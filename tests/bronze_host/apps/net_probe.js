@@ -101,6 +101,24 @@ say('ws.readyState_after_close', ws.readyState === 3);
 say('fetch.exists', typeof fetch === 'function');
 say('xhr.exists', typeof XMLHttpRequest === 'function');
 
+const xhr = new XMLHttpRequest();
+say('xhr.responseType_default', xhr.responseType === '');
+xhr.responseType = 'text';
+say('xhr.responseType_text', xhr.responseType);
+xhr.responseType = 'arraybuffer';
+say('xhr.responseType_ab', xhr.responseType);
+xhr.responseType = 'blob';
+say('xhr.responseType_blob', xhr.responseType);
+xhr.responseType = 'json';
+say('xhr.responseType_json', xhr.responseType);
+let threwInvalid = false;
+try {
+    xhr.responseType = 'invalid_type';
+} catch (e) {
+    threwInvalid = true;
+}
+say('xhr.responseType_invalidThrew', threwInvalid);
+
 // Test data URL fetch (instant inline resolution)
 fetch('data:text/plain;base64,SGVsbG8gQnJvbnplIE5ldHdvcmtpbmch').then(function(res) {
     say('fetch.data_ok', res.ok);

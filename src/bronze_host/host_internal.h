@@ -23,9 +23,13 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-namespace bro::engine { class Engine; }
+namespace bro::engine {
+class Engine;
+struct GamepadState;
+}  // namespace bro::engine
 namespace bro::dom {
 class Document;
 class Element;
@@ -296,11 +300,33 @@ struct HostNodeState {
     ev::Persistent classListObj;
     ev::Persistent computedObj;
     ev::Persistent datasetObj;
+    std::unordered_map<std::string, uint64_t> inlineHandles;
+    std::unordered_map<std::string, ev::Persistent> inlineFns;
     bool hasStyle = false;
     bool hasClassList = false;
     bool hasComputed = false;
     bool hasDataset = false;
 };
+
+// ---------------------------------------------------------------------------
+// Style & dataset decomposition (host_element_style.cpp / dataset.cpp / forms.cpp)
+// ---------------------------------------------------------------------------
+Value makeStyleObject(HostNodeState* st);
+Value makeComputedStyleObject(HostNodeState* st);
+void decorateElementStyle(ObjectBuilder& b);
+
+Value makeDatasetObject(HostNodeState* st);
+Value makeClassListObject(HostNodeState* st);
+void decorateElementDataset(ObjectBuilder& b);
+
+void decorateElementForms(ObjectBuilder& b);
+
+// ---------------------------------------------------------------------------
+// Storage & Gamepad (dom_storage.cpp / dom_gamepad.cpp)
+// ---------------------------------------------------------------------------
+Value makeLocalStorageValue();
+Value makeNavigatorValue();
+Value buildGamepadSnapshot(const engine::GamepadState& gp);
 
 // The entry for `node`, created on first ask. Never null for a non-null node.
 HostNodeState* hostNodeStateFor(dom::Node* node);

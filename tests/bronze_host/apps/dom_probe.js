@@ -336,6 +336,36 @@ say('plat.hasConfirm', typeof confirm === 'function');
 say('plat.screenPositive', screen.width > 0 && screen.height > 0);
 
 // ---------------------------------------------------------------------------
+// Inline event handlers
+// ---------------------------------------------------------------------------
+
+const btn = document.createElement('button');
+panel.appendChild(btn);
+say('inline.initial', btn.onclick === null);
+
+let clickFired = 0;
+const clickHandler = function (e) {
+    clickFired++;
+};
+btn.onclick = clickHandler;
+say('inline.getAssigned', btn.onclick === clickHandler);
+
+btn.dispatchEvent({ type: 'click' });
+say('inline.fired', clickFired);
+
+btn.onclick = null;
+say('inline.clearedGet', btn.onclick === null);
+btn.dispatchEvent({ type: 'click' });
+say('inline.notFiredAfterClear', clickFired);
+
+let keyFired = '';
+btn.onkeydown = function (e) {
+    keyFired = e.key;
+};
+btn.dispatchEvent({ type: 'keydown', key: 'Enter' });
+say('inline.keydown', keyFired);
+
+// ---------------------------------------------------------------------------
 // Done, one frame later
 // ---------------------------------------------------------------------------
 // The tail runs from a requestAnimationFrame rather than here, for one reason:

@@ -323,6 +323,11 @@ void installPlatformGlobals() {
     for (const char* name : {
              "Event", "UIEvent", "MouseEvent", "PointerEvent", "KeyboardEvent",
              "WheelEvent", "InputEvent", "FocusEvent", "ProgressEvent",
+         }) {
+        ev::registerGlobal(name, makeInterfaceValue(name));
+    }
+    installElementGlobals();
+    for (const char* name : {
              "HTMLInputElement", "HTMLSelectElement",
              "HTMLTextAreaElement", "HTMLVideoElement", "HTMLMediaElement",
              "HTMLAnchorElement", "HTMLDivElement", "Text", "CharacterData",

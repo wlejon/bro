@@ -1,45 +1,5 @@
 // Blob, File, FileReader, and URL — bytes an app holds, and the names it gives
 // them.
-//
-// Everything else in this layer moves data one way: the app asks for a file and
-// the host reads it off disk. This is the other direction. A Blob is bytes the
-// PROGRAM produced or was handed, with no path behind them, and the whole point
-// of the family is that those bytes can then be used everywhere a URL can —
-// `img.src = URL.createObjectURL(blob)`, `fetch(objectUrl)`, an XHR. Without it
-// a compiled app can decode a model it loaded and can build one in memory, and
-// has no way to show the second.
-//
-// FOUR THINGS ARE WORTH READING BEFORE THE CODE.
-//
-// THE OBJECT-URL TABLE IS THE ENGINE'S, not this layer's. `util::object_url.h`
-// is a process-global map from a `blob:` string to bytes, already consulted by
-// the <img> size probe, the draw path's image cache and bro's own JS. Minting
-// into it means a URL a compiled app creates resolves in the PAGE's markup and
-// in an interpreted script beside it, which is the same argument that put
-// listeners on the engine's dispatch instead of a second one (host_dom_events.cpp).
-// A private table here would have produced URLs only compiled code could read,
-// and the failure would have been an <img> that silently showed nothing.
-//
-// THE BYTES ARE HOST MEMORY. A HostBlob owns a std::vector, not heap bytes.
-// embed::typedArrayInfo's pointer dies at the next allocation (embed.h says so
-// loudly); a Blob has to outlive arbitrary program execution, so the
-// constructor copies out of the heap immediately and never looks back. It is
-// also what lets `URL.createObjectURL` hand the engine a resource that any
-// thread can read.
-//
-// A READ IS ASYNCHRONOUS BECAUSE THE WEB SAYS SO, not because it is slow. Every
-// read here is a memcpy and could return before the call does. It goes through
-// postHostTask anyway, so `reader.onload` is assigned AFTER `readAsText` is
-// called and still fires — which is how every FileReader ever written is
-// structured, and a synchronous implementation would run the callback that does
-// not exist yet.
-//
-// `URL` IS A NAMESPACE, NOT A CONSTRUCTOR. On the web it is both — callable and
-// carrying createObjectURL — and the callable shape is buildable here; it is
-// simply unbuilt, because the namespace costs almost nothing and `URL.parse`
-// is the standard equivalent of the constructor. The long comment at
-// installFileGlobals() has the full reasoning; the short version is that
-// `URL.parse(href, base)` is here and `new URL(href)` is not.
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
@@ -72,13 +32,6 @@ HostBlob* mutableHostBlob(Value v) {
 // Assembling a Blob's bytes out of whatever the program passed
 // ---------------------------------------------------------------------------
 
-// One part of `new Blob(parts)`. The web accepts strings, ArrayBuffers, any
-// view over one, and other Blobs; each is appended in order.
-//
-// COPIED IMMEDIATELY, before anything else can allocate. typedArrayInfo hands
-// back a pointer into the moving heap that the very next embed call may
-// invalidate, so the memcpy has to happen between the info call and the loop's
-// next iteration — which is exactly where it is.
 void appendPart(std::vector<uint8_t>& out, Value part) {
     if (const HostBlob* nested = hostBlobOf(part)) {
         out.insert(out.end(), nested->bytes.begin(), nested->bytes.end());
@@ -95,15 +48,10 @@ void appendPart(std::vector<uint8_t>& out, Value part) {
         return;
     }
     if (ev::isUndefined(part) || ev::isNull(part)) return;
-    // Anything else stringifies, which is what the web does — `new
-    // Blob([42])` is the two bytes of "42".
     const std::string s = ev::toUtf8(part);
     out.insert(out.end(), s.begin(), s.end());
 }
 
-// `parts` is an array-like. It is walked through getProperty/getElement rather
-// than any host-side array reader, because what the program passes is a real
-// JS array and its elements may be getters.
 std::vector<uint8_t> collectParts(Value partsValue) {
     std::vector<uint8_t> out;
     if (!ev::isObject(partsValue)) return out;
@@ -113,8 +61,6 @@ std::vector<uint8_t> collectParts(Value partsValue) {
     if (!(lenD > 0)) return out;
     const uint32_t len = static_cast<uint32_t>(lenD);
     for (uint32_t i = 0; i < len; ++i) {
-        // Re-read through the Persistent each turn: getElement allocates, and
-        // the array may have moved since the previous iteration.
         appendPart(out, ev::getElement(parts.get(), i));
     }
     return out;
@@ -164,9 +110,6 @@ std::string base64Encode(const std::vector<uint8_t>& in) {
 // The Blob surface
 // ---------------------------------------------------------------------------
 
-// A promise already resolved with `v`. The reaction jobs land in the microtask
-// queue the frame seam drains, so `await blob.text()` continues on the same
-// turn the web would continue it on.
 Value resolvedPromise(Value v) {
     ev::Persistent value(v);
     ev::Persistent p(ev::createPromise());
@@ -181,32 +124,20 @@ Value bytesToArrayBuffer(const std::vector<uint8_t>& bytes) {
 Value bytesToUint8Array(const std::vector<uint8_t>& bytes) {
     ev::Persistent view(ev::createTypedArray(ev::elements::Uint8,
                                              static_cast<uint32_t>(bytes.size())));
-    // fillTypedArray does NOT allocate, so the view cannot have moved between
-    // the two calls — but it is read back through the Persistent anyway,
-    // because that invariant belongs to embed and not to this file.
     ev::fillTypedArray(view.get(), std::span<const uint8_t>(bytes.data(), bytes.size()));
     return view.get();
 }
 
-// The per-instance STATE of a Blob. Everything else a Blob can do is the same
-// for every Blob and lives on the prototype below.
 void installBlobState(ObjectBuilder& b, const HostBlob* blob) {
     b.set("size", ev::fromDouble(static_cast<double>(blob->bytes.size())));
     b.set("type", ev::fromUtf8(blob->type));
 }
 
-// The Blob METHODS, decorated once onto Blob.prototype. Each unwraps its
-// RECEIVER rather than closing over a HostBlob* — which is not only tidier: a
-// closure holding the raw payload of a cell it does not root is a dangling
-// read the moment a detached method outlives its object, and every one of
-// these used to be written that way.
 void decorateBlobProto(ObjectBuilder& b) {
     b.def("slice", 3, [](Value self, std::span<const Value> a) {
         const HostBlob* blob = mutableHostBlob(self);
         if (!blob) return ev::throwTypeError("Blob.slice: the receiver is not a Blob");
         const double n = static_cast<double>(blob->bytes.size());
-        // Negative offsets count from the end, as Array.prototype.slice does
-        // and as the Blob spec spells out.
         auto clamp = [n](Value v, double dflt) {
             if (ev::isUndefined(v)) return dflt;
             double x = ev::toDouble(v);
@@ -247,7 +178,6 @@ void decorateBlobProto(ObjectBuilder& b) {
     });
 }
 
-// The three classes this file installs. File EXTENDS Blob, as on the web.
 HostClass g_blobClass;
 HostClass g_fileClass;
 HostClass g_readerClass;
@@ -256,11 +186,6 @@ HostClass g_readerClass;
 // FileReader
 // ---------------------------------------------------------------------------
 
-// Only what cannot live as a property: `readyState` is read by the program and
-// so is an ordinary property, but the abort latch is written by abort() and
-// read by a task that may already be queued, and a property read from inside
-// the task would see whatever the program last assigned rather than what abort
-// recorded.
 struct HostReader {
     uint32_t tag = kHostReaderTag;  // must be first
     uint64_t generation = 0;        // bumped by abort() and by each new read
@@ -275,15 +200,10 @@ HostReader* readerOf(Value v) {
     return r;
 }
 
-// Set a property on an object held in a Persistent, keeping the Persistent
-// current: setProperty may MOVE the object and answers its new address.
 void setOn(ev::Persistent& obj, const char* key, Value v) {
     obj.set(ev::setProperty(obj.get(), key, v));
 }
 
-// The one shape every read takes: latch a generation, queue the copy, and on
-// the way out either publish `result` and fire load/loadend, or publish `error`
-// and fire error/loadend. `produce` runs on the task, so it allocates safely.
 void startRead(Value self, Value blobValue,
                std::function<Value(const std::vector<uint8_t>&)> produce) {
     HostReader* reader = readerOf(self);
@@ -296,9 +216,6 @@ void startRead(Value self, Value blobValue,
     setOn(target, "error", ev::null());
 
     const uint64_t generation = ++reader->generation;
-    // A copy, not a reference: the Blob value is not rooted by this closure and
-    // the read must survive the program dropping it. Blobs are immutable and
-    // usually small enough that this is the honest cost of the interface.
     std::vector<uint8_t> bytes = blob ? blob->bytes : std::vector<uint8_t>();
     const bool haveBlob = blob != nullptr;
 
@@ -306,12 +223,9 @@ void startRead(Value self, Value blobValue,
                   produce = std::move(produce)]() mutable {
         ev::Persistent self2(target);
         HostReader* r = readerOf(self2.get());
-        // abort(), or a second read started before this one ran. Either way
-        // this task's result is stale and must not be published — the web's
-        // rule that a reader delivers exactly one terminal event per read.
         if (!r || r->generation != generation) return;
 
-        r->generation = generation;  // unchanged; kept explicit for the reader
+        r->generation = generation;
         setOn(self2, "readyState", ev::fromDouble(2));  // DONE
         if (!haveBlob) {
             ObjectBuilder err;
@@ -332,8 +246,6 @@ Value makeFileReaderValue() {
     auto* reader = new HostReader();
     ObjectBuilder b(g_readerClass.make(reader, hostReaderDtor));
 
-    // Data properties first, so the shape is fixed before a read rewrites
-    // them — the same reason host_image.cpp seeds width/height up front.
     { Value z = ev::fromDouble(0); b.set("readyState", z); }
     { Value n = ev::null(); b.set("result", n); }
     { Value n = ev::null(); b.set("error", n); }
@@ -342,22 +254,15 @@ Value makeFileReaderValue() {
         Value n = ev::null();
         b.set(slot, n);
     }
-    // The readyState constants are NOT here: they are the same for every
-    // reader, so they sit on the prototype and on the constructor, which is
-    // where the web has them (`reader.DONE` and `FileReader.DONE` both work).
     return b.get();
 }
 
-// Everything a FileReader can DO, decorated once onto FileReader.prototype.
 void decorateReaderProto(ObjectBuilder& b) {
     b.set("EMPTY", ev::fromDouble(0));
     b.set("LOADING", ev::fromDouble(1));
     b.set("DONE", ev::fromDouble(2));
 
     b.def("readAsText", 2, [](Value self, std::span<const Value> a) {
-        // The encoding argument is accepted and ignored: the bytes a Blob holds
-        // in this runtime came from UTF-8 sources, and a real transcoder here
-        // would be a second, worse copy of the one brokit already has.
         startRead(self, argAt(a, 0), [](const std::vector<uint8_t>& bytes) {
             return ev::fromUtf8(std::string(bytes.begin(), bytes.end()));
         });
@@ -371,8 +276,6 @@ void decorateReaderProto(ObjectBuilder& b) {
     });
     b.def("readAsBinaryString", 1, [](Value self, std::span<const Value> a) {
         startRead(self, argAt(a, 0), [](const std::vector<uint8_t>& bytes) {
-            // One character per BYTE, which is what the legacy method means —
-            // not a UTF-8 decode.
             std::string s;
             s.reserve(bytes.size());
             for (uint8_t c : bytes) s += static_cast<char>(c);
@@ -394,8 +297,6 @@ void decorateReaderProto(ObjectBuilder& b) {
     b.def("abort", 0, [](Value self, std::span<const Value>) {
         HostReader* r = readerOf(self);
         if (!r) return ev::undefined();
-        // Bumping the generation is the abort: the queued task finds a number
-        // that is not its own and publishes nothing.
         ++r->generation;
         ev::Persistent target(self);
         setOn(target, "readyState", ev::fromDouble(2));
@@ -432,10 +333,6 @@ Value makeCreateObjectURL() {
             if (!blob)
                 return ev::throwTypeError(
                     "URL.createObjectURL: argument is not a Blob");
-            // Minted here rather than by the engine, and numbered from a
-            // counter of its own, because bro's JS half mints from its own
-            // counter into the SAME table — two counters, one namespace, so
-            // the prefix has to differ or the two would collide.
             static std::atomic<uint64_t> counter{1};
             const std::string url =
                 "blob:bro/bronze-" +
@@ -457,13 +354,25 @@ Value makeRevokeObjectURL() {
         1);
 }
 
-// The URL parser: enough of RFC 3986 to answer the components libraries read.
-// Not a validator — an input with no scheme resolves against `base` when one is
-// given and is reported as-is when it is not, which is where three.js's
-// LoaderUtils and every "is this absolute" test land.
 struct ParsedURL {
     std::string href, protocol, hostname, port, pathname, search, hash;
 };
+
+inline constexpr uint32_t kHostUrlTag = 0x55524C20u;  // 'URL '
+
+struct HostUrl {
+    uint32_t tag = kHostUrlTag;
+    ParsedURL parsed;
+};
+
+void hostUrlDtor(void* p) { delete static_cast<HostUrl*>(p); }
+
+HostUrl* urlOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* u = static_cast<HostUrl*>(ev::handleData(v));
+    if (!u || u->tag != kHostUrlTag) return nullptr;
+    return u;
+}
 
 bool splitAbsolute(const std::string& in, ParsedURL& out) {
     const size_t colon = in.find(':');
@@ -508,10 +417,6 @@ bool splitAbsolute(const std::string& in, ParsedURL& out) {
     return true;
 }
 
-// The relative-reference merge, in the one form apps actually use: an absolute
-// path replaces the base's path, anything else is appended to the base's
-// directory. `..` and `.` segments are then removed, because a resolved URL
-// with them in it is not equal to the one every other implementation produces.
 std::string normalizePath(const std::string& path) {
     std::vector<std::string> parts;
     size_t i = 0;
@@ -532,130 +437,347 @@ std::string normalizePath(const std::string& path) {
         out += parts[k];
         if (k + 1 < parts.size()) out += '/';
     }
-    // A trailing slash in the input survives normalisation, which matters for
-    // a base URL naming a directory.
     if (!path.empty() && path.back() == '/' && !out.empty() && out.back() != '/')
         out += '/';
     return out;
 }
 
-ParsedURL parseURL(const std::string& input, const std::string& base) {
-    ParsedURL out;
+void rebuildUrlHref(ParsedURL& u) {
+    u.href = u.protocol;
+    if (!u.hostname.empty()) {
+        u.href += "//" + u.hostname;
+        if (!u.port.empty()) u.href += ":" + u.port;
+    }
+    u.href += u.pathname + u.search + u.hash;
+}
+
+bool parseURL(const std::string& input, const std::string& base, ParsedURL& out) {
     if (splitAbsolute(input, out)) {
         out.pathname = normalizePath(out.pathname);
     } else if (!base.empty()) {
         ParsedURL b;
         if (!splitAbsolute(base, b)) {
-            out.pathname = input;
+            return false;
+        }
+        out.protocol = b.protocol;
+        out.hostname = b.hostname;
+        out.port = b.port;
+        std::string rest = input;
+        const size_t hash = rest.find('#');
+        if (hash != std::string::npos) {
+            out.hash = rest.substr(hash);
+            rest = rest.substr(0, hash);
+        }
+        const size_t query = rest.find('?');
+        if (query != std::string::npos) {
+            out.search = rest.substr(query);
+            rest = rest.substr(0, query);
+        }
+        if (!rest.empty() && rest[0] == '/') {
+            out.pathname = normalizePath(rest);
         } else {
-            out.protocol = b.protocol;
-            out.hostname = b.hostname;
-            out.port = b.port;
-            std::string rest = input;
-            const size_t hash = rest.find('#');
-            if (hash != std::string::npos) {
-                out.hash = rest.substr(hash);
-                rest = rest.substr(0, hash);
-            }
-            const size_t query = rest.find('?');
-            if (query != std::string::npos) {
-                out.search = rest.substr(query);
-                rest = rest.substr(0, query);
-            }
-            if (!rest.empty() && rest[0] == '/') {
-                out.pathname = normalizePath(rest);
-            } else {
-                const size_t slash = b.pathname.rfind('/');
-                const std::string dir = slash == std::string::npos
-                                            ? "/"
-                                            : b.pathname.substr(0, slash + 1);
-                out.pathname = normalizePath(dir + rest);
-            }
+            const size_t slash = b.pathname.rfind('/');
+            const std::string dir = slash == std::string::npos
+                                        ? "/"
+                                        : b.pathname.substr(0, slash + 1);
+            out.pathname = normalizePath(dir + rest);
         }
     } else {
-        out.pathname = input;
+        return false;
     }
 
-    out.href = out.protocol;
-    if (!out.hostname.empty()) {
-        out.href += "//" + out.hostname;
-        if (!out.port.empty()) out.href += ":" + out.port;
+    rebuildUrlHref(out);
+    return true;
+}
+
+std::vector<std::pair<std::string, std::string>> parseQueryParams(const std::string& search) {
+    std::vector<std::pair<std::string, std::string>> pairs;
+    if (search.size() > 1 && search[0] == '?') {
+        std::string q = search.substr(1);
+        size_t i = 0;
+        while (i <= q.size()) {
+            size_t amp = q.find('&', i);
+            if (amp == std::string::npos) amp = q.size();
+            const std::string item = q.substr(i, amp - i);
+            if (!item.empty()) {
+                const size_t eq = item.find('=');
+                if (eq == std::string::npos)
+                    pairs.emplace_back(item, "");
+                else
+                    pairs.emplace_back(item.substr(0, eq), item.substr(eq + 1));
+            }
+            i = amp + 1;
+        }
     }
-    out.href += out.pathname + out.search + out.hash;
+    return pairs;
+}
+
+std::string serializeQueryParams(const std::vector<std::pair<std::string, std::string>>& pairs) {
+    if (pairs.empty()) return "";
+    std::string out;
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        if (i > 0) out += '&';
+        out += pairs[i].first;
+        if (!pairs[i].second.empty()) {
+            out += '=';
+            out += pairs[i].second;
+        }
+    }
     return out;
 }
 
-Value makeURLValue(const ParsedURL& u) {
-    ObjectBuilder b;
-    b.set("href", ev::fromUtf8(u.href));
-    b.set("protocol", ev::fromUtf8(u.protocol));
-    b.set("hostname", ev::fromUtf8(u.hostname));
-    b.set("port", ev::fromUtf8(u.port));
-    b.set("host", ev::fromUtf8(u.port.empty() ? u.hostname
-                                              : u.hostname + ":" + u.port));
-    b.set("pathname", ev::fromUtf8(u.pathname));
-    b.set("search", ev::fromUtf8(u.search));
-    b.set("hash", ev::fromUtf8(u.hash));
-    b.set("origin", ev::fromUtf8(u.hostname.empty()
-                                     ? std::string("null")
-                                     : u.protocol + "//" + u.hostname +
-                                           (u.port.empty() ? "" : ":" + u.port)));
+HostClass g_urlClass;
 
-    // searchParams, as a snapshot rather than a live view. That was forced
-    // when the embed API had no property trap; it no longer is — makeHostProxy
-    // (host_proxy.cpp) is what `dataset` is built on and would serve a live
-    // URLSearchParams too. It stays a snapshot until someone needs the live
-    // one, because a URLSearchParams whose set() did not write back to the URL
-    // would be worse than one that plainly reads. get/has/getAll cover what a
-    // library asks of it.
-    {
-        std::vector<std::pair<std::string, std::string>> pairs;
-        if (u.search.size() > 1) {
-            std::string q = u.search.substr(1);
-            size_t i = 0;
-            while (i <= q.size()) {
-                size_t amp = q.find('&', i);
-                if (amp == std::string::npos) amp = q.size();
-                const std::string item = q.substr(i, amp - i);
-                if (!item.empty()) {
-                    const size_t eq = item.find('=');
-                    if (eq == std::string::npos)
-                        pairs.emplace_back(item, "");
-                    else
-                        pairs.emplace_back(item.substr(0, eq), item.substr(eq + 1));
+Value makeSearchParamsObject(HostUrl* u) {
+    ObjectBuilder sp;
+    sp.def("get", 1, [u](Value, std::span<const Value> a) {
+        std::string key = ev::toUtf8(argAt(a, 0));
+        auto pairs = parseQueryParams(u->parsed.search);
+        for (const auto& kv : pairs)
+            if (kv.first == key) return ev::fromUtf8(kv.second);
+        return ev::null();
+    });
+    sp.def("has", 1, [u](Value, std::span<const Value> a) {
+        std::string key = ev::toUtf8(argAt(a, 0));
+        auto pairs = parseQueryParams(u->parsed.search);
+        for (const auto& kv : pairs)
+            if (kv.first == key) return ev::fromBool(true);
+        return ev::fromBool(false);
+    });
+    sp.def("getAll", 1, [u](Value, std::span<const Value> a) {
+        std::string key = ev::toUtf8(argAt(a, 0));
+        auto pairs = parseQueryParams(u->parsed.search);
+        std::vector<std::string> hits;
+        for (const auto& kv : pairs)
+            if (kv.first == key) hits.push_back(kv.second);
+        return hostArrayOf(hits.size(),
+                           [&hits](size_t i) { return ev::fromUtf8(hits[i]); });
+    });
+    sp.def("set", 2, [u](Value, std::span<const Value> a) {
+        std::string key = ev::toUtf8(argAt(a, 0));
+        std::string val = ev::toUtf8(argAt(a, 1));
+        auto pairs = parseQueryParams(u->parsed.search);
+        bool found = false;
+        std::vector<std::pair<std::string, std::string>> next;
+        for (auto& kv : pairs) {
+            if (kv.first == key) {
+                if (!found) {
+                    next.emplace_back(key, val);
+                    found = true;
                 }
-                i = amp + 1;
+            } else {
+                next.push_back(kv);
             }
         }
-        ObjectBuilder sp;
-        sp.def("get", 1, [pairs](Value, std::span<const Value> a) {
-            const std::string key = ev::toUtf8(argAt(a, 0));
-            for (const auto& kv : pairs)
-                if (kv.first == key) return ev::fromUtf8(kv.second);
-            return ev::null();
-        });
-        sp.def("has", 1, [pairs](Value, std::span<const Value> a) {
-            const std::string key = ev::toUtf8(argAt(a, 0));
-            for (const auto& kv : pairs)
-                if (kv.first == key) return ev::fromBool(true);
-            return ev::fromBool(false);
-        });
-        sp.def("getAll", 1, [pairs](Value, std::span<const Value> a) {
-            const std::string key = ev::toUtf8(argAt(a, 0));
-            std::vector<std::string> hits;
-            for (const auto& kv : pairs)
-                if (kv.first == key) hits.push_back(kv.second);
-            return hostArrayOf(hits.size(),
-                               [&hits](size_t i) { return ev::fromUtf8(hits[i]); });
-        });
-        b.set("searchParams", sp.get());
-    }
-
-    const std::string href = u.href;
-    b.def("toString", 0, [href](Value, std::span<const Value>) {
-        return ev::fromUtf8(href);
+        if (!found) next.emplace_back(key, val);
+        std::string q = serializeQueryParams(next);
+        u->parsed.search = q.empty() ? "" : "?" + q;
+        rebuildUrlHref(u->parsed);
+        return ev::undefined();
     });
-    return b.get();
+    sp.def("append", 2, [u](Value, std::span<const Value> a) {
+        std::string key = ev::toUtf8(argAt(a, 0));
+        std::string val = ev::toUtf8(argAt(a, 1));
+        auto pairs = parseQueryParams(u->parsed.search);
+        pairs.emplace_back(key, val);
+        std::string q = serializeQueryParams(pairs);
+        u->parsed.search = q.empty() ? "" : "?" + q;
+        rebuildUrlHref(u->parsed);
+        return ev::undefined();
+    });
+    sp.def("delete", 1, [u](Value, std::span<const Value> a) {
+        std::string key = ev::toUtf8(argAt(a, 0));
+        auto pairs = parseQueryParams(u->parsed.search);
+        std::vector<std::pair<std::string, std::string>> next;
+        for (const auto& kv : pairs) {
+            if (kv.first != key) next.push_back(kv);
+        }
+        std::string q = serializeQueryParams(next);
+        u->parsed.search = q.empty() ? "" : "?" + q;
+        rebuildUrlHref(u->parsed);
+        return ev::undefined();
+    });
+    sp.def("toString", 0, [u](Value, std::span<const Value>) {
+        auto pairs = parseQueryParams(u->parsed.search);
+        return ev::fromUtf8(serializeQueryParams(pairs));
+    });
+    return sp.get();
+}
+
+Value makeURLValue(const ParsedURL& u) {
+    auto* url = new HostUrl();
+    url->parsed = u;
+    return g_urlClass.make(url, hostUrlDtor);
+}
+
+void decorateUrlProto(ObjectBuilder& b) {
+    b.accessor("href",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed.href : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (ev::isObject(v) || ev::isUndefined(v)) return ev::undefined();
+                   ParsedURL p;
+                   if (parseURL(ev::toUtf8(v), "", p)) {
+                       u->parsed = p;
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("origin",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   if (!u || u->parsed.hostname.empty()) return ev::fromUtf8("null");
+                   std::string orig = u->parsed.protocol + "//" + u->parsed.hostname;
+                   if (!u->parsed.port.empty()) orig += ":" + u->parsed.port;
+                   return ev::fromUtf8(orig);
+               },
+               nullptr);
+    b.accessor("protocol",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed.protocol : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       std::string s = ev::toUtf8(v);
+                       if (!s.empty()) {
+                           if (s.back() != ':') s += ':';
+                           u->parsed.protocol = s;
+                           rebuildUrlHref(u->parsed);
+                       }
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("host",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::fromUtf8("");
+                   return ev::fromUtf8(u->parsed.port.empty()
+                                           ? u->parsed.hostname
+                                           : u->parsed.hostname + ":" + u->parsed.port);
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       std::string s = ev::toUtf8(v);
+                       size_t colon = s.find(':');
+                       if (colon != std::string::npos) {
+                           u->parsed.hostname = s.substr(0, colon);
+                           u->parsed.port = s.substr(colon + 1);
+                       } else {
+                           u->parsed.hostname = s;
+                           u->parsed.port.clear();
+                       }
+                       rebuildUrlHref(u->parsed);
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("hostname",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed.hostname : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       u->parsed.hostname = ev::toUtf8(v);
+                       rebuildUrlHref(u->parsed);
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("port",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed.port : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       u->parsed.port = ev::toUtf8(v);
+                       rebuildUrlHref(u->parsed);
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("pathname",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed.pathname : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       std::string p = ev::toUtf8(v);
+                       if (p.empty() || p[0] != '/') p = "/" + p;
+                       u->parsed.pathname = normalizePath(p);
+                       rebuildUrlHref(u->parsed);
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("search",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed.search : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       std::string s = ev::toUtf8(v);
+                       if (!s.empty() && s[0] != '?') s = "?" + s;
+                       u->parsed.search = s;
+                       rebuildUrlHref(u->parsed);
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("hash",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed.hash : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       std::string h = ev::toUtf8(v);
+                       if (!h.empty() && h[0] != '#') h = "#" + h;
+                       u->parsed.hash = h;
+                       rebuildUrlHref(u->parsed);
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("searchParams",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   return makeSearchParamsObject(u);
+               },
+               nullptr);
+
+    b.def("toString", 0, [](Value self, std::span<const Value>) {
+        HostUrl* u = urlOf(self);
+        return ev::fromUtf8(u ? u->parsed.href : "");
+    });
+    b.def("toJSON", 0, [](Value self, std::span<const Value>) {
+        HostUrl* u = urlOf(self);
+        return ev::fromUtf8(u ? u->parsed.href : "");
+    });
 }
 
 }  // namespace
@@ -708,60 +830,53 @@ void installFileGlobals() {
             installBlobState(b, blob);
             b.set("name", ev::fromUtf8(blob->name));
             b.set("lastModified", ev::fromDouble(blob->lastModified));
-            // webkitRelativePath is empty for a File the program built, and
-            // present because file-input code reads it unconditionally.
             b.set("webkitRelativePath", ev::fromUtf8(""));
             return b.get();
         },
-        // A File carries no methods of its own: it inherits Blob's, through
-        // the chain below.
         nullptr);
-    // `file instanceof Blob` is true on the web, and a File really does answer
-    // slice/text/arrayBuffer. One chain buys both.
     g_fileClass.inherit(g_blobClass);
 
     g_readerClass.install(
         "FileReader", 0,
         [](Value, std::span<const Value>) { return makeFileReaderValue(); },
         decorateReaderProto);
-    // The web has the constants on the constructor too.
     g_readerClass.setStatic("EMPTY", ev::fromDouble(0));
     g_readerClass.setStatic("LOADING", ev::fromDouble(1));
     g_readerClass.setStatic("DONE", ev::fromDouble(2));
 
-    // URL IS A NAMESPACE HERE, NOT A CONSTRUCTOR — `new URL(href)` does not
-    // work and `URL.parse(href, base)` does.
-    //
-    // On the web URL is both: callable, and carrying createObjectURL. This was
-    // once unbuildable — embed::setProperty called fatal() on any receiver that
-    // was not a plain object, and the way round it (the program's own
-    // Object.assign) was a hard runtime error rather than a catchable throw, so
-    // there was no probing at startup and degrading. That is fixed: setProperty
-    // takes a FUNCTION receiver now, landing the definition where a class
-    // `static` member's would, so the callable-URL-with-statics shape is
-    // available whenever this is converted.
-    //
-    // It has not been, because the namespace costs almost nothing. The statics
-    // are the half that cannot be spelled any other way — createObjectURL is
-    // why this family exists — and they work as plain properties of a plain
-    // object. The constructor has an exact standard equivalent in `URL.parse`,
-    // a real 2024 addition to the web platform that answers null instead of
-    // throwing. What converting WOULD buy is `x instanceof URL`, and that is
-    // now reachable as well: `prototype` cannot be ASSIGNED on a host function,
-    // but READING it mints the real slot-backed object to decorate and to birth
-    // instances on (host_image.cpp works it end to end for `Image`).
-    ObjectBuilder ns;
-    ns.set("createObjectURL", makeCreateObjectURL());
-    ns.set("revokeObjectURL", makeRevokeObjectURL());
-    ns.def("parse", 2, [](Value, std::span<const Value> a) {
+    g_urlClass.install(
+        "URL", 1,
+        [](Value, std::span<const Value> a) {
+            Value urlV = argAt(a, 0);
+            if (ev::isObject(urlV) || ev::isUndefined(urlV)) {
+                return ev::throwTypeError("URL constructor: first argument must be a string");
+            }
+            std::string urlStr = ev::toUtf8(urlV);
+            std::string baseStr;
+            Value baseV = argAt(a, 1);
+            if (!ev::isObject(baseV) && !ev::isUndefined(baseV)) {
+                baseStr = ev::toUtf8(baseV);
+            }
+            ParsedURL p;
+            if (!parseURL(urlStr, baseStr, p)) {
+                return ev::throwTypeError("Invalid URL: " + urlStr);
+            }
+            return makeURLValue(p);
+        },
+        decorateUrlProto);
+
+    g_urlClass.setStatic("createObjectURL", makeCreateObjectURL());
+    g_urlClass.setStatic("revokeObjectURL", makeRevokeObjectURL());
+    g_urlClass.setStatic("parse", ev::makeFunction([](Value, std::span<const Value> a) {
         Value hrefV = argAt(a, 0);
         if (ev::isObject(hrefV) || ev::isUndefined(hrefV)) return ev::null();
         Value baseV = argAt(a, 1);
         const std::string base =
             (ev::isObject(baseV) || ev::isUndefined(baseV)) ? "" : ev::toUtf8(baseV);
-        return makeURLValue(parseURL(ev::toUtf8(hrefV), base));
-    });
-    ev::registerGlobal("URL", ns.get());
+        ParsedURL p;
+        if (!parseURL(ev::toUtf8(hrefV), base, p)) return ev::null();
+        return makeURLValue(p);
+    }, 2));
 }
 
 }  // namespace bro::bronze_host

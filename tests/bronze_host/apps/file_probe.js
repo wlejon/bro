@@ -92,9 +92,7 @@ say('url.isBlobScheme', url.indexOf('blob:') === 0);
 // the second revoke free the first one's bytes.
 say('url.distinct', URL.createObjectURL(b1) !== url);
 
-// URL.parse rather than `new URL(...)`: a host function cannot carry a static,
-// so URL here is a namespace and the constructor has no place to live. See
-// src/bronze_host/host_file.cpp — the runtime message is quoted there.
+// URL.parse static method
 const u = URL.parse('https://example.com:8080/a/b/../c.json?x=1&y=two#frag');
 say('parse.protocol', u.protocol);
 say('parse.hostname', u.hostname);
@@ -110,6 +108,25 @@ say('parse.href', u.href);
 say('parse.param', u.searchParams.get('y'));
 say('parse.paramMissing', u.searchParams.get('nope') === null);
 say('parse.has', u.searchParams.has('x'));
+
+// new URL(...) constructor
+const ctorUrl = new URL('https://example.com:8080/a/b/../c.json?x=1&y=two#frag');
+say('url.ctor.protocol', ctorUrl.protocol);
+say('url.ctor.hostname', ctorUrl.hostname);
+say('url.ctor.port', ctorUrl.port);
+say('url.ctor.host', ctorUrl.host);
+say('url.ctor.pathname', ctorUrl.pathname);
+say('url.ctor.search', ctorUrl.search);
+say('url.ctor.hash', ctorUrl.hash);
+say('url.ctor.origin', ctorUrl.origin);
+say('url.ctor.href', ctorUrl.href);
+say('url.ctor.toString', ctorUrl.toString());
+say('url.ctor.toJSON', ctorUrl.toJSON());
+say('url.ctor.param', ctorUrl.searchParams.get('y'));
+say('url.ctor.has', ctorUrl.searchParams.has('x'));
+
+const ctorRel = new URL('textures/wood.png', 'https://example.com/models/scene/');
+say('url.ctorRel.href', ctorRel.href);
 
 // A relative reference against a base, which is the case a loader hits.
 const rel = URL.parse('textures/wood.png', 'https://example.com/models/scene/');

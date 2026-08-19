@@ -65,7 +65,12 @@ add_library(bro_bronze_host STATIC
     gl_context.cpp
     app_module.cpp
     dom_globals.cpp
+    dom_storage.cpp
+    dom_gamepad.cpp
     host_element.cpp
+    host_element_style.cpp
+    host_element_dataset.cpp
+    host_element_forms.cpp
     host_node.cpp
     host_events.cpp
     host_dom_events.cpp

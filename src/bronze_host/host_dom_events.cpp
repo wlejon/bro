@@ -249,9 +249,11 @@ struct EventSpec {
     bool cancelable = true;
     bool hasDetail = false;
     std::string detail;
+    std::string key;
+    std::string code;
 };
 
-// Reads `{type, bubbles, cancelable, detail}`. False leaves a pending
+// Reads `{type, bubbles, cancelable, detail, key, code}`. False leaves a pending
 // TypeError naming what was wrong: a dispatch with no type is a program bug,
 // and a silently dropped one would look exactly like a listener that never
 // ran. `bubbles`/`cancelable` default to true — a custom event between the two
@@ -297,6 +299,15 @@ bool readEventSpec(Value descV, const char* what, EventSpec& out) {
         }
         out.hasDetail = true;
         out.detail = ev::toUtf8(detailV);
+    }
+
+    Value keyV = ev::getProperty(desc.get(), "key");
+    if (!ev::isUndefined(keyV) && !ev::isNull(keyV) && !ev::isObject(keyV)) {
+        out.key = ev::toUtf8(keyV);
+    }
+    Value codeV = ev::getProperty(desc.get(), "code");
+    if (!ev::isUndefined(codeV) && !ev::isNull(codeV) && !ev::isObject(codeV)) {
+        out.code = ev::toUtf8(codeV);
     }
     return true;
 }
@@ -417,6 +428,13 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
         return ev::throwError(std::string(what) +
                               ".dispatchEvent: no element to dispatch at");
     }
+    if (spec.type == "keydown" || spec.type == "keyup") {
+        dom::KeyboardEvent k(spec.type, spec.bubbles, spec.cancelable);
+        k.setKey(spec.key);
+        k.setCode(spec.code.empty() ? spec.key : spec.code);
+        engine->dispatchElementEvent(el, k);
+        return ev::fromBool(!k.defaultPrevented());
+    }
     dom::CustomEvent custom(spec.type, spec.bubbles, spec.cancelable);
     dom::Event plain(spec.type, spec.bubbles, spec.cancelable);
     dom::Event& evt = spec.hasDetail ? static_cast<dom::Event&>(custom) : plain;
@@ -433,6 +451,13 @@ Value hostDispatchToWindow(Value desc) {
     if (!readEventSpec(desc, "window", spec)) return ev::undefined();
     engine::Engine* engine = hostEngine();
     if (!engine) return ev::throwError("window.dispatchEvent: no engine");
+    if (spec.type == "keydown" || spec.type == "keyup") {
+        dom::KeyboardEvent k(spec.type, spec.bubbles, spec.cancelable);
+        k.setKey(spec.key);
+        k.setCode(spec.code.empty() ? spec.key : spec.code);
+        engine->dispatchWindowEvent(k);
+        return ev::fromBool(!k.defaultPrevented());
+    }
     dom::CustomEvent custom(spec.type, spec.bubbles, spec.cancelable);
     dom::Event plain(spec.type, spec.bubbles, spec.cancelable);
     dom::Event& evt = spec.hasDetail ? static_cast<dom::Event&>(custom) : plain;
