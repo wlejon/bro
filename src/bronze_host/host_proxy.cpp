@@ -138,8 +138,39 @@ Value makeHostProxy(HostProxyTraps traps) {
         return d.get();
     });
 
+    // apply(target, thisArg, argsArray) / construct(target, argsArray,
+    // newTarget) — present only for a callable view, because a trap defined on
+    // a non-callable target is a trap the language will never consult.
+    if (pack->t.apply) {
+        h.def("apply", 3, [pack](Value, std::span<const Value> a) -> Value {
+            Value list = argAt(a, 2);
+            const uint32_t n = ev::isObject(list)
+                                   ? static_cast<uint32_t>(
+                                         ev::toDouble(ev::getProperty(list, "length")))
+                                   : 0;
+            std::vector<Value> args;
+            args.reserve(n);
+            for (uint32_t i = 0; i < n; ++i) args.push_back(ev::getElement(list, i));
+            return pack->t.apply(argAt(a, 1), std::span<const Value>(args));
+        });
+    }
+    if (pack->t.construct) {
+        h.def("construct", 3, [pack](Value, std::span<const Value> a) -> Value {
+            Value list = argAt(a, 1);
+            const uint32_t n = ev::isObject(list)
+                                   ? static_cast<uint32_t>(
+                                         ev::toDouble(ev::getProperty(list, "length")))
+                                   : 0;
+            std::vector<Value> args;
+            args.reserve(n);
+            for (uint32_t i = 0; i < n; ++i) args.push_back(ev::getElement(list, i));
+            return pack->t.construct(std::span<const Value>(args));
+        });
+    }
+
     ev::Persistent handler(h.get());
-    ev::Persistent target(ev::createObject());
+    ev::Persistent target(ev::isUndefined(pack->t.target) ? ev::createObject()
+                                                          : pack->t.target);
 
     ev::GlobalValue proxyCtor = ev::globalValue("Proxy");
     if (!proxyCtor.found) {

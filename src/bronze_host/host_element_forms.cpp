@@ -13,19 +13,46 @@
 
 namespace bro::bronze_host {
 
+namespace {
+// Where a non-reflecting element's `value` actually lives. Same key as the
+// QuickJS binding's, so one <div> has one `value` whichever realm wrote it.
+constexpr const char* kValueExpando = "__broValue";
+} // namespace
+
 void decorateElementForms(ObjectBuilder& b) {
+    // `value` is on the ONE element prototype, so it is reached by every
+    // element and not only by the controls that reflect one. A <div>'s
+    // `.value` is an ordinary expando (form_control.h says so at
+    // reflectsValue), and an accessor that answers "" for it is not merely
+    // imprecise: the setter swallows the write. That cost real time to find —
+    // three.js's editor stores an object id on each outliner row as
+    // `option.value = object.id`, reads it back in the row's click handler,
+    // and got "" instead, so `parseInt` made a NaN, `getObjectById` answered
+    // undefined, and selecting anything threw on `object.uuid`.
+    //
+    // The fallback is src/js/element_bindings.cpp's, down to the key: both
+    // realms bind the same elements, and a page that sets `div.value` in one
+    // and reads it in the other must see one property and not two.
     b.accessor("value",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st) return ev::undefined();
-                   return ev::fromUtf8(st->el ? layout::formValue(st->el)
-                                              : std::string());
+                   if (!st->el) return ev::fromUtf8(std::string());
+                   if (!layout::reflectsValue(st->el))
+                       return ev::getProperty(self_, kValueExpando);
+                   return ev::fromUtf8(layout::formValue(st->el));
                },
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
-                   if (!st) return ev::undefined();
+                   if (!st || !st->el) return ev::undefined();
                    Value v = argAt(a, 0);
-                   if (st->el && !ev::isObject(v))
+                   if (!layout::reflectsValue(st->el)) {
+                       // Whatever it is — number, object, undefined — kept as
+                       // it was given, because an expando is not coerced.
+                       ev::setProperty(self_, kValueExpando, v);
+                       return ev::undefined();
+                   }
+                   if (!ev::isObject(v))
                        layout::setFormValue(st->el,
                                             ev::isUndefined(v) ? "" : ev::toUtf8(v));
                    return ev::undefined();

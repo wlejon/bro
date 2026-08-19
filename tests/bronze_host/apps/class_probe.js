@@ -31,9 +31,19 @@ function say(label, value) { console.log('APP ' + label + '=' + value); }
 // On the web `Image` IS `HTMLImageElement` — one constructor under two names.
 say('ctor.aliased', Image === HTMLImageElement);
 say('ctor.protoIsObject', typeof Image.prototype === 'object' && Image.prototype !== null);
-// The minted prototype is an ordinary object, so an instance still reaches
-// Object.prototype and `img.hasOwnProperty(...)` resolves.
-say('ctor.protoChainsToObject', Object.getPrototypeOf(Image.prototype) === Object.prototype);
+// `Image` is an element class: on the web HTMLImageElement extends HTMLElement
+// extends Element, and an img is a NODE — one you can append, which is the
+// whole reason it is not a standalone host object here. So its prototype
+// chains onto Element's...
+say('ctor.protoChainsToElement', Object.getPrototypeOf(Image.prototype) === Element.prototype);
+// ...and Object.prototype is still reached THROUGH it, which is what keeps
+// `img.hasOwnProperty(...)` resolving. Walked rather than asserted one link at
+// a time, so that adding a link to the chain does not break this.
+say('ctor.reachesObjectProto', (function () {
+    let p = Image.prototype;
+    while (p !== null && p !== Object.prototype) p = Object.getPrototypeOf(p);
+    return p === Object.prototype;
+})());
 
 const img = new Image();
 
@@ -57,7 +67,10 @@ const other = new Image();
 say('img.methodShared', img.addEventListener === other.addEventListener);
 say('img.instancesDistinct', img !== other);
 
-// Own properties are STATE and nothing else, in registration order.
+// Own properties are IDENTITY and nothing else: an element's tag, and nothing
+// that could have been shared. Everything the image adds — src, the four
+// sizes, complete, crossOrigin — is on the prototype, so one img and ten
+// thousand cost the same three.
 say('img.ownKeys', Object.keys(img).sort().join(','));
 
 // ---------------------------------------------------------------------------

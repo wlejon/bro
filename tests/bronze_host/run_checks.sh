@@ -158,6 +158,15 @@ check_proxy() {
         --expr "advanceTime(64);"
 }
 
+# `new Function` in compiled code, answered by the engine's QuickJS realm, and
+# the value bridge that makes the result usable. Only this check catches a
+# crossing that copies where it must wrap (a written property the compiled side
+# never sees), an identity that does not round-trip, and the three non-ordinary
+# constructors being answered as if they were `Function`.
+check_interp() {
+    bh_run_check bronze_host_interp         "$SCRIPT_DIR/appdir_interp"         "$SCRIPT_DIR/apps/interp_probe.js"         "$SCRIPT_DIR/expected/interp_probe.expected"         --expr "advanceTime(64);"
+}
+
 # Host classes, via Image as the worked example: a handle born on its
 # constructor's prototype, methods shared per class rather than closed over
 # per instance, instanceof answering.
@@ -300,8 +309,8 @@ check_pixi() {
 
 # ---------------------------------------------------------------------------
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
-        parser proxy class input video audio physics ai net wild instanced
-        pixi)
+        parser proxy class interp input video audio physics ai net wild
+        instanced pixi)
 
 case "${1:-}" in
     --list)

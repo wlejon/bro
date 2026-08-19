@@ -26,7 +26,8 @@ Off by default; nothing here is in the default build.
 | `host_events.cpp` | `on<type>` + `addEventListener` for the objects that fire events |
 | `host_dom_events.cpp` | canvas / document / window listeners, wired to the **engine's** dispatch |
 | `host_timers.cpp` | `setTimeout`/`setInterval` and the main-thread task queue |
-| `host_image.cpp` | `Image`, and the decode behind `.src` |
+| `host_image.cpp` | the image DECODE behind `.src`, and the lookup that finds a decoded image behind a value |
+| `host_element_image.cpp` | `Image` / `HTMLImageElement` as an element CLASS: `new Image()` and `createElement('img')` are one `<img>` node, born on a prototype that chains to `Element`'s |
 | `host_xhr.cpp` | `XMLHttpRequest` over the app asset path and http(s); `''`/`text`/`arraybuffer`/`blob`/`json` (see its header) |
 | `host_file.cpp` | `Blob`, `File`, `FileReader`, and `URL` — bytes an app holds, and the object URLs that name them |
 | `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
@@ -35,7 +36,9 @@ Off by default; nothing here is in the default build.
 | `host_video.cpp` | `VideoEncoder` / `GifEncoder`: RGBA frames, a 2D canvas or the composited viewport in; a `.webm` or `.gif` file out |
 | `host_fetch.cpp` | `fetch()` over the engine's asset mounts, into a real bronze Promise |
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
-| `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, `localStorage` |
+| `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, `localStorage`, and behind a bridged interpreted object |
+| `host_interp.cpp` | **the interpreter bridge**: compiled `new Function` compiled by the page's QuickJS realm, and values crossing between the two heaps in both directions |
+| `host_vendor_globals.cpp` | the names a page loads with plain `<script>` tags — `signals`, `CodeMirror`, `acorn`, `tern`, `esprima`, `jsonlint` — registered as the page's own objects, through that bridge |
 | `host_audio_*.cpp`, `host_audio_internal.h` | the Web Audio SURFACE ? `AudioContext` and the node/param objects ? over broaudio. `connect()` routes nothing and most node state is inaudible; see the header of `host_audio_core.cpp` for what actually reaches the engine. `_core` context + globals install, `_param` AudioParam, `_buffer` AudioBuffer + decode, `_nodes` oscillator/filter/analyser/source, `_spatial` Panner + StereoPanner, `_dsp` Delay/Compressor/WaveShaper/Convolver/Splitter/Merger |
 | `host_physics_*.cpp`, `host_physics_internal.h` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt. `_core` bodies + globals, `_constraints` joints/motors/limits, `_character`, `_softbody`, `_queries` raycast/overlap |
 | `host_ai_*.cpp`, `host_ai_internal.h` | the `AI` namespace, over brogameagent. `_core` globals + aim math, `_navgrid`, `_navmesh`, `_agent` |
@@ -151,6 +154,45 @@ crosses the language boundary is a copy:
   one of the three on a stored event object afterwards is a named `TypeError`,
   not a silent no-op and not a write through a dangling pointer.
 
+### The exception, and it is one exception: the interpreter bridge
+
+`host_interp.cpp` is where heap values DO cross, and it exists because one
+thing an AOT compiler cannot do is compile a string the program builds at run
+time. `new Function(source)` is not a corner: it is how the three.js editor's
+Play button runs a user's script (`editor/js/libs/app.js`), and refusing it
+refuses the feature.
+
+So a compiled `new Function` is compiled by **the page's QuickJS realm** — the
+one already in the process, running the page's own `<script>` tags — and the
+function it produces comes back wrapped. From there values cross in both
+directions: primitives by value, objects and functions by a wrapper that
+forwards property reads, writes, calls, `in`, `delete` and enumeration to the
+other heap, typed arrays by copy (embed's pointer contract makes a shared
+buffer a dangling read at the next allocation), and thrown values as throws
+rather than as silent undefined.
+
+Two things make that safe to say rather than merely to hope:
+
+- **Identity is a table, not an address.** A value that has crossed once is
+  wrapped once, so a round trip returns the object that went in. bronze's
+  collector MOVES, so the bronze side of that table is compared by walking it
+  rather than by hashing raw bits — the bits name a pre-collection address.
+  QuickJS is refcounted and does not move, so its side is a hash.
+- **The table owns both halves, and neither finalizer touches the other
+  collector.** A wrapper holds an index into the table and nothing else.
+
+Engine objects still do not cross — they are *shared*, which is the rule above
+and not an exception to it. A `<div>` handed through the bridge in either
+direction resolves to the same `dom::Element`, so `appendChild` gets a node
+rather than a wrapper that merely answers `nodeType`.
+
+`host_vendor_globals.cpp` is what the bridge bought: `CodeMirror`, `esprima`,
+`acorn`, `tern`, `signals` and `jsonlint` used to be four hundred and fifty
+lines of hollow C++ reimplementation — a `CodeMirror` you could not type in, an
+`esprima.parse` that approved every program. They are now the page's real
+libraries. A page that did not load one gets `undefined` for it, which is what
+the same page gets in a browser.
+
 ### CustomEvent, which is the sanctioned channel between the two worlds
 
 `dispatchEvent` from compiled code takes a plain descriptor —
@@ -222,7 +264,8 @@ used to say the same sentence — *bronze cannot build a value on a chosen
 prototype* — and shaped real API around it. `new CustomEvent(...)` does not
 exist because of it.
 
-That is no longer true, and `Image` (`host_image.cpp`) is the worked example.
+That is no longer true, and `Image` (`host_element_image.cpp`) is the worked
+example.
 The class story is three calls, none of them new:
 
 1. `makeFunction` for the constructor, then **read** `prototype` off it with

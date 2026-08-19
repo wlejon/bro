@@ -26,6 +26,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_interp.h"
 
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
@@ -366,8 +367,10 @@ dom::Document* documentFor(dom::Document* fixed) {
 
 // document.createElement / createElementNS. An unknown tag is not a refusal:
 // every HTML tag is a real dom::Element here, and the element surface is the
-// same one for all of them. `img` is the one exception — it is a host object
-// with a decoder behind `.src`, not a laid-out element (host_image.cpp).
+// same one for all of them. `img` gets MORE than that surface rather than a
+// different one — a decoder behind `.src`, added by host_element_image.cpp on
+// top of the element, because an image built this way is still a node the
+// program may append.
 Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
                         size_t tagIndex) {
     Value tagV = argAt(a, tagIndex);
@@ -838,6 +841,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     g_host = new HostState();
     g_host->engine = &engine;
 
+    // The interpreter bridge, before anything the compiled program can run:
+    // `new Function` is a BUILTIN read, not a host global, so it is not on the
+    // manifest and nothing below registers it — the hook is installed into
+    // bronze itself (host_interp.h). Early, because a module's top level may
+    // build a function from a string on its first line.
+    installInterpBridge(engine);
+
     // The frame hook, registered exactly once (Engine::onFrame callbacks are
     // never unregistered). It fires at the point the engine's own rAF fires,
     // with rAF's pause semantics, in every display mode. hostFrame above owns
@@ -895,10 +905,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     // The families that own their own files, each registering the names
     // the manifest lists for it, in the manifest's order.
     installTimerGlobals();
-    installImageGlobal();
     installXhrGlobal();
     installFetchGlobal();
     installPlatformGlobals();
+    // AFTER installPlatformGlobals, which is where installElementGlobals runs:
+    // `Image` is an element class and chains its prototype onto Element's, so
+    // Element's has to exist first (host_element_image.cpp).
+    installImageGlobal();
     installFileGlobals();
     installAbortGlobals();
     installObserverGlobals();

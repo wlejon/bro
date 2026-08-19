@@ -325,6 +325,8 @@ bool isCanvasTag(const std::string& tag) {
     return tag == "CANVAS" || tag == "canvas";
 }
 
+bool isImgTag(const std::string& tag) { return tag == "IMG" || tag == "img"; }
+
 // Element is a real class: one prototype carrying the whole element surface,
 // with every instance born on it. Before this, an element carried its own copy
 // of all fifty-eight members — a thousand-element UI allocated fifty-eight
@@ -344,6 +346,10 @@ Value makeNodeHandleObject(dom::Node* node) {
 // its Persistents from inside a finalizer — the one thing host_internal.h's GC
 // rule forbids.
 Value makeElementHandleObject(dom::Element* el) {
+    // An <img> is born on Image.prototype, which chains to this one — so it is
+    // an Element and a node like any other and an Image besides
+    // (host_element_image.cpp).
+    if (isImgTag(el->tagName())) return makeImageElementHandle(el);
     return g_elementClass.make(stateFor(el), [](void*) {});
 }
 
@@ -354,12 +360,15 @@ HostNodeState* hostNodeStateOfValue(Value v) { return nodeStateOf(v); }
 Value makePlainElementValue(dom::Element* el) {
     ObjectBuilder b(makeElementHandleObject(el));
     installElementCore(b, el);
+    if (isImgTag(el->tagName())) primeImageFromMarkup(el);
     return b.get();
 }
 
 // The only per-instance properties an element has: its identity. Everything
 // else is the same for every element and lives on the prototype.
 void decorateElementProto(ObjectBuilder& b);
+
+const HostClass& elementHostClass() { return g_elementClass; }
 
 void installElementGlobals() {
     // `new Element()` is illegal on the web (the [[HTMLConstructor]] rule), so
@@ -377,16 +386,18 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     b.set("tagName", ev::fromUtf8(el->tagName()));
     b.set("nodeName", ev::fromUtf8(el->tagName()));
 
-    // The event-target trio stays per instance, and is the only part of the
-    // element surface that does. installElementEventTarget takes an
-    // ElementSource — a std::function<dom::Element*()> with no receiver to
-    // read — and its error messages name the tag, which is per element too.
-    // Three methods an element owns instead of fifty-eight.
-    installElementEventTarget(b, [st = stateFor(el)]() { return st->el; },
-                               el->tagName().c_str());
 }
 
 void decorateElementProto(ObjectBuilder& b) {
+    // The event-target trio, shared like everything else here. It used to be
+    // the one part of the element surface that was per instance, because
+    // installElementEventTarget took an ElementSource that captured a single
+    // element; passing no source makes it read the receiver instead, so
+    // `a.addEventListener === b.addEventListener` for any two elements — which
+    // is what the web says and what `document.createElement('img')` has to
+    // satisfy against `new Image()`.
+    installElementEventTarget(b, nullptr, "Element");
+
     // One per event type the ENGINE actually dispatches to an element. A name
     // that is absent reads as `undefined` and an assignment to it goes nowhere,
     // which is the failure a library hits silently — so the list tracks

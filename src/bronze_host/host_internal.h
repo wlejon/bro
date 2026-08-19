@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -291,6 +292,12 @@ Value hostDispatchToWindow(Value desc);
 // entry itself is never freed while the program might still hold the wrapper —
 // it holds Persistents, and ~Persistent is an embed call, which the GC rule
 // above forbids a handle finalizer from making.
+// An <img>'s decoded pixels, defined further down with the rest of the image
+// path. Declared here because an img ELEMENT carries one: the wrapper is a
+// node like any other element's, and the decoder hangs off its state rather
+// than replacing it (host_element_image.cpp).
+struct HostImage;
+
 struct HostNodeState {
     uint32_t tag = kHostElementTag;  // must be first — see the tag note above
     dom::Node* node = nullptr;
@@ -306,6 +313,10 @@ struct HostNodeState {
     bool hasClassList = false;
     bool hasComputed = false;
     bool hasDataset = false;
+    // Non-null only for an <img>: its src, its size and its RGBA. Owned here
+    // so it dies with the node's entry, which is what the registry's
+    // unique_ptr already guarantees.
+    std::unique_ptr<HostImage> image;
 };
 
 // ---------------------------------------------------------------------------
@@ -320,6 +331,13 @@ Value makeClassListObject(HostNodeState* st);
 void decorateElementDataset(ObjectBuilder& b);
 
 void decorateElementForms(ObjectBuilder& b);
+
+// The <img> half of the element surface (host_element_image.cpp). `Image` is
+// an element CLASS here, so the members live on its prototype and an img
+// wrapper is born on that instead of on Element's — which is why the handle
+// comes from here rather than from host_element.cpp's element class.
+Value makeImageElementHandle(dom::Element* el);
+void primeImageFromMarkup(dom::Element* el);
 
 // ---------------------------------------------------------------------------
 // Storage & Gamepad (dom_storage.cpp / dom_gamepad.cpp)
@@ -409,6 +427,17 @@ struct HostProxyTraps {
     std::function<bool(const std::string& key)> has;
     std::function<std::vector<std::string>()> ownKeys;
     std::function<void(const std::string& key)> remove;
+
+    // A CALLABLE view. The four live views this file was written for are data,
+    // and an empty object target is all they need; a view standing in for a
+    // FUNCTION in another engine is not, because [[Call]] and [[Construct]]
+    // are the target's and no trap can conjure them. So such a caller supplies
+    // its own callable target — an unnamed host function, so that it carries
+    // no own `name`/`length` for the 10.5 invariants to check the traps
+    // against — and the two traps that forward through it.
+    Value target = ev::undefined();
+    std::function<Value(Value thisValue, std::span<const Value> args)> apply;
+    std::function<Value(std::span<const Value> args)> construct;
 };
 
 // The proxy itself. Builds its own empty target — see host_proxy.cpp for why
@@ -440,6 +469,11 @@ Value hostComputedStyleFor(Value elValue);
 void noteHostElementValue(dom::Element* el, Value v);
 
 bool isCanvasTag(const std::string& tag);
+bool isImgTag(const std::string& tag);
+
+// The class every element is born on. Exposed so that a SUBCLASS — `Image`,
+// today the only one — can chain its prototype onto it.
+const HostClass& elementHostClass();
 
 // A fresh object that is ALREADY an element handle — what every element
 // wrapper in this layer must be built on, so hostElementOf() can recover the
@@ -511,6 +545,12 @@ struct HostImage {
     bool ok = false;            // ... and it settled as a success
 };
 const HostImage* hostImageOf(Value v);
+
+// Resolve `src` and decode it into `img`, leaving `img.complete` true either
+// way and `img.ok` true only on success. Shared by `new Image()` and by an
+// <img> element, because a texture must not depend on which of the two the
+// page happened to build (host_image.cpp).
+void loadHostImage(HostImage& img, const std::string& src);
 
 // ---------------------------------------------------------------------------
 // Platform odds and ends (host_platform.cpp)

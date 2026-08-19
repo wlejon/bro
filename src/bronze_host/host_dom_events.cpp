@@ -415,6 +415,35 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
     if (r.thrown) reportBronzeError(origin, r.value);
 }
 
+namespace {
+
+// The receiver's element, for the shared form of the trio below. An
+// ElementSource captures ONE element, so a method built from it can only live
+// on that element's own object — which is why these three were the last
+// per-instance members an element had. Reading the receiver instead is the
+// same answer without the capture, so ONE function object serves every
+// element and two elements' `addEventListener` are the same value, the way
+// they are on the web and the way the other fifty-eight members here already
+// are.
+dom::Element* elementOfReceiver(Value self) {
+    HostNodeState* st = hostNodeStateOfValue(self);
+    return st ? st->el : nullptr;
+}
+
+// `source` may be null, and that is the prototype form: resolve the element
+// from the receiver, and name it in diagnostics by its own tag.
+dom::Element* targetElement(const ElementSource& source, Value thisValue) {
+    return source ? source() : elementOfReceiver(thisValue);
+}
+
+std::string targetName(const ElementSource& source, const std::string& name,
+                       dom::Element* el) {
+    if (source || !el) return name;
+    return el->tagName();
+}
+
+}  // namespace
+
 void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                const char* what) {
     std::string name = what;
@@ -424,25 +453,26 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         // thisValue is current at entry only; root it before anything below
         // allocates (embed.h's NativeFn contract).
         ev::Persistent self(thisValue);
+        dom::Element* el = targetElement(source, thisValue);
+        const std::string who = targetName(source, name, el);
         Value typeV = argAt(a, 0);
         Value fn = argAt(a, 1);
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
-            return ev::throwTypeError(name + ".addEventListener: type must be a string");
+            return ev::throwTypeError(who + ".addEventListener: type must be a string");
         }
         if (!ev::isFunction(fn)) {
-            return ev::throwTypeError(name +
+            return ev::throwTypeError(who +
                                       ".addEventListener: listener must be a function");
         }
         ev::Persistent fnP(fn);
         dom::ListenerOptions opts = readOptions(argAt(a, 2));
         std::string type = ev::toUtf8(typeV);
 
-        dom::Element* el = source();
         if (!el) {
             // The registration says so rather than vanishing: a listener the
             // program believes is attached, on a target that does not exist,
             // is the failure this whole file is here to end.
-            return ev::throwError(name +
+            return ev::throwError(who +
                                   ".addEventListener: the element does not exist yet");
         }
 
@@ -455,7 +485,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
             }
         }
 
-        std::string origin = name + " " + type + " listener";
+        std::string origin = who + " " + type + " listener";
         dom::ListenerHandle handle = el->addEventListener(
             type,
             [fnP, self, origin](dom::Event& evt) {
@@ -463,22 +493,23 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
             },
             opts);
         if (!handle) {
-            return ev::throwError(name + ".addEventListener: the engine refused the "
-                                         "registration");
+            return ev::throwError(who + ".addEventListener: the engine refused the "
+                                        "registration");
         }
         registrations().push_back({el, std::move(type), fnP, handle});
         return ev::undefined();
     });
 
-    b.def("removeEventListener", 3, [source, name](Value, std::span<const Value> a) {
+    b.def("removeEventListener", 3, [source, name](Value thisValue,
+                                                   std::span<const Value> a) {
+        dom::Element* el = targetElement(source, thisValue);
         Value typeV = argAt(a, 0);
         Value fn = argAt(a, 1);
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
-            return ev::throwTypeError(name +
+            return ev::throwTypeError(targetName(source, name, el) +
                                       ".removeEventListener: type must be a string");
         }
         std::string type = ev::toUtf8(typeV);
-        dom::Element* el = source();
         auto& list = registrations();
         for (auto it = list.begin(); it != list.end(); ++it) {
             // Identity by a compare of two CURRENT addresses with no
@@ -493,8 +524,11 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         return ev::undefined();
     });
 
-    b.def("dispatchEvent", 1, [source, name](Value, std::span<const Value> a) {
-        return hostDispatchToElement(source, name.c_str(), argAt(a, 0));
+    b.def("dispatchEvent", 1, [source, name](Value thisValue,
+                                             std::span<const Value> a) {
+        dom::Element* el = targetElement(source, thisValue);
+        const std::string who = targetName(source, name, el);
+        return hostDispatchToElement([el]() { return el; }, who.c_str(), argAt(a, 0));
     });
 }
 

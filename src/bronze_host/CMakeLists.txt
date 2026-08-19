@@ -111,11 +111,13 @@ add_library(bro_bronze_host STATIC
     host_element_style.cpp
     host_element_dataset.cpp
     host_element_forms.cpp
+    host_element_image.cpp
     host_node.cpp
     host_events.cpp
     host_dom_events.cpp
     host_timers.cpp
     host_image.cpp
+    host_interp.cpp
     host_platform.cpp
     host_xhr.cpp
     host_fetch.cpp
