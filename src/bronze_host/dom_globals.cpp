@@ -632,6 +632,19 @@ Value makeWindowValue() {
 
     b.set("getComputedStyle", makeGetComputedStyle());
     b.set("localStorage", makeLocalStorageValue());
+    b.def("matchMedia", 1, [](Value, std::span<const Value> a) {
+        std::string query = a.empty() || ev::isUndefined(a[0]) ? "" : ev::toUtf8(a[0]);
+        bool matches = (query.find("dark") != std::string::npos);
+        ObjectBuilder m;
+        m.set("matches", ev::fromBool(matches));
+        m.set("media", ev::fromUtf8(query));
+        auto noop = [](Value, std::span<const Value>) { return ev::undefined(); };
+        m.def("addEventListener", 2, noop);
+        m.def("removeEventListener", 2, noop);
+        m.def("addListener", 1, noop);
+        m.def("removeListener", 1, noop);
+        return m.get();
+    });
 
     {
         ObjectBuilder loc;
@@ -658,6 +671,8 @@ Value makeWindowValue() {
     for (const char* name : {
              "AudioContext", "webkitAudioContext", "signals", "CodeMirror",
              "acorn", "tern", "esprima", "jsonlint", "draco_encoder",
+             "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+             "requestAnimationFrame", "cancelAnimationFrame", "performance",
          }) {
         std::string n(name);
         b.accessor(name,

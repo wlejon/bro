@@ -36,6 +36,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 
+#include "engine/engine.h"
 #include "dom/comment_node.h"
 #include "dom/document.h"
 #include "dom/document_fragment.h"
@@ -297,6 +298,22 @@ void installNodeTree(ObjectBuilder& b) {
         if (!st) return ev::undefined();
                    return st->node ? hostNodeValue(st->node->parentNode())
                                    : ev::null();
+               },
+               nullptr);
+
+    b.accessor("ownerDocument",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->node) return ev::null();
+                   if (dom::Document* doc = st->node->document()) {
+                       if (hostEngine() && doc == hostEngine()->document()) {
+                           ev::GlobalValue g = ev::globalValue("document");
+                           return g.found ? g.value : ev::null();
+                       }
+                       return hostDocumentValue(doc);
+                   }
+                   ev::GlobalValue g = ev::globalValue("document");
+                   return g.found ? g.value : ev::null();
                },
                nullptr);
 

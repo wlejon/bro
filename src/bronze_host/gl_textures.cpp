@@ -19,6 +19,8 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 
+#include "canvas/canvas_scene.h"
+#include "dom/element.h"
 #include "util/log.h"
 
 namespace bro::bronze_host {
@@ -54,6 +56,21 @@ SourcePixels resolveSource(Value source, const char* who) {
         return {img->rgba.data(), img->width, img->height};
     }
 
+    if (dom::Element* el = hostElementOf(source)) {
+        if (auto* scene = static_cast<bro::canvas::CanvasScene*>(el->canvasScene())) {
+            int w = std::atoi(el->getAttribute("width").c_str());
+            int h = std::atoi(el->getAttribute("height").c_str());
+            if (w <= 0) w = 300;
+            if (h <= 0) h = 150;
+            const uint8_t* px = scene->snapshotPixels(w, h);
+            if (px) {
+                return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h)};
+            }
+        }
+        static const std::vector<uint8_t> s_dummy(4, 255);
+        return {s_dummy.data(), 1, 1};
+    }
+
     // ImageData-shaped { width, height, data }: the duck type bro's own canvas
     // and createImageBitmap paths already consume (src/js/imagebitmap_bindings.cpp),
     // matched here so a texture built from raw RGBA needs no new object kind.
@@ -78,7 +95,7 @@ SourcePixels resolveSource(Value source, const char* who) {
         }
     }
 
-    LOG_ERROR("bronze_host: %s DOM-source overload needs an Image or an "
+    LOG_ERROR("bronze_host: %s DOM-source overload needs an Image, Canvas, or an "
               "ImageData-shaped { width, height, data }",
               who);
     return {};

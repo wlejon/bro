@@ -574,6 +574,21 @@ void decorateElementProto(ObjectBuilder& b) {
                                  : ev::null();
                },
                nullptr);
+    b.accessor("ownerDocument",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->node) return ev::null();
+                   if (dom::Document* doc = st->node->document()) {
+                       if (hostEngine() && doc == hostEngine()->document()) {
+                           ev::GlobalValue g = ev::globalValue("document");
+                           return g.found ? g.value : ev::null();
+                       }
+                       return hostDocumentValue(doc);
+                   }
+                   ev::GlobalValue g = ev::globalValue("document");
+                   return g.found ? g.value : ev::null();
+               },
+               nullptr);
 
     auto defEdge = [&b](const char* name, bool first) {
         b.accessor(name,

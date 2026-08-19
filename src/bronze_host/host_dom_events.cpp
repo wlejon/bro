@@ -83,17 +83,7 @@ Value describeTarget(dom::Element* el) {
     if (!el) return ev::null();
     Value host = hostValueForElement(el);
     if (!ev::isUndefined(host)) return host;
-    ObjectBuilder b;
-    {
-        Value tag = ev::fromUtf8(el->tagName());
-        b.set("tagName", tag);
-    }
-    {
-        Value id = ev::fromUtf8(el->getAttribute("id"));
-        b.set("id", id);
-    }
-    b.set("nodeId", ev::fromDouble(static_cast<double>(el->nodeId())));
-    return b.get();
+    return hostElementValue(el);
 }
 
 // ---------------------------------------------------------------------------
