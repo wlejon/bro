@@ -586,6 +586,13 @@ const HostBlob* hostBlobOf(Value v);
 // the web, so there is never a second owner to keep in step.
 Value makeBlobValue(std::vector<uint8_t> bytes, std::string type);
 
+// A real `File` over the bytes at `path`, or `undefined` when it cannot be
+// read — a dropped directory, a permission error, a file that vanished between
+// the drop and the dispatch. The caller falls back to a `{ name, path }`
+// descriptor so a drop never fails outright, which is what the interpreted
+// realm does with the same failure (src/js/event_dispatch_populate.cpp).
+Value makeFileFromPath(const std::string& path);
+
 // ---------------------------------------------------------------------------
 // AbortController / AbortSignal (host_abort.cpp)
 // ---------------------------------------------------------------------------

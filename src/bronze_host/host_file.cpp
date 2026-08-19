@@ -11,8 +11,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <system_error>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -925,10 +930,73 @@ void decorateUrlProto(ObjectBuilder& b) {
     });
 }
 
+// The MIME type a filename implies. There is no sniffing here and no content
+// negotiation: an extension is all a dropped path carries, and it is what the
+// interpreted realm's `__bro_fileFromPath` uses too (src/js/js/file_polyfills.js),
+// so a File built here and one built there describe the same file the same way.
+std::string mimeForName(const std::string& name) {
+    const size_t dot = name.rfind('.');
+    if (dot == std::string::npos || dot + 1 >= name.size()) return "";
+    std::string ext = name.substr(dot + 1);
+    for (char& c : ext) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+    static const std::pair<const char*, const char*> kTable[] = {
+        {"png", "image/png"},    {"jpg", "image/jpeg"},  {"jpeg", "image/jpeg"},
+        {"gif", "image/gif"},    {"webp", "image/webp"}, {"bmp", "image/bmp"},
+        {"svg", "image/svg+xml"},
+        {"json", "application/json"}, {"js", "text/javascript"},
+        {"mjs", "text/javascript"},   {"css", "text/css"},
+        {"html", "text/html"},   {"txt", "text/plain"},  {"md", "text/plain"},
+        {"wav", "audio/wav"},    {"mp3", "audio/mpeg"},  {"ogg", "audio/ogg"},
+        {"webm", "video/webm"},  {"mp4", "video/mp4"},
+        {"glb", "model/gltf-binary"}, {"gltf", "model/gltf+json"},
+        {"zip", "application/zip"},   {"wasm", "application/wasm"},
+    };
+    for (const auto& [k, v] : kTable)
+        if (ext == k) return v;
+    return "";
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // The pieces other files use
+// ---------------------------------------------------------------------------
+
+Value makeFileFromPath(const std::string& path) {
+    std::error_code ec;
+    const std::filesystem::path fsPath(path);
+
+    std::ifstream in(fsPath, std::ios::binary);
+    if (!in) return ev::undefined();
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+    if (in.bad()) return ev::undefined();
+
+    auto* blob = new HostBlob();
+    blob->bytes = std::move(bytes);
+    blob->isFile = true;
+    blob->name = fsPath.filename().string();
+    blob->type = mimeForName(blob->name);
+    // Best effort, and zero when the clock is unreadable: `lastModified` is
+    // metadata a drop handler may print, never something it branches on.
+    const auto mtime = std::filesystem::last_write_time(fsPath, ec);
+    if (!ec) {
+        blob->lastModified = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                mtime.time_since_epoch()).count());
+    }
+
+    ObjectBuilder b(g_fileClass.make(blob, hostBlobDtor));
+    installBlobState(b, blob);
+    b.set("name", ev::fromUtf8(blob->name));
+    b.set("lastModified", ev::fromDouble(blob->lastModified));
+    b.set("webkitRelativePath", ev::fromUtf8(""));
+    // Where it came from. Not a web property, and deliberately kept: a drop is
+    // the one moment a page is handed a real filesystem path (docs/paths-api.js),
+    // and the interpreted realm hands one over too.
+    b.set("path", ev::fromUtf8(path));
+    return b.get();
+}
 // ---------------------------------------------------------------------------
 
 const HostBlob* hostBlobOf(Value v) { return mutableHostBlob(v); }

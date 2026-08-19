@@ -184,36 +184,44 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         dt.def("setData", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
         dt.def("clearData", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
 
+        // A dropped file is a REAL File — bytes and all. It used to be a
+        // descriptor with `size: 0` and no content, which every shape check a
+        // page makes passes and every read fails: FileReader answered the empty
+        // string, `URL.createObjectURL` handed back an empty resource, and a
+        // three.js editor asked to import an .obj built an empty mesh without
+        // saying why. `makeFileFromPath` reads the file; anything unreadable
+        // still arrives as the name/path descriptor, so a drop of a directory
+        // does not fail the whole gesture.
         const auto& files = drag->files();
-        Value filesArr = hostArrayOf(files.size(), [&files](size_t i) {
-            const std::string& path = files[i];
-            std::string name = std::filesystem::path(path).filename().string();
-            ObjectBuilder f;
-            f.set("name", ev::fromUtf8(name));
-            f.set("path", ev::fromUtf8(path));
-            f.set("size", ev::fromDouble(0));
-            f.set("type", ev::fromUtf8(""));
-            f.set("lastModified", ev::fromDouble(0));
-            f.set("webkitRelativePath", ev::fromUtf8(""));
-            return f.get();
+        auto fileForPath = [](const std::string& path) {
+            Value f = makeFileFromPath(path);
+            if (!ev::isUndefined(f)) return f;
+            ObjectBuilder d;
+            d.set("name", ev::fromUtf8(std::filesystem::path(path).filename().string()));
+            d.set("path", ev::fromUtf8(path));
+            return d.get();
+        };
+        Value filesArr = hostArrayOf(files.size(), [&files, &fileForPath](size_t i) {
+            return fileForPath(files[i]);
         });
         dt.set("files", filesArr);
 
-        Value itemsArr = hostArrayOf(files.size(), [&files](size_t i) {
+        // `items` is the DataTransferItemList, and a page that has it PREFERS
+        // it: the three.js editor branches on `dataTransfer.items` and reaches
+        // its files through `webkitGetAsEntry().file(cb)` because that path
+        // also carries dropped folders. So the entries have to answer with the
+        // same real Files `dt.files` holds, or having the list at all is worse
+        // than not having it — it steers the page onto a route that yields
+        // nothing.
+        Value itemsArr = hostArrayOf(files.size(), [&files, &fileForPath](size_t i) {
             const std::string& path = files[i];
-            std::string name = std::filesystem::path(path).filename().string();
+            const std::string name = std::filesystem::path(path).filename().string();
             ObjectBuilder item;
             item.set("kind", ev::fromUtf8("file"));
             item.set("type", ev::fromUtf8(""));
-            item.def("getAsFile", 0, [name, path](Value, std::span<const Value>) {
-                ObjectBuilder f;
-                f.set("name", ev::fromUtf8(name));
-                f.set("path", ev::fromUtf8(path));
-                f.set("size", ev::fromDouble(0));
-                f.set("type", ev::fromUtf8(""));
-                f.set("lastModified", ev::fromDouble(0));
-                f.set("webkitRelativePath", ev::fromUtf8(""));
-                return f.get();
+            item.def("getAsFile", 0, [path](Value, std::span<const Value>) {
+                Value f = makeFileFromPath(path);
+                return ev::isUndefined(f) ? ev::null() : f;
             });
             item.def("webkitGetAsEntry", 0, [name, path](Value, std::span<const Value>) {
                 ObjectBuilder entry;
@@ -221,19 +229,25 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
                 entry.set("isDirectory", ev::fromBool(false));
                 entry.set("name", ev::fromUtf8(name));
                 entry.set("fullPath", ev::fromUtf8("/" + name));
-                entry.def("file", 1, [name, path](Value, std::span<const Value> a) {
+                // DEFERRED, and that is not a detail. FileSystemFileEntry.file()
+                // is asynchronous on the web, and code written against it
+                // counts on the callback landing after the loop that queued it:
+                // the three.js editor's getFilesFromItemList increments its
+                // "handled" counter in the callback and its "total" on the line
+                // AFTER the entry.file() call, so a synchronous callback
+                // compares 1 === 0, decides the batch is not finished, and
+                // silently drops every dropped file. The engine's own frame
+                // seam is the queue.
+                entry.def("file", 1, [path](Value, std::span<const Value> a) {
                     Value cb = argAt(a, 0);
-                    if (ev::isFunction(cb)) {
-                        ObjectBuilder f;
-                        f.set("name", ev::fromUtf8(name));
-                        f.set("path", ev::fromUtf8(path));
-                        f.set("size", ev::fromDouble(0));
-                        f.set("type", ev::fromUtf8(""));
-                        f.set("lastModified", ev::fromDouble(0));
-                        f.set("webkitRelativePath", ev::fromUtf8(""));
-                        Value fileVal = f.get();
-                        ev::call(cb, ev::undefined(), std::span<const Value>(&fileVal, 1));
-                    }
+                    if (!ev::isFunction(cb)) return ev::undefined();
+                    auto held = std::make_shared<ev::Persistent>(cb);
+                    postHostTask([held, path]() {
+                        Value fileVal = makeFileFromPath(path);
+                        if (ev::isUndefined(fileVal)) return;
+                        ev::call(held->get(), ev::undefined(),
+                                 std::span<const Value>(&fileVal, 1));
+                    });
                     return ev::undefined();
                 });
                 return entry.get();

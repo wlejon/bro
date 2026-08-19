@@ -508,6 +508,18 @@ resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of the ENGINE's
 object-URL table (`util/object_url.h`), so a URL minted by compiled code
 resolves in the page's markup and vice versa.
 
+A DROPPED file is one of those `File`s — bytes read off disk, the MIME type its
+extension implies, and the non-standard `.path` the interpreted realm also
+hands over (`makeFileFromPath`, used by `host_dom_events.cpp`). It used to be a
+descriptor with `size: 0` and no content, which passes every shape check a page
+makes and fails every read. `dataTransfer.items` answers with the same Files,
+and its `webkitGetAsEntry().file(cb)` calls back on the FRAME SEAM rather than
+synchronously, because that call is asynchronous on the web and code written
+against it counts on it — the three.js editor's `getFilesFromItemList`
+increments its "handled" counter in the callback and its "total" on the next
+line, so a synchronous callback makes it decide the batch is unfinished and
+drop every dropped file.
+
 `URL` is a CONSTRUCTOR and carries the statics: `new URL(href, base)`,
 `URL.createObjectURL`, `URL.revokeObjectURL`, `URL.parse(href, base)` and
 `x instanceof URL` all work. It was a bare namespace until `setProperty` took a
