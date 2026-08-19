@@ -4,6 +4,8 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 
+#include "engine/engine.h"
+
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -25,40 +27,95 @@ struct StorageState {
 
 static StorageState g_storage;
 
+static std::string escapeJsonString(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\t': out += "\\t"; break;
+            case '\r': out += "\\r"; break;
+            default: out += c; break;
+        }
+    }
+    return out;
+}
+
 static void loadStorageFile() {
     if (g_storage.loaded) return;
     g_storage.loaded = true;
-    g_storage.path = ".storage.json";
+    if (auto* eng = hostEngine()) {
+        if (!eng->appDir().empty()) {
+            g_storage.path = eng->appDir() + "/.storage.json";
+        } else {
+            g_storage.path = ".storage.json";
+        }
+    } else {
+        g_storage.path = ".storage.json";
+    }
+
     std::ifstream file(g_storage.path);
     if (!file.is_open()) return;
-    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    size_t pos = 0;
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+
+    size_t pos = content.find('{');
+    if (pos == std::string::npos) return;
+    pos++;
+
+    auto parseString = [&](size_t& p) -> std::string {
+        if (p >= content.size() || content[p] != '"') return "";
+        p++; // skip opening quote
+        std::string result;
+        while (p < content.size() && content[p] != '"') {
+            if (content[p] == '\\' && p + 1 < content.size()) {
+                p++;
+                switch (content[p]) {
+                    case '"': result += '"'; break;
+                    case '\\': result += '\\'; break;
+                    case 'n': result += '\n'; break;
+                    case 't': result += '\t'; break;
+                    case 'r': result += '\r'; break;
+                    default: result += content[p]; break;
+                }
+            } else {
+                result += content[p];
+            }
+            p++;
+        }
+        if (p < content.size()) p++; // skip closing quote
+        return result;
+    };
+
     while (pos < content.size()) {
-        size_t kstart = content.find('"', pos);
-        if (kstart == std::string::npos) break;
-        size_t kend = content.find('"', kstart + 1);
-        if (kend == std::string::npos) break;
-        std::string key = content.substr(kstart + 1, kend - kstart - 1);
-        size_t colon = content.find(':', kend);
-        if (colon == std::string::npos) break;
-        size_t vstart = content.find('"', colon);
-        if (vstart == std::string::npos) break;
-        size_t vend = content.find('"', vstart + 1);
-        if (vend == std::string::npos) break;
-        std::string val = content.substr(vstart + 1, vend - vstart - 1);
-        g_storage.items[key] = val;
-        pos = vend + 1;
+        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\n' ||
+               content[pos] == '\r' || content[pos] == '\t' || content[pos] == ','))
+            pos++;
+        if (pos >= content.size() || content[pos] == '}') break;
+
+        std::string key = parseString(pos);
+        while (pos < content.size() && content[pos] != ':') pos++;
+        if (pos < content.size()) pos++;
+        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t')) pos++;
+
+        std::string value = parseString(pos);
+        if (!key.empty()) {
+            g_storage.items[key] = value;
+        }
     }
 }
 
 static void saveStorageFile() {
+    if (g_storage.path.empty()) return;
     std::ofstream file(g_storage.path);
     if (!file.is_open()) return;
     file << "{\n";
     size_t idx = 0;
     for (const auto& [k, v] : g_storage.items) {
         if (idx > 0) file << ",\n";
-        file << "  \"" << k << "\": \"" << v << "\"";
+        file << "  \"" << escapeJsonString(k) << "\": \"" << escapeJsonString(v) << "\"";
         idx++;
     }
     file << "\n}\n";

@@ -102,6 +102,7 @@ add_library(bro_bronze_host STATIC
     host_ai_navmesh.cpp
     host_ai_agent.cpp
     host_net.cpp
+    host_vendor_globals.cpp
 )
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 

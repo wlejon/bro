@@ -643,7 +643,10 @@ Value makeWindowValue() {
     // whose constructor does not exist yet at this point. An accessor is also
     // the truthful shape — `window.AudioContext` and the bare `AudioContext`
     // are the same object on the web, not two.
-    for (const char* name : {"AudioContext", "webkitAudioContext"}) {
+    for (const char* name : {
+             "AudioContext", "webkitAudioContext", "signals", "CodeMirror",
+             "acorn", "tern", "esprima", "jsonlint", "draco_encoder",
+         }) {
         std::string n(name);
         b.accessor(name,
                    [n](Value, std::span<const Value>) {
@@ -909,6 +912,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         ev::registerGlobal("bro", broVal);
     }
     installNetGlobals();
+    installVendorGlobals();
 }
 
 }  // namespace bro::bronze_host

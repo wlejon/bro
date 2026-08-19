@@ -37,6 +37,9 @@
 #include "dom/event.h"
 #include "dom/event_target.h"
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -164,6 +167,92 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
             b.set("deltaZ", ev::fromDouble(w->deltaZ()));
             b.set("deltaMode", ev::fromDouble(w->deltaMode()));
         }
+    }
+
+    if (auto* drag = dynamic_cast<dom::DragEvent*>(&e)) {
+        ObjectBuilder dt;
+        dt.set("dropEffect", ev::fromUtf8("none"));
+        dt.set("effectAllowed", ev::fromUtf8("all"));
+
+        std::vector<std::string> typeList;
+        if (!drag->files().empty()) typeList.push_back("Files");
+        if (!drag->dataText().empty()) typeList.push_back("text/plain");
+        Value typesArr = hostArrayOf(typeList.size(), [&typeList](size_t i) {
+            return ev::fromUtf8(typeList[i]);
+        });
+        dt.set("types", typesArr);
+
+        std::string dtText = drag->dataText();
+        dt.def("getData", 1, [dtText](Value, std::span<const Value> a) {
+            Value fV = argAt(a, 0);
+            if (ev::isObject(fV) || ev::isUndefined(fV)) return ev::fromUtf8("");
+            std::string fmt = ev::toUtf8(fV);
+            for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (fmt == "text" || fmt == "text/plain") return ev::fromUtf8(dtText);
+            return ev::fromUtf8("");
+        });
+        dt.def("setData", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+        dt.def("clearData", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+
+        const auto& files = drag->files();
+        Value filesArr = hostArrayOf(files.size(), [&files](size_t i) {
+            const std::string& path = files[i];
+            std::string name = std::filesystem::path(path).filename().string();
+            ObjectBuilder f;
+            f.set("name", ev::fromUtf8(name));
+            f.set("path", ev::fromUtf8(path));
+            f.set("size", ev::fromDouble(0));
+            f.set("type", ev::fromUtf8(""));
+            f.set("lastModified", ev::fromDouble(0));
+            f.set("webkitRelativePath", ev::fromUtf8(""));
+            return f.get();
+        });
+        dt.set("files", filesArr);
+
+        Value itemsArr = hostArrayOf(files.size(), [&files](size_t i) {
+            const std::string& path = files[i];
+            std::string name = std::filesystem::path(path).filename().string();
+            ObjectBuilder item;
+            item.set("kind", ev::fromUtf8("file"));
+            item.set("type", ev::fromUtf8(""));
+            item.def("getAsFile", 0, [name, path](Value, std::span<const Value>) {
+                ObjectBuilder f;
+                f.set("name", ev::fromUtf8(name));
+                f.set("path", ev::fromUtf8(path));
+                f.set("size", ev::fromDouble(0));
+                f.set("type", ev::fromUtf8(""));
+                f.set("lastModified", ev::fromDouble(0));
+                f.set("webkitRelativePath", ev::fromUtf8(""));
+                return f.get();
+            });
+            item.def("webkitGetAsEntry", 0, [name, path](Value, std::span<const Value>) {
+                ObjectBuilder entry;
+                entry.set("isFile", ev::fromBool(true));
+                entry.set("isDirectory", ev::fromBool(false));
+                entry.set("name", ev::fromUtf8(name));
+                entry.set("fullPath", ev::fromUtf8("/" + name));
+                entry.def("file", 1, [name, path](Value, std::span<const Value> a) {
+                    Value cb = argAt(a, 0);
+                    if (ev::isFunction(cb)) {
+                        ObjectBuilder f;
+                        f.set("name", ev::fromUtf8(name));
+                        f.set("path", ev::fromUtf8(path));
+                        f.set("size", ev::fromDouble(0));
+                        f.set("type", ev::fromUtf8(""));
+                        f.set("lastModified", ev::fromDouble(0));
+                        f.set("webkitRelativePath", ev::fromUtf8(""));
+                        Value fileVal = f.get();
+                        ev::call(cb, ev::undefined(), std::span<const Value>(&fileVal, 1));
+                    }
+                    return ev::undefined();
+                });
+                return entry.get();
+            });
+            return item.get();
+        });
+        dt.set("items", itemsArr);
+
+        b.set("dataTransfer", dt.get());
     }
 
     if (auto* k = dynamic_cast<dom::KeyboardEvent*>(&e)) {

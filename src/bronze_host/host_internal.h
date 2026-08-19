@@ -666,4 +666,10 @@ void installNetGlobals();
 void drainNetEvents();
 Value makeBroNetValue();
 
+// ---------------------------------------------------------------------------
+// Vendor globals (host_vendor_globals.cpp)
+// ---------------------------------------------------------------------------
+
+void installVendorGlobals();
+
 }  // namespace bro::bronze_host

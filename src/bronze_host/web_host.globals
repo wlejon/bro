@@ -113,3 +113,10 @@ AIAgent
 WebSocket
 CloseEvent
 MessageEvent
+signals
+CodeMirror
+acorn
+tern
+esprima
+jsonlint
+draco_encoder
