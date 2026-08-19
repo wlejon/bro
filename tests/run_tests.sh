@@ -11,7 +11,8 @@
 # PASS/FAIL lines; exit 77 (the automake convention) counts as SKIP, which a
 # tree without the bronze CLI (-DBRONZE_WITH_LLVM=OFF) uses so that "this tree
 # cannot build the subject" never reads as "the subject is broken".
-# BRO_TEST_BRONZE=0 leaves them out entirely; their per-check timeout is
+# BRO_TEST_BRONZE=0 leaves them out entirely, BRO_TEST_BRONZE_SKIP=<names>
+# leaves out the ones it names (CI skips `pixi`); their per-check timeout is
 # BRO_TEST_SH_TIMEOUT (default 900 s — a first run compiles its module, and
 # two of the probes take minutes).
 #

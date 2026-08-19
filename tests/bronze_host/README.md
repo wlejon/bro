@@ -2,7 +2,11 @@
 
 Twenty-three checks, one manifest. `tests/run_tests.sh` enumerates them
 (`run_checks.sh --list`) and runs each with the rest of the suite — exit 77
-counts as SKIP there, and `BRO_TEST_BRONZE=0` leaves them out. By hand:
+counts as SKIP there, and `BRO_TEST_BRONZE=0` leaves them out. Individual
+checks drop out with `BRO_TEST_BRONZE_SKIP=<names>` (space- or comma-separated,
+filtered before `--list` reports them): CI sets `BRO_TEST_BRONZE_SKIP=pixi`,
+because that module takes longer to compile on a runner than the suite's 900 s
+per-check timeout allows — run `pixi` locally instead. By hand:
 
 ```bash
 tests/bronze_host/run_checks.sh           # run all, with a summary

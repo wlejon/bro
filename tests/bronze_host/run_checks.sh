@@ -11,6 +11,7 @@
 #   run_checks.sh            run every check, with a summary line
 #
 # Environment: BRO_HEADLESS, BRONZE, BRO_BRONZE_FRAMES — see lib.sh.
+#              BRO_TEST_BRONZE_SKIP — names to leave out (space/comma list).
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -311,6 +312,21 @@ check_pixi() {
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
         parser proxy class interp input video audio physics ai net wild
         instanced pixi)
+
+# BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before
+# they are ever listed, so the runner does not even see them. CI uses it for
+# `pixi`, whose module takes longer to compile than any timeout the suite is
+# willing to give a single check.
+if [[ -n "${BRO_TEST_BRONZE_SKIP:-}" ]]; then
+    read -r -a BH_SKIP <<< "${BRO_TEST_BRONZE_SKIP//,/ }"
+    KEPT=()
+    for C in "${CHECKS[@]}"; do
+        DROP=0
+        for S in "${BH_SKIP[@]}"; do [[ "$C" == "$S" ]] && DROP=1; done
+        [[ $DROP -eq 0 ]] && KEPT+=("$C")
+    done
+    CHECKS=("${KEPT[@]}")
+fi
 
 case "${1:-}" in
     --list)
