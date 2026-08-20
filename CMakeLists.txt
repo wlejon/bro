@@ -173,9 +173,9 @@ option(BRO_BUILD_EXECUTABLES "Build the bro/bro-headless/bro-server binaries" ${
 # the engine's WebGL2 context and a minimal DOM as bronze host globals, so a
 # compiled three.js app can render through bro. OFF by default and entirely
 # outside the default configure path — turning it ON resolves a bronze
-# checkout as a sibling working tree (`../bronze`; no submodule fallback) and
+# checkout (`../bronze` standalone repo, else `third_party/bronze` submodule) and
 # builds its runtime + embed libraries into this tree.
-option(BRO_WITH_BRONZE "bronze AOT host layer (needs ../bronze sibling checkout)" OFF)
+option(BRO_WITH_BRONZE "bronze AOT host layer (resolves ../bronze or third_party/bronze)" OFF)
 
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})

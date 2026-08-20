@@ -1,10 +1,10 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on fourteen sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
+bro depends on fifteen sibling repos with submodule fallbacks under `third_party/`: fourteen libraries linked directly into the engine, plus **[bronze](https://github.com/wlejon/bronze)** (the AOT JavaScript compiler, resolved under `BRO_WITH_BRONZE=ON`).
 
-A fifteenth entry, **[bronze](https://github.com/wlejon/bronze)**, follows the same two-tree rule but is not a library bro links: it is the AOT JavaScript compiler, resolved by `src/bronze_host/CMakeLists.txt` under `BRO_WITH_BRONZE=ON` (off by default). Because it is off by default, the configure that resolves it says which of the two trees it picked — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
+Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. Because bronze is off by default, the configure that resolves it says which of the two trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
 
-A fifteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library. It's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -44,7 +44,7 @@ D:/projects/
 │       ├── broimage/             # submodule (CI / fallback)
 │       ├── brosoundml/           # submodule (CI / fallback)
 │       ├── brovisionml/          # submodule (CI / fallback)
-│       └── bronze/              # submodule (CI / nightly; BRO_WITH_BRONZE only)
+│       └── bronze/               # submodule (CI / nightly; BRO_WITH_BRONZE only)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── qjsbind/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
@@ -99,6 +99,7 @@ Most siblings are added **conditionally**, behind the modular-build flags (see [
 | brosoundml | `BRO_WITH_SOUNDML` |
 | brodiffusion | `BRO_WITH_DIFFUSION` |
 | brovisionml | `BRO_WITH_VISION` |
+| bronze | `BRO_WITH_BRONZE` |
 
 With a gate off, the sibling is never added and the JS bindings it backs compile out to a `{ available: false }` stub. The flags auto-resolve their prerequisites (`_bro_require` in the top-level `CMakeLists.txt`), so e.g. `BRO_WITH_DIFFUSION=ON` forces `BRO_WITH_LM` and `BRO_WITH_TENSOR` on.
 
@@ -124,7 +125,7 @@ bro also forwards `BROIMAGE_WITH_TENSOR` (from `BRO_WITH_TENSOR`), `BROGAMEAGENT
 
 ### 1. Edit a library
 
-Edit files only in the standalone repo (e.g. `D:/projects/brokit/src/...`, `D:/projects/bromesh/src/...`).
+Edit files only in the standalone repo (e.g. `D:/projects/brokit/src/...`, `D:/projects/bromesh/src/...`, `D:/projects/bronze/src/...`).
 
 ### 2. Build and test
 
@@ -147,6 +148,12 @@ cd D:/projects/broaudio && cmake --build build --config Debug
 # assertions trigger a modal abort() dialog on Windows.
 cd D:/projects/bromesh && cmake --build build --config Release
 ./build/tests/Release/bromesh_test.exe
+
+# bronze (Release dev preset; LLVM backend for oracle/tests)
+cd D:/projects/bronze
+.\dev.cmd cmake --preset dev -DBRONZE_WITH_LLVM=ON
+.\dev.cmd cmake --build --preset dev
+.\dev.cmd ctest --preset dev -LE "threejs|pixi"
 ```
 
 ### 3. Commit the library
@@ -171,9 +178,9 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, and `brovisionml`.
+Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, and `bronze`.
 
-## Status, pull, sync across all sixteen repos
+## Status, pull, sync across all seventeen repos
 
 `scripts/repo-status.ps1` (Windows) and `scripts/repo-status.sh` (Linux/macOS) are the same tool in two ports. Run either from anywhere; both resolve paths from the script location.
 
@@ -217,7 +224,8 @@ cmake -B build \
     -DBRODIFFUSION_DIR=/path/to/brodiffusion \
     -DBROIMAGE_DIR=/path/to/broimage \
     -DBROSOUNDML_DIR=/path/to/brosoundml \
-    -DBROVISIONML_DIR=/path/to/brovisionml
+    -DBROVISIONML_DIR=/path/to/brovisionml \
+    -DBRONZE_DIR=/path/to/bronze
 ```
 
 Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
@@ -227,7 +235,7 @@ cmake -B build -DBROMATH_DIR=none -DQJSBIND_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
                -DBROFLORA_DIR=none -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none \
                -DBROLM_DIR=none -DBRODIFFUSION_DIR=none -DBROIMAGE_DIR=none \
-               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none
+               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none -DBRONZE_DIR=none
 ```
 
 ## Apps tree

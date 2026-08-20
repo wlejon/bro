@@ -73,6 +73,7 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 | broimage | `broimage::broimage` | image decode/encode + CPU kernels + ML preprocessing (no WebGL; `bro.image.gpu` is bro-side JS) |
 | brosoundml | `brosoundml` | audio-ML inference: TTS/STT/diarization/codec/wake |
 | brovisionml | `brovisionml::brovisionml` | vision-ML inference: SAM, depth, normals, matting, ControlNet annotators |
+| bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | AOT JavaScript compiler + shared runtime for `BRO_WITH_BRONZE` |
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
 | Skia | `skia` (imported) | pre-built 2D rasterization |
