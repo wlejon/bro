@@ -80,6 +80,55 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
+    // clearBuffer{fv,iv,uiv}(buffer, drawbuffer, values [, srcOffset]) — the
+    // spec's length rule: COLOR needs 4 values past srcOffset, DEPTH/STENCIL
+    // 1; short is INVALID_VALUE and no call. Same host-copy note as
+    // drawBuffers above.
+    b.def("clearBufferfv", 3, [c](Value, std::span<const Value> a) {
+        std::vector<float> storage;
+        const float* p = nullptr;
+        size_t n = 0;
+        const GLenum buffer = u32At(a, 0);
+        const size_t off = a.size() > 3 ? static_cast<size_t>(u32At(a, 3)) : 0;
+        const size_t need = buffer == GL_COLOR ? 4 : 1;
+        if (floatData(argAt(a, 2), storage, &p, &n)) {
+            if (n < off + need) live(c)->setSyntheticError(GL_INVALID_VALUE);
+            else live(c)->clearBufferfv(buffer, i32At(a, 1), p + off);
+        }
+        return ev::undefined();
+    });
+    b.def("clearBufferiv", 3, [c](Value, std::span<const Value> a) {
+        std::vector<int32_t> storage;
+        const int32_t* p = nullptr;
+        size_t n = 0;
+        const GLenum buffer = u32At(a, 0);
+        const size_t off = a.size() > 3 ? static_cast<size_t>(u32At(a, 3)) : 0;
+        const size_t need = buffer == GL_COLOR ? 4 : 1;
+        if (int32Data(argAt(a, 2), storage, &p, &n)) {
+            if (n < off + need) live(c)->setSyntheticError(GL_INVALID_VALUE);
+            else live(c)->clearBufferiv(buffer, i32At(a, 1), p + off);
+        }
+        return ev::undefined();
+    });
+    b.def("clearBufferuiv", 3, [c](Value, std::span<const Value> a) {
+        std::vector<uint32_t> storage;
+        const uint32_t* p = nullptr;
+        size_t n = 0;
+        const GLenum buffer = u32At(a, 0);
+        const size_t off = a.size() > 3 ? static_cast<size_t>(u32At(a, 3)) : 0;
+        const size_t need = buffer == GL_COLOR ? 4 : 1;
+        if (uint32Data(argAt(a, 2), storage, &p, &n)) {
+            if (n < off + need) live(c)->setSyntheticError(GL_INVALID_VALUE);
+            else live(c)->clearBufferuiv(buffer, i32At(a, 1), p + off);
+        }
+        return ev::undefined();
+    });
+    b.def("clearBufferfi", 4, [c](Value, std::span<const Value> a) {
+        live(c)->clearBufferfi(u32At(a, 0), i32At(a, 1),
+                               static_cast<GLfloat>(numAt(a, 2)), i32At(a, 3));
+        return ev::undefined();
+    });
+
     b.def("blitFramebuffer", 10, [c](Value, std::span<const Value> a) {
         live(c)->blitFramebuffer(i32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
                                  i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7),

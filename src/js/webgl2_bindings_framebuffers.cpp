@@ -129,6 +129,69 @@ static JSValue js_blitFramebuffer(JSContext* ctx, JSValueConst this_val, int arg
     return JS_UNDEFINED;
 }
 
+// clearBuffer{fv,iv,uiv}(buffer, drawbuffer, values [, srcOffset]) — the
+// spec's length rule: COLOR needs 4 values past srcOffset, DEPTH/STENCIL 1;
+// short is INVALID_VALUE and no call.
+static bool clearBufferCount(webgl::WebGL2RenderingContext* gl, uint32_t buffer,
+                             size_t count, uint32_t srcOffset) {
+    const size_t need = (buffer == GL_COLOR) ? 4 : 1;
+    if (count < srcOffset + need) {
+        gl->setSyntheticError(GL_INVALID_VALUE);
+        return false;
+    }
+    return true;
+}
+
+static JSValue js_clearBufferfv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
+    uint32_t buffer, srcOffset = 0; int drawbuffer;
+    JS_ToUint32(ctx, &buffer, argv[0]);
+    JS_ToInt32(ctx, &drawbuffer, argv[1]);
+    if (argc > 3) JS_ToUint32(ctx, &srcOffset, argv[3]);
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count) &&
+        clearBufferCount(gl, buffer, count, srcOffset))
+        gl->clearBufferfv(buffer, drawbuffer, data + srcOffset);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_clearBufferiv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
+    uint32_t buffer, srcOffset = 0; int drawbuffer;
+    JS_ToUint32(ctx, &buffer, argv[0]);
+    JS_ToInt32(ctx, &drawbuffer, argv[1]);
+    if (argc > 3) JS_ToUint32(ctx, &srcOffset, argv[3]);
+    std::vector<int32_t> storage; const int32_t* data = nullptr; size_t count = 0;
+    if (getInt32Array(ctx, argv[2], storage, &data, &count) &&
+        clearBufferCount(gl, buffer, count, srcOffset))
+        gl->clearBufferiv(buffer, drawbuffer, data + srcOffset);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_clearBufferuiv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
+    uint32_t buffer, srcOffset = 0; int drawbuffer;
+    JS_ToUint32(ctx, &buffer, argv[0]);
+    JS_ToInt32(ctx, &drawbuffer, argv[1]);
+    if (argc > 3) JS_ToUint32(ctx, &srcOffset, argv[3]);
+    std::vector<uint32_t> storage; const uint32_t* data = nullptr; size_t count = 0;
+    if (getUint32Array(ctx, argv[2], storage, &data, &count) &&
+        clearBufferCount(gl, buffer, count, srcOffset))
+        gl->clearBufferuiv(buffer, drawbuffer, data + srcOffset);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_clearBufferfi(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 4) return JS_UNDEFINED;
+    uint32_t buffer; int drawbuffer, stencil; double depth;
+    JS_ToUint32(ctx, &buffer, argv[0]);
+    JS_ToInt32(ctx, &drawbuffer, argv[1]);
+    JS_ToFloat64(ctx, &depth, argv[2]);
+    JS_ToInt32(ctx, &stencil, argv[3]);
+    gl->clearBufferfi(buffer, drawbuffer, (GLfloat)depth, stencil);
+    return JS_UNDEFINED;
+}
+
 // ===========================================================================
 // Renderbuffers
 // ===========================================================================
@@ -197,6 +260,10 @@ const JSCFunctionListEntry webgl2_framebuffer_funcs[] = {
     JS_CFUNC_DEF("readBuffer", 1, js_readBuffer),
     JS_CFUNC_DEF("drawBuffers", 1, js_drawBuffers),
     JS_CFUNC_DEF("blitFramebuffer", 10, js_blitFramebuffer),
+    JS_CFUNC_DEF("clearBufferfv", 3, js_clearBufferfv),
+    JS_CFUNC_DEF("clearBufferiv", 3, js_clearBufferiv),
+    JS_CFUNC_DEF("clearBufferuiv", 3, js_clearBufferuiv),
+    JS_CFUNC_DEF("clearBufferfi", 4, js_clearBufferfi),
     JS_CFUNC_DEF("createRenderbuffer", 0, js_createRenderbuffer),
     JS_CFUNC_DEF("deleteRenderbuffer", 1, js_deleteRenderbuffer),
     JS_CFUNC_DEF("bindRenderbuffer", 2, js_bindRenderbuffer),

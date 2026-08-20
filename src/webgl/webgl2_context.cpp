@@ -226,6 +226,26 @@ void WebGL2RenderingContext::clearDepth(GLfloat depth) { glClearDepth(depth); }
 void WebGL2RenderingContext::clearStencil(GLint s) { glClearStencil(s); }
 void WebGL2RenderingContext::clear(GLbitfield mask) { glClear(mask); }
 
+// The clearBuffer* family targets attachments by index, so unlike clear() it
+// needs no BACK→COLOR_ATTACHMENT0 mapping on the canvas FBO: drawbuffer 0 IS
+// that attachment there.
+void WebGL2RenderingContext::clearBufferfv(GLenum buffer, GLint drawbuffer,
+                                           const GLfloat* values) {
+    glClearBufferfv(buffer, drawbuffer, values);
+}
+void WebGL2RenderingContext::clearBufferiv(GLenum buffer, GLint drawbuffer,
+                                           const GLint* values) {
+    glClearBufferiv(buffer, drawbuffer, values);
+}
+void WebGL2RenderingContext::clearBufferuiv(GLenum buffer, GLint drawbuffer,
+                                            const GLuint* values) {
+    glClearBufferuiv(buffer, drawbuffer, values);
+}
+void WebGL2RenderingContext::clearBufferfi(GLenum buffer, GLint drawbuffer,
+                                           GLfloat depth, GLint stencil) {
+    glClearBufferfi(buffer, drawbuffer, depth, stencil);
+}
+
 void WebGL2RenderingContext::enable(GLenum cap) {
     switch (cap) {
         case GL_BLEND: sBlend_ = true; break;

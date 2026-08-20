@@ -93,6 +93,10 @@ public:
     void clearDepth(GLfloat depth);
     void clearStencil(GLint s);
     void clear(GLbitfield mask);
+    void clearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* values);
+    void clearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* values);
+    void clearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* values);
+    void clearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void enable(GLenum cap);
     void disable(GLenum cap);
     GLboolean isEnabled(GLenum cap);

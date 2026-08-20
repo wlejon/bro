@@ -211,6 +211,10 @@ const ConstantEntry kConstants[] = {
     {"LUMINANCE_ALPHA", 0x190A},
     {"DEPTH_COMPONENT", 0x1902},
     {"DEPTH_STENCIL", 0x84F9},
+    // clearBuffer* buffer selectors (COLOR doubles as a pixel-copy source).
+    {"COLOR", 0x1800},
+    {"DEPTH", 0x1801},
+    {"STENCIL", 0x1802},
     {"R8", 0x8229},
     {"R16F", 0x822D},
     {"R32F", 0x822E},

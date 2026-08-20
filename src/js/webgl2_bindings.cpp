@@ -254,6 +254,10 @@ static const JSCFunctionListEntry webgl2_constants[] = {
     JS_PROP_INT32_DEF("LUMINANCE_ALPHA", 0x190A, 0),
     JS_PROP_INT32_DEF("DEPTH_COMPONENT", 0x1902, 0),
     JS_PROP_INT32_DEF("DEPTH_STENCIL", 0x84F9, 0),
+    // clearBuffer* buffer selectors (COLOR doubles as a pixel-copy source).
+    JS_PROP_INT32_DEF("COLOR", 0x1800, 0),
+    JS_PROP_INT32_DEF("DEPTH", 0x1801, 0),
+    JS_PROP_INT32_DEF("STENCIL", 0x1802, 0),
     JS_PROP_INT32_DEF("R8", 0x8229, 0),
     JS_PROP_INT32_DEF("R16F", 0x822D, 0),
     JS_PROP_INT32_DEF("R32F", 0x822E, 0),
