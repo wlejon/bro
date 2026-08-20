@@ -57,7 +57,11 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
         ctorBody = [msg](Value, std::span<const Value>) { return ev::throwTypeError(msg); };
     }
 
-    ev::Persistent ctor(ev::makeFunction(std::move(ctorBody), arity));
+    // Named, like every host method reached through ObjectBuilder::def: a
+    // constructor standing in for a web-platform one answers for its `.name`
+    // too, and `Element.name` reading as a diagnosed absence rather than
+    // "Element" was the last place a host object could be told from a real one.
+    ev::Persistent ctor(ev::makeFunction(std::move(ctorBody), arity, name));
 
     {
         // Reading mints it. ObjectBuilder's own Persistent is what holds it

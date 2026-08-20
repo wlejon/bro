@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -323,15 +324,32 @@ struct ObjectBuilder {
     void def(const char* name, uint32_t arity, ev::NativeFn fn) {
         // hostProfileWrap is the identity unless BRO_GL_PROFILE=1 (gl_profile.h);
         // makeFunction allocates, so it runs BEFORE obj.get() is read.
-        Value f = ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity);
+        //
+        // The name is passed on, and it is a fact rather than a courtesy: a
+        // host method standing in for a web-platform one answers for that
+        // method's `.name` too (`gl.drawElements.name === "drawElements"` in
+        // every browser), and a profile of the runtime cannot otherwise tell
+        // 166 GL entry points apart — every host function shares ONE
+        // trampoline code pointer, so the name slot is the only thing that
+        // distinguishes them. One line here names every method reached through
+        // this builder, DOM included, for the same reason hostProfileWrap's
+        // comment gives: they all funnel through one place.
+        Value f = ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity, name);
         obj.set(ev::setProperty(obj.get(), name, f));
     }
 
     void accessor(const char* name, ev::NativeFn getter, ev::NativeFn setter) {
         // The getter must survive the setter's allocation, hence the
         // Persistent bridge between the two makeFunction calls.
-        ev::Persistent g(ev::makeFunction(hostProfileWrap(name, std::move(getter)), 0));
-        Value s = setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1)
+        //
+        // "get x" / "set x", which is 10.2.9's own spelling for an accessor
+        // function's name (SetFunctionName with a prefix), and not the bare
+        // property name the two would otherwise share.
+        const std::string getName = "get " + std::string(name);
+        const std::string setName = "set " + std::string(name);
+        ev::Persistent g(
+            ev::makeFunction(hostProfileWrap(name, std::move(getter)), 0, getName));
+        Value s = setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1, setName)
                          : ev::undefined();
         obj.set(ev::defineAccessor(obj.get(), name, g.get(), s, /*enumerable=*/true));
     }
