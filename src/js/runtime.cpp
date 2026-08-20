@@ -205,6 +205,14 @@ Suppressor& suppressor() {
 }
 
 thread_local int g_inHostHook = 0;
+thread_local int g_jsExecDepth = 0;
+
+struct ThreadExecGuard {
+    ThreadExecGuard()  { ++g_jsExecDepth; }
+    ~ThreadExecGuard() { if (g_jsExecDepth > 0) --g_jsExecDepth; }
+    ThreadExecGuard(const ThreadExecGuard&) = delete;
+    ThreadExecGuard& operator=(const ThreadExecGuard&) = delete;
+};
 
 // RAII guard for the host-hook recursion counter. The counter stops
 // window.onerror / window.onunhandledrejection from recursing if the handler
@@ -606,6 +614,7 @@ Runtime::~Runtime()
 
 bool Runtime::eval(const std::string& code, const std::string& filename)
 {
+    ExecutionGuard guard(this);
     JSValue result = JS_Eval(ctx_, code.c_str(), code.size(),
                              filename.c_str(), JS_EVAL_TYPE_GLOBAL);
     if (checkException(ctx_, result, ErrorOrigin::eval(filename))) {
@@ -617,6 +626,7 @@ bool Runtime::eval(const std::string& code, const std::string& filename)
 
 bool Runtime::evalModule(const std::string& code, const std::string& filename)
 {
+    ExecutionGuard guard(this);
     JSValue func = JS_Eval(ctx_, code.c_str(), code.size(),
                            filename.c_str(),
                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
@@ -705,6 +715,10 @@ void Runtime::discardPendingRejections()
 
 void Runtime::executePendingJobs()
 {
+    if (drainingPendingJobs_) return;
+    drainingPendingJobs_ = true;
+    ExecutionGuard guard(this);
+    ThreadExecGuard threadGuard;
     JSContext* pctx = nullptr;
     for (;;) {
         int r = JS_ExecutePendingJob(rt_, &pctx);
@@ -727,6 +741,7 @@ void Runtime::executePendingJobs()
             // Continue draining — other microtasks should still run.
         }
     }
+    drainingPendingJobs_ = false;
 }
 
 JSContext* Runtime::createContext()
@@ -774,6 +789,7 @@ void Runtime::setModuleLoader(const util::AssetMounts* mounts,
 JSValue Runtime::callJs(JSContext* ctx, JSValueConst fn, JSValueConst thisVal,
                         int argc, JSValueConst* argv, const ErrorOrigin& origin)
 {
+    ThreadExecGuard guard;
     JSValue ret = JS_Call(ctx, fn, thisVal, argc, argv);
     if (JS_IsException(ret)) {
         JSValue exception = JS_GetException(ctx);

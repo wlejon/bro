@@ -95,6 +95,7 @@ struct Crossing {
 
 struct Bridge {
     JSContext* ctx = nullptr;
+    std::thread::id ownerThread{};
     JSClassID refClass = 0;
     JSClassID globalsClass = 0;
     std::vector<std::unique_ptr<Crossing>> rows;
@@ -114,7 +115,6 @@ struct Bridge {
     // weak simply contributes nothing until the sweep frees its row.
     std::unordered_map<uint64_t, size_t> byBronze;
     uint64_t byBronzeEpoch = ~0ULL;
-    bool byBronzeDirty = true;
 };
 
 Bridge& bridge() {
@@ -152,20 +152,22 @@ Value bronzeHalfOf(const Crossing& row) {
 
 void rebuildByBronze() {
     Bridge& b = bridge();
-    b.byBronze.clear();
-    for (size_t i = 0; i < b.rows.size(); ++i) {
-        const Crossing& row = *b.rows[i];
-        if (row.kind == CrossKind::Free || row.deadPending) continue;
-        Value v = bronzeHalfOf(row);
-        if (ev::isObject(v)) b.byBronze[ev::toBits(v)] = i;
+    while (b.byBronzeEpoch != ev::relocationEpoch()) {
+        const uint64_t currentEpoch = ev::relocationEpoch();
+        b.byBronze.clear();
+        for (size_t i = 0; i < b.rows.size(); ++i) {
+            const Crossing& row = *b.rows[i];
+            if (row.kind == CrossKind::Free || row.deadPending) continue;
+            Value v = bronzeHalfOf(row);
+            if (ev::isObject(v)) b.byBronze[ev::toBits(v)] = i;
+        }
+        b.byBronzeEpoch = currentEpoch;
     }
-    b.byBronzeEpoch = ev::relocationEpoch();
-    b.byBronzeDirty = false;
 }
 
 Crossing* rowForBronze(Value v) {
     Bridge& b = bridge();
-    if (b.byBronzeDirty || b.byBronzeEpoch != ev::relocationEpoch()) rebuildByBronze();
+    if (b.byBronzeEpoch != ev::relocationEpoch()) rebuildByBronze();
     auto it = b.byBronze.find(ev::toBits(v));
     if (it == b.byBronze.end()) return nullptr;
     Crossing* row = b.rows[it->second].get();
@@ -195,29 +197,33 @@ size_t takeRow() {
 // A bronze object going OUT: the row roots it; `wrapper` is recorded without
 // a dup — its finalizer is what ends the row.
 size_t addBronzeOut(Value bronzeObj, JSValueConst wrapper) {
-    const size_t index = takeRow();
     Bridge& b = bridge();
+    if (b.byBronzeEpoch != ev::relocationEpoch()) rebuildByBronze();
+    const size_t index = takeRow();
     Crossing& row = *b.rows[index];
     row.kind = CrossKind::BronzeOut;
     row.deadPending = false;
     row.bronze.set(bronzeObj);
     row.js = wrapper;  // not owned
-    b.byBronzeDirty = true;
+    b.byBronze[ev::toBits(bronzeObj)] = index;
     return index;
 }
 
 // A JS value coming IN, or a shared buffer/view: the row owns `js` (one dup),
 // and holds `bronzeWrapper` only weakly.
 size_t addWeakRow(CrossKind kind, Value bronzeWrapper, JSValueConst js) {
-    const size_t index = takeRow();
     Bridge& b = bridge();
+    ev::Persistent wrapperP(bronzeWrapper);
+    Value weakRef = makeWeakRef(wrapperP.get());
+    if (b.byBronzeEpoch != ev::relocationEpoch()) rebuildByBronze();
+    const size_t index = takeRow();
     Crossing& row = *b.rows[index];
     row.kind = kind;
     row.deadPending = false;
-    row.bronze.set(makeWeakRef(bronzeWrapper));
+    row.bronze.set(weakRef);
     row.js = JS_DupValue(b.ctx, js);
     b.byJs[JS_VALUE_GET_PTR(js)] = index;
-    b.byBronzeDirty = true;
+    b.byBronze[ev::toBits(wrapperP.get())] = index;
     return index;
 }
 
@@ -231,12 +237,20 @@ void freeRow(size_t index, bool freeOwnedJs) {
         if (it != b.byJs.end() && it->second == index) b.byJs.erase(it);
         if (freeOwnedJs && b.ctx) JS_FreeValue(b.ctx, row.js);
     }
+    if (b.byBronzeEpoch == ev::relocationEpoch()) {
+        Value v = bronzeHalfOf(row);
+        if (ev::isObject(v)) {
+            auto it = b.byBronze.find(ev::toBits(v));
+            if (it != b.byBronze.end() && it->second == index) {
+                b.byBronze.erase(it);
+            }
+        }
+    }
     row.kind = CrossKind::Free;
     row.deadPending = false;
     row.bronze.set(ev::undefined());
     row.js = JS_UNDEFINED;
     b.freeRows.push_back(index);
-    b.byBronzeDirty = true;
 }
 
 JSValue toJs(Value v);
@@ -566,6 +580,10 @@ void installGlobalsFallback() {
 Value callInterpreted(size_t rowIndex, Value thisValue, std::span<const Value> args,
                       bool asConstructor) {
     Bridge& b = bridge();
+    if (b.ownerThread != std::thread::id{} && std::this_thread::get_id() != b.ownerThread) {
+        return ev::throwError(
+            "interpreted function: cross-bridge calls must execute on the main interpreter thread");
+    }
     // `args` points at GC-rooted slots the collector updates in place, so
     // reading it per iteration is safe even when a toJs allocates. `thisValue`
     // is a plain copy — embed.h: "re-root it before allocating".
@@ -1065,7 +1083,8 @@ Value toBronze(JSValueConst v) {
     row.bronze.set(makeWeakRef(wrapper.get()));
     row.js = JS_DupValue(b.ctx, v);
     b.byJs[JS_VALUE_GET_PTR(v)] = index;
-    b.byBronzeDirty = true;
+    if (b.byBronzeEpoch != ev::relocationEpoch()) rebuildByBronze();
+    b.byBronze[ev::toBits(wrapper.get())] = index;
     return wrapper.get();
 }
 
@@ -1087,6 +1106,10 @@ Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const Value> args)
     if (!b.ctx) {
         return ev::throwError(
             "new Function: no interpreter realm to compile in (the bridge is not installed)");
+    }
+    if (b.ownerThread != std::thread::id{} && std::this_thread::get_id() != b.ownerThread) {
+        return ev::throwError(
+            "new Function: dynamic compilation must execute on the main interpreter thread");
     }
 
     // 27.3.1.1 steps 8-12: every argument but the last is a parameter list,
@@ -1118,6 +1141,14 @@ Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const Value> args)
         JS_FreeValue(b.ctx, fn);
         return ev::throwError("new Function: " + describeJsException(b.ctx));
     }
+    // Drain any microtasks/promise jobs spawned during compilation
+    while (JS_IsJobPending(JS_GetRuntime(b.ctx))) {
+        JSContext* pctx = nullptr;
+        if (JS_ExecutePendingJob(JS_GetRuntime(b.ctx), &pctx) < 0) {
+            JSValue e = JS_GetException(pctx ? pctx : b.ctx);
+            JS_FreeValue(pctx ? pctx : b.ctx, e);
+        }
+    }
     Value out = toBronze(fn);
     JS_FreeValue(b.ctx, fn);
     return out;
@@ -1134,11 +1165,23 @@ Value dynamicEval(Value source) {
         return ev::throwError(
             "eval: no interpreter realm to compile in (the bridge is not installed)");
     }
+    if (b.ownerThread != std::thread::id{} && std::this_thread::get_id() != b.ownerThread) {
+        return ev::throwError(
+            "eval: dynamic evaluation must execute on the main interpreter thread");
+    }
     const std::string text = ev::toUtf8(source);
     JSValue r = JS_Eval(b.ctx, text.c_str(), text.size(), "<eval>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) {
         JS_FreeValue(b.ctx, r);
         return ev::throwError("eval: " + describeJsException(b.ctx));
+    }
+    // Drain any microtasks/promise jobs spawned during eval
+    while (JS_IsJobPending(JS_GetRuntime(b.ctx))) {
+        JSContext* pctx = nullptr;
+        if (JS_ExecutePendingJob(JS_GetRuntime(b.ctx), &pctx) < 0) {
+            JSValue e = JS_GetException(pctx ? pctx : b.ctx);
+            JS_FreeValue(pctx ? pctx : b.ctx, e);
+        }
     }
     Value out = toBronze(r);
     JS_FreeValue(b.ctx, r);
@@ -1155,6 +1198,7 @@ void installInterpBridge(engine::Engine& engine) {
         return;
     }
     b.ctx = rt->getContext();
+    b.ownerThread = std::this_thread::get_id();
     if (b.refClass == 0) {
         JS_NewClassID(JS_GetRuntime(b.ctx), &b.refClass);
         JS_NewClass(JS_GetRuntime(b.ctx), b.refClass, &g_refClassDef);
@@ -1170,6 +1214,9 @@ void installInterpBridge(engine::Engine& engine) {
 Value bridgeJsGlobal(const char* name) {
     Bridge& b = bridge();
     if (!b.ctx) return ev::undefined();
+    if (b.ownerThread != std::thread::id{} && std::this_thread::get_id() != b.ownerThread) {
+        return ev::undefined();
+    }
     JSValue global = JS_GetGlobalObject(b.ctx);
     JSValue v = JS_GetPropertyStr(b.ctx, global, name);
     JS_FreeValue(b.ctx, global);
@@ -1186,6 +1233,9 @@ Value bridgeJsGlobal(const char* name) {
 void sweepInterpBridge() {
     Bridge& b = bridge();
     if (!b.ctx) return;
+    if (b.ownerThread != std::thread::id{} && std::this_thread::get_id() != b.ownerThread) {
+        return;
+    }
 
     // 1. Rows whose BronzeOut wrapper finalized since the last sweep. The
     //    vector is swapped out first: freeing a weak row's dup below can run
@@ -1241,7 +1291,7 @@ void resetInterpBridge() {
     b.pendingDead.clear();
     b.byJs.clear();
     b.byBronze.clear();
-    b.byBronzeDirty = true;
+    b.byBronzeEpoch = ~0ULL;
 }
 
 }  // namespace bro::bronze_host

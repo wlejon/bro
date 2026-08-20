@@ -148,7 +148,8 @@ void Engine::run() {
                 JSValue global = JS_GetGlobalObject(ctx);
                 JSValue tickFn = JS_GetPropertyStr(ctx, global, fnName);
                 if (JS_IsFunction(ctx, tickFn)) {
-                    JSValue ret = JS_Call(ctx, tickFn, JS_UNDEFINED, 0, nullptr);
+                    JSValue ret = js::Runtime::callJs(ctx, tickFn, JS_UNDEFINED, 0, nullptr,
+                                                       js::ErrorOrigin::binding());
                     JS_FreeValue(ctx, ret);
                 }
                 JS_FreeValue(ctx, tickFn);
@@ -590,7 +591,8 @@ void Engine::run() {
             JSValue global = JS_GetGlobalObject(ctx);
             JSValue tickFn = JS_GetPropertyStr(ctx, global, fnName);
             if (JS_IsFunction(ctx, tickFn)) {
-                JSValue ret = JS_Call(ctx, tickFn, JS_UNDEFINED, 0, nullptr);
+                JSValue ret = js::Runtime::callJs(ctx, tickFn, JS_UNDEFINED, 0, nullptr,
+                                                   js::ErrorOrigin::binding());
                 JS_FreeValue(ctx, ret);
             }
             JS_FreeValue(ctx, tickFn);
@@ -842,7 +844,7 @@ void Engine::run() {
                     }
                     if (!JS_IsUndefined(observerCheckFn_) && !JS_IsException(observerCheckFn_)) {
                         JSValue r = JS_EvalFunction(ctx, JS_DupValue(ctx, observerCheckFn_));
-                        JS_FreeValue(ctx, r);
+                        js::Runtime::checkException(ctx, r, js::ErrorOrigin::binding());
                     }
                 }
 

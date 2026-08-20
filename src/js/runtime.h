@@ -89,6 +89,21 @@ public:
     /// Get the global object (caller must JS_FreeValue when done).
     JSValue getGlobalObject() const;
 
+    /// True while JS code (eval, module, callback, microtask) is currently
+    /// executing on this runtime. Used by the engine's event loop and modal
+    /// hooks to avoid re-entrant timer/microtask dispatches.
+    bool isExecuting() const { return execDepth_ > 0; }
+    void enterExecution() { ++execDepth_; }
+    void leaveExecution() { if (execDepth_ > 0) --execDepth_; }
+
+    struct ExecutionGuard {
+        Runtime* rt_ = nullptr;
+        explicit ExecutionGuard(Runtime* rt) : rt_(rt) { if (rt_) rt_->enterExecution(); }
+        ~ExecutionGuard() { if (rt_) rt_->leaveExecution(); }
+        ExecutionGuard(const ExecutionGuard&) = delete;
+        ExecutionGuard& operator=(const ExecutionGuard&) = delete;
+    };
+
     /// Drain the microtask / promise job queue. Errors flow through the funnel.
     /// After the queue empties, rejected promises that never picked up a
     /// handler during the burst are reported (HTML-spec unhandledrejection
@@ -179,6 +194,8 @@ private:
     JSRuntime* rt_ = nullptr;
     JSContext* ctx_ = nullptr;
     std::vector<PendingRejection> pendingRejections_;
+    int execDepth_ = 0;
+    bool drainingPendingJobs_ = false;
 
     /// What the module loader resolves against. Held by value so its address is
     /// stable for the runtime's lifetime — QuickJS keeps the opaque pointer, and

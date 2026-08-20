@@ -126,6 +126,9 @@ using bromath::cfromColor8;
 
 void Engine::tickTimersOnly()
 {
+    if (jsRuntime_ && jsRuntime_->isExecuting()) {
+        return;
+    }
     // Advance the bro.time scaled clock exactly like a frame top would, so
     // timers keep obeying pause/timescale during modal blocking, and the
     // frame loop resumes with a fresh wall reference (no post-modal jump).
