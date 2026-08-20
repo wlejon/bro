@@ -167,6 +167,55 @@ try {
 }
 say('evalThrow', evalCaught);
 
+// --- The compiled realm's globals, visible to dynamic code -------------------
+//
+// The editor's shape exactly: compiled code assigns onto its own globalThis
+// (`window.THREE = THREE`), then a scene script compiled by `new Function`
+// reads the name bare. The interpreted realm's global chain falls back to
+// bronze for names it does not have — reads only, and an unresolved name is
+// still a ReferenceError rather than a quiet undefined.
+
+globalThis.BRIDGE_GLOBAL = { n: 9 };
+say('globalFromEval', eval('BRIDGE_GLOBAL.n'));
+say('globalFromFunction', new Function('return BRIDGE_GLOBAL.n * 2')());
+say('globalStillMissing', eval('typeof NOT_A_GLOBAL_ANYWHERE'));
+say('globalMissThrows', eval(
+    'try { NOT_A_GLOBAL_ANYWHERE; "no" } catch (e) { e.constructor.name }'));
+
+// window and globalThis are one expando namespace, as on the web — the
+// editor's exact idiom is `window.THREE = THREE` read back bare by a scene
+// script. Both directions, and the self-references survive the proxy.
+window.BRIDGE_VIA_WINDOW = { n: 4 };
+say('windowExpandoIsGlobal', eval('BRIDGE_VIA_WINDOW.n'));
+say('windowReadsGlobal', window.BRIDGE_GLOBAL.n);
+say('windowSelf', window.self === window && window.window === window);
+
+// `new` across the boundary: the scene-script idiom is `new THREE.Vector3()`
+// where THREE and its classes are compiled. The wrapper must carry the
+// constructor bit or QuickJS refuses before the call trap is consulted.
+class BridgePair {
+    constructor(a, b) { this.sum = a + b; }
+}
+globalThis.BRIDGE_CLASS = BridgePair;
+say('newAcross', eval('new BRIDGE_CLASS(3, 4).sum'));
+say('newViaWindow', new Function('return new BRIDGE_CLASS(5, 6).sum')());
+
+// The Play-crash shape, pinned: re-cross the class EVERY round (its wrapper
+// dies between rounds) and construct through the fresh wrapper, long enough
+// to cross a bronze GC flip. The bug this catches: toJs holding its argument
+// raw across an allocating probe, so the fresh row rooted a pre-collection
+// address and the next construct executed recycled heap. Sum of (2i+1) for
+// i<n is n², so the answer also proves no iteration was dropped.
+say('gcChurn', eval(
+    '(function () {\n' +
+    '  let s = 0;\n' +
+    '  for (let i = 0; i < 40000; i++) {\n' +
+    '    const C = BRIDGE_CLASS;\n' +
+    '    s += new C(i, i + 1).sum;\n' +
+    '  }\n' +
+    '  return s;\n' +
+    '})()'));
+
 // --- The other three constructors -------------------------------------------
 //
 // %AsyncFunction% and the generator forms are distinct intrinsics, and the

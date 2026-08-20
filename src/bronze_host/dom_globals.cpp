@@ -868,11 +868,66 @@ void installWebHostGlobals(engine::Engine& engine) {
         ev::registerGlobal("document", doc);
     }
     {
-        ev::Persistent win(makeWindowValue());
+        // On the web the window IS the global object: `window.THREE = THREE`
+        // and a later bare `THREE` are one binding (the editor does exactly
+        // this to hand THREE to its scene scripts). Here the window cannot BE
+        // globalThis — its fixed surface is accessors and host functions —
+        // so it is a proxy in front of that surface whose expando reads,
+        // writes, membership and enumeration forward to globalThis. The
+        // read side resolves through ev::globalValue, the same ladder a
+        // compiled bare read walks, so the two spellings cannot drift.
+        ev::Persistent inner(makeWindowValue());
+
+        HostProxyTraps traps;
+        traps.methods = inner.get();
+        traps.get = [](const std::string& key, Value& out) {
+            ev::GlobalValue g = ev::globalValue(key);
+            if (!g.found) return false;
+            out = g.value;
+            return true;
+        };
+        traps.set = [](const std::string& key, Value v) {
+            // v arrives current, but globalValue may allocate (the builtin
+            // ladder builds lazily) — root it first or store stale bits.
+            ev::Persistent vP(v);
+            ev::GlobalValue gt = ev::globalValue("globalThis");
+            if (gt.found) ev::setProperty(gt.value, key.c_str(), vP.get());
+        };
+        traps.has = [](const std::string& key) { return ev::globalValue(key).found; };
+        traps.ownKeys = []() {
+            // Reflect.ownKeys(globalThis), string keys only — the same answer
+            // the interp bridge's wrapper enumeration gives (host_interp.cpp).
+            std::vector<std::string> keys;
+            ev::GlobalValue reflect = ev::globalValue("Reflect");
+            if (!reflect.found) return keys;
+            // getProperty/getElement may allocate: every value read more than
+            // once rides in a Persistent (the embed GC contract).
+            ev::Persistent reflectP(reflect.value);
+            ev::GlobalValue gt = ev::globalValue("globalThis");
+            if (!gt.found) return keys;
+            ev::Persistent gtP(gt.value);
+            Value fn = ev::getProperty(reflectP.get(), "ownKeys");
+            if (!ev::isFunction(fn)) return keys;
+            Value self = gtP.get();
+            ev::CallResult r =
+                ev::call(fn, reflectP.get(), std::span<const Value>(&self, 1));
+            if (r.thrown || !ev::isObject(r.value)) return keys;
+            ev::Persistent arr(r.value);
+            const auto n =
+                static_cast<uint32_t>(ev::toDouble(ev::getProperty(arr.get(), "length")));
+            for (uint32_t i = 0; i < n; ++i) {
+                Value k = ev::getElement(arr.get(), i);
+                if (!ev::isSymbol(k)) keys.push_back(ev::toUtf8(k));
+            }
+            return keys;
+        };
+
+        ev::Persistent win(makeHostProxy(std::move(traps)));
         // window.self === window and window.window === window, the two
-        // self-references three.js and its loaders occasionally take.
-        win.set(ev::setProperty(win.get(), "self", win.get()));
-        win.set(ev::setProperty(win.get(), "window", win.get()));
+        // self-references three.js and its loaders occasionally take. On the
+        // fixed surface, so the reads beat the globalThis fallback.
+        inner.set(ev::setProperty(inner.get(), "self", win.get()));
+        inner.set(ev::setProperty(inner.get(), "window", win.get()));
         ev::registerGlobal("window", win.get());
         ev::registerGlobal("self", win.get());
         // On the web the global object IS the window, so its listener

@@ -166,7 +166,14 @@ So a compiled `new Function` is compiled by **the page's QuickJS realm** — the
 one already in the process, running the page's own `<script>` tags — and the
 function it produces comes back wrapped — and so is a compiled `eval`, with
 global-environment semantics for both spellings (an AOT frame has no local
-scope to hand over; the compiler warns at any direct `eval(...)` site). From
+scope to hand over; the compiler warns at any direct `eval(...)` site). The
+interpreted realm's global lookups **fall back to the compiled realm's
+globals** — a fallback object on the QuickJS global's prototype chain answers
+misses from embed's `globalValue`, resolving in the same order a compiled read
+does — because the string being compiled was authored against the app's
+namespace: the editor assigns `window.THREE` and its scene scripts open with
+`new THREE.Vector3`. Reads only; a write shadows on the QuickJS global by the
+ordinary prototype rule, and an unresolved name is still a ReferenceError. From
 there values cross in both directions: primitives by value, objects and
 functions by a wrapper that forwards property reads, writes, calls, `in`,
 `delete` and enumeration to the other heap, typed arrays as **two views over
