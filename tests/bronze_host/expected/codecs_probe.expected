@@ -1,0 +1,12 @@
+APP dracoEncoded=true
+APP dracoVerts=4
+APP dracoTris=2
+APP dracoAttrs=1
+APP dracoAttrType=POSITION
+APP dracoElemWrite=5
+APP dracoRefusesJunk=yes
+APP ktxSize=40x40
+APP ktxFormat=rgba8
+APP ktxMips=6
+APP ktxBytes=true
+APP done=true

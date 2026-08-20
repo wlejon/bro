@@ -418,6 +418,45 @@ class Mesh {
   // --- Static: File I/O (load) ----------------------------------------------
 
   /**
+   * Decode a Draco-compressed mesh or point cloud from memory — a .drc
+   * file's bytes, or the buffer view glTF's KHR_draco_mesh_compression
+   * points at. NATIVE (google/draco in bromesh): no worker, no WASM, one
+   * synchronous call.
+   *
+   * The standard streams come converted (colors expanded to rgba floats,
+   * quantized values dequantized); `attributes` additionally carries EVERY
+   * decoded attribute raw — integer skinning data stays integer, and glTF
+   * consumers match entries by `uniqueId`. `type` is the Draco semantic:
+   * "POSITION" | "NORMAL" | "COLOR" | "TEX_COORD" | "GENERIC".
+   * A point cloud decodes with no `indices`. Throws on a corrupt buffer.
+   * @param {Uint8Array|ArrayBuffer} bytes
+   * @returns {{ positions: Float32Array, normals?: Float32Array,
+   *            uvs?: Float32Array, colors?: Float32Array,
+   *            indices?: Uint32Array, mesh: Mesh,
+   *            attributes: {type:string, uniqueId:number, components:number,
+   *                         count:number, kind:string, data:Object}[] }}
+   * @example
+   *   const bytes = new Uint8Array(await (await fetch('model.drc')).arrayBuffer());
+   *   const geo = Mesh.decodeDraco(bytes);
+   *   scene.createMeshNode({ positions: geo.positions, indices: geo.indices });
+   */
+  static decodeDraco(bytes) {}
+
+  /**
+   * Encode an indexed triangle mesh to Draco bytes (.drc). Positions are
+   * required; normals/uvs/colors encode when present. Options: positionBits
+   * (default 14), normalBits (10), uvBits (12), colorBits (8) — quantization,
+   * 1..30 — and speed 0..10 (0 = smallest, 10 = fastest, default 7).
+   * Vertex order is not preserved (the encoder rewelds); geometry is.
+   * @param {{positions: Float32Array, normals?: Float32Array,
+   *          uvs?: Float32Array, colors?: Float32Array, indices: Uint32Array}} streams
+   * @param {{positionBits?:number, normalBits?:number, uvBits?:number,
+   *          colorBits?:number, speed?:number}} [options]
+   * @returns {Uint8Array}
+   */
+  static encodeDraco(streams, options) {}
+
+  /**
    * Load a glTF/GLB file. Returns the whole scene, not just geometry. See
    * the "glTF rigged extensions" section for the field list.
    * @returns {{ meshes: Mesh[], skins: SkinData[], skeletons: Skeleton[],

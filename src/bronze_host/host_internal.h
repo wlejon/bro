@@ -715,6 +715,15 @@ void drainNetEvents();
 Value makeBroNetValue();
 
 // ---------------------------------------------------------------------------
+// Native codecs (host_codecs.cpp): bro.mesh Draco decode/encode and
+// bro.image KTX2 transcode for the compiled realm. Empty objects when the
+// build compiled the codec out (no bromesh draco / no basis transcoder).
+// ---------------------------------------------------------------------------
+
+Value makeBroMeshValue();
+Value makeBroImageValue();
+
+// ---------------------------------------------------------------------------
 // Vendor globals (host_vendor_globals.cpp)
 // ---------------------------------------------------------------------------
 

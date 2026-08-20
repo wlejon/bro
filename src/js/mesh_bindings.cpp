@@ -57,6 +57,9 @@
 #include <bromesh/voxel/greedy_mesh.h>
 #include <bromesh/voxel/voxel_chunk.h>
 #include <bromesh/io/gltf.h>
+#if defined(BROMESH_HAS_DRACO)
+#include <bromesh/io/draco.h>
+#endif
 #include <bromesh/io/obj.h>
 #include <bromesh/io/fbx.h>
 #include <bromesh/io/ply.h>
@@ -1530,6 +1533,135 @@ static std::string resolveMeshWritePath(JSContext* ctx, const std::string& path)
     return (fs::path(dir) / p.filename()).generic_string();
 }
 
+#if defined(BROMESH_HAS_DRACO)
+// ---------------------------------------------------------------------------
+// Draco — bromesh's NATIVE codec. There is no WASM engine anywhere in this
+// stack; DRACOLoader-shaped code gets these two calls instead of a worker
+// pool spinning an emscripten decoder.
+// ---------------------------------------------------------------------------
+
+static JSValue newTypedArrayCopy(JSContext* ctx, JSTypedArrayEnum kind,
+                                 const void* data, size_t byteLength) {
+    JSValue ab = JS_NewArrayBufferCopy(ctx, static_cast<const uint8_t*>(data), byteLength);
+    if (JS_IsException(ab)) return ab;
+    // Three slots even though argc is 1: quickjs's typed-array constructor
+    // reads argv[1] (offset) and argv[2] (length) without consulting argc.
+    JSValue args[3] = {ab, JS_UNDEFINED, JS_UNDEFINED};
+    JSValue ta = JS_NewTypedArray(ctx, 1, args, kind);
+    JS_FreeValue(ctx, ab);
+    return ta;
+}
+
+static JSValue js_decodeDraco(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "decodeDraco requires (bytes: Uint8Array|ArrayBuffer)");
+    std::vector<uint8_t> bytes;
+    if (!readUint8ArrayVal(ctx, argv[0], bytes)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));  // not a typed array; try a bare buffer
+        size_t n = 0;
+        uint8_t* p = JS_GetArrayBuffer(ctx, &n, argv[0]);
+        if (!p)
+            return JS_ThrowTypeError(ctx,
+                                     "decodeDraco: bytes must be a typed array or ArrayBuffer");
+        bytes.assign(p, p + n);
+    }
+
+    bromesh::DracoDecoded decoded = bromesh::decodeDraco(bytes.data(), bytes.size());
+    if (!decoded.ok()) return JS_ThrowTypeError(ctx, "%s", decoded.error.c_str());
+
+    JSValue obj = JS_NewObject(ctx);
+    const bromesh::MeshData& m = decoded.mesh;
+    JS_SetPropertyStr(ctx, obj, "positions",
+                      newTypedArrayCopy(ctx, JS_TYPED_ARRAY_FLOAT32, m.positions.data(),
+                                        m.positions.size() * sizeof(float)));
+    if (!m.normals.empty())
+        JS_SetPropertyStr(ctx, obj, "normals",
+                          newTypedArrayCopy(ctx, JS_TYPED_ARRAY_FLOAT32, m.normals.data(),
+                                            m.normals.size() * sizeof(float)));
+    if (!m.uvs.empty())
+        JS_SetPropertyStr(ctx, obj, "uvs",
+                          newTypedArrayCopy(ctx, JS_TYPED_ARRAY_FLOAT32, m.uvs.data(),
+                                            m.uvs.size() * sizeof(float)));
+    if (!m.colors.empty())
+        JS_SetPropertyStr(ctx, obj, "colors",
+                          newTypedArrayCopy(ctx, JS_TYPED_ARRAY_FLOAT32, m.colors.data(),
+                                            m.colors.size() * sizeof(float)));
+    if (!m.indices.empty())
+        JS_SetPropertyStr(ctx, obj, "indices",
+                          newTypedArrayCopy(ctx, JS_TYPED_ARRAY_UINT32, m.indices.data(),
+                                            m.indices.size() * sizeof(uint32_t)));
+
+    // Every attribute raw, for glTF consumers that key on uniqueId and need
+    // integer data (JOINTS_0) kept integer.
+    JSValue attrs = JS_NewArray(ctx);
+    uint32_t attrIndex = 0;
+    for (const bromesh::DracoAttribute& a : decoded.attributes) {
+        JSTypedArrayEnum kind = JS_TYPED_ARRAY_FLOAT32;
+        const char* kindName = "float32";
+        switch (a.kind) {
+            case bromesh::DracoAttribute::Kind::Int8: kind = JS_TYPED_ARRAY_INT8; kindName = "int8"; break;
+            case bromesh::DracoAttribute::Kind::Uint8: kind = JS_TYPED_ARRAY_UINT8; kindName = "uint8"; break;
+            case bromesh::DracoAttribute::Kind::Int16: kind = JS_TYPED_ARRAY_INT16; kindName = "int16"; break;
+            case bromesh::DracoAttribute::Kind::Uint16: kind = JS_TYPED_ARRAY_UINT16; kindName = "uint16"; break;
+            case bromesh::DracoAttribute::Kind::Int32: kind = JS_TYPED_ARRAY_INT32; kindName = "int32"; break;
+            case bromesh::DracoAttribute::Kind::Uint32: kind = JS_TYPED_ARRAY_UINT32; kindName = "uint32"; break;
+            default: break;
+        }
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "type", JS_NewString(ctx, a.type.c_str()));
+        JS_SetPropertyStr(ctx, o, "uniqueId", JS_NewUint32(ctx, a.uniqueId));
+        JS_SetPropertyStr(ctx, o, "components", JS_NewInt32(ctx, a.components));
+        JS_SetPropertyStr(ctx, o, "count", JS_NewUint32(ctx, a.count));
+        JS_SetPropertyStr(ctx, o, "kind", JS_NewString(ctx, kindName));
+        JS_SetPropertyStr(ctx, o, "data",
+                          newTypedArrayCopy(ctx, kind, a.bytes.data(), a.bytes.size()));
+        JS_SetPropertyUint32(ctx, attrs, attrIndex++, o);
+    }
+    JS_SetPropertyStr(ctx, obj, "attributes", attrs);
+
+    // The bro-native shape too, last: wrapMesh takes the streams by move.
+    JS_SetPropertyStr(ctx, obj, "mesh", wrapMesh(ctx, std::move(decoded.mesh)));
+    return obj;
+}
+
+static JSValue js_encodeDraco(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "encodeDraco requires ({positions, indices, ...})");
+    bromesh::MeshData mesh;
+    readFloatArray(ctx, argv[0], "positions", mesh.positions);
+    readFloatArray(ctx, argv[0], "normals", mesh.normals);
+    readFloatArray(ctx, argv[0], "uvs", mesh.uvs);
+    readFloatArray(ctx, argv[0], "colors", mesh.colors);
+    readUint32Array(ctx, argv[0], "indices", mesh.indices);
+
+    bromesh::DracoEncodeOptions opt;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        JSValue v;
+        int32_t n;
+        v = JS_GetPropertyStr(ctx, argv[1], "positionBits");
+        if (!JS_IsUndefined(v) && JS_ToInt32(ctx, &n, v) == 0) opt.positionBits = n;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "normalBits");
+        if (!JS_IsUndefined(v) && JS_ToInt32(ctx, &n, v) == 0) opt.normalBits = n;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "uvBits");
+        if (!JS_IsUndefined(v) && JS_ToInt32(ctx, &n, v) == 0) opt.uvBits = n;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "colorBits");
+        if (!JS_IsUndefined(v) && JS_ToInt32(ctx, &n, v) == 0) opt.colorBits = n;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "speed");
+        if (!JS_IsUndefined(v) && JS_ToInt32(ctx, &n, v) == 0) opt.speed = n;
+        JS_FreeValue(ctx, v);
+    }
+
+    std::string error;
+    std::vector<uint8_t> bytes = bromesh::encodeDraco(mesh, opt, &error);
+    if (bytes.empty()) return JS_ThrowTypeError(ctx, "%s", error.c_str());
+    return newTypedArrayCopy(ctx, JS_TYPED_ARRAY_UINT8, bytes.data(), bytes.size());
+}
+#endif  // BROMESH_HAS_DRACO
+
 void MeshBindings::install(JSContext* ctx) {
     qjsbind::Class<MW>(ctx, "Mesh")
 
@@ -2273,6 +2405,10 @@ void MeshBindings::install(JSContext* ctx) {
     .static_raw("greedyMesh",    js_greedyMesh, 4)
 
     // ── Static: I/O (load) ──────────────────────────────────────────────
+#if defined(BROMESH_HAS_DRACO)
+    .static_raw("decodeDraco", js_decodeDraco, 1)
+    .static_raw("encodeDraco", js_encodeDraco, 2)
+#endif
     .static_method("loadGLTF", [](JSContext* ctx, std::string path) -> JSValue {
         path = brokit::api::resolveAssetPath(ctx, path);
         auto scene = bromesh::loadGLTF(path);

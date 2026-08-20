@@ -117,6 +117,7 @@ add_library(bro_bronze_host STATIC
     host_dom_events.cpp
     host_timers.cpp
     host_image.cpp
+    host_codecs.cpp
     host_interp.cpp
     host_platform.cpp
     host_xhr.cpp
@@ -196,6 +197,12 @@ endfunction()
 target_link_libraries(bro_bronze_host
     PUBLIC bro_engine bro_net bro_webgl glad broimage::broimage brogameagent bronze::runtime_shared
 )
+
+# bromesh backs bro.mesh.decodeDraco/encodeDraco in the compiled realm
+# (host_codecs.cpp); it is 3D-optional, so guard rather than assume.
+if(TARGET bromesh)
+    target_link_libraries(bro_bronze_host PUBLIC bromesh)
+endif()
 
 if(TARGET libcurl_static)
     target_link_libraries(bro_bronze_host PRIVATE libcurl_static)

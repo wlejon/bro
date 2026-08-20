@@ -168,6 +168,14 @@ check_interp() {
     bh_run_check bronze_host_interp         "$SCRIPT_DIR/appdir_interp"         "$SCRIPT_DIR/apps/interp_probe.js"         "$SCRIPT_DIR/expected/interp_probe.expected"         --expr "advanceTime(64);"
 }
 
+# The native codecs from compiled code: bro.mesh's Draco round trip and
+# bro.image's KTX2 transcode (host_codecs.cpp), typed-array payloads sized for
+# generated code's ABI element access. What only this catches: a build that
+# guarded the codecs out, or a binding whose views arrive mis-sized.
+check_codecs() {
+    bh_run_check bronze_host_codecs         "$SCRIPT_DIR/appdir_codecs"         "$SCRIPT_DIR/apps/codecs_probe.js"         "$SCRIPT_DIR/expected/codecs_probe.expected"         --expr "advanceTime(64);"
+}
+
 # Host classes, via Image as the worked example: a handle born on its
 # constructor's prototype, methods shared per class rather than closed over
 # per instance, instanceof answering.
@@ -310,7 +318,7 @@ check_pixi() {
 
 # ---------------------------------------------------------------------------
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
-        parser proxy class interp input video audio physics ai net wild
+        parser proxy class interp codecs input video audio physics ai net wild
         instanced pixi)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before

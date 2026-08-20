@@ -275,6 +275,30 @@ const image = {
   probeDimensions(bytes) {},
 
   /**
+   * Transcode a KTX2 texture (ETC1S/BasisLZ or UASTC payload, Zstd
+   * supercompression included) to an uploadable format. NATIVE (the
+   * basis_universal transcoder in broimage): no worker, no WASM.
+   *
+   * `format` picks the target: "rgba8" (default — plain pixels, uploads on
+   * every GL path) or "bc1"/"bc3"/"bc4"/"bc5"/"bc7" (4x4 block data for the
+   * S3TC/RGTC/BPTC extensions). The RESULT's `format` reports what was
+   * actually produced — bc1 of an image that carries alpha answers rgba8
+   * rather than dropping the channel. `mips` is the layer-0/face-0 mip
+   * chain; data is pixels for rgba8, blocks for BC. Throws on a corrupt or
+   * non-KTX2 buffer.
+   * @param {Uint8Array|ArrayBuffer} bytes
+   * @param {string} [format="rgba8"]
+   * @returns {{width:number, height:number, hasAlpha:boolean, srgb:boolean,
+   *            format:string, mips:{width:number, height:number,
+   *            data:Uint8Array}[]}}
+   * @example
+   *   const tex = bro.image.transcodeKTX2(bytes);           // rgba8
+   *   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.width, tex.height, 0,
+   *                 gl.RGBA, gl.UNSIGNED_BYTE, tex.mips[0].data);
+   */
+  transcodeKTX2(bytes, format) {},
+
+  /**
    * Read the EXIF Orientation tag (1..8; 1 = normal / absent). The enum:
    * 1 Normal, 2 FlipH, 3 Rotate180, 4 FlipV, 5 Transpose, 6 Rotate90CW,
    * 7 Transverse, 8 Rotate90CCW.

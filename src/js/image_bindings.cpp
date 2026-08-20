@@ -19,6 +19,9 @@
 #include <unordered_map>
 
 #include "broimage/decode.h"
+#if defined(BROIMAGE_HAS_KTX2)
+#include "broimage/ktx2.h"
+#endif
 
 #if BRO_WITH_WEBP
 #include "render/webp_image.h"
@@ -563,6 +566,69 @@ static JSValue img_probeDimensions(JSContext* ctx, JSValueConst, int argc, JSVal
     JS_SetPropertyStr(ctx, obj, "channels", JS_NewInt32(ctx, c));
     return obj;
 }
+
+#if defined(BROIMAGE_HAS_KTX2)
+// transcodeKTX2(bytes, format?) — broimage's NATIVE basis_universal
+// transcoder (no WASM in this stack). `format` is "rgba8" (default), "bc1",
+// "bc3", "bc4", "bc5" or "bc7"; the result's `format` reports what was
+// actually produced (BC1 of an alpha image answers rgba8 rather than drop
+// the channel). Returns {width, height, hasAlpha, srgb, format,
+// mips: [{width, height, data: Uint8Array}]} — mip data is pixels for rgba8,
+// 4x4 blocks for BC. Throws on a corrupt or non-KTX2 buffer.
+static JSValue img_transcodeKTX2(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "transcodeKTX2(bytes, format?)");
+    const uint8_t* p; size_t n;
+    if (!getBytes(ctx, argv[0], &p, &n))
+        return JS_ThrowTypeError(ctx, "transcodeKTX2: expected bytes");
+
+    broimage::Ktx2Format target = broimage::Ktx2Format::RGBA8;
+    if (argc >= 2 && JS_IsString(argv[1])) {
+        const char* s = JS_ToCString(ctx, argv[1]);
+        if (!s) return JS_EXCEPTION;
+        std::string f = s;
+        JS_FreeCString(ctx, s);
+        if (f == "bc1") target = broimage::Ktx2Format::BC1;
+        else if (f == "bc3") target = broimage::Ktx2Format::BC3;
+        else if (f == "bc4") target = broimage::Ktx2Format::BC4;
+        else if (f == "bc5") target = broimage::Ktx2Format::BC5;
+        else if (f == "bc7") target = broimage::Ktx2Format::BC7;
+        else if (f != "rgba8")
+            return JS_ThrowTypeError(ctx, "transcodeKTX2: unknown format '%s'", f.c_str());
+    }
+
+    broimage::Ktx2Image img = broimage::transcode_ktx2(p, n, target);
+    if (!img.ok()) return JS_ThrowTypeError(ctx, "%s", img.error.c_str());
+
+    const char* formatName = "rgba8";
+    switch (img.format) {
+        case broimage::Ktx2Format::BC1: formatName = "bc1"; break;
+        case broimage::Ktx2Format::BC3: formatName = "bc3"; break;
+        case broimage::Ktx2Format::BC4: formatName = "bc4"; break;
+        case broimage::Ktx2Format::BC5: formatName = "bc5"; break;
+        case broimage::Ktx2Format::BC7: formatName = "bc7"; break;
+        default: break;
+    }
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, img.width));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, img.height));
+    JS_SetPropertyStr(ctx, obj, "hasAlpha", JS_NewBool(ctx, img.hasAlpha));
+    JS_SetPropertyStr(ctx, obj, "srgb", JS_NewBool(ctx, img.srgb));
+    JS_SetPropertyStr(ctx, obj, "format", JS_NewString(ctx, formatName));
+    JSValue mips = JS_NewArray(ctx);
+    for (size_t i = 0; i < img.mips.size(); ++i) {
+        const broimage::Ktx2Level& level = img.mips[i];
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "width", JS_NewInt32(ctx, level.width));
+        JS_SetPropertyStr(ctx, o, "height", JS_NewInt32(ctx, level.height));
+        JS_SetPropertyStr(ctx, o, "data",
+                          newTA(ctx, "Uint8Array", level.data.data(), level.data.size()));
+        JS_SetPropertyUint32(ctx, mips, (uint32_t)i, o);
+    }
+    JS_SetPropertyStr(ctx, obj, "mips", mips);
+    return obj;
+}
+#endif  // BROIMAGE_HAS_KTX2
 
 // readExifOrientation(src) — path string or JPEG bytes. Returns 1..8 (1 when
 // absent/invalid).
@@ -1417,6 +1483,9 @@ static void registerImageKernels(JSContext* ctx) {
     setFn(ctx, image, "decodeF32", img_decodeF32, 1);
     setFn(ctx, image, "decodeOriented", img_decodeOriented, 1);
     setFn(ctx, image, "probeDimensions", img_probeDimensions, 1);
+#if defined(BROIMAGE_HAS_KTX2)
+    setFn(ctx, image, "transcodeKTX2", img_transcodeKTX2, 2);
+#endif
     setFn(ctx, image, "readExifOrientation", img_readExifOrientation, 1);
     setFn(ctx, image, "applyExifOrientation", img_applyExifOrientation, 4);
 

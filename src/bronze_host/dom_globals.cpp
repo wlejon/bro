@@ -820,6 +820,8 @@ Value makeBroValue() {
         b.set("time", time.get());
     }
     b.set("net", makeBroNetValue());
+    b.set("mesh", makeBroMeshValue());
+    b.set("image", makeBroImageValue());
     return b.get();
 }
 
