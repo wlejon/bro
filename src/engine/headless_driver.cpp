@@ -723,5 +723,8 @@ int bro::engine::runHeadless(int argc, char* argv[], const HeadlessHooks& hooks)
 #ifdef _WIN32
     if (getenv("BRO_THREAD_CENSUS")) printThreadCensus();
 #endif
+    // Last call before the CRT is skipped entirely: a host's end-of-run
+    // reporting goes here or nowhere (HeadlessHooks::beforeExit).
+    if (hooks.beforeExit) hooks.beforeExit();
     _exit(exitCode);
 }

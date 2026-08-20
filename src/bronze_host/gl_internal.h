@@ -17,6 +17,8 @@
 // GL call (which copies into the driver) before any embed call that could
 // allocate, and never stores it.
 
+#include "bronze_host/gl_profile.h"
+
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_objects.h"
 #include "embed/embed.h"
@@ -319,16 +321,18 @@ struct ObjectBuilder {
     }
 
     void def(const char* name, uint32_t arity, ev::NativeFn fn) {
+        // hostProfileWrap is the identity unless BRO_GL_PROFILE=1 (gl_profile.h);
         // makeFunction allocates, so it runs BEFORE obj.get() is read.
-        Value f = ev::makeFunction(std::move(fn), arity);
+        Value f = ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity);
         obj.set(ev::setProperty(obj.get(), name, f));
     }
 
     void accessor(const char* name, ev::NativeFn getter, ev::NativeFn setter) {
         // The getter must survive the setter's allocation, hence the
         // Persistent bridge between the two makeFunction calls.
-        ev::Persistent g(ev::makeFunction(std::move(getter), 0));
-        Value s = setter ? ev::makeFunction(std::move(setter), 1) : ev::undefined();
+        ev::Persistent g(ev::makeFunction(hostProfileWrap(name, std::move(getter)), 0));
+        Value s = setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1)
+                         : ev::undefined();
         obj.set(ev::defineAccessor(obj.get(), name, g.get(), s, /*enumerable=*/true));
     }
 

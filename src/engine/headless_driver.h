@@ -53,6 +53,15 @@ struct HeadlessHooks {
     /// needs it — after the fact the warning has already been emitted.
     std::function<bool(const std::string& appDir)> providesCompiledApp;
 
+    /// Run after the Engine is destroyed and immediately before `_exit()`.
+    ///
+    /// The driver leaves through `_exit()`, which skips `atexit` handlers and
+    /// static destruction on purpose (see the teardown comment in
+    /// headless_driver.cpp). Anything a host wants reported at the end of a
+    /// run — a profile table, a leak census — has to be called here rather
+    /// than registered with the CRT, because the CRT never gets the chance.
+    std::function<void()> beforeExit;
+
     /// Name used in usage text and diagnostics.
     std::string programName = "bro-headless";
 

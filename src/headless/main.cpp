@@ -25,6 +25,7 @@
 #endif
 #if BRO_WITH_BRONZE
 #include "bronze_host/app_module.h"
+#include "bronze_host/gl_profile.h"
 #endif
 
 #include <string>
@@ -433,6 +434,9 @@ int main(int argc, char* argv[]) {
         if (auto modulePath = bro::bronze_host::findAppModule(engine.appDir()))
             bro::bronze_host::runAppModule(engine, *modulePath);
     };
+    // The driver leaves through _exit(), so the BRO_GL_PROFILE table has to be
+    // printed from here — an atexit registration would never run.
+    hooks.beforeExit = [] { bro::bronze_host::hostProfileDump(); };
 #endif
     return bro::engine::runHeadless(argc, argv, hooks);
 }

@@ -102,6 +102,7 @@ add_library(bro_bronze_host STATIC
     gl_framebuffers.cpp
     gl_queries.cpp
     gl_context.cpp
+    gl_profile.cpp
     app_module.cpp
     dom_globals.cpp
     host_canvas2d.cpp
