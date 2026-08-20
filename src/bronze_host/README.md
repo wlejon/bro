@@ -164,22 +164,33 @@ refuses the feature.
 
 So a compiled `new Function` is compiled by **the page's QuickJS realm** — the
 one already in the process, running the page's own `<script>` tags — and the
-function it produces comes back wrapped. From there values cross in both
-directions: primitives by value, objects and functions by a wrapper that
-forwards property reads, writes, calls, `in`, `delete` and enumeration to the
-other heap, typed arrays by copy (embed's pointer contract makes a shared
-buffer a dangling read at the next allocation), and thrown values as throws
-rather than as silent undefined.
+function it produces comes back wrapped — and so is a compiled `eval`, with
+global-environment semantics for both spellings (an AOT frame has no local
+scope to hand over; the compiler warns at any direct `eval(...)` site). From
+there values cross in both directions: primitives by value, objects and
+functions by a wrapper that forwards property reads, writes, calls, `in`,
+`delete` and enumeration to the other heap, typed arrays as **two views over
+one byte store** (embed's `externalizeArrayBuffer` pins the bytes outside the
+moving heap, so a script's write to `position.array[0]` is the compiled
+renderer's write too — the copy that silently diverged is gone), and thrown
+values as throws rather than as silent undefined.
 
-Two things make that safe to say rather than merely to hope:
+Three things make that safe to say rather than merely to hope:
 
 - **Identity is a table, not an address.** A value that has crossed once is
   wrapped once, so a round trip returns the object that went in. bronze's
-  collector MOVES, so the bronze side of that table is compared by walking it
-  rather than by hashing raw bits — the bits name a pre-collection address.
-  QuickJS is refcounted and does not move, so its side is a hash.
-- **The table owns both halves, and neither finalizer touches the other
-  collector.** A wrapper holds an index into the table and nothing else.
+  collector MOVES, so the bronze side of the table is a bits-keyed map
+  rebuilt whenever embed's `relocationEpoch()` has advanced — bits only go
+  stale when that does. QuickJS is refcounted and does not move, so its side
+  is a plain hash.
+- **The table roots only the FOREIGN half; its own side it holds weakly.**
+  An outbound wrapper's QuickJS finalizer and an inbound proxy's bronze
+  `WeakRef` are the death signals; a per-frame sweep (`sweepInterpBridge`,
+  from `hostFrame`) turns them into freed rows. What crosses and is dropped
+  is reclaimed; the table's size tracks what is live across the boundary.
+- **Neither finalizer touches the other collector.** A wrapper's finalizer
+  records an index and nothing else; every release happens at the frame
+  boundary, on a plain host stack.
 
 Engine objects still do not cross — they are *shared*, which is the rule above
 and not an exception to it. A `<div>` handed through the bridge in either

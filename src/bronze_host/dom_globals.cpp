@@ -167,6 +167,10 @@ void fireAnimationFrames() {
 //     run the PREVIOUS frame's continuations against this frame's state, and a
 //     rejection thrown in the last rAF before shutdown would never be reported
 //     at all, because quiescence would never be reached again.
+//
+//  7. The bridge sweep, after the checkpoint: the drain runs bronze's deferred
+//     finalizers, which is when a crossing's own-side wrapper can die, and the
+//     sweep is what turns those deaths into freed rows (host_interp.h).
 void hostFrame(double dtMs) {
     if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
     g_host->clockMs += dtMs;                             // 2
@@ -177,6 +181,7 @@ void hostFrame(double dtMs) {
     fireAnimationFrames();                               // 5
     deliverHostObservers();                              // 5b
     ev::drainMicrotasks();                               // 6
+    sweepInterpBridge();                                 // 7
 }
 
 // ---------------------------------------------------------------------------

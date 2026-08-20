@@ -1,24 +1,45 @@
 // The interpreter bridge. host_interp.h says why it exists; this file is the
-// mechanism, and it is four things stacked:
+// mechanism, and it is five things stacked:
 //
 //   1. THE CROSSING TABLE — one row per object that has been through the
 //      boundary, holding both halves. It answers identity in both directions,
 //      and it is what makes a round trip give back the original rather than a
 //      wrapper around a wrapper.
 //   2. toJs / toBronze — the conversion pair. Primitives copy. Objects wrap.
+//      Typed arrays SHARE: both realms hold windows over one external byte
+//      store (embed.h's externalizeArrayBuffer), so a script's write to
+//      `position.array[0]` is the compiled program's write too.
 //   3. THE TWO WRAPPERS — a QuickJS class whose property access forwards into
 //      bronze, and a bronze function/proxy whose property access forwards into
 //      QuickJS.
-//   4. THE HOOK — CreateDynamicFunction, performed by JS_Eval.
+//   4. THE HOOKS — CreateDynamicFunction and eval, performed by JS_Eval.
+//   5. THE SWEEP — sweepInterpBridge, the frame-boundary reclaim that keeps
+//      the table from being the leak it used to be.
 //
-// WHY THE TABLE OWNS EVERYTHING. Both wrappers are reachable from a finalizer:
-// a bronze function object dies and destroys its closure, a QuickJS object
-// dies and runs its class finalizer. Neither may touch the other collector —
-// host_internal.h's GC rule forbids an embed call from a bronze finalizer, and
-// the mirror hazard is worse (a QuickJS finalizer destroying an ev::Persistent
-// re-enters bronze mid-sweep). So no wrapper owns a reference to anything:
-// each holds an INDEX, the table holds the references, and both finalizers do
-// nothing at all.
+// OWNERSHIP, per row: each row OWNS the foreign half and holds its own-side
+// wrapper without owning it, so the wrapper can die when the program lets go
+// — and the wrapper's death is the row's reclaim signal:
+//
+//   - A bronze object crossed OUT (BronzeOut) is rooted by a Persistent; the
+//     QuickJS wrapper is held un-duplicated, and its class FINALIZER pushes
+//     the row index onto a plain vector. The finalizer touches nothing else —
+//     host_internal.h's GC rule forbids an embed call from a finalizer, and
+//     pushing an integer is not one.
+//   - A QuickJS object crossed IN (JsIn) is owned by one JS_DupValue; the
+//     bronze proxy is held through a bronze WeakRef (itself in a Persistent),
+//     so the row learns the proxy died by deref'ing at the sweep. The same
+//     shape carries the shared typed-array rows (SharedBuf, SharedView).
+//
+// The sweep runs from hostFrame — a plain host stack, outside both
+// collectors — which is where JS_FreeValue and Persistent release are
+// unconditionally safe. resetInterpBridge() remains the app-realm teardown.
+//
+// IDENTITY without the old linear scan: lookups by bronze value key a map on
+// raw bits, rebuilt when embed's relocationEpoch() has moved — bits only
+// change when that does, so the cache cannot go stale (embed.h says this is
+// the primitive's whole purpose). The JS direction keys on QuickJS object
+// pointers, which never move; entries are owned or flagged dead before their
+// pointer can be reused.
 
 #include "bronze_host/host_interp.h"
 
@@ -48,25 +69,51 @@ namespace {
 // The crossing table
 // ---------------------------------------------------------------------------
 
+enum class CrossKind : uint8_t {
+    Free,       // on the free list; every field reset
+    BronzeOut,  // bronze object, wrapped as a BronzeRef for JS
+    JsIn,       // QuickJS object, wrapped as a HostProxy for bronze
+    SharedBuf,  // one external byte store, an ArrayBuffer in both realms
+    SharedView, // one typed-array window, a view object in both realms
+};
+
 struct Crossing {
-    ev::Persistent bronze;      // rooted; the collector updates it in place
-    JSValue js = JS_UNDEFINED;  // owned (one JS_DupValue), freed on reset
+    CrossKind kind = CrossKind::Free;
+    // BronzeOut: set by the wrapper's finalizer; the row is garbage awaiting
+    // the sweep, and every lookup treats it as absent — the wrapper's memory
+    // may already be reused.
+    bool deadPending = false;
+    // BronzeOut: the foreign bronze object, rooted. The others: a bronze
+    // WeakRef over the bronze-side wrapper (proxy, buffer, view), so the row
+    // holds no claim on it.
+    ev::Persistent bronze;
+    // BronzeOut: the wrapper, NOT owned (identity only; valid while
+    // !deadPending). The others: the foreign/shared JS value, owned by one
+    // JS_DupValue the sweep releases.
+    JSValue js = JS_UNDEFINED;
 };
 
 struct Bridge {
     JSContext* ctx = nullptr;
     JSClassID refClass = 0;
     std::vector<std::unique_ptr<Crossing>> rows;
-    // The JS half is a stable pointer — QuickJS never moves an object — so
-    // that direction gets a real map. The bronze half cannot: embed.h says raw
-    // bits "name a pre-collection address", so a map keyed on them would be
-    // wrong after the first collection and wrong SILENTLY. That direction
-    // scans instead, comparing each row's CURRENT bits through its Persistent,
-    // which is always right. The scan is over objects that have actually
-    // crossed — a handful for a scripted scene — and the day that stops being
-    // true the fix is an identity primitive in embed, not a cache that can go
-    // stale.
+    std::vector<size_t> freeRows;
+    // Indices whose BronzeOut wrapper finalized. POD only: the pushes happen
+    // inside QuickJS collection.
+    std::vector<size_t> pendingDead;
+
+    // JS object pointer -> row, for the owned-js row kinds. QuickJS never
+    // moves an object, and an owned entry's pointer cannot be reused while
+    // the row holds its dup.
     std::unordered_map<void*, size_t> byJs;
+
+    // Bronze bits -> row, rebuilt whenever the collector has relocated
+    // anything since the last build. BronzeOut rows contribute their rooted
+    // object's CURRENT bits; the weak kinds contribute their deref — a dead
+    // weak simply contributes nothing until the sweep frees its row.
+    std::unordered_map<uint64_t, size_t> byBronze;
+    uint64_t byBronzeEpoch = ~0ULL;
+    bool byBronzeDirty = true;
 };
 
 Bridge& bridge() {
@@ -74,33 +121,118 @@ Bridge& bridge() {
     return b;
 }
 
-Crossing* rowForJs(JSValueConst v) {
-    if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT) return nullptr;
+// ---- bronze WeakRef, spelled through embed ---------------------------------
+
+Value makeWeakRef(Value target) {
+    ev::GlobalValue ctor = ev::globalValue("WeakRef");
+    if (!ctor.found) return ev::undefined();
+    ev::CallResult r = ev::construct(ctor.value, std::span<const Value>(&target, 1));
+    return r.thrown ? ev::undefined() : r.value;
+}
+
+// The referent, or undefined once the collector has proved it dead.
+Value derefWeakRef(Value weakRef) {
+    if (!ev::isObject(weakRef)) return ev::undefined();
+    Value deref = ev::getProperty(weakRef, "deref");
+    if (!ev::isFunction(deref)) return ev::undefined();
+    ev::CallResult r = ev::call(deref, weakRef, {});
+    return r.thrown ? ev::undefined() : r.value;
+}
+
+// The row's bronze-side wrapper (or foreign object), as of NOW. Undefined for
+// a weak row whose wrapper died.
+Value bronzeHalfOf(const Crossing& row) {
+    if (row.kind == CrossKind::BronzeOut) return row.bronze.get();
+    return derefWeakRef(row.bronze.get());
+}
+
+void rebuildByBronze() {
     Bridge& b = bridge();
-    auto it = b.byJs.find(JS_VALUE_GET_PTR(v));
-    return it == b.byJs.end() ? nullptr : b.rows[it->second].get();
+    b.byBronze.clear();
+    for (size_t i = 0; i < b.rows.size(); ++i) {
+        const Crossing& row = *b.rows[i];
+        if (row.kind == CrossKind::Free || row.deadPending) continue;
+        Value v = bronzeHalfOf(row);
+        if (ev::isObject(v)) b.byBronze[ev::toBits(v)] = i;
+    }
+    b.byBronzeEpoch = ev::relocationEpoch();
+    b.byBronzeDirty = false;
 }
 
 Crossing* rowForBronze(Value v) {
     Bridge& b = bridge();
-    const uint64_t want = ev::toBits(v);
-    for (auto& row : b.rows) {
-        if (ev::toBits(row->bronze.get()) == want) return row.get();
-    }
-    return nullptr;
+    if (b.byBronzeDirty || b.byBronzeEpoch != ev::relocationEpoch()) rebuildByBronze();
+    auto it = b.byBronze.find(ev::toBits(v));
+    if (it == b.byBronze.end()) return nullptr;
+    Crossing* row = b.rows[it->second].get();
+    return row->deadPending || row->kind == CrossKind::Free ? nullptr : row;
 }
 
-// Both halves in, one row out. `js` is duplicated here: the table owns its
-// reference for the bridge's life, independently of whoever handed it in.
-size_t addCrossing(Value bronze, JSValueConst js) {
+Crossing* rowForJs(JSValueConst v) {
+    if (JS_VALUE_GET_TAG(v) != JS_TAG_OBJECT) return nullptr;
     Bridge& b = bridge();
-    auto row = std::make_unique<Crossing>();
-    row->bronze.set(bronze);
-    row->js = JS_DupValue(b.ctx, js);
-    const size_t index = b.rows.size();
-    if (JS_VALUE_GET_TAG(js) == JS_TAG_OBJECT) b.byJs[JS_VALUE_GET_PTR(js)] = index;
-    b.rows.push_back(std::move(row));
+    auto it = b.byJs.find(JS_VALUE_GET_PTR(v));
+    if (it == b.byJs.end()) return nullptr;
+    Crossing* row = b.rows[it->second].get();
+    return row->deadPending || row->kind == CrossKind::Free ? nullptr : row;
+}
+
+size_t takeRow() {
+    Bridge& b = bridge();
+    if (!b.freeRows.empty()) {
+        const size_t i = b.freeRows.back();
+        b.freeRows.pop_back();
+        return i;
+    }
+    b.rows.push_back(std::make_unique<Crossing>());
+    return b.rows.size() - 1;
+}
+
+// A bronze object going OUT: the row roots it; `wrapper` is recorded without
+// a dup — its finalizer is what ends the row.
+size_t addBronzeOut(Value bronzeObj, JSValueConst wrapper) {
+    const size_t index = takeRow();
+    Bridge& b = bridge();
+    Crossing& row = *b.rows[index];
+    row.kind = CrossKind::BronzeOut;
+    row.deadPending = false;
+    row.bronze.set(bronzeObj);
+    row.js = wrapper;  // not owned
+    b.byBronzeDirty = true;
     return index;
+}
+
+// A JS value coming IN, or a shared buffer/view: the row owns `js` (one dup),
+// and holds `bronzeWrapper` only weakly.
+size_t addWeakRow(CrossKind kind, Value bronzeWrapper, JSValueConst js) {
+    const size_t index = takeRow();
+    Bridge& b = bridge();
+    Crossing& row = *b.rows[index];
+    row.kind = kind;
+    row.deadPending = false;
+    row.bronze.set(makeWeakRef(bronzeWrapper));
+    row.js = JS_DupValue(b.ctx, js);
+    b.byJs[JS_VALUE_GET_PTR(js)] = index;
+    b.byBronzeDirty = true;
+    return index;
+}
+
+void freeRow(size_t index, bool freeOwnedJs) {
+    Bridge& b = bridge();
+    Crossing& row = *b.rows[index];
+    if (row.kind == CrossKind::Free) return;
+    const bool ownsJs = row.kind != CrossKind::BronzeOut;
+    if (ownsJs) {
+        auto it = b.byJs.find(JS_VALUE_GET_PTR(row.js));
+        if (it != b.byJs.end() && it->second == index) b.byJs.erase(it);
+        if (freeOwnedJs && b.ctx) JS_FreeValue(b.ctx, row.js);
+    }
+    row.kind = CrossKind::Free;
+    row.deadPending = false;
+    row.bronze.set(ev::undefined());
+    row.js = JS_UNDEFINED;
+    b.freeRows.push_back(index);
+    b.byBronzeDirty = true;
 }
 
 JSValue toJs(Value v);
@@ -268,6 +400,22 @@ JSValue jsRefCall(JSContext* ctx, JSValueConst func_obj, JSValueConst this_val,
     return toJs(r.value);
 }
 
+// The reclaim signal, and the WHOLE of what a finalizer may do here: record
+// the index and mark the row unreadable. It runs inside QuickJS collection —
+// possibly triggered by a JS_FreeValue this very file makes — so it must not
+// touch either heap; a vector push and a bool store touch neither.
+void jsRefFinalizer(JSRuntime*, JSValueConst val) {
+    Bridge& b = bridge();
+    void* p = JS_GetOpaque(val, b.refClass);
+    if (!p) return;
+    const size_t index = reinterpret_cast<size_t>(p) - 1;
+    if (index >= b.rows.size()) return;
+    Crossing& row = *b.rows[index];
+    if (row.kind != CrossKind::BronzeOut) return;
+    row.deadPending = true;
+    b.pendingDead.push_back(index);
+}
+
 JSClassExoticMethods g_refExotic = {
     /* get_own_property       */ jsRefGetOwnProperty,
     /* get_own_property_names */ jsRefOwnKeys,
@@ -280,9 +428,7 @@ JSClassExoticMethods g_refExotic = {
 
 JSClassDef g_refClassDef = {
     /* class_name */ "BronzeRef",
-    // Nothing to finalize: the crossing table owns both halves, so a wrapper
-    // that dies takes nothing with it. See the file header.
-    /* finalizer */ nullptr,
+    /* finalizer */ jsRefFinalizer,
     /* gc_mark   */ nullptr,
     /* call      */ jsRefCall,
     /* exotic    */ &g_refExotic,
@@ -292,7 +438,7 @@ JSValue makeJsRef(Value bronze) {
     Bridge& b = bridge();
     JSValue obj = JS_NewObjectClass(b.ctx, static_cast<int>(b.refClass));
     if (JS_IsException(obj)) return obj;
-    const size_t index = addCrossing(bronze, obj);
+    const size_t index = addBronzeOut(bronze, obj);
     JS_SetOpaque(obj, reinterpret_cast<void*>(index + 1));
     return obj;
 }
@@ -342,6 +488,10 @@ Value callInterpreted(size_t rowIndex, Value thisValue, std::span<const Value> a
 // `length` properties, and the 10.5 get-invariant would then check the trap's
 // answer against them. Unnamed, there is nothing to disagree with, and `name`
 // is answered from the interpreted function like every other property.
+//
+// The captured rowIndex cannot go stale despite row reuse: a trap can only
+// fire while its proxy is alive, and the row is recycled only after the sweep
+// has seen the proxy dead.
 Value makeBronzeFunction(size_t rowIndex) {
     HostProxyTraps t;
     t.target = ev::makeFunction([](Value, std::span<const Value>) { return ev::undefined(); });
@@ -442,48 +592,102 @@ Value makeBronzeObject(size_t rowIndex) {
 }
 
 // ---------------------------------------------------------------------------
-// The conversion pair
+// Typed arrays: one byte store, a window in each realm
 // ---------------------------------------------------------------------------
+//
+// The old bridge COPIED binary data, because embed's pointer contract made a
+// shared buffer impossible — a bronze buffer's bytes lived in the moving heap
+// and the address died at the next allocation. That contract now has its
+// deliberate exception (embed.h, externalizeArrayBuffer): a buffer's storage
+// migrates once into a refcounted host block that never moves, and from then
+// on BOTH realms hold real views over the same bytes. A user script's
+// `position.array[i] = x` is the write the compiled renderer uploads; the
+// copy semantics that silently dropped it are gone.
+//
+// Identity holds per OBJECT, not merely per byte: the buffer crosses once
+// (SharedBuf row), each distinct view crosses once (SharedView row), and a
+// round trip in either direction gives back the object that started it.
+//
+// The copy paths at the bottom remain for exactly one case each way: a
+// detached buffer (externalize refuses), and a QuickJS view whose buffer
+// bytes cannot be pinned. A DETACH of a shared QuickJS buffer after crossing
+// (transfer to a worker, say) frees bytes the bronze side still points at —
+// the one lifetime this design does not cover; three.js's editor never
+// transfers a geometry array, and a loader that does gets the copy path by
+// crossing before it transfers.
 
-// Binary data is COPIED, and that is forced rather than chosen. embed.h's
-// pointer contract says a typed array's bytes live in the moving bronze heap
-// and the address dies at the next allocation — so a QuickJS view sharing that
-// buffer would be a dangling read the first time either side allocated, which
-// is every frame. The copy means a script that MUTATES an array it was handed
-// mutates its own copy; three.js scripts read geometry far more than they
-// write it, and a shared-buffer story needs a pinning primitive bronze does
-// not have.
-
-struct KindMap {
+struct KindPair {
     bronze::ElementKind kind;
+    JSTypedArrayEnum jsKind;
     const char* jsCtor;
 };
 
-const KindMap kKinds[] = {
-    {ev::elements::Int8, "Int8Array"},         {ev::elements::Uint8, "Uint8Array"},
-    {ev::elements::Uint8Clamped, "Uint8ClampedArray"},
-    {ev::elements::Int16, "Int16Array"},       {ev::elements::Uint16, "Uint16Array"},
-    {ev::elements::Int32, "Int32Array"},       {ev::elements::Uint32, "Uint32Array"},
-    {ev::elements::Float32, "Float32Array"},   {ev::elements::Float64, "Float64Array"},
+const KindPair kKinds[] = {
+    {ev::elements::Int8, JS_TYPED_ARRAY_INT8, "Int8Array"},
+    {ev::elements::Uint8, JS_TYPED_ARRAY_UINT8, "Uint8Array"},
+    {ev::elements::Uint8Clamped, JS_TYPED_ARRAY_UINT8C, "Uint8ClampedArray"},
+    {ev::elements::Int16, JS_TYPED_ARRAY_INT16, "Int16Array"},
+    {ev::elements::Uint16, JS_TYPED_ARRAY_UINT16, "Uint16Array"},
+    {ev::elements::Int32, JS_TYPED_ARRAY_INT32, "Int32Array"},
+    {ev::elements::Uint32, JS_TYPED_ARRAY_UINT32, "Uint32Array"},
+    {ev::elements::Float32, JS_TYPED_ARRAY_FLOAT32, "Float32Array"},
+    {ev::elements::Float64, JS_TYPED_ARRAY_FLOAT64, "Float64Array"},
+    {ev::elements::Float16, JS_TYPED_ARRAY_FLOAT16, "Float16Array"},
+    {ev::elements::BigInt64, JS_TYPED_ARRAY_BIG_INT64, "BigInt64Array"},
+    {ev::elements::BigUint64, JS_TYPED_ARRAY_BIG_UINT64, "BigUint64Array"},
 };
 
-JSValue typedArrayToJs(Value v) {
+const KindPair* pairForBronze(bronze::ElementKind kind) {
+    for (const KindPair& k : kKinds)
+        if (k.kind == kind) return &k;
+    return nullptr;
+}
+
+const KindPair* pairForJs(int jsKind) {
+    for (const KindPair& k : kKinds)
+        if (k.jsKind == jsKind) return &k;
+    return nullptr;
+}
+
+// JS_NewArrayBuffer's free_func for a store the bronze side pinned: the AB's
+// death releases the reference the crossing took. Runs inside QuickJS
+// collection, and releaseExternalStore is heap-free unless it is the LAST
+// reference — which it cannot be while the bronze buffer's own Deferred
+// reference is outstanding, and for a store that outlived its bronze buffer
+// the deleter is plain free().
+void sharedStoreFreeFunc(JSRuntime*, void* opaque, void*) {
+    ev::releaseExternalStore(opaque);
+}
+
+// The deleter for a store wrapping a QUICKJS buffer's bytes: drop the dup
+// that kept the ArrayBuffer (and so its bytes) alive. It runs from bronze's
+// deferred-finalizer drain — a plain host stack at the frame boundary —
+// where JS_FreeValue is unconditionally safe.
+struct JsBytesKeep {
+    JSContext* ctx;
+    JSValue buffer;
+};
+
+void releaseJsBytes(void* user, uint8_t*) {
+    auto* keep = static_cast<JsBytesKeep*>(user);
+    JS_FreeValue(keep->ctx, keep->buffer);
+    delete keep;
+}
+
+// The legacy copy, kept for the cases sharing cannot serve.
+JSValue typedArrayCopyToJs(Value v) {
     Bridge& b = bridge();
     ev::TypedArrayInfo info = ev::typedArrayInfo(v);
     if (!info) return JS_UNDEFINED;
-    const char* ctorName = nullptr;
-    for (const KindMap& k : kKinds) {
-        if (k.kind == info.elementKind) ctorName = k.jsCtor;
-    }
-    // Float16 and the two BigInt kinds have no plain-number counterpart worth
-    // faking; they arrive as a byte view rather than as a wrong element type.
+    const KindPair* pair = pairForBronze(info.elementKind);
+    const char* ctorName = pair ? pair->jsCtor : "Uint8Array";
     std::vector<uint8_t> bytes(info.data, info.data + info.byteLength);
 
     JSValue global = JS_GetGlobalObject(b.ctx);
-    JSValue ctor = JS_GetPropertyStr(b.ctx, global, ctorName ? ctorName : "Uint8Array");
+    JSValue ctor = JS_GetPropertyStr(b.ctx, global, ctorName);
     JS_FreeValue(b.ctx, global);
     JSValue count = JS_NewInt64(
-        b.ctx, ctorName ? info.elementCount : static_cast<int64_t>(bytes.size()));
+        b.ctx, pair ? info.elementCount : static_cast<int64_t>(bytes.size()));
     JSValue out = JS_CallConstructor(b.ctx, ctor, 1, &count);
     JS_FreeValue(b.ctx, count);
     JS_FreeValue(b.ctx, ctor);
@@ -500,7 +704,7 @@ JSValue typedArrayToJs(Value v) {
     return out;
 }
 
-Value typedArrayToBronze(JSValueConst v) {
+Value typedArrayCopyToBronze(JSValueConst v) {
     Bridge& b = bridge();
     size_t byteOffset = 0, byteLength = 0, bytesPerElement = 0;
     JSValue buffer =
@@ -517,30 +721,125 @@ Value typedArrayToBronze(JSValueConst v) {
         bytes.assign(src + byteOffset, src + byteOffset + byteLength);
     JS_FreeValue(b.ctx, buffer);
 
-    // The element kind is read off the constructor's name, which is the only
-    // thing QuickJS reports about a view without a per-kind accessor per type.
-    JSValue ctor = JS_GetPropertyStr(b.ctx, v, "constructor");
-    JSValue nameV = JS_GetPropertyStr(b.ctx, ctor, "name");
-    const char* nameC = JS_ToCString(b.ctx, nameV);
-    const std::string name = nameC ? nameC : "";
-    if (nameC) JS_FreeCString(b.ctx, nameC);
-    JS_FreeValue(b.ctx, nameV);
-    JS_FreeValue(b.ctx, ctor);
-
-    bronze::ElementKind kind = ev::elements::Uint8;
-    uint32_t perElement = 1;
-    for (const KindMap& k : kKinds) {
-        if (name == k.jsCtor) {
-            kind = k.kind;
-            perElement = static_cast<uint32_t>(bytesPerElement ? bytesPerElement : 1);
-        }
-    }
+    const KindPair* pair = pairForJs(JS_GetTypedArrayType(v));
+    bronze::ElementKind kind = pair ? pair->kind : ev::elements::Uint8;
+    const uint32_t perElement =
+        pair ? static_cast<uint32_t>(bytesPerElement ? bytesPerElement : 1) : 1;
     Value view = ev::createTypedArray(
         kind, static_cast<uint32_t>(bytes.size() / (perElement ? perElement : 1)));
     ev::fillTypedArray(view, std::span<const uint8_t>(bytes));
     return view;
 }
 
+// The bronze BUFFER's JS twin, created on first crossing: pin the bytes, wrap
+// them in a real ArrayBuffer whose death releases the pin. Returns a dup the
+// caller owns, or JS_UNDEFINED when the buffer cannot externalize (detached).
+JSValue jsBufferFor(Value bronzeBuffer) {
+    Bridge& b = bridge();
+    if (Crossing* row = rowForBronze(bronzeBuffer)) return JS_DupValue(b.ctx, row->js);
+    ev::ExternalBytes ext = ev::externalizeArrayBuffer(bronzeBuffer);
+    if (!ext) return JS_UNDEFINED;
+    JSValue jsBuf = JS_NewArrayBuffer(b.ctx, ext.data, ext.byteLength, sharedStoreFreeFunc,
+                                      ext.store, /*is_shared=*/false);
+    if (JS_IsException(jsBuf)) {
+        JS_FreeValue(b.ctx, jsBuf);
+        JS_GetException(b.ctx);
+        ev::releaseExternalStore(ext.store);
+        return JS_UNDEFINED;
+    }
+    addWeakRow(CrossKind::SharedBuf, bronzeBuffer, jsBuf);
+    return jsBuf;
+}
+
+// A bronze view going OUT: same store, a JS view over the same window.
+JSValue typedArrayToJs(Value v) {
+    Bridge& b = bridge();
+    if (Crossing* row = rowForBronze(v)) return JS_DupValue(b.ctx, row->js);
+
+    ev::TypedArrayInfo info = ev::typedArrayInfo(v);
+    if (!info) return JS_UNDEFINED;
+    const KindPair* pair = pairForBronze(info.elementKind);
+    if (!pair) return typedArrayCopyToJs(v);
+
+    JSValue jsBuf = jsBufferFor(ev::typedArrayBuffer(v));
+    if (JS_IsUndefined(jsBuf)) return typedArrayCopyToJs(v);
+
+    JSValue argv[3] = {jsBuf, JS_NewInt64(b.ctx, ev::typedArrayByteOffset(v)),
+                       JS_NewInt64(b.ctx, info.elementCount)};
+    JSValue jsView = JS_NewTypedArray(b.ctx, 3, argv, pair->jsKind);
+    JS_FreeValue(b.ctx, argv[0]);
+    JS_FreeValue(b.ctx, argv[1]);
+    JS_FreeValue(b.ctx, argv[2]);
+    if (JS_IsException(jsView)) {
+        JS_FreeValue(b.ctx, jsView);
+        JS_GetException(b.ctx);
+        return typedArrayCopyToJs(v);
+    }
+    addWeakRow(CrossKind::SharedView, v, jsView);
+    return jsView;
+}
+
+// A QuickJS view coming IN: pin its buffer's bytes under a bronze external
+// buffer, and hand back a bronze view over the same window.
+Value typedArrayToBronze(JSValueConst v) {
+    Bridge& b = bridge();
+    if (Crossing* row = rowForJs(v)) {
+        Value view = derefWeakRef(row->bronze.get());
+        if (ev::isObject(view)) return view;
+    }
+
+    const KindPair* pair = pairForJs(JS_GetTypedArrayType(v));
+    if (!pair) return typedArrayCopyToBronze(v);
+
+    size_t byteOffset = 0, byteLength = 0, bytesPerElement = 0;
+    JSValue jsBuf = JS_GetTypedArrayBuffer(b.ctx, v, &byteOffset, &byteLength,
+                                           &bytesPerElement);
+    if (JS_IsException(jsBuf)) {
+        JS_FreeValue(b.ctx, jsBuf);
+        JS_GetException(b.ctx);
+        return ev::undefined();
+    }
+
+    Value bronzeBuf = ev::undefined();
+    if (Crossing* brow = rowForJs(jsBuf)) {
+        bronzeBuf = derefWeakRef(brow->bronze.get());
+    }
+    if (!ev::isObject(bronzeBuf)) {
+        size_t bufLen = 0;
+        uint8_t* data = JS_GetArrayBuffer(b.ctx, &bufLen, jsBuf);
+        if (!data) {
+            JS_FreeValue(b.ctx, jsBuf);
+            JS_GetException(b.ctx);
+            return typedArrayCopyToBronze(v);
+        }
+        // The store's reference to the BUFFER is what keeps these bytes
+        // valid; it drops from bronze's deferred drain when the bronze
+        // buffer dies.
+        auto* keep = new JsBytesKeep{b.ctx, JS_DupValue(b.ctx, jsBuf)};
+        bronzeBuf = ev::createExternalArrayBuffer(data, static_cast<uint32_t>(bufLen),
+                                                  releaseJsBytes, keep);
+        if (!ev::isObject(bronzeBuf)) {
+            JS_FreeValue(b.ctx, keep->buffer);
+            delete keep;
+            JS_FreeValue(b.ctx, jsBuf);
+            return typedArrayCopyToBronze(v);
+        }
+        addWeakRow(CrossKind::SharedBuf, bronzeBuf, jsBuf);
+    }
+    JS_FreeValue(b.ctx, jsBuf);
+
+    const uint32_t per = static_cast<uint32_t>(bytesPerElement ? bytesPerElement : 1);
+    Value view = ev::createTypedArrayView(pair->kind, bronzeBuf,
+                                          static_cast<uint32_t>(byteOffset),
+                                          static_cast<uint32_t>(byteLength / per));
+    if (!ev::isObject(view)) return typedArrayCopyToBronze(v);
+    addWeakRow(CrossKind::SharedView, view, v);
+    return view;
+}
+
+// ---------------------------------------------------------------------------
+// The conversion pair
+// ---------------------------------------------------------------------------
 
 JSValue toJs(Value v) {
     Bridge& b = bridge();
@@ -556,6 +855,11 @@ JSValue toJs(Value v) {
     if (ev::isString(v)) return JS_NewString(b.ctx, ev::toUtf8(v).c_str());
     if (!ev::isObject(v)) return JS_UNDEFINED;  // BigInt and the holes
     if (ev::isTypedArray(v)) return typedArrayToJs(v);
+    if (ev::isArrayBuffer(v)) {
+        JSValue jsBuf = jsBufferFor(v);
+        if (!JS_IsUndefined(jsBuf)) return jsBuf;
+        // detached: fall through to the wrapper, which is at least identity
+    }
     // An ENGINE object is not wrapped in either direction: both realms already
     // wrap the same dom::Element, so the crossing resolves to the other
     // realm's existing wrapper for it. This is the README's rule ("Engine
@@ -564,7 +868,11 @@ JSValue toJs(Value v) {
     // unwraps to a dom::Node, and a generic forwarding wrapper is not one.
     if (dom::Element* el = hostElementOf(v))
         return js::DomBindings::wrapElement(b.ctx, el);
-    if (Crossing* row = rowForBronze(v)) return JS_DupValue(b.ctx, row->js);
+    if (Crossing* row = rowForBronze(v)) {
+        if (row->kind == CrossKind::BronzeOut) return JS_DupValue(b.ctx, row->js);
+        // A proxy for a JS object, going home: the original.
+        return JS_DupValue(b.ctx, row->js);
+    }
     return makeJsRef(v);
 }
 
@@ -595,33 +903,34 @@ Value toBronze(JSValueConst v) {
     // arrive as that element, not as a proxy that merely forwards `nodeType`.
     if (auto* el = static_cast<dom::Element*>(js::DomBindings::unwrapElement(b.ctx, v)))
         return hostElementValue(el);
-    if (Crossing* row = rowForJs(v)) return row->bronze.get();
-
-    // Binary data copies rather than wraps, for the reason typedArrayToJs
-    // gives; it is also the one object kind where a wrapper would be wrong on
-    // its own terms, since element access on a typed array is not a property
-    // read the traps could serve.
-    {
-        size_t off = 0, len = 0, per = 0;
-        JSValue buf = JS_GetTypedArrayBuffer(b.ctx, v, &off, &len, &per);
-        const bool isView = !JS_IsException(buf);
-        if (isView) {
-            JS_FreeValue(b.ctx, buf);
-            return typedArrayToBronze(v);
-        }
-        JS_FreeValue(b.ctx, buf);
-        JS_GetException(b.ctx);
+    if (Crossing* row = rowForJs(v)) {
+        Value wrapper = derefWeakRef(row->bronze.get());
+        if (ev::isObject(wrapper)) return wrapper;
+        // The wrapper died between sweeps; fall through and cross afresh.
     }
 
-    const size_t index = b.rows.size();
+    // A typed-array view shares its store rather than wrapping or copying —
+    // element access on one is not a property read the traps could serve, and
+    // a copy is a divergence the first write exposes.
+    if (JS_GetTypedArrayType(v) >= 0) return typedArrayToBronze(v);
+
+    const size_t index = takeRow();
     Value wrapper =
         JS_IsFunction(b.ctx, v) ? makeBronzeFunction(index) : makeBronzeObject(index);
-    addCrossing(wrapper, v);
+    // Fill the reserved row in place: the traps captured `index`, so the row
+    // must be THIS one.
+    Crossing& row = *b.rows[index];
+    row.kind = CrossKind::JsIn;
+    row.deadPending = false;
+    row.bronze.set(makeWeakRef(wrapper));
+    row.js = JS_DupValue(b.ctx, v);
+    b.byJs[JS_VALUE_GET_PTR(v)] = index;
+    b.byBronzeDirty = true;
     return wrapper;
 }
 
 // ---------------------------------------------------------------------------
-// CreateDynamicFunction (27.3.1.1), performed by the interpreter
+// Dynamic code (27.3.1.1 and 19.2.1), performed by the interpreter
 // ---------------------------------------------------------------------------
 
 const char* sourcePrefixFor(ev::DynamicFunctionKind kind) {
@@ -674,6 +983,28 @@ Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const Value> args)
     return out;
 }
 
+// A compiled `eval(src)`, evaluated by the page's realm in GLOBAL scope —
+// which is the semantics bronze's provided `eval` promises for both the
+// direct and the indirect spelling (an AOT frame has no local scope to hand
+// over, and the lowering warned at any direct call site). The runtime has
+// already performed 19.2.1 step 2, so `source` is always a string.
+Value dynamicEval(Value source) {
+    Bridge& b = bridge();
+    if (!b.ctx) {
+        return ev::throwError(
+            "eval: no interpreter realm to compile in (the bridge is not installed)");
+    }
+    const std::string text = ev::toUtf8(source);
+    JSValue r = JS_Eval(b.ctx, text.c_str(), text.size(), "<eval>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) {
+        JS_FreeValue(b.ctx, r);
+        return ev::throwError("eval: " + describeJsException(b.ctx));
+    }
+    Value out = toBronze(r);
+    JS_FreeValue(b.ctx, r);
+    return out;
+}
+
 }  // namespace
 
 void installInterpBridge(engine::Engine& engine) {
@@ -689,8 +1020,9 @@ void installInterpBridge(engine::Engine& engine) {
         JS_NewClass(JS_GetRuntime(b.ctx), b.refClass, &g_refClassDef);
     }
     ev::setDynamicFunctionHook(dynamicFunction);
-    LOG_INFO("bronze_host: interpreter bridge installed (compiled `new Function` "
-             "compiles in the app's QuickJS realm)");
+    ev::setDynamicEvalHook(dynamicEval);
+    LOG_INFO("bronze_host: interpreter bridge installed (compiled `new Function` and "
+             "`eval` compile in the app's QuickJS realm)");
 }
 
 Value bridgeJsGlobal(const char* name) {
@@ -709,13 +1041,65 @@ Value bridgeJsGlobal(const char* name) {
     return out;
 }
 
+void sweepInterpBridge() {
+    Bridge& b = bridge();
+    if (!b.ctx) return;
+
+    // 1. Rows whose BronzeOut wrapper finalized since the last sweep. The
+    //    vector is swapped out first: freeing a weak row's dup below can run
+    //    QuickJS collection, whose finalizers push NEW indices — those wait
+    //    for the next frame.
+    std::vector<size_t> dead;
+    dead.swap(b.pendingDead);
+    for (size_t index : dead) {
+        if (index >= b.rows.size()) continue;
+        Crossing& row = *b.rows[index];
+        if (row.kind == CrossKind::BronzeOut && row.deadPending) {
+            freeRow(index, /*freeOwnedJs=*/false);
+        }
+    }
+
+    // 2. Weak rows whose bronze-side wrapper the collector has proved dead.
+    //    Rows can only die at a collection, so a quiet epoch means nothing to
+    //    scan.
+    static uint64_t lastSweepEpoch = ~0ULL;
+    const uint64_t epoch = ev::relocationEpoch();
+    if (epoch != lastSweepEpoch) {
+        lastSweepEpoch = epoch;
+        for (size_t i = 0; i < b.rows.size(); ++i) {
+            Crossing& row = *b.rows[i];
+            if (row.kind != CrossKind::JsIn && row.kind != CrossKind::SharedBuf &&
+                row.kind != CrossKind::SharedView) {
+                continue;
+            }
+            if (!ev::isObject(derefWeakRef(row.bronze.get()))) {
+                freeRow(i, /*freeOwnedJs=*/true);
+            }
+        }
+    }
+}
+
 void resetInterpBridge() {
     Bridge& b = bridge();
-    for (auto& row : b.rows) {
-        if (b.ctx) JS_FreeValue(b.ctx, row->js);
+    for (size_t i = 0; i < b.rows.size(); ++i) {
+        Crossing& row = *b.rows[i];
+        // BronzeOut wrappers are not owned here; they die with the realm and
+        // their finalizers find rows already reset.
+        const bool ownsJs = row.kind == CrossKind::JsIn ||
+                            row.kind == CrossKind::SharedBuf ||
+                            row.kind == CrossKind::SharedView;
+        if (ownsJs && b.ctx) JS_FreeValue(b.ctx, row.js);
+        row.kind = CrossKind::Free;
+        row.deadPending = false;
+        row.bronze.set(ev::undefined());
+        row.js = JS_UNDEFINED;
     }
     b.rows.clear();
+    b.freeRows.clear();
+    b.pendingDead.clear();
     b.byJs.clear();
+    b.byBronze.clear();
+    b.byBronzeDirty = true;
 }
 
 }  // namespace bro::bronze_host

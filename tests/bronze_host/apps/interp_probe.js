@@ -94,10 +94,10 @@ say('arrayIndex', arr[1]);
 
 // --- Binary data ------------------------------------------------------------
 //
-// Copied, not shared: embed.h's pointer contract makes a shared buffer a
-// dangling read at the next allocation, so a mutation on one side is NOT
-// visible on the other. That is a documented property of the bridge, so it is
-// asserted rather than worked around.
+// SHARED, not copied: both realms hold views over one external byte store
+// (embed.h's externalizeArrayBuffer), so a mutation on one side IS the other
+// side's read. This is what lets an editor script's write to
+// `position.array[0]` reach the compiled renderer's upload.
 
 const sum = new Function('a', 'var t = 0; for (var i = 0; i < a.length; i++) t += a[i]; return t;');
 const f32 = new Float32Array([1.5, 2.5, 3.0]);
@@ -110,7 +110,18 @@ say('typedOutValue', out[2]);
 
 const mutate = new Function('a', 'a[0] = 1000;');
 mutate(f32);
-say('typedIsCopy', f32[0]);
+say('typedIsShared', f32[0]);
+
+// The reverse direction shares too: a view born in the interpreter, mutated
+// by compiled code, and read back through the interpreter's own reference.
+const readBack = new Function('a', 'return a[1];');
+out[1] = 250;
+say('typedSharedBack', readBack(out));
+
+// Identity round trip: the same view crossing twice is the same object over
+// there, and coming home it is itself.
+const isSame = new Function('a', 'b', 'return a === b;');
+say('typedIdentity', isSame(f32, f32));
 
 // --- Errors, both directions ------------------------------------------------
 
@@ -136,6 +147,25 @@ try {
     syntax = 'threw';
 }
 say('syntaxError', syntax);
+
+// --- eval, the sibling seam ---------------------------------------------------
+//
+// A compiled eval is answered by the same realm as new Function, with GLOBAL
+// semantics for both spellings — an AOT frame has no local scope to hand
+// over, and the compiler says as much at any direct call site.
+
+say('evalNumber', eval('6 * 7'));
+say('evalNonString', eval(42));
+const indirect = eval;
+say('evalIndirect', indirect('({ n: 8 })').n);
+
+let evalCaught = 'none';
+try {
+    eval('throw new Error("from eval")');
+} catch (e) {
+    evalCaught = 'caught';
+}
+say('evalThrow', evalCaught);
 
 // --- The other three constructors -------------------------------------------
 //

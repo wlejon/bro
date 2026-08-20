@@ -21,11 +21,17 @@
 // the layer keeps the simpler rule: values are WRAPPED, never copied, and each
 // wrapper forwards to the object it stands for.
 //
-// The two collectors do not trace each other, so a wrapped object is held
-// alive by the crossing table below for as long as the bridge lives. That is a
-// leak in the strict sense and a bounded one in practice: the table holds what
-// crossed, an app's scripts cross a handful of engine objects, and
-// resetInterpBridge() empties it when the app realm goes away.
+// The two collectors do not trace each other, so the crossing table roots the
+// FOREIGN half of every crossing and holds its OWN side only weakly — a
+// QuickJS finalizer on the outbound wrapper class, a bronze WeakRef on the
+// inbound proxy. When a wrapper dies, sweepInterpBridge (called once per frame
+// from hostFrame) releases the row and the foreign object with it, so the
+// table's size tracks what is LIVE across the boundary, not what has ever
+// crossed. resetInterpBridge() still empties it when the app realm goes away.
+//
+// Typed arrays do not wrap at all: both realms hold real views over one
+// external byte store (embed.h's externalizeArrayBuffer), so writes on either
+// side are simply visible on the other.
 
 #include "embed/embed.h"
 
@@ -54,6 +60,11 @@ void installInterpBridge(engine::Engine& engine);
 // no-op. It looked like an editor and edited nothing. Bridging the real object
 // is not a better fake; it is the library.
 Value bridgeJsGlobal(const char* name);
+
+// Reclaim rows whose own-side wrapper has died: run once per frame, from
+// hostFrame, after the microtask/finalizer drain — a plain host stack where
+// releasing either half is unconditionally safe.
+void sweepInterpBridge();
 
 // Drop every crossing. The wrappers handed out before this keep working
 // against the objects they already hold; what goes is the table's claim on
