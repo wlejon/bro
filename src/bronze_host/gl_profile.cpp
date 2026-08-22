@@ -74,6 +74,7 @@ std::map<std::string, Slot>& slotTable() {
 thread_local uint64_t t_childTicks = 0;
 
 bool s_enabled = false;
+bool s_trace = false;
 bool s_initialised = false;
 bool s_dumped = false;
 
@@ -81,6 +82,13 @@ void initOnce() {
     if (s_initialised) return;
     s_initialised = true;
     const char* env = std::getenv("BRO_GL_PROFILE");
+    if (env && std::strcmp(env, "trace") == 0) {
+        s_enabled = true;
+        s_trace = true;
+        slotTable();
+        std::atexit(hostProfileDump);
+        return;
+    }
     if (env && std::strcmp(env, "1") == 0) {
         s_enabled = true;
         slotTable();  // construct before atexit registers, so it outlives the dump
@@ -112,6 +120,7 @@ ev::NativeFn hostProfileWrap(const char* name, ev::NativeFn fn) {
     Slot* slot = slotFor(name);
     return [slot, inner = std::move(fn)](bronze::Value thisValue,
                                         std::span<const bronze::Value> args) {
+        if (s_trace) std::fprintf(stderr, "HOSTCALL %s argc=%zu\n", slot->name.c_str(), args.size());
         const uint64_t savedChild = t_childTicks;
         t_childTicks = 0;
         const uint64_t t0 = ticksNow();
