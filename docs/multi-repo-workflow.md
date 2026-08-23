@@ -63,6 +63,7 @@ D:/projects/
 ├── brosoundml/                   # standalone repo (preferred for dev)
 ├── brovisionml/                  # standalone repo (preferred for dev)
 ├── bronze/                       # standalone repo (the AOT compiler)
+├── brosurface/                   # standalone repo (IDL code generation toolchain)
 └── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
 ```
 

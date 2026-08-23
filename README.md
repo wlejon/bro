@@ -106,13 +106,14 @@ The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc r
 - **brovisionml.** Vision-model inference: SAM segmentation, Depth-Anything-V2 depth, DSINE surface normals, BiRefNet matting, and the ControlNet conditioning annotators (HED, lineart, MLSD, OpenPose, SegFormer). See [brovisionml](https://github.com/wlejon/brovisionml).
 - **broimage.** Image decode/encode (stb) plus composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric ops, alpha-correct compositing, color/HSV/sRGB, normalization presets, and NHWC/NCHW preproc. Backs `bro.image` and host-side preprocessing in brolm/brodiffusion. See [broimage](https://github.com/wlejon/broimage).
 - **bronze.** Ahead-of-time compiler that turns JavaScript into native machine code (LLVM-backed; standalone binaries and a shared runtime). Powers compiled apps in bro via `src/bronze_host` under `BRO_WITH_BRONZE`. See [bronze](https://github.com/wlejon/bronze).
+- **brosurface.** Single-source WebIDL code generation toolchain. Emits QuickJS C++ bindings (`src/js/`), bronze_host C++ bindings (`src/bronze_host/`), availability stubs, JSDoc documentation (`docs/`), and global TypeScript definitions (`types/index.d.ts` and `docs/bro.d.ts`). See [brosurface](https://github.com/wlejon/brosurface).
 - **Jolt Physics.** Rigid body physics with contact listeners, integrated into the scene graph.
 - **Skia.** 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs. Text runs through HarfBuzz shaping and Skia's UAX#9 bidi subset, both compiled from the Skia source bundle and on in every build profile, so ligatures, cursive joining, and RTL reordering are the one text path rather than an optional upgrade.
 - **SDL3.** Windowing, input events, and OpenGL contexts. All GPU work is OpenGL 3.3 Core (via glad) on SDL_GL contexts; there is no SDL_GPU, D3D12, or Metal path. The Skia-rasterized UI texture (Ganesh-GL) and the 3D scene layer are composited together as textured quads in the main GL context.
 
 Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), **glad** (OpenGL 3.3 Core loader), and **FastNoise2** (via brokit).
 
-C++20, roughly 215K lines under `src/`, with the JS bindings in `src/js/` accounting for ~92K of it. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless JS scripting and testing), and `bro-server` (dedicated game server, a fixed-tickrate JS loop with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
+C++20, roughly 215K lines under `src/`, with the JS bindings in `src/js/` generated directly from IDL specifications. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless JS scripting and testing), and `bro-server` (dedicated game server, a fixed-tickrate JS loop with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
 ## Building
 
@@ -162,15 +163,17 @@ myapp/
 
 For more elaborate setups, such as multiple apps under a project root with shared `lib/` and `system/` directories, see [broworkshop](https://github.com/wlejon/broworkshop) for the layout pattern (project-level `bro.json` with `default_app`, `lib`, `system`).
 
-## JS API reference
+## TypeScript & JS API reference
 
-Annotated `.js` files in [docs/](docs/). Load them in your editor for JSDoc on every binding:
+Full TypeScript autocompletion and typechecking definitions for the `bro` namespace and all engine extensions live in [`types/index.d.ts`](types/index.d.ts) and [`docs/bro.d.ts`](docs/bro.d.ts).
 
-**Graphics & world.** `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile-api.js`, `worldgen-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`.
+Annotated `.js` files in [docs/](docs/) are emitted directly from [`brosurface`](https://github.com/wlejon/brosurface). Load them in your editor for JSDoc on every binding:
 
-**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web-animations-api.js`, `pointer-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `imagebitmap-api.js`, `video-api.js`, `audio-api.js`, `net-api.js`, `net-sync-api.js`.
+**Graphics & world.** `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile_world-api.js`, `worldgen-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`, `canvas-api.js`, `webgl2-api.js`.
 
-**On-device AI.** `gpu-api.js`, `tensor-api.js`, `lm-api.js`, `diffusion-api.js`, `vision-api.js`, `triposplat-api.js`, `motion-api.js`, `tts-api.js`, `stt-api.js`, `diar-api.js`, `rave-api.js`, `wake-api.js`, `kws-api.js`, `mic-api.js`, `sense-api.js`, `gesture-api.js`, `listen-api.js`, `ai-game-api.js`.
+**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web_animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `net-api.js`, `settings-api.js`, `intl-api.js`.
+
+**On-device AI.** `gpu-api.js`, `tensor-api.js`, `lm-api.js`, `diffusion-api.js`, `vision-api.js`, `triposplat-api.js`, `motion-api.js`, `tts-api.js`, `stt-api.js`, `diar-api.js`, `rave-api.js`, `wake-api.js`, `kws-api.js`, `mic-api.js`, `sense-api.js`, `gesture-api.js`, `listen-api.js`, `ai-api.js`.
 
 Plus [settings.md](docs/settings.md) (settings + action binding), [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless), [system-panels.md](docs/system-panels.md) (authoring/overriding engine-level UI panels: menu bar, preferences modal, splash, inspector), [projects.md](docs/projects.md) (the project manager and skeletons), and [build-options.md](docs/build-options.md) (profiles and feature flags).
 
