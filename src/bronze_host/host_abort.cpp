@@ -169,12 +169,13 @@ void hostAbortSignal(Value signal, Value reason) {
 // ---------------------------------------------------------------------------
 
 void installAbortGlobals() {
-    // A null body is what HostClass::install turns into a constructor that
-    // throws — `new AbortSignal()` is a TypeError on the web, and a signal is
-    // only ever minted by AbortController, AbortSignal.abort/timeout/any. The
-    // statics still land on the constructor and every signal is born on the
-    // prototype, so `x instanceof AbortSignal` answers true.
-    g_signalClass.install("AbortSignal", 0, nullptr, decorateSignalProto);
+    g_signalClass.install(
+        "AbortSignal", 0,
+        // Not constructible: the IDL declares no constructor, and
+        // HostClass::install turns a null body into the TypeError the
+        // web specifies for `new AbortSignal()`.
+        nullptr,
+        decorateSignalProto);
     g_signalClass.setStatic("abort", ev::makeFunction([](Value, std::span<const Value> a) { ev::Persistent signal(makeSignal()); hostAbortSignal(signal.get(), argAt(a, 0)); return signal.get(); }, 1));
     g_signalClass.setStatic("timeout", ev::makeFunction(signalTimeout, 1));
     g_signalClass.setStatic("any", ev::makeFunction(signalAny, 1));

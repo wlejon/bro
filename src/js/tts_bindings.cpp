@@ -1,4 +1,5 @@
 #if BRO_WITH_SOUNDML
+
 #include "js/tts_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
@@ -3126,4 +3127,4 @@ void cleanupTtsBindings(JSContext* /*ctx*/) {
 
 } // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+#endif // BRO_WITH_SOUNDML

@@ -28,48 +28,6 @@
 
 namespace bro::js {
 
-static JSValue make_float32_array(JSContext* ctx, const float* data, size_t count)
-{
-    size_t byte_len = count * sizeof(float);
-    JSValue ab = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), byte_len);
-    if (JS_IsException(ab)) return ab;
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
-    JSValue result = JS_CallConstructor(ctx, ctor, 1, &ab);
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    JS_FreeValue(ctx, ab);
-    return result;
-}
-
-static bool resolve_f32(JSContext* ctx, JSValueConst v, const char* name,
-                        float** out, size_t* count)
-{
-    size_t byte_offset = 0, byte_len = 0, bpe = 0;
-    JSValue buf = JS_GetTypedArrayBuffer(ctx, v, &byte_offset, &byte_len, &bpe);
-    if (JS_IsException(buf)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
-        return false;
-    }
-    if (bpe != sizeof(float)) {
-        JS_FreeValue(ctx, buf);
-        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
-        return false;
-    }
-    size_t ab_len = 0;
-    uint8_t* ab_ptr = JS_GetArrayBuffer(ctx, &ab_len, buf);
-    JS_FreeValue(ctx, buf);
-    if (!ab_ptr) {
-        JS_ThrowTypeError(ctx, "%s has a detached or invalid buffer", name);
-        return false;
-    }
-    *out   = reinterpret_cast<float*>(ab_ptr + byte_offset);
-    *count = byte_len / sizeof(float);
-    return true;
-}
-
 using ::std::optional;
 using ::std::string;
 using ::std::clamp;
@@ -2282,18 +2240,6 @@ static JSValue js_seq_automationInterpMode(JSContext* ctx, JSValueConst this_val
     return JS_NewString(ctx, s);
 }
 
-void AudioBindings::cleanup(JSContext*)
-{
-    // No central JS-ref registry u2014 every wrapper (VoiceAllocatorData,
-    // MidiInputData, SequenceData, etc.) frees its own JSValue callbacks in
-    // its destructor when qjsbind finalizes it. We just drop the engine
-    // pointer + wavetable bank cache here; the per-wrapper finalizers run as
-    // the runtime tears down.
-    s_audioEngine = nullptr;
-    s_wavetables.clear();
-    s_nextWavetableId = 1;
-}
-
 void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
 {
     s_audioEngine = engine;
@@ -3127,5 +3073,18 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
         }
         JS_FreeValue(ctx, shimResult);
 }
+
+void AudioBindings::cleanup(JSContext*)
+{
+    // No central JS-ref registry u2014 every wrapper (VoiceAllocatorData,
+    // MidiInputData, SequenceData, etc.) frees its own JSValue callbacks in
+    // its destructor when qjsbind finalizes it. We just drop the engine
+    // pointer + wavetable bank cache here; the per-wrapper finalizers run as
+    // the runtime tears down.
+    s_audioEngine = nullptr;
+    s_wavetables.clear();
+    s_nextWavetableId = 1;
+}
+
 
 } // namespace bro::js

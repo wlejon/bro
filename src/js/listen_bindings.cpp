@@ -1,4 +1,5 @@
 #if BRO_WITH_SOUNDML
+
 #include "js/listen_bindings.h"
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
@@ -365,4 +366,4 @@ void installListenBindings(JSContext* ctx) {
 
 } // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+#endif // BRO_WITH_SOUNDML

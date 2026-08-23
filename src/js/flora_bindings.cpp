@@ -1,3 +1,5 @@
+#if BRO_WITH_FLORA
+
 #include "js/flora_bindings.h"
 #include "js/flora_bindings_internal.h"
 #include "js/mesh_bindings.h"
@@ -303,3 +305,5 @@ void FloraBindings::install(JSContext* ctx) {
 
 
 } // namespace bro::js
+
+#endif // BRO_WITH_FLORA

@@ -82,33 +82,6 @@
 
 namespace bro::js {
 
-static bool resolve_f32(JSContext* ctx, JSValueConst v, const char* name,
-                        float** out, size_t* count)
-{
-    size_t byte_offset = 0, byte_len = 0, bpe = 0;
-    JSValue buf = JS_GetTypedArrayBuffer(ctx, v, &byte_offset, &byte_len, &bpe);
-    if (JS_IsException(buf)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
-        return false;
-    }
-    if (bpe != sizeof(float)) {
-        JS_FreeValue(ctx, buf);
-        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
-        return false;
-    }
-    size_t ab_len = 0;
-    uint8_t* ab_ptr = JS_GetArrayBuffer(ctx, &ab_len, buf);
-    JS_FreeValue(ctx, buf);
-    if (!ab_ptr) {
-        JS_ThrowTypeError(ctx, "%s has a detached or invalid buffer", name);
-        return false;
-    }
-    *out   = reinterpret_cast<float*>(ab_ptr + byte_offset);
-    *count = byte_len / sizeof(float);
-    return true;
-}
-
 // ---------------------------------------------------------------------------
 // Opaque wrapper
 // ---------------------------------------------------------------------------
@@ -1685,36 +1658,6 @@ static JSValue js_encodeDraco(JSContext* ctx, JSValueConst, int argc, JSValueCon
 }
 #endif  // BROMESH_HAS_DRACO
 
-void MeshBindings::cleanup(JSContext*) {
-    // No persistent JSValue/atom storage in this binding — qjsbind owns the
-    // class registrations + finalizers, and bro.mesh is reached from globalThis
-    // (cleared by the engine-level globalThis sweep before the runtime dies).
-}
-
-// ---------------------------------------------------------------------------
-// Public API — used by worker thread transfer and scene_bindings
-// ---------------------------------------------------------------------------
-
-bromesh::MeshData* MeshBindings::getMeshData(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<MW>(ctx, val);
-    return w ? w->data.get() : nullptr;
-}
-
-std::unique_ptr<bromesh::MeshData> MeshBindings::takeMeshData(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<MW>(ctx, val);
-    if (!w) return nullptr;
-    return std::move(w->data);
-}
-
-JSValue MeshBindings::wrapMeshData(JSContext* ctx, std::unique_ptr<bromesh::MeshData> data) {
-    if (!data) return JS_ThrowTypeError(ctx, "wrapMeshData: null MeshData");
-    return qjsbind::wrap<MW>(ctx, new MW{std::move(data)});
-}
-
-JSClassID MeshBindings::classId() {
-    return qjsbind::class_id<MW>();
-}
-
 void MeshBindings::install(JSContext* ctx)
 {
     qjsbind::Class<MW>(ctx, "Mesh")
@@ -3080,6 +3023,37 @@ void MeshBindings::install(JSContext* ctx)
         })
         ;
 }
+
+void MeshBindings::cleanup(JSContext*) {
+    // No persistent JSValue/atom storage in this binding — qjsbind owns the
+    // class registrations + finalizers, and bro.mesh is reached from globalThis
+    // (cleared by the engine-level globalThis sweep before the runtime dies).
+}
+
+// ---------------------------------------------------------------------------
+// Public API — used by worker thread transfer and scene_bindings
+// ---------------------------------------------------------------------------
+
+bromesh::MeshData* MeshBindings::getMeshData(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<MW>(ctx, val);
+    return w ? w->data.get() : nullptr;
+}
+
+std::unique_ptr<bromesh::MeshData> MeshBindings::takeMeshData(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<MW>(ctx, val);
+    if (!w) return nullptr;
+    return std::move(w->data);
+}
+
+JSValue MeshBindings::wrapMeshData(JSContext* ctx, std::unique_ptr<bromesh::MeshData> data) {
+    if (!data) return JS_ThrowTypeError(ctx, "wrapMeshData: null MeshData");
+    return qjsbind::wrap<MW>(ctx, new MW{std::move(data)});
+}
+
+JSClassID MeshBindings::classId() {
+    return qjsbind::class_id<MW>();
+}
+
 
 } // namespace bro::js
 
