@@ -1,12 +1,10 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on fifteen sibling repos with submodule fallbacks under `third_party/`: fourteen libraries linked directly into the engine, plus **[bronze](https://github.com/wlejon/bronze)** (the AOT JavaScript compiler, resolved under `BRO_WITH_BRONZE=ON`).
+bro depends on sixteen sibling repos with submodule fallbacks under `third_party/`: fourteen libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the AOT JavaScript compiler, resolved under `BRO_WITH_BRONZE=ON`), and **[brosurface](https://github.com/wlejon/brosurface)** (the WebIDL code generation toolchain).
 
 Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. Because bronze is off by default, the configure that resolves it says which of the two trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
 
-A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
-
-A seventeenth sibling repo, **[brosurface](https://github.com/wlejon/brosurface)** at `../brosurface`, is the **IDL generator toolchain**. It generates TypeScript `.d.ts` definitions, QuickJS bindings (`src/js/`), bronze_host bindings (`src/bronze_host/`), availability stubs, and JSDoc documentation from single `.idl` declarations. Run `npm run sync-to-bro` from `../brosurface` to emit updated bindings directly into `bro`.
+A seventeenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library / Tool | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -25,7 +23,7 @@ A seventeenth sibling repo, **[brosurface](https://github.com/wlejon/brosurface)
 | **brosoundml** | `../brosoundml` | `third_party/brosoundml` |
 | **brovisionml** | `../brovisionml` | `third_party/brovisionml` |
 | **bronze** (compiler, opt-in) | `../bronze` | `third_party/bronze` |
-| **brosurface** (generator tool) | `../brosurface` | *(none — run directly via `npm run sync-to-bro`)* |
+| **brosurface** (generator tool) | `../brosurface` | `third_party/brosurface` |
 
 ## Directory Layout
 
@@ -47,7 +45,8 @@ D:/projects/
 │       ├── broimage/             # submodule (CI / fallback)
 │       ├── brosoundml/           # submodule (CI / fallback)
 │       ├── brovisionml/          # submodule (CI / fallback)
-│       └── bronze/               # submodule (CI / nightly; BRO_WITH_BRONZE only)
+│       ├── bronze/               # submodule (CI / nightly; BRO_WITH_BRONZE only)
+│       └── brosurface/           # submodule (CI / fallback)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── qjsbind/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)

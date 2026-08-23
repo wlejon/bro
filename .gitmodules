@@ -52,3 +52,6 @@
 [submodule "third_party/bronze"]
 	path = third_party/bronze
 	url = https://github.com/wlejon/bronze.git
+[submodule "third_party/brosurface"]
+	path = third_party/brosurface
+	url = https://github.com/wlejon/brosurface.git

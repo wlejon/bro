@@ -48,7 +48,7 @@ $ProjectsRoot = (Resolve-Path (Join-Path $BroRoot '..')).Path
 $Siblings = @(
     'bromath', 'qjsbind', 'brokit', 'htmlayout', 'broaudio', 'bromesh', 'broflora',
     'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml', 'brovisionml',
-    'bronze'
+    'bronze', 'brosurface'
 )
 
 # Run a git command in a repo, returning trimmed stdout (errors swallowed).
@@ -173,7 +173,6 @@ if ($Pull) {
     Write-Host '== Pulling (fast-forward only) ==' -ForegroundColor White
     Repo-Pull 'bro' $BroRoot
     Repo-Pull 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
-    Repo-Pull 'brosurface' (Join-Path $ProjectsRoot 'brosurface')
     foreach ($name in $Siblings) {
         Repo-Pull $name (Join-Path $ProjectsRoot $name)
     }
@@ -183,7 +182,6 @@ if ($Pull) {
 Write-Host '== Repo state ==' -ForegroundColor White
 Repo-State 'bro' $BroRoot
 Repo-State 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
-Repo-State 'brosurface' (Join-Path $ProjectsRoot 'brosurface')
 foreach ($name in $Siblings) {
     Repo-State $name (Join-Path $ProjectsRoot $name)
 }
