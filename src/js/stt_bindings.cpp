@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 #include "js/stt_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
@@ -2410,3 +2411,5 @@ void cleanupSttBindings(JSContext* /*ctx*/) {}
 
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

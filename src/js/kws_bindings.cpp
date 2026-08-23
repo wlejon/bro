@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 #include "js/kws_bindings.h"
 #include "audio_inference/audio_inference.h"
 #include "js/listen_host.h"
@@ -1100,3 +1101,5 @@ void cleanupKwsBindings(JSContext* /*ctx*/) {
 
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML
