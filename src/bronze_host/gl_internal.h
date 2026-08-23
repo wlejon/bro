@@ -206,6 +206,19 @@ inline Value argAt(std::span<const Value> args, size_t i) {
     return i < args.size() ? args[i] : ev::undefined();
 }
 
+// Was argument `i` actually supplied?
+//
+// NOT the same question as `i < args.size()`. Compiled code calling a host
+// function through the direct-dispatch path passes one value per DECLARED
+// parameter, padding the ones the call site left off with `undefined` — so a
+// two-argument JS call into a def() of arity 8 arrives here with args.size()
+// == 8. Deciding optionality on the span's length therefore reads a padded
+// `undefined` as if the app had passed it: numAt() answers 0, and an optional
+// layer mask silently becomes "match nothing". Ask about the VALUE instead.
+inline bool hasArg(std::span<const Value> args, size_t i) {
+    return i < args.size() && !ev::isUndefined(args[i]);
+}
+
 // ---------------------------------------------------------------------------
 // Bulk-data readers (uniform*v, bufferData, texImage2D, ...)
 // ---------------------------------------------------------------------------

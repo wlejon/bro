@@ -77,18 +77,18 @@ void registerQueryMethods(ObjectBuilder& b) {
             float len = diff.Length();
             maxDist = len > 0.0f ? len : 1000.0f;
             dir = len > 1e-6f ? diff / len : JPH::Vec3(0, 0, 0);
-            if (a.size() >= 3) {
+            if (hasArg(a, 2)) {
                 if (ev::isObject(a[2])) readQueryFilter(a[2], filter);
                 else filter.layerMask = static_cast<uint32_t>(numAt(a, 2));
             }
-        } else if (a.size() >= 6) {
+        } else if (hasArg(a, 5)) {
             origin = JPH::RVec3(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
             dir = JPH::Vec3(static_cast<float>(numAt(a, 3)), static_cast<float>(numAt(a, 4)), static_cast<float>(numAt(a, 5)));
-            if (a.size() >= 7) {
+            if (hasArg(a, 6)) {
                 if (ev::isObject(a[6])) readQueryFilter(a[6], filter);
                 else maxDist = static_cast<float>(numAt(a, 6));
             }
-            if (a.size() >= 8 && ev::isObject(a[7])) readQueryFilter(a[7], filter);
+            if (hasArg(a, 7) && ev::isObject(a[7])) readQueryFilter(a[7], filter);
         }
 
         auto hits = world->raycast(origin, dir, maxDist, filter);
@@ -116,18 +116,18 @@ void registerQueryMethods(ObjectBuilder& b) {
             float len = diff.Length();
             maxDist = len > 0.0f ? len : 1000.0f;
             dir = len > 1e-6f ? diff / len : JPH::Vec3(0, 0, 0);
-            if (a.size() >= 3) {
+            if (hasArg(a, 2)) {
                 if (ev::isObject(a[2])) readQueryFilter(a[2], filter);
                 else filter.layerMask = static_cast<uint32_t>(numAt(a, 2));
             }
-        } else if (a.size() >= 6) {
+        } else if (hasArg(a, 5)) {
             origin = JPH::RVec3(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
             dir = JPH::Vec3(static_cast<float>(numAt(a, 3)), static_cast<float>(numAt(a, 4)), static_cast<float>(numAt(a, 5)));
-            if (a.size() >= 7) {
+            if (hasArg(a, 6)) {
                 if (ev::isObject(a[6])) readQueryFilter(a[6], filter);
                 else maxDist = static_cast<float>(numAt(a, 6));
             }
-            if (a.size() >= 8 && ev::isObject(a[7])) readQueryFilter(a[7], filter);
+            if (hasArg(a, 7) && ev::isObject(a[7])) readQueryFilter(a[7], filter);
         }
 
         physics::RayHit hit;
@@ -145,10 +145,10 @@ void registerQueryMethods(ObjectBuilder& b) {
         physics::BodyOptions shape;
         shape.shape = physics::BodyOptions::ShapeSphere;
         shape.position = readRVec3(a[0]);
-        shape.radius = a.size() >= 2 ? static_cast<float>(numAt(a, 1)) : 0.5f;
+        shape.radius = hasArg(a, 1) ? static_cast<float>(numAt(a, 1)) : 0.5f;
 
         physics::QueryFilter filter;
-        if (a.size() >= 3) {
+        if (hasArg(a, 2)) {
             if (ev::isObject(a[2])) readQueryFilter(a[2], filter);
             else filter.layerMask = static_cast<uint32_t>(numAt(a, 2));
         }
@@ -167,11 +167,11 @@ void registerQueryMethods(ObjectBuilder& b) {
         physics::BodyOptions shape;
         shape.shape = physics::BodyOptions::ShapeBox;
         shape.position = readRVec3(a[0]);
-        shape.halfExtents = a.size() >= 2 ? readVec3(a[1], JPH::Vec3(0.5f, 0.5f, 0.5f)) : JPH::Vec3(0.5f, 0.5f, 0.5f);
-        if (a.size() >= 3 && ev::isObject(a[2])) shape.rotation = readQuat(a[2]);
+        shape.halfExtents = hasArg(a, 1) ? readVec3(a[1], JPH::Vec3(0.5f, 0.5f, 0.5f)) : JPH::Vec3(0.5f, 0.5f, 0.5f);
+        if (hasArg(a, 2) && ev::isObject(a[2])) shape.rotation = readQuat(a[2]);
 
         physics::QueryFilter filter;
-        if (a.size() >= 4) {
+        if (hasArg(a, 3)) {
             if (ev::isObject(a[3])) readQueryFilter(a[3], filter);
             else filter.layerMask = static_cast<uint32_t>(numAt(a, 3));
         }
@@ -188,7 +188,7 @@ void registerQueryMethods(ObjectBuilder& b) {
         if (!world || a.size() < 3) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         JPH::RVec3 pt(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
         physics::QueryFilter filter;
-        if (a.size() >= 4 && ev::isObject(a[3])) readQueryFilter(a[3], filter);
+        if (hasArg(a, 3) && ev::isObject(a[3])) readQueryFilter(a[3], filter);
 
         auto bodies = world->overlapPoint(pt, filter);
         return hostArrayOf(bodies.size(), [&](size_t i) {
