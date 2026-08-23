@@ -12,7 +12,6 @@
 #include <broaudio/sequencer/sequence.h>
 #include <broaudio/io/audio_file.h>
 #include <broaudio/dsp/resampler.h>
-#include <broaudio/node/audio_node.h>
 #include <algorithm>
 #include <optional>
 #include <string>
@@ -202,16 +201,19 @@ struct OscNodeData {
     broaudio::Engine* engine;
     int voiceId;
     ::std::string type = "sine";
-    broaudio::OscillatorNode node;
+    JSContext* ctx = nullptr;
+    JSValue connectedGain = JS_UNDEFINED;
 
     ~OscNodeData() {
-        engine->stopVoice(voiceId, engine->currentTime());
+        if (engine) engine->stopVoice(voiceId, engine->currentTime());
+        if (ctx && !JS_IsUndefined(connectedGain)) {
+            JS_FreeValue(ctx, connectedGain);
+        }
     }
 };
 
 struct GainNodeData {
     broaudio::Engine* engine;
-    broaudio::GainNode node;
 };
 
 struct BiquadFilterNodeData {
@@ -471,7 +473,10 @@ static JSValue js_osc_connect(JSContext* ctx, JSValueConst this_val, int argc, J
 
     auto* gd = qjsbind::unwrap<GainNodeData>(ctx, argv[0]);
     if (gd) {
-        d->node.connect(&gd->node);
+        if (!JS_IsUndefined(d->connectedGain)) {
+            JS_FreeValue(ctx, d->connectedGain);
+        }
+        d->connectedGain = JS_DupValue(ctx, argv[0]);
     }
 
     return JS_DupValue(ctx, argv[0]);
@@ -481,9 +486,18 @@ static JSValue js_osc_start(JSContext* ctx, JSValueConst this_val, int argc, JSV
     auto* d = qjsbind::unwrap<OscNodeData>(ctx, this_val);
     if (!d) return JS_UNDEFINED;
 
-    if (auto* gNode = d->node.connectedGainNode()) {
-        float g = gNode->gain().value();
-        d->engine->setGain(d->voiceId, g);
+    if (!JS_IsUndefined(d->connectedGain)) {
+        JSValue gainObj = JS_GetPropertyStr(ctx, d->connectedGain, "gain");
+        if (!JS_IsUndefined(gainObj) && !JS_IsException(gainObj)) {
+            JSValue val = JS_GetPropertyStr(ctx, gainObj, "value");
+            double g = 1.0;
+            if (!JS_IsUndefined(val) && !JS_IsException(val)) {
+                JS_ToFloat64(ctx, &g, val);
+                JS_FreeValue(ctx, val);
+            }
+            JS_FreeValue(ctx, gainObj);
+            d->engine->setGain(d->voiceId, static_cast<float>(g));
+        }
     }
 
     double when = d->engine->currentTime();
@@ -766,7 +780,7 @@ static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_va
     if (!d) return JS_UNDEFINED;
 
     int voiceId = d->engine->createVoice();
-    auto* oscData = new OscNodeData{d->engine, voiceId, "sine"};
+    auto* oscData = new OscNodeData{d->engine, voiceId, "sine", ctx};
     JSValue obj = qjsbind::wrap<OscNodeData>(ctx, oscData);
 
     // Helper to create AudioParam
@@ -2381,7 +2395,12 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                         JS_FreeCString(ctx, s);
                     })
                 .method_raw("connect", js_osc_connect, 1)
-                .method("disconnect", [](OscNodeData*) {})
+                .method("disconnect", [](OscNodeData* d) {
+                    if (d->ctx && !JS_IsUndefined(d->connectedGain)) {
+                        JS_FreeValue(d->ctx, d->connectedGain);
+                        d->connectedGain = JS_UNDEFINED;
+                    }
+                })
                 .method_raw("start", js_osc_start, 1)
                 .method_raw("stop", js_osc_stop, 1);
         }

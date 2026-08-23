@@ -23,8 +23,6 @@ nonEmpty(Mesh.tetrahedron(),        'tetrahedron');
 nonEmpty(Mesh.cone(0.5, 1, 16, 4),  'cone');
 nonEmpty(Mesh.disc(0.5, 16),        'disc');
 nonEmpty(Mesh.rock(1.0, 7, 2),      'rock');
-nonEmpty(Mesh.trefoilKnot(),        'trefoilKnot');
-nonEmpty(Mesh.kleinBottle(),        'kleinBottle');
 
 // Platonic solid face counts
 const ico = Mesh.icosahedron();

@@ -10,7 +10,6 @@
 #include <broaudio/synth/wavetable.h>
 #include <broaudio/dsp/resampler.h>
 #include <broaudio/io/audio_file.h>
-#include <broaudio/node/audio_node.h>
 #include <broaudio/engine.h>
 
 #include <algorithm>

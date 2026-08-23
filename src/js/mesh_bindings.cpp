@@ -2420,12 +2420,6 @@ void MeshBindings::install(JSContext* ctx)
             return wrapMesh(ctx, bromesh::rock((float)r.value_or(0.5), seed.value_or(42), nsub.value_or(2)));
         })
         .static_raw("blob", js_blob, 1)
-        .static_method("trefoilKnot", [](JSContext* ctx, std::optional<double> r, std::optional<int> slices, std::optional<int> stacks) -> JSValue {
-            return wrapMesh(ctx, bromesh::trefoilKnot((float)r.value_or(1.0), slices.value_or(64), stacks.value_or(16)));
-        })
-        .static_method("kleinBottle", [](JSContext* ctx, std::optional<int> slices, std::optional<int> stacks) -> JSValue {
-            return wrapMesh(ctx, bromesh::kleinBottle(slices.value_or(32), stacks.value_or(16)));
-        })
     
         // ── Static: CSG ─────────────────────────────────────────────────────
         .static_method("union", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
