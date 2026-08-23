@@ -82,21 +82,6 @@
 
 namespace bro::js {
 
-static JSValue make_float32_array(JSContext* ctx, const float* data, size_t count)
-{
-    size_t byte_len = count * sizeof(float);
-    JSValue ab = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), byte_len);
-    if (JS_IsException(ab)) return ab;
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
-    JSValue result = JS_CallConstructor(ctx, ctor, 1, &ab);
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    JS_FreeValue(ctx, ab);
-    return result;
-}
-
 static bool resolve_f32(JSContext* ctx, JSValueConst v, const char* name,
                         float** out, size_t* count)
 {
