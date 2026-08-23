@@ -1,25 +1,18 @@
-// bro.media — the waveform and the filmstrip.
-//
-// A timeline has to show what is IN a file, not just play it. Neither the
-// samples nor the frames exist anywhere the DOM can reach: they only appear
-// inside a decoder, and only if someone decodes the whole file. So the engine
-// hands them over, once, in the shape a timeline draws from.
-//
-// Compiled out with BRO_WITH_VIDEO, where it installs the usual
-// `{ available: false }` stub.
-#include "js/media_bindings.h"
-
 #if BRO_WITH_VIDEO
 
+#include "js/media_bindings.h"
 #include "video/media_analysis.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <cctype>
 #include <string>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
+
 
 namespace {
 
@@ -158,27 +151,32 @@ JSValue js_media_thumbnails(JSContext* ctx, JSValueConst, int argc, JSValueConst
 
 } // namespace
 
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installMediaBindings(JSContext* ctx, const std::string& basePath) {
-    s_basePath = basePath;
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (!JS_IsObject(broObj)) {
+        s_basePath = basePath;
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (!JS_IsObject(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue media = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, media, "available", JS_TRUE);
+        JS_SetPropertyStr(ctx, media, "peaks",
+                          JS_NewCFunction(ctx, js_media_peaks, "peaks", 2));
+        JS_SetPropertyStr(ctx, media, "thumbnails",
+                          JS_NewCFunction(ctx, js_media_thumbnails, "thumbnails", 2));
+        JS_SetPropertyStr(ctx, broObj, "media", media);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue media = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, media, "available", JS_TRUE);
-    JS_SetPropertyStr(ctx, media, "peaks",
-                      JS_NewCFunction(ctx, js_media_peaks, "peaks", 2));
-    JS_SetPropertyStr(ctx, media, "thumbnails",
-                      JS_NewCFunction(ctx, js_media_thumbnails, "thumbnails", 2));
-    JS_SetPropertyStr(ctx, broObj, "media", media);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js
@@ -201,6 +199,7 @@ void installMediaBindings(JSContext* ctx, const std::string&) {
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
+
 
 } // namespace bro::js
 

@@ -1,809 +1,682 @@
-// =============================================================================
-// bro.image API Reference
-// =============================================================================
-//
-// Composable typed-array kernels. Six verbs operate on whole TypedArray
-// buffers from C++; JS stays out of the per-pixel loop. Op behavior is a
-// small struct (enum + numeric params), never a JS callback.
-//
-//   reduce    buffer → scalar(s)         (minmax / sum / mean / histogram)
-//   map       dst[i] = f(src[i])         (affine / abs / log / sqrt / exp / pow)
-//   combine   dst[i] = f(a[i], b[i])     (add / sub / mul / min / max / lerp / wsum)
-//   lookup    scalar field → RGBA        (the colormap workhorse)
-//   stencil   dst[i] = sum(K * src[N])   (3x3, 5x5, sobel, blur, ...)
-//   resample  change size                (nearest / bilinear)
-//
-// Builders:
-//   gradient(stops, n)                   build a 1D RGBA8 LUT for lookup()
-//   alloc(w, h, channels, dtype)         allocate a typed buffer
-//
-// All ops are caller-allocated (into-style): provide dst; nothing is allocated
-// inside the kernel. Buffers are reused across frames.
-//
-// Typical pipeline (the FastNoise2 colormap case):
-//
-//   const lut = bro.image.gradient([
-//       [0.00,  10,  30,  80],
-//       [0.45, 230, 220, 150],
-//       [0.55, 100, 170,  90],
-//       [0.75, 250, 250, 250],
-//   ]);
-//   const noise = bro.image.alloc(w, h, 1);            // once, reused
-//   node.genUniformGrid2DInto(noise, 0, 0, w, h, freq, seed);
-//   const {min, max} = bro.image.reduce(noise, 'minmax');
-//   bro.image.lookup(imgData.data, noise, lut, {lo: min, hi: max});
-//   ctx.putImageData(imgData, 0, 0);
-//
-// =============================================================================
+/**
+ * =============================================================================
+ * bro.image / Image / bro.image.gpu — Image Processing and CPU/GPU Kernels
+ * =============================================================================
+ *
+ * Composable typed-array kernels, CPU/GPU image decoding, transformation, and
+ * WebGL2-backed canvas rendering.
+ *
+ * @example
+ *   // FastNoise2 colormap pipeline
+ *   const lut = bro.image.gradient([
+ *     [0.00,  10,  30,  80],
+ *     [0.45, 230, 220, 150],
+ *     [0.55, 100, 170,  90],
+ *     [0.75, 250, 250, 250],
+ *   ]);
+ *   const noise = bro.image.alloc(w, h, 1);
+ *   const {min, max} = bro.image.reduce(noise, 'minmax');
+ *   bro.image.lookup(imgData.data, noise, lut, {lo: min, hi: max});
+ *   ctx.putImageData(imgData, 0, 0);
+ */
 
+// ── Classes & Interfaces ─────────────────────────────────────────────────────
 
-// -----------------------------------------------------------------------------
-// bro.image, namespace
-// -----------------------------------------------------------------------------
+/**
+ * Standard HTML Image / DOM Image helper constructor.
+ */
+class Image {
 
-const image = {
-
-  // --- reduce -------------------------------------------------------------
+  constructor() {}
 
   /**
-   * Collapse a buffer to a scalar (or scalars).
-   *
-   * @param {TypedArray} src
-   * @param {string} op - 'minmax' | 'sum' | 'mean' | 'histogram'
-   * @param {object} [params]
-   * @param {number} [params.stride=1] - visit every Nth element. Cheap
-   *        approximate range/sum for huge buffers driving smoothed estimators
-   *        (mean is the mean of the *visited* elements; histogram counts only
-   *        the visited elements).
-   * @returns {{min:number,max:number} | number | Uint32Array}
-   *
-   * @example
-   *   bro.image.reduce(arr, 'minmax');                         // {min, max}
-   *   bro.image.reduce(arr, 'minmax', {stride: 8});            // ~8× cheaper
-   *   bro.image.reduce(arr, 'sum');                            // number
-   *   bro.image.reduce(arr, 'mean');                           // number
-   *   bro.image.reduce(arr, 'histogram', {bins: 256, lo: 0, hi: 1});  // Uint32Array
+   *  Image source URL or path.
+   * @type {string}
    */
-  reduce(src, op, params) {},
-
-  // --- map ----------------------------------------------------------------
+  src;
 
   /**
-   * Element-wise unary kernel. dst[i] = f(src[i]).
-   *
-   * Both buffers must be Float32Array.
-   *
-   * @param {Float32Array} dst
-   * @param {Float32Array} src
-   * @param {object} opSpec
-   *
-   * @example
-   *   bro.image.map(dst, src, {op: 'affine', a: 2, b: 1});            // 2x + 1
-   *   bro.image.map(dst, src, {op: 'affine', a: 1, b: 0, clamp: [0, 1]});
-   *   bro.image.map(dst, src, {op: 'abs'});
-   *   bro.image.map(dst, src, {op: 'log'});
-   *   bro.image.map(dst, src, {op: 'sqrt'});
-   *   bro.image.map(dst, src, {op: 'exp'});
-   *   bro.image.map(dst, src, {op: 'pow', exp: 2.2});
+   *  Intrinsic image width in pixels.
+   * @readonly
+   * @type {number}
    */
-  map(dst, src, opSpec) {},
-
-  // --- combine ------------------------------------------------------------
+  width;
 
   /**
-   * Element-wise binary kernel. dst[i] = f(a[i], b[i]).
-   *
-   * All three buffers must be Float32Array of the same length.
-   *
-   * @param {Float32Array} dst
-   * @param {Float32Array} a
-   * @param {Float32Array} b
-   * @param {object} opSpec
-   *
-   * @example
-   *   bro.image.combine(dst, a, b, {op: 'add'});               // a + b
-   *   bro.image.combine(dst, a, b, {op: 'sub'});
-   *   bro.image.combine(dst, a, b, {op: 'mul'});
-   *   bro.image.combine(dst, a, b, {op: 'min'});
-   *   bro.image.combine(dst, a, b, {op: 'max'});
-   *   bro.image.combine(dst, a, b, {op: 'lerp', t: 0.5});      // (1-t)*a + t*b
-   *   bro.image.combine(dst, a, b, {op: 'wsum', wa: 2, wb: 1}); // 2a + b
+   *  Intrinsic image height in pixels.
+   * @readonly
+   * @type {number}
    */
-  combine(dst, a, b, opSpec) {},
-
-  // --- lookup -------------------------------------------------------------
+  height;
 
   /**
-   * Map each scalar in `src` through a 1D RGBA8 LUT into `dst`.
+   *  Natural width of image.
+   * @readonly
+   * @type {number}
+   */
+  naturalWidth;
+
+  /**
+   *  Natural height of image.
+   * @readonly
+   * @type {number}
+   */
+  naturalHeight;
+
+  /**
+   *  True if image has finished loading.
+   * @readonly
+   * @type {boolean}
+   */
+  complete;
+
+  /**
+   *  Callback invoked on successful load.
+   * @type {Function|null}
+   */
+  onload;
+
+  /**
+   *  Callback invoked on load error.
+   * @type {Function|null}
+   */
+  onerror;
+
+  /**
+   *  Adds an event listener for image events.
    *
-   * For each src[i]: t = (src[i] - lo) / (hi - lo);
-   *                  idx = clamp(floor(t * (lutN - 1)));
-   *                  dst[i*4..i*4+3] = lut[idx*4..idx*4+3].
+   * @param {string} type
+   * @param {Function} listener
+   */
+  addEventListener(type, listener) {}
+
+  /**
+   *  Removes an event listener for image events.
    *
-   * dst must be Uint8Array or Uint8ClampedArray sized to 4*N. Typically the
-   * `data` of an ImageData created via canvas2d.createImageData(w, h).
-   *
-   * src may be any scalar TypedArray; Float32Array is the hot path.
-   * lut must be a Uint8Array of RGBA8 entries (4*K bytes); usually built
-   * via bro.image.gradient().
-   *
-   * @param {Uint8Array|Uint8ClampedArray} dst
-   * @param {TypedArray} src
-   * @param {Uint8Array} lut
-   * @param {{lo:number, hi:number, edge?:'clamp'|'wrap'}} params
-   *
-   * @example
-   *   bro.image.lookup(imgData.data, noiseField, lut, {lo: 0, hi: 1});
+   * @param {string} type
+   * @param {Function} listener
    */
-  lookup(dst, src, lut, params) {},
+  removeEventListener(type, listener) {}
 
-  // --- stencil ------------------------------------------------------------
+}
 
-  /**
-   * Convolve `src` with `kernel` into `dst`.
-   *
-   * dst[y*W + x] = (sum over (kx,ky) of kernel[ky*kw+kx] * src[(y+ky-hkh)*W + (x+kx-hkw)])
-   *               / divisor + bias.
-   *
-   * Kernel w and h must be odd. Buffers are Float32Array.
-   *
-   * Edge modes: 'clamp' (replicate edge), 'wrap' (toroidal), 'zero' (off-grid is 0).
-   *
-   * @param {Float32Array} dst
-   * @param {Float32Array} src
-   * @param {{data:Float32Array, w:number, h:number}} kernel
-   * @param {{srcW:number, srcH:number, edge?:string, divisor?:number, bias?:number}} params
-   *
-   * @example
-   *   const sobelX = {data: new Float32Array([-1,0,1,-2,0,2,-1,0,1]), w:3, h:3};
-   *   bro.image.stencil(edges, src, sobelX, {srcW:w, srcH:h, edge:'clamp'});
-   *
-   *   const blur = {data: new Float32Array(9).fill(1), w:3, h:3};
-   *   bro.image.stencil(out, src, blur, {srcW:w, srcH:h, edge:'clamp', divisor:9});
-   */
-  stencil(dst, src, kernel, params) {},
+/**
+ * Alias for HTMLImageElement DOM interface.
+ */
+class HTMLImageElement extends Image {
 
-  // --- resample -----------------------------------------------------------
+}
 
-  /**
-   * Resize a Float32Array image. Supports multi-channel data (interleaved).
-   *
-   * @param {Float32Array} dst
-   * @param {Float32Array} src
-   * @param {{srcW:number, srcH:number, dstW:number, dstH:number,
-   *          channels:number, filter:'nearest'|'bilinear'}} params
-   *
-   * @example
-   *   bro.image.resample(hi, lo, {
-   *       srcW: 256, srcH: 160, dstW: 1280, dstH: 800,
-   *       channels: 1, filter: 'bilinear'
-   *   });
-   */
-  resample(dst, src, params) {},
+// ── Namespaces ───────────────────────────────────────────────────────────────
 
-  // --- gradient (builder) -------------------------------------------------
+/**
+ * CPU and GPU image manipulation and kernel acceleration suite.
+ */
+/**
+ *  Preprocessing normalization presets (clip, imagenet, sam).
+ * @readonly
+ * @type {Object}
+ */
+bro.image.presets;
 
-  /**
-   * Build a 1D RGBA8 LUT from color stops, linearly interpolated.
-   *
-   * Each stop is [t, r, g, b] or [t, r, g, b, a]. t in [0,1]; rgb/a in [0,255].
-   * Stops outside the [first.t, last.t] range clamp to the endpoints.
-   *
-   * @param {Array<Array<number>>} stops
-   * @param {number} [n=256] - LUT entry count
-   * @returns {Uint8Array} - RGBA8, 4*n bytes
-   *
-   * @example
-   *   const viridisish = bro.image.gradient([
-   *       [0.00,  68,  1,  84],
-   *       [0.50,  33, 145, 140],
-   *       [1.00, 253, 231,  37],
-   *   ]);
-   *
-   *   // Posterize / threshold via LUT shape:
-   *   const thresh = bro.image.gradient([
-   *       [0.0,   0,   0,   0],
-   *       [0.5,   0,   0,   0],
-   *       [0.5, 255, 255, 255],
-   *       [1.0, 255, 255, 255],
-   *   ]);
-   */
-  gradient(stops, n) {},
+/**
+ *  Collapse a buffer to a scalar or histogram.
+ *
+ * @param {ArrayBufferView} src
+ * @param {string} op
+ * @param {Object} [params]
+ * @returns {*}
+ */
+bro.image.reduce = function(src, op, params) {};
 
-  // --- alloc (sugar) ------------------------------------------------------
+/**
+ *  Element-wise unary kernel. dst[i] = f(src[i]).
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} opSpec
+ */
+bro.image.map = function(dst, src, opSpec) {};
 
-  /**
-   * Allocate a TypedArray sized for w*h*channels.
-   *
-   * dtype: 'float32' (default) | 'float64' | 'uint8' | 'uint8c' |
-   *        'int16' | 'int32' | 'uint16' | 'uint32'.
-   *
-   * @param {number} w
-   * @param {number} h
-   * @param {number} channels
-   * @param {string} [dtype='float32']
-   * @returns {TypedArray}
-   *
-   * @example
-   *   const heightmap = bro.image.alloc(1024, 1024, 1);
-   *   const rgba      = bro.image.alloc(w, h, 4, 'uint8c');
-   */
-  alloc(w, h, channels, dtype) {},
+/**
+ *  Element-wise binary kernel. dst[i] = f(a[i], b[i]).
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} a
+ * @param {Float32Array} b
+ * @param {Object} opSpec
+ */
+bro.image.combine = function(dst, a, b, opSpec) {};
 
+/**
+ *  Map each scalar in src through a 1D RGBA8 LUT into dst.
+ *
+ * @param {ArrayBufferView} dst
+ * @param {ArrayBufferView} src
+ * @param {Uint8Array} lut
+ * @param {Object} params
+ */
+bro.image.lookup = function(dst, src, lut, params) {};
 
-  // ===========================================================================
-  // Decode / probe / EXIF  (broimage decode.h)
-  // ===========================================================================
-  //
-  // Each decode accepts EITHER a path string (resolved against the app dir +
-  // engine mounts, like an Image src) OR a Uint8Array/ArrayBuffer of an encoded
-  // image (e.g. a fetched response body). Returns
-  // {width, height, channels, pixels} where `pixels` is the noted TypedArray.
-  // 8-bit RGBA decode is already available via `new Image()`; these cover the
-  // high-bit-depth, HDR, and auto-oriented cases.
+/**
+ *  Convolve src with kernel into dst.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} kernel
+ * @param {Object} params
+ */
+bro.image.stencil = function(dst, src, kernel, params) {};
 
-  /**
-   * Decode a 16-bit image (most importantly 16-bit PNGs: depth maps, masks).
-   * Channels forced to 4 (RGBA). Returns null on failure.
-   * @param {string|Uint8Array|ArrayBuffer} src
-   * @returns {{width:number,height:number,channels:number,pixels:Uint16Array}|null}
-   * @example const {width, height, pixels} = bro.image.decodeU16('depth16.png');
-   */
-  decodeU16(src) {},
+/**
+ *  Resize a Float32Array image.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.resample = function(dst, src, params) {};
 
-  /**
-   * Decode a float / HDR image (Radiance .hdr/.pic, float PNG). RGBA.
-   * Returns null on failure.
-   * @param {string|Uint8Array|ArrayBuffer} src
-   * @returns {{width:number,height:number,channels:number,pixels:Float32Array}|null}
-   */
-  decodeF32(src) {},
+/**
+ *  Build a 1D RGBA8 LUT from color stops.
+ *
+ * @param {Array<Array<number>>} stops
+ * @param {number} [n]
+ * @returns {Uint8Array}
+ */
+bro.image.gradient = function(stops, n) {};
 
-  /**
-   * Decode 8-bit RGBA and apply the EXIF orientation tag (phone photos render
-   * sideways without this). Same 1x1-white fallback as Image on hard failure.
-   * @param {string|Uint8Array|ArrayBuffer} src
-   * @returns {{width:number,height:number,channels:number,pixels:Uint8Array}}
-   */
-  decodeOriented(src) {},
+/**
+ *  Allocate a TypedArray sized for w*h*channels.
+ *
+ * @param {number} w
+ * @param {number} h
+ * @param {number} channels
+ * @param {string} [dtype]
+ * @returns {ArrayBufferView}
+ */
+bro.image.alloc = function(w, h, channels, dtype) {};
 
-  /**
-   * Cheap header probe: dimensions without decoding pixels.
-   * @param {Uint8Array|ArrayBuffer} bytes
-   * @returns {{width:number,height:number,channels:number}|null}
-   */
-  probeDimensions(bytes) {},
+/**
+ *  Decode a 16-bit image into RGBA.
+ *
+ * @param {*} src
+ * @returns {Object|null}
+ */
+bro.image.decodeU16 = function(src) {};
 
-  /**
-   * Transcode a KTX2 texture (ETC1S/BasisLZ or UASTC payload, Zstd
-   * supercompression included) to an uploadable format. NATIVE (the
-   * basis_universal transcoder in broimage): no worker, no WASM.
-   *
-   * `format` picks the target: "rgba8" (default — plain pixels, uploads on
-   * every GL path) or "bc1"/"bc3"/"bc4"/"bc5"/"bc7" (4x4 block data for the
-   * S3TC/RGTC/BPTC extensions). The RESULT's `format` reports what was
-   * actually produced — bc1 of an image that carries alpha answers rgba8
-   * rather than dropping the channel. `mips` is the layer-0/face-0 mip
-   * chain; data is pixels for rgba8, blocks for BC. Throws on a corrupt or
-   * non-KTX2 buffer.
-   * @param {Uint8Array|ArrayBuffer} bytes
-   * @param {string} [format="rgba8"]
-   * @returns {{width:number, height:number, hasAlpha:boolean, srgb:boolean,
-   *            format:string, mips:{width:number, height:number,
-   *            data:Uint8Array}[]}}
-   * @example
-   *   const tex = bro.image.transcodeKTX2(bytes);           // rgba8
-   *   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.width, tex.height, 0,
-   *                 gl.RGBA, gl.UNSIGNED_BYTE, tex.mips[0].data);
-   */
-  transcodeKTX2(bytes, format) {},
+/**
+ *  Decode a float / HDR image.
+ *
+ * @param {*} src
+ * @returns {Object|null}
+ */
+bro.image.decodeF32 = function(src) {};
 
-  /**
-   * Read the EXIF Orientation tag (1..8; 1 = normal / absent). The enum:
-   * 1 Normal, 2 FlipH, 3 Rotate180, 4 FlipV, 5 Transpose, 6 Rotate90CW,
-   * 7 Transverse, 8 Rotate90CCW.
-   * @param {string|Uint8Array|ArrayBuffer} src - path or JPEG bytes
-   * @returns {number}
-   */
-  readExifOrientation(src) {},
+/**
+ *  Decode 8-bit RGBA and apply EXIF orientation.
+ *
+ * @param {*} src
+ * @returns {Object}
+ */
+bro.image.decodeOriented = function(src) {};
 
-  /**
-   * Apply an EXIF orientation transform to an RGBA8 buffer. Dimensions swap for
-   * the 90/270 transforms, so the result is returned (not written in place).
-   * @param {Uint8Array} pixels - RGBA8, width*height*4
-   * @param {number} width
-   * @param {number} height
-   * @param {number} orient - 1..8 (see readExifOrientation)
-   * @returns {{width:number,height:number,pixels:Uint8Array}}
-   */
-  applyExifOrientation(pixels, width, height, orient) {},
+/**
+ *  Cheap header probe for dimensions.
+ *
+ * @param {ArrayBufferView} bytes
+ * @returns {Object|null}
+ */
+bro.image.probeDimensions = function(bytes) {};
 
+/**
+ *  Transcode a KTX2 texture.
+ *
+ * @param {ArrayBufferView} bytes
+ * @param {string} [format]
+ * @returns {Object}
+ */
+bro.image.transcodeKTX2 = function(bytes, format) {};
 
-  // ===========================================================================
-  // Encode  (broimage encode.h)
-  // ===========================================================================
-  //
-  // `pixels` is a Uint8Array of HWC interleaved data. *File variants write the
-  // file (path resolved against the app dir) and return a boolean; *memory
-  // variants return a Uint8Array of the encoded bytes (or null on failure).
+/**
+ *  Read EXIF orientation tag.
+ *
+ * @param {*} src
+ * @returns {number}
+ */
+bro.image.readExifOrientation = function(src) {};
 
-  /** PNG (lossless RGBA). strideBytes defaults to width*channels (tight). */
-  encodePngFile(path, pixels, width, height, channels, strideBytes) {},
-  /** @returns {Uint8Array|null} */
-  encodePng(pixels, width, height, channels, strideBytes) {},
-  /** JPEG (lossy). quality in [1,100], default 90. channels 1 (gray) or 3. */
-  encodeJpegFile(path, pixels, width, height, channels, quality) {},
-  /** @returns {Uint8Array|null} */
-  encodeJpeg(pixels, width, height, channels, quality) {},
+/**
+ *  Apply EXIF orientation transform to an RGBA8 buffer.
+ *
+ * @param {Uint8Array} pixels
+ * @param {number} width
+ * @param {number} height
+ * @param {number} orient
+ * @returns {Object}
+ */
+bro.image.applyExifOrientation = function(pixels, width, height, orient) {};
 
+/**
+ *  Encode PNG to file.
+ *
+ * @param {string} path
+ * @param {Uint8Array} pixels
+ * @param {number} width
+ * @param {number} height
+ * @param {number} channels
+ * @param {number} [strideBytes]
+ * @returns {boolean}
+ */
+bro.image.encodePngFile = function(path, pixels, width, height, channels, strideBytes) {};
 
-  // ===========================================================================
-  // Geometric  (broimage geometric.h). Caller-allocated dst (into-style)
-  // ===========================================================================
-  //
-  // Resize filters: 'nearest' | 'bilinear' | 'bicubic' | 'lanczos3' | 'area'
-  // (area is the correct choice for downscales; lanczos3 for quality upscales).
-  // u8 variants take optional srcStride/dstStride (byte distance between rows;
-  // 0 = tightly packed) so they can work on a sub-rect of a larger buffer.
+/**
+ *  Encode PNG to memory.
+ *
+ * @param {Uint8Array} pixels
+ * @param {number} width
+ * @param {number} height
+ * @param {number} channels
+ * @param {number} [strideBytes]
+ * @returns {Uint8Array|null}
+ */
+bro.image.encodePng = function(pixels, width, height, channels, strideBytes) {};
 
-  /**
-   * Resize HWC uint8 (RGBA8 etc).
-   * @param {Uint8Array} dst
-   * @param {Uint8Array} src
-   * @param {{srcW,srcH,dstW,dstH,channels,filter?,srcStride?,dstStride?}} params
-   * @example
-   *   bro.image.resizeU8(dst, src, {srcW:512,srcH:512,dstW:224,dstH:224,
-   *                                 channels:4, filter:'area'});
-   */
-  resizeU8(dst, src, params) {},
+/**
+ *  Encode JPEG to file.
+ *
+ * @param {string} path
+ * @param {Uint8Array} pixels
+ * @param {number} width
+ * @param {number} height
+ * @param {number} channels
+ * @param {number} [quality]
+ * @returns {boolean}
+ */
+bro.image.encodeJpegFile = function(path, pixels, width, height, channels, quality) {};
 
-  /**
-   * Resize HWC float32 with the full filter set (the `resample` verb is
-   * nearest/bilinear only).
-   * @param {Float32Array} dst
-   * @param {Float32Array} src
-   * @param {{srcW,srcH,dstW,dstH,channels,filter?}} params
-   */
-  resizeF32(dst, src, params) {},
+/**
+ *  Encode JPEG to memory.
+ *
+ * @param {Uint8Array} pixels
+ * @param {number} width
+ * @param {number} height
+ * @param {number} channels
+ * @param {number} [quality]
+ * @returns {Uint8Array|null}
+ */
+bro.image.encodeJpeg = function(pixels, width, height, channels, quality) {};
 
-  /**
-   * Resize planar CHW float32 (the layout brolm / Qwen3.5-VL / brodiffusion
-   * preprocessors use).
-   * @param {Float32Array} dst
-   * @param {Float32Array} src
-   * @param {{srcW,srcH,dstW,dstH,channels,filter?}} params
-   */
-  resizeChwF32(dst, src, params) {},
+/**
+ *  Resize HWC uint8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.resizeU8 = function(dst, src, params) {};
 
-  /**
-   * Letterbox HWC uint8: scale-to-fit preserving aspect, center, fill the rest
-   * with `pad`. Returns the content rect.
-   * @param {Uint8Array} dst
-   * @param {Uint8Array} src
-   * @param {{srcW,srcH,dstW,dstH,channels,pad?:[r,g,b,a],filter?}} params
-   * @returns {{x:number,y:number,w:number,h:number}}
-   */
-  letterboxU8(dst, src, params) {},
+/**
+ *  Resize HWC float32.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.resizeF32 = function(dst, src, params) {};
 
-  /**
-   * Constant-pad HWC uint8 with the source placed at (offX, offY).
-   * @param {{srcW,srcH,dstW,dstH,channels,offX?,offY?,pad?:[r,g,b,a],srcStride?,dstStride?}} params
-   */
-  padU8(dst, src, params) {},
+/**
+ *  Resize planar CHW float32.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.resizeChwF32 = function(dst, src, params) {};
 
-  /**
-   * Crop an [x,y,w,h] rect (out-of-range clamps to the source edge).
-   * @param {{srcW,srcH,channels,x,y,w,h,srcStride?,dstStride?}} params
-   */
-  cropU8(dst, src, params) {},
+/**
+ *  Letterbox HWC uint8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ * @returns {Object}
+ */
+bro.image.letterboxU8 = function(dst, src, params) {};
 
-  /**
-   * Center-crop a cropW x cropH rect from the middle of the source.
-   * @param {{srcW,srcH,channels,cropW,cropH,srcStride?,dstStride?}} params
-   */
-  centerCropU8(dst, src, params) {},
+/**
+ *  Constant-pad HWC uint8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.padU8 = function(dst, src, params) {};
 
-  /** Mirror left<->right. @param {{w,h,channels,srcStride?,dstStride?}} params */
-  flipHorizontalU8(dst, src, params) {},
-  /** Mirror top<->bottom. @param {{w,h,channels,srcStride?,dstStride?}} params */
-  flipVerticalU8(dst, src, params) {},
-  /**
-   * Rotate by 90-degree multiples. `turns` = number of 90-CCW turns (0..3).
-   * dst dims swap for odd turns; size dst accordingly.
-   * @param {{srcW,srcH,channels,turns,srcStride?,dstStride?}} params
-   */
-  rotate90U8(dst, src, params) {},
+/**
+ *  Crop an [x,y,w,h] rect.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.cropU8 = function(dst, src, params) {};
 
+/**
+ *  Center-crop a cropW x cropH rect.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.centerCropU8 = function(dst, src, params) {};
 
-  // ===========================================================================
-  // Alpha  (broimage alpha.h), RGBA8, fixes composite fringing
-  // ===========================================================================
+/**
+ *  Mirror left to right.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.flipHorizontalU8 = function(dst, src, params) {};
 
-  /** R,G,B *= a/255. @param {Uint8Array} dst @param {Uint8Array} src */
-  premultiplyAlpha(dst, src) {},
-  /** Inverse of premultiplyAlpha. */
-  unpremultiplyAlpha(dst, src) {},
-  /**
-   * Alpha-aware RGBA8 resize (premultiply -> resize -> unpremultiply). Use for
-   * any RGBA composite whose transparent regions carry arbitrary RGB (decoded
-   * PNGs, sprite atlases, glyph alphas).
-   * @param {{srcW,srcH,dstW,dstH,filter?}} params
-   */
-  resizeRgba8Alpha(dst, src, params) {},
-  /**
-   * Alpha-aware RGBA8 letterbox. `pad` is written verbatim (straight RGBA).
-   * @param {{srcW,srcH,dstW,dstH,pad?:[r,g,b,a],filter?}} params
-   * @returns {{x:number,y:number,w:number,h:number}}
-   */
-  letterboxRgba8Alpha(dst, src, params) {},
+/**
+ *  Mirror top to bottom.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.flipVerticalU8 = function(dst, src, params) {};
 
+/**
+ *  Rotate by 90-degree multiples.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.rotate90U8 = function(dst, src, params) {};
 
-  // ===========================================================================
-  // Color  (broimage color.h)
-  // ===========================================================================
-  //
-  // Channel-convert ops are uint8; pixel count is derived from src length and
-  // its channel count. Layout / gamma / sRGB / HSV / HSL / color-matrix ops are
-  // float32 and may alias (dst === src allowed).
+/**
+ *  Premultiply alpha.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ */
+bro.image.premultiplyAlpha = function(dst, src) {};
 
-  /** RGBA8 -> RGB8. */
-  rgbaToRgb(dst, src) {},
-  /** RGB8 -> RGBA8 (alpha defaults to 255). */
-  rgbToRgba(dst, src, alpha) {},
-  /** RGBA8 -> gray8 (Rec.601 luma). */
-  rgbaToGray(dst, src) {},
-  /** RGB8 -> gray8 (Rec.601 luma). */
-  rgbToGray(dst, src) {},
-  /** Interleaved HWC -> planar CHW float32. @param {{width,height,channels}} params */
-  hwcToChw(dst, src, params) {},
-  /** Planar CHW -> interleaved HWC float32. @param {{width,height,channels}} params */
-  chwToHwc(dst, src, params) {},
-  /** dst = src^gamma over the whole float32 buffer. */
-  applyGamma(dst, src, gamma) {},
-  /** sRGB -> linear (IEC 61966-2-1), float32 buffers. */
-  srgbToLinear(dst, src) {},
-  /** linear -> sRGB, float32 buffers. */
-  linearToSrgb(dst, src) {},
-  /** uint8 sRGB -> float32 linear in one pass. @param {Float32Array} dst @param {Uint8Array} src */
-  srgbToLinearU8ToF32(dst, src) {},
-  /** float32 linear -> uint8 sRGB in one pass. @param {Uint8Array} dst @param {Float32Array} src */
-  linearF32ToSrgbU8(dst, src) {},
-  /** RGB -> HSV, float32, 3 components per pixel, all in [0,1] (hue normalized). */
-  rgbToHsv(dst, src) {},
-  /** HSV -> RGB. */
-  hsvToRgb(dst, src) {},
-  /** RGB -> HSL. */
-  rgbToHsl(dst, src) {},
-  /** HSL -> RGB. */
-  hslToRgb(dst, src) {},
-  /**
-   * Apply a row-major 3x3 color matrix to each RGB(A) float32 pixel
-   * ([R' G' B']^T = M*[R G B]^T; alpha passes through).
-   * @param {{channels:3|4, matrix:number[9]}} params
-   */
-  applyColorMatrix3x3(dst, src, params) {},
-  /**
-   * Apply a row-major 3x4 color matrix (last column is a bias):
-   * [R' G' B']^T = M*[R G B 1]^T.
-   * @param {{channels:3|4, matrix:number[12]}} params
-   */
-  applyColorMatrix3x4(dst, src, params) {},
+/**
+ *  Unpremultiply alpha.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ */
+bro.image.unpremultiplyAlpha = function(dst, src) {};
 
+/**
+ *  Alpha-aware RGBA8 resize.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.resizeRgba8Alpha = function(dst, src, params) {};
 
-  // ===========================================================================
-  // Preproc  (broimage preproc.h), NHWC <-> NCHW + dtype scale/bias
-  // ===========================================================================
-  //
-  // The layout shuffle every model preprocess does on the way into a Tensor.
-  // Typical scalings: [0,255]->[0,1] is scale 1/255 bias 0; [0,255]->[-1,1] is
-  // scale 2/255 bias -1.
+/**
+ *  Alpha-aware RGBA8 letterbox.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ * @returns {Object}
+ */
+bro.image.letterboxRgba8Alpha = function(dst, src, params) {};
 
-  /**
-   * Packed NHWC uint8 -> planar NCHW float32 with Y = src*scale + bias.
-   * @param {Float32Array} dst @param {Uint8Array} src
-   * @param {{N?,H,W,C,scale?,bias?}} params
-   */
-  u8NhwcToF32Nchw(dst, src, params) {},
-  /** Float32 NHWC -> NCHW (no dtype change). @param {{N?,H,W,C}} params */
-  nhwcToNchwF32(dst, src, params) {},
-  /** Float32 NCHW -> NHWC. @param {{N?,C,H,W}} params */
-  nchwToNhwcF32(dst, src, params) {},
-  /**
-   * Planar NCHW float32 -> packed NHWC uint8: clamp(round(src*scale+bias),0,255).
-   * Inverse of u8NhwcToF32Nchw. @param {Uint8Array} dst @param {Float32Array} src
-   * @param {{N?,C,H,W,scale?,bias?}} params
-   */
-  f32NchwToU8Nhwc(dst, src, params) {},
+/**
+ *  RGBA8 to RGB8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ */
+bro.image.rgbaToRgb = function(dst, src) {};
 
+/**
+ *  RGB8 to RGBA8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ * @param {number} [alpha]
+ */
+bro.image.rgbToRgba = function(dst, src, alpha) {};
 
-  // ===========================================================================
-  // Normalize  (broimage normalize.h + presets.h)
-  // ===========================================================================
+/**
+ *  RGBA8 to gray8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ */
+bro.image.rgbaToGray = function(dst, src) {};
 
-  /**
-   * Per-channel (x - mean[c]) / std[c] on NCHW float32 (in place allowed).
-   * @param {Float32Array} dst @param {Float32Array} src
-   * @param {{N?,C,H,W, mean:number[C], std:number[C]}} params
-   * @example
-   *   bro.image.normalizeNchw(t, t, {C:3, H:224, W:224,
-   *       mean: bro.image.presets.clip.mean, std: bro.image.presets.clip.std});
-   */
-  normalizeNchw(dst, src, params) {},
+/**
+ *  RGB8 to gray8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Uint8Array} src
+ */
+bro.image.rgbToGray = function(dst, src) {};
 
-  /**
-   * Preprocessing constants as {mean:[3], std:[3]} (applied after [0,255]->[0,1]):
-   *   presets.clip      CLIP ViT-L/14
-   *   presets.imagenet  torchvision default
-   *   presets.sam       Segment Anything (= ImageNet stats; SAM also pads to 1024)
-   */
-  presets: {},
+/**
+ *  Interleaved HWC to planar CHW float32.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.hwcToChw = function(dst, src, params) {};
 
+/**
+ *  Planar CHW to interleaved HWC float32.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.chwToHwc = function(dst, src, params) {};
 
-  // ===========================================================================
-  // Multi-channel stencil  (broimage kernels.h)
-  // ===========================================================================
+/**
+ *  Apply gamma curve to float32 buffer.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {number} gamma
+ */
+bro.image.applyGamma = function(dst, src, gamma) {};
 
-  /**
-   * HWC float32 convolution: the same kernel applied to each channel
-   * independently. The multi-channel companion to `stencil` (which is
-   * single-channel): what you want for blur/sharpen/edge on an RGB(A) image
-   * without deinterleaving first.
-   * @param {Float32Array} dst
-   * @param {Float32Array} src
-   * @param {{data:Float32Array, w:number, h:number}} kernel - w/h odd
-   * @param {{srcW,srcH,channels,edge?:'clamp'|'wrap'|'zero',divisor?,bias?}} params
-   */
-  stencilHwc(dst, src, kernel, params) {},
+/**
+ *  sRGB to linear conversion.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ */
+bro.image.srgbToLinear = function(dst, src) {};
 
+/**
+ *  Linear to sRGB conversion.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ */
+bro.image.linearToSrgb = function(dst, src) {};
 
-  // ===========================================================================
-  // Tiling  (broimage tiling.h), feather window + weighted accumulate
-  // ===========================================================================
-  //
-  // Split a large image into overlapping tiles, run a local operator per tile,
-  // then glue the outputs back seamlessly. Seams are hidden by a feather window
-  // (raised-cosine ramp across each overlapped edge). Each tile contributes
-  // value*window into `acc` and window into `wacc`; a final divide blends them.
+/**
+ *  uint8 sRGB to float32 linear in one pass.
+ *
+ * @param {Float32Array} dst
+ * @param {Uint8Array} src
+ */
+bro.image.srgbToLinearU8ToF32 = function(dst, src) {};
 
-  /**
-   * Fill a single-channel feather window for a tw x th tile. Overlap widths
-   * (pixels) per edge; an edge with overlap 0 keeps full weight to the boundary
-   * (image-border tiles).
-   * @param {Float32Array} win - tw*th
-   * @param {{tw,th,ovL?,ovR?,ovT?,ovB?}} params
-   */
-  featherWindow(win, params) {},
+/**
+ *  float32 linear to uint8 sRGB in one pass.
+ *
+ * @param {Uint8Array} dst
+ * @param {Float32Array} src
+ */
+bro.image.linearF32ToSrgbU8 = function(dst, src) {};
 
-  /**
-   * Scatter one tile into the full-size accumulators, weighted by `window`.
-   * `acc` (full_w*full_h*channels) and `wacc` (full_w*full_h) must be
-   * zero-initialized before the first tile and reused across the pass.
-   * @param {Float32Array} acc
-   * @param {Float32Array} wacc
-   * @param {Float32Array} tile   - tw*th*channels (HWC)
-   * @param {Float32Array} window - tw*th
-   * @param {{fullW,fullH,channels,tw,th,dstX,dstY}} params
-   */
-  accumulateTile(acc, wacc, tile, window, params) {},
+/**
+ *  RGB to HSV conversion.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ */
+bro.image.rgbToHsv = function(dst, src) {};
 
-  /**
-   * Resolve the accumulators into the final blended map, in place:
-   * acc[i] /= max(wacc[i], eps). Uncovered pixels (weight 0) resolve to 0.
-   * @param {Float32Array} acc
-   * @param {Float32Array} wacc
-   * @param {{nPixels,channels,eps?}} params
-   */
-  normalizeAccumulator(acc, wacc, params) {},
-};
+/**
+ *  HSV to RGB conversion.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ */
+bro.image.hsvToRgb = function(dst, src) {};
 
+/**
+ *  RGB to HSL conversion.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ */
+bro.image.rgbToHsl = function(dst, src) {};
 
-// =============================================================================
-// bro.image.gpu, WebGL2-backed counterparts (lives in bro, NOT broimage)
-// =============================================================================
-//
-// Ownership boundary: the CPU `bro.image` kernels above are the broimage C++
-// library (surfaced via brokit). `bro.image.gpu.*` is a separate, bro-side
-// WebGL2 *renderer*, it draws to a canvas via fragment shaders and shares the
-// namespace only for ergonomics (CPU `lookup` ↔ GPU `colormap`, both consuming
-// a `bro.image.gradient` LUT). It is not part of broimage and does not dispatch
-// through brotensor; broimage's own GPU path is CUDA/Metal compute on tensors,
-// which is a different thing from rendering to a browser canvas.
-//
-// V1 surface: colormap.
-//
-//   bro.image.gpu.colormap(canvas, src, lut, {lo, hi, srcW, srcH})
-//   bro.image.gpu.colormap(canvas, src, lut, {autoRange: true, ema, srcW, srcH})
-//
-// Renders a 1-channel float field through a 1D RGBA8 LUT directly to a
-// canvas via a WebGL2 fragment shader. The noise is uploaded as a R32F
-// texture; the LUT as a K×1 RGBA8 texture; one fullscreen-triangle draw
-// per frame.
-//
-// The canvas you pass MUST be backed by a webgl2 context. The first call
-// creates and caches the program / VAO / textures; subsequent calls only
-// reupload data (texSubImage2D) and redraw.
-//
-// Eliminates the per-frame ImageData allocation + putImageData CPU upload
-// that bottleneck the CPU lookup pipeline at large canvas sizes.
-//
-// autoRange mode: the engine computes (min, max) via a parallel GPU
-// reduction over the noise texture, EMA-smooths it across frames in a 1×1
-// RG32F ping-pong, and the colormap shader samples that range. The CPU
-// never sees the values, no `bro.image.reduce`, no per-frame range
-// uniforms. EXT_color_buffer_float must be supported (it is on every
-// real-world WebGL2 implementation; the autoRange path throws cleanly if
-// not).
+/**
+ *  HSL to RGB conversion.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ */
+bro.image.hslToRgb = function(dst, src) {};
 
-const imageGpu = {
+/**
+ *  Apply row-major 3x3 color matrix.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.applyColorMatrix3x3 = function(dst, src, params) {};
 
-  /**
-   * Colormap a scalar field to `canvas` via a fragment shader.
-   *
-   * @param {HTMLCanvasElement} canvas - must support webgl2
-   * @param {Float32Array}      src    - srcW * srcH scalar field
-   * @param {Uint8Array}        lut    - 4*K bytes (RGBA8); typically built
-   *                                     via bro.image.gradient()
-   * srcW/srcH default to canvas.width/canvas.height when omitted (the 1:1
-   * case); pass them explicitly when the field is rendered at a different
-   * resolution than the canvas (e.g. lo-res field → hi-res display).
-   *
-   * @param {object} params
-   * @param {number}  [params.lo]        - explicit low (uniform-range mode)
-   * @param {number}  [params.hi]        - explicit high (uniform-range mode)
-   * @param {boolean} [params.autoRange] - if true, lo/hi are computed on the
-   *                                       GPU via parallel min/max reduction
-   *                                       and EMA-smoothed across frames.
-   *                                       lo/hi are ignored.
-   * @param {number}  [params.ema=0.02]  - blend factor for autoRange smoothing.
-   *                                       Higher = more responsive, lower = more
-   *                                       stable. 1.0 means "use this frame's
-   *                                       raw min/max directly."
-   * @param {number}  [params.srcW]      - field width  (default canvas.width)
-   * @param {number}  [params.srcH]      - field height (default canvas.height)
-   * @param {{x,y,w,h}} [params.viewRect] - sub-rect of the source texture to
-   *        display on the canvas. Lets you upload a wider field once and
-   *        slide a window across it on subsequent calls. Default: full source.
-   * @param {boolean} [params.regenerate=true] - if false, skip the src upload
-   *        and reuse the cached noiseTex. `src` may be null. Throws if no
-   *        field has been uploaded for this canvas yet.
-   *
-   * @example
-   *   // autoRange: no reduce on CPU, no per-frame range uniforms.
-   *   function frame() {
-   *       node.genUniformGrid2DInto(data, ox, oy, 1280, 800, freq, seed);
-   *       bro.image.gpu.colormap(canvas, data, lut, { autoRange: true });
-   *       requestAnimationFrame(frame);
-   *   }
-   *
-   * @example
-   *   // Explicit range (the original mode):
-   *   const {min, max} = bro.image.reduce(data, 'minmax');
-   *   bro.image.gpu.colormap(canvas, data, lut, { lo: min, hi: max });
-   */
-  colormap(canvas, src, lut, params) {},
+/**
+ *  Apply row-major 3x4 color matrix.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.applyColorMatrix3x4 = function(dst, src, params) {};
 
-  /**
-   * Generate a 2D Simplex FBm field on the GPU and colormap it to `canvas`
-   * in one call. The scalar field never materializes on the CPU side, it
-   * lives only as an intermediate R32F texture between the FBm shader and
-   * the colormap shader.
-   *
-   * Use this instead of `FastNoise.create('Simplex')` +
-   * `genUniformGrid2DInto` + `colormap` when you don't need the field on
-   * the CPU. At large canvas sizes this eliminates the per-frame
-   * CPU→GPU upload (5 MB at 1280×800) and the Float32Array buffer
-   * entirely.
-   *
-   * V1 supports type === 'Simplex' only. SuperSimplex, Perlin, Value,
-   * CellularValue and CellularDistance are not implemented in shader form
-   * yet: stay on the CPU path for those types.
-   *
-   * @param {HTMLCanvasElement} canvas - webgl2-backed
-   * @param {Uint8Array} lut           - RGBA8 LUT (see gradient())
-   * @param {object} params
-   * @param {number} params.frequency
-   * @param {number} [params.octaves=1]      - 1..16
-   * @param {number} [params.gain=0.5]
-   * @param {number} [params.lacunarity=2]
-   * @param {number} [params.seed=0]
-   * @param {number} [params.ox=0]           - world offset x
-   * @param {number} [params.oy=0]           - world offset y
-   * @param {string} [params.type='Simplex'] - V1: only 'Simplex'
-   * @param {boolean} [params.autoRange]     - GPU min/max + EMA (see colormap)
-   * @param {number}  [params.ema=0.02]
-   * @param {number}  [params.lo] / [params.hi] - uniform-range mode
-   * @param {number}  [params.srcW] / [params.srcH]
-   * @param {{x,y,w,h}} [params.viewRect] - sub-rect of the noiseTex to display.
-   *        Combines naturally with regenerate:false for smooth scrolling
-   *        across a pre-rendered tile (see example).
-   * @param {boolean} [params.regenerate=true] - if false, skip the FBm gen
-   *        pass and just re-display the cached noiseTex via the colormap
-   *        pipeline. Throws if no field has been generated yet.
-   *
-   * @example
-   *   // Animating FBm with autoRange: no CPU buffer, no reduce, no upload.
-   *   function frame() {
-   *       t += dt * scrollSpeed;
-   *       bro.image.gpu.fbm2D(canvas, lut, {
-   *           frequency: 0.05, octaves: 8, gain: 0.5, lacunarity: 2.0,
-   *           seed: 1337, ox: t, oy: 0,
-   *           autoRange: true,
-   *       });
-   *       requestAnimationFrame(frame);
-   *   }
-   *
-   * @example
-   *   // 1Hz tile regen with per-frame smooth scrolling. The FBm pass runs
-   *   // once per second; intervening frames are pure 1-quad colormaps with
-   *   // a translated viewRect.
-   *   const cw = canvas.width, ch = canvas.height;
-   *   const TILE_W = cw + 256;          // extra horizontal scroll buffer
-   *   let tileOx = 0, lastRegen = 0, t = 0;
-   *
-   *   function frame(now) {
-   *       t += dt * scrollSpeed;
-   *       const scrollPx = (t - tileOx) / freq;  // pixels into the tile
-   *       if (scrollPx > TILE_W - cw || now - lastRegen > 1000) {
-   *           tileOx = t;
-   *           lastRegen = now;
-   *           bro.image.gpu.fbm2D(canvas, lut, {
-   *               frequency: freq, octaves, gain, lacunarity, seed,
-   *               ox: tileOx, oy: 0,
-   *               srcW: TILE_W, srcH: ch,
-   *               autoRange: true,
-   *               viewRect: { x: 0, y: 0, w: cw, h: ch },
-   *           });
-   *       } else {
-   *           bro.image.gpu.fbm2D(canvas, lut, {
-   *               regenerate: false,
-   *               autoRange: true,
-   *               viewRect: { x: scrollPx, y: 0, w: cw, h: ch },
-   *           });
-   *       }
-   *       requestAnimationFrame(frame);
-   *   }
-   */
-  fbm2D(canvas, lut, params) {},
-};
+/**
+ *  Packed NHWC uint8 to planar NCHW float32.
+ *
+ * @param {Float32Array} dst
+ * @param {Uint8Array} src
+ * @param {Object} params
+ */
+bro.image.u8NhwcToF32Nchw = function(dst, src, params) {};
 
+/**
+ *  Float32 NHWC to NCHW.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.nhwcToNchwF32 = function(dst, src, params) {};
 
-// =============================================================================
-// Recipes
-// =============================================================================
-//
-// Colormap a noise field
-// ----------------------
-//   const lut = bro.image.gradient([[0,0,0,0],[1,255,255,255]]);
-//   const {min, max} = bro.image.reduce(field, 'minmax');
-//   bro.image.lookup(img.data, field, lut, {lo: min, hi: max});
-//   ctx.putImageData(img, 0, 0);
-//
-// Threshold (LUT does the work; lookup is the same call)
-// ------------------------------------------------------
-//   const thresh = bro.image.gradient([
-//       [0.0,   0,0,0], [0.5,   0,0,0],
-//       [0.5, 255,255,255], [1.0, 255,255,255]]);
-//   bro.image.lookup(img.data, field, thresh, {lo: 0, hi: 1});
-//
-// Edge-detected colormap
-// ----------------------
-//   const sobelX = {data: new Float32Array([-1,0,1,-2,0,2,-1,0,1]), w:3, h:3};
-//   bro.image.stencil(edges, src, sobelX, {srcW:w, srcH:h, edge:'clamp'});
-//   const {min, max} = bro.image.reduce(edges, 'minmax');
-//   bro.image.lookup(img.data, edges, viridis, {lo: min, hi: max});
-//
-// Histogram equalization
-// ----------------------
-//   const hist  = bro.image.reduce(src, 'histogram', {bins: 256, lo, hi});
-//   const eqLut = buildEqLut(hist);   // small JS routine, one-time per histogram
-//   bro.image.lookup(img.data, src, eqLut, {lo, hi});
-//
-// Render at low res then upsample
-// -------------------------------
-//   const lo = node.genUniformGrid2D(ox, oy, 256, 160, freq, seed);
-//   bro.image.resample(hi, lo, {srcW:256, srcH:160, dstW:1280, dstH:800,
-//                                channels:1, filter:'bilinear'});
-//   const {min, max} = bro.image.reduce(hi, 'minmax');
-//   bro.image.lookup(img.data, hi, lut, {lo: min, hi: max});
-//
-// =============================================================================
+/**
+ *  Float32 NCHW to NHWC.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.nchwToNhwcF32 = function(dst, src, params) {};
+
+/**
+ *  Planar NCHW float32 to packed NHWC uint8.
+ *
+ * @param {Uint8Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.f32NchwToU8Nhwc = function(dst, src, params) {};
+
+/**
+ *  Normalize NCHW float32 buffer with mean/std.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} params
+ */
+bro.image.normalizeNchw = function(dst, src, params) {};
+
+/**
+ *  Multi-channel stencil convolution.
+ *
+ * @param {Float32Array} dst
+ * @param {Float32Array} src
+ * @param {Object} kernel
+ * @param {Object} params
+ */
+bro.image.stencilHwc = function(dst, src, kernel, params) {};
+
+/**
+ *  Fill single-channel feather window.
+ *
+ * @param {Float32Array} win
+ * @param {Object} params
+ */
+bro.image.featherWindow = function(win, params) {};
+
+/**
+ *  Accumulate tile into global accumulator.
+ *
+ * @param {Float32Array} acc
+ * @param {Float32Array} wacc
+ * @param {Float32Array} tile
+ * @param {Float32Array} window
+ * @param {Object} params
+ */
+bro.image.accumulateTile = function(acc, wacc, tile, window, params) {};
+
+/**
+ *  Normalize tiled accumulator in place.
+ *
+ * @param {Float32Array} acc
+ * @param {Float32Array} wacc
+ * @param {Object} params
+ */
+bro.image.normalizeAccumulator = function(acc, wacc, params) {};
+
+/**
+ * WebGL2-backed GPU image rendering and procedural generation.
+ */
+/**
+ *  Colormap a scalar field to canvas via WebGL2 fragment shader.
+ *
+ * @param {Object} canvas
+ * @param {Float32Array} src
+ * @param {Uint8Array} lut
+ * @param {Object} [params]
+ */
+bro.image_gpu.colormap = function(canvas, src, lut, params) {};
+
+/**
+ *  Generate 2D Simplex FBm noise field directly on GPU.
+ *
+ * @param {Object} canvas
+ * @param {Uint8Array} lut
+ * @param {Object} params
+ */
+bro.image_gpu.fbm2D = function(canvas, lut, params) {};
+

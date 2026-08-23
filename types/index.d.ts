@@ -287,6 +287,15 @@ interface CustomElementOptions {
 }
 
 /**
+ * Options for initializing an Event.
+ */
+interface EventInit {
+  bubbles?: boolean;
+  cancelable?: boolean;
+  composed?: boolean;
+}
+
+/**
  * Initialization dictionary for creating a Blob.
  */
 interface BlobPropertyBag {
@@ -3023,6 +3032,189 @@ declare class DOMParser {
 }
 
 /**
+ * Root interface for DOM event dispatching and propagation.
+ */
+declare class Event {
+  /**
+   *  Initializes a new Event instance.
+   */
+  constructor(type: string, eventInitDict?: EventInit);
+  /**
+   *  Type of event.
+   */
+  readonly type: string;
+  /**
+   *  Event target element.
+   */
+  readonly target: object | null;
+  /**
+   *  Current event target element.
+   */
+  readonly currentTarget: object | null;
+  /**
+   *  Whether event bubbles up the DOM tree.
+   */
+  readonly bubbles: boolean;
+  /**
+   *  Whether event default action can be prevented.
+   */
+  readonly cancelable: boolean;
+  /**
+   *  Whether preventDefault was called on this event.
+   */
+  readonly defaultPrevented: boolean;
+  /**
+   *  Creation timestamp of event in milliseconds.
+   */
+  readonly timeStamp: number;
+  /**
+   *  Prevents default browser/engine action for this event.
+   */
+  preventDefault(): void;
+  /**
+   *  Stops further event propagation in the DOM tree.
+   */
+  stopPropagation(): void;
+  /**
+   *  Deprecated legacy event initializer.
+   */
+  initEvent(type: string, bubbles: boolean, cancelable: boolean): void;
+}
+
+/**
+ * Event carrying custom user data in the detail property.
+ */
+declare class CustomEvent extends Event {
+  /**
+   *  User-supplied detail payload.
+   */
+  readonly detail: any;
+}
+
+/**
+ * Base interface for UI and user-input events.
+ */
+declare class UIEvent extends Event {
+  /**
+   *  Window view context.
+   */
+  readonly view: any;
+  /**
+   *  Numeric event detail.
+   */
+  readonly detail: number;
+}
+
+/**
+ * Mouse button and cursor movement event.
+ */
+declare class MouseEvent extends UIEvent {
+  readonly screenX: number;
+  readonly screenY: number;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly pageX: number;
+  readonly pageY: number;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly metaKey: boolean;
+  readonly button: number;
+  readonly buttons: number;
+  readonly relatedTarget: object | null;
+}
+
+/**
+ * Unified pointer event for mouse, pen, and touch input.
+ */
+declare class PointerEvent extends MouseEvent {
+  /**
+   *  Unique identifier for the pointer device/contact.
+   */
+  readonly pointerId: number;
+  /**
+   *  Device type ('mouse' | 'touch' | 'pen').
+   */
+  readonly pointerType: string;
+  /**
+   *  Whether this contact is the primary pointer.
+   */
+  readonly isPrimary: boolean;
+  /**
+   *  Contact pressure in range [0, 1].
+   */
+  readonly pressure: number;
+  /**
+   *  Contact width in pixels.
+   */
+  readonly width: number;
+  /**
+   *  Contact height in pixels.
+   */
+  readonly height: number;
+}
+
+/**
+ * Individual touch contact point on a touch-sensitive surface.
+ */
+declare class Touch {
+  readonly identifier: number;
+  readonly target: object;
+  readonly screenX: number;
+  readonly screenY: number;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly pageX: number;
+  readonly pageY: number;
+  readonly force: number;
+}
+
+/**
+ * List of active touch contact points.
+ */
+declare class TouchList {
+  readonly length: number;
+  item(index: number): Touch | null;
+}
+
+/**
+ * Multi-touch interaction event.
+ */
+declare class TouchEvent extends UIEvent {
+  readonly touches: TouchList;
+  readonly targetTouches: TouchList;
+  readonly changedTouches: TouchList;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+  readonly metaKey: boolean;
+}
+
+/**
+ * Multi-finger gesture event (pinch / pan / rotate).
+ */
+declare class GestureEvent extends UIEvent {
+  /**
+   *  Gesture scale relative to start.
+   */
+  readonly scale: number;
+  /**
+   *  Rotation in degrees clockwise since start.
+   */
+  readonly rotation: number;
+  /**
+   *  Centroid X in viewport coordinates.
+   */
+  readonly clientX: number;
+  /**
+   *  Centroid Y in viewport coordinates.
+   */
+  readonly clientY: number;
+}
+
+/**
  * Represents immutable raw binary data held in native memory.
  */
 declare class Blob {
@@ -3477,6 +3669,93 @@ declare class GestureStreamView {
 }
 
 /**
+ * Embedded sub-document element interface.
+ */
+declare class HTMLIFrameElement extends HTMLElement {
+  /**
+   *  Source path or directory for embedded sub-document.
+   */
+  src: string;
+  /**
+   *  Intrinsic width of iframe element.
+   */
+  width: string;
+  /**
+   *  Intrinsic height of iframe element.
+   */
+  height: string;
+  /**
+   *  Document of embedded sub-document (if accessible).
+   */
+  readonly contentDocument: any;
+  /**
+   *  Window global proxy of embedded sub-document.
+   */
+  readonly contentWindow: any;
+  /**
+   *  Rebuilds and reloads sub-document from its current src.
+   */
+  reload(): void;
+  /**
+   *  Synchronously captures rendered pixels of sub-document as an ImageData.
+   */
+  capture(): object | null;
+}
+
+/**
+ * Standard HTML Image / DOM Image helper constructor.
+ */
+declare class Image {
+  constructor();
+  /**
+   *  Image source URL or path.
+   */
+  src: string;
+  /**
+   *  Intrinsic image width in pixels.
+   */
+  readonly width: number;
+  /**
+   *  Intrinsic image height in pixels.
+   */
+  readonly height: number;
+  /**
+   *  Natural width of image.
+   */
+  readonly naturalWidth: number;
+  /**
+   *  Natural height of image.
+   */
+  readonly naturalHeight: number;
+  /**
+   *  True if image has finished loading.
+   */
+  readonly complete: boolean;
+  /**
+   *  Callback invoked on successful load.
+   */
+  onload: Function | null;
+  /**
+   *  Callback invoked on load error.
+   */
+  onerror: Function | null;
+  /**
+   *  Adds an event listener for image events.
+   */
+  addEventListener(type: string, listener: Function): void;
+  /**
+   *  Removes an event listener for image events.
+   */
+  removeEventListener(type: string, listener: Function): void;
+}
+
+/**
+ * Alias for HTMLImageElement DOM interface.
+ */
+declare class HTMLImageElement extends Image {
+}
+
+/**
  * W3C ImageBitmap interface representing a bitmap image that can be drawn to a canvas.
  */
 declare class ImageBitmap {
@@ -3518,6 +3797,155 @@ declare class ImageData {
    *  RGBA one-dimensional array of pixel data.
    */
   readonly data: Uint8ClampedArray;
+}
+
+/**
+ * Formats numbers, currencies, and percentages according to locale conventions.
+ */
+declare class NumberFormat {
+  constructor(locales?: any, options?: object);
+  /**
+   *  Returns subset of provided locales supported by implementation.
+   */
+  static supportedLocalesOf(locales: any, options?: object): string[];
+  /**
+   *  Formats a number to a localized string.
+   */
+  format(value: number): string;
+  /**
+   *  Returns sequence of tokenized format parts.
+   */
+  formatToParts(value: number): object[];
+  /**
+   *  Returns resolved formatting options.
+   */
+  resolvedOptions(): object;
+}
+
+/**
+ * Formats dates and times according to locale conventions.
+ */
+declare class DateTimeFormat {
+  constructor(locales?: any, options?: object);
+  /**
+   *  Returns subset of provided locales supported by implementation.
+   */
+  static supportedLocalesOf(locales: any, options?: object): string[];
+  /**
+   *  Formats a Date or timestamp to a localized string.
+   */
+  format(date?: any): string;
+  /**
+   *  Returns sequence of tokenized date/time format parts.
+   */
+  formatToParts(date?: any): object[];
+  /**
+   *  Returns resolved formatting options.
+   */
+  resolvedOptions(): object;
+}
+
+/**
+ * Determines plural category rules for numbers.
+ */
+declare class PluralRules {
+  constructor(locales?: any, options?: object);
+  /**
+   *  Returns subset of provided locales supported by implementation.
+   */
+  static supportedLocalesOf(locales: any, options?: object): string[];
+  /**
+   *  Selects plural category ('zero' | 'one' | 'two' | 'few' | 'many' | 'other').
+   */
+  select(value: number): string;
+  /**
+   *  Returns resolved formatting options.
+   */
+  resolvedOptions(): object;
+}
+
+/**
+ * Compares strings according to locale-specific collation rules.
+ */
+declare class Collator {
+  constructor(locales?: any, options?: object);
+  /**
+   *  Returns subset of provided locales supported by implementation.
+   */
+  static supportedLocalesOf(locales: any, options?: object): string[];
+  /**
+   *  Compares two strings returning negative, zero, or positive integer.
+   */
+  compare(string1: string, string2: string): number;
+  /**
+   *  Returns resolved formatting options.
+   */
+  resolvedOptions(): object;
+}
+
+/**
+ * Formats lists of items using localized conjunctions and disjunctions.
+ */
+declare class ListFormat {
+  constructor(locales?: any, options?: object);
+  /**
+   *  Returns subset of provided locales supported by implementation.
+   */
+  static supportedLocalesOf(locales: any, options?: object): string[];
+  /**
+   *  Formats a list of strings into a localized sentence fragment.
+   */
+  format(list: string[]): string;
+  /**
+   *  Returns sequence of tokenized list format parts.
+   */
+  formatToParts(list: string[]): object[];
+  /**
+   *  Returns resolved formatting options.
+   */
+  resolvedOptions(): object;
+}
+
+/**
+ * Formats relative time units ('3 days ago', 'in 2 hours').
+ */
+declare class RelativeTimeFormat {
+  constructor(locales?: any, options?: object);
+  /**
+   *  Returns subset of provided locales supported by implementation.
+   */
+  static supportedLocalesOf(locales: any, options?: object): string[];
+  /**
+   *  Formats a value and time unit into relative time string.
+   */
+  format(value: number, unit: string): string;
+  /**
+   *  Returns sequence of tokenized relative time format parts.
+   */
+  formatToParts(value: number, unit: string): object[];
+  /**
+   *  Returns resolved formatting options.
+   */
+  resolvedOptions(): object;
+}
+
+/**
+ * Returns localized display names for languages, regions, and currencies.
+ */
+declare class DisplayNames {
+  constructor(locales?: any, options?: object);
+  /**
+   *  Returns subset of provided locales supported by implementation.
+   */
+  static supportedLocalesOf(locales: any, options?: object): string[];
+  /**
+   *  Returns localized display name for given language/region code.
+   */
+  of(code: string): string | null;
+  /**
+   *  Returns resolved formatting options.
+   */
+  resolvedOptions(): object;
 }
 
 declare class KwsStreamView {
@@ -4174,6 +4602,98 @@ declare class Smoother {
    * Advance n simulation ticks.
    */
   tickN(n: number): number;
+}
+
+/**
+ * WebM/VP9 video and Opus audio encoder.
+ */
+declare class VideoEncoder {
+  /**
+   *  Initializes a new VideoEncoder instance with config options.
+   */
+  constructor(config: object);
+  /**
+   *  Configured video frame width.
+   */
+  readonly width: number;
+  /**
+   *  Configured video frame height.
+   */
+  readonly height: number;
+  /**
+   *  Number of encoded frames written to file.
+   */
+  readonly framesWritten: number;
+  /**
+   *  Last encoder error message.
+   */
+  readonly lastError: string;
+  /**
+   *  Push an RGBA frame buffer to encode.
+   */
+  addFrameRGBA(pixels: Uint8Array, stride?: number): void;
+  /**
+   *  Snapshot and encode a canvas element frame.
+   */
+  addCanvasFrame(canvas: object): void;
+  /**
+   *  Snapshot and encode full composited viewport frame.
+   */
+  addViewportFrame(): void;
+  /**
+   *  Push interleaved float32 PCM audio samples.
+   */
+  addAudioFramesPCM(pcm: Float32Array): void;
+  /**
+   *  Finalizes encoding and closes output file.
+   */
+  finish(): void;
+}
+
+/**
+ * Animated GIF89a encoder with per-frame 256-color palette quantization.
+ */
+declare class GifEncoder {
+  /**
+   *  Initializes a new GifEncoder instance with config options.
+   */
+  constructor(config: object);
+  /**
+   *  Configured frame width.
+   */
+  readonly width: number;
+  /**
+   *  Configured frame height.
+   */
+  readonly height: number;
+  /**
+   *  Number of frames written.
+   */
+  readonly framesWritten: number;
+  /**
+   *  Last encoder error message.
+   */
+  readonly lastError: string;
+  /**
+   *  Push an RGBA frame buffer to encode.
+   */
+  addFrameRGBA(pixels: Uint8Array, stride?: number): void;
+  /**
+   *  Snapshot and encode a canvas element frame.
+   */
+  addCanvasFrame(canvas: object): void;
+  /**
+   *  Snapshot and encode full viewport frame.
+   */
+  addViewportFrame(): void;
+  /**
+   *  Set delay for subsequent frame in centiseconds (1/100s).
+   */
+  setNextFrameDelayCs(delayCs: number): void;
+  /**
+   *  Finalizes GIF encoding and writes trailer.
+   */
+  finish(): void;
 }
 
 declare class Mesh {
@@ -5664,6 +6184,276 @@ declare namespace bro {
     function trim(device?: string, keepBytes?: number): boolean;
   }
 
+  /**
+   * CPU and GPU image manipulation and kernel acceleration suite.
+   */
+  namespace image {
+    /**
+     *  Preprocessing normalization presets (clip, imagenet, sam).
+     */
+    const presets: object;
+    /**
+     *  Collapse a buffer to a scalar or histogram.
+     */
+    function reduce(src: ArrayBufferView, op: string, params?: object): any;
+    /**
+     *  Element-wise unary kernel. dst[i] = f(src[i]).
+     */
+    function map(dst: Float32Array, src: Float32Array, opSpec: object): void;
+    /**
+     *  Element-wise binary kernel. dst[i] = f(a[i], b[i]).
+     */
+    function combine(dst: Float32Array, a: Float32Array, b: Float32Array, opSpec: object): void;
+    /**
+     *  Map each scalar in src through a 1D RGBA8 LUT into dst.
+     */
+    function lookup(dst: ArrayBufferView, src: ArrayBufferView, lut: Uint8Array, params: object): void;
+    /**
+     *  Convolve src with kernel into dst.
+     */
+    function stencil(dst: Float32Array, src: Float32Array, kernel: object, params: object): void;
+    /**
+     *  Resize a Float32Array image.
+     */
+    function resample(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Build a 1D RGBA8 LUT from color stops.
+     */
+    function gradient(stops: number[][], n?: number): Uint8Array;
+    /**
+     *  Allocate a TypedArray sized for w*h*channels.
+     */
+    function alloc(w: number, h: number, channels: number, dtype?: string): ArrayBufferView;
+    /**
+     *  Decode a 16-bit image into RGBA.
+     */
+    function decodeU16(src: any): object | null;
+    /**
+     *  Decode a float / HDR image.
+     */
+    function decodeF32(src: any): object | null;
+    /**
+     *  Decode 8-bit RGBA and apply EXIF orientation.
+     */
+    function decodeOriented(src: any): object;
+    /**
+     *  Cheap header probe for dimensions.
+     */
+    function probeDimensions(bytes: ArrayBufferView): object | null;
+    /**
+     *  Transcode a KTX2 texture.
+     */
+    function transcodeKTX2(bytes: ArrayBufferView, format?: string): object;
+    /**
+     *  Read EXIF orientation tag.
+     */
+    function readExifOrientation(src: any): number;
+    /**
+     *  Apply EXIF orientation transform to an RGBA8 buffer.
+     */
+    function applyExifOrientation(pixels: Uint8Array, width: number, height: number, orient: number): object;
+    /**
+     *  Encode PNG to file.
+     */
+    function encodePngFile(path: string, pixels: Uint8Array, width: number, height: number, channels: number, strideBytes?: number): boolean;
+    /**
+     *  Encode PNG to memory.
+     */
+    function encodePng(pixels: Uint8Array, width: number, height: number, channels: number, strideBytes?: number): Uint8Array | null;
+    /**
+     *  Encode JPEG to file.
+     */
+    function encodeJpegFile(path: string, pixels: Uint8Array, width: number, height: number, channels: number, quality?: number): boolean;
+    /**
+     *  Encode JPEG to memory.
+     */
+    function encodeJpeg(pixels: Uint8Array, width: number, height: number, channels: number, quality?: number): Uint8Array | null;
+    /**
+     *  Resize HWC uint8.
+     */
+    function resizeU8(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Resize HWC float32.
+     */
+    function resizeF32(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Resize planar CHW float32.
+     */
+    function resizeChwF32(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Letterbox HWC uint8.
+     */
+    function letterboxU8(dst: Uint8Array, src: Uint8Array, params: object): object;
+    /**
+     *  Constant-pad HWC uint8.
+     */
+    function padU8(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Crop an [x,y,w,h] rect.
+     */
+    function cropU8(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Center-crop a cropW x cropH rect.
+     */
+    function centerCropU8(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Mirror left to right.
+     */
+    function flipHorizontalU8(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Mirror top to bottom.
+     */
+    function flipVerticalU8(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Rotate by 90-degree multiples.
+     */
+    function rotate90U8(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Premultiply alpha.
+     */
+    function premultiplyAlpha(dst: Uint8Array, src: Uint8Array): void;
+    /**
+     *  Unpremultiply alpha.
+     */
+    function unpremultiplyAlpha(dst: Uint8Array, src: Uint8Array): void;
+    /**
+     *  Alpha-aware RGBA8 resize.
+     */
+    function resizeRgba8Alpha(dst: Uint8Array, src: Uint8Array, params: object): void;
+    /**
+     *  Alpha-aware RGBA8 letterbox.
+     */
+    function letterboxRgba8Alpha(dst: Uint8Array, src: Uint8Array, params: object): object;
+    /**
+     *  RGBA8 to RGB8.
+     */
+    function rgbaToRgb(dst: Uint8Array, src: Uint8Array): void;
+    /**
+     *  RGB8 to RGBA8.
+     */
+    function rgbToRgba(dst: Uint8Array, src: Uint8Array, alpha?: number): void;
+    /**
+     *  RGBA8 to gray8.
+     */
+    function rgbaToGray(dst: Uint8Array, src: Uint8Array): void;
+    /**
+     *  RGB8 to gray8.
+     */
+    function rgbToGray(dst: Uint8Array, src: Uint8Array): void;
+    /**
+     *  Interleaved HWC to planar CHW float32.
+     */
+    function hwcToChw(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Planar CHW to interleaved HWC float32.
+     */
+    function chwToHwc(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Apply gamma curve to float32 buffer.
+     */
+    function applyGamma(dst: Float32Array, src: Float32Array, gamma: number): void;
+    /**
+     *  sRGB to linear conversion.
+     */
+    function srgbToLinear(dst: Float32Array, src: Float32Array): void;
+    /**
+     *  Linear to sRGB conversion.
+     */
+    function linearToSrgb(dst: Float32Array, src: Float32Array): void;
+    /**
+     *  uint8 sRGB to float32 linear in one pass.
+     */
+    function srgbToLinearU8ToF32(dst: Float32Array, src: Uint8Array): void;
+    /**
+     *  float32 linear to uint8 sRGB in one pass.
+     */
+    function linearF32ToSrgbU8(dst: Uint8Array, src: Float32Array): void;
+    /**
+     *  RGB to HSV conversion.
+     */
+    function rgbToHsv(dst: Float32Array, src: Float32Array): void;
+    /**
+     *  HSV to RGB conversion.
+     */
+    function hsvToRgb(dst: Float32Array, src: Float32Array): void;
+    /**
+     *  RGB to HSL conversion.
+     */
+    function rgbToHsl(dst: Float32Array, src: Float32Array): void;
+    /**
+     *  HSL to RGB conversion.
+     */
+    function hslToRgb(dst: Float32Array, src: Float32Array): void;
+    /**
+     *  Apply row-major 3x3 color matrix.
+     */
+    function applyColorMatrix3x3(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Apply row-major 3x4 color matrix.
+     */
+    function applyColorMatrix3x4(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Packed NHWC uint8 to planar NCHW float32.
+     */
+    function u8NhwcToF32Nchw(dst: Float32Array, src: Uint8Array, params: object): void;
+    /**
+     *  Float32 NHWC to NCHW.
+     */
+    function nhwcToNchwF32(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Float32 NCHW to NHWC.
+     */
+    function nchwToNhwcF32(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Planar NCHW float32 to packed NHWC uint8.
+     */
+    function f32NchwToU8Nhwc(dst: Uint8Array, src: Float32Array, params: object): void;
+    /**
+     *  Normalize NCHW float32 buffer with mean/std.
+     */
+    function normalizeNchw(dst: Float32Array, src: Float32Array, params: object): void;
+    /**
+     *  Multi-channel stencil convolution.
+     */
+    function stencilHwc(dst: Float32Array, src: Float32Array, kernel: object, params: object): void;
+    /**
+     *  Fill single-channel feather window.
+     */
+    function featherWindow(win: Float32Array, params: object): void;
+    /**
+     *  Accumulate tile into global accumulator.
+     */
+    function accumulateTile(acc: Float32Array, wacc: Float32Array, tile: Float32Array, window: Float32Array, params: object): void;
+    /**
+     *  Normalize tiled accumulator in place.
+     */
+    function normalizeAccumulator(acc: Float32Array, wacc: Float32Array, params: object): void;
+  }
+
+  /**
+   * WebGL2-backed GPU image rendering and procedural generation.
+   */
+  namespace image_gpu {
+    /**
+     *  Colormap a scalar field to canvas via WebGL2 fragment shader.
+     */
+    function colormap(canvas: object, src: Float32Array, lut: Uint8Array, params?: object): void;
+    /**
+     *  Generate 2D Simplex FBm noise field directly on GPU.
+     */
+    function fbm2D(canvas: object, lut: Uint8Array, params: object): void;
+  }
+
+  /**
+   * Standard ECMA-402 internationalization namespace.
+   */
+  namespace Intl {
+    /**
+     *  Normalizes BCP-47 language tag strings to canonical form.
+     */
+    function getCanonicalLocales(locales?: any): string[];
+  }
+
   namespace kws {
     function load(opts: KwsPolicyOptions): void;
     function unload(): void;
@@ -5854,6 +6644,24 @@ declare namespace bro {
      * 2D/3D integer grid cell coordinate hash.
      */
     function cellHash(x: number, y: number, z?: number): number;
+  }
+
+  /**
+   * Media file analysis and timeline diagnostics namespace.
+   */
+  namespace media {
+    /**
+     *  Whether media analysis subsystem is available.
+     */
+    const available: boolean;
+    /**
+     *  Extract waveform min/max/rms peaks from audio/video file.
+     */
+    function peaks(path: string, options?: object): object | null;
+    /**
+     *  Extract thumbnail strip image from video file.
+     */
+    function thumbnails(path: string, options?: object): object | null;
   }
 
   /**
@@ -6434,6 +7242,40 @@ declare namespace bro {
     function decodeFrom(kokoro: KokoroModel, voice: Voice, asr: Float32Array, F0: Float32Array, N: Float32Array, nPhonemes: number, opts?: object): AsyncHandle;
   }
 
+  /**
+   * Third-party vendor globals bridge namespace.
+   */
+  namespace vendor_globals {
+    /**
+     *  Signals event emitter / reactive signal library.
+     */
+    const signals: any;
+    /**
+     *  CodeMirror in-browser code editor.
+     */
+    const CodeMirror: any;
+    /**
+     *  Acorn JavaScript parser.
+     */
+    const acorn: any;
+    /**
+     *  Tern JavaScript code-analysis engine.
+     */
+    const tern: any;
+    /**
+     *  Esprima ECMAScript parsing infrastructure.
+     */
+    const esprima: any;
+    /**
+     *  JSONLint JSON validator.
+     */
+    const jsonlint: any;
+    /**
+     *  Draco geometry mesh encoder.
+     */
+    const draco_encoder: any;
+  }
+
   namespace vision {
     function init(): void;
     function loadDepth(modelDir: string, opts?: object): any;
@@ -6573,6 +7415,10 @@ declare namespace bro {
    * FastNoise procedural SIMD-accelerated noise generator.
    */
   const noise: typeof FastNoise;
+  /**
+   * WebGL2-backed GPU image rendering and procedural generation.
+   */
+  const image.gpu: typeof image_gpu;
 }
 
 declare const customElements: CustomElementRegistry;
