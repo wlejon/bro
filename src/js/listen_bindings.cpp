@@ -1,31 +1,26 @@
-#if BRO_WITH_SOUNDML
-// bro.listen — JS surface over the shared listen host's stream retention.
-// Thin wrapper over the listenHost* retention API (listen_host.h); all state and
-// threading live there. See docs/listen-api.js.
-
 #include "js/listen_bindings.h"
-
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
 #include "js/listen_host.h"
 #include "js/sense_bindings.h"
 #include "js/wake_bindings.h"
-
 #include <broaudio/loopback_capture.h>
 #include <brosoundml/listen_bus.h>
-
 #include <qjsbind/qjsbind.h>
 #include <quickjs.h>
-
 #include <cstdint>
 #include <string>
 #include <vector>
+
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
 
 namespace {
 
-// bro.listen.retain(seconds) — enable/resize raw-audio retention to `seconds`
+// bro.listen.retain(seconds) u2014 enable/resize raw-audio retention to `seconds`
 // of the shared stream (0 disables and frees it). Source-agnostic: captures
 // whatever drives the host (mic, scripted feed, future loopback). Takes effect
 // immediately when the stream is live, else on the next start.
@@ -65,7 +60,7 @@ JSValue js_frame(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 
 // bro.listen.info() -> { active, seconds, rate, hop, frameRate, streamFrame,
-// heldFrames, heldSeconds } — retention status for a UI / scrubber.
+// heldFrames, heldSeconds } u2014 retention status for a UI / scrubber.
 JSValue js_info(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const ListenRetentionInfo r = listenHostRetentionInfo();
     JSValue o = JS_NewObject(ctx);
@@ -83,14 +78,14 @@ JSValue js_info(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return o;
 }
 
-// ─── ListenStream handle — one independent listening pipeline ─────────────────
+// u2500u2500u2500 ListenStream handle u2014 one independent listening pipeline u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 //
 // `bro.listen.open(source)` returns one of these. It wraps a StreamId and
 // delegates to the per-stream listen-host API (listen_host.h); the host owns all
 // audio infra + member state, so the handle holds nothing but the id. Closing
 // (explicitly via .close() or when the handle is GC'd) frees the stream's source
 // + infra. StreamIds are monotonic (never reused), so a stale handle can never
-// address a different stream — its methods just no-op once invalid.
+// address a different stream u2014 its methods just no-op once invalid.
 
 struct StreamHandle {
     StreamId           id   = kInvalidStream;
@@ -113,7 +108,7 @@ StreamHandle* streamSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<StreamHandle>(ctx, this_val);
 }
 
-// stream.retain(seconds) — see bro.listen.retain (per-stream).
+// stream.retain(seconds) u2014 see bro.listen.retain (per-stream).
 JSValue js_stream_retain(JSContext* ctx, JSValueConst this_val,
                          int argc, JSValueConst* argv) {
     StreamHandle* h = streamSelf(ctx, this_val);
@@ -177,7 +172,7 @@ JSValue js_stream_info(JSContext* ctx, JSValueConst this_val,
     return o;
 }
 
-// stream.feed(Float32Array) — scripted/headless feed at the stream's rate. The
+// stream.feed(Float32Array) u2014 scripted/headless feed at the stream's rate. The
 // host picks the path (threaded ring write vs inline bus run). For driving
 // retention + attached models in tests; live capture writes the ring itself.
 JSValue js_stream_feed(JSContext* ctx, JSValueConst this_val,
@@ -194,7 +189,7 @@ JSValue js_stream_feed(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// stream.close() — detach members, stop the source, free infra. Idempotent.
+// stream.close() u2014 detach members, stop the source, free infra. Idempotent.
 JSValue js_stream_close(JSContext* ctx, JSValueConst this_val,
                         int, JSValueConst*) {
     StreamHandle* h = streamSelf(ctx, this_val);
@@ -314,7 +309,7 @@ JSValue js_supported(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 
 // bro.listen.apps() -> [{ pid, name }, ...]. Applications currently holding a
-// render audio session — the candidates for {process: pid}. Empty when loopback
+// render audio session u2014 the candidates for {process: pid}. Empty when loopback
 // is unsupported.
 JSValue js_apps(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const std::vector<broaudio::AudioProcess> apps = listenHostEnumerateApps();
@@ -330,38 +325,41 @@ JSValue js_apps(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installListenBindings(JSContext* ctx) {
     registerListenStreamClass(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue listen = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, listen, "open",
+            JS_NewCFunction(ctx, js_open, "open", 1));
+        JS_SetPropertyStr(ctx, listen, "supported",
+            JS_NewCFunction(ctx, js_supported, "supported", 0));
+        JS_SetPropertyStr(ctx, listen, "apps",
+            JS_NewCFunction(ctx, js_apps, "apps", 0));
+        JS_SetPropertyStr(ctx, listen, "retain",
+            JS_NewCFunction(ctx, js_retain, "retain", 1));
+        JS_SetPropertyStr(ctx, listen, "audio",
+            JS_NewCFunction(ctx, js_audio, "audio", 2));
+        JS_SetPropertyStr(ctx, listen, "frame",
+            JS_NewCFunction(ctx, js_frame, "frame", 0));
+        JS_SetPropertyStr(ctx, listen, "info",
+            JS_NewCFunction(ctx, js_info, "info", 0));
+        JS_SetPropertyStr(ctx, broObj, "listen", listen);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue listen = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, listen, "open",
-        JS_NewCFunction(ctx, js_open, "open", 1));
-    JS_SetPropertyStr(ctx, listen, "supported",
-        JS_NewCFunction(ctx, js_supported, "supported", 0));
-    JS_SetPropertyStr(ctx, listen, "apps",
-        JS_NewCFunction(ctx, js_apps, "apps", 0));
-    JS_SetPropertyStr(ctx, listen, "retain",
-        JS_NewCFunction(ctx, js_retain, "retain", 1));
-    JS_SetPropertyStr(ctx, listen, "audio",
-        JS_NewCFunction(ctx, js_audio, "audio", 2));
-    JS_SetPropertyStr(ctx, listen, "frame",
-        JS_NewCFunction(ctx, js_frame, "frame", 0));
-    JS_SetPropertyStr(ctx, listen, "info",
-        JS_NewCFunction(ctx, js_info, "info", 0));
-    JS_SetPropertyStr(ctx, broObj, "listen", listen);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js

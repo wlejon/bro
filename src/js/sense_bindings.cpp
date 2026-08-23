@@ -1,34 +1,12 @@
-#if BRO_WITH_SOUNDML
-// JS bindings for brosoundml::SensorHub — the tier-0 acoustic sensor bus,
-// dual-homed per audio stream.
-//
-// Model-free: each stream gets its OWN SensorHub (pure CPU DSP over the stream's
-// shared PCEN mel pass). bro.sense targets the shared default-microphone stream;
-// stream.sense (the SenseView a bro.listen.open() handle exposes) targets that
-// handle's stream — so an app can run tier-0 sensing on system audio AND the mic
-// at once. Each op resolves its per-stream tenant from `this`: unwrap<SenseView>
-// → that view's stream, else default mic.
-//
-// Threading: the hub's feed() runs on the stream's inference thread (headless:
-// inline), and snapshot() is a lock-free seqlock read the main thread polls —
-// there is no per-frame tick and no callback registry, because every sensor
-// pairs its momentary boolean with a monotonic counter, so a poller can never
-// miss an event, only observe it one poll late. (No tick means tenants for
-// closed streams are pruned lazily on access + swept at cleanup.)
-
 #include "js/sense_bindings.h"
-
 #include "audio_inference/audio_inference.h"
 #include "js/listen_host.h"
-
 #include <broaudio/engine.h>
 #include <broaudio/mic_tap.h>
 #include <brosoundml/sensor_hub.h>
 #include <brotensor/runtime.h>
-
 #include <quickjs.h>
 #include <qjsbind/qjsbind.h>
-
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -37,13 +15,17 @@
 #include <unordered_map>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
 
 namespace {
 
 using engine::AudioInference;
 
-// ─── One stream's sensor tenant ──────────────────────────────────────────────
+// u2500u2500u2500 One stream's sensor tenant u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 struct SenseTenant {
     StreamId                               streamId = kInvalidStream;
     // The hub. Owned by the tenant while active; the stream's task closure holds
@@ -87,7 +69,7 @@ bool getInt(JSContext* ctx, JSValueConst obj, const char* key, int& dst) {
     return ok;
 }
 
-// Overlay sensor-policy keys present on `obj` onto `cfg` (flat keys — the
+// Overlay sensor-policy keys present on `obj` onto `cfg` (flat keys u2014 the
 // config is small enough that nesting would just be ceremony).
 void readConfig(JSContext* ctx, JSValueConst obj,
                 brosoundml::SensorHubConfig& cfg) {
@@ -151,7 +133,7 @@ JSValue makeSnapshot(JSContext* ctx, const brosoundml::SensorSnapshot& s) {
     return o;
 }
 
-// ─── Tenant registry ─────────────────────────────────────────────────────────
+// u2500u2500u2500 Tenant registry u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 SenseTenant* findTenant(StreamId id) {
     auto it = g_sense.tenants.find(id);
@@ -166,7 +148,7 @@ void dropTenant(StreamId id) {
     g_sense.tenants.erase(it);
 }
 
-// The stream `this` addresses: a SenseView → its stream; bro.sense → default
+// The stream `this` addresses: a SenseView u2192 its stream; bro.sense u2192 default
 // mic. Returns kInvalidStream (and prunes the tenant) if a view's stream has
 // closed.
 StreamId streamOf(JSContext* ctx, JSValueConst this_val) {
@@ -196,9 +178,9 @@ void stopSensing(SenseTenant* t) {
     t->active = false;
 }
 
-// ─── JS-callable functions ─────────────────────────────────────────────────
+// u2500u2500u2500 JS-callable functions u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
-// start(opts?) — build the hub and go live on THIS stream.
+// start(opts?) u2014 build the hub and go live on THIS stream.
 //   opts (all optional): vadFloorDb, vadSnrDb, vadRiseDbps, vadHangFrames,
 //   onsetRatio, onsetAbs, onsetEma, onsetRefractoryFrames,
 //   tonalMinPeriodicity, tonalFminHz, tonalFmaxHz.
@@ -216,7 +198,7 @@ JSValue js_start(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* 
         return JS_ThrowInternalError(ctx,
             "bro.sense.start: this stream is already sensing (stop() first)");
 
-    // The hub is pure CPU DSP, but its mel front-end runs on brotensor ops —
+    // The hub is pure CPU DSP, but its mel front-end runs on brotensor ops u2014
     // init() is idempotent and cheap.
     try {
         brotensor::init();
@@ -231,7 +213,7 @@ JSValue js_start(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* 
 
         // Join the listen host on this stream: one source + ring + task drive
         // the hub (alongside bro.kws's spotter, if live) off ONE mel pass. The
-        // hub's snapshot IS the delivery — no per-frame callback.
+        // hub's snapshot IS the delivery u2014 no per-frame callback.
         listenStreamSetHub(sid, hub);
         t->hub    = hub;
         t->active = true;
@@ -327,8 +309,8 @@ JSValue js_feed(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* a
 }
 
 // bro.sense.analyze(samples, opts?) -> per-frame sensor timeline for a clip.
-// Runs a PRIVATE SensorHub over the clip offline — no live tap, no stream, no
-// effect on any bus, callable any time — and returns columnar arrays. Namespace
+// Runs a PRIVATE SensorHub over the clip offline u2014 no live tap, no stream, no
+// effect on any bus, callable any time u2014 and returns columnar arrays. Namespace
 // op (not stream-scoped). flags packs bit0=voice, bit1=tonal, bit2=onset.
 JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     int n = 0;
@@ -359,7 +341,7 @@ JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         if (s.onset) f |= 4;
         flags.push_back(f);
     };
-    // Prime one window, then advance one hop per frame — identical framing to
+    // Prime one window, then advance one hop per frame u2014 identical framing to
     // the enroll path, so frame indices line up with what a gesture captures.
     if (n >= win) {
         hub.feed(p, win);
@@ -388,7 +370,7 @@ JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return o;
 }
 
-// ─── View class registration ──────────────────────────────────────────────
+// u2500u2500u2500 View class registration u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 void registerSenseViewClass(JSContext* ctx) {
     qjsbind::Class<SenseView>(ctx, "SenseStreamView", qjsbind::NoGlobal)
@@ -412,43 +394,46 @@ JSValue senseViewFor(JSContext* ctx, std::uint32_t id) {
     return qjsbind::wrap<SenseView>(ctx, new SenseView{static_cast<StreamId>(id)});
 }
 
-void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine,
-                          engine::AudioInference* inference) {
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
+void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::AudioInference* inference) {
     g_sense.audioEngine = audioEngine;
-    g_sense.inference   = inference;
-    g_sense.ctx         = ctx;
-
-    registerSenseViewClass(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        g_sense.inference   = inference;
+        g_sense.ctx         = ctx;
+    
+        registerSenseViewClass(ctx);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue sense = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, sense, "start",
+            JS_NewCFunction(ctx, js_start, "start", 1));
+        JS_SetPropertyStr(ctx, sense, "stop",
+            JS_NewCFunction(ctx, js_stop, "stop", 0));
+        JS_SetPropertyStr(ctx, sense, "isActive",
+            JS_NewCFunction(ctx, js_isActive, "isActive", 0));
+        JS_SetPropertyStr(ctx, sense, "snapshot",
+            JS_NewCFunction(ctx, js_snapshot, "snapshot", 0));
+        JS_SetPropertyStr(ctx, sense, "sampleRate",
+            JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
+        JS_SetPropertyStr(ctx, sense, "stats",
+            JS_NewCFunction(ctx, js_stats, "stats", 0));
+        JS_SetPropertyStr(ctx, sense, "feed",
+            JS_NewCFunction(ctx, js_feed, "feed", 1));
+        JS_SetPropertyStr(ctx, sense, "analyze",
+            JS_NewCFunction(ctx, js_analyze, "analyze", 2));
+        JS_SetPropertyStr(ctx, broObj, "sense", sense);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue sense = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, sense, "start",
-        JS_NewCFunction(ctx, js_start, "start", 1));
-    JS_SetPropertyStr(ctx, sense, "stop",
-        JS_NewCFunction(ctx, js_stop, "stop", 0));
-    JS_SetPropertyStr(ctx, sense, "isActive",
-        JS_NewCFunction(ctx, js_isActive, "isActive", 0));
-    JS_SetPropertyStr(ctx, sense, "snapshot",
-        JS_NewCFunction(ctx, js_snapshot, "snapshot", 0));
-    JS_SetPropertyStr(ctx, sense, "sampleRate",
-        JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
-    JS_SetPropertyStr(ctx, sense, "stats",
-        JS_NewCFunction(ctx, js_stats, "stats", 0));
-    JS_SetPropertyStr(ctx, sense, "feed",
-        JS_NewCFunction(ctx, js_feed, "feed", 1));
-    JS_SetPropertyStr(ctx, sense, "analyze",
-        JS_NewCFunction(ctx, js_analyze, "analyze", 2));
-    JS_SetPropertyStr(ctx, broObj, "sense", sense);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 void cleanupSenseBindings(JSContext* /*ctx*/) {
@@ -459,6 +444,5 @@ void cleanupSenseBindings(JSContext* /*ctx*/) {
     g_sense.ctx         = nullptr;
 }
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js

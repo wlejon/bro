@@ -1,30 +1,14 @@
-#if BRO_WITH_SOUNDML
-// JS bindings for brosoundml::Kokoro — text-to-speech inference.
-//
-// Installed onto bro.tts.* by installTtsBindings(). The Kokoro pipeline
-// (plBERT + text encoder + prosody predictor + iSTFTNet decoder, ~82M params)
-// and its voice packs live behind opaque qjsbind handles.
-//
-// Kokoro consumes phoneme token ids — G2P (text -> phonemes) is the caller's
-// responsibility; the upstream Kokoro distribution uses misaki, which we do
-// not bundle. The token-id <-> phoneme mapping is exposed via the model's
-// vocab (Kokoro::config().vocab) for callers that build a small JS-side G2P.
-// Output is mono 24 kHz FP32 in a Float32Array.
-
 #include "js/tts_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
 #include "js/model_gate.h"
-
 #include <api/api.h>  // brokit::api::resolveAssetPath
 #include <qjsbind/qjsbind.h>
-
 #include <brosoundml/kokoro.h>
 #include <brosoundml/qwen_tts.h>
 #include <brosoundml/supertonic.h>
 #include <brosoundml/speaker_encoder.h>
 #include <brosoundml/audio.h>
-
 #include <brosoundml/g2p/lexicon.h>
 #include <brosoundml/g2p/morphology.h>
 #include <brosoundml/g2p/special_cases.h>
@@ -32,10 +16,8 @@
 #include <brosoundml/g2p/phoneme_adapter.h>
 #include <brosoundml/g2p/phonemizer.h>
 #include <brosoundml/detail/json.h>
-
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -50,16 +32,20 @@
 #include <utility>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Wrapper structs
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 // The model + its single-owner gate are held by shared_ptr so they outlive the
 // JS model handle whenever a KokoroSession over it is still alive, and so EVERY
-// synthesis over one model — module-level bro.tts.synthesize(model) AND every
-// session.synthesize() — serializes on the ONE busy flag. brosoundml's Kokoro
+// synthesis over one model u2014 module-level bro.tts.synthesize(model) AND every
+// session.synthesize() u2014 serializes on the ONE busy flag. brosoundml's Kokoro
 // session tier is SHARED WEIGHTS / SERIALIZED synthesis (one GPU stream, a
 // lazily captured CUDA graph with shared step buffers), so sessions isolate the
 // VOICE, not parallel execution; concurrent synthesis must be gated here.
@@ -80,7 +66,7 @@ struct VoiceWrapper {
     brosoundml::Voice voice;
 };
 
-// Qwen3-TTS — text-driven (no phoneme frontend, no voice pack). Holds the
+// Qwen3-TTS u2014 text-driven (no phoneme frontend, no voice pack). Holds the
 // pipeline (Talker + Code Predictor + bundled codec) and the device it loaded
 // on. Like Kokoro it is single-owner: `busy` rejects a second concurrent op.
 struct QwenTtsWrapper {
@@ -90,7 +76,7 @@ struct QwenTtsWrapper {
     ModelGate busy;
 };
 
-// Supertonic-3 — flow-matching multilingual TTS (Supertone). Text-driven
+// Supertonic-3 u2014 flow-matching multilingual TTS (Supertone). Text-driven
 // (codepoint frontend, no G2P, no phoneme step); a voice is a VoiceStyle preset
 // loaded from the model's voice_styles/. Like Kokoro it is single-owner: `busy`
 // rejects a second concurrent synthesis on the model.
@@ -107,7 +93,7 @@ struct SupertonicVoiceWrapper {
     std::string            name;
 };
 
-// ── Session wrappers (multi-voice / multi-stream over shared weights) ──
+// u2500u2500 Session wrappers (multi-voice / multi-stream over shared weights) u2500u2500
 // A Kokoro speaking handle bound to a Voice: brosoundml::KokoroSession holds the
 // model by shared_ptr<const Kokoro> internally; we add the shared busy gate +
 // device so session.synthesize() serializes with every other op on the model.
@@ -118,7 +104,7 @@ struct KokoroSessionWrapper {
 };
 
 // A QwenTts voice session: its own Talker + Code Predictor AR scratch over the
-// shared weights. SERIALIZED tier — gated on the shared busy flag.
+// shared weights. SERIALIZED tier u2014 gated on the shared busy flag.
 struct QwenTtsSessionWrapper {
     std::shared_ptr<brosoundml::QwenTts> model;
     ModelGate busy;
@@ -131,7 +117,7 @@ struct QwenTtsSessionWrapper {
 static JSValue js_kokoro_createSession(JSContext*, JSValueConst, int, JSValueConst*);
 static JSValue js_qwen_createSession(JSContext*, JSValueConst, int, JSValueConst*);
 
-// Standalone ECAPA-TDNN speaker encoder (bro.tts.loadSpeakerEncoder) — the
+// Standalone ECAPA-TDNN speaker encoder (bro.tts.loadSpeakerEncoder) u2014 the
 // voice-clone enrollment front-end on its own, without loading all of Qwen-Base.
 // Host-side CPU; no device state.
 struct SpeakerEncoderWrapper {
@@ -147,9 +133,9 @@ static const char* qwenVariantName(brosoundml::QwenTtsVariant v) {
     return "?";
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Helpers
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static bool argStr(JSContext* ctx, JSValueConst v, std::string& out) {
     if (!JS_IsString(v)) return false;
@@ -176,7 +162,7 @@ static bool getBool(JSContext* ctx, JSValueConst obj, const char* key) {
     return r;
 }
 
-// Pick the default device — CUDA, then Metal, then CPU. brotensor::init()
+// Pick the default device u2014 CUDA, then Metal, then CPU. brotensor::init()
 // must have been called beforehand so the GPU backend probes have run.
 static brotensor::Device autoDevice() {
     if (brotensor::is_available(brotensor::Device::CUDA))  return brotensor::Device::CUDA;
@@ -271,9 +257,9 @@ static JSValue audioBufferToJs(JSContext* ctx,
     return obj;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Voice class
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static void registerVoiceClass(JSContext* ctx) {
     qjsbind::Class<VoiceWrapper>(ctx, "Voice", qjsbind::NoGlobal)
@@ -288,9 +274,9 @@ static void registerVoiceClass(JSContext* ctx) {
         });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Kokoro methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static KokoroWrapper* kokoroSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<KokoroWrapper>(ctx, this_val);
@@ -332,7 +318,7 @@ static JSValue js_kokoro_loadVoice(JSContext* ctx, JSValueConst this_val,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path (back-compat) ──
+    // u2500u2500 Sync path (back-compat) u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -345,7 +331,7 @@ static JSValue js_kokoro_loadVoice(JSContext* ctx, JSValueConst this_val,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<VoiceLoadState>();
     ls->kw        = w;
     ls->path      = path;
@@ -391,7 +377,7 @@ static JSValue js_kokoro_loadVoice(JSContext* ctx, JSValueConst this_val,
 //   Build a voice from raw style floats instead of a file, so the app can
 //   author or blend voices and play them through synthesize()/synthesizeTraced().
 //   `data` is a Float32Array (or number[]): either voice_dim (= 2*style_dim)
-//   values — a single style point broadcast across all length rows — or a whole
+//   values u2014 a single style point broadcast across all length rows u2014 or a whole
 //   multiple of voice_dim for a full rows*voice_dim table.
 static JSValue js_kokoro_createVoice(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
@@ -496,7 +482,7 @@ static JSValue traceStagesToJs(JSContext* ctx, const brosoundml::KokoroTrace& tr
 //   KokoroTrace) as a row-major (h x w) Float32Array, for visualization. The
 //   model is run synchronously; the extra cost is one host copy per stage.
 //   For a non-blocking variant, use bro.tts.synthesize(kokoro, ids, voice,
-//   { trace: true, onDone }) — same stages, built on a background thread.
+//   { trace: true, onDone }) u2014 same stages, built on a background thread.
 static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
     auto* w = kokoroSelf(ctx, this_val);
@@ -538,7 +524,7 @@ static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
 
 // decodeFrom(voice, asr, F0, N, nPhonemes, opts?)
 //   -> { samples, sampleRate, stages? }
-//   Re-decode from EDITED intermediates — the prosody-editing entry point. asr,
+//   Re-decode from EDITED intermediates u2014 the prosody-editing entry point. asr,
 //   F0 and N are the 'asr', 'F0_pred' and 'N_pred' Float32Array stages from a
 //   prior synthesizeTraced(); edit any of them and re-run only the decoder back
 //   half (skips plBERT / encoders / predictor). nPhonemes is the 'phonemes'
@@ -602,7 +588,7 @@ static JSValue js_kokoro_vocab(JSContext* ctx, JSValueConst this_val,
 }
 
 // encodePhonemes(ipa) -> Int32Array
-//   Runs only the codepoint→id stage via brosoundml::g2p::PhonemeAdapter
+//   Runs only the codepointu2192id stage via brosoundml::g2p::PhonemeAdapter
 //   against this Kokoro's vocab. Adapter is lazily built on first call and
 //   cached on the wrapper.
 static JSValue js_kokoro_encodePhonemes(JSContext* ctx, JSValueConst this_val,
@@ -642,9 +628,9 @@ static void registerKokoroClass(JSContext* ctx) {
         .method_raw("createSession",  js_kokoro_createSession,  1);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // QwenTts methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static QwenTtsWrapper* qwenSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<QwenTtsWrapper>(ctx, this_val);
@@ -653,7 +639,7 @@ static QwenTtsWrapper* qwenSelf(JSContext* ctx, JSValueConst this_val) {
 // Read opts.speaker / opts.language / opts.instruct (all optional strings).
 // Defaults match QwenTts::synthesize: speaker "" (the model resolves the first
 // preset only if it has speakers), language "english", instruct "" (no voice
-// instruction — the VoiceDesign description, or the 1.7B CustomVoice instruct).
+// instruction u2014 the VoiceDesign description, or the 1.7B CustomVoice instruct).
 static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
                               std::string& speaker, std::string& language,
                               std::string& instruct) {
@@ -673,18 +659,18 @@ static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
 }
 
 // Read the optional sampling controls into a QwenTtsSampling. Omitted keys keep
-// the struct defaults — temperature 0 (deterministic greedy), repetition penalty
+// the struct defaults u2014 temperature 0 (deterministic greedy), repetition penalty
 // 1.05 (the upstream policy). Shared by the sync + async synth paths. The Talker
 // steering knobs:
 //   opts.repetitionPenalty  > 1 discourages the AR Talker's droning / looping.
 //   opts.logitBias          { codeId: delta, ... } additive codebook-0 bias
 //                           (delta -Infinity forbids a code). Opaque RVQ ids.
 //   opts.adaptive           > 0 scales the codebook-0 temperature per frame by
-//                           how unsure the model is — hotter only where it hedged.
+//                           how unsure the model is u2014 hotter only where it hedged.
 //   opts.voiceSteer         Float32Array, talker-hidden width: an additive offset
 //                           on the prefill speaker-slot row (the emotion / masc-fem
 //                           direction-add). Works on any variant with a speaker
-//                           slot — CustomVoice presets and Base x-vectors alike.
+//                           slot u2014 CustomVoice presets and Base x-vectors alike.
 //   opts.speakerVector      Float32Array, talker-hidden width: REPLACES the speaker
 //                           slot with a designed voice (e.g. a voice-basis point
 //                           rendered through CustomVoice instead of a preset).
@@ -733,14 +719,14 @@ static void readQwenSampling(JSContext* ctx, JSValueConst opts,
         s.voice_steer = qjsbind::read_float32_array(ctx, vs);
     JS_FreeValue(ctx, vs);
     // speakerVector: a Float32Array that REPLACES the speaker slot (a designed
-    // voice on any variant — e.g. a voice-basis point rendered through CustomVoice).
+    // voice on any variant u2014 e.g. a voice-basis point rendered through CustomVoice).
     JSValue sv = JS_GetPropertyStr(ctx, opts, "speakerVector");
     if (!JS_IsUndefined(sv) && !JS_IsNull(sv))
         s.speaker_vector = qjsbind::read_float32_array(ctx, sv);
     JS_FreeValue(ctx, sv);
 }
 
-// Marshal a QwenTtsTrace to a JS stages array [{ name, h, w, data:Float32Array }] —
+// Marshal a QwenTtsTrace to a JS stages array [{ name, h, w, data:Float32Array }] u2014
 // the same shape Kokoro's traceStagesToJs uses, so a UI renders both uniformly.
 static JSValue qwenTraceToJs(JSContext* ctx, const brosoundml::QwenTtsTrace& tr) {
     JSValue stages = JS_NewArray(ctx);
@@ -830,7 +816,7 @@ static JSValue js_qwen_synthesize_clone(JSContext* ctx, JSValueConst this_val,
 
 // qwen.synthesizeFromXvector(text, xvec, opts?) -> { samples, sampleRate }  (sync)
 //   Render `text` from a caller-supplied speaker x-vector (Float32Array of
-//   enc_dim — 1024 — floats, as embedSpeaker returns), bypassing the WAV
+//   enc_dim u2014 1024 u2014 floats, as embedSpeaker returns), bypassing the WAV
 //   enrollment of synthesizeClone. This is the voice-designer seam: enroll real
 //   voices to x-vectors, interpolate / morph / steer in that space, then render
 //   the designed point. Base variant only. opts.language + sampling controls as
@@ -874,7 +860,7 @@ static JSValue js_qwen_synthesize_from_xvector(JSContext* ctx, JSValueConst this
 
 // qwen.decodeCodes(codes, numQuantizers, numFrames) -> { samples, sampleRate }  (sync)
 //   Decode a precomputed RVQ code stream straight through the bundled 12 Hz codec
-//   to a 24 kHz waveform — the deterministic tail of synthesis. `codes` is an
+//   to a 24 kHz waveform u2014 the deterministic tail of synthesis. `codes` is an
 //   Int32Array (or number[]) of numQuantizers*numFrames codes, codebook-major
 //   (codes[k*numFrames + t]); the same layout encodeAudio returns. Lets an editor
 //   splice / prefix-lock / round-trip a code stream and re-render it.
@@ -908,7 +894,7 @@ static JSValue js_qwen_decode_codes(JSContext* ctx, JSValueConst this_val,
 //   The analysis path (inverse of decodeCodes): encode mono PCM into the codec's
 //   RVQ codes. audio: Float32Array of mono samples; opts.sampleRate (default
 //   24000, resampled internally). codes is an Int32Array of numQuantizers*
-//   numFrames, codebook-major — feed straight back to decodeCodes to round-trip.
+//   numFrames, codebook-major u2014 feed straight back to decodeCodes to round-trip.
 static JSValue js_qwen_encode_audio(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     auto* w = qwenSelf(ctx, this_val);
@@ -939,7 +925,7 @@ static JSValue js_qwen_encode_audio(JSContext* ctx, JSValueConst this_val,
 }
 
 // qwen.embedSpeaker(audio, opts?) -> Float32Array(enc_dim)   (sync, Base only)
-//   Encode mono PCM to the ECAPA-TDNN speaker x-vector (1024-D) — the same
+//   Encode mono PCM to the ECAPA-TDNN speaker x-vector (1024-D) u2014 the same
 //   enrollment synthesizeClone does, on its own. audio: Float32Array of mono
 //   samples; opts.sampleRate: input rate (default 24000, resampled to the
 //   encoder's 24 kHz as needed). The audio->identity front-end for harvesting
@@ -1008,7 +994,7 @@ static JSValue js_qwen_speaker_dialect(JSContext* ctx, JSValueConst this_val,
     return JS_NewString(ctx, w->qwen->speaker_dialect(name).c_str());
 }
 
-// ─── SpeakerEncoder handle ──────────────────────────────────────────────────
+// u2500u2500u2500 SpeakerEncoder handle u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 static SpeakerEncoderWrapper* speakerSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<SpeakerEncoderWrapper>(ctx, this_val);
@@ -1029,7 +1015,7 @@ struct SpkEmbedState {
 
 // enc.embedSpeaker(audio, opts?) -> Float32Array(enc_dim)   (sync)
 //                                -> AsyncHandle             (async, if opts.onDone)
-//   Encode mono PCM to the ECAPA-TDNN speaker x-vector (1024-D) — the same
+//   Encode mono PCM to the ECAPA-TDNN speaker x-vector (1024-D) u2014 the same
 //   enrollment QwenTts does, but from the standalone ~18 MB artifact. audio:
 //   Float32Array of mono samples; opts.sampleRate: input rate (default 24000,
 //   resampled to the encoder's 24 kHz as needed). Drop-in for qwen.embedSpeaker.
@@ -1056,7 +1042,7 @@ static JSValue js_speaker_embed(JSContext* ctx, JSValueConst this_val,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onDone);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onError);
@@ -1070,7 +1056,7 @@ static JSValue js_speaker_embed(JSContext* ctx, JSValueConst this_val,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto st = std::make_shared<SpkEmbedState>();
     st->w          = w;
     st->self       = JS_DupValue(ctx, this_val);   // keep the encoder alive
@@ -1139,9 +1125,9 @@ static void registerQwenClass(JSContext* ctx) {
         .method_raw("createSession",  js_qwen_createSession,   0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // bro.tts free functions
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     try {
@@ -1152,9 +1138,9 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// G2P (text → phoneme ids) — module-scope lazy Phonemizer
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
+// G2P (text u2192 phoneme ids) u2014 module-scope lazy Phonemizer
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 //
 // The Phonemizer holds non-owning pointers to five dependencies. We keep them
 // all alive in a single PhonemizerState that's lazy-built on first call to
@@ -1168,7 +1154,7 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 //
 // Path resolution, highest precedence first:
 //   1. explicit per-asset paths set via bro.tts.setAssets({lexicon, posTagger,
-//      kokoroConfig}) — for loading from a flat per-user cache
+//      kokoroConfig}) u2014 for loading from a flat per-user cache
 //   2. the sibling layout rooted at setAssetRoot(path) (data root derived as
 //      <path>/../brosoundml-data)
 //   3. a default search of well-known sibling paths relative to the cwd
@@ -1210,7 +1196,7 @@ static std::string resolveBrosoundmlRoot() {
         if (fileExists(std::string(p) + "/weights/kokoro/config.json"))
             return p;
     }
-    return "../brosoundml";  // best guess — error reporter will mention it
+    return "../brosoundml";  // best guess u2014 error reporter will mention it
 }
 
 // Resolve the brosoundml-data sibling. Sits next to the brosoundml repo.
@@ -1378,7 +1364,7 @@ struct KokoroLoadState {
 // bro.tts.loadKokoro(modelDir, opts?) -> Kokoro         (sync)
 //                                     -> AsyncHandle     (async, if opts.onReady)
 //   modelDir contains config.json + model.safetensors.
-//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.device: 'cuda' | 'cpu' u2014 defaults to CUDA when available, else CPU.
 //   opts.onReady(kokoro) / opts.onError(message): when onReady is a function the
 //   load runs on a background thread (non-blocking, parallelizable with other
 //   loads) and these fire on the JS thread.
@@ -1388,7 +1374,7 @@ static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadKokoro(modelDir, opts?): path required");
     // Resolve the same way fs.existsSync() does (app-relative base paths),
-    // not against the raw OS process cwd — callers commonly probe candidate
+    // not against the raw OS process cwd u2014 callers commonly probe candidate
     // dirs with fs.existsSync() first, which would otherwise silently
     // disagree with what this native loader actually opens.
     dir = brokit::api::resolveAssetPath(ctx, dir);
@@ -1408,7 +1394,7 @@ static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path (back-compat) ──
+    // u2500u2500 Sync path (back-compat) u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1421,7 +1407,7 @@ static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<KokoroLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
@@ -1458,9 +1444,9 @@ static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // QwenTts loader
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 // Build + load a Qwen3-TTS model from a checkpoint dir (config.json +
 // model.safetensors + vocab.json + merges.txt + speech_tokenizer/). Heavy +
@@ -1491,8 +1477,8 @@ struct QwenTtsLoadState {
 //                                   -> AsyncHandle       (async, if opts.onReady)
 //   modelDir holds config.json + model.safetensors + vocab.json + merges.txt and
 //   the bundled speech_tokenizer/ codec. Unlike Kokoro, Qwen3-TTS is text-driven
-//   end-to-end — no phonemize() / loadVoice() step.
-//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   end-to-end u2014 no phonemize() / loadVoice() step.
+//   opts.device: 'cuda' | 'cpu' u2014 defaults to CUDA when available, else CPU.
 //   opts.onReady(qwen) / opts.onError(message): when onReady is a function the
 //   load runs on a background thread and these fire on the JS thread.
 static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
@@ -1516,7 +1502,7 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1529,7 +1515,7 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<QwenTtsLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
@@ -1566,13 +1552,13 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // SpeakerEncoder loader
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 // Build + load a standalone speaker encoder from an artifact dir (config.json +
 // model.safetensors). Cheap I/O (~18 MB); the encoder places its conv stack on
-// the default device (GPU when available) — so DON'T wrap this in a CPU
+// the default device (GPU when available) u2014 so DON'T wrap this in a CPU
 // DeviceScope, or load()'s default_device() query would pin it to CPU. Throws
 // on error.
 static void buildSpeakerEncoder(const std::string& dir,
@@ -1595,7 +1581,7 @@ struct SpeakerEncoderLoadState {
 
 // bro.tts.loadSpeakerEncoder(dir, opts?) -> SpeakerEncoder       (sync)
 //                                        -> AsyncHandle          (async, if opts.onReady)
-//   dir holds config.json + model.safetensors — the standalone ECAPA-TDNN
+//   dir holds config.json + model.safetensors u2014 the standalone ECAPA-TDNN
 //   speaker encoder (brosoundml-data/qwen-tts/speaker-encoder). Loading just this
 //   enrolls a voice-clone reference clip without pulling in all of Qwen-Base.
 //   The returned handle exposes embedSpeaker(audio, opts?) -> Float32Array. The
@@ -1618,7 +1604,7 @@ static JSValue js_loadSpeakerEncoder(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1631,7 +1617,7 @@ static JSValue js_loadSpeakerEncoder(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<SpeakerEncoderLoadState>();
     ls->dir      = dir;
     ls->hasReady = true;
@@ -1667,9 +1653,9 @@ static JSValue js_loadSpeakerEncoder(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Supertonic loader + class
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 // Build + load a Supertonic model from a converted directory (tts.json +
 // per-model *.safetensors + unicode_indexer.json + voice_styles/). Heavy +
@@ -1699,9 +1685,9 @@ struct SupertonicLoadState {
 // bro.tts.loadSupertonic(modelDir, opts?) -> Supertonic     (sync)
 //                                         -> AsyncHandle     (async, if opts.onReady)
 //   modelDir is the converted layout (tts.json + *.safetensors + the codepoint
-//   frontend tables + voice_styles/). Supertonic is text-driven end to end — no
+//   frontend tables + voice_styles/). Supertonic is text-driven end to end u2014 no
 //   phonemize() step; a voice is a VoiceStyle preset via loadVoiceStyle().
-//   opts.device: 'cuda' | 'cpu' | 'metal' — defaults to CUDA when available.
+//   opts.device: 'cuda' | 'cpu' | 'metal' u2014 defaults to CUDA when available.
 //   opts.onReady(supertonic) / opts.onError(message): when onReady is a function
 //   the load runs on a background thread and these fire on the JS thread.
 static JSValue js_loadSupertonic(JSContext* ctx, JSValueConst,
@@ -1725,7 +1711,7 @@ static JSValue js_loadSupertonic(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1738,7 +1724,7 @@ static JSValue js_loadSupertonic(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<SupertonicLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
@@ -1933,12 +1919,12 @@ struct SupertonicSynthJob {
 };
 
 // bro.tts.synthesize(supertonic, text, opts) -> AsyncHandle
-//   opts.voice       SupertonicVoice (required) — a loadVoiceStyle() preset.
+//   opts.voice       SupertonicVoice (required) u2014 a loadVoiceStyle() preset.
 //   opts.language    ISO tag ('en' default; one of the 31 supported, or 'na').
 //   opts.steps       flow-matching Euler steps (8 default; more = smoother/slower).
 //   opts.speed       > 1 shortens the utterance (1.05 upstream default).
 //   opts.seed        Philox seed for the N(0,1) flow noise (0 default).
-//   opts.longForm    bool — split into sentences + concat (synthesize_long).
+//   opts.longForm    bool u2014 split into sentences + concat (synthesize_long).
 //   opts.gapSeconds  silence between sentences when longForm (0.3 default).
 //   opts.guidance    CFG scale w (3 default): higher = crisper/more articulated,
 //                    lower = flatter/breathier. Flow-matching only (no Kokoro/Qwen).
@@ -2036,10 +2022,10 @@ static JSValue js_supertonic_synthesize_async(JSContext* ctx, int argc,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Async synthesis — bro.tts.synthesize(kokoro, phonemeIds, voice, opts)
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
+// Async synthesis u2014 bro.tts.synthesize(kokoro, phonemeIds, voice, opts)
 //                   bro.tts.synthesize(qwen, text, opts)
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 //
 // Runs Kokoro's forward pass on a background thread via the async-job runner, so
 // the JS thread stays responsive. Kokoro has no autoregressive loop, so there
@@ -2060,7 +2046,7 @@ struct TtsJob {
     std::vector<float>   samples;                  // filled by work()
     int                  sample_rate = 24000;      // filled by work()
     std::vector<int32_t> durations;                // filled by work()
-    bool                 wantTrace = false;         // opts.trace — capture stages
+    bool                 wantTrace = false;         // opts.trace u2014 capture stages
     brosoundml::KokoroTrace trace;                  // filled by work() if wantTrace
     JSValue              onDone    = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
     JSValue              kokoroRef = JS_UNDEFINED;  // dup of the kokoro JS object
@@ -2109,7 +2095,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
         readQwenSampling(ctx, argv[2], job->sampling);
         job->wantTrace = getBool(ctx, argv[2], "trace");
         // opts.xvector (Base designer): render off-thread from a designed speaker
-        // x-vector instead of a preset/instruct — the async twin of the sync
+        // x-vector instead of a preset/instruct u2014 the async twin of the sync
         // synthesizeFromXvector, so the voice designer never blocks the JS thread.
         JSValue xv = JS_GetPropertyStr(ctx, argv[2], "xvector");
         if (!JS_IsUndefined(xv) && !JS_IsNull(xv))
@@ -2187,7 +2173,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
 // thread as each codec chunk is decoded (so playback can start before generation
 // finishes), then opts.onDone(result, info) fires once with the full buffer. The
 // work thread is the sole writer of a committed chunk prefix published via an
-// atomic; the JS-thread poll drains it — lock-free, no mutex.
+// atomic; the JS-thread poll drains it u2014 lock-free, no mutex.
 struct QwenStreamJob {
     std::string        text;
     std::string        speaker;
@@ -2227,7 +2213,7 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
         readQwenSynthOpts(ctx, argv[2], job->speaker, job->language, job->instruct);
         readQwenSampling(ctx, argv[2], job->sampling);
         // opts.xvector (Base designer): stream from a designed speaker x-vector
-        // instead of a preset — the streaming twin of the async synthesize path,
+        // instead of a preset u2014 the streaming twin of the async synthesize path,
         // so the Base voice designer can stream too (not just Render).
         JSValue xv = JS_GetPropertyStr(ctx, argv[2], "xvector");
         if (!JS_IsUndefined(xv) && !JS_IsNull(xv))
@@ -2268,7 +2254,7 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
     auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
         // on_chunk runs on THIS (background) thread: copy the samples into the
-        // next slot and publish it. No JS here — the JS-thread poll fires onChunk.
+        // next slot and publish it. No JS here u2014 the JS-thread poll fires onChunk.
         auto onChunkCb = [job](const float* s, int n) {
             const size_t idx = job->produced.load(std::memory_order_relaxed);
             if (idx >= job->chunkSlots.size()) return;   // bound guard
@@ -2333,20 +2319,20 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Streaming Kokoro synthesis — bro.tts.synthesizeStream(kokoro, chunks, voice, opts)
-// ─────────────────────────────────────────────────────────────────────────────
+// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+// Streaming Kokoro synthesis u2014 bro.tts.synthesizeStream(kokoro, chunks, voice, opts)
+// u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 //
 // Kokoro is a single non-autoregressive forward pass, so unlike Qwen there is no
 // internal point at which a prefix is final. Streaming therefore chunks the
 // *input*: the caller hands an array of phoneme-id chunks (split at sentence /
 // clause / word boundaries, e.g. on the space token kokoro.vocab()[' ']), each
 // chunk is synthesized as an independent forward pass, and its 24 kHz samples are
-// emitted via opts.onChunk(Float32Array) the moment that chunk completes — so
+// emitted via opts.onChunk(Float32Array) the moment that chunk completes u2014 so
 // playback can start before the whole script is synthesized. opts.onDone(result,
 // info) then fires once with the full concatenated buffer. Same SPSC handoff as
 // the Qwen path: the work thread is the sole writer of a committed chunk prefix
-// published via an atomic; the JS-thread poll drains it — lock-free, no mutex.
+// published via an atomic; the JS-thread poll drains it u2014 lock-free, no mutex.
 struct KokoroStreamJob {
     std::vector<std::vector<int32_t>> chunks;     // one phoneme-id vector per chunk
     VoiceWrapper*      vw = nullptr;               // borrowed via voiceRef dup
@@ -2452,7 +2438,7 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
         brotensor::DeviceScope scope(mw->device);
         // on_chunk runs on THIS (background) thread: copy the samples + the
         // chunk's per-phoneme durations into the next slot and publish it. No JS
-        // here — the JS-thread poll fires onChunk.
+        // here u2014 the JS-thread poll fires onChunk.
         auto onChunkCb = [job](const float* s, int n,
                                const int32_t* d, int nd) {
             const size_t idx = job->produced.load(std::memory_order_relaxed);
@@ -2476,7 +2462,7 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
         while (job->drained < n) {
             std::vector<float>&   chunk = job->chunkSlots[job->drained];
             std::vector<int32_t>& dur   = job->durSlots[job->drained];
-            // onChunk(samples: Float32Array, durations: Int32Array) — durations is
+            // onChunk(samples: Float32Array, durations: Int32Array) u2014 durations is
             // the chunk's per-phoneme frame counts (BOS/EOS-wrapped), so a caller
             // can align words to this chunk's audio precisely.
             JSValue args[2] = { qjsbind::make_float32_array(c, chunk),
@@ -2520,9 +2506,9 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
-// bro.tts.synthesizeStream(model, ...) — streaming synthesis, dispatched by type.
-//   QwenTts:  synthesizeStream(qwen, text, opts?)               — chunks the AR tail
-//   Kokoro:   synthesizeStream(kokoro, phonemeChunks, voice, opts?) — chunks the input
+// bro.tts.synthesizeStream(model, ...) u2014 streaming synthesis, dispatched by type.
+//   QwenTts:  synthesizeStream(qwen, text, opts?)               u2014 chunks the AR tail
+//   Kokoro:   synthesizeStream(kokoro, phonemeChunks, voice, opts?) u2014 chunks the input
 static JSValue js_tts_synthesize_stream(JSContext* ctx, JSValueConst,
                                         int argc, JSValueConst* argv) {
     if (argc < 1)
@@ -2542,8 +2528,8 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         return JS_ThrowTypeError(ctx,
             "synthesize(model, ...): a Kokoro or QwenTts model is required");
 
-    // Dispatch on model type. QwenTts and Supertonic are text-driven —
-    // synthesize(model, text, opts?). Kokoro takes phoneme ids —
+    // Dispatch on model type. QwenTts and Supertonic are text-driven u2014
+    // synthesize(model, text, opts?). Kokoro takes phoneme ids u2014
     // synthesize(kokoro, phonemeIds, voice).
     if (qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]))
         return js_qwen_synthesize_async(ctx, argc, argv);
@@ -2654,9 +2640,9 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Async re-decode — bro.tts.decodeFrom(kokoro, voice, asr, F0, N, nPhonemes, opts)
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
+// Async re-decode u2014 bro.tts.decodeFrom(kokoro, voice, asr, F0, N, nPhonemes, opts)
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 //
 // The prosody-editing seam (kokoro.decodeFrom) on a background thread, so the UI
 // never blocks while the user scrubs the timing / pitch / energy and we re-decode
@@ -2788,23 +2774,23 @@ static JSValue js_tts_decodeFrom(JSContext* ctx, JSValueConst,
     return js_kokoro_decodeFrom_async(ctx, argc, argv);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Multi-voice / multi-stream sessions — model.createSession() + session.*
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
+// Multi-voice / multi-stream sessions u2014 model.createSession() + session.*
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 //
-// One loaded model behind N per-stream sessions over ONE shared weight set — the
+// One loaded model behind N per-stream sessions over ONE shared weight set u2014 the
 // TTS analog of N wake detectors on one shared net (give N NPCs distinct voices
 // without N weight copies). session.synthesize(...) reuses the exact async-job
 // dispatch as the module-level bro.tts.synthesize(model, ...) (real cancellation,
 // onDone(result, info)) but drives the session's own scratch and claims the
 // model's SHARED busy gate. brosoundml's tier here is SHARED WEIGHTS / SERIALIZED
-// synthesis (one GPU stream, shared captured graph), so calls over one model —
-// module-level and any session — never overlap: a second in-flight op throws.
+// synthesis (one GPU stream, shared captured graph), so calls over one model u2014
+// module-level and any session u2014 never overlap: a second in-flight op throws.
 // Sessions isolate the VOICE / AR scratch, not parallel execution; drive them
 // from one synth worker / queue (the NPC turn-taking pattern). Output is
 // bit-identical to the same call on a fresh model.
 
-// ── Kokoro session (bound voice) ──
+// u2500u2500 Kokoro session (bound voice) u2500u2500
 static KokoroSessionWrapper* kokoroSessionSelf(JSContext* ctx, JSValueConst v) {
     return qjsbind::unwrap<KokoroSessionWrapper>(ctx, v);
 }
@@ -2863,7 +2849,7 @@ static JSValue js_kokoro_session_synthesize(JSContext* ctx, JSValueConst this_va
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model "
-            "(sessions over one model serialize — drive them from one queue)");
+            "(sessions over one model serialize u2014 drive them from one queue)");
     }
 
     job->hasOnDone = JS_IsFunction(ctx, onDone);
@@ -2919,7 +2905,7 @@ static JSValue js_kokoro_session_synthesize(JSContext* ctx, JSValueConst this_va
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// session.setVoice(voice) — re-skin this NPC without touching shared weights.
+// session.setVoice(voice) u2014 re-skin this NPC without touching shared weights.
 static JSValue js_kokoro_session_setVoice(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
     auto* sw = kokoroSessionSelf(ctx, this_val);
@@ -2939,7 +2925,7 @@ static void registerKokoroSessionClass(JSContext* ctx) {
         .method_raw("setVoice",   js_kokoro_session_setVoice,   1);
 }
 
-// ── QwenTts session ──
+// u2500u2500 QwenTts session u2500u2500
 static QwenTtsSessionWrapper* qwenSessionSelf(JSContext* ctx, JSValueConst v) {
     return qjsbind::unwrap<QwenTtsSessionWrapper>(ctx, v);
 }
@@ -2996,7 +2982,7 @@ static JSValue js_qwen_session_synthesize(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model "
-            "(sessions over one model serialize — drive them from one queue)");
+            "(sessions over one model serialize u2014 drive them from one queue)");
     }
 
     job->hasOnDone = JS_IsFunction(ctx, onDone);
@@ -3052,7 +3038,7 @@ static JSValue js_qwen_session_synthesize(JSContext* ctx, JSValueConst this_val,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// session.reset() — zero the session's AR scratch (drops its captured graphs).
+// session.reset() u2014 zero the session's AR scratch (drops its captured graphs).
 static JSValue js_qwen_session_reset(JSContext* ctx, JSValueConst this_val,
                                      int, JSValueConst*) {
     auto* sw = qwenSessionSelf(ctx, this_val);
@@ -3077,55 +3063,55 @@ static void registerQwenSessionClass(JSContext* ctx) {
         .method_raw("reset",      js_qwen_session_reset,      0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
 // Install
-// ═══════════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
 
 void installTtsBindings(JSContext* ctx) {
     registerVoiceClass(ctx);
-    registerKokoroClass(ctx);
-    registerQwenClass(ctx);
-    registerSupertonicVoiceClass(ctx);
-    registerSupertonicClass(ctx);
-    registerSpeakerEncoderClass(ctx);
-    registerKokoroSessionClass(ctx);
-    registerQwenSessionClass(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        registerKokoroClass(ctx);
+        registerQwenClass(ctx);
+        registerSupertonicVoiceClass(ctx);
+        registerSupertonicClass(ctx);
+        registerSpeakerEncoderClass(ctx);
+        registerKokoroSessionClass(ctx);
+        registerQwenSessionClass(ctx);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue tts = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, tts, "init",
+            JS_NewCFunction(ctx, js_init, "init", 0));
+        JS_SetPropertyStr(ctx, tts, "loadKokoro",
+            JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 2));
+        JS_SetPropertyStr(ctx, tts, "loadQwen",
+            JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
+        JS_SetPropertyStr(ctx, tts, "loadSupertonic",
+            JS_NewCFunction(ctx, js_loadSupertonic, "loadSupertonic", 2));
+        JS_SetPropertyStr(ctx, tts, "loadSpeakerEncoder",
+            JS_NewCFunction(ctx, js_loadSpeakerEncoder, "loadSpeakerEncoder", 2));
+        JS_SetPropertyStr(ctx, tts, "phonemize",
+            JS_NewCFunction(ctx, js_phonemize, "phonemize", 2));
+        JS_SetPropertyStr(ctx, tts, "setAssetRoot",
+            JS_NewCFunction(ctx, js_setAssetRoot, "setAssetRoot", 1));
+        JS_SetPropertyStr(ctx, tts, "setAssets",
+            JS_NewCFunction(ctx, js_setAssets, "setAssets", 1));
+        JS_SetPropertyStr(ctx, tts, "synthesize",
+            JS_NewCFunction(ctx, js_tts_synthesize, "synthesize", 4));
+        JS_SetPropertyStr(ctx, tts, "synthesizeStream",
+            JS_NewCFunction(ctx, js_tts_synthesize_stream, "synthesizeStream", 4));
+        JS_SetPropertyStr(ctx, tts, "decodeFrom",
+            JS_NewCFunction(ctx, js_tts_decodeFrom, "decodeFrom", 7));
+        JS_SetPropertyStr(ctx, broObj, "tts", tts);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue tts = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, tts, "init",
-        JS_NewCFunction(ctx, js_init, "init", 0));
-    JS_SetPropertyStr(ctx, tts, "loadKokoro",
-        JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 2));
-    JS_SetPropertyStr(ctx, tts, "loadQwen",
-        JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
-    JS_SetPropertyStr(ctx, tts, "loadSupertonic",
-        JS_NewCFunction(ctx, js_loadSupertonic, "loadSupertonic", 2));
-    JS_SetPropertyStr(ctx, tts, "loadSpeakerEncoder",
-        JS_NewCFunction(ctx, js_loadSpeakerEncoder, "loadSpeakerEncoder", 2));
-    JS_SetPropertyStr(ctx, tts, "phonemize",
-        JS_NewCFunction(ctx, js_phonemize, "phonemize", 2));
-    JS_SetPropertyStr(ctx, tts, "setAssetRoot",
-        JS_NewCFunction(ctx, js_setAssetRoot, "setAssetRoot", 1));
-    JS_SetPropertyStr(ctx, tts, "setAssets",
-        JS_NewCFunction(ctx, js_setAssets, "setAssets", 1));
-    JS_SetPropertyStr(ctx, tts, "synthesize",
-        JS_NewCFunction(ctx, js_tts_synthesize, "synthesize", 4));
-    JS_SetPropertyStr(ctx, tts, "synthesizeStream",
-        JS_NewCFunction(ctx, js_tts_synthesize_stream, "synthesizeStream", 4));
-    JS_SetPropertyStr(ctx, tts, "decodeFrom",
-        JS_NewCFunction(ctx, js_tts_decodeFrom, "decodeFrom", 7));
-    JS_SetPropertyStr(ctx, broObj, "tts", tts);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 void cleanupTtsBindings(JSContext* /*ctx*/) {
@@ -3136,6 +3122,5 @@ void cleanupTtsBindings(JSContext* /*ctx*/) {
     g_kokoroConfigPath.clear();
 }
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js

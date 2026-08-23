@@ -1,35 +1,10 @@
-#if BRO_WITH_SOUNDML
-// JS bindings for brosoundml::GestureSpotter — open-vocabulary non-speech
-// gesture matching (rhythm / tone), dual-homed per audio stream.
-//
-// The tier-0 sibling of bro.kws: where bro.kws aligns phoneme templates,
-// bro.gesture matches enrolled onset-rhythm and sustained-pitch gestures, so
-// clicks/taps/whistles fire reliably where the speech model only hears garbage.
-//
-// Model-free: each stream gets its OWN GestureSpotter. The matcher consumes that
-// stream's SensorHub snapshot, so a stream only fires gestures while its
-// bro.sense (stream.sense) is also a live member. bro.gesture targets the shared
-// default-microphone stream; stream.gesture (the GestureView a
-// bro.listen.open() handle exposes) targets that handle's stream. Each op
-// resolves its per-stream tenant from `this`: unwrap<GestureView> → that view's
-// stream, else default mic.
-//
-// Same three-thread split and single-producer discipline as bro.kws: a stream's
-// enroll/remove/clear/reset only while that stream is NOT listening; fired
-// gestures cross inference->main through the tenant's fixed SPSC slot ring,
-// drained by tickGesture (which also prunes tenants whose stream has closed).
-
 #include "js/gesture_bindings.h"
-
 #include "audio_inference/audio_inference.h"
 #include "js/listen_host.h"
-
 #include <broaudio/engine.h>
 #include <brosoundml/gesture_spotter.h>
-
 #include <quickjs.h>
 #include <qjsbind/qjsbind.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -39,6 +14,10 @@
 #include <unordered_map>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
 
 namespace {
@@ -47,7 +26,7 @@ using engine::AudioInference;
 
 constexpr std::uint64_t kEventSlots = 64;
 
-// ─── One stream's gesture tenant ─────────────────────────────────────────────
+// u2500u2500u2500 One stream's gesture tenant u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 //
 // Address-stable (held by unique_ptr in g_gesture.tenants), so the inference-
 // thread onGestures closure can capture a raw GestureTenant* and publish into it.
@@ -150,7 +129,7 @@ const char* kindName(brosoundml::GestureKind k) {
     return k == brosoundml::GestureKind::Tone ? "tone" : "rhythm";
 }
 
-// ─── Tenant registry ─────────────────────────────────────────────────────────
+// u2500u2500u2500 Tenant registry u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 GestureTenant* findTenant(StreamId id) {
     auto it = g_gesture.tenants.find(id);
@@ -191,18 +170,18 @@ JSValue throwIfListening(JSContext* ctx, const GestureTenant* t, const char* wha
     if (!t || !t->listening) return JS_UNDEFINED;
     return JS_ThrowInternalError(ctx,
         "bro.gesture.%s: not allowed while this stream is listening "
-        "(enroll/remove/clear/reset share the matcher's feed thread — stop() "
+        "(enroll/remove/clear/reset share the matcher's feed thread u2014 stop() "
         "first)", what);
 }
 
-// ─── Tenant resolution (the dual-home seam) ──────────────────────────────────
+// u2500u2500u2500 Tenant resolution (the dual-home seam) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 StreamId streamOf(JSContext* ctx, JSValueConst this_val) {
     if (GestureView* v = qjsbind::unwrap<GestureView>(ctx, this_val)) return v->streamId;
     return listenHostDefaultMicId();
 }
 
-// ─── JS-callable functions ─────────────────────────────────────────────────
+// u2500u2500u2500 JS-callable functions u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 // enrollFromAudio(name, samples, policy?) -> beats
 //   samples: Float32Array mono PCM at sampleRate(). Runs the clip through a
@@ -328,7 +307,7 @@ JSValue js_reset(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
-// listen({ onGesture }) — start matching on THIS stream. Requires at least one
+// listen({ onGesture }) u2014 start matching on THIS stream. Requires at least one
 // enrolled gesture; needs the stream's bro.sense active to actually fire (the
 // matcher reads the SensorHub snapshot).
 JSValue js_listen(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -449,7 +428,7 @@ void drainTenant(JSContext* ctx, GestureTenant* t) {
     }
 }
 
-// ─── View class registration ──────────────────────────────────────────────
+// u2500u2500u2500 View class registration u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 void registerGestureViewClass(JSContext* ctx) {
     qjsbind::Class<GestureView>(ctx, "GestureStreamView", qjsbind::NoGlobal)
@@ -475,47 +454,50 @@ JSValue gestureViewFor(JSContext* ctx, std::uint32_t id) {
     return qjsbind::wrap<GestureView>(ctx, new GestureView{static_cast<StreamId>(id)});
 }
 
-void installGestureBindings(JSContext* ctx, broaudio::Engine* audioEngine,
-                            engine::AudioInference* inference) {
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
+void installGestureBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::AudioInference* inference) {
     g_gesture.audioEngine = audioEngine;
-    g_gesture.inference   = inference;
-    g_gesture.ctx         = ctx;
-
-    registerGestureViewClass(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        g_gesture.inference   = inference;
+        g_gesture.ctx         = ctx;
+    
+        registerGestureViewClass(ctx);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue ges = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ges, "enrollFromAudio",
+            JS_NewCFunction(ctx, js_enrollFromAudio, "enrollFromAudio", 3));
+        JS_SetPropertyStr(ctx, ges, "remove",
+            JS_NewCFunction(ctx, js_remove, "remove", 1));
+        JS_SetPropertyStr(ctx, ges, "clear",
+            JS_NewCFunction(ctx, js_clear, "clear", 0));
+        JS_SetPropertyStr(ctx, ges, "templates",
+            JS_NewCFunction(ctx, js_templates, "templates", 0));
+        JS_SetPropertyStr(ctx, ges, "inspect",
+            JS_NewCFunction(ctx, js_inspect, "inspect", 1));
+        JS_SetPropertyStr(ctx, ges, "reset",
+            JS_NewCFunction(ctx, js_reset, "reset", 0));
+        JS_SetPropertyStr(ctx, ges, "listen",
+            JS_NewCFunction(ctx, js_listen, "listen", 1));
+        JS_SetPropertyStr(ctx, ges, "stop",
+            JS_NewCFunction(ctx, js_stop, "stop", 0));
+        JS_SetPropertyStr(ctx, ges, "isActive",
+            JS_NewCFunction(ctx, js_isActive, "isActive", 0));
+        JS_SetPropertyStr(ctx, ges, "sampleRate",
+            JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
+        JS_SetPropertyStr(ctx, broObj, "gesture", ges);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue ges = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, ges, "enrollFromAudio",
-        JS_NewCFunction(ctx, js_enrollFromAudio, "enrollFromAudio", 3));
-    JS_SetPropertyStr(ctx, ges, "remove",
-        JS_NewCFunction(ctx, js_remove, "remove", 1));
-    JS_SetPropertyStr(ctx, ges, "clear",
-        JS_NewCFunction(ctx, js_clear, "clear", 0));
-    JS_SetPropertyStr(ctx, ges, "templates",
-        JS_NewCFunction(ctx, js_templates, "templates", 0));
-    JS_SetPropertyStr(ctx, ges, "inspect",
-        JS_NewCFunction(ctx, js_inspect, "inspect", 1));
-    JS_SetPropertyStr(ctx, ges, "reset",
-        JS_NewCFunction(ctx, js_reset, "reset", 0));
-    JS_SetPropertyStr(ctx, ges, "listen",
-        JS_NewCFunction(ctx, js_listen, "listen", 1));
-    JS_SetPropertyStr(ctx, ges, "stop",
-        JS_NewCFunction(ctx, js_stop, "stop", 0));
-    JS_SetPropertyStr(ctx, ges, "isActive",
-        JS_NewCFunction(ctx, js_isActive, "isActive", 0));
-    JS_SetPropertyStr(ctx, ges, "sampleRate",
-        JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
-    JS_SetPropertyStr(ctx, broObj, "gesture", ges);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 void tickGesture(JSContext* ctx) {
@@ -523,10 +505,10 @@ void tickGesture(JSContext* ctx) {
         GestureTenant* t = it->second.get();
         // Prune a tenant whose stream has closed (handle .close()'d or GC'd).
         // The stream's teardown removed its inference task (a barrier), so the
-        // onGestures closure can no longer run — safe to drop. Default mic is
+        // onGestures closure can no longer run u2014 safe to drop. Default mic is
         // never invalid.
         if (!listenHostValid(t->streamId)) {
-            stopListening(t);   // frees onGesture (detach is a no-op — stream gone)
+            stopListening(t);   // frees onGesture (detach is a no-op u2014 stream gone)
             it = g_gesture.tenants.erase(it);
             continue;
         }
@@ -543,6 +525,5 @@ void cleanupGestureBindings(JSContext* /*ctx*/) {
     g_gesture.ctx         = nullptr;
 }
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js

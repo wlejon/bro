@@ -1,71 +1,14 @@
-#if BRO_WITH_SOUNDML
-// JS bindings for brosoundml::WakeWord — streaming wake-word detection,
-// dual-homed across N independent audio streams.
-//
-// ─── Weight sharing across streams ──────────────────────────────────────────
-//
-// The 2D BC-ResNet (BcResnet2d) weights load ONCE into a shared, read-only net
-// (g_wake.net) — explicitly via bro.wake.load(), or lazily on the first
-// listen() that carries a `weights` path. Each listened-on stream gets its OWN
-// WakeWord built over that net via WakeWord(shared_ptr<const BcResnet2d>): the
-// weights live once behind the shared_ptr; each detector owns only its own
-// streaming session + front-end + detector bookkeeping. So the same wake word
-// runs on the mic AND on system-audio loopback AND on one app's audio at once,
-// no weights copied, each with its own threshold/refractory.
-//
-// ─── Dual-homed surface ─────────────────────────────────────────────────────
-//
-// listen/stop/suspend/… live on BOTH bro.wake (targets the shared default-mic
-// stream) and stream.wake (the WakeView a bro.listen.open() handle exposes,
-// targeting that handle's stream). Each op resolves its per-stream tenant from
-// `this`: unwrap<WakeView> → that view's stream, else default mic.
-//
-// ─── Per-stream tenant + threading ──────────────────────────────────────────
-//
-// bro.wake is a tenant of the engine's shared listen host (listen_host.h): per
-// stream one raw (no-AGC) tap/source + one ring + one inference task drive a
-// brosoundml::ListenBus whose single PCEN mel pass feeds every attached member,
-// so running bro.wake alongside bro.kws/bro.sense on a stream costs one feature
-// pass with one forward per model. The AGC-free training recipe (random
-// presentation level) made the model level-invariant, so no AGC exists anywhere
-// on this path. Three concerns, three threads:
-//
-//   - PRODUCER (real-time audio thread): the stream's source callback copies
-//     resampled raw samples into that stream's lock-free SPSC ring; nothing else.
-//   - INFERENCE thread (engine::AudioInference worker; or, headless, the calling
-//     thread): the stream's task drains its ring, runs the bus
-//     (mel → WakeWord::feed_mel), and hands the fire flag to this tenant's
-//     onWake hook, which publishes score/fire telemetry into the tenant's
-//     atomics.
-//   - MAIN thread: tickWake() drains every tenant's fire counter and invokes its
-//     onFire callback, so onFire always runs single-threaded with the app.
-//
-// The detector rolls continuously (the host feeds everything it drains);
-// suspend() only gates whether a fire is delivered to onFire, never whether
-// audio is processed — so there is no freeze/thaw of the streaming window.
-//
-// Lifetime: the shared net survives stop() (drop it with unload()/cleanup). A
-// tenant's WakeWord is captured into the host's task closure (owned by the
-// worker); the tenant holds a second ref for score reads / atomic setters and
-// drops it on stop() after detaching, so the model's destructor (CUDA frees)
-// runs on the worker. A tenant is dropped when its stream closes (pruned in
-// tickWake) or on unload().
-
 #include "js/wake_bindings.h"
-
 #include "audio_inference/audio_inference.h"
 #include "js/listen_host.h"
-
 #include <broaudio/engine.h>
 #include <broaudio/mic_tap.h>
 #include <brosoundml/bc_resnet2d.h>
 #include <brosoundml/wake.h>
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <qjsbind/qjsbind.h>
 #include <quickjs.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -76,13 +19,17 @@
 #include <unordered_map>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
 
 namespace {
 
 using engine::AudioInference;
 
-// ─── One stream's wake-word tenant ───────────────────────────────────────────
+// u2500u2500u2500 One stream's wake-word tenant u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 //
 // Address-stable (held by unique_ptr in g_wake.tenants), so the inference-thread
 // onWake closure can capture a raw WakeTenant* and publish into its atomics.
@@ -109,7 +56,7 @@ struct WakeTenant {
     bool active = false;
 };
 
-// ─── Namespace-level state (the shared net + the per-stream tenants) ──────────
+// u2500u2500u2500 Namespace-level state (the shared net + the per-stream tenants) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 struct WakeNamespace {
     broaudio::Engine* audioEngine = nullptr;
     AudioInference*   inference   = nullptr;
@@ -129,7 +76,7 @@ struct WakeView {
     StreamId streamId = kInvalidStream;
 };
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// u2500u2500u2500 Helpers u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 bool getStr(JSContext* ctx, JSValueConst obj, const char* key, std::string& out) {
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
@@ -202,7 +149,7 @@ const char* deviceName(brotensor::Device d) {
     return "?";
 }
 
-// ─── Tenant registry ─────────────────────────────────────────────────────────
+// u2500u2500u2500 Tenant registry u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 WakeTenant* findTenant(StreamId id) {
     auto it = g_wake.tenants.find(id);
@@ -268,12 +215,12 @@ ListenWakeFn makeOnWake(WakeTenant* t, std::shared_ptr<brosoundml::WakeWord> wak
     };
 }
 
-// Get-or-load the shared net. If already loaded, returns it (weights ignored —
+// Get-or-load the shared net. If already loaded, returns it (weights ignored u2014
 // unload() first to swap). Otherwise loads from `weights` (required) on `dev`.
 bool ensureNet(const std::string& weights, brotensor::Device dev, std::string& err) {
     if (g_wake.net) return true;
     if (weights.empty()) {
-        err = "no model loaded — pass opts.weights (or call bro.wake.load first)";
+        err = "no model loaded u2014 pass opts.weights (or call bro.wake.load first)";
         return false;
     }
     try {
@@ -292,16 +239,16 @@ bool ensureNet(const std::string& weights, brotensor::Device dev, std::string& e
     }
 }
 
-// ─── Tenant resolution (the dual-home seam) ──────────────────────────────────
+// u2500u2500u2500 Tenant resolution (the dual-home seam) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 StreamId streamOf(JSContext* ctx, JSValueConst this_val) {
     if (WakeView* v = qjsbind::unwrap<WakeView>(ctx, this_val)) return v->streamId;
     return listenHostDefaultMicId();
 }
 
-// ─── JS-callable functions ─────────────────────────────────────────────────
+// u2500u2500u2500 JS-callable functions u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
-// bro.wake.load({ weights, device? }) — load the BC-ResNet checkpoint ONCE into
+// bro.wake.load({ weights, device? }) u2014 load the BC-ResNet checkpoint ONCE into
 // the shared net (optional; listen() lazy-loads from its own weights too).
 // Drops any existing tenants (their detectors referenced the old net).
 JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -578,7 +525,7 @@ void drainTenant(JSContext* ctx, WakeTenant* t) {
     }
 }
 
-// ─── View class registration ──────────────────────────────────────────────
+// u2500u2500u2500 View class registration u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 void registerWakeViewClass(JSContext* ctx) {
     qjsbind::Class<WakeView>(ctx, "WakeStreamView", qjsbind::NoGlobal)
@@ -605,56 +552,59 @@ JSValue wakeViewFor(JSContext* ctx, std::uint32_t id) {
     return qjsbind::wrap<WakeView>(ctx, new WakeView{static_cast<StreamId>(id)});
 }
 
-void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine,
-                         engine::AudioInference* inference) {
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
+void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::AudioInference* inference) {
     g_wake.audioEngine = audioEngine;
-    g_wake.inference   = inference;
-    g_wake.ctx         = ctx;
-
-    registerWakeViewClass(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        g_wake.inference   = inference;
+        g_wake.ctx         = ctx;
+    
+        registerWakeViewClass(ctx);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue wake = JS_NewObject(ctx);
+        // Namespace ops (shared net u2014 not stream-scoped).
+        JS_SetPropertyStr(ctx, wake, "load",
+            JS_NewCFunction(ctx, js_load, "load", 1));
+        JS_SetPropertyStr(ctx, wake, "unload",
+            JS_NewCFunction(ctx, js_unload, "unload", 0));
+        // Per-stream ops u2014 on bro.wake they target the shared default-mic stream;
+        // the SAME functions are method_raw on WakeView for stream.wake.
+        JS_SetPropertyStr(ctx, wake, "listen",
+            JS_NewCFunction(ctx, js_listen, "listen", 1));
+        JS_SetPropertyStr(ctx, wake, "stop",
+            JS_NewCFunction(ctx, js_stop, "stop", 0));
+        JS_SetPropertyStr(ctx, wake, "suspend",
+            JS_NewCFunction(ctx, js_suspend, "suspend", 0));
+        JS_SetPropertyStr(ctx, wake, "resume",
+            JS_NewCFunction(ctx, js_resume, "resume", 0));
+        JS_SetPropertyStr(ctx, wake, "lastScore",
+            JS_NewCFunction(ctx, js_lastScore, "lastScore", 0));
+        JS_SetPropertyStr(ctx, wake, "isActive",
+            JS_NewCFunction(ctx, js_isActive, "isActive", 0));
+        JS_SetPropertyStr(ctx, wake, "isSuspended",
+            JS_NewCFunction(ctx, js_isSuspended, "isSuspended", 0));
+        JS_SetPropertyStr(ctx, wake, "isLoaded",
+            JS_NewCFunction(ctx, js_isLoaded, "isLoaded", 0));
+        JS_SetPropertyStr(ctx, wake, "setThreshold",
+            JS_NewCFunction(ctx, js_setThreshold, "setThreshold", 1));
+        JS_SetPropertyStr(ctx, wake, "stats",
+            JS_NewCFunction(ctx, js_stats, "stats", 0));
+        JS_SetPropertyStr(ctx, wake, "feed",
+            JS_NewCFunction(ctx, js_feed, "feed", 1));
+        JS_SetPropertyStr(ctx, broObj, "wake", wake);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue wake = JS_NewObject(ctx);
-    // Namespace ops (shared net — not stream-scoped).
-    JS_SetPropertyStr(ctx, wake, "load",
-        JS_NewCFunction(ctx, js_load, "load", 1));
-    JS_SetPropertyStr(ctx, wake, "unload",
-        JS_NewCFunction(ctx, js_unload, "unload", 0));
-    // Per-stream ops — on bro.wake they target the shared default-mic stream;
-    // the SAME functions are method_raw on WakeView for stream.wake.
-    JS_SetPropertyStr(ctx, wake, "listen",
-        JS_NewCFunction(ctx, js_listen, "listen", 1));
-    JS_SetPropertyStr(ctx, wake, "stop",
-        JS_NewCFunction(ctx, js_stop, "stop", 0));
-    JS_SetPropertyStr(ctx, wake, "suspend",
-        JS_NewCFunction(ctx, js_suspend, "suspend", 0));
-    JS_SetPropertyStr(ctx, wake, "resume",
-        JS_NewCFunction(ctx, js_resume, "resume", 0));
-    JS_SetPropertyStr(ctx, wake, "lastScore",
-        JS_NewCFunction(ctx, js_lastScore, "lastScore", 0));
-    JS_SetPropertyStr(ctx, wake, "isActive",
-        JS_NewCFunction(ctx, js_isActive, "isActive", 0));
-    JS_SetPropertyStr(ctx, wake, "isSuspended",
-        JS_NewCFunction(ctx, js_isSuspended, "isSuspended", 0));
-    JS_SetPropertyStr(ctx, wake, "isLoaded",
-        JS_NewCFunction(ctx, js_isLoaded, "isLoaded", 0));
-    JS_SetPropertyStr(ctx, wake, "setThreshold",
-        JS_NewCFunction(ctx, js_setThreshold, "setThreshold", 1));
-    JS_SetPropertyStr(ctx, wake, "stats",
-        JS_NewCFunction(ctx, js_stats, "stats", 0));
-    JS_SetPropertyStr(ctx, wake, "feed",
-        JS_NewCFunction(ctx, js_feed, "feed", 1));
-    JS_SetPropertyStr(ctx, broObj, "wake", wake);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 void tickWake(JSContext* ctx) {
@@ -662,9 +612,9 @@ void tickWake(JSContext* ctx) {
         WakeTenant* t = it->second.get();
         // Prune a tenant whose stream has closed. The stream's teardown removed
         // its inference task (a barrier), so the onWake closure can no longer
-        // run — safe to drop. Default mic is never invalid.
+        // run u2014 safe to drop. Default mic is never invalid.
         if (!listenHostValid(t->streamId)) {
-            stopTenant(t);   // frees onFire (detach is a no-op — stream gone)
+            stopTenant(t);   // frees onFire (detach is a no-op u2014 stream gone)
             it = g_wake.tenants.erase(it);
             continue;
         }
@@ -680,6 +630,5 @@ void cleanupWakeBindings(JSContext* /*ctx*/) {
     g_wake.ctx         = nullptr;
 }
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js

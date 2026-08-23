@@ -1,76 +1,14 @@
-#if BRO_WITH_SOUNDML
-// JS bindings for brosoundml::PhonemeSpotter — open-vocabulary streaming
-// keyword spotting, dual-homed across N independent audio streams.
-//
-// bro.kws is the open-vocab sibling of bro.wake: where bro.wake runs one
-// trained-in keyword logit, bro.kws aligns enrolled phoneme-sequence templates
-// (from bro.tts.phonemize ids, raw class ids, or reference audio) against
-// PhonemeNet's streaming per-frame posteriors and fires named events.
-//
-// ─── Weight sharing across streams ──────────────────────────────────────────
-//
-// bro.kws.load() reads the PhonemeNet checkpoint ONCE into a shared, read-only
-// net (g_kws.net). Each stream that spots gets its OWN PhonemeSpotter built over
-// that net via PhonemeSpotter(shared_ptr<const PhonemeNet>): the weights live
-// once behind the shared_ptr; each spotter owns only its templates, its
-// streaming session (PhonemeSession), and its matcher. So the same vocabulary
-// can be spotted on the mic AND on system audio AND on one app's audio at once,
-// no weights copied — and the per-stream template sets are independent.
-//
-// ─── Dual-homed surface ─────────────────────────────────────────────────────
-//
-// The enroll/listen/… ops are registered on BOTH bro.kws and the per-stream
-// view (stream.kws, a KwsView). Each op resolves its tenant from `this`:
-// unwrap<KwsView> → that view's stream id; otherwise (called as bro.kws.*) the
-// shared default-microphone stream. One implementation, two homes.
-//
-// ─── Per-stream tenant + threading ──────────────────────────────────────────
-//
-// A KwsTenant (keyed by StreamId, address-stable in g_kws.tenants) holds one
-// stream's spotter, its enrolled-name snapshot, its onSpot callback, and its
-// SPSC event ring. The audio plumbing lives in the shared listen host
-// (listen_host.h): per stream ONE raw no-AGC source + ring + inference task
-// drive a brosoundml::ListenBus that this tenant's spotter joins as a member
-// (alongside that stream's bro.sense hub), so the stack costs one PCEN feature
-// pass and one PhonemeNet forward per stream. Three concerns on three threads:
-//
-//   - PRODUCER (real-time audio thread): the stream's source callback (mic tap
-//     or loopback) copies samples into that stream's lock-free SPSC ring.
-//   - INFERENCE thread (engine::AudioInference worker; or, headless, the
-//     calling thread): the stream's task drains its ring, runs the bus (mel →
-//     PhonemeSpotter::feed_mel), and hands fired events to this tenant's onSpots
-//     hook, which publishes them into the tenant's SPSC slot ring (template
-//     index + confidence — no strings cross threads).
-//   - MAIN thread: tickKws() drains every tenant's slots and invokes its JS
-//     onSpot callback, so onSpot always runs single-threaded with the app.
-//
-// Single-producer discipline: PhonemeSpotter's mutators (enroll / remove /
-// clear / reset) share a thread with feed(). While a stream is listening its
-// feed() runs on the inference thread, so the binding rejects that stream's
-// mutators until its stop() — enroll first, then listen. The lock-free
-// cross-thread readers (prefix_progress, progress_snapshot, last_posterior)
-// stay available while live.
-//
-// Lifetime: the shared net survives stop() so templates can be re-enrolled or
-// listening resumed without reloading weights; it is dropped only on unload() /
-// cleanup. A tenant's spotter survives that stream's stop() likewise. A tenant
-// is dropped when its stream closes (pruned in tickKws) or on unload().
-
 #include "js/kws_bindings.h"
-
 #include "audio_inference/audio_inference.h"
 #include "js/listen_host.h"
-
 #include <broaudio/engine.h>
 #include <broaudio/mic_tap.h>
 #include <brosoundml/phoneme_model.h>
 #include <brosoundml/phoneme_spotter.h>
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <qjsbind/qjsbind.h>
 #include <quickjs.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -81,6 +19,10 @@
 #include <unordered_map>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
 
 namespace {
@@ -88,11 +30,11 @@ namespace {
 using engine::AudioInference;
 
 // Fired events cross inference -> main as (template index, confidence) pairs
-// in a fixed SPSC slot ring. 64 slots is generous — spot events arrive at
+// in a fixed SPSC slot ring. 64 slots is generous u2014 spot events arrive at
 // human speech cadence; on overflow the newest event is dropped.
 constexpr std::uint64_t kEventSlots = 64;
 
-// ─── One stream's keyword-spotting tenant ────────────────────────────────────
+// u2500u2500u2500 One stream's keyword-spotting tenant u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 //
 // Address-stable (held by unique_ptr in g_kws.tenants), so the inference-thread
 // onSpots closure can capture a raw KwsTenant* and publish into its ring.
@@ -104,7 +46,7 @@ struct KwsTenant {
     // ref while listening.
     std::shared_ptr<brosoundml::PhonemeSpotter> spotter;
 
-    // Template-name snapshot taken at listen() — index i names eventIdx[i].
+    // Template-name snapshot taken at listen() u2014 index i names eventIdx[i].
     // The enrolled set cannot change while listening, so the snapshot is stable
     // for the task's lifetime. Main thread reads it in tickKws.
     std::vector<std::string> names;
@@ -130,7 +72,7 @@ struct KwsTenant {
     bool listening = false;
 };
 
-// ─── Namespace-level state (the shared net + the per-stream tenants) ──────────
+// u2500u2500u2500 Namespace-level state (the shared net + the per-stream tenants) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 struct KwsNamespace {
     broaudio::Engine* audioEngine = nullptr;
     AudioInference*   inference   = nullptr;
@@ -149,13 +91,13 @@ struct KwsNamespace {
 KwsNamespace g_kws;
 
 // A per-stream view object: `stream.kws`. Carries only the stream id; the ops
-// resolve their tenant through it. (No JSValue fields — nothing for the GC to
+// resolve their tenant through it. (No JSValue fields u2014 nothing for the GC to
 // mark; the onSpot callback lives in the C++ KwsTenant, manually managed.)
 struct KwsView {
     StreamId streamId = kInvalidStream;
 };
 
-// ─── Helpers (same shapes as wake_bindings) ─────────────────────────────────
+// u2500u2500u2500 Helpers (same shapes as wake_bindings) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 bool getStr(JSContext* ctx, JSValueConst obj, const char* key, std::string& out) {
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
@@ -241,7 +183,7 @@ void readPolicy(JSContext* ctx, JSValueConst obj, brosoundml::SpotterConfig& cfg
     // Proportional coverage gate: a completion must have at least
     // ceil(minCoverage * L) of the template's phonemes ACTUALLY emitted (not
     // merely riding the emission floor). This is what stops a long phrase from
-    // firing on a short suffix — "what is the first" completing on just
+    // firing on a short suffix u2014 "what is the first" completing on just
     // "first", with the leading phonemes floored. 0 (default) = absolute
     // min_phonemes gate only. See SpotterConfig::min_coverage_frac.
     if (getNum(ctx, obj, "minCoverage", d))   cfg.min_coverage_frac = (float)d;
@@ -333,7 +275,7 @@ int nameIndexOf(const std::vector<std::string>& names, const std::string& n) {
 }
 
 // Publish one fired event into a tenant's SPSC ring (inference thread). Drops
-// the newest event on overflow — never corrupts the ring.
+// the newest event on overflow u2014 never corrupts the ring.
 void publishEvent(KwsTenant* t, int nameIdx, float confidence,
                   std::int64_t startFrame, std::int64_t endFrame) {
     const std::uint64_t p = t->produced.load(std::memory_order_relaxed);
@@ -345,7 +287,7 @@ void publishEvent(KwsTenant* t, int nameIdx, float confidence,
     t->produced.store(p + 1, std::memory_order_release);
 }
 
-// ─── Tenant registry ─────────────────────────────────────────────────────────
+// u2500u2500u2500 Tenant registry u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 KwsTenant* findTenant(StreamId id) {
     auto it = g_kws.tenants.find(id);
@@ -398,18 +340,18 @@ JSValue throwIfListening(JSContext* ctx, const KwsTenant* t, const char* what) {
     if (!t || !t->listening) return JS_UNDEFINED;
     return JS_ThrowInternalError(ctx,
         "bro.kws.%s: not allowed while this stream is listening (enroll/remove/"
-        "clear/reset share the spotter's feed thread — stop() first)", what);
+        "clear/reset share the spotter's feed thread u2014 stop() first)", what);
 }
 
-// ─── Tenant resolution (the dual-home seam) ──────────────────────────────────
+// u2500u2500u2500 Tenant resolution (the dual-home seam) u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
-// The stream `this` addresses: a KwsView → its stream; bro.kws → default mic.
+// The stream `this` addresses: a KwsView u2192 its stream; bro.kws u2192 default mic.
 StreamId streamOf(JSContext* ctx, JSValueConst this_val) {
     if (KwsView* v = qjsbind::unwrap<KwsView>(ctx, this_val)) return v->streamId;
     return listenHostDefaultMicId();
 }
 
-// ─── JS-callable functions ─────────────────────────────────────────────────
+// u2500u2500u2500 JS-callable functions u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 // bro.kws.load({ weights, device?, threshold?, refractoryMs?, smoothing?,
 //                minPhonemes?, entrySilenceFrames?, emissionFloor?,
@@ -418,7 +360,7 @@ StreamId streamOf(JSContext* ctx, JSValueConst this_val) {
 // Load the PhonemeNet checkpoint (+ its embedded class map) ONCE into the shared
 // net and set the global detector-policy defaults. Drops any existing tenants
 // (their spotters referenced the old net). Enroll templates next, then listen().
-// Namespace op — not stream-scoped.
+// Namespace op u2014 not stream-scoped.
 JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsObject(argv[0])) {
         return JS_ThrowTypeError(ctx,
@@ -429,7 +371,7 @@ JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(ctx,
             "bro.kws.load: opts.weights (PhonemeNet checkpoint path) required");
     }
-    // init() BEFORE the device probe — the GPU backends only register on the
+    // init() BEFORE the device probe u2014 the GPU backends only register on the
     // driver probe, so autoDevice() before init() silently lands on CPU.
     try {
         brotensor::init();
@@ -453,7 +395,7 @@ JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
                 brosoundml::PhonemeNet::load(weights, dev));
         }
 
-        // Replacing the net invalidates existing tenant spotters — drop them.
+        // Replacing the net invalidates existing tenant spotters u2014 drop them.
         unloadAll();
 
         brosoundml::SpotterConfig cfg;            // struct defaults
@@ -479,10 +421,10 @@ JSValue js_unload(JSContext*, JSValueConst, int, JSValueConst*) {
 }
 
 // bro.kws.enroll(name, phonemeIds, policy?) -> template length
-//   phonemeIds: Int32Array/number[] of Kokoro phoneme ids — exactly what
+//   phonemeIds: Int32Array/number[] of Kokoro phoneme ids u2014 exactly what
 //   bro.tts.phonemize(text) returns. Silence/suprasegmental ids are dropped
 //   and duplicate adjacent classes collapsed by the library. Enrolls on the
-//   tenant for THIS stream (bro.kws → default mic; stream.kws → that stream).
+//   tenant for THIS stream (bro.kws u2192 default mic; stream.kws u2192 that stream).
 JSValue js_enroll(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     KwsTenant* t = ensureTenant(streamOf(ctx, this_val));
     if (!t)
@@ -523,7 +465,7 @@ JSValue js_enroll(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst*
 }
 
 // bro.kws.enrollFromAudio(name, samples, policy?) -> template length
-//   samples: Float32Array of mono PCM at bro.kws.sampleRate() — runs the model
+//   samples: Float32Array of mono PCM at bro.kws.sampleRate() u2014 runs the model
 //   over the reference audio and uses the argmax class sequence as the template.
 JSValue js_enrollFromAudio(JSContext* ctx, JSValueConst this_val, int argc,
                            JSValueConst* argv) {
@@ -568,7 +510,7 @@ JSValue js_enrollFromAudio(JSContext* ctx, JSValueConst this_val, int argc,
 }
 
 // bro.kws.enrollFromClasses(name, classIds, policy?) -> template length
-//   classIds: Int32Array/number[] of phoneme-CLASS ids (already in [0,K) — the
+//   classIds: Int32Array/number[] of phoneme-CLASS ids (already in [0,K) u2014 the
 //   matcher's own alphabet, e.g. an edited sequence from bro.kws.inspect). The
 //   library drops the silence class (0) and collapses adjacent duplicates. This
 //   is the re-enroll path for an edited template.
@@ -705,7 +647,7 @@ JSValue js_reset(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
-// bro.kws.listen({ onSpot }) — start live spotting on THIS stream. Requires a
+// bro.kws.listen({ onSpot }) u2014 start live spotting on THIS stream. Requires a
 // loaded net and at least one enrolled template on this stream.
 JSValue js_listen(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (!g_kws.audioEngine)
@@ -814,7 +756,7 @@ JSValue js_sampleRate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_NewInt32(ctx, g_kws.net ? g_kws.net->config().sample_rate : 0);
 }
 
-// Best current prefix progress across this stream's templates, [0,1] — a
+// Best current prefix progress across this stream's templates, [0,1] u2014 a
 // lock-free library read, safe while the inference thread feeds. For UI meters.
 JSValue js_prefixProgress(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     KwsTenant* t = findTenant(streamOf(ctx, this_val));
@@ -822,7 +764,7 @@ JSValue js_prefixProgress(JSContext* ctx, JSValueConst this_val, int, JSValueCon
     return JS_NewFloat64(ctx, t->spotter->prefix_progress());
 }
 
-// Per-template alignment telemetry for THIS stream — the spotter's contribution
+// Per-template alignment telemetry for THIS stream u2014 the spotter's contribution
 // to the fused listening surface. One coherent lock-free snapshot. Null until
 // this stream has a spotter (i.e. something was enrolled / it listened).
 JSValue js_progress(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
@@ -853,7 +795,7 @@ JSValue js_progress(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
 }
 
 // bro.kws.posterior(topK=3) -> { frame, top: [{ cls, label, p }, ...] } or null.
-// The model's RAW per-frame readout for THIS stream — what PhonemeNet is hearing
+// The model's RAW per-frame readout for THIS stream u2014 what PhonemeNet is hearing
 // now, independent of any template. last_posterior() is a lock-free seqlock
 // read, safe while the inference thread feeds.
 JSValue js_posterior(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -872,7 +814,7 @@ JSValue js_posterior(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     if (topK > K) topK = K;
 
     const auto& cm = t->spotter->class_map();
-    // Partial top-K by repeated argmax (K is small — a few dozen classes).
+    // Partial top-K by repeated argmax (K is small u2014 a few dozen classes).
     std::vector<int> taken(static_cast<std::size_t>(K), 0);
     JSValue arr = JS_NewArray(ctx);
     for (int r = 0; r < topK; ++r) {
@@ -900,7 +842,7 @@ JSValue js_posterior(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 }
 
 // Diagnostic surface over THIS stream's mic tap (cf. bro.wake.stats). Null for a
-// non-mic (loopback) stream — there is no mic tap to report.
+// non-mic (loopback) stream u2014 there is no mic tap to report.
 JSValue js_stats(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     KwsTenant* t = findTenant(streamOf(ctx, this_val));
     const broaudio::MicTapId tap =
@@ -935,8 +877,8 @@ JSValue makeEventArray(JSContext* ctx,
 // Manual feed for tests / scripted scenarios on THIS stream. Samples must
 // already be at the spotter's rate. Mirrors bro.wake.feed's mode split:
 //   - Headless (no inference worker): the stream's bus runs synchronously on
-//     this (the inference) thread — it is ONE stream, so the feed advances every
-//     attached tenant (bro.sense included) — and the fired events come back as
+//     this (the inference) thread u2014 it is ONE stream, so the feed advances every
+//     attached tenant (bro.sense included) u2014 and the fired events come back as
 //     [{name, confidence}]. Suspended fires are still returned (the caller
 //     asked) but not queued for onSpot.
 //   - Threaded: samples go into the stream's live ring; events surface via
@@ -991,7 +933,7 @@ void drainTenant(JSContext* ctx, KwsTenant* t) {
         t->drained.store(drained, std::memory_order_release);
         if (idx < 0 || idx >= (int)t->names.size()) continue;
         // 3rd arg: the matched span on the frames axis (align with
-        // bro.kws.progress().frames / bro.sense frames). Backward-compatible —
+        // bro.kws.progress().frames / bro.sense frames). Backward-compatible u2014
         // existing onSpot(name, conf) handlers ignore it.
         JSValue span = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, span, "startFrame", JS_NewInt64(ctx, startF));
@@ -1018,7 +960,7 @@ void drainTenant(JSContext* ctx, KwsTenant* t) {
     }
 }
 
-// ─── View class registration ──────────────────────────────────────────────
+// u2500u2500u2500 View class registration u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 
 // The per-stream ops shared by bro.kws and stream.kws. Registered as method_raw
 // on the KwsView prototype; the SAME function pointers go on bro.kws below.
@@ -1057,76 +999,79 @@ JSValue kwsViewFor(JSContext* ctx, std::uint32_t id) {
     return qjsbind::wrap<KwsView>(ctx, new KwsView{static_cast<StreamId>(id)});
 }
 
-void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine,
-                        engine::AudioInference* inference) {
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
+void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::AudioInference* inference) {
     g_kws.audioEngine = audioEngine;
-    g_kws.inference   = inference;
-    g_kws.ctx         = ctx;
-
-    registerKwsViewClass(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        g_kws.inference   = inference;
+        g_kws.ctx         = ctx;
+    
+        registerKwsViewClass(ctx);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue kws = JS_NewObject(ctx);
+        // Namespace ops (shared net u2014 not stream-scoped).
+        JS_SetPropertyStr(ctx, kws, "load",
+            JS_NewCFunction(ctx, js_load, "load", 1));
+        JS_SetPropertyStr(ctx, kws, "unload",
+            JS_NewCFunction(ctx, js_unload, "unload", 0));
+        // Per-stream ops u2014 on bro.kws they target the shared default-mic stream;
+        // the SAME functions are method_raw on KwsView for stream.kws.
+        JS_SetPropertyStr(ctx, kws, "enroll",
+            JS_NewCFunction(ctx, js_enroll, "enroll", 3));
+        JS_SetPropertyStr(ctx, kws, "enrollFromAudio",
+            JS_NewCFunction(ctx, js_enrollFromAudio, "enrollFromAudio", 3));
+        JS_SetPropertyStr(ctx, kws, "enrollFromClasses",
+            JS_NewCFunction(ctx, js_enrollFromClasses, "enrollFromClasses", 3));
+        JS_SetPropertyStr(ctx, kws, "inspect",
+            JS_NewCFunction(ctx, js_inspect, "inspect", 1));
+        JS_SetPropertyStr(ctx, kws, "remove",
+            JS_NewCFunction(ctx, js_remove, "remove", 1));
+        JS_SetPropertyStr(ctx, kws, "clear",
+            JS_NewCFunction(ctx, js_clear, "clear", 0));
+        JS_SetPropertyStr(ctx, kws, "templates",
+            JS_NewCFunction(ctx, js_templates, "templates", 0));
+        JS_SetPropertyStr(ctx, kws, "reset",
+            JS_NewCFunction(ctx, js_reset, "reset", 0));
+        JS_SetPropertyStr(ctx, kws, "listen",
+            JS_NewCFunction(ctx, js_listen, "listen", 1));
+        JS_SetPropertyStr(ctx, kws, "stop",
+            JS_NewCFunction(ctx, js_stop, "stop", 0));
+        JS_SetPropertyStr(ctx, kws, "suspend",
+            JS_NewCFunction(ctx, js_suspend, "suspend", 0));
+        JS_SetPropertyStr(ctx, kws, "resume",
+            JS_NewCFunction(ctx, js_resume, "resume", 0));
+        JS_SetPropertyStr(ctx, kws, "isActive",
+            JS_NewCFunction(ctx, js_isActive, "isActive", 0));
+        JS_SetPropertyStr(ctx, kws, "isSuspended",
+            JS_NewCFunction(ctx, js_isSuspended, "isSuspended", 0));
+        JS_SetPropertyStr(ctx, kws, "isLoaded",
+            JS_NewCFunction(ctx, js_isLoaded, "isLoaded", 0));
+        JS_SetPropertyStr(ctx, kws, "sampleRate",
+            JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
+        JS_SetPropertyStr(ctx, kws, "prefixProgress",
+            JS_NewCFunction(ctx, js_prefixProgress, "prefixProgress", 0));
+        JS_SetPropertyStr(ctx, kws, "progress",
+            JS_NewCFunction(ctx, js_progress, "progress", 0));
+        JS_SetPropertyStr(ctx, kws, "posterior",
+            JS_NewCFunction(ctx, js_posterior, "posterior", 1));
+        JS_SetPropertyStr(ctx, kws, "stats",
+            JS_NewCFunction(ctx, js_stats, "stats", 0));
+        JS_SetPropertyStr(ctx, kws, "feed",
+            JS_NewCFunction(ctx, js_feed, "feed", 1));
+        JS_SetPropertyStr(ctx, broObj, "kws", kws);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue kws = JS_NewObject(ctx);
-    // Namespace ops (shared net — not stream-scoped).
-    JS_SetPropertyStr(ctx, kws, "load",
-        JS_NewCFunction(ctx, js_load, "load", 1));
-    JS_SetPropertyStr(ctx, kws, "unload",
-        JS_NewCFunction(ctx, js_unload, "unload", 0));
-    // Per-stream ops — on bro.kws they target the shared default-mic stream;
-    // the SAME functions are method_raw on KwsView for stream.kws.
-    JS_SetPropertyStr(ctx, kws, "enroll",
-        JS_NewCFunction(ctx, js_enroll, "enroll", 3));
-    JS_SetPropertyStr(ctx, kws, "enrollFromAudio",
-        JS_NewCFunction(ctx, js_enrollFromAudio, "enrollFromAudio", 3));
-    JS_SetPropertyStr(ctx, kws, "enrollFromClasses",
-        JS_NewCFunction(ctx, js_enrollFromClasses, "enrollFromClasses", 3));
-    JS_SetPropertyStr(ctx, kws, "inspect",
-        JS_NewCFunction(ctx, js_inspect, "inspect", 1));
-    JS_SetPropertyStr(ctx, kws, "remove",
-        JS_NewCFunction(ctx, js_remove, "remove", 1));
-    JS_SetPropertyStr(ctx, kws, "clear",
-        JS_NewCFunction(ctx, js_clear, "clear", 0));
-    JS_SetPropertyStr(ctx, kws, "templates",
-        JS_NewCFunction(ctx, js_templates, "templates", 0));
-    JS_SetPropertyStr(ctx, kws, "reset",
-        JS_NewCFunction(ctx, js_reset, "reset", 0));
-    JS_SetPropertyStr(ctx, kws, "listen",
-        JS_NewCFunction(ctx, js_listen, "listen", 1));
-    JS_SetPropertyStr(ctx, kws, "stop",
-        JS_NewCFunction(ctx, js_stop, "stop", 0));
-    JS_SetPropertyStr(ctx, kws, "suspend",
-        JS_NewCFunction(ctx, js_suspend, "suspend", 0));
-    JS_SetPropertyStr(ctx, kws, "resume",
-        JS_NewCFunction(ctx, js_resume, "resume", 0));
-    JS_SetPropertyStr(ctx, kws, "isActive",
-        JS_NewCFunction(ctx, js_isActive, "isActive", 0));
-    JS_SetPropertyStr(ctx, kws, "isSuspended",
-        JS_NewCFunction(ctx, js_isSuspended, "isSuspended", 0));
-    JS_SetPropertyStr(ctx, kws, "isLoaded",
-        JS_NewCFunction(ctx, js_isLoaded, "isLoaded", 0));
-    JS_SetPropertyStr(ctx, kws, "sampleRate",
-        JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
-    JS_SetPropertyStr(ctx, kws, "prefixProgress",
-        JS_NewCFunction(ctx, js_prefixProgress, "prefixProgress", 0));
-    JS_SetPropertyStr(ctx, kws, "progress",
-        JS_NewCFunction(ctx, js_progress, "progress", 0));
-    JS_SetPropertyStr(ctx, kws, "posterior",
-        JS_NewCFunction(ctx, js_posterior, "posterior", 1));
-    JS_SetPropertyStr(ctx, kws, "stats",
-        JS_NewCFunction(ctx, js_stats, "stats", 0));
-    JS_SetPropertyStr(ctx, kws, "feed",
-        JS_NewCFunction(ctx, js_feed, "feed", 1));
-    JS_SetPropertyStr(ctx, broObj, "kws", kws);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 void tickKws(JSContext* ctx) {
@@ -1134,10 +1079,10 @@ void tickKws(JSContext* ctx) {
         KwsTenant* t = it->second.get();
         // Prune a tenant whose stream has closed (handle .close()'d or GC'd).
         // The stream's teardown removed its inference task (a barrier), so the
-        // onSpots closure can no longer run — safe to drop the tenant. Default
+        // onSpots closure can no longer run u2014 safe to drop the tenant. Default
         // mic is never invalid, so its tenant is never pruned here.
         if (!listenHostValid(t->streamId)) {
-            stopListening(t);   // frees onSpot (detach is a no-op — stream gone)
+            stopListening(t);   // frees onSpot (detach is a no-op u2014 stream gone)
             it = g_kws.tenants.erase(it);
             continue;
         }
@@ -1153,6 +1098,5 @@ void cleanupKwsBindings(JSContext* /*ctx*/) {
     g_kws.ctx         = nullptr;
 }
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js

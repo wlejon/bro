@@ -70,7 +70,65 @@ interface Node { [key: string]: any; }
  */
 type BlobPart = string | ArrayBuffer | ArrayBufferView | Blob;
 
+type ListenSource = string | ListenSourceOptions;
+
 // ── Dictionaries ─────────────────────────────────────────────────────────────
+
+/**
+ * @file audio.idl
+ * @description Web Audio API compatible AudioContext, DSP nodes, synthesis, and streaming.
+ */
+interface AudioDecodedBuffer {
+  samples?: Float32Array;
+  channels?: number;
+  sampleRate?: number;
+  numFrames?: number;
+}
+
+interface StreamStats {
+  decodedFrames?: number;
+  playedFrames?: number;
+  bufferedFrames?: number;
+  underrunFrames?: number;
+  finished?: boolean;
+}
+
+interface StreamFromFileOptions {
+  ringFrames?: number;
+  prebufferFrames?: number;
+  loop?: boolean;
+  gain?: number;
+}
+
+interface SequenceNote {
+  beat?: number;
+  note?: number;
+  velocity?: number;
+  duration?: number;
+}
+
+interface SequenceAutomationPoint {
+  beat?: number;
+  value?: number;
+}
+
+interface MidiPort {
+  index?: number;
+  name?: string;
+}
+
+interface MidiRawEvent {
+  type?: string;
+  channel?: number;
+  data1?: number;
+  data2?: number;
+  pitchBend?: number;
+  timestamp?: number;
+}
+
+interface MediaStreamConstraints {
+  audio?: boolean;
+}
 
 /**
  * Options for custom element definition (e.g. customized built-in element extension).
@@ -120,6 +178,43 @@ interface GamepadEffectParameters {
    *  Right trigger motor magnitude [0.0 - 1.0] (trigger-rumble only)
    */
   rightTrigger?: number;
+}
+
+/**
+ * @file gesture.idl
+ * @description Non-speech acoustic gesture matching (clicks, rhythms, whistles).
+ * Dual-homed on bro.gesture (default mic) and stream.gesture (bro.listen.open handle).
+ */
+interface GesturePolicyOptions {
+  tempoTol?: number;
+  pitchTol?: number;
+  pitchStabilityTol?: number;
+  shapeTol?: number;
+  refractoryFrames?: number;
+  minOnsets?: number;
+  minToneFrames?: number;
+  onsetSigFrames?: number;
+}
+
+interface GestureListenOptions {
+  onGesture: Function;
+}
+
+interface GestureOnsetSignature {
+  voiced?: number;
+  pitchHz?: number;
+  bright?: number;
+}
+
+interface GestureInspection {
+  name?: string;
+  kind?: string;
+  frameMs?: number;
+  intervalsMs?: number[];
+  onsets?: GestureOnsetSignature[];
+  toneHz?: number;
+  toneMs?: number;
+  toneSpread?: number;
 }
 
 /**
@@ -224,6 +319,126 @@ interface GpuMemoryInfo {
    * Total physical VRAM in bytes on the device.
    */
   totalBytes: number;
+}
+
+/**
+ * @file kws.idl
+ * @description Open-vocabulary keyword spotting via PhonemeSpotter. Dual-homed on bro.kws
+ * (default microphone) and stream.kws (bro.listen.open handle).
+ */
+interface KwsSmoothingOptions {
+  hits?: number;
+  window?: number;
+}
+
+interface KwsPolicyOptions {
+  weights?: string;
+  device?: string;
+  threshold?: number;
+  refractoryMs?: number;
+  smoothing?: KwsSmoothingOptions;
+  minPhonemes?: number;
+  entrySilenceFrames?: number;
+  emissionFloor?: number;
+  minCoverage?: number;
+  scoreNorm?: number;
+  enrollGaps?: boolean;
+  gapMinFrames?: number;
+  gapTolerance?: number;
+}
+
+interface KwsListenOptions {
+  onSpot: Function;
+}
+
+interface KwsSpan {
+  startFrame?: number;
+  endFrame?: number;
+  matchedFrames?: number;
+}
+
+interface KwsStateInspection {
+  cls?: number;
+  label?: string;
+  gap?: boolean;
+  gapLo?: number;
+  gapHi?: number;
+}
+
+interface KwsInspection {
+  name?: string;
+  threshold?: number;
+  frameMs?: number;
+  hasGaps?: boolean;
+  states?: KwsStateInspection[];
+}
+
+interface KwsTemplateProgress {
+  name?: string;
+  matched?: number;
+  length?: number;
+  progress?: number;
+  confidence?: number;
+  completions?: number;
+  lastAdvanceFrame?: number;
+  lastFireFrame?: number;
+}
+
+interface KwsProgress {
+  frames?: number;
+  generation?: number;
+  templates?: KwsTemplateProgress[];
+}
+
+interface KwsPosteriorTopClass {
+  cls?: number;
+  label?: string;
+  p?: number;
+}
+
+interface KwsPosterior {
+  frame?: number;
+  top?: KwsPosteriorTopClass[];
+}
+
+interface KwsStats {
+  framesDelivered?: number;
+  samplesDelivered?: number;
+  rollingPeak?: number;
+}
+
+interface KwsEvent {
+  name?: string;
+  confidence?: number;
+}
+
+/**
+ * @file listen.idl
+ * @description Core audio streaming pipelines and listen host retention.
+ */
+interface ListenSourceOptions {
+  mic?: boolean;
+  system?: boolean;
+  process?: number;
+  pid?: number;
+  exclude?: boolean;
+  channel?: number;
+}
+
+interface ListenRetentionInfo {
+  active?: boolean;
+  seconds?: number;
+  rate?: number;
+  hop?: number;
+  frameRate?: number;
+  streamFrame?: number;
+  heldFrames?: number;
+  heldSeconds?: number;
+}
+
+interface AudioApp {
+  pid?: number;
+  name?: string;
 }
 
 /**
@@ -756,6 +971,69 @@ interface RaveLoadOptions {
 }
 
 /**
+ * @file sense.idl
+ * @description Real-time tier-0 acoustic sensing (VAD, pitch, onset, tonality, centroid).
+ * Dual-homed on bro.sense (default mic) and stream.sense (bro.listen.open handle).
+ */
+interface SenseStartOptions {
+  vadFloorDb?: number;
+  vadSnrDb?: number;
+  vadRiseDbps?: number;
+  vadHangFrames?: number;
+  onsetRatio?: number;
+  onsetAbs?: number;
+  onsetEma?: number;
+  onsetRefractoryFrames?: number;
+  tonalMinPeriodicity?: number;
+  tonalFminHz?: number;
+  tonalFmaxHz?: number;
+}
+
+interface SenseSnapshot {
+  frames?: number;
+  t?: number;
+  rms?: number;
+  peak?: number;
+  db?: number;
+  voice?: boolean;
+  noiseFloorDb?: number;
+  snrDb?: number;
+  voiceFrames?: number;
+  voiceEvents?: number;
+  lastVoiceFrame?: number;
+  flux?: number;
+  onset?: boolean;
+  onsets?: number;
+  lastOnsetFrame?: number;
+  periodicity?: number;
+  dominantHz?: number;
+  tonal?: boolean;
+  tonalFrames?: number;
+  tonalEvents?: number;
+  lastTonalFrame?: number;
+  centroid?: number;
+}
+
+interface SenseStats {
+  framesDelivered?: number;
+  samplesDelivered?: number;
+  rollingPeak?: number;
+}
+
+interface SenseAnalysis {
+  frames?: number;
+  hop?: number;
+  win?: number;
+  rate?: number;
+  frameMs?: number;
+  db?: Float32Array;
+  dominantHz?: Float32Array;
+  periodicity?: Float32Array;
+  centroid?: Float32Array;
+  flags?: Int32Array;
+}
+
+/**
  * Options for action binding definitions.
  */
 interface ActionOptions {
@@ -795,6 +1073,58 @@ interface DisplayModeInfo {
    *  Vertical refresh rate in Hz.
    */
   refreshRate?: number;
+}
+
+/**
+ * @file stt.idl
+ * @description Speech-to-text inference models: Whisper, Parakeet, and Qwen3-ASR.
+ */
+interface WhisperLoadOptions {
+  device?: string;
+  quantize?: boolean;
+}
+
+interface TokenizerLoadOptions {
+  path: string;
+  specialTokens?: string;
+}
+
+interface WhisperTranscribeOptions {
+  maxNewTokens?: number;
+  prompt?: Int32Array | number[];
+  temperature?: number;
+  onToken?: Function;
+  onDone?: Function;
+}
+
+interface ParakeetTranscribeOptions {
+  onToken?: Function;
+  onDone?: Function;
+}
+
+interface ParakeetResult {
+  tokenIds?: Int32Array;
+  frameOffsets?: Int32Array;
+}
+
+interface QwenAsrTranscribeOptions {
+  maxNewTokens?: number;
+  contextIds?: Int32Array | number[];
+  onToken?: Function;
+  onDone?: Function;
+}
+
+interface QwenAsrEncodeResult {
+  tokenIds?: Int32Array;
+}
+
+interface QwenAsrStreamOptions {
+  device?: string;
+}
+
+interface SttAudioBuffer {
+  samples?: Float32Array;
+  sampleRate?: number;
 }
 
 /**
@@ -1134,6 +1464,123 @@ interface BidiParagraph {
 }
 
 /**
+ * @file tts.idl
+ * @description Text-to-speech synthesis engines: Kokoro (82M), Qwen3-TTS, and Supertonic-3.
+ */
+interface KokoroLoadOptions {
+  device?: string;
+}
+
+interface VoiceLoadOptions {
+  path?: string;
+}
+
+interface KokoroSynthesizeOptions {
+  speed?: number;
+  onDone?: Function;
+}
+
+interface KokoroSynthesizeResult {
+  samples?: Float32Array;
+  sampleRate?: number;
+}
+
+interface KokoroStreamOptions {
+  speed?: number;
+  onChunk?: Function;
+  onDone?: Function;
+}
+
+interface QwenLoadOptions {
+  device?: string;
+}
+
+interface QwenSynthesizeOptions {
+  speaker?: string;
+  speed?: number;
+  onDone?: Function;
+}
+
+interface QwenSynthesizeResult {
+  samples?: Float32Array;
+  sampleRate?: number;
+}
+
+interface QwenStreamOptions {
+  speaker?: string;
+  speed?: number;
+  onChunk?: Function;
+  onDone?: Function;
+}
+
+interface QwenAudioCodes {
+  codes?: Int32Array;
+  numFrames?: number;
+}
+
+interface SupertonicLoadOptions {
+  device?: string;
+}
+
+interface SupertonicSynthesizeOptions {
+  voice?: SupertonicVoice;
+  speed?: number;
+  onDone?: Function;
+}
+
+interface SupertonicSynthesizeResult {
+  samples?: Float32Array;
+  sampleRate?: number;
+}
+
+interface SpeakerEncoderLoadOptions {
+  device?: string;
+}
+
+interface SpeakerEncoderEmbedOptions {
+  audio?: Float32Array | SttAudioBuffer;
+  onDone?: Function;
+}
+
+interface TtsAssetsOptions {
+  root?: string;
+  lexicon?: string;
+  pos?: string;
+  kokoroConfig?: string;
+}
+
+/**
+ * @file wake.idl
+ * @description Streaming wake-word detection via BcResnet2d. Dual-homed on bro.wake
+ * (default microphone) and stream.wake (bro.listen.open handle).
+ */
+interface WakeSmoothingOptions {
+  hits?: number;
+  window?: number;
+}
+
+interface WakeListenOptions {
+  weights?: string;
+  onFire: Function;
+  threshold?: number;
+  smoothing?: WakeSmoothingOptions;
+  refractoryMs?: number;
+  device?: string;
+}
+
+interface WakeLoadOptions {
+  weights: string;
+  device?: string;
+}
+
+interface WakeStats {
+  framesDelivered?: number;
+  samplesDelivered?: number;
+  rollingPeak?: number;
+  scoreMax?: number;
+}
+
+/**
  * Timing and configuration options for element animations.
  */
 interface KeyframeAnimationOptions {
@@ -1333,6 +1780,149 @@ declare class AbortController {
    * @param reason Optional abort reason
    */
   abort(reason?: any): void;
+}
+
+declare class AudioParam {
+  value: number;
+  setValueAtTime(value: number, time: number): void;
+  linearRampToValueAtTime(value: number, time: number): void;
+  exponentialRampToValueAtTime(value: number, time: number): void;
+  setTargetAtTime(target: number, startTime: number, timeConstant: number): void;
+  setValueCurveAtTime(values: Float32Array, startTime: number, duration: number): void;
+  cancelScheduledValues(cancelTime: number): void;
+  cancelAndHoldAtTime(cancelTime: number): void;
+}
+
+declare class OscillatorNode {
+  type: string;
+  readonly frequency: AudioParam;
+  readonly detune: AudioParam;
+  start(when?: number): void;
+  stop(when?: number): void;
+  connect(destination: object): void;
+  disconnect(): void;
+}
+
+declare class GainNode {
+  readonly gain: AudioParam;
+  connect(destination: object): void;
+  disconnect(): void;
+}
+
+declare class BiquadFilterNode {
+  type: string;
+  readonly frequency: AudioParam;
+  readonly detune: AudioParam;
+  readonly Q: AudioParam;
+  readonly gain: AudioParam;
+  connect(destination: object): void;
+  disconnect(): void;
+  getFrequencyResponse(frequencyHz: Float32Array, magResponse: Float32Array, phaseResponse: Float32Array): void;
+}
+
+declare class AnalyserNode {
+  fftSize: number;
+  readonly frequencyBinCount: number;
+  minDecibels: number;
+  maxDecibels: number;
+  smoothingTimeConstant: number;
+  getFloatFrequencyData(array: Float32Array): void;
+  getByteFrequencyData(array: Uint8Array): void;
+  getFloatTimeDomainData(array: Float32Array): void;
+  getByteTimeDomainData(array: Uint8Array): void;
+  connect(destination: object): void;
+  disconnect(): void;
+}
+
+declare class MediaStream {
+  readonly active: boolean;
+}
+
+declare class MediaStreamAudioSourceNode {
+  connect(destination: object): void;
+  disconnect(): void;
+}
+
+declare class AudioDestinationNode {
+  readonly maxChannelCount: number;
+}
+
+declare class VoiceAllocator {
+  noteOn(note: number, velocity: number): number;
+  noteOff(note: number): void;
+  allNotesOff(): void;
+  voiceCount(): number;
+}
+
+declare class ModMatrix {
+  setRouting(source: string, dest: string, amount: number): void;
+  getRouting(source: string, dest: string): number;
+  clear(): void;
+}
+
+declare class MidiInput {
+  listPorts(): MidiPort[];
+  openPort(index: number): boolean;
+  closePort(): void;
+  pollEvents(): MidiRawEvent[];
+}
+
+declare class Sequence {
+  tempo: number;
+  length: number;
+  loop: boolean;
+  addNote(beat: number, note: number, velocity: number, duration: number): void;
+  clearNotes(): void;
+  getNotes(): SequenceNote[];
+}
+
+declare class AudioContext {
+  constructor();
+  readonly currentTime: number;
+  readonly sampleRate: number;
+  readonly state: string;
+  readonly destination: AudioDestinationNode;
+  createOscillator(): OscillatorNode;
+  createGain(): GainNode;
+  createBiquadFilter(): BiquadFilterNode;
+  createAnalyser(): AnalyserNode;
+  createMediaStreamSource(stream: MediaStream): MediaStreamAudioSourceNode;
+  createVoiceAllocator(maxVoices: number): VoiceAllocator;
+  createModMatrix(): ModMatrix;
+  createMidiInput(): MidiInput;
+  createSequence(): Sequence;
+  suspend(): void;
+  resume(): void;
+  close(): void;
+  startRecording(): void;
+  stopRecording(): Float32Array | null;
+  createClipFromFile(path: string): number;
+  createClipFromFileAsync(path: string): AsyncHandle;
+  decodeAudioData(buffer: ArrayBuffer): AudioDecodedBuffer | null;
+  decodeAudioFile(path: string): AudioDecodedBuffer | null;
+  exportRecordingToWav(path: string): boolean;
+  saveWav(path: string, samples: Float32Array, channels: number, sampleRate: number): boolean;
+  createClip(samples: Float32Array, channels?: number): number;
+  deleteClip(id: number): void;
+  getClipSampleCount(id: number): number;
+  getClipChannels(id: number): number;
+  getClipWaveform(id: number, points: number): Float32Array | null;
+  playClip(id: number, gain?: number, loop?: boolean, pan?: number): number;
+  createStream(channels: number, sampleRate: number): number;
+  pushStreamSamples(id: number, samples: Float32Array): boolean;
+  closeStream(id: number): void;
+  createStreamFromFile(path: string, opts?: StreamFromFileOptions): number;
+  getStreamStats(id: number): StreamStats | null;
+  stopPlayback(id: number): void;
+  setPlaybackGain(id: number, gain: number): void;
+  setPlaybackLoop(id: number, loop: boolean): void;
+  setPlaybackPlaying(id: number, playing: boolean): void;
+  setPlaybackRegion(id: number, startFrame: number, endFrame: number): void;
+  setPlaybackRate(id: number, rate: number): void;
+  setPlaybackPan(id: number, pan: number): void;
+  getPlaybackPosition(id: number): number;
+  getPlaybackPositionSeconds(id: number): number;
+  seekPlayback(id: number, seconds: number): void;
 }
 
 /**
@@ -1953,6 +2543,20 @@ declare class GamepadEvent {
   readonly gamepad: Gamepad;
 }
 
+declare class GestureStreamView {
+  readonly active: boolean;
+  enrollFromAudio(name: string, samples: Float32Array, policy?: GesturePolicyOptions): number;
+  remove(name: string): boolean;
+  clear(): void;
+  templates(): string[];
+  inspect(name: string): GestureInspection | null;
+  reset(): void;
+  listen(opts: GestureListenOptions): void;
+  stop(): void;
+  isActive(): boolean;
+  sampleRate(): number;
+}
+
 /**
  * W3C ImageBitmap interface representing a bitmap image that can be drawn to a canvas.
  */
@@ -1995,6 +2599,47 @@ declare class ImageData {
    *  RGBA one-dimensional array of pixel data.
    */
   readonly data: Uint8ClampedArray;
+}
+
+declare class KwsStreamView {
+  readonly active: boolean;
+  enroll(name: string, phonemeIds: Int32Array | number[], policy?: KwsPolicyOptions): number;
+  enrollFromAudio(name: string, samples: Float32Array, policy?: KwsPolicyOptions): number;
+  enrollFromClasses(name: string, classIds: Int32Array | number[], policy?: KwsPolicyOptions): number;
+  inspect(name: string): KwsInspection | null;
+  remove(name: string): boolean;
+  clear(): void;
+  templates(): string[];
+  reset(): void;
+  listen(opts: KwsListenOptions): void;
+  stop(): void;
+  suspend(): void;
+  resume(): void;
+  isActive(): boolean;
+  isSuspended(): boolean;
+  isLoaded(): boolean;
+  sampleRate(): number;
+  prefixProgress(): number;
+  progress(): KwsProgress | null;
+  posterior(topK?: number): KwsPosterior | null;
+  stats(): KwsStats | null;
+  feed(samples: Float32Array): KwsEvent[] | null;
+}
+
+declare class ListenStream {
+  readonly id: number;
+  readonly kind: string;
+  readonly valid: boolean;
+  readonly wake: WakeStreamView;
+  readonly kws: KwsStreamView;
+  readonly sense: SenseStreamView;
+  readonly gesture: GestureStreamView;
+  retain(seconds?: number): void;
+  audio(startFrame: number, endFrame: number): Float32Array | null;
+  frame(): number;
+  info(): ListenRetentionInfo;
+  feed(samples: Float32Array): void;
+  close(): void;
 }
 
 /**
@@ -2815,6 +3460,76 @@ declare class Rave {
   decode(latent: Float32Array, frames: number, opts?: RaveDecodeOptions): RaveAudioBuffer;
 }
 
+declare class SenseStreamView {
+  readonly active: boolean;
+  start(opts?: SenseStartOptions): void;
+  stop(): void;
+  isActive(): boolean;
+  snapshot(): SenseSnapshot | null;
+  sampleRate(): number;
+  stats(): SenseStats | null;
+  feed(samples: Float32Array): SenseSnapshot | null;
+  analyze(samples: Float32Array, opts?: SenseStartOptions): SenseAnalysis | null;
+}
+
+declare class WhisperTokenizer {
+  readonly loaded: boolean;
+  encode(text: string): Int32Array | number[];
+  decode(tokenIds: Int32Array | number[]): string;
+  buildPrompt(opts?: object): Int32Array;
+}
+
+declare class WhisperModel {
+  readonly loaded: boolean;
+  readonly device: string;
+  transcribe(audio: Float32Array | SttAudioBuffer, promptOrOpts?: Int32Array | number[] | WhisperTranscribeOptions, opts?: WhisperTranscribeOptions): AsyncHandle;
+  createSession(): WhisperSession;
+}
+
+declare class WhisperSession {
+  readonly loaded: boolean;
+  transcribe(audio: Float32Array | SttAudioBuffer, promptOrOpts?: Int32Array | number[] | WhisperTranscribeOptions, opts?: WhisperTranscribeOptions): AsyncHandle;
+  reset(): void;
+}
+
+declare class ParakeetTokenizer {
+  readonly loaded: boolean;
+  encode(text: string): Int32Array | number[];
+  decode(tokenIds: Int32Array | number[]): string;
+}
+
+declare class ParakeetModel {
+  readonly loaded: boolean;
+  readonly device: string;
+  transcribe(audio: Float32Array | SttAudioBuffer, opts?: ParakeetTranscribeOptions): AsyncHandle;
+  createSession(): ParakeetSession;
+}
+
+declare class ParakeetSession {
+  readonly loaded: boolean;
+  transcribe(audio: Float32Array | SttAudioBuffer, opts?: ParakeetTranscribeOptions): AsyncHandle;
+  reset(): void;
+}
+
+declare class QwenAsrModel {
+  readonly loaded: boolean;
+  readonly device: string;
+  transcribe(audio: Float32Array | SttAudioBuffer, opts?: QwenAsrTranscribeOptions): AsyncHandle;
+  createSession(): QwenAsrSession;
+}
+
+declare class QwenAsrSession {
+  readonly loaded: boolean;
+  transcribe(audio: Float32Array | SttAudioBuffer, opts?: QwenAsrTranscribeOptions): AsyncHandle;
+  reset(): void;
+}
+
+declare class QwenAsrStream {
+  readonly loaded: boolean;
+  feed(audio: Float32Array | SttAudioBuffer): void;
+  finish(): QwenAsrEncodeResult;
+}
+
 /**
  * Chunked procedural and heightmap terrain manager instance.
  */
@@ -2924,6 +3639,73 @@ declare class TripoSplatPipeline {
    * Generate 3D Gaussian Splat cloud from input image.
    */
   generate(image: any, opts?: object): object;
+}
+
+declare class KokoroModel {
+  readonly loaded: boolean;
+  readonly device: string;
+  encodePhonemes(ipa: string): Int32Array;
+  loadVoice(path: string): Voice;
+  createSession(): KokoroSession;
+}
+
+declare class Voice {
+  readonly loaded: boolean;
+  readonly name: string;
+}
+
+declare class KokoroSession {
+  readonly loaded: boolean;
+  synthesize(phonemes: Int32Array | number[], voice: Voice, opts?: KokoroSynthesizeOptions): AsyncHandle;
+  reset(): void;
+}
+
+declare class QwenTtsModel {
+  readonly loaded: boolean;
+  readonly device: string;
+  readonly variant: string;
+  createSession(): QwenTtsSession;
+  encodeAudio(audio: Float32Array): QwenAudioCodes;
+  decodeCodes(codes: Int32Array): Float32Array;
+}
+
+declare class QwenTtsSession {
+  readonly loaded: boolean;
+  readonly variant: string;
+  synthesize(text: string, opts?: QwenSynthesizeOptions): AsyncHandle;
+  reset(): void;
+}
+
+declare class SupertonicModel {
+  readonly loaded: boolean;
+  readonly device: string;
+  loadVoiceStyle(path: string): SupertonicVoice;
+}
+
+declare class SupertonicVoice {
+  readonly loaded: boolean;
+  readonly name: string;
+}
+
+declare class SpeakerEncoder {
+  readonly loaded: boolean;
+  readonly device: string;
+  embedSpeaker(audio: Float32Array, opts?: SpeakerEncoderEmbedOptions): AsyncHandle;
+}
+
+declare class WakeStreamView {
+  readonly active: boolean;
+  listen(opts: WakeListenOptions): void;
+  stop(): void;
+  suspend(): void;
+  resume(): void;
+  lastScore(): number;
+  isActive(): boolean;
+  isSuspended(): boolean;
+  isLoaded(): boolean;
+  setThreshold(threshold: number): void;
+  stats(): WakeStats | null;
+  feed(samples: Float32Array, sampleRate?: number): any;
 }
 
 /**
@@ -3152,6 +3934,19 @@ declare namespace bro {
     function leafCluster(phyllotaxy: any, opts?: object): object;
   }
 
+  namespace gesture {
+    function enrollFromAudio(name: string, samples: Float32Array, policy?: GesturePolicyOptions): number;
+    function remove(name: string): boolean;
+    function clear(): void;
+    function templates(): string[];
+    function inspect(name: string): GestureInspection | null;
+    function reset(): void;
+    function listen(opts: GestureListenOptions): void;
+    function stop(): void;
+    function isActive(): boolean;
+    function sampleRate(): number;
+  }
+
   /**
    * Engine-level 3D transform gizmo namespace.
    */
@@ -3334,6 +4129,42 @@ declare namespace bro {
      *   bro.gpu.trim(); // release U-Net scratch before the VAE decode allocates
      */
     function trim(device?: string, keepBytes?: number): boolean;
+  }
+
+  namespace kws {
+    function load(opts: KwsPolicyOptions): void;
+    function unload(): void;
+    function enroll(name: string, phonemeIds: Int32Array | number[], policy?: KwsPolicyOptions): number;
+    function enrollFromAudio(name: string, samples: Float32Array, policy?: KwsPolicyOptions): number;
+    function enrollFromClasses(name: string, classIds: Int32Array | number[], policy?: KwsPolicyOptions): number;
+    function inspect(name: string): KwsInspection | null;
+    function remove(name: string): boolean;
+    function clear(): void;
+    function templates(): string[];
+    function reset(): void;
+    function listen(opts: KwsListenOptions): void;
+    function stop(): void;
+    function suspend(): void;
+    function resume(): void;
+    function isActive(): boolean;
+    function isSuspended(): boolean;
+    function isLoaded(): boolean;
+    function sampleRate(): number;
+    function prefixProgress(): number;
+    function progress(): KwsProgress | null;
+    function posterior(topK?: number): KwsPosterior | null;
+    function stats(): KwsStats | null;
+    function feed(samples: Float32Array): KwsEvent[] | null;
+  }
+
+  namespace listen {
+    function open(source?: ListenSource): ListenStream;
+    function supported(): boolean;
+    function apps(): AudioApp[];
+    function retain(seconds?: number): void;
+    function audio(startFrame: number, endFrame: number): Float32Array | null;
+    function frame(): number;
+    function info(): ListenRetentionInfo;
   }
 
   /**
@@ -3639,6 +4470,17 @@ declare namespace bro {
     function loadRave(modelDir: string, opts?: RaveLoadOptions): Rave;
   }
 
+  namespace sense {
+    function start(opts?: SenseStartOptions): void;
+    function stop(): void;
+    function isActive(): boolean;
+    function snapshot(): SenseSnapshot | null;
+    function sampleRate(): number;
+    function stats(): SenseStats | null;
+    function feed(samples: Float32Array): SenseSnapshot | null;
+    function analyze(samples: Float32Array, opts?: SenseStartOptions): SenseAnalysis | null;
+  }
+
   /**
    * Dedicated server and worker host runtime control namespace.
    */
@@ -3775,6 +4617,17 @@ declare namespace bro {
     function getDefaults(category?: string): object;
   }
 
+  namespace stt {
+    function init(): void;
+    function loadWhisper(dir: string, opts?: WhisperLoadOptions): WhisperModel | AsyncHandle;
+    function loadTokenizer(opts: TokenizerLoadOptions): WhisperTokenizer | AsyncHandle;
+    function loadParakeet(dir: string, opts?: WhisperLoadOptions): ParakeetModel | AsyncHandle;
+    function loadParakeetTokenizer(path: string, opts?: WhisperLoadOptions): ParakeetTokenizer | AsyncHandle;
+    function loadQwenAsr(dir: string, opts?: WhisperLoadOptions): QwenAsrModel | AsyncHandle;
+    function loadQwenAsrStream(dir: string, opts?: QwenAsrStreamOptions): QwenAsrStream | AsyncHandle;
+    function transcribe(model: object, audio: Float32Array | SttAudioBuffer, promptOrOpts?: any, opts?: object): AsyncHandle;
+  }
+
   /**
    * Diagnostic window onto text shaping, cluster mapping, and bidi resolution.
    */
@@ -3895,6 +4748,36 @@ declare namespace bro {
      * Request cancellation of active reconstruction generation.
      */
     function cancel(): void;
+  }
+
+  namespace tts {
+    function init(): void;
+    function loadKokoro(dir: string, opts?: KokoroLoadOptions): KokoroModel | AsyncHandle;
+    function loadQwen(dir: string, opts?: QwenLoadOptions): QwenTtsModel | AsyncHandle;
+    function loadSupertonic(dir: string, opts?: SupertonicLoadOptions): SupertonicModel | AsyncHandle;
+    function loadSpeakerEncoder(dir: string, opts?: SpeakerEncoderLoadOptions): SpeakerEncoder | AsyncHandle;
+    function phonemize(text: string, opts?: object): Int32Array;
+    function setAssetRoot(dir: string): void;
+    function setAssets(opts: TtsAssetsOptions): void;
+    function synthesize(model: object, textOrPhonemes: any, voiceOrOpts: any, opts?: object): AsyncHandle;
+    function synthesizeStream(model: object, textOrChunks: any, voiceOrOpts: any, opts?: object): AsyncHandle;
+    function decodeFrom(kokoro: KokoroModel, voice: Voice, asr: Float32Array, F0: Float32Array, N: Float32Array, nPhonemes: number, opts?: object): AsyncHandle;
+  }
+
+  namespace wake {
+    function load(opts: WakeLoadOptions): void;
+    function unload(): void;
+    function listen(opts: WakeListenOptions): void;
+    function stop(): void;
+    function suspend(): void;
+    function resume(): void;
+    function lastScore(): number;
+    function isActive(): boolean;
+    function isSuspended(): boolean;
+    function isLoaded(): boolean;
+    function setThreshold(threshold: number): void;
+    function stats(): WakeStats | null;
+    function feed(samples: Float32Array, sampleRate?: number): any;
   }
 
   /**

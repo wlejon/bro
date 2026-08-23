@@ -3,9 +3,7 @@
 #include "js/async_job.h"
 #include "js/runtime.h"
 #include "util/log.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <broaudio/dsp/fft.h>
 #include <broaudio/synth/voice_allocator.h>
 #include <broaudio/synth/modulation.h>
@@ -15,7 +13,6 @@
 #include <broaudio/io/audio_file.h>
 #include <broaudio/dsp/resampler.h>
 #include <broaudio/node/audio_node.h>
-
 #include <algorithm>
 #include <optional>
 #include <string>
@@ -26,12 +23,54 @@
 #include <memory>
 #include <cassert>
 #include <thread>
-
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace bro::js {
+
+static JSValue make_float32_array(JSContext* ctx, const float* data, size_t count)
+{
+    size_t byte_len = count * sizeof(float);
+    JSValue ab = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), byte_len);
+    if (JS_IsException(ab)) return ab;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
+    JSValue result = JS_CallConstructor(ctx, ctor, 1, &ab);
+    JS_FreeValue(ctx, ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, ab);
+    return result;
+}
+
+static bool resolve_f32(JSContext* ctx, JSValueConst v, const char* name,
+                        float** out, size_t* count)
+{
+    size_t byte_offset = 0, byte_len = 0, bpe = 0;
+    JSValue buf = JS_GetTypedArrayBuffer(ctx, v, &byte_offset, &byte_len, &bpe);
+    if (JS_IsException(buf)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
+        return false;
+    }
+    if (bpe != sizeof(float)) {
+        JS_FreeValue(ctx, buf);
+        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
+        return false;
+    }
+    size_t ab_len = 0;
+    uint8_t* ab_ptr = JS_GetArrayBuffer(ctx, &ab_len, buf);
+    JS_FreeValue(ctx, buf);
+    if (!ab_ptr) {
+        JS_ThrowTypeError(ctx, "%s has a detached or invalid buffer", name);
+        return false;
+    }
+    *out   = reinterpret_cast<float*>(ab_ptr + byte_offset);
+    *count = byte_len / sizeof(float);
+    return true;
+}
+
 using ::std::optional;
 using ::std::string;
 using ::std::clamp;
@@ -124,7 +163,7 @@ static broaudio::DistanceModel parseDistanceModel(const char* s) {
 }
 
 // ---------------------------------------------------------------------------
-// Wrapper structs — one per JS class (for unique qjsbind::class_id<T>)
+// Wrapper structs u2014 one per JS class (for unique qjsbind::class_id<T>)
 // ---------------------------------------------------------------------------
 
 struct AudioParamData {
@@ -138,7 +177,7 @@ struct AudioParamData {
 };
 
 struct AudioDestNodeData {
-    // Marker only — no data needed
+    // Marker only u2014 no data needed
 };
 
 struct AnalyserNodeData {
@@ -213,7 +252,7 @@ struct MidiInputData {
     JSValue pitchBendCallback = JS_UNDEFINED;
     JSValue rawCallback = JS_UNDEFINED;
     // One slot per CC number. The broaudio callback for a CC borrows the ref
-    // stored here rather than taking its own — every ref this struct owns must
+    // stored here rather than taking its own u2014 every ref this struct owns must
     // be reachable from a field, or it can neither be freed nor GC-marked.
     // A default member initializer, not a constructor: the struct is created
     // with aggregate init below, and a user-declared ctor would break that.
@@ -1157,7 +1196,7 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
         return JS_ThrowTypeError(ctx, "createClipFromFileAsync: file path required");
     const char* cpath = JS_ToCString(ctx, argv[0]);
     if (!cpath) return JS_EXCEPTION;
-    // Resolve on the JS thread — the decode runs on a worker that has no
+    // Resolve on the JS thread u2014 the decode runs on a worker that has no
     // notion of the app directory or the mount table.
     ::std::string pathCopy = resolveAssetPath(cpath);
     JS_FreeCString(ctx, cpath);
@@ -1181,7 +1220,7 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
     st->reject  = resolving[1];
 
     auto work = [st](const ::std::atomic<bool>&) {
-        // createClip locks the control-plane media mutex — safe off-thread.
+        // createClip locks the control-plane media mutex u2014 safe off-thread.
         st->clipId = st->engine->createClipFromFileEx(st->path.c_str(), &st->error);
     };
     auto done = [st](JSContext* c, bool cancelled, const ::std::string& jobError) {
@@ -1215,7 +1254,7 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
 
 // createStreamFromFile(path, options?) -> playbackId. Disk-streamed playback:
 // the file decodes incrementally on a broaudio worker thread into a ring the
-// mixer consumes — large files never sit in RAM. Throws with the decode error
+// mixer consumes u2014 large files never sit in RAM. Throws with the decode error
 // on failure. options: { ringFrames, prebufferFrames, loop, gain }.
 static JSValue js_audioctx_createStreamFromFile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
@@ -1438,7 +1477,7 @@ static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val, int a
     if (argc >= 3) { loop = JS_ToBool(ctx, argv[2]); }
     // Optional 4th arg: a sample-accurate start time (engine seconds, from
     // ctx.currentTime). Streaming uses it to queue chunks on the audio clock so
-    // they join gaplessly — no main-thread setTimeout jitter or clock drift. A
+    // they join gaplessly u2014 no main-thread setTimeout jitter or clock drift. A
     // `when` at/before now plays immediately, same as the 3-arg form.
     if (argc >= 4 && JS_IsNumber(argv[3])) {
         double when; JS_ToFloat64(ctx, &when, argv[3]);
@@ -1545,7 +1584,7 @@ static JSValue js_va_setStealPolicy(JSContext* ctx, JSValueConst this_val, int a
 }
 
 // ---------------------------------------------------------------------------
-// Preset (de)serialization — JS object <-> broaudio preset structs
+// Preset (de)serialization u2014 JS object <-> broaudio preset structs
 // ---------------------------------------------------------------------------
 //
 // broaudio's toJson/fromJson operate on plain preset structs (VoicePreset,
@@ -2142,7 +2181,7 @@ static JSValue js_audioctx_loadPreset(JSContext* ctx, JSValueConst, int argc, JS
 
 // Render numFrames through the full pipeline (no device) and return the latest
 // mono mixdown as a Float32Array. If a Float32Array is passed as the 2nd arg it
-// is filled in place (up to its length) and returned. Headless only — driving
+// is filled in place (up to its length) and returned. Headless only u2014 driving
 // the pipeline from the main thread while a live device callback runs would race.
 static JSValue js_audioctx_renderBlock(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     assertMainAudioThread();
@@ -2221,837 +2260,9 @@ static JSValue js_seq_automationInterpMode(JSContext* ctx, JSValueConst this_val
     return JS_NewString(ctx, s);
 }
 
-// ---------------------------------------------------------------------------
-// Install — register all classes using qjsbind::Class<T>
-// ---------------------------------------------------------------------------
-
-void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
-{
-    s_audioEngine = engine;
-
-    // --- AudioParam ---
-    {
-        qjsbind::Class<AudioParamData>(ctx, "AudioParam")
-            .prop("value",
-                [](AudioParamData* p) -> double { return p->value; },
-                [](AudioParamData* p, double v) {
-                    p->value = static_cast<float>(v);
-                    switch (p->target) {
-                        case AudioParamData::Target::Frequency:
-                            p->engine->setFrequency(p->voiceId, p->value); break;
-                        case AudioParamData::Target::Gain:
-                            p->engine->setGain(p->voiceId, p->value); break;
-                        case AudioParamData::Target::Pan:
-                            p->engine->setVoicePan(p->voiceId, p->value); break;
-                        case AudioParamData::Target::Attack:
-                            p->engine->setAttackTime(p->voiceId, p->value); break;
-                        case AudioParamData::Target::Decay:
-                            p->engine->setDecayTime(p->voiceId, p->value); break;
-                        case AudioParamData::Target::SustainLevel:
-                            p->engine->setSustainLevel(p->voiceId, p->value); break;
-                        case AudioParamData::Target::Release:
-                            p->engine->setReleaseTime(p->voiceId, p->value); break;
-                        case AudioParamData::Target::FilterFrequency:
-                            p->engine->setFilterFrequency(p->voiceId, p->value); break;
-                        case AudioParamData::Target::FilterQ:
-                            p->engine->setFilterQ(p->voiceId, p->value); break;
-                        case AudioParamData::Target::FilterGain:
-                            p->engine->setFilterGain(p->voiceId, p->value); break;
-                        case AudioParamData::Target::PitchBend:
-                            p->engine->setVoicePitchBend(p->voiceId, p->value); break;
-                    }
-                });
-    }
-
-    // --- AudioDestinationNode ---
-    {
-        qjsbind::Class<AudioDestNodeData>(ctx, "AudioDestinationNode");
-    }
-
-    // --- AnalyserNode ---
-    {
-        qjsbind::Class<AnalyserNodeData>(ctx, "AnalyserNode")
-            .prop("fftSize",
-                [](AnalyserNodeData* d) -> int { return d->fftSize; },
-                [](AnalyserNodeData* d, int v) {
-                    if (v >= 32 && v <= 32768 && (v & (v - 1)) == 0) {
-                        d->fftSize = v;
-                        d->smoothedMagnitudes.clear();
-                    }
-                })
-            .get("frequencyBinCount",
-                [](AnalyserNodeData* d) -> int { return d->fftSize / 2; })
-            .prop("minDecibels",
-                [](AnalyserNodeData* d) -> double { return d->minDecibels; },
-                [](AnalyserNodeData* d, double v) { d->minDecibels = static_cast<float>(v); })
-            .prop("maxDecibels",
-                [](AnalyserNodeData* d) -> double { return d->maxDecibels; },
-                [](AnalyserNodeData* d, double v) { d->maxDecibels = static_cast<float>(v); })
-            .prop("smoothingTimeConstant",
-                [](AnalyserNodeData* d) -> double { return d->smoothingTimeConstant; },
-                [](AnalyserNodeData* d, double v) { d->smoothingTimeConstant = static_cast<float>(::std::clamp(v, 0.0, 1.0)); })
-            .prop("source",
-                [](AnalyserNodeData* d) -> int { return d->source; },
-                [](AnalyserNodeData* d, int v) { d->source = (v == 2) ? 2 : (v == 1) ? 1 : 0; })
-            .method_raw("getFloatFrequencyData", js_analyser_getFloatFrequencyData, 1)
-            .method_raw("getByteFrequencyData", js_analyser_getByteFrequencyData, 1)
-            .method_raw("getFloatTimeDomainData", js_analyser_getFloatTimeDomainData, 1)
-            .method_raw("getByteTimeDomainData", js_analyser_getByteTimeDomainData, 1)
-            .method("connect",
-                [](AnalyserNodeData*, JSContext* ctx, JSValue arg) -> JSValue {
-                    return JS_DupValue(ctx, arg);
-                })
-            .method("disconnect",
-                [](AnalyserNodeData*) {});
-    }
-
-    // --- MediaStream ---
-    {
-        qjsbind::Class<MicStreamData>(ctx, "MediaStream");
-    }
-
-    // --- MediaStreamAudioSourceNode ---
-    {
-        qjsbind::Class<MicSourceData>(ctx, "MediaStreamAudioSourceNode")
-            .method_raw("connect", js_micsource_connect, 1)
-            .method("disconnect", [](MicSourceData*) {});
-    }
-
-    // --- OscillatorNode ---
-    {
-        qjsbind::Class<OscNodeData>(ctx, "OscillatorNode")
-            .get("voiceId",
-                [](OscNodeData* d) -> int { return d->voiceId; })
-            .prop("type",
-                [](OscNodeData* d, JSContext* ctx) -> JSValue {
-                    return JS_NewString(ctx, d->type.c_str());
-                },
-                [](OscNodeData* d, JSContext* ctx, JSValue val) {
-                    const char* s = JS_ToCString(ctx, val);
-                    if (!s) return;
-                    d->type = s;
-                    d->engine->setWaveform(d->voiceId, parseWaveform(s));
-                    JS_FreeCString(ctx, s);
-                })
-            .method_raw("connect", js_osc_connect, 1)
-            .method("disconnect", [](OscNodeData*) {})
-            .method_raw("start", js_osc_start, 1)
-            .method_raw("stop", js_osc_stop, 1);
-    }
-
-    // --- GainNode ---
-    {
-        qjsbind::Class<GainNodeData>(ctx, "GainNode")
-            .method("connect",
-                [](GainNodeData*, JSContext* ctx, JSValue arg) -> JSValue {
-                    return JS_DupValue(ctx, arg);
-                })
-            .method("disconnect", [](GainNodeData*) {});
-    }
-
-    // --- BiquadFilterNode ---
-    {
-        qjsbind::Class<BiquadFilterNodeData>(ctx, "BiquadFilterNode")
-            .method_raw("connect", js_biquadfilter_connect, 1)
-            .method_raw("disconnect", js_biquadfilter_disconnect, 0);
-
-        // type getter/setter needs this_val for __type property, use method_raw workaround
-        // We register type as methods since prop() doesn't support this_val access
-        // Actually, the original used JS_CGETSET_DEF which maps to prop. But
-        // since the getter reads from __type on this_val and setter writes to it,
-        // we can't use qjsbind prop(). Keep as raw methods that simulate getter/setter.
-        // Note: BiquadFilterNode type property was registered via JS_CGETSET_DEF in the
-        // original code, but since qjsbind prop lambdas don't have access to this_val
-        // (only self pointer), we'll just use the two raw methods above + add the
-        // type property via JS_DefinePropertyGetSet manually after class registration.
-        // However, the class destructor has already run. Instead, we handle this by
-        // making the type methods work on the biquad data directly, storing the type
-        // string in the wrapper struct. Actually simpler: just use method_raw for get/set.
-    }
-
-    // --- VoiceAllocator ---
-    {
-        qjsbind::Class<VoiceAllocatorData>(ctx, "VoiceAllocator")
-            .gc_mark([](VoiceAllocatorData* d, JSRuntime* rt, JS_MarkFunc* mark) {
-                JS_MarkValue(rt, d->voiceSetupCallback, mark);
-                JS_MarkValue(rt, d->lambdaCbRef, mark);
-            })
-            .method_raw("noteOn", js_va_noteOn, 2)
-            .method_raw("noteOff", js_va_noteOff, 1)
-            .method_raw("allNotesOff", js_va_allNotesOff, 0)
-            .method_raw("setStealPolicy", js_va_setStealPolicy, 1)
-            .method("setMaxVoices",
-                [](VoiceAllocatorData* d, int count) { d->allocator->setMaxVoices(count); })
-            .method_raw("setVoiceSetup", js_va_setVoiceSetup, 1)
-            .method("voiceForNote",
-                [](VoiceAllocatorData* d, int note) -> int { return d->allocator->voiceForNote(note); })
-            .get("activeVoiceCount",
-                [](VoiceAllocatorData* d) -> int { return d->allocator->activeVoiceCount(); });
-    }
-
-    // --- ModMatrix ---
-    {
-        qjsbind::Class<ModMatrixData>(ctx, "ModMatrix")
-            .method_raw("setLfoShape", js_mod_setLfoShape, 2)
-            .method("setLfoRate",
-                [](ModMatrixData* d, int idx, double hz) { d->modMatrix->setLfoRate(idx, static_cast<float>(hz)); })
-            .method("setLfoDepth",
-                [](ModMatrixData* d, int idx, double v) { d->modMatrix->setLfoDepth(idx, static_cast<float>(v)); })
-            .method("setLfoOffset",
-                [](ModMatrixData* d, int idx, double v) { d->modMatrix->setLfoOffset(idx, static_cast<float>(v)); })
-            .method("setLfoBipolar",
-                [](ModMatrixData* d, int idx, bool v) { d->modMatrix->setLfoBipolar(idx, v); })
-            .method("setLfoSync",
-                [](ModMatrixData* d, int idx, bool v) { d->modMatrix->setLfoSync(idx, v); })
-            .method_raw("addRoute", js_mod_addRoute, 3)
-            .method("removeRoute",
-                [](ModMatrixData* d, int idx) { d->modMatrix->removeRoute(idx); })
-            .method("setRouteAmount",
-                [](ModMatrixData* d, int idx, double v) { d->modMatrix->setRouteAmount(idx, static_cast<float>(v)); })
-            .method("setRouteEnabled",
-                [](ModMatrixData* d, int idx, bool v) { d->modMatrix->setRouteEnabled(idx, v); })
-            .method("clearAllRoutes",
-                [](ModMatrixData* d) { d->modMatrix->clearAllRoutes(); })
-            .method("setModWheel",
-                [](ModMatrixData* d, double v) { d->modMatrix->setModWheel(static_cast<float>(v)); })
-            .method("setAftertouch",
-                [](ModMatrixData* d, double v) { d->modMatrix->setAftertouch(static_cast<float>(v)); })
-            .get("routeCount",
-                [](ModMatrixData* d) -> int { return d->modMatrix->routeCount(); });
-    }
-
-    // --- MidiInput ---
-    {
-        qjsbind::Class<MidiInputData>(ctx, "MidiInput")
-            .gc_mark([](MidiInputData* d, JSRuntime* rt, JS_MarkFunc* mark) {
-                JS_MarkValue(rt, d->pitchBendCallback, mark);
-                JS_MarkValue(rt, d->rawCallback, mark);
-                for (JSValue& v : d->ccCallbacks) JS_MarkValue(rt, v, mark);
-            })
-            .method_raw("availablePorts", js_midi_availablePorts, 0)
-            .method("open",
-                [](MidiInputData* d, int port) -> bool { return d->midi->open(port); })
-            .method("close",
-                [](MidiInputData* d) { d->midi->close(); })
-            .method_raw("connectToAllocator", js_midi_connectToAllocator, 1)
-            .method_raw("onControlChange", js_midi_onControlChange, 2)
-            .method_raw("onPitchBend", js_midi_onPitchBend, 1)
-            .method_raw("onRawEvent", js_midi_onRawEvent, 1)
-            .method("processEvents",
-                [](MidiInputData* d) { d->midi->processEvents(); })
-            .get("isOpen",
-                [](MidiInputData* d) -> bool { return d->midi->isOpen(); });
-    }
-
-    // --- Sequence ---
-    {
-        qjsbind::Class<SequenceData>(ctx, "Sequence")
-            .gc_mark([](SequenceData* d, JSRuntime* rt, JS_MarkFunc* mark) {
-                for (JSValue v : d->automationCallbacks) JS_MarkValue(rt, v, mark);
-            })
-            .method("setBPM",
-                [](SequenceData* d, double v) {
-                    if (s_audioEngine)
-                        d->seq->setBPM(v, s_audioEngine->currentTime());
-                    else
-                        d->seq->setBPM(v);
-                })
-            .method("setTimeSignature",
-                [](SequenceData* d, int num, int den) { d->seq->setTimeSignature(num, den); })
-            .method("addNote",
-                [](SequenceData* d, double beat, int note, double vel, double dur) {
-                    broaudio::NoteEvent ev{beat, note, static_cast<float>(vel), dur};
-                    d->seq->addNote(ev);
-                })
-            .method("removeNote",
-                [](SequenceData* d, int idx) { d->seq->removeNote(idx); })
-            .method("clearNotes",
-                [](SequenceData* d) { d->seq->clearNotes(); })
-            .method("play",
-                [](SequenceData* d, optional<double> t) {
-                    double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
-                    d->seq->play(when);
-                })
-            .method("stop",
-                [](SequenceData* d) { d->seq->stop(); })
-            .method("pause",
-                [](SequenceData* d, optional<double> t) {
-                    double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
-                    d->seq->pause(when);
-                })
-            .method("resume",
-                [](SequenceData* d, optional<double> t) {
-                    double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
-                    d->seq->resume(when);
-                })
-            .method("setLoopEnabled",
-                [](SequenceData* d, bool v) { d->seq->setLoopEnabled(v); })
-            .method("setLoopRange",
-                [](SequenceData* d, double start, double end) { d->seq->setLoopRange(start, end); })
-            .method("currentBeat",
-                [](SequenceData* d, optional<double> t) -> double {
-                    double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
-                    return d->seq->currentBeat(when);
-                })
-            .method("update",
-                [](SequenceData* d, optional<double> t) {
-                    double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
-                    d->seq->update(when);
-                })
-            .get("bpm",
-                [](SequenceData* d) -> double { return d->seq->bpm(); })
-            .get("playing",
-                [](SequenceData* d) -> bool { return d->seq->isPlaying(); })
-            .get("paused",
-                [](SequenceData* d) -> bool { return d->seq->isPaused(); })
-            .get("loopEnabled",
-                [](SequenceData* d) -> bool { return d->seq->isLoopEnabled(); })
-            .get("noteCount",
-                [](SequenceData* d) -> int { return d->seq->noteCount(); })
-            .method_raw("note", js_seq_note, 1)
-            .method_raw("addAutomationLane", js_seq_addAutomationLane, 1)
-            .method_raw("removeAutomationLane", js_seq_removeAutomationLane, 1)
-            .method_raw("clearAutomationLanes", js_seq_clearAutomationLanes, 0)
-            .method("addAutomationPoint",
-                [](SequenceData* d, int laneIdx, double beat, double value) {
-                    if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
-                        d->seq->automationLane(laneIdx).addPoint(beat, static_cast<float>(value));
-                })
-            .method("removeAutomationPoint",
-                [](SequenceData* d, int laneIdx, int ptIdx) {
-                    if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
-                        d->seq->automationLane(laneIdx).removePoint(ptIdx);
-                })
-            .method("clearAutomationPoints",
-                [](SequenceData* d, int laneIdx) {
-                    if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
-                        d->seq->automationLane(laneIdx).clearPoints();
-                })
-            .method_raw("setAutomationInterpMode", js_seq_setAutomationInterpMode, 2)
-            .method("automationPointCount",
-                [](SequenceData* d, int lane) -> int {
-                    if (lane < 0 || lane >= d->seq->automationLaneCount()) return 0;
-                    return d->seq->automationLane(lane).pointCount();
-                })
-            .method_raw("automationPoint", js_seq_automationPoint, 2)
-            .method_raw("automationInterpMode", js_seq_automationInterpMode, 1)
-            .get("automationLaneCount",
-                [](SequenceData* d) -> int { return d->seq->automationLaneCount(); });
-    }
-
-    // --- AudioContext ---
-    {
-        qjsbind::Class<AudioCtxData>(ctx, "AudioContext")
-            .constructor([](JSContext* ctx, int, JSValueConst*) -> AudioCtxData* {
-                if (!s_audioEngine) {
-                    JS_ThrowInternalError(ctx, "Audio not initialized");
-                    return nullptr;
-                }
-                auto* data = new AudioCtxData{s_audioEngine};
-                // We need to set destination after wrap; handled below via __postCtor
-                return data;
-            })
-            // Properties
-            .get("currentTime",
-                [](AudioCtxData* d) -> double { return d->engine->currentTime(); })
-            .get("sampleRate",
-                [](AudioCtxData* d) -> int { return d->engine->sampleRate(); })
-            .get("outputLatency",
-                [](AudioCtxData* d) -> double { return d->engine->outputLatencySeconds(); })
-            .prop("masterGain",
-                [](AudioCtxData* d) -> double { return d->engine->masterGain(); },
-                [](AudioCtxData* d, double v) { d->engine->setMasterGain(static_cast<float>(v)); })
-            .prop("micMuted",
-                [](AudioCtxData* d) -> bool { return d->engine->isMicMuted(); },
-                [](AudioCtxData* d, bool v) { d->engine->setMicMuted(v); })
-            .prop("micMonitorGain",
-                [](AudioCtxData* d) -> double { return d->engine->micMonitorGain(); },
-                [](AudioCtxData* d, double v) { d->engine->setMicMonitorGain(static_cast<float>(clamp(v, 0.0, 1.0))); })
-            .prop("micBus",
-                [](AudioCtxData* d) -> int { return d->engine->micBus(); },
-                [](AudioCtxData* d, int v) { d->engine->setMicBus(v); })
-            .get("recording",
-                [](AudioCtxData* d) -> bool { return d->engine->isRecording(); })
-
-            // Node creation (raw — they create objects of other types)
-            .method_raw("createOscillator", js_audioctx_createOscillator, 0)
-            .method_raw("createGain", js_audioctx_createGain, 0)
-            .method_raw("createAnalyser", js_audioctx_createAnalyser, 0)
-            .method_raw("createBiquadFilter", js_audioctx_createBiquadFilter, 0)
-            .method_raw("createMediaStreamSource", js_audioctx_createMediaStreamSource, 1)
-
-            // Master delay
-            .method("setDelayEnabled",
-                [](AudioCtxData* d, bool v) { d->engine->setDelayEnabled(v); })
-            .method("setDelayTime",
-                [](AudioCtxData* d, double v) { d->engine->setDelayTime(static_cast<float>(v)); })
-            .method("setDelayFeedback",
-                [](AudioCtxData* d, double v) { d->engine->setDelayFeedback(static_cast<float>(v)); })
-            .method("setDelayMix",
-                [](AudioCtxData* d, double v) { d->engine->setDelayMix(static_cast<float>(v)); })
-
-            // Master reverb
-            .method("setReverbEnabled",
-                [](AudioCtxData* d, bool v) { d->engine->setBusReverbEnabled(0, v); })
-            .method("setReverbRoomSize",
-                [](AudioCtxData* d, double v) { d->engine->setBusReverbRoomSize(0, static_cast<float>(v)); })
-            .method("setReverbDamping",
-                [](AudioCtxData* d, double v) { d->engine->setBusReverbDamping(0, static_cast<float>(v)); })
-            .method("setReverbMix",
-                [](AudioCtxData* d, double v) { d->engine->setBusReverbMix(0, static_cast<float>(v)); })
-
-            // Master chorus
-            .method("setChorusEnabled",
-                [](AudioCtxData* d, bool v) { d->engine->setBusChorusEnabled(0, v); })
-            .method("setChorusRate",
-                [](AudioCtxData* d, double v) { d->engine->setBusChorusRate(0, static_cast<float>(v)); })
-            .method("setChorusDepth",
-                [](AudioCtxData* d, double v) { d->engine->setBusChorusDepth(0, static_cast<float>(v)); })
-            .method("setChorusMix",
-                [](AudioCtxData* d, double v) { d->engine->setBusChorusMix(0, static_cast<float>(v)); })
-            .method("setChorusFeedback",
-                [](AudioCtxData* d, double v) { d->engine->setBusChorusFeedback(0, static_cast<float>(v)); })
-            .method("setChorusBaseDelay",
-                [](AudioCtxData* d, double v) { d->engine->setBusChorusBaseDelay(0, static_cast<float>(v)); })
-
-            // Master compressor
-            .method("setCompressorEnabled",
-                [](AudioCtxData* d, bool v) { d->engine->setBusCompressorEnabled(0, v); })
-            .method("setCompressorThreshold",
-                [](AudioCtxData* d, double v) { d->engine->setBusCompressorThreshold(0, static_cast<float>(v)); })
-            .method("setCompressorRatio",
-                [](AudioCtxData* d, double v) { d->engine->setBusCompressorRatio(0, static_cast<float>(v)); })
-            .method("setCompressorAttack",
-                [](AudioCtxData* d, double v) { d->engine->setBusCompressorAttack(0, static_cast<float>(v)); })
-            .method("setCompressorRelease",
-                [](AudioCtxData* d, double v) { d->engine->setBusCompressorRelease(0, static_cast<float>(v)); })
-
-            // Master limiter (lookahead peak limiter on the master bus)
-            .method("setLimiterEnabled",
-                [](AudioCtxData* d, bool v) { d->engine->setLimiterEnabled(v); })
-            .method("setLimiterThreshold",
-                [](AudioCtxData* d, double dB) { d->engine->setLimiterThreshold(static_cast<float>(dB)); })
-            .method("setLimiterRelease",
-                [](AudioCtxData* d, double ms) { d->engine->setLimiterRelease(static_cast<float>(ms)); })
-
-            // Mix bus API
-            .method("createBus",
-                [](AudioCtxData* d) -> int { return d->engine->createBus(); })
-            .method("deleteBus",
-                [](AudioCtxData* d, int id) { d->engine->deleteBus(id); })
-            .method("setBusGain",
-                [](AudioCtxData* d, int id, double v) { d->engine->setBusGain(id, static_cast<float>(v)); })
-            .method("setBusPan",
-                [](AudioCtxData* d, int id, double v) { d->engine->setBusPan(id, static_cast<float>(v)); })
-            .method("setBusMuted",
-                [](AudioCtxData* d, int id, bool v) { d->engine->setBusMuted(id, v); })
-            .method("setBusSolo",
-                [](AudioCtxData* d, int id, bool v) { d->engine->setBusSolo(id, v); })
-            .method("getBusSolo",
-                [](AudioCtxData* d, int id) -> bool { return d->engine->getBusSolo(id); })
-            .method("allocateBusFilterSlot",
-                [](AudioCtxData* d, int busId) -> int { return d->engine->allocateBusFilterSlot(busId); })
-            .method("releaseBusFilterSlot",
-                [](AudioCtxData* d, int busId, int slot) { d->engine->releaseBusFilterSlot(busId, slot); })
-            .method("setBusFilterEnabled",
-                [](AudioCtxData* d, int busId, int slot, bool v) { d->engine->setBusFilterEnabled(busId, slot, v); })
-            .method_raw("setBusFilterType", js_audioctx_setBusFilterType, 3)
-            .method("setBusFilterFrequency",
-                [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterFrequency(busId, slot, static_cast<float>(v)); })
-            .method("setBusFilterQ",
-                [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterQ(busId, slot, static_cast<float>(v)); })
-            .method("setBusFilterGain",
-                [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterGain(busId, slot, static_cast<float>(v)); })
-
-            // Per-bus effects
-            .method("setBusDelayEnabled",
-                [](AudioCtxData* d, int busId, bool v) { d->engine->setBusDelayEnabled(busId, v); })
-            .method("setBusDelayTime",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDelayTime(busId, static_cast<float>(v)); })
-            .method("setBusDelayFeedback",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDelayFeedback(busId, static_cast<float>(v)); })
-            .method("setBusDelayMix",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDelayMix(busId, static_cast<float>(v)); })
-            .method("setBusCompressorEnabled",
-                [](AudioCtxData* d, int busId, bool v) { d->engine->setBusCompressorEnabled(busId, v); })
-            .method("setBusCompressorThreshold",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorThreshold(busId, static_cast<float>(v)); })
-            .method("setBusCompressorRatio",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorRatio(busId, static_cast<float>(v)); })
-            .method("setBusCompressorAttack",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorAttack(busId, static_cast<float>(v)); })
-            .method("setBusCompressorRelease",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorRelease(busId, static_cast<float>(v)); })
-            .method("setBusReverbEnabled",
-                [](AudioCtxData* d, int busId, bool v) { d->engine->setBusReverbEnabled(busId, v); })
-            .method("setBusReverbRoomSize",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusReverbRoomSize(busId, static_cast<float>(v)); })
-            .method("setBusReverbDamping",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusReverbDamping(busId, static_cast<float>(v)); })
-            .method("setBusReverbMix",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusReverbMix(busId, static_cast<float>(v)); })
-            .method("setBusChorusEnabled",
-                [](AudioCtxData* d, int busId, bool v) { d->engine->setBusChorusEnabled(busId, v); })
-            .method("setBusChorusRate",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusRate(busId, static_cast<float>(v)); })
-            .method("setBusChorusDepth",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusDepth(busId, static_cast<float>(v)); })
-            .method("setBusChorusMix",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusMix(busId, static_cast<float>(v)); })
-            .method("setBusChorusFeedback",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusFeedback(busId, static_cast<float>(v)); })
-            .method("setBusChorusBaseDelay",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusBaseDelay(busId, static_cast<float>(v)); })
-            .method("setBusEqEnabled",
-                [](AudioCtxData* d, int busId, bool v) { d->engine->setBusEqEnabled(busId, v); })
-            .method("setBusEqBandGain",
-                [](AudioCtxData* d, int busId, int band, double v) { d->engine->setBusEqBandGain(busId, band, static_cast<float>(v)); })
-            .method("setBusEqMasterGain",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusEqMasterGain(busId, static_cast<float>(v)); })
-            .method("setBusDistortionEnabled",
-                [](AudioCtxData* d, int busId, bool v) { d->engine->setBusDistortionEnabled(busId, v); })
-            .method("setBusDistortionMode",
-                [](AudioCtxData* d, int busId, string mode) {
-                    broaudio::DistortionMode m = broaudio::DistortionMode::SoftClip;
-                    if (mode == "softclip") m = broaudio::DistortionMode::SoftClip;
-                    else if (mode == "hardclip") m = broaudio::DistortionMode::HardClip;
-                    else if (mode == "foldback") m = broaudio::DistortionMode::Foldback;
-                    else if (mode == "bitcrush") m = broaudio::DistortionMode::Bitcrush;
-                    d->engine->setBusDistortionMode(busId, m);
-                })
-            .method("setBusDistortionDrive",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionDrive(busId, static_cast<float>(v)); })
-            .method("setBusDistortionMix",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionMix(busId, static_cast<float>(v)); })
-            .method("setBusDistortionOutputGain",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionOutputGain(busId, static_cast<float>(v)); })
-            .method("setBusDistortionCrushBits",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionCrushBits(busId, static_cast<float>(v)); })
-            .method("setBusDistortionCrushRate",
-                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionCrushRate(busId, static_cast<float>(v)); })
-            .method("setBusCompressorSidechain",
-                [](AudioCtxData* d, int busId, int scBusId) { d->engine->setBusCompressorSidechain(busId, scBusId); })
-
-            // Bus metering
-            .method("getBusPeakL",
-                [](AudioCtxData* d, int busId) -> double { return d->engine->getBusPeakL(busId); })
-            .method("getBusPeakR",
-                [](AudioCtxData* d, int busId) -> double { return d->engine->getBusPeakR(busId); })
-            .method("getBusRmsL",
-                [](AudioCtxData* d, int busId) -> double { return d->engine->getBusRmsL(busId); })
-            .method("getBusRmsR",
-                [](AudioCtxData* d, int busId) -> double { return d->engine->getBusRmsR(busId); })
-
-            // Sample-accurate scheduling
-            .method("scheduleNoteOn",
-                [](AudioCtxData* d, int voiceId, double when) { d->engine->scheduleNoteOn(voiceId, when); })
-            .method("scheduleNoteOff",
-                [](AudioCtxData* d, int voiceId, double when) { d->engine->scheduleNoteOff(voiceId, when); })
-
-            // Voice/clip bus routing
-            .method("setVoiceBus",
-                [](AudioCtxData* d, int voiceId, int busId) { d->engine->setVoiceBus(voiceId, busId); })
-            .method("setPlaybackBus",
-                [](AudioCtxData* d, int id, int busId) { d->engine->setPlaybackBus(id, busId); })
-
-            // Offline effect processing
-            .method_raw("processEffectsOffline", js_audioctx_processEffectsOffline, 2)
-
-            // Offline render (headless — pump the full pipeline without a device)
-            .method_raw("renderBlock", js_audioctx_renderBlock, 1)
-
-            // Preset serialization (JS object <-> JSON) + apply to live engine
-            .method_raw("voicePresetToJson", js_audioctx_voicePresetToJson, 1)
-            .method_raw("busPresetToJson", js_audioctx_busPresetToJson, 1)
-            .method_raw("modPresetToJson", js_audioctx_modPresetToJson, 1)
-            .method_raw("enginePresetToJson", js_audioctx_enginePresetToJson, 1)
-            .method_raw("voicePresetFromJson", js_audioctx_voicePresetFromJson, 1)
-            .method_raw("busPresetFromJson", js_audioctx_busPresetFromJson, 1)
-            .method_raw("modPresetFromJson", js_audioctx_modPresetFromJson, 1)
-            .method_raw("enginePresetFromJson", js_audioctx_enginePresetFromJson, 1)
-            .method_raw("applyVoicePreset", js_audioctx_applyVoicePreset, 2)
-            .method_raw("applyBusPreset", js_audioctx_applyBusPreset, 2)
-            .method_raw("applyModPreset", js_audioctx_applyModPreset, 1)
-            .method_raw("applyEnginePreset", js_audioctx_applyEnginePreset, 1)
-            .method_raw("savePreset", js_audioctx_savePreset, 2)
-            .method_raw("loadPreset", js_audioctx_loadPreset, 1)
-
-            // Voice lifecycle
-            .method("createVoice",
-                [](AudioCtxData* d) -> int { return d->engine->createVoice(); })
-            .method("removeVoice",
-                [](AudioCtxData* d, int voiceId) { d->engine->removeVoice(voiceId); })
-            .method("startVoice",
-                [](AudioCtxData* d, int voiceId, double when) { d->engine->startVoice(voiceId, when); })
-            .method("stopVoice",
-                [](AudioCtxData* d, int voiceId, double when) { d->engine->stopVoice(voiceId, when); })
-            .method("setVoicePersistent",
-                [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoicePersistent(voiceId, v); })
-
-            // Voice note context
-            .method("setVoiceNote",
-                [](AudioCtxData* d, int voiceId, int note, double vel) {
-                    d->engine->setVoiceNote(voiceId, note, static_cast<float>(vel));
-                })
-
-            // Direct voice parameter control
-            .method_raw("setVoiceWaveform", js_audioctx_setVoiceWaveform, 2)
-            .method("setVoiceFrequency",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setFrequency(voiceId, static_cast<float>(v)); })
-            .method("setVoiceGain",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setGain(voiceId, static_cast<float>(v)); })
-            .method("setVoicePan",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoicePan(voiceId, static_cast<float>(v)); })
-            .method("setVoiceAttack",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setAttackTime(voiceId, static_cast<float>(v)); })
-            .method("setVoiceDecay",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setDecayTime(voiceId, static_cast<float>(v)); })
-            .method("setVoiceSustain",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setSustainLevel(voiceId, static_cast<float>(v)); })
-            .method("setVoiceRelease",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setReleaseTime(voiceId, static_cast<float>(v)); })
-            .method("setVoicePitchBend",
-                [](AudioCtxData* d, int voiceId, double semitones) { d->engine->setVoicePitchBend(voiceId, static_cast<float>(semitones)); })
-
-            // Unison
-            .method("setVoiceUnisonCount",
-                [](AudioCtxData* d, int voiceId, int count) { d->engine->setVoiceUnisonCount(voiceId, count); })
-            .method("setVoiceUnisonDetune",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceUnisonDetune(voiceId, static_cast<float>(v)); })
-            .method("setVoiceUnisonStereoWidth",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceUnisonStereoWidth(voiceId, static_cast<float>(v)); })
-
-            // Per-voice filter
-            .method("setVoiceFilterEnabled",
-                [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoiceFilterEnabled(voiceId, v); })
-            .method_raw("setVoiceFilterType", js_audioctx_setVoiceFilterType, 2)
-            .method("setVoiceFilterFrequency",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceFilterFrequency(voiceId, static_cast<float>(v)); })
-            .method("setVoiceFilterQ",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceFilterQ(voiceId, static_cast<float>(v)); })
-
-            // Bus effect order
-            .method_raw("setBusEffectOrder", js_audioctx_setBusEffectOrder, 2)
-
-            // Wavetable
-            .method_raw("createWavetable", js_audioctx_createWavetable, 1)
-            .method_raw("createWavetableFromWaveform", js_audioctx_createWavetableFromWaveform, 1)
-            .method("deleteWavetable",
-                [](AudioCtxData*, int id) { s_wavetables.erase(id); })
-            .method_raw("setVoiceWavetable", js_audioctx_setVoiceWavetable, 2)
-
-            // Spectrum
-            .method_raw("getSpectrum", js_audioctx_getSpectrum, 1)
-
-            // Spatial audio — listener
-            .method("setListenerPosition",
-                [](AudioCtxData* d, double x, double y, double z) {
-                    d->engine->setListenerPosition(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-                })
-            .method("setListenerOrientation",
-                [](AudioCtxData* d, double fx, double fy, double fz, double ux, double uy, double uz) {
-                    d->engine->setListenerOrientation(
-                        static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(fz),
-                        static_cast<float>(ux), static_cast<float>(uy), static_cast<float>(uz));
-                })
-            .method("setListenerVelocity",
-                [](AudioCtxData* d, double x, double y, double z) {
-                    d->engine->setListenerVelocity(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-                })
-
-            // Doppler
-            .prop("dopplerFactor",
-                [](AudioCtxData* d) -> double { return d->engine->dopplerFactor(); },
-                [](AudioCtxData* d, double v) { d->engine->setDopplerFactor(static_cast<float>(v)); })
-            .method("getPlaybackDopplerRatio",
-                [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackDopplerRatio(id); })
-            .method("getVoiceDopplerRatio",
-                [](AudioCtxData* d, int id) -> double { return d->engine->getVoiceDopplerRatio(id); })
-
-            // Spatial audio — voice sources
-            .method("setVoiceSpatialEnabled",
-                [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoiceSpatialEnabled(voiceId, v); })
-            .method("setVoiceSpatialPosition",
-                [](AudioCtxData* d, int voiceId, double x, double y, double z) {
-                    d->engine->setVoiceSpatialPosition(voiceId, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-                })
-            .method("setVoiceSpatialVelocity",
-                [](AudioCtxData* d, int voiceId, double x, double y, double z) {
-                    d->engine->setVoiceSpatialVelocity(voiceId, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-                })
-            .method("setVoiceSpatialRefDistance",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialRefDistance(voiceId, static_cast<float>(v)); })
-            .method("setVoiceSpatialMaxDistance",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialMaxDistance(voiceId, static_cast<float>(v)); })
-            .method("setVoiceSpatialRolloff",
-                [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialRolloff(voiceId, static_cast<float>(v)); })
-            .method_raw("setVoiceSpatialDistanceModel", js_audioctx_setVoiceSpatialDistanceModel, 2)
-
-            // Spatial audio — playback sources
-            .method("setPlaybackSpatialEnabled",
-                [](AudioCtxData* d, int id, bool v) { d->engine->setPlaybackSpatialEnabled(id, v); })
-            .method("setPlaybackSpatialPosition",
-                [](AudioCtxData* d, int id, double x, double y, double z) {
-                    d->engine->setPlaybackSpatialPosition(id, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-                })
-            .method("setPlaybackSpatialVelocity",
-                [](AudioCtxData* d, int id, double x, double y, double z) {
-                    d->engine->setPlaybackSpatialVelocity(id, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-                })
-            .method("setPlaybackSpatialRefDistance",
-                [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialRefDistance(id, static_cast<float>(v)); })
-            .method("setPlaybackSpatialMaxDistance",
-                [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialMaxDistance(id, static_cast<float>(v)); })
-            .method("setPlaybackSpatialRolloff",
-                [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialRolloff(id, static_cast<float>(v)); })
-            .method_raw("setPlaybackSpatialDistanceModel", js_audioctx_setPlaybackSpatialDistanceModel, 2)
-
-            // Head model
-            .method("setHeadModelEnabled",
-                [](AudioCtxData* d, bool v) { d->engine->setHeadModelEnabled(v); })
-            .method("setHeadModelIldStrength",
-                [](AudioCtxData* d, double v) { d->engine->setHeadModelIldStrength(static_cast<float>(v)); })
-            .method("setHeadModelBehindAttenuation",
-                [](AudioCtxData* d, double v) { d->engine->setHeadModelBehindAttenuation(static_cast<float>(v)); })
-            .method("setHeadModelNearCutoff",
-                [](AudioCtxData* d, double front, double behind) {
-                    d->engine->setHeadModelNearCutoff(static_cast<float>(front), static_cast<float>(behind));
-                })
-            .method("setHeadModelFarCutoffRatio",
-                [](AudioCtxData* d, double v) { d->engine->setHeadModelFarCutoffRatio(static_cast<float>(v)); })
-            .method("setHeadModelElevation",
-                [](AudioCtxData* d, double nearHz, double farHz) {
-                    d->engine->setHeadModelElevation(static_cast<float>(nearHz), static_cast<float>(farHz));
-                })
-            .method("setHeadModelCutoffRange",
-                [](AudioCtxData* d, double minHz, double maxHz) {
-                    d->engine->setHeadModelCutoffRange(static_cast<float>(minHz), static_cast<float>(maxHz));
-                })
-
-            // Aux sends
-            .method("setVoiceSend",
-                [](AudioCtxData* d, int voiceId, int sendBusId, double v) {
-                    d->engine->setVoiceSend(voiceId, sendBusId, static_cast<float>(v));
-                })
-            .method("setPlaybackSend",
-                [](AudioCtxData* d, int id, int sendBusId, double v) {
-                    d->engine->setPlaybackSend(id, sendBusId, static_cast<float>(v));
-                })
-            .method("setBusSend",
-                [](AudioCtxData* d, int busId, int sendBusId, double v) {
-                    d->engine->setBusSend(busId, sendBusId, static_cast<float>(v));
-                })
-
-            // Factory methods
-            .method_raw("createVoiceAllocator", js_audioctx_createVoiceAllocator, 1)
-            .method_raw("getModMatrix", js_audioctx_getModMatrix, 0)
-            .method_raw("createMidiInput", js_audioctx_createMidiInput, 0)
-            .method_raw("createSequence", js_audioctx_createSequence, 1)
-
-            // Recording
-            .method("startRecording",
-                [](AudioCtxData* d) { d->engine->startRecording(); })
-            .method_raw("stopRecording", js_audioctx_stopRecording, 0)
-
-            // Audio file I/O
-            .method_raw("createClipFromFile", js_audioctx_createClipFromFile, 1)
-            .method_raw("createClipFromFileAsync", js_audioctx_createClipFromFileAsync, 1)
-            .method_raw("decodeAudioData", js_audioctx_decodeAudioData, 1)
-            .method_raw("decodeAudioFile", js_audioctx_decodeAudioFile, 1)
-            .method("exportRecordingToWav",
-                [](AudioCtxData* d, JSContext* ctx, JSValue pathVal) -> JSValue {
-                    const char* path = JS_ToCString(ctx, pathVal);
-                    if (!path) return JS_FALSE;
-                    string resolved = resolveAssetWritePath(path);
-                    bool ok = d->engine->exportRecordingToWav(resolved.c_str());
-                    JS_FreeCString(ctx, path);
-                    return JS_NewBool(ctx, ok);
-                })
-            .method_raw("saveWav", js_audioctx_saveWav, 4)
-
-            // Clips
-            .method_raw("createClip", js_audioctx_createClip, 1)
-            .method("deleteClip",
-                [](AudioCtxData* d, int id) { d->engine->deleteClip(id); })
-            .method("getClipSampleCount",
-                [](AudioCtxData* d, int id) -> int { return d->engine->getClipSampleCount(id); })
-            .method("getClipChannels",
-                [](AudioCtxData* d, int id) -> int { return d->engine->getClipChannels(id); })
-            .method_raw("getClipWaveform", js_audioctx_getClipWaveform, 2)
-            .method_raw("playClip", js_audioctx_playClip, 4)
-            // Streaming PCM source (live voice / network audio)
-            .method_raw("createStream", js_audioctx_createStream, 2)
-            .method_raw("pushStreamSamples", js_audioctx_pushStreamSamples, 2)
-            .method_raw("closeStream", js_audioctx_closeStream, 1)
-            // Disk-streamed file playback
-            .method_raw("createStreamFromFile", js_audioctx_createStreamFromFile, 2)
-            .method_raw("getStreamStats", js_audioctx_getStreamStats, 1)
-            .method("stopPlayback",
-                [](AudioCtxData* d, int id) { d->engine->stopPlayback(id); })
-            .method("setPlaybackGain",
-                [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackGain(id, static_cast<float>(v)); })
-            .method("setPlaybackLoop",
-                [](AudioCtxData* d, int id, bool v) { d->engine->setPlaybackLoop(id, v); })
-            .method("setPlaybackPlaying",
-                [](AudioCtxData* d, int id, bool v) { d->engine->setPlaybackPlaying(id, v); })
-            .method("setPlaybackRegion",
-                [](AudioCtxData* d, int id, int start, int end) { d->engine->setPlaybackRegion(id, start, end); })
-            .method("setPlaybackRate",
-                [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackRate(id, static_cast<float>(v)); })
-            .method("setPlaybackPan",
-                [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackPan(id, static_cast<float>(v)); })
-            .method("getPlaybackPosition",
-                [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackPosition(id); })
-            .method("getPlaybackPositionSeconds",
-                [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackPositionSeconds(id); })
-            .method("seekPlayback",
-                [](AudioCtxData* d, int id, double seconds) { d->engine->seekPlayback(id, seconds); });
-    }
-
-    // The AudioContext constructor created by qjsbind doesn't add the destination property.
-    // We need to patch it so that `new AudioContext()` gets a destination property.
-    // We do this by evaluating a small JS shim that wraps the constructor.
-    {
-        JSValue global = JS_GetGlobalObject(ctx);
-
-        // Install native getUserMedia
-        JS_SetPropertyStr(ctx, global, "__nativeGetUserMedia",
-                          JS_NewCFunction(ctx, js_getUserMedia, "__nativeGetUserMedia", 1));
-
-        JS_FreeValue(ctx, global);
-    }
-
-    // Wire destination and getUserMedia via JS shim
-    const char* shim =
-        "(function() {"
-        "  var _OrigAudioContext = AudioContext;"
-        "  globalThis.AudioContext = function() {"
-        "    var ctx = new _OrigAudioContext();"
-        "    ctx.destination = {};"
-        "    return ctx;"
-        "  };"
-        "  globalThis.AudioContext.prototype = _OrigAudioContext.prototype;"
-        "  if (typeof navigator !== 'undefined') {"
-        "    if (!navigator.mediaDevices) navigator.mediaDevices = {};"
-        "    navigator.mediaDevices.getUserMedia = globalThis.__nativeGetUserMedia;"
-        "  }"
-        "})();";
-    JSValue shimResult = JS_Eval(ctx, shim, strlen(shim), "<audio-shim>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(shimResult)) {
-        JSValue exc = JS_GetException(ctx);
-        const char* msg = JS_ToCString(ctx, exc);
-        if (msg) {
-            LOG_ERROR("Audio shim failed: %s", msg);
-            JS_FreeCString(ctx, msg);
-        }
-        JS_FreeValue(ctx, exc);
-    }
-    JS_FreeValue(ctx, shimResult);
-}
-
 void AudioBindings::cleanup(JSContext*)
 {
-    // No central JS-ref registry — every wrapper (VoiceAllocatorData,
+    // No central JS-ref registry u2014 every wrapper (VoiceAllocatorData,
     // MidiInputData, SequenceData, etc.) frees its own JSValue callbacks in
     // its destructor when qjsbind finalizes it. We just drop the engine
     // pointer + wavetable bank cache here; the per-wrapper finalizers run as
@@ -3059,6 +2270,830 @@ void AudioBindings::cleanup(JSContext*)
     s_audioEngine = nullptr;
     s_wavetables.clear();
     s_nextWavetableId = 1;
+}
+
+void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
+{
+    s_audioEngine = engine;
+    
+        // --- AudioParam ---
+        {
+            qjsbind::Class<AudioParamData>(ctx, "AudioParam")
+                .prop("value",
+                    [](AudioParamData* p) -> double { return p->value; },
+                    [](AudioParamData* p, double v) {
+                        p->value = static_cast<float>(v);
+                        switch (p->target) {
+                            case AudioParamData::Target::Frequency:
+                                p->engine->setFrequency(p->voiceId, p->value); break;
+                            case AudioParamData::Target::Gain:
+                                p->engine->setGain(p->voiceId, p->value); break;
+                            case AudioParamData::Target::Pan:
+                                p->engine->setVoicePan(p->voiceId, p->value); break;
+                            case AudioParamData::Target::Attack:
+                                p->engine->setAttackTime(p->voiceId, p->value); break;
+                            case AudioParamData::Target::Decay:
+                                p->engine->setDecayTime(p->voiceId, p->value); break;
+                            case AudioParamData::Target::SustainLevel:
+                                p->engine->setSustainLevel(p->voiceId, p->value); break;
+                            case AudioParamData::Target::Release:
+                                p->engine->setReleaseTime(p->voiceId, p->value); break;
+                            case AudioParamData::Target::FilterFrequency:
+                                p->engine->setFilterFrequency(p->voiceId, p->value); break;
+                            case AudioParamData::Target::FilterQ:
+                                p->engine->setFilterQ(p->voiceId, p->value); break;
+                            case AudioParamData::Target::FilterGain:
+                                p->engine->setFilterGain(p->voiceId, p->value); break;
+                            case AudioParamData::Target::PitchBend:
+                                p->engine->setVoicePitchBend(p->voiceId, p->value); break;
+                        }
+                    });
+        }
+    
+        // --- AudioDestinationNode ---
+        {
+            qjsbind::Class<AudioDestNodeData>(ctx, "AudioDestinationNode");
+        }
+    
+        // --- AnalyserNode ---
+        {
+            qjsbind::Class<AnalyserNodeData>(ctx, "AnalyserNode")
+                .prop("fftSize",
+                    [](AnalyserNodeData* d) -> int { return d->fftSize; },
+                    [](AnalyserNodeData* d, int v) {
+                        if (v >= 32 && v <= 32768 && (v & (v - 1)) == 0) {
+                            d->fftSize = v;
+                            d->smoothedMagnitudes.clear();
+                        }
+                    })
+                .get("frequencyBinCount",
+                    [](AnalyserNodeData* d) -> int { return d->fftSize / 2; })
+                .prop("minDecibels",
+                    [](AnalyserNodeData* d) -> double { return d->minDecibels; },
+                    [](AnalyserNodeData* d, double v) { d->minDecibels = static_cast<float>(v); })
+                .prop("maxDecibels",
+                    [](AnalyserNodeData* d) -> double { return d->maxDecibels; },
+                    [](AnalyserNodeData* d, double v) { d->maxDecibels = static_cast<float>(v); })
+                .prop("smoothingTimeConstant",
+                    [](AnalyserNodeData* d) -> double { return d->smoothingTimeConstant; },
+                    [](AnalyserNodeData* d, double v) { d->smoothingTimeConstant = static_cast<float>(::std::clamp(v, 0.0, 1.0)); })
+                .prop("source",
+                    [](AnalyserNodeData* d) -> int { return d->source; },
+                    [](AnalyserNodeData* d, int v) { d->source = (v == 2) ? 2 : (v == 1) ? 1 : 0; })
+                .method_raw("getFloatFrequencyData", js_analyser_getFloatFrequencyData, 1)
+                .method_raw("getByteFrequencyData", js_analyser_getByteFrequencyData, 1)
+                .method_raw("getFloatTimeDomainData", js_analyser_getFloatTimeDomainData, 1)
+                .method_raw("getByteTimeDomainData", js_analyser_getByteTimeDomainData, 1)
+                .method("connect",
+                    [](AnalyserNodeData*, JSContext* ctx, JSValue arg) -> JSValue {
+                        return JS_DupValue(ctx, arg);
+                    })
+                .method("disconnect",
+                    [](AnalyserNodeData*) {});
+        }
+    
+        // --- MediaStream ---
+        {
+            qjsbind::Class<MicStreamData>(ctx, "MediaStream");
+        }
+    
+        // --- MediaStreamAudioSourceNode ---
+        {
+            qjsbind::Class<MicSourceData>(ctx, "MediaStreamAudioSourceNode")
+                .method_raw("connect", js_micsource_connect, 1)
+                .method("disconnect", [](MicSourceData*) {});
+        }
+    
+        // --- OscillatorNode ---
+        {
+            qjsbind::Class<OscNodeData>(ctx, "OscillatorNode")
+                .get("voiceId",
+                    [](OscNodeData* d) -> int { return d->voiceId; })
+                .prop("type",
+                    [](OscNodeData* d, JSContext* ctx) -> JSValue {
+                        return JS_NewString(ctx, d->type.c_str());
+                    },
+                    [](OscNodeData* d, JSContext* ctx, JSValue val) {
+                        const char* s = JS_ToCString(ctx, val);
+                        if (!s) return;
+                        d->type = s;
+                        d->engine->setWaveform(d->voiceId, parseWaveform(s));
+                        JS_FreeCString(ctx, s);
+                    })
+                .method_raw("connect", js_osc_connect, 1)
+                .method("disconnect", [](OscNodeData*) {})
+                .method_raw("start", js_osc_start, 1)
+                .method_raw("stop", js_osc_stop, 1);
+        }
+    
+        // --- GainNode ---
+        {
+            qjsbind::Class<GainNodeData>(ctx, "GainNode")
+                .method("connect",
+                    [](GainNodeData*, JSContext* ctx, JSValue arg) -> JSValue {
+                        return JS_DupValue(ctx, arg);
+                    })
+                .method("disconnect", [](GainNodeData*) {});
+        }
+    
+        // --- BiquadFilterNode ---
+        {
+            qjsbind::Class<BiquadFilterNodeData>(ctx, "BiquadFilterNode")
+                .method_raw("connect", js_biquadfilter_connect, 1)
+                .method_raw("disconnect", js_biquadfilter_disconnect, 0);
+    
+            // type getter/setter needs this_val for __type property, use method_raw workaround
+            // We register type as methods since prop() doesn't support this_val access
+            // Actually, the original used JS_CGETSET_DEF which maps to prop. But
+            // since the getter reads from __type on this_val and setter writes to it,
+            // we can't use qjsbind prop(). Keep as raw methods that simulate getter/setter.
+            // Note: BiquadFilterNode type property was registered via JS_CGETSET_DEF in the
+            // original code, but since qjsbind prop lambdas don't have access to this_val
+            // (only self pointer), we'll just use the two raw methods above + add the
+            // type property via JS_DefinePropertyGetSet manually after class registration.
+            // However, the class destructor has already run. Instead, we handle this by
+            // making the type methods work on the biquad data directly, storing the type
+            // string in the wrapper struct. Actually simpler: just use method_raw for get/set.
+        }
+    
+        // --- VoiceAllocator ---
+        {
+            qjsbind::Class<VoiceAllocatorData>(ctx, "VoiceAllocator")
+                .gc_mark([](VoiceAllocatorData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                    JS_MarkValue(rt, d->voiceSetupCallback, mark);
+                    JS_MarkValue(rt, d->lambdaCbRef, mark);
+                })
+                .method_raw("noteOn", js_va_noteOn, 2)
+                .method_raw("noteOff", js_va_noteOff, 1)
+                .method_raw("allNotesOff", js_va_allNotesOff, 0)
+                .method_raw("setStealPolicy", js_va_setStealPolicy, 1)
+                .method("setMaxVoices",
+                    [](VoiceAllocatorData* d, int count) { d->allocator->setMaxVoices(count); })
+                .method_raw("setVoiceSetup", js_va_setVoiceSetup, 1)
+                .method("voiceForNote",
+                    [](VoiceAllocatorData* d, int note) -> int { return d->allocator->voiceForNote(note); })
+                .get("activeVoiceCount",
+                    [](VoiceAllocatorData* d) -> int { return d->allocator->activeVoiceCount(); });
+        }
+    
+        // --- ModMatrix ---
+        {
+            qjsbind::Class<ModMatrixData>(ctx, "ModMatrix")
+                .method_raw("setLfoShape", js_mod_setLfoShape, 2)
+                .method("setLfoRate",
+                    [](ModMatrixData* d, int idx, double hz) { d->modMatrix->setLfoRate(idx, static_cast<float>(hz)); })
+                .method("setLfoDepth",
+                    [](ModMatrixData* d, int idx, double v) { d->modMatrix->setLfoDepth(idx, static_cast<float>(v)); })
+                .method("setLfoOffset",
+                    [](ModMatrixData* d, int idx, double v) { d->modMatrix->setLfoOffset(idx, static_cast<float>(v)); })
+                .method("setLfoBipolar",
+                    [](ModMatrixData* d, int idx, bool v) { d->modMatrix->setLfoBipolar(idx, v); })
+                .method("setLfoSync",
+                    [](ModMatrixData* d, int idx, bool v) { d->modMatrix->setLfoSync(idx, v); })
+                .method_raw("addRoute", js_mod_addRoute, 3)
+                .method("removeRoute",
+                    [](ModMatrixData* d, int idx) { d->modMatrix->removeRoute(idx); })
+                .method("setRouteAmount",
+                    [](ModMatrixData* d, int idx, double v) { d->modMatrix->setRouteAmount(idx, static_cast<float>(v)); })
+                .method("setRouteEnabled",
+                    [](ModMatrixData* d, int idx, bool v) { d->modMatrix->setRouteEnabled(idx, v); })
+                .method("clearAllRoutes",
+                    [](ModMatrixData* d) { d->modMatrix->clearAllRoutes(); })
+                .method("setModWheel",
+                    [](ModMatrixData* d, double v) { d->modMatrix->setModWheel(static_cast<float>(v)); })
+                .method("setAftertouch",
+                    [](ModMatrixData* d, double v) { d->modMatrix->setAftertouch(static_cast<float>(v)); })
+                .get("routeCount",
+                    [](ModMatrixData* d) -> int { return d->modMatrix->routeCount(); });
+        }
+    
+        // --- MidiInput ---
+        {
+            qjsbind::Class<MidiInputData>(ctx, "MidiInput")
+                .gc_mark([](MidiInputData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                    JS_MarkValue(rt, d->pitchBendCallback, mark);
+                    JS_MarkValue(rt, d->rawCallback, mark);
+                    for (JSValue& v : d->ccCallbacks) JS_MarkValue(rt, v, mark);
+                })
+                .method_raw("availablePorts", js_midi_availablePorts, 0)
+                .method("open",
+                    [](MidiInputData* d, int port) -> bool { return d->midi->open(port); })
+                .method("close",
+                    [](MidiInputData* d) { d->midi->close(); })
+                .method_raw("connectToAllocator", js_midi_connectToAllocator, 1)
+                .method_raw("onControlChange", js_midi_onControlChange, 2)
+                .method_raw("onPitchBend", js_midi_onPitchBend, 1)
+                .method_raw("onRawEvent", js_midi_onRawEvent, 1)
+                .method("processEvents",
+                    [](MidiInputData* d) { d->midi->processEvents(); })
+                .get("isOpen",
+                    [](MidiInputData* d) -> bool { return d->midi->isOpen(); });
+        }
+    
+        // --- Sequence ---
+        {
+            qjsbind::Class<SequenceData>(ctx, "Sequence")
+                .gc_mark([](SequenceData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                    for (JSValue v : d->automationCallbacks) JS_MarkValue(rt, v, mark);
+                })
+                .method("setBPM",
+                    [](SequenceData* d, double v) {
+                        if (s_audioEngine)
+                            d->seq->setBPM(v, s_audioEngine->currentTime());
+                        else
+                            d->seq->setBPM(v);
+                    })
+                .method("setTimeSignature",
+                    [](SequenceData* d, int num, int den) { d->seq->setTimeSignature(num, den); })
+                .method("addNote",
+                    [](SequenceData* d, double beat, int note, double vel, double dur) {
+                        broaudio::NoteEvent ev{beat, note, static_cast<float>(vel), dur};
+                        d->seq->addNote(ev);
+                    })
+                .method("removeNote",
+                    [](SequenceData* d, int idx) { d->seq->removeNote(idx); })
+                .method("clearNotes",
+                    [](SequenceData* d) { d->seq->clearNotes(); })
+                .method("play",
+                    [](SequenceData* d, optional<double> t) {
+                        double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
+                        d->seq->play(when);
+                    })
+                .method("stop",
+                    [](SequenceData* d) { d->seq->stop(); })
+                .method("pause",
+                    [](SequenceData* d, optional<double> t) {
+                        double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
+                        d->seq->pause(when);
+                    })
+                .method("resume",
+                    [](SequenceData* d, optional<double> t) {
+                        double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
+                        d->seq->resume(when);
+                    })
+                .method("setLoopEnabled",
+                    [](SequenceData* d, bool v) { d->seq->setLoopEnabled(v); })
+                .method("setLoopRange",
+                    [](SequenceData* d, double start, double end) { d->seq->setLoopRange(start, end); })
+                .method("currentBeat",
+                    [](SequenceData* d, optional<double> t) -> double {
+                        double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
+                        return d->seq->currentBeat(when);
+                    })
+                .method("update",
+                    [](SequenceData* d, optional<double> t) {
+                        double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
+                        d->seq->update(when);
+                    })
+                .get("bpm",
+                    [](SequenceData* d) -> double { return d->seq->bpm(); })
+                .get("playing",
+                    [](SequenceData* d) -> bool { return d->seq->isPlaying(); })
+                .get("paused",
+                    [](SequenceData* d) -> bool { return d->seq->isPaused(); })
+                .get("loopEnabled",
+                    [](SequenceData* d) -> bool { return d->seq->isLoopEnabled(); })
+                .get("noteCount",
+                    [](SequenceData* d) -> int { return d->seq->noteCount(); })
+                .method_raw("note", js_seq_note, 1)
+                .method_raw("addAutomationLane", js_seq_addAutomationLane, 1)
+                .method_raw("removeAutomationLane", js_seq_removeAutomationLane, 1)
+                .method_raw("clearAutomationLanes", js_seq_clearAutomationLanes, 0)
+                .method("addAutomationPoint",
+                    [](SequenceData* d, int laneIdx, double beat, double value) {
+                        if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
+                            d->seq->automationLane(laneIdx).addPoint(beat, static_cast<float>(value));
+                    })
+                .method("removeAutomationPoint",
+                    [](SequenceData* d, int laneIdx, int ptIdx) {
+                        if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
+                            d->seq->automationLane(laneIdx).removePoint(ptIdx);
+                    })
+                .method("clearAutomationPoints",
+                    [](SequenceData* d, int laneIdx) {
+                        if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
+                            d->seq->automationLane(laneIdx).clearPoints();
+                    })
+                .method_raw("setAutomationInterpMode", js_seq_setAutomationInterpMode, 2)
+                .method("automationPointCount",
+                    [](SequenceData* d, int lane) -> int {
+                        if (lane < 0 || lane >= d->seq->automationLaneCount()) return 0;
+                        return d->seq->automationLane(lane).pointCount();
+                    })
+                .method_raw("automationPoint", js_seq_automationPoint, 2)
+                .method_raw("automationInterpMode", js_seq_automationInterpMode, 1)
+                .get("automationLaneCount",
+                    [](SequenceData* d) -> int { return d->seq->automationLaneCount(); });
+        }
+    
+        // --- AudioContext ---
+        {
+            qjsbind::Class<AudioCtxData>(ctx, "AudioContext")
+                .constructor([](JSContext* ctx, int, JSValueConst*) -> AudioCtxData* {
+                    if (!s_audioEngine) {
+                        JS_ThrowInternalError(ctx, "Audio not initialized");
+                        return nullptr;
+                    }
+                    auto* data = new AudioCtxData{s_audioEngine};
+                    // We need to set destination after wrap; handled below via __postCtor
+                    return data;
+                })
+                // Properties
+                .get("currentTime",
+                    [](AudioCtxData* d) -> double { return d->engine->currentTime(); })
+                .get("sampleRate",
+                    [](AudioCtxData* d) -> int { return d->engine->sampleRate(); })
+                .get("outputLatency",
+                    [](AudioCtxData* d) -> double { return d->engine->outputLatencySeconds(); })
+                .prop("masterGain",
+                    [](AudioCtxData* d) -> double { return d->engine->masterGain(); },
+                    [](AudioCtxData* d, double v) { d->engine->setMasterGain(static_cast<float>(v)); })
+                .prop("micMuted",
+                    [](AudioCtxData* d) -> bool { return d->engine->isMicMuted(); },
+                    [](AudioCtxData* d, bool v) { d->engine->setMicMuted(v); })
+                .prop("micMonitorGain",
+                    [](AudioCtxData* d) -> double { return d->engine->micMonitorGain(); },
+                    [](AudioCtxData* d, double v) { d->engine->setMicMonitorGain(static_cast<float>(clamp(v, 0.0, 1.0))); })
+                .prop("micBus",
+                    [](AudioCtxData* d) -> int { return d->engine->micBus(); },
+                    [](AudioCtxData* d, int v) { d->engine->setMicBus(v); })
+                .get("recording",
+                    [](AudioCtxData* d) -> bool { return d->engine->isRecording(); })
+    
+                // Node creation (raw u2014 they create objects of other types)
+                .method_raw("createOscillator", js_audioctx_createOscillator, 0)
+                .method_raw("createGain", js_audioctx_createGain, 0)
+                .method_raw("createAnalyser", js_audioctx_createAnalyser, 0)
+                .method_raw("createBiquadFilter", js_audioctx_createBiquadFilter, 0)
+                .method_raw("createMediaStreamSource", js_audioctx_createMediaStreamSource, 1)
+    
+                // Master delay
+                .method("setDelayEnabled",
+                    [](AudioCtxData* d, bool v) { d->engine->setDelayEnabled(v); })
+                .method("setDelayTime",
+                    [](AudioCtxData* d, double v) { d->engine->setDelayTime(static_cast<float>(v)); })
+                .method("setDelayFeedback",
+                    [](AudioCtxData* d, double v) { d->engine->setDelayFeedback(static_cast<float>(v)); })
+                .method("setDelayMix",
+                    [](AudioCtxData* d, double v) { d->engine->setDelayMix(static_cast<float>(v)); })
+    
+                // Master reverb
+                .method("setReverbEnabled",
+                    [](AudioCtxData* d, bool v) { d->engine->setBusReverbEnabled(0, v); })
+                .method("setReverbRoomSize",
+                    [](AudioCtxData* d, double v) { d->engine->setBusReverbRoomSize(0, static_cast<float>(v)); })
+                .method("setReverbDamping",
+                    [](AudioCtxData* d, double v) { d->engine->setBusReverbDamping(0, static_cast<float>(v)); })
+                .method("setReverbMix",
+                    [](AudioCtxData* d, double v) { d->engine->setBusReverbMix(0, static_cast<float>(v)); })
+    
+                // Master chorus
+                .method("setChorusEnabled",
+                    [](AudioCtxData* d, bool v) { d->engine->setBusChorusEnabled(0, v); })
+                .method("setChorusRate",
+                    [](AudioCtxData* d, double v) { d->engine->setBusChorusRate(0, static_cast<float>(v)); })
+                .method("setChorusDepth",
+                    [](AudioCtxData* d, double v) { d->engine->setBusChorusDepth(0, static_cast<float>(v)); })
+                .method("setChorusMix",
+                    [](AudioCtxData* d, double v) { d->engine->setBusChorusMix(0, static_cast<float>(v)); })
+                .method("setChorusFeedback",
+                    [](AudioCtxData* d, double v) { d->engine->setBusChorusFeedback(0, static_cast<float>(v)); })
+                .method("setChorusBaseDelay",
+                    [](AudioCtxData* d, double v) { d->engine->setBusChorusBaseDelay(0, static_cast<float>(v)); })
+    
+                // Master compressor
+                .method("setCompressorEnabled",
+                    [](AudioCtxData* d, bool v) { d->engine->setBusCompressorEnabled(0, v); })
+                .method("setCompressorThreshold",
+                    [](AudioCtxData* d, double v) { d->engine->setBusCompressorThreshold(0, static_cast<float>(v)); })
+                .method("setCompressorRatio",
+                    [](AudioCtxData* d, double v) { d->engine->setBusCompressorRatio(0, static_cast<float>(v)); })
+                .method("setCompressorAttack",
+                    [](AudioCtxData* d, double v) { d->engine->setBusCompressorAttack(0, static_cast<float>(v)); })
+                .method("setCompressorRelease",
+                    [](AudioCtxData* d, double v) { d->engine->setBusCompressorRelease(0, static_cast<float>(v)); })
+    
+                // Master limiter (lookahead peak limiter on the master bus)
+                .method("setLimiterEnabled",
+                    [](AudioCtxData* d, bool v) { d->engine->setLimiterEnabled(v); })
+                .method("setLimiterThreshold",
+                    [](AudioCtxData* d, double dB) { d->engine->setLimiterThreshold(static_cast<float>(dB)); })
+                .method("setLimiterRelease",
+                    [](AudioCtxData* d, double ms) { d->engine->setLimiterRelease(static_cast<float>(ms)); })
+    
+                // Mix bus API
+                .method("createBus",
+                    [](AudioCtxData* d) -> int { return d->engine->createBus(); })
+                .method("deleteBus",
+                    [](AudioCtxData* d, int id) { d->engine->deleteBus(id); })
+                .method("setBusGain",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setBusGain(id, static_cast<float>(v)); })
+                .method("setBusPan",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setBusPan(id, static_cast<float>(v)); })
+                .method("setBusMuted",
+                    [](AudioCtxData* d, int id, bool v) { d->engine->setBusMuted(id, v); })
+                .method("setBusSolo",
+                    [](AudioCtxData* d, int id, bool v) { d->engine->setBusSolo(id, v); })
+                .method("getBusSolo",
+                    [](AudioCtxData* d, int id) -> bool { return d->engine->getBusSolo(id); })
+                .method("allocateBusFilterSlot",
+                    [](AudioCtxData* d, int busId) -> int { return d->engine->allocateBusFilterSlot(busId); })
+                .method("releaseBusFilterSlot",
+                    [](AudioCtxData* d, int busId, int slot) { d->engine->releaseBusFilterSlot(busId, slot); })
+                .method("setBusFilterEnabled",
+                    [](AudioCtxData* d, int busId, int slot, bool v) { d->engine->setBusFilterEnabled(busId, slot, v); })
+                .method_raw("setBusFilterType", js_audioctx_setBusFilterType, 3)
+                .method("setBusFilterFrequency",
+                    [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterFrequency(busId, slot, static_cast<float>(v)); })
+                .method("setBusFilterQ",
+                    [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterQ(busId, slot, static_cast<float>(v)); })
+                .method("setBusFilterGain",
+                    [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterGain(busId, slot, static_cast<float>(v)); })
+    
+                // Per-bus effects
+                .method("setBusDelayEnabled",
+                    [](AudioCtxData* d, int busId, bool v) { d->engine->setBusDelayEnabled(busId, v); })
+                .method("setBusDelayTime",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDelayTime(busId, static_cast<float>(v)); })
+                .method("setBusDelayFeedback",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDelayFeedback(busId, static_cast<float>(v)); })
+                .method("setBusDelayMix",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDelayMix(busId, static_cast<float>(v)); })
+                .method("setBusCompressorEnabled",
+                    [](AudioCtxData* d, int busId, bool v) { d->engine->setBusCompressorEnabled(busId, v); })
+                .method("setBusCompressorThreshold",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorThreshold(busId, static_cast<float>(v)); })
+                .method("setBusCompressorRatio",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorRatio(busId, static_cast<float>(v)); })
+                .method("setBusCompressorAttack",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorAttack(busId, static_cast<float>(v)); })
+                .method("setBusCompressorRelease",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusCompressorRelease(busId, static_cast<float>(v)); })
+                .method("setBusReverbEnabled",
+                    [](AudioCtxData* d, int busId, bool v) { d->engine->setBusReverbEnabled(busId, v); })
+                .method("setBusReverbRoomSize",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusReverbRoomSize(busId, static_cast<float>(v)); })
+                .method("setBusReverbDamping",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusReverbDamping(busId, static_cast<float>(v)); })
+                .method("setBusReverbMix",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusReverbMix(busId, static_cast<float>(v)); })
+                .method("setBusChorusEnabled",
+                    [](AudioCtxData* d, int busId, bool v) { d->engine->setBusChorusEnabled(busId, v); })
+                .method("setBusChorusRate",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusRate(busId, static_cast<float>(v)); })
+                .method("setBusChorusDepth",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusDepth(busId, static_cast<float>(v)); })
+                .method("setBusChorusMix",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusMix(busId, static_cast<float>(v)); })
+                .method("setBusChorusFeedback",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusFeedback(busId, static_cast<float>(v)); })
+                .method("setBusChorusBaseDelay",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusChorusBaseDelay(busId, static_cast<float>(v)); })
+                .method("setBusEqEnabled",
+                    [](AudioCtxData* d, int busId, bool v) { d->engine->setBusEqEnabled(busId, v); })
+                .method("setBusEqBandGain",
+                    [](AudioCtxData* d, int busId, int band, double v) { d->engine->setBusEqBandGain(busId, band, static_cast<float>(v)); })
+                .method("setBusEqMasterGain",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusEqMasterGain(busId, static_cast<float>(v)); })
+                .method("setBusDistortionEnabled",
+                    [](AudioCtxData* d, int busId, bool v) { d->engine->setBusDistortionEnabled(busId, v); })
+                .method("setBusDistortionMode",
+                    [](AudioCtxData* d, int busId, string mode) {
+                        broaudio::DistortionMode m = broaudio::DistortionMode::SoftClip;
+                        if (mode == "softclip") m = broaudio::DistortionMode::SoftClip;
+                        else if (mode == "hardclip") m = broaudio::DistortionMode::HardClip;
+                        else if (mode == "foldback") m = broaudio::DistortionMode::Foldback;
+                        else if (mode == "bitcrush") m = broaudio::DistortionMode::Bitcrush;
+                        d->engine->setBusDistortionMode(busId, m);
+                    })
+                .method("setBusDistortionDrive",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionDrive(busId, static_cast<float>(v)); })
+                .method("setBusDistortionMix",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionMix(busId, static_cast<float>(v)); })
+                .method("setBusDistortionOutputGain",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionOutputGain(busId, static_cast<float>(v)); })
+                .method("setBusDistortionCrushBits",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionCrushBits(busId, static_cast<float>(v)); })
+                .method("setBusDistortionCrushRate",
+                    [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionCrushRate(busId, static_cast<float>(v)); })
+                .method("setBusCompressorSidechain",
+                    [](AudioCtxData* d, int busId, int scBusId) { d->engine->setBusCompressorSidechain(busId, scBusId); })
+    
+                // Bus metering
+                .method("getBusPeakL",
+                    [](AudioCtxData* d, int busId) -> double { return d->engine->getBusPeakL(busId); })
+                .method("getBusPeakR",
+                    [](AudioCtxData* d, int busId) -> double { return d->engine->getBusPeakR(busId); })
+                .method("getBusRmsL",
+                    [](AudioCtxData* d, int busId) -> double { return d->engine->getBusRmsL(busId); })
+                .method("getBusRmsR",
+                    [](AudioCtxData* d, int busId) -> double { return d->engine->getBusRmsR(busId); })
+    
+                // Sample-accurate scheduling
+                .method("scheduleNoteOn",
+                    [](AudioCtxData* d, int voiceId, double when) { d->engine->scheduleNoteOn(voiceId, when); })
+                .method("scheduleNoteOff",
+                    [](AudioCtxData* d, int voiceId, double when) { d->engine->scheduleNoteOff(voiceId, when); })
+    
+                // Voice/clip bus routing
+                .method("setVoiceBus",
+                    [](AudioCtxData* d, int voiceId, int busId) { d->engine->setVoiceBus(voiceId, busId); })
+                .method("setPlaybackBus",
+                    [](AudioCtxData* d, int id, int busId) { d->engine->setPlaybackBus(id, busId); })
+    
+                // Offline effect processing
+                .method_raw("processEffectsOffline", js_audioctx_processEffectsOffline, 2)
+    
+                // Offline render (headless u2014 pump the full pipeline without a device)
+                .method_raw("renderBlock", js_audioctx_renderBlock, 1)
+    
+                // Preset serialization (JS object <-> JSON) + apply to live engine
+                .method_raw("voicePresetToJson", js_audioctx_voicePresetToJson, 1)
+                .method_raw("busPresetToJson", js_audioctx_busPresetToJson, 1)
+                .method_raw("modPresetToJson", js_audioctx_modPresetToJson, 1)
+                .method_raw("enginePresetToJson", js_audioctx_enginePresetToJson, 1)
+                .method_raw("voicePresetFromJson", js_audioctx_voicePresetFromJson, 1)
+                .method_raw("busPresetFromJson", js_audioctx_busPresetFromJson, 1)
+                .method_raw("modPresetFromJson", js_audioctx_modPresetFromJson, 1)
+                .method_raw("enginePresetFromJson", js_audioctx_enginePresetFromJson, 1)
+                .method_raw("applyVoicePreset", js_audioctx_applyVoicePreset, 2)
+                .method_raw("applyBusPreset", js_audioctx_applyBusPreset, 2)
+                .method_raw("applyModPreset", js_audioctx_applyModPreset, 1)
+                .method_raw("applyEnginePreset", js_audioctx_applyEnginePreset, 1)
+                .method_raw("savePreset", js_audioctx_savePreset, 2)
+                .method_raw("loadPreset", js_audioctx_loadPreset, 1)
+    
+                // Voice lifecycle
+                .method("createVoice",
+                    [](AudioCtxData* d) -> int { return d->engine->createVoice(); })
+                .method("removeVoice",
+                    [](AudioCtxData* d, int voiceId) { d->engine->removeVoice(voiceId); })
+                .method("startVoice",
+                    [](AudioCtxData* d, int voiceId, double when) { d->engine->startVoice(voiceId, when); })
+                .method("stopVoice",
+                    [](AudioCtxData* d, int voiceId, double when) { d->engine->stopVoice(voiceId, when); })
+                .method("setVoicePersistent",
+                    [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoicePersistent(voiceId, v); })
+    
+                // Voice note context
+                .method("setVoiceNote",
+                    [](AudioCtxData* d, int voiceId, int note, double vel) {
+                        d->engine->setVoiceNote(voiceId, note, static_cast<float>(vel));
+                    })
+    
+                // Direct voice parameter control
+                .method_raw("setVoiceWaveform", js_audioctx_setVoiceWaveform, 2)
+                .method("setVoiceFrequency",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setFrequency(voiceId, static_cast<float>(v)); })
+                .method("setVoiceGain",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setGain(voiceId, static_cast<float>(v)); })
+                .method("setVoicePan",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoicePan(voiceId, static_cast<float>(v)); })
+                .method("setVoiceAttack",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setAttackTime(voiceId, static_cast<float>(v)); })
+                .method("setVoiceDecay",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setDecayTime(voiceId, static_cast<float>(v)); })
+                .method("setVoiceSustain",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setSustainLevel(voiceId, static_cast<float>(v)); })
+                .method("setVoiceRelease",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setReleaseTime(voiceId, static_cast<float>(v)); })
+                .method("setVoicePitchBend",
+                    [](AudioCtxData* d, int voiceId, double semitones) { d->engine->setVoicePitchBend(voiceId, static_cast<float>(semitones)); })
+    
+                // Unison
+                .method("setVoiceUnisonCount",
+                    [](AudioCtxData* d, int voiceId, int count) { d->engine->setVoiceUnisonCount(voiceId, count); })
+                .method("setVoiceUnisonDetune",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceUnisonDetune(voiceId, static_cast<float>(v)); })
+                .method("setVoiceUnisonStereoWidth",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceUnisonStereoWidth(voiceId, static_cast<float>(v)); })
+    
+                // Per-voice filter
+                .method("setVoiceFilterEnabled",
+                    [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoiceFilterEnabled(voiceId, v); })
+                .method_raw("setVoiceFilterType", js_audioctx_setVoiceFilterType, 2)
+                .method("setVoiceFilterFrequency",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceFilterFrequency(voiceId, static_cast<float>(v)); })
+                .method("setVoiceFilterQ",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceFilterQ(voiceId, static_cast<float>(v)); })
+    
+                // Bus effect order
+                .method_raw("setBusEffectOrder", js_audioctx_setBusEffectOrder, 2)
+    
+                // Wavetable
+                .method_raw("createWavetable", js_audioctx_createWavetable, 1)
+                .method_raw("createWavetableFromWaveform", js_audioctx_createWavetableFromWaveform, 1)
+                .method("deleteWavetable",
+                    [](AudioCtxData*, int id) { s_wavetables.erase(id); })
+                .method_raw("setVoiceWavetable", js_audioctx_setVoiceWavetable, 2)
+    
+                // Spectrum
+                .method_raw("getSpectrum", js_audioctx_getSpectrum, 1)
+    
+                // Spatial audio u2014 listener
+                .method("setListenerPosition",
+                    [](AudioCtxData* d, double x, double y, double z) {
+                        d->engine->setListenerPosition(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                    })
+                .method("setListenerOrientation",
+                    [](AudioCtxData* d, double fx, double fy, double fz, double ux, double uy, double uz) {
+                        d->engine->setListenerOrientation(
+                            static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(fz),
+                            static_cast<float>(ux), static_cast<float>(uy), static_cast<float>(uz));
+                    })
+                .method("setListenerVelocity",
+                    [](AudioCtxData* d, double x, double y, double z) {
+                        d->engine->setListenerVelocity(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                    })
+    
+                // Doppler
+                .prop("dopplerFactor",
+                    [](AudioCtxData* d) -> double { return d->engine->dopplerFactor(); },
+                    [](AudioCtxData* d, double v) { d->engine->setDopplerFactor(static_cast<float>(v)); })
+                .method("getPlaybackDopplerRatio",
+                    [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackDopplerRatio(id); })
+                .method("getVoiceDopplerRatio",
+                    [](AudioCtxData* d, int id) -> double { return d->engine->getVoiceDopplerRatio(id); })
+    
+                // Spatial audio u2014 voice sources
+                .method("setVoiceSpatialEnabled",
+                    [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoiceSpatialEnabled(voiceId, v); })
+                .method("setVoiceSpatialPosition",
+                    [](AudioCtxData* d, int voiceId, double x, double y, double z) {
+                        d->engine->setVoiceSpatialPosition(voiceId, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                    })
+                .method("setVoiceSpatialVelocity",
+                    [](AudioCtxData* d, int voiceId, double x, double y, double z) {
+                        d->engine->setVoiceSpatialVelocity(voiceId, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                    })
+                .method("setVoiceSpatialRefDistance",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialRefDistance(voiceId, static_cast<float>(v)); })
+                .method("setVoiceSpatialMaxDistance",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialMaxDistance(voiceId, static_cast<float>(v)); })
+                .method("setVoiceSpatialRolloff",
+                    [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialRolloff(voiceId, static_cast<float>(v)); })
+                .method_raw("setVoiceSpatialDistanceModel", js_audioctx_setVoiceSpatialDistanceModel, 2)
+    
+                // Spatial audio u2014 playback sources
+                .method("setPlaybackSpatialEnabled",
+                    [](AudioCtxData* d, int id, bool v) { d->engine->setPlaybackSpatialEnabled(id, v); })
+                .method("setPlaybackSpatialPosition",
+                    [](AudioCtxData* d, int id, double x, double y, double z) {
+                        d->engine->setPlaybackSpatialPosition(id, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                    })
+                .method("setPlaybackSpatialVelocity",
+                    [](AudioCtxData* d, int id, double x, double y, double z) {
+                        d->engine->setPlaybackSpatialVelocity(id, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                    })
+                .method("setPlaybackSpatialRefDistance",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialRefDistance(id, static_cast<float>(v)); })
+                .method("setPlaybackSpatialMaxDistance",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialMaxDistance(id, static_cast<float>(v)); })
+                .method("setPlaybackSpatialRolloff",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialRolloff(id, static_cast<float>(v)); })
+                .method_raw("setPlaybackSpatialDistanceModel", js_audioctx_setPlaybackSpatialDistanceModel, 2)
+    
+                // Head model
+                .method("setHeadModelEnabled",
+                    [](AudioCtxData* d, bool v) { d->engine->setHeadModelEnabled(v); })
+                .method("setHeadModelIldStrength",
+                    [](AudioCtxData* d, double v) { d->engine->setHeadModelIldStrength(static_cast<float>(v)); })
+                .method("setHeadModelBehindAttenuation",
+                    [](AudioCtxData* d, double v) { d->engine->setHeadModelBehindAttenuation(static_cast<float>(v)); })
+                .method("setHeadModelNearCutoff",
+                    [](AudioCtxData* d, double front, double behind) {
+                        d->engine->setHeadModelNearCutoff(static_cast<float>(front), static_cast<float>(behind));
+                    })
+                .method("setHeadModelFarCutoffRatio",
+                    [](AudioCtxData* d, double v) { d->engine->setHeadModelFarCutoffRatio(static_cast<float>(v)); })
+                .method("setHeadModelElevation",
+                    [](AudioCtxData* d, double nearHz, double farHz) {
+                        d->engine->setHeadModelElevation(static_cast<float>(nearHz), static_cast<float>(farHz));
+                    })
+                .method("setHeadModelCutoffRange",
+                    [](AudioCtxData* d, double minHz, double maxHz) {
+                        d->engine->setHeadModelCutoffRange(static_cast<float>(minHz), static_cast<float>(maxHz));
+                    })
+    
+                // Aux sends
+                .method("setVoiceSend",
+                    [](AudioCtxData* d, int voiceId, int sendBusId, double v) {
+                        d->engine->setVoiceSend(voiceId, sendBusId, static_cast<float>(v));
+                    })
+                .method("setPlaybackSend",
+                    [](AudioCtxData* d, int id, int sendBusId, double v) {
+                        d->engine->setPlaybackSend(id, sendBusId, static_cast<float>(v));
+                    })
+                .method("setBusSend",
+                    [](AudioCtxData* d, int busId, int sendBusId, double v) {
+                        d->engine->setBusSend(busId, sendBusId, static_cast<float>(v));
+                    })
+    
+                // Factory methods
+                .method_raw("createVoiceAllocator", js_audioctx_createVoiceAllocator, 1)
+                .method_raw("getModMatrix", js_audioctx_getModMatrix, 0)
+                .method_raw("createMidiInput", js_audioctx_createMidiInput, 0)
+                .method_raw("createSequence", js_audioctx_createSequence, 1)
+    
+                // Recording
+                .method("startRecording",
+                    [](AudioCtxData* d) { d->engine->startRecording(); })
+                .method_raw("stopRecording", js_audioctx_stopRecording, 0)
+    
+                // Audio file I/O
+                .method_raw("createClipFromFile", js_audioctx_createClipFromFile, 1)
+                .method_raw("createClipFromFileAsync", js_audioctx_createClipFromFileAsync, 1)
+                .method_raw("decodeAudioData", js_audioctx_decodeAudioData, 1)
+                .method_raw("decodeAudioFile", js_audioctx_decodeAudioFile, 1)
+                .method("exportRecordingToWav",
+                    [](AudioCtxData* d, JSContext* ctx, JSValue pathVal) -> JSValue {
+                        const char* path = JS_ToCString(ctx, pathVal);
+                        if (!path) return JS_FALSE;
+                        string resolved = resolveAssetWritePath(path);
+                        bool ok = d->engine->exportRecordingToWav(resolved.c_str());
+                        JS_FreeCString(ctx, path);
+                        return JS_NewBool(ctx, ok);
+                    })
+                .method_raw("saveWav", js_audioctx_saveWav, 4)
+    
+                // Clips
+                .method_raw("createClip", js_audioctx_createClip, 1)
+                .method("deleteClip",
+                    [](AudioCtxData* d, int id) { d->engine->deleteClip(id); })
+                .method("getClipSampleCount",
+                    [](AudioCtxData* d, int id) -> int { return d->engine->getClipSampleCount(id); })
+                .method("getClipChannels",
+                    [](AudioCtxData* d, int id) -> int { return d->engine->getClipChannels(id); })
+                .method_raw("getClipWaveform", js_audioctx_getClipWaveform, 2)
+                .method_raw("playClip", js_audioctx_playClip, 4)
+                // Streaming PCM source (live voice / network audio)
+                .method_raw("createStream", js_audioctx_createStream, 2)
+                .method_raw("pushStreamSamples", js_audioctx_pushStreamSamples, 2)
+                .method_raw("closeStream", js_audioctx_closeStream, 1)
+                // Disk-streamed file playback
+                .method_raw("createStreamFromFile", js_audioctx_createStreamFromFile, 2)
+                .method_raw("getStreamStats", js_audioctx_getStreamStats, 1)
+                .method("stopPlayback",
+                    [](AudioCtxData* d, int id) { d->engine->stopPlayback(id); })
+                .method("setPlaybackGain",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackGain(id, static_cast<float>(v)); })
+                .method("setPlaybackLoop",
+                    [](AudioCtxData* d, int id, bool v) { d->engine->setPlaybackLoop(id, v); })
+                .method("setPlaybackPlaying",
+                    [](AudioCtxData* d, int id, bool v) { d->engine->setPlaybackPlaying(id, v); })
+                .method("setPlaybackRegion",
+                    [](AudioCtxData* d, int id, int start, int end) { d->engine->setPlaybackRegion(id, start, end); })
+                .method("setPlaybackRate",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackRate(id, static_cast<float>(v)); })
+                .method("setPlaybackPan",
+                    [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackPan(id, static_cast<float>(v)); })
+                .method("getPlaybackPosition",
+                    [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackPosition(id); })
+                .method("getPlaybackPositionSeconds",
+                    [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackPositionSeconds(id); })
+                .method("seekPlayback",
+                    [](AudioCtxData* d, int id, double seconds) { d->engine->seekPlayback(id, seconds); });
+        }
+    
+        // The AudioContext constructor created by qjsbind doesn't add the destination property.
+        // We need to patch it so that `new AudioContext()` gets a destination property.
+        // We do this by evaluating a small JS shim that wraps the constructor.
+        {
+            JSValue global = JS_GetGlobalObject(ctx);
+    
+            // Install native getUserMedia
+            JS_SetPropertyStr(ctx, global, "__nativeGetUserMedia",
+                              JS_NewCFunction(ctx, js_getUserMedia, "__nativeGetUserMedia", 1));
+    
+            JS_FreeValue(ctx, global);
+        }
+    
+        // Wire destination and getUserMedia via JS shim
+        const char* shim =
+            "(function() {"
+            "  var _OrigAudioContext = AudioContext;"
+            "  globalThis.AudioContext = function() {"
+            "    var ctx = new _OrigAudioContext();"
+            "    ctx.destination = {};"
+            "    return ctx;"
+            "  };"
+            "  globalThis.AudioContext.prototype = _OrigAudioContext.prototype;"
+            "  if (typeof navigator !== 'undefined') {"
+            "    if (!navigator.mediaDevices) navigator.mediaDevices = {};"
+            "    navigator.mediaDevices.getUserMedia = globalThis.__nativeGetUserMedia;"
+            "  }"
+            "})();";
+        JSValue shimResult = JS_Eval(ctx, shim, strlen(shim), "<audio-shim>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(shimResult)) {
+            JSValue exc = JS_GetException(ctx);
+            const char* msg = JS_ToCString(ctx, exc);
+            if (msg) {
+                LOG_ERROR("Audio shim failed: %s", msg);
+                JS_FreeCString(ctx, msg);
+            }
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, shimResult);
 }
 
 } // namespace bro::js

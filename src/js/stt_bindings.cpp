@@ -1,44 +1,18 @@
-#if BRO_WITH_SOUNDML
-// JS bindings for brosoundml speech-to-text inference — Whisper, Parakeet,
-// and Qwen3-ASR.
-//
-// Installed onto bro.stt.* by installSttBindings(). The models (Whisper:
-// encoder + KV-cached decoder, ~150 MB - ~3 GB; Parakeet-TDT-0.6B-v3:
-// FastConformer encoder + TDT decoder, ~2.4 GB; Qwen3-ASR-0.6B/-1.7B: AuT
-// encoder + Qwen3 decoder, 52-language + language ID) and their tokenizers
-// (brolm::whisper::Tokenizer / brolm::t5::Tokenizer SentencePiece) live
-// behind opaque qjsbind handles. Qwen3-ASR detokenizes with the Qwen BPE
-// tokenizer already bound as bro.lm.loadTokenizer.
-//
-// All models run on GPU by default — the loaders place them on CUDA when a
-// GPU backend is available (pass opts.device 'cpu' to force CPU). transcribe()
-// takes 16 kHz mono FP32 audio and returns the raw token id stream; the caller
-// detokenizes. Whisper needs a decoder prompt (tokenizer.buildPrompt());
-// Parakeet is unconditional and additionally reports per-token encoder-frame
-// positions for word timestamps; Qwen3-ASR is unconditional with optional
-// context biasing and a streaming encoder tap (loadQwenAsrStream).
-
 #include "js/stt_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
 #include "js/model_gate.h"
 #include "js/marshal.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <api/api.h>  // brokit::api::resolveAssetPath
-
 #include <brosoundml/whisper.h>
 #include <brosoundml/parakeet.h>
 #include <brosoundml/qwen_asr.h>
 #include <brosoundml/audio.h>
-
 #include <brolm/whisper_tokenizer.h>
 #include <brolm/tokenizer_t5.h>
-
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -48,16 +22,20 @@
 #include <string>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Wrapper structs
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 // The model + its single-owner gate are held by shared_ptr so they outlive the
 // JS model handle whenever a session (see *SessionWrapper below) is still alive,
-// and so EVERY inference over one model — module-level bro.stt.transcribe(model)
-// AND every session.transcribe() — serializes on the ONE busy flag. brosoundml's
+// and so EVERY inference over one model u2014 module-level bro.stt.transcribe(model)
+// AND every session.transcribe() u2014 serializes on the ONE busy flag. brosoundml's
 // session tier for these models is SHARED WEIGHTS / SERIALIZED decode (the GPU
 // runs one stream and the captured decoder step-graph is shared), so concurrent
 // decode over sessions of one model is unsupported and must be gated here.
@@ -96,7 +74,7 @@ struct ParakeetWrapper {
 // A Parakeet decode session over shared weights: its own TDT prediction-net
 // state, one per stream. brosoundml's tier here is CONCURRENT (the forward
 // touches no shared mutable state), but the bro async runner still serializes
-// on the shared busy gate to match the other models and the single GPU stream —
+// on the shared busy gate to match the other models and the single GPU stream u2014
 // correctness is identical, only parallelism is given up.
 struct ParakeetSessionWrapper {
     std::shared_ptr<brosoundml::Parakeet> model;
@@ -105,7 +83,7 @@ struct ParakeetSessionWrapper {
     brosoundml::ParakeetSession           session;
 };
 
-// Parakeet's tokenizer is a HF tokenizer.json SentencePiece unigram — the
+// Parakeet's tokenizer is a HF tokenizer.json SentencePiece unigram u2014 the
 // brolm::t5::Tokenizer parses that format and its decode() skips out-of-vocab
 // ids, which is exactly what an ASR id stream (no blank/pad) needs.
 struct ParakeetTokenizerWrapper {
@@ -114,7 +92,7 @@ struct ParakeetTokenizerWrapper {
 
 // Qwen3-ASR detokenizes with the Qwen BPE tokenizer already bound as
 // bro.lm.loadTokenizer (vocab.json + merges.txt sit in the model dir), so no
-// new tokenizer wrapper here — brosoundml emits and consumes raw id streams.
+// new tokenizer wrapper here u2014 brosoundml emits and consumes raw id streams.
 struct QwenAsrWrapper {
     std::shared_ptr<brosoundml::QwenAsr> asr;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
@@ -133,7 +111,7 @@ struct QwenAsrSessionWrapper {
 };
 
 // Encoder-only streaming tap. feed()/finish() run synchronously on the JS
-// thread (one encoder block is ~1 s of audio — cheap on GPU), so no busy flag.
+// thread (one encoder block is ~1 s of audio u2014 cheap on GPU), so no busy flag.
 struct QwenAsrStreamWrapper {
     std::unique_ptr<brosoundml::QwenAsrStream> stream;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
@@ -145,9 +123,9 @@ static JSValue js_whisper_createSession(JSContext*, JSValueConst, int, JSValueCo
 static JSValue js_parakeet_createSession(JSContext*, JSValueConst, int, JSValueConst*);
 static JSValue js_qwenasr_createSession(JSContext*, JSValueConst, int, JSValueConst*);
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Helpers (TU-local — same shape as the lm/diffusion bindings)
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
+// Helpers (TU-local u2014 same shape as the lm/diffusion bindings)
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static bool argStr(JSContext* ctx, JSValueConst v, std::string& out) {
     if (!JS_IsString(v)) return false;
@@ -185,7 +163,7 @@ static bool getBool(JSContext* ctx, JSValueConst obj, const char* key,
     return out;
 }
 
-// Pick the default device — CUDA, then Metal, then CPU. brotensor::init()
+// Pick the default device u2014 CUDA, then Metal, then CPU. brotensor::init()
 // must have been called beforehand so the GPU backend probes have run.
 static brotensor::Device autoDevice() {
     if (brotensor::is_available(brotensor::Device::CUDA))  return brotensor::Device::CUDA;
@@ -229,9 +207,9 @@ static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
     return false;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // WhisperTokenizer methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static WhisperTokenizerWrapper* tokSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<WhisperTokenizerWrapper>(ctx, this_val);
@@ -253,7 +231,7 @@ static JSValue js_wtok_encode(JSContext* ctx, JSValueConst this_val,
     }
 }
 
-// decode(ids, skipSpecial=false) — special-token ids decode to literal
+// decode(ids, skipSpecial=false) u2014 special-token ids decode to literal
 // "<|...|>" by default; skipSpecial=true drops them.
 static JSValue js_wtok_decode(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
@@ -328,15 +306,15 @@ static void registerTokenizerClass(JSContext* ctx) {
         .method_raw("timestampSeconds",  js_wtok_timestampSeconds, 1);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // ParakeetTokenizer methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static ParakeetTokenizerWrapper* ptokSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<ParakeetTokenizerWrapper>(ctx, this_val);
 }
 
-// tokenize(text) -> Int32Array — unigram pieces only, no eos/padding.
+// tokenize(text) -> Int32Array u2014 unigram pieces only, no eos/padding.
 static JSValue js_ptok_tokenize(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv) {
     auto* w = ptokSelf(ctx, this_val);
@@ -352,7 +330,7 @@ static JSValue js_ptok_tokenize(JSContext* ctx, JSValueConst this_val,
     }
 }
 
-// decode(ids) -> string — ids outside the vocab (blank/pad) are skipped, so
+// decode(ids) -> string u2014 ids outside the vocab (blank/pad) are skipped, so
 // the raw Parakeet id stream decodes directly.
 static JSValue js_ptok_decode(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
@@ -379,9 +357,9 @@ static void registerParakeetTokenizerClass(JSContext* ctx) {
         .method_raw("decode",   js_ptok_decode,   1);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Whisper methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static WhisperWrapper* whisperSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<WhisperWrapper>(ctx, this_val);
@@ -392,18 +370,18 @@ static WhisperWrapper* whisperSelf(JSContext* ctx, JSValueConst this_val) {
 //   promptIds: Int32Array of decoder prefix (from tokenizer.buildPrompt()).
 //   opts.maxNewTokens: cap on autoregressive loop (0 = model.maxTargetPositions).
 //                      In long-form mode this caps EACH 30 s window independently.
-//   opts.timestampBeginId: tokenizer.firstTimestampId — when set (>= 0) AND the
+//   opts.timestampBeginId: tokenizer.firstTimestampId u2014 when set (>= 0) AND the
 //                      audio is longer than 30 s, the input is windowed into 30 s
 //                      segments (Whisper sequential long-form decode) instead of
 //                      truncated to the first window. Requires a timestamps prompt
 //                      (buildPrompt(lang, task, true)).
-//   opts.noTimestampsId: tokenizer.noTimestampsId — when set (>= 0) the decoder is
+//   opts.noTimestampsId: tokenizer.noTimestampsId u2014 when set (>= 0) the decoder is
 //                      never allowed to pick <|notimestamps|>. Pass it whenever you
 //                      want timings: a timestamps prompt only omits the token, it
 //                      does not stop the model generating it, and once generated
 //                      the segment carries no timestamp at all.
 //   opts.onToken(id):  invoked once per decoded token, in order, as it is produced
-//                      (synchronously on this thread) — for live partial decode.
+//                      (synchronously on this thread) u2014 for live partial decode.
 //   opts.onWindow(t):  invoked as each long-form window opens, with the absolute
 //                      offset in seconds of that window's <|0.00|>. Pair it with
 //                      onToken whenever the timestamps are being placed in time:
@@ -449,7 +427,7 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
         };
     }
     // The callback fires synchronously inside transcribe() on this (JS) thread,
-    // so it can call straight back into JS — no handoff needed for the sync path.
+    // so it can call straight back into JS u2014 no handoff needed for the sync path.
     if (JS_IsFunction(ctx, onToken)) {
         opts.on_token = [ctx, onToken](int32_t id) {
             JSValue a = JS_NewInt32(ctx, id);
@@ -460,7 +438,7 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
         };
     }
 
-    // Abort on process interrupt (Ctrl+C / window close / engine teardown) —
+    // Abort on process interrupt (Ctrl+C / window close / engine teardown) u2014
     // the sync call would otherwise block shutdown for the full transcription.
     opts.cancel = [] { return bro::util::interrupted(); };
 
@@ -491,15 +469,15 @@ static void registerWhisperClass(JSContext* ctx) {
         .method_raw("createSession", js_whisper_createSession, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // Parakeet methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static ParakeetWrapper* parakeetSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<ParakeetWrapper>(ctx, this_val);
 }
 
-// { tokenIds: Int32Array, tokenFrames: Int32Array } — tokenFrames[i] is the
+// { tokenIds: Int32Array, tokenFrames: Int32Array } u2014 tokenFrames[i] is the
 // encoder-frame index token i was emitted at; * frameSeconds for a start time.
 static JSValue makeParakeetResult(JSContext* c,
                                   const std::vector<int32_t>& ids,
@@ -512,10 +490,10 @@ static JSValue makeParakeetResult(JSContext* c,
 
 // transcribe(audio, opts?) -> { tokenIds, tokenFrames }
 //   audio: Float32Array @ 16 kHz, OR { samples, sampleRate } object. Parakeet
-//          is unconditional — no prompt.
+//          is unconditional u2014 no prompt.
 //   opts.maxNewTokens: cap on emitted tokens (0 = decode the whole clip).
 //   opts.onToken(id):  invoked once per emitted token, in order, synchronously
-//                      on this thread — for live partial decode.
+//                      on this thread u2014 for live partial decode.
 static JSValue js_parakeet_transcribe(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv) {
     auto* w = parakeetSelf(ctx, this_val);
@@ -535,7 +513,7 @@ static JSValue js_parakeet_transcribe(JSContext* ctx, JSValueConst this_val,
         onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
     }
     // Fires synchronously inside transcribe() on this (JS) thread, so it can
-    // call straight back into JS — no handoff needed for the sync path.
+    // call straight back into JS u2014 no handoff needed for the sync path.
     if (JS_IsFunction(ctx, onToken)) {
         opts.on_token = [ctx, onToken](int32_t id) {
             JSValue a = JS_NewInt32(ctx, id);
@@ -572,9 +550,9 @@ static void registerParakeetClass(JSContext* ctx) {
         .method_raw("createSession", js_parakeet_createSession, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // QwenAsr methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static QwenAsrWrapper* qwenAsrSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<QwenAsrWrapper>(ctx, this_val);
@@ -584,12 +562,12 @@ static QwenAsrWrapper* qwenAsrSelf(JSContext* ctx, JSValueConst this_val) {
 //   audio: Float32Array @ 16 kHz, OR { samples, sampleRate } object.
 //   opts.maxNewTokens: cap on the autoregressive loop (0 = 1024).
 //   opts.contextIds:   Int32Array of Qwen BPE ids (bro.lm tokenizer.encode())
-//                      placed in the chat template's system block — biases
+//                      placed in the chat template's system block u2014 biases
 //                      recognition toward names / domain terms.
 //   opts.onToken(id):  invoked once per decoded token, in order, synchronously
-//                      on this thread — for live partial decode.
+//                      on this thread u2014 for live partial decode.
 // The stream is the model's native "language <Language><asr_text>transcript"
-// format — split the id stream on model.asrTextId, then decode each side
+// format u2014 split the id stream on model.asrTextId, then decode each side
 // with the Qwen tokenizer (the marker detokenizes to an empty string, so a
 // text-level split does not work).
 static JSValue js_qwenasr_transcribe(JSContext* ctx, JSValueConst this_val,
@@ -615,7 +593,7 @@ static JSValue js_qwenasr_transcribe(JSContext* ctx, JSValueConst this_val,
         onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
     }
     // Fires synchronously inside transcribe() on this (JS) thread, so it can
-    // call straight back into JS — no handoff needed for the sync path.
+    // call straight back into JS u2014 no handoff needed for the sync path.
     if (JS_IsFunction(ctx, onToken)) {
         opts.on_token = [ctx, onToken](int32_t id) {
             JSValue a = JS_NewInt32(ctx, id);
@@ -643,7 +621,7 @@ static JSValue js_qwenasr_transcribe(JSContext* ctx, JSValueConst this_val,
 
 // encode(audio) -> { latents: Float32Array, frames, latentDim, latentHz }
 //   Latent tap: AuT encoder + projector only (no decoder). `latents` is
-//   row-major (frames, latentDim) on the host — the rows transcribe() splices
+//   row-major (frames, latentDim) on the host u2014 the rows transcribe() splices
 //   over the <|audio_pad|> block, at latentHz rows/second.
 static JSValue js_qwenasr_encode(JSContext* ctx, JSValueConst this_val,
                                  int argc, JSValueConst* argv) {
@@ -688,9 +666,9 @@ static void registerQwenAsrClass(JSContext* ctx) {
         .method_raw("createSession", js_qwenasr_createSession, 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // QwenAsrStream methods
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static QwenAsrStreamWrapper* qwenAsrStreamSelf(JSContext* ctx,
                                                JSValueConst this_val) {
@@ -766,9 +744,9 @@ static void registerQwenAsrStreamClass(JSContext* ctx) {
         .method_raw("latents", js_qwenasrstream_latents, 2);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // bro.stt free functions
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 
 static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     try {
@@ -809,7 +787,7 @@ struct WhisperLoadState {
 // bro.stt.loadWhisper(modelDir, opts?) -> Whisper          (sync)
 //                                      -> AsyncHandle       (async, if opts.onReady)
 //   modelDir contains config.json + model.safetensors (HF Whisper checkpoint).
-//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.device: 'cuda' | 'cpu' u2014 defaults to CUDA when available, else CPU.
 //   opts.onReady(whisper) / opts.onError(message): when onReady is a function
 //   the load runs on a background thread (non-blocking, parallelizable with
 //   other loads) and these fire on the JS thread.
@@ -837,7 +815,7 @@ static JSValue js_loadWhisper(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path (back-compat) ──
+    // u2500u2500 Sync path (back-compat) u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -850,7 +828,7 @@ static JSValue js_loadWhisper(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<WhisperLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
@@ -934,7 +912,7 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
     JSValue onError = JS_GetPropertyStr(ctx, argv[0], "onError");
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path (back-compat) ──
+    // u2500u2500 Sync path (back-compat) u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -947,7 +925,7 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<WhisperTokLoadState>();
     ls->vocab    = vocab;
     ls->merges   = merges;
@@ -1001,7 +979,7 @@ static void buildParakeet(const std::string& dir, brotensor::Device dev,
     w_out = std::move(w);
 }
 
-// State for an async loadParakeet — same shape as WhisperLoadState.
+// State for an async loadParakeet u2014 same shape as WhisperLoadState.
 struct ParakeetLoadState {
     std::string                      dir;
     brotensor::Device                dev = brotensor::Device::CPU;
@@ -1015,7 +993,7 @@ struct ParakeetLoadState {
 //                                       -> AsyncHandle      (async, if opts.onReady)
 //   modelDir contains config.json + model.safetensors (HF Parakeet-TDT
 //   checkpoint, e.g. nvidia/parakeet-tdt-0.6b-v3).
-//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.device: 'cuda' | 'cpu' u2014 defaults to CUDA when available, else CPU.
 //   opts.onReady(parakeet) / opts.onError(message): when onReady is a function
 //   the load runs on a background thread and these fire on the JS thread.
 static JSValue js_loadParakeet(JSContext* ctx, JSValueConst,
@@ -1040,7 +1018,7 @@ static JSValue js_loadParakeet(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1053,7 +1031,7 @@ static JSValue js_loadParakeet(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<ParakeetLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
@@ -1128,7 +1106,7 @@ static JSValue js_loadParakeetTokenizer(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1141,7 +1119,7 @@ static JSValue js_loadParakeetTokenizer(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<ParakeetTokLoadState>();
     ls->path     = path;
     ls->hasReady = true;
@@ -1194,7 +1172,7 @@ static void buildQwenAsr(const std::string& dir, brotensor::Device dev,
     w_out = std::move(w);
 }
 
-// State for an async loadQwenAsr — same shape as WhisperLoadState.
+// State for an async loadQwenAsr u2014 same shape as WhisperLoadState.
 struct QwenAsrLoadState {
     std::string                     dir;
     brotensor::Device               dev = brotensor::Device::CPU;
@@ -1208,9 +1186,9 @@ struct QwenAsrLoadState {
 //                                      -> AsyncHandle       (async, if opts.onReady)
 //   modelDir contains config.json + model.safetensors (HF Qwen3-ASR
 //   checkpoint, e.g. Qwen/Qwen3-ASR-0.6B). The Qwen BPE tokenizer files
-//   (vocab.json + merges.txt) sit in the same dir — load them with
+//   (vocab.json + merges.txt) sit in the same dir u2014 load them with
 //   bro.lm.loadTokenizer to detokenize the id stream.
-//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.device: 'cuda' | 'cpu' u2014 defaults to CUDA when available, else CPU.
 //   opts.onReady(asr) / opts.onError(message): when onReady is a function the
 //   load runs on a background thread and these fire on the JS thread.
 static JSValue js_loadQwenAsr(JSContext* ctx, JSValueConst,
@@ -1235,7 +1213,7 @@ static JSValue js_loadQwenAsr(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1248,7 +1226,7 @@ static JSValue js_loadQwenAsr(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<QwenAsrLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
@@ -1346,7 +1324,7 @@ static JSValue js_loadQwenAsrStream(JSContext* ctx, JSValueConst,
                                : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
+    // u2500u2500 Sync path u2500u2500
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -1359,7 +1337,7 @@ static JSValue js_loadQwenAsrStream(JSContext* ctx, JSValueConst,
         }
     }
 
-    // ── Async path ──
+    // u2500u2500 Async path u2500u2500
     auto ls = std::make_shared<QwenAsrStreamLoadState>();
     ls->dir         = dir;
     ls->blockChunks = blockChunks;
@@ -1398,11 +1376,11 @@ static JSValue js_loadQwenAsrStream(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Async transcription — bro.stt.transcribe(whisper, audio, promptIds, opts)
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
+// Async transcription u2014 bro.stt.transcribe(whisper, audio, promptIds, opts)
 //                       bro.stt.transcribe(parakeet, audio, opts)
 //                       bro.stt.transcribe(qwenAsr, audio, opts)
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 //
 // Runs Whisper's autoregressive decode on a background thread via the async-job
 // runner, so the JS thread stays responsive. Cancellation is real: brosoundml's
@@ -1413,7 +1391,7 @@ static JSValue js_loadQwenAsrStream(JSContext* ctx, JSValueConst,
 //
 // opts.onToken(id) streams each decoded token id as it is produced: the work
 // thread (sole writer) publishes a committed token prefix via an atomic and the
-// JS-thread poll drains it and fires onToken — lock-free, no mutex, same SPSC
+// JS-thread poll drains it and fires onToken u2014 lock-free, no mutex, same SPSC
 // handoff as the Qwen-TTS streaming path. opts.timestampBeginId enables long-form
 // (>30 s) windowed decode instead of truncating to the first 30 s window.
 
@@ -1429,7 +1407,7 @@ struct SttJob {
     // Long-form window marks, published by the decode thread and drained by the
     // JS-thread poll alongside the tokens. Each carries the token index it
     // precedes, so the poll can fire onWindow *before* the tokens belonging to
-    // that window — without which a caller placing timestamps live would attach
+    // that window u2014 without which a caller placing timestamps live would attach
     // them to the previous window. Same lock-free shape as tokenSlots: the
     // producer stores the payload then releases the count.
     struct WindowSlot { double start = 0.0; size_t at = 0; };
@@ -1489,7 +1467,7 @@ struct QwenAsrJob {
     size_t                  drained = 0;
 };
 
-// bro.stt.transcribe(qwenAsr, audio, opts?) — async Qwen3-ASR decode on a
+// bro.stt.transcribe(qwenAsr, audio, opts?) u2014 async Qwen3-ASR decode on a
 // background thread. Mirrors the Parakeet path below: real cancellation (the
 // greedy loop polls the flag once per token), SPSC onToken streaming,
 // onDone(tokenIds, info). opts.contextIds biases recognition (see the sync
@@ -1594,7 +1572,7 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
-// bro.stt.transcribe(parakeet, audio, opts?) — async Parakeet decode on a
+// bro.stt.transcribe(parakeet, audio, opts?) u2014 async Parakeet decode on a
 // background thread. Mirrors the Whisper path below: real cancellation (the
 // TDT loop polls the flag once per encoder frame), SPSC onToken streaming,
 // onDone(result, info) with result = { tokenIds, tokenFrames }.
@@ -1698,11 +1676,11 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
         return JS_ThrowTypeError(ctx,
             "transcribe(model, audio, ...): model and audio required");
 
-    // Parakeet path — no prompt: transcribe(parakeet, audio, opts?).
+    // Parakeet path u2014 no prompt: transcribe(parakeet, audio, opts?).
     if (auto* p = qjsbind::unwrap<ParakeetWrapper>(ctx, argv[0]))
         return js_stt_transcribe_parakeet(ctx, p, argc, argv);
 
-    // Qwen3-ASR path — no prompt: transcribe(qwenAsr, audio, opts?).
+    // Qwen3-ASR path u2014 no prompt: transcribe(qwenAsr, audio, opts?).
     if (auto* q = qjsbind::unwrap<QwenAsrWrapper>(ctx, argv[0]))
         return js_stt_transcribe_qwenasr(ctx, q, argc, argv);
 
@@ -1893,23 +1871,23 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Multi-stream sessions — model.createSession() + session.transcribe()/reset()
-// ═══════════════════════════════════════════════════════════════════════════
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
+// Multi-stream sessions u2014 model.createSession() + session.transcribe()/reset()
+// u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 //
 // One loaded model behind N per-stream sessions (own KV-cache / prediction
-// state) over ONE shared weight set — the STT analog of N wake detectors on one
+// state) over ONE shared weight set u2014 the STT analog of N wake detectors on one
 // shared net. session.transcribe(...) reuses the exact async-job dispatch as the
 // module-level bro.stt.transcribe(model, ...) (real cancellation, SPSC onToken
 // streaming, onDone(result, info)) but drives the session's own state and claims
 // the model's SHARED busy gate. brosoundml's tier for these models is SHARED
 // WEIGHTS / SERIALIZED decode (one GPU stream, shared captured step-graph), so
-// calls over one model — module-level and any session — never overlap: a second
+// calls over one model u2014 module-level and any session u2014 never overlap: a second
 // in-flight op throws. Sessions isolate STATE, not parallel execution; drive
 // them from one worker / queue. Each session's transcript is bit-identical to
 // the same call on a fresh model.
 
-// ── Whisper session ──
+// u2500u2500 Whisper session u2500u2500
 static WhisperSessionWrapper* whisperSessionSelf(JSContext* ctx, JSValueConst v) {
     return qjsbind::unwrap<WhisperSessionWrapper>(ctx, v);
 }
@@ -1968,7 +1946,7 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
             "transcribe: an operation is already in flight on this model "
-            "(sessions over one model serialize — drive them from one queue)");
+            "(sessions over one model serialize u2014 drive them from one queue)");
     }
 
     job->hasOnDone  = JS_IsFunction(ctx, onDone);
@@ -2061,7 +2039,7 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
-// session.reset() — clear the session's KV-cache for a fresh, unrelated clip.
+// session.reset() u2014 clear the session's KV-cache for a fresh, unrelated clip.
 static JSValue js_whisper_session_reset(JSContext* ctx, JSValueConst this_val,
                                         int, JSValueConst*) {
     auto* sw = whisperSessionSelf(ctx, this_val);
@@ -2084,7 +2062,7 @@ static void registerWhisperSessionClass(JSContext* ctx) {
         .method_raw("reset",      js_whisper_session_reset,      0);
 }
 
-// ── Parakeet session ──
+// u2500u2500 Parakeet session u2500u2500
 static ParakeetSessionWrapper* parakeetSessionSelf(JSContext* ctx, JSValueConst v) {
     return qjsbind::unwrap<ParakeetSessionWrapper>(ctx, v);
 }
@@ -2133,7 +2111,7 @@ static JSValue js_parakeet_session_transcribe(JSContext* ctx, JSValueConst this_
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
             "transcribe: an operation is already in flight on this model "
-            "(sessions over one model serialize — drive them from one queue)");
+            "(sessions over one model serialize u2014 drive them from one queue)");
     }
 
     job->hasOnDone   = JS_IsFunction(ctx, onDone);
@@ -2230,7 +2208,7 @@ static void registerParakeetSessionClass(JSContext* ctx) {
         .method_raw("reset",      js_parakeet_session_reset,      0);
 }
 
-// ── Qwen3-ASR session ──
+// u2500u2500 Qwen3-ASR session u2500u2500
 static QwenAsrSessionWrapper* qwenAsrSessionSelf(JSContext* ctx, JSValueConst v) {
     return qjsbind::unwrap<QwenAsrSessionWrapper>(ctx, v);
 }
@@ -2283,7 +2261,7 @@ static JSValue js_qwenasr_session_transcribe(JSContext* ctx, JSValueConst this_v
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
             "transcribe: an operation is already in flight on this model "
-            "(sessions over one model serialize — drive them from one queue)");
+            "(sessions over one model serialize u2014 drive them from one queue)");
     }
 
     job->hasOnDone  = JS_IsFunction(ctx, onDone);
@@ -2382,54 +2360,53 @@ static void registerQwenAsrSessionClass(JSContext* ctx) {
         .method_raw("reset",      js_qwenasr_session_reset,      0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
 // Install
-// ═══════════════════════════════════════════════════════════════════════════
+// ---------------------------------------------------------------------------
 
 void installSttBindings(JSContext* ctx) {
     registerTokenizerClass(ctx);
-    registerWhisperClass(ctx);
-    registerParakeetTokenizerClass(ctx);
-    registerParakeetClass(ctx);
-    registerQwenAsrClass(ctx);
-    registerQwenAsrStreamClass(ctx);
-    registerWhisperSessionClass(ctx);
-    registerParakeetSessionClass(ctx);
-    registerQwenAsrSessionClass(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        registerWhisperClass(ctx);
+        registerParakeetTokenizerClass(ctx);
+        registerParakeetClass(ctx);
+        registerQwenAsrClass(ctx);
+        registerQwenAsrStreamClass(ctx);
+        registerWhisperSessionClass(ctx);
+        registerParakeetSessionClass(ctx);
+        registerQwenAsrSessionClass(ctx);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue stt = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, stt, "init",
+            JS_NewCFunction(ctx, js_init, "init", 0));
+        JS_SetPropertyStr(ctx, stt, "loadWhisper",
+            JS_NewCFunction(ctx, js_loadWhisper, "loadWhisper", 2));
+        JS_SetPropertyStr(ctx, stt, "loadTokenizer",
+            JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
+        JS_SetPropertyStr(ctx, stt, "loadParakeet",
+            JS_NewCFunction(ctx, js_loadParakeet, "loadParakeet", 2));
+        JS_SetPropertyStr(ctx, stt, "loadParakeetTokenizer",
+            JS_NewCFunction(ctx, js_loadParakeetTokenizer, "loadParakeetTokenizer", 2));
+        JS_SetPropertyStr(ctx, stt, "loadQwenAsr",
+            JS_NewCFunction(ctx, js_loadQwenAsr, "loadQwenAsr", 2));
+        JS_SetPropertyStr(ctx, stt, "loadQwenAsrStream",
+            JS_NewCFunction(ctx, js_loadQwenAsrStream, "loadQwenAsrStream", 2));
+        JS_SetPropertyStr(ctx, stt, "transcribe",
+            JS_NewCFunction(ctx, js_stt_transcribe, "transcribe", 4));
+        JS_SetPropertyStr(ctx, broObj, "stt", stt);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue stt = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, stt, "init",
-        JS_NewCFunction(ctx, js_init, "init", 0));
-    JS_SetPropertyStr(ctx, stt, "loadWhisper",
-        JS_NewCFunction(ctx, js_loadWhisper, "loadWhisper", 2));
-    JS_SetPropertyStr(ctx, stt, "loadTokenizer",
-        JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
-    JS_SetPropertyStr(ctx, stt, "loadParakeet",
-        JS_NewCFunction(ctx, js_loadParakeet, "loadParakeet", 2));
-    JS_SetPropertyStr(ctx, stt, "loadParakeetTokenizer",
-        JS_NewCFunction(ctx, js_loadParakeetTokenizer, "loadParakeetTokenizer", 2));
-    JS_SetPropertyStr(ctx, stt, "loadQwenAsr",
-        JS_NewCFunction(ctx, js_loadQwenAsr, "loadQwenAsr", 2));
-    JS_SetPropertyStr(ctx, stt, "loadQwenAsrStream",
-        JS_NewCFunction(ctx, js_loadQwenAsrStream, "loadQwenAsrStream", 2));
-    JS_SetPropertyStr(ctx, stt, "transcribe",
-        JS_NewCFunction(ctx, js_stt_transcribe, "transcribe", 4));
-    JS_SetPropertyStr(ctx, broObj, "stt", stt);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 void cleanupSttBindings(JSContext* /*ctx*/) {}
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js
