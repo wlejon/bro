@@ -7,7 +7,7 @@
 //
 // `__host` is not an app-facing API. It is the smallest possible host
 // application — the same shape planet-bro and ffmpeg-bro have, and the shape
-// broc's generated C++ has — expressed through nothing but the public engine
+// host-generated C++ has — expressed through nothing but the public engine
 // surface, so tests/scene/test_host_scene_context.js can prove that a scene
 // context built from C++ is the same thing canvas.getContext('scene') builds.
 // If an engine change ever breaks that equivalence, that test fails, which is

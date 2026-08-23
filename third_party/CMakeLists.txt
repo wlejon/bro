@@ -12,12 +12,12 @@
 # changes: in the documented layout both roots are the same directory.
 #
 # (2) exists because a host application's CMake root is not required to be a
-# sibling of bro. broc generates its project inside the app tree it compiles,
-# so `${CMAKE_SOURCE_DIR}/..` lands somewhere with no libraries in it — and the
-# old single-root lookup then fell through to bro's *submodules*, silently
-# building a different (and, in a non-recursive clone, absent) source tree. The
-# failure surfaced far from its cause, as brokit's FastNoise2 submodule missing
-# a CMakeLists.txt.
+# sibling of bro. A standalone compiler/generator may generate its project inside
+# the app tree it compiles, so `${CMAKE_SOURCE_DIR}/..` lands somewhere with no
+# libraries in it — and the old single-root lookup then fell through to bro's
+# *submodules*, silently building a different (and, in a non-recursive clone,
+# absent) source tree. The failure surfaced far from its cause, as brokit's
+# FastNoise2 submodule missing a CMakeLists.txt.
 #
 # An explicit `-D<NAME>_DIR=` still wins over both: these only supply the
 # default for a cache entry that CMake leaves alone once it is set. Pointing one

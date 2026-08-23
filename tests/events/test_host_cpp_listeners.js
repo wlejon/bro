@@ -13,7 +13,7 @@
 //
 // It is driven through `__host` (src/headless/main.cpp) — the smallest
 // possible host application, built out of nothing but the public engine
-// surface, which is the shape broc's generated C++ has. `__host.note(tag)`
+// surface, which is the shape host-generated C++ has. `__host.note(tag)`
 // appends to the very same log the C++ listeners write to, so the relative
 // order of a C++ and a JS listener is directly observable.
 //

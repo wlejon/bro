@@ -5,8 +5,8 @@
 // host's route to an Engine*, bro::engine::engineForContext(JSContext*). It is
 // driven through `__host`, a deliberately tiny host application installed by
 // bro-headless via HeadlessHooks::installHostBindings (src/headless/main.cpp) —
-// the same hook planet-bro and ffmpeg-bro use, and the same shape broc's
-// generated C++ has. Nothing here reaches into the engine any other way.
+// the same hook planet-bro and ffmpeg-bro use, and the same shape host-generated
+// C++ has. Nothing here reaches into the engine any other way.
 //
 // Why it matters: a SceneGraph built with make_unique outside createSceneContext
 // is not in Engine::sceneGraphs_, so the frame loop never renders it, and has no
