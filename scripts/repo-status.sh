@@ -296,3 +296,8 @@ else
 fi
 
 exit 0
+
+if [[ "$SYNC_SURFACE" -eq 1 ]]; then
+    echo
+    bash "$SCRIPT_DIR/sync-surface.sh"
+fi
