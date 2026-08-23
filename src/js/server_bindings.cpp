@@ -2,24 +2,17 @@
 #include "engine/engine.h"
 #include "js/worker.h"
 #include "util/log.h"
-
 #include <qjsbind/qjsbind.h>
+
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
 
-// Main-context binding (engine-backed). One engine per process, so a
-// static pointer is fine here — set by install() on the main thread.
 static engine::Engine* s_engine = nullptr;
 static JSContext* s_ctx = nullptr;
-
-// Worker-context binding. Each worker thread has its own JSContext; we
-// resolve the Worker pointer via a thread-local since workers can be
-// running on different threads concurrently and a static map would race.
 static thread_local Worker* s_worker = nullptr;
-
-// ---------------------------------------------------------------------------
-// bro.server.stop() — request graceful shutdown
-// ---------------------------------------------------------------------------
 
 static JSValue js_server_stop(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     if (s_worker) {
@@ -33,10 +26,6 @@ static JSValue js_server_stop(JSContext* ctx, JSValueConst, int, JSValueConst*) 
     }
     return JS_UNDEFINED;
 }
-
-// ---------------------------------------------------------------------------
-// bro.server.tickrate — get/set ticks per second
-// ---------------------------------------------------------------------------
 
 static JSValue js_server_get_tickrate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     if (s_worker) return JS_NewFloat64(ctx, s_worker->tickRate());
@@ -62,31 +51,16 @@ static JSValue js_server_set_tickrate(JSContext* ctx, JSValueConst, int argc, JS
     return JS_UNDEFINED;
 }
 
-// ---------------------------------------------------------------------------
-// bro.server.uptime — seconds since server started
-// ---------------------------------------------------------------------------
-
 static JSValue js_server_get_uptime(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     if (s_worker) return JS_NewFloat64(ctx, s_worker->uptimeSec());
     if (!s_engine) return JS_NewFloat64(ctx, 0.0);
     return JS_NewFloat64(ctx, s_engine->serverUptime());
 }
 
-// ---------------------------------------------------------------------------
-// Function list
-// ---------------------------------------------------------------------------
-
 static const JSCFunctionListEntry js_server_funcs[] = {
     JS_CFUNC_DEF("stop", 0, js_server_stop),
 };
 
-// ---------------------------------------------------------------------------
-// Install / Cleanup
-// ---------------------------------------------------------------------------
-
-// Build the bro.server object on `ctx` and attach the shared getters/
-// setters. Which backend (engine vs worker) those functions talk to is
-// determined by s_engine / s_worker at call time.
 static void buildServerObject(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -119,10 +93,14 @@ static void buildServerObject(JSContext* ctx) {
     JS_FreeValue(ctx, global);
 }
 
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void ServerBindings::install(JSContext* ctx, engine::Engine* engine) {
     s_engine = engine;
-    s_ctx = ctx;
-    buildServerObject(ctx);
+        s_ctx = ctx;
+        buildServerObject(ctx);
 }
 
 void ServerBindings::installWorker(JSContext* ctx, Worker* worker) {
@@ -131,9 +109,6 @@ void ServerBindings::installWorker(JSContext* ctx, Worker* worker) {
 }
 
 void ServerBindings::cleanup(JSContext* ctx) {
-    // Drop bro.server so the getter/setter JSValues and the "tickrate" /
-    // "uptime" atoms held by its property shape are released before the
-    // runtime is freed.
     if (ctx) {
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -146,8 +121,6 @@ void ServerBindings::cleanup(JSContext* ctx) {
         JS_FreeValue(ctx, global);
     }
 
-    // Clear whichever backend is bound on this thread. On the main thread
-    // this clears s_engine; on a worker thread it clears its own s_worker.
     if (s_worker) {
         s_worker = nullptr;
         return;
@@ -155,5 +128,6 @@ void ServerBindings::cleanup(JSContext* ctx) {
     s_engine = nullptr;
     s_ctx = nullptr;
 }
+
 
 } // namespace bro::js

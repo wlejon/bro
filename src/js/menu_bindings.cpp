@@ -1,19 +1,14 @@
 #include "js/menu_bindings.h"
 #include "engine/engine.h"
 #include "engine/menu_bar.h"
+#include <cstring>
+#include <string>
 
 extern "C" {
 #include "quickjs.h"
 }
 
-#include <cstring>
-#include <string>
-
 namespace bro::js {
-
-// ---------------------------------------------------------------------------
-// Engine pointer stash
-// ---------------------------------------------------------------------------
 
 static const char* kMenuEngineKey = "__bro_menu_engine_ptr";
 
@@ -39,10 +34,6 @@ static std::string readCString(JSContext* ctx, JSValueConst v) {
     }
     return out;
 }
-
-// ---------------------------------------------------------------------------
-// JS functions
-// ---------------------------------------------------------------------------
 
 static JSValue js_menu_show(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* eng = getEngine(ctx);
@@ -148,32 +139,37 @@ static const JSCFunctionListEntry js_menu_funcs[] = {
     JS_CFUNC_DEF("on", 2, js_menu_on),
 };
 
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void MenuBindings::install(JSContext* ctx, engine::Engine* engine) {
     JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, kMenuEngineKey,
-                      JS_NewInt64(ctx, static_cast<int64_t>(
-                          reinterpret_cast<intptr_t>(engine))));
-
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue menuObj = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, menuObj, js_menu_funcs,
-                               sizeof(js_menu_funcs) / sizeof(js_menu_funcs[0]));
-
-    JSAtom visibleAtom = JS_NewAtom(ctx, "visible");
-    JS_DefinePropertyGetSet(ctx, menuObj, visibleAtom,
-        JS_NewCFunction(ctx, js_menu_get_visible, "get visible", 0),
-        JS_UNDEFINED,
-        JS_PROP_CONFIGURABLE);
-    JS_FreeAtom(ctx, visibleAtom);
-
-    JS_SetPropertyStr(ctx, broObj, "menu", menuObj);
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_SetPropertyStr(ctx, global, kMenuEngineKey,
+                          JS_NewInt64(ctx, static_cast<int64_t>(
+                              reinterpret_cast<intptr_t>(engine))));
+    
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue menuObj = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, menuObj, js_menu_funcs,
+                                   sizeof(js_menu_funcs) / sizeof(js_menu_funcs[0]));
+    
+        JSAtom visibleAtom = JS_NewAtom(ctx, "visible");
+        JS_DefinePropertyGetSet(ctx, menuObj, visibleAtom,
+            JS_NewCFunction(ctx, js_menu_get_visible, "get visible", 0),
+            JS_UNDEFINED,
+            JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, visibleAtom);
+    
+        JS_SetPropertyStr(ctx, broObj, "menu", menuObj);
+        JS_FreeValue(ctx, broObj);
+        JS_FreeValue(ctx, global);
 }
+
 
 } // namespace bro::js

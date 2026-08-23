@@ -1,19 +1,15 @@
 #include "js/imagebitmap_bindings.h"
 #include "js/image_bindings.h"
 #include "svg/svg_renderer.h"
-
 #include <qjsbind/qjsbind.h>
-
-#include <api/api.h>  // brokit::api::blobBytes
+#include <api/api.h>
 #include "broimage/decode.h"
 #if BRO_WITH_WEBP
 #include "render/webp_image.h"
 #endif
-
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
-
 #include <cstring>
 #include <string>
 #include <utility>
@@ -21,11 +17,6 @@
 
 namespace bro::js {
 
-// ---------------------------------------------------------------------------
-// Backing store. An ImageBitmap is just an immutable raster SkImage; once
-// closed (or transferred away) `image` is null and the bitmap draws as a
-// no-op. The qjsbind default finalizer deletes this struct, dropping the ref.
-// ---------------------------------------------------------------------------
 struct ImageBitmapData {
     sk_sp<SkImage> image;
     int width = 0;
@@ -34,11 +25,6 @@ struct ImageBitmapData {
 
 using IB = ImageBitmapData;
 
-// ---------------------------------------------------------------------------
-// Build a raster RGBA SkImage from a contiguous pixel buffer, honouring an
-// optional crop rect. The crop is clamped to the source bounds (no transparent
-// padding for out-of-bounds rects — a deliberate v1 simplification).
-// ---------------------------------------------------------------------------
 static sk_sp<SkImage> buildBitmap(const uint8_t* rgba, int srcW, int srcH,
                                   bool crop, int sx, int sy, int sw, int sh,
                                   std::string& err) {
@@ -69,15 +55,9 @@ static sk_sp<SkImage> buildBitmap(const uint8_t* rgba, int srcW, int srcH,
     return SkImages::RasterFromData(info, data, static_cast<size_t>(sw) * 4);
 }
 
-// ---------------------------------------------------------------------------
-// Resolve a createImageBitmap source argument to a raster SkImage. Sources:
-// another ImageBitmap, an Image / HTMLCanvasElement (via the shared pixel
-// extractor), or an ImageData-shaped plain object { width, height, data }.
-// ---------------------------------------------------------------------------
 static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
                                       bool crop, int sx, int sy, int sw, int sh,
                                       std::string& err) {
-    // 1) ImageBitmap — immutable, so an uncropped copy can share the SkImage.
     if (sk_sp<SkImage> bm = ImageBitmapBindings::getImage(src)) {
         if (!crop) return bm;
         int bw = bm->width(), bh = bm->height();
@@ -99,7 +79,6 @@ static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
         return SkImages::RasterFromData(info, data, static_cast<size_t>(sw) * 4);
     }
 
-    // 2) Image or HTMLCanvasElement — reuse the existing pixel extractor.
     {
         ImagePixels pix;
         if (ImageBindings::getImagePixels(src, pix)) {
@@ -108,13 +87,6 @@ static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
         }
     }
 
-    // 3) Blob / File — encoded bytes, decoded here.
-    //
-    // This is the spec's canonical source and the one every fetch-based image
-    // path produces: `fetch(url).then(r => r.blob()).then(createImageBitmap)`
-    // is how three.js's ImageBitmapLoader loads a texture, which makes it how
-    // GLTFLoader loads every texture in a model. Without it, a Blob fell
-    // through to the ImageData branch and came back "unsupported source".
     {
         const uint8_t* bytes = nullptr;
         size_t len = 0;
@@ -123,7 +95,6 @@ static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
             std::string decodeErr;
             bool ok = broimage::decode_memory(bytes, len, decoded, &decodeErr);
 #if BRO_WITH_WEBP
-            // stb has no WebP; same fallback the other decode paths take.
             if (!ok) {
                 int w = 0, h = 0;
                 std::vector<uint8_t> rgba;
@@ -158,7 +129,6 @@ static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
         }
     }
 
-    // 4) ImageData-shaped plain object { width, height, data:TypedArray }.
     if (JS_IsObject(src)) {
         JSValue wv = JS_GetPropertyStr(ctx, src, "width");
         JSValue hv = JS_GetPropertyStr(ctx, src, "height");
@@ -171,13 +141,13 @@ static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
         size_t len = 0;
         size_t off = 0, blen = 0;
         JSValue ab = JS_GetTypedArrayBuffer(ctx, dv, &off, &blen, nullptr);
-        if (JS_IsException(ab)) {
-            JS_FreeValue(ctx, JS_GetException(ctx));  // clear: dv not a TypedArray
-        } else {
+        if (!JS_IsException(ab)) {
             buf = JS_GetArrayBuffer(ctx, &len, ab);
             if (buf) { buf += off; len = blen; }
+            JS_FreeValue(ctx, ab);
+        } else {
+            JS_FreeValue(ctx, JS_GetException(ctx));
         }
-        JS_FreeValue(ctx, ab);
 
         sk_sp<SkImage> result;
         if (buf && w > 0 && h > 0 &&
@@ -196,12 +166,6 @@ static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
     return nullptr;
 }
 
-// ---------------------------------------------------------------------------
-// createImageBitmap(source)  /  createImageBitmap(source, sx, sy, sw, sh)
-// Returns a Promise<ImageBitmap>. The RGBA→SkImage work is synchronous; the
-// promise is resolved (or rejected) immediately so callers stay portable with
-// the web standard.
-// ---------------------------------------------------------------------------
 static JSValue js_createImageBitmap(JSContext* ctx, JSValueConst /*this_val*/,
                                     int argc, JSValueConst* argv) {
     std::string err;
@@ -244,25 +208,14 @@ static JSValue js_createImageBitmap(JSContext* ctx, JSValueConst /*this_val*/,
     return promise;
 }
 
-// ---------------------------------------------------------------------------
-// new ImageData(width, height)  |  new ImageData(Uint8ClampedArray data, width [, height])
-//
-// The standard Web constructor. bro's canvas (putImageData) and createImageBitmap
-// consume the duck-typed { width, height, data } shape, but the global ImageData
-// constructor itself was missing — so `new ImageData(pixels, w, h)`, the
-// idiomatic way to wrap raw RGBA (e.g. bro.steam.getAvatar pixels), threw
-// ReferenceError. This produces that same shape; with a typed array it shares
-// the buffer (web semantics), and with dimensions only it allocates zeroed RGBA.
-// ---------------------------------------------------------------------------
 static JSValue js_imageData_ctor(JSContext* ctx, JSValueConst /*new_target*/,
                                  int argc, JSValueConst* argv) {
     if (argc < 1) return JS_ThrowTypeError(ctx, "ImageData requires arguments");
 
-    // Overload select: is arg0 a typed array (data-first) or a number (w,h)?
     size_t off = 0, blen = 0;
     JSValue ab0 = JS_GetTypedArrayBuffer(ctx, argv[0], &off, &blen, nullptr);
     const bool dataFirst = !JS_IsException(ab0);
-    if (!dataFirst) JS_FreeValue(ctx, JS_GetException(ctx)); // clear: arg0 not a TypedArray
+    if (!dataFirst) JS_FreeValue(ctx, JS_GetException(ctx));
     else            JS_FreeValue(ctx, ab0);
 
     JSValue dataArr = JS_UNDEFINED;
@@ -286,7 +239,7 @@ static JSValue js_imageData_ctor(JSContext* ctx, JSValueConst /*new_target*/,
             }
         }
         width = w; height = h;
-        dataArr = JS_DupValue(ctx, argv[0]); // share the same Uint8ClampedArray
+        dataArr = JS_DupValue(ctx, argv[0]);
     } else {
         int32_t w = 0, h = 0;
         JS_ToInt32(ctx, &w, argv[0]);
@@ -310,10 +263,6 @@ static JSValue js_imageData_ctor(JSContext* ctx, JSValueConst /*new_target*/,
 
 JSValue ImageBitmapBindings::makeImageData(JSContext* ctx, int width, int height,
                                            JSValue dataArr) {
-    // Resolve the shared prototype off the global constructor so every
-    // producer yields true `instanceof ImageData` objects. Falls back to a
-    // plain object if the constructor isn't installed (defensive — install()
-    // runs before any producer in both main and worker contexts).
     JSValue obj = JS_UNDEFINED;
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue ctor = JS_GetPropertyStr(ctx, global, "ImageData");
@@ -332,9 +281,6 @@ JSValue ImageBitmapBindings::makeImageData(JSContext* ctx, int width, int height
     return obj;
 }
 
-// ---------------------------------------------------------------------------
-// ImageBitmap.prototype.close() — release the backing image eagerly.
-// ---------------------------------------------------------------------------
 static JSValue js_imagebitmap_close(JSContext* ctx, JSValueConst this_val,
                                     int /*argc*/, JSValueConst* /*argv*/) {
     if (auto* d = qjsbind::unwrap<IB>(ctx, this_val)) {
@@ -343,52 +289,6 @@ static JSValue js_imagebitmap_close(JSContext* ctx, JSValueConst this_val,
         d->height = 0;
     }
     return JS_UNDEFINED;
-}
-
-// ---------------------------------------------------------------------------
-// Install + public API
-// ---------------------------------------------------------------------------
-void ImageBitmapBindings::install(JSContext* ctx) {
-    qjsbind::Class<IB>(ctx, "ImageBitmap", qjsbind::NoGlobal)
-        .get("width",  [](IB* d) -> int { return d->width; })
-        .get("height", [](IB* d) -> int { return d->height; })
-        .method_raw("close", js_imagebitmap_close, 0);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "createImageBitmap",
-        JS_NewCFunction(ctx, js_createImageBitmap, "createImageBitmap", 1));
-
-    // The interface object. ImageBitmap has no usable constructor — only
-    // createImageBitmap makes one — but it is still a global, and code branches
-    // on `x instanceof ImageBitmap` to tell a decoded bitmap from an <img> or a
-    // raw {data,width,height}. With the name absent, three.js's texture
-    // serializer took every ImageBitmap for an unknown source and refused to
-    // save it, so a scene that imported fine came back textureless.
-    {
-        JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<IB>());
-        JSValue ibCtor = JS_NewCFunction2(ctx,
-            [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
-                return JS_ThrowTypeError(c, "Illegal constructor: use createImageBitmap()");
-            }, "ImageBitmap", 0, JS_CFUNC_constructor, 0);
-        JS_SetConstructor(ctx, ibCtor, proto);
-        JS_FreeValue(ctx, proto);
-        JS_SetPropertyStr(ctx, global, "ImageBitmap", ibCtor);
-    }
-    // ImageData needs a real prototype object paired with the constructor
-    // (JS_SetConstructor wires ctor.prototype ↔ proto.constructor). A bare
-    // C-function constructor has no "prototype" property at all, which makes
-    // `x instanceof ImageData` throw TypeError instead of answering — that
-    // took out any app using the standard CanvasImageSource type switch.
-    // makeImageData() stamps this prototype on every produced instance.
-    {
-        JSValue idCtor = JS_NewCFunction2(ctx, js_imageData_ctor, "ImageData", 2,
-                                          JS_CFUNC_constructor, 0);
-        JSValue idProto = JS_NewObject(ctx);
-        JS_SetConstructor(ctx, idCtor, idProto);
-        JS_FreeValue(ctx, idProto);
-        JS_SetPropertyStr(ctx, global, "ImageData", idCtor);
-    }
-    JS_FreeValue(ctx, global);
 }
 
 JSClassID ImageBitmapBindings::classId() {
@@ -416,6 +316,38 @@ sk_sp<SkImage> ImageBitmapBindings::takeImage(JSValueConst val) {
     d->width = 0;
     d->height = 0;
     return img;
+}
+
+void ImageBitmapBindings::install(JSContext* ctx)
+{
+    qjsbind::Class<IB>(ctx, "ImageBitmap", qjsbind::NoGlobal)
+            .get("width",  [](IB* d) -> int { return d->width; })
+            .get("height", [](IB* d) -> int { return d->height; })
+            .method_raw("close", js_imagebitmap_close, 0);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, global, "createImageBitmap",
+            JS_NewCFunction(ctx, js_createImageBitmap, "createImageBitmap", 1));
+    
+        {
+            JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<IB>());
+            JSValue ibCtor = JS_NewCFunction2(ctx,
+                [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+                    return JS_ThrowTypeError(c, "Illegal constructor: use createImageBitmap()");
+                }, "ImageBitmap", 0, JS_CFUNC_constructor, 0);
+            JS_SetConstructor(ctx, ibCtor, proto);
+            JS_FreeValue(ctx, proto);
+            JS_SetPropertyStr(ctx, global, "ImageBitmap", ibCtor);
+        }
+        {
+            JSValue idCtor = JS_NewCFunction2(ctx, js_imageData_ctor, "ImageData", 2,
+                                              JS_CFUNC_constructor, 0);
+            JSValue idProto = JS_NewObject(ctx);
+            JS_SetConstructor(ctx, idCtor, idProto);
+            JS_FreeValue(ctx, idProto);
+            JS_SetPropertyStr(ctx, global, "ImageData", idCtor);
+        }
+        JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js

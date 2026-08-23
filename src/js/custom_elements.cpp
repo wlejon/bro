@@ -232,6 +232,39 @@ static JSValue js_ce_whenDefined(JSContext* ctx, JSValueConst, int, JSValueConst
     return result;
 }
 
+void installCustomElements(JSContext* ctx, JSClassID elementClassId, void* documentPtr) {
+    auto* reg = new CERegistry();
+    reg->elementClassId = elementClassId;
+    reg->document = static_cast<bro::dom::Document*>(documentPtr);
+    s_registries[ctx] = reg;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+
+    JSValue ce = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, ce, "define",
+        JS_NewCFunction(ctx, js_ce_define, "define", 2));
+    JS_SetPropertyStr(ctx, ce, "get",
+        JS_NewCFunction(ctx, js_ce_get, "get", 1));
+    JS_SetPropertyStr(ctx, ce, "whenDefined",
+        JS_NewCFunction(ctx, js_ce_whenDefined, "whenDefined", 1));
+    JS_SetPropertyStr(ctx, global, "customElements", ce);
+
+    JSValue htmlCtor = JS_NewCFunction2(ctx, js_htmlelement_ctor,
+                                        "HTMLElement", 0,
+                                        JS_CFUNC_constructor, 0);
+
+    JSValue elemProto = JS_GetClassProto(ctx, elementClassId);
+    JSValue htmlProto = JS_NewObjectProto(ctx, elemProto);
+    JS_FreeValue(ctx, elemProto);
+
+    JS_SetPropertyStr(ctx, htmlCtor, "prototype", JS_DupValue(ctx, htmlProto));
+    JS_SetPropertyStr(ctx, htmlProto, "constructor", JS_DupValue(ctx, htmlCtor));
+    JS_FreeValue(ctx, htmlProto);
+
+    JS_SetPropertyStr(ctx, global, "HTMLElement", htmlCtor);
+    JS_FreeValue(ctx, global);
+}
+
 void cleanupCustomElements(JSContext* ctx)
 {
     auto it = s_registries.find(ctx);
@@ -365,40 +398,6 @@ bool upgradeCustomElementPrototype(JSContext* ctx, JSValue wrapper, const std::s
     }
     JS_FreeValue(ctx, customProto);
     return true;
-}
-
-void installCustomElements(JSContext* ctx, JSClassID elementClassId, void* documentPtr)
-{
-    auto* reg = new CERegistry();
-    reg->elementClassId = elementClassId;
-    reg->document = static_cast<bro::dom::Document*>(documentPtr);
-    s_registries[ctx] = reg;
-    
-    JSValue global = JS_GetGlobalObject(ctx);
-    
-    JSValue ce = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, ce, "define",
-        JS_NewCFunction(ctx, js_ce_define, "define", 2));
-    JS_SetPropertyStr(ctx, ce, "get",
-        JS_NewCFunction(ctx, js_ce_get, "get", 1));
-    JS_SetPropertyStr(ctx, ce, "whenDefined",
-        JS_NewCFunction(ctx, js_ce_whenDefined, "whenDefined", 1));
-    JS_SetPropertyStr(ctx, global, "customElements", ce);
-    
-    JSValue htmlCtor = JS_NewCFunction2(ctx, js_htmlelement_ctor,
-                                        "HTMLElement", 0,
-                                        JS_CFUNC_constructor, 0);
-    
-    JSValue elemProto = JS_GetClassProto(ctx, elementClassId);
-    JSValue htmlProto = JS_NewObjectProto(ctx, elemProto);
-    JS_FreeValue(ctx, elemProto);
-    
-    JS_SetPropertyStr(ctx, htmlCtor, "prototype", JS_DupValue(ctx, htmlProto));
-    JS_SetPropertyStr(ctx, htmlProto, "constructor", JS_DupValue(ctx, htmlCtor));
-    JS_FreeValue(ctx, htmlProto);
-    
-    JS_SetPropertyStr(ctx, global, "HTMLElement", htmlCtor);
-    JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js

@@ -1,140 +1,80 @@
-// =============================================================================
-// bro Native File Dialogs API
-// =============================================================================
-//
-// Native open/save dialogs backed by SDL3's portable file dialog API
-// (Win32 IFileDialog, GTK/portal on Linux, NSOpenPanel on macOS). These
-// are *globals*, not on the bro.* namespace, and they predate brokit's
-// own showOpenFilePicker, apps in this repo use these, not the
-// web-standard variants.
-//
-// All three calls block the JS thread until the user picks or cancels.
-// While blocked the engine spins an 8 ms loop that pumps SDL events and
-// runs the JS timer queue (setTimeout / setInterval), so an audio
-// sequencer driven by timers keeps going. That is ALL that runs:
-// requestAnimationFrame callbacks, layout, and rendering are stopped for
-// the whole life of the dialog, so the window does not repaint and CSS
-// animations do not advance. No further script runs until the call returns.
-//
-// All three are declared with arity 0, so `showOpenFileDialog.length === 0`
-// despite the signatures below, arguments are read positionally at runtime.
-//
-// Filter format is a single string: "Label|ext1;ext2;ext3"
-//   "Audio Files|wav;mp3;ogg;flac"
-//   "GLB / GLTF|glb;gltf"
-//   "JSON|json"
-// Pass an empty string (or omit) to show all files. A non-string filter
-// argument is silently ignored (same as omitting it). A string with no "|"
-// is taken as the PATTERN, with the literal label "Files". So 'json' works
-// but is displayed as "Files".
-// =============================================================================
+/**
+ * =============================================================================
+ * bro Native File Dialogs & Modal Dialogs API
+ * =============================================================================
+ *
+ * Native open/save file dialogs backed by SDL3's portable file dialog API, plus
+ * the browser's standard modal dialog trio (alert, confirm, prompt).
+ *
+ * @example
+ *   const files = showOpenFileDialog('Audio Files|wav;flac;mp3;ogg;opus');
+ *   if (files.length) {
+ *     console.log('Selected file:', files[0]);
+ *   }
+ *
+ * @example
+ *   if (confirm('Are you sure you want to proceed?')) {
+ *     alert('Action confirmed');
+ *   }
+ */
 
+// ── Classes & Interfaces ─────────────────────────────────────────────────────
 
-// -----------------------------------------------------------------------------
-// showOpenFileDialog(filter?, allowMultiple?) → string[]
-// -----------------------------------------------------------------------------
-//
-// Returns an array of absolute file paths. Empty array if the user
-// cancelled. With allowMultiple = false (default) the array has 0 or 1
-// entries; with true it can have many.
+/**
+ * Native modal dialogs and file system pickers interface.
+ */
+class Dialogs {
 
-const files = showOpenFileDialog('Audio Files|wav;flac;mp3;ogg;opus');
-if (files.length) {
-    loadAudio(files[0]);
+  /**
+   * Displays a modal alert dialog with an optional message.
+   *
+   * @param {*} [message] - Text to display
+   */
+  static alert(message) {}
+
+  /**
+   * Displays a modal confirmation dialog with OK and Cancel buttons.
+   *
+   * @param {*} [message] - Prompt message to display
+   * @returns {boolean} True if OK was clicked, false if cancelled
+   */
+  static confirm(message) {}
+
+  /**
+   * Displays a modal dialog with a text prompt and default value.
+   *
+   * @param {*} [message] - Prompt message to display
+   * @param {string} [defaultText] - Default input value
+   * @returns {string|null} String response or null if cancelled
+   */
+  static prompt(message, defaultText) {}
+
+  /**
+   * Opens a native modal file picker dialog.
+   *
+   * @param {string} [filter] - Filter pattern string (e.g. "Images|png;jpg")
+   * @param {boolean} [allowMultiple] - Whether to allow multiple file selection
+   * @returns {Array<string>} Array of selected absolute file paths
+   */
+  static showOpenFileDialog(filter, allowMultiple) {}
+
+  /**
+   * Opens a native modal directory picker dialog.
+   *
+   * @param {string} [defaultLocation] - Starting directory path
+   * @param {boolean} [allowMultiple] - Whether to allow multiple folder selection
+   * @returns {Array<string>} Array of selected absolute folder paths
+   */
+  static showOpenFolderDialog(defaultLocation, allowMultiple) {}
+
+  /**
+   * Opens a native modal file save dialog.
+   *
+   * @param {string} [filter] - Filter pattern string (e.g. "JSON|json")
+   * @param {string} [defaultName] - Default location or file path
+   * @returns {string|null} Selected file path string or null if cancelled
+   */
+  static showSaveFileDialog(filter, defaultName) {}
+
 }
 
-// Multiple selection:
-const many = showOpenFileDialog('Images|png;jpg;jpeg', true);
-many.forEach(loadImage);
-
-
-// -----------------------------------------------------------------------------
-// showOpenFolderDialog(defaultLocation?, allowMultiple?) → string[]
-// -----------------------------------------------------------------------------
-//
-// defaultLocation is an optional starting directory (absolute path).
-// Returns an array of folder paths; empty if cancelled.
-
-const dirs = showOpenFolderDialog(state.lastDir || null);
-if (dirs.length) {
-    state.lastDir = dirs[0];
-    openProjectFolder(dirs[0]);
-}
-
-
-// -----------------------------------------------------------------------------
-// showSaveFileDialog(filter?, defaultName?) → string | null
-// -----------------------------------------------------------------------------
-//
-// Returns a single absolute path, or null if the user cancelled.
-//
-// defaultName is NOT a filename hint: it is handed to SDL as the default
-// *location* (after backslash normalization on Windows), so a bare
-// 'recording.wav' is interpreted as a path, not as a pre-filled name. Pass a
-// full path, 'C:\\Users\\me\\Music\\recording.wav' or `${dir}/recording.wav`,
-// if you want the dialog to open somewhere specific.
-
-const path = showSaveFileDialog('WAV Files|wav', `${state.lastDir}/recording.wav`);
-if (path) {
-    saveWav(path);
-}
-
-
-// -----------------------------------------------------------------------------
-// Where these globals exist, and why the feature test matters
-// -----------------------------------------------------------------------------
-//
-// They are installed unconditionally on the PRIMARY app realm, headless
-// included. Headless is NOT a safe harbour: with no window the dialogs are
-// installed against a null parent window and still enter the same blocking
-// wait, so calling one from a test hangs the run until a native dialog is
-// dismissed by hand. Never trigger a dialog from a headless test, gate it
-// behind an explicit user action, or behind your own flag.
-//
-// The globals are genuinely ABSENT in <iframe> sub-documents and in
-// secondary windows (bro.window.open). Those realms are built without the
-// dialog bindings. That is what the feature test protects against: code that
-// may run in a sub-document, not code that may run headless.
-
-if (typeof showSaveFileDialog !== 'function') {
-    // Reached from an <iframe> or a secondary window, ask the host realm to
-    // run the dialog and post the path back.
-    throw new Error('Save dialog is available in the main app realm only');
-}
-
-
-// =============================================================================
-// alert / confirm / prompt — the browser's three modal dialogs
-// =============================================================================
-//
-//   alert(message)                    → undefined
-//   confirm(message)                  → boolean
-//   prompt(message, defaultValue?)    → string | null
-//
-// Installed on the same global as the file dialogs, so any page that assumes
-// them — and a great deal of shipped code does, usually as the guard in front
-// of a destructive action — works unchanged. They block like a browser's: a
-// windowed run puts up SDL's native message box, modal to the app window, and
-// nothing else advances until the user answers.
-//
-// prompt() has no native text field to offer (SDL's message box is buttons
-// only), so it shows the message with the default value beneath it and the
-// user chooses between accepting that value and cancelling. An app that needs
-// real text entry should draw its own field — input, focus and overlays are
-// all in the engine already.
-//
-// HEADLESS AND SERVER RUNS DO NOT BLOCK. Unlike the file dialogs above, these
-// three answer themselves when there is no one to ask: the message is logged
-// ("[confirm] Are you sure? -> OK") and the call returns immediately. The
-// default is to accept, so a script driving an app walks through its
-// confirmations instead of stopping at the first one:
-//
-//   confirm(...)  → true         prompt(...)  → the default value
-//
-// `setDialogAnswer(false)` (a headless global — see docs/headless.md) flips
-// that for the rest of the run, which is how you test a cancel branch:
-//
-//   setDialogAnswer(false);
-//   clickDeleteButton();          // the app's confirm() returns false
-//   assert(itemStillThere());
-//   setDialogAnswer(true);

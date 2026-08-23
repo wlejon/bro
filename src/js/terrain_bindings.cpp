@@ -286,8 +286,7 @@ void TerrainBindings::cleanup(JSContext*) {
     }
 }
 
-void TerrainBindings::install(JSContext* ctx)
-{
+void TerrainBindings::install(JSContext* ctx) {
     qjsbind::Class<TW>(ctx, "Terrain")
         .method("update", [](TW* self, JSContext*, double x, double y, double z) -> int {
             if (!self->manager) return 0;

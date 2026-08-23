@@ -1,138 +1,111 @@
 /**
- * bro.menu, Standard application menu bar
+ * =============================================================================
+ * bro.menu — Standard Application Menu Bar
+ * =============================================================================
  *
- * A horizontal menu bar rendered by the engine's system panel
- * (system/menu.html). Hidden by default, tooling apps that want a
- * menu (project manager, editors, IDE-like tools) call bro.menu.show()
- * at startup. The bar behaves identically in bro-headless: showing it
- * reserves the same top inset and it appears in screenshots, so headless
- * runs exercise the exact viewport geometry the windowed app gets.
+ * Horizontal menu bar rendered by the engine's system panel. Provides native
+ * menu hierarchies, accelerator keys, dynamic items, and custom action routing.
  *
- * Actions prefixed with "__system." are engine-handled:
- *   __system.quit, close the app (sets running=false)
- *   __system.preferences, open the settings overlay (Graphics/Audio/Input)
- *   __system.inspector, toggle the DOM inspector panel; item is auto-checked when open
- *   __system.togglePerf, toggle the perf HUD overlay (same as F8)
- *
- * Only the inspector item syncs its checkmark from the engine side. The
- * __system.togglePerf item is re-checked inside its own menu handler, so
- * toggling the HUD with F8 leaves the menu item's checkmark stale, mirror it
- * yourself with updateItem() if you offer both paths.
- *
- * All other action IDs dispatch to handlers registered via bro.menu.on(id, fn).
- * The ESC key is no longer reserved by the engine, apps are free to use it.
- *
- * bro.menu lives on the primary app realm only. Code in an <iframe> or in a
- * secondary window (bro.window.open) has no bro.menu, and a secondary window
- * has no menu bar of its own: the bar belongs to the main window.
- *
- * Default menu (engine-built):
- *   File: Quit (Ctrl+Q → __system.quit)
- *   Edit: Preferences... (__system.preferences)
- *   View: Inspector (__system.inspector)
+ * @example
+ *   bro.menu.show();
+ *   bro.menu.set([
+ *     { id: 'file', label: 'File', items: [
+ *       { id: 'file.new', label: 'New', accel: 'Ctrl+N' },
+ *       { id: '__system.quit', label: 'Quit', accel: 'Ctrl+Q' }
+ *     ]}
+ *   ]);
+ *   bro.menu.on('file.new', () => {
+ *     console.log('New file requested');
+ *   });
  */
 
-// ── Show / Hide ──────────────────────────────────────────────────────────────
+// ── Dictionaries ─────────────────────────────────────────────────────────────
 
-bro.menu.show();
-bro.menu.hide();
-bro.menu.visible;   // read-only boolean (a non-enumerable accessor. It does
-                    // not show up in Object.keys(bro.menu) or a spread copy)
+/**
+ * Menu item descriptor definition.
+ * @typedef {Object} MenuItem
+ * @property {string} [id] -  Unique item identifier, or '__system.*' for engine actions.
+ * @property {string} [label] -  Display label text.
+ * @property {string} [accel] -  Keyboard shortcut hint string (e.g. 'Ctrl+S').
+ * @property {boolean} [separator] -  Whether to draw as a horizontal separator line.
+ * @property {boolean} [enabled] -  Whether item is enabled and clickable.
+ * @property {boolean} [hidden] -  Whether item is hidden from the menu.
+ * @property {boolean} [checked] -  Whether item shows a checkmark.
+ * @property {Array<MenuItem>} [items] -  Submenu child items.
+ */
 
+/**
+ * Mutable properties for updating an existing menu item.
+ * @typedef {Object} MenuItemUpdate
+ * @property {string} [label] -  New display label text.
+ * @property {string} [accel] -  New keyboard shortcut hint string.
+ * @property {boolean} [enabled] -  Enabled status.
+ * @property {boolean} [hidden] -  Visibility status.
+ * @property {boolean} [checked] -  Checkmark status.
+ * @property {Array<MenuItem>} [items] -  New submenu child items.
+ */
 
-// ── Set the tree (replaces any existing menus) ──────────────────────────────
+// ── Namespaces ───────────────────────────────────────────────────────────────
 
-bro.menu.set([
-    { id: 'file', label: 'File', items: [
-        { id: 'file.new',   label: 'New',         accel: 'Ctrl+N' },
-        { id: 'file.open',  label: 'Open...',     accel: 'Ctrl+O' },
-        { id: 'file.save',  label: 'Save',        accel: 'Ctrl+S', enabled: false },
-        { separator: true },
-        { id: '__system.quit', label: 'Quit',     accel: 'Ctrl+Q' },
-    ]},
-    { id: 'edit', label: 'Edit', items: [
-        { id: 'edit.undo',   label: 'Undo', accel: 'Ctrl+Z' },
-        { id: 'edit.redo',   label: 'Redo', accel: 'Ctrl+Y' },
-        { separator: true },
-        { id: '__system.preferences', label: 'Preferences...' },
-    ]},
-    { id: 'view', label: 'View', items: [
-        { id: 'view.grid', label: 'Show Grid', checked: true },
-    ]},
-]);
+/**
+ * Top-level application menu bar management namespace.
+ */
+/**
+ * Whether the menu bar is currently visible.
+ * @readonly
+ * @type {boolean}
+ */
+bro.menu.visible;
 
+/**
+ * Shows the menu bar panel.
+ */
+bro.menu.show = function() {};
 
-// ── Mutate the tree ──────────────────────────────────────────────────────────
+/**
+ * Hides the menu bar panel.
+ */
+bro.menu.hide = function() {};
 
-// addItem / updateItem / removeItem each return a boolean: true if the target
-// was found and the tree changed, false otherwise (e.g. an unknown id). They
-// do not throw on a miss. Check the return value.
-//
-// Add an item. parentId = '' (empty) appends a new root; otherwise appends
-// into that submenu. index is optional (negative = append). Any non-string
-// parentId or id is coerced to '' rather than rejected, so addItem(null, item)
-// quietly appends a new ROOT instead of erroring.
-bro.menu.addItem('file', { id: 'file.recent', label: 'Recent', items: [
-    { id: 'recent.1', label: 'project1.json' },
-    { id: 'recent.2', label: 'project2.json' },
-]}, /* index */ 2);
+/**
+ * Replaces the entire menu bar tree.
+ *
+ * @param {Array<MenuItem>} items - Array of root menu item trees
+ */
+bro.menu.set = function(items) {};
 
-// Update any mutable property of an item by id.
-bro.menu.updateItem('file.save', { enabled: true });
-bro.menu.updateItem('view.grid', { checked: false });
-bro.menu.updateItem('file.recent', { hidden: true });
+/**
+ * Adds an item to a submenu or root.
+ *
+ * @param {string} parentId - Parent submenu id, or empty string for root
+ * @param {MenuItem} item - Item descriptor to add
+ * @param {number} [index] - Optional insertion index (negative to append)
+ * @returns {boolean} True if item was added, false otherwise
+ */
+bro.menu.addItem = function(parentId, item, index) {};
 
-// Remove an item (anywhere in the tree).
-bro.menu.removeItem('recent.2');
+/**
+ * Updates mutable properties of an item by id.
+ *
+ * @param {string} id - Target item identifier
+ * @param {MenuItemUpdate} props - Properties to update
+ * @returns {boolean} True if target item was found and updated, false otherwise
+ */
+bro.menu.updateItem = function(id, props) {};
 
+/**
+ * Removes an item anywhere in the tree.
+ *
+ * @param {string} id - Target item identifier
+ * @returns {boolean} True if item was found and removed, false otherwise
+ */
+bro.menu.removeItem = function(id) {};
 
-// ── Register action handlers ────────────────────────────────────────────────
+/**
+ * Registers an action handler callback for a menu item.
+ *
+ * @param {string} id - Target item identifier
+ * @param {Function} callback - Callback function executed on click
+ */
+bro.menu.on = function(id, callback) {};
 
-// showOpenFileDialog is synchronous and takes a filter STRING (not an options
-// object, a non-string first argument is silently ignored, showing all
-// files). It returns an array of paths, empty on cancel. So test .length,
-// never truthiness. See docs/dialogs-api.js.
-bro.menu.on('file.open', () => {
-    const files = showOpenFileDialog('JSON|json');
-    if (files.length) loadProject(files[0]);
-});
-
-bro.menu.on('file.save', () => { /* ... */ });
-bro.menu.on('view.grid', () => {
-    gridVisible = !gridVisible;
-    bro.menu.updateItem('view.grid', { checked: gridVisible });
-});
-
-
-// ── Item shape ──────────────────────────────────────────────────────────────
-//
-// {
-//   id:        string, unique id, or '__system.*' for engine actions
-//   label:     string, display text
-//   accel:     string, shortcut hint, display-only (e.g. 'Ctrl+S')
-//   separator: boolean, draw as a horizontal divider (ignores everything else)
-//   enabled:   boolean, default true; false greys out and ignores clicks
-//   hidden:    boolean, default false; true hides the item entirely
-//   checked:   boolean, default false; true shows a checkmark
-//   items:     Array<Item>, children (for submenus / roots)
-// }
-//
-// Only root items (top-level) show on the menu bar. Each root's `items` are
-// rendered as a dropdown when the root is clicked. Submenus nested deeper
-// than one level are not rendered by the default menu.html.
-
-
-// ── Opt out ─────────────────────────────────────────────────────────────────
-
-// For fullscreen apps (FPS, games, kiosk):
-bro.menu.hide();
-
-
-// ── Replace the look entirely ───────────────────────────────────────────────
-//
-// Drop your own renderer at <your-app>/system/menu.html. The engine
-// prefers app-local system panels over the global ones, same mechanism
-// as perf.html / settings/*.html overrides. Your replacement has the same
-// __bro bridge: __bro.menu.getTree() returns the current tree, __bro.menu.click(id)
-// dispatches actions, window.__onMenuChanged is called on tree mutations.
-// Full system-panel authoring reference: docs/system-panels.md.

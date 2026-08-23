@@ -10,10 +10,6 @@
 #include <cstring>
 #include <vector>
 
-extern "C" {
-#include "quickjs.h"
-}
-
 namespace bro::js {
 
 namespace {
@@ -173,20 +169,20 @@ static JSValue js_mic_start(JSContext* ctx, JSValueConst, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
-static JSValue js_mic_stop(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_mic_stop(JSContext*, JSValueConst, int, JSValueConst*) {
     shutdownActiveMic();
     return JS_UNDEFINED;
 }
 
-static JSValue js_mic_is_active(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_mic_is_active(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_NewBool(ctx, g_mic.active);
 }
 
-static JSValue js_mic_engine_rate(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_mic_engine_rate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_NewInt32(ctx, g_mic.audioEngine ? g_mic.audioEngine->sampleRate() : 0);
 }
 
-static JSValue js_mic_stats(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_mic_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     if (!g_mic.active || !g_mic.audioEngine || g_mic.tapId == broaudio::kInvalidMicTapId) return JS_NULL;
     auto s = g_mic.audioEngine->getMicTapStats(g_mic.tapId);
     JSValue o = JS_NewObject(ctx);
@@ -220,7 +216,7 @@ static JSValue js_mic_levels(JSContext* ctx, JSValueConst, int argc, JSValueCons
 static JSValue js_mic_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!g_mic.active) return JS_ThrowInternalError(ctx, "bro.mic.feed: not started");
     if (!g_mic.audioEngine) return JS_ThrowInternalError(ctx, "bro.mic.feed: audio engine not available");
-    if (g_mic.audioEngine->isMicCapturing()) return JS_ThrowInternalError(ctx, "bro.mic.feed: cannot feed while live mic capture is active");
+    if (g_mic.audioEngine->isMicCapturing()) return JS_ThrowInternalError(ctx, "bro.mic.feed: cannot feed while live capture is active");
     if (argc < 1) return JS_ThrowTypeError(ctx, "bro.mic.feed(Float32Array, sampleRate?)");
     size_t byteOff = 0, viewLen = 0, bpe = 0;
     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, &bpe);
@@ -233,47 +229,10 @@ static JSValue js_mic_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     const int engineRate = g_mic.audioEngine->sampleRate();
     if (argc >= 2 && JS_IsNumber(argv[1])) {
         int32_t r = 0; JS_ToInt32(ctx, &r, argv[1]);
-        if (r > 0 && r != engineRate) return JS_ThrowTypeError(ctx, "bro.mic.feed: sampleRate=%d must equal engine mic rate=%d", r, engineRate);
+        if (r > 0 && r != engineRate) return JS_ThrowTypeError(ctx, "bro.mic.feed: sampleRate=%d must equal engine capture rate=%d", r, engineRate);
     }
     g_mic.audioEngine->injectMicSamples(reinterpret_cast<const float*>(p + byteOff), n);
     return JS_UNDEFINED;
-}
-
-// ---------------------------------------------------------------------------
-// Install
-// ---------------------------------------------------------------------------
-
-void installMicBindings(JSContext* ctx, broaudio::Engine* audioEngine) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    g_mic.audioEngine = audioEngine;
-    g_mic.ctx         = ctx;
-
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue micObj = JS_NewObject(ctx);
-
-    JS_SetPropertyStr(ctx, micObj, "start",
-        JS_NewCFunction(ctx, js_mic_start, "start", 1));
-    JS_SetPropertyStr(ctx, micObj, "stop",
-        JS_NewCFunction(ctx, js_mic_stop, "stop", 0));
-    JS_SetPropertyStr(ctx, micObj, "isActive",
-        JS_NewCFunction(ctx, js_mic_is_active, "isActive", 0));
-    JS_SetPropertyStr(ctx, micObj, "engineRate",
-        JS_NewCFunction(ctx, js_mic_engine_rate, "engineRate", 0));
-    JS_SetPropertyStr(ctx, micObj, "stats",
-        JS_NewCFunction(ctx, js_mic_stats, "stats", 0));
-    JS_SetPropertyStr(ctx, micObj, "levels",
-        JS_NewCFunction(ctx, js_mic_levels, "levels", 1));
-    JS_SetPropertyStr(ctx, micObj, "feed",
-        JS_NewCFunction(ctx, js_mic_feed, "feed", 2));
-
-    JS_SetPropertyStr(ctx, broObj, "mic", micObj);
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
 }
 
 void tickMic(JSContext* ctx) {
@@ -323,5 +282,36 @@ void cleanupMicBindings(JSContext* /*ctx*/) {
     g_mic.ctx         = nullptr;
 }
 
+void installMicBindings(JSContext* ctx, broaudio::Engine* audioEngine) {
+    g_mic.audioEngine = audioEngine;
+    g_mic.ctx         = ctx;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+
+    JSValue micObj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, micObj, "start",
+        JS_NewCFunction(ctx, js_mic_start, "start", 1));
+    JS_SetPropertyStr(ctx, micObj, "stop",
+        JS_NewCFunction(ctx, js_mic_stop, "stop", 0));
+    JS_SetPropertyStr(ctx, micObj, "isActive",
+        JS_NewCFunction(ctx, js_mic_is_active, "isActive", 0));
+    JS_SetPropertyStr(ctx, micObj, "engineRate",
+        JS_NewCFunction(ctx, js_mic_engine_rate, "engineRate", 0));
+    JS_SetPropertyStr(ctx, micObj, "stats",
+        JS_NewCFunction(ctx, js_mic_stats, "stats", 0));
+    JS_SetPropertyStr(ctx, micObj, "levels",
+        JS_NewCFunction(ctx, js_mic_levels, "levels", 1));
+    JS_SetPropertyStr(ctx, micObj, "feed",
+        JS_NewCFunction(ctx, js_mic_feed, "feed", 2));
+
+    JS_SetPropertyStr(ctx, broObj, "mic", micObj);
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
+}
 
 } // namespace bro::js

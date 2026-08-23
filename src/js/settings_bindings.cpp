@@ -6,17 +6,13 @@
 #include <string>
 #include <vector>
 
-extern "C" {
-#include "quickjs.h"
-}
-
 namespace bro::js {
 
 static const char* kSettingsKey = "__bro_settings_ptr";
 static const char* kWindowKey = "__bro_settings_window_ptr";
 
 struct SettingsState {
-    engine::Settings* settings = nullptr;
+    engine::Settings* store = nullptr;
     platform::Window* window = nullptr;
     engine::Engine* engine = nullptr;
 };
@@ -90,20 +86,20 @@ static JSValue buildActionArray(JSContext* ctx,
 static JSValue js_settings_get(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     std::string key = jsStr(ctx, argv[0]);
-    std::string value = state->settings->getString(key);
+    std::string value = state->store->getString(key);
     return settingsValueToJS(ctx, key, value);
 }
 
 static JSValue js_settings_get_all(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     std::string category;
     if (argc >= 1 && JS_IsString(argv[0])) category = jsStr(ctx, argv[0]);
-    
+
     auto addGraphics = [&](JSValue obj) {
-        auto& g = state->settings->graphics();
+        auto& g = state->store->graphics();
         JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, g.width));
         JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, g.height));
         JS_SetPropertyStr(ctx, obj, "fullscreen", JS_NewBool(ctx, g.fullscreen));
@@ -113,24 +109,24 @@ static JSValue js_settings_get_all(JSContext* ctx, JSValueConst, int argc, JSVal
         JS_SetPropertyStr(ctx, obj, "maxFps", JS_NewFloat64(ctx, g.maxFps));
     };
     auto addAudio = [&](JSValue obj) {
-        auto& a = state->settings->audio();
+        auto& a = state->store->audio();
         JS_SetPropertyStr(ctx, obj, "masterVolume", JS_NewFloat64(ctx, a.masterVolume));
         JS_SetPropertyStr(ctx, obj, "musicVolume", JS_NewFloat64(ctx, a.musicVolume));
         JS_SetPropertyStr(ctx, obj, "sfxVolume", JS_NewFloat64(ctx, a.sfxVolume));
         JS_SetPropertyStr(ctx, obj, "muted", JS_NewBool(ctx, a.muted));
     };
     auto addInput = [&](JSValue obj) {
-        auto& i = state->settings->input();
+        auto& i = state->store->input();
         JS_SetPropertyStr(ctx, obj, "scrollSpeed", JS_NewFloat64(ctx, i.scrollSpeed));
         JS_SetPropertyStr(ctx, obj, "doubleClickThresholdMs", JS_NewFloat64(ctx, i.doubleClickThresholdMs));
         JS_SetPropertyStr(ctx, obj, "doubleClickDistancePx", JS_NewFloat64(ctx, i.doubleClickDistancePx));
         JS_SetPropertyStr(ctx, obj, "overlayToggleKey", JS_NewInt32(ctx, static_cast<int32_t>(i.overlayToggleKey)));
     };
     auto addAppearance = [&](JSValue obj) {
-        auto& ap = state->settings->appearance();
+        auto& ap = state->store->appearance();
         JS_SetPropertyStr(ctx, obj, "colorScheme", JS_NewString(ctx, ap.colorScheme.c_str()));
     };
-    
+
     if (category == "appearance") {
         JSValue obj = JS_NewObject(ctx);
         addAppearance(obj);
@@ -151,7 +147,7 @@ static JSValue js_settings_get_all(JSContext* ctx, JSValueConst, int argc, JSVal
         addInput(obj);
         return obj;
     }
-    
+
     JSValue root = JS_NewObject(ctx);
     JSValue gObj = JS_NewObject(ctx); addGraphics(gObj); JS_SetPropertyStr(ctx, root, "graphics", gObj);
     JSValue aObj = JS_NewObject(ctx); addAudio(aObj); JS_SetPropertyStr(ctx, root, "audio", aObj);
@@ -163,16 +159,16 @@ static JSValue js_settings_get_all(JSContext* ctx, JSValueConst, int argc, JSVal
 static JSValue js_settings_set(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     std::string key = jsStr(ctx, argv[0]);
     if (JS_IsBool(argv[1])) {
-        state->settings->setUser(key, JS_ToBool(ctx, argv[1]) != 0);
+        state->store->setUser(key, JS_ToBool(ctx, argv[1]) != 0);
     } else if (JS_IsNumber(argv[1])) {
         double d;
         JS_ToFloat64(ctx, &d, argv[1]);
-        state->settings->setUser(key, d);
+        state->store->setUser(key, d);
     } else {
-        state->settings->setUser(key, jsStr(ctx, argv[1]));
+        state->store->setUser(key, jsStr(ctx, argv[1]));
     }
     return JS_UNDEFINED;
 }
@@ -180,27 +176,27 @@ static JSValue js_settings_set(JSContext* ctx, JSValueConst, int argc, JSValueCo
 static JSValue js_settings_set_default(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     std::string key = jsStr(ctx, argv[0]);
     if (JS_IsBool(argv[1])) {
-        state->settings->setDefault(key, JS_ToBool(ctx, argv[1]) != 0);
+        state->store->setDefault(key, JS_ToBool(ctx, argv[1]) != 0);
     } else if (JS_IsNumber(argv[1])) {
         double d;
         JS_ToFloat64(ctx, &d, argv[1]);
-        state->settings->setDefault(key, d);
+        state->store->setDefault(key, d);
     } else {
-        state->settings->setDefault(key, jsStr(ctx, argv[1]));
+        state->store->setDefault(key, jsStr(ctx, argv[1]));
     }
     return JS_UNDEFINED;
 }
 
 static JSValue js_settings_reset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     if (argc >= 1 && JS_IsString(argv[0])) {
-        state->settings->resetCategory(jsStr(ctx, argv[0]));
+        state->store->resetCategory(jsStr(ctx, argv[0]));
     } else {
-        state->settings->resetAll();
+        state->store->resetAll();
     }
     return JS_UNDEFINED;
 }
@@ -208,7 +204,7 @@ static JSValue js_settings_reset(JSContext* ctx, JSValueConst, int argc, JSValue
 static JSValue js_settings_define_action(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     std::string action = jsStr(ctx, argv[0]);
     std::vector<std::string> keys;
     if (JS_IsArray(argv[1])) {
@@ -220,12 +216,12 @@ static JSValue js_settings_define_action(JSContext* ctx, JSValueConst, int argc,
             JS_FreeValue(ctx, elem);
         }
     }
-    state->settings->defineAction(action, keys);
+    state->store->defineAction(action, keys);
     if (argc >= 3 && JS_IsObject(argv[2])) {
         JSValue dz = JS_GetPropertyStr(ctx, argv[2], "deadzone");
         if (JS_IsNumber(dz)) {
             double d = 0.0; JS_ToFloat64(ctx, &d, dz);
-            state->settings->setActionDeadzone(action, static_cast<float>(d));
+            state->store->setActionDeadzone(action, static_cast<float>(d));
         }
         JS_FreeValue(ctx, dz);
     }
@@ -235,7 +231,7 @@ static JSValue js_settings_define_action(JSContext* ctx, JSValueConst, int argc,
 static JSValue js_settings_rebind_action(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     std::string action = jsStr(ctx, argv[0]);
     std::vector<std::string> keys;
     if (JS_IsArray(argv[1])) {
@@ -247,30 +243,30 @@ static JSValue js_settings_rebind_action(JSContext* ctx, JSValueConst, int argc,
             JS_FreeValue(ctx, elem);
         }
     }
-    state->settings->rebindAction(action, keys);
+    state->store->rebindAction(action, keys);
     return JS_UNDEFINED;
 }
 
 static JSValue js_settings_reset_action(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
-    state->settings->resetAction(jsStr(ctx, argv[0]));
+    if (!state || !state->store) return JS_UNDEFINED;
+    state->store->resetAction(jsStr(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
-static JSValue js_settings_reset_all_actions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_settings_reset_all_actions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
-    state->settings->resetAllActions();
+    if (!state || !state->store) return JS_UNDEFINED;
+    state->store->resetAllActions();
     return JS_UNDEFINED;
 }
 
 static JSValue js_settings_get_action_keys(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NewArray(ctx);
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_NewArray(ctx);
-    auto keys = state->settings->getKeysForAction(jsStr(ctx, argv[0]));
+    if (!state || !state->store) return JS_NewArray(ctx);
+    auto keys = state->store->getKeysForAction(jsStr(ctx, argv[0]));
     JSValue arr = JS_NewArray(ctx);
     for (size_t i = 0; i < keys.size(); i++) {
         JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), JS_NewString(ctx, keys[i].c_str()));
@@ -281,8 +277,8 @@ static JSValue js_settings_get_action_keys(JSContext* ctx, JSValueConst, int arg
 static JSValue js_settings_get_key_action(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_NULL;
-    std::string action = state->settings->getActionForKey(jsStr(ctx, argv[0]));
+    if (!state || !state->store) return JS_NULL;
+    std::string action = state->store->getActionForKey(jsStr(ctx, argv[0]));
     if (action.empty()) return JS_NULL;
     return JS_NewString(ctx, action.c_str());
 }
@@ -302,19 +298,19 @@ static JSValue js_settings_is_action_pressed(JSContext* ctx, JSValueConst, int a
     return JS_NewBool(ctx, state->engine->actionPressed(jsStr(ctx, argv[0])));
 }
 
-static JSValue js_settings_get_actions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_settings_get_actions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_NewArray(ctx);
-    return buildActionArray(ctx, state->settings->getActions());
+    if (!state || !state->store) return JS_NewArray(ctx);
+    return buildActionArray(ctx, state->store->getActions());
 }
 
-static JSValue js_settings_get_app_actions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_settings_get_app_actions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_NewArray(ctx);
-    return buildActionArray(ctx, state->settings->getAppActions());
+    if (!state || !state->store) return JS_NewArray(ctx);
+    return buildActionArray(ctx, state->store->getAppActions());
 }
 
-static JSValue js_settings_get_display_modes(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_settings_get_display_modes(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* state = getState(ctx);
     if (!state) return JS_NewArray(ctx);
     JSValue arr = JS_NewArray(ctx);
@@ -333,12 +329,12 @@ static JSValue js_settings_get_display_modes(JSContext* ctx, JSValueConst, int a
 
 static JSValue js_settings_get_defaults(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_UNDEFINED;
+    if (!state || !state->store) return JS_UNDEFINED;
     std::string category;
     if (argc >= 1 && JS_IsString(argv[0])) category = jsStr(ctx, argv[0]);
-    
+
     auto addGraphics = [&](JSValue obj) {
-        auto& g = state->settings->graphicsDefaults();
+        auto& g = state->store->graphicsDefaults();
         JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, g.width));
         JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, g.height));
         JS_SetPropertyStr(ctx, obj, "fullscreen", JS_NewBool(ctx, g.fullscreen));
@@ -359,17 +355,26 @@ static JSValue js_settings_get_defaults(JSContext* ctx, JSValueConst, int argc, 
     return root;
 }
 
-// ---------------------------------------------------------------------------
-// Install
-// ---------------------------------------------------------------------------
+void SettingsBindings::cleanup(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue val = JS_GetPropertyStr(ctx, global, kSettingsKey);
+    if (JS_IsNumber(val)) {
+        int64_t ptr = 0;
+        JS_ToInt64(ctx, &ptr, val);
+        delete reinterpret_cast<SettingsState*>(static_cast<intptr_t>(ptr));
+    }
+    JS_FreeValue(ctx, val);
+    JS_SetPropertyStr(ctx, global, kSettingsKey, JS_UNDEFINED);
+    JS_FreeValue(ctx, global);
+}
 
 void SettingsBindings::install(JSContext* ctx, engine::Settings* settings, platform::Window* window, engine::Engine* engine) {
-    JSValue global = JS_GetGlobalObject(ctx);
     auto* state = new SettingsState();
-    state->settings = settings;
+    state->store = settings;
     state->window = window;
     state->engine = engine;
-    
+
+    JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, kSettingsKey,
                       JS_NewInt64(ctx, static_cast<int64_t>(
                           reinterpret_cast<intptr_t>(state))));
@@ -381,7 +386,6 @@ void SettingsBindings::install(JSContext* ctx, engine::Settings* settings, platf
     }
 
     JSValue settingsObj = JS_NewObject(ctx);
-
     JS_SetPropertyStr(ctx, settingsObj, "get",
         JS_NewCFunction(ctx, js_settings_get, "get", 1));
     JS_SetPropertyStr(ctx, settingsObj, "getAll",
@@ -421,19 +425,5 @@ void SettingsBindings::install(JSContext* ctx, engine::Settings* settings, platf
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
-
-void SettingsBindings::cleanup(JSContext* ctx) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue val = JS_GetPropertyStr(ctx, global, kSettingsKey);
-    if (JS_IsNumber(val)) {
-        int64_t ptr = 0;
-        JS_ToInt64(ctx, &ptr, val);
-        delete reinterpret_cast<SettingsState*>(static_cast<intptr_t>(ptr));
-    }
-    JS_FreeValue(ctx, val);
-    JS_SetPropertyStr(ctx, global, kSettingsKey, JS_UNDEFINED);
-    JS_FreeValue(ctx, global);
-}
-
 
 } // namespace bro::js
