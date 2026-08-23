@@ -6,12 +6,14 @@
 # submodule sync: i.e. the standalone repo you actually build against (../<name>)
 # sits at a different commit than the pointer bro records in third_party/<name>.
 #
-# Usage: scripts/repo-status.sh [-v] [-p] [-s]
+# Usage: scripts/repo-status.sh [-v] [-p] [-s] [-u]
 #   -v, --verbose   also list changed files for dirty repos
 #   -p, --pull      fast-forward every repo (bro, broworkshop, each sibling) to
 #                   its upstream first, so the status below reflects the remotes
 #   -s, --sync      bump bro's stale submodule pointers up to the standalone
 #                   repos' HEADs and make a single bro commit recording it
+#   -u, --push      push every repo (bro, broworkshop, each sibling) that is
+#                   ahead of its upstream
 #
 # Pull is --ff-only and never recurses into submodules: a repo that has diverged,
 # is detached, or has no upstream is reported and skipped, never merged.
@@ -30,13 +32,15 @@ PROJECTS_ROOT="$(cd .. && pwd)"
 VERBOSE=0
 PULL=0
 SYNC=0
+PUSH=0
 for arg in "$@"; do
     case "$arg" in
         -v|--verbose) VERBOSE=1 ;;
         -p|--pull)    PULL=1 ;;
         -s|--sync)    SYNC=1 ;;
+        -u|--push)    PUSH=1 ;;
         -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
@@ -145,6 +149,45 @@ repo_pull() {
         "$label" "$Y" "$n" "$N" "$DIM" "${before:0:9}" "${after:0:9}" "$N"
 }
 
+# Push one repo to its upstream.
+# Args: <label> <path>
+repo_push() {
+    local label="$1" path="$2" branch upstream ahead out head
+    if [[ ! -d "$path/.git" && ! -f "$path/.git" ]]; then
+        printf '  %-14s %sno git repo (%s)%s\n' "$label" "$DIM" "$path" "$N"
+        return
+    fi
+
+    branch="$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    if [[ "$branch" == "HEAD" ]]; then
+        printf '  %-14s %sskip: detached HEAD%s\n' "$label" "$Y" "$N"
+        return
+    fi
+
+    upstream="$(git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    if [[ -z "$upstream" ]]; then
+        printf '  %-14s %sskip: no upstream configured%s\n' "$label" "$DIM" "$N"
+        return
+    fi
+
+    ahead="$(git -C "$path" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+    if [[ "$ahead" -eq 0 ]]; then
+        head="$(git -C "$path" rev-parse HEAD 2>/dev/null)"
+        printf '  %-14s %sup to date%s %s(%s)%s\n' "$label" "$G" "$N" "$DIM" "${head:0:9}" "$N"
+        return
+    fi
+
+    if ! out="$(git -C "$path" push --quiet 2>&1)"; then
+        printf '  %-14s %spush failed%s %s%s%s\n' "$label" "$R" "$N" "$DIM" \
+            "$(printf '%s' "$out" | grep -m1 . || true)" "$N"
+        return
+    fi
+
+    head="$(git -C "$path" rev-parse HEAD 2>/dev/null)"
+    printf '  %-14s %spushed +%s%s %s(%s)%s\n' \
+        "$label" "$G" "$ahead" "$N" "$DIM" "${head:0:9}" "$N"
+}
+
 if [[ "$PULL" -eq 1 ]]; then
     echo "${BOLD}== Pulling (fast-forward only) ==${N}"
     repo_pull "bro" "$BRO_ROOT"
@@ -228,69 +271,74 @@ done
 echo
 if [[ "$out_of_sync" -eq 0 ]]; then
     echo "${G}All siblings in submodule sync.${N}"
-    exit 0
-fi
-
-echo "${Y}${out_of_sync} sibling(s) out of submodule sync.${N}"
-
-if [[ "$SYNC" -eq 0 ]]; then
-    echo "${DIM}Re-run with --sync to bump bro's pointers to the standalone HEADs and commit.${N}"
-    exit 0
-fi
-
-if [[ "${#SYNC_NAMES[@]}" -eq 0 ]]; then
-    echo "${Y}Nothing to sync: out-of-sync siblings have standalone behind bro (pull them first).${N}"
-    exit 0
-fi
-
-echo
-echo "${BOLD}== Syncing ${#SYNC_NAMES[@]} pointer(s) to standalone HEAD ==${N}"
-
-staged_paths=()
-staged_names=()
-for i in "${!SYNC_NAMES[@]}"; do
-    name="${SYNC_NAMES[$i]}"
-    sha="${SYNC_SHAS[$i]}"
-    standalone="$PROJECTS_ROOT/$name"
-    sub_path="third_party/$name"
-
-    if [[ ! -e "$sub_path/.git" ]]; then
-        printf '  %-14s %sskip: submodule not initialized (git submodule update --init %s)%s\n' \
-            "$name" "$Y" "$sub_path" "$N"
-        continue
-    fi
-
-    # Bring the standalone HEAD commit into the submodule, then point at it.
-    if ! git -C "$sub_path" fetch --quiet "$standalone" HEAD 2>/dev/null; then
-        printf '  %-14s %sskip: fetch from standalone failed%s\n' "$name" "$R" "$N"
-        continue
-    fi
-    if ! git -C "$sub_path" checkout --quiet "$sha" 2>/dev/null; then
-        printf '  %-14s %sskip: checkout %s failed%s\n' "$name" "$R" "${sha:0:9}" "$N"
-        continue
-    fi
-    git -C "$BRO_ROOT" add "$sub_path"
-    printf '  %-14s %sbumped -> %s%s\n' "$name" "$G" "${sha:0:9}" "$N"
-    staged_paths+=("$sub_path")
-    staged_names+=("$name")
-done
-
-if [[ "${#staged_paths[@]}" -eq 0 ]]; then
-    echo "${Y}No pointers were updated.${N}"
-    exit 1
-fi
-
-# Single bro commit recording exactly the bumped pointers (pathspec keeps any
-# unrelated staged changes out of this commit).
-names_list="$(printf '%s, ' "${staged_names[@]}")"; names_list="${names_list%, }"
-msg="Update submodules: ${names_list} (sync to standalone HEAD)"
-echo
-if git -C "$BRO_ROOT" commit --quiet -m "$msg" -- "${staged_paths[@]}"; then
-    echo "${G}Committed:${N} $msg"
-    git -C "$BRO_ROOT" log -1 --oneline | sed 's/^/  /'
 else
-    echo "${R}Commit failed.${N}"
-    exit 1
+    echo "${Y}${out_of_sync} sibling(s) out of submodule sync.${N}"
+fi
+
+if [[ "$SYNC" -eq 1 ]]; then
+    if [[ "${#SYNC_NAMES[@]}" -eq 0 ]]; then
+        echo "${Y}Nothing to sync: out-of-sync siblings have standalone behind bro (pull them first).${N}"
+    else
+        echo
+        echo "${BOLD}== Syncing ${#SYNC_NAMES[@]} pointer(s) to standalone HEAD ==${N}"
+
+        staged_paths=()
+        staged_names=()
+        for i in "${!SYNC_NAMES[@]}"; do
+            name="${SYNC_NAMES[$i]}"
+            sha="${SYNC_SHAS[$i]}"
+            standalone="$PROJECTS_ROOT/$name"
+            sub_path="third_party/$name"
+
+            if [[ ! -e "$sub_path/.git" ]]; then
+                printf '  %-14s %sskip: submodule not initialized (git submodule update --init %s)%s\n' \
+                    "$name" "$Y" "$sub_path" "$N"
+                continue
+            fi
+
+            # Bring the standalone HEAD commit into the submodule, then point at it.
+            if ! git -C "$sub_path" fetch --quiet "$standalone" HEAD 2>/dev/null; then
+                printf '  %-14s %sskip: fetch from standalone failed%s\n' "$name" "$R" "$N"
+                continue
+            fi
+            if ! git -C "$sub_path" checkout --quiet "$sha" 2>/dev/null; then
+                printf '  %-14s %sskip: checkout %s failed%s\n' "$name" "$R" "${sha:0:9}" "$N"
+                continue
+            fi
+            git -C "$BRO_ROOT" add "$sub_path"
+            printf '  %-14s %sbumped -> %s%s\n' "$name" "$G" "${sha:0:9}" "$N"
+            staged_paths+=("$sub_path")
+            staged_names+=("$name")
+        done
+
+        if [[ "${#staged_paths[@]}" -gt 0 ]]; then
+            # Single bro commit recording exactly the bumped pointers (pathspec keeps any
+            # unrelated staged changes out of this commit).
+            names_list="$(printf '%s, ' "${staged_names[@]}")"; names_list="${names_list%, }"
+            msg="Update submodules: ${names_list} (sync to standalone HEAD)"
+            echo
+            if git -C "$BRO_ROOT" commit --quiet -m "$msg" -- "${staged_paths[@]}"; then
+                echo "${G}Committed:${N} $msg"
+                git -C "$BRO_ROOT" log -1 --oneline | sed 's/^/  /'
+            else
+                echo "${R}Commit failed.${N}"
+            fi
+        else
+            echo "${Y}No pointers were updated.${N}"
+        fi
+    fi
+elif [[ "$out_of_sync" -gt 0 ]]; then
+    echo "${DIM}Re-run with --sync to bump bro's pointers to the standalone HEADs and commit.${N}"
+fi
+
+if [[ "$PUSH" -eq 1 ]]; then
+    echo
+    echo "${BOLD}== Pushing ==${N}"
+    repo_push "bro" "$BRO_ROOT"
+    repo_push "broworkshop" "$PROJECTS_ROOT/broworkshop"
+    for name in "${SIBLINGS[@]}"; do
+        repo_push "$name" "$PROJECTS_ROOT/$name"
+    done
 fi
 
 exit 0

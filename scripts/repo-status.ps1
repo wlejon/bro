@@ -25,14 +25,21 @@
     standalone is ahead of (or diverged from) bro's recorded pointer; siblings
     whose standalone is behind bro are left alone (pull the standalone first).
 
+.PARAMETER Push
+    Push every repo (bro, broworkshop, and each sibling) that is ahead of its
+    upstream. If run alongside -Sync, submodules in bro are bumped and committed
+    first, then pushed along with the siblings.
+
 .EXAMPLE
     pwsh scripts/repo-status.ps1
     pwsh scripts/repo-status.ps1 -ListFiles
     pwsh scripts/repo-status.ps1 -Pull
     pwsh scripts/repo-status.ps1 -Pull -Sync
+    pwsh scripts/repo-status.ps1 -Push
+    pwsh scripts/repo-status.ps1 -Sync -Push
 #>
 [CmdletBinding()]
-param([switch]$ListFiles, [switch]$Pull, [switch]$Sync)
+param([switch]$ListFiles, [switch]$Pull, [switch]$Sync, [switch]$Push)
 
 $ErrorActionPreference = 'Continue'
 
@@ -169,6 +176,53 @@ function Repo-Pull {
     Write-Host ("{0} -> {1}" -f $before.Substring(0, 9), $after.Substring(0, 9)) -ForegroundColor DarkGray
 }
 
+# Push one repo to its upstream.
+function Repo-Push {
+    param([string]$Label, [string]$Path)
+
+    Write-Host ("  {0,-14} " -f $Label) -NoNewline
+
+    if (-not (Is-GitRepo $Path)) {
+        Write-Host "no git repo ($Path)" -ForegroundColor DarkGray
+        return
+    }
+
+    $branch = Git-In $Path rev-parse --abbrev-ref HEAD
+    if ($branch -eq 'HEAD') {
+        Write-Host 'skip: detached HEAD' -ForegroundColor Yellow
+        return
+    }
+
+    $upstream = Git-In $Path rev-parse --abbrev-ref --symbolic-full-name '@{u}'
+    if (-not $upstream) {
+        Write-Host 'skip: no upstream configured' -ForegroundColor DarkGray
+        return
+    }
+
+    $ahead = 0
+    $a = Git-In $Path rev-list --count '@{u}..HEAD'
+    if ($a) { $ahead = [int]$a }
+
+    if ($ahead -eq 0) {
+        $head = Git-In $Path rev-parse HEAD
+        Write-Host 'up to date ' -ForegroundColor Green -NoNewline
+        Write-Host ("({0})" -f $head.Substring(0, 9)) -ForegroundColor DarkGray
+        return
+    }
+
+    $out = & git -C $Path push --quiet 2>&1 | ForEach-Object { $_.ToString() }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'push failed' -ForegroundColor Red -NoNewline
+        $why = $out | Where-Object { $_ -match '\S' } | Select-Object -First 1
+        if ($why) { Write-Host " - $why" -ForegroundColor DarkGray } else { Write-Host '' }
+        return
+    }
+
+    $head = Git-In $Path rev-parse HEAD
+    Write-Host ("pushed +{0} " -f $ahead) -ForegroundColor Green -NoNewline
+    Write-Host ("({0})" -f $head.Substring(0, 9)) -ForegroundColor DarkGray
+}
+
 if ($Pull) {
     Write-Host '== Pulling (fast-forward only) ==' -ForegroundColor White
     Repo-Pull 'bro' $BroRoot
@@ -269,70 +323,75 @@ foreach ($name in $Siblings) {
 Write-Host ''
 if ($outOfSync -eq 0) {
     Write-Host 'All siblings in submodule sync.' -ForegroundColor Green
-    exit 0
+} else {
+    Write-Host "$outOfSync sibling(s) out of submodule sync." -ForegroundColor Yellow
 }
 
-Write-Host "$outOfSync sibling(s) out of submodule sync." -ForegroundColor Yellow
+if ($Sync) {
+    if ($toSync.Count -eq 0) {
+        Write-Host 'Nothing to sync: out-of-sync siblings have standalone behind bro (pull them first).' -ForegroundColor Yellow
+    } else {
+        Write-Host ''
+        Write-Host ("== Syncing {0} pointer(s) to standalone HEAD ==" -f $toSync.Count) -ForegroundColor White
 
-if (-not $Sync) {
+        $stagedPaths = @()
+        $stagedNames = @()
+        foreach ($s in $toSync) {
+            if (-not (Test-Path (Join-Path $s.SubFull '.git'))) {
+                Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
+                Write-Host ("skip: submodule not initialized (git submodule update --init {0})" -f $s.SubPath) -ForegroundColor Yellow
+                continue
+            }
+
+            # Bring the standalone HEAD commit into the submodule, then point at it.
+            & git -C $s.SubFull fetch --quiet $s.Standalone HEAD 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
+                Write-Host 'skip: fetch from standalone failed' -ForegroundColor Red
+                continue
+            }
+            & git -C $s.SubFull checkout --quiet $s.Sha 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
+                Write-Host ("skip: checkout {0} failed" -f $s.Sha.Substring(0, 9)) -ForegroundColor Red
+                continue
+            }
+            & git -C $BroRoot add $s.SubPath 2>$null
+            Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
+            Write-Host ("bumped -> {0}" -f $s.Sha.Substring(0, 9)) -ForegroundColor Green
+            $stagedPaths += $s.SubPath
+            $stagedNames += $s.Name
+        }
+
+        if ($stagedPaths.Count -gt 0) {
+            # Single bro commit recording exactly the bumped pointers (pathspec keeps any
+            # unrelated staged changes out of this commit).
+            $namesList = $stagedNames -join ', '
+            $msg = "Update submodules: $namesList (sync to standalone HEAD)"
+            Write-Host ''
+            & git -C $BroRoot commit --quiet -m $msg -- @stagedPaths 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Committed: " -ForegroundColor Green -NoNewline
+                Write-Host $msg
+                & git -C $BroRoot log -1 --oneline | ForEach-Object { Write-Host "  $_" }
+            }
+            else {
+                Write-Host 'Commit failed.' -ForegroundColor Red
+            }
+        } else {
+            Write-Host 'No pointers were updated.' -ForegroundColor Yellow
+        }
+    }
+} elseif ($outOfSync -gt 0) {
     Write-Host "Re-run with -Sync to bump bro's pointers to the standalone HEADs and commit." -ForegroundColor DarkGray
-    exit 0
 }
 
-if ($toSync.Count -eq 0) {
-    Write-Host 'Nothing to sync: out-of-sync siblings have standalone behind bro (pull them first).' -ForegroundColor Yellow
-    exit 0
-}
-
-Write-Host ''
-Write-Host ("== Syncing {0} pointer(s) to standalone HEAD ==" -f $toSync.Count) -ForegroundColor White
-
-$stagedPaths = @()
-$stagedNames = @()
-foreach ($s in $toSync) {
-    if (-not (Test-Path (Join-Path $s.SubFull '.git'))) {
-        Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-        Write-Host ("skip: submodule not initialized (git submodule update --init {0})" -f $s.SubPath) -ForegroundColor Yellow
-        continue
+if ($Push) {
+    Write-Host ''
+    Write-Host '== Pushing ==' -ForegroundColor White
+    Repo-Push 'bro' $BroRoot
+    Repo-Push 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
+    foreach ($name in $Siblings) {
+        Repo-Push $name (Join-Path $ProjectsRoot $name)
     }
-
-    # Bring the standalone HEAD commit into the submodule, then point at it.
-    & git -C $s.SubFull fetch --quiet $s.Standalone HEAD 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-        Write-Host 'skip: fetch from standalone failed' -ForegroundColor Red
-        continue
-    }
-    & git -C $s.SubFull checkout --quiet $s.Sha 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-        Write-Host ("skip: checkout {0} failed" -f $s.Sha.Substring(0, 9)) -ForegroundColor Red
-        continue
-    }
-    & git -C $BroRoot add $s.SubPath 2>$null
-    Write-Host ("  {0,-14} " -f $s.Name) -NoNewline
-    Write-Host ("bumped -> {0}" -f $s.Sha.Substring(0, 9)) -ForegroundColor Green
-    $stagedPaths += $s.SubPath
-    $stagedNames += $s.Name
-}
-
-if ($stagedPaths.Count -eq 0) {
-    Write-Host 'No pointers were updated.' -ForegroundColor Yellow
-    exit 1
-}
-
-# Single bro commit recording exactly the bumped pointers (pathspec keeps any
-# unrelated staged changes out of this commit).
-$namesList = $stagedNames -join ', '
-$msg = "Update submodules: $namesList (sync to standalone HEAD)"
-Write-Host ''
-& git -C $BroRoot commit --quiet -m $msg -- @stagedPaths 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Committed: " -ForegroundColor Green -NoNewline
-    Write-Host $msg
-    & git -C $BroRoot log -1 --oneline | ForEach-Object { Write-Host "  $_" }
-}
-else {
-    Write-Host 'Commit failed.' -ForegroundColor Red
-    exit 1
 }

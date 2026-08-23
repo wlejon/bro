@@ -192,11 +192,14 @@ pwsh scripts/repo-status.ps1              # working-tree state + submodule-point
 pwsh scripts/repo-status.ps1 -ListFiles   # also list changed files in dirty repos
 pwsh scripts/repo-status.ps1 -Pull        # fast-forward everything first, then report
 pwsh scripts/repo-status.ps1 -Pull -Sync  # ...and bump bro's stale pointers + commit
+pwsh scripts/repo-status.ps1 -Push        # push repos ahead of upstream to their remotes
+pwsh scripts/repo-status.ps1 -Sync -Push  # sync submodules, commit in bro, and push all
 ```
 
 ```bash
-scripts/repo-status.sh              # -v / --verbose, -p / --pull, -s / --sync
+scripts/repo-status.sh              # -v / --verbose, -p / --pull, -s / --sync, -u / --push
 scripts/repo-status.sh --pull
+scripts/repo-status.sh --sync --push
 ```
 
 **`-Pull` / `--pull`** fast-forwards bro, broworkshop, and every sibling onto its upstream before the report, so what you read reflects the remotes rather than whatever you last fetched. Use it after a round of merges lands on GitHub (dependabot, PRs merged from the web) to bring the whole tree forward in one shot. It is deliberately conservative:
@@ -207,6 +210,8 @@ scripts/repo-status.sh --pull
 - Detached HEADs and branches with no upstream are reported and skipped.
 
 **`-Sync` / `--sync`** then bumps bro's stale submodule pointers to the standalone HEADs and records them in a single bro commit. It only acts where the standalone is ahead of (or diverged from) the recorded pointer; a sibling whose standalone is *behind* bro is left alone, since that one needs a pull, not a bump. Note the ordering `-Pull -Sync` implies: pull first so the pointers you record are the real remote HEADs.
+
+**`-Push` / `-u, --push`** pushes bro, broworkshop, and every sibling that has local commits ahead of its upstream. When combined with `-Sync` (`-Sync -Push`), it updates and commits the submodule pointers in `bro` first, then pushes both `bro` and all sibling repos in one pass.
 
 ## Overriding Paths
 
