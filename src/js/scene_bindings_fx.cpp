@@ -1,10 +1,7 @@
-// Scene JS bindings — 2D-overlay + effects nodes: shapes, sprites (sheet /
-// animation parsing + the animation-end callback registry), HTML nodes,
-// 2D + 3D particle systems, and gaussian splats. Shared wrapper structs +
-// helpers live in scene_bindings_internal.h.
+#if BRO_WITH_3D
 
 #include "js/scene_bindings.h"
-#if BRO_WITH_3D  // modular-build feature gate
+#include "js/scene_bindings.h"
 #include "js/scene_bindings_internal.h"
 #include "js/runtime.h"
 #include "scene/scene_graph.h"
@@ -17,11 +14,8 @@
 #include "scene/gaussian_splat_node.h"
 #include "scene/decal_node.h"
 #include "util/log.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <bromesh/io/splat_ply.h>
-
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -1319,6 +1313,12 @@ JSValue js_node_probeCapture(JSContext* ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+static inline void _unused_scene_fx_install(JSContext* ctx)
+{
+    // No install needed
+    (void)ctx;
+}
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_3D
+#endif // BRO_WITH_3D

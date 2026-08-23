@@ -1,14 +1,11 @@
+#if BRO_WITH_3D
+
 #include "js/clipmap_bindings.h"
-#if BRO_WITH_3D  // modular-build feature gate
-
 #include <qjsbind/qjsbind.h>
-
 #include "scene/clipmap_terrain.h"
 #include "scene/scene_graph.h"
 #include "js/scene_bindings_internal.h"
-
 #include "util/log.h"
-
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -412,109 +409,6 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
 // Install / Cleanup
 // -------------------------------------------------------------------------
 
-void ClipmapBindings::install(JSContext* ctx) {
-    qjsbind::Class<CW>(ctx, "ClipmapTerrain")
-        // No constructor — created via scene.createClipmapTerrain()
-        .method_raw("setHeightLayer", js_clipmap_setHeightLayer, 2)
-        .method_raw("setSnowLine", js_clipmap_setSnowLine, 1)
-        .method_raw("setChartCenter", js_clipmap_setChartCenter, 2)
-        .method_raw("setDetail", js_clipmap_setDetail, 1)
-        .method_raw("setMaterials", js_clipmap_setMaterials, 1)
-        .method_raw("setForest", js_clipmap_setForest, 1)
-        .method_raw("setSurfaceLayer", js_clipmap_setSurfaceLayer, 1)
-        .method_raw("update", js_clipmap_update, 3)
-        // The composed GLSL for 'vertex' or 'fragment'. An app that replaces
-        // one chunk with a material of its own needs the other four exactly as
-        // the clipmap assembles them, and the suite needs it to prove that
-        // cubicSurface off changes the source by zero bytes.
-        .method("shaderSource", [](CW* self, std::string stage) -> std::string {
-            if (!self->terrain) return std::string();
-            return self->terrain->shaderSource(stage);
-        })
-        .method("elevationAt", [](CW* self, double x, double z) -> double {
-            if (!self->terrain) return 0.0;
-            return self->terrain->elevationAt((float)x, (float)z);
-        })
-        .method("renderedElevationAt", [](CW* self, double x, double z) -> double {
-            // elevationAt() bent by the planetary-curvature chart: the world Y
-            // at which the DRAWN sheet sits under (x, z). Identical to
-            // elevationAt() unless a chart centre is pinned on a round world;
-            // pinned, the sheet at chord rho from the centre has dropped by
-            // ~rho^2/2R, and a camera grounded on elevationAt() floats
-            // kilometres above the picture. Ground cameras and AGL readouts on
-            // this one; keep elevationAt() for the field's own space.
-            if (!self->terrain) return 0.0;
-            return self->terrain->renderedElevationAt((float)x, (float)z);
-        })
-        .method("destroy", [](CW* self) {
-            if (self->terrain) {
-                self->terrain->destroy();
-                self->terrain.reset();
-            }
-        })
-        .get("node", [](CW* self, JSContext* c) -> JSValue {
-            if (!self->terrain) return JS_NULL;
-            auto* g = self->graph();
-            if (!g) return JS_NULL;
-            return wrapNode(c, self->terrain->node(), g);
-        })
-        .get("levels", [](CW* self) -> int {
-            return self->terrain ? self->terrain->levelCount() : 0;
-        })
-        .get("resolution", [](CW* self) -> int {
-            return self->terrain ? self->terrain->config().resolution : 0;
-        })
-        .get("cellSize", [](CW* self) -> double {
-            return self->terrain ? self->terrain->config().cellSize : 0.0;
-        })
-        .get("layerCount", [](CW* self) -> int {
-            return self->terrain ? self->terrain->layerCount() : 0;
-        })
-        .get("triangleCount", [](CW* self) -> int {
-            return self->terrain ? self->terrain->triangleCount() : 0;
-        })
-        .get("vertexCount", [](CW* self) -> int {
-            return self->terrain ? self->terrain->vertexCount() : 0;
-        })
-        .get("farDistance", [](CW* self) -> double {
-            // Outer half-extent of the coarsest ring. NOT a constant: update()
-            // zooms the stack with altitude, so read this every frame — it is
-            // both the camera's far plane and the radius the app must keep
-            // height data across.
-            return self->terrain ? (double)self->terrain->farDistance() : 0.0;
-        })
-        .get("cellScale", [](CW* self) -> double {
-            return self->terrain ? (double)self->terrain->cellScale() : 1.0;
-        })
-        .get("planetRadius", [](CW* self) -> double {
-            return self->terrain ? (double)self->terrain->config().planetRadius : 0.0;
-        })
-        .method("coverageDistance", [](CW* self, double eyeAboveSeaLevel) -> double {
-            // The radius the APP must supply height data across:
-            // horizon(eye) + horizon(highest ground). Sizing a layer from
-            // farDistance instead is what makes the data bill quadratic in a
-            // reach that is mostly behind the planet. See
-            // ClipmapTerrain::coverageDistance.
-            //
-            // ABOVE SEA LEVEL, not above the ground underfoot: a camera on a
-            // summit sees much further than one on a plain, and height above
-            // the ground cannot tell the two apart. Passing height above ground
-            // here under-sizes the request and cuts the world off short.
-            return self->terrain
-                ? (double)self->terrain->coverageDistance((float)eyeAboveSeaLevel)
-                : 0.0;
-        })
-        .method("horizonDistance", [](CW* self, double eyeAboveSeaLevel) -> double {
-            // How far the surface is visible from that height, measured from
-            // sea level as above. Infinite on a flat world, so JS sees
-            // Infinity — sizing data from it is then correctly an error rather
-            // than a silently huge number.
-            return self->terrain
-                ? (double)self->terrain->horizonDistance((float)eyeAboveSeaLevel)
-                : 0.0;
-        });
-}
-
 void ClipmapBindings::cleanup(JSContext*) {
     // Drop every live terrain before scene graphs are destroyed, so their
     // destructors don't touch a dangling SceneGraph reference.
@@ -526,6 +420,110 @@ void ClipmapBindings::cleanup(JSContext*) {
     }
 }
 
+void ClipmapBindings::install(JSContext* ctx)
+{
+    qjsbind::Class<CW>(ctx, "ClipmapTerrain")
+            // No constructor — created via scene.createClipmapTerrain()
+            .method_raw("setHeightLayer", js_clipmap_setHeightLayer, 2)
+            .method_raw("setSnowLine", js_clipmap_setSnowLine, 1)
+            .method_raw("setChartCenter", js_clipmap_setChartCenter, 2)
+            .method_raw("setDetail", js_clipmap_setDetail, 1)
+            .method_raw("setMaterials", js_clipmap_setMaterials, 1)
+            .method_raw("setForest", js_clipmap_setForest, 1)
+            .method_raw("setSurfaceLayer", js_clipmap_setSurfaceLayer, 1)
+            .method_raw("update", js_clipmap_update, 3)
+            // The composed GLSL for 'vertex' or 'fragment'. An app that replaces
+            // one chunk with a material of its own needs the other four exactly as
+            // the clipmap assembles them, and the suite needs it to prove that
+            // cubicSurface off changes the source by zero bytes.
+            .method("shaderSource", [](CW* self, std::string stage) -> std::string {
+                if (!self->terrain) return std::string();
+                return self->terrain->shaderSource(stage);
+            })
+            .method("elevationAt", [](CW* self, double x, double z) -> double {
+                if (!self->terrain) return 0.0;
+                return self->terrain->elevationAt((float)x, (float)z);
+            })
+            .method("renderedElevationAt", [](CW* self, double x, double z) -> double {
+                // elevationAt() bent by the planetary-curvature chart: the world Y
+                // at which the DRAWN sheet sits under (x, z). Identical to
+                // elevationAt() unless a chart centre is pinned on a round world;
+                // pinned, the sheet at chord rho from the centre has dropped by
+                // ~rho^2/2R, and a camera grounded on elevationAt() floats
+                // kilometres above the picture. Ground cameras and AGL readouts on
+                // this one; keep elevationAt() for the field's own space.
+                if (!self->terrain) return 0.0;
+                return self->terrain->renderedElevationAt((float)x, (float)z);
+            })
+            .method("destroy", [](CW* self) {
+                if (self->terrain) {
+                    self->terrain->destroy();
+                    self->terrain.reset();
+                }
+            })
+            .get("node", [](CW* self, JSContext* c) -> JSValue {
+                if (!self->terrain) return JS_NULL;
+                auto* g = self->graph();
+                if (!g) return JS_NULL;
+                return wrapNode(c, self->terrain->node(), g);
+            })
+            .get("levels", [](CW* self) -> int {
+                return self->terrain ? self->terrain->levelCount() : 0;
+            })
+            .get("resolution", [](CW* self) -> int {
+                return self->terrain ? self->terrain->config().resolution : 0;
+            })
+            .get("cellSize", [](CW* self) -> double {
+                return self->terrain ? self->terrain->config().cellSize : 0.0;
+            })
+            .get("layerCount", [](CW* self) -> int {
+                return self->terrain ? self->terrain->layerCount() : 0;
+            })
+            .get("triangleCount", [](CW* self) -> int {
+                return self->terrain ? self->terrain->triangleCount() : 0;
+            })
+            .get("vertexCount", [](CW* self) -> int {
+                return self->terrain ? self->terrain->vertexCount() : 0;
+            })
+            .get("farDistance", [](CW* self) -> double {
+                // Outer half-extent of the coarsest ring. NOT a constant: update()
+                // zooms the stack with altitude, so read this every frame — it is
+                // both the camera's far plane and the radius the app must keep
+                // height data across.
+                return self->terrain ? (double)self->terrain->farDistance() : 0.0;
+            })
+            .get("cellScale", [](CW* self) -> double {
+                return self->terrain ? (double)self->terrain->cellScale() : 1.0;
+            })
+            .get("planetRadius", [](CW* self) -> double {
+                return self->terrain ? (double)self->terrain->config().planetRadius : 0.0;
+            })
+            .method("coverageDistance", [](CW* self, double eyeAboveSeaLevel) -> double {
+                // The radius the APP must supply height data across:
+                // horizon(eye) + horizon(highest ground). Sizing a layer from
+                // farDistance instead is what makes the data bill quadratic in a
+                // reach that is mostly behind the planet. See
+                // ClipmapTerrain::coverageDistance.
+                //
+                // ABOVE SEA LEVEL, not above the ground underfoot: a camera on a
+                // summit sees much further than one on a plain, and height above
+                // the ground cannot tell the two apart. Passing height above ground
+                // here under-sizes the request and cuts the world off short.
+                return self->terrain
+                    ? (double)self->terrain->coverageDistance((float)eyeAboveSeaLevel)
+                    : 0.0;
+            })
+            .method("horizonDistance", [](CW* self, double eyeAboveSeaLevel) -> double {
+                // How far the surface is visible from that height, measured from
+                // sea level as above. Infinite on a flat world, so JS sees
+                // Infinity — sizing data from it is then correctly an error rather
+                // than a silently huge number.
+                return self->terrain
+                    ? (double)self->terrain->horizonDistance((float)eyeAboveSeaLevel)
+                    : 0.0;
+            });
+}
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_3D
+#endif // BRO_WITH_3D

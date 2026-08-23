@@ -1,14 +1,11 @@
+#if BRO_WITH_3D
+
 #include "js/mesh_bindings.h"
-#if BRO_WITH_3D  // modular-build feature gate
+#include "js/mesh_bindings.h"
 #include "js/rigging_bindings.h"
-
 #include <qjsbind/qjsbind.h>
-
-#include <api/api.h>  // brokit::api::resolveAssetPath — keep native mesh file
-                      // I/O consistent with fs.* path resolution
-
+#include <api/api.h>
 #include <filesystem>
-
 #include <bromath/vec.h>
 #include <bromath/quat.h>
 #include <bromath/mat.h>
@@ -77,7 +74,6 @@
 #include <bromesh/procedural/branches.h>
 #include <bromesh/procedural/leaf_scatter.h>
 #include <bromesh/procedural/plants.h>
-
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -85,6 +81,48 @@
 #include <cmath>
 
 namespace bro::js {
+
+static JSValue make_float32_array(JSContext* ctx, const float* data, size_t count)
+{
+    size_t byte_len = count * sizeof(float);
+    JSValue ab = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), byte_len);
+    if (JS_IsException(ab)) return ab;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
+    JSValue result = JS_CallConstructor(ctx, ctor, 1, &ab);
+    JS_FreeValue(ctx, ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, ab);
+    return result;
+}
+
+static bool resolve_f32(JSContext* ctx, JSValueConst v, const char* name,
+                        float** out, size_t* count)
+{
+    size_t byte_offset = 0, byte_len = 0, bpe = 0;
+    JSValue buf = JS_GetTypedArrayBuffer(ctx, v, &byte_offset, &byte_len, &bpe);
+    if (JS_IsException(buf)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
+        return false;
+    }
+    if (bpe != sizeof(float)) {
+        JS_FreeValue(ctx, buf);
+        JS_ThrowTypeError(ctx, "%s must be a Float32Array", name);
+        return false;
+    }
+    size_t ab_len = 0;
+    uint8_t* ab_ptr = JS_GetArrayBuffer(ctx, &ab_len, buf);
+    JS_FreeValue(ctx, buf);
+    if (!ab_ptr) {
+        JS_ThrowTypeError(ctx, "%s has a detached or invalid buffer", name);
+        return false;
+    }
+    *out   = reinterpret_cast<float*>(ab_ptr + byte_offset);
+    *count = byte_len / sizeof(float);
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Opaque wrapper
@@ -1662,1382 +1700,6 @@ static JSValue js_encodeDraco(JSContext* ctx, JSValueConst, int argc, JSValueCon
 }
 #endif  // BROMESH_HAS_DRACO
 
-void MeshBindings::install(JSContext* ctx) {
-    qjsbind::Class<MW>(ctx, "Mesh")
-
-    // ── Constructor ─────────────────────────────────────────────────────
-    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> MW* {
-        auto md = std::make_unique<bromesh::MeshData>();
-        if (argc > 0 && JS_IsObject(argv[0])) {
-            readFloatArray(ctx, argv[0], "positions", md->positions);
-            readFloatArray(ctx, argv[0], "normals", md->normals);
-            readFloatArray(ctx, argv[0], "uvs", md->uvs);
-            readFloatArray(ctx, argv[0], "colors", md->colors);
-            readUint32Array(ctx, argv[0], "indices", md->indices);
-        }
-        return new MW{std::move(md)};
-    })
-
-    // ── TypedArray properties (getter + setter) ─────────────────────────
-    .prop("positions",
-        [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? make_float32_array(ctx, w->data->positions) : JS_UNDEFINED;
-        },
-        [](MW* w, JSContext* ctx, JSValue val) {
-            if (w->data) readFloatArrayVal(ctx, val, w->data->positions);
-        })
-    .prop("normals",
-        [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? make_float32_array(ctx, w->data->normals) : JS_UNDEFINED;
-        },
-        [](MW* w, JSContext* ctx, JSValue val) {
-            if (w->data) readFloatArrayVal(ctx, val, w->data->normals);
-        })
-    .prop("uvs",
-        [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? make_float32_array(ctx, w->data->uvs) : JS_UNDEFINED;
-        },
-        [](MW* w, JSContext* ctx, JSValue val) {
-            if (w->data) readFloatArrayVal(ctx, val, w->data->uvs);
-        })
-    .prop("colors",
-        [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? make_float32_array(ctx, w->data->colors) : JS_UNDEFINED;
-        },
-        [](MW* w, JSContext* ctx, JSValue val) {
-            if (w->data) readFloatArrayVal(ctx, val, w->data->colors);
-        })
-    .prop("indices",
-        [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? makeUint32Array(ctx, w->data->indices) : JS_UNDEFINED;
-        },
-        [](MW* w, JSContext* ctx, JSValue val) {
-            if (w->data) readUint32ArrayVal(ctx, val, w->data->indices);
-        })
-
-    // ── Read-only properties ────────────────────────────────────────────
-    .get("vertexCount",    [](MW* w) { return (int)(w->data ? w->data->vertexCount() : 0); })
-    .get("triangleCount",  [](MW* w) { return (int)(w->data ? w->data->triangleCount() : 0); })
-    .get("hasNormals",     [](MW* w) { return w->data && w->data->hasNormals(); })
-    .get("hasUVs",         [](MW* w) { return w->data && w->data->hasUVs(); })
-    .get("hasColors",      [](MW* w) { return w->data && w->data->hasColors(); })
-    .get("empty",          [](MW* w) { return !w->data || w->data->empty(); })
-
-    // ── Clone ───────────────────────────────────────────────────────────
-    .method("clone", [](MW* w, JSContext* ctx) -> JSValue {
-        return w->data ? wrapMesh(ctx, bromesh::MeshData(*w->data)) : JS_UNDEFINED;
-    })
-
-    // ── Transforms ──────────────────────────────────────────────────────
-    .method("translate", [](MW* w, double dx, double dy, double dz) {
-        if (w->data) bromesh::translateMesh(*w->data, (float)dx, (float)dy, (float)dz);
-    }, qjsbind::returns_this)
-
-    .method("scale", [](MW* w, double sx, std::optional<double> sy_opt, std::optional<double> sz_opt) {
-        if (!w->data) return;
-        float fsx = (float)sx;
-        float fsy = sy_opt ? (float)*sy_opt : fsx;
-        float fsz = sz_opt ? (float)*sz_opt : fsx;
-        bromesh::scaleMesh(*w->data, fsx, fsy, fsz);
-    })
-
-    .method("rotate", [](MW* w, double ax, double ay, double az, double angle) {
-        if (w->data) bromesh::rotateMesh(*w->data, (float)ax, (float)ay, (float)az, (float)angle);
-    }, qjsbind::returns_this)
-
-    .method("center", [](MW* w) {
-        if (w->data) bromesh::centerMesh(*w->data);
-    }, qjsbind::returns_this)
-
-    .method("mirror", [](MW* w, int axis) {
-        if (w->data && axis >= 0 && axis <= 2) bromesh::mirrorMesh(*w->data, axis);
-    }, qjsbind::returns_this)
-
-    .method("transform", [](MW* w, JSContext* ctx, JSValue matArr) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        std::vector<float> mat;
-        if (!readFloatArrayVal(ctx, matArr, mat) || mat.size() < 16) return JS_UNDEFINED;
-        bromesh::transformMesh(*w->data, mat.data());
-        return JS_UNDEFINED; // returns_this handles the return
-    }, qjsbind::returns_this)
-
-    // ── Normals ─────────────────────────────────────────────────────────
-    .method("computeNormals", [](MW* w) {
-        if (w->data) bromesh::computeNormals(*w->data);
-    }, qjsbind::returns_this)
-
-    .method("computeFlatNormals", [](MW* w, JSContext* ctx) -> JSValue {
-        return w->data ? wrapMesh(ctx, bromesh::computeFlatNormals(*w->data)) : JS_UNDEFINED;
-    })
-
-    .method("computeTangents", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return make_float32_array(ctx, bromesh::computeTangents(*w->data));
-    })
-
-    // ── Simplification ──────────────────────────────────────────────────
-    .method("simplify", [](MW* w, double ratio, std::optional<double> error) {
-        if (w->data) *w->data = bromesh::simplify(*w->data, (float)ratio, (float)error.value_or(0.01));
-    }, qjsbind::returns_this)
-
-    .method("simplifyWithAttributes", [](MW* w, double ratio, std::optional<double> error,
-                                          std::optional<double> uvW, std::optional<double> nW) {
-        if (w->data) *w->data = bromesh::simplifyWithAttributes(*w->data,
-            (float)ratio, (float)error.value_or(0.01), (float)uvW.value_or(1.0), (float)nW.value_or(0.5));
-    }, qjsbind::returns_this)
-
-    .method("simplifyToTriangleCount", [](MW* w, int target, std::optional<double> error) {
-        if (w->data) *w->data = bromesh::simplifyToTriangleCount(*w->data, (size_t)target, (float)error.value_or(0.01));
-    }, qjsbind::returns_this)
-
-    .method("generateLODChain", [](MW* w, JSContext* ctx, JSValue ratiosArr) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        std::vector<float> ratios;
-        if (!readFloatArrayVal(ctx, ratiosArr, ratios) || ratios.empty()) return JS_UNDEFINED;
-        auto lods = bromesh::generateLODChain(*w->data, ratios.data(), (int)ratios.size());
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < lods.size(); i++)
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(lods[i])));
-        return arr;
-    })
-
-    // ── Subdivision ─────────────────────────────────────────────────────
-    .method("subdivideLoop", [](MW* w, std::optional<int> iter) {
-        if (w->data) *w->data = bromesh::subdivideLoop(*w->data, iter.value_or(1));
-    }, qjsbind::returns_this)
-
-    .method("subdivideCatmullClark", [](MW* w, std::optional<int> iter) {
-        if (w->data) *w->data = bromesh::subdivideCatmullClark(*w->data, iter.value_or(1));
-    }, qjsbind::returns_this)
-
-    .method("subdivideMidpoint", [](MW* w, std::optional<int> iter) {
-        if (w->data) *w->data = bromesh::subdivideMidpoint(*w->data, iter.value_or(1));
-    }, qjsbind::returns_this)
-
-    // ── Smoothing ───────────────────────────────────────────────────────
-    .method("smoothLaplacian", [](MW* w, std::optional<double> lambda, std::optional<int> iter) {
-        if (w->data) bromesh::smoothLaplacian(*w->data, (float)lambda.value_or(0.5), iter.value_or(1));
-    }, qjsbind::returns_this)
-
-    .method("smoothTaubin", [](MW* w, std::optional<double> lambda, std::optional<double> mu,
-                                std::optional<int> iter) {
-        if (w->data) bromesh::smoothTaubin(*w->data, (float)lambda.value_or(0.5), (float)mu.value_or(-0.53), iter.value_or(1));
-    }, qjsbind::returns_this)
-
-    // ── Optimization ────────────────────────────────────────────────────
-    .method("optimizeVertexCache", [](MW* w) {
-        if (w->data) bromesh::optimizeVertexCache(*w->data);
-    }, qjsbind::returns_this)
-
-    .method("optimizeVertexFetch", [](MW* w) {
-        if (w->data) bromesh::optimizeVertexFetch(*w->data);
-    }, qjsbind::returns_this)
-
-    .method("optimizeOverdraw", [](MW* w, std::optional<double> thresh) {
-        if (w->data) bromesh::optimizeOverdraw(*w->data, (float)thresh.value_or(1.05));
-    }, qjsbind::returns_this)
-
-    // ── Analysis ────────────────────────────────────────────────────────
-    .method("computeBBox", [](MW* w, JSContext* ctx) -> JSValue {
-        return w->data ? makeBBox(ctx, bromesh::computeBBox(*w->data)) : JS_UNDEFINED;
-    })
-
-    .method("isManifold", [](MW* w) { return w->data ? bromesh::isManifold(*w->data) : false; })
-
-    .method("computeVolume", [](MW* w) { return w->data ? bromesh::computeVolume(*w->data) : 0.0; })
-
-    .method("raycast", [](MW* w, JSContext* ctx, JSValue origin, JSValue direction,
-                           std::optional<double> maxDist) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        float o[3], d[3];
-        readVec3(ctx, origin, o);
-        readVec3(ctx, direction, d);
-        return makeRayHit(ctx, bromesh::raycast(*w->data, o, d, (float)maxDist.value_or(0.0)));
-    })
-
-    .method("raycastAll", [](MW* w, JSContext* ctx, JSValue origin, JSValue direction,
-                              std::optional<double> maxDist) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        float o[3], d[3];
-        readVec3(ctx, origin, o);
-        readVec3(ctx, direction, d);
-        auto hits = bromesh::raycastAll(*w->data, o, d, (float)maxDist.value_or(0.0));
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < hits.size(); i++)
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeRayHit(ctx, hits[i]));
-        return arr;
-    })
-
-    .method("raycastTest", [](MW* w, JSContext* ctx, JSValue origin, JSValue direction,
-                               std::optional<double> maxDist) -> JSValue {
-        if (!w->data) return JS_FALSE;
-        float o[3], d[3];
-        readVec3(ctx, origin, o);
-        readVec3(ctx, direction, d);
-        return JS_NewBool(ctx, bromesh::raycastTest(*w->data, o, d, (float)maxDist.value_or(0.0)));
-    })
-
-    .method("closestPoint", [](MW* w, JSContext* ctx, JSValue point) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        float pt[3];
-        readVec3(ctx, point, pt);
-        return makeRayHit(ctx, bromesh::closestPoint(*w->data, pt));
-    })
-
-    .method("hasSelfIntersections", [](MW* w) { return w->data ? bromesh::hasSelfIntersections(*w->data) : false; })
-
-    .method("findSelfIntersections", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto pairs = bromesh::findSelfIntersections(*w->data);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < pairs.size(); i++) {
-            JSValue obj = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, obj, "triA", JS_NewInt32(ctx, (int32_t)pairs[i].triA));
-            JS_SetPropertyStr(ctx, obj, "triB", JS_NewInt32(ctx, (int32_t)pairs[i].triB));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, obj);
-        }
-        return arr;
-    })
-
-    .method("intersectsMesh", [](MW* w, JSContext* ctx, JSValue other) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto* otherMD = qjsbind::unwrap<MW>(ctx, other);
-        if (!otherMD || !otherMD->data) return JS_ThrowTypeError(ctx, "argument must be a Mesh");
-        return JS_NewBool(ctx, bromesh::meshesIntersect(*w->data, *otherMD->data));
-    })
-
-    // ── UV ──────────────────────────────────────────────────────────────
-    .method("unwrapUVs", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto result = bromesh::unwrapUVs(*w->data);
-        JSValue obj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, obj, "atlasWidth", JS_NewInt32(ctx, result.atlasWidth));
-        JS_SetPropertyStr(ctx, obj, "atlasHeight", JS_NewInt32(ctx, result.atlasHeight));
-        JS_SetPropertyStr(ctx, obj, "chartCount", JS_NewInt32(ctx, result.chartCount));
-        JS_SetPropertyStr(ctx, obj, "success", JS_NewBool(ctx, result.success));
-        return obj;
-    })
-
-    .method("projectUVs", [](MW* w, std::string type, std::optional<double> scale) {
-        if (!w->data) return;
-        bromesh::ProjectionType pt = bromesh::ProjectionType::Box;
-        if (type == "box")              pt = bromesh::ProjectionType::Box;
-        else if (type == "planarXY")    pt = bromesh::ProjectionType::PlanarXY;
-        else if (type == "planarXZ")    pt = bromesh::ProjectionType::PlanarXZ;
-        else if (type == "planarYZ")    pt = bromesh::ProjectionType::PlanarYZ;
-        else if (type == "cylindrical") pt = bromesh::ProjectionType::Cylindrical;
-        else if (type == "spherical")   pt = bromesh::ProjectionType::Spherical;
-        bromesh::projectUVs(*w->data, pt, (float)scale.value_or(1.0));
-    }, qjsbind::returns_this)
-
-    // ── Save I/O ────────────────────────────────────────────────────────
-    .method("saveGLTF", [](MW* w, JSContext* ctx, std::string path, std::optional<JSValue> opts) -> JSValue {
-        if (!w->data) return JS_FALSE;
-        path = resolveMeshWritePath(ctx, path);
-        if (!opts || !JS_IsObject(*opts)) {
-            return JS_NewBool(ctx, bromesh::saveGLTF(*w->data, path));
-        }
-        bromesh::SkinData* skinPtr = nullptr;
-        bromesh::Skeleton* skelPtr = nullptr;
-        std::vector<bromesh::Animation> anims;
-        JSValue v;
-
-        v = JS_GetPropertyStr(ctx, *opts, "skin");
-        if (!JS_IsUndefined(v) && !JS_IsNull(v))
-            skinPtr = RiggingBindings::getSkinData(ctx, v);
-        JS_FreeValue(ctx, v);
-
-        v = JS_GetPropertyStr(ctx, *opts, "skeleton");
-        if (!JS_IsUndefined(v) && !JS_IsNull(v))
-            skelPtr = RiggingBindings::getSkeleton(ctx, v);
-        JS_FreeValue(ctx, v);
-
-        v = JS_GetPropertyStr(ctx, *opts, "animations");
-        if (JS_IsArray(v)) {
-            JSValue lenV = JS_GetPropertyStr(ctx, v, "length");
-            int32_t n = 0; JS_ToInt32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
-            anims.reserve((size_t)n);
-            for (int32_t i = 0; i < n; i++) {
-                JSValue elem = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
-                bromesh::Animation* a = RiggingBindings::getAnimation(ctx, elem);
-                if (a) anims.push_back(*a);
-                JS_FreeValue(ctx, elem);
-            }
-        }
-        JS_FreeValue(ctx, v);
-
-        bool ok = bromesh::saveGLTF(*w->data, skinPtr, skelPtr, anims, path);
-        return JS_NewBool(ctx, ok);
-    })
-    .method("saveOBJ",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::saveOBJ(*w->data, resolveMeshWritePath(ctx, path)) : false; })
-    .method("savePLY",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::savePLY(*w->data, resolveMeshWritePath(ctx, path)) : false; })
-    .method("saveSTL",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::saveSTL(*w->data, resolveMeshWritePath(ctx, path)) : false; })
-
-    // ── Remesh / repair / weld / crease ────────────────────────────────
-    .method("remeshIsotropic", [](MW* w, std::optional<double> edgeLen, std::optional<int> iter) {
-        if (w->data) *w->data = bromesh::remeshIsotropic(*w->data, (float)edgeLen.value_or(0.0), iter.value_or(5));
-    }, qjsbind::returns_this)
-
-    .method("weld", [](MW* w, std::optional<double> epsilon) {
-        if (w->data) *w->data = bromesh::weldVertices(*w->data, (float)epsilon.value_or(1e-5));
-    }, qjsbind::returns_this)
-
-    .method("computeCreaseNormals", [](MW* w, std::optional<double> angleDeg) {
-        if (w->data) *w->data = bromesh::computeCreaseNormals(*w->data, (float)angleDeg.value_or(30.0));
-    }, qjsbind::returns_this)
-
-    .method("removeDegenerateTriangles", [](MW* w, std::optional<double> eps) {
-        if (w->data) *w->data = bromesh::removeDegenerateTriangles(*w->data, (float)eps.value_or(1e-8));
-    }, qjsbind::returns_this)
-
-    .method("removeDuplicateTriangles", [](MW* w) {
-        if (w->data) *w->data = bromesh::removeDuplicateTriangles(*w->data);
-    }, qjsbind::returns_this)
-
-    .method("fillHoles", [](MW* w, std::optional<int> maxEdges) {
-        if (w->data) *w->data = bromesh::fillHoles(*w->data, maxEdges.value_or(64));
-    }, qjsbind::returns_this)
-
-    .method("splitComponents", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto comps = bromesh::splitConnectedComponents(*w->data);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < comps.size(); i++)
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(comps[i])));
-        return arr;
-    })
-
-    .method("shrinkwrap", [](MW* w, JSContext* ctx, JSValue targetVal,
-                              std::optional<std::string> mode, std::optional<double> maxDist,
-                              std::optional<double> offset, std::optional<JSValue> axisArr) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto* t = qjsbind::unwrap<MW>(ctx, targetVal);
-        if (!t || !t->data) return JS_ThrowTypeError(ctx, "target must be a Mesh");
-        auto m = bromesh::ShrinkwrapMode::Nearest;
-        if (mode) {
-            if (*mode == "projectAlongNormal")     m = bromesh::ShrinkwrapMode::ProjectAlongNormal;
-            else if (*mode == "projectAlongAxis")  m = bromesh::ShrinkwrapMode::ProjectAlongAxis;
-        }
-        float axis[3] = {0,1,0};
-        bool useAxis = false;
-        if (axisArr && JS_IsObject(*axisArr)) { readVec3(ctx, *axisArr, axis); useAxis = true; }
-        bromesh::shrinkwrap(*w->data, *t->data, m,
-                            (float)maxDist.value_or(0.0), (float)offset.value_or(0.0),
-                            useAxis ? axis : nullptr);
-        return JS_UNDEFINED;
-    }, qjsbind::returns_this)
-
-    // ── Surface sampling / metrics ─────────────────────────────────────
-    .method("sampleSurface", [](MW* w, JSContext* ctx, int numSamples, std::optional<int> seed) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return wrapMesh(ctx, bromesh::sampleSurface(*w->data, (size_t)numSamples, (uint32_t)seed.value_or(0)));
-    })
-
-    .method("surfaceArea", [](MW* w) {
-        return w->data ? (double)bromesh::computeSurfaceArea(*w->data) : 0.0;
-    })
-
-    .method("triangleAreas", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return make_float32_array(ctx, bromesh::computeTriangleAreas(*w->data));
-    })
-
-    // ── Vertex-space baking ─────────────────────────────────────────────
-    .method("bakeAmbientOcclusion", [](MW* w, std::optional<int> numRays, std::optional<double> maxDist) {
-        if (w->data) bromesh::bakeAmbientOcclusion(*w->data, numRays.value_or(64), (float)maxDist.value_or(0.0));
-    }, qjsbind::returns_this)
-
-    .method("bakeCurvature", [](MW* w, std::optional<double> scale) {
-        if (w->data) bromesh::bakeCurvature(*w->data, (float)scale.value_or(1.0));
-    }, qjsbind::returns_this)
-
-    .method("bakeThickness", [](MW* w, std::optional<int> numRays, std::optional<double> maxDist) {
-        if (w->data) bromesh::bakeThickness(*w->data, numRays.value_or(32), (float)maxDist.value_or(0.0));
-    }, qjsbind::returns_this)
-
-    // ── Texture-space baking ────────────────────────────────────────────
-    .method("bakeAOToTexture", [](MW* w, JSContext* ctx, int texW, int texH,
-                                   std::optional<int> numRays, std::optional<double> maxDist) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return makeTextureBuffer(ctx, bromesh::bakeAmbientOcclusionToTexture(
-            *w->data, texW, texH, numRays.value_or(64), (float)maxDist.value_or(0.0)));
-    })
-    .method("bakeCurvatureToTexture", [](MW* w, JSContext* ctx, int texW, int texH, std::optional<double> scale) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return makeTextureBuffer(ctx, bromesh::bakeCurvatureToTexture(
-            *w->data, texW, texH, (float)scale.value_or(1.0)));
-    })
-    .method("bakeThicknessToTexture", [](MW* w, JSContext* ctx, int texW, int texH,
-                                          std::optional<int> numRays, std::optional<double> maxDist) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return makeTextureBuffer(ctx, bromesh::bakeThicknessToTexture(
-            *w->data, texW, texH, numRays.value_or(32), (float)maxDist.value_or(0.0)));
-    })
-    .method("bakeNormalsToTexture", [](MW* w, JSContext* ctx, int texW, int texH) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return makeTextureBuffer(ctx, bromesh::bakeNormalsToTexture(*w->data, texW, texH));
-    })
-    .method("bakePositionToTexture", [](MW* w, JSContext* ctx, int texW, int texH) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return makeTextureBuffer(ctx, bromesh::bakePositionToTexture(*w->data, texW, texH));
-    })
-    .method("bakeNormalsFromReference", [](MW* w, JSContext* ctx, JSValue refVal,
-                                            int texW, int texH, std::optional<double> searchDist) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto* r = qjsbind::unwrap<MW>(ctx, refVal);
-        if (!r || !r->data) return JS_ThrowTypeError(ctx, "reference must be a Mesh");
-        return makeTextureBuffer(ctx, bromesh::bakeNormalsFromReference(
-            *w->data, *r->data, texW, texH, (float)searchDist.value_or(0.0)));
-    })
-    .method("bakeAOFromReference", [](MW* w, JSContext* ctx, JSValue refVal,
-                                       int texW, int texH,
-                                       std::optional<int> numRays, std::optional<double> maxDist) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto* r = qjsbind::unwrap<MW>(ctx, refVal);
-        if (!r || !r->data) return JS_ThrowTypeError(ctx, "reference must be a Mesh");
-        return makeTextureBuffer(ctx, bromesh::bakeAOFromReference(
-            *w->data, *r->data, texW, texH, numRays.value_or(64), (float)maxDist.value_or(0.0)));
-    })
-
-    // ── Convex ──────────────────────────────────────────────────────────
-    .method("convexHull", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return wrapMesh(ctx, bromesh::convexHull(*w->data));
-    })
-
-    .method("convexDecomposition", [](MW* w, JSContext* ctx, std::optional<JSValue> paramsObj) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        bromesh::ConvexDecompParams p;
-        if (paramsObj && JS_IsObject(*paramsObj)) {
-            JSValue v;
-            v = JS_GetPropertyStr(ctx, *paramsObj, "maxHulls");
-            if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxHulls = x; }
-            JS_FreeValue(ctx, v);
-            v = JS_GetPropertyStr(ctx, *paramsObj, "maxVerticesPerHull");
-            if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxVerticesPerHull = x; }
-            JS_FreeValue(ctx, v);
-            v = JS_GetPropertyStr(ctx, *paramsObj, "resolution");
-            if (!JS_IsUndefined(v)) { double x; JS_ToFloat64(ctx, &x, v); p.resolution = (float)x; }
-            JS_FreeValue(ctx, v);
-            v = JS_GetPropertyStr(ctx, *paramsObj, "minVolumePerHull");
-            if (!JS_IsUndefined(v)) { double x; JS_ToFloat64(ctx, &x, v); p.minVolumePerHull = (float)x; }
-            JS_FreeValue(ctx, v);
-        }
-        auto hulls = bromesh::convexDecomposition(*w->data, p);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < hulls.size(); i++)
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(hulls[i])));
-        return arr;
-    })
-
-    // ── UV metrics ──────────────────────────────────────────────────────
-    .method("computeUVDistortion", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto dist = bromesh::computeUVDistortion(*w->data);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < dist.size(); i++) {
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "stretch",         JS_NewFloat64(ctx, dist[i].stretch));
-            JS_SetPropertyStr(ctx, o, "areaDistortion",  JS_NewFloat64(ctx, dist[i].areaDistortion));
-            JS_SetPropertyStr(ctx, o, "angleDistortion", JS_NewFloat64(ctx, dist[i].angleDistortion));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
-
-    .method("measureUVQuality", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto m = bromesh::measureUVQuality(*w->data);
-        JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "avgStretch",         JS_NewFloat64(ctx, m.avgStretch));
-        JS_SetPropertyStr(ctx, o, "maxStretch",         JS_NewFloat64(ctx, m.maxStretch));
-        JS_SetPropertyStr(ctx, o, "avgAreaDistortion",  JS_NewFloat64(ctx, m.avgAreaDistortion));
-        JS_SetPropertyStr(ctx, o, "maxAreaDistortion",  JS_NewFloat64(ctx, m.maxAreaDistortion));
-        JS_SetPropertyStr(ctx, o, "avgAngleDistortion", JS_NewFloat64(ctx, m.avgAngleDistortion));
-        JS_SetPropertyStr(ctx, o, "maxAngleDistortion", JS_NewFloat64(ctx, m.maxAngleDistortion));
-        JS_SetPropertyStr(ctx, o, "uvSpaceUsage",       JS_NewFloat64(ctx, m.uvSpaceUsage));
-        JS_SetPropertyStr(ctx, o, "triangleCount",      JS_NewInt32(ctx, (int32_t)m.triangleCount));
-        return o;
-    })
-
-    // ── Analyze (meshopt-backed stats) ─────────────────────────────────
-    .method("analyzeVertexCache", [](MW* w, JSContext* ctx, std::optional<int> cacheSize) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto s = bromesh::analyzeVertexCache(*w->data, (unsigned)cacheSize.value_or(16));
-        JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "verticesTransformed", JS_NewInt64(ctx, (int64_t)s.verticesTransformed));
-        JS_SetPropertyStr(ctx, o, "warpsExecuted",       JS_NewInt64(ctx, (int64_t)s.warpsExecuted));
-        JS_SetPropertyStr(ctx, o, "acmr",                JS_NewFloat64(ctx, s.acmr));
-        JS_SetPropertyStr(ctx, o, "atvr",                JS_NewFloat64(ctx, s.atvr));
-        return o;
-    })
-
-    .method("analyzeVertexFetch", [](MW* w, JSContext* ctx, std::optional<int> vertexSize) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto s = bromesh::analyzeVertexFetch(*w->data, (size_t)vertexSize.value_or(32));
-        JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "bytesFetched", JS_NewInt64(ctx, (int64_t)s.bytesFetched));
-        JS_SetPropertyStr(ctx, o, "overfetch",    JS_NewFloat64(ctx, s.overfetch));
-        return o;
-    })
-
-    .method("analyzeOverdraw", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto s = bromesh::analyzeOverdraw(*w->data);
-        JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "pixelsCovered", JS_NewInt64(ctx, (int64_t)s.pixelsCovered));
-        JS_SetPropertyStr(ctx, o, "pixelsShaded",  JS_NewInt64(ctx, (int64_t)s.pixelsShaded));
-        JS_SetPropertyStr(ctx, o, "overdraw",      JS_NewFloat64(ctx, s.overdraw));
-        return o;
-    })
-
-    // ── Spatial sort / shadow indices ──────────────────────────────────
-    .method("spatialSortTriangles", [](MW* w) {
-        if (w->data) bromesh::spatialSortTriangles(*w->data);
-    }, qjsbind::returns_this)
-    .method("spatialSortVertices", [](MW* w) {
-        if (w->data) bromesh::spatialSortVertices(*w->data);
-    }, qjsbind::returns_this)
-    .method("generateShadowIndexBuffer", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        return makeUint32Array(ctx, bromesh::generateShadowIndexBuffer(*w->data));
-    })
-
-    // ── Meshlets ───────────────────────────────────────────────────────
-    .method("buildMeshlets", [](MW* w, JSContext* ctx, std::optional<JSValue> paramsObj) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        bromesh::MeshletParams p;
-        if (paramsObj && JS_IsObject(*paramsObj)) {
-            JSValue v;
-            v = JS_GetPropertyStr(ctx, *paramsObj, "maxVertices");
-            if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxVertices = (size_t)x; }
-            JS_FreeValue(ctx, v);
-            v = JS_GetPropertyStr(ctx, *paramsObj, "maxTriangles");
-            if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxTriangles = (size_t)x; }
-            JS_FreeValue(ctx, v);
-            v = JS_GetPropertyStr(ctx, *paramsObj, "coneWeight");
-            if (!JS_IsUndefined(v)) { double x; JS_ToFloat64(ctx, &x, v); p.coneWeight = (float)x; }
-            JS_FreeValue(ctx, v);
-        }
-        auto ml = bromesh::buildMeshlets(*w->data, p);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < ml.size(); i++) {
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "vertices",  makeUint32Array(ctx, ml[i].vertices));
-            std::vector<uint8_t> triBuf(ml[i].triangles.begin(), ml[i].triangles.end());
-            JS_SetPropertyStr(ctx, o, "triangles", makeUint8Array(ctx, triBuf));
-            JSValue b = JS_NewObject(ctx);
-            JSValue cen = JS_NewArray(ctx);
-            JSValue apex = JS_NewArray(ctx);
-            JSValue axis = JS_NewArray(ctx);
-            for (int k = 0; k < 3; k++) {
-                JS_SetPropertyUint32(ctx, cen,  k, JS_NewFloat64(ctx, ml[i].bounds.center[k]));
-                JS_SetPropertyUint32(ctx, apex, k, JS_NewFloat64(ctx, ml[i].bounds.coneApex[k]));
-                JS_SetPropertyUint32(ctx, axis, k, JS_NewFloat64(ctx, ml[i].bounds.coneAxis[k]));
-            }
-            JS_SetPropertyStr(ctx, b, "center",     cen);
-            JS_SetPropertyStr(ctx, b, "radius",     JS_NewFloat64(ctx, ml[i].bounds.radius));
-            JS_SetPropertyStr(ctx, b, "coneApex",   apex);
-            JS_SetPropertyStr(ctx, b, "coneAxis",   axis);
-            JS_SetPropertyStr(ctx, b, "coneCutoff", JS_NewFloat64(ctx, ml[i].bounds.coneCutoff));
-            JS_SetPropertyStr(ctx, o, "bounds",    b);
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
-
-    // ── Encode (for streaming) ─────────────────────────────────────────
-    .method("encode", [](MW* w, JSContext* ctx) -> JSValue {
-        if (!w->data) return JS_UNDEFINED;
-        auto e = bromesh::encodeMesh(*w->data);
-        JSValue o = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, o, "vertexData",  makeUint8Array(ctx, e.vertexData));
-        JS_SetPropertyStr(ctx, o, "indexData",   makeUint8Array(ctx, e.indexData));
-        JS_SetPropertyStr(ctx, o, "vertexCount", JS_NewInt64(ctx, (int64_t)e.vertexCount));
-        JS_SetPropertyStr(ctx, o, "vertexSize",  JS_NewInt64(ctx, (int64_t)e.vertexSize));
-        JS_SetPropertyStr(ctx, o, "indexCount",  JS_NewInt64(ctx, (int64_t)e.indexCount));
-        JS_SetPropertyStr(ctx, o, "hasNormals",  JS_NewBool(ctx, w->data->hasNormals()));
-        JS_SetPropertyStr(ctx, o, "hasUVs",      JS_NewBool(ctx, w->data->hasUVs()));
-        JS_SetPropertyStr(ctx, o, "hasColors",   JS_NewBool(ctx, w->data->hasColors()));
-        return o;
-    })
-
-    // ── Skinning / morph (rigging) ─────────────────────────────────────
-    .method("applySkinning", [](MW* w, JSContext* ctx, JSValue skinVal, JSValue matricesVal) -> JSValue {
-        if (!w->data) return JS_ThrowTypeError(ctx, "neutered Mesh");
-        auto* skin = RiggingBindings::getSkinData(ctx, skinVal);
-        if (!skin) return JS_ThrowTypeError(ctx, "first argument must be a SkinData");
-        std::vector<float> mats;
-        if (!readFloatArrayVal(ctx, matricesVal, mats))
-            return JS_ThrowTypeError(ctx, "second argument must be a Float32Array of pose matrices");
-        size_t needed = skin->boneCount * 16;
-        if (mats.size() < needed)
-            return JS_ThrowRangeError(ctx, "pose matrices length %zu < boneCount*16 (%zu)",
-                                      mats.size(), needed);
-        bromesh::applySkinning(*w->data, *skin, mats.data());
-        return JS_UNDEFINED;
-    })
-    .method("applyMorphTarget", [](MW* w, JSContext* ctx, JSValue morph, double weight) -> JSValue {
-        if (!w->data) return JS_ThrowTypeError(ctx, "neutered Mesh");
-        if (!JS_IsObject(morph)) return JS_ThrowTypeError(ctx, "morph target must be an object");
-        bromesh::MorphTarget mt;
-        JSValue v;
-
-        v = JS_GetPropertyStr(ctx, morph, "name");
-        if (JS_IsString(v)) {
-            const char* s = JS_ToCString(ctx, v);
-            if (s) { mt.name = s; JS_FreeCString(ctx, s); }
-        }
-        JS_FreeValue(ctx, v);
-
-        v = JS_GetPropertyStr(ctx, morph, "deltaPositions");
-        if (!JS_IsUndefined(v) && !JS_IsNull(v)) readFloatArrayVal(ctx, v, mt.deltaPositions);
-        JS_FreeValue(ctx, v);
-
-        v = JS_GetPropertyStr(ctx, morph, "deltaNormals");
-        if (!JS_IsUndefined(v) && !JS_IsNull(v)) readFloatArrayVal(ctx, v, mt.deltaNormals);
-        JS_FreeValue(ctx, v);
-
-        bromesh::applyMorphTarget(*w->data, mt, (float)weight);
-        return JS_UNDEFINED;
-    })
-
-    // ── Static: Primitives ──────────────────────────────────────────────
-    .static_method("box", [](JSContext* ctx, std::optional<double> hw, std::optional<double> hh,
-                              std::optional<double> hd) -> JSValue {
-        return wrapMesh(ctx, bromesh::box((float)hw.value_or(0.5), (float)hh.value_or(0.5), (float)hd.value_or(0.5)));
-    })
-    .static_method("sphere", [](JSContext* ctx, std::optional<double> r, std::optional<int> seg,
-                                 std::optional<int> rings) -> JSValue {
-        return wrapMesh(ctx, bromesh::sphere((float)r.value_or(0.5), seg.value_or(16), rings.value_or(12)));
-    })
-    .static_method("cylinder", [](JSContext* ctx, std::optional<double> r, std::optional<double> hh,
-                                   std::optional<int> seg) -> JSValue {
-        return wrapMesh(ctx, bromesh::cylinder((float)r.value_or(0.5), (float)hh.value_or(0.5), seg.value_or(16)));
-    })
-    .static_method("capsule", [](JSContext* ctx, std::optional<double> r, std::optional<double> hh,
-                                  std::optional<int> seg, std::optional<int> rings) -> JSValue {
-        return wrapMesh(ctx, bromesh::capsule((float)r.value_or(0.5), (float)hh.value_or(0.5), seg.value_or(16), rings.value_or(8)));
-    })
-    .static_method("plane", [](JSContext* ctx, std::optional<double> hw, std::optional<double> hd,
-                                std::optional<int> sx, std::optional<int> sz) -> JSValue {
-        return wrapMesh(ctx, bromesh::plane((float)hw.value_or(5.0), (float)hd.value_or(5.0), sx.value_or(1), sz.value_or(1)));
-    })
-    .static_method("torus", [](JSContext* ctx, std::optional<double> major, std::optional<double> minor,
-                                std::optional<int> majSeg, std::optional<int> minSeg) -> JSValue {
-        return wrapMesh(ctx, bromesh::torus((float)major.value_or(1.0), (float)minor.value_or(0.3), majSeg.value_or(24), minSeg.value_or(12)));
-    })
-    .static_raw("heightmapGrid", js_heightmapGrid, 3)
-
-    // ── Static: par_primitives (procedural / Platonic) ─────────────────
-    .static_method("geodesicSphere", [](JSContext* ctx, std::optional<double> r, std::optional<int> nsub) -> JSValue {
-        return wrapMesh(ctx, bromesh::geodesicSphere((float)r.value_or(0.5), nsub.value_or(2)));
-    })
-    .static_method("icosahedron",  [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::icosahedron()); })
-    .static_method("dodecahedron", [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::dodecahedron()); })
-    .static_method("octahedron",   [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::octahedron()); })
-    .static_method("tetrahedron",  [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::tetrahedron()); })
-    .static_method("cone", [](JSContext* ctx, std::optional<double> r, std::optional<double> h,
-                               std::optional<int> slices, std::optional<int> stacks,
-                               std::optional<bool> capBase) -> JSValue {
-        return wrapMesh(ctx, bromesh::cone((float)r.value_or(0.5), (float)h.value_or(1.0),
-                                           slices.value_or(16), stacks.value_or(4),
-                                           capBase.value_or(false)));
-    })
-    .static_method("disc", [](JSContext* ctx, std::optional<double> r, std::optional<int> slices) -> JSValue {
-        return wrapMesh(ctx, bromesh::disc((float)r.value_or(0.5), slices.value_or(16)));
-    })
-    .static_method("rock", [](JSContext* ctx, std::optional<double> r, std::optional<int> seed, std::optional<int> nsub) -> JSValue {
-        return wrapMesh(ctx, bromesh::rock((float)r.value_or(0.5), seed.value_or(42), nsub.value_or(2)));
-    })
-    .static_raw("blob", js_blob, 1)
-    .static_method("trefoilKnot", [](JSContext* ctx, std::optional<double> r, std::optional<int> slices, std::optional<int> stacks) -> JSValue {
-        return wrapMesh(ctx, bromesh::trefoilKnot((float)r.value_or(1.0), slices.value_or(64), stacks.value_or(16)));
-    })
-    .static_method("kleinBottle", [](JSContext* ctx, std::optional<int> slices, std::optional<int> stacks) -> JSValue {
-        return wrapMesh(ctx, bromesh::kleinBottle(slices.value_or(32), stacks.value_or(16)));
-    })
-
-    // ── Static: CSG ─────────────────────────────────────────────────────
-    .static_method("union", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
-        auto* ma = qjsbind::unwrap<MW>(ctx, a);
-        auto* mb = qjsbind::unwrap<MW>(ctx, b);
-        if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-        return wrapMesh(ctx, bromesh::booleanUnion(*ma->data, *mb->data));
-    })
-    .static_method("subtract", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
-        auto* ma = qjsbind::unwrap<MW>(ctx, a);
-        auto* mb = qjsbind::unwrap<MW>(ctx, b);
-        if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-        return wrapMesh(ctx, bromesh::booleanDifference(*ma->data, *mb->data));
-    })
-    .static_method("intersect", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
-        auto* ma = qjsbind::unwrap<MW>(ctx, a);
-        auto* mb = qjsbind::unwrap<MW>(ctx, b);
-        if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-        return wrapMesh(ctx, bromesh::booleanIntersection(*ma->data, *mb->data));
-    })
-    .static_raw("splitByPlane", js_splitByPlane, 5)
-    .static_raw("polygon2D",    js_triangulatePolygon2D, 3)
-    .static_raw("polygon3D",    js_triangulatePolygon3D, 3)
-    .static_method("merge", [](JSContext* ctx, JSValue meshArr) -> JSValue {
-        if (!JS_IsArray(meshArr)) return JS_ThrowTypeError(ctx, "merge requires an array of Mesh instances");
-        JSValue lenVal = JS_GetPropertyStr(ctx, meshArr, "length");
-        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
-        std::vector<bromesh::MeshData> meshes;
-        meshes.reserve((size_t)len);
-        for (int32_t i = 0; i < len; i++) {
-            JSValue elem = JS_GetPropertyUint32(ctx, meshArr, (uint32_t)i);
-            auto* w = qjsbind::unwrap<MW>(ctx, elem);
-            if (w && w->data) {
-                meshes.push_back(*w->data);
-            }
-            JS_FreeValue(ctx, elem);
-        }
-        return wrapMesh(ctx, bromesh::mergeMeshes(meshes));
-    })
-
-    // ── Static: Isosurface ──────────────────────────────────────────────
-    .static_raw("marchingCubes", js_marchingCubes, 4)
-    .static_raw("dualContour",   js_dualContour, 4)
-    .static_raw("surfaceNets",   js_surfaceNets, 4)
-    .static_raw("transvoxel",    js_transvoxel, 4)
-    .static_raw("greedyMesh",    js_greedyMesh, 4)
-
-    // ── Static: I/O (load) ──────────────────────────────────────────────
-#if defined(BROMESH_HAS_DRACO)
-    .static_raw("decodeDraco", js_decodeDraco, 1)
-    .static_raw("encodeDraco", js_encodeDraco, 2)
-#endif
-    .static_method("loadGLTF", [](JSContext* ctx, std::string path) -> JSValue {
-        path = brokit::api::resolveAssetPath(ctx, path);
-        auto scene = bromesh::loadGLTF(path);
-        JSValue obj = JS_NewObject(ctx);
-
-        JSValue meshArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.meshes.size(); i++)
-            JS_SetPropertyUint32(ctx, meshArr, (uint32_t)i, wrapMesh(ctx, std::move(scene.meshes[i])));
-        JS_SetPropertyStr(ctx, obj, "meshes", meshArr);
-
-        JSValue skinArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.skins.size(); i++)
-            JS_SetPropertyUint32(ctx, skinArr, (uint32_t)i,
-                RiggingBindings::wrapSkinData(ctx, std::move(scene.skins[i])));
-        JS_SetPropertyStr(ctx, obj, "skins", skinArr);
-
-        JSValue skelArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.skeletons.size(); i++)
-            JS_SetPropertyUint32(ctx, skelArr, (uint32_t)i,
-                RiggingBindings::wrapSkeleton(ctx, std::move(scene.skeletons[i])));
-        JS_SetPropertyStr(ctx, obj, "skeletons", skelArr);
-
-        JSValue animArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.animations.size(); i++)
-            JS_SetPropertyUint32(ctx, animArr, (uint32_t)i,
-                RiggingBindings::wrapAnimation(ctx, std::move(scene.animations[i])));
-        JS_SetPropertyStr(ctx, obj, "animations", animArr);
-
-        JSValue meshSkelArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.meshSkeleton.size(); i++)
-            JS_SetPropertyUint32(ctx, meshSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.meshSkeleton[i]));
-        JS_SetPropertyStr(ctx, obj, "meshSkeleton", meshSkelArr);
-
-        JSValue animSkelArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.animationSkeleton.size(); i++)
-            JS_SetPropertyUint32(ctx, animSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.animationSkeleton[i]));
-        JS_SetPropertyStr(ctx, obj, "animationSkeleton", animSkelArr);
-
-        JSValue matSkelArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.meshMaterial.size(); i++)
-            JS_SetPropertyUint32(ctx, matSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.meshMaterial[i]));
-        JS_SetPropertyStr(ctx, obj, "meshMaterial", matSkelArr);
-
-        // Images — RGBA8, exposed as { name, mimeType, width, height, data: Uint8Array }.
-        JSValue imgArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.images.size(); i++) {
-            auto& im = scene.images[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "name",     JS_NewString(ctx, im.name.c_str()));
-            JS_SetPropertyStr(ctx, o, "mimeType", JS_NewString(ctx, im.mimeType.c_str()));
-            JS_SetPropertyStr(ctx, o, "width",    JS_NewInt32(ctx, im.width));
-            JS_SetPropertyStr(ctx, o, "height",   JS_NewInt32(ctx, im.height));
-            if (!im.data.empty()) {
-                JSValue ab = JS_NewArrayBufferCopy(ctx, im.data.data(), im.data.size());
-                JSValue args[3] = { ab, JS_UNDEFINED, JS_UNDEFINED };
-                JS_SetPropertyStr(ctx, o, "data", JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8));
-                JS_FreeValue(ctx, ab);
-            } else {
-                JS_SetPropertyStr(ctx, o, "data", JS_NULL);
-            }
-            JS_SetPropertyUint32(ctx, imgArr, (uint32_t)i, o);
-        }
-        JS_SetPropertyStr(ctx, obj, "images", imgArr);
-
-        // Materials — full glTF metallic/roughness subset. Texture fields are
-        // image indices into `images` (-1 = none).
-        JSValue matArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < scene.materials.size(); i++) {
-            auto& m = scene.materials[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, m.name.c_str()));
-            JSValue bc = JS_NewArray(ctx);
-            for (int k = 0; k < 4; k++)
-                JS_SetPropertyUint32(ctx, bc, k, JS_NewFloat64(ctx, m.baseColorFactor[k]));
-            JS_SetPropertyStr(ctx, o, "baseColorFactor", bc);
-            JS_SetPropertyStr(ctx, o, "metallicFactor",  JS_NewFloat64(ctx, m.metallicFactor));
-            JS_SetPropertyStr(ctx, o, "roughnessFactor", JS_NewFloat64(ctx, m.roughnessFactor));
-            JSValue ef = JS_NewArray(ctx);
-            for (int k = 0; k < 3; k++)
-                JS_SetPropertyUint32(ctx, ef, k, JS_NewFloat64(ctx, m.emissiveFactor[k]));
-            JS_SetPropertyStr(ctx, o, "emissiveFactor",  ef);
-            JS_SetPropertyStr(ctx, o, "baseColorTexture",         JS_NewInt32(ctx, m.baseColorTexture));
-            JS_SetPropertyStr(ctx, o, "metallicRoughnessTexture", JS_NewInt32(ctx, m.metallicRoughnessTexture));
-            JS_SetPropertyStr(ctx, o, "normalTexture",            JS_NewInt32(ctx, m.normalTexture));
-            JS_SetPropertyStr(ctx, o, "occlusionTexture",         JS_NewInt32(ctx, m.occlusionTexture));
-            JS_SetPropertyStr(ctx, o, "emissiveTexture",          JS_NewInt32(ctx, m.emissiveTexture));
-            JS_SetPropertyUint32(ctx, matArr, (uint32_t)i, o);
-        }
-        JS_SetPropertyStr(ctx, obj, "materials", matArr);
-
-        return obj;
-    })
-    .static_method("loadOBJ", [](JSContext* ctx, std::string path) -> JSValue {
-        return wrapMesh(ctx, bromesh::loadOBJ(brokit::api::resolveAssetPath(ctx, path)));
-    })
-    .static_method("loadFBX", [](JSContext* ctx, std::string path) -> JSValue {
-        path = brokit::api::resolveAssetPath(ctx, path);
-        auto meshes = bromesh::loadFBX(path);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < meshes.size(); i++)
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(meshes[i])));
-        return arr;
-    })
-    .static_method("loadPLY", [](JSContext* ctx, std::string path) -> JSValue {
-        return wrapMesh(ctx, bromesh::loadPLY(brokit::api::resolveAssetPath(ctx, path)));
-    })
-    .static_method("loadSTL", [](JSContext* ctx, std::string path) -> JSValue {
-        return wrapMesh(ctx, bromesh::loadSTL(brokit::api::resolveAssetPath(ctx, path)));
-    })
-    .static_method("loadVOX", [](JSContext* ctx, std::string path) -> JSValue {
-        path = brokit::api::resolveAssetPath(ctx, path);
-        auto vox = bromesh::loadVOX(path);
-        JSValue obj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, obj, "sizeX", JS_NewInt32(ctx, vox.sizeX));
-        JS_SetPropertyStr(ctx, obj, "sizeY", JS_NewInt32(ctx, vox.sizeY));
-        JS_SetPropertyStr(ctx, obj, "sizeZ", JS_NewInt32(ctx, vox.sizeZ));
-        {
-            JSValue abuf = JS_NewArrayBufferCopy(ctx, vox.voxels.data(), vox.voxels.size());
-            JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-            JS_SetPropertyStr(ctx, obj, "voxels", JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8));
-            JS_FreeValue(ctx, abuf);
-        }
-        {
-            size_t bytes = 256 * 4 * sizeof(float);
-            JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(vox.palette), bytes);
-            JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-            JS_SetPropertyStr(ctx, obj, "palette", JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32));
-            JS_FreeValue(ctx, abuf);
-        }
-        return obj;
-    })
-
-    // ── Static: Gaussian Splat .ply I/O ─────────────────────────────────
-    // Load/save a 3D Gaussian Splat cloud as a standard 3DGS .ply (INRIA /
-    // PlayCanvas). The returned cloud SoA matches scene.createGaussianSplat
-    // and bro.triposplat.generate exactly, so a loaded .ply feeds straight
-    // into scene.createGaussianSplat({ cloud }) with no reshaping.
-    .static_method("loadSplatPLY", [](JSContext* ctx, std::string path) -> JSValue {
-        return makeSplatCloud(ctx, bromesh::loadSplatPLY(
-            brokit::api::resolveAssetPath(ctx, path)));
-    })
-    .static_raw("saveSplatPLY",
-        [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
-            if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
-                return JS_ThrowTypeError(ctx, "saveSplatPLY(path, cloud)");
-            const char* p = JS_ToCString(ctx, argv[0]);
-            std::string path = p ? p : "";
-            if (p) JS_FreeCString(ctx, p);
-            bromesh::GaussianSplatCloud cloud;
-            std::string err;
-            if (!readSplatCloud(ctx, argv[1], cloud, err))
-                return JS_ThrowTypeError(ctx, "saveSplatPLY: %s", err.c_str());
-            return JS_NewBool(ctx, bromesh::saveSplatPLY(
-                cloud, resolveMeshWritePath(ctx, path)));
-        }, 2)
-
-    // ── Static: Reconstruction ──────────────────────────────────────────
-    .static_raw("reconstruct", js_reconstruct, 1)
-
-    // ── Static: Encoding / stripification ──────────────────────────────
-    .static_raw("decode", js_decode, 1)
-    .static_method("stripify", [](JSContext* ctx, JSValue indicesVal, int vertexCount, std::optional<int> restartIdx) -> JSValue {
-        std::vector<uint32_t> idx;
-        if (!readUint32ArrayVal(ctx, indicesVal, idx)) return JS_ThrowTypeError(ctx, "indices must be Uint32Array");
-        auto strip = bromesh::stripify(idx, (size_t)vertexCount, (uint32_t)restartIdx.value_or((int)0xFFFFFFFF));
-        return makeUint32Array(ctx, strip);
-    })
-    .static_method("unstripify", [](JSContext* ctx, JSValue stripVal, std::optional<int> restartIdx) -> JSValue {
-        std::vector<uint32_t> strip;
-        if (!readUint32ArrayVal(ctx, stripVal, strip)) return JS_ThrowTypeError(ctx, "strip must be Uint32Array");
-        auto list = bromesh::unstripify(strip, (uint32_t)restartIdx.value_or((int)0xFFFFFFFF));
-        return makeUint32Array(ctx, list);
-    })
-
-    // ── Static: Sweep along a path ──────────────────────────────────────
-    .static_raw("sweep", js_sweep, 2)
-    .static_raw("bezierSweep", js_bezierSweep, 2)
-    .static_raw("tube", js_tube, 2)
-
-    // ── Static: Plant primitives ───────────────────────────────────────
-    .static_raw("leafCard",   js_leafCard,   1)
-    .static_raw("flower",     js_flower,     0)
-    .static_raw("bladeStrip", js_bladeStrip, 1)
-    .static_raw("bladePath",  js_bladePath,  0)
-
-    // ── Static: Branch-tree primitives ─────────────────────────────────
-    // spaceColonize → BranchSegment[]; thickenBranches assigns radii via
-    // pipe model; meshBranches sweeps the tree as a single merged mesh.
-    // Plant archetypes are assembled in JS on top of these primitives.
-    .static_raw("spaceColonize",   js_spaceColonize,   3)
-    .static_raw("thickenBranches", js_thickenBranches, 1)
-    .static_raw("meshBranches",    js_meshBranches,    1)
-    .static_raw("placeLeavesOnBranches", js_placeLeavesOnBranches, 1)
-    .static_raw("scatterLeaves",         js_scatterLeaves,         2)
-    .static_raw("tree",                  js_tree,                  0)
-
-    // ── Static: collision-aware placement primitives ────────────────────
-    // CapsuleField is the shared occupancy substrate; packAnchors greedily
-    // selects spaced positions while respecting it.
-    .static_raw("capsuleField",             js_capsuleField,             1)
-    .static_raw("capsuleFieldFromSegments", js_capsuleFieldFromSegments, 1)
-    .static_raw("packAnchors",              js_packAnchors,              1)
-
-    // ── Static: L-system helpers ───────────────────────────────────────
-    .static_raw("parseLSystem",      js_parseLSystem,      1)
-    .static_raw("lsystemToBranches", js_lsystemToBranches, 1)
-    ; // end of Class<MW>
-
-    // =======================================================================
-    // MeshBVH — acceleration structure for repeated ray queries
-    // =======================================================================
-    qjsbind::Class<BVW>(ctx, "MeshBVH")
-    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> BVW* {
-        if (argc < 1) return new BVW{std::make_unique<bromesh::MeshBVH>()};
-        auto* mw = qjsbind::unwrap<MW>(ctx, argv[0]);
-        if (!mw || !mw->data) return new BVW{std::make_unique<bromesh::MeshBVH>()};
-        int leafSize = 8;
-        if (argc > 1) { int32_t x; JS_ToInt32(ctx, &x, argv[1]); leafSize = x; }
-        auto bvh = bromesh::MeshBVH::build(*mw->data, leafSize);
-        return new BVW{std::make_unique<bromesh::MeshBVH>(std::move(bvh))};
-    })
-    .get("empty",         [](BVW* w) { return !w->bvh || w->bvh->empty(); })
-    .get("nodeCount",     [](BVW* w) { return (int)(w->bvh ? w->bvh->nodeCount() : 0); })
-    .get("triangleCount", [](BVW* w) { return (int)(w->bvh ? w->bvh->triangleCount() : 0); })
-    .method("bounds", [](BVW* w, JSContext* ctx) -> JSValue {
-        return w->bvh ? makeBBox(ctx, w->bvh->bounds()) : JS_UNDEFINED;
-    })
-    .method("raycast", [](BVW* w, JSContext* ctx, JSValue meshVal, JSValue origin, JSValue direction,
-                           std::optional<double> maxDist) -> JSValue {
-        if (!w->bvh) return JS_UNDEFINED;
-        auto* mw = qjsbind::unwrap<MW>(ctx, meshVal);
-        if (!mw || !mw->data) return JS_ThrowTypeError(ctx, "first argument must be the source Mesh");
-        float o[3], d[3];
-        readVec3(ctx, origin, o);
-        readVec3(ctx, direction, d);
-        return makeRayHit(ctx, w->bvh->raycast(*mw->data, o, d, (float)maxDist.value_or(0.0)));
-    })
-    .method("raycastTest", [](BVW* w, JSContext* ctx, JSValue meshVal, JSValue origin, JSValue direction,
-                               std::optional<double> maxDist) -> JSValue {
-        if (!w->bvh) return JS_FALSE;
-        auto* mw = qjsbind::unwrap<MW>(ctx, meshVal);
-        if (!mw || !mw->data) return JS_ThrowTypeError(ctx, "first argument must be the source Mesh");
-        float o[3], d[3];
-        readVec3(ctx, origin, o);
-        readVec3(ctx, direction, d);
-        return JS_NewBool(ctx, w->bvh->raycastTest(*mw->data, o, d, (float)maxDist.value_or(0.0)));
-    })
-    ;
-
-    // =======================================================================
-    // CapsuleField — capsule + sphere occupancy lookup. Built once from
-    // existing geometry (typically branch segments) and queried during
-    // foliage / bloom / cane placement to avoid interpenetration.
-    // =======================================================================
-    qjsbind::Class<CFW>(ctx, "CapsuleField")
-    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> CFW* {
-        std::vector<bromesh::Capsule> caps;
-        std::vector<bromesh::Sphere>  sphs;
-        if (argc >= 1 && JS_IsArray(argv[0])) readCapsules(ctx, argv[0], caps);
-        if (argc >= 2 && JS_IsArray(argv[1])) readSpheres(ctx, argv[1], sphs);
-        float cellSize = 0.0f;
-        if (argc >= 3 && JS_IsNumber(argv[2])) {
-            double d = 0; JS_ToFloat64(ctx, &d, argv[2]);
-            cellSize = (float)d;
-        }
-        return new CFW{std::make_unique<bromesh::CapsuleField>(
-            std::move(caps), std::move(sphs), cellSize)};
-    })
-    .get("empty",        [](CFW* w) { return !w->field || w->field->empty(); })
-    .get("capsuleCount", [](CFW* w) { return (int)(w->field ? w->field->capsuleCount() : 0); })
-    .get("sphereCount",  [](CFW* w) { return (int)(w->field ? w->field->sphereCount()  : 0); })
-    .get("cellSize",     [](CFW* w) { return (double)(w->field ? w->field->cellSize() : 0.0f); })
-    .method("distance", [](CFW* w, JSContext* ctx, JSValue point,
-                           std::optional<int> excludeTag) -> JSValue {
-        if (!w->field) return JS_NewFloat64(ctx, 0.0);
-        bromath::Vec3 p = readBmVec3(ctx, point);
-        return JS_NewFloat64(ctx, (double)w->field->distance(p, excludeTag.value_or(-1)));
-    })
-    .method("nearest", [](CFW* w, JSContext* ctx, JSValue point,
-                          std::optional<int> excludeTag) -> JSValue {
-        if (!w->field) return JS_NULL;
-        bromath::Vec3 p = readBmVec3(ctx, point);
-        auto n = w->field->nearest(p, excludeTag.value_or(-1));
-        JSValue o = JS_NewObject(ctx);
-        JSValue pt = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, pt, 0, JS_NewFloat64(ctx, n.point.x));
-        JS_SetPropertyUint32(ctx, pt, 1, JS_NewFloat64(ctx, n.point.y));
-        JS_SetPropertyUint32(ctx, pt, 2, JS_NewFloat64(ctx, n.point.z));
-        JS_SetPropertyStr(ctx, o, "point", pt);
-        JSValue nm = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, nm, 0, JS_NewFloat64(ctx, n.normal.x));
-        JS_SetPropertyUint32(ctx, nm, 1, JS_NewFloat64(ctx, n.normal.y));
-        JS_SetPropertyUint32(ctx, nm, 2, JS_NewFloat64(ctx, n.normal.z));
-        JS_SetPropertyStr(ctx, o, "normal", nm);
-        JS_SetPropertyStr(ctx, o, "distance", JS_NewFloat64(ctx, n.distance));
-        JS_SetPropertyStr(ctx, o, "tag",      JS_NewInt32(ctx, n.tag));
-        return o;
-    })
-    .method("intersectsSphere", [](CFW* w, JSContext* ctx, JSValue center, double radius,
-                                    std::optional<int> excludeTag) -> JSValue {
-        if (!w->field) return JS_FALSE;
-        bromath::Vec3 c = readBmVec3(ctx, center);
-        return JS_NewBool(ctx, w->field->intersectsSphere(c, (float)radius, excludeTag.value_or(-1)));
-    })
-    ;
-
-    // =======================================================================
-    // ProgressiveMesh — LOD streaming via edge-collapse records
-    // =======================================================================
-    qjsbind::Class<PMW>(ctx, "ProgressiveMesh")
-    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> PMW* {
-        if (argc < 1) return new PMW{std::make_unique<bromesh::ProgressiveMesh>()};
-        auto* mw = qjsbind::unwrap<MW>(ctx, argv[0]);
-        if (!mw || !mw->data) return new PMW{std::make_unique<bromesh::ProgressiveMesh>()};
-        auto pm = bromesh::buildProgressiveMesh(*mw->data);
-        return new PMW{std::make_unique<bromesh::ProgressiveMesh>(std::move(pm))};
-    })
-    .get("maxTriangles", [](PMW* w) { return (int)(w->pm ? w->pm->maxTriangles() : 0); })
-    .get("minTriangles", [](PMW* w) { return (int)(w->pm ? w->pm->minTriangles() : 0); })
-    .get("collapseCount",[](PMW* w) { return (int)(w->pm ? w->pm->collapses.size() : 0); })
-    .method("atTriangleCount", [](PMW* w, JSContext* ctx, int n) -> JSValue {
-        if (!w->pm) return JS_UNDEFINED;
-        return wrapMesh(ctx, bromesh::progressiveMeshAtTriangleCount(*w->pm, (size_t)n));
-    })
-    .method("atRatio", [](PMW* w, JSContext* ctx, double r) -> JSValue {
-        if (!w->pm) return JS_UNDEFINED;
-        return wrapMesh(ctx, bromesh::progressiveMeshAtRatio(*w->pm, (float)r));
-    })
-    .method("serialize", [](PMW* w, JSContext* ctx) -> JSValue {
-        if (!w->pm) return JS_UNDEFINED;
-        return makeUint8Array(ctx, bromesh::serializeProgressiveMesh(*w->pm));
-    })
-    .static_method("deserialize", [](JSContext* ctx, JSValue bytesVal) -> JSValue {
-        std::vector<uint8_t> bytes;
-        if (!readUint8ArrayVal(ctx, bytesVal, bytes)) return JS_ThrowTypeError(ctx, "expected Uint8Array");
-        auto pm = bromesh::deserializeProgressiveMesh(bytes.data(), bytes.size());
-        return qjsbind::wrap<PMW>(ctx, new PMW{std::make_unique<bromesh::ProgressiveMesh>(std::move(pm))});
-    })
-    ;
-
-    // =======================================================================
-    // PolyMesh — half-edge over N-gon faces. Edit topology that survives
-    // arbitrary triangulation choices; the render mesh is .tessellate()'d on
-    // demand. See bromesh/manipulation/poly_mesh.h.
-    // =======================================================================
-    struct PMeshWrapper {
-        std::unique_ptr<bromesh::PolyMesh> pm;
-    };
-    using PolyMW = PMeshWrapper;
-
-    qjsbind::Class<PolyMW>(ctx, "PolyMesh")
-    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> PolyMW* {
-        // Empty mesh by default; the static factories build populated ones.
-        (void)ctx; (void)argc; (void)argv;
-        return new PolyMW{std::make_unique<bromesh::PolyMesh>()};
-    })
-
-    .static_raw("fromMeshData",
-        [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
-            if (argc < 2) return JS_ThrowTypeError(ctx,
-                "fromMeshData(positions, indices[, triToGroup])");
-            std::vector<float> positions;
-            std::vector<uint32_t> indices;
-            std::vector<int32_t> triToGroup;
-            if (!readFloatArrayVal(ctx, argv[0], positions))
-                return JS_ThrowTypeError(ctx, "positions must be Float32Array");
-            if (!readUint32ArrayVal(ctx, argv[1], indices))
-                return JS_ThrowTypeError(ctx, "indices must be Uint32Array");
-            if (argc > 2 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2])) {
-                std::vector<uint32_t> tmp;
-                if (readUint32ArrayVal(ctx, argv[2], tmp)) {
-                    triToGroup.assign(tmp.begin(), tmp.end());
-                } else {
-                    // Allow Int32Array via reinterpretation through Uint32 reader.
-                    // (readUint32ArrayVal also matches that storage class.)
-                }
-            }
-            auto pm = std::make_unique<bromesh::PolyMesh>(
-                bromesh::PolyMesh::fromMeshData(positions, indices, triToGroup));
-            return qjsbind::wrap<PolyMW>(ctx, new PolyMW{std::move(pm)});
-        }, 3)
-
-    .static_raw("fromPolygon",
-        [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
-            if (argc < 2) return JS_ThrowTypeError(ctx,
-                "fromPolygon(positionsXYZ, normal[, group])");
-            std::vector<float> positions;
-            std::vector<float> nvec;
-            if (!readFloatArrayVal(ctx, argv[0], positions))
-                return JS_ThrowTypeError(ctx, "positions must be Float32Array");
-            if (!readFloatLikeVal(ctx, argv[1], nvec) || nvec.size() < 3)
-                return JS_ThrowTypeError(ctx, "normal must be [nx, ny, nz]");
-            int32_t group = 0;
-            if (argc > 2) { int32_t g; JS_ToInt32(ctx, &g, argv[2]); group = g; }
-            const float n[3] = { nvec[0], nvec[1], nvec[2] };
-            auto pm = std::make_unique<bromesh::PolyMesh>(
-                bromesh::PolyMesh::fromPolygon(positions, n, group));
-            return qjsbind::wrap<PolyMW>(ctx, new PolyMW{std::move(pm)});
-        }, 3)
-
-    // ── Inspection ──────────────────────────────────────────────────────
-    .get("vertexCount",   [](PolyMW* w) { return (int)(w->pm ? w->pm->vertexCount() : 0); })
-    .get("halfEdgeCount", [](PolyMW* w) { return (int)(w->pm ? w->pm->halfEdgeCount() : 0); })
-    .get("faceCount",     [](PolyMW* w) { return (int)(w->pm ? w->pm->faceCount() : 0); })
-
-    .method("faceVertexCount", [](PolyMW* w, int faceIdx) {
-        return w->pm ? w->pm->faceVertexCount(faceIdx) : 0;
-    })
-
-    .method("faceVertices", [](PolyMW* w, JSContext* ctx, int faceIdx) -> JSValue {
-        if (!w->pm) return JS_NewArray(ctx);
-        auto vs = w->pm->faceVertices(faceIdx);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < vs.size(); ++i)
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, vs[i]));
-        return arr;
-    })
-
-    .method("getVertex", [](PolyMW* w, JSContext* ctx, int vi) -> JSValue {
-        if (!w->pm) return JS_NULL;
-        float p[3]; w->pm->getVertex(vi, p);
-        JSValue arr = JS_NewArray(ctx);
-        for (int i = 0; i < 3; ++i)
-            JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, p[i]));
-        return arr;
-    })
-
-    .method("computeFaceNormal", [](PolyMW* w, JSContext* ctx, int faceIdx) -> JSValue {
-        if (!w->pm) return JS_NULL;
-        float n[3]; w->pm->computeFaceNormal(faceIdx, n);
-        JSValue arr = JS_NewArray(ctx);
-        for (int i = 0; i < 3; ++i)
-            JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, n[i]));
-        return arr;
-    })
-
-    .method("faceGroup", [](PolyMW* w, int faceIdx) -> int {
-        if (!w->pm || faceIdx < 0 || faceIdx >= (int)w->pm->faceCount()) return -1;
-        return w->pm->faces()[faceIdx].group;
-    })
-
-    .method("setFaceGroup", [](PolyMW* w, int faceIdx, int group) {
-        if (!w->pm || faceIdx < 0 || faceIdx >= (int)w->pm->faceCount()) return;
-        w->pm->faces()[faceIdx].group = group;
-    })
-
-    .method("facesInGroup", [](PolyMW* w, JSContext* ctx, int groupId) -> JSValue {
-        if (!w->pm) return JS_NewArray(ctx);
-        auto fs = w->pm->facesInGroup(groupId);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < fs.size(); ++i)
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, fs[i]));
-        return arr;
-    })
-
-    // ── Tessellation ────────────────────────────────────────────────────
-    .method("tessellate", [](PolyMW* w, JSContext* ctx) -> JSValue {
-        if (!w->pm) return JS_NULL;
-        auto t = w->pm->tessellate();
-        JSValue obj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, obj, "positions", make_float32_array(ctx, t.positions));
-        JS_SetPropertyStr(ctx, obj, "normals",   make_float32_array(ctx, t.normals));
-        JS_SetPropertyStr(ctx, obj, "indices",   makeUint32Array(ctx, t.indices));
-        // triToFace + triToGroup as Int32-typed arrays via Uint32 storage
-        // (downstream JS just reads them as numeric arrays).
-        std::vector<uint32_t> ttf(t.triToFace.begin(),  t.triToFace.end());
-        std::vector<uint32_t> ttg(t.triToGroup.begin(), t.triToGroup.end());
-        JS_SetPropertyStr(ctx, obj, "triToFace",  makeUint32Array(ctx, ttf));
-        JS_SetPropertyStr(ctx, obj, "triToGroup", makeUint32Array(ctx, ttg));
-        return obj;
-    })
-
-    // ── Validation ──────────────────────────────────────────────────────
-    .method("validate", [](PolyMW* w, JSContext* ctx) -> JSValue {
-        if (!w->pm) return JS_NULL;
-        auto v = w->pm->validate();
-        JSValue obj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, obj, "valid",              JS_NewBool(ctx, v.valid));
-        JS_SetPropertyStr(ctx, obj, "isClosed",           JS_NewBool(ctx, v.isClosed));
-        JS_SetPropertyStr(ctx, obj, "boundaryHalfEdges",  JS_NewInt32(ctx, v.boundaryHalfEdges));
-        JSValue errArr = JS_NewArray(ctx);
-        for (size_t i = 0; i < v.errors.size(); ++i) {
-            JS_SetPropertyUint32(ctx, errArr, (uint32_t)i,
-                JS_NewString(ctx, v.errors[i].c_str()));
-        }
-        JS_SetPropertyStr(ctx, obj, "errors", errArr);
-        return obj;
-    })
-
-    // ── Mutation ────────────────────────────────────────────────────────
-    .method("addVertex", [](PolyMW* w, double x, double y, double z) -> int {
-        if (!w->pm) return -1;
-        return w->pm->addVertex((float)x, (float)y, (float)z);
-    })
-
-    .method("addFace", [](PolyMW* w, JSContext* ctx, JSValue vertsArr,
-                          std::optional<int> group) -> int {
-        if (!w->pm) return -1;
-        if (!JS_IsArray(vertsArr)) {
-            JS_ThrowTypeError(ctx, "addFace expects an array of vertex indices");
-            return -1;
-        }
-        JSValue lv = JS_GetPropertyStr(ctx, vertsArr, "length");
-        int32_t len = 0; JS_ToInt32(ctx, &len, lv); JS_FreeValue(ctx, lv);
-        std::vector<int32_t> vs;
-        vs.reserve((size_t)len);
-        for (int32_t i = 0; i < len; ++i) {
-            JSValue e = JS_GetPropertyUint32(ctx, vertsArr, (uint32_t)i);
-            int32_t v; JS_ToInt32(ctx, &v, e); JS_FreeValue(ctx, e);
-            vs.push_back(v);
-        }
-        return w->pm->addFace(vs, group.value_or(-1));
-    })
-
-    .method("translateVertex", [](PolyMW* w, JSContext* ctx, int vi, JSValue offsetArr) {
-        if (!w->pm) return;
-        float o[3]; readVec3(ctx, offsetArr, o);
-        w->pm->translateVertex(vi, o);
-    })
-
-    .method("translateFace", [](PolyMW* w, JSContext* ctx, int faceIdx, JSValue offsetArr) {
-        if (!w->pm) return;
-        float o[3]; readVec3(ctx, offsetArr, o);
-        w->pm->translateFace(faceIdx, o);
-    })
-
-    .method("translateFaceWithRing", [](PolyMW* w, JSContext* ctx, int faceIdx, JSValue offsetArr) {
-        if (!w->pm) return;
-        float o[3]; readVec3(ctx, offsetArr, o);
-        w->pm->translateFaceWithRing(faceIdx, o);
-    })
-
-    .method("extrudeFace", [](PolyMW* w, JSContext* ctx, int faceIdx,
-                              JSValue offsetArr,
-                              std::optional<bool> withBack,
-                              std::optional<int> bridgeGroup,
-                              std::optional<int> backGroup) -> JSValue {
-        if (!w->pm) return JS_NULL;
-        float o[3]; readVec3(ctx, offsetArr, o);
-        auto r = w->pm->extrudeFace(faceIdx, o,
-            withBack.value_or(true),
-            bridgeGroup.value_or(-1),
-            backGroup.value_or(-1));
-        JSValue obj = JS_NewObject(ctx);
-        std::vector<uint32_t> dv(r.dupVerts.begin(),     r.dupVerts.end());
-        std::vector<uint32_t> bf(r.bridgeFaces.begin(),  r.bridgeFaces.end());
-        std::vector<uint32_t> bg(r.bridgeAdjGroup.begin(), r.bridgeAdjGroup.end());
-        JS_SetPropertyStr(ctx, obj, "dupVerts",       makeUint32Array(ctx, dv));
-        JS_SetPropertyStr(ctx, obj, "bridgeFaces",    makeUint32Array(ctx, bf));
-        JS_SetPropertyStr(ctx, obj, "bridgeAdjGroup", makeUint32Array(ctx, bg));
-        JS_SetPropertyStr(ctx, obj, "backFace",       JS_NewInt32(ctx, r.backFace));
-        return obj;
-    })
-
-    .method("rematchTwins", [](PolyMW* w) {
-        if (w->pm) w->pm->rematchTwins();
-    })
-
-    .method("mergeFacesByGroup", [](PolyMW* w) {
-        if (w->pm) w->pm->mergeFacesByGroup();
-    })
-
-    .method("compact", [](PolyMW* w) {
-        if (w->pm) w->pm->compact();
-    })
-
-    .method("findGroupBoundary", [](PolyMW* w, JSContext* ctx, int groupId) -> JSValue {
-        if (!w->pm) return JS_NewArray(ctx);
-        auto loops = w->pm->findGroupBoundary(groupId);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < loops.size(); ++i) {
-            JSValue inner = JS_NewArray(ctx);
-            for (size_t j = 0; j < loops[i].size(); ++j) {
-                JS_SetPropertyUint32(ctx, inner, (uint32_t)j, JS_NewInt32(ctx, loops[i][j]));
-            }
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, inner);
-        }
-        return arr;
-    })
-    ;
-
-    // =======================================================================
-    // LSystem — string-rule stochastic L-system rewriter
-    // =======================================================================
-    qjsbind::Class<LSW>(ctx, "LSystem")
-    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> LSW* {
-        auto* w = new LSW();
-        if (argc > 0 && JS_IsString(argv[0])) {
-            const char* s = JS_ToCString(ctx, argv[0]);
-            if (s) {
-                w->axiom = bromesh::parseModules(std::string_view(s));
-                w->ls->setAxiom(w->axiom);
-                JS_FreeCString(ctx, s);
-            }
-        }
-        return w;
-    })
-    .method("setAxiom", [](LSW* w, JSContext* ctx, std::string text) {
-        w->axiom = bromesh::parseModules(std::string_view(text));
-        w->ls->setAxiom(w->axiom);
-    }, qjsbind::returns_this)
-    .method("addRule", [](LSW* w, std::string predecessor, std::string successor,
-                          std::optional<double> weight) {
-        if (predecessor.empty()) return;
-        bromesh::ProductionRule rule;
-        rule.predecessor = predecessor[0];
-        rule.weight = (float)weight.value_or(1.0);
-        auto mods = bromesh::parseModules(std::string_view(successor));
-        rule.successor = [mods](const std::vector<float>&) { return mods; };
-        w->ls->addRule(std::move(rule));
-    }, qjsbind::returns_this)
-    .method("derive", [](LSW* w, JSContext* ctx, int iterations,
-                          std::optional<int64_t> seed) -> JSValue {
-        auto mods = w->ls->derive(iterations, (uint64_t)seed.value_or(0));
-        return JS_NewString(ctx, bromesh::serializeModules(mods).c_str());
-    })
-    .method("deriveModules", [](LSW* w, JSContext* ctx, int iterations,
-                                 std::optional<int64_t> seed) -> JSValue {
-        auto mods = w->ls->derive(iterations, (uint64_t)seed.value_or(0));
-        return makeModulesArray(ctx, mods);
-    })
-    ;
-
-}
-
-// ---------------------------------------------------------------------------
-// Cleanup
-// ---------------------------------------------------------------------------
-
 void MeshBindings::cleanup(JSContext*) {
     // No persistent JSValue/atom storage in this binding — qjsbind owns the
     // class registrations + finalizers, and bro.mesh is reached from globalThis
@@ -3068,6 +1730,1378 @@ JSClassID MeshBindings::classId() {
     return qjsbind::class_id<MW>();
 }
 
+void MeshBindings::install(JSContext* ctx)
+{
+    qjsbind::Class<MW>(ctx, "Mesh")
+    
+        // ── Constructor ─────────────────────────────────────────────────────
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> MW* {
+            auto md = std::make_unique<bromesh::MeshData>();
+            if (argc > 0 && JS_IsObject(argv[0])) {
+                readFloatArray(ctx, argv[0], "positions", md->positions);
+                readFloatArray(ctx, argv[0], "normals", md->normals);
+                readFloatArray(ctx, argv[0], "uvs", md->uvs);
+                readFloatArray(ctx, argv[0], "colors", md->colors);
+                readUint32Array(ctx, argv[0], "indices", md->indices);
+            }
+            return new MW{std::move(md)};
+        })
+    
+        // ── TypedArray properties (getter + setter) ─────────────────────────
+        .prop("positions",
+            [](MW* w, JSContext* ctx) -> JSValue {
+                return w->data ? make_float32_array(ctx, w->data->positions) : JS_UNDEFINED;
+            },
+            [](MW* w, JSContext* ctx, JSValue val) {
+                if (w->data) readFloatArrayVal(ctx, val, w->data->positions);
+            })
+        .prop("normals",
+            [](MW* w, JSContext* ctx) -> JSValue {
+                return w->data ? make_float32_array(ctx, w->data->normals) : JS_UNDEFINED;
+            },
+            [](MW* w, JSContext* ctx, JSValue val) {
+                if (w->data) readFloatArrayVal(ctx, val, w->data->normals);
+            })
+        .prop("uvs",
+            [](MW* w, JSContext* ctx) -> JSValue {
+                return w->data ? make_float32_array(ctx, w->data->uvs) : JS_UNDEFINED;
+            },
+            [](MW* w, JSContext* ctx, JSValue val) {
+                if (w->data) readFloatArrayVal(ctx, val, w->data->uvs);
+            })
+        .prop("colors",
+            [](MW* w, JSContext* ctx) -> JSValue {
+                return w->data ? make_float32_array(ctx, w->data->colors) : JS_UNDEFINED;
+            },
+            [](MW* w, JSContext* ctx, JSValue val) {
+                if (w->data) readFloatArrayVal(ctx, val, w->data->colors);
+            })
+        .prop("indices",
+            [](MW* w, JSContext* ctx) -> JSValue {
+                return w->data ? makeUint32Array(ctx, w->data->indices) : JS_UNDEFINED;
+            },
+            [](MW* w, JSContext* ctx, JSValue val) {
+                if (w->data) readUint32ArrayVal(ctx, val, w->data->indices);
+            })
+    
+        // ── Read-only properties ────────────────────────────────────────────
+        .get("vertexCount",    [](MW* w) { return (int)(w->data ? w->data->vertexCount() : 0); })
+        .get("triangleCount",  [](MW* w) { return (int)(w->data ? w->data->triangleCount() : 0); })
+        .get("hasNormals",     [](MW* w) { return w->data && w->data->hasNormals(); })
+        .get("hasUVs",         [](MW* w) { return w->data && w->data->hasUVs(); })
+        .get("hasColors",      [](MW* w) { return w->data && w->data->hasColors(); })
+        .get("empty",          [](MW* w) { return !w->data || w->data->empty(); })
+    
+        // ── Clone ───────────────────────────────────────────────────────────
+        .method("clone", [](MW* w, JSContext* ctx) -> JSValue {
+            return w->data ? wrapMesh(ctx, bromesh::MeshData(*w->data)) : JS_UNDEFINED;
+        })
+    
+        // ── Transforms ──────────────────────────────────────────────────────
+        .method("translate", [](MW* w, double dx, double dy, double dz) {
+            if (w->data) bromesh::translateMesh(*w->data, (float)dx, (float)dy, (float)dz);
+        }, qjsbind::returns_this)
+    
+        .method("scale", [](MW* w, double sx, std::optional<double> sy_opt, std::optional<double> sz_opt) {
+            if (!w->data) return;
+            float fsx = (float)sx;
+            float fsy = sy_opt ? (float)*sy_opt : fsx;
+            float fsz = sz_opt ? (float)*sz_opt : fsx;
+            bromesh::scaleMesh(*w->data, fsx, fsy, fsz);
+        })
+    
+        .method("rotate", [](MW* w, double ax, double ay, double az, double angle) {
+            if (w->data) bromesh::rotateMesh(*w->data, (float)ax, (float)ay, (float)az, (float)angle);
+        }, qjsbind::returns_this)
+    
+        .method("center", [](MW* w) {
+            if (w->data) bromesh::centerMesh(*w->data);
+        }, qjsbind::returns_this)
+    
+        .method("mirror", [](MW* w, int axis) {
+            if (w->data && axis >= 0 && axis <= 2) bromesh::mirrorMesh(*w->data, axis);
+        }, qjsbind::returns_this)
+    
+        .method("transform", [](MW* w, JSContext* ctx, JSValue matArr) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            std::vector<float> mat;
+            if (!readFloatArrayVal(ctx, matArr, mat) || mat.size() < 16) return JS_UNDEFINED;
+            bromesh::transformMesh(*w->data, mat.data());
+            return JS_UNDEFINED; // returns_this handles the return
+        }, qjsbind::returns_this)
+    
+        // ── Normals ─────────────────────────────────────────────────────────
+        .method("computeNormals", [](MW* w) {
+            if (w->data) bromesh::computeNormals(*w->data);
+        }, qjsbind::returns_this)
+    
+        .method("computeFlatNormals", [](MW* w, JSContext* ctx) -> JSValue {
+            return w->data ? wrapMesh(ctx, bromesh::computeFlatNormals(*w->data)) : JS_UNDEFINED;
+        })
+    
+        .method("computeTangents", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return make_float32_array(ctx, bromesh::computeTangents(*w->data));
+        })
+    
+        // ── Simplification ──────────────────────────────────────────────────
+        .method("simplify", [](MW* w, double ratio, std::optional<double> error) {
+            if (w->data) *w->data = bromesh::simplify(*w->data, (float)ratio, (float)error.value_or(0.01));
+        }, qjsbind::returns_this)
+    
+        .method("simplifyWithAttributes", [](MW* w, double ratio, std::optional<double> error,
+                                              std::optional<double> uvW, std::optional<double> nW) {
+            if (w->data) *w->data = bromesh::simplifyWithAttributes(*w->data,
+                (float)ratio, (float)error.value_or(0.01), (float)uvW.value_or(1.0), (float)nW.value_or(0.5));
+        }, qjsbind::returns_this)
+    
+        .method("simplifyToTriangleCount", [](MW* w, int target, std::optional<double> error) {
+            if (w->data) *w->data = bromesh::simplifyToTriangleCount(*w->data, (size_t)target, (float)error.value_or(0.01));
+        }, qjsbind::returns_this)
+    
+        .method("generateLODChain", [](MW* w, JSContext* ctx, JSValue ratiosArr) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            std::vector<float> ratios;
+            if (!readFloatArrayVal(ctx, ratiosArr, ratios) || ratios.empty()) return JS_UNDEFINED;
+            auto lods = bromesh::generateLODChain(*w->data, ratios.data(), (int)ratios.size());
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < lods.size(); i++)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(lods[i])));
+            return arr;
+        })
+    
+        // ── Subdivision ─────────────────────────────────────────────────────
+        .method("subdivideLoop", [](MW* w, std::optional<int> iter) {
+            if (w->data) *w->data = bromesh::subdivideLoop(*w->data, iter.value_or(1));
+        }, qjsbind::returns_this)
+    
+        .method("subdivideCatmullClark", [](MW* w, std::optional<int> iter) {
+            if (w->data) *w->data = bromesh::subdivideCatmullClark(*w->data, iter.value_or(1));
+        }, qjsbind::returns_this)
+    
+        .method("subdivideMidpoint", [](MW* w, std::optional<int> iter) {
+            if (w->data) *w->data = bromesh::subdivideMidpoint(*w->data, iter.value_or(1));
+        }, qjsbind::returns_this)
+    
+        // ── Smoothing ───────────────────────────────────────────────────────
+        .method("smoothLaplacian", [](MW* w, std::optional<double> lambda, std::optional<int> iter) {
+            if (w->data) bromesh::smoothLaplacian(*w->data, (float)lambda.value_or(0.5), iter.value_or(1));
+        }, qjsbind::returns_this)
+    
+        .method("smoothTaubin", [](MW* w, std::optional<double> lambda, std::optional<double> mu,
+                                    std::optional<int> iter) {
+            if (w->data) bromesh::smoothTaubin(*w->data, (float)lambda.value_or(0.5), (float)mu.value_or(-0.53), iter.value_or(1));
+        }, qjsbind::returns_this)
+    
+        // ── Optimization ────────────────────────────────────────────────────
+        .method("optimizeVertexCache", [](MW* w) {
+            if (w->data) bromesh::optimizeVertexCache(*w->data);
+        }, qjsbind::returns_this)
+    
+        .method("optimizeVertexFetch", [](MW* w) {
+            if (w->data) bromesh::optimizeVertexFetch(*w->data);
+        }, qjsbind::returns_this)
+    
+        .method("optimizeOverdraw", [](MW* w, std::optional<double> thresh) {
+            if (w->data) bromesh::optimizeOverdraw(*w->data, (float)thresh.value_or(1.05));
+        }, qjsbind::returns_this)
+    
+        // ── Analysis ────────────────────────────────────────────────────────
+        .method("computeBBox", [](MW* w, JSContext* ctx) -> JSValue {
+            return w->data ? makeBBox(ctx, bromesh::computeBBox(*w->data)) : JS_UNDEFINED;
+        })
+    
+        .method("isManifold", [](MW* w) { return w->data ? bromesh::isManifold(*w->data) : false; })
+    
+        .method("computeVolume", [](MW* w) { return w->data ? bromesh::computeVolume(*w->data) : 0.0; })
+    
+        .method("raycast", [](MW* w, JSContext* ctx, JSValue origin, JSValue direction,
+                               std::optional<double> maxDist) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            float o[3], d[3];
+            readVec3(ctx, origin, o);
+            readVec3(ctx, direction, d);
+            return makeRayHit(ctx, bromesh::raycast(*w->data, o, d, (float)maxDist.value_or(0.0)));
+        })
+    
+        .method("raycastAll", [](MW* w, JSContext* ctx, JSValue origin, JSValue direction,
+                                  std::optional<double> maxDist) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            float o[3], d[3];
+            readVec3(ctx, origin, o);
+            readVec3(ctx, direction, d);
+            auto hits = bromesh::raycastAll(*w->data, o, d, (float)maxDist.value_or(0.0));
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < hits.size(); i++)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeRayHit(ctx, hits[i]));
+            return arr;
+        })
+    
+        .method("raycastTest", [](MW* w, JSContext* ctx, JSValue origin, JSValue direction,
+                                   std::optional<double> maxDist) -> JSValue {
+            if (!w->data) return JS_FALSE;
+            float o[3], d[3];
+            readVec3(ctx, origin, o);
+            readVec3(ctx, direction, d);
+            return JS_NewBool(ctx, bromesh::raycastTest(*w->data, o, d, (float)maxDist.value_or(0.0)));
+        })
+    
+        .method("closestPoint", [](MW* w, JSContext* ctx, JSValue point) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            float pt[3];
+            readVec3(ctx, point, pt);
+            return makeRayHit(ctx, bromesh::closestPoint(*w->data, pt));
+        })
+    
+        .method("hasSelfIntersections", [](MW* w) { return w->data ? bromesh::hasSelfIntersections(*w->data) : false; })
+    
+        .method("findSelfIntersections", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto pairs = bromesh::findSelfIntersections(*w->data);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < pairs.size(); i++) {
+                JSValue obj = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, obj, "triA", JS_NewInt32(ctx, (int32_t)pairs[i].triA));
+                JS_SetPropertyStr(ctx, obj, "triB", JS_NewInt32(ctx, (int32_t)pairs[i].triB));
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, obj);
+            }
+            return arr;
+        })
+    
+        .method("intersectsMesh", [](MW* w, JSContext* ctx, JSValue other) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto* otherMD = qjsbind::unwrap<MW>(ctx, other);
+            if (!otherMD || !otherMD->data) return JS_ThrowTypeError(ctx, "argument must be a Mesh");
+            return JS_NewBool(ctx, bromesh::meshesIntersect(*w->data, *otherMD->data));
+        })
+    
+        // ── UV ──────────────────────────────────────────────────────────────
+        .method("unwrapUVs", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto result = bromesh::unwrapUVs(*w->data);
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "atlasWidth", JS_NewInt32(ctx, result.atlasWidth));
+            JS_SetPropertyStr(ctx, obj, "atlasHeight", JS_NewInt32(ctx, result.atlasHeight));
+            JS_SetPropertyStr(ctx, obj, "chartCount", JS_NewInt32(ctx, result.chartCount));
+            JS_SetPropertyStr(ctx, obj, "success", JS_NewBool(ctx, result.success));
+            return obj;
+        })
+    
+        .method("projectUVs", [](MW* w, std::string type, std::optional<double> scale) {
+            if (!w->data) return;
+            bromesh::ProjectionType pt = bromesh::ProjectionType::Box;
+            if (type == "box")              pt = bromesh::ProjectionType::Box;
+            else if (type == "planarXY")    pt = bromesh::ProjectionType::PlanarXY;
+            else if (type == "planarXZ")    pt = bromesh::ProjectionType::PlanarXZ;
+            else if (type == "planarYZ")    pt = bromesh::ProjectionType::PlanarYZ;
+            else if (type == "cylindrical") pt = bromesh::ProjectionType::Cylindrical;
+            else if (type == "spherical")   pt = bromesh::ProjectionType::Spherical;
+            bromesh::projectUVs(*w->data, pt, (float)scale.value_or(1.0));
+        }, qjsbind::returns_this)
+    
+        // ── Save I/O ────────────────────────────────────────────────────────
+        .method("saveGLTF", [](MW* w, JSContext* ctx, std::string path, std::optional<JSValue> opts) -> JSValue {
+            if (!w->data) return JS_FALSE;
+            path = resolveMeshWritePath(ctx, path);
+            if (!opts || !JS_IsObject(*opts)) {
+                return JS_NewBool(ctx, bromesh::saveGLTF(*w->data, path));
+            }
+            bromesh::SkinData* skinPtr = nullptr;
+            bromesh::Skeleton* skelPtr = nullptr;
+            std::vector<bromesh::Animation> anims;
+            JSValue v;
+    
+            v = JS_GetPropertyStr(ctx, *opts, "skin");
+            if (!JS_IsUndefined(v) && !JS_IsNull(v))
+                skinPtr = RiggingBindings::getSkinData(ctx, v);
+            JS_FreeValue(ctx, v);
+    
+            v = JS_GetPropertyStr(ctx, *opts, "skeleton");
+            if (!JS_IsUndefined(v) && !JS_IsNull(v))
+                skelPtr = RiggingBindings::getSkeleton(ctx, v);
+            JS_FreeValue(ctx, v);
+    
+            v = JS_GetPropertyStr(ctx, *opts, "animations");
+            if (JS_IsArray(v)) {
+                JSValue lenV = JS_GetPropertyStr(ctx, v, "length");
+                int32_t n = 0; JS_ToInt32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+                anims.reserve((size_t)n);
+                for (int32_t i = 0; i < n; i++) {
+                    JSValue elem = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+                    bromesh::Animation* a = RiggingBindings::getAnimation(ctx, elem);
+                    if (a) anims.push_back(*a);
+                    JS_FreeValue(ctx, elem);
+                }
+            }
+            JS_FreeValue(ctx, v);
+    
+            bool ok = bromesh::saveGLTF(*w->data, skinPtr, skelPtr, anims, path);
+            return JS_NewBool(ctx, ok);
+        })
+        .method("saveOBJ",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::saveOBJ(*w->data, resolveMeshWritePath(ctx, path)) : false; })
+        .method("savePLY",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::savePLY(*w->data, resolveMeshWritePath(ctx, path)) : false; })
+        .method("saveSTL",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::saveSTL(*w->data, resolveMeshWritePath(ctx, path)) : false; })
+    
+        // ── Remesh / repair / weld / crease ────────────────────────────────
+        .method("remeshIsotropic", [](MW* w, std::optional<double> edgeLen, std::optional<int> iter) {
+            if (w->data) *w->data = bromesh::remeshIsotropic(*w->data, (float)edgeLen.value_or(0.0), iter.value_or(5));
+        }, qjsbind::returns_this)
+    
+        .method("weld", [](MW* w, std::optional<double> epsilon) {
+            if (w->data) *w->data = bromesh::weldVertices(*w->data, (float)epsilon.value_or(1e-5));
+        }, qjsbind::returns_this)
+    
+        .method("computeCreaseNormals", [](MW* w, std::optional<double> angleDeg) {
+            if (w->data) *w->data = bromesh::computeCreaseNormals(*w->data, (float)angleDeg.value_or(30.0));
+        }, qjsbind::returns_this)
+    
+        .method("removeDegenerateTriangles", [](MW* w, std::optional<double> eps) {
+            if (w->data) *w->data = bromesh::removeDegenerateTriangles(*w->data, (float)eps.value_or(1e-8));
+        }, qjsbind::returns_this)
+    
+        .method("removeDuplicateTriangles", [](MW* w) {
+            if (w->data) *w->data = bromesh::removeDuplicateTriangles(*w->data);
+        }, qjsbind::returns_this)
+    
+        .method("fillHoles", [](MW* w, std::optional<int> maxEdges) {
+            if (w->data) *w->data = bromesh::fillHoles(*w->data, maxEdges.value_or(64));
+        }, qjsbind::returns_this)
+    
+        .method("splitComponents", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto comps = bromesh::splitConnectedComponents(*w->data);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < comps.size(); i++)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(comps[i])));
+            return arr;
+        })
+    
+        .method("shrinkwrap", [](MW* w, JSContext* ctx, JSValue targetVal,
+                                  std::optional<std::string> mode, std::optional<double> maxDist,
+                                  std::optional<double> offset, std::optional<JSValue> axisArr) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto* t = qjsbind::unwrap<MW>(ctx, targetVal);
+            if (!t || !t->data) return JS_ThrowTypeError(ctx, "target must be a Mesh");
+            auto m = bromesh::ShrinkwrapMode::Nearest;
+            if (mode) {
+                if (*mode == "projectAlongNormal")     m = bromesh::ShrinkwrapMode::ProjectAlongNormal;
+                else if (*mode == "projectAlongAxis")  m = bromesh::ShrinkwrapMode::ProjectAlongAxis;
+            }
+            float axis[3] = {0,1,0};
+            bool useAxis = false;
+            if (axisArr && JS_IsObject(*axisArr)) { readVec3(ctx, *axisArr, axis); useAxis = true; }
+            bromesh::shrinkwrap(*w->data, *t->data, m,
+                                (float)maxDist.value_or(0.0), (float)offset.value_or(0.0),
+                                useAxis ? axis : nullptr);
+            return JS_UNDEFINED;
+        }, qjsbind::returns_this)
+    
+        // ── Surface sampling / metrics ─────────────────────────────────────
+        .method("sampleSurface", [](MW* w, JSContext* ctx, int numSamples, std::optional<int> seed) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return wrapMesh(ctx, bromesh::sampleSurface(*w->data, (size_t)numSamples, (uint32_t)seed.value_or(0)));
+        })
+    
+        .method("surfaceArea", [](MW* w) {
+            return w->data ? (double)bromesh::computeSurfaceArea(*w->data) : 0.0;
+        })
+    
+        .method("triangleAreas", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return make_float32_array(ctx, bromesh::computeTriangleAreas(*w->data));
+        })
+    
+        // ── Vertex-space baking ─────────────────────────────────────────────
+        .method("bakeAmbientOcclusion", [](MW* w, std::optional<int> numRays, std::optional<double> maxDist) {
+            if (w->data) bromesh::bakeAmbientOcclusion(*w->data, numRays.value_or(64), (float)maxDist.value_or(0.0));
+        }, qjsbind::returns_this)
+    
+        .method("bakeCurvature", [](MW* w, std::optional<double> scale) {
+            if (w->data) bromesh::bakeCurvature(*w->data, (float)scale.value_or(1.0));
+        }, qjsbind::returns_this)
+    
+        .method("bakeThickness", [](MW* w, std::optional<int> numRays, std::optional<double> maxDist) {
+            if (w->data) bromesh::bakeThickness(*w->data, numRays.value_or(32), (float)maxDist.value_or(0.0));
+        }, qjsbind::returns_this)
+    
+        // ── Texture-space baking ────────────────────────────────────────────
+        .method("bakeAOToTexture", [](MW* w, JSContext* ctx, int texW, int texH,
+                                       std::optional<int> numRays, std::optional<double> maxDist) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return makeTextureBuffer(ctx, bromesh::bakeAmbientOcclusionToTexture(
+                *w->data, texW, texH, numRays.value_or(64), (float)maxDist.value_or(0.0)));
+        })
+        .method("bakeCurvatureToTexture", [](MW* w, JSContext* ctx, int texW, int texH, std::optional<double> scale) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return makeTextureBuffer(ctx, bromesh::bakeCurvatureToTexture(
+                *w->data, texW, texH, (float)scale.value_or(1.0)));
+        })
+        .method("bakeThicknessToTexture", [](MW* w, JSContext* ctx, int texW, int texH,
+                                              std::optional<int> numRays, std::optional<double> maxDist) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return makeTextureBuffer(ctx, bromesh::bakeThicknessToTexture(
+                *w->data, texW, texH, numRays.value_or(32), (float)maxDist.value_or(0.0)));
+        })
+        .method("bakeNormalsToTexture", [](MW* w, JSContext* ctx, int texW, int texH) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return makeTextureBuffer(ctx, bromesh::bakeNormalsToTexture(*w->data, texW, texH));
+        })
+        .method("bakePositionToTexture", [](MW* w, JSContext* ctx, int texW, int texH) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return makeTextureBuffer(ctx, bromesh::bakePositionToTexture(*w->data, texW, texH));
+        })
+        .method("bakeNormalsFromReference", [](MW* w, JSContext* ctx, JSValue refVal,
+                                                int texW, int texH, std::optional<double> searchDist) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto* r = qjsbind::unwrap<MW>(ctx, refVal);
+            if (!r || !r->data) return JS_ThrowTypeError(ctx, "reference must be a Mesh");
+            return makeTextureBuffer(ctx, bromesh::bakeNormalsFromReference(
+                *w->data, *r->data, texW, texH, (float)searchDist.value_or(0.0)));
+        })
+        .method("bakeAOFromReference", [](MW* w, JSContext* ctx, JSValue refVal,
+                                           int texW, int texH,
+                                           std::optional<int> numRays, std::optional<double> maxDist) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto* r = qjsbind::unwrap<MW>(ctx, refVal);
+            if (!r || !r->data) return JS_ThrowTypeError(ctx, "reference must be a Mesh");
+            return makeTextureBuffer(ctx, bromesh::bakeAOFromReference(
+                *w->data, *r->data, texW, texH, numRays.value_or(64), (float)maxDist.value_or(0.0)));
+        })
+    
+        // ── Convex ──────────────────────────────────────────────────────────
+        .method("convexHull", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return wrapMesh(ctx, bromesh::convexHull(*w->data));
+        })
+    
+        .method("convexDecomposition", [](MW* w, JSContext* ctx, std::optional<JSValue> paramsObj) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            bromesh::ConvexDecompParams p;
+            if (paramsObj && JS_IsObject(*paramsObj)) {
+                JSValue v;
+                v = JS_GetPropertyStr(ctx, *paramsObj, "maxHulls");
+                if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxHulls = x; }
+                JS_FreeValue(ctx, v);
+                v = JS_GetPropertyStr(ctx, *paramsObj, "maxVerticesPerHull");
+                if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxVerticesPerHull = x; }
+                JS_FreeValue(ctx, v);
+                v = JS_GetPropertyStr(ctx, *paramsObj, "resolution");
+                if (!JS_IsUndefined(v)) { double x; JS_ToFloat64(ctx, &x, v); p.resolution = (float)x; }
+                JS_FreeValue(ctx, v);
+                v = JS_GetPropertyStr(ctx, *paramsObj, "minVolumePerHull");
+                if (!JS_IsUndefined(v)) { double x; JS_ToFloat64(ctx, &x, v); p.minVolumePerHull = (float)x; }
+                JS_FreeValue(ctx, v);
+            }
+            auto hulls = bromesh::convexDecomposition(*w->data, p);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < hulls.size(); i++)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(hulls[i])));
+            return arr;
+        })
+    
+        // ── UV metrics ──────────────────────────────────────────────────────
+        .method("computeUVDistortion", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto dist = bromesh::computeUVDistortion(*w->data);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < dist.size(); i++) {
+                JSValue o = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, o, "stretch",         JS_NewFloat64(ctx, dist[i].stretch));
+                JS_SetPropertyStr(ctx, o, "areaDistortion",  JS_NewFloat64(ctx, dist[i].areaDistortion));
+                JS_SetPropertyStr(ctx, o, "angleDistortion", JS_NewFloat64(ctx, dist[i].angleDistortion));
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+            }
+            return arr;
+        })
+    
+        .method("measureUVQuality", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto m = bromesh::measureUVQuality(*w->data);
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "avgStretch",         JS_NewFloat64(ctx, m.avgStretch));
+            JS_SetPropertyStr(ctx, o, "maxStretch",         JS_NewFloat64(ctx, m.maxStretch));
+            JS_SetPropertyStr(ctx, o, "avgAreaDistortion",  JS_NewFloat64(ctx, m.avgAreaDistortion));
+            JS_SetPropertyStr(ctx, o, "maxAreaDistortion",  JS_NewFloat64(ctx, m.maxAreaDistortion));
+            JS_SetPropertyStr(ctx, o, "avgAngleDistortion", JS_NewFloat64(ctx, m.avgAngleDistortion));
+            JS_SetPropertyStr(ctx, o, "maxAngleDistortion", JS_NewFloat64(ctx, m.maxAngleDistortion));
+            JS_SetPropertyStr(ctx, o, "uvSpaceUsage",       JS_NewFloat64(ctx, m.uvSpaceUsage));
+            JS_SetPropertyStr(ctx, o, "triangleCount",      JS_NewInt32(ctx, (int32_t)m.triangleCount));
+            return o;
+        })
+    
+        // ── Analyze (meshopt-backed stats) ─────────────────────────────────
+        .method("analyzeVertexCache", [](MW* w, JSContext* ctx, std::optional<int> cacheSize) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto s = bromesh::analyzeVertexCache(*w->data, (unsigned)cacheSize.value_or(16));
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "verticesTransformed", JS_NewInt64(ctx, (int64_t)s.verticesTransformed));
+            JS_SetPropertyStr(ctx, o, "warpsExecuted",       JS_NewInt64(ctx, (int64_t)s.warpsExecuted));
+            JS_SetPropertyStr(ctx, o, "acmr",                JS_NewFloat64(ctx, s.acmr));
+            JS_SetPropertyStr(ctx, o, "atvr",                JS_NewFloat64(ctx, s.atvr));
+            return o;
+        })
+    
+        .method("analyzeVertexFetch", [](MW* w, JSContext* ctx, std::optional<int> vertexSize) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto s = bromesh::analyzeVertexFetch(*w->data, (size_t)vertexSize.value_or(32));
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "bytesFetched", JS_NewInt64(ctx, (int64_t)s.bytesFetched));
+            JS_SetPropertyStr(ctx, o, "overfetch",    JS_NewFloat64(ctx, s.overfetch));
+            return o;
+        })
+    
+        .method("analyzeOverdraw", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto s = bromesh::analyzeOverdraw(*w->data);
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "pixelsCovered", JS_NewInt64(ctx, (int64_t)s.pixelsCovered));
+            JS_SetPropertyStr(ctx, o, "pixelsShaded",  JS_NewInt64(ctx, (int64_t)s.pixelsShaded));
+            JS_SetPropertyStr(ctx, o, "overdraw",      JS_NewFloat64(ctx, s.overdraw));
+            return o;
+        })
+    
+        // ── Spatial sort / shadow indices ──────────────────────────────────
+        .method("spatialSortTriangles", [](MW* w) {
+            if (w->data) bromesh::spatialSortTriangles(*w->data);
+        }, qjsbind::returns_this)
+        .method("spatialSortVertices", [](MW* w) {
+            if (w->data) bromesh::spatialSortVertices(*w->data);
+        }, qjsbind::returns_this)
+        .method("generateShadowIndexBuffer", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            return makeUint32Array(ctx, bromesh::generateShadowIndexBuffer(*w->data));
+        })
+    
+        // ── Meshlets ───────────────────────────────────────────────────────
+        .method("buildMeshlets", [](MW* w, JSContext* ctx, std::optional<JSValue> paramsObj) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            bromesh::MeshletParams p;
+            if (paramsObj && JS_IsObject(*paramsObj)) {
+                JSValue v;
+                v = JS_GetPropertyStr(ctx, *paramsObj, "maxVertices");
+                if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxVertices = (size_t)x; }
+                JS_FreeValue(ctx, v);
+                v = JS_GetPropertyStr(ctx, *paramsObj, "maxTriangles");
+                if (!JS_IsUndefined(v)) { int32_t x; JS_ToInt32(ctx, &x, v); p.maxTriangles = (size_t)x; }
+                JS_FreeValue(ctx, v);
+                v = JS_GetPropertyStr(ctx, *paramsObj, "coneWeight");
+                if (!JS_IsUndefined(v)) { double x; JS_ToFloat64(ctx, &x, v); p.coneWeight = (float)x; }
+                JS_FreeValue(ctx, v);
+            }
+            auto ml = bromesh::buildMeshlets(*w->data, p);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < ml.size(); i++) {
+                JSValue o = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, o, "vertices",  makeUint32Array(ctx, ml[i].vertices));
+                std::vector<uint8_t> triBuf(ml[i].triangles.begin(), ml[i].triangles.end());
+                JS_SetPropertyStr(ctx, o, "triangles", makeUint8Array(ctx, triBuf));
+                JSValue b = JS_NewObject(ctx);
+                JSValue cen = JS_NewArray(ctx);
+                JSValue apex = JS_NewArray(ctx);
+                JSValue axis = JS_NewArray(ctx);
+                for (int k = 0; k < 3; k++) {
+                    JS_SetPropertyUint32(ctx, cen,  k, JS_NewFloat64(ctx, ml[i].bounds.center[k]));
+                    JS_SetPropertyUint32(ctx, apex, k, JS_NewFloat64(ctx, ml[i].bounds.coneApex[k]));
+                    JS_SetPropertyUint32(ctx, axis, k, JS_NewFloat64(ctx, ml[i].bounds.coneAxis[k]));
+                }
+                JS_SetPropertyStr(ctx, b, "center",     cen);
+                JS_SetPropertyStr(ctx, b, "radius",     JS_NewFloat64(ctx, ml[i].bounds.radius));
+                JS_SetPropertyStr(ctx, b, "coneApex",   apex);
+                JS_SetPropertyStr(ctx, b, "coneAxis",   axis);
+                JS_SetPropertyStr(ctx, b, "coneCutoff", JS_NewFloat64(ctx, ml[i].bounds.coneCutoff));
+                JS_SetPropertyStr(ctx, o, "bounds",    b);
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+            }
+            return arr;
+        })
+    
+        // ── Encode (for streaming) ─────────────────────────────────────────
+        .method("encode", [](MW* w, JSContext* ctx) -> JSValue {
+            if (!w->data) return JS_UNDEFINED;
+            auto e = bromesh::encodeMesh(*w->data);
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "vertexData",  makeUint8Array(ctx, e.vertexData));
+            JS_SetPropertyStr(ctx, o, "indexData",   makeUint8Array(ctx, e.indexData));
+            JS_SetPropertyStr(ctx, o, "vertexCount", JS_NewInt64(ctx, (int64_t)e.vertexCount));
+            JS_SetPropertyStr(ctx, o, "vertexSize",  JS_NewInt64(ctx, (int64_t)e.vertexSize));
+            JS_SetPropertyStr(ctx, o, "indexCount",  JS_NewInt64(ctx, (int64_t)e.indexCount));
+            JS_SetPropertyStr(ctx, o, "hasNormals",  JS_NewBool(ctx, w->data->hasNormals()));
+            JS_SetPropertyStr(ctx, o, "hasUVs",      JS_NewBool(ctx, w->data->hasUVs()));
+            JS_SetPropertyStr(ctx, o, "hasColors",   JS_NewBool(ctx, w->data->hasColors()));
+            return o;
+        })
+    
+        // ── Skinning / morph (rigging) ─────────────────────────────────────
+        .method("applySkinning", [](MW* w, JSContext* ctx, JSValue skinVal, JSValue matricesVal) -> JSValue {
+            if (!w->data) return JS_ThrowTypeError(ctx, "neutered Mesh");
+            auto* skin = RiggingBindings::getSkinData(ctx, skinVal);
+            if (!skin) return JS_ThrowTypeError(ctx, "first argument must be a SkinData");
+            std::vector<float> mats;
+            if (!readFloatArrayVal(ctx, matricesVal, mats))
+                return JS_ThrowTypeError(ctx, "second argument must be a Float32Array of pose matrices");
+            size_t needed = skin->boneCount * 16;
+            if (mats.size() < needed)
+                return JS_ThrowRangeError(ctx, "pose matrices length %zu < boneCount*16 (%zu)",
+                                          mats.size(), needed);
+            bromesh::applySkinning(*w->data, *skin, mats.data());
+            return JS_UNDEFINED;
+        })
+        .method("applyMorphTarget", [](MW* w, JSContext* ctx, JSValue morph, double weight) -> JSValue {
+            if (!w->data) return JS_ThrowTypeError(ctx, "neutered Mesh");
+            if (!JS_IsObject(morph)) return JS_ThrowTypeError(ctx, "morph target must be an object");
+            bromesh::MorphTarget mt;
+            JSValue v;
+    
+            v = JS_GetPropertyStr(ctx, morph, "name");
+            if (JS_IsString(v)) {
+                const char* s = JS_ToCString(ctx, v);
+                if (s) { mt.name = s; JS_FreeCString(ctx, s); }
+            }
+            JS_FreeValue(ctx, v);
+    
+            v = JS_GetPropertyStr(ctx, morph, "deltaPositions");
+            if (!JS_IsUndefined(v) && !JS_IsNull(v)) readFloatArrayVal(ctx, v, mt.deltaPositions);
+            JS_FreeValue(ctx, v);
+    
+            v = JS_GetPropertyStr(ctx, morph, "deltaNormals");
+            if (!JS_IsUndefined(v) && !JS_IsNull(v)) readFloatArrayVal(ctx, v, mt.deltaNormals);
+            JS_FreeValue(ctx, v);
+    
+            bromesh::applyMorphTarget(*w->data, mt, (float)weight);
+            return JS_UNDEFINED;
+        })
+    
+        // ── Static: Primitives ──────────────────────────────────────────────
+        .static_method("box", [](JSContext* ctx, std::optional<double> hw, std::optional<double> hh,
+                                  std::optional<double> hd) -> JSValue {
+            return wrapMesh(ctx, bromesh::box((float)hw.value_or(0.5), (float)hh.value_or(0.5), (float)hd.value_or(0.5)));
+        })
+        .static_method("sphere", [](JSContext* ctx, std::optional<double> r, std::optional<int> seg,
+                                     std::optional<int> rings) -> JSValue {
+            return wrapMesh(ctx, bromesh::sphere((float)r.value_or(0.5), seg.value_or(16), rings.value_or(12)));
+        })
+        .static_method("cylinder", [](JSContext* ctx, std::optional<double> r, std::optional<double> hh,
+                                       std::optional<int> seg) -> JSValue {
+            return wrapMesh(ctx, bromesh::cylinder((float)r.value_or(0.5), (float)hh.value_or(0.5), seg.value_or(16)));
+        })
+        .static_method("capsule", [](JSContext* ctx, std::optional<double> r, std::optional<double> hh,
+                                      std::optional<int> seg, std::optional<int> rings) -> JSValue {
+            return wrapMesh(ctx, bromesh::capsule((float)r.value_or(0.5), (float)hh.value_or(0.5), seg.value_or(16), rings.value_or(8)));
+        })
+        .static_method("plane", [](JSContext* ctx, std::optional<double> hw, std::optional<double> hd,
+                                    std::optional<int> sx, std::optional<int> sz) -> JSValue {
+            return wrapMesh(ctx, bromesh::plane((float)hw.value_or(5.0), (float)hd.value_or(5.0), sx.value_or(1), sz.value_or(1)));
+        })
+        .static_method("torus", [](JSContext* ctx, std::optional<double> major, std::optional<double> minor,
+                                    std::optional<int> majSeg, std::optional<int> minSeg) -> JSValue {
+            return wrapMesh(ctx, bromesh::torus((float)major.value_or(1.0), (float)minor.value_or(0.3), majSeg.value_or(24), minSeg.value_or(12)));
+        })
+        .static_raw("heightmapGrid", js_heightmapGrid, 3)
+    
+        // ── Static: par_primitives (procedural / Platonic) ─────────────────
+        .static_method("geodesicSphere", [](JSContext* ctx, std::optional<double> r, std::optional<int> nsub) -> JSValue {
+            return wrapMesh(ctx, bromesh::geodesicSphere((float)r.value_or(0.5), nsub.value_or(2)));
+        })
+        .static_method("icosahedron",  [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::icosahedron()); })
+        .static_method("dodecahedron", [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::dodecahedron()); })
+        .static_method("octahedron",   [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::octahedron()); })
+        .static_method("tetrahedron",  [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::tetrahedron()); })
+        .static_method("cone", [](JSContext* ctx, std::optional<double> r, std::optional<double> h,
+                                   std::optional<int> slices, std::optional<int> stacks,
+                                   std::optional<bool> capBase) -> JSValue {
+            return wrapMesh(ctx, bromesh::cone((float)r.value_or(0.5), (float)h.value_or(1.0),
+                                               slices.value_or(16), stacks.value_or(4),
+                                               capBase.value_or(false)));
+        })
+        .static_method("disc", [](JSContext* ctx, std::optional<double> r, std::optional<int> slices) -> JSValue {
+            return wrapMesh(ctx, bromesh::disc((float)r.value_or(0.5), slices.value_or(16)));
+        })
+        .static_method("rock", [](JSContext* ctx, std::optional<double> r, std::optional<int> seed, std::optional<int> nsub) -> JSValue {
+            return wrapMesh(ctx, bromesh::rock((float)r.value_or(0.5), seed.value_or(42), nsub.value_or(2)));
+        })
+        .static_raw("blob", js_blob, 1)
+        .static_method("trefoilKnot", [](JSContext* ctx, std::optional<double> r, std::optional<int> slices, std::optional<int> stacks) -> JSValue {
+            return wrapMesh(ctx, bromesh::trefoilKnot((float)r.value_or(1.0), slices.value_or(64), stacks.value_or(16)));
+        })
+        .static_method("kleinBottle", [](JSContext* ctx, std::optional<int> slices, std::optional<int> stacks) -> JSValue {
+            return wrapMesh(ctx, bromesh::kleinBottle(slices.value_or(32), stacks.value_or(16)));
+        })
+    
+        // ── Static: CSG ─────────────────────────────────────────────────────
+        .static_method("union", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
+            auto* ma = qjsbind::unwrap<MW>(ctx, a);
+            auto* mb = qjsbind::unwrap<MW>(ctx, b);
+            if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
+            return wrapMesh(ctx, bromesh::booleanUnion(*ma->data, *mb->data));
+        })
+        .static_method("subtract", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
+            auto* ma = qjsbind::unwrap<MW>(ctx, a);
+            auto* mb = qjsbind::unwrap<MW>(ctx, b);
+            if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
+            return wrapMesh(ctx, bromesh::booleanDifference(*ma->data, *mb->data));
+        })
+        .static_method("intersect", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
+            auto* ma = qjsbind::unwrap<MW>(ctx, a);
+            auto* mb = qjsbind::unwrap<MW>(ctx, b);
+            if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
+            return wrapMesh(ctx, bromesh::booleanIntersection(*ma->data, *mb->data));
+        })
+        .static_raw("splitByPlane", js_splitByPlane, 5)
+        .static_raw("polygon2D",    js_triangulatePolygon2D, 3)
+        .static_raw("polygon3D",    js_triangulatePolygon3D, 3)
+        .static_method("merge", [](JSContext* ctx, JSValue meshArr) -> JSValue {
+            if (!JS_IsArray(meshArr)) return JS_ThrowTypeError(ctx, "merge requires an array of Mesh instances");
+            JSValue lenVal = JS_GetPropertyStr(ctx, meshArr, "length");
+            int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+            std::vector<bromesh::MeshData> meshes;
+            meshes.reserve((size_t)len);
+            for (int32_t i = 0; i < len; i++) {
+                JSValue elem = JS_GetPropertyUint32(ctx, meshArr, (uint32_t)i);
+                auto* w = qjsbind::unwrap<MW>(ctx, elem);
+                if (w && w->data) {
+                    meshes.push_back(*w->data);
+                }
+                JS_FreeValue(ctx, elem);
+            }
+            return wrapMesh(ctx, bromesh::mergeMeshes(meshes));
+        })
+    
+        // ── Static: Isosurface ──────────────────────────────────────────────
+        .static_raw("marchingCubes", js_marchingCubes, 4)
+        .static_raw("dualContour",   js_dualContour, 4)
+        .static_raw("surfaceNets",   js_surfaceNets, 4)
+        .static_raw("transvoxel",    js_transvoxel, 4)
+        .static_raw("greedyMesh",    js_greedyMesh, 4)
+    
+        // ── Static: I/O (load) ──────────────────────────────────────────────
+    #if defined(BROMESH_HAS_DRACO)
+        .static_raw("decodeDraco", js_decodeDraco, 1)
+        .static_raw("encodeDraco", js_encodeDraco, 2)
+    #endif
+        .static_method("loadGLTF", [](JSContext* ctx, std::string path) -> JSValue {
+            path = brokit::api::resolveAssetPath(ctx, path);
+            auto scene = bromesh::loadGLTF(path);
+            JSValue obj = JS_NewObject(ctx);
+    
+            JSValue meshArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.meshes.size(); i++)
+                JS_SetPropertyUint32(ctx, meshArr, (uint32_t)i, wrapMesh(ctx, std::move(scene.meshes[i])));
+            JS_SetPropertyStr(ctx, obj, "meshes", meshArr);
+    
+            JSValue skinArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.skins.size(); i++)
+                JS_SetPropertyUint32(ctx, skinArr, (uint32_t)i,
+                    RiggingBindings::wrapSkinData(ctx, std::move(scene.skins[i])));
+            JS_SetPropertyStr(ctx, obj, "skins", skinArr);
+    
+            JSValue skelArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.skeletons.size(); i++)
+                JS_SetPropertyUint32(ctx, skelArr, (uint32_t)i,
+                    RiggingBindings::wrapSkeleton(ctx, std::move(scene.skeletons[i])));
+            JS_SetPropertyStr(ctx, obj, "skeletons", skelArr);
+    
+            JSValue animArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.animations.size(); i++)
+                JS_SetPropertyUint32(ctx, animArr, (uint32_t)i,
+                    RiggingBindings::wrapAnimation(ctx, std::move(scene.animations[i])));
+            JS_SetPropertyStr(ctx, obj, "animations", animArr);
+    
+            JSValue meshSkelArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.meshSkeleton.size(); i++)
+                JS_SetPropertyUint32(ctx, meshSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.meshSkeleton[i]));
+            JS_SetPropertyStr(ctx, obj, "meshSkeleton", meshSkelArr);
+    
+            JSValue animSkelArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.animationSkeleton.size(); i++)
+                JS_SetPropertyUint32(ctx, animSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.animationSkeleton[i]));
+            JS_SetPropertyStr(ctx, obj, "animationSkeleton", animSkelArr);
+    
+            JSValue matSkelArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.meshMaterial.size(); i++)
+                JS_SetPropertyUint32(ctx, matSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.meshMaterial[i]));
+            JS_SetPropertyStr(ctx, obj, "meshMaterial", matSkelArr);
+    
+            // Images — RGBA8, exposed as { name, mimeType, width, height, data: Uint8Array }.
+            JSValue imgArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.images.size(); i++) {
+                auto& im = scene.images[i];
+                JSValue o = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, o, "name",     JS_NewString(ctx, im.name.c_str()));
+                JS_SetPropertyStr(ctx, o, "mimeType", JS_NewString(ctx, im.mimeType.c_str()));
+                JS_SetPropertyStr(ctx, o, "width",    JS_NewInt32(ctx, im.width));
+                JS_SetPropertyStr(ctx, o, "height",   JS_NewInt32(ctx, im.height));
+                if (!im.data.empty()) {
+                    JSValue ab = JS_NewArrayBufferCopy(ctx, im.data.data(), im.data.size());
+                    JSValue args[3] = { ab, JS_UNDEFINED, JS_UNDEFINED };
+                    JS_SetPropertyStr(ctx, o, "data", JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8));
+                    JS_FreeValue(ctx, ab);
+                } else {
+                    JS_SetPropertyStr(ctx, o, "data", JS_NULL);
+                }
+                JS_SetPropertyUint32(ctx, imgArr, (uint32_t)i, o);
+            }
+            JS_SetPropertyStr(ctx, obj, "images", imgArr);
+    
+            // Materials — full glTF metallic/roughness subset. Texture fields are
+            // image indices into `images` (-1 = none).
+            JSValue matArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < scene.materials.size(); i++) {
+                auto& m = scene.materials[i];
+                JSValue o = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, m.name.c_str()));
+                JSValue bc = JS_NewArray(ctx);
+                for (int k = 0; k < 4; k++)
+                    JS_SetPropertyUint32(ctx, bc, k, JS_NewFloat64(ctx, m.baseColorFactor[k]));
+                JS_SetPropertyStr(ctx, o, "baseColorFactor", bc);
+                JS_SetPropertyStr(ctx, o, "metallicFactor",  JS_NewFloat64(ctx, m.metallicFactor));
+                JS_SetPropertyStr(ctx, o, "roughnessFactor", JS_NewFloat64(ctx, m.roughnessFactor));
+                JSValue ef = JS_NewArray(ctx);
+                for (int k = 0; k < 3; k++)
+                    JS_SetPropertyUint32(ctx, ef, k, JS_NewFloat64(ctx, m.emissiveFactor[k]));
+                JS_SetPropertyStr(ctx, o, "emissiveFactor",  ef);
+                JS_SetPropertyStr(ctx, o, "baseColorTexture",         JS_NewInt32(ctx, m.baseColorTexture));
+                JS_SetPropertyStr(ctx, o, "metallicRoughnessTexture", JS_NewInt32(ctx, m.metallicRoughnessTexture));
+                JS_SetPropertyStr(ctx, o, "normalTexture",            JS_NewInt32(ctx, m.normalTexture));
+                JS_SetPropertyStr(ctx, o, "occlusionTexture",         JS_NewInt32(ctx, m.occlusionTexture));
+                JS_SetPropertyStr(ctx, o, "emissiveTexture",          JS_NewInt32(ctx, m.emissiveTexture));
+                JS_SetPropertyUint32(ctx, matArr, (uint32_t)i, o);
+            }
+            JS_SetPropertyStr(ctx, obj, "materials", matArr);
+    
+            return obj;
+        })
+        .static_method("loadOBJ", [](JSContext* ctx, std::string path) -> JSValue {
+            return wrapMesh(ctx, bromesh::loadOBJ(brokit::api::resolveAssetPath(ctx, path)));
+        })
+        .static_method("loadFBX", [](JSContext* ctx, std::string path) -> JSValue {
+            path = brokit::api::resolveAssetPath(ctx, path);
+            auto meshes = bromesh::loadFBX(path);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < meshes.size(); i++)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, wrapMesh(ctx, std::move(meshes[i])));
+            return arr;
+        })
+        .static_method("loadPLY", [](JSContext* ctx, std::string path) -> JSValue {
+            return wrapMesh(ctx, bromesh::loadPLY(brokit::api::resolveAssetPath(ctx, path)));
+        })
+        .static_method("loadSTL", [](JSContext* ctx, std::string path) -> JSValue {
+            return wrapMesh(ctx, bromesh::loadSTL(brokit::api::resolveAssetPath(ctx, path)));
+        })
+        .static_method("loadVOX", [](JSContext* ctx, std::string path) -> JSValue {
+            path = brokit::api::resolveAssetPath(ctx, path);
+            auto vox = bromesh::loadVOX(path);
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "sizeX", JS_NewInt32(ctx, vox.sizeX));
+            JS_SetPropertyStr(ctx, obj, "sizeY", JS_NewInt32(ctx, vox.sizeY));
+            JS_SetPropertyStr(ctx, obj, "sizeZ", JS_NewInt32(ctx, vox.sizeZ));
+            {
+                JSValue abuf = JS_NewArrayBufferCopy(ctx, vox.voxels.data(), vox.voxels.size());
+                JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+                JS_SetPropertyStr(ctx, obj, "voxels", JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8));
+                JS_FreeValue(ctx, abuf);
+            }
+            {
+                size_t bytes = 256 * 4 * sizeof(float);
+                JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(vox.palette), bytes);
+                JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+                JS_SetPropertyStr(ctx, obj, "palette", JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32));
+                JS_FreeValue(ctx, abuf);
+            }
+            return obj;
+        })
+    
+        // ── Static: Gaussian Splat .ply I/O ─────────────────────────────────
+        // Load/save a 3D Gaussian Splat cloud as a standard 3DGS .ply (INRIA /
+        // PlayCanvas). The returned cloud SoA matches scene.createGaussianSplat
+        // and bro.triposplat.generate exactly, so a loaded .ply feeds straight
+        // into scene.createGaussianSplat({ cloud }) with no reshaping.
+        .static_method("loadSplatPLY", [](JSContext* ctx, std::string path) -> JSValue {
+            return makeSplatCloud(ctx, bromesh::loadSplatPLY(
+                brokit::api::resolveAssetPath(ctx, path)));
+        })
+        .static_raw("saveSplatPLY",
+            [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+                if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
+                    return JS_ThrowTypeError(ctx, "saveSplatPLY(path, cloud)");
+                const char* p = JS_ToCString(ctx, argv[0]);
+                std::string path = p ? p : "";
+                if (p) JS_FreeCString(ctx, p);
+                bromesh::GaussianSplatCloud cloud;
+                std::string err;
+                if (!readSplatCloud(ctx, argv[1], cloud, err))
+                    return JS_ThrowTypeError(ctx, "saveSplatPLY: %s", err.c_str());
+                return JS_NewBool(ctx, bromesh::saveSplatPLY(
+                    cloud, resolveMeshWritePath(ctx, path)));
+            }, 2)
+    
+        // ── Static: Reconstruction ──────────────────────────────────────────
+        .static_raw("reconstruct", js_reconstruct, 1)
+    
+        // ── Static: Encoding / stripification ──────────────────────────────
+        .static_raw("decode", js_decode, 1)
+        .static_method("stripify", [](JSContext* ctx, JSValue indicesVal, int vertexCount, std::optional<int> restartIdx) -> JSValue {
+            std::vector<uint32_t> idx;
+            if (!readUint32ArrayVal(ctx, indicesVal, idx)) return JS_ThrowTypeError(ctx, "indices must be Uint32Array");
+            auto strip = bromesh::stripify(idx, (size_t)vertexCount, (uint32_t)restartIdx.value_or((int)0xFFFFFFFF));
+            return makeUint32Array(ctx, strip);
+        })
+        .static_method("unstripify", [](JSContext* ctx, JSValue stripVal, std::optional<int> restartIdx) -> JSValue {
+            std::vector<uint32_t> strip;
+            if (!readUint32ArrayVal(ctx, stripVal, strip)) return JS_ThrowTypeError(ctx, "strip must be Uint32Array");
+            auto list = bromesh::unstripify(strip, (uint32_t)restartIdx.value_or((int)0xFFFFFFFF));
+            return makeUint32Array(ctx, list);
+        })
+    
+        // ── Static: Sweep along a path ──────────────────────────────────────
+        .static_raw("sweep", js_sweep, 2)
+        .static_raw("bezierSweep", js_bezierSweep, 2)
+        .static_raw("tube", js_tube, 2)
+    
+        // ── Static: Plant primitives ───────────────────────────────────────
+        .static_raw("leafCard",   js_leafCard,   1)
+        .static_raw("flower",     js_flower,     0)
+        .static_raw("bladeStrip", js_bladeStrip, 1)
+        .static_raw("bladePath",  js_bladePath,  0)
+    
+        // ── Static: Branch-tree primitives ─────────────────────────────────
+        // spaceColonize → BranchSegment[]; thickenBranches assigns radii via
+        // pipe model; meshBranches sweeps the tree as a single merged mesh.
+        // Plant archetypes are assembled in JS on top of these primitives.
+        .static_raw("spaceColonize",   js_spaceColonize,   3)
+        .static_raw("thickenBranches", js_thickenBranches, 1)
+        .static_raw("meshBranches",    js_meshBranches,    1)
+        .static_raw("placeLeavesOnBranches", js_placeLeavesOnBranches, 1)
+        .static_raw("scatterLeaves",         js_scatterLeaves,         2)
+        .static_raw("tree",                  js_tree,                  0)
+    
+        // ── Static: collision-aware placement primitives ────────────────────
+        // CapsuleField is the shared occupancy substrate; packAnchors greedily
+        // selects spaced positions while respecting it.
+        .static_raw("capsuleField",             js_capsuleField,             1)
+        .static_raw("capsuleFieldFromSegments", js_capsuleFieldFromSegments, 1)
+        .static_raw("packAnchors",              js_packAnchors,              1)
+    
+        // ── Static: L-system helpers ───────────────────────────────────────
+        .static_raw("parseLSystem",      js_parseLSystem,      1)
+        .static_raw("lsystemToBranches", js_lsystemToBranches, 1)
+        ; // end of Class<MW>
+    
+        // =======================================================================
+        // MeshBVH — acceleration structure for repeated ray queries
+        // =======================================================================
+        qjsbind::Class<BVW>(ctx, "MeshBVH")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> BVW* {
+            if (argc < 1) return new BVW{std::make_unique<bromesh::MeshBVH>()};
+            auto* mw = qjsbind::unwrap<MW>(ctx, argv[0]);
+            if (!mw || !mw->data) return new BVW{std::make_unique<bromesh::MeshBVH>()};
+            int leafSize = 8;
+            if (argc > 1) { int32_t x; JS_ToInt32(ctx, &x, argv[1]); leafSize = x; }
+            auto bvh = bromesh::MeshBVH::build(*mw->data, leafSize);
+            return new BVW{std::make_unique<bromesh::MeshBVH>(std::move(bvh))};
+        })
+        .get("empty",         [](BVW* w) { return !w->bvh || w->bvh->empty(); })
+        .get("nodeCount",     [](BVW* w) { return (int)(w->bvh ? w->bvh->nodeCount() : 0); })
+        .get("triangleCount", [](BVW* w) { return (int)(w->bvh ? w->bvh->triangleCount() : 0); })
+        .method("bounds", [](BVW* w, JSContext* ctx) -> JSValue {
+            return w->bvh ? makeBBox(ctx, w->bvh->bounds()) : JS_UNDEFINED;
+        })
+        .method("raycast", [](BVW* w, JSContext* ctx, JSValue meshVal, JSValue origin, JSValue direction,
+                               std::optional<double> maxDist) -> JSValue {
+            if (!w->bvh) return JS_UNDEFINED;
+            auto* mw = qjsbind::unwrap<MW>(ctx, meshVal);
+            if (!mw || !mw->data) return JS_ThrowTypeError(ctx, "first argument must be the source Mesh");
+            float o[3], d[3];
+            readVec3(ctx, origin, o);
+            readVec3(ctx, direction, d);
+            return makeRayHit(ctx, w->bvh->raycast(*mw->data, o, d, (float)maxDist.value_or(0.0)));
+        })
+        .method("raycastTest", [](BVW* w, JSContext* ctx, JSValue meshVal, JSValue origin, JSValue direction,
+                                   std::optional<double> maxDist) -> JSValue {
+            if (!w->bvh) return JS_FALSE;
+            auto* mw = qjsbind::unwrap<MW>(ctx, meshVal);
+            if (!mw || !mw->data) return JS_ThrowTypeError(ctx, "first argument must be the source Mesh");
+            float o[3], d[3];
+            readVec3(ctx, origin, o);
+            readVec3(ctx, direction, d);
+            return JS_NewBool(ctx, w->bvh->raycastTest(*mw->data, o, d, (float)maxDist.value_or(0.0)));
+        })
+        ;
+    
+        // =======================================================================
+        // CapsuleField — capsule + sphere occupancy lookup. Built once from
+        // existing geometry (typically branch segments) and queried during
+        // foliage / bloom / cane placement to avoid interpenetration.
+        // =======================================================================
+        qjsbind::Class<CFW>(ctx, "CapsuleField")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> CFW* {
+            std::vector<bromesh::Capsule> caps;
+            std::vector<bromesh::Sphere>  sphs;
+            if (argc >= 1 && JS_IsArray(argv[0])) readCapsules(ctx, argv[0], caps);
+            if (argc >= 2 && JS_IsArray(argv[1])) readSpheres(ctx, argv[1], sphs);
+            float cellSize = 0.0f;
+            if (argc >= 3 && JS_IsNumber(argv[2])) {
+                double d = 0; JS_ToFloat64(ctx, &d, argv[2]);
+                cellSize = (float)d;
+            }
+            return new CFW{std::make_unique<bromesh::CapsuleField>(
+                std::move(caps), std::move(sphs), cellSize)};
+        })
+        .get("empty",        [](CFW* w) { return !w->field || w->field->empty(); })
+        .get("capsuleCount", [](CFW* w) { return (int)(w->field ? w->field->capsuleCount() : 0); })
+        .get("sphereCount",  [](CFW* w) { return (int)(w->field ? w->field->sphereCount()  : 0); })
+        .get("cellSize",     [](CFW* w) { return (double)(w->field ? w->field->cellSize() : 0.0f); })
+        .method("distance", [](CFW* w, JSContext* ctx, JSValue point,
+                               std::optional<int> excludeTag) -> JSValue {
+            if (!w->field) return JS_NewFloat64(ctx, 0.0);
+            bromath::Vec3 p = readBmVec3(ctx, point);
+            return JS_NewFloat64(ctx, (double)w->field->distance(p, excludeTag.value_or(-1)));
+        })
+        .method("nearest", [](CFW* w, JSContext* ctx, JSValue point,
+                              std::optional<int> excludeTag) -> JSValue {
+            if (!w->field) return JS_NULL;
+            bromath::Vec3 p = readBmVec3(ctx, point);
+            auto n = w->field->nearest(p, excludeTag.value_or(-1));
+            JSValue o = JS_NewObject(ctx);
+            JSValue pt = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, pt, 0, JS_NewFloat64(ctx, n.point.x));
+            JS_SetPropertyUint32(ctx, pt, 1, JS_NewFloat64(ctx, n.point.y));
+            JS_SetPropertyUint32(ctx, pt, 2, JS_NewFloat64(ctx, n.point.z));
+            JS_SetPropertyStr(ctx, o, "point", pt);
+            JSValue nm = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, nm, 0, JS_NewFloat64(ctx, n.normal.x));
+            JS_SetPropertyUint32(ctx, nm, 1, JS_NewFloat64(ctx, n.normal.y));
+            JS_SetPropertyUint32(ctx, nm, 2, JS_NewFloat64(ctx, n.normal.z));
+            JS_SetPropertyStr(ctx, o, "normal", nm);
+            JS_SetPropertyStr(ctx, o, "distance", JS_NewFloat64(ctx, n.distance));
+            JS_SetPropertyStr(ctx, o, "tag",      JS_NewInt32(ctx, n.tag));
+            return o;
+        })
+        .method("intersectsSphere", [](CFW* w, JSContext* ctx, JSValue center, double radius,
+                                        std::optional<int> excludeTag) -> JSValue {
+            if (!w->field) return JS_FALSE;
+            bromath::Vec3 c = readBmVec3(ctx, center);
+            return JS_NewBool(ctx, w->field->intersectsSphere(c, (float)radius, excludeTag.value_or(-1)));
+        })
+        ;
+    
+        // =======================================================================
+        // ProgressiveMesh — LOD streaming via edge-collapse records
+        // =======================================================================
+        qjsbind::Class<PMW>(ctx, "ProgressiveMesh")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> PMW* {
+            if (argc < 1) return new PMW{std::make_unique<bromesh::ProgressiveMesh>()};
+            auto* mw = qjsbind::unwrap<MW>(ctx, argv[0]);
+            if (!mw || !mw->data) return new PMW{std::make_unique<bromesh::ProgressiveMesh>()};
+            auto pm = bromesh::buildProgressiveMesh(*mw->data);
+            return new PMW{std::make_unique<bromesh::ProgressiveMesh>(std::move(pm))};
+        })
+        .get("maxTriangles", [](PMW* w) { return (int)(w->pm ? w->pm->maxTriangles() : 0); })
+        .get("minTriangles", [](PMW* w) { return (int)(w->pm ? w->pm->minTriangles() : 0); })
+        .get("collapseCount",[](PMW* w) { return (int)(w->pm ? w->pm->collapses.size() : 0); })
+        .method("atTriangleCount", [](PMW* w, JSContext* ctx, int n) -> JSValue {
+            if (!w->pm) return JS_UNDEFINED;
+            return wrapMesh(ctx, bromesh::progressiveMeshAtTriangleCount(*w->pm, (size_t)n));
+        })
+        .method("atRatio", [](PMW* w, JSContext* ctx, double r) -> JSValue {
+            if (!w->pm) return JS_UNDEFINED;
+            return wrapMesh(ctx, bromesh::progressiveMeshAtRatio(*w->pm, (float)r));
+        })
+        .method("serialize", [](PMW* w, JSContext* ctx) -> JSValue {
+            if (!w->pm) return JS_UNDEFINED;
+            return makeUint8Array(ctx, bromesh::serializeProgressiveMesh(*w->pm));
+        })
+        .static_method("deserialize", [](JSContext* ctx, JSValue bytesVal) -> JSValue {
+            std::vector<uint8_t> bytes;
+            if (!readUint8ArrayVal(ctx, bytesVal, bytes)) return JS_ThrowTypeError(ctx, "expected Uint8Array");
+            auto pm = bromesh::deserializeProgressiveMesh(bytes.data(), bytes.size());
+            return qjsbind::wrap<PMW>(ctx, new PMW{std::make_unique<bromesh::ProgressiveMesh>(std::move(pm))});
+        })
+        ;
+    
+        // =======================================================================
+        // PolyMesh — half-edge over N-gon faces. Edit topology that survives
+        // arbitrary triangulation choices; the render mesh is .tessellate()'d on
+        // demand. See bromesh/manipulation/poly_mesh.h.
+        // =======================================================================
+        struct PMeshWrapper {
+            std::unique_ptr<bromesh::PolyMesh> pm;
+        };
+        using PolyMW = PMeshWrapper;
+    
+        qjsbind::Class<PolyMW>(ctx, "PolyMesh")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> PolyMW* {
+            // Empty mesh by default; the static factories build populated ones.
+            (void)ctx; (void)argc; (void)argv;
+            return new PolyMW{std::make_unique<bromesh::PolyMesh>()};
+        })
+    
+        .static_raw("fromMeshData",
+            [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+                if (argc < 2) return JS_ThrowTypeError(ctx,
+                    "fromMeshData(positions, indices[, triToGroup])");
+                std::vector<float> positions;
+                std::vector<uint32_t> indices;
+                std::vector<int32_t> triToGroup;
+                if (!readFloatArrayVal(ctx, argv[0], positions))
+                    return JS_ThrowTypeError(ctx, "positions must be Float32Array");
+                if (!readUint32ArrayVal(ctx, argv[1], indices))
+                    return JS_ThrowTypeError(ctx, "indices must be Uint32Array");
+                if (argc > 2 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2])) {
+                    std::vector<uint32_t> tmp;
+                    if (readUint32ArrayVal(ctx, argv[2], tmp)) {
+                        triToGroup.assign(tmp.begin(), tmp.end());
+                    } else {
+                        // Allow Int32Array via reinterpretation through Uint32 reader.
+                        // (readUint32ArrayVal also matches that storage class.)
+                    }
+                }
+                auto pm = std::make_unique<bromesh::PolyMesh>(
+                    bromesh::PolyMesh::fromMeshData(positions, indices, triToGroup));
+                return qjsbind::wrap<PolyMW>(ctx, new PolyMW{std::move(pm)});
+            }, 3)
+    
+        .static_raw("fromPolygon",
+            [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+                if (argc < 2) return JS_ThrowTypeError(ctx,
+                    "fromPolygon(positionsXYZ, normal[, group])");
+                std::vector<float> positions;
+                std::vector<float> nvec;
+                if (!readFloatArrayVal(ctx, argv[0], positions))
+                    return JS_ThrowTypeError(ctx, "positions must be Float32Array");
+                if (!readFloatLikeVal(ctx, argv[1], nvec) || nvec.size() < 3)
+                    return JS_ThrowTypeError(ctx, "normal must be [nx, ny, nz]");
+                int32_t group = 0;
+                if (argc > 2) { int32_t g; JS_ToInt32(ctx, &g, argv[2]); group = g; }
+                const float n[3] = { nvec[0], nvec[1], nvec[2] };
+                auto pm = std::make_unique<bromesh::PolyMesh>(
+                    bromesh::PolyMesh::fromPolygon(positions, n, group));
+                return qjsbind::wrap<PolyMW>(ctx, new PolyMW{std::move(pm)});
+            }, 3)
+    
+        // ── Inspection ──────────────────────────────────────────────────────
+        .get("vertexCount",   [](PolyMW* w) { return (int)(w->pm ? w->pm->vertexCount() : 0); })
+        .get("halfEdgeCount", [](PolyMW* w) { return (int)(w->pm ? w->pm->halfEdgeCount() : 0); })
+        .get("faceCount",     [](PolyMW* w) { return (int)(w->pm ? w->pm->faceCount() : 0); })
+    
+        .method("faceVertexCount", [](PolyMW* w, int faceIdx) {
+            return w->pm ? w->pm->faceVertexCount(faceIdx) : 0;
+        })
+    
+        .method("faceVertices", [](PolyMW* w, JSContext* ctx, int faceIdx) -> JSValue {
+            if (!w->pm) return JS_NewArray(ctx);
+            auto vs = w->pm->faceVertices(faceIdx);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < vs.size(); ++i)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, vs[i]));
+            return arr;
+        })
+    
+        .method("getVertex", [](PolyMW* w, JSContext* ctx, int vi) -> JSValue {
+            if (!w->pm) return JS_NULL;
+            float p[3]; w->pm->getVertex(vi, p);
+            JSValue arr = JS_NewArray(ctx);
+            for (int i = 0; i < 3; ++i)
+                JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, p[i]));
+            return arr;
+        })
+    
+        .method("computeFaceNormal", [](PolyMW* w, JSContext* ctx, int faceIdx) -> JSValue {
+            if (!w->pm) return JS_NULL;
+            float n[3]; w->pm->computeFaceNormal(faceIdx, n);
+            JSValue arr = JS_NewArray(ctx);
+            for (int i = 0; i < 3; ++i)
+                JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, n[i]));
+            return arr;
+        })
+    
+        .method("faceGroup", [](PolyMW* w, int faceIdx) -> int {
+            if (!w->pm || faceIdx < 0 || faceIdx >= (int)w->pm->faceCount()) return -1;
+            return w->pm->faces()[faceIdx].group;
+        })
+    
+        .method("setFaceGroup", [](PolyMW* w, int faceIdx, int group) {
+            if (!w->pm || faceIdx < 0 || faceIdx >= (int)w->pm->faceCount()) return;
+            w->pm->faces()[faceIdx].group = group;
+        })
+    
+        .method("facesInGroup", [](PolyMW* w, JSContext* ctx, int groupId) -> JSValue {
+            if (!w->pm) return JS_NewArray(ctx);
+            auto fs = w->pm->facesInGroup(groupId);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < fs.size(); ++i)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, fs[i]));
+            return arr;
+        })
+    
+        // ── Tessellation ────────────────────────────────────────────────────
+        .method("tessellate", [](PolyMW* w, JSContext* ctx) -> JSValue {
+            if (!w->pm) return JS_NULL;
+            auto t = w->pm->tessellate();
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "positions", make_float32_array(ctx, t.positions));
+            JS_SetPropertyStr(ctx, obj, "normals",   make_float32_array(ctx, t.normals));
+            JS_SetPropertyStr(ctx, obj, "indices",   makeUint32Array(ctx, t.indices));
+            // triToFace + triToGroup as Int32-typed arrays via Uint32 storage
+            // (downstream JS just reads them as numeric arrays).
+            std::vector<uint32_t> ttf(t.triToFace.begin(),  t.triToFace.end());
+            std::vector<uint32_t> ttg(t.triToGroup.begin(), t.triToGroup.end());
+            JS_SetPropertyStr(ctx, obj, "triToFace",  makeUint32Array(ctx, ttf));
+            JS_SetPropertyStr(ctx, obj, "triToGroup", makeUint32Array(ctx, ttg));
+            return obj;
+        })
+    
+        // ── Validation ──────────────────────────────────────────────────────
+        .method("validate", [](PolyMW* w, JSContext* ctx) -> JSValue {
+            if (!w->pm) return JS_NULL;
+            auto v = w->pm->validate();
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "valid",              JS_NewBool(ctx, v.valid));
+            JS_SetPropertyStr(ctx, obj, "isClosed",           JS_NewBool(ctx, v.isClosed));
+            JS_SetPropertyStr(ctx, obj, "boundaryHalfEdges",  JS_NewInt32(ctx, v.boundaryHalfEdges));
+            JSValue errArr = JS_NewArray(ctx);
+            for (size_t i = 0; i < v.errors.size(); ++i) {
+                JS_SetPropertyUint32(ctx, errArr, (uint32_t)i,
+                    JS_NewString(ctx, v.errors[i].c_str()));
+            }
+            JS_SetPropertyStr(ctx, obj, "errors", errArr);
+            return obj;
+        })
+    
+        // ── Mutation ────────────────────────────────────────────────────────
+        .method("addVertex", [](PolyMW* w, double x, double y, double z) -> int {
+            if (!w->pm) return -1;
+            return w->pm->addVertex((float)x, (float)y, (float)z);
+        })
+    
+        .method("addFace", [](PolyMW* w, JSContext* ctx, JSValue vertsArr,
+                              std::optional<int> group) -> int {
+            if (!w->pm) return -1;
+            if (!JS_IsArray(vertsArr)) {
+                JS_ThrowTypeError(ctx, "addFace expects an array of vertex indices");
+                return -1;
+            }
+            JSValue lv = JS_GetPropertyStr(ctx, vertsArr, "length");
+            int32_t len = 0; JS_ToInt32(ctx, &len, lv); JS_FreeValue(ctx, lv);
+            std::vector<int32_t> vs;
+            vs.reserve((size_t)len);
+            for (int32_t i = 0; i < len; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, vertsArr, (uint32_t)i);
+                int32_t v; JS_ToInt32(ctx, &v, e); JS_FreeValue(ctx, e);
+                vs.push_back(v);
+            }
+            return w->pm->addFace(vs, group.value_or(-1));
+        })
+    
+        .method("translateVertex", [](PolyMW* w, JSContext* ctx, int vi, JSValue offsetArr) {
+            if (!w->pm) return;
+            float o[3]; readVec3(ctx, offsetArr, o);
+            w->pm->translateVertex(vi, o);
+        })
+    
+        .method("translateFace", [](PolyMW* w, JSContext* ctx, int faceIdx, JSValue offsetArr) {
+            if (!w->pm) return;
+            float o[3]; readVec3(ctx, offsetArr, o);
+            w->pm->translateFace(faceIdx, o);
+        })
+    
+        .method("translateFaceWithRing", [](PolyMW* w, JSContext* ctx, int faceIdx, JSValue offsetArr) {
+            if (!w->pm) return;
+            float o[3]; readVec3(ctx, offsetArr, o);
+            w->pm->translateFaceWithRing(faceIdx, o);
+        })
+    
+        .method("extrudeFace", [](PolyMW* w, JSContext* ctx, int faceIdx,
+                                  JSValue offsetArr,
+                                  std::optional<bool> withBack,
+                                  std::optional<int> bridgeGroup,
+                                  std::optional<int> backGroup) -> JSValue {
+            if (!w->pm) return JS_NULL;
+            float o[3]; readVec3(ctx, offsetArr, o);
+            auto r = w->pm->extrudeFace(faceIdx, o,
+                withBack.value_or(true),
+                bridgeGroup.value_or(-1),
+                backGroup.value_or(-1));
+            JSValue obj = JS_NewObject(ctx);
+            std::vector<uint32_t> dv(r.dupVerts.begin(),     r.dupVerts.end());
+            std::vector<uint32_t> bf(r.bridgeFaces.begin(),  r.bridgeFaces.end());
+            std::vector<uint32_t> bg(r.bridgeAdjGroup.begin(), r.bridgeAdjGroup.end());
+            JS_SetPropertyStr(ctx, obj, "dupVerts",       makeUint32Array(ctx, dv));
+            JS_SetPropertyStr(ctx, obj, "bridgeFaces",    makeUint32Array(ctx, bf));
+            JS_SetPropertyStr(ctx, obj, "bridgeAdjGroup", makeUint32Array(ctx, bg));
+            JS_SetPropertyStr(ctx, obj, "backFace",       JS_NewInt32(ctx, r.backFace));
+            return obj;
+        })
+    
+        .method("rematchTwins", [](PolyMW* w) {
+            if (w->pm) w->pm->rematchTwins();
+        })
+    
+        .method("mergeFacesByGroup", [](PolyMW* w) {
+            if (w->pm) w->pm->mergeFacesByGroup();
+        })
+    
+        .method("compact", [](PolyMW* w) {
+            if (w->pm) w->pm->compact();
+        })
+    
+        .method("findGroupBoundary", [](PolyMW* w, JSContext* ctx, int groupId) -> JSValue {
+            if (!w->pm) return JS_NewArray(ctx);
+            auto loops = w->pm->findGroupBoundary(groupId);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < loops.size(); ++i) {
+                JSValue inner = JS_NewArray(ctx);
+                for (size_t j = 0; j < loops[i].size(); ++j) {
+                    JS_SetPropertyUint32(ctx, inner, (uint32_t)j, JS_NewInt32(ctx, loops[i][j]));
+                }
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, inner);
+            }
+            return arr;
+        })
+        ;
+    
+        // =======================================================================
+        // LSystem — string-rule stochastic L-system rewriter
+        // =======================================================================
+        qjsbind::Class<LSW>(ctx, "LSystem")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> LSW* {
+            auto* w = new LSW();
+            if (argc > 0 && JS_IsString(argv[0])) {
+                const char* s = JS_ToCString(ctx, argv[0]);
+                if (s) {
+                    w->axiom = bromesh::parseModules(std::string_view(s));
+                    w->ls->setAxiom(w->axiom);
+                    JS_FreeCString(ctx, s);
+                }
+            }
+            return w;
+        })
+        .method("setAxiom", [](LSW* w, JSContext* ctx, std::string text) {
+            w->axiom = bromesh::parseModules(std::string_view(text));
+            w->ls->setAxiom(w->axiom);
+        }, qjsbind::returns_this)
+        .method("addRule", [](LSW* w, std::string predecessor, std::string successor,
+                              std::optional<double> weight) {
+            if (predecessor.empty()) return;
+            bromesh::ProductionRule rule;
+            rule.predecessor = predecessor[0];
+            rule.weight = (float)weight.value_or(1.0);
+            auto mods = bromesh::parseModules(std::string_view(successor));
+            rule.successor = [mods](const std::vector<float>&) { return mods; };
+            w->ls->addRule(std::move(rule));
+        }, qjsbind::returns_this)
+        .method("derive", [](LSW* w, JSContext* ctx, int iterations,
+                              std::optional<int64_t> seed) -> JSValue {
+            auto mods = w->ls->derive(iterations, (uint64_t)seed.value_or(0));
+            return JS_NewString(ctx, bromesh::serializeModules(mods).c_str());
+        })
+        .method("deriveModules", [](LSW* w, JSContext* ctx, int iterations,
+                                     std::optional<int64_t> seed) -> JSValue {
+            auto mods = w->ls->derive(iterations, (uint64_t)seed.value_or(0));
+            return makeModulesArray(ctx, mods);
+        })
+        ;
+}
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_3D
+#endif // BRO_WITH_3D

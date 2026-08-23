@@ -75,6 +75,79 @@ type ListenSource = string | ListenSourceOptions;
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
+ * =============================================================================
+ * bro Animation & Tweening API Reference
+ * =============================================================================
+ *
+ * Data-driven animation clips, blend spaces, state machines, and property tweening.
+ */
+interface AnimationKeyDef {
+  time?: number;
+  value?: any;
+  easing?: string;
+}
+
+interface AnimationTrackDef {
+  target?: string;
+  property?: string;
+  keys?: AnimationKeyDef[];
+  interpolation?: string;
+}
+
+interface AnimationClipDef {
+  name?: string;
+  duration?: number;
+  loop?: boolean;
+  tracks?: AnimationTrackDef[];
+}
+
+interface TweenPropertyTargets {
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  color?: number[];
+  opacity?: number;
+  intensity?: number;
+  fov?: number;
+  custom?: number;
+}
+
+interface TweenOptions {
+  duration?: number;
+  easing?: string;
+  loop?: number;
+  yoyo?: boolean;
+  delay?: number;
+}
+
+interface BlendSpace1DClip {
+  clip?: string;
+  pos?: number;
+}
+
+interface BlendSpace2DClip {
+  clip?: string;
+  pos?: number[];
+}
+
+interface AnimStateMachineTransition {
+  to?: string;
+  trigger?: string;
+  blendTime?: number;
+}
+
+interface AnimStateMachineState {
+  clip?: string;
+  loop?: boolean;
+  transitions?: AnimStateMachineTransition[];
+}
+
+interface AnimStateMachineDef {
+  initialState?: string;
+  states?: Record<string, AnimStateMachineState>;
+}
+
+/**
  * @file audio.idl
  * @description Web Audio API compatible AudioContext, DSP nodes, synthesis, and streaming.
  */
@@ -128,6 +201,79 @@ interface MidiRawEvent {
 
 interface MediaStreamConstraints {
   audio?: boolean;
+}
+
+/**
+ * =============================================================================
+ * bro Clipmap Terrain API Reference
+ * =============================================================================
+ *
+ * A camera-centred GEOMETRY CLIPMAP: concentric square rings of fixed topology,
+ * built once, parked on the camera, displaced on the GPU from a streamed height
+ * pyramid. This is the "continuous world from underfoot to the horizon" case.
+ */
+interface ClipmapMaterialComponent {
+  albedo?: number[];
+  roughness?: number;
+}
+
+interface ClipmapMaterialsOptions {
+  rock?: ClipmapMaterialComponent;
+  snow?: ClipmapMaterialComponent;
+  sand?: ClipmapMaterialComponent;
+  grass?: ClipmapMaterialComponent;
+}
+
+interface ClipmapForestOptions {
+  albedo?: number[];
+  strength?: number;
+}
+
+interface ClipmapDetailOptions {
+  wavelength?: number;
+  relief?: number;
+  gain?: number;
+  octaves?: number;
+}
+
+interface ClipmapHeightLayerOptions {
+  data?: Float32Array;
+  width?: number;
+  height?: number;
+  originX?: number;
+  originZ?: number;
+  metresPerCell?: number;
+  wrapX?: boolean;
+  bandLimited?: boolean;
+}
+
+interface ClipmapSurfaceLayerOptions {
+  data?: Float32Array;
+  width?: number;
+  height?: number;
+  originX?: number;
+  originZ?: number;
+  metresPerCell?: number;
+  components?: number;
+}
+
+interface ClipmapTerrainConfig {
+  levels?: number;
+  resolution?: number;
+  cellSize?: number;
+  heightScale?: number;
+  seaLevel?: number;
+  snowLine?: number;
+  maxCellScale?: number;
+  planetRadius?: number;
+  layerFade?: boolean;
+  coverageFloor?: boolean;
+  cubicSurface?: boolean;
+  cubicHeight?: boolean;
+  detailWavelength?: number;
+  detailRelief?: number;
+  detailGain?: number;
+  detailOctaves?: number;
 }
 
 /**
@@ -413,6 +559,143 @@ interface KwsEvent {
 }
 
 /**
+ * =============================================================================
+ * bro Lighting, PBR Materials & Post-FX API Reference
+ * =============================================================================
+ *
+ * Physical lights, PBR materials, post-processing stack, tonemapping, and environmental effects.
+ */
+interface LightConfig {
+  type?: string;
+  color?: number[];
+  intensity?: number;
+  range?: number;
+  innerCone?: number;
+  outerCone?: number;
+  castShadow?: boolean;
+}
+
+interface PBRMaterialConfig {
+  albedo?: number[];
+  albedoTexture?: string;
+  roughness?: number;
+  roughnessTexture?: string;
+  metallic?: number;
+  metallicTexture?: string;
+  emissive?: number[];
+  emissiveTexture?: string;
+  emissiveIntensity?: number;
+  normalTexture?: string;
+  normalScale?: number;
+  occlusionTexture?: string;
+  occlusionStrength?: number;
+  alphaMode?: string;
+  alphaCutoff?: number;
+  doubleSided?: boolean;
+}
+
+interface EnvironmentConfig {
+  panorama?: string;
+  cubeMap?: string;
+  color?: number[];
+  intensity?: number;
+  blur?: number;
+  background?: boolean;
+}
+
+interface ToneMapConfig {
+  mode?: string;
+  exposure?: number;
+  whitePoint?: number;
+}
+
+interface AmbientConfig {
+  color?: number[];
+  intensity?: number;
+}
+
+interface ShadowQualityConfig {
+  resolution?: number;
+  cascades?: number;
+  maxDistance?: number;
+  bias?: number;
+  normalBias?: number;
+}
+
+interface ShadowCacheConfig {
+  enabled?: boolean;
+  staticResolution?: number;
+}
+
+interface FogConfig {
+  mode?: string;
+  color?: number[];
+  density?: number;
+  start?: number;
+  end?: number;
+  heightFalloff?: number;
+  height?: number;
+}
+
+interface AtmosphereConfig {
+  rayleigh?: number[];
+  mie?: number[];
+  turbidity?: number;
+  sunPosition?: number[];
+  sunIntensity?: number;
+}
+
+interface StarfieldConfig {
+  starCount?: number;
+  starSize?: number;
+  twinkleSpeed?: number;
+  tint?: number[];
+}
+
+interface TiltShiftConfig {
+  blur?: number;
+  focus?: number;
+  range?: number;
+}
+
+interface BloomConfig {
+  threshold?: number;
+  intensity?: number;
+  radius?: number;
+  iterations?: number;
+}
+
+interface SSAOConfig {
+  radius?: number;
+  bias?: number;
+  intensity?: number;
+  sampleCount?: number;
+}
+
+interface SSRConfig {
+  maxDistance?: number;
+  thickness?: number;
+  stepCount?: number;
+  roughnessCutoff?: number;
+}
+
+interface DepthOfFieldConfig {
+  focusDistance?: number;
+  focalLength?: number;
+  fStop?: number;
+  maxBlur?: number;
+}
+
+interface ColorLUTConfig {
+  texture?: string;
+  intensity?: number;
+}
+
+interface FXAAConfig {
+  enabled?: boolean;
+}
+
+/**
  * @file listen.idl
  * @description Core audio streaming pipelines and listen host retention.
  */
@@ -678,6 +961,230 @@ interface MenuItemUpdate {
    *  New submenu child items.
    */
   items?: MenuItem[];
+}
+
+/**
+ * =============================================================================
+ * bro Mesh API Reference
+ * =============================================================================
+ *
+ * The bromesh C++ library is exposed via these classes and namespaces:
+ * Mesh, MeshBVH, ProgressiveMesh, PolyMesh, LSystem.
+ */
+interface MeshOptions {
+  positions?: Float32Array;
+  normals?: Float32Array;
+  uvs?: Float32Array;
+  colors?: Float32Array;
+  indices?: Uint32Array;
+}
+
+interface MeshBVHIntersectResult {
+  hit?: boolean;
+  distance?: number;
+  triangle?: number;
+  point?: number[];
+  normal?: number[];
+  uv?: number[];
+  barycentric?: number[];
+}
+
+interface MeshletGroupResult {
+  meshletCount?: number;
+  meshlets?: ArrayBuffer;
+  vertices?: Uint32Array;
+  triangles?: Uint8Array;
+}
+
+interface MeshUVQualityResult {
+  coverage?: number;
+  minAreaRatio?: number;
+  maxAreaRatio?: number;
+  avgStretch?: number;
+  maxStretch?: number;
+  avgAngleError?: number;
+  overlaps?: number;
+}
+
+interface MeshUVDistortionResult {
+  stretch?: number;
+  areaDistortion?: number;
+  angleDistortion?: number;
+}
+
+interface MeshRepairStats {
+  nonManifoldEdgesFixed?: number;
+  degenerateTrianglesRemoved?: number;
+  selfIntersectionsResolved?: number;
+  holesClosed?: number;
+}
+
+interface MeshBakeTransferOptions {
+  maxDistance?: number;
+  uvScale?: number;
+  uvOffset?: number[];
+  sampleQuality?: number;
+  normalSpace?: string;
+}
+
+interface MeshTreeOptions {
+  base?: number[];
+  canopyCenter?: number[];
+  canopyRadius?: number;
+  attractorCount?: number;
+  sides?: number;
+  leafRadius?: number;
+  pipeExp?: number;
+}
+
+interface MeshLeafCardOptions {
+  width?: number;
+  length?: number;
+  bend?: number;
+  curl?: number;
+  stemOffset?: boolean;
+  cup?: number;
+  widthSegments?: number;
+  lengthSegments?: number;
+  fullUV?: boolean;
+  shapedSilhouette?: boolean;
+}
+
+interface MeshFlowerOptions {
+  petalCount?: number;
+  petalShape?: string;
+  petalLength?: number;
+  petalWidth?: number;
+  petalCurl?: number;
+  petalBend?: number;
+  layers?: number;
+  layerTwist?: number;
+  centerRadius?: number;
+  centerHeight?: number;
+  outerTilt?: number;
+  innerTilt?: number;
+  layerScaleFalloff?: number;
+  outerYLift?: number;
+  innerYLift?: number;
+  petalCup?: number;
+  shapedPetals?: boolean;
+  centerColor?: number[];
+}
+
+interface MeshBezierSweepOptions {
+  samples?: number;
+  capStart?: boolean;
+  capEnd?: boolean;
+  closeProfile?: boolean;
+  miterJoints?: boolean;
+  profileScale?: any;
+  twist?: any;
+}
+
+interface MeshSpaceColonizationOptions {
+  attractionRadius?: number;
+  killRadius?: number;
+  segmentLength?: number;
+  maxIterations?: number;
+  tropismWeight?: number;
+  tropism?: number[];
+  obstacles?: any;
+  obstacleClearance?: number;
+  obstacleSteer?: number;
+}
+
+interface MeshBranchSegment {
+  p0?: number[];
+  p1?: number[];
+  r0?: number;
+  r1?: number;
+  dir?: number[];
+  parent?: number;
+  depth?: number;
+}
+
+interface MeshLeafPlacementOptions {
+  maxRadius?: number;
+  minDepth?: number;
+  terminalOnly?: boolean;
+  perUnitLength?: number;
+  densityFalloff?: number;
+  upBias?: number;
+  tiltJitter?: number;
+  rollJitter?: number;
+  baseScale?: number;
+  scaleJitter?: number;
+  scaleByRadius?: number;
+  dedupRadius?: number;
+  seed?: number;
+  densityWeight?: number[];
+  avoid?: any;
+  obstacleClearance?: number;
+  obstaclePushout?: number;
+  keepOut?: object[];
+}
+
+interface MeshPlacedLeaves {
+  count?: number;
+  transforms?: Float32Array;
+  branchRadius?: Float32Array;
+  branchDepth?: Int32Array;
+}
+
+interface MeshBlobOptions {
+  radius?: number;
+  seed?: number;
+  nsub?: number;
+  scale?: any;
+  center?: any;
+}
+
+interface MeshDracoDecodedAttribute {
+  type?: string;
+  uniqueId?: number;
+  components?: number;
+  count?: number;
+  kind?: string;
+  data?: ArrayBufferView;
+}
+
+interface MeshDracoDecoded {
+  positions?: Float32Array;
+  normals?: Float32Array;
+  uvs?: Float32Array;
+  colors?: Float32Array;
+  indices?: Uint32Array;
+  attributes?: MeshDracoDecodedAttribute[];
+  mesh?: Mesh;
+}
+
+interface MeshDracoEncodeOptions {
+  positionBits?: number;
+  normalBits?: number;
+  uvBits?: number;
+  colorBits?: number;
+  genericBits?: number;
+  compressionLevel?: number;
+  sequential?: boolean;
+}
+
+interface MeshExtrudeFaceResult {
+  dupVerts?: Uint32Array;
+  bridgeFaces?: Uint32Array;
+  bridgeAdjGroup?: Uint32Array;
+  backFace?: number;
+}
+
+interface MeshLSystemModule {
+  symbol?: string;
+  params?: number[];
+}
+
+interface MeshConvexDecompParams {
+  maxHulls?: number;
+  maxVerticesPerHull?: number;
+  resolution?: number;
+  minVolumePerHull?: number;
 }
 
 /**
@@ -968,6 +1475,250 @@ interface RaveLoadOptions {
    *  Async load error callback
    */
   onError?: Function;
+}
+
+/**
+ * =============================================================================
+ * bro Rigging, Animation & Inverse Kinematics API Reference
+ * =============================================================================
+ *
+ * Skeletal structures, joint hierarchies, inverse kinematics solvers (TwoBoneIK, FABRIK, LookAt),
+ * skinning weight assignment, automated procedural rigging, and pose retargeting.
+ */
+interface SkinDataOptions {
+  vertexCount?: number;
+  maxWeightsPerVertex?: number;
+  indices?: Uint16Array;
+  weights?: Float32Array;
+}
+
+interface SkeletonBone {
+  name?: string;
+  parent?: number;
+  localBindPose?: number[];
+  inverseBindMatrix?: number[];
+}
+
+interface SkeletonSocket {
+  name?: string;
+  boneIndex?: number;
+  offset?: number[];
+}
+
+interface SkeletonOptions {
+  bones?: SkeletonBone[];
+  sockets?: SkeletonSocket[];
+}
+
+interface PoseTRS {
+  translation?: number[];
+  rotation?: number[];
+  scale?: number[];
+}
+
+interface IKTwoBoneOptions {
+  rootPos?: number[];
+  midPos?: number[];
+  endPos?: number[];
+  targetPos?: number[];
+  poleVector?: number[];
+  length1?: number;
+  length2?: number;
+}
+
+interface IKFabrikOptions {
+  jointPositions?: number[][];
+  targetPos?: number[];
+  tolerance?: number;
+  maxIterations?: number;
+}
+
+interface IKLookAtOptions {
+  headPos?: number[];
+  targetPos?: number[];
+  forward?: number[];
+  up?: number[];
+  maxAngle?: number;
+}
+
+interface RigLandmark {
+  name?: string;
+  position?: number[];
+  confidence?: number;
+}
+
+interface RigDetectionResult {
+  landmarks?: RigLandmark[];
+  detectedType?: string;
+}
+
+interface RigFitResult {
+  skeleton?: Skeleton;
+  skin?: SkinData;
+}
+
+interface AutoRigOptions {
+  rigType?: string;
+  maxBones?: number;
+  voxelize?: boolean;
+  voxelResolution?: number;
+}
+
+interface LocomotionOptions {
+  speed?: number;
+  strideLength?: number;
+  cycleDuration?: number;
+}
+
+/**
+ * =============================================================================
+ * bro Scene Graph API Reference
+ * =============================================================================
+ *
+ * 3D Scene Graph containing hierarchically nested nodes (MeshNode, SkinnedMeshNode,
+ * InstancedMeshNode, LightNode, CameraNode, ParticleNode, HtmlNode, ShapeNode, SpriteNode).
+ */
+interface SceneNodeOptions {
+  name?: string;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  visible?: boolean;
+}
+
+interface SceneCameraOptions {
+  fov?: number;
+  near?: number;
+  far?: number;
+  eye?: number[];
+  target?: number[];
+  up?: number[];
+}
+
+interface SceneRaycastResult {
+  node?: SceneNode;
+  point?: number[];
+  normal?: number[];
+  distance?: number;
+}
+
+interface SceneCullStats {
+  totalNodes?: number;
+  renderedNodes?: number;
+  culledNodes?: number;
+}
+
+interface ImpostorAtlasInfo {
+  width?: number;
+  height?: number;
+  cols?: number;
+  rows?: number;
+  boundsRadius?: number;
+  boundsCenter?: number[];
+  atlasRGBA?: Uint8Array;
+}
+
+interface ImpostorOptions {
+  margin?: number;
+  cullNear?: number;
+  cullFar?: number;
+}
+
+interface ImpostorResult {
+  node?: SceneNode;
+  quadCount?: number;
+}
+
+interface MeshNodeOptions {
+  mesh?: Mesh;
+  material?: string;
+  castShadow?: string;
+  receiveShadow?: string;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  visible?: boolean;
+}
+
+interface SkinnedMeshNodeOptions {
+  mesh?: Mesh;
+  skin?: SkinData;
+  skeleton?: Skeleton;
+  material?: string;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  visible?: boolean;
+}
+
+interface InstancedMeshNodeOptions {
+  mesh?: Mesh;
+  capacity?: number;
+  material?: string;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  visible?: boolean;
+}
+
+interface GaussianSplatNodeOptions {
+  file?: string;
+  data?: ArrayBuffer;
+  cloud?: object;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  visible?: boolean;
+}
+
+interface HtmlNodeOptions {
+  html?: string;
+  width?: number;
+  height?: number;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  visible?: boolean;
+}
+
+interface LightNodeOptions {
+  type?: string;
+  color?: number[];
+  intensity?: number;
+  range?: number;
+  innerCone?: number;
+  outerCone?: number;
+  castShadow?: boolean;
+  position?: number[];
+  rotation?: number[];
+}
+
+interface ParticleNodeOptions {
+  maxParticles?: number;
+  texture?: string;
+  position?: number[];
+  visible?: boolean;
+}
+
+interface Particles3DNodeOptions {
+  maxParticles?: number;
+  mode?: string;
+  mesh?: Mesh;
+  position?: number[];
+  visible?: boolean;
+}
+
+interface DecalNodeOptions {
+  texture?: string;
+  size?: number[];
+  position?: number[];
+  rotation?: number[];
+}
+
+interface ReflectionProbeNodeOptions {
+  size?: number[];
+  resolution?: number;
+  position?: number[];
 }
 
 /**
@@ -1464,6 +2215,77 @@ interface BidiParagraph {
 }
 
 /**
+ * =============================================================================
+ * bro Tile World API Reference
+ * =============================================================================
+ *
+ * Infinite chunked 2D/2.5D/3D tile maps, voxel extraction, pathfinding, autotiling, and navigation grid integration.
+ */
+interface TilePickResult {
+  tileX?: number;
+  tileY?: number;
+  layer?: number;
+  tileId?: number;
+  worldPosition?: number[];
+}
+
+interface TilePathResult {
+  reachable?: boolean;
+  path?: number[][];
+  totalCost?: number;
+}
+
+interface TileRegionResult {
+  regionId?: number;
+  tiles?: number[][];
+  area?: number;
+}
+
+interface TileAutotileRule {
+  matchTile?: number;
+  outputTile?: number;
+  mask?: number;
+}
+
+interface TileLayerConfig {
+  name?: string;
+  zIndex?: number;
+  collision?: boolean;
+  opacity?: number;
+  visible?: boolean;
+}
+
+interface TileChunkInfo {
+  chunkX?: number;
+  chunkY?: number;
+  tileCount?: number;
+  dirty?: boolean;
+}
+
+interface TileVoxelExtractOptions {
+  minX?: number;
+  minY?: number;
+  maxX?: number;
+  maxY?: number;
+  heightScale?: number;
+}
+
+interface TileAgentNavOptions {
+  agentRadius?: number;
+  allowDiagonal?: boolean;
+  maxSlope?: number;
+}
+
+interface TileWorldConfig {
+  chunkSize?: number;
+  tileSize?: number;
+  layers?: TileLayerConfig[];
+  tileAtlas?: string;
+  atlasTileWidth?: number;
+  atlasTileHeight?: number;
+}
+
+/**
  * @file tts.idl
  * @description Text-to-speech synthesis engines: Kokoro (82M), Qwen3-TTS, and Supertonic-3.
  */
@@ -1782,6 +2604,29 @@ declare class AbortController {
   abort(reason?: any): void;
 }
 
+declare class Tween {
+  to(target: object, props: TweenPropertyTargets, duration: number, easing?: string): Tween;
+  parallel(tweens: Tween[]): Tween;
+  call(callback: Function): Tween;
+  loop(count?: number): Tween;
+  start(): Tween;
+  stop(): Tween;
+  pause(): Tween;
+  resume(): Tween;
+  destroy(): void;
+}
+
+declare class AnimationPlayer {
+  addClip(name: string, clip: any): void;
+  clipDef(name: string, def: AnimationClipDef): void;
+  play(clipName: string, opts?: object): void;
+  pause(): void;
+  resume(): void;
+  stop(): void;
+  seek(time: number): void;
+  destroy(): void;
+}
+
 declare class AudioParam {
   value: number;
   setValueAtTime(value: number, time: number): void;
@@ -1923,6 +2768,33 @@ declare class AudioContext {
   getPlaybackPosition(id: number): number;
   getPlaybackPositionSeconds(id: number): number;
   seekPlayback(id: number, seconds: number): void;
+}
+
+declare class ClipmapTerrain {
+  readonly node: SceneNode | null;
+  readonly levels: number;
+  readonly resolution: number;
+  readonly cellSize: number;
+  readonly layerCount: number;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  readonly farDistance: number;
+  readonly cellScale: number;
+  readonly planetRadius: number;
+  setHeightLayer(index: number, desc: ClipmapHeightLayerOptions | null): ClipmapTerrain;
+  setSnowLine(m: number): ClipmapTerrain;
+  setChartCenter(x: number | null, z?: number): ClipmapTerrain;
+  setDetail(desc: ClipmapDetailOptions): ClipmapTerrain;
+  setMaterials(desc: ClipmapMaterialsOptions): ClipmapTerrain;
+  setForest(desc: ClipmapForestOptions): ClipmapTerrain;
+  setSurfaceLayer(indexOrDesc: any, desc?: ClipmapSurfaceLayerOptions | null): ClipmapTerrain;
+  update(camX: number, camY: number, camZ: number): ClipmapTerrain;
+  shaderSource(stage: string): string;
+  elevationAt(x: number, z: number): number;
+  renderedElevationAt(x: number, z: number): number;
+  coverageDistance(eyeAboveSeaLevel: number): number;
+  horizonDistance(eyeAboveSeaLevel: number): number;
+  destroy(): void;
 }
 
 /**
@@ -2626,6 +3498,57 @@ declare class KwsStreamView {
   feed(samples: Float32Array): KwsEvent[] | null;
 }
 
+declare class LightNode {
+  color: number[];
+  intensity: number;
+  range: number;
+  innerCone: number;
+  outerCone: number;
+  castShadow: boolean;
+}
+
+declare class ShapeNode {
+  shapeType: string;
+  color: number[];
+  size: number[];
+}
+
+declare class SpriteNode {
+  texture: string;
+  size: number[];
+  addAnimation(name: string, animSpec: object): void;
+  play(name: string): void;
+  stop(): void;
+}
+
+declare class HtmlNode {
+  setHtml(html: string): void;
+  markHtmlDirty(): void;
+}
+
+declare class ParticleNode {
+  burst(count: number): void;
+  clear(): void;
+}
+
+declare class Particles3DNode {
+  burst(count: number): void;
+  clear(): void;
+}
+
+declare class GaussianSplatNode {
+  savePly(path: string): void;
+}
+
+declare class DecalNode {
+  texture: string;
+  size: number[];
+}
+
+declare class ReflectionProbeNode {
+  probeCapture(): void;
+}
+
 declare class ListenStream {
   readonly id: number;
   readonly kind: string;
@@ -3206,6 +4129,140 @@ declare class Smoother {
   tickN(n: number): number;
 }
 
+declare class Mesh {
+  constructor(opts?: MeshOptions);
+  static box(halfW?: number, halfH?: number, halfD?: number): Mesh;
+  static sphere(radius?: number, segments?: number, rings?: number): Mesh;
+  static cylinder(radius?: number, halfHeight?: number, segments?: number): Mesh;
+  static capsule(radius?: number, halfHeight?: number, segments?: number): Mesh;
+  static cone(radius?: number, height?: number, segments?: number): Mesh;
+  static plane(halfW?: number, halfH?: number, segW?: number, segH?: number): Mesh;
+  static torus(radius?: number, tubeRadius?: number, segments?: number, tubeSegments?: number): Mesh;
+  static icosahedron(radius?: number): Mesh;
+  static dodecahedron(radius?: number): Mesh;
+  static octahedron(radius?: number): Mesh;
+  static tetrahedron(radius?: number): Mesh;
+  static disk(radius?: number, segments?: number): Mesh;
+  static tube(points: number[], radius?: number, segments?: number): Mesh;
+  static fromGLTF(buffer: ArrayBuffer): Mesh;
+  static fromOBJ(text: string): Mesh;
+  static fromPLY(buffer: ArrayBuffer): Mesh;
+  static fromSTL(buffer: ArrayBuffer): Mesh;
+  static fromFBX(buffer: ArrayBuffer): Mesh;
+  static fromVOX(buffer: ArrayBuffer): Mesh;
+  static merge(meshes: Mesh[]): Mesh;
+  static marchingCubes(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
+  static surfaceNets(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
+  static dualContouring(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
+  static sweep(path: number[], profile: number[]): Mesh;
+  static bezierSweep(controlPoints: number[][], profile: number[][], opts?: MeshBezierSweepOptions): Mesh;
+  static leafCard(shape: any, opts?: MeshLeafCardOptions): Mesh;
+  static flower(opts?: MeshFlowerOptions): Mesh;
+  static blob(opts?: MeshBlobOptions): Mesh;
+  static spaceColonize(attractors: number[][], seedPoints: number[][], initialDirection: number[], opts?: MeshSpaceColonizationOptions): MeshBranchSegment[];
+  static thickenBranches(segments: MeshBranchSegment[], leafRadius?: number, pipeExp?: number): MeshBranchSegment[];
+  static meshBranches(segments: MeshBranchSegment[], sides?: number): Mesh;
+  static placeLeavesOnBranches(segments: MeshBranchSegment[], opts?: MeshLeafPlacementOptions): MeshPlacedLeaves;
+  static scatterLeaves(segments: MeshBranchSegment[], leaf: Mesh, opts?: MeshLeafPlacementOptions): Mesh;
+  static tree(opts?: MeshTreeOptions): object;
+  static parseLSystem(text: string): MeshLSystemModule[];
+  static packAnchors(candidates: number[][], opts?: object): Int32Array;
+  static lsystemToBranches(modules: MeshLSystemModule[], opts?: object): MeshBranchSegment[];
+  static capsuleField(capsules: object[], spheres?: object[], cellSize?: number): object;
+  static capsuleFieldFromSegments(segments: MeshBranchSegment[], radiusScale?: number, extraSpheres?: object[]): object;
+  static decodeDraco(bytes: ArrayBufferView): MeshDracoDecoded;
+  static encodeDraco(meshData: object, opts?: MeshDracoEncodeOptions): ArrayBuffer;
+  positions: Float32Array;
+  normals: Float32Array;
+  uvs: Float32Array;
+  colors: Float32Array;
+  indices: Uint32Array;
+  readonly vertexCount: number;
+  readonly triangleCount: number;
+  readonly hasNormals: boolean;
+  readonly hasUVs: boolean;
+  readonly hasColors: boolean;
+  readonly empty: boolean;
+  clone(): Mesh;
+  translate(dx: number, dy: number, dz: number): Mesh;
+  scale(sx: number, sy?: number, sz?: number): Mesh;
+  rotate(ax: number, ay: number, az: number, angle: number): Mesh;
+  center(): Mesh;
+  fitToBox(size: number): Mesh;
+  transform(matrix: number[]): Mesh;
+  applySkinning(skin: SkinData, matrices: number[]): Mesh;
+  applyMorphTarget(target: Mesh, weight: number): Mesh;
+  computeNormals(creaseAngle?: number): Mesh;
+  invertNormals(): Mesh;
+  flipFaces(): Mesh;
+  weld(threshold?: number): Mesh;
+  simplify(ratio: number, targetError?: number): Mesh;
+  subdivideLoop(iterations?: number): Mesh;
+  subdivideCatmullClark(iterations?: number): Mesh;
+  smooth(lambda?: number, iterations?: number): Mesh;
+  remesh(targetEdgeLength?: number): Mesh;
+  repair(): Mesh;
+  repairSelfIntersections(): Mesh;
+  shrinkwrap(target: Mesh, factor?: number, offset?: number): Mesh;
+  splitComponents(): Mesh[];
+  booleanUnion(other: Mesh): Mesh;
+  booleanDifference(other: Mesh): Mesh;
+  booleanIntersection(other: Mesh): Mesh;
+  csgUnion(other: Mesh): Mesh;
+  csgSubtract(other: Mesh): Mesh;
+  csgIntersect(other: Mesh): Mesh;
+  generateUVs(method?: string): Mesh;
+  projectUVs(projection?: string, plane?: number[]): Mesh;
+  optimize(): Mesh;
+  buildBVH(): MeshBVH;
+  buildProgressiveMesh(): ProgressiveMesh;
+  buildMeshlets(maxVertices?: number, maxTriangles?: number): MeshletGroupResult;
+  computeUVDistortion(): MeshUVDistortionResult[];
+  measureUVQuality(): MeshUVQualityResult;
+  convexHull(): Mesh;
+  convexDecomposition(params?: MeshConvexDecompParams): Mesh[];
+  toGLTF(name?: string): Uint8Array;
+  toOBJ(): string;
+  toPLY(): string;
+  toSTL(): string;
+  toSTLB(): ArrayBuffer;
+  toFBX(): ArrayBuffer;
+  toVOX(): ArrayBuffer;
+}
+
+declare class MeshBVH {
+  raycast(origin: number[], direction: number[], maxDist?: number): MeshBVHIntersectResult | null;
+  queryAABB(min: number[], max: number[]): number[];
+}
+
+declare class ProgressiveMesh {
+  readonly collapseCount: number;
+  readonly minVertices: number;
+  readonly maxVertices: number;
+  getMesh(detail: number): Mesh;
+}
+
+declare class PolyMesh {
+  constructor(mesh?: Mesh);
+  readonly vertexCount: number;
+  readonly faceCount: number;
+  readonly edgeCount: number;
+  toMesh(): Mesh;
+  extrudeFace(faceIdx: number, offset: number[], withBack?: boolean, bridgeGroup?: number, backGroup?: number): MeshExtrudeFaceResult;
+  rematchTwins(): void;
+  mergeFacesByGroup(): void;
+  compact(): void;
+  findGroupBoundary(groupId: number): number[][];
+}
+
+declare class LSystem {
+  constructor(axiom?: string);
+  setAxiom(text: string): LSystem;
+  addRule(predecessor: string, successor: string, weight?: number): LSystem;
+  derive(iterations: number, seed?: number): string;
+  deriveModules(iterations: number, seed?: number): MeshLSystemModule[];
+}
+
 /**
  * ARDY text-to-motion generation pipeline instance.
  */
@@ -3460,6 +4517,186 @@ declare class Rave {
   decode(latent: Float32Array, frames: number, opts?: RaveDecodeOptions): RaveAudioBuffer;
 }
 
+declare class SkinData {
+  constructor(opts?: SkinDataOptions);
+  readonly vertexCount: number;
+  readonly maxWeights: number;
+  clone(): SkinData;
+  validate(): boolean;
+  normalize(): void;
+}
+
+declare class Skeleton {
+  constructor(opts?: SkeletonOptions);
+  readonly boneCount: number;
+  findBone(name: string): number;
+  boneName(index: number): string;
+  boneParent(index: number): number;
+  boneBindPose(index: number): number[];
+  boneInverseBind(index: number): number[];
+  clone(): Skeleton;
+}
+
+declare class Pose {
+  constructor(skeleton: Skeleton);
+  readonly boneCount: number;
+  getBoneLocal(index: number): PoseTRS;
+  setBoneLocal(index: number, trs: PoseTRS): void;
+  getBoneModelMatrix(index: number): number[];
+  clone(): Pose;
+}
+
+declare class SkeletalAnimation {
+  readonly name: string;
+  readonly duration: number;
+  readonly trackCount: number;
+  evaluate(time: number, outPose: Pose): void;
+}
+
+declare class RigSpec {
+  constructor(type: string);
+  readonly type: string;
+  readonly requiredBones: string[];
+}
+
+declare class VoxelChunk {
+  constructor(dimX: number, dimY: number, dimZ: number);
+  set(x: number, y: number, z: number, value: number): void;
+  get(x: number, y: number, z: number): number;
+  toMesh(): Mesh;
+}
+
+declare class IK {
+  static solveTwoBone(opts: IKTwoBoneOptions): number[][];
+  static solveFabrik(opts: IKFabrikOptions): number[][];
+  static solveLookAt(opts: IKLookAtOptions): number[];
+}
+
+declare class Rig {
+  static detectLandmarks(mesh: Mesh): RigDetectionResult;
+  static fitSkeleton(mesh: Mesh, spec: RigSpec): RigFitResult;
+  static autoRig(mesh: Mesh, opts?: AutoRigOptions): RigFitResult;
+  static transferWeights(sourceMesh: Mesh, sourceSkin: SkinData, targetMesh: Mesh): SkinData;
+}
+
+declare class SceneNode {
+  readonly id: number;
+  name: string;
+  visible: boolean;
+  position: number[];
+  rotation: number[];
+  scale: number[];
+  readonly worldPosition: number[];
+  readonly worldMatrix: number[];
+  readonly parent: SceneNode | null;
+  readonly children: SceneNode[];
+  add(child: SceneNode): SceneNode;
+  remove(child: SceneNode): void;
+  destroy(): void;
+  setPosition(x: number, y: number, z: number): SceneNode;
+  setRotation(x: number, y: number, z: number, w?: number): SceneNode;
+  setScale(x: number, y?: number, z?: number): SceneNode;
+  lookAt(target: number[], up?: number[]): SceneNode;
+  setMaterial(mat: object): SceneNode;
+  setSkeleton(skeleton: Skeleton): SceneNode;
+  addClip(name: string, anim: SkeletalAnimation): SceneNode;
+  getBoneWorldMatrix(nameOrIndex: any): Float32Array | null;
+  addBlendSpace1D(name: string, clips: BlendSpace1DClip[]): SceneNode;
+  addBlendSpace2D(name: string, clips: BlendSpace2DClip[]): SceneNode;
+  setBlendPos(name: string, x: number, y?: number): SceneNode;
+  blendState(name: string): object | null;
+  playLayer(layer: number, clipName: string, weight?: number, fadeTime?: number): SceneNode;
+  stopLayer(layer: number, fadeTime?: number): SceneNode;
+  setLayerWeight(layer: number, weight: number): SceneNode;
+  addStateMachine(name: string, def: AnimStateMachineDef): SceneNode;
+  travel(name: string, targetState: string): boolean;
+  setRootMotion(enabled: boolean): SceneNode;
+  consumeRootMotion(): object;
+  play(clipName?: string, opts?: object): SceneNode;
+  stop(): SceneNode;
+  pause(): SceneNode;
+  resume(): SceneNode;
+  setInstanceTransform(index: number, matrix: number[]): void;
+  setInstanceColor(index: number, color: number[]): void;
+  setInstanceCount(count: number): void;
+  setHtml(html: string): SceneNode;
+  markHtmlDirty(): void;
+  burst(count: number): void;
+  clear(): void;
+  probeCapture(): void;
+  savePly(path: string): void;
+}
+
+declare class SceneGraph {
+  readonly root: SceneNode;
+  cameraX: number;
+  cameraY: number;
+  cameraZoom: number;
+  showLightIcons: boolean;
+  frustumCulling: boolean;
+  shadowCache: boolean;
+  renderScale: number;
+  msaa: number;
+  activeCamera: SceneNode | null;
+  readonly viewMatrix: number[];
+  readonly projectionMatrix: number[];
+  readonly cameraEye: number[];
+  createNode(opts?: SceneNodeOptions): SceneNode;
+  createShape(opts?: object): SceneNode;
+  createSprite(opts?: object): SceneNode;
+  createPhysicsNode(opts?: object): SceneNode;
+  createMesh(opts?: MeshNodeOptions): SceneNode;
+  createSkinnedMesh(opts?: SkinnedMeshNodeOptions): SceneNode;
+  createInstancedMesh(opts?: InstancedMeshNodeOptions): SceneNode;
+  createGaussianSplat(opts?: GaussianSplatNodeOptions): SceneNode;
+  createHtmlNode(opts?: HtmlNodeOptions): SceneNode;
+  createLight(opts?: LightNodeOptions): SceneNode;
+  createParticles(opts?: ParticleNodeOptions): SceneNode;
+  createParticles3D(opts?: Particles3DNodeOptions): SceneNode;
+  createDecal(opts?: DecalNodeOptions): SceneNode;
+  createReflectionProbe(opts?: ReflectionProbeNodeOptions): SceneNode;
+  createTween(): Tween;
+  createAnimationPlayer(): AnimationPlayer;
+  createTerrain(opts?: TerrainConfig): Terrain;
+  createClipmapTerrain(opts?: ClipmapTerrainConfig): ClipmapTerrain;
+  createTileWorld(opts?: TileWorldConfig): TileWorld;
+  findById(id: number): SceneNode | null;
+  findByName(name: string): SceneNode | null;
+  destroyNode(node: SceneNode): void;
+  setCamera(opts?: SceneCameraOptions): void;
+  createCamera(opts?: SceneCameraOptions): SceneNode;
+  setActiveCamera(camera: SceneNode | null): void;
+  setToneMap(opts?: ToneMapConfig): void;
+  setAmbient(opts?: AmbientConfig): void;
+  setWind(dir: number[], speed: number): void;
+  setShadowQuality(opts?: ShadowQualityConfig): void;
+  setShadowCache(opts?: ShadowCacheConfig): void;
+  setFog(opts?: FogConfig): void;
+  setAtmosphere(opts?: AtmosphereConfig): void;
+  setStarfield(opts?: StarfieldConfig): void;
+  setTiltShift(opts?: TiltShiftConfig): void;
+  setBloom(opts?: BloomConfig): void;
+  setSSAO(opts?: SSAOConfig): void;
+  setSSR(opts?: SSRConfig): void;
+  setDepthOfField(opts?: DepthOfFieldConfig): void;
+  setColorLUT(opts?: ColorLUTConfig): void;
+  setFXAA(enabled: boolean): void;
+  setRenderScale(scale: number): void;
+  setMSAA(samples: number): void;
+  setEnvironment(opts?: EnvironmentConfig): void;
+  setFrustumCulling(enabled: boolean): void;
+  cullStats(): SceneCullStats;
+  syncPhysics(): void;
+  raycast(origin: number[], direction: number[]): SceneRaycastResult | null;
+  unprojectLocal(node: SceneNode, screenPoint: number[]): number[];
+  toImageData(): ImageData;
+  captureFrame(format?: string, quality?: number): ArrayBuffer;
+  asTexture(): object;
+  bindAudioListenerToCamera(bind: boolean): void;
+  attachAIWorld(aiWorld: object, opts?: object): void;
+  detachAIWorld(): void;
+}
+
 declare class SenseStreamView {
   readonly active: boolean;
   start(opts?: SenseStartOptions): void;
@@ -3623,6 +4860,37 @@ declare class Terrain {
   /**
    * Release all terrain meshes, destroy chunk structures, and detach from scene graph.
    */
+  destroy(): void;
+}
+
+declare class TileWorld {
+  readonly node: SceneNode | null;
+  readonly width: number;
+  readonly height: number;
+  readonly chunkCount: number;
+  readonly vertexCount: number;
+  readonly triangleCount: number;
+  setTile(layer: number, x: number, y: number, tileId: number): void;
+  getTile(layer: number, x: number, y: number): number;
+  fillRect(layer: number, x: number, y: number, w: number, h: number, tileId: number): void;
+  clearLayer(layer: number): void;
+  pickTile(worldX: number, worldZ: number): TilePickResult | null;
+  findPath(startX: number, startY: number, endX: number, endY: number, opts?: TileAgentNavOptions): TilePathResult;
+  computeRegions(layer: number): TileRegionResult[];
+  applyAutotile(layer: number, rules: TileAutotileRule[]): void;
+  extractVoxelMesh(opts?: TileVoxelExtractOptions): Mesh;
+  setOrigin(x: number, y: number, z: number): void;
+  advance(dtMs: number): boolean;
+  addObjectKind(kindId: number, spec: object): void;
+  addObject(kindId: number, x: number, y: number, z: number): void;
+  clearObjects(kindId?: number): void;
+  objectCount(kind: number): number;
+  rebuildObjects(): void;
+  rebuild(): void;
+  rebuildAll(): void;
+  configure(cfg: object): void;
+  save(): ArrayBuffer;
+  load(data: ArrayBuffer): boolean;
   destroy(): void;
 }
 

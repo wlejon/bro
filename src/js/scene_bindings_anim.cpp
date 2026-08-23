@@ -1,11 +1,7 @@
-// Scene JS bindings — animation surface: the skinned-mesh animation player
-// (setSkeleton / addClip / bone queries, unified play/stop/pause/resume that
-// also drives sprites and particles) and the chainable Tween returned by
-// scene.createTween(). Shared wrapper structs + helpers live in
-// scene_bindings_internal.h.
+#if BRO_WITH_3D
 
 #include "js/scene_bindings.h"
-#if BRO_WITH_3D  // modular-build feature gate
+#include "js/scene_bindings.h"
 #include "js/scene_bindings_internal.h"
 #include "js/rigging_bindings.h"
 #include "js/runtime.h"
@@ -18,9 +14,7 @@
 #include "scene/skinned_mesh_node.h"
 #include "scene/animation_player.h"
 #include "scene/tween.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -794,6 +788,12 @@ JSValue js_sg_createTween(JSContext* ctx, JSValueConst this_val, int, JSValueCon
         new TweenWrapper{g->livenessToken(), t->id()});
 }
 
+static inline void _unused_scene_anim_install(JSContext* ctx)
+{
+    // No install needed
+    (void)ctx;
+}
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_3D
+#endif // BRO_WITH_3D

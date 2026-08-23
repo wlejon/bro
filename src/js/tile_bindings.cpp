@@ -1,9 +1,9 @@
+#if BRO_WITH_3D
+
+#include "js/tile_bindings.h"
 #include "js/asset_path.h"
 #include "js/tile_bindings.h"
-#if BRO_WITH_3D  // modular-build feature gate
-
 #include <qjsbind/qjsbind.h>
-
 #include "scene/tile_world.h"
 #include "scene/scene_graph.h"
 #include "js/mesh_bindings.h"
@@ -14,10 +14,8 @@
 #include "tile/pathfind.h"
 #include "tile/region.h"
 #include "tile/coord.h"
-
 #include <brogameagent/nav_grid.h>
 #include <brogameagent/types.h>
-
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -999,81 +997,6 @@ JSValue createTileWorldJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst
 // Install / Cleanup
 // -------------------------------------------------------------------------
 
-void TileBindings::install(JSContext* ctx) {
-    qjsbind::Class<TWld>(ctx, "TileWorld")
-        // No constructor — created via scene.createTileWorld().
-        .method_raw("setTile", js_tile_setTile, 4)
-        .method_raw("getTile", js_tile_getTile, 3)
-        .method_raw("fillTile", js_tile_fillTile, 6)
-        .method("setElevation", [](TWld* self, int x, int y, int level) {
-            if (self->world) self->world->setElevation(x, y, level);
-        })
-        .method("getElevation", [](TWld* self, int x, int y) -> int {
-            return self->world ? self->world->elevation(x, y) : 0;
-        })
-        .method("fillElevation", [](TWld* self, int x0, int y0, int x1, int y1, int level) {
-            if (self->world) self->world->fillElevation(x0, y0, x1, y1, level);
-        })
-        .method_raw("setTint", js_tile_setTint, 6)
-        .method_raw("fillTint", js_tile_fillTint, 8)
-        .method_raw("getTint", js_tile_getTint, 2)
-        .method("setFlag", [](TWld* self, int x, int y, double bit, bool on) {
-            if (self->world) self->world->setFlag(x, y, (uint32_t)bit, on);
-        })
-        .method("hasFlag", [](TWld* self, int x, int y, double bit) -> bool {
-            return self->world ? self->world->hasFlag(x, y, (uint32_t)bit) : false;
-        })
-        .method_raw("worldToCell", js_tile_worldToCell, 2)
-        .method_raw("cellCenterWorldXZ", js_tile_cellCenterWorldXZ, 2)
-        .method_raw("worldBounds", js_tile_worldBounds, 0)
-        .method_raw("raycastCell", js_tile_raycastCell, 3)
-        .method_raw("sampleHeight", js_tile_sampleHeight, 2)
-        .method_raw("isWalkable", js_tile_isWalkable, 3)
-        .method_raw("syncNavGrid", js_tile_syncNavGrid, 2)
-        .method_raw("toNavGrid", js_tile_toNavGrid, 1)
-        .method_raw("findPath", js_tile_findPath, 5)
-        .method_raw("distanceField", js_tile_distanceField, 2)
-        .method_raw("floodFill", js_tile_floodFill, 3)
-        .method_raw("components", js_tile_components, 1)
-        .method_raw("cellDistance", js_tile_cellDistance, 5)
-        .method_raw("cellNeighbors", js_tile_cellNeighbors, 3)
-        .method_raw("cellRing", js_tile_cellRing, 4)
-        .method_raw("cellsInRange", js_tile_cellsInRange, 4)
-        .method_raw("cellLine", js_tile_cellLine, 4)
-        .method("setOrigin", [](TWld* self, double x, double y, double z) {
-            if (self->world) self->world->setOrigin((float)x, (float)y, (float)z);
-        })
-        .method("advance", [](TWld* self, double dtMs) -> bool {
-            return self->world ? self->world->advance(dtMs) : false;
-        })
-        .method_raw("addObjectKind", js_tile_addObjectKind, 2)
-        .method_raw("addObject", js_tile_addObject, 4)
-        .method_raw("clearObjects", js_tile_clearObjects, 1)
-        .method("objectCount", [](TWld* self, int kind) -> int {
-            return self->world ? self->world->objectCount(kind) : 0;
-        })
-        .method("rebuildObjects", [](TWld* self) {
-            if (self->world) self->world->rebuildObjects();
-        })
-        .method("rebuild", [](TWld* self) {
-            if (self->world) self->world->rebuildDirty();
-        })
-        .method("rebuildAll", [](TWld* self) {
-            if (self->world) self->world->rebuildAll();
-        })
-        .method_raw("configure", js_tile_configure, 1)
-        .method_raw("save", js_tile_save, 0)
-        .method_raw("load", js_tile_load, 1)
-        .method("destroy", [](TWld* self) {
-            if (self->world) { self->world->clear(); self->world.reset(); }
-        })
-        .get("width",  [](TWld* self) -> int { return self->world ? self->world->width()  : 0; })
-        .get("height", [](TWld* self) -> int { return self->world ? self->world->height() : 0; })
-        .get("chunkCount",    [](TWld* self) -> int { return self->world ? self->world->chunkCount()    : 0; })
-        .get("vertexCount",   [](TWld* self) -> int { return self->world ? self->world->totalVertices() : 0; })
-        .get("triangleCount", [](TWld* self) -> int { return self->world ? self->world->totalTriangles(): 0; });
-}
-
 void TileBindings::setAppContext(const std::string& basePath,
                                  const util::AssetMounts* mounts) {
     setAssetPathContext(basePath, mounts);
@@ -1085,6 +1008,82 @@ void TileBindings::cleanup(JSContext*) {
     }
 }
 
+void TileBindings::install(JSContext* ctx)
+{
+    qjsbind::Class<TWld>(ctx, "TileWorld")
+            // No constructor — created via scene.createTileWorld().
+            .method_raw("setTile", js_tile_setTile, 4)
+            .method_raw("getTile", js_tile_getTile, 3)
+            .method_raw("fillTile", js_tile_fillTile, 6)
+            .method("setElevation", [](TWld* self, int x, int y, int level) {
+                if (self->world) self->world->setElevation(x, y, level);
+            })
+            .method("getElevation", [](TWld* self, int x, int y) -> int {
+                return self->world ? self->world->elevation(x, y) : 0;
+            })
+            .method("fillElevation", [](TWld* self, int x0, int y0, int x1, int y1, int level) {
+                if (self->world) self->world->fillElevation(x0, y0, x1, y1, level);
+            })
+            .method_raw("setTint", js_tile_setTint, 6)
+            .method_raw("fillTint", js_tile_fillTint, 8)
+            .method_raw("getTint", js_tile_getTint, 2)
+            .method("setFlag", [](TWld* self, int x, int y, double bit, bool on) {
+                if (self->world) self->world->setFlag(x, y, (uint32_t)bit, on);
+            })
+            .method("hasFlag", [](TWld* self, int x, int y, double bit) -> bool {
+                return self->world ? self->world->hasFlag(x, y, (uint32_t)bit) : false;
+            })
+            .method_raw("worldToCell", js_tile_worldToCell, 2)
+            .method_raw("cellCenterWorldXZ", js_tile_cellCenterWorldXZ, 2)
+            .method_raw("worldBounds", js_tile_worldBounds, 0)
+            .method_raw("raycastCell", js_tile_raycastCell, 3)
+            .method_raw("sampleHeight", js_tile_sampleHeight, 2)
+            .method_raw("isWalkable", js_tile_isWalkable, 3)
+            .method_raw("syncNavGrid", js_tile_syncNavGrid, 2)
+            .method_raw("toNavGrid", js_tile_toNavGrid, 1)
+            .method_raw("findPath", js_tile_findPath, 5)
+            .method_raw("distanceField", js_tile_distanceField, 2)
+            .method_raw("floodFill", js_tile_floodFill, 3)
+            .method_raw("components", js_tile_components, 1)
+            .method_raw("cellDistance", js_tile_cellDistance, 5)
+            .method_raw("cellNeighbors", js_tile_cellNeighbors, 3)
+            .method_raw("cellRing", js_tile_cellRing, 4)
+            .method_raw("cellsInRange", js_tile_cellsInRange, 4)
+            .method_raw("cellLine", js_tile_cellLine, 4)
+            .method("setOrigin", [](TWld* self, double x, double y, double z) {
+                if (self->world) self->world->setOrigin((float)x, (float)y, (float)z);
+            })
+            .method("advance", [](TWld* self, double dtMs) -> bool {
+                return self->world ? self->world->advance(dtMs) : false;
+            })
+            .method_raw("addObjectKind", js_tile_addObjectKind, 2)
+            .method_raw("addObject", js_tile_addObject, 4)
+            .method_raw("clearObjects", js_tile_clearObjects, 1)
+            .method("objectCount", [](TWld* self, int kind) -> int {
+                return self->world ? self->world->objectCount(kind) : 0;
+            })
+            .method("rebuildObjects", [](TWld* self) {
+                if (self->world) self->world->rebuildObjects();
+            })
+            .method("rebuild", [](TWld* self) {
+                if (self->world) self->world->rebuildDirty();
+            })
+            .method("rebuildAll", [](TWld* self) {
+                if (self->world) self->world->rebuildAll();
+            })
+            .method_raw("configure", js_tile_configure, 1)
+            .method_raw("save", js_tile_save, 0)
+            .method_raw("load", js_tile_load, 1)
+            .method("destroy", [](TWld* self) {
+                if (self->world) { self->world->clear(); self->world.reset(); }
+            })
+            .get("width",  [](TWld* self) -> int { return self->world ? self->world->width()  : 0; })
+            .get("height", [](TWld* self) -> int { return self->world ? self->world->height() : 0; })
+            .get("chunkCount",    [](TWld* self) -> int { return self->world ? self->world->chunkCount()    : 0; })
+            .get("vertexCount",   [](TWld* self) -> int { return self->world ? self->world->totalVertices() : 0; })
+            .get("triangleCount", [](TWld* self) -> int { return self->world ? self->world->totalTriangles(): 0; });
+}
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_3D
+#endif // BRO_WITH_3D
