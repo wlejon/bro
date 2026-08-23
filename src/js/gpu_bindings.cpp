@@ -1,30 +1,18 @@
 #if BRO_WITH_TENSOR
-// Installed onto bro.gpu by installGpuBindings(). A thin, always-present
-// runtime probe over brotensor's registered backends — see gpu_bindings.h for
-// the rationale (it exists even in CPU-only builds, where bro.tensor stubs out).
-//
-// The getters call brotensor::init() lazily: it is idempotent and the result is
-// stable once the CUDA / Metal drivers have been probed, so a non-ML app that
-// never reads bro.gpu pays nothing at context creation. `backend`/`available`
-// report brotensor::default_device() — the canonical "best available" device
-// (CUDA > Metal > CPU) that governs where the next tensor, and therefore a
-// freshly-loaded model, lands.
 
 #include "gpu_bindings.h"
-
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <cstdlib>
 #include <cstring>
 #include <string>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
 
-// The backend name alone ('cuda'/'metal'/'cpu'), with no device index. This is
-// what `backend` and `devices` report: brotensor now carries a per-device index
-// for multi-GPU, but the probe surface stays backend-shaped, and the index is
-// addressed explicitly through the 'cuda:N' argument form below.
 static const char* deviceName(brotensor::Device d) {
     switch (d.type) {
         case brotensor::DeviceType::CUDA:  return "cuda";
@@ -34,9 +22,6 @@ static const char* deviceName(brotensor::Device d) {
     return "cpu";
 }
 
-// Parses argv[argIdx] as 'cuda'/'metal'/'cpu', optionally with a device index
-// ('cuda:1'); falls back to default_device() when the arg is missing, not a
-// string, or names no known backend.
 static brotensor::Device parseDeviceArg(JSContext* ctx, int argc, JSValueConst* argv,
                                         int argIdx) {
     if (argc <= argIdx || !JS_IsString(argv[argIdx])) return brotensor::default_device();
@@ -59,17 +44,16 @@ static brotensor::Device parseDeviceArg(JSContext* ctx, int argc, JSValueConst* 
     return d;
 }
 
-// Is this exact device — backend AND card index — registered? The brotensor
-// probes take the index straight to the driver, which for an out-of-range card
-// leaves the current device selected and would answer for the wrong GPU; the
-// probe methods gate on this instead, so 'cuda:9' on a one-card box reports
-// "nothing there" rather than card 0's numbers.
 static bool deviceExists(brotensor::Device want) {
     for (auto d : brotensor::available_devices()) {
         if (d == want) return true;
     }
     return false;
 }
+
+// ---------------------------------------------------------------------------
+// Accessors
+// ---------------------------------------------------------------------------
 
 static JSValue js_gpu_get_available(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     brotensor::init();
@@ -81,10 +65,6 @@ static JSValue js_gpu_get_backend(JSContext* ctx, JSValueConst, int, JSValueCons
     return JS_NewString(ctx, deviceName(brotensor::default_device()));
 }
 
-// devices -> ['cpu', 'cuda', ...]: registered BACKENDS, one entry each. On a
-// multi-GPU box available_devices() lists every card (cuda:0, cuda:1, …), so
-// the names are deduped here — the count lives on `deviceCount`, and a specific
-// card is addressed as 'cuda:N' in memoryInfo/deviceName/trim.
 static JSValue js_gpu_get_devices(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     brotensor::init();
     JSValue arr = JS_NewArray(ctx);
@@ -99,11 +79,20 @@ static JSValue js_gpu_get_devices(JSContext* ctx, JSValueConst, int, JSValueCons
     return arr;
 }
 
-// deviceCount(device?) -> number. How many devices of that backend are
-// registered: the multi-GPU count for 'cuda', 1 for 'cpu' (and for a backend
-// that reports no index), 0 when the backend isn't registered at all. The valid
-// indices for the 'cuda:N' argument form are 0 .. deviceCount('cuda') - 1.
-static JSValue js_gpu_deviceCount(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_gpu_get_compiled_backends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "cpu"));
+    #if defined(BROTENSOR_HAS_CUDA) && BROTENSOR_HAS_CUDA
+    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "cuda"));
+    #endif
+    #if defined(BROTENSOR_HAS_METAL) && BROTENSOR_HAS_METAL
+    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "metal"));
+    #endif
+    return arr;
+}
+
+static JSValue js_gpu_device_count(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     brotensor::init();
     brotensor::Device want = parseDeviceArg(ctx, argc, argv, 0);
     int n = 0;
@@ -113,33 +102,7 @@ static JSValue js_gpu_deviceCount(JSContext* ctx, JSValueConst, int argc, JSValu
     return JS_NewInt32(ctx, n);
 }
 
-// compiledBackends -> ["cpu", ...]. The tensor backends actually COMPILED INTO
-// this binary, read from brotensor's own BROTENSOR_HAS_CUDA / _METAL defines —
-// a static fact, independent of whether a matching GPU is present at runtime,
-// and independent of bro's BRO_WITH_TENSOR_* flags (a stale build cache can let
-// those two diverge; this reports what brotensor truly built). CPU is always
-// there. This is the honest "can this build EVER use a GPU" signal, unlike
-// `backend`/`available`/`devices`, which report the runtime device and all read
-// 'cpu'/empty on a GPU-less machine even for a CUDA-capable binary. The nightly
-// smoke test asserts on this so a CPU-only `full` build can't ship advertised as
-// GPU-enabled (the runner has no GPU, so the runtime probes can't catch it).
-static JSValue js_gpu_get_compiledBackends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t i = 0;
-    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "cpu"));
-#if defined(BROTENSOR_HAS_CUDA) && BROTENSOR_HAS_CUDA
-    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "cuda"));
-#endif
-#if defined(BROTENSOR_HAS_METAL) && BROTENSOR_HAS_METAL
-    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "metal"));
-#endif
-    return arr;
-}
-
-// memoryInfo(device?) -> {freeBytes, totalBytes} | null. device is
-// 'cuda'/'metal'/'cpu', defaulting to the current default device. Returns
-// null when the backend isn't registered or can't report (always null on CPU).
-static JSValue js_gpu_memoryInfo(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_gpu_memory_info(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     brotensor::init();
     brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
     if (!deviceExists(d)) return JS_NULL;
@@ -151,11 +114,7 @@ static JSValue js_gpu_memoryInfo(JSContext* ctx, JSValueConst, int argc, JSValue
     return o;
 }
 
-// deviceName(device?) -> string | null. The card's human-readable name
-// (cudaDeviceProp.name, e.g. "NVIDIA GeForce RTX 4090"), for `device`
-// ('cuda'/'metal'/'cpu', defaulting to the current default device). Null when
-// the backend isn't registered or can't report (always null on CPU).
-static JSValue js_gpu_deviceName(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_gpu_device_name(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     brotensor::init();
     brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
     if (!deviceExists(d)) return JS_NULL;
@@ -164,13 +123,6 @@ static JSValue js_gpu_deviceName(JSContext* ctx, JSValueConst, int argc, JSValue
     return JS_NewString(ctx, name.c_str());
 }
 
-// trim(device?, keepBytes=0) -> boolean. Returns the backend allocator's
-// cached-but-unused memory to the driver, keeping at most keepBytes cached.
-// Use between pipeline phases with very different scratch shapes — cached
-// blocks count against device residency, and on Windows (WDDM) sustained
-// near-full commit silently demotes large resident allocations to shared
-// memory, turning weight reads into PCIe traffic. False when the backend
-// isn't registered or has no trimmable allocator (always false on CPU).
 static JSValue js_gpu_trim(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     brotensor::init();
     brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
@@ -183,44 +135,48 @@ static JSValue js_gpu_trim(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     return JS_NewBool(ctx, brotensor::device_mem_trim(d, keepBytes));
 }
 
-static void defineGetter(JSContext* ctx, JSValue obj, const char* name,
-                         JSCFunction* getter) {
-    JSAtom atom = JS_NewAtom(ctx, name);
-    JS_DefinePropertyGetSet(ctx, obj, atom,
-        JS_NewCFunction(ctx, getter, name, 0),
-        JS_UNDEFINED,
-        JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-    JS_FreeAtom(ctx, atom);
-}
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
 
 void installGpuBindings(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
     if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
-        JS_FreeValue(ctx, broObj);
         broObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
     }
 
     JSValue gpuObj = JS_NewObject(ctx);
-    defineGetter(ctx, gpuObj, "available", js_gpu_get_available);
-    defineGetter(ctx, gpuObj, "backend",   js_gpu_get_backend);
-    defineGetter(ctx, gpuObj, "devices",   js_gpu_get_devices);
-    defineGetter(ctx, gpuObj, "compiledBackends", js_gpu_get_compiledBackends);
-    JS_SetPropertyStr(ctx, gpuObj, "deviceCount",
-                      JS_NewCFunction(ctx, js_gpu_deviceCount, "deviceCount", 1));
-    JS_SetPropertyStr(ctx, gpuObj, "memoryInfo",
-                      JS_NewCFunction(ctx, js_gpu_memoryInfo, "memoryInfo", 1));
-    JS_SetPropertyStr(ctx, gpuObj, "deviceName",
-                      JS_NewCFunction(ctx, js_gpu_deviceName, "deviceName", 1));
-    JS_SetPropertyStr(ctx, gpuObj, "trim",
-                      JS_NewCFunction(ctx, js_gpu_trim, "trim", 2));
-    JS_SetPropertyStr(ctx, broObj, "gpu", gpuObj);
 
+    auto defineGetSet = [&](const char* name, JSCFunction* getter,
+                            JSCFunction* setter) {
+        JSAtom atom = JS_NewAtom(ctx, name);
+        JS_DefinePropertyGetSet(ctx, gpuObj, atom,
+            JS_NewCFunction(ctx, getter, name, 0),
+            setter ? JS_NewCFunction(ctx, setter, name, 1) : JS_UNDEFINED,
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    };
+    defineGetSet("available",  js_gpu_get_available,  nullptr);
+    defineGetSet("backend",  js_gpu_get_backend,  nullptr);
+    defineGetSet("devices",  js_gpu_get_devices,  nullptr);
+    defineGetSet("compiledBackends",  js_gpu_get_compiled_backends,  nullptr);
+    JS_SetPropertyStr(ctx, gpuObj, "deviceCount",
+        JS_NewCFunction(ctx, js_gpu_device_count, "deviceCount", 1));
+    JS_SetPropertyStr(ctx, gpuObj, "memoryInfo",
+        JS_NewCFunction(ctx, js_gpu_memory_info, "memoryInfo", 1));
+    JS_SetPropertyStr(ctx, gpuObj, "deviceName",
+        JS_NewCFunction(ctx, js_gpu_device_name, "deviceName", 1));
+    JS_SetPropertyStr(ctx, gpuObj, "trim",
+        JS_NewCFunction(ctx, js_gpu_trim, "trim", 2));
+
+    JS_SetPropertyStr(ctx, broObj, "gpu", gpuObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
 
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_TENSOR
+#endif // BRO_WITH_TENSOR

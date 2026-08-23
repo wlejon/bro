@@ -149,6 +149,7 @@ if [[ "$PULL" -eq 1 ]]; then
     echo "${BOLD}== Pulling (fast-forward only) ==${N}"
     repo_pull "bro" "$BRO_ROOT"
     repo_pull "broworkshop" "$PROJECTS_ROOT/broworkshop"
+    repo_pull "brosurface" "$PROJECTS_ROOT/brosurface"
     for name in "${SIBLINGS[@]}"; do
         repo_pull "$name" "$PROJECTS_ROOT/$name"
     done
@@ -158,6 +159,7 @@ fi
 echo "${BOLD}== Repo state ==${N}"
 repo_state "bro" "$BRO_ROOT"
 repo_state "broworkshop" "$PROJECTS_ROOT/broworkshop"
+repo_state "brosurface" "$PROJECTS_ROOT/brosurface"
 for name in "${SIBLINGS[@]}"; do
     repo_state "$name" "$PROJECTS_ROOT/$name"
 done

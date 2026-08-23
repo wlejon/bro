@@ -6,7 +6,9 @@ Each has a standalone repo at `../<name>` and a git submodule fallback under `th
 
 A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
-| Library | Standalone repo | Submodule fallback |
+A seventeenth sibling repo, **[brosurface](https://github.com/wlejon/brosurface)** at `../brosurface`, is the **IDL generator toolchain**. It generates TypeScript `.d.ts` definitions, QuickJS bindings (`src/js/`), bronze_host bindings (`src/bronze_host/`), availability stubs, and JSDoc documentation from single `.idl` declarations. Run `npm run sync-to-bro` from `../brosurface` to emit updated bindings directly into `bro`.
+
+| Library / Tool | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
 | **bromath** | `../bromath` | `third_party/bromath` |
 | **qjsbind** | `../qjsbind` | `third_party/qjsbind` |
@@ -23,6 +25,7 @@ A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)
 | **brosoundml** | `../brosoundml` | `third_party/brosoundml` |
 | **brovisionml** | `../brovisionml` | `third_party/brovisionml` |
 | **bronze** (compiler, opt-in) | `../bronze` | `third_party/bronze` |
+| **brosurface** (generator tool) | `../brosurface` | *(none — run directly via `npm run sync-to-bro`)* |
 
 ## Directory Layout
 

@@ -1,5 +1,7 @@
 /**
- * bro.time, global pause + timescale
+ * =============================================================================
+ * bro.time — global pause + timescale
+ * =============================================================================
  *
  * The Godot Engine.time_scale / SceneTree.paused analog. The engine owns one
  * scaled clock, advanced each frame by wallDt * scale (0 while paused), and
@@ -48,48 +50,51 @@
  * and not at all while paused, while virtual time (system panels, splash,
  * audio pump, brokit ticks) advances by the full ms. This makes pause and
  * timescale fully testable headlessly.
+ *
+ * @example
+ *   // Pause menu idiom
+ *   window.addEventListener('action', (e) => {
+ *     if (e.name === 'pause') bro.time.paused = !bro.time.paused;
+ *   });
+ *
+ * @example
+ *   // Slow-motion effect
+ *   bro.time.scale = 0.25;                           // bullet time
+ *   setTimeout(() => { bro.time.scale = 1; }, 500);  // 500 scaled ms = 2000 wall ms
+ *
+ * @example
+ *   // Headless testing
+ *   bro.time.scale = 0.5;
+ *   advanceTime(100);        // scaled clock advances 50ms; timers/rAF/physics see 50ms
+ *   bro.time.paused = true;
+ *   advanceTime(1000);       // gameplay time does not move at all
  */
 
-// ── Properties ───────────────────────────────────────────────────────────────
+// ── Namespaces ───────────────────────────────────────────────────────────────
 
-bro.time.scale;          // number, time multiplier, default 1
-bro.time.scale = 0.5;    // slow motion (half speed)
-bro.time.scale = 2;      // fast-forward (double speed)
-bro.time.scale = 0;      // freeze gameplay time without the pause side-effects
-                         // (audio keeps playing, rAF keeps firing)
-// Assignments clamp to [0, 100]; non-finite values are ignored. The value is
-// first put through ToNumber, so an unparseable string ('fast') becomes NaN
-// and is ignored, but a BigInt or Symbol THROWS TypeError rather than being
-// ignored, validate before assigning if the value comes from user data.
+/**
+ * Global engine time and timescale control namespace.
+ */
+/**
+ * Time multiplier (default 1.0). Clamps to [0, 100]; non-finite values are ignored.
+ * 0.5 = slow motion, 2.0 = fast forward, 0 = freeze gameplay time without pause side-effects.
+ * @type {number}
+ */
+bro.time.scale;
 
-bro.time.paused;         // boolean, global pause, default false
-bro.time.paused = true;  // effective scale 0 + rAF skipped + audio suspended
-bro.time.paused = false; // everything resumes exactly where it stopped
+/**
+ * Global pause state (default false).
+ * true = effective scale 0 + rAF callbacks skipped + audio output suspended.
+ * false = everything resumes exactly where it stopped.
+ * @type {boolean}
+ */
+bro.time.paused;
 
-bro.time.now;            // number, current scaled engine time in ms
-                         // (read-only; the clock timers/rAF/transitions run on)
+/**
+ * Current scaled engine time in milliseconds (read-only).
+ * This is the clock timers, rAF, transitions, and physics run on.
+ * @readonly
+ * @type {number}
+ */
+bro.time.now;
 
-// ── Pause menu idiom ─────────────────────────────────────────────────────────
-//
-// Gameplay (rAF loops, timers, physics, CSS animations) freezes; DOM input
-// events still dispatch, so a pause overlay built from ordinary elements
-// keeps working. Drive its "animations" from input, or leave them to the
-// engine-level system panels which stay on wall time.
-
-window.addEventListener('action', (e) => {
-    if (e.name === 'pause') bro.time.paused = !bro.time.paused;
-});
-
-// ── Slow-motion effect ───────────────────────────────────────────────────────
-
-bro.time.scale = 0.25;                       // bullet time
-setTimeout(() => { bro.time.scale = 1; }, 500);  // NOTE: this timeout is itself
-// scaled, 500 scaled ms = 2000 wall ms at scale 0.25. Time your effect in
-// wall clock with Date.now() if you want a fixed real-world duration.
-
-// ── Headless testing ─────────────────────────────────────────────────────────
-
-bro.time.scale = 0.5;
-advanceTime(100);        // scaled clock advances 50ms; timers/rAF/physics see 50ms
-bro.time.paused = true;
-advanceTime(1000);       // gameplay time does not move at all

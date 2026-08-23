@@ -8,8 +8,7 @@ extern "C" {
 namespace bro::js {
 
 // ---------------------------------------------------------------------------
-// Engine pointer stash (same pattern as menu_bindings — no pinned JSValues,
-// so there is nothing to gc_mark and no finalizer-order hazard).
+// Engine pointer stash (no pinned JSValues, no finalizer-order hazard).
 // ---------------------------------------------------------------------------
 
 static const char* kTimeEngineKey = "__bro_time_engine_ptr";
@@ -34,7 +33,7 @@ static engine::Engine* getEngine(JSContext* ctx) {
 
 static JSValue js_time_get_scale(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* eng = getEngine(ctx);
-    return JS_NewFloat64(ctx, eng ? eng->timeScale() : 1.0);
+    return JS_NewFloat64(ctx, static_cast<double>(eng ? eng->timeScale() : 1.0));
 }
 
 static JSValue js_time_set_scale(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -61,7 +60,7 @@ static JSValue js_time_set_paused(JSContext* ctx, JSValueConst, int argc, JSValu
 
 static JSValue js_time_get_now(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* eng = getEngine(ctx);
-    return JS_NewFloat64(ctx, eng ? eng->timeNowMs() : 0.0);
+    return JS_NewFloat64(ctx, static_cast<double>(eng ? eng->timeNowMs() : 0.0));
 }
 
 // ---------------------------------------------------------------------------
@@ -92,12 +91,13 @@ void TimeBindings::install(JSContext* ctx, engine::Engine* engine) {
         JS_FreeAtom(ctx, atom);
     };
     defineGetSet("scale",  js_time_get_scale,  js_time_set_scale);
-    defineGetSet("paused", js_time_get_paused, js_time_set_paused);
-    defineGetSet("now",    js_time_get_now,    nullptr);
+    defineGetSet("paused",  js_time_get_paused,  js_time_set_paused);
+    defineGetSet("now",  js_time_get_now,  nullptr);
 
     JS_SetPropertyStr(ctx, broObj, "time", timeObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
+
 
 } // namespace bro::js

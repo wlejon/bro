@@ -1,28 +1,69 @@
-// bro.gpu, runtime GPU-backend probe
-// =============================================================================
-//
-// A thin, always-present view of the brotensor backends registered in this
-// build at runtime. Use it to decide whether an ML model will run on a GPU or
-// fall back to CPU *before* you load it, large models (LLMs, diffusion U-Nets,
-// Whisper) are unbearably slow on CPU, so apps typically warn or gate on this.
-//
-// Why this is separate from `bro.tensor`:
-//   - `bro.tensor` is the GPU tensor/op surface. It compiles OUT to a stub
-//     `{ available: false }` when no GPU backend (CUDA/Metal) is built in, and
-//     `bro.tensor.available` reflects that *compile-time* decision.
-//   - `bro.gpu` is ALWAYS present (brotensor's CPU backend is always linked)
-//     and reflects *runtime* reality: a CUDA build still reports CPU here when
-//     no CUDA device is actually present at run time. This is the device the ML
-//     loaders (bro.lm / bro.stt / bro.tts / bro.vision / bro.diffusion) default
-//     to, so it is the honest signal for "will this be slow."
-//
-// The properties are lazy getters: the CUDA/Metal driver probe runs on first
-// access, not at startup, so an app that never touches ML pays nothing.
+/**
+ * =============================================================================
+ * bro.gpu, runtime GPU-backend probe
+ * =============================================================================
+ *
+ * A thin, always-present view of the brotensor backends registered in this
+ * build at runtime. Use it to decide whether an ML model will run on a GPU or
+ * fall back to CPU *before* you load it, large models (LLMs, diffusion U-Nets,
+ * Whisper) are unbearably slow on CPU, so apps typically warn or gate on this.
+ *
+ * Why this is separate from `bro.tensor`:
+ *   - `bro.tensor` is the GPU tensor/op surface. It compiles OUT to a stub
+ *     `{ available: false }` when no GPU backend (CUDA/Metal) is built in, and
+ *     `bro.tensor.available` reflects that *compile-time* decision.
+ *   - `bro.gpu` is ALWAYS present (brotensor's CPU backend is always linked)
+ *     and reflects *runtime* reality: a CUDA build still reports CPU here when
+ *     no CUDA device is actually present at run time. This is the device the ML
+ *     loaders (bro.lm / bro.stt / bro.tts / bro.vision / bro.diffusion) default
+ *     to, so it is the honest signal for "will this be slow."
+ *
+ * The properties are lazy getters: the CUDA/Metal driver probe runs on first
+ * access, not at startup, so an app that never touches ML pays nothing.
+ *
+ * @example
+ *   // Typical use: warn before loading a large model on CPU
+ *   if (!bro.gpu.available) {
+ *     // Non-blocking warning, the model still loads and runs, just slowly.
+ *     status('No GPU detected (' + bro.gpu.backend + '), loading on CPU will be slow. Continue?', 'warn');
+ *   }
+ *
+ * @example
+ *   // Drive a backend badge honestly in any build:
+ *   const badge = document.querySelector('#backend');
+ *   badge.textContent = bro.gpu.backend.toUpperCase();      // 'CUDA' | 'METAL' | 'CPU'
+ *   badge.className = 'badge ' + (bro.gpu.available ? 'ok' : 'bad');
+ *
+ * @example
+ *   // Confirm-gate a heavy load:
+ *   function maybeLoad(loadFn) {
+ *     if (!bro.gpu.available &&
+ *         !confirm('This model will run on CPU and may take minutes. Load anyway?')) {
+ *       return;
+ *     }
+ *     loadFn();
+ *   }
+ */
 
+// ── Dictionaries ─────────────────────────────────────────────────────────────
+
+/**
+ * GPU device memory capacity and availability information in bytes.
+ * @typedef {Object} GpuMemoryInfo
+ * @property {number} freeBytes - Free VRAM in bytes available for allocation.
+ * @property {number} totalBytes - Total physical VRAM in bytes on the device.
+ */
+
+// ── Namespaces ───────────────────────────────────────────────────────────────
+
+/**
+ * Runtime GPU-backend probe and device memory introspection namespace.
+ */
 /**
  * Whether a GPU device is registered and is the default compute device.
  * `false` on a CPU-only build, and also on a GPU build with no usable device
  * (e.g. no CUDA driver / no card present).
+ * @readonly
  * @type {boolean}
  */
 bro.gpu.available;
@@ -30,6 +71,7 @@ bro.gpu.available;
 /**
  * The default compute device: what a freshly-loaded model lands on.
  * One of 'cuda' | 'metal' | 'cpu' (best available: CUDA > Metal > CPU).
+ * @readonly
  * @type {string}
  */
 bro.gpu.backend;
@@ -40,27 +82,10 @@ bro.gpu.backend;
  * always included. One entry per BACKEND, not per card: a two-GPU box still
  * reports ['cpu', 'cuda'] — see `deviceCount()` for how many cards, and the
  * 'cuda:N' argument form for addressing a specific one.
- * @type {string[]}
+ * @readonly
+ * @type {Array<string>}
  */
 bro.gpu.devices;
-
-/**
- * How many devices of `device`'s backend are registered: the card count on a
- * multi-GPU box, 1 for 'cpu', 0 when that backend isn't registered at all.
- * The valid indices for the 'cuda:N' form accepted by `memoryInfo`,
- * `deviceName`, and `trim` are 0 .. deviceCount('cuda') - 1.
- *
- * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
- * @returns {number}
- *
- * @example
- *   for (let i = 0; i < bro.gpu.deviceCount('cuda'); i++) {
- *     const mem = bro.gpu.memoryInfo('cuda:' + i);
- *     console.log(bro.gpu.deviceName('cuda:' + i),
- *                 (mem.freeBytes / 1e9).toFixed(1) + ' GB free');
- *   }
- */
-bro.gpu.deviceCount(device) {}
 
 /**
  * The tensor backends COMPILED INTO this binary: a static build-time fact from
@@ -73,9 +98,29 @@ bro.gpu.deviceCount(device) {}
  * EVER use a GPU," so it's the right signal for build/packaging checks, e.g. a
  * CI smoke test verifying a release binary actually ships the GPU backend on a
  * GPU-less runner, where the runtime probes can't tell.
- * @type {string[]}
+ * @readonly
+ * @type {Array<string>}
  */
 bro.gpu.compiledBackends;
+
+/**
+ * How many devices of `device`'s backend are registered: the card count on a
+ * multi-GPU box, 1 for 'cpu', 0 when that backend isn't registered at all.
+ * The valid indices for the 'cuda:N' form accepted by `memoryInfo`,
+ * `deviceName`, and `trim` are 0 .. deviceCount('cuda') - 1.
+ *
+ * @param {string} [device] - 'cuda' | 'metal' | 'cpu'
+ * @returns {number} Device count for the specified backend
+ * @example
+ * for (let i = 0; i < bro.gpu.deviceCount('cuda'); i++) {
+ *     const mem = bro.gpu.memoryInfo('cuda:' + i);
+ *     if (mem) {
+ *       console.log(bro.gpu.deviceName('cuda:' + i),
+ *                   (mem.freeBytes / 1e9).toFixed(1) + ' GB free');
+ *     }
+ *   }
+ */
+bro.gpu.deviceCount = function(device) {};
 
 /**
  * Device-wide free/total VRAM in bytes for `device` (e.g. cudaMemGetInfo).
@@ -83,17 +128,15 @@ bro.gpu.compiledBackends;
  * or gate a large model load on available headroom. Returns `null` when the
  * backend isn't registered or can't report: always `null` for 'cpu'.
  *
- * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu',
- *   optionally with a card index on a multi-GPU box: 'cuda:1'
- * @returns {?{freeBytes: number, totalBytes: number}}
- *
+ * @param {string} [device] - 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @returns {GpuMemoryInfo|null} Free and total VRAM in bytes, or null
  * @example
- *   const mem = bro.gpu.memoryInfo();
+ * const mem = bro.gpu.memoryInfo();
  *   if (mem && mem.freeBytes < 4e9) {
  *     status('Less than 4 GB VRAM free: model may not fit.', 'warn');
  *   }
  */
-bro.gpu.memoryInfo(device) {}
+bro.gpu.memoryInfo = function(device) {};
 
 /**
  * The card's human-readable name (e.g. `cudaDeviceProp.name`,
@@ -101,16 +144,16 @@ bro.gpu.memoryInfo(device) {}
  * isn't registered or can't report: always `null` for 'cpu'. Pair with
  * `memoryInfo()` to label a VRAM budget line with the actual card.
  *
- * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu',
- *   optionally with a card index on a multi-GPU box: 'cuda:1'
- * @returns {?string}
- *
+ * @param {string} [device] - 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @returns {string|null} Device name string or null
  * @example
- *   const card = bro.gpu.deviceName() || bro.gpu.backend.toUpperCase();
+ * const card = bro.gpu.deviceName() || bro.gpu.backend.toUpperCase();
  *   const mem = bro.gpu.memoryInfo();
- *   status(card + ' · ' + (mem.totalBytes / 1e9).toFixed(1) + ' GB');
+ *   if (mem) {
+ *     status(card + ' · ' + (mem.totalBytes / 1e9).toFixed(1) + ' GB');
+ *   }
  */
-bro.gpu.deviceName(device) {}
+bro.gpu.deviceName = function(device) {};
 
 /**
  * Return the backend allocator's cached-but-unused memory to the driver,
@@ -125,36 +168,13 @@ bro.gpu.deviceName(device) {}
  * weight read into PCIe traffic. Returns `false` when the backend isn't
  * registered or has no trimmable allocator: always `false` for 'cpu'.
  *
- * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu',
- *   optionally with a card index on a multi-GPU box: 'cuda:1'
- * @param {number} [keepBytes=0] - bytes to keep cached
- * @returns {boolean}
- *
+ * @param {string} [device] - 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @param {number} [keepBytes] - bytes to keep cached
+ * @returns {boolean} Whether trim succeeded
  * @example
- *   const unet = bro.diffusion.loadModel(unetDir);
+ * const unet = bro.diffusion.loadModel(unetDir);
  *   // ... run denoise steps ...
  *   bro.gpu.trim(); // release U-Net scratch before the VAE decode allocates
  */
-bro.gpu.trim(device, keepBytes) {}
+bro.gpu.trim = function(device, keepBytes) {};
 
-// --- Typical use: warn before loading a large model on CPU -------------------
-
-if (!bro.gpu.available) {
-  // Non-blocking warning, the model still loads and runs, just slowly.
-  status('No GPU detected (' + bro.gpu.backend + '), loading on CPU will be '
-       + 'slow. Continue?', 'warn');
-}
-
-// Drive a backend badge honestly in any build:
-const badge = document.querySelector('#backend');
-badge.textContent = bro.gpu.backend.toUpperCase();      // 'CUDA' | 'METAL' | 'CPU'
-badge.className = 'badge ' + (bro.gpu.available ? 'ok' : 'bad');
-
-// Confirm-gate a heavy load:
-function maybeLoad(loadFn) {
-  if (!bro.gpu.available &&
-      !confirm('This model will run on CPU and may take minutes. Load anyway?')) {
-    return;
-  }
-  loadFn();
-}

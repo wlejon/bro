@@ -1,5 +1,7 @@
 /**
- * bro.mic, Live mic chunk consumer (fixed-size frames)
+ * =============================================================================
+ * bro.mic — live mic chunk consumer (fixed-size frames)
+ * =============================================================================
  *
  * A general-purpose live-microphone consumer built on broaudio's multi-consumer
  * mic-tap dispatch. Where bro.wake feeds a model that does its own internal
@@ -18,123 +20,109 @@
  * tap and both fan out from the same captured audio, so there are no
  * last-writer-wins races over the mic.
  *
- * Companion windowed demo: ../broworkshop/demos/mic-chunks (a scrolling
- * per-chunk level meter). Headless smoke test: tests/smoke_mic_chunks.js.
- */
-
-
-// ── Start ─────────────────────────────────────────────────────────────────────
-
-/**
- * Register a mic tap and begin delivering fixed-size chunks. Replaces any prior
- * bro.mic consumer (the previous tap is removed first). Starts mic capture
- * automatically unless opts.live is false.
- *
- * @param {Object}   [opts]
- * @param {number}   [opts.chunkFrames=160] - Samples per chunk, measured at
- *                                            targetRate. 160 @ 16 kHz = 10 ms.
- *                                            0 = deliver the resampler's natural
- *                                            cadence (variable size).
- * @param {number}   [opts.targetRate=16000] - Rate handed to the callback.
- *                                             0 = the engine's native mic rate
- *                                             (no resampling).
- * @param {boolean}  [opts.agc=false]       - Enable broaudio's peak-track AGC
- *                                            (lifts quiet input toward a target
- *                                            loudness). Off by default so the
- *                                            meter shows true input level.
- * @param {boolean}  [opts.live=true]       - Open the recording device. Set
- *                                            false for headless/offline use and
- *                                            drive the tap with bro.mic.feed().
- * @param {boolean}  [opts.samples=false]   - Deliver each chunk's raw PCM:
- *                                            onChunk's argument gains a
- *                                            `samples` Float32Array
- *                                            (chunkFrames mono samples at
- *                                            targetRate). Requires a fixed
- *                                            chunkFrames (> 0). This is the
- *                                            capture path for recording /
- *                                            STT consumers: concatenate the
- *                                            chunks for the utterance.
- * @param {Function} [opts.onChunk]         - Called per chunk on the JS thread
- *                                            with { index, peak, rms, samples? }.
- *                                            index is the absolute chunk counter
- *                                            (gaps indicate dropped chunks).
- * @param {number}   [opts.targetPeak]      - AGC: target peak (default 0.95).
- * @param {number}   [opts.halfLifeSec]     - AGC: running-peak decay half-life.
- * @param {number}   [opts.noiseGate]       - AGC: chunks below this don't raise
- *                                            the running peak (ignores hiss).
- * @param {number}   [opts.maxGain]         - AGC: clamp on applied gain.
- *
  * @example
+ *   // Start live mic capture delivering 10ms chunks
  *   bro.mic.start({
- *     chunkFrames: 160, targetRate: 16000, agc: false,
- *     onChunk: (c) => meter.push(c.peak),
+ *     chunkFrames: 160,
+ *     targetRate: 16000,
+ *     agc: false,
+ *     onChunk: (c) => console.log("Chunk index: " + c.index + " peak: " + c.peak),
  *   });
- */
-bro.mic.start = function (opts) {};
-
-
-// ── Stop ──────────────────────────────────────────────────────────────────────
-
-/**
- * Remove the tap and free the onChunk callback. Does NOT stop mic capture,
- * other consumers (e.g. bro.wake) may share the device. Safe to call when not
- * started.
- */
-bro.mic.stop = function () {};
-
-
-// ── Offline / headless feed ─────────────────────────────────────────────────
-
-/**
- * Push synthetic mic-rate audio through the active tap exactly as the recording
- * callback would (resample → AGC → chunk → onChunk / ring). For headless tests
- * and offline replay. Throws if live capture is active (feed and the recording
- * callback would race the same per-tap state): pair it with start({ live:false }).
- *
- * @param {Float32Array} samples       - Mono PCM at the engine mic rate.
- * @param {number}       [sampleRate]  - If given, must equal bro.mic.engineRate().
  *
  * @example
+ *   // Headless / synthetic feed
  *   bro.mic.start({ chunkFrames: 160, targetRate: 16000, live: false });
+ *   const synth = new Float32Array(16000);
  *   bro.mic.feed(synth, bro.mic.engineRate());
- *   const s = bro.mic.stats();   // s.chunkCount, s.rollingPeak, ...
+ *   const s = bro.mic.stats();
+ *   if (s) console.log("Total chunks: " + s.chunkCount);
  */
-bro.mic.feed = function (samples, sampleRate) {};
 
-
-// ── Introspection ─────────────────────────────────────────────────────────────
+// ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
- * @returns {boolean} Whether a tap is currently registered.
+ * Options for configuring and starting live mic stream capture.
+ * @typedef {Object} MicStartOptions
+ * @property {number} [chunkFrames] -  Samples per chunk measured at targetRate (default 160 = 10ms @ 16kHz). 0 = resampler cadence.
+ * @property {number} [targetRate] -  Sample rate delivered to callback in Hz (default 16000). 0 = engine native rate.
+ * @property {boolean} [agc] -  Enable broaudio peak-track AGC (default false).
+ * @property {boolean} [live] -  Open recording device (default true). Set false for offline/feed testing.
+ * @property {boolean} [samples] -  Deliver raw Float32Array PCM samples in onChunk callback (default false).
+ * @property {Function} [onChunk] -  Callback invoked per chunk on the main thread: (chunk: MicChunk) => void.
+ * @property {number} [targetPeak] -  AGC target peak level in [0, 1] (default 0.95).
+ * @property {number} [halfLifeSec] -  AGC running-peak decay half-life in seconds.
+ * @property {number} [noiseGate] -  AGC noise gate threshold (chunks below this do not raise running peak).
+ * @property {number} [maxGain] -  AGC maximum gain clamp.
  */
-bro.mic.isActive = function () {};
 
 /**
- * @returns {number} The engine's native mic sample rate (Hz). bro.mic.feed
- *                   expects samples at this rate.
+ * Diagnostic statistics for the active microphone tap and chunk ring.
+ * @typedef {Object} MicStats
+ * @property {number} [framesDelivered] -  Total callback invocations / chunks delivered.
+ * @property {number} [samplesDelivered] -  Total audio samples handed to callback.
+ * @property {number} [rollingPeak] -  Rolling peak level post-AGC in range [0, 1].
+ * @property {number} [chunkCount] -  Total chunks published to lock-free ring.
+ * @property {number} [dropped] -  Number of chunks dropped due to main-thread backlog.
+ * @property {number} [chunkFrames] -  Configured frame count per chunk.
  */
-bro.mic.engineRate = function () {};
 
 /**
- * Diagnostic snapshot of the underlying broaudio tap plus the binding's chunk
- * ring. Returns null when no tap is installed.
+ * Individual audio chunk structure delivered to onChunk callbacks.
+ * @typedef {Object} MicChunk
+ * @property {number} [index] -  Absolute monotonic chunk sequence counter.
+ * @property {number} [peak] -  Peak amplitude for this chunk in range [0, 1].
+ * @property {number} [rms] -  Root Mean Square (RMS) energy level for this chunk.
+ * @property {Float32Array} [samples] -  Raw PCM sample buffer (present when opts.samples = true).
+ */
+
+// ── Namespaces ───────────────────────────────────────────────────────────────
+
+/**
+ * Real-time microphone audio capture and fixed-size chunk streaming namespace.
+ */
+/**
+ * Register a microphone tap and start chunk delivery.
  *
- * @returns {?{
- *   framesDelivered:  number,  // callback invocations (== chunks, post-slicing)
- *   samplesDelivered: number,  // total samples handed to the callback
- *   rollingPeak:      number,  // tap's rolling peak (post-AGC), [0, ~1]
- *   chunkCount:       number,  // total chunks published to the ring
- *   dropped:          number,  // chunks the main-thread drain had to skip
- *   chunkFrames:      number,  // configured frames per chunk
- * }}
+ * @param {MicStartOptions} [opts] - Capture configuration options
  */
-bro.mic.stats = function () {};
+bro.mic.start = function(opts) {};
 
 /**
- * Snapshot of the most recent chunk peaks, oldest-first, for a polling level
- * meter. Each value is a peak in [0, ~1].
- *
- * @param {number} [maxCount] - Cap the number returned (default: all buffered).
- * @returns {number[]}
+ * Stop active microphone capture tap and free callback references.
  */
-bro.mic.levels = function (maxCount) {};
+bro.mic.stop = function() {};
+
+/**
+ * Check whether a microphone capture tap is currently registered and active.
+ * @returns {boolean} Whether capture is active
+ */
+bro.mic.isActive = function() {};
+
+/**
+ * Query the engine's native microphone sample rate in Hz.
+ * @returns {number} Native sample rate
+ */
+bro.mic.engineRate = function() {};
+
+/**
+ * Query diagnostic snapshot of tap statistics and ring buffers.
+ * @returns {MicStats|null} Tap statistics snapshot or null if inactive
+ */
+bro.mic.stats = function() {};
+
+/**
+ * Get array of recent peak amplitude levels for meter rendering.
+ *
+ * @param {number} [maxCount] - Maximum number of recent level samples to return
+ * @returns {Array<number>} Array of floating-point peak levels
+ */
+bro.mic.levels = function(maxCount) {};
+
+/**
+ * Feed synthetic microphone audio samples for offline and headless testing.
+ *
+ * @param {Float32Array} samples - Float32Array PCM samples at engine rate
+ * @param {number} [sampleRate] - Optional expected sample rate (must match engine rate)
+ */
+bro.mic.feed = function(samples, sampleRate) {};
+

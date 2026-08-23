@@ -1,14 +1,11 @@
+#if BRO_WITH_3D
+
 #include "js/terrain_bindings.h"
-#if BRO_WITH_3D  // modular-build feature gate
-
 #include <qjsbind/qjsbind.h>
-
 #include "scene/terrain_manager.h"
 #include "scene/scene_graph.h"
 #include "js/scene_bindings.h"
-
 #include "util/log.h"
-
 #include <cstring>
 #include <string>
 #include <unordered_set>
@@ -16,16 +13,8 @@
 
 namespace bro::js {
 
-// -------------------------------------------------------------------------
-// TerrainWrapper — opaque data attached to JS terrain objects
-// -------------------------------------------------------------------------
-
 struct TerrainWrapper {
     std::unique_ptr<scene::TerrainManager> manager;
-
-    // The JS height provider, if one is installed. Held as a dup'd JSValue for
-    // the wrapper's lifetime; the context outlives every DOM/scene object, so
-    // freeing it in the destructor is safe.
     JSContext* cbCtx = nullptr;
     JSValue    heightSource = JS_UNDEFINED;
     bool       hasHeightSource = false;
@@ -45,14 +34,8 @@ struct TerrainWrapper {
 
 using TW = TerrainWrapper;
 
-// -------------------------------------------------------------------------
-// Parse TerrainConfig from JS options object
-// -------------------------------------------------------------------------
-
 static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
     scene::TerrainConfig cfg;
-
-    // chunkSize: [x, y, z] array
     JSValue cs = JS_GetPropertyStr(ctx, opts, "chunkSize");
     if (JS_IsArray(cs)) {
         JSValue cx = JS_GetPropertyUint32(ctx, cs, 0);
@@ -64,7 +47,6 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
         JS_FreeValue(ctx, cx); JS_FreeValue(ctx, cy); JS_FreeValue(ctx, cz);
     }
     JS_FreeValue(ctx, cs);
-
     cfg.cellSize = (float)qjsbind::get_prop_number(ctx, opts, "cellSize", cfg.cellSize);
     cfg.loadRadius = qjsbind::get_prop_int(ctx, opts, "loadRadius", cfg.loadRadius);
     cfg.unloadRadius = qjsbind::get_prop_int(ctx, opts, "unloadRadius", cfg.unloadRadius);
@@ -84,8 +66,6 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
     cfg.lodLevelCount = qjsbind::get_prop_int(ctx, opts, "lodLevels", cfg.lodLevelCount);
     cfg.lodScaleFactor = qjsbind::get_prop_int(ctx, opts, "lodScaleFactor", cfg.lodScaleFactor);
     cfg.planetRadius = (float)qjsbind::get_prop_number(ctx, opts, "planetRadius", cfg.planetRadius);
-
-    // origin: [x, y, z] — world-space position of this terrain
     JSValue orig = JS_GetPropertyStr(ctx, opts, "origin");
     if (JS_IsArray(orig)) {
         JSValue ox = JS_GetPropertyUint32(ctx, orig, 0);
@@ -97,8 +77,6 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
         JS_FreeValue(ctx, ox); JS_FreeValue(ctx, oy); JS_FreeValue(ctx, oz);
     }
     JS_FreeValue(ctx, orig);
-
-    // noise: { frequency, octaves, gain, lacunarity }
     JSValue noise = JS_GetPropertyStr(ctx, opts, "noise");
     if (JS_IsObject(noise)) {
         cfg.noiseFrequency = (float)qjsbind::get_prop_number(ctx, noise, "frequency", cfg.noiseFrequency);
@@ -107,11 +85,8 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
         cfg.noiseLacunarity = (float)qjsbind::get_prop_number(ctx, noise, "lacunarity", cfg.noiseLacunarity);
     }
     JS_FreeValue(ctx, noise);
-
-    // palette: flat Float32Array or plain Array of numbers
     JSValue pal = JS_GetPropertyStr(ctx, opts, "palette");
     if (!JS_IsUndefined(pal)) {
-        // Try typed array first.
         size_t offset = 0, byteLen = 0, bpe = 0;
         JSValue abuf = JS_GetTypedArrayBuffer(ctx, pal, &offset, &byteLen, &bpe);
         if (!JS_IsException(abuf)) {
@@ -125,17 +100,13 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
             JS_FreeValue(ctx, abuf);
         } else {
             JS_FreeValue(ctx, abuf);
-            // Fall back to plain JS array.
             JSValue lenVal = JS_GetPropertyStr(ctx, pal, "length");
-            int32_t len = 0;
-            JS_ToInt32(ctx, &len, lenVal);
-            JS_FreeValue(ctx, lenVal);
+            int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
             if (len > 0) {
                 cfg.palette.resize(len);
                 for (int32_t i = 0; i < len; i++) {
                     JSValue el = JS_GetPropertyUint32(ctx, pal, i);
-                    double v = 0;
-                    JS_ToFloat64(ctx, &v, el);
+                    double v = 0; JS_ToFloat64(ctx, &v, el);
                     cfg.palette[i] = (float)v;
                     JS_FreeValue(ctx, el);
                 }
@@ -143,142 +114,68 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
         }
     }
     JS_FreeValue(ctx, pal);
-
     return cfg;
 }
 
-// -------------------------------------------------------------------------
-// Helper: parse [x, y, z] array
-// -------------------------------------------------------------------------
-
-static bool parseVec3(JSContext* ctx, JSValueConst val, bromath::Vec3& out) {
-    if (!JS_IsArray(val)) return false;
-    JSValue ex = JS_GetPropertyUint32(ctx, val, 0);
-    JSValue ey = JS_GetPropertyUint32(ctx, val, 1);
-    JSValue ez = JS_GetPropertyUint32(ctx, val, 2);
-    double x = 0, y = 0, z = 0;
-    bool ok = !JS_ToFloat64(ctx, &x, ex)
-           && !JS_ToFloat64(ctx, &y, ey)
-           && !JS_ToFloat64(ctx, &z, ez);
-    JS_FreeValue(ctx, ex); JS_FreeValue(ctx, ey); JS_FreeValue(ctx, ez);
-    if (!ok) return false;
-    out = {(float)x, (float)y, (float)z};
-    return true;
-}
-
-// -------------------------------------------------------------------------
-// Complex methods needing raw argc/argv
-// -------------------------------------------------------------------------
-
-// terrain.raycast(origin, direction, maxDist)
 static JSValue js_terrain_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = qjsbind::unwrap<TW>(ctx, this_val);
-    if (!w || !w->manager) return JS_NULL;
-    if (argc < 2) return JS_ThrowTypeError(ctx, "terrain.raycast(origin, dir[, maxDist])");
-
+    auto* self = qjsbind::unwrap<TW>(ctx, this_val);
+    if (!self || !self->manager || argc < 2) return JS_NULL;
     bromath::Vec3 origin, dir;
-    if (!parseVec3(ctx, argv[0], origin)) return JS_ThrowTypeError(ctx, "origin must be [x,y,z]");
-    if (!parseVec3(ctx, argv[1], dir)) return JS_ThrowTypeError(ctx, "direction must be [x,y,z]");
-
-    double maxDist = 0;
-    if (argc >= 3) JS_ToFloat64(ctx, &maxDist, argv[2]);
-
-    auto hit = w->manager->raycast(origin, dir, (float)maxDist);
+    JSValue o = argv[0], d = argv[1];
+    if (JS_IsArray(o)) {
+        JSValue x = JS_GetPropertyUint32(ctx, o, 0), y = JS_GetPropertyUint32(ctx, o, 1), z = JS_GetPropertyUint32(ctx, o, 2);
+        double vx = 0, vy = 0, vz = 0;
+        JS_ToFloat64(ctx, &vx, x); JS_ToFloat64(ctx, &vy, y); JS_ToFloat64(ctx, &vz, z);
+        origin = {(float)vx, (float)vy, (float)vz};
+        JS_FreeValue(ctx, x); JS_FreeValue(ctx, y); JS_FreeValue(ctx, z);
+    }
+    if (JS_IsArray(d)) {
+        JSValue x = JS_GetPropertyUint32(ctx, d, 0), y = JS_GetPropertyUint32(ctx, d, 1), z = JS_GetPropertyUint32(ctx, d, 2);
+        double vx = 0, vy = 0, vz = 0;
+        JS_ToFloat64(ctx, &vx, x); JS_ToFloat64(ctx, &vy, y); JS_ToFloat64(ctx, &vz, z);
+        dir = {(float)vx, (float)vy, (float)vz};
+        JS_FreeValue(ctx, x); JS_FreeValue(ctx, y); JS_FreeValue(ctx, z);
+    }
+    float maxDist = argc > 2 ? (float)qjsbind::Convert<double>::from_js(ctx, argv[2]) : 1000.0f;
+    auto hit = self->manager->raycast(origin, dir, maxDist);
     if (!hit.hit) return JS_NULL;
-
-    JSValue out = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, out, "hit", JS_TRUE);
-    JS_SetPropertyStr(ctx, out, "distance", JS_NewFloat64(ctx, hit.distance));
-
-    JSValue position = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, position, 0, JS_NewFloat64(ctx, hit.worldPos[0]));
-    JS_SetPropertyUint32(ctx, position, 1, JS_NewFloat64(ctx, hit.worldPos[1]));
-    JS_SetPropertyUint32(ctx, position, 2, JS_NewFloat64(ctx, hit.worldPos[2]));
-    JS_SetPropertyStr(ctx, out, "position", position);
-
-    JSValue normal = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, normal, 0, JS_NewFloat64(ctx, hit.normal[0]));
-    JS_SetPropertyUint32(ctx, normal, 1, JS_NewFloat64(ctx, hit.normal[1]));
-    JS_SetPropertyUint32(ctx, normal, 2, JS_NewFloat64(ctx, hit.normal[2]));
-    JS_SetPropertyStr(ctx, out, "normal", normal);
-
+    JSValue res = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, res, "hit", JS_NewBool(ctx, true));
+    JS_SetPropertyStr(ctx, res, "distance", JS_NewFloat64(ctx, hit.distance));
+    JSValue pos = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, pos, 0, JS_NewFloat64(ctx, hit.worldPos[0]));
+    JS_SetPropertyUint32(ctx, pos, 1, JS_NewFloat64(ctx, hit.worldPos[1]));
+    JS_SetPropertyUint32(ctx, pos, 2, JS_NewFloat64(ctx, hit.worldPos[2]));
+    JS_SetPropertyStr(ctx, res, "position", pos);
+    JSValue norm = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, norm, 0, JS_NewFloat64(ctx, hit.normal[0]));
+    JS_SetPropertyUint32(ctx, norm, 1, JS_NewFloat64(ctx, hit.normal[1]));
+    JS_SetPropertyUint32(ctx, norm, 2, JS_NewFloat64(ctx, hit.normal[2]));
+    JS_SetPropertyStr(ctx, res, "normal", norm);
     JSValue chunk = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, chunk, 0, JS_NewInt32(ctx, hit.chunk.x));
     JS_SetPropertyUint32(ctx, chunk, 1, JS_NewInt32(ctx, hit.chunk.z));
-    JS_SetPropertyStr(ctx, out, "chunk", chunk);
-
-    JSValue voxel = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, voxel, 0, JS_NewInt32(ctx, hit.localX));
-    JS_SetPropertyUint32(ctx, voxel, 1, JS_NewInt32(ctx, hit.localY));
-    JS_SetPropertyUint32(ctx, voxel, 2, JS_NewInt32(ctx, hit.localZ));
-    JS_SetPropertyStr(ctx, out, "voxel", voxel);
-
-    JS_SetPropertyStr(ctx, out, "material", JS_NewInt32(ctx, hit.material));
-
-    return out;
+    JS_SetPropertyStr(ctx, res, "chunk", chunk);
+    JSValue vox = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, vox, 0, JS_NewInt32(ctx, hit.localX));
+    JS_SetPropertyUint32(ctx, vox, 1, JS_NewInt32(ctx, hit.localY));
+    JS_SetPropertyUint32(ctx, vox, 2, JS_NewInt32(ctx, hit.localZ));
+    JS_SetPropertyStr(ctx, res, "voxel", vox);
+    JS_SetPropertyStr(ctx, res, "material", JS_NewInt32(ctx, hit.material));
+    return res;
 }
 
-// terrain.configure(opts) — reconfigure and rebuild
 static JSValue js_terrain_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = qjsbind::unwrap<TW>(ctx, this_val);
-    if (!w || !w->manager || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
-
-    auto cfg = parseConfig(ctx, argv[0]);
-    w->manager->configure(cfg);
+    auto* self = qjsbind::unwrap<TW>(ctx, this_val);
+    if (!self || !self->manager || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+    self->manager->configure(parseConfig(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
-// -------------------------------------------------------------------------
-// Factory: scene.createTerrain(opts) — called from scene_bindings.cpp
-// -------------------------------------------------------------------------
-
-JSValue createTerrainJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst opts) {
-    if (!graph) return JS_ThrowTypeError(ctx, "createTerrain: no scene graph");
-
-    auto cfg = parseConfig(ctx, opts);
-    auto mgr = std::make_unique<scene::TerrainManager>(*graph);
-    mgr->configure(cfg);
-
-    return qjsbind::wrap<TW>(ctx, new TW(std::move(mgr)));
-}
-
-// -------------------------------------------------------------------------
-// AI ground-follow height probe (see terrain_bindings.h)
-// -------------------------------------------------------------------------
-
-void* terrainHandleFromJS(JSContext* ctx, JSValueConst v) {
-    if (!JS_IsObject(v)) return nullptr;
-    return qjsbind::unwrap<TW>(ctx, v);
-}
-
-bool terrainSampleHeight(void* handle, float x, float z,
-                         float rayStartY, float rayLength, float& outY) {
-    auto* tw = static_cast<TW*>(handle);
-    if (!tw || !TW::allInstances().count(tw) || !tw->manager) return false;
-    auto hit = tw->manager->raycast({x, rayStartY, z}, {0.0f, -1.0f, 0.0f}, rayLength);
-    if (!hit.hit) return false;
-    outY = hit.worldPos[1];
-    return true;
-}
-
-// -------------------------------------------------------------------------
-// Install / Cleanup
-// -------------------------------------------------------------------------
-
-// terrain.invalidateRegion(x0, z0, x1, z1)
-//
-// Tell the terrain that the height source will now answer differently inside a
-// world-space XZ rectangle. Chunks overlapping it are regenerated in place, a
-// few per update(); nothing is destroyed. This is what a streaming source calls
-// when data arrives, instead of configure() — which wipes every chunk and, if
-// data keeps arriving, wipes them faster than they can be rebuilt.
-static JSValue js_terrain_invalidateRegion(JSContext* ctx, JSValueConst this_val,
-                                           int argc, JSValueConst* argv) {
+static JSValue js_terrain_invalidateRegion(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* self = qjsbind::unwrap<TW>(ctx, this_val);
     if (!self || !self->manager) return JS_UNDEFINED;
-    if (argc < 4) {
-        return JS_ThrowTypeError(ctx, "invalidateRegion(x0, z0, x1, z1) needs 4 numbers");
-    }
+    if (argc < 4) return JS_ThrowTypeError(ctx, "invalidateRegion(x0, z0, x1, z1) needs 4 numbers");
     double v[4];
     for (int i = 0; i < 4; i++) {
         if (JS_ToFloat64(ctx, &v[i], argv[i]) < 0) return JS_EXCEPTION;
@@ -288,21 +185,9 @@ static JSValue js_terrain_invalidateRegion(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
-// terrain.setHeightSource(fn | null)
-//
-// fn(cx, cz, lod, paddedW, paddedH, cellSize, worldX0, worldZ0) must return a
-// Float32Array of paddedW*paddedH heights (row-major, z-major, absolute world Y)
-// or null/undefined to fall back to the built-in noise for that chunk.
-//
-// This runs INSIDE terrain.update(), on the JS thread, once per newly loaded
-// chunk — so it must be cheap. The intended shape is to sample an already
-// resident tile (see docs/worldgen-api.js); anything that generates on demand
-// here will stall the frame.
-static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val,
-                                          int argc, JSValueConst* argv) {
+static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* self = qjsbind::unwrap<TW>(ctx, this_val);
     if (!self || !self->manager) return JS_UNDEFINED;
-
     if (self->hasHeightSource) {
         JS_FreeValue(self->cbCtx, self->heightSource);
         self->hasHeightSource = false;
@@ -312,11 +197,9 @@ static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val,
         self->manager->setHeightSource(nullptr);
         return JS_UNDEFINED;
     }
-
     self->cbCtx = ctx;
     self->heightSource = JS_DupValue(ctx, argv[0]);
     self->hasHeightSource = true;
-
     self->manager->setHeightSource(
         [self](int cx, int cz, int lod, float* padded, int paddedW, int paddedH,
                float cellSize, float worldX0, float worldZ0) -> bool {
@@ -329,11 +212,7 @@ static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val,
             };
             JSValue r = JS_Call(c, self->heightSource, JS_UNDEFINED, 8, args);
             for (JSValue& a : args) JS_FreeValue(c, a);
-
             if (JS_IsException(r)) {
-                // Swallowing the exception here would silently substitute noise
-                // for a provider the app believes is running; report it and let
-                // the chunk fall back visibly.
                 JSValue e = JS_GetException(c);
                 const char* msg = JS_ToCString(c, e);
                 if (msg) {
@@ -345,7 +224,6 @@ static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val,
                 return false;
             }
             if (!JS_IsObject(r)) { JS_FreeValue(c, r); return false; }
-
             size_t byteOff = 0, viewLen = 0;
             JSValue abuf = JS_GetTypedArrayBuffer(c, r, &byteOff, &viewLen, nullptr);
             if (JS_IsException(abuf)) {
@@ -355,15 +233,11 @@ static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val,
             }
             size_t abufLen = 0;
             uint8_t* ptr = JS_GetArrayBuffer(c, &abufLen, abuf);
-
             const size_t want = static_cast<size_t>(paddedW) * paddedH * sizeof(float);
             bool ok = ptr && viewLen >= want;
             if (ok) {
                 std::memcpy(padded, ptr + byteOff, want);
             } else if (ptr) {
-                // A short buffer would leave the tail of the chunk as whatever
-                // was in the vector — stale heights from a previously unloaded
-                // chunk. Refuse rather than render that.
                 LOG_ERROR("terrain heightSource returned %zu bytes, expected %zu "
                           "(%dx%d padded floats) - falling back to noise",
                           viewLen, want, paddedW, paddedH);
@@ -375,9 +249,46 @@ static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-void TerrainBindings::install(JSContext* ctx) {
+JSValue createTerrainJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst opts) {
+    if (!graph) return JS_NULL;
+    auto mgr = std::make_unique<scene::TerrainManager>(*graph);
+    mgr->configure(parseConfig(ctx, opts));
+    auto* tw = new TerrainWrapper(std::move(mgr));
+    return qjsbind::wrap<TW>(ctx, tw);
+}
+
+void* terrainHandleFromJS(JSContext* ctx, JSValueConst v) {
+    auto* tw = qjsbind::unwrap<TW>(ctx, v);
+    return static_cast<void*>(tw);
+}
+
+bool terrainSampleHeight(void* handle, float x, float z,
+                         float rayStartY, float rayLength, float& outY) {
+    if (!handle) return false;
+    auto* tw = static_cast<TerrainWrapper*>(handle);
+    if (TerrainWrapper::allInstances().find(tw) == TerrainWrapper::allInstances().end() || !tw->manager) {
+        return false;
+    }
+    const bromath::Vec3 origin{x, rayStartY, z};
+    const bromath::Vec3 dir{0.0f, -1.0f, 0.0f};
+    auto hit = tw->manager->raycast(origin, dir, rayLength);
+    if (!hit.hit) return false;
+    outY = hit.worldPos[1];
+    return true;
+}
+
+void TerrainBindings::cleanup(JSContext*) {
+    for (auto* tw : TW::allInstances()) {
+        if (tw->manager) {
+            tw->manager->clear();
+            tw->manager.reset();
+        }
+    }
+}
+
+void TerrainBindings::install(JSContext* ctx)
+{
     qjsbind::Class<TW>(ctx, "Terrain")
-        // No constructor — created via scene.createTerrain()
         .method("update", [](TW* self, JSContext*, double x, double y, double z) -> int {
             if (!self->manager) return 0;
             return self->manager->update((float)x, (float)y, (float)z);
@@ -429,17 +340,6 @@ void TerrainBindings::install(JSContext* ctx) {
         });
 }
 
-void TerrainBindings::cleanup(JSContext*) {
-    // Clear all live TerrainManagers before scene graphs are destroyed,
-    // so their destructors don't access dangling SceneGraph references.
-    for (auto* tw : TW::allInstances()) {
-        if (tw->manager) {
-            tw->manager->clear();
-            tw->manager.reset();
-        }
-    }
-}
-
 } // namespace bro::js
 
-#endif  // BRO_WITH_3D
+#endif // BRO_WITH_3D

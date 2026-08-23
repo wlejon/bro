@@ -1,20 +1,52 @@
-// Gamepad polling, navigator.getGamepads(), vibrationActuator dual-rumble & trigger-rumble.
+// GamepadButton, Gamepad, GamepadEvent — bronze_host translation unit.
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 
+#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_internal.h"
 #include "engine/engine.h"
 #include "engine/gamepad.h"
-
 #include <string>
 #include <vector>
 
 namespace bro::bronze_host {
 
-// ---------------------------------------------------------------------------
-// Gamepad snapshot & vibrationActuator
-// ---------------------------------------------------------------------------
+namespace {
+
+HostClass g_gamepad_buttonClass;
+HostClass g_gamepadClass;
+HostClass g_gamepad_eventClass;
+
+void decorateGamepadButtonProto(ObjectBuilder& b) {
+    b.accessor("pressed",
+               [](Value self, std::span<const Value>) {
+        return ev::fromUtf8("");
+    },
+               nullptr);
+    b.accessor("touched",
+               [](Value self, std::span<const Value>) {
+        return ev::fromUtf8("");
+    },
+               nullptr);
+    b.accessor("value",
+               [](Value self, std::span<const Value>) {
+        return ev::fromUtf8("");
+    },
+               nullptr);
+}
+
+void decorateGamepadEventProto(ObjectBuilder& b) {
+    b.accessor("gamepad",
+               [](Value self, std::span<const Value>) {
+        return ev::fromUtf8("");
+    },
+               nullptr);
+}
+
+}  // namespace
+
 Value buildGamepadSnapshot(const engine::GamepadState& gp) {
     ObjectBuilder obj;
     obj.set("id", ev::fromUtf8(gp.id));
@@ -107,13 +139,6 @@ Value buildGamepadSnapshot(const engine::GamepadState& gp) {
     return obj.get();
 }
 
-// The compiled app's navigator answers with the identity the interpreted side
-// already declares (src/js/window_bindings.cpp): one engine, one name — an app
-// must not learn a different browser depending on which compiler ran it, and
-// "Bro/1.0" routes every UA sniff (pixi's isSafari, isMobile) to the desktop
-// path this layer actually implements. maxTouchPoints=0 is the other half of
-// that routing: it keeps pixi's EventSystem on the mouse events
-// host_dom_events.cpp wires.
 Value makeNavigatorValue() {
     ObjectBuilder b;
     b.set("userAgent", ev::fromUtf8("Bro/1.0"));
@@ -132,6 +157,28 @@ Value makeNavigatorValue() {
         });
     });
     return b.get();
+}
+
+// ---------------------------------------------------------------------------
+// install
+// ---------------------------------------------------------------------------
+
+void installGamepadButtonGlobals() {
+    g_gamepad_buttonClass.install(
+        "GamepadButton", 0,
+        [](Value, std::span<const Value>) { return ev::undefined(); },
+        decorateGamepadButtonProto);
+
+    g_gamepadClass.install(
+        "Gamepad", 0,
+        [](Value, std::span<const Value>) { return ev::undefined(); },
+        nullptr);
+
+    g_gamepad_eventClass.install(
+        "GamepadEvent", 0,
+        [](Value, std::span<const Value>) { return ev::undefined(); },
+        decorateGamepadEventProto);
+
 }
 
 }  // namespace bro::bronze_host

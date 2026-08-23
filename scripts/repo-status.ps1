@@ -173,6 +173,7 @@ if ($Pull) {
     Write-Host '== Pulling (fast-forward only) ==' -ForegroundColor White
     Repo-Pull 'bro' $BroRoot
     Repo-Pull 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
+    Repo-Pull 'brosurface' (Join-Path $ProjectsRoot 'brosurface')
     foreach ($name in $Siblings) {
         Repo-Pull $name (Join-Path $ProjectsRoot $name)
     }
@@ -182,6 +183,7 @@ if ($Pull) {
 Write-Host '== Repo state ==' -ForegroundColor White
 Repo-State 'bro' $BroRoot
 Repo-State 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
+Repo-State 'brosurface' (Join-Path $ProjectsRoot 'brosurface')
 foreach ($name in $Siblings) {
     Repo-State $name (Join-Path $ProjectsRoot $name)
 }

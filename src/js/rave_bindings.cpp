@@ -1,27 +1,12 @@
 #if BRO_WITH_SOUNDML
-// JS bindings for brosoundml::Rave — RAVE neural audio autoencoder inference.
-//
-// Installed onto bro.rave.* by installRaveBindings(). A converted RAVE v2 model
-// (encoder + decoder + PQMF + latent PCA, <20M params) lives behind an opaque
-// qjsbind handle. encode() compresses a waveform to a (nLatent x frames) latent
-// whose PCA-sorted axes (loudness / pitch / timbre) are the editable curves a
-// lab plots; decode() resynthesises a waveform from a (possibly edited) latent.
-//
-// encode/decode are fast (faster-than-realtime) so the methods are synchronous;
-// the heavy file-IO + GPU-upload load step has an async form (opts.onReady).
 
 #include "js/rave_bindings.h"
 #include "js/async_job.h"
-
 #include <qjsbind/qjsbind.h>
-
-#include <api/api.h>  // brokit::api::resolveAssetPath
-
+#include <api/api.h>
 #include <brosoundml/rave.h>
 #include <brosoundml/audio.h>
-
 #include <brotensor/runtime.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -31,19 +16,17 @@
 #include <utility>
 #include <vector>
 
-namespace bro::js {
+extern "C" {
+#include "quickjs.h"
+}
 
-// ─── wrapper ─────────────────────────────────────────────────────────────────
+namespace bro::js {
 
 struct RaveWrapper {
     std::unique_ptr<brosoundml::Rave> rave;
-    brotensor::Device device = brotensor::Device::CPU;   // captured at load
-    // Set while an async op runs on this model's thread; rejects a second
-    // concurrent op (the model is single-owner).
+    brotensor::Device device = brotensor::Device::CPU;
     std::atomic<bool> busy{false};
 };
-
-// ─── helpers ─────────────────────────────────────────────────────────────────
 
 static bool argStr(JSContext* ctx, JSValueConst v, std::string& out) {
     if (!JS_IsString(v)) return false;
@@ -90,15 +73,10 @@ static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
     return false;
 }
 
-// ─── Rave methods ────────────────────────────────────────────────────────────
-
 static RaveWrapper* raveSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<RaveWrapper>(ctx, this_val);
 }
 
-// rave.encode(audio) -> { latent: Float32Array, nLatent, frames }
-//   audio: mono Float32Array at rave.sampleRate. The latent is channel-major,
-//   latent[c*frames + t] — nLatent time-series of length frames. Deterministic.
 static JSValue js_rave_encode(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
     auto* w = raveSelf(ctx, this_val);
@@ -121,22 +99,6 @@ static JSValue js_rave_encode(JSContext* ctx, JSValueConst this_val,
     }
 }
 
-// rave.decode(latent, frames, opts?) -> { samples, sampleRate, channels }
-//   latent: Float32Array of nLatent*frames, channel-major (latent[c*frames + t]).
-//   Produces frames * totalRatio samples per channel. nLatent is inferred as
-//   latent.length / frames and must equal rave.nLatent.
-//   opts (optional):
-//     addNoise?: bool   run RAVE's stochastic FFT noise-synth branch (breathy /
-//                       unvoiced texture).
-//     seed?:     number pins the white noise + stereo latent pad so the output
-//                       is reproducible (default deterministic, no noise).
-//     channels?: number >1 returns an INTERLEAVED multi-channel buffer
-//                       (samples[t*channels + c]); RAVE's stereo decode runs the
-//                       mono decoder once per channel.
-//     stereoWidth?: number  std of the independent N(0,1) pad on the discarded
-//                       latent dims per channel — the source of L/R decorrelation
-//                       (RAVE-native = 1.0; defaults to 1.0 when channels>1).
-//   `channels` in the result is the channel count (1 = plain mono).
 static JSValue js_rave_decode(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
     auto* w = raveSelf(ctx, this_val);
@@ -181,8 +143,6 @@ static JSValue js_rave_decode(JSContext* ctx, JSValueConst this_val,
         }
         JS_FreeValue(ctx, wv);
     }
-    // Stereo with no explicit width: use RAVE's native unit-variance pad so the
-    // channels actually decorrelate (otherwise both channels would be identical).
     if (opts.channels > 1 && !widthSet) opts.latent_pad_std = 1.0f;
 
     try {
@@ -219,8 +179,6 @@ static void registerRaveClass(JSContext* ctx) {
         .method_raw("decode", js_rave_decode, 2);
 }
 
-// ─── loader ──────────────────────────────────────────────────────────────────
-
 static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     try {
         brotensor::init();
@@ -252,12 +210,6 @@ struct RaveLoadState {
     bool    hasReady = false, hasError = false;
 };
 
-// bro.rave.loadRave(modelDir, opts?) -> Rave         (sync)
-//                                    -> AsyncHandle   (async, if opts.onReady)
-//   modelDir holds config.json + model.safetensors (scripts/convert-rave.py).
-//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
-//   opts.onReady(rave) / opts.onError(message): when onReady is a function the
-//   load runs on a background thread and these fire on the JS thread.
 static JSValue js_loadRave(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
@@ -277,7 +229,6 @@ static JSValue js_loadRave(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError") : JS_UNDEFINED;
     const bool async = JS_IsFunction(ctx, onReady);
 
-    // ── Sync path ──
     if (!async) {
         JS_FreeValue(ctx, onReady);
         JS_FreeValue(ctx, onError);
@@ -290,7 +241,6 @@ static JSValue js_loadRave(JSContext* ctx, JSValueConst, int argc, JSValueConst*
         }
     }
 
-    // ── Async path ──
     auto ls = std::make_shared<RaveLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
@@ -302,9 +252,9 @@ static JSValue js_loadRave(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     JS_FreeValue(ctx, onError);
 
     auto work = [ls](const std::atomic<bool>&) {
-        buildRave(ls->dir, ls->dev, ls->w);   // throws -> error
+        buildRave(ls->dir, ls->dev, ls->w);
     };
-    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+    auto done = [ls](JSContext* c, bool, const std::string& error) {
         if (!error.empty() || !ls->w) {
             if (ls->hasError) {
                 JSValue e = JS_NewString(c, error.empty() ? "loadRave failed" : error.c_str());
@@ -326,11 +276,16 @@ static JSValue js_loadRave(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// ─── install ─────────────────────────────────────────────────────────────────
+void cleanupRaveBindings(JSContext* /*ctx*/) {}
+
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
 
 void installRaveBindings(JSContext* ctx) {
     registerRaveClass(ctx);
-
+    
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
     if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -338,20 +293,19 @@ void installRaveBindings(JSContext* ctx) {
         broObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
     }
-
+    
     JSValue rave = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, rave, "init",
         JS_NewCFunction(ctx, js_init, "init", 0));
     JS_SetPropertyStr(ctx, rave, "loadRave",
         JS_NewCFunction(ctx, js_loadRave, "loadRave", 2));
     JS_SetPropertyStr(ctx, broObj, "rave", rave);
-
+    
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
 
-void cleanupRaveBindings(JSContext* /*ctx*/) {}
 
-}  // namespace bro::js
+} // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+#endif // BRO_WITH_SOUNDML

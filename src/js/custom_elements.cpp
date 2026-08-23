@@ -4,25 +4,16 @@
 #include "dom/node.h"
 #include "dom/document.h"
 #include "util/log.h"
-
 #include <unordered_map>
 #include <vector>
 #include <string>
 #include <algorithm>
 #include <cctype>
 
-extern "C" {
-#include "quickjs.h"
-}
-
 namespace bro::js {
 
-// ---------------------------------------------------------------------------
-// Per-context state
-// ---------------------------------------------------------------------------
-
 struct CustomElementDef {
-    JSValue constructor;  // ref-counted
+    JSValue constructor;
     std::vector<std::string> observedAttributes;
 };
 
@@ -39,9 +30,7 @@ static CERegistry* getReg(JSContext* ctx) {
     return (it != s_registries.end()) ? it->second : nullptr;
 }
 
-// Tag currently being constructed by createElement (for HTMLElement super() call)
 static thread_local std::string s_constructingTag;
-// C++ element being constructed by createElement
 static thread_local bro::dom::Element* s_constructingElem = nullptr;
 
 static std::string toLower(const std::string& s) {
@@ -60,12 +49,8 @@ static bool isValidName(const std::string& name) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// HTMLElement constructor — called via super() from user class constructors
-// ---------------------------------------------------------------------------
-
 static JSValue js_htmlelement_ctor(JSContext* ctx, JSValueConst new_target,
-                                   int /*argc*/, JSValueConst* /*argv*/)
+                                   int, JSValueConst*)
 {
     auto* reg = getReg(ctx);
     if (!reg) return JS_ThrowTypeError(ctx, "No custom element registry");
@@ -73,7 +58,6 @@ static JSValue js_htmlelement_ctor(JSContext* ctx, JSValueConst new_target,
     std::string tag = s_constructingTag;
     bro::dom::Element* elem = s_constructingElem;
 
-    // If not called from createElement, reverse-lookup new_target
     if (tag.empty()) {
         for (auto& [name, def] : reg->defs) {
             if (JS_VALUE_GET_PTR(def.constructor) == JS_VALUE_GET_PTR(new_target)) {
@@ -85,7 +69,6 @@ static JSValue js_htmlelement_ctor(JSContext* ctx, JSValueConst new_target,
             return JS_ThrowTypeError(ctx, "Illegal constructor");
     }
 
-    // Get prototype from new_target (correct for class inheritance)
     JSValue proto = JS_GetPropertyStr(ctx, new_target, "prototype");
     if (JS_IsException(proto)) return proto;
 
@@ -94,7 +77,6 @@ static JSValue js_htmlelement_ctor(JSContext* ctx, JSValueConst new_target,
     if (JS_IsException(obj)) return obj;
 
     if (!elem) {
-        // `new MyElement()` path — create C++ element
         if (!reg->document) {
             JS_FreeValue(ctx, obj);
             return JS_ThrowInternalError(ctx, "No document");
@@ -108,7 +90,6 @@ static JSValue js_htmlelement_ctor(JSContext* ctx, JSValueConst new_target,
 
     JS_SetOpaque(obj, elem);
 
-    // Cache in __bro_elem_map
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
     if (JS_IsUndefined(elemMap)) {
@@ -122,120 +103,6 @@ static JSValue js_htmlelement_ctor(JSContext* ctx, JSValueConst new_target,
 
     return obj;
 }
-
-// Forward declarations for lifecycle helpers (used by define's upgrade step)
-static void fireCallback(JSContext* ctx, JSValue wrapper, const char* name);
-
-// ---------------------------------------------------------------------------
-// customElements.define / get / whenDefined
-// ---------------------------------------------------------------------------
-
-static JSValue js_ce_define(JSContext* ctx, JSValueConst /*this_val*/,
-                            int argc, JSValueConst* argv)
-{
-    if (argc < 2)
-        return JS_ThrowTypeError(ctx, "define requires name and constructor");
-
-    const char* nameStr = JS_ToCString(ctx, argv[0]);
-    if (!nameStr) return JS_EXCEPTION;
-    std::string name = toLower(nameStr);
-    JS_FreeCString(ctx, nameStr);
-
-    if (!isValidName(name))
-        return JS_ThrowSyntaxError(ctx, "'%s' is not a valid custom element name", name.c_str());
-
-    if (!JS_IsFunction(ctx, argv[1]))
-        return JS_ThrowTypeError(ctx, "Constructor must be a function");
-
-    auto* reg = getReg(ctx);
-    if (!reg) return JS_UNDEFINED;
-
-    if (reg->defs.count(name))
-        return JS_ThrowTypeError(ctx, "'%s' already defined", name.c_str());
-
-    CustomElementDef def;
-    def.constructor = JS_DupValue(ctx, argv[1]);
-
-    // Read static observedAttributes
-    JSValue observed = JS_GetPropertyStr(ctx, argv[1], "observedAttributes");
-    if (JS_IsArray(observed)) {
-        JSValue lenVal = JS_GetPropertyStr(ctx, observed, "length");
-        int32_t len = 0;
-        JS_ToInt32(ctx, &len, lenVal);
-        JS_FreeValue(ctx, lenVal);
-        for (int32_t i = 0; i < len; i++) {
-            JSValue item = JS_GetPropertyUint32(ctx, observed, i);
-            const char* s = JS_ToCString(ctx, item);
-            if (s) {
-                def.observedAttributes.push_back(s);
-                JS_FreeCString(ctx, s);
-            }
-            JS_FreeValue(ctx, item);
-        }
-    }
-    JS_FreeValue(ctx, observed);
-
-    reg->defs[name] = def;
-
-    // Upgrade existing elements in the DOM that match this tag name.
-    // Per the spec, when define() is called, any existing elements with
-    // that tag get upgraded: constructor runs, then connectedCallback fires.
-    if (reg->document) {
-        auto existing = reg->document->querySelectorAll(name);
-        for (auto* elem : existing) {
-            // Run the full constructor via createCustomElement.
-            // This sets the prototype, creates a cached wrapper, and runs
-            // user constructor code (e.g. this._count = 0).
-            JSValue upgraded = createCustomElement(ctx, elem, name);
-            if (!JS_IsException(upgraded) && !JS_IsUndefined(upgraded)) {
-                // Fire connectedCallback since element is already in the tree
-                if (elem->parentNode()) {
-                    fireCallback(ctx, upgraded, "connectedCallback");
-                }
-                JS_FreeValue(ctx, upgraded);
-            } else {
-                JS_FreeValue(ctx, upgraded);
-            }
-        }
-    }
-
-    return JS_UNDEFINED;
-}
-
-static JSValue js_ce_get(JSContext* ctx, JSValueConst /*this_val*/,
-                         int argc, JSValueConst* argv)
-{
-    if (argc < 1) return JS_UNDEFINED;
-    const char* s = JS_ToCString(ctx, argv[0]);
-    if (!s) return JS_UNDEFINED;
-    std::string name = toLower(s);
-    JS_FreeCString(ctx, s);
-
-    auto* reg = getReg(ctx);
-    if (!reg) return JS_UNDEFINED;
-    auto it = reg->defs.find(name);
-    if (it == reg->defs.end()) return JS_UNDEFINED;
-    return JS_DupValue(ctx, it->second.constructor);
-}
-
-static JSValue js_ce_whenDefined(JSContext* ctx, JSValueConst /*this_val*/,
-                                 int argc, JSValueConst* argv)
-{
-    // Simplified: always returns a resolved promise
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue promiseCtor = JS_GetPropertyStr(ctx, global, "Promise");
-    JSValue resolve = JS_GetPropertyStr(ctx, promiseCtor, "resolve");
-    JSValue undef = JS_UNDEFINED;
-    JSValue result = JS_Call(ctx, resolve, promiseCtor, 1, &undef);
-    JS_FreeValue(ctx, resolve);
-    JS_FreeValue(ctx, promiseCtor);
-    JS_FreeValue(ctx, global);
-    return result;
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle helpers
-// ---------------------------------------------------------------------------
 
 static void fireCallback(JSContext* ctx, JSValue wrapper, const char* name) {
     JSValue method = JS_GetPropertyStr(ctx, wrapper, name);
@@ -261,12 +128,10 @@ static void fireCallbackRecursive(JSContext* ctx, JSValue wrapper,
     auto* elem = static_cast<bro::dom::Element*>(DomBindings::unwrapElement(ctx, wrapper));
     if (!elem) return;
 
-    // Fire on this element if it's a custom element
     if (reg->defs.count(toLower(elem->tagName()))) {
         fireCallback(ctx, wrapper, callbackName);
     }
 
-    // Recurse into child elements
     for (auto* child : elem->childNodes()) {
         if (child->nodeType() == bro::dom::NodeType::Element) {
             JSValue childW = DomBindings::wrapElement(ctx, child);
@@ -276,15 +141,172 @@ static void fireCallbackRecursive(JSContext* ctx, JSValue wrapper,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+static JSValue js_ce_define(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
+{
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "define requires name and constructor");
 
-void fireConnectedCallback(JSContext* ctx, JSValue elementWrapper) {
+    const char* nameStr = JS_ToCString(ctx, argv[0]);
+    if (!nameStr) return JS_EXCEPTION;
+    std::string name = toLower(nameStr);
+    JS_FreeCString(ctx, nameStr);
+
+    if (!isValidName(name))
+        return JS_ThrowSyntaxError(ctx, "'%s' is not a valid custom element name", name.c_str());
+
+    if (!JS_IsFunction(ctx, argv[1]))
+        return JS_ThrowTypeError(ctx, "Constructor must be a function");
+
+    auto* reg = getReg(ctx);
+    if (!reg) return JS_UNDEFINED;
+
+    if (reg->defs.count(name))
+        return JS_ThrowTypeError(ctx, "'%s' already defined", name.c_str());
+
+    CustomElementDef def;
+    def.constructor = JS_DupValue(ctx, argv[1]);
+
+    JSValue observed = JS_GetPropertyStr(ctx, argv[1], "observedAttributes");
+    if (JS_IsArray(observed)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, observed, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue item = JS_GetPropertyUint32(ctx, observed, i);
+            const char* s = JS_ToCString(ctx, item);
+            if (s) {
+                def.observedAttributes.push_back(s);
+                JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, item);
+        }
+    }
+    JS_FreeValue(ctx, observed);
+
+    reg->defs[name] = def;
+
+    if (reg->document) {
+        auto existing = reg->document->querySelectorAll(name);
+        for (auto* elem : existing) {
+            JSValue upgraded = createCustomElement(ctx, elem, name);
+            if (!JS_IsException(upgraded) && !JS_IsUndefined(upgraded)) {
+                if (elem->parentNode()) {
+                    fireCallback(ctx, upgraded, "connectedCallback");
+                }
+                JS_FreeValue(ctx, upgraded);
+            } else {
+                JS_FreeValue(ctx, upgraded);
+            }
+        }
+    }
+
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ce_get(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
+{
+    if (argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (!s) return JS_UNDEFINED;
+    std::string name = toLower(s);
+    JS_FreeCString(ctx, s);
+
+    auto* reg = getReg(ctx);
+    if (!reg) return JS_UNDEFINED;
+    auto it = reg->defs.find(name);
+    if (it == reg->defs.end()) return JS_UNDEFINED;
+    return JS_DupValue(ctx, it->second.constructor);
+}
+
+static JSValue js_ce_whenDefined(JSContext* ctx, JSValueConst, int, JSValueConst*)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue promiseCtor = JS_GetPropertyStr(ctx, global, "Promise");
+    JSValue resolve = JS_GetPropertyStr(ctx, promiseCtor, "resolve");
+    JSValue undef = JS_UNDEFINED;
+    JSValue result = JS_Call(ctx, resolve, promiseCtor, 1, &undef);
+    JS_FreeValue(ctx, resolve);
+    JS_FreeValue(ctx, promiseCtor);
+    JS_FreeValue(ctx, global);
+    return result;
+}
+
+void cleanupCustomElements(JSContext* ctx)
+{
+    auto it = s_registries.find(ctx);
+    if (it == s_registries.end()) return;
+
+    auto* reg = it->second;
+    for (auto& [name, def] : reg->defs) {
+        JS_FreeValue(ctx, def.constructor);
+    }
+    delete reg;
+    s_registries.erase(it);
+}
+
+JSValue createCustomElement(JSContext* ctx, void* elemPtr, const std::string& tag)
+{
+    auto* reg = getReg(ctx);
+    if (!reg) return JS_UNDEFINED;
+
+    std::string lower = toLower(tag);
+    auto it = reg->defs.find(lower);
+    if (it == reg->defs.end()) return JS_UNDEFINED;
+
+    auto* elem = static_cast<bro::dom::Element*>(elemPtr);
+
+    s_constructingTag = lower;
+    s_constructingElem = elem;
+
+    JSValue result = JS_CallConstructor(ctx, it->second.constructor, 0, nullptr);
+
+    s_constructingTag.clear();
+    s_constructingElem = nullptr;
+
+    return result;
+}
+
+void upgradeCustomElementsInSubtree(JSContext* ctx, void* nodePtr)
+{
+    auto* node = static_cast<bro::dom::Node*>(nodePtr);
+    if (!node) return;
+    auto* reg = getReg(ctx);
+    if (!reg) return;
+
+    for (auto* child : node->childNodes()) {
+        if (child->nodeType() != bro::dom::NodeType::Element) continue;
+        auto* elem = static_cast<bro::dom::Element*>(child);
+
+        const std::string& tag = elem->tagName();
+        bool hasHyphen = false;
+        for (char c : tag) { if (c == '-') { hasHyphen = true; break; } }
+
+        bool upgraded = false;
+        if (hasHyphen) {
+            std::string lower = toLower(tag);
+            if (reg->defs.find(lower) != reg->defs.end()) {
+                JSValue result = createCustomElement(ctx, elem, lower);
+                if (!JS_IsException(result) && !JS_IsUndefined(result)) {
+                    JS_FreeValue(ctx, result);
+                    upgraded = true;
+                }
+            }
+        }
+
+        if (!upgraded || !elem->hasShadow()) {
+            upgradeCustomElementsInSubtree(ctx, elem);
+        }
+    }
+}
+
+void fireConnectedCallback(JSContext* ctx, JSValue elementWrapper)
+{
     fireCallbackRecursive(ctx, elementWrapper, "connectedCallback");
 }
 
-void fireDisconnectedCallback(JSContext* ctx, JSValue elementWrapper) {
+void fireDisconnectedCallback(JSContext* ctx, JSValue elementWrapper)
+{
     fireCallbackRecursive(ctx, elementWrapper, "disconnectedCallback");
 }
 
@@ -328,67 +350,8 @@ void fireAttributeChangedCallback(JSContext* ctx, JSValue elementWrapper,
     for (int i = 0; i < 3; i++) JS_FreeValue(ctx, args[i]);
 }
 
-JSValue createCustomElement(JSContext* ctx, void* elemPtr, const std::string& tag) {
-    auto* reg = getReg(ctx);
-    if (!reg) return JS_UNDEFINED;
-
-    std::string lower = toLower(tag);
-    auto it = reg->defs.find(lower);
-    if (it == reg->defs.end()) return JS_UNDEFINED;
-
-    auto* elem = static_cast<bro::dom::Element*>(elemPtr);
-
-    // Set thread-locals for the HTMLElement constructor
-    s_constructingTag = lower;
-    s_constructingElem = elem;
-
-    JSValue result = JS_CallConstructor(ctx, it->second.constructor, 0, nullptr);
-
-    s_constructingTag.clear();
-    s_constructingElem = nullptr;
-
-    return result;
-}
-
-void upgradeCustomElementsInSubtree(JSContext* ctx, void* nodePtr) {
-    auto* node = static_cast<bro::dom::Node*>(nodePtr);
-    if (!node) return;
-    auto* reg = getReg(ctx);
-    if (!reg) return;
-
-    for (auto* child : node->childNodes()) {
-        if (child->nodeType() != bro::dom::NodeType::Element) continue;
-        auto* elem = static_cast<bro::dom::Element*>(child);
-
-        // A custom element name must contain a hyphen — cheap pre-filter
-        // before the registry lookup.
-        const std::string& tag = elem->tagName();
-        bool hasHyphen = false;
-        for (char c : tag) { if (c == '-') { hasHyphen = true; break; } }
-
-        bool upgraded = false;
-        if (hasHyphen) {
-            std::string lower = toLower(tag);
-            if (reg->defs.find(lower) != reg->defs.end()) {
-                JSValue result = createCustomElement(ctx, elem, lower);
-                if (!JS_IsException(result) && !JS_IsUndefined(result)) {
-                    JS_FreeValue(ctx, result);
-                    upgraded = true;
-                }
-            }
-        }
-
-        // If the element has its own shadow (populated by its constructor),
-        // don't recurse into its light-DOM children here — but there shouldn't
-        // be any at this point since the parser already placed them. Still,
-        // we want to upgrade any nested customs inside plain descendants.
-        if (!upgraded || !elem->hasShadow()) {
-            upgradeCustomElementsInSubtree(ctx, elem);
-        }
-    }
-}
-
-bool upgradeCustomElementPrototype(JSContext* ctx, JSValue wrapper, const std::string& tagName) {
+bool upgradeCustomElementPrototype(JSContext* ctx, JSValue wrapper, const std::string& tagName)
+{
     auto* reg = getReg(ctx);
     if (!reg) return false;
 
@@ -404,20 +367,15 @@ bool upgradeCustomElementPrototype(JSContext* ctx, JSValue wrapper, const std::s
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Install / cleanup
-// ---------------------------------------------------------------------------
-
 void installCustomElements(JSContext* ctx, JSClassID elementClassId, void* documentPtr)
 {
     auto* reg = new CERegistry();
     reg->elementClassId = elementClassId;
     reg->document = static_cast<bro::dom::Document*>(documentPtr);
     s_registries[ctx] = reg;
-
+    
     JSValue global = JS_GetGlobalObject(ctx);
-
-    // customElements object
+    
     JSValue ce = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, ce, "define",
         JS_NewCFunction(ctx, js_ce_define, "define", 2));
@@ -426,37 +384,21 @@ void installCustomElements(JSContext* ctx, JSClassID elementClassId, void* docum
     JS_SetPropertyStr(ctx, ce, "whenDefined",
         JS_NewCFunction(ctx, js_ce_whenDefined, "whenDefined", 1));
     JS_SetPropertyStr(ctx, global, "customElements", ce);
-
-    // HTMLElement constructor — replaces the dummy stub class
+    
     JSValue htmlCtor = JS_NewCFunction2(ctx, js_htmlelement_ctor,
                                         "HTMLElement", 0,
                                         JS_CFUNC_constructor, 0);
-
-    // HTMLElement.prototype inherits from Element prototype
+    
     JSValue elemProto = JS_GetClassProto(ctx, elementClassId);
     JSValue htmlProto = JS_NewObjectProto(ctx, elemProto);
     JS_FreeValue(ctx, elemProto);
-
+    
     JS_SetPropertyStr(ctx, htmlCtor, "prototype", JS_DupValue(ctx, htmlProto));
     JS_SetPropertyStr(ctx, htmlProto, "constructor", JS_DupValue(ctx, htmlCtor));
     JS_FreeValue(ctx, htmlProto);
-
+    
     JS_SetPropertyStr(ctx, global, "HTMLElement", htmlCtor);
-
     JS_FreeValue(ctx, global);
-}
-
-void cleanupCustomElements(JSContext* ctx)
-{
-    auto it = s_registries.find(ctx);
-    if (it == s_registries.end()) return;
-
-    auto* reg = it->second;
-    for (auto& [name, def] : reg->defs) {
-        JS_FreeValue(ctx, def.constructor);
-    }
-    delete reg;
-    s_registries.erase(it);
 }
 
 } // namespace bro::js

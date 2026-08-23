@@ -1,14 +1,17 @@
-#include "js/text_bindings.h"
+#if BRO_WITH_TEXT_SHAPING
 
+#include "js/text_bindings.h"
 #include "engine/engine.h"
 #include "render/bidi.h"
 #include "render/renderer.h"
 #include "render/shaped_run.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <string>
 #include <vector>
+
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
 
@@ -18,8 +21,6 @@ render::Renderer* rendererOf(engine::Engine* eng) {
     return eng ? eng->renderer() : nullptr;
 }
 
-// Read the { family, size, weight, italic, letterSpacing, wordSpacing } options
-// bag. `family` must be kept alive by the caller: FontRef holds a view.
 struct Opts {
     std::string    family = "Arial";
     render::FontRef ref{};
@@ -45,8 +46,6 @@ Opts readOpts(JSContext* ctx, JSValueConst v) {
     return o;
 }
 
-// Shape argv[0] with argv[1]'s options. Returns null (and leaves *out unset)
-// when there is no renderer or nothing to shape.
 const render::ShapedRun* shapeArgs(JSContext* ctx, engine::Engine* eng,
                                    int argc, JSValueConst* argv,
                                    std::string& textOut, Opts& optsOut) {
@@ -58,26 +57,57 @@ const render::ShapedRun* shapeArgs(JSContext* ctx, engine::Engine* eng,
     return r->shapeText(textOut, optsOut.ref, optsOut.spacing.letter != 0.0f);
 }
 
-JSValue js_shape(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv);
-JSValue js_byteOffsetToX(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv);
-JSValue js_xToByteOffset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv);
-JSValue js_clusterRange(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv);
-JSValue js_cacheStats(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv);
+JSValue caretToJs(JSContext* ctx, const render::ShapedRun::Caret& c) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "x", JS_NewFloat64(ctx, c.x));
+    JS_SetPropertyStr(ctx, o, "isLeadingEdge", JS_NewBool(ctx, c.isLeadingEdge));
+    return o;
+}
 
-engine::Engine* g_engine = nullptr;
+} // namespace
 
-JSValue js_shape(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+// ---------------------------------------------------------------------------
+// Engine pointer stash (no pinned JSValues, no finalizer-order hazard).
+// ---------------------------------------------------------------------------
+
+static const char* kTextEngineKey = "__bro_text_engine_ptr";
+
+static engine::Engine* getEngine(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue val = JS_GetPropertyStr(ctx, global, kTextEngineKey);
+    engine::Engine* e = nullptr;
+    if (JS_IsNumber(val)) {
+        int64_t ptr = 0;
+        JS_ToInt64(ctx, &ptr, val);
+        e = reinterpret_cast<engine::Engine*>(static_cast<intptr_t>(ptr));
+    }
+    JS_FreeValue(ctx, val);
+    JS_FreeValue(ctx, global);
+    return e;
+}
+
+// ---------------------------------------------------------------------------
+// Accessors
+// ---------------------------------------------------------------------------
+
+static JSValue js_text_get_bidi_available(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* eng = getEngine(ctx);
+    return JS_NewBool(ctx, render::bidi::available());
+}
+
+static JSValue js_text_shape(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
     std::string text;
     Opts opts;
-    const render::ShapedRun* run = shapeArgs(ctx, g_engine, argc, argv, text, opts);
+    const render::ShapedRun* run = shapeArgs(ctx, eng, argc, argv, text, opts);
     if (!run) return JS_NULL;
-
+    
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "text", JS_NewString(ctx, text.c_str()));
     JS_SetPropertyStr(ctx, out, "glyphCount",
                       JS_NewInt32(ctx, static_cast<int>(run->glyphCount())));
     JS_SetPropertyStr(ctx, out, "width", JS_NewFloat64(ctx, run->width(opts.spacing)));
-
+    
     auto list = run->clusterList(opts.spacing);
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
@@ -95,34 +125,27 @@ JSValue js_shape(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return out;
 }
 
-JSValue caretToJs(JSContext* ctx, const render::ShapedRun::Caret& c) {
-    JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "x", JS_NewFloat64(ctx, c.x));
-    JS_SetPropertyStr(ctx, o, "isLeadingEdge", JS_NewBool(ctx, c.isLeadingEdge));
-    return o;
-}
-
-JSValue js_byteOffsetToX(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_text_byte_offset_to_x(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
     std::string text;
     Opts opts;
-    const render::ShapedRun* run = shapeArgs(ctx, g_engine, argc, argv, text, opts);
+    const render::ShapedRun* run = shapeArgs(ctx, eng, argc, argv, text, opts);
     if (!run) return JS_NULL;
     int32_t off = 0;
     if (argc > 2) JS_ToInt32(ctx, &off, argv[2]);
     auto pos = run->byteOffsetToX(static_cast<std::size_t>(off < 0 ? 0 : off), opts.spacing);
     JSValue out = caretToJs(ctx, pos.primary);
-    // Only present at a direction boundary, where the offset names two places
-    // on the line. Absent means the offset has a single unambiguous caret.
     if (pos.hasSecondary) {
         JS_SetPropertyStr(ctx, out, "secondary", caretToJs(ctx, pos.secondary));
     }
     return out;
 }
 
-JSValue js_xToByteOffset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_text_x_to_byte_offset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
     std::string text;
     Opts opts;
-    const render::ShapedRun* run = shapeArgs(ctx, g_engine, argc, argv, text, opts);
+    const render::ShapedRun* run = shapeArgs(ctx, eng, argc, argv, text, opts);
     if (!run) return JS_NULL;
     double x = 0;
     if (argc > 2) JS_ToFloat64(ctx, &x, argv[2]);
@@ -130,10 +153,11 @@ JSValue js_xToByteOffset(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
         run->xToByteOffset(static_cast<float>(x), opts.spacing)));
 }
 
-JSValue js_clusterRange(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_text_cluster_range(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
     std::string text;
     Opts opts;
-    const render::ShapedRun* run = shapeArgs(ctx, g_engine, argc, argv, text, opts);
+    const render::ShapedRun* run = shapeArgs(ctx, eng, argc, argv, text, opts);
     if (!run) return JS_NULL;
     int32_t off = 0;
     if (argc > 2) JS_ToInt32(ctx, &off, argv[2]);
@@ -144,21 +168,22 @@ JSValue js_clusterRange(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// Bidi (UAX #9). Exposed so the Unicode conformance corpus — BidiTest.txt and
-// BidiCharacterTest.txt, ~500k cases between them — can be run as a real test
-// against the engine's own resolver rather than against a reimplementation of
-// it in the test.
-// ---------------------------------------------------------------------------
+static JSValue js_text_cache_stats(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
+    render::Renderer* r = rendererOf(eng);
+    render::TextShapingEngine* te = r ? r->textEngine() : nullptr;
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "hits",
+                      JS_NewInt64(ctx, te ? static_cast<int64_t>(te->hits()) : 0));
+    JS_SetPropertyStr(ctx, out, "misses",
+                      JS_NewInt64(ctx, te ? static_cast<int64_t>(te->misses()) : 0));
+    return out;
+}
 
-// bro.text.bidi(text, base) -> { paragraphLevel, levels, runs }
-//   base: "ltr" | "rtl" | "auto" (default "auto" — UAX #9 P2/P3)
-//   levels: one entry PER CODEPOINT (the engine works in bytes; per-codepoint
-//           is what the corpus and every JS caller want)
-JSValue js_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_text_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
     const std::string text = qjsbind::Convert<std::string>::from_js(ctx, argv[0]);
-
+    
     render::bidi::BaseDirection base = render::bidi::BaseDirection::Auto;
     if (argc > 1 && JS_IsString(argv[1])) {
         const std::string b = qjsbind::Convert<std::string>::from_js(ctx, argv[1]);
@@ -167,16 +192,15 @@ JSValue js_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     }
     render::bidi::Override ov = render::bidi::Override::Normal;
     if (argc > 2 && JS_ToBool(ctx, argv[2])) ov = render::bidi::Override::Override;
-
+    
     const render::bidi::Paragraph para =
         render::bidi::resolveParagraph(text, base, ov);
-
+    
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "paragraphLevel",
                       JS_NewInt32(ctx, para.paragraphLevel));
     JS_SetPropertyStr(ctx, out, "uniform", JS_NewBool(ctx, para.uniform));
-
-    // Per-codepoint levels: take the level at each UTF-8 lead byte.
+    
     JSValue levels = JS_NewArray(ctx);
     uint32_t li = 0;
     for (std::size_t i = 0; i < text.size(); ++i) {
@@ -185,7 +209,7 @@ JSValue js_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
                              JS_NewInt32(ctx, para.levels[i]));
     }
     JS_SetPropertyStr(ctx, out, "levels", levels);
-
+    
     JSValue runs = JS_NewArray(ctx);
     uint32_t ri = 0;
     for (const auto& r : para.runs()) {
@@ -199,8 +223,7 @@ JSValue js_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return out;
 }
 
-// bro.text.bidiReorder([levels]) -> [logical index per visual slot]  (rule L2)
-JSValue js_bidiReorder(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_text_bidi_reorder(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsArray(argv[0])) return JS_NULL;
     uint32_t n = static_cast<uint32_t>(
         qjsbind::get_prop_int(ctx, argv[0], "length", 0));
@@ -221,49 +244,55 @@ JSValue js_bidiReorder(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     return arr;
 }
 
-JSValue js_cacheStats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    render::Renderer* r = rendererOf(g_engine);
-    render::TextShapingEngine* te = r ? r->textEngine() : nullptr;
-    JSValue out = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, out, "hits",
-                      JS_NewInt64(ctx, te ? static_cast<int64_t>(te->hits()) : 0));
-    JS_SetPropertyStr(ctx, out, "misses",
-                      JS_NewInt64(ctx, te ? static_cast<int64_t>(te->misses()) : 0));
-    return out;
-}
-
-}  // namespace
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
 
 void installTextBindings(JSContext* ctx, engine::Engine* engine) {
-    g_engine = engine;
-
     JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, kTextEngineKey,
+                      JS_NewInt64(ctx, static_cast<int64_t>(
+                          reinterpret_cast<intptr_t>(engine))));
+
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (!JS_IsObject(broObj)) {
-        JS_FreeValue(ctx, broObj);
+    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
         broObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
     }
 
-    JSValue text = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, text, "shape", JS_NewCFunction(ctx, js_shape, "shape", 2));
-    JS_SetPropertyStr(ctx, text, "byteOffsetToX",
-                      JS_NewCFunction(ctx, js_byteOffsetToX, "byteOffsetToX", 3));
-    JS_SetPropertyStr(ctx, text, "xToByteOffset",
-                      JS_NewCFunction(ctx, js_xToByteOffset, "xToByteOffset", 3));
-    JS_SetPropertyStr(ctx, text, "clusterRange",
-                      JS_NewCFunction(ctx, js_clusterRange, "clusterRange", 3));
-    JS_SetPropertyStr(ctx, text, "cacheStats",
-                      JS_NewCFunction(ctx, js_cacheStats, "cacheStats", 0));
-    JS_SetPropertyStr(ctx, text, "bidi", JS_NewCFunction(ctx, js_bidi, "bidi", 3));
-    JS_SetPropertyStr(ctx, text, "bidiReorder",
-                      JS_NewCFunction(ctx, js_bidiReorder, "bidiReorder", 1));
-    JS_SetPropertyStr(ctx, text, "bidiAvailable",
-                      JS_NewBool(ctx, render::bidi::available()));
-    JS_SetPropertyStr(ctx, broObj, "text", text);
+    JSValue textObj = JS_NewObject(ctx);
 
+    auto defineGetSet = [&](const char* name, JSCFunction* getter,
+                            JSCFunction* setter) {
+        JSAtom atom = JS_NewAtom(ctx, name);
+        JS_DefinePropertyGetSet(ctx, textObj, atom,
+            JS_NewCFunction(ctx, getter, name, 0),
+            setter ? JS_NewCFunction(ctx, setter, name, 1) : JS_UNDEFINED,
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    };
+    defineGetSet("bidiAvailable",  js_text_get_bidi_available,  nullptr);
+    JS_SetPropertyStr(ctx, textObj, "shape",
+        JS_NewCFunction(ctx, js_text_shape, "shape", 2));
+    JS_SetPropertyStr(ctx, textObj, "byteOffsetToX",
+        JS_NewCFunction(ctx, js_text_byte_offset_to_x, "byteOffsetToX", 3));
+    JS_SetPropertyStr(ctx, textObj, "xToByteOffset",
+        JS_NewCFunction(ctx, js_text_x_to_byte_offset, "xToByteOffset", 3));
+    JS_SetPropertyStr(ctx, textObj, "clusterRange",
+        JS_NewCFunction(ctx, js_text_cluster_range, "clusterRange", 3));
+    JS_SetPropertyStr(ctx, textObj, "cacheStats",
+        JS_NewCFunction(ctx, js_text_cache_stats, "cacheStats", 0));
+    JS_SetPropertyStr(ctx, textObj, "bidi",
+        JS_NewCFunction(ctx, js_text_bidi, "bidi", 3));
+    JS_SetPropertyStr(ctx, textObj, "bidiReorder",
+        JS_NewCFunction(ctx, js_text_bidi_reorder, "bidiReorder", 1));
+
+    JS_SetPropertyStr(ctx, broObj, "text", textObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
 
+
 } // namespace bro::js
+
+#endif // BRO_WITH_TEXT_SHAPING

@@ -1,500 +1,170 @@
-// bro.flora, broflora ecosystem simulation
-// =========================================
-// Bindings for the broflora multi-scale plant simulation
-// (Makowski et al. 2019, "Synthetic Silviculture"). A world is a ticking
-// ecosystem: branch-module prototypes are registered up front, plants
-// reference them, and `step(dt)` advances light → vigor → development →
-// spawning → senescence. Geometry is emitted on demand as a bromesh
-// Mesh plus parallel arrays of segments, foliage samples, and bloom
-// anchors that downstream pipelines (leaf scatter, flower instancing,
-// shader colour) consume.
+// ── Classes & Interfaces ─────────────────────────────────────────────────────
+
+class FloraWorld {
+
+  /**
+   * Current simulation time in seconds.
+   * @readonly
+   * @type {number}
+   */
+  simTime;
+
+  /**
+   * Total number of living plants in the world.
+   * @readonly
+   * @type {number}
+   */
+  plantCount;
+
+  /**
+   * Total number of registered module prototypes.
+   * @readonly
+   * @type {number}
+   */
+  prototypeCount;
+
+  /**
+   * Total active module instances across all plants.
+   * @readonly
+   * @type {number}
+   */
+  moduleCount;
+
+  /**
+   * Register a branch module prototype into the world state.
+   *
+   * @param {Object} spec
+   * @returns {number}
+   */
+  addPrototype(spec) {}
+
+  /**
+   * Add a voronoi site defining spatial dominance and archetype distribution.
+   *
+   * @param {number} prototypeIndex
+   * @param {number} [determinacy=1]
+   * @param {number} [apicalControl=0.5]
+   * @returns {FloraWorld}
+   */
+  addVoronoiSite(prototypeIndex, determinacy, apicalControl) {}
+
+  /**
+   * Add a plant specimen into the ecosystem.
+   *
+   * @param {Object} spec
+   * @returns {number}
+   */
+  addPlant(spec) {}
+
+  /**
+   * Remove a plant specimen by index (swap-and-pop).
+   *
+   * @param {number} plantIdx
+   * @returns {boolean}
+   */
+  removePlant(plantIdx) {}
+
+  /**
+   * Advance the simulation by delta time.
+   *
+   * @param {number} dt
+   * @returns {FloraWorld}
+   */
+  step(dt) {}
+
+  /**
+   * Query full runtime and species snapshot for a plant.
+   *
+   * @param {number} plantIdx
+   * @returns {Object|null}
+   */
+  plantInfo(plantIdx) {}
+
+  /**
+   * Update climate temperature and precipitation parameters in real-time.
+   *
+   * @param {Object} opts
+   * @returns {FloraWorld}
+   */
+  setClimate(opts) {}
+
+  /**
+   * Sample the world shadow grid at a world-space coordinate [x, y, z].
+   *
+   * @param {Array<number>} pos
+   * @returns {number|null}
+   */
+  sampleShadow(pos) {}
+
+  /**
+   * Verify integrity of world module hierarchy.
+   * @returns {string|null}
+   */
+  validate() {}
+
+  /**
+   * Emit procedural mesh geometry for all living plant branches.
+   *
+   * @param {number} [sides=6]
+   * @returns {Object}
+   */
+  emitMesh(sides) {}
+
+  /**
+   * Emit linear branch segments with radii and parent indices.
+   * @returns {Array<Object>}
+   */
+  emitSegments() {}
+
+  /**
+   * Emit foliage particle points.
+   * @returns {Array<Object>}
+   */
+  emitFoliage() {}
+
+  /**
+   * Emit blossom and flowering anchor points.
+   * @returns {Array<Object>}
+   */
+  emitBloomAnchors() {}
+
+}
+
+// ── Namespaces ───────────────────────────────────────────────────────────────
 
 /**
- * Create a world.
+ * =============================================================================
+ * bro.flora — ecosystem simulation (Synthetic Silviculture)
+ * =============================================================================
  *
- * @param {Object} [opts]
- * @param {number} [opts.rngSeed]
- *        Deterministic seed for the world rng. Defaults to broflora's
- *        internal golden-ratio constant.
- * @param {Object} [opts.climate]
- *        Annual climate. Defaults: tempBase 15 °C, precip 1000 mm/yr.
- * @param {number} [opts.climate.annualTempBase]
- * @param {number} [opts.climate.annualPrecip]
- * @param {number} [opts.climate.tempLapsePerUnit]
- *        Temperature lapse rate per metre of elevation (default -0.0065).
- * @param {Object} [opts.shadow]
- *        Uniform 3D shadow grid. Plants read Q_G from this grid.
- *        Required for non-trivial simulation; if omitted, the world
- *        defaults to no shadow grid which makes light Q = 0 everywhere.
- * @param {number[]} [opts.shadow.origin] World-space origin [x,y,z].
- * @param {number}   [opts.shadow.cellSize]
- * @param {number}   [opts.shadow.width]
- * @param {number}   [opts.shadow.height]
- * @param {number}   [opts.shadow.depth]
- * @param {number}   [opts.shadow.fill=1.0]  Initial Q_G value, full sun by default.
- * @returns {FloraWorld}
+ * Procedural plant and ecosystem growth simulation based on Makowski et al. (2019).
+ * Simulates bud fate, developmental archetypes, hydraulic architecture, and competitive
+ * light interception across multiple species in a shared voxel shadow grid.
+ * @example
+ * const world = bro.flora.createWorld({ rngSeed: 42 });
+ *   const protoIdx = world.addPrototype(bro.flora.prototypes.monopodial(3, 0.6));
+ *   const plantIdx = world.addPlant({
+ *     origin: [0, 0, 0],
+ *     prototypeIndex: protoIdx,
+ *     species: { maxAge: 50.0, apicalControl: 0.8 }
+ *   });
+ *   world.step(1.0);
+ *   const mesh = world.emitMesh(6);
  */
-bro.flora.createWorld;
-
-// Example: minimal grove (one Y-shaped prototype, one seedling)
-const world = bro.flora.createWorld({
-  rngSeed: 0xC0FFEE,
-  climate: { annualTempBase: 15, annualPrecip: 1000 },
-  shadow:  { origin: [-8, 0, -8], cellSize: 1,
-             width: 16, height: 16, depth: 16, fill: 1.0 },
-});
+/**
+ * Instantiate an ecosystem simulation world.
+ *
+ * @param {Object} [opts] - Simulation initialization options (rngSeed, climate, shadow grid).
+ * @returns {FloraWorld} World instance handle.
+ */
+bro.flora.createWorld = function(opts) {};
 
 /**
- * Register a branch-module prototype. Returns the prototype's index, to
- * be passed to addVoronoiSite / addPlant. Prototypes are immutable once
- * registered: every plant referencing a prototype holds a raw pointer
- * to broflora's internal storage, which the world manages.
+ * Procedural leaf cluster geometry generator.
  *
- * Topology rules: edges are undirected pairs into `nodes`, declared in
- * basipetal order (parent index < child index). `rootNode` is the
- * single node where the module attaches to its parent; `terminalNodes`
- * are the tip points where children attach.
- *
- * @typedef {Object} PrototypeSpec
- * @property {string}   [name]            Human-readable label for debugging.
- * @property {Array<{position:number[], ageAtBirth?:number, lengthMax?:number, thickening?:number}>} nodes
- * @property {Array<[number,number] | {a:number,b:number}>} edges
- * @property {number}   [rootNode=0]
- * @property {number[]} terminalNodes
- *
- * @param {PrototypeSpec} spec
- * @returns {number} prototype index, or -1 on failure
+ * @param {*} phyllotaxy - Phyllotactic arrangement type.
+ * @param {Object} [opts] - Leaf cluster configuration options.
+ * @returns {Object} Mesh instance containing generated leaf vertices and indices.
  */
-world.addPrototype;
-
-const protoY = world.addPrototype({
-  name: 'Y',
-  nodes: [
-    { position: [ 0.0, 0.0, 0.0] },
-    { position: [ 0.3, 1.0, 0.0], ageAtBirth: 0.2 },
-    { position: [-0.3, 1.0, 0.0], ageAtBirth: 0.2 },
-  ],
-  edges: [[0, 1], [0, 2]],
-  rootNode: 0,
-  terminalNodes: [1, 2],
-});
-
-/**
- * Built-in prototype specs: ready-made branch modules so you don't have
- * to hand-author node/edge graphs (and the basipetal parent<child edge
- * ordering they require). Each returns a plain spec object that drops
- * straight into world.addPrototype(...).
- *
- *   bro.flora.prototypes.straight()
- *       Single straight segment (the "I" pole; juvenile / shade-suppressed).
- *   bro.flora.prototypes.fork()
- *       Symmetric planar two-terminal "Y".
- *   bro.flora.prototypes.whorl(arms = 3, spread = 0.55)
- *       Short trunk topped by `arms` (2..8) terminals spread evenly in 3D
- *       and pitched out by `spread` (0..1). Workhorse for full rounded crowns.
- *   bro.flora.prototypes.monopodial(lateralBranches = 2, lateralSpread = 0.7)
- *       Central dominant leader extending upward (terminal 0 = apical tip)
- *       with `lateralBranches` (1..4) side arms branching at acute/spreading
- *       angles. Leader extends strongly before laterals, giving true
- *       excurrent / conifer growth.
- *   bro.flora.prototypes.sympodial(primarySpread = 0.3, lateralSpread = 0.7)
- *       Asymmetrical fork with dominant primary arm (terminal 0) and secondary
- *       arm (terminal 1), capturing decurrent spreading crowns (oaks, maples).
- *   bro.flora.prototypes.horizontalTier(arms = 3, spread = 0.85) / tier(...)
- *       Horizontal plagiotropic shelf tiers (`arms` 2..8, near-horizontal
- *       spread). Characteristic of pines, cedars, and dogwoods.
- *   bro.flora.prototypes.weeping(spread = 0.6, droop = 0.4)
- *       Pendulous downward-curving lateral shoots (weeping willows, birches).
- */
-bro.flora.prototypes;
-
-const protoWhorl      = world.addPrototype(bro.flora.prototypes.whorl(4, 0.7));
-const protoMonopodial = world.addPrototype(bro.flora.prototypes.monopodial(3, 0.65));
-const protoSympodial  = world.addPrototype(bro.flora.prototypes.sympodial(0.25, 0.75));
-const protoTier       = world.addPrototype(bro.flora.prototypes.horizontalTier(4, 0.85));
-const protoWeeping    = world.addPrototype(bro.flora.prototypes.weeping(0.6, 0.45));
-
-/**
- * Register a Voronoi site in (determinacy D, apicalControl λ) space.
- * Spawning picks the nearest site to the local (D', λ) of the parent
- * module. Two-plus sites are typical so module selection has somewhere
- * to drift toward as plants mature.
- *
- * @param {number} prototypeIndex  From addPrototype.
- * @param {number} determinacy     D coordinate.
- * @param {number} apicalControl   λ coordinate.
- */
-world.addVoronoiSite;
-
-world.addVoronoiSite(protoMonopodial, 0.2, 0.85);
-world.addVoronoiSite(protoSympodial,  0.8, 0.35);
-
-/**
- * Plant a seedling. The plant's initial root module is created from
- * `prototypeIndex`; subsequent modules are spawned by the simulation.
- *
- * Species fields are partially applied: fields you omit keep their
- * defaults. See broflora's `Species` definition for the full list.
- *
- * @typedef {Object} PlantSpec
- * @property {number[]} origin                 World-space [x,y,z].
- * @property {number}   [age=0]                Initial plant age.
- * @property {Object}   [species]              Partial species override.
- * @property {number}   [prototypeIndex]       Root-module prototype.
- * @property {number}   [initialVigor]         Initial root vigor; defaults to species.minVigor*2.
- *
- * @param {PlantSpec} spec
- * @returns {number} plant index, or -1 on failure
- */
-world.addPlant;
-
-world.addPlant({
-  origin: [0, 0, 0],
-  species: { moduleMatureAge: 0.6, shadeTolerance: 0.5 },
-  prototypeIndex: protoMonopodial,
-});
-
-/**
- * Remove a plant by index. Swap-and-pop: the plant at the end of the
- * internal vector is moved into the vacated slot, then the vector is
- * shrunk. Returns true on success, false if `plantIdx` is out of range.
- *
- * Plant indices are NOT stable across `removePlant` or `step`. The
- * simulation's senescence pass already erases fully-dead plants and
- * appends new seedlings during `step`, so external code must not cache
- * plant indices across either operation. Callers that maintain a
- * mapping from world coordinates / chunks to plant indices should
- * rebuild it after any sequence of `removePlant` or `step` calls.
- *
- * Modules inside plants reference only their plant's prototypes (by
- * pointer) and other modules inside the same plant (by index), so the
- * swap is safe: no cross-plant pointers exist.
- *
- * @param {number} plantIdx
- * @returns {boolean}
- */
-world.removePlant;
-
-world.removePlant(0);
-
-/**
- * Advance the simulation by `dt`. Internally runs light → basipetal/
- * acropetal vigor → development (age + tropism) → spawning → senescence.
- *
- * @param {number} dt  Tick size.
- * @returns {FloraWorld}
- */
-world.step;
-
-for (let i = 0; i < 200; i++) world.step(0.1);
-
-/**
- * Emit the world's plant geometry as a single Mesh (bromesh-compatible).
- * One faceted tapered cylinder per branch segment per module, with
- * `sides` ≥ 3.
- *
- * @param {number} [sides=6]
- * @returns {Mesh}
- */
-world.emitMesh;
-
-const mesh = world.emitMesh(6);
-console.log('verts:', mesh.vertexCount, 'tris:', mesh.triangleCount);
-
-/**
- * Emit the world's branch skeleton as a flat array, in lockstep with
- * emitFoliage(). Indices match: segs[i] / fol[i] describe the same
- * segment. Parent indices are absolute into the returned array, so a
- * single downstream leaf-scatter call can run over the whole world.
- *
- * @returns {Array<{from:number[], to:number[], radius:number, depth:number, parent:number}>}
- */
-world.emitSegments;
-
-/**
- * Per-segment foliage state, in lockstep with emitSegments(). Scalars
- * are in [0,1] (or [0,2] for age01) so they can drive vertex attributes
- * or scatter density without normalisation.
- *
- * `light01` is the shade-tolerance-adjusted light (Q_eff) the sim runs on,
- * a tolerant species floors it near 1.0. `lightExposure01` is the RAW
- * illumination Q·Q_G before that lerp, so it carries the true shadow
- * gradient (~1 in sun, →0 deep in a closed canopy). Use it (not light01)
- * to carve foliage/bloom density by actual shade.
- *
- * `twigGrade01` is 1 on shoots at leaf thickness, falling to 0 on branches
- * thicker than ~6x the species leaf diameter: the "off the trunk/scaffold"
- * component baked into `mass`. Multiply it into any custom density recipe
- * that ignores `mass` (e.g. one built from `lightExposure01`), or leaves
- * will scatter onto structural branches as readily as onto twigs.
- *
- * @returns {Array<{mass:number, age01:number, vigor01:number, light01:number, lightExposure01:number, senescence01:number, isTerminal:boolean, twigGrade01:number}>}
- */
-world.emitFoliage;
-
-const segs = world.emitSegments();
-const fol  = world.emitFoliage();
-// Zip them: segs[i] and fol[i] describe the same prototype edge.
-
-/**
- * Fast native C++ foliage scatter mesh generation.
- * Stamping `leafMesh` along the world's branch skeleton, weighted by
- * simulation foliage state (light exposure, maturity, senescence, twig grade).
- *
- * @param {Mesh} leafMesh  Individual leaf or botanical leaf cluster mesh.
- * @param {Object} [opts]  Leaf placement and filtering options.
- * @param {number} [opts.maxRadius=0.05]
- * @param {number} [opts.minDepth=1]
- * @param {boolean} [opts.terminalOnly=false]
- * @param {number} [opts.perUnitLength=20.0]
- * @param {number} [opts.upBias=0.5]
- * @param {number} [opts.tiltJitter=0.3]
- * @param {number} [opts.rollJitter=0.2]
- * @param {number} [opts.baseScale=1.0]
- * @param {number} [opts.scaleJitter=0.2]
- * @param {number} [opts.scaleByRadius=0.0]
- * @param {number} [opts.dedupRadius=0.0]
- * @returns {Mesh} Merged foliage mesh.
- */
-world.emitFoliageMesh;
-
-/**
- * Fast native C++ foliage transform buffer for InstancedMeshNode.
- * Returns Float32Array containing 4x4 column-major transforms (16 floats per leaf).
- *
- * @param {Object} [opts] LeafPlacementOptions
- * @returns {Float32Array}
- */
-world.emitFoliageTransforms;
-
-/**
- * Compact per-segment records for GPU vertex-shader foliage expansion
- * (foliage_scatter.vert).
- *
- * Returns { segments: Float32Array (segCount*8: [from.xyz, radius, dir.xyz, count]),
- *           instSeg: Float32Array (instanceCount), segCount, instanceCount,
- *           boundsMin: number[], boundsMax: number[] }.
- *
- * @param {Object} [opts] LeafPlacementOptions
- * @returns {Object}
- */
-world.emitScatterSegments;
-
-/**
- * Compact per-segment tube buffer for the GPU branch-tube node.
- * Returns { segments: Float32Array (segCount*8: [from.xyz, radiusFrom, to.xyz, radiusTo]),
- *           segCount, boundsMin, boundsMax }.
- *
- * @param {Object} [opts]
- * @param {number} [opts.minRadius=0.0]
- * @returns {Object}
- */
-world.emitBranchTubes;
-
-/**
- * Fast native C++ branch segment transform buffer (16 floats per segment)
- * for InstancedMeshNode.
- *
- * @returns {Float32Array}
- */
-world.emitSegmentTransforms;
-
-/**
- * Bloom / fruit anchor candidates: one per terminal node of each
- * terminal module on every flowering plant. Empty for pre-flowering
- * plants. Feed to bromesh.packAnchors to thin overlapping candidates,
- * then instance a flower mesh at each survivor.
- *
- * @returns {Array<{position:number[], normal:number[], age01:number, vigor01:number, lightExposure01:number, senescence01:number}>}
- */
-world.emitBloomAnchors;
-
-const blooms = world.emitBloomAnchors();
-
-/**
- * Fast native C++ bloom mesh emitter. Returns `[petalsMesh, centersMesh]`.
- *
- * @param {Mesh} petalMesh
- * @param {Mesh} [centerMesh]
- * @param {Object} [opts]
- * @param {number} [opts.bloomCap=500]
- * @param {number} [opts.bloomLightMin=0.18]
- * @returns {Mesh[]}
- */
-world.emitBloomMesh;
-
-// ── Per-plant emit ────────────────────────────────────────────────────
-// Same shapes as the world-level emit, restricted to one plant. Useful
-// for per-species rendering (assign each plant a colour, emit each
-// plant separately, merge per-species into one MeshNode) or for
-// inspector panels that need a single plant's geometry.
-//
-// All four return null when plantIdx is out of range; the array forms
-// return an empty array for valid plants that have nothing to emit yet
-// (no segments, pre-flowering, etc).
-
-/** @param {number} plantIdx
- *  @param {number} [sides=6]
- *  @returns {Mesh|null}                       */
-world.emitPlantMesh;
-
-/** @param {number} plantIdx
- *  @returns {Array<BranchSegment>|null}       */
-world.emitPlantSegments;
-
-/** @param {number} plantIdx
- *  @returns {Array<FoliageSample>|null}       */
-world.emitPlantFoliage;
-
-/** @param {number} plantIdx
- *  @param {Mesh} leafMesh
- *  @param {Object} [opts]
- *  @returns {Mesh|null}                       */
-world.emitPlantFoliageMesh;
-
-/** @param {number} plantIdx
- *  @returns {Array<BloomAnchor>|null}         */
-world.emitPlantBloomAnchors;
-
-// ── Per-plant inspect ─────────────────────────────────────────────────
-/**
- * Snapshot of one plant's runtime state plus a copy of every Species
- * field. Returns null for out-of-range indices.
- *
- * @param {number} plantIdx
- * @returns {{
- *   origin: number[],
- *   age: number,
- *   flowering: boolean,
- *   senescing: boolean,
- *   moduleCount: number,
- *   effectiveRootVigorMax: number,
- *   rootVigor?: number,
- *   rootLight?: number,
- *   species: {
- *     maxVigor:number, minVigor:number, rootVigorMax:number,
- *     apicalControl:number, determinacy:number, shadeTolerance:number,
- *     apicalControlMature:number, determinacyMature:number,
- *     tropismDir:number[], tropismG1:number, tropismG2:number,
- *     growthScale:number,
- *     climateOptT:number, climateOptP:number, climateSigT:number, climateSigP:number,
- *     maxAge:number, floweringAge:number, seedingRadius:number,
- *     moduleMatureAge:number, pipeExp:number, leafDiameter:number,
- *     terrainAnchorWeight:number, maxSeedingSlope:number,
- *     distributionWeightCollisions:number, distributionWeightTropism:number,
- *     orthotropy:number, individualVariation:number
- *   }
- * }|null}
- */
-world.plantInfo;
-
-const info = world.plantInfo(0);
-if (info && info.flowering) console.log('plant 0 has begun flowering');
-
-// ── Mid-sim mutators ─────────────────────────────────────────────────
-/**
- * Update the world climate without rebuilding. The species adaptation
- * factor σ(T, P) is computed on the fly each tick, so a UI slider can
- * drive species succession in real time.
- *
- * Omitted fields keep their current value.
- *
- * @param {Object} opts
- * @param {number} [opts.annualTempBase]
- * @param {number} [opts.annualPrecip]
- * @param {number} [opts.tempLapsePerUnit]
- * @returns {FloraWorld}
- */
-world.setClimate;
-
-world.setClimate({ annualTempBase: 5 });
-
-// ── Environment read ─────────────────────────────────────────────────
-/**
- * Read the cell-centered Q_G value at world-space `[x,y,z]`. Returns
- * null if the world has no shadow grid or the position falls outside.
- * Nearest-cell lookup: matches the value the simulation itself uses
- * when computing each module's incident light. The shadow grid is
- * rebuilt every `step()`, so calling this between steps reflects the
- * current canopy occlusion.
- *
- * @param {number[]} pos  world position [x,y,z]
- * @returns {number|null}
- */
-world.sampleShadow;
-
-const sun = world.sampleShadow([0, 5, 0]);   // ~1.0 above the canopy
-
-/**
- * Validate world invariants (topological order, prototype refs,
- * Voronoi indices). Returns null on success, an error string on
- * failure. O(N) over modules. Useful in tests, not every tick.
- *
- * @returns {string|null}
- */
-world.validate;
-
-// Read-only properties:
-//   world.simTime, total simulated time (sum of dt).
-//   world.plantCount, number of plants.
-//   world.prototypeCount, number of registered prototypes.
-//   world.moduleCount, sum of modules across all plants.
-
-// ── Botanical Leaf Clusters ──────────────────────────────────────────
-/**
- * Botanical leaf arrangement patterns (phyllotaxy).
- *
- *   alternate: 0       Distichous / 2-ranked spiral, alternating sides along twig (oak, elm, birch, beech)
- *   opposite: 1        Decussate paired leaves opposite each other with 90° node twist (maple, ash, lilac)
- *   spiral: 2          Golden angle (~137.5°) rosette along shoot axis (magnolia, apple, cherry)
- *   fascicle: 3        Pine needle bundle: 2–5 needles radiating from a basal sheath (pine)
- *   compoundPinnate: 4 Paired lateral leaflets along a central rachis with a terminal leaflet (walnut, rowan, acacia)
- */
-bro.flora.phyllotaxy = {
-  alternate: 0,
-  opposite: 1,
-  spiral: 2,
-  fascicle: 3,
-  compoundPinnate: 4,
-};
-
-/**
- * Procedural botanical leaf cluster / twig spray with petioles and leaves.
- * Output mesh is in local space: twig root at (0, 0, 0) extending along +Z.
- * Vertex colors encode wind bend weight in the R channel (0 at base, 1 at outermost leaf tips).
- *
- * @param {number|string} [phyllotaxy=0] Phyllotaxy enum value (0..4) or name ('alternate', 'opposite', 'spiral', 'fascicle', 'compoundPinnate').
- * @param {Object} [opts] Leaf cluster options.
- * @param {number} [opts.count=6] Number of leaves / leaflets in cluster.
- * @param {number} [opts.twigLength=0.25] Length of supporting micro-twig / rachis along local +Z.
- * @param {number} [opts.twigRadius=0.005] Radius of supporting micro-twig.
- * @param {number} [opts.petioleLength=0.04] Length of individual leaf stalk (petiole).
- * @param {number} [opts.leafWidth=0.12] Width of individual leaf cards.
- * @param {number} [opts.leafLength=0.20] Length of individual leaf cards.
- * @param {string|number} [opts.leafShape='oval'] Leaf shape ('oval', 'pointed', 'lobed', 'needle', 'frond', 'petal').
- * @param {string|number} [opts.shape='oval'] Alias for leafShape.
- * @param {number} [opts.leafBend=0.3] Length-wise bend deflection (radians).
- * @param {number} [opts.leafCurl=0.1] Axial twist curl (radians).
- * @param {number} [opts.leafCup=0.2] Bilateral transverse cupping.
- * @param {number} [opts.droop=0.2] Gravitational sag deflection along petiole and leaf.
- * @param {number} [opts.upBias=0.6] Phototropic bias turning adaxial surface toward sky (+Y).
- * @param {number} [opts.spread=0.7] Lateral fan/divergence angle (radians) from central twig axis.
- * @param {boolean} [opts.includeTwigMesh=true] If true, generates micro-twig stem geometry.
- * @param {boolean} [opts.shapedSilhouette=true] If true, modulates leaf card width by shape silhouette.
- * @param {boolean} [opts.fullUV=false] If true, leaf card UVs span full [0, 1] instead of atlas cell.
- * @returns {Mesh}
- */
-bro.flora.leafCluster;
-
-// Example: oak leaf spray
-const oakCluster = bro.flora.leafCluster(bro.flora.phyllotaxy.alternate, {
-  count: 6,
-  twigLength: 0.22,
-  leafWidth: 0.12,
-  leafLength: 0.20,
-  shape: 'lobed',
-  leafBend: 0.35,
-  droop: 0.2,
-  upBias: 0.7,
-});
+bro.flora.leafCluster = function(phyllotaxy, opts) {};
 

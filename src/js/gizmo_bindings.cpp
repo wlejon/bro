@@ -1,23 +1,35 @@
+#if BRO_WITH_3D
+
 #include "js/gizmo_bindings.h"
-#if BRO_WITH_3D  // modular-build feature gate
 #include "engine/engine.h"
 #include "engine/gizmo.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
+#include <cstring>
 
 extern "C" {
 #include "quickjs.h"
 }
 
-#include <cstring>
-
 namespace bro::js {
 
+namespace {
+static int slotFromName(const char* name) {
+    if (!name) return -1;
+    if (!strcmp(name, "position"))     return engine::GizmoManager::CB_Position;
+    if (!strcmp(name, "orientation"))  return engine::GizmoManager::CB_Orientation;
+    if (!strcmp(name, "beginDrag"))    return engine::GizmoManager::CB_BeginDrag;
+    if (!strcmp(name, "translate"))    return engine::GizmoManager::CB_Translate;
+    if (!strcmp(name, "rotate"))       return engine::GizmoManager::CB_Rotate;
+    if (!strcmp(name, "scale"))        return engine::GizmoManager::CB_Scale;
+    if (!strcmp(name, "endDrag"))      return engine::GizmoManager::CB_EndDrag;
+    if (!strcmp(name, "hoverChange"))  return engine::GizmoManager::CB_HoverChange;
+    return -1;
+}
+} // namespace
+
 // ---------------------------------------------------------------------------
-// bro.gizmo.*  — JS surface over the engine-level 3D gizmo.
-// Engine-rendered handles (translate arrows, rotate rings, scale boxes),
-// engine-driven drag interaction. Apps subscribe via callbacks or just read
-// the pivot callback to have the gizmo follow a moving target.
+// Engine pointer stash (no pinned JSValues, no finalizer-order hazard).
 // ---------------------------------------------------------------------------
 
 static const char* kGizmoEngineKey = "__bro_gizmo_engine_ptr";
@@ -36,17 +48,52 @@ static engine::Engine* getEngine(JSContext* ctx) {
     return e;
 }
 
-// --- Basic setters -----------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Accessors
+// ---------------------------------------------------------------------------
 
-static JSValue js_gizmo_show(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+static JSValue js_gizmo_get_visible(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* eng = getEngine(ctx);
+    auto* e = getEngine(ctx);
+    return JS_NewBool(ctx, e ? e->gizmo().visible() : 0);
+}
+
+static JSValue js_gizmo_get_dragging(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* eng = getEngine(ctx);
+    auto* e = getEngine(ctx);
+    return JS_NewBool(ctx, e ? e->gizmo().isDragging() : 0);
+}
+
+static JSValue js_gizmo_get_hovered(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* eng = getEngine(ctx);
+    auto* e = getEngine(ctx);
+    if (!e) return JS_NULL;
+    const char* s = nullptr;
+    switch (e->gizmo().hovered()) {
+    case engine::GizmoAxis::X: s = "x"; break;
+    case engine::GizmoAxis::Y: s = "y"; break;
+    case engine::GizmoAxis::Z: s = "z"; break;
+    case engine::GizmoAxis::XY: s = "xy"; break;
+    case engine::GizmoAxis::YZ: s = "yz"; break;
+    case engine::GizmoAxis::XZ: s = "xz"; break;
+    case engine::GizmoAxis::View: s = "view"; break;
+    case engine::GizmoAxis::Center: s = "center"; break;
+    default: return JS_NULL;
+    }
+    return JS_NewString(ctx, s);
+}
+
+static JSValue js_gizmo_show(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (auto* e = getEngine(ctx)) e->gizmo().show();
     return JS_UNDEFINED;
 }
-static JSValue js_gizmo_hide(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+
+static JSValue js_gizmo_hide(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (auto* e = getEngine(ctx)) e->gizmo().hide();
     return JS_UNDEFINED;
 }
-static JSValue js_gizmo_setMode(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+
+static JSValue js_gizmo_set_mode(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* e = getEngine(ctx);
     if (!e || argc < 1 || !JS_IsString(argv[0])) return JS_UNDEFINED;
     const char* s = JS_ToCString(ctx, argv[0]);
@@ -58,7 +105,8 @@ static JSValue js_gizmo_setMode(JSContext* ctx, JSValueConst, int argc, JSValueC
     }
     return JS_UNDEFINED;
 }
-static JSValue js_gizmo_setSpace(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+
+static JSValue js_gizmo_set_space(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* e = getEngine(ctx);
     if (!e || argc < 1 || !JS_IsString(argv[0])) return JS_UNDEFINED;
     const char* s = JS_ToCString(ctx, argv[0]);
@@ -69,7 +117,8 @@ static JSValue js_gizmo_setSpace(JSContext* ctx, JSValueConst, int argc, JSValue
     }
     return JS_UNDEFINED;
 }
-static JSValue js_gizmo_setPosition(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+
+static JSValue js_gizmo_set_position(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* e = getEngine(ctx);
     if (!e || argc < 3) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0;
@@ -81,7 +130,8 @@ static JSValue js_gizmo_setPosition(JSContext* ctx, JSValueConst, int argc, JSVa
                            static_cast<float>(z));
     return JS_UNDEFINED;
 }
-static JSValue js_gizmo_setOrientation(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+
+static JSValue js_gizmo_set_orientation(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* e = getEngine(ctx);
     if (!e || argc < 4) return JS_UNDEFINED;
     double x = 0, y = 0, z = 0, w = 1;
@@ -102,7 +152,7 @@ static JSValue js_gizmo_configure(JSContext* ctx, JSValueConst, int argc, JSValu
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "gizmo.configure() requires an options object");
     auto& cfg = e->gizmo().config();
-
+    
     auto readFloat = [&](const char* name, float& out) {
         JSValue v = JS_GetPropertyStr(ctx, argv[0], name);
         if (JS_IsNumber(v)) { double d; JS_ToFloat64(ctx, &d, v); out = static_cast<float>(d); }
@@ -111,34 +161,11 @@ static JSValue js_gizmo_configure(JSContext* ctx, JSValueConst, int argc, JSValu
     readFloat("size", cfg.targetPixelSize);
     readFloat("emissive", cfg.emissive);
     readFloat("emissiveHover", cfg.emissiveHover);
-
+    
     JSValue aot = JS_GetPropertyStr(ctx, argv[0], "alwaysOnTop");
     if (JS_IsBool(aot)) cfg.alwaysOnTop = JS_ToBool(ctx, aot);
     JS_FreeValue(ctx, aot);
-
-    auto readColor = [&](const char* name, float (&out)[4]) {
-        JSValue o = JS_GetPropertyStr(ctx, argv[0], name);
-        if (JS_IsString(o)) {
-            const char* s = JS_ToCString(ctx, o);
-            if (s && s[0] == '#') {
-                size_t len = strlen(s);
-                unsigned long val = strtoul(s + 1, nullptr, 16);
-                if (len == 7) {
-                    out[0] = ((val >> 16) & 0xFF) / 255.0f;
-                    out[1] = ((val >>  8) & 0xFF) / 255.0f;
-                    out[2] = (val & 0xFF) / 255.0f;
-                    out[3] = 1.0f;
-                } else if (len == 9) {
-                    out[0] = ((val >> 24) & 0xFF) / 255.0f;
-                    out[1] = ((val >> 16) & 0xFF) / 255.0f;
-                    out[2] = ((val >>  8) & 0xFF) / 255.0f;
-                    out[3] = (val & 0xFF) / 255.0f;
-                }
-            }
-            if (s) JS_FreeCString(ctx, s);
-        }
-        JS_FreeValue(ctx, o);
-    };
+    
     JSValue colors = JS_GetPropertyStr(ctx, argv[0], "colors");
     if (JS_IsObject(colors)) {
         JSValue xv = JS_GetPropertyStr(ctx, colors, "x");
@@ -157,6 +184,11 @@ static JSValue js_gizmo_configure(JSContext* ctx, JSValueConst, int argc, JSValu
                         out[1] = ((val >>  8) & 0xFF) / 255.0f;
                         out[2] = (val & 0xFF) / 255.0f;
                         out[3] = 1.0f;
+                    } else if (len == 9) {
+                        out[0] = ((val >> 24) & 0xFF) / 255.0f;
+                        out[1] = ((val >> 16) & 0xFF) / 255.0f;
+                        out[2] = ((val >>  8) & 0xFF) / 255.0f;
+                        out[3] = (val & 0xFF) / 255.0f;
                     }
                 }
                 if (s) JS_FreeCString(ctx, s);
@@ -171,35 +203,16 @@ static JSValue js_gizmo_configure(JSContext* ctx, JSValueConst, int argc, JSValu
         JS_FreeValue(ctx, hv); JS_FreeValue(ctx, av);
     }
     JS_FreeValue(ctx, colors);
-    (void)readColor;
     return JS_UNDEFINED;
 }
 
-// --- Callbacks (attach) ------------------------------------------------------
-
-static int slotFromName(const char* name) {
-    if (!name) return -1;
-    if (!strcmp(name, "position"))     return engine::GizmoManager::CB_Position;
-    if (!strcmp(name, "orientation"))  return engine::GizmoManager::CB_Orientation;
-    if (!strcmp(name, "beginDrag"))    return engine::GizmoManager::CB_BeginDrag;
-    if (!strcmp(name, "translate"))    return engine::GizmoManager::CB_Translate;
-    if (!strcmp(name, "rotate"))       return engine::GizmoManager::CB_Rotate;
-    if (!strcmp(name, "scale"))        return engine::GizmoManager::CB_Scale;
-    if (!strcmp(name, "endDrag"))      return engine::GizmoManager::CB_EndDrag;
-    if (!strcmp(name, "hoverChange"))  return engine::GizmoManager::CB_HoverChange;
-    return -1;
-}
-
-// bro.gizmo.attach({ position, orientation, beginDrag, translate, rotate,
-//                    scale, endDrag, hoverChange })
-// Any subset is accepted; known keys overwrite callbacks, unknown keys are
-// ignored. Non-function values clear the slot. Implicitly shows the gizmo.
 static JSValue js_gizmo_attach(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* e = getEngine(ctx);
     if (!e) return JS_UNDEFINED;
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "gizmo.attach() requires an object");
-
+    
+    e->gizmo().setJSContext(ctx);
     const char* keys[] = {
         "position", "orientation", "beginDrag", "translate",
         "rotate", "scale", "endDrag", "hoverChange"
@@ -211,7 +224,6 @@ static JSValue js_gizmo_attach(JSContext* ctx, JSValueConst, int argc, JSValueCo
             if (JS_IsFunction(ctx, v)) {
                 e->gizmo().setCallback(slot, v);
             } else if (!JS_IsUndefined(v)) {
-                // Provided but not callable → clear slot.
                 e->gizmo().setCallback(slot, JS_UNDEFINED);
             }
         }
@@ -221,7 +233,7 @@ static JSValue js_gizmo_attach(JSContext* ctx, JSValueConst, int argc, JSValueCo
     return JS_UNDEFINED;
 }
 
-static JSValue js_gizmo_detach(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+static JSValue js_gizmo_detach(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* e = getEngine(ctx);
     if (!e) return JS_UNDEFINED;
     for (int i = 0; i < engine::GizmoManager::CB_COUNT; ++i) {
@@ -231,47 +243,9 @@ static JSValue js_gizmo_detach(JSContext* ctx, JSValueConst, int, JSValueConst*)
     return JS_UNDEFINED;
 }
 
-// --- Getters -----------------------------------------------------------------
-
-static JSValue js_gizmo_get_visible(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    auto* e = getEngine(ctx);
-    return JS_NewBool(ctx, e ? e->gizmo().visible() : 0);
-}
-static JSValue js_gizmo_get_dragging(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    auto* e = getEngine(ctx);
-    return JS_NewBool(ctx, e ? e->gizmo().isDragging() : 0);
-}
-static JSValue js_gizmo_get_hovered(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    auto* e = getEngine(ctx);
-    if (!e) return JS_NULL;
-    const char* s = nullptr;
-    switch (e->gizmo().hovered()) {
-    case engine::GizmoAxis::X: s = "x"; break;
-    case engine::GizmoAxis::Y: s = "y"; break;
-    case engine::GizmoAxis::Z: s = "z"; break;
-    case engine::GizmoAxis::XY: s = "xy"; break;
-    case engine::GizmoAxis::YZ: s = "yz"; break;
-    case engine::GizmoAxis::XZ: s = "xz"; break;
-    case engine::GizmoAxis::View: s = "view"; break;
-    case engine::GizmoAxis::Center: s = "center"; break;
-    default: return JS_NULL;
-    }
-    return JS_NewString(ctx, s);
-}
-
-static const JSCFunctionListEntry js_gizmo_funcs[] = {
-    JS_CFUNC_DEF("show", 0, js_gizmo_show),
-    JS_CFUNC_DEF("hide", 0, js_gizmo_hide),
-    JS_CFUNC_DEF("setMode", 1, js_gizmo_setMode),
-    JS_CFUNC_DEF("setSpace", 1, js_gizmo_setSpace),
-    JS_CFUNC_DEF("setPosition", 3, js_gizmo_setPosition),
-    JS_CFUNC_DEF("setOrientation", 4, js_gizmo_setOrientation),
-    JS_CFUNC_DEF("configure", 1, js_gizmo_configure),
-    JS_CFUNC_DEF("attach", 1, js_gizmo_attach),
-    JS_CFUNC_DEF("detach", 0, js_gizmo_detach),
-};
-
-// --- Install -----------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
 
 void GizmoBindings::install(JSContext* ctx, engine::Engine* engine) {
     JSValue global = JS_GetGlobalObject(ctx);
@@ -279,35 +253,51 @@ void GizmoBindings::install(JSContext* ctx, engine::Engine* engine) {
                       JS_NewInt64(ctx, static_cast<int64_t>(
                           reinterpret_cast<intptr_t>(engine))));
 
-    // Now the gizmo manager can store / call callbacks.
-    engine->gizmo().setJSContext(ctx);
-
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
     if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
         broObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
     }
 
-    JSValue gzObj = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, gzObj, js_gizmo_funcs,
-                               sizeof(js_gizmo_funcs) / sizeof(js_gizmo_funcs[0]));
+    JSValue gizmoObj = JS_NewObject(ctx);
 
-    auto defineGet = [&](const char* name, JSCFunction* fn) {
-        JSAtom a = JS_NewAtom(ctx, name);
-        JS_DefinePropertyGetSet(ctx, gzObj, a,
-            JS_NewCFunction(ctx, fn, name, 0),
-            JS_UNDEFINED, JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, a);
+    auto defineGetSet = [&](const char* name, JSCFunction* getter,
+                            JSCFunction* setter) {
+        JSAtom atom = JS_NewAtom(ctx, name);
+        JS_DefinePropertyGetSet(ctx, gizmoObj, atom,
+            JS_NewCFunction(ctx, getter, name, 0),
+            setter ? JS_NewCFunction(ctx, setter, name, 1) : JS_UNDEFINED,
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
     };
-    defineGet("visible",  js_gizmo_get_visible);
-    defineGet("dragging", js_gizmo_get_dragging);
-    defineGet("hovered",  js_gizmo_get_hovered);
+    defineGetSet("visible",  js_gizmo_get_visible,  nullptr);
+    defineGetSet("dragging",  js_gizmo_get_dragging,  nullptr);
+    defineGetSet("hovered",  js_gizmo_get_hovered,  nullptr);
+    JS_SetPropertyStr(ctx, gizmoObj, "show",
+        JS_NewCFunction(ctx, js_gizmo_show, "show", 0));
+    JS_SetPropertyStr(ctx, gizmoObj, "hide",
+        JS_NewCFunction(ctx, js_gizmo_hide, "hide", 0));
+    JS_SetPropertyStr(ctx, gizmoObj, "setMode",
+        JS_NewCFunction(ctx, js_gizmo_set_mode, "setMode", 1));
+    JS_SetPropertyStr(ctx, gizmoObj, "setSpace",
+        JS_NewCFunction(ctx, js_gizmo_set_space, "setSpace", 1));
+    JS_SetPropertyStr(ctx, gizmoObj, "setPosition",
+        JS_NewCFunction(ctx, js_gizmo_set_position, "setPosition", 3));
+    JS_SetPropertyStr(ctx, gizmoObj, "setOrientation",
+        JS_NewCFunction(ctx, js_gizmo_set_orientation, "setOrientation", 4));
+    JS_SetPropertyStr(ctx, gizmoObj, "configure",
+        JS_NewCFunction(ctx, js_gizmo_configure, "configure", 1));
+    JS_SetPropertyStr(ctx, gizmoObj, "attach",
+        JS_NewCFunction(ctx, js_gizmo_attach, "attach", 1));
+    JS_SetPropertyStr(ctx, gizmoObj, "detach",
+        JS_NewCFunction(ctx, js_gizmo_detach, "detach", 0));
 
-    JS_SetPropertyStr(ctx, broObj, "gizmo", gzObj);
+    JS_SetPropertyStr(ctx, broObj, "gizmo", gizmoObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
 
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_3D
+#endif // BRO_WITH_3D

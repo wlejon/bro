@@ -2,14 +2,9 @@
 #include "engine/engine.h"
 #include "engine/gamepad.h"
 #include "util/log.h"
-
 #include <string>
 
 namespace bro::js {
-
-// ---------------------------------------------------------------------------
-// Engine pointer stash (same pattern as headless_bindings)
-// ---------------------------------------------------------------------------
 
 static const char* kGamepadEngineKey = "__bro_gamepad_engine_ptr";
 
@@ -27,10 +22,6 @@ static engine::Engine* getEngine(JSContext* ctx) {
     return e;
 }
 
-// ---------------------------------------------------------------------------
-// Rumble (Gamepad.vibrationActuator)
-// ---------------------------------------------------------------------------
-
 static JSValue resolvedPromise(JSContext* ctx, JSValue value) {
     JSValue funcs[2];
     JSValue promise = JS_NewPromiseCapability(ctx, funcs);
@@ -46,12 +37,6 @@ static JSValue resolvedPromise(JSContext* ctx, JSValue value) {
     return promise;
 }
 
-// playEffect(type, {duration, strongMagnitude, weakMagnitude, leftTrigger,
-// rightTrigger}) -> Promise<"complete">
-// data[0] = gamepad slot index. Follows the W3C GamepadHapticActuator shape:
-// "dual-rumble" drives the body motors; "trigger-rumble" additionally drives
-// the per-trigger motors from leftTrigger/rightTrigger (SDL_RumbleGamepad-
-// Triggers — Xbox-style pads; others ignore it). startDelay is ignored.
 static JSValue js_playEffect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv,
                              int, JSValue* data) {
     auto* engine = getEngine(ctx);
@@ -103,7 +88,6 @@ static JSValue js_playEffect(JSContext* ctx, JSValueConst, int argc, JSValueCons
     return resolvedPromise(ctx, JS_NewString(ctx, ok ? "complete" : "preempted"));
 }
 
-// reset() -> Promise<"complete"> — stop any in-progress rumble.
 static JSValue js_resetEffect(JSContext* ctx, JSValueConst, int, JSValueConst*,
                               int, JSValue* data) {
     auto* engine = getEngine(ctx);
@@ -115,12 +99,7 @@ static JSValue js_resetEffect(JSContext* ctx, JSValueConst, int, JSValueConst*,
     return resolvedPromise(ctx, JS_NewString(ctx, "complete"));
 }
 
-// ---------------------------------------------------------------------------
-// Snapshot construction
-// ---------------------------------------------------------------------------
-
-JSValue buildGamepadSnapshot(JSContext* ctx, engine::Engine* /*engine*/,
-                             const engine::GamepadState& gp) {
+JSValue buildGamepadSnapshot(JSContext* ctx, engine::Engine*, const engine::GamepadState& gp) {
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "id", JS_NewString(ctx, gp.id.c_str()));
     JS_SetPropertyStr(ctx, obj, "index", JS_NewInt32(ctx, gp.index));
@@ -134,8 +113,6 @@ JSValue buildGamepadSnapshot(JSContext* ctx, engine::Engine* /*engine*/,
         bool pressed = value >= engine::kGamepadTriggerPressThreshold;
         JSValue b = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, b, "pressed", JS_NewBool(ctx, pressed));
-        // No touch sensors on the wire: touched mirrors "any contact", i.e.
-        // pressed or a sub-threshold analog value (per the W3C default).
         JS_SetPropertyStr(ctx, b, "touched", JS_NewBool(ctx, pressed || value > 0.0f));
         JS_SetPropertyStr(ctx, b, "value", JS_NewFloat64(ctx, value));
         JS_SetPropertyUint32(ctx, buttons, static_cast<uint32_t>(i), b);
@@ -149,8 +126,6 @@ JSValue buildGamepadSnapshot(JSContext* ctx, engine::Engine* /*engine*/,
     }
     JS_SetPropertyStr(ctx, obj, "axes", axes);
 
-    // vibrationActuator — dual-rumble via SDL_RumbleGamepad. The C functions
-    // carry the slot index as bound data so the snapshot stays a plain object.
     JSValue actuator = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, actuator, "type", JS_NewString(ctx, "dual-rumble"));
     {
@@ -170,10 +145,6 @@ JSValue buildGamepadSnapshot(JSContext* ctx, engine::Engine* /*engine*/,
     return obj;
 }
 
-// ---------------------------------------------------------------------------
-// navigator.getGamepads()
-// ---------------------------------------------------------------------------
-
 static JSValue js_getGamepads(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* engine = getEngine(ctx);
     JSValue arr = JS_NewArray(ctx);
@@ -188,16 +159,13 @@ static JSValue js_getGamepads(JSContext* ctx, JSValueConst, int, JSValueConst*) 
     return arr;
 }
 
-// ---------------------------------------------------------------------------
-// Install
-// ---------------------------------------------------------------------------
-
-void installGamepadBindings(JSContext* ctx, engine::Engine* engine) {
+void installGamepadBindings(JSContext* ctx, engine::Engine* engine)
+{
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, kGamepadEngineKey,
                       JS_NewInt64(ctx, static_cast<int64_t>(
                           reinterpret_cast<intptr_t>(engine))));
-
+    
     JSValue nav = JS_GetPropertyStr(ctx, global, "navigator");
     if (JS_IsUndefined(nav) || JS_IsNull(nav)) {
         JS_FreeValue(ctx, nav);
