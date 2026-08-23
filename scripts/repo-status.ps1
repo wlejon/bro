@@ -32,7 +32,7 @@
     pwsh scripts/repo-status.ps1 -Pull -Sync
 #>
 [CmdletBinding()]
-param([switch]$ListFiles, [switch]$Pull, [switch]$Sync, [switch]$SyncSurface)
+param([switch]$ListFiles, [switch]$Pull, [switch]$Sync)
 
 $ErrorActionPreference = 'Continue'
 
@@ -337,9 +337,4 @@ if ($LASTEXITCODE -eq 0) {
 else {
     Write-Host 'Commit failed.' -ForegroundColor Red
     exit 1
-}
-
-if ($SyncSurface) {
-    Write-Host ''
-    & pwsh (Join-Path $PSScriptRoot 'sync-surface.ps1')
 }

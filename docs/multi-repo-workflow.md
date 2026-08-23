@@ -209,29 +209,7 @@ scripts/repo-status.sh --pull
 
 **`-Sync` / `--sync`** then bumps bro's stale submodule pointers to the standalone HEADs and records them in a single bro commit. It only acts where the standalone is ahead of (or diverged from) the recorded pointer; a sibling whose standalone is *behind* bro is left alone, since that one needs a pull, not a bump. Note the ordering `-Pull -Sync` implies: pull first so the pointers you record are the real remote HEADs.
 
-**`-SyncSurface` / `--sync-surface`** executes the `brosurface` generator pipeline, emitting updated C++ bindings, bronze_host bridges, TypeScript definition files, and JSDoc documentation directly into `bro`.
-
-## Surface Generation & Synchronization (brosurface)
-
-[brosurface](https://github.com/wlejon/brosurface) is the single-source WebIDL code generation toolchain for the engine API surface.
-
-To regenerate and sync all bindings, docs, and TypeScript types from `brosurface` into `bro`:
-
-```bash
-# Windows
-pwsh scripts/sync-surface.ps1
-
-# Linux / macOS
-bash scripts/sync-surface.sh
-```
-
-Or combine it with your repository status checks:
-
-```bash
-pwsh scripts/repo-status.ps1 -SyncSurface
-```
-
-To point at a different location for any sibling:
+## Overriding Paths
 
 ```bash
 cmake -B build \
