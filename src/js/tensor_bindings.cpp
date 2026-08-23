@@ -1,61 +1,19 @@
 #if BRO_WITH_TENSOR
-// JS bindings for brotensor — CUDA or Metal GPU tensor + ops.
-//
-// Installed onto bro.tensor.* by installTensorBindings(). The op surface is
-// split across several TUs to keep individual files in the few-hundred-LOC
-// range:
-//
-//   tensor_bindings.cpp            — class, runtime, factory; orchestrates the
-//                                    cluster installers; "core" ops (linear,
-//                                    relu/tanh/sigmoid, softmax, layernorm,
-//                                    attention/mha, optim, batched, embedding,
-//                                    concat/split, masked-mean-pool, mse, fused
-//                                    softmax-xent, reductions, batched-train
-//                                    backwards, copy_d2d / scale / clamp /
-//                                    build_slot_mask / mul_inplace /
-//                                    layernorm_inference_batched(+fp16),
-//                                    softmax_xent_fused_batched,
-//                                    mse_vec_per_sample,
-//                                    linear_forward_batched_fp16,
-//                                    concat_batched_rows,
-//                                    concat_nchw_channels(+backward) — too
-//                                    interrelated with concat_rows to split)
-//   tensor_bindings_activations.cpp — silu, gelu, gelu_exact, quick_gelu,
-//                                    swiglu, geglu, geglu_exact F/B;
-//                                    rms_norm F/B, group_norm F/B;
-//                                    matmul, matmul_backward; rope F/B;
-//                                    build_causal_mask_row.
-//   tensor_bindings_attention.cpp  — self/cross attention (fp16+fp32 train);
-//                                    flash attention family;
-//                                    attention_token_moments; kv_cache_append;
-//                                    resblock F/B.
-//   tensor_bindings_conv.cpp       — conv2d F/B; up/downsample 2x F/B;
-//                                    nchw↔seq transpose.
-//   tensor_bindings_diffusion.cpp  — ddim_step, euler_step, dpmpp_2m_step,
-//                                    timestep_embedding.
-//   tensor_bindings_int8.cpp       — INT8 quant helpers + W8A16 ops.
-//
-// Compilation gating:
-//   brotensor publishes BROTENSOR_HAS_GPU=1 when either CUDA or Metal is
-//   enabled (BROTENSOR_HAS_CUDA / BROTENSOR_HAS_METAL identify the specific
-//   backend). The public op surface is identical across backends, so we gate
-//   on the umbrella define here. Without GPU support installTensorBindings
-//   publishes a stub namespace with `available: false` so JS code can detect
-//   it.
 
 #include "js/ai_bindings.h"
-
-#include <qjsbind/qjsbind.h>
-
-#ifdef BROTENSOR_HAS_GPU
-
+#include "js/ai_bindings.h"
 #include "js/tensor_bindings_internal.h"
-
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <qjsbind/qjsbind.h>
+
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
+
 
 using qjsbind::make_float32_array;
 
@@ -975,134 +933,139 @@ static void installDtypeEnum(JSContext* ctx, JSValue gpuObj) {
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installTensorBindings(JSContext* ctx) {
-    registerClasses(ctx);
-
-    JSValue gpuObj = JS_NewObject(ctx);
-
-    JS_SetPropertyStr(ctx, gpuObj, "available", JS_TRUE);
-
-    // Backend identification
-#ifdef BROTENSOR_HAS_CUDA
-    JS_SetPropertyStr(ctx, gpuObj, "backend", JS_NewString(ctx, "cuda"));
-#elif defined(BROTENSOR_HAS_METAL)
-    JS_SetPropertyStr(ctx, gpuObj, "backend", JS_NewString(ctx, "metal"));
-#else
-    JS_SetPropertyStr(ctx, gpuObj, "backend", JS_NewString(ctx, "unknown"));
-#endif
-
-    installDtypeEnum(ctx, gpuObj);
-
-    // Runtime
-    JS_SetPropertyStr(ctx, gpuObj, "init", JS_NewCFunction(ctx, js_init, "init", 0));
-    JS_SetPropertyStr(ctx, gpuObj, "sync", JS_NewCFunction(ctx, js_sync, "sync", 0));
-
-    // Factory
-    JS_SetPropertyStr(ctx, gpuObj, "createTensor",
-        JS_NewCFunction(ctx, js_createTensor, "createTensor", 3));
-
-    // Dense + elementwise
-    JS_SetPropertyStr(ctx, gpuObj, "linearForward",      JS_NewCFunction(ctx, js_linearForward,      "linearForward",      4));
-    JS_SetPropertyStr(ctx, gpuObj, "linearBackward",     JS_NewCFunction(ctx, js_linearBackward,     "linearBackward",     6));
-    JS_SetPropertyStr(ctx, gpuObj, "reluForward",        JS_NewCFunction(ctx, js_reluForward,        "reluForward",        2));
-    JS_SetPropertyStr(ctx, gpuObj, "reluBackward",       JS_NewCFunction(ctx, js_reluBackward,       "reluBackward",       3));
-    JS_SetPropertyStr(ctx, gpuObj, "tanhForward",        JS_NewCFunction(ctx, js_tanhForward,        "tanhForward",        2));
-    JS_SetPropertyStr(ctx, gpuObj, "tanhBackward",       JS_NewCFunction(ctx, js_tanhBackward,       "tanhBackward",       3));
-    JS_SetPropertyStr(ctx, gpuObj, "sigmoidForward",     JS_NewCFunction(ctx, js_sigmoidForward,     "sigmoidForward",     2));
-    JS_SetPropertyStr(ctx, gpuObj, "sigmoidBackward",    JS_NewCFunction(ctx, js_sigmoidBackward,    "sigmoidBackward",    3));
-    JS_SetPropertyStr(ctx, gpuObj, "addInplace",         JS_NewCFunction(ctx, js_addInplace,         "addInplace",         2));
-    JS_SetPropertyStr(ctx, gpuObj, "addScalarInplace",   JS_NewCFunction(ctx, js_addScalarInplace,   "addScalarInplace",   2));
-    JS_SetPropertyStr(ctx, gpuObj, "scaleInplace",       JS_NewCFunction(ctx, js_scaleInplace,       "scaleInplace",       2));
-    JS_SetPropertyStr(ctx, gpuObj, "mulInplace",         JS_NewCFunction(ctx, js_mulInplace,         "mulInplace",         2));
-    JS_SetPropertyStr(ctx, gpuObj, "clamp",              JS_NewCFunction(ctx, js_clamp,              "clamp",              3));
-    JS_SetPropertyStr(ctx, gpuObj, "buildSlotMask",      JS_NewCFunction(ctx, js_buildSlotMask,      "buildSlotMask",      5));
-    JS_SetPropertyStr(ctx, gpuObj, "copyD2D",            JS_NewCFunction(ctx, js_copyD2D,            "copyD2D",            5));
-    JS_SetPropertyStr(ctx, gpuObj, "cast",               JS_NewCFunction(ctx, js_cast,               "cast",               3));
-
-    // Softmax
-    JS_SetPropertyStr(ctx, gpuObj, "softmaxForward",     JS_NewCFunction(ctx, js_softmaxForward,     "softmaxForward",     3));
-    JS_SetPropertyStr(ctx, gpuObj, "softmaxBackward",    JS_NewCFunction(ctx, js_softmaxBackward,    "softmaxBackward",    3));
-
-    // LayerNorm
-    JS_SetPropertyStr(ctx, gpuObj, "layernormForward",                       JS_NewCFunction(ctx, js_layernormForward,                       "layernormForward",                       6));
-    JS_SetPropertyStr(ctx, gpuObj, "layernormBackward",                      JS_NewCFunction(ctx, js_layernormBackward,                      "layernormBackward",                      7));
-    JS_SetPropertyStr(ctx, gpuObj, "layernormForwardInferenceBatched",       JS_NewCFunction(ctx, js_layernormForwardInferenceBatched,       "layernormForwardInferenceBatched",       5));
-    JS_SetPropertyStr(ctx, gpuObj, "layernormForwardInferenceBatchedFp16",   JS_NewCFunction(ctx, js_layernormForwardInferenceBatchedFp16,   "layernormForwardInferenceBatchedFp16",   5));
-
-    // Single-head attention
-    JS_SetPropertyStr(ctx, gpuObj, "attentionForward",   JS_NewCFunction(ctx, js_attentionForward,   "attentionForward",   12));
-    JS_SetPropertyStr(ctx, gpuObj, "attentionBackward",  JS_NewCFunction(ctx, js_attentionBackward,  "attentionBackward",  17));
-
-    // MHA
-    JS_SetPropertyStr(ctx, gpuObj, "mhaForward",         JS_NewCFunction(ctx, js_mhaForward,         "mhaForward",         13));
-    JS_SetPropertyStr(ctx, gpuObj, "mhaBackward",        JS_NewCFunction(ctx, js_mhaBackward,        "mhaBackward",        18));
-
-    // Pooling, losses, embedding, concat
-    JS_SetPropertyStr(ctx, gpuObj, "maskedMeanPoolForward",       JS_NewCFunction(ctx, js_maskedMeanPoolForward,       "maskedMeanPoolForward",       3));
-    JS_SetPropertyStr(ctx, gpuObj, "maskedMeanPoolBackward",      JS_NewCFunction(ctx, js_maskedMeanPoolBackward,      "maskedMeanPoolBackward",      4));
-    JS_SetPropertyStr(ctx, gpuObj, "mseVecForward",               JS_NewCFunction(ctx, js_mseVecForward,               "mseVecForward",               2));
-    JS_SetPropertyStr(ctx, gpuObj, "mseVecBackward",              JS_NewCFunction(ctx, js_mseVecBackward,              "mseVecBackward",              3));
-    JS_SetPropertyStr(ctx, gpuObj, "mseVecPerSample",             JS_NewCFunction(ctx, js_mseVecPerSample,             "mseVecPerSample",             4));
-    JS_SetPropertyStr(ctx, gpuObj, "softmaxXentFused",            JS_NewCFunction(ctx, js_softmaxXentFused,            "softmaxXentFused",            5));
-    JS_SetPropertyStr(ctx, gpuObj, "softmaxXentFusedBatched",     JS_NewCFunction(ctx, js_softmaxXentFusedBatched,     "softmaxXentFusedBatched",     8));
-    JS_SetPropertyStr(ctx, gpuObj, "embeddingLookupForward",      JS_NewCFunction(ctx, js_embeddingLookupForward,      "embeddingLookupForward",      4));
-    JS_SetPropertyStr(ctx, gpuObj, "embeddingLookupBackward",     JS_NewCFunction(ctx, js_embeddingLookupBackward,     "embeddingLookupBackward",     4));
-    JS_SetPropertyStr(ctx, gpuObj, "concatRows",                  JS_NewCFunction(ctx, js_concatRows,                  "concatRows",                  2));
-    JS_SetPropertyStr(ctx, gpuObj, "splitRows",                   JS_NewCFunction(ctx, js_splitRows,                   "splitRows",                   2));
-    JS_SetPropertyStr(ctx, gpuObj, "concatBatchedRows",           JS_NewCFunction(ctx, js_concatBatchedRows,           "concatBatchedRows",           2));
-    JS_SetPropertyStr(ctx, gpuObj, "concatNchwChannels",          JS_NewCFunction(ctx, js_concatNchwChannels,          "concatNchwChannels",          6));
-    JS_SetPropertyStr(ctx, gpuObj, "concatNchwChannelsBackward",  JS_NewCFunction(ctx, js_concatNchwChannelsBackward,  "concatNchwChannelsBackward",  6));
-
-    // Optimisers
-    JS_SetPropertyStr(ctx, gpuObj, "sgdStep",   JS_NewCFunction(ctx, js_sgdStep,   "sgdStep",   5));
-    JS_SetPropertyStr(ctx, gpuObj, "adamStep",  JS_NewCFunction(ctx, js_adamStep,  "adamStep",  9));
-
-    // Batched (inference + training)
-    JS_SetPropertyStr(ctx, gpuObj, "linearForwardBatched",       JS_NewCFunction(ctx, js_linearForwardBatched,       "linearForwardBatched",       4));
-    JS_SetPropertyStr(ctx, gpuObj, "linearForwardBatchedFp16",   JS_NewCFunction(ctx, js_linearForwardBatchedFp16,   "linearForwardBatchedFp16",   4));
-    JS_SetPropertyStr(ctx, gpuObj, "reluForwardBatched",         JS_NewCFunction(ctx, js_reluForwardBatched,         "reluForwardBatched",         2));
-    JS_SetPropertyStr(ctx, gpuObj, "tanhForwardBatched",         JS_NewCFunction(ctx, js_tanhForwardBatched,         "tanhForwardBatched",         2));
-    JS_SetPropertyStr(ctx, gpuObj, "addInplaceBatched",          JS_NewCFunction(ctx, js_addInplaceBatched,          "addInplaceBatched",          2));
-    JS_SetPropertyStr(ctx, gpuObj, "linearBackwardBatched",      JS_NewCFunction(ctx, js_linearBackwardBatched,      "linearBackwardBatched",      6));
-    JS_SetPropertyStr(ctx, gpuObj, "reluBackwardBatched",        JS_NewCFunction(ctx, js_reluBackwardBatched,        "reluBackwardBatched",        3));
-    JS_SetPropertyStr(ctx, gpuObj, "tanhBackwardBatched",        JS_NewCFunction(ctx, js_tanhBackwardBatched,        "tanhBackwardBatched",        3));
-
-    // Reductions
-    JS_SetPropertyStr(ctx, gpuObj, "sumRows",    JS_NewCFunction(ctx, js_sumRows,    "sumRows",    2));
-    JS_SetPropertyStr(ctx, gpuObj, "sumCols",    JS_NewCFunction(ctx, js_sumCols,    "sumCols",    2));
-    JS_SetPropertyStr(ctx, gpuObj, "argmaxRows", JS_NewCFunction(ctx, js_argmaxRows, "argmaxRows", 2));
-
-    JS_SetPropertyStr(ctx, gpuObj, "gatherRows",     JS_NewCFunction(ctx, js_gatherRows,     "gatherRows",     3));
-    JS_SetPropertyStr(ctx, gpuObj, "scatterRowsAdd", JS_NewCFunction(ctx, js_scatterRowsAdd, "scatterRowsAdd", 4));
-    JS_SetPropertyStr(ctx, gpuObj, "topKRows",       JS_NewCFunction(ctx, js_topKRows,       "topKRows",       4));
-    JS_SetPropertyStr(ctx, gpuObj, "layernormForwardBatchedWithCaches",  JS_NewCFunction(ctx, js_layernormForwardBatchedWithCaches,  "layernormForwardBatchedWithCaches",  8));
-    JS_SetPropertyStr(ctx, gpuObj, "layernormBackwardBatchedWithCaches", JS_NewCFunction(ctx, js_layernormBackwardBatchedWithCaches, "layernormBackwardBatchedWithCaches", 7));
-    JS_SetPropertyStr(ctx, gpuObj, "randUniform",    JS_NewCFunction(ctx, js_randUniform,    "randUniform",    3));
-    JS_SetPropertyStr(ctx, gpuObj, "randn",          JS_NewCFunction(ctx, js_randn,          "randn",          3));
-    JS_SetPropertyStr(ctx, gpuObj, "randBernoulli",  JS_NewCFunction(ctx, js_randBernoulli,  "randBernoulli",  4));
-    JS_SetPropertyStr(ctx, gpuObj, "randnTruncated", JS_NewCFunction(ctx, js_randnTruncated, "randnTruncated", 5));
-    JS_SetPropertyStr(ctx, gpuObj, "xavierInit",     JS_NewCFunction(ctx, js_xavierInit,     "xavierInit",     2));
-
-    // Delegate the other clusters.
-    installTensorActivationOps(ctx, gpuObj);
-    installTensorAttentionOps(ctx, gpuObj);
-    installTensorConvOps(ctx, gpuObj);
-    installTensorDiffusionOps(ctx, gpuObj);
-    installTensorInt8Ops(ctx, gpuObj);
-    installTensorSafetensorsOps(ctx, gpuObj);
-    installTensorAudioOps(ctx, gpuObj);
-
-    // Install onto bro.tensor.
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        registerClasses(ctx);
+    
+        JSValue gpuObj = JS_NewObject(ctx);
+    
+        JS_SetPropertyStr(ctx, gpuObj, "available", JS_TRUE);
+    
+        // Backend identification
+    #ifdef BROTENSOR_HAS_CUDA
+        JS_SetPropertyStr(ctx, gpuObj, "backend", JS_NewString(ctx, "cuda"));
+    #elif defined(BROTENSOR_HAS_METAL)
+        JS_SetPropertyStr(ctx, gpuObj, "backend", JS_NewString(ctx, "metal"));
+    #else
+        JS_SetPropertyStr(ctx, gpuObj, "backend", JS_NewString(ctx, "unknown"));
+    #endif
+    
+        installDtypeEnum(ctx, gpuObj);
+    
+        // Runtime
+        JS_SetPropertyStr(ctx, gpuObj, "init", JS_NewCFunction(ctx, js_init, "init", 0));
+        JS_SetPropertyStr(ctx, gpuObj, "sync", JS_NewCFunction(ctx, js_sync, "sync", 0));
+    
+        // Factory
+        JS_SetPropertyStr(ctx, gpuObj, "createTensor",
+            JS_NewCFunction(ctx, js_createTensor, "createTensor", 3));
+    
+        // Dense + elementwise
+        JS_SetPropertyStr(ctx, gpuObj, "linearForward",      JS_NewCFunction(ctx, js_linearForward,      "linearForward",      4));
+        JS_SetPropertyStr(ctx, gpuObj, "linearBackward",     JS_NewCFunction(ctx, js_linearBackward,     "linearBackward",     6));
+        JS_SetPropertyStr(ctx, gpuObj, "reluForward",        JS_NewCFunction(ctx, js_reluForward,        "reluForward",        2));
+        JS_SetPropertyStr(ctx, gpuObj, "reluBackward",       JS_NewCFunction(ctx, js_reluBackward,       "reluBackward",       3));
+        JS_SetPropertyStr(ctx, gpuObj, "tanhForward",        JS_NewCFunction(ctx, js_tanhForward,        "tanhForward",        2));
+        JS_SetPropertyStr(ctx, gpuObj, "tanhBackward",       JS_NewCFunction(ctx, js_tanhBackward,       "tanhBackward",       3));
+        JS_SetPropertyStr(ctx, gpuObj, "sigmoidForward",     JS_NewCFunction(ctx, js_sigmoidForward,     "sigmoidForward",     2));
+        JS_SetPropertyStr(ctx, gpuObj, "sigmoidBackward",    JS_NewCFunction(ctx, js_sigmoidBackward,    "sigmoidBackward",    3));
+        JS_SetPropertyStr(ctx, gpuObj, "addInplace",         JS_NewCFunction(ctx, js_addInplace,         "addInplace",         2));
+        JS_SetPropertyStr(ctx, gpuObj, "addScalarInplace",   JS_NewCFunction(ctx, js_addScalarInplace,   "addScalarInplace",   2));
+        JS_SetPropertyStr(ctx, gpuObj, "scaleInplace",       JS_NewCFunction(ctx, js_scaleInplace,       "scaleInplace",       2));
+        JS_SetPropertyStr(ctx, gpuObj, "mulInplace",         JS_NewCFunction(ctx, js_mulInplace,         "mulInplace",         2));
+        JS_SetPropertyStr(ctx, gpuObj, "clamp",              JS_NewCFunction(ctx, js_clamp,              "clamp",              3));
+        JS_SetPropertyStr(ctx, gpuObj, "buildSlotMask",      JS_NewCFunction(ctx, js_buildSlotMask,      "buildSlotMask",      5));
+        JS_SetPropertyStr(ctx, gpuObj, "copyD2D",            JS_NewCFunction(ctx, js_copyD2D,            "copyD2D",            5));
+        JS_SetPropertyStr(ctx, gpuObj, "cast",               JS_NewCFunction(ctx, js_cast,               "cast",               3));
+    
+        // Softmax
+        JS_SetPropertyStr(ctx, gpuObj, "softmaxForward",     JS_NewCFunction(ctx, js_softmaxForward,     "softmaxForward",     3));
+        JS_SetPropertyStr(ctx, gpuObj, "softmaxBackward",    JS_NewCFunction(ctx, js_softmaxBackward,    "softmaxBackward",    3));
+    
+        // LayerNorm
+        JS_SetPropertyStr(ctx, gpuObj, "layernormForward",                       JS_NewCFunction(ctx, js_layernormForward,                       "layernormForward",                       6));
+        JS_SetPropertyStr(ctx, gpuObj, "layernormBackward",                      JS_NewCFunction(ctx, js_layernormBackward,                      "layernormBackward",                      7));
+        JS_SetPropertyStr(ctx, gpuObj, "layernormForwardInferenceBatched",       JS_NewCFunction(ctx, js_layernormForwardInferenceBatched,       "layernormForwardInferenceBatched",       5));
+        JS_SetPropertyStr(ctx, gpuObj, "layernormForwardInferenceBatchedFp16",   JS_NewCFunction(ctx, js_layernormForwardInferenceBatchedFp16,   "layernormForwardInferenceBatchedFp16",   5));
+    
+        // Single-head attention
+        JS_SetPropertyStr(ctx, gpuObj, "attentionForward",   JS_NewCFunction(ctx, js_attentionForward,   "attentionForward",   12));
+        JS_SetPropertyStr(ctx, gpuObj, "attentionBackward",  JS_NewCFunction(ctx, js_attentionBackward,  "attentionBackward",  17));
+    
+        // MHA
+        JS_SetPropertyStr(ctx, gpuObj, "mhaForward",         JS_NewCFunction(ctx, js_mhaForward,         "mhaForward",         13));
+        JS_SetPropertyStr(ctx, gpuObj, "mhaBackward",        JS_NewCFunction(ctx, js_mhaBackward,        "mhaBackward",        18));
+    
+        // Pooling, losses, embedding, concat
+        JS_SetPropertyStr(ctx, gpuObj, "maskedMeanPoolForward",       JS_NewCFunction(ctx, js_maskedMeanPoolForward,       "maskedMeanPoolForward",       3));
+        JS_SetPropertyStr(ctx, gpuObj, "maskedMeanPoolBackward",      JS_NewCFunction(ctx, js_maskedMeanPoolBackward,      "maskedMeanPoolBackward",      4));
+        JS_SetPropertyStr(ctx, gpuObj, "mseVecForward",               JS_NewCFunction(ctx, js_mseVecForward,               "mseVecForward",               2));
+        JS_SetPropertyStr(ctx, gpuObj, "mseVecBackward",              JS_NewCFunction(ctx, js_mseVecBackward,              "mseVecBackward",              3));
+        JS_SetPropertyStr(ctx, gpuObj, "mseVecPerSample",             JS_NewCFunction(ctx, js_mseVecPerSample,             "mseVecPerSample",             4));
+        JS_SetPropertyStr(ctx, gpuObj, "softmaxXentFused",            JS_NewCFunction(ctx, js_softmaxXentFused,            "softmaxXentFused",            5));
+        JS_SetPropertyStr(ctx, gpuObj, "softmaxXentFusedBatched",     JS_NewCFunction(ctx, js_softmaxXentFusedBatched,     "softmaxXentFusedBatched",     8));
+        JS_SetPropertyStr(ctx, gpuObj, "embeddingLookupForward",      JS_NewCFunction(ctx, js_embeddingLookupForward,      "embeddingLookupForward",      4));
+        JS_SetPropertyStr(ctx, gpuObj, "embeddingLookupBackward",     JS_NewCFunction(ctx, js_embeddingLookupBackward,     "embeddingLookupBackward",     4));
+        JS_SetPropertyStr(ctx, gpuObj, "concatRows",                  JS_NewCFunction(ctx, js_concatRows,                  "concatRows",                  2));
+        JS_SetPropertyStr(ctx, gpuObj, "splitRows",                   JS_NewCFunction(ctx, js_splitRows,                   "splitRows",                   2));
+        JS_SetPropertyStr(ctx, gpuObj, "concatBatchedRows",           JS_NewCFunction(ctx, js_concatBatchedRows,           "concatBatchedRows",           2));
+        JS_SetPropertyStr(ctx, gpuObj, "concatNchwChannels",          JS_NewCFunction(ctx, js_concatNchwChannels,          "concatNchwChannels",          6));
+        JS_SetPropertyStr(ctx, gpuObj, "concatNchwChannelsBackward",  JS_NewCFunction(ctx, js_concatNchwChannelsBackward,  "concatNchwChannelsBackward",  6));
+    
+        // Optimisers
+        JS_SetPropertyStr(ctx, gpuObj, "sgdStep",   JS_NewCFunction(ctx, js_sgdStep,   "sgdStep",   5));
+        JS_SetPropertyStr(ctx, gpuObj, "adamStep",  JS_NewCFunction(ctx, js_adamStep,  "adamStep",  9));
+    
+        // Batched (inference + training)
+        JS_SetPropertyStr(ctx, gpuObj, "linearForwardBatched",       JS_NewCFunction(ctx, js_linearForwardBatched,       "linearForwardBatched",       4));
+        JS_SetPropertyStr(ctx, gpuObj, "linearForwardBatchedFp16",   JS_NewCFunction(ctx, js_linearForwardBatchedFp16,   "linearForwardBatchedFp16",   4));
+        JS_SetPropertyStr(ctx, gpuObj, "reluForwardBatched",         JS_NewCFunction(ctx, js_reluForwardBatched,         "reluForwardBatched",         2));
+        JS_SetPropertyStr(ctx, gpuObj, "tanhForwardBatched",         JS_NewCFunction(ctx, js_tanhForwardBatched,         "tanhForwardBatched",         2));
+        JS_SetPropertyStr(ctx, gpuObj, "addInplaceBatched",          JS_NewCFunction(ctx, js_addInplaceBatched,          "addInplaceBatched",          2));
+        JS_SetPropertyStr(ctx, gpuObj, "linearBackwardBatched",      JS_NewCFunction(ctx, js_linearBackwardBatched,      "linearBackwardBatched",      6));
+        JS_SetPropertyStr(ctx, gpuObj, "reluBackwardBatched",        JS_NewCFunction(ctx, js_reluBackwardBatched,        "reluBackwardBatched",        3));
+        JS_SetPropertyStr(ctx, gpuObj, "tanhBackwardBatched",        JS_NewCFunction(ctx, js_tanhBackwardBatched,        "tanhBackwardBatched",        3));
+    
+        // Reductions
+        JS_SetPropertyStr(ctx, gpuObj, "sumRows",    JS_NewCFunction(ctx, js_sumRows,    "sumRows",    2));
+        JS_SetPropertyStr(ctx, gpuObj, "sumCols",    JS_NewCFunction(ctx, js_sumCols,    "sumCols",    2));
+        JS_SetPropertyStr(ctx, gpuObj, "argmaxRows", JS_NewCFunction(ctx, js_argmaxRows, "argmaxRows", 2));
+    
+        JS_SetPropertyStr(ctx, gpuObj, "gatherRows",     JS_NewCFunction(ctx, js_gatherRows,     "gatherRows",     3));
+        JS_SetPropertyStr(ctx, gpuObj, "scatterRowsAdd", JS_NewCFunction(ctx, js_scatterRowsAdd, "scatterRowsAdd", 4));
+        JS_SetPropertyStr(ctx, gpuObj, "topKRows",       JS_NewCFunction(ctx, js_topKRows,       "topKRows",       4));
+        JS_SetPropertyStr(ctx, gpuObj, "layernormForwardBatchedWithCaches",  JS_NewCFunction(ctx, js_layernormForwardBatchedWithCaches,  "layernormForwardBatchedWithCaches",  8));
+        JS_SetPropertyStr(ctx, gpuObj, "layernormBackwardBatchedWithCaches", JS_NewCFunction(ctx, js_layernormBackwardBatchedWithCaches, "layernormBackwardBatchedWithCaches", 7));
+        JS_SetPropertyStr(ctx, gpuObj, "randUniform",    JS_NewCFunction(ctx, js_randUniform,    "randUniform",    3));
+        JS_SetPropertyStr(ctx, gpuObj, "randn",          JS_NewCFunction(ctx, js_randn,          "randn",          3));
+        JS_SetPropertyStr(ctx, gpuObj, "randBernoulli",  JS_NewCFunction(ctx, js_randBernoulli,  "randBernoulli",  4));
+        JS_SetPropertyStr(ctx, gpuObj, "randnTruncated", JS_NewCFunction(ctx, js_randnTruncated, "randnTruncated", 5));
+        JS_SetPropertyStr(ctx, gpuObj, "xavierInit",     JS_NewCFunction(ctx, js_xavierInit,     "xavierInit",     2));
+    
+        // Delegate the other clusters.
+        installTensorActivationOps(ctx, gpuObj);
+        installTensorAttentionOps(ctx, gpuObj);
+        installTensorConvOps(ctx, gpuObj);
+        installTensorDiffusionOps(ctx, gpuObj);
+        installTensorInt8Ops(ctx, gpuObj);
+        installTensorSafetensorsOps(ctx, gpuObj);
+        installTensorAudioOps(ctx, gpuObj);
+    
+        // Install onto bro.tensor.
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+        JS_SetPropertyStr(ctx, broObj, "tensor", gpuObj);
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-    JS_SetPropertyStr(ctx, broObj, "tensor", gpuObj);
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
 
 // Cross-binding unwrap helper (declared in ai_bindings.h).
@@ -1110,36 +1073,7 @@ nngpu::Tensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v) {
     return gpuTensorFromJSLocal(ctx, v);
 }
 
-} // namespace bro::js
-
-#else // !BROTENSOR_HAS_GPU
-
-namespace brotensor { struct Tensor; }
-
-namespace bro::js {
-
-void installTensorBindings(JSContext* ctx) {
-    JSValue gpuObj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, gpuObj, "available", JS_FALSE);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
-        JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-    JS_SetPropertyStr(ctx, broObj, "tensor", gpuObj);
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
-}
-
-brotensor::Tensor* gpuTensorFromJS(JSContext*, JSValueConst) {
-    return nullptr;
-}
 
 } // namespace bro::js
 
-#endif // BROTENSOR_HAS_GPU
-
-#endif  // BRO_WITH_TENSOR
+#endif // BRO_WITH_TENSOR

@@ -1,1401 +1,1226 @@
-// =============================================================================
-// bro.tensor, GPU tensor + ops (brotensor: CUDA or Metal)
-// =============================================================================
-//
-// Wraps the brotensor sibling library. brotensor exposes one unified tensor
-// type with a runtime Device tag and device-neutral ops; bro.tensor is the
-// GPU-resident face of it. The op surface is identical across CUDA (NVIDIA)
-// and Metal (Apple) backends, code written against bro.tensor runs unchanged
-// on either. Mirrors brotensor's CPU op surface over device-resident tensor
-// buffers, plus a broad set of training- and inference-only ops for
-// transformers, diffusion U-Nets, and W8A16 quant.
-//
-// Availability:
-//   bro.tensor.available  // boolean
-//   bro.tensor.backend    // "cuda" | "metal" | "unknown" (only when available)
-//
-// `available` is true when bro was built against a brotensor with a GPU
-// backend enabled (-DBROGAMEAGENT_WITH_CUDA=ON or _WITH_METAL=ON). When
-// false, only `available` is exposed, guard everything else behind the
-// `available` check.
-//
-// Dtypes:
-//   bro.tensor.dtype.fp32   // 0
-//   bro.tensor.dtype.fp16   // 1
-//   bro.tensor.dtype.int8   // 2
-//
-// Tensors carry a dtype tag. Arithmetic ops dispatch on the input dtype
-// (FP32 or FP16); FP16 ops accumulate internally in FP32. INT8 is only
-// carried by weight-only quantised ops. createTensor() / .resize() accept
-// either the string ("fp32" | "fp16" | "int8") or the numeric enum.
-//
-// Synchronisation:
-//   Every op runs on the default stream and is asynchronous on the GPU.
-//   Before reading results back to host, call bro.tensor.sync() or use
-//   .download(), which auto-syncs internally.
-//
-// Mask convention:
-//   Wherever the CPU API takes a Float32Array mask (host pointer), the GPU
-//   API takes a *device* mask: pass either `null`/`undefined` (no mask) OR
-//   a GpuTensor whose `.data` is the device pointer. Passing a Float32Array
-//   throws TypeError.
-//
-// Int32 indices (embedding):
-//   `idx` arguments are GpuTensors whose `.data` is reinterpreted as an
-//   int32_t* device buffer (size == B). This keeps indices resident on
-//   device across calls.
-//
-// =============================================================================
-
-
-const gpu = bro.tensor;
-
-// -----------------------------------------------------------------------------
-// Runtime
-// -----------------------------------------------------------------------------
+// ── Classes & Interfaces ─────────────────────────────────────────────────────
 
 /**
- * `true` when a GPU backend is compiled in. Always check before accessing
- * other `gpu.*` symbols.
+ * =============================================================================
+ * bro.tensor — GPU tensor + ops (brotensor: CUDA or Metal)
+ * =============================================================================
+ *
+ * Wraps the brotensor sibling library. brotensor exposes one unified tensor
+ * type with a runtime Device tag and device-neutral ops; bro.tensor is the
+ * GPU-resident face of it. The op surface is identical across CUDA (NVIDIA)
+ * and Metal (Apple) backends.
+ * @example
+ * if (bro.tensor.available) {
+ *     bro.tensor.init();
+ *     const t = bro.tensor.createTensor(3, 4);
+ *     t.zero();
+ *     const data = t.download();
+ *   }
+ */
+class GpuTensor {
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  rows;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  cols;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  size;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  bytes;
+
+  zero() {}
+
+  /**
+   * @param {number} rows
+   * @param {number} cols
+   * @param {(string|number)} [dtype]
+   */
+  resize(rows, cols, dtype) {}
+
+  /**
+   * @returns {string}
+   */
+  dtype() {}
+
+  /**
+   * @returns {GpuTensor}
+   */
+  clone() {}
+
+  /**
+   * @param {(Float32Array|Object)} src
+   */
+  upload(src) {}
+
+  /**
+   * @param {Object} [dst]
+   * @returns {(Float32Array|void)}
+   */
+  download(dst) {}
+
+  /**
+   * @param {Uint16Array} data
+   */
+  uploadFp16(data) {}
+
+  /**
+   * @returns {Uint16Array}
+   */
+  downloadFp16() {}
+
+  /**
+   * @param {Int8Array} data
+   */
+  uploadInt8(data) {}
+
+}
+
+// ── Namespaces ───────────────────────────────────────────────────────────────
+
+/**
+ * @readonly
  * @type {boolean}
  */
-gpu.available;
-
-/** "cuda" | "metal" | "unknown": the active backend identifier. */
-gpu.backend;
+bro.tensor.available;
 
 /**
- * Idempotent device init. CUDA: selects device 0 (or BROTENSOR_CUDA_DEVICE).
- * Metal: opens the default MTLDevice. Most ops auto-init; call once at
- * startup to surface device errors early.
+ * @readonly
+ * @type {string}
  */
-gpu.init();
+bro.tensor.backend;
 
-/** Block until all queued kernels on the default stream have completed. */
-gpu.sync();
+bro.tensor.init = function() {};
 
-
-// -----------------------------------------------------------------------------
-// GpuTensor
-// -----------------------------------------------------------------------------
+bro.tensor.sync = function() {};
 
 /**
- * Allocate an owning device tensor. dtype defaults to FP32. Storage is
- * uninitialised: call `.zero()` if you need zeros.
  * @param {number} rows
  * @param {number} [cols=1]
- * @param {string|number} [dtype="fp32"]  "fp32" | "fp16" | "int8" or enum
+ * @param {(string|number)} [dtype="fp32"]
  * @returns {GpuTensor}
  */
-const t   = gpu.createTensor(3, 4);
-const t16 = gpu.createTensor(3, 4, "fp16");
-const q8  = gpu.createTensor(8, 16, "int8");
-
-t.rows;          // 3
-t.cols;          // 4
-t.size;          // 12
-t.bytes;         // 48  (3*4*sizeof(fp32))
-t.dtype();       // "fp32"
-
-t.zero();                       // device memset to 0
-t.resize(2, 6);                 // reallocates, default fp32
-t.resize(2, 6, "fp16");         // reallocates AND switches dtype to FP16
-const dup = t.clone();          // owning device-side copy (same dtype)
+bro.tensor.createTensor = function(rows, cols, dtype) {};
 
 /**
- * Upload host → device (FP32).
- * @param {AITensor|Float32Array} src
+ * @param {GpuTensor} W
+ * @param {GpuTensor} b
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
-t.upload(new Float32Array([1, 2, 3, 4, 5, 6]));
+bro.tensor.linearForward = function(W, b, x, y) {};
 
 /**
- * Download device → host (FP32). Auto-syncs.
- *   download()       → returns a fresh Float32Array
- *   download(dst)    → copies into the AITensor `dst` (resizes if needed)
+ * @param {GpuTensor} W
+ * @param {GpuTensor} x
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dW
+ * @param {GpuTensor} dB
  */
-const arr = t.download();
-const ht  = bro.ai.game.nn.createTensor(t.rows, t.cols);
-t.download(ht);
+bro.tensor.linearBackward = function(W, x, dY, dX, dW, dB) {};
 
 /**
- * FP16 upload / download: pass a Uint16Array holding the IEEE binary16 bit
- * pattern. Use this when staging diffusion-style FP16 weights.
- *
- *   t16.uploadFp16(uint16Array);    // resizes destination to (n, 1) FP16
- *   const u16 = t16.downloadFp16(); // returns fresh Uint16Array (bit pattern)
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
+bro.tensor.reluForward = function(x, y) {};
 
 /**
- * INT8 upload: pass an Int8Array of raw int8 weight bytes, typically the
- * `weights` field of quantizeInt8PerRowHost(). This is the staging path for
- * W8A16 weights: the only way to get quantised weights onto the device.
- *
- *   q8.uploadInt8(quant.weights);   // resizes destination to (rows, cols) INT8
- *
- * Keeps the destination's existing (rows, cols) when their product matches
- * the element count; otherwise falls back to (n, 1). Pair the resulting
- * tensor with an FP32 (out, 1) scales tensor for the matmulInt8wFp16 family.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-
-
-// -----------------------------------------------------------------------------
-// Dense + elementwise
-// -----------------------------------------------------------------------------
-
-gpu.linearForward(W, b, x, y);              // y = W*x + b
-gpu.linearBackward(W, x, dY, dX, dW, dB);   // dW, dB accumulated; dX overwritten
-
-gpu.reluForward(x, y);     gpu.reluBackward(x, dY, dX);
-gpu.tanhForward(x, y);     gpu.tanhBackward(y, dY, dX);    // uses cached y
-gpu.sigmoidForward(x, y);  gpu.sigmoidBackward(y, dY, dX); // uses cached y
-
-gpu.addInplace(y, x);            // y[i] += x[i]
-gpu.addScalarInplace(y, 0.5);    // y[i] += s
-gpu.scaleInplace(y, 2.0);        // y[i] *= s
-gpu.mulInplace(y, x);            // y[i] *= x[i]   (FP32/FP16)
-gpu.clamp(y, -1.0, 1.0);         // y[i] = clip(y[i], lo, hi)
+bro.tensor.reluBackward = function(x, dY, dX) {};
 
 /**
- * Build a slot-validity mask on-device:
- *   mask[k] = (x[offset + k*stride] > 0.5) ? 1 : 0   for k in [0, K)
- * Resizes mask to (K, 1). Used to avoid host syncs when constructing
- * per-slot validity masks.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
-gpu.buildSlotMask(x, offset, K, stride, mask);
+bro.tensor.tanhForward = function(x, y) {};
 
 /**
- * Device-to-device chunk copy: copies `n` flat floats from src starting at
- * `srcOff` into dst starting at `dstOff`. Treats both tensors as flat
- * buffers regardless of shape.
+ * @param {GpuTensor} y
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-gpu.copyD2D(src, srcOff, dst, dstOff, n);
+bro.tensor.tanhBackward = function(y, dY, dX) {};
 
 /**
- * Dtype cast: dst = src converted to outDtype. dst is resized (and dtype-set)
- * to match src's shape, on src's device. Supports the FP32 <-> FP16 pair plus
- * a same-dtype passthrough copy; other pairs throw. The standard
- * mixed-precision primitive (FP16 weight <-> FP32 master copy).
- *   outDtype: "fp32" | "fp16" | "int8" or a bro.tensor.dtype.* enum value.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
-gpu.cast(src, dst, "fp16");
-
-
-// -----------------------------------------------------------------------------
-// Modern activations (transformer + diffusion stack)
-// -----------------------------------------------------------------------------
-//
-// All forward kernels take (x, y); all backward kernels take (x, dY, dX) and
-// read the *raw forward input x*, not the cached forward output y. FP32 and
-// FP16 are dispatched on x.dtype.
-
-gpu.siluForward(x, y);          gpu.siluBackward(x, dY, dX);    // x * sigmoid(x)
-gpu.geluForward(x, y);          gpu.geluBackward(x, dY, dX);    // tanh approx
-gpu.geluExactForward(x, y);     gpu.geluExactBackward(x, dY, dX); // erf-based
-gpu.quickGeluForward(x, y);     gpu.quickGeluBackward(x, dY, dX); // x * sigmoid(1.702 x)
-
-// Gated FFN activations. Input shape (B, 2*D) split into halves A, B_half;
-// output (B, D). swiglu: silu(A) * B_half. geglu: A * gelu(B_half). Same
-// API for the exact-erf GEGLU.
-gpu.swigluForward(X, Y);        gpu.swigluBackward(X, dY, dX);
-gpu.gegluForward(X, Y);         gpu.gegluBackward(X, dY, dX);
-gpu.gegluExactForward(X, Y);    gpu.gegluExactBackward(X, dY, dX);
-
-
-// -----------------------------------------------------------------------------
-// Softmax
-// -----------------------------------------------------------------------------
-
-gpu.softmaxForward(logits, probs, /*mask|null*/ null);
-gpu.softmaxBackward(probs, dProbs, dLogits);  // full Jacobian
-
-
-// -----------------------------------------------------------------------------
-// LayerNorm + batched-inference LayerNorm
-// -----------------------------------------------------------------------------
+bro.tensor.sigmoidForward = function(x, y) {};
 
 /**
- * Single-vector LayerNorm. Returns the mean/rstd scalars for the backward
- * to consume without recomputation.
+ * @param {GpuTensor} y
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-const ln = gpu.layernormForward(x, gamma, beta, y, xhat, 1e-5);
-gpu.layernormBackward(dY, xhat, gamma, ln.rstd, dX, dGamma, dBeta);
+bro.tensor.sigmoidBackward = function(y, dY, dX) {};
 
 /**
- * Inference-only batched LayerNorm (no cache, no sync). One block per row.
- *   X_RD:  (R, D)
- *   gamma: (D,)
- *   beta:  (D,)
- *   Y_RD:  (R, D), resized if mis-shaped
+ * @param {GpuTensor} y
+ * @param {GpuTensor} x
  */
-gpu.layernormForwardInferenceBatched(X_RD, gamma, beta, Y_RD, 1e-5);
-gpu.layernormForwardInferenceBatchedFp16(X_RD, gamma, beta, Y_RD, 1e-5);
-
-
-// -----------------------------------------------------------------------------
-// RMSNorm (Llama-style)
-// -----------------------------------------------------------------------------
+bro.tensor.addInplace = function(y, x) {};
 
 /**
- * Per-row: rms[b] = sqrt(mean_j x[b,j]^2 + eps); y[b,j] = x[b,j]*gamma[j]/rms[b]
- *   X:     (B, D)
- *   gamma: (D, 1)
- *   Y:     (B, D), resized + dtype-matched
+ * @param {GpuTensor} y
+ * @param {number} s
  */
-gpu.rmsNormForward(X, gamma, 1e-5, Y);
-gpu.rmsNormBackward(X, gamma, dY, 1e-5, dX, dGamma);  // dGamma accumulated
-
-
-// -----------------------------------------------------------------------------
-// GroupNorm (diffusion / vision)
-// -----------------------------------------------------------------------------
+bro.tensor.addScalarInplace = function(y, s) {};
 
 /**
- * NCHW GroupNorm. numGroups must divide C. Mean/var computed over
- * (C/numGroups, H, W) per (n, group) tile. FP32 and FP16 dispatched on
- * X.dtype.
+ * @param {GpuTensor} y
+ * @param {number} s
  */
-gpu.groupNormForward(X, gamma, beta, N, C, H, W, numGroups, 1e-5, Y);
-gpu.groupNormBackward(X, gamma, dY, N, C, H, W, numGroups, 1e-5,
-                      dX, dGamma, dBeta);  // dGamma/dBeta accumulated
-
-
-// -----------------------------------------------------------------------------
-// Matmul (raw, no bias)
-// -----------------------------------------------------------------------------
-
-/** C(M,N) = A(M,K) @ B(K,N). Dtype dispatched on A.dtype. */
-gpu.matmul(A, B, C);
+bro.tensor.scaleInplace = function(y, s) {};
 
 /**
- * Backward. dA, dB are *accumulated* into (caller zeros). dC is read-only.
- *   dA += dC @ B^T   ;   dB += A^T @ dC
+ * @param {GpuTensor} y
+ * @param {GpuTensor} x
  */
-gpu.matmulBackward(A, B, dC, dA, dB);
-
-
-// -----------------------------------------------------------------------------
-// RoPE (rotary position embedding)
-// -----------------------------------------------------------------------------
+bro.tensor.mulInplace = function(y, x) {};
 
 /**
- * Per-head pair rotation:
- *   x_{2i}   ←  x_{2i}   * cos(θ) - x_{2i+1} * sin(θ)
- *   x_{2i+1} ←  x_{2i}   * sin(θ) + x_{2i+1} * cos(θ)
- *   θ = pos * thetaBase^(-2i/headDim);  pos = seqOffset + row.
- *
- *   X / Y / dY / dX: (L, numHeads * headDim)
- *   headDim must be even.
+ * @param {GpuTensor} y
+ * @param {number} lo
+ * @param {number} hi
  */
-gpu.ropeForward(X, headDim, numHeads, seqOffset, 10000.0, Y);
-gpu.ropeBackward(dY, headDim, numHeads, seqOffset, 10000.0, dX);
+bro.tensor.clamp = function(y, lo, hi) {};
 
 /**
- * RoPE with caller-supplied cos/sin tables. Same pair rotation as ropeForward,
- * but θ is not derived from seqOffset/thetaBase: instead each row reads its
- * angles from precomputed tables. Use this when the position schedule is
- * irregular (packed sequences, 2D/3D RoPE) or shared across calls.
- *   X / Y / dY / dX:    (L, numHeads * headDim)
- *   cosTbl / sinTbl:    (L, headDim/2), one angle row per token.
- *   headDim must be even. Dispatched on X.dtype (FP32 / FP16 / BF16).
+ * @param {GpuTensor} x
+ * @param {number} offset
+ * @param {number} K
+ * @param {number} stride
+ * @param {GpuTensor} mask
  */
-gpu.ropeApply(X, cosTbl, sinTbl, headDim, numHeads, Y);
-gpu.ropeApplyBackward(dY, cosTbl, sinTbl, headDim, numHeads, dX);
-
-
-// -----------------------------------------------------------------------------
-// AdaLN modulation (DiT / SD3 / Flux)
-// -----------------------------------------------------------------------------
+bro.tensor.buildSlotMask = function(x, offset, K, stride, mask) {};
 
 /**
- * Adaptive-LayerNorm modulation: Y = X * (1 + scale) + shift, with the
- * per-channel scale / shift broadcast across every token row, the affine
- * step every DiT block applies after norm().
- *   X, Y:          (L, D) token activations.
- *   scale, shift:  length-D vectors ((1,D) or (D,1)), same dtype/device as X.
- * Y is resized + dtype-set to match X. Dispatched on X.dtype (FP32/FP16/BF16).
+ * @param {GpuTensor} src
+ * @param {number} srcOff
+ * @param {GpuTensor} dst
+ * @param {number} dstOff
+ * @param {number} n
  */
-gpu.modulate(X, scale, shift, Y);
+bro.tensor.copyD2D = function(src, srcOff, dst, dstOff, n) {};
 
 /**
- * Broadcast channel-wise multiply: Y[l,d] = X[l,d] * v[d], the DiT residual
- * gate (`x = x + broadcastMul(sublayerOut, gate)`) and any per-channel
- * rescale.
- *   X, Y: (L, D).  v: length-D vector ((1,D) or (D,1)), same dtype/device as X.
+ * @param {GpuTensor} src
+ * @param {GpuTensor} dst
+ * @param {(string|number)} outDtype
  */
-gpu.broadcastMul(X, v, Y);
-
-
-// -----------------------------------------------------------------------------
-// Reductions
-// -----------------------------------------------------------------------------
-
-gpu.sumRows(X, Y);     // Y(M,1) = sum_n X[m, n]
-gpu.sumCols(X, Y);     // Y(1,N) = sum_m X[m, n]
-gpu.argmaxRows(X, Idx); // Idx(M,1) FP32; integer index stored as float
-
-
-// -----------------------------------------------------------------------------
-// Single-head + multi-head attention
-// -----------------------------------------------------------------------------
+bro.tensor.cast = function(src, dst, outDtype) {};
 
 /**
- * Single-head SDPA self-attention. Caches Q/K/V/Attn/Y_pre_Wo are filled by
- * the forward so the backward needs no recomputation.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
-gpu.attentionForward(X, Wq, Wk, Wv, Wo, mask, Q, K, V, Attn, Y_pre_Wo, O);
-gpu.attentionBackward(dO, X, Q, K, V, Attn, Y_pre_Wo,
-                      Wq, Wk, Wv, Wo, mask,
-                      dX, dWq, dWk, dWv, dWo);
+bro.tensor.siluForward = function(x, y) {};
 
 /**
- * Multi-head self-attention. Wq/Wk/Wv/Wo are (D,D); split into h heads of
- * head_dim = D/h. Caches Qh/Kh/Vh: (h*K, head_dim); Attnh: (h*K, K);
- * Yconcat: (K, D); O: (K, D).
+ * @param {GpuTensor} x
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-gpu.mhaForward(X, Wq, Wk, Wv, Wo, mask, numHeads,
-               Qh, Kh, Vh, Attnh, Yconcat, O);
-gpu.mhaBackward(dO, X, Qh, Kh, Vh, Attnh, Yconcat,
-                Wq, Wk, Wv, Wo, mask, numHeads,
-                dX, dWq, dWk, dWv, dWo);
-
-
-// -----------------------------------------------------------------------------
-// Self / cross attention (training-aware variants)
-// -----------------------------------------------------------------------------
-
-/** Inference self-attention (no caches exposed). FP16 path via flash-attn. */
-gpu.selfAttentionForward(X, Wq, Wk, Wv, Wo, mask, numHeads, O);
-
-/** FP32 training self-attention with caches (thin wrapper over mhaForward). */
-gpu.selfAttentionForwardTrain(X, Wq, Wk, Wv, Wo, mask, numHeads,
-                              Qh, Kh, Vh, Attnh, Yconcat, O);
-gpu.selfAttentionBackward(dO, X, Qh, Kh, Vh, Attnh, Yconcat,
-                          Wq, Wk, Wv, Wo, mask, numHeads,
-                          dX, dWq, dWk, dWv, dWo);
+bro.tensor.siluBackward = function(x, dY, dX) {};
 
 /**
- * Cross-attention: K/V projected from a separate context tensor (used in
- * diffusion U-Nets for text conditioning). Wk/Wv may be rectangular (D, D_ctx).
- * FP16 dispatch → flash-attn path (caches not exposed); FP32 → training path.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
-gpu.crossAttentionForward(X, Ctx, Wq, Wk, Wv, Wo, mask, numHeads, O);
+bro.tensor.geluForward = function(x, y) {};
 
 /**
- * FP16 cross-attention with head-averaged attention map AttnAvg and an
- * optional pre-softmax logit bias (Lq, Lk). Used by Cross-Attention Tree
- * Search to inspect / inject attention maps.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-gpu.crossAttentionForwardWithAttn(X, Ctx, Wq, Wk, Wv, Wo,
-                                  mask, attnLogitBias /* GpuTensor|null */,
-                                  numHeads, O, AttnAvg);
-
-gpu.crossAttentionForwardTrain(X, Ctx, Wq, Wk, Wv, Wo, mask, numHeads,
-                               Qh, Kh, Vh, Attnh, Yconcat, O);
-gpu.crossAttentionBackward(dO, X, Ctx, Qh, Kh, Vh, Attnh, Yconcat,
-                           Wq, Wk, Wv, Wo, mask, numHeads,
-                           dX, dCtx, dWq, dWk, dWv, dWo);
+bro.tensor.geluBackward = function(x, dY, dX) {};
 
 /**
- * Spatial moments of a cross-attention map (Lq, Lk). For each text token k:
- *   mass[k] = sum_q Attn[q, k]
- *   centroid[k] = mass-weighted (y, x) of the image-token grid.
- * Used as an MCTS reward primitive over diffusion attention maps.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
-gpu.attentionTokenMoments(Attn, h_lat, w_lat, mass, centroid);
-
-/** Causal mask helper: mask[k] = (k <= q) ? 1 : 0; sized to (L, 1). */
-gpu.buildCausalMaskRow(L, q, mask);
-
-
-// -----------------------------------------------------------------------------
-// T5-style self-attention with relative-position bias
-// -----------------------------------------------------------------------------
-//
-// Scaled self-attention with an optional additive per-head bias on the
-// pre-softmax scores, the encoder attention of a T5 text encoder. Unlike the
-// other attention ops it takes an explicit `scale` (T5 does NOT scale the QK
-// dot product, so pass 1.0) and an additive `attnBias`.
-//
-//   X:        (L, D) token activations; O resized + dtype-matched to X.
-//   Wq/Wk/Wv/Wo: (D, D) projection weights, same dtype as X.
-//   mask:     optional device key-validity mask (length L, 1 valid / 0 not),
-//             or null. Also gates padded query rows.
-//   attnBias: optional (numHeads*L, L) FP32 GpuTensor, row h*L+q holds head
-//             h's length-L bias for query q. null → plain scaled attention.
-//             T5's relative-position bias is built host-side (bucketed) and
-//             uploaded here. FP32 on every backend, regardless of X.dtype.
-//   scale:    QK-dot multiplier, applied before the bias.
-//
-// Dispatched on X.dtype (FP32 / FP16 / BF16); FP32 internal math. Scores are
-// materialised (L, L) per head, intended for encoder-length sequences
-// (T5 ≤ 512).
-gpu.selfAttentionBiasForward(X, Wq, Wk, Wv, Wo,
-                             /*mask|null*/ null, /*attnBias|null*/ bias,
-                             numHeads, /*scale*/ 1.0, O);
-
-
-// -----------------------------------------------------------------------------
-// Flash-attention family (FP16, recompute-based backward)
-// -----------------------------------------------------------------------------
+bro.tensor.geluExactForward = function(x, y) {};
 
 /**
- * Bare FlashAttention forward: Q/K/V already projected, no Wo. Tiled online
- * softmax; works for arbitrary Lq/Lk. `causal` enables autoregressive
- * masking (requires Lq == Lk).
+ * @param {GpuTensor} x
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-gpu.flashAttentionForward(Q, K, V, mask, numHeads, /*causal*/ false, O);
+bro.tensor.geluExactBackward = function(x, dY, dX) {};
 
 /**
- * Sliding-window causal self-attention (FP32). Q/K/V already projected as
- * (L, numHeads*headDim). Always causal: the Lq queries sit at the last Lq
- * positions of a length-Lk sequence (q_offset = Lk - Lq) and each attends keys
- * [max(0, pos-window+1), pos]. `window <= 0` is unbounded causal.
- *   - Lq == Lk: prefill / codec sliding window.
- *   - Lq  < Lk: incremental decode of an Lq-token block over a K/V cache
- *               (Lq == 1, window <= 0 attends the whole cache).
- * Supports GQA: K/V may carry fewer heads than Q. The local attention used by
- * streaming codecs (Qwen3-TTS / Mimi). Inference-only.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} y
  */
-gpu.flashAttentionWindowedForward(Q, K, V, mask, numHeads, /*window*/ 0, O);
+bro.tensor.quickGeluForward = function(x, y) {};
 
 /**
- * Bare FlashAttention backward: recompute-based; no per-call caches saved
- * by the forward. dQ/dK/dV are overwritten.
+ * @param {GpuTensor} x
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-gpu.flashAttentionBackward(Q, K, V, O, dO, mask, numHeads, false,
-                           dQ, dK, dV);
+bro.tensor.quickGeluBackward = function(x, dY, dX) {};
 
 /**
- * Fused flash-attention with all four projection matmuls inside the kernel.
- * Pass `Ctx = null` for self-attention (causal CLIP-text usage); pass a
- * (Lk, D_ctx) tensor for cross-attention. Each optional bias can be null.
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Y
  */
-gpu.flashAttentionQkvoForward(X, /*Ctx|null*/ null,
-                              Wq, /*bq|null*/ null,
-                              Wk, /*bk|null*/ null,
-                              Wv, /*bv|null*/ null,
-                              Wo, /*bo|null*/ null,
-                              /*mask|null*/ null,
-                              numHeads, /*causal*/ false, O);
+bro.tensor.swigluForward = function(X, Y) {};
 
 /**
- * Backward partner of flashAttentionQkvoForward. Recompute-style: no caches
- * consumed from the forward. Pass the same inputs the forward saw. Uses an
- * options object because the positional form has 22 args.
- *
- * Required keys: X, Wq, Wk, Wv, Wo, dO, numHeads, dX, dWq, dWk, dWv, dWo
- * Optional keys (default null/false):
- *   Ctx, bq, bk, bv, bo, mask, causal, dCtx, dbq, dbk, dbv, dbo
- *
- * dCtx must be non-null iff Ctx was non-null in the forward. Bias-grad
- * symmetry: dbX is required iff the corresponding bX was supplied.
+ * @param {GpuTensor} X
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-gpu.flashAttentionQkvoBackward({
-    X, Ctx, Wq, bq, Wk, bk, Wv, bv, Wo, bo,
-    mask, numHeads, causal: false, dO,
-    dX, dCtx, dWq, dbq, dWk, dbk, dWv, dbv, dWo, dbo,
-});
+bro.tensor.swigluBackward = function(X, dY, dX) {};
 
 /**
- * Pre-project a context tensor through Wk/Wv. Useful for diffusion: the
- * text context is fixed across denoising steps, so projecting once amortises
- * the cost over all steps.
- *   K_out, V_out:  (Lk, D)  FP16
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Y
  */
-gpu.flashAttentionProjectKv(ctx, Wk, /*bk|null*/ null,
-                                Wv, /*bv|null*/ null,
-                                K_out, V_out);
+bro.tensor.gegluForward = function(X, Y) {};
 
 /**
- * Flash-attention with X projected to Q on the fly but K/V supplied
- * pre-projected (typically via flashAttentionProjectKv). Bitwise-equivalent
- * to the cached path of flashAttentionQkvoForward.
+ * @param {GpuTensor} X
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
  */
-gpu.flashAttentionQWithKvCachedForward(X, K, V,
-                                       Wq, /*bq|null*/ null,
-                                       Wo, /*bo|null*/ null,
-                                       /*mask|null*/ null,
-                                       numHeads, /*causal*/ false, O);
+bro.tensor.gegluBackward = function(X, dY, dX) {};
 
 /**
- * Causal flash-attention against a partially-filled KV cache. Reads only
- * the first `validLen` rows of K_cache / V_cache. Query position
- *   p_q = validLen - L_q + i
- * attends to cache positions [0, p_q]. Typical L_q == 1 for token-by-token
- * decoding.
- *
- * numKvHeads defaults to numHeads (plain MHA); pass a smaller value for GQA
- * (numKvHeads must divide numHeads: query head h reads KV head
- * h/(numHeads/numKvHeads)). attnSoftcap > 0 applies Gemma-2 tanh logit
- * soft-capping (raw score s -> attnSoftcap * tanh(s/attnSoftcap), before the
- * causal/window mask); 0 (default) disables it. window > 0 applies
- * sliding-window causal masking: query at absolute position p attends key j
- * only when j <= p AND j > p-window; <= 0 (default) is unbounded causal.
- * Both default to bit-identical pre-GQA behaviour.
- *
- * @param {number} [numKvHeads=numHeads]
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Y
+ */
+bro.tensor.gegluExactForward = function(X, Y) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} dX
+ */
+bro.tensor.gegluExactBackward = function(X, dY, dX) {};
+
+/**
+ * @param {GpuTensor} logits
+ * @param {GpuTensor} probs
+ * @param {GpuTensor|null} [mask]
+ */
+bro.tensor.softmaxForward = function(logits, probs, mask) {};
+
+/**
+ * @param {GpuTensor} probs
+ * @param {GpuTensor} dProbs
+ * @param {GpuTensor} dLogits
+ */
+bro.tensor.softmaxBackward = function(probs, dProbs, dLogits) {};
+
+/**
+ * @param {GpuTensor} x
+ * @param {GpuTensor} gamma
+ * @param {GpuTensor} beta
+ * @param {GpuTensor} y
+ * @param {GpuTensor} xhat
+ * @param {number} [eps=0.00001]
+ * @returns {Object}
+ */
+bro.tensor.layernormForward = function(x, gamma, beta, y, xhat, eps) {};
+
+/**
+ * @param {GpuTensor} dY
+ * @param {GpuTensor} xhat
+ * @param {GpuTensor} gamma
+ * @param {number} rstd
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dGamma
+ * @param {GpuTensor} dBeta
+ */
+bro.tensor.layernormBackward = function(dY, xhat, gamma, rstd, dX, dGamma, dBeta) {};
+
+/**
+ * @param {GpuTensor} X_RD
+ * @param {GpuTensor} gamma
+ * @param {GpuTensor} beta
+ * @param {GpuTensor} Y_RD
+ * @param {number} [eps=0.00001]
+ */
+bro.tensor.layernormForwardInferenceBatched = function(X_RD, gamma, beta, Y_RD, eps) {};
+
+/**
+ * @param {GpuTensor} X_RD
+ * @param {GpuTensor} gamma
+ * @param {GpuTensor} beta
+ * @param {GpuTensor} Y_RD
+ * @param {number} [eps=0.00001]
+ */
+bro.tensor.layernormForwardInferenceBatchedFp16 = function(X_RD, gamma, beta, Y_RD, eps) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} gamma
+ * @param {number} eps
+ * @param {GpuTensor} Y
+ */
+bro.tensor.rmsNormForward = function(X, gamma, eps, Y) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} gamma
+ * @param {GpuTensor} dY
+ * @param {number} eps
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dGamma
+ */
+bro.tensor.rmsNormBackward = function(X, gamma, dY, eps, dX, dGamma) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} gamma
+ * @param {GpuTensor} beta
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {number} numGroups
+ * @param {number} eps
+ * @param {GpuTensor} Y
+ */
+bro.tensor.groupNormForward = function(X, gamma, beta, N, C, H, W, numGroups, eps, Y) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} gamma
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {number} numGroups
+ * @param {number} eps
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dGamma
+ * @param {GpuTensor} dBeta
+ */
+bro.tensor.groupNormBackward = function(X, gamma, dY, N, C, H, W, numGroups, eps, dX, dGamma, dBeta) {};
+
+/**
+ * @param {GpuTensor} A
+ * @param {GpuTensor} B
+ * @param {GpuTensor} C
+ */
+bro.tensor.matmul = function(A, B, C) {};
+
+/**
+ * @param {GpuTensor} A
+ * @param {GpuTensor} B
+ * @param {GpuTensor} dC
+ * @param {GpuTensor} dA
+ * @param {GpuTensor} dB
+ */
+bro.tensor.matmulBackward = function(A, B, dC, dA, dB) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {number} headDim
+ * @param {number} numHeads
+ * @param {number} seqOffset
+ * @param {number} thetaBase
+ * @param {GpuTensor} Y
+ */
+bro.tensor.ropeForward = function(X, headDim, numHeads, seqOffset, thetaBase, Y) {};
+
+/**
+ * @param {GpuTensor} dY
+ * @param {number} headDim
+ * @param {number} numHeads
+ * @param {number} seqOffset
+ * @param {number} thetaBase
+ * @param {GpuTensor} dX
+ */
+bro.tensor.ropeBackward = function(dY, headDim, numHeads, seqOffset, thetaBase, dX) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} cosTbl
+ * @param {GpuTensor} sinTbl
+ * @param {number} headDim
+ * @param {number} numHeads
+ * @param {GpuTensor} Y
+ */
+bro.tensor.ropeApply = function(X, cosTbl, sinTbl, headDim, numHeads, Y) {};
+
+/**
+ * @param {GpuTensor} dY
+ * @param {number} headDim
+ * @param {number} numHeads
+ * @param {GpuTensor} dX
+ */
+bro.tensor.ropeApplyBackward = function(dY, headDim, numHeads, dX) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} scale
+ * @param {GpuTensor} shift
+ * @param {GpuTensor} Y
+ */
+bro.tensor.modulate = function(X, scale, shift, Y) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} v
+ * @param {GpuTensor} Y
+ */
+bro.tensor.broadcastMul = function(X, v, Y) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Y
+ */
+bro.tensor.sumRows = function(X, Y) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Y
+ */
+bro.tensor.sumCols = function(X, Y) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Idx
+ */
+bro.tensor.argmaxRows = function(X, Idx) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {GpuTensor} Q
+ * @param {GpuTensor} K
+ * @param {GpuTensor} V
+ * @param {GpuTensor} Attn
+ * @param {GpuTensor} Y_pre_Wo
+ * @param {GpuTensor} O
+ */
+bro.tensor.attentionForward = function(X, Wq, Wk, Wv, Wo, mask, Q, K, V, Attn, Y_pre_Wo, O) {};
+
+/**
+ * @param {GpuTensor} dO
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Q
+ * @param {GpuTensor} K
+ * @param {GpuTensor} V
+ * @param {GpuTensor} Attn
+ * @param {GpuTensor} Y_pre_Wo
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dWq
+ * @param {GpuTensor} dWk
+ * @param {GpuTensor} dWv
+ * @param {GpuTensor} dWo
+ */
+bro.tensor.attentionBackward = function(dO, X, Q, K, V, Attn, Y_pre_Wo, Wq, Wk, Wv, Wo, mask, dX, dWq, dWk, dWv, dWo) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} Qh
+ * @param {GpuTensor} Kh
+ * @param {GpuTensor} Vh
+ * @param {GpuTensor} Attnh
+ * @param {GpuTensor} Yconcat
+ * @param {GpuTensor} O
+ */
+bro.tensor.mhaForward = function(X, Wq, Wk, Wv, Wo, mask, numHeads, Qh, Kh, Vh, Attnh, Yconcat, O) {};
+
+/**
+ * @param {GpuTensor} dO
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Qh
+ * @param {GpuTensor} Kh
+ * @param {GpuTensor} Vh
+ * @param {GpuTensor} Attnh
+ * @param {GpuTensor} Yconcat
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dWq
+ * @param {GpuTensor} dWk
+ * @param {GpuTensor} dWv
+ * @param {GpuTensor} dWo
+ */
+bro.tensor.mhaBackward = function(dO, X, Qh, Kh, Vh, Attnh, Yconcat, Wq, Wk, Wv, Wo, mask, numHeads, dX, dWq, dWk, dWv, dWo) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} O
+ */
+bro.tensor.selfAttentionForward = function(X, Wq, Wk, Wv, Wo, mask, numHeads, O) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} Qh
+ * @param {GpuTensor} Kh
+ * @param {GpuTensor} Vh
+ * @param {GpuTensor} Attnh
+ * @param {GpuTensor} Yconcat
+ * @param {GpuTensor} O
+ */
+bro.tensor.selfAttentionForwardTrain = function(X, Wq, Wk, Wv, Wo, mask, numHeads, Qh, Kh, Vh, Attnh, Yconcat, O) {};
+
+/**
+ * @param {GpuTensor} dO
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Qh
+ * @param {GpuTensor} Kh
+ * @param {GpuTensor} Vh
+ * @param {GpuTensor} Attnh
+ * @param {GpuTensor} Yconcat
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dWq
+ * @param {GpuTensor} dWk
+ * @param {GpuTensor} dWv
+ * @param {GpuTensor} dWo
+ */
+bro.tensor.selfAttentionBackward = function(dO, X, Qh, Kh, Vh, Attnh, Yconcat, Wq, Wk, Wv, Wo, mask, numHeads, dX, dWq, dWk, dWv, dWo) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Ctx
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} O
+ */
+bro.tensor.crossAttentionForward = function(X, Ctx, Wq, Wk, Wv, Wo, mask, numHeads, O) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Ctx
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {GpuTensor|null} attnLogitBias
+ * @param {number} numHeads
+ * @param {GpuTensor} O
+ * @param {GpuTensor} AttnAvg
+ */
+bro.tensor.crossAttentionForwardWithAttn = function(X, Ctx, Wq, Wk, Wv, Wo, mask, attnLogitBias, numHeads, O, AttnAvg) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Ctx
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} Qh
+ * @param {GpuTensor} Kh
+ * @param {GpuTensor} Vh
+ * @param {GpuTensor} Attnh
+ * @param {GpuTensor} Yconcat
+ * @param {GpuTensor} O
+ */
+bro.tensor.crossAttentionForwardTrain = function(X, Ctx, Wq, Wk, Wv, Wo, mask, numHeads, Qh, Kh, Vh, Attnh, Yconcat, O) {};
+
+/**
+ * @param {GpuTensor} dO
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Ctx
+ * @param {GpuTensor} Qh
+ * @param {GpuTensor} Kh
+ * @param {GpuTensor} Vh
+ * @param {GpuTensor} Attnh
+ * @param {GpuTensor} Yconcat
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {GpuTensor} dX
+ * @param {GpuTensor} dCtx
+ * @param {GpuTensor} dWq
+ * @param {GpuTensor} dWk
+ * @param {GpuTensor} dWv
+ * @param {GpuTensor} dWo
+ */
+bro.tensor.crossAttentionBackward = function(dO, X, Ctx, Qh, Kh, Vh, Attnh, Yconcat, Wq, Wk, Wv, Wo, mask, numHeads, dX, dCtx, dWq, dWk, dWv, dWo) {};
+
+/**
+ * @param {GpuTensor} Attn
+ * @param {number} h_lat
+ * @param {number} w_lat
+ * @param {GpuTensor} mass
+ * @param {GpuTensor} centroid
+ */
+bro.tensor.attentionTokenMoments = function(Attn, h_lat, w_lat, mass, centroid) {};
+
+/**
+ * @param {number} L
+ * @param {number} q
+ * @param {GpuTensor} mask
+ */
+bro.tensor.buildCausalMaskRow = function(L, q, mask) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} mask
+ * @param {GpuTensor|null} attnBias
+ * @param {number} numHeads
+ * @param {number} scale
+ * @param {GpuTensor} O
+ */
+bro.tensor.selfAttentionBiasForward = function(X, Wq, Wk, Wv, Wo, mask, attnBias, numHeads, scale, O) {};
+
+/**
+ * @param {GpuTensor} Q
+ * @param {GpuTensor} K
+ * @param {GpuTensor} V
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {boolean} causal
+ * @param {GpuTensor} O
+ */
+bro.tensor.flashAttentionForward = function(Q, K, V, mask, numHeads, causal, O) {};
+
+/**
+ * @param {GpuTensor} Q
+ * @param {GpuTensor} K
+ * @param {GpuTensor} V
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {number} window
+ * @param {GpuTensor} O
+ */
+bro.tensor.flashAttentionWindowedForward = function(Q, K, V, mask, numHeads, window, O) {};
+
+/**
+ * @param {GpuTensor} Q
+ * @param {GpuTensor} K
+ * @param {GpuTensor} V
+ * @param {GpuTensor} O
+ * @param {GpuTensor} dO
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {boolean} causal
+ * @param {GpuTensor} dQ
+ * @param {GpuTensor} dK
+ * @param {GpuTensor} dV
+ */
+bro.tensor.flashAttentionBackward = function(Q, K, V, O, dO, mask, numHeads, causal, dQ, dK, dV) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor|null} Ctx
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor|null} bq
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor|null} bk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor|null} bv
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} bo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {boolean} causal
+ * @param {GpuTensor} O
+ */
+bro.tensor.flashAttentionQkvoForward = function(X, Ctx, Wq, bq, Wk, bk, Wv, bv, Wo, bo, mask, numHeads, causal, O) {};
+
+/**
+ * @param {Object} opts
+ */
+bro.tensor.flashAttentionQkvoBackward = function(opts) {};
+
+/**
+ * @param {GpuTensor} ctx
+ * @param {GpuTensor} Wk
+ * @param {GpuTensor|null} bk
+ * @param {GpuTensor} Wv
+ * @param {GpuTensor|null} bv
+ * @param {GpuTensor} K_out
+ * @param {GpuTensor} V_out
+ */
+bro.tensor.flashAttentionProjectKv = function(ctx, Wk, bk, Wv, bv, K_out, V_out) {};
+
+/**
+ * @param {GpuTensor} X
+ * @param {GpuTensor} K
+ * @param {GpuTensor} V
+ * @param {GpuTensor} Wq
+ * @param {GpuTensor|null} bq
+ * @param {GpuTensor} Wo
+ * @param {GpuTensor|null} bo
+ * @param {GpuTensor|null} mask
+ * @param {number} numHeads
+ * @param {boolean} causal
+ * @param {GpuTensor} O
+ */
+bro.tensor.flashAttentionQWithKvCachedForward = function(X, K, V, Wq, bq, Wo, bo, mask, numHeads, causal, O) {};
+
+/**
+ * @param {GpuTensor} Q
+ * @param {GpuTensor} K_cache
+ * @param {GpuTensor} V_cache
+ * @param {number} validLen
+ * @param {number} numHeads
+ * @param {GpuTensor} O
+ * @param {number} [numKvHeads]
  * @param {number} [attnSoftcap=0]
  * @param {number} [window=0]
  */
-gpu.flashAttentionDecode(Q, K_cache, V_cache, validLen, numHeads, O,
-                         numKvHeads, attnSoftcap, window);
+bro.tensor.flashAttentionDecode = function(Q, K_cache, V_cache, validLen, numHeads, O, numKvHeads, attnSoftcap, window) {};
 
 /**
- * The CUDA-graph-capturable twin of flashAttentionDecode. K_cache/V_cache
- * are always read at their full (L_max, ·) shape, the launch shape never
- * changes as generation advances, and validity comes from `dMask` (a
- * device-resident FP32 GpuTensor, length L_max, 1 valid / 0 invalid, updated
- * by the caller between graph replays) instead of a validLen scalar. Q must
- * be a single query row (L_q == 1). With
- * mask = [1]*validLen + [0]*(L_max-validLen) the result is bit-identical to
- * flashAttentionDecode(Q, K, V, validLen, ...) at L_q == 1. Same
- * numKvHeads/attnSoftcap/window extensions as flashAttentionDecode.
- *
- * @param {GpuTensor} dMask - device-resident FP32 key mask, length L_max
- * @param {number} [numKvHeads=numHeads]
+ * @param {GpuTensor} Q
+ * @param {GpuTensor} K_cache
+ * @param {GpuTensor} V_cache
+ * @param {GpuTensor} dMask
+ * @param {number} numHeads
+ * @param {GpuTensor} O
+ * @param {number} [numKvHeads]
  * @param {number} [attnSoftcap=0]
  * @param {number} [window=0]
  */
-gpu.flashAttentionDecodeMasked(Q, K_cache, V_cache, dMask, numHeads, O,
-                               numKvHeads, attnSoftcap, window);
+bro.tensor.flashAttentionDecodeMasked = function(Q, K_cache, V_cache, dMask, numHeads, O, numKvHeads, attnSoftcap, window) {};
 
 /**
- * Append L_new freshly-projected K/V rows into rows [curLen, curLen+L_new)
- * of K_cache / V_cache. Caches must be pre-sized.
+ * @param {GpuTensor} K_new
+ * @param {GpuTensor} V_new
+ * @param {number} curLen
+ * @param {GpuTensor} K_cache
+ * @param {GpuTensor} V_cache
  */
-gpu.kvCacheAppend(K_new, V_new, curLen, K_cache, V_cache);
-
-
-// -----------------------------------------------------------------------------
-// Conv2D (NCHW), forward + per-input/weight/bias backwards
-// -----------------------------------------------------------------------------
-//
-// All NCHW tensors are stored as 2D (N, C * H * W); the spatial dims are
-// passed as integer arguments. The weight tensor uses OIHW layout:
-// (C_out, (C_in/groups) * kH * kW). `groups` is required (pass 1 for the
-// standard full-channel convolution). FP32 and FP16 are both supported and
-// dispatched on X.dtype.
-//
-// Output dims:
-//   H_out = (H + 2*pH - dH * (kH - 1) - 1) / sH + 1
-//   W_out = (W + 2*pW - dW * (kW - 1) - 1) / sW + 1
-
-gpu.conv2dForward(X, Wt, /*bias|null*/ null,
-                  N, C_in, H, W, C_out, kH, kW,
-                  sH, sW, pH, pW, dH, dW, groups, Y);
-
-gpu.conv2dBackwardInput(Wt, dY,
-                        N, C_in, H, W, C_out, kH, kW,
-                        sH, sW, pH, pW, dH, dW, groups, dX);  // overwrite
-
-gpu.conv2dBackwardWeight(X, dY,
-                         N, C_in, H, W, C_out, kH, kW,
-                         sH, sW, pH, pW, dH, dW, groups, dWt); // accumulate
-
-gpu.conv2dBackwardBias(dY, N, C_out, H_out, W_out, dB);        // accumulate
-
-
-// -----------------------------------------------------------------------------
-// 2x up/downsample (NCHW)
-// -----------------------------------------------------------------------------
-//
-// Forward and backward share the same (N, C, H, W) convention. H and W are
-// the *input* dims (post-upsample dims = 2H, 2W; pre-downsample dims for the
-// down family). FP32 and FP16 dispatched on the input dtype.
-
-gpu.upsampleNearest2xForward(X,  N, C, H, W, Y);    // 2x nearest-neighbour
-gpu.upsampleNearest2xBackward(dY, N, C, H, W, dX);
-
-gpu.upsampleBilinear2xForward(X,  N, C, H, W, Y);   // align_corners=false
-gpu.upsampleBilinear2xBackward(dY, N, C, H, W, dX);
-
-gpu.downsampleAvg2xForward(X,  N, C, H, W, Y);      // 2x2 avg-pool
-gpu.downsampleAvg2xBackward(dY, N, C, H, W, dX);
-
-
-// -----------------------------------------------------------------------------
-// NCHW ↔ sequence transpose
-// -----------------------------------------------------------------------------
-//
-// Lets transformer-shaped ops (attention, layernorm-batched) consume tensors
-// produced by NCHW primitives (conv2d, group_norm, resblock). Per-element
-// gather; FP32 and FP16 supported.
-
-// X: (N, C * H * W)  →  Y: (N * H * W, C)
-gpu.nchwToSequence(X, N, C, H, W, Y);
-
-// X: (N * H * W, C)  →  Y: (N, C * H * W)
-gpu.sequenceToNchw(X, N, C, H, W, Y);
-
-
-// -----------------------------------------------------------------------------
-// Spatial resample / unfold / normalize (NCHW), vision post-processing
-// -----------------------------------------------------------------------------
-//
-// Inference-only building blocks for depth / surface-normal / optical-flow
-// heads (DPT, DSINE, RAFT). All take NCHW packed as (N, C*H*W); Y is resized +
-// dtype-set to X. FP32 on CPU; FP32/FP16(/BF16) on CUDA, dispatched on X.dtype.
-
-// Resample H_in×W_in → H_out×W_out. mode: 0 nearest, 1 bilinear,
-// 2 bicubic a=-0.5 (PIL), 3 bicubic a=-0.75 (torch/OpenCV). Half-pixel mapping.
-gpu.interp2dForward(X, N, C, H_in, W_in, H_out, W_out, /*mode*/ 1, Y);
-
-// Same, but corner-aligned mapping (torch align_corners=True), the convention
-// DPT / Depth-Anything fusion + final upsamples use. modes 0/1/2 only.
-gpu.interp2dAlignCornersForward(X, N, C, H_in, W_in, H_out, W_out, /*mode*/ 1, Y);
-
-// Neighborhood unfold (spatial-preserving im2col): each output pixel gathers
-// its kH×kW window into a channel block. mode: 0 zero, 1 reflect, 2 replicate.
-// Y: (N, C*kH*kW * H_out*W_out). stride 1 + pad (k-1)/2 keeps the grid size.
-gpu.unfold2dForward(X, N, C, H, W, kH, kW, sH, sW, padT, padB, padL, padR,
-                    /*mode*/ 0, Y);
-
-// Per-pixel L2 normalize over the channel axis (unit-length direction field):
-//   Y[n,:,h,w] = X[n,:,h,w] / max(||X[n,:,h,w]||, eps)
-gpu.l2NormalizeNchwForward(X, N, C, H, W, /*eps*/ 1e-12, Y);
-
-// RAFT-style convex (learned-mask) upsample: each low-res pixel expands to a
-// scale×scale block, every fine pixel a softmax-weighted blend of the 3×3
-// low-res neighborhood. Mask: (N, 9*scale*scale*H*W), torch (N,9,k,k,H,W).
-// Y: (N, C*(scale*H)*(scale*W)).
-gpu.convexUpsampleForward(X, Mask, N, C, H, W, /*scale*/ 8, Y);
-
-
-// -----------------------------------------------------------------------------
-// ResBlock (fused SD U-Net residual block)
-// -----------------------------------------------------------------------------
-//
-// Options-object call site: too many optional tensors for a positional API.
-//
-// Required:
-//   X, gamma1, beta1, W1, gamma2, beta2, W2, Y,
-//   N, C_in, C_out, H, W
-// Optional (any can be null/undefined):
-//   b1, t_emb_shift, b2, Wskip, bskip
-//   numGroups (default 32), eps (default 1e-5)
-//
-// Math (forward):
-//   h  = silu(group_norm(X, gamma1, beta1))
-//   h  = conv2d_3x3_same(h, W1, b1)
-//   if t_emb_shift: h += broadcast(t_emb_shift)
-//   h  = silu(group_norm(h, gamma2, beta2))
-//   h  = conv2d_3x3_same(h, W2, b2)
-//   Y  = h + (C_in == C_out ? X : conv2d_1x1(X, Wskip, bskip))
-
-gpu.resblockForward({
-    X, gamma1, beta1, W1, b1, t_emb_shift,
-    gamma2, beta2, W2, b2,
-    Wskip: null, bskip: null,
-    N, C_in, C_out, H, W,
-    numGroups: 32, eps: 1e-5,
-    Y,
-});
+bro.tensor.kvCacheAppend = function(K_new, V_new, curLen, K_cache, V_cache) {};
 
 /**
- * ResBlock backward. Recomputes the forward intermediates internally.
- * Pass the same forward inputs plus dY and the gradient accumulators.
- * dWeights and dGammas/dBetas are accumulated; dX is overwritten.
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Wt
+ * @param {GpuTensor|null} bias
+ * @param {number} N
+ * @param {number} C_in
+ * @param {number} H
+ * @param {number} W
+ * @param {number} C_out
+ * @param {number} kH
+ * @param {number} kW
+ * @param {number} sH
+ * @param {number} sW
+ * @param {number} pH
+ * @param {number} pW
+ * @param {number} dH
+ * @param {number} dW
+ * @param {number} groups
+ * @param {GpuTensor} Y
  */
-gpu.resblockBackward({
-    X, gamma1, beta1, W1, b1, t_emb_shift,
-    gamma2, beta2, W2, b2,
-    Wskip, bskip,
-    N, C_in, C_out, H, W, numGroups: 32, eps: 1e-5,
-    dY,
-    dX,
-    dGamma1, dBeta1, dW1, db1, dt_emb_shift,
-    dGamma2, dBeta2, dW2, db2,
-    dWskip, dbskip,
-});
-
-
-// -----------------------------------------------------------------------------
-// Pooling, losses, embedding, concat
-// -----------------------------------------------------------------------------
-
-gpu.maskedMeanPoolForward(X, /*mask|null*/ null, y);
-gpu.maskedMeanPoolBackward(dY, mask, K, dX);
-
-const mseLoss   = gpu.mseVecForward(pred, target);
-gpu.mseVecBackward(pred, target, dPred);
+bro.tensor.conv2dForward = function(X, Wt, bias, N, C_in, H, W, C_out, kH, kW, sH, sW, pH, pW, dH, dW, groups, Y) {};
 
 /**
- * Per-sample MSE (CPU `mse_scalar` parity: loss = 0.5*d², dPred = d).
- *   pred, target:  (B, 1)
- *   dPred:         (B, 1)
- *   lossPerSample: (B, 1)
+ * @param {GpuTensor} Wt
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} C_in
+ * @param {number} H
+ * @param {number} W
+ * @param {number} C_out
+ * @param {number} kH
+ * @param {number} kW
+ * @param {number} sH
+ * @param {number} sW
+ * @param {number} pH
+ * @param {number} pW
+ * @param {number} dH
+ * @param {number} dW
+ * @param {number} groups
+ * @param {GpuTensor} dX
  */
-gpu.mseVecPerSample(pred, target, dPred, lossPerSample);
+bro.tensor.conv2dBackwardInput = function(Wt, dY, N, C_in, H, W, C_out, kH, kW, sH, sW, pH, pW, dH, dW, groups, dX) {};
 
 /**
- * Fused softmax + cross-entropy. Returns the scalar loss; writes probs and
- * dLogits = probs - target on valid entries (0 on invalid).
+ * @param {GpuTensor} X
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} C_in
+ * @param {number} H
+ * @param {number} W
+ * @param {number} C_out
+ * @param {number} kH
+ * @param {number} kW
+ * @param {number} sH
+ * @param {number} sW
+ * @param {number} pH
+ * @param {number} pW
+ * @param {number} dH
+ * @param {number} dW
+ * @param {number} groups
+ * @param {GpuTensor} dWt
  */
-const xentLoss = gpu.softmaxXentFused(logits, target, mask, probs, dLogits);
+bro.tensor.conv2dBackwardWeight = function(X, dY, N, C_in, H, W, C_out, kH, kW, sH, sW, pH, pW, dH, dW, groups, dWt) {};
 
 /**
- * Batched fused softmax + cross-entropy across (sample, head) tiles. Used
- * by trainers that share a single (B, n_act_total) logits buffer across all
- * actor heads. `headOffsets` is a GpuTensor wrapping an int32 device buffer
- * of cumulative offsets, length n_heads + 1.
- *
- *   logits_BL, target_BL, probs_BL, dLogits_BL: (B, n_act_total)
- *   mask:        (B, n_act_total) device pointer or null
- *   lossPerSample: (B, 1), overwritten with sum-over-heads loss
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} C_out
+ * @param {number} H_out
+ * @param {number} W_out
+ * @param {GpuTensor} dB
  */
-gpu.softmaxXentFusedBatched(logits_BL, target_BL, /*mask|null*/ null,
-                            headOffsets, n_heads,
-                            probs_BL, dLogits_BL, lossPerSample);
+bro.tensor.conv2dBackwardBias = function(dY, N, C_out, H_out, W_out, dB) {};
 
 /**
- * Embedding lookup. `idx` is a GpuTensor reinterpreted as an int32_t*
- * device buffer (its size must equal B). Avoids per-call host→device copies.
- *   out[b, :] = table[idx[b], :]
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} Y
  */
-gpu.embeddingLookupForward(table, idxAsInt32, B, out);
-gpu.embeddingLookupBackward(dOut, idxAsInt32, B, dTable);  // accumulated
-
-/** Concat flat tensors end-to-end. `parts` is a JS array of GpuTensors. */
-gpu.concatRows([part0, part1, part2], out);
-
-/** Inverse: scatter disjoint segments of `in` back into each `parts[i]`. */
-gpu.splitRows(in_, [part0, part1, part2]);
+bro.tensor.upsampleNearest2xForward = function(X, N, C, H, W, Y) {};
 
 /**
- * Batched column-block concat. parts are each (B, d_i); out becomes
- * (B, sum d_i).
- *   out[b, off_i + j] = parts[i][b, j]
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} dX
  */
-gpu.concatBatchedRows([part0, part1, part2], out);
+bro.tensor.upsampleNearest2xBackward = function(dY, N, C, H, W, dX) {};
 
 /**
- * Channel-axis concat over NCHW tensors. Each `parts[i]` is shape
- * (N, C_i * H * W); out becomes (N, sum_i C_i * H * W) with channel blocks
- * regrouped per sample.
- *   C_per_part: JS array of ints, same length as parts.
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} Y
  */
-gpu.concatNchwChannels([part0, part1], N, H, W, [C0, C1], out);
+bro.tensor.upsampleBilinear2xForward = function(X, N, C, H, W, Y) {};
 
 /**
- * Backward of channel-axis NCHW concat. Each parts[i] is overwritten with
- * the matching channel slice of dY.
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} dX
  */
-gpu.concatNchwChannelsBackward(dY, N, H, W, [C0, C1], [dPart0, dPart1]);
-
-
-// -----------------------------------------------------------------------------
-// Optimisers
-// -----------------------------------------------------------------------------
+bro.tensor.upsampleBilinear2xBackward = function(dY, N, C, H, W, dX) {};
 
 /**
- *   velocity = momentum*velocity + grad
- *   param   -= lr * velocity
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} Y
  */
-gpu.sgdStep(param, grad, velocity, lr, momentum);
+bro.tensor.downsampleAvg2xForward = function(X, N, C, H, W, Y) {};
 
 /**
- * Adam (1-based step counter for bias correction):
- *   m = beta1*m + (1 - beta1)*g
- *   v = beta2*v + (1 - beta2)*g^2
- *   param -= lr * (m / (1 - beta1^step)) / (sqrt(v / (1 - beta2^step)) + eps)
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} dX
  */
-gpu.adamStep(param, grad, m, v, lr, beta1, beta2, eps, step);
-
-
-// -----------------------------------------------------------------------------
-// Batched (inference + training)
-// -----------------------------------------------------------------------------
-//
-// (B, D) row-major layout. Forward variants are launch-amortising
-// single-kernel forwards. Backward variants partner the forwards for
-// training paths that share a minibatch.
-
-gpu.linearForwardBatched(W, bias, X_BD, Y_BD);
-gpu.linearForwardBatchedFp16(W, /*bias|null*/ null, X_BD, Y_BD);  // FP16-only
-gpu.reluForwardBatched(X_BD, Y_BD);
-gpu.tanhForwardBatched(X_BD, Y_BD);
-gpu.addInplaceBatched(Y_BD, X_BD);
-
-gpu.linearBackwardBatched(W, X_BD, dY_BD, dX_BD, dW, dB);  // dW/dB accumulate
-gpu.reluBackwardBatched(X_BD, dY_BD, dX_BD);   // reads X
-gpu.tanhBackwardBatched(Y_BD, dY_BD, dX_BD);   // reads Y (forward output)
-
-
-// -----------------------------------------------------------------------------
-// Diffusion samplers (FP16, fwd-only)
-// -----------------------------------------------------------------------------
-//
-// The scheduler keeps its α / σ / log-SNR coefficients host-side; the kernel
-// just applies one elementwise step. x_t and eps_pred must share shape;
-// outputs are resized to match.
+bro.tensor.downsampleAvg2xBackward = function(dY, N, C, H, W, dX) {};
 
 /**
- *   x0_pred = (x_t - sqrt(1 - alpha_t) * eps_pred) / sqrt(alpha_t)
- *   dir     = sqrt(1 - alpha_prev - sigma_t^2) * eps_pred
- *   x_prev  = sqrt(alpha_prev) * x0_pred + dir
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} Y
  */
-gpu.ddimStep(x_t, eps_pred, alpha_t, alpha_prev, sigma_t, x_prev);
-
-/** Euler (ε-prediction): x_prev = x_t + (sigma_prev - sigma_t) * eps_pred. */
-gpu.eulerStep(x_t, eps_pred, sigma_t, sigma_prev, x_prev);
+bro.tensor.nchwToSequence = function(X, N, C, H, W, Y) {};
 
 /**
- * DPM-Solver++ 2M, ε-prediction. The caller maintains a running x0 cache;
- * coefficients (c_xt, c_x0t, c_x0prev) are derived host-side from the
- * scheduler's σ / log-SNR schedule. First step has no x0_prev. Use
- * eulerStep instead. x0_out is the new x0 estimate to copy into x0_prev for
- * the next step.
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {GpuTensor} Y
  */
-gpu.dpmpp2mStep(x_t, eps_pred, x0_prev, sigma_t,
-                c_xt, c_x0t, c_x0prev, x_prev, x0_out);
+bro.tensor.sequenceToNchw = function(X, N, C, H, W, Y) {};
 
 /**
- * Sinusoidal timestep embedding (SD/SDXL default: flip_sin_to_cos=true,
- * downscale_freq_shift=0).
- *   timesteps: (N, 1) FP32
- *   Y:         (N, dim) FP32
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H_in
+ * @param {number} W_in
+ * @param {number} H_out
+ * @param {number} W_out
+ * @param {number} mode
+ * @param {GpuTensor} Y
  */
-gpu.timestepEmbedding(timesteps, dim, /*maxPeriod*/ 10000.0, Y);
-
-
-// -----------------------------------------------------------------------------
-// INT8 weight-only quantisation (W8A16)
-// -----------------------------------------------------------------------------
-//
-// Activations stay FP16; weights are quantised to per-output-row symmetric
-// INT8 with FP32 dequant scales. No backward. Weights are frozen at
-// inference time.
+bro.tensor.interp2dForward = function(X, N, C, H_in, W_in, H_out, W_out, mode, Y) {};
 
 /**
- * Host helper. Quantises an FP16 weight matrix (passed as a Uint16Array of
- * IEEE binary16 bit patterns) to INT8 + per-output-row FP32 scales.
- * Returns fresh typed arrays:
- *   { weights: Int8Array of length out*in,
- *     scales:  Float32Array of length out }
- * The caller uploads these into GpuTensors with the int8/fp32 dtypes.
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H_in
+ * @param {number} W_in
+ * @param {number} H_out
+ * @param {number} W_out
+ * @param {number} mode
+ * @param {GpuTensor} Y
  */
-const { weights, scales } = gpu.quantizeInt8PerRowHost(W_fp16_uint16, out, in_);
-
-/** Y = dequant(W_int8, scales) @ X.  W: (out,in) int8; scales: (out,1) FP32. */
-gpu.matmulInt8wFp16(W_int8, scales, X, Y);
-
-/** W8A16 conv2d forward. Same shape contract as conv2dForward. */
-gpu.conv2dInt8wFp16Forward(X, W_int8, scales, /*bias|null*/ null,
-                           N, C_in, H, W, C_out, kH, kW,
-                           sH, sW, pH, pW, dH, dW, groups, Y);
-
-/** W8A16 batched linear: Y(B, out) = X(B, in) @ dequant(W)^T + bias. */
-gpu.linearForwardBatchedInt8wFp16(W_int8, scales, /*bias|null*/ null,
-                                  X_BD, Y_BD);
-
-/** W8A16 ResBlock forward, same options shape as resblockForward but each
- *  conv weight is replaced by its INT8 + FP32 scales pair. */
-gpu.resblockForwardInt8wFp16({
-    X, gamma1, beta1, W1_int8, s1, b1, t_emb_shift,
-    gamma2, beta2, W2_int8, s2, b2,
-    Wskip_int8: null, sskip: null, bskip: null,
-    N, C_in, C_out, H, W, numGroups: 32, eps: 1e-5, Y,
-});
-
-/** W8A16 KV-projection: project ctx through (Wk, sk, bk?) and (Wv, sv, bv?). */
-gpu.flashAttentionProjectKvInt8wFp16(ctx, Wk_int8, sk, /*bk|null*/ null,
-                                          Wv_int8, sv, /*bv|null*/ null,
-                                          K_out, V_out);
-
-/** W8A16 Q-with-pre-projected-KV flash-attention forward. */
-gpu.flashAttentionQWithKvCachedInt8wFp16(X, K, V,
-                                         Wq_int8, sq, /*bq|null*/ null,
-                                         Wo_int8, so, /*bo|null*/ null,
-                                         /*mask|null*/ null,
-                                         numHeads, /*causal*/ false, O);
-
-/** W8A16 fused-QKVO flash-attention forward (options-object form). */
-gpu.flashAttentionQkvoInt8wFp16({
-    X, Ctx: null,
-    Wq_int8, sq, bq: null,
-    Wk_int8, sk, bk: null,
-    Wv_int8, sv, bv: null,
-    Wo_int8, so, bo: null,
-    mask: null, numHeads, causal: false, O,
-});
+bro.tensor.interp2dAlignCornersForward = function(X, N, C, H_in, W_in, H_out, W_out, mode, Y) {};
 
 /**
- * W8A16 variant of selfAttentionBiasForward: the quantised T5 encoder
- * attention. Each projection weight is an INT8 (D, D) matrix paired with an
- * FP32 (D, 1) per-output-row dequant scale; activations stay FP16. `attnBias`
- * is FP32 (numHeads*L, L) or null; `scale` is the pre-bias QK multiplier.
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {number} kH
+ * @param {number} kW
+ * @param {number} sH
+ * @param {number} sW
+ * @param {number} padT
+ * @param {number} padB
+ * @param {number} padL
+ * @param {number} padR
+ * @param {number} mode
+ * @param {GpuTensor} Y
  */
-gpu.selfAttentionBiasInt8wFp16(X,
-                               Wq_int8, sq, Wk_int8, sk,
-                               Wv_int8, sv, Wo_int8, so,
-                               /*mask|null*/ null, /*attnBias|null*/ bias,
-                               numHeads, /*scale*/ 1.0, O);
-
-
-// -----------------------------------------------------------------------------
-// safetensors, load / save
-// -----------------------------------------------------------------------------
-//
-// Read and write the huggingface safetensors container format. The reader
-// mmap's the file: opening a multi-GB checkpoint and inspecting only its
-// header() is cheap, no payload is faulted in until get() uploads a tensor.
+bro.tensor.unfold2dForward = function(X, N, C, H, W, kH, kW, sH, sW, padT, padB, padL, padR, mode, Y) {};
 
 /**
- * Open a .safetensors file. Returns an opaque handle that owns the mmap.
- * Throws if the file is missing or malformed.
+ * @param {GpuTensor} X
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {number} eps
+ * @param {GpuTensor} Y
  */
-const f = gpu.openSafetensors('/path/to/model.safetensors');
-
-/** Number of tensors in the file. */
-f.count;
-
-/** Tensor names, in file order. -> string[] */
-f.names();
+bro.tensor.l2NormalizeNchwForward = function(X, N, C, H, W, eps, Y) {};
 
 /**
- * Per-tensor metadata: no payload read, so this is cheap on huge files.
- * -> { name: { dtype: "F32"|"F16"|"BF16"|..., shape: number[], nbytes }, ... }
+ * @param {GpuTensor} X
+ * @param {GpuTensor} Mask
+ * @param {number} N
+ * @param {number} C
+ * @param {number} H
+ * @param {number} W
+ * @param {number} scale
+ * @param {GpuTensor} Y
  */
-const hdr = f.header();
+bro.tensor.convexUpsampleForward = function(X, Mask, N, C, H, W, scale, Y) {};
 
 /**
- * Upload one tensor as a GpuTensor. brotensor tensors are 2D; when rows/cols
- * are omitted the N-D source is flattened to (shape[0], numel/shape[0]).
- *
- * The optional dtype string selects how the source is uploaded:
- *   "native"  (default): keep the file's dtype (F16/F32/BF16).
- *   "compute": the backend's compute dtype: FP16 on a GPU build,
- *                         FP32 on CPU. BF16 sources are converted. This is
- *                         the model-loader path.
- *   "fp16": always FP16, converting an F32 source.
- * It may be passed in place of, or after, rows/cols. Throws on unknown name.
+ * @param {Object} opts
  */
-const W  = f.get('model.layers.0.self_attn.q_proj.weight');           // native
-const Wc = f.get('model.layers.0.self_attn.q_proj.weight', 'compute'); // → FP16 on GPU
-const W2 = f.get('embedding.weight', 1024, 768, 'compute'); // explicit 2D + dtype
-
-/** Release the mmap early. Also released automatically on GC. */
-f.close();
+bro.tensor.resblockForward = function(opts) {};
 
 /**
- * Write a set of GpuTensors to a .safetensors file. Each value must be a
- * GpuTensor; FP32 and FP16 tensors are supported. Shape is stored as the
- * tensor's (rows, cols).
+ * @param {Object} opts
  */
-gpu.saveSafetensors('/path/to/out.safetensors', { weight: W, bias: b });
-
-
-// =============================================================================
-// brosoundml audio ops
-// =============================================================================
-//
-// The building blocks of Whisper / STT, TTS, neural-codec and vocoder models:
-// spectral transforms, the 1D convolution family, vocoder/codec activations,
-// codec quantization, resampling, and an autoregressive sampler. brotensor
-// implements this family on the CPU and both GPU backends.
-//
-// Complex tensor layout:
-//   There is no complex dtype. A complex spectrum of C bins over R rows is an
-//   ordinary FP32 (R, 2*C) tensor with the bin axis stored interleaved
-//   [re, im, re, im, ...]; real tensors keep the natural (R, C) shape.
-//
-// All ops below are backend-neutral, CPU, CUDA and Metal each have a kernel.
-
-
-// -----------------------------------------------------------------------------
-// Spectral / FFT core
-// -----------------------------------------------------------------------------
-//
-// One signal per tensor row. "backward" normalisation (numpy default): the
-// forward transform is unscaled, the inverse is scaled by 1/N. fft / ifft have
-// no explicit backward, the adjoint of y = fft(x) is ifft(grad) scaled by N
-// (and vice versa). rfft / irfft DO have backward ops: their adjoints carry
-// bin weighting that is easy to get wrong by hand.
-
-gpu.fft(x, y);             // complex (R,2*N) -> complex (R,2*N)
-gpu.ifft(x, y);            // complex -> complex, scaled by 1/N
-gpu.rfft(x, y);            // real (R,L) -> half-spectrum complex (R,2*(L/2+1))
-gpu.irfft(x, L, y);        // half-spectrum -> real (R,L); L disambiguates length
-gpu.rfftBackward(dY, L, dX);   // adjoint of rfft; dX real (R,L)
-gpu.irfftBackward(dY, dX);     // adjoint of irfft; dX complex, L from dY.cols
-
-gpu.complexMul(a, b, y);                       // y = a * b per bin
-gpu.complexMulBackward(a, b, dY, dA, dB);      // dA/dB accumulated (pre-zero)
-gpu.complexAbs(z, y);                          // y = |z|, REAL (R,C)
-gpu.complexAbsBackward(z, dY, dZ);             // dZ overwritten
-gpu.complexAngle(z, y);                        // y = atan2(im, re); no backward
-gpu.complexFromPolar(mag, phase, y);           // y = mag * exp(i*phase)
-
-
-// -----------------------------------------------------------------------------
-// STFT / iSTFT
-// -----------------------------------------------------------------------------
-//
-// A length-L real signal is one row of an (N, L) tensor; the complex
-// spectrogram is (N*frames, 2*(nFft/2+1)) with each signal's frame block
-// stacked in order. `window` is a real (1, winLength) tensor; winLength <= nFft.
-// `center` reflect-pads the signal by nFft/2 each side (torch center=True);
-// `normalized` additionally scales by 1/sqrt(nFft). stft and istft are linear
-// but NOT mutual adjoints once the window + COLA normalisation are folded in,
-// so both backward ops are explicit.
-
-gpu.stft(signal, window, N, nFft, hopLength, winLength, center, normalized, spec);
-gpu.istft(spec, window, N, signalLen, nFft, hopLength, winLength,
-          center, normalized, signal);
-gpu.stftBackward(dSpec, window, N, signalLen, nFft, hopLength, winLength,
-                 center, normalized, dSignal);
-gpu.istftBackward(dSignal, window, N, signalLen, nFft, hopLength, winLength,
-                  center, normalized, dSpec);
-
-
-// -----------------------------------------------------------------------------
-// 1D convolution family (NCL)
-// -----------------------------------------------------------------------------
-//
-// Activations are (N, C * L), the NCHW convention with the height axis
-// dropped; weights are OIL: (C_out, (C_in/groups) * kL). conv1d and its
-// backward halves are conv2d wrappers; conv_transpose1d, causalConv1dUpdate
-// and pad1d are genuine 1D kernels.
-//
-// pad1d `mode`: 0 = zero, 1 = reflect, 2 = replicate.
-
-gpu.pad1dForward(X, N, C, L, padLeft, padRight, mode, Y);
-gpu.pad1dBackward(dY, N, C, L, padLeft, padRight, mode, dX);
-
-gpu.conv1d(X, Wt, /*bias|null*/ null, N, C_in, L, C_out, kL,
-           stride, padding, dilation, groups, Y);
-gpu.conv1dBackwardInput(Wt, dY, N, C_in, L, C_out, kL,
-                        stride, padding, dilation, groups, dX);   // overwrite
-gpu.conv1dBackwardWeight(X, dY, N, C_in, L, C_out, kL,
-                         stride, padding, dilation, groups, dWt); // accumulate
-gpu.conv1dBackwardBias(dY, N, C_out, L_out, dB);                  // accumulate
-
-/** W8A16 1D conv. W_int8 is OIL INT8; scales is (C_out,1) FP32; activations FP16. */
-gpu.conv1dInt8wFp16(X, W_int8, scales, /*bias|null*/ null, N, C_in, L, C_out, kL,
-                    stride, padding, dilation, groups, Y);
+bro.tensor.resblockBackward = function(opts) {};
 
 /**
- * 1D transposed convolution: the upsampling primitive of every neural vocoder
- * (HiFi-GAN, EnCodec/DAC decoders). Weight layout is input-channel-major:
- * (C_in, (C_out/groups) * kL). `outputPadding` (< stride) disambiguates the
- * output length, exactly torch's ConvTranspose1d arg.
+ * @param {GpuTensor} X
+ * @param {GpuTensor|null} mask
+ * @param {GpuTensor} y
  */
-gpu.convTranspose1dForward(X, Wt, /*bias|null*/ null, N, C_in, L, C_out, kL,
-                           stride, padding, outputPadding, dilation, groups, Y);
-gpu.convTranspose1dBackwardInput(Wt, dY, N, C_in, L, C_out, kL,
-                                 stride, padding, outputPadding, dilation,
-                                 groups, dX);                       // overwrite
-gpu.convTranspose1dBackwardWeight(X, dY, N, C_in, L, C_out, kL,
-                                  stride, padding, outputPadding, dilation,
-                                  groups, dWt);                     // accumulate
-gpu.convTranspose1dBackwardBias(dY, N, C_out, L_out, dB);            // accumulate
+bro.tensor.maskedMeanPoolForward = function(X, mask, y) {};
 
 /**
- * Causal 1D conv: left-pads the length axis by dilation*(kL-1) then runs a
- * valid conv1d, so every output sample depends only on inputs at or before it.
- * `scratch` is a caller-owned GpuTensor reused as the left-padded-input buffer
- * (resized internally): passing it in keeps the call allocation-free.
+ * @param {GpuTensor} dY
+ * @param {GpuTensor|null} mask
+ * @param {number} K
+ * @param {GpuTensor} dX
  */
-gpu.causalConv1d(X, Wt, /*bias|null*/ null, N, C_in, L, C_out, kL,
-                 stride, dilation, groups, scratch, Y);
+bro.tensor.maskedMeanPoolBackward = function(dY, mask, K, dX) {};
 
 /**
- * One streaming step of a causal depthwise conv against a rolling state cache
- * (streaming Whisper, real-time vocoders, Mamba's short conv). C channels in
- * and out, one length-kL filter per channel. `state` holds (kL-1)*dilation
- * samples of history: read AND overwritten; caller zero-initialises it.
- *   X, Y:  (N, C * L_step)              new samples in / outputs out
- *   Wt:    (C, kL)                      depthwise filter, one row per channel
- *   state: (N, C * (kL-1)*dilation)     rolling history
+ * @param {GpuTensor} pred
+ * @param {GpuTensor} target
+ * @returns {number}
  */
-gpu.causalConv1dUpdate(X, Wt, /*bias|null*/ null, N, C, L_step, kL, dilation,
-                       state, Y);
-
-
-// -----------------------------------------------------------------------------
-// Vocoder / codec activations (NCL)
-// -----------------------------------------------------------------------------
+bro.tensor.mseVecForward = function(pred, target) {};
 
 /**
- * Snake activation (BigVGAN / DAC vocoder). Per-channel learnable alpha (and
- * optional beta), broadcast across the (n, l) plane:
- *   beta == null:  y = x + (1/alpha_c) * sin^2(alpha_c * x)
- *   beta != null:  y = x + (1/beta_c)  * sin^2(alpha_c * x)
- *   alpha / beta:  (C,1) or (1,C).  dAlpha / dBeta accumulated (pre-zero).
- *   dBeta must be non-null exactly when beta is non-null.
+ * @param {GpuTensor} pred
+ * @param {GpuTensor} target
+ * @param {GpuTensor} dPred
  */
-gpu.snakeForward(X, alpha, /*beta|null*/ null, N, C, L, Y);
-gpu.snakeBackward(X, alpha, /*beta|null*/ null, dY, N, C, L,
-                  dX, dAlpha, /*dBeta|null*/ null);
-
-gpu.eluForward(x, alpha, y);            // EnCodec activation; x>0 ? x : a*(e^x-1)
-gpu.eluBackward(x, dY, alpha, dX);
-gpu.leakyReluForward(x, negativeSlope, y);   // HiFi-GAN activation
-gpu.leakyReluBackward(x, dY, negativeSlope, dX);
-
-
-// -----------------------------------------------------------------------------
-// Codec quantization
-// -----------------------------------------------------------------------------
-//
-// The bottlenecks of neural audio codecs. Both backward ops are the
-// straight-through estimator, a plain identity passthrough (dX = dQuantized).
+bro.tensor.mseVecBackward = function(pred, target, dPred) {};
 
 /**
- * Vector-quantization encode (VQ-VAE / residual-VQ). For each input row picks
- * the L2-nearest codeword, emits its index and copies the codeword out.
- *   x:         (N, D) FP32 input rows.
- *   codebook:  (K, D) FP32 codewords.
- *   indices:   (N, 1) INT32, output, dtype-set to INT32.
- *   quantized: (N, D) FP32, output, codebook[indices[n]] per row.
+ * @param {GpuTensor} pred
+ * @param {GpuTensor} target
+ * @param {GpuTensor} dPred
+ * @param {GpuTensor} lossPerSample
  */
-gpu.vqEncodeForward(x, codebook, indices, quantized);
-gpu.vqEncodeBackward(dQuantized, dX);
+bro.tensor.mseVecPerSample = function(pred, target, dPred, lossPerSample) {};
 
 /**
- * Finite Scalar Quantization (NanoCodec). Each coordinate is snapped to one of
- * L_d evenly spaced levels; the per-dim indices are packed mixed-radix.
- *   x:             (N, D) FP32, assumed pre-bounded into [-1, 1].
- *   levels:        (D, 1) INT32 per-dimension level count (each >= 2).
- *   quantized:     (N, D) FP32, output, dequantized values in [-1, 1].
- *   packedIndices: (N, 1) INT32, output, the mixed-radix packed code per row.
+ * @param {GpuTensor} logits
+ * @param {GpuTensor} target
+ * @param {GpuTensor|null} mask
+ * @param {GpuTensor} probs
+ * @param {GpuTensor} dLogits
+ * @returns {number}
  */
-gpu.fsqQuantizeForward(x, levels, quantized, packedIndices);
-gpu.fsqQuantizeBackward(dQuantized, dX);
-
-
-// -----------------------------------------------------------------------------
-// 1D resampling
-// -----------------------------------------------------------------------------
-//
-// Arbitrary-scale resampling along the length axis of an NCL tensor (sample-
-// rate conversion). align_corners=false convention. mode: 0 = nearest,
-// 1 = linear. The backward is the exact adjoint (overwrites dX).
-
-gpu.resample1dForward(X, N, C, L_in, L_out, mode, Y);
-gpu.resample1dBackward(dY, N, C, L_in, L_out, mode, dX);
-
-
-// -----------------------------------------------------------------------------
-// log / exp / round elementwise
-// -----------------------------------------------------------------------------
-//
-// FP32 elementwise scalar maps (log-mel spectrograms, log-domain losses). log
-// and exp backward read the raw forward input x; round backward is the
-// straight-through estimator and needs only dY. All backward ops overwrite dX.
-// The caller owns the x > 0 precondition for log. It is not guarded.
-
-gpu.logForward(x, y);       gpu.logBackward(x, dY, dX);
-gpu.expForward(x, y);       gpu.expBackward(x, dY, dX);
-gpu.roundForward(x, y);     gpu.roundBackward(dY, dX);   // round-half-to-even
-
-
-// -----------------------------------------------------------------------------
-// Autoregressive logit sampling
-// -----------------------------------------------------------------------------
+bro.tensor.softmaxXentFused = function(logits, target, mask, probs, dLogits) {};
 
 /**
- * Per-row next-token sampler over an (N, V) logit matrix. Applies, in order:
- * temperature scaling, softmax, top-k filter, top-p / nucleus filter,
- * renormalize, inverse-CDF draw. temperature == 0 is deterministic argmax.
- * `key` / `counter` seed the Philox 4x32-10 RNG (plain numbers, not tensors).
- *   logits:  (N, V) FP32
- *   indices: (N, 1), output, one drawn token id per row.
+ * @param {GpuTensor} logits_BL
+ * @param {GpuTensor} target_BL
+ * @param {GpuTensor|null} mask
+ * @param {GpuTensor} headOffsets
+ * @param {number} n_heads
+ * @param {GpuTensor} probs_BL
+ * @param {GpuTensor} dLogits_BL
+ * @param {GpuTensor} lossPerSample
  */
-gpu.sampleLogits(logits, temperature, topK, topP, key, counter, indices);
+bro.tensor.softmaxXentFusedBatched = function(logits_BL, target_BL, mask, headOffsets, n_heads, probs_BL, dLogits_BL, lossPerSample) {};
 
 /**
- * Graph-capturable twin of sampleLogits: byte-identical draw for the same
- * effective base counter, but every RNG-state and output buffer is a caller-
- * owned pre-sized GpuTensor touched only on-device, so a whole autoregressive
- * decode step can be recorded into a CUDA graph and replayed with a single
- * launch (no host-side counter read/write, no mid-capture allocation). Unlike
- * sampleLogits, this has a real CUDA kernel (CPU/CUDA bit-exact).
- *   logits:  (N, V) FP32
- *   counter: (>=1,) INT32, counter[0] is the base offset; advanced in place
- *            by N each call (fresh draws every replay, no host involvement).
- *   scratch: FP32, >= 3*N*V elements, sized once and reused across steps.
- *   indices: (N, 1) INT32, pre-sized by the caller; written in place, never
- *            resized.
+ * @param {GpuTensor} table
+ * @param {GpuTensor} idxAsInt32
+ * @param {number} B
+ * @param {GpuTensor} out
  */
-gpu.sampleLogitsInto(logits, temperature, topK, topP, key, counter, scratch, indices);
-
-
-// =============================================================================
-// Pooling, pad/crop, transpose-conv, conv3d, windowing, batch-norm (NCHW)
-// =============================================================================
-//
-// NCHW packed as (N, C*...). Y/dX resized + dtype-set to the input. FP32 on
-// CPU; FP32/FP16 on CUDA where the backend supports it.
-
-// Max pool: Idx (INT32) records the argmax position the backward scatters into.
-gpu.maxPool2dForward(X, N, C, H, W, kH, kW, sH, sW, padH, padW, Y, Idx);
-gpu.maxPool2dBackward(dY, Idx, N, C, H, W, H_out, W_out, dX);   // overwrite
-
-// Adaptive average pool, output region per pixel follows PyTorch's formula.
-gpu.adaptiveAvgPool2dForward(X, N, C, H, W, H_out, W_out, Y);
-gpu.adaptiveAvgPool2dBackward(dY, N, C, H, W, H_out, W_out, dX);
-
-// Spatial pad / crop. pad2d mode: 0 zero, 1 reflect, 2 replicate.
-gpu.pad2dForward(X, N, C, H, W, padT, padB, padL, padR, /*mode*/ 0, Y);
-gpu.pad2dBackward(dY, N, C, H, W, padT, padB, padL, padR, /*mode*/ 0, dX);
-gpu.slice2dForward(X, N, C, H, W, h0, w0, H_out, W_out, Y);     // crop region
-gpu.slice2dBackward(dY, N, C, H, W, h0, w0, H_out, W_out, dX);  // zero + scatter
-
-// Transposed conv2d (fractionally-strided), forward + per-input/weight/bias bwd.
-gpu.convTranspose2dForward(X, Wt, /*bias|null*/ null,
-                           N, C_in, H, W, C_out, kH, kW,
-                           sH, sW, pH, pW, opH, opW, dH, dW, groups, Y);
-gpu.convTranspose2dBackwardInput(Wt, dY, N, C_in, H, W, C_out, kH, kW,
-                                 sH, sW, pH, pW, opH, opW, dH, dW, groups, dX);
-gpu.convTranspose2dBackwardWeight(X, dY, N, C_in, H, W, C_out, kH, kW,
-                                  sH, sW, pH, pW, opH, opW, dH, dW, groups, dWt);
-gpu.convTranspose2dBackwardBias(dY, N, C_out, H_out, W_out, dB);
-
-// conv3d (N,C,T,H,W), FP32 forward, and INT8-weight / FP16-activation variant.
-gpu.conv3dForward(X, Wt, /*bias|null*/ null,
-                  N, C_in, T, H, W, C_out, kT, kH, kW,
-                  sT, sH, sW, pT, pH, pW, dT, dH, dW, groups, Y);
-gpu.conv3dInt8wFp16Forward(X, W_int8, scales, /*bias|null*/ null,
-                           N, C_in, T, H, W, C_out, kT, kH, kW,
-                           sT, sH, sW, pT, pH, pW, dT, dH, dW, groups, Y);
-
-// Window partition / reverse (Swin/SAM) + Qwen-VL 2x2 spatial token merge.
-gpu.windowPartitionForward(X, N, C, H, W, window, Y);
-gpu.windowReverseForward(X, N, C, H, W, window, Y);
-gpu.spatialMerge2x2Forward(X, N, C, H, W, Y);   // (N,C,H,W) -> (N,4C,H/2,W/2)
-
-// Batch norm. Forward updates running stats + saves mean/rstd for backward;
-// inference uses the frozen running stats.
-gpu.batchNormForward(X, gamma, beta, runningMean, runningVar,
-                     N, C, H, W, eps, momentum, Y, savedMean, savedRstd);
-gpu.batchNormBackward(X, gamma, savedMean, savedRstd, dY,
-                      N, C, H, W, dX, dGamma, dBeta);
-gpu.batchNormInference(X, gamma, beta, runningMean, runningVar,
-                       N, C, H, W, eps, Y);
-
-
-// =============================================================================
-// Image preprocessing
-// =============================================================================
-
-// Per-channel (x - mean) / std on an NCHW image (CLIP/ImageNet/SAM normalize).
-// mean / std are length-C tensors.
-gpu.imageNormalize(X, mean, std, N, C, H, W, Y);
-
-// Decode + layout: HWC uint8 bytes -> NCHW FP32 with y = x*scale + bias.
-// `srcUint8` is a host Uint8Array of N*H*W*C bytes.
-gpu.imageU8ToF32NhwcToNchw(srcUint8, N, H, W, C, /*scale*/ 1/255, /*bias*/ 0, Y);
-
-
-// =============================================================================
-// k-quant (GGUF) weight inference
-// =============================================================================
-//
-// Dequant a GGUF k-quant weight block to FP16, or run a weight-only-quant
-// linear directly (W stays k-quant, X/Y FP16). Batched variants take (B, D).
-
-gpu.dequantQ4kToFp16(W_q4k, W_fp16);
-gpu.dequantQ6kToFp16(W_q6k, W_fp16);
-gpu.dequantQ8_0ToFp16(W_q8, W_fp16);
-
-gpu.linearForwardQ4kFp16(W_q4k, /*bias|null*/ null, x, y);            // single row
-gpu.linearForwardQ6kFp16(W_q6k, /*bias|null*/ null, x, y);
-gpu.linearForwardQ8_0Fp16(W_q8, /*bias|null*/ null, x, y);
-gpu.linearForwardBatchedQ4kFp16(W_q4k, /*bias|null*/ null, X_BD, Y_BD);
-gpu.linearForwardBatchedQ6kFp16(W_q6k, /*bias|null*/ null, X_BD, Y_BD);
-gpu.linearForwardBatchedQ8_0Fp16(W_q8, /*bias|null*/ null, X_BD, Y_BD);
-
-
-// =============================================================================
-// Specialized attention
-// =============================================================================
+bro.tensor.embeddingLookupForward = function(table, idxAsInt32, B, out) {};
 
 /**
- * SAM / ViTDet decomposed 2D relative-position self-attention. A token maps to
- * grid coords over a (gridH, gridW) patch grid; the rel-pos bias is factored
- * into length-gridH and length-gridW tables (never materialised L×L). Each bias
- * (bq/bk/bv/bo) is optional. relPosH: (2*gridH-1, headDim), relPosW likewise.
- * The windowed variant runs it independently per window×window tile.
+ * @param {GpuTensor} dOut
+ * @param {GpuTensor} idxAsInt32
+ * @param {number} B
+ * @param {GpuTensor} dTable
  */
-gpu.selfAttentionDecomposedRelPosForward(
-    X, Wq, bq, Wk, bk, Wv, bv, Wo, bo, relPosH, relPosW,
-    numHeads, gridH, gridW, /*scale*/ 1/Math.sqrt(headDim), O);
-gpu.selfAttentionDecomposedRelPosWindowedForward(
-    X, Wq, bq, Wk, bk, Wv, bv, Wo, bo, relPosH, relPosW,
-    numHeads, gridH, gridW, window, /*scale*/ 1/Math.sqrt(headDim), O);
+bro.tensor.embeddingLookupBackward = function(dOut, idxAsInt32, B, dTable) {};
 
 /**
- * Packed variable-length attention (Qwen-VL window attn). Sequences are packed
- * contiguously; cuSeqlensQ / cuSeqlensK are INT32 device-pointer GpuTensors of
- * length batch+1 (prefix sums): pass an INT32 tensor whose .data is the device
- * buffer. No cross-sequence attention.
+ * @param {Array<GpuTensor>} parts
+ * @param {GpuTensor} out
  */
-gpu.flashAttentionVarlenForward(Q, K, V, cuSeqlensQ, cuSeqlensK,
-                                batch, maxSeqQ, maxSeqK, numHeads, headDim, causal, O);
-gpu.flashAttentionVarlenBackward(Q, K, V, O, dO, cuSeqlensQ, cuSeqlensK,
-                                 batch, maxSeqQ, maxSeqK, numHeads, headDim, causal,
-                                 dQ, dK, dV);
+bro.tensor.concatRows = function(parts, out) {};
 
 /**
- * Gated delta rule (linear attention: Qwen3-Next). `state` is the recurrent
- * (d_k, d_v) memory, read + written in place. Chunked processes a whole block;
- * step advances one token.
+ * @param {GpuTensor} in_
+ * @param {Array<GpuTensor>} parts
  */
-gpu.gatedDeltaRuleChunked(Q, K, V, aRaw, beta, logA, numHeads, d_k, d_v, state, O);
-gpu.gatedDeltaRuleStep(Q, K, V, aRaw, beta, logA, numHeads, d_k, d_v, state, O);
+bro.tensor.splitRows = function(in_, parts) {};
 
 /**
- * Qwen-VL multimodal M-RoPE: separate cos/sin tables and INT32 device-pointer
- * position buffers for the temporal / height / width axes; d_t + d_h + d_w =
- * headDim/2 rotary pairs.
+ * @param {Array<GpuTensor>} parts
+ * @param {GpuTensor} out
  */
-gpu.ropeApplyMrope(X, cosT, sinT, cosH, sinH, cosW, sinW,
-                   posT, posH, posW, headDim, numHeads, d_t, d_h, d_w, Y);
+bro.tensor.concatBatchedRows = function(parts, out) {};
 
+/**
+ * @param {Array<GpuTensor>} parts
+ * @param {number} N
+ * @param {number} H
+ * @param {number} W
+ * @param {Array<number>} C_per_part
+ * @param {GpuTensor} out
+ */
+bro.tensor.concatNchwChannels = function(parts, N, H, W, C_per_part, out) {};
 
-// =============================================================================
-// Normalize / loss helpers
-// =============================================================================
+/**
+ * @param {GpuTensor} dY
+ * @param {number} N
+ * @param {number} H
+ * @param {number} W
+ * @param {Array<number>} C_per_part
+ * @param {Array<GpuTensor>} dParts
+ */
+bro.tensor.concatNchwChannelsBackward = function(dY, N, H, W, C_per_part, dParts) {};
 
-// Per-head last-dim L2 normalize over an (L, numHeads*headDim) layout
-// (gated-deltanet QK-norm). Distinct from l2NormalizeNchwForward (channel axis).
-gpu.l2NormForward(X, headDim, numHeads, eps, Y);
-gpu.l2NormBackward(X, headDim, numHeads, eps, dY, dX);
+/**
+ * @param {GpuTensor} param
+ * @param {GpuTensor} grad
+ * @param {GpuTensor} velocity
+ * @param {number} lr
+ * @param {number} momentum
+ */
+bro.tensor.sgdStep = function(param, grad, velocity, lr, momentum) {};
 
-// Fused numerically-stable BCE-with-logits over a (B, L) batch. `mask` is an
-// optional device-pointer (float) GpuTensor; writes probs, dLogits, and a
-// per-sample loss vector.
-gpu.bceWithLogitsFusedBatched(logits, target, /*mask|null*/ null, posWeight,
-                              probs, dLogits, lossPerSample);
+/**
+ * @param {GpuTensor} param
+ * @param {GpuTensor} grad
+ * @param {GpuTensor} m
+ * @param {GpuTensor} v
+ * @param {number} lr
+ * @param {number} beta1
+ * @param {number} beta2
+ * @param {number} eps
+ * @param {number} step
+ */
+bro.tensor.adamStep = function(param, grad, m, v, lr, beta1, beta2, eps, step) {};
 
-// Single-segment softmax cross-entropy over HOST Float32Arrays (probs/dLogits
-// written in place; optional host mask). Returns the scalar loss.
-const loss = gpu.softmaxXentSegment(logits, target, probs, dLogits, n, /*mask|null*/ null);
-
-// Scalar MSE: returns [loss, dPred].
-const [mseLoss, dPred] = gpu.mseScalar(pred, target);
-
-
-// =============================================================================
-// Row gather/scatter, top-k, training-cache layernorm, RNG, init
-// =============================================================================
-
-gpu.gatherRows(X, idxAsInt32, Y);              // Y[i] = X[Idx[i]]
-gpu.scatterRowsAdd(dY, idxAsInt32, R, dX);     // dX (R rows) zeroed then += dY
-gpu.topKRows(X, k, Vals, Idx);                 // per-row top-k, descending; Idx INT32
-
-// Layernorm that saves Xhat / Mean / Rstd caches for an exact training backward.
-gpu.layernormForwardBatchedWithCaches(X, gamma, beta, Y, Xhat, Mean, Rstd, eps);
-gpu.layernormBackwardBatchedWithCaches(dY, Xhat, gamma, Rstd, dX, dGamma, dBeta);
-
-// Counter-based (Philox) RNG, deterministic in (key, counter). key/counter are
-// BigInt or Number; fills the destination tensor.
-gpu.randUniform(key, counter, Y);              // U[0,1)
-gpu.randn(key, counter, Y);                    // standard normal
-gpu.randBernoulli(p, key, counter, Y);         // 1 w.p. p
-gpu.randnTruncated(lo, hi, key, counter, Y);   // normal truncated to [lo,hi]
-
-// Xavier-uniform fill. Takes an RNG state (BigInt/Number), returns the advanced
-// state as a BigInt, thread it through successive inits.
-let rngState = gpu.xavierInit(W, rngState);

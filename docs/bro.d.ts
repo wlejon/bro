@@ -1785,48 +1785,6 @@ interface SenseAnalysis {
 }
 
 /**
- * Options for action binding definitions.
- */
-interface ActionOptions {
-  /**
-   *  Deadzone threshold for analog axis bindings (default ~0.1).
-   */
-  deadzone?: number;
-}
-
-/**
- * Information describing a registered action and its key bindings.
- */
-interface ActionBindingInfo {
-  /**
-   *  Action name identifier.
-   */
-  action?: string;
-  /**
-   *  Sequence of bound key and input strings.
-   */
-  keys?: string[];
-}
-
-/**
- * Display video mode describing available fullscreen resolution and refresh rate.
- */
-interface DisplayModeInfo {
-  /**
-   *  Horizontal width in pixels.
-   */
-  width?: number;
-  /**
-   *  Vertical height in pixels.
-   */
-  height?: number;
-  /**
-   *  Vertical refresh rate in Hz.
-   */
-  refreshRate?: number;
-}
-
-/**
  * @file stt.idl
  * @description Speech-to-text inference models: Whisper, Parakeet, and Qwen3-ASR.
  */
@@ -2403,44 +2361,6 @@ interface WakeStats {
 }
 
 /**
- * Timing and configuration options for element animations.
- */
-interface KeyframeAnimationOptions {
-  /**
-   *  Duration of single iteration in milliseconds.
-   */
-  duration?: number;
-  /**
-   *  Start delay in milliseconds.
-   */
-  delay?: number;
-  /**
-   *  End delay in milliseconds.
-   */
-  endDelay?: number;
-  /**
-   *  Number of iterations (or Infinity).
-   */
-  iterations?: number;
-  /**
-   *  Playback direction ("normal", "reverse", "alternate", "alternate-reverse").
-   */
-  direction?: string;
-  /**
-   *  Timing function easing name.
-   */
-  easing?: string;
-  /**
-   *  Fill mode ("none", "forwards", "backwards", "both").
-   */
-  fill?: string;
-  /**
-   *  Animation identifier string.
-   */
-  id?: string;
-}
-
-/**
  * Desktop coordinates and dimensions of a rectangle bounds.
  */
 interface DisplayBounds {
@@ -2602,6 +2522,65 @@ declare class AbortController {
    * @param reason Optional abort reason
    */
   abort(reason?: any): void;
+}
+
+/**
+ * =============================================================================
+ * bro.ai.game — Game AI, Navigation Grids/Meshes, ORCA Avoidance, and MCTS
+ * =============================================================================
+ *
+ * Real-time game AI simulation system providing agents, spatial worlds,
+ * navigation grids, navmesh pathfinding, local collision avoidance (ORCA),
+ * tactical steering behaviors, and Monte Carlo Tree Search (MCTS).
+ *
+ * @example
+ *   const world = bro.ai.game.createWorld();
+ *   const agent = bro.ai.game.createAgent(world, { radius: 0.5, maxSpeed: 5.0 });
+ *   agent.setPosition(0, 0, 0);
+ *   world.step(1 / 60);
+ */
+declare class AIAgent {
+  readonly id: number;
+  setPosition(x: number, y: number, z: number): void;
+  setVelocity(x: number, y: number, z: number): void;
+  setGoal(x: number, y: number, z: number): void;
+  stop(): void;
+}
+
+declare class AIWorld {
+  step(dt: number): void;
+  createAgent(opts?: object): AIAgent;
+  destroyAgent(agent: AIAgent): void;
+}
+
+declare class AINavGrid {
+  isWalkable(x: number, z: number): boolean;
+  setWalkable(x: number, z: number, walkable: boolean): void;
+  findPath(startX: number, startZ: number, endX: number, endZ: number): object[];
+}
+
+declare class AINavMesh {
+  findPath(startX: number, startY: number, startZ: number, endX: number, endY: number, endZ: number): object[];
+}
+
+declare class AIMcts {
+  search(state: object, opts?: object): object;
+}
+
+declare class CombatAction {
+  targetX: number;
+  targetZ: number;
+  actionType: number;
+}
+
+declare class Formation {
+  setLeader(agent: AIAgent): void;
+  addFollower(agent: AIAgent, offsetX: number, offsetZ: number): void;
+  update(dt: number): void;
+}
+
+declare class VecSim {
+  step(dt: number): void;
 }
 
 declare class Tween {
@@ -2770,6 +2749,89 @@ declare class AudioContext {
   seekPlayback(id: number, seconds: number): void;
 }
 
+/**
+ * =============================================================================
+ * CanvasRenderingContext2D — 2D Canvas Graphics Context
+ * =============================================================================
+ *
+ * High-performance 2D drawing context backed by Skia graphics engine.
+ * Supports path drawing, gradients, text measurement, image rendering,
+ * and pixel buffer manipulation.
+ *
+ * @example
+ *   const ctx = canvas.getContext('2d');
+ *   ctx.fillStyle = '#ff0000';
+ *   ctx.fillRect(10, 10, 100, 100);
+ */
+declare class CanvasGradient {
+  addColorStop(offset: number, color: string): void;
+}
+
+declare class TextMetrics {
+  readonly width: number;
+}
+
+declare class CanvasRenderingContext2D {
+  readonly canvasWidth: number;
+  readonly canvasHeight: number;
+  fillStyle: any;
+  strokeStyle: any;
+  lineWidth: number;
+  lineCap: string;
+  lineJoin: string;
+  miterLimit: number;
+  globalAlpha: number;
+  globalCompositeOperation: string;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
+  shadowBlur: number;
+  shadowColor: string;
+  font: string;
+  textAlign: string;
+  textBaseline: string;
+  direction: string;
+  imageSmoothingEnabled: boolean;
+  imageSmoothingQuality: string;
+  lineDashOffset: number;
+  save(): void;
+  restore(): void;
+  reset(): void;
+  beginPath(): void;
+  closePath(): void;
+  stroke(): void;
+  fill(): void;
+  clip(): void;
+  resetTransform(): void;
+  fillRect(x: number, y: number, w: number, h: number): void;
+  strokeRect(x: number, y: number, w: number, h: number): void;
+  clearRect(x: number, y: number, w: number, h: number): void;
+  fillText(text: string, x: number, y: number, maxWidth?: number): void;
+  strokeText(text: string, x: number, y: number, maxWidth?: number): void;
+  translate(x: number, y: number): void;
+  rotate(angle: number): void;
+  scale(x: number, y: number): void;
+  setTransform(a: number, b: number, c: number, d: number, e: number, f: number): void;
+  transform(a: number, b: number, c: number, d: number, e: number, f: number): void;
+  moveTo(x: number, y: number): void;
+  lineTo(x: number, y: number): void;
+  arcTo(x1: number, y1: number, x2: number, y2: number, radius: number): void;
+  bezierCurveTo(cp1x: number, cp1y: number, cp2x: number, cp2y: number, x: number, y: number): void;
+  quadraticCurveTo(cpx: number, cpy: number, x: number, y: number): void;
+  arc(x: number, y: number, radius: number, startAngle: number, endAngle: number, counterclockwise?: boolean): void;
+  ellipse(x: number, y: number, radiusX: number, radiusY: number, rotation: number, startAngle: number, endAngle: number, counterclockwise?: boolean): void;
+  rect(x: number, y: number, w: number, h: number): void;
+  isPointInPath(x: number, y: number): boolean;
+  drawImage(image: any, sx: number, sy: number, sw?: number, sh?: number, dx?: number, dy?: number, dw?: number, dh?: number): void;
+  getImageData(sx: number, sy: number, sw: number, sh: number): ImageData;
+  putImageData(imageData: ImageData, dx: number, dy: number, dirtyX?: number, dirtyY?: number, dirtyWidth?: number, dirtyHeight?: number): void;
+  createImageData(swOrImagedata: number | ImageData, sh?: number): ImageData;
+  createLinearGradient(x0: number, y0: number, x1: number, y1: number): CanvasGradient;
+  createRadialGradient(x0: number, y0: number, r0: number, x1: number, y1: number, r1: number): CanvasGradient;
+  measureText(text: string): TextMetrics;
+  setLineDash(segments: number[]): void;
+  getLineDash(): number[];
+}
+
 declare class ClipmapTerrain {
   readonly node: SceneNode | null;
   readonly levels: number;
@@ -2932,30 +2994,15 @@ declare class ClusterDiarizer {
   diarize(audio: Float32Array, opts?: object): object;
 }
 
+/**
+ * =============================================================================
+ * bro.diffusion — text-to-image neural diffusion inference pipeline
+ * =============================================================================
+ */
 declare class Pipeline {
-  /**
-   * True if model weights are loaded and ready for inference.
-   */
-  readonly weightsLoaded: boolean;
-  /**
-   * Load model safetensors weights file into pipeline.
-   */
-  loadWeights(path: string): void;
-  /**
-   * Generate image from text prompt.
-   */
-  generate(opts?: object): object;
 }
 
 declare class PipelineState {
-  /**
-   * Current denoising step index.
-   */
-  readonly step: number;
-  /**
-   * True if denoising trajectory has completed.
-   */
-  readonly done: boolean;
 }
 
 /**
@@ -4474,6 +4521,52 @@ declare class FastNoise {
 }
 
 /**
+ * =============================================================================
+ * Physics — Jolt Physics 3D Simulation & Collision System
+ * =============================================================================
+ *
+ * Complete 3D physics engine binding backed by Jolt Physics.
+ * Includes rigid body dynamics, collision queries (raycast, shape cast, overlap),
+ * character virtual controllers, vehicles, ragdolls, soft bodies, constraints,
+ * and sandbox worlds.
+ *
+ * @example
+ *   Physics.setGravity(0, -9.81, 0);
+ *   const body = Physics.createBody({
+ *     shape: { type: 'box', halfExtents: [1, 1, 1] },
+ *     position: [0, 10, 0],
+ *     motionType: 'dynamic'
+ *   });
+ *   Physics.addImpulse(body, 0, 5, 0);
+ */
+declare class PhysicsWorldHandle {
+  destroy(): void;
+  step(dt: number): void;
+}
+
+declare class PhysicsCharacter {
+  setPosition(x: number, y: number, z: number): void;
+  setLinearVelocity(x: number, y: number, z: number): void;
+  getPosition(): object;
+  getLinearVelocity(): object;
+  update(dt: number): void;
+}
+
+declare class PhysicsVehicle {
+  setDriverInput(forward: number, steer: number, brake: number, handBrake: number): void;
+  getTransform(): object;
+}
+
+declare class PhysicsRagdoll {
+  driveToPose(pose: object, dt: number): void;
+  getPose(): object;
+}
+
+declare class PhysicsSoftBody {
+  getBounds(): object;
+}
+
+/**
  * RAVE neural audio autoencoder model handle.
  */
 declare class Rave {
@@ -4768,6 +4861,40 @@ declare class QwenAsrStream {
 }
 
 /**
+ * =============================================================================
+ * bro.tensor — GPU tensor + ops (brotensor: CUDA or Metal)
+ * =============================================================================
+ *
+ * Wraps the brotensor sibling library. brotensor exposes one unified tensor
+ * type with a runtime Device tag and device-neutral ops; bro.tensor is the
+ * GPU-resident face of it. The op surface is identical across CUDA (NVIDIA)
+ * and Metal (Apple) backends.
+ *
+ * @example
+ *   if (bro.tensor.available) {
+ *     bro.tensor.init();
+ *     const t = bro.tensor.createTensor(3, 4);
+ *     t.zero();
+ *     const data = t.download();
+ *   }
+ */
+declare class GpuTensor {
+  readonly rows: number;
+  readonly cols: number;
+  readonly size: number;
+  readonly bytes: number;
+  zero(): void;
+  resize(rows: number, cols: number, dtype?: string | number): void;
+  dtype(): string;
+  clone(): GpuTensor;
+  upload(src: Float32Array | object): void;
+  download(dst?: object): Float32Array | void;
+  uploadFp16(data: Uint16Array): void;
+  downloadFp16(): Uint16Array;
+  uploadInt8(data: Int8Array): void;
+}
+
+/**
  * Chunked procedural and heightmap terrain manager instance.
  */
 declare class Terrain {
@@ -4894,19 +5021,12 @@ declare class TileWorld {
   destroy(): void;
 }
 
+/**
+ * =============================================================================
+ * bro.triposplat — Single-Image 3D Gaussian Splat Generation (TripoSR / TripoSplat)
+ * =============================================================================
+ */
 declare class TripoSplatPipeline {
-  /**
-   * Target execution device name.
-   */
-  readonly device: string;
-  /**
-   * True if BiRefNet background matte removal preprocessor is active.
-   */
-  readonly backgroundRemoval: boolean;
-  /**
-   * Generate 3D Gaussian Splat cloud from input image.
-   */
-  generate(image: any, opts?: object): object;
 }
 
 declare class KokoroModel {
@@ -4961,6 +5081,88 @@ declare class SpeakerEncoder {
   embedSpeaker(audio: Float32Array, opts?: SpeakerEncoderEmbedOptions): AsyncHandle;
 }
 
+/**
+ * =============================================================================
+ * bro.vision — Vision-model inference (brovisionml)
+ * =============================================================================
+ *
+ * Image-understanding and dense prediction models: promptable segmentation (SAM),
+ * monocular depth (Depth-Anything-V2), surface normals (DSINE), ControlNet annotators
+ * (HED, Lineart, MLSD, OpenPose, SegFormer, BiRefNet, StyleGAN3, DINOv2, DINOv3).
+ *
+ * @example
+ *   bro.vision.init();
+ *   const depth = bro.vision.loadDepth('weights/depth-anything-v2-small');
+ *   const result = depth.estimate(imageBitmap);
+ */
+declare class DepthEstimator {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Sam {
+  readonly device: string;
+  readonly hasImage: boolean;
+  setImage(image: any, opts?: object): any;
+  segment(opts?: object): object;
+  segmentEverything(image: any, opts?: object): any;
+}
+
+declare class NormalEstimator {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Hed {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Lineart {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Mlsd {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Openpose {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Segformer {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Birefnet {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class StyleGAN3 {
+  readonly device: string;
+  readonly zDim: number;
+  readonly cDim: number;
+  readonly wDim: number;
+  readonly imgResolution: number;
+  readonly imgChannels: number;
+  generate(z: Float32Array, opts?: object): object;
+}
+
+declare class Dinov2 {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
+declare class Dinov3 {
+  readonly device: string;
+  estimate(image: any, opts?: object): object;
+}
+
 declare class WakeStreamView {
   readonly active: boolean;
   listen(opts: WakeListenOptions): void;
@@ -4977,61 +5179,144 @@ declare class WakeStreamView {
 }
 
 /**
- * Web Animations API Animation controller instance.
+ * =============================================================================
+ * WebGL2RenderingContext — WebGL 2.0 Graphics Rendering Pipeline
+ * =============================================================================
+ *
+ * OpenGL ES 3.0 compatible 3D hardware-accelerated rendering interface for WebGL2.
+ * Includes buffer objects, textures, shaders, programs, framebuffers, renderbuffers,
+ * vertex array objects, samplers, queries, and sync primitives.
+ *
+ * @example
+ *   const gl = canvas.getContext('webgl2');
+ *   gl.clearColor(0.0, 0.0, 0.0, 1.0);
+ *   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+ */
+declare class WebGLBuffer {
+}
+
+declare class WebGLTexture {
+}
+
+declare class WebGLProgram {
+}
+
+declare class WebGLShader {
+}
+
+declare class WebGLFramebuffer {
+}
+
+declare class WebGLRenderbuffer {
+}
+
+declare class WebGLVertexArrayObject {
+}
+
+declare class WebGLUniformLocation {
+}
+
+declare class WebGLSampler {
+}
+
+declare class WebGLQuery {
+}
+
+declare class WebGLSync {
+}
+
+declare class WebGLTransformFeedback {
+}
+
+declare class WebGL2RenderingContext {
+  readonly canvasWidth: number;
+  readonly canvasHeight: number;
+  clearColor(r: number, g: number, b: number, a: number): void;
+  clear(mask: number): void;
+  viewport(x: number, y: number, width: number, height: number): void;
+  enable(cap: number): void;
+  disable(cap: number): void;
+  blendFunc(sfactor: number, dfactor: number): void;
+  depthFunc(func: number): void;
+  createBuffer(): WebGLBuffer | null;
+  deleteBuffer(buffer: WebGLBuffer | null): void;
+  bindBuffer(target: number, buffer: WebGLBuffer | null): void;
+  bufferData(target: number, data: ArrayBuffer | ArrayBufferView | number, usage: number): void;
+  createTexture(): WebGLTexture | null;
+  deleteTexture(texture: WebGLTexture | null): void;
+  bindTexture(target: number, texture: WebGLTexture | null): void;
+  activeTexture(texture: number): void;
+  createProgram(): WebGLProgram | null;
+  deleteProgram(program: WebGLProgram | null): void;
+  linkProgram(program: WebGLProgram | null): void;
+  useProgram(program: WebGLProgram | null): void;
+  createShader(type: number): WebGLShader | null;
+  deleteShader(shader: WebGLShader | null): void;
+  shaderSource(shader: WebGLShader | null, source: string): void;
+  compileShader(shader: WebGLShader | null): void;
+  attachShader(program: WebGLProgram | null, shader: WebGLShader | null): void;
+  createVertexArray(): WebGLVertexArrayObject | null;
+  deleteVertexArray(array: WebGLVertexArrayObject | null): void;
+  bindVertexArray(array: WebGLVertexArrayObject | null): void;
+  getUniformLocation(program: WebGLProgram | null, name: string): WebGLUniformLocation | null;
+  drawArrays(mode: number, first: number, count: number): void;
+  drawElements(mode: number, count: number, type: number, offset: number): void;
+}
+
+/**
+ * =============================================================================
+ * Web Animations API
+ * =============================================================================
+ *
+ * Implements the W3C Web Animations API for DOM elements.
+ * Provides element.animate(), element.getAnimations(), and Animation object controls.
+ *
+ * @example
+ *   const anim = element.animate([
+ *     { transform: 'translateY(0px)', opacity: 1 },
+ *     { transform: 'translateY(100px)', opacity: 0 }
+ *   ], { duration: 1000, iterations: Infinity });
+ *   anim.pause();
  */
 declare class Animation {
-  /**
-   *  Current playback time in milliseconds, or null if idle.
-   */
-  currentTime: number | null;
-  /**
-   *  Playback rate multiplier (default 1.0).
-   */
+  currentTime: number;
   playbackRate: number;
-  /**
-   *  Current playback state ("idle", "running", "paused", "finished").
-   */
   readonly playState: string;
-  /**
-   *  Whether the animation has pending async tasks (always false).
-   */
   readonly pending: boolean;
-  /**
-   *  Optional identifier for the animation.
-   */
-  id: string;
-  /**
-   *  Promise that resolves when animation finishes or rejects if cancelled.
-   */
   readonly finished: Promise<Animation>;
-  /**
-   *  Event handler called when animation finishes.
-   */
+  readonly ready: Promise<Animation>;
   onfinish: ((event: any) => any) | null;
-  /**
-   *  Event handler called when animation is cancelled.
-   */
   oncancel: ((event: any) => any) | null;
-  /**
-   *  Starts or resumes playback of the animation.
-   */
   play(): void;
-  /**
-   *  Pauses playback of the animation.
-   */
   pause(): void;
-  /**
-   *  Cancels the animation and clears its effects.
-   */
-  cancel(): void;
-  /**
-   *  Fast-forwards animation to completion.
-   */
   finish(): void;
-  /**
-   *  Reverses playback direction of the animation.
-   */
+  cancel(): void;
   reverse(): void;
+}
+
+declare class WebAnimations {
+}
+
+/**
+ * =============================================================================
+ * Worker — Web Workers Dedicated Background Execution
+ * =============================================================================
+ *
+ * Dedicated background thread running an isolated JavaScript runtime
+ * communicating via structured clone postMessage/onmessage.
+ *
+ * @example
+ *   const worker = new Worker('worker.js');
+ *   worker.onmessage = (e) => console.log('From worker:', e.data);
+ *   worker.postMessage({ task: 'compute', count: 1000 });
+ */
+declare class Worker {
+  constructor(scriptURL: string, options?: object);
+  onmessage: ((event: any) => any) | null;
+  onerror: ((event: any) => any) | null;
+  onmessageerror: ((event: any) => any) | null;
+  postMessage(message: any, transfer?: object[]): void;
+  terminate(): void;
 }
 
 declare class World {
@@ -5084,6 +5369,18 @@ declare class World {
 // ── Global 'bro' Namespace ───────────────────────────────────────────────────
 
 declare namespace bro {
+  namespace game {
+    function createAgent(world: AIWorld, opts?: object): AIAgent;
+    function createWorld(opts?: object): AIWorld;
+    function createNavGrid(minX: number, minZ: number, maxX: number, maxZ: number, cellSize: number): AINavGrid;
+    function createNavMesh(opts?: object): AINavMesh;
+    function createMcts(config: object): AIMcts;
+    function createCombatAction(): CombatAction;
+    function createFormation(opts?: object): Formation;
+    function createVecSim(opts?: object): VecSim;
+    function registerCapability(name: string, definition: object): void;
+  }
+
   /**
    * =============================================================================
    * bro.diar — neural speaker diarization (Sortformer & Clustering Diarizer)
@@ -5124,43 +5421,11 @@ declare namespace bro {
     function clusterDiarize(model: ClusterDiarizer, audio: Float32Array, opts?: object): AsyncHandle;
   }
 
-  /**
-   * =============================================================================
-   * bro.diffusion — text-to-image neural diffusion inference pipeline
-   * =============================================================================
-   *
-   * Multi-architecture neural diffusion pipeline supporting SD1.5, LCM, SCM, FlowMatch,
-   * and Flux DiT architectures. Supports one-shot and step-wise latent sampling, ControlNet,
-   * LoRA adapters, cross-attention steering, and noise expansion.
-   *
-   * @example
-   *   const pipe = bro.diffusion.loadModel("weights/sd15", { device: "cuda" });
-   *   const img = pipe.generate({
-   *     prompt: "a golden retriever in a field of sunflowers",
-   *     steps: 20,
-   *     guidanceScale: 7.5
-   *   });
-   */
   namespace diffusion {
-    /**
-     * Brodiffusion version string.
-     */
     const version: string;
-    /**
-     * Initialize brotensor inference acceleration.
-     */
     function init(): void;
-    /**
-     * Instantiate diffusion pipeline from model architecture configuration.
-     */
     function createPipeline(config: object): Pipeline;
-    /**
-     * Load complete diffusion model checkpoint directory.
-     */
     function loadModel(dir: string, opts?: object): Pipeline;
-    /**
-     * Transport identity latent noise across resolution upscaling factors.
-     */
     function expandNoise(src: Float32Array, opts: object): Float32Array;
   }
 
@@ -5706,6 +5971,40 @@ declare namespace bro {
   }
 
   /**
+   * =============================================================================
+   * bro.net & bro.net.sync — Game Networking and Replication System
+   * =============================================================================
+   *
+   * Low-level UDP game networking backed by GameNetworkingSockets, with raw
+   * binary packets, structured clone messaging, and multi-channel delivery.
+   * Includes bro.net.sync high-level multiplayer state replication and RPCs.
+   *
+   * @example
+   *   bro.net.onconnect = (peerId) => console.log('Peer connected:', peerId);
+   *   bro.net.onmessage = (peerId, data) => console.log('Received message:', data);
+   *   bro.net.host(7777);
+   */
+  namespace net {
+    let onconnect: ((event: any) => any) | null;
+    let ondisconnect: ((event: any) => any) | null;
+    let onmessage: ((event: any) => any) | null;
+    function host(port: number, callback?: Function): void;
+    function unhost(): void;
+    function connect(address: string, port: number, callback?: Function): number;
+    function disconnect(peerId: number): void;
+    function disconnectAll(): void;
+    function send(peerId: number, data: ArrayBuffer | ArrayBufferView, channel?: number): void;
+    function broadcast(data: ArrayBuffer | ArrayBufferView, channel?: number): void;
+    function sendClone(peerId: number, value: any, channel?: number): void;
+    function broadcastClone(value: any, channel?: number): void;
+    function peers(): number[];
+    function getPeerAddress(peerId: number): string | null;
+    function stats(): object;
+    function getPeerStats(peerId: number): object | null;
+    function setPeerSimulatedLoss(peerId: number, chance: number, latencyMin: number, latencyMax: number): void;
+  }
+
+  /**
    * Engine asset and application filesystem path resolution namespace.
    */
   namespace paths {
@@ -5719,6 +6018,67 @@ declare namespace bro {
      * @returns Resolved absolute filesystem path
      */
     function resolvePath(path: string): string;
+  }
+
+  namespace Physics {
+    function createWorldHandle(opts?: object): PhysicsWorldHandle;
+    function createWorld(opts?: object): void;
+    function setGravity(x: number, y: number, z: number): void;
+    function getGravity(): number[];
+    function setLayers(config: object): void;
+    function createBody(config: object): number;
+    function destroyBody(tag: number): void;
+    function destroyAll(): void;
+    function getTransform(tag: number): object;
+    function getVelocity(tag: number): object;
+    function setPosition(tag: number, x: number, y: number, z: number): void;
+    function setRotation(tag: number, x: number, y: number, z: number, w: number): void;
+    function setLinearVelocity(tag: number, x: number, y: number, z: number): void;
+    function setAngularVelocity(tag: number, x: number, y: number, z: number): void;
+    function addForce(tag: number, x: number, y: number, z: number): void;
+    function addImpulse(tag: number, x: number, y: number, z: number): void;
+    function addTorque(tag: number, x: number, y: number, z: number): void;
+    function setUserData(tag: number, data: any): void;
+    function getUserData(tag: number): any;
+    function setLayer(tag: number, layer: number): void;
+    function setKinematic(tag: number): void;
+    function setMotionType(tag: number, type: string | number): void;
+    function moveKinematic(tag: number, x: number, y: number, z: number, dt: number): void;
+    function raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
+    function raycastClosest(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
+    function castShape(config: object): object[];
+    function castShapeClosest(config: object): object | null;
+    function overlapShape(config: object): number[];
+    function overlapPoint(x: number, y: number, z: number, mask?: number): number[];
+    function getContacts(): object[];
+    function setFrictionCombine(tag: number, mode: string): void;
+    function setRestitutionCombine(tag: number, mode: string): void;
+    function setMass(tag: number, mass: number): void;
+    function setLinearDamping(tag: number, damping: number): void;
+    function setAngularDamping(tag: number, damping: number): void;
+    function setGravityFactor(tag: number, factor: number): void;
+    function setFriction(tag: number, friction: number): void;
+    function setRestitution(tag: number, restitution: number): void;
+    function getBodyProperties(tag: number): object | null;
+    function setAreaOverride(tag: number, config: object): void;
+    function setTimeStep(dt: number): void;
+    function setInterpolation(enabled: boolean): void;
+    function getInterpolation(): boolean;
+    function isActive(tag: number): boolean;
+    function activate(tag: number): void;
+    function getAllTransforms(worldHandle?: number): Float32Array;
+    function createCharacter(config: object): PhysicsCharacter;
+    function createVehicle(config: object): PhysicsVehicle;
+    function createRagdoll(config: object): PhysicsRagdoll;
+    function createSoftBody(config: object): PhysicsSoftBody;
+    function createConstraint(config: object): number;
+    function destroyConstraint(tag: number): void;
+    function setConstraintEnabled(tag: number, enabled: boolean): void;
+    function setWheelMotor(vehicleTag: number, wheelIndex: number, motorTorque: number, brakeTorque: number): void;
+    function setConstraintMotor(tag: number, config: object): void;
+    function setConstraintBreakingImpulse(tag: number, impulse: number): void;
+    function getConstraintBreakingImpulse(tag: number): number;
+    function getBrokenConstraints(): number[];
   }
 
   /**
@@ -5768,121 +6128,72 @@ declare namespace bro {
   }
 
   /**
-   * Persistent layered settings and action binding management namespace.
+   * =============================================================================
+   * bro.settings — Engine & Display Settings Management
+   * =============================================================================
    */
   namespace settings {
-    /**
-     * Get a single typed setting value (boolean, number, or string).
-     *
-     * @param key Setting key (e.g. 'graphics.vsync', 'audio.masterVolume')
-     * @returns Typed setting value or undefined
-     */
-    function get(key: string): any;
-    /**
-     * Get all settings as a nested object or for a specific category.
-     *
-     * @param category Optional category name ('graphics', 'audio', 'input', 'appearance')
-     * @returns Settings dictionary object
-     */
-    function getAll(category?: string): object;
-    /**
-     * Set a user-level setting override (persisted across sessions).
-     *
-     * @param key Setting key
-     * @param value New setting value
-     */
-    function set(key: string, value: any): void;
-    /**
-     * Set an app-level default setting value (not persisted).
-     *
-     * @param key Setting key
-     * @param value Default setting value
-     */
-    function setDefault(key: string, value: any): void;
-    /**
-     * Reset user overrides for a category or for all settings to defaults.
-     *
-     * @param category Optional category name to reset
-     */
-    function reset(category?: string): void;
-    /**
-     * Define an action with default input bindings (app-level).
-     *
-     * @param name Action name identifier
-     * @param keys Sequence of key and input binding strings
-     * @param options Optional binding options such as axis deadzone
-     */
-    function defineAction(name: string, keys: string[], options?: ActionOptions): void;
-    /**
-     * Rebind an action at the user level (persisted across sessions).
-     *
-     * @param name Action name identifier
-     * @param keys New sequence of key and input binding strings
-     */
-    function rebindAction(name: string, keys: string[]): void;
-    /**
-     * Reset user-level rebind for a single action to its default bindings.
-     *
-     * @param name Action name identifier
-     */
-    function resetAction(name: string): void;
-    /**
-     * Reset all user-level action rebinds to default bindings.
-     */
-    function resetAllActions(): void;
-    /**
-     * Get current active key bindings for an action.
-     *
-     * @param name Action name identifier
-     * @returns Array of bound input strings
-     */
-    function getActionKeys(name: string): string[];
-    /**
-     * Reverse lookup the action bound to a given input key or button.
-     *
-     * @param key Input key string
-     * @returns Bound action name or null
-     */
-    function getKeyAction(key: string): string | null;
-    /**
-     * Polled analog strength of an action in range [0, 1].
-     *
-     * @param name Action name identifier
-     * @returns Action analog strength
-     */
-    function getActionStrength(name: string): number;
-    /**
-     * Polled boolean press state of an action.
-     *
-     * @param name Action name identifier
-     * @returns Whether the action is currently pressed
-     */
-    function isActionPressed(name: string): boolean;
-    /**
-     * Get all defined actions (engine and app level).
-     *
-     * @returns Sequence of action descriptors
-     */
-    function getActions(): ActionBindingInfo[];
-    /**
-     * Get actions declared specifically by the current app.
-     *
-     * @returns Sequence of app action descriptors
-     */
-    function getAppActions(): ActionBindingInfo[];
-    /**
-     * Enumerate supported fullscreen video display modes and refresh rates.
-     *
-     * @returns Array of available display modes
-     */
-    function getDisplayModes(): DisplayModeInfo[];
-    /**
-     * Get app and engine default settings ignoring user overrides.
-     *
-     * @param category Optional category filter
-     * @returns Default settings object
-     */
-    function getDefaults(category?: string): object;
+    function load(): void;
+    function save(): void;
+  }
+
+  /**
+   * =============================================================================
+   * bro.steam — Steamworks Integration & Services
+   * =============================================================================
+   *
+   * Steamworks integration providing user authentication, achievements, stats,
+   * overlay activation, friends list, rich presence, matchmaking lobbies, and voice chat.
+   *
+   * @example
+   *   if (bro.steam.available) {
+   *     console.log('Logged into Steam as:', bro.steam.personaName);
+   *     bro.steam.setAchievement('ACH_FIRST_WIN');
+   *   }
+   */
+  namespace steam {
+    const available: boolean;
+    const reason: string;
+    const appId: number;
+    const steamId: string;
+    const personaName: string;
+    const isLoggedOn: boolean;
+    const isVoiceRecording: boolean;
+    const voiceSampleRate: number;
+    let onpulse: ((event: any) => any) | null;
+    let onfriends: ((event: any) => any) | null;
+    let onoverlay: ((event: any) => any) | null;
+    let onjoinrequest: ((event: any) => any) | null;
+    let onlobbyentered: ((event: any) => any) | null;
+    let onlobbyupdated: ((event: any) => any) | null;
+    let onlobbyleft: ((event: any) => any) | null;
+    let onlobbyinvite: ((event: any) => any) | null;
+    let onlobbyjoinrequest: ((event: any) => any) | null;
+    let onvoicecaptured: ((event: any) => any) | null;
+    function getAchievement(name: string): boolean;
+    function setAchievement(name: string): boolean;
+    function clearAchievement(name: string): boolean;
+    function getStat(name: string): number;
+    function setStat(name: string, value: number): boolean;
+    function storeStats(): boolean;
+    function activateOverlay(dialog?: string): void;
+    function activateOverlayToWebPage(url: string): void;
+    function getFriends(): object[];
+    function getAvatar(steamId: string, size?: string | number): Promise<object>;
+    function setRichPresence(key: string, value: string): boolean;
+    function clearRichPresence(): void;
+    function createLobby(type: string, maxMembers: number): Promise<object>;
+    function joinLobby(lobbyId: string): Promise<object>;
+    function leaveLobby(lobbyId: string): void;
+    function setLobbyData(lobbyId: string, key: string, value: string): boolean;
+    function getLobbyMembers(lobbyId: string): object[];
+    function getLobbyOwner(lobbyId: string): string;
+    function getLobbyData(lobbyId: string, key: string): string;
+    function requestLobbyList(filter?: object): void;
+    function inviteUserToLobby(lobbyId: string, steamId: string): boolean;
+    function startVoiceRecording(): void;
+    function stopVoiceRecording(): void;
+    function decodeVoice(data: Uint8Array, sampleRate?: number): Promise<Float32Array>;
   }
 
   namespace stt {
@@ -5894,6 +6205,124 @@ declare namespace bro {
     function loadQwenAsr(dir: string, opts?: WhisperLoadOptions): QwenAsrModel | AsyncHandle;
     function loadQwenAsrStream(dir: string, opts?: QwenAsrStreamOptions): QwenAsrStream | AsyncHandle;
     function transcribe(model: object, audio: Float32Array | SttAudioBuffer, promptOrOpts?: any, opts?: object): AsyncHandle;
+  }
+
+  namespace tensor {
+    const available: boolean;
+    const backend: string;
+    function init(): void;
+    function sync(): void;
+    function createTensor(rows: number, cols?: number, dtype?: string | number): GpuTensor;
+    function linearForward(W: GpuTensor, b: GpuTensor, x: GpuTensor, y: GpuTensor): void;
+    function linearBackward(W: GpuTensor, x: GpuTensor, dY: GpuTensor, dX: GpuTensor, dW: GpuTensor, dB: GpuTensor): void;
+    function reluForward(x: GpuTensor, y: GpuTensor): void;
+    function reluBackward(x: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function tanhForward(x: GpuTensor, y: GpuTensor): void;
+    function tanhBackward(y: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function sigmoidForward(x: GpuTensor, y: GpuTensor): void;
+    function sigmoidBackward(y: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function addInplace(y: GpuTensor, x: GpuTensor): void;
+    function addScalarInplace(y: GpuTensor, s: number): void;
+    function scaleInplace(y: GpuTensor, s: number): void;
+    function mulInplace(y: GpuTensor, x: GpuTensor): void;
+    function clamp(y: GpuTensor, lo: number, hi: number): void;
+    function buildSlotMask(x: GpuTensor, offset: number, K: number, stride: number, mask: GpuTensor): void;
+    function copyD2D(src: GpuTensor, srcOff: number, dst: GpuTensor, dstOff: number, n: number): void;
+    function cast(src: GpuTensor, dst: GpuTensor, outDtype: string | number): void;
+    function siluForward(x: GpuTensor, y: GpuTensor): void;
+    function siluBackward(x: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function geluForward(x: GpuTensor, y: GpuTensor): void;
+    function geluBackward(x: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function geluExactForward(x: GpuTensor, y: GpuTensor): void;
+    function geluExactBackward(x: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function quickGeluForward(x: GpuTensor, y: GpuTensor): void;
+    function quickGeluBackward(x: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function swigluForward(X: GpuTensor, Y: GpuTensor): void;
+    function swigluBackward(X: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function gegluForward(X: GpuTensor, Y: GpuTensor): void;
+    function gegluBackward(X: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function gegluExactForward(X: GpuTensor, Y: GpuTensor): void;
+    function gegluExactBackward(X: GpuTensor, dY: GpuTensor, dX: GpuTensor): void;
+    function softmaxForward(logits: GpuTensor, probs: GpuTensor, mask?: GpuTensor | null): void;
+    function softmaxBackward(probs: GpuTensor, dProbs: GpuTensor, dLogits: GpuTensor): void;
+    function layernormForward(x: GpuTensor, gamma: GpuTensor, beta: GpuTensor, y: GpuTensor, xhat: GpuTensor, eps?: number): object;
+    function layernormBackward(dY: GpuTensor, xhat: GpuTensor, gamma: GpuTensor, rstd: number, dX: GpuTensor, dGamma: GpuTensor, dBeta: GpuTensor): void;
+    function layernormForwardInferenceBatched(X_RD: GpuTensor, gamma: GpuTensor, beta: GpuTensor, Y_RD: GpuTensor, eps?: number): void;
+    function layernormForwardInferenceBatchedFp16(X_RD: GpuTensor, gamma: GpuTensor, beta: GpuTensor, Y_RD: GpuTensor, eps?: number): void;
+    function rmsNormForward(X: GpuTensor, gamma: GpuTensor, eps: number, Y: GpuTensor): void;
+    function rmsNormBackward(X: GpuTensor, gamma: GpuTensor, dY: GpuTensor, eps: number, dX: GpuTensor, dGamma: GpuTensor): void;
+    function groupNormForward(X: GpuTensor, gamma: GpuTensor, beta: GpuTensor, N: number, C: number, H: number, W: number, numGroups: number, eps: number, Y: GpuTensor): void;
+    function groupNormBackward(X: GpuTensor, gamma: GpuTensor, dY: GpuTensor, N: number, C: number, H: number, W: number, numGroups: number, eps: number, dX: GpuTensor, dGamma: GpuTensor, dBeta: GpuTensor): void;
+    function matmul(A: GpuTensor, B: GpuTensor, C: GpuTensor): void;
+    function matmulBackward(A: GpuTensor, B: GpuTensor, dC: GpuTensor, dA: GpuTensor, dB: GpuTensor): void;
+    function ropeForward(X: GpuTensor, headDim: number, numHeads: number, seqOffset: number, thetaBase: number, Y: GpuTensor): void;
+    function ropeBackward(dY: GpuTensor, headDim: number, numHeads: number, seqOffset: number, thetaBase: number, dX: GpuTensor): void;
+    function ropeApply(X: GpuTensor, cosTbl: GpuTensor, sinTbl: GpuTensor, headDim: number, numHeads: number, Y: GpuTensor): void;
+    function ropeApplyBackward(dY: GpuTensor, headDim: number, numHeads: number, dX: GpuTensor): void;
+    function modulate(X: GpuTensor, scale: GpuTensor, shift: GpuTensor, Y: GpuTensor): void;
+    function broadcastMul(X: GpuTensor, v: GpuTensor, Y: GpuTensor): void;
+    function sumRows(X: GpuTensor, Y: GpuTensor): void;
+    function sumCols(X: GpuTensor, Y: GpuTensor): void;
+    function argmaxRows(X: GpuTensor, Idx: GpuTensor): void;
+    function attentionForward(X: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, Q: GpuTensor, K: GpuTensor, V: GpuTensor, Attn: GpuTensor, Y_pre_Wo: GpuTensor, O: GpuTensor): void;
+    function attentionBackward(dO: GpuTensor, X: GpuTensor, Q: GpuTensor, K: GpuTensor, V: GpuTensor, Attn: GpuTensor, Y_pre_Wo: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, dX: GpuTensor, dWq: GpuTensor, dWk: GpuTensor, dWv: GpuTensor, dWo: GpuTensor): void;
+    function mhaForward(X: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, Qh: GpuTensor, Kh: GpuTensor, Vh: GpuTensor, Attnh: GpuTensor, Yconcat: GpuTensor, O: GpuTensor): void;
+    function mhaBackward(dO: GpuTensor, X: GpuTensor, Qh: GpuTensor, Kh: GpuTensor, Vh: GpuTensor, Attnh: GpuTensor, Yconcat: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, dX: GpuTensor, dWq: GpuTensor, dWk: GpuTensor, dWv: GpuTensor, dWo: GpuTensor): void;
+    function selfAttentionForward(X: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, O: GpuTensor): void;
+    function selfAttentionForwardTrain(X: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, Qh: GpuTensor, Kh: GpuTensor, Vh: GpuTensor, Attnh: GpuTensor, Yconcat: GpuTensor, O: GpuTensor): void;
+    function selfAttentionBackward(dO: GpuTensor, X: GpuTensor, Qh: GpuTensor, Kh: GpuTensor, Vh: GpuTensor, Attnh: GpuTensor, Yconcat: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, dX: GpuTensor, dWq: GpuTensor, dWk: GpuTensor, dWv: GpuTensor, dWo: GpuTensor): void;
+    function crossAttentionForward(X: GpuTensor, Ctx: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, O: GpuTensor): void;
+    function crossAttentionForwardWithAttn(X: GpuTensor, Ctx: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, attnLogitBias: GpuTensor | null, numHeads: number, O: GpuTensor, AttnAvg: GpuTensor): void;
+    function crossAttentionForwardTrain(X: GpuTensor, Ctx: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, Qh: GpuTensor, Kh: GpuTensor, Vh: GpuTensor, Attnh: GpuTensor, Yconcat: GpuTensor, O: GpuTensor): void;
+    function crossAttentionBackward(dO: GpuTensor, X: GpuTensor, Ctx: GpuTensor, Qh: GpuTensor, Kh: GpuTensor, Vh: GpuTensor, Attnh: GpuTensor, Yconcat: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, numHeads: number, dX: GpuTensor, dCtx: GpuTensor, dWq: GpuTensor, dWk: GpuTensor, dWv: GpuTensor, dWo: GpuTensor): void;
+    function attentionTokenMoments(Attn: GpuTensor, h_lat: number, w_lat: number, mass: GpuTensor, centroid: GpuTensor): void;
+    function buildCausalMaskRow(L: number, q: number, mask: GpuTensor): void;
+    function selfAttentionBiasForward(X: GpuTensor, Wq: GpuTensor, Wk: GpuTensor, Wv: GpuTensor, Wo: GpuTensor, mask: GpuTensor | null, attnBias: GpuTensor | null, numHeads: number, scale: number, O: GpuTensor): void;
+    function flashAttentionForward(Q: GpuTensor, K: GpuTensor, V: GpuTensor, mask: GpuTensor | null, numHeads: number, causal: boolean, O: GpuTensor): void;
+    function flashAttentionWindowedForward(Q: GpuTensor, K: GpuTensor, V: GpuTensor, mask: GpuTensor | null, numHeads: number, window: number, O: GpuTensor): void;
+    function flashAttentionBackward(Q: GpuTensor, K: GpuTensor, V: GpuTensor, O: GpuTensor, dO: GpuTensor, mask: GpuTensor | null, numHeads: number, causal: boolean, dQ: GpuTensor, dK: GpuTensor, dV: GpuTensor): void;
+    function flashAttentionQkvoForward(X: GpuTensor, Ctx: GpuTensor | null, Wq: GpuTensor, bq: GpuTensor | null, Wk: GpuTensor, bk: GpuTensor | null, Wv: GpuTensor, bv: GpuTensor | null, Wo: GpuTensor, bo: GpuTensor | null, mask: GpuTensor | null, numHeads: number, causal: boolean, O: GpuTensor): void;
+    function flashAttentionQkvoBackward(opts: object): void;
+    function flashAttentionProjectKv(ctx: GpuTensor, Wk: GpuTensor, bk: GpuTensor | null, Wv: GpuTensor, bv: GpuTensor | null, K_out: GpuTensor, V_out: GpuTensor): void;
+    function flashAttentionQWithKvCachedForward(X: GpuTensor, K: GpuTensor, V: GpuTensor, Wq: GpuTensor, bq: GpuTensor | null, Wo: GpuTensor, bo: GpuTensor | null, mask: GpuTensor | null, numHeads: number, causal: boolean, O: GpuTensor): void;
+    function flashAttentionDecode(Q: GpuTensor, K_cache: GpuTensor, V_cache: GpuTensor, validLen: number, numHeads: number, O: GpuTensor, numKvHeads?: number, attnSoftcap?: number, window?: number): void;
+    function flashAttentionDecodeMasked(Q: GpuTensor, K_cache: GpuTensor, V_cache: GpuTensor, dMask: GpuTensor, numHeads: number, O: GpuTensor, numKvHeads?: number, attnSoftcap?: number, window?: number): void;
+    function kvCacheAppend(K_new: GpuTensor, V_new: GpuTensor, curLen: number, K_cache: GpuTensor, V_cache: GpuTensor): void;
+    function conv2dForward(X: GpuTensor, Wt: GpuTensor, bias: GpuTensor | null, N: number, C_in: number, H: number, W: number, C_out: number, kH: number, kW: number, sH: number, sW: number, pH: number, pW: number, dH: number, dW: number, groups: number, Y: GpuTensor): void;
+    function conv2dBackwardInput(Wt: GpuTensor, dY: GpuTensor, N: number, C_in: number, H: number, W: number, C_out: number, kH: number, kW: number, sH: number, sW: number, pH: number, pW: number, dH: number, dW: number, groups: number, dX: GpuTensor): void;
+    function conv2dBackwardWeight(X: GpuTensor, dY: GpuTensor, N: number, C_in: number, H: number, W: number, C_out: number, kH: number, kW: number, sH: number, sW: number, pH: number, pW: number, dH: number, dW: number, groups: number, dWt: GpuTensor): void;
+    function conv2dBackwardBias(dY: GpuTensor, N: number, C_out: number, H_out: number, W_out: number, dB: GpuTensor): void;
+    function upsampleNearest2xForward(X: GpuTensor, N: number, C: number, H: number, W: number, Y: GpuTensor): void;
+    function upsampleNearest2xBackward(dY: GpuTensor, N: number, C: number, H: number, W: number, dX: GpuTensor): void;
+    function upsampleBilinear2xForward(X: GpuTensor, N: number, C: number, H: number, W: number, Y: GpuTensor): void;
+    function upsampleBilinear2xBackward(dY: GpuTensor, N: number, C: number, H: number, W: number, dX: GpuTensor): void;
+    function downsampleAvg2xForward(X: GpuTensor, N: number, C: number, H: number, W: number, Y: GpuTensor): void;
+    function downsampleAvg2xBackward(dY: GpuTensor, N: number, C: number, H: number, W: number, dX: GpuTensor): void;
+    function nchwToSequence(X: GpuTensor, N: number, C: number, H: number, W: number, Y: GpuTensor): void;
+    function sequenceToNchw(X: GpuTensor, N: number, C: number, H: number, W: number, Y: GpuTensor): void;
+    function interp2dForward(X: GpuTensor, N: number, C: number, H_in: number, W_in: number, H_out: number, W_out: number, mode: number, Y: GpuTensor): void;
+    function interp2dAlignCornersForward(X: GpuTensor, N: number, C: number, H_in: number, W_in: number, H_out: number, W_out: number, mode: number, Y: GpuTensor): void;
+    function unfold2dForward(X: GpuTensor, N: number, C: number, H: number, W: number, kH: number, kW: number, sH: number, sW: number, padT: number, padB: number, padL: number, padR: number, mode: number, Y: GpuTensor): void;
+    function l2NormalizeNchwForward(X: GpuTensor, N: number, C: number, H: number, W: number, eps: number, Y: GpuTensor): void;
+    function convexUpsampleForward(X: GpuTensor, Mask: GpuTensor, N: number, C: number, H: number, W: number, scale: number, Y: GpuTensor): void;
+    function resblockForward(opts: object): void;
+    function resblockBackward(opts: object): void;
+    function maskedMeanPoolForward(X: GpuTensor, mask: GpuTensor | null, y: GpuTensor): void;
+    function maskedMeanPoolBackward(dY: GpuTensor, mask: GpuTensor | null, K: number, dX: GpuTensor): void;
+    function mseVecForward(pred: GpuTensor, target: GpuTensor): number;
+    function mseVecBackward(pred: GpuTensor, target: GpuTensor, dPred: GpuTensor): void;
+    function mseVecPerSample(pred: GpuTensor, target: GpuTensor, dPred: GpuTensor, lossPerSample: GpuTensor): void;
+    function softmaxXentFused(logits: GpuTensor, target: GpuTensor, mask: GpuTensor | null, probs: GpuTensor, dLogits: GpuTensor): number;
+    function softmaxXentFusedBatched(logits_BL: GpuTensor, target_BL: GpuTensor, mask: GpuTensor | null, headOffsets: GpuTensor, n_heads: number, probs_BL: GpuTensor, dLogits_BL: GpuTensor, lossPerSample: GpuTensor): void;
+    function embeddingLookupForward(table: GpuTensor, idxAsInt32: GpuTensor, B: number, out: GpuTensor): void;
+    function embeddingLookupBackward(dOut: GpuTensor, idxAsInt32: GpuTensor, B: number, dTable: GpuTensor): void;
+    function concatRows(parts: GpuTensor[], out: GpuTensor): void;
+    function splitRows(in_: GpuTensor, parts: GpuTensor[]): void;
+    function concatBatchedRows(parts: GpuTensor[], out: GpuTensor): void;
+    function concatNchwChannels(parts: GpuTensor[], N: number, H: number, W: number, C_per_part: number[], out: GpuTensor): void;
+    function concatNchwChannelsBackward(dY: GpuTensor, N: number, H: number, W: number, C_per_part: number[], dParts: GpuTensor[]): void;
+    function sgdStep(param: GpuTensor, grad: GpuTensor, velocity: GpuTensor, lr: number, momentum: number): void;
+    function adamStep(param: GpuTensor, grad: GpuTensor, m: GpuTensor, v: GpuTensor, lr: number, beta1: number, beta2: number, eps: number, step: number): void;
   }
 
   /**
@@ -5985,36 +6414,9 @@ declare namespace bro {
     const now: number;
   }
 
-  /**
-   * =============================================================================
-   * bro.triposplat — single-image to 3D Gaussian Splat pipeline
-   * =============================================================================
-   *
-   * Feedforward 3D reconstruction pipeline assembling DINOv3 ViT-H, Flux.2 VAE encoder,
-   * FlowDiT diffusion transformer, and Octree Gaussian Decoder into real-time 3D Gaussian splats.
-   *
-   * @example
-   *   const pipeline = bro.triposplat.load({
-   *     dinov3: "weights/dinov3.safetensors",
-   *     vae: "weights/vae.safetensors",
-   *     flow: "weights/flow.safetensors",
-   *     decoder: "weights/decoder.safetensors"
-   *   });
-   *   const cloud = pipeline.generate(imageBitmap, { steps: 25 });
-   *   scene.createGaussianSplat({ cloud, scale: 1.0 });
-   */
   namespace triposplat {
-    /**
-     * Initialize brotensor acceleration subsystem.
-     */
     function init(): void;
-    /**
-     * Load TripoSplat model checkpoint pipelines.
-     */
-    function load(opts: object): TripoSplatPipeline;
-    /**
-     * Request cancellation of active reconstruction generation.
-     */
+    function load(config: object): TripoSplatPipeline;
     function cancel(): void;
   }
 
@@ -6030,6 +6432,22 @@ declare namespace bro {
     function synthesize(model: object, textOrPhonemes: any, voiceOrOpts: any, opts?: object): AsyncHandle;
     function synthesizeStream(model: object, textOrChunks: any, voiceOrOpts: any, opts?: object): AsyncHandle;
     function decodeFrom(kokoro: KokoroModel, voice: Voice, asr: Float32Array, F0: Float32Array, N: Float32Array, nPhonemes: number, opts?: object): AsyncHandle;
+  }
+
+  namespace vision {
+    function init(): void;
+    function loadDepth(modelDir: string, opts?: object): any;
+    function loadSam(modelDir: string, opts?: object): any;
+    function loadNormal(modelDir: string, opts?: object): any;
+    function loadHed(modelDir: string, opts?: object): any;
+    function loadLineart(modelDir: string, opts?: object): any;
+    function loadMlsd(modelDir: string, opts?: object): any;
+    function loadOpenpose(modelDir: string, opts?: object): any;
+    function loadSegformer(modelDir: string, opts?: object): any;
+    function loadBirefnet(modelDir: string, opts?: object): any;
+    function loadStyleGAN3(modelDir: string, opts?: object): any;
+    function loadDinov2(modelDir: string, opts?: object): any;
+    function loadDinov3(modelDir: string, opts?: object): any;
   }
 
   namespace wake {

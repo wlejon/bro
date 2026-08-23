@@ -2,15 +2,13 @@
 #include "js/webgl2_bindings_util.h"
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_objects.h"
-
-#include "image_gpu.js.h"   // generates `static const char js_image_gpu[] = ...`
-
-#include <quickjs.h>
-#include <qjsbind/qjsbind.h>
+#include "image_gpu.js.h"
 #include <glad/gl.h>
 #include <cstring>
+#include <qjsbind/qjsbind.h>
 
 namespace bro::js {
+
 
 using namespace webgl2;
 
@@ -551,89 +549,92 @@ static const int webgl2_constants_count = sizeof(webgl2_constants) / sizeof(webg
 // Tag type for WebGL2RenderingContext (borrowed pointer, no destructor)
 struct WebGL2CtxTag {};
 
-void WebGL2Bindings::install(JSContext* ctx) {
-    // --- Register WebGL2 context class (no destructor — C++ context owns GL lifetime) ---
-    qjsbind::Class<WebGL2CtxTag>(ctx, "WebGL2RenderingContext",
-                                  qjsbind::NoGlobal | qjsbind::NoDestructor)
-        .function_list(webgl2_constants, webgl2_constants_count)
-        .function_list(webgl2_state_funcs, webgl2_state_funcs_count)
-        .function_list(webgl2_buffer_funcs, webgl2_buffer_funcs_count)
-        .function_list(webgl2_shader_funcs, webgl2_shader_funcs_count)
-        .function_list(webgl2_texture_funcs, webgl2_texture_funcs_count)
-        .function_list(webgl2_framebuffer_funcs, webgl2_framebuffer_funcs_count)
-        .function_list(webgl2_query_funcs, webgl2_query_funcs_count)
-        .function_list(webgl2_object_funcs, webgl2_object_funcs_count);
-    js_webgl2_ctx_class_id = qjsbind::class_id<WebGL2CtxTag>();
 
-    // --- Register WebGL object classes (default delete-ptr finalizer) ---
-    qjsbind::Class<bro::webgl::WebGLBuffer>(ctx, "WebGLBuffer", qjsbind::NoGlobal);
-    js_webgl_buffer_class_id = qjsbind::class_id<bro::webgl::WebGLBuffer>();
-
-    qjsbind::Class<bro::webgl::WebGLTexture>(ctx, "WebGLTexture", qjsbind::NoGlobal);
-    js_webgl_texture_class_id = qjsbind::class_id<bro::webgl::WebGLTexture>();
-
-    qjsbind::Class<bro::webgl::WebGLProgram>(ctx, "WebGLProgram", qjsbind::NoGlobal);
-    js_webgl_program_class_id = qjsbind::class_id<bro::webgl::WebGLProgram>();
-
-    qjsbind::Class<bro::webgl::WebGLShader>(ctx, "WebGLShader", qjsbind::NoGlobal);
-    js_webgl_shader_class_id = qjsbind::class_id<bro::webgl::WebGLShader>();
-
-    qjsbind::Class<bro::webgl::WebGLFramebuffer>(ctx, "WebGLFramebuffer", qjsbind::NoGlobal);
-    js_webgl_framebuffer_class_id = qjsbind::class_id<bro::webgl::WebGLFramebuffer>();
-
-    qjsbind::Class<bro::webgl::WebGLRenderbuffer>(ctx, "WebGLRenderbuffer", qjsbind::NoGlobal);
-    js_webgl_renderbuffer_class_id = qjsbind::class_id<bro::webgl::WebGLRenderbuffer>();
-
-    qjsbind::Class<bro::webgl::WebGLVertexArrayObject>(ctx, "WebGLVertexArrayObject", qjsbind::NoGlobal);
-    js_webgl_vao_class_id = qjsbind::class_id<bro::webgl::WebGLVertexArrayObject>();
-
-    qjsbind::Class<bro::webgl::WebGLUniformLocation>(ctx, "WebGLUniformLocation", qjsbind::NoGlobal);
-    js_webgl_uniform_loc_class_id = qjsbind::class_id<bro::webgl::WebGLUniformLocation>();
-
-    qjsbind::Class<bro::webgl::WebGLSampler>(ctx, "WebGLSampler", qjsbind::NoGlobal);
-    js_webgl_sampler_class_id = qjsbind::class_id<bro::webgl::WebGLSampler>();
-
-    qjsbind::Class<bro::webgl::WebGLQuery>(ctx, "WebGLQuery", qjsbind::NoGlobal);
-    js_webgl_query_class_id = qjsbind::class_id<bro::webgl::WebGLQuery>();
-
-    qjsbind::Class<bro::webgl::WebGLSync>(ctx, "WebGLSync", qjsbind::NoGlobal);
-    js_webgl_sync_class_id = qjsbind::class_id<bro::webgl::WebGLSync>();
-
-    qjsbind::Class<bro::webgl::WebGLTransformFeedback>(ctx, "WebGLTransformFeedback", qjsbind::NoGlobal);
-    js_webgl_tf_class_id = qjsbind::class_id<bro::webgl::WebGLTransformFeedback>();
-
-    // --- three.js compatibility: expose WebGL2RenderingContext as a global constructor ---
-    // three.js checks: typeof WebGL2RenderingContext !== "undefined"
-    // three.js checks: ctx.constructor.name === "WebGL2RenderingContext"
-    JSValue proto = JS_GetClassProto(ctx, js_webgl2_ctx_class_id);
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor = JS_NewObject(ctx);
-    JSAtom nameAtom = JS_NewAtom(ctx, "name");
-    JS_DefinePropertyValue(ctx, ctor, nameAtom, JS_NewString(ctx, "WebGL2RenderingContext"),
-                           JS_PROP_CONFIGURABLE);
-    JS_FreeAtom(ctx, nameAtom);
-
-    JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor));
-    JS_SetPropertyStr(ctx, global, "WebGL2RenderingContext", ctor);
-    JS_FreeValue(ctx, global);
-    JS_FreeValue(ctx, proto);
-
-    // --- bro.image.gpu — WebGL2-backed colormap helpers. Extends bro.image
-    //     (installed by brokit) with `.gpu`. Lives here because it depends on
-    //     the WebGL2 API just registered above; only available in GPU mode. ---
-    JSValue r = JS_Eval(ctx, js_image_gpu, std::strlen(js_image_gpu),
-                        "<bro.image.gpu>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(r)) {
-        JSValue exc = JS_GetException(ctx);
-        const char* msg = JS_ToCString(ctx, exc);
-        if (msg) {
-            JS_ThrowInternalError(ctx, "bro.image.gpu install failed: %s", msg);
-            JS_FreeCString(ctx, msg);
+void WebGL2Bindings::install(JSContext* ctx)
+{
+        // --- Register WebGL2 context class (no destructor — C++ context owns GL lifetime) ---
+        qjsbind::Class<WebGL2CtxTag>(ctx, "WebGL2RenderingContext",
+                                      qjsbind::NoGlobal | qjsbind::NoDestructor)
+            .function_list(webgl2_constants, webgl2_constants_count)
+            .function_list(webgl2_state_funcs, webgl2_state_funcs_count)
+            .function_list(webgl2_buffer_funcs, webgl2_buffer_funcs_count)
+            .function_list(webgl2_shader_funcs, webgl2_shader_funcs_count)
+            .function_list(webgl2_texture_funcs, webgl2_texture_funcs_count)
+            .function_list(webgl2_framebuffer_funcs, webgl2_framebuffer_funcs_count)
+            .function_list(webgl2_query_funcs, webgl2_query_funcs_count)
+            .function_list(webgl2_object_funcs, webgl2_object_funcs_count);
+        js_webgl2_ctx_class_id = qjsbind::class_id<WebGL2CtxTag>();
+    
+        // --- Register WebGL object classes (default delete-ptr finalizer) ---
+        qjsbind::Class<bro::webgl::WebGLBuffer>(ctx, "WebGLBuffer", qjsbind::NoGlobal);
+        js_webgl_buffer_class_id = qjsbind::class_id<bro::webgl::WebGLBuffer>();
+    
+        qjsbind::Class<bro::webgl::WebGLTexture>(ctx, "WebGLTexture", qjsbind::NoGlobal);
+        js_webgl_texture_class_id = qjsbind::class_id<bro::webgl::WebGLTexture>();
+    
+        qjsbind::Class<bro::webgl::WebGLProgram>(ctx, "WebGLProgram", qjsbind::NoGlobal);
+        js_webgl_program_class_id = qjsbind::class_id<bro::webgl::WebGLProgram>();
+    
+        qjsbind::Class<bro::webgl::WebGLShader>(ctx, "WebGLShader", qjsbind::NoGlobal);
+        js_webgl_shader_class_id = qjsbind::class_id<bro::webgl::WebGLShader>();
+    
+        qjsbind::Class<bro::webgl::WebGLFramebuffer>(ctx, "WebGLFramebuffer", qjsbind::NoGlobal);
+        js_webgl_framebuffer_class_id = qjsbind::class_id<bro::webgl::WebGLFramebuffer>();
+    
+        qjsbind::Class<bro::webgl::WebGLRenderbuffer>(ctx, "WebGLRenderbuffer", qjsbind::NoGlobal);
+        js_webgl_renderbuffer_class_id = qjsbind::class_id<bro::webgl::WebGLRenderbuffer>();
+    
+        qjsbind::Class<bro::webgl::WebGLVertexArrayObject>(ctx, "WebGLVertexArrayObject", qjsbind::NoGlobal);
+        js_webgl_vao_class_id = qjsbind::class_id<bro::webgl::WebGLVertexArrayObject>();
+    
+        qjsbind::Class<bro::webgl::WebGLUniformLocation>(ctx, "WebGLUniformLocation", qjsbind::NoGlobal);
+        js_webgl_uniform_loc_class_id = qjsbind::class_id<bro::webgl::WebGLUniformLocation>();
+    
+        qjsbind::Class<bro::webgl::WebGLSampler>(ctx, "WebGLSampler", qjsbind::NoGlobal);
+        js_webgl_sampler_class_id = qjsbind::class_id<bro::webgl::WebGLSampler>();
+    
+        qjsbind::Class<bro::webgl::WebGLQuery>(ctx, "WebGLQuery", qjsbind::NoGlobal);
+        js_webgl_query_class_id = qjsbind::class_id<bro::webgl::WebGLQuery>();
+    
+        qjsbind::Class<bro::webgl::WebGLSync>(ctx, "WebGLSync", qjsbind::NoGlobal);
+        js_webgl_sync_class_id = qjsbind::class_id<bro::webgl::WebGLSync>();
+    
+        qjsbind::Class<bro::webgl::WebGLTransformFeedback>(ctx, "WebGLTransformFeedback", qjsbind::NoGlobal);
+        js_webgl_tf_class_id = qjsbind::class_id<bro::webgl::WebGLTransformFeedback>();
+    
+        // --- three.js compatibility: expose WebGL2RenderingContext as a global constructor ---
+        // three.js checks: typeof WebGL2RenderingContext !== "undefined"
+        // three.js checks: ctx.constructor.name === "WebGL2RenderingContext"
+        JSValue proto = JS_GetClassProto(ctx, js_webgl2_ctx_class_id);
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_NewObject(ctx);
+        JSAtom nameAtom = JS_NewAtom(ctx, "name");
+        JS_DefinePropertyValue(ctx, ctor, nameAtom, JS_NewString(ctx, "WebGL2RenderingContext"),
+                               JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, nameAtom);
+    
+        JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor));
+        JS_SetPropertyStr(ctx, global, "WebGL2RenderingContext", ctor);
+        JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, proto);
+    
+        // --- bro.image.gpu — WebGL2-backed colormap helpers. Extends bro.image
+        //     (installed by brokit) with `.gpu`. Lives here because it depends on
+        //     the WebGL2 API just registered above; only available in GPU mode. ---
+        JSValue r = JS_Eval(ctx, js_image_gpu, std::strlen(js_image_gpu),
+                            "<bro.image.gpu>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(r)) {
+            JSValue exc = JS_GetException(ctx);
+            const char* msg = JS_ToCString(ctx, exc);
+            if (msg) {
+                JS_ThrowInternalError(ctx, "bro.image.gpu install failed: %s", msg);
+                JS_FreeCString(ctx, msg);
+            }
+            JS_FreeValue(ctx, exc);
         }
-        JS_FreeValue(ctx, exc);
-    }
-    JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, r);
 }
+
 
 JSValue WebGL2Bindings::wrapContext(JSContext* ctx, webgl::WebGL2RenderingContext* glCtx) {
     JSValue obj = qjsbind::wrap_unowned<WebGL2CtxTag>(ctx, reinterpret_cast<WebGL2CtxTag*>(glCtx));
@@ -652,5 +653,7 @@ void WebGL2Bindings::cleanup(JSContext*) {
     // No persistent JSValue/atom storage in this binding — qjsbind owns the
     // class registration and prototype, freed when the JSRuntime is destroyed.
 }
+
+
 
 } // namespace bro::js

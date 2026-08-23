@@ -25,23 +25,17 @@
 #include "util/interrupt.h"
 #include "util/log.h"
 #include "util/time.h"
-
-#include <api/api.h>  // brokit::api
-
+#include <api/api.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <thread>
 #include <unordered_map>
-
-extern "C" {
-#include "quickjs.h"
-}
-
 #include <qjsbind/qjsbind.h>
 
 namespace bro::js {
+
 
 // ============================================================================
 // Worker implementation
@@ -692,30 +686,30 @@ static JSValue js_worker_terminate(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-void installWorkerBindings(JSContext* ctx, const std::string& appBasePath,
-                           net::NetService* netService,
-                           const util::AssetMounts* mounts)
+
+void installWorkerBindings(JSContext* ctx, const std::string& appBasePath, net::NetService* netService, const util::AssetMounts* mounts)
 {
-    // Register class and prototype via qjsbind (NoGlobal — we set a custom constructor below)
-    qjsbind::Class<WorkerOpaque>(ctx, "Worker", qjsbind::NoGlobal,
-                                  js_worker_finalizer)
-        .method_raw("postMessage", js_worker_postMessage, 1)
-        .method_raw("terminate", js_worker_terminate, 0);
-
-    // Install custom constructor on globalThis (needs new_target access)
-    JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<WorkerOpaque>());
-    JSValue ctor = JS_NewCFunction2(ctx, js_worker_ctor, "Worker", 1,
-                                    JS_CFUNC_constructor, 0);
-    JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "Worker", ctor);
-    JS_FreeValue(ctx, global);
-
-    // Per-context state
-    s_workerState[ctx] = WorkerBindingsState{appBasePath, {}, netService, mounts};
+        // Register class and prototype via qjsbind (NoGlobal — we set a custom constructor below)
+        qjsbind::Class<WorkerOpaque>(ctx, "Worker", qjsbind::NoGlobal,
+                                      js_worker_finalizer)
+            .method_raw("postMessage", js_worker_postMessage, 1)
+            .method_raw("terminate", js_worker_terminate, 0);
+    
+        // Install custom constructor on globalThis (needs new_target access)
+        JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<WorkerOpaque>());
+        JSValue ctor = JS_NewCFunction2(ctx, js_worker_ctor, "Worker", 1,
+                                        JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, global, "Worker", ctor);
+        JS_FreeValue(ctx, global);
+    
+        // Per-context state
+        s_workerState[ctx] = WorkerBindingsState{appBasePath, {}, netService, mounts};
 }
+
 
 void cleanupWorkerBindings(JSContext* ctx)
 {
@@ -754,4 +748,6 @@ void tickWorkers(JSContext* ctx)
     }
 }
 
-}  // namespace bro::js
+
+
+} // namespace bro::js

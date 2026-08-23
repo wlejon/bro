@@ -1,32 +1,10 @@
 #if BRO_WITH_VISION
-// JS bindings for brovisionml — vision-model inference (bro.vision.*).
-//
-// Installed onto bro.vision.* by installVisionBindings(). Each model from
-// brovisionml lives behind an opaque qjsbind handle (DepthEstimator, Sam, …)
-// created by a `bro.vision.loadXxx(modelDir, opts)` loader. Models run on GPU
-// by default — the loader places the model on CUDA when a backend is available
-// (opts.device 'cpu' to force CPU).
-//
-// Heavy work — load, SAM's image encode, every inference call — runs on a
-// background thread via the async-job runner when the caller passes an
-// onReady/onDone callback, so the JS thread stays responsive (the same
-// convention bro.stt / bro.tts / bro.lm use). With no callback the op runs
-// inline and returns its result directly.
-//
-// Image inputs accept an `ImageBitmap` or an ImageData-shaped
-// `{ data, width, height }` (RGBA Uint8/Uint8Clamped). Dense-map results come
-// back as a drawable `ImageBitmap` (colorized / grayscale) plus the raw
-// typed-array data, so they pipe straight into canvas drawImage, WebGL
-// texImage2D, or a bro.diffusion conditioning input.
 
 #include "js/vision_bindings.h"
 #include "js/async_job.h"
 #include "js/imagebitmap_bindings.h"
-
 #include <qjsbind/qjsbind.h>
-
-#include <api/api.h>  // brokit::api::resolveAssetPath
-
+#include <api/api.h>
 #include <brovisionml/depth_anything.h>
 #include <brovisionml/sam.h>
 #include <brovisionml/sam_amg.h>
@@ -40,14 +18,11 @@
 #include <brovisionml/stylegan3.h>
 #include <brovisionml/dinov2.h>
 #include <brovisionml/dinov3.h>
-
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -59,9 +34,16 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Scalar / option helpers (TU-local — same shape as the stt/lm/diffusion
@@ -2562,63 +2544,71 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installVisionBindings(JSContext* ctx) {
-    registerDepthClass(ctx);
-    registerSamClass(ctx);
-    registerNormalClass(ctx);
-    registerHedClass(ctx);
-    registerLineartClass(ctx);
-    registerMlsdClass(ctx);
-    registerOpenposeClass(ctx);
-    registerSegformerClass(ctx);
-    registerBirefnetClass(ctx);
-    registerStyleGAN3Class(ctx);
-    registerDinov2Class(ctx);
-    registerDinov3Class(ctx);
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        registerDepthClass(ctx);
+        registerSamClass(ctx);
+        registerNormalClass(ctx);
+        registerHedClass(ctx);
+        registerLineartClass(ctx);
+        registerMlsdClass(ctx);
+        registerOpenposeClass(ctx);
+        registerSegformerClass(ctx);
+        registerBirefnetClass(ctx);
+        registerStyleGAN3Class(ctx);
+        registerDinov2Class(ctx);
+        registerDinov3Class(ctx);
+    
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+            JS_FreeValue(ctx, broObj);
+            broObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+        }
+    
+        JSValue vision = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, vision, "init",
+            JS_NewCFunction(ctx, js_init, "init", 0));
+        JS_SetPropertyStr(ctx, vision, "loadDepth",
+            JS_NewCFunction(ctx, js_loadDepth, "loadDepth", 2));
+        JS_SetPropertyStr(ctx, vision, "loadSam",
+            JS_NewCFunction(ctx, js_loadSam, "loadSam", 2));
+        JS_SetPropertyStr(ctx, vision, "loadNormal",
+            JS_NewCFunction(ctx, js_loadNormal, "loadNormal", 2));
+        JS_SetPropertyStr(ctx, vision, "loadHed",
+            JS_NewCFunction(ctx, js_loadHed, "loadHed", 2));
+        JS_SetPropertyStr(ctx, vision, "loadLineart",
+            JS_NewCFunction(ctx, js_loadLineart, "loadLineart", 2));
+        JS_SetPropertyStr(ctx, vision, "loadMlsd",
+            JS_NewCFunction(ctx, js_loadMlsd, "loadMlsd", 2));
+        JS_SetPropertyStr(ctx, vision, "loadOpenpose",
+            JS_NewCFunction(ctx, js_loadOpenpose, "loadOpenpose", 2));
+        JS_SetPropertyStr(ctx, vision, "loadSegformer",
+            JS_NewCFunction(ctx, js_loadSegformer, "loadSegformer", 2));
+        JS_SetPropertyStr(ctx, vision, "loadBirefnet",
+            JS_NewCFunction(ctx, js_loadBirefnet, "loadBirefnet", 2));
+        JS_SetPropertyStr(ctx, vision, "loadStyleGAN3",
+            JS_NewCFunction(ctx, js_loadStyleGAN3, "loadStyleGAN3", 2));
+        JS_SetPropertyStr(ctx, vision, "loadDinov2",
+            JS_NewCFunction(ctx, js_loadDinov2, "loadDinov2", 2));
+        JS_SetPropertyStr(ctx, vision, "loadDinov3",
+            JS_NewCFunction(ctx, js_loadDinov3, "loadDinov3", 2));
+        JS_SetPropertyStr(ctx, broObj, "vision", vision);
+    
         JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-
-    JSValue vision = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, vision, "init",
-        JS_NewCFunction(ctx, js_init, "init", 0));
-    JS_SetPropertyStr(ctx, vision, "loadDepth",
-        JS_NewCFunction(ctx, js_loadDepth, "loadDepth", 2));
-    JS_SetPropertyStr(ctx, vision, "loadSam",
-        JS_NewCFunction(ctx, js_loadSam, "loadSam", 2));
-    JS_SetPropertyStr(ctx, vision, "loadNormal",
-        JS_NewCFunction(ctx, js_loadNormal, "loadNormal", 2));
-    JS_SetPropertyStr(ctx, vision, "loadHed",
-        JS_NewCFunction(ctx, js_loadHed, "loadHed", 2));
-    JS_SetPropertyStr(ctx, vision, "loadLineart",
-        JS_NewCFunction(ctx, js_loadLineart, "loadLineart", 2));
-    JS_SetPropertyStr(ctx, vision, "loadMlsd",
-        JS_NewCFunction(ctx, js_loadMlsd, "loadMlsd", 2));
-    JS_SetPropertyStr(ctx, vision, "loadOpenpose",
-        JS_NewCFunction(ctx, js_loadOpenpose, "loadOpenpose", 2));
-    JS_SetPropertyStr(ctx, vision, "loadSegformer",
-        JS_NewCFunction(ctx, js_loadSegformer, "loadSegformer", 2));
-    JS_SetPropertyStr(ctx, vision, "loadBirefnet",
-        JS_NewCFunction(ctx, js_loadBirefnet, "loadBirefnet", 2));
-    JS_SetPropertyStr(ctx, vision, "loadStyleGAN3",
-        JS_NewCFunction(ctx, js_loadStyleGAN3, "loadStyleGAN3", 2));
-    JS_SetPropertyStr(ctx, vision, "loadDinov2",
-        JS_NewCFunction(ctx, js_loadDinov2, "loadDinov2", 2));
-    JS_SetPropertyStr(ctx, vision, "loadDinov3",
-        JS_NewCFunction(ctx, js_loadDinov3, "loadDinov3", 2));
-    JS_SetPropertyStr(ctx, broObj, "vision", vision);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, global);
 }
+
 
 void cleanupVisionBindings(JSContext* /*ctx*/) {}
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_VISION
+
+} // namespace bro::js
+
+#endif // BRO_WITH_VISION

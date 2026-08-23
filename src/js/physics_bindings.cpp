@@ -1,20 +1,13 @@
-// Jolt rigid-body physics bindings (the global `Physics` class + PhysicsNode
-// support). Compiled only when BRO_WITH_PHYSICS is on — the header pulls Jolt,
-// so the guard precedes every include. With physics off there is no `Physics`
-// class (advanced apps feature-detect `typeof Physics`); nothing else installs
-// it, and 3D (which embeds physics) is forced off too.
 #if BRO_WITH_PHYSICS
 
 #include "js/physics_bindings.h"
 #include "js/runtime.h"
 #include "physics/physics_world.h"
 #include "util/log.h"
-
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <qjsbind/qjsbind.h>
-
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -24,9 +17,14 @@
 #include <unordered_set>
 #include <vector>
 
-JPH_SUPPRESS_WARNINGS
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
+
+JPH_SUPPRESS_WARNINGS
+
 
 // ---------------------------------------------------------------------------
 // JsWorld — wraps a PhysicsWorld plus its tag space and JS-side bookkeeping.
@@ -3987,133 +3985,139 @@ static JSValue js_physics_createWorldHandle(JSContext* ctx, JSValueConst, int ar
 // Install
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
-    // Default world: don't take ownership, engine owns the PhysicsWorld.
-    s_defaultWorld = new JsWorld();
-    s_defaultWorld->world = world;
-    s_defaultWorld->ownsWorld = false;
-
-    // Register world handle class.
-    JSRuntime* rt = JS_GetRuntime(ctx);
-    if (s_worldClassId == 0) {
-        JS_NewClassID(rt, &s_worldClassId);
-    }
-    if (!JS_IsRegisteredClass(rt, s_worldClassId)) {
-        JS_NewClass(rt, s_worldClassId, &s_worldClassDef);
-    }
-    JSValue proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, proto, s_worldProtoFuncs,
-                               sizeof(s_worldProtoFuncs)/sizeof(s_worldProtoFuncs[0]));
-    JS_SetClassProto(ctx, s_worldClassId, proto);
-
-    // Register character handle class.
-    if (s_characterClassId == 0) {
-        JS_NewClassID(rt, &s_characterClassId);
-    }
-    if (!JS_IsRegisteredClass(rt, s_characterClassId)) {
-        JS_NewClass(rt, s_characterClassId, &s_characterClassDef);
-    }
-    JSValue charProto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, charProto, s_characterProtoFuncs,
-                               sizeof(s_characterProtoFuncs)/sizeof(s_characterProtoFuncs[0]));
-    JS_SetClassProto(ctx, s_characterClassId, charProto);
-
-    // Register vehicle handle class.
-    if (s_vehicleClassId == 0) {
-        JS_NewClassID(rt, &s_vehicleClassId);
-    }
-    if (!JS_IsRegisteredClass(rt, s_vehicleClassId)) {
-        JS_NewClass(rt, s_vehicleClassId, &s_vehicleClassDef);
-    }
-    JSValue vehProto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, vehProto, s_vehicleProtoFuncs,
-                               sizeof(s_vehicleProtoFuncs)/sizeof(s_vehicleProtoFuncs[0]));
-    JS_SetClassProto(ctx, s_vehicleClassId, vehProto);
-
-    // Register ragdoll handle class.
-    if (s_ragdollClassId == 0) {
-        JS_NewClassID(rt, &s_ragdollClassId);
-    }
-    if (!JS_IsRegisteredClass(rt, s_ragdollClassId)) {
-        JS_NewClass(rt, s_ragdollClassId, &s_ragdollClassDef);
-    }
-    JSValue ragProto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, ragProto, s_ragdollProtoFuncs,
-                               sizeof(s_ragdollProtoFuncs)/sizeof(s_ragdollProtoFuncs[0]));
-    JS_SetClassProto(ctx, s_ragdollClassId, ragProto);
-
-    // Register soft-body handle class.
-    if (s_softBodyClassId == 0) {
-        JS_NewClassID(rt, &s_softBodyClassId);
-    }
-    if (!JS_IsRegisteredClass(rt, s_softBodyClassId)) {
-        JS_NewClass(rt, s_softBodyClassId, &s_softBodyClassDef);
-    }
-    JSValue softProto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, softProto, s_softBodyProtoFuncs,
-                               sizeof(s_softBodyProtoFuncs)/sizeof(s_softBodyProtoFuncs[0]));
-    JS_SetClassProto(ctx, s_softBodyClassId, softProto);
-
-    qjsbind::Namespace(ctx, "Physics")
-        .function("createWorld", js_physics_createWorld, 1)
-        .function("createWorldHandle", js_physics_createWorldHandle, 1)
-        .function("setGravity", js_physics_setGravity, 3)
-        .function("getGravity", js_physics_getGravity, 0)
-        .function("setLayers", js_physics_setLayers, 1)
-        .function("createBody", js_physics_createBody, 1)
-        .function("destroyBody", js_physics_destroyBody, 1)
-        .function("destroyAll", js_physics_destroyAll, 0)
-        .function("getTransform", js_physics_getTransform, 1)
-        .function("getVelocity", js_physics_getVelocity, 1)
-        .function("setPosition", js_physics_setPosition, 4)
-        .function("setRotation", js_physics_setRotation, 5)
-        .function("setLinearVelocity", js_physics_setLinearVelocity, 4)
-        .function("setAngularVelocity", js_physics_setAngularVelocity, 4)
-        .function("addForce", js_physics_addForce, 4)
-        .function("addImpulse", js_physics_addImpulse, 4)
-        .function("addTorque", js_physics_addTorque, 4)
-        .function("setUserData", js_physics_setUserData, 2)
-        .function("getUserData", js_physics_getUserData, 1)
-        .function("setLayer", js_physics_setLayer, 2)
-        .function("setKinematic", js_physics_setKinematic, 1)
-        .function("setMotionType", js_physics_setMotionType, 2)
-        .function("moveKinematic", js_physics_moveKinematic, 5)
-        .function("raycast", js_physics_raycast, 8)
-        .function("raycastClosest", js_physics_raycastClosest, 8)
-        .function("castShape", js_physics_castShape, 1)
-        .function("castShapeClosest", js_physics_castShapeClosest, 1)
-        .function("overlapShape", js_physics_overlapShape, 1)
-        .function("overlapPoint", js_physics_overlapPoint, 4)
-        .function("getContacts", js_physics_getContacts, 0)
-        .function("setFrictionCombine", js_physics_setFrictionCombine, 2)
-        .function("setRestitutionCombine", js_physics_setRestitutionCombine, 2)
-        .function("setMass", js_physics_setMass, 2)
-        .function("setLinearDamping", js_physics_setLinearDamping, 2)
-        .function("setAngularDamping", js_physics_setAngularDamping, 2)
-        .function("setGravityFactor", js_physics_setGravityFactor, 2)
-        .function("setFriction", js_physics_setFriction, 2)
-        .function("setRestitution", js_physics_setRestitution, 2)
-        .function("getBodyProperties", js_physics_getBodyProperties, 1)
-        .function("setAreaOverride", js_physics_setAreaOverride, 2)
-        .function("setTimeStep", js_physics_setTimeStep, 1)
-        .function("setInterpolation", js_physics_setInterpolation, 1)
-        .function("getInterpolation", js_physics_getInterpolation, 0)
-        .function("isActive", js_physics_isActive, 1)
-        .function("activate", js_physics_activate, 1)
-        .function("getAllTransforms", js_physics_getAllTransforms, 1)
-        .function("createCharacter", js_physics_createCharacter, 1)
-        .function("createVehicle", js_physics_createVehicle, 1)
-        .function("createRagdoll", js_physics_createRagdoll, 1)
-        .function("createSoftBody", js_physics_createSoftBody, 1)
-        .function("createConstraint", js_physics_createConstraint, 1)
-        .function("destroyConstraint", js_physics_destroyConstraint, 1)
-        .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)
-        .function("setWheelMotor", js_physics_setWheelMotor, 4)
-        .function("setConstraintMotor", js_physics_setConstraintMotor, 2)
-        .function("setConstraintBreakingImpulse", js_physics_setConstraintBreakingImpulse, 2)
-        .function("getConstraintBreakingImpulse", js_physics_getConstraintBreakingImpulse, 1)
-        .function("getBrokenConstraints", js_physics_getBrokenConstraints, 0);
+        // Default world: don't take ownership, engine owns the PhysicsWorld.
+        s_defaultWorld = new JsWorld();
+        s_defaultWorld->world = world;
+        s_defaultWorld->ownsWorld = false;
+    
+        // Register world handle class.
+        JSRuntime* rt = JS_GetRuntime(ctx);
+        if (s_worldClassId == 0) {
+            JS_NewClassID(rt, &s_worldClassId);
+        }
+        if (!JS_IsRegisteredClass(rt, s_worldClassId)) {
+            JS_NewClass(rt, s_worldClassId, &s_worldClassDef);
+        }
+        JSValue proto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, proto, s_worldProtoFuncs,
+                                   sizeof(s_worldProtoFuncs)/sizeof(s_worldProtoFuncs[0]));
+        JS_SetClassProto(ctx, s_worldClassId, proto);
+    
+        // Register character handle class.
+        if (s_characterClassId == 0) {
+            JS_NewClassID(rt, &s_characterClassId);
+        }
+        if (!JS_IsRegisteredClass(rt, s_characterClassId)) {
+            JS_NewClass(rt, s_characterClassId, &s_characterClassDef);
+        }
+        JSValue charProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, charProto, s_characterProtoFuncs,
+                                   sizeof(s_characterProtoFuncs)/sizeof(s_characterProtoFuncs[0]));
+        JS_SetClassProto(ctx, s_characterClassId, charProto);
+    
+        // Register vehicle handle class.
+        if (s_vehicleClassId == 0) {
+            JS_NewClassID(rt, &s_vehicleClassId);
+        }
+        if (!JS_IsRegisteredClass(rt, s_vehicleClassId)) {
+            JS_NewClass(rt, s_vehicleClassId, &s_vehicleClassDef);
+        }
+        JSValue vehProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, vehProto, s_vehicleProtoFuncs,
+                                   sizeof(s_vehicleProtoFuncs)/sizeof(s_vehicleProtoFuncs[0]));
+        JS_SetClassProto(ctx, s_vehicleClassId, vehProto);
+    
+        // Register ragdoll handle class.
+        if (s_ragdollClassId == 0) {
+            JS_NewClassID(rt, &s_ragdollClassId);
+        }
+        if (!JS_IsRegisteredClass(rt, s_ragdollClassId)) {
+            JS_NewClass(rt, s_ragdollClassId, &s_ragdollClassDef);
+        }
+        JSValue ragProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, ragProto, s_ragdollProtoFuncs,
+                                   sizeof(s_ragdollProtoFuncs)/sizeof(s_ragdollProtoFuncs[0]));
+        JS_SetClassProto(ctx, s_ragdollClassId, ragProto);
+    
+        // Register soft-body handle class.
+        if (s_softBodyClassId == 0) {
+            JS_NewClassID(rt, &s_softBodyClassId);
+        }
+        if (!JS_IsRegisteredClass(rt, s_softBodyClassId)) {
+            JS_NewClass(rt, s_softBodyClassId, &s_softBodyClassDef);
+        }
+        JSValue softProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, softProto, s_softBodyProtoFuncs,
+                                   sizeof(s_softBodyProtoFuncs)/sizeof(s_softBodyProtoFuncs[0]));
+        JS_SetClassProto(ctx, s_softBodyClassId, softProto);
+    
+        qjsbind::Namespace(ctx, "Physics")
+            .function("createWorld", js_physics_createWorld, 1)
+            .function("createWorldHandle", js_physics_createWorldHandle, 1)
+            .function("setGravity", js_physics_setGravity, 3)
+            .function("getGravity", js_physics_getGravity, 0)
+            .function("setLayers", js_physics_setLayers, 1)
+            .function("createBody", js_physics_createBody, 1)
+            .function("destroyBody", js_physics_destroyBody, 1)
+            .function("destroyAll", js_physics_destroyAll, 0)
+            .function("getTransform", js_physics_getTransform, 1)
+            .function("getVelocity", js_physics_getVelocity, 1)
+            .function("setPosition", js_physics_setPosition, 4)
+            .function("setRotation", js_physics_setRotation, 5)
+            .function("setLinearVelocity", js_physics_setLinearVelocity, 4)
+            .function("setAngularVelocity", js_physics_setAngularVelocity, 4)
+            .function("addForce", js_physics_addForce, 4)
+            .function("addImpulse", js_physics_addImpulse, 4)
+            .function("addTorque", js_physics_addTorque, 4)
+            .function("setUserData", js_physics_setUserData, 2)
+            .function("getUserData", js_physics_getUserData, 1)
+            .function("setLayer", js_physics_setLayer, 2)
+            .function("setKinematic", js_physics_setKinematic, 1)
+            .function("setMotionType", js_physics_setMotionType, 2)
+            .function("moveKinematic", js_physics_moveKinematic, 5)
+            .function("raycast", js_physics_raycast, 8)
+            .function("raycastClosest", js_physics_raycastClosest, 8)
+            .function("castShape", js_physics_castShape, 1)
+            .function("castShapeClosest", js_physics_castShapeClosest, 1)
+            .function("overlapShape", js_physics_overlapShape, 1)
+            .function("overlapPoint", js_physics_overlapPoint, 4)
+            .function("getContacts", js_physics_getContacts, 0)
+            .function("setFrictionCombine", js_physics_setFrictionCombine, 2)
+            .function("setRestitutionCombine", js_physics_setRestitutionCombine, 2)
+            .function("setMass", js_physics_setMass, 2)
+            .function("setLinearDamping", js_physics_setLinearDamping, 2)
+            .function("setAngularDamping", js_physics_setAngularDamping, 2)
+            .function("setGravityFactor", js_physics_setGravityFactor, 2)
+            .function("setFriction", js_physics_setFriction, 2)
+            .function("setRestitution", js_physics_setRestitution, 2)
+            .function("getBodyProperties", js_physics_getBodyProperties, 1)
+            .function("setAreaOverride", js_physics_setAreaOverride, 2)
+            .function("setTimeStep", js_physics_setTimeStep, 1)
+            .function("setInterpolation", js_physics_setInterpolation, 1)
+            .function("getInterpolation", js_physics_getInterpolation, 0)
+            .function("isActive", js_physics_isActive, 1)
+            .function("activate", js_physics_activate, 1)
+            .function("getAllTransforms", js_physics_getAllTransforms, 1)
+            .function("createCharacter", js_physics_createCharacter, 1)
+            .function("createVehicle", js_physics_createVehicle, 1)
+            .function("createRagdoll", js_physics_createRagdoll, 1)
+            .function("createSoftBody", js_physics_createSoftBody, 1)
+            .function("createConstraint", js_physics_createConstraint, 1)
+            .function("destroyConstraint", js_physics_destroyConstraint, 1)
+            .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)
+            .function("setWheelMotor", js_physics_setWheelMotor, 4)
+            .function("setConstraintMotor", js_physics_setConstraintMotor, 2)
+            .function("setConstraintBreakingImpulse", js_physics_setConstraintBreakingImpulse, 2)
+            .function("getConstraintBreakingImpulse", js_physics_getConstraintBreakingImpulse, 1)
+            .function("getBrokenConstraints", js_physics_getBrokenConstraints, 0);
 }
+
 
 void PhysicsBindings::cleanup(JSContext* ctx) {
     if (ctx) {
@@ -4130,6 +4134,8 @@ void PhysicsBindings::cleanup(JSContext* ctx) {
     }
 }
 
+
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_PHYSICS
+#endif // BRO_WITH_PHYSICS
