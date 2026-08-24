@@ -40,6 +40,9 @@
 #include "js/flora_bindings.h"
 #include "js/net_bindings.h"
 #include "js/video_bindings.h"
+#include "js/media_bindings.h"
+#include "js/gizmo_bindings.h"
+#include "js/scene_bindings.h"
 #include "js/mesh_bindings.h"
 
 // Forward decls for the audio-taking soundml install signatures. (listen_host's
@@ -147,6 +150,16 @@ void NetBindings::cleanup(JSContext* /*ctx*/) {}
 void VideoBindings::install(JSContext* /*ctx*/, const std::string& /*basePath*/) {}
 #endif
 
+// ── MEDIA (bro.media) ────────────────────────────────────────────────────────
+// Waveform peaks and filmstrip thumbnails, both of which decode through
+// bro_video. Same flag as the encoders above, but this one is a real
+// namespace, so it gets the throwing Proxy rather than a silent no-op.
+#if !BRO_WITH_VIDEO
+void installMediaBindings(JSContext* ctx, const std::string& /*basePath*/) {
+    installUnavailableNamespace(ctx, "media", "BRO_WITH_VIDEO");
+}
+#endif
+
 // ── GAMEAI (bro.ai — game-agent core: navgrid/pathfinding/steering/MCTS) ─────
 // install() installs the unavailable bro.ai namespace so apps feature-detect
 // (`bro.ai.available === false`); cleanup is a no-op. The real definitions live
@@ -168,6 +181,25 @@ void AIBindings::cleanup(JSContext* /*ctx*/) {}
 #if !BRO_WITH_3D
 void MeshBindings::install(JSContext* /*ctx*/) {}
 void MeshBindings::cleanup(JSContext* /*ctx*/) {}
+#endif
+
+// ── GIZMO + IMPOSTOR (bro.gizmo, bro.impostor — 3D-only) ─────────────────────
+// The two `bro.*` namespaces that go out with the scene graph. Their install
+// calls used to be `#if BRO_WITH_3D` at the call site in engine_init.cpp, so a
+// build without 3D had no namespace at all and an app asking for one got a
+// ReferenceError instead of the "compiled without" answer every other feature
+// gives. The guard moved here, which is where the rest of them live.
+//
+// SceneBindings::install installs `bro.impostor` alongside the scene classes;
+// the classes themselves are 3D types with no meaningful stub, so only the
+// namespace comes back.
+#if !BRO_WITH_3D
+void GizmoBindings::install(JSContext* ctx, engine::Engine* /*engine*/) {
+    installUnavailableNamespace(ctx, "gizmo", "BRO_WITH_3D");
+}
+void SceneBindings::install(JSContext* ctx) {
+    installUnavailableNamespace(ctx, "impostor", "BRO_WITH_3D");
+}
 #endif
 
 // ── TRIPOSPLAT ───────────────────────────────────────────────────────────────

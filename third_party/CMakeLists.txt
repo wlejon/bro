@@ -241,6 +241,28 @@ else()
     add_subdirectory(broimage EXCLUDE_FROM_ALL)
 endif()
 
+# curl links whatever zstd it can find, and broimage's basisu transcoder
+# carries its own decompress-only copy for Zstd-supercompressed KTX2. Both
+# export ZSTD_createDStream and friends, so a build where curl found one is a
+# build that fails at link with LNK2005 -- every executable, after everything
+# has compiled.
+#
+# Whether curl finds one is a property of the machine, not of this repo: CMake
+# searches PATH-adjacent prefixes, so a developer who installed vcpkg for the
+# default profile has a zstd on PATH and gets the collision even in `minimal`,
+# which is documented as needing nothing beyond the submodules. Same source
+# tree, same command, different answer per machine.
+#
+# So pick one, here, for everyone. basisu's copy is load-bearing -- without it
+# a texture format stops loading. curl's is Content-Encoding negotiation, and
+# brokit already turned zlib off in its own curl configuration, so this build's
+# curl does no content decompression either way; zstd was just the one encoding
+# nobody thought to switch off, and it happens to be the one that collides.
+#
+# The durable home for this line is beside that CURL_ZLIB in brokit. It is here
+# because this is the tree a first clone gets.
+set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+
 # --- brokit (JS runtime APIs) ---
 # Prefer the standalone repo at ../brokit for local development.
 # Falls back to the git submodule at third_party/brokit.

@@ -4,6 +4,9 @@ name: CI
 # + net/video/steam, no AI tower/CUDA so it stays fast. This is the signal
 # behind the "CI" badge. The heavier full+CUDA build runs in nightly.yml.
 #
+# The `minimal` job below covers the other end: the profile BUILDING.md hands
+# to someone who has just cloned and has no vcpkg. See its own comment.
+#
 # The bronze host layer (src/bronze_host, 17K lines) is built on all three
 # platforms — it is off by default in a local configure, so without this it
 # would compile nowhere until someone noticed. Only Linux also builds the
@@ -232,3 +235,86 @@ jobs:
           # it locally with tests/bronze_host/run_checks.sh pixi.
           BRO_TEST_BRONZE_SKIP: pixi
         run: xvfb-run -a ./tests/run_tests.sh
+
+  # The onramp. `cmake -B build -DBRO_PROFILE=minimal` is what BUILDING.md tells
+  # someone to run when they have just cloned and do not have vcpkg, so it is the
+  # first thing a newcomer's machine actually does -- and until this job existed,
+  # nothing checked it. Three separate things were broken in it at once:
+  #
+  #   * bro.media's compiled-out stub sat outside its own #include block, so the
+  #     TU did not compile with BRO_WITH_VIDEO off at all;
+  #   * curl linked a zstd it found on PATH next to the one basisu bundles, so
+  #     every executable failed at link -- on machines with vcpkg installed, and
+  #     only those, which is the worst way for a build to break;
+  #   * bro.gizmo and bro.impostor were guarded at their call sites rather than
+  #     stubbed, so they vanished instead of reporting themselves unavailable.
+  #
+  # None of it was visible from the app profile, where every one of those flags
+  # is on and the #else branches are never even parsed. Hence a job whose whole
+  # job is to have the flags off.
+  #
+  # Deliberately bare: no vcpkg, no LLVM, no bronze, nothing in the configure
+  # line that BUILDING.md does not print. If this job needs a flag added to keep
+  # working, that flag belongs in the docs first.
+  minimal:
+    name: minimal (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux also runs the built binary: a build that links but cannot open
+          # a document is not what "it just works" means.
+          - { name: linux,   os: ubuntu-24.04, smoke: true  }
+          - { name: windows, os: windows-2022, smoke: false }
+          - { name: macos,   os: macos-14,     smoke: false }
+    steps:
+      - name: Rewrite SSH submodule URLs to HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # The same list the app job installs, minus nothing: minimal still wants a
+      # window, fonts and audio. Xvfb + mesa so the smoke run below exercises the
+      # GL path that ships rather than a raster fallback.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             ninja-build nasm xvfb libgl1-mesa-dri             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev             libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
+
+      - name: Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Configure
+        shell: bash
+        run: |
+          GEN_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          fi
+          cmake -B build             -DBRO_PROFILE=minimal             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_C_COMPILER_LAUNCHER=sccache             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache             $GEN_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      # Not the full suite -- most of tests/ needs features this profile does not
+      # have. This asserts the floor minimal promises (HTML parses, layout
+      # measures, Canvas2D draws) and then that every gated `bro.*` namespace is
+      # still present and says why it is unavailable.
+      - name: Smoke (headless, GPU path under Xvfb)
+        if: matrix.smoke
+        shell: bash
+        run: xvfb-run -a ./build/bro-headless tests/_smoke_app tests/_smoke_app/minimal_smoke.js

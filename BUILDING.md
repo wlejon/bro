@@ -40,7 +40,17 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
   `brotensor`. It's the HTML/CSS/JS + Canvas2D + WebGL floor, plus audio (broaudio
   is self-contained and `<audio>`/Web Audio is core to HTML). `bro.scene`,
   `Physics`, `bro.net`, `VideoEncoder`, and the whole `bro.lm`/`bro.diffusion`/…
-  tower report unavailable.
+  tower report unavailable. CI builds this profile on all three platforms and
+  runs `tests/_smoke_app/minimal_smoke.js` against it — the floor above, plus a
+  check that every compiled-out namespace is still present and says which flag
+  it wants. Run it yourself the same way:
+
+  ```bash
+  ./build/bro-headless tests/_smoke_app tests/_smoke_app/minimal_smoke.js
+  ```
+
+  Most of `tests/` needs features this profile doesn't have, so the full suite
+  is not the check here.
 - **`app`** (~22 MB, default) is a complete web/app/game runtime. It needs vcpkg
   only because networking (GameNetworkingSockets) and video decode (libvpx/webm)
   pull vcpkg ports. A runtime where `bro.net` and `<video>` silently didn't work

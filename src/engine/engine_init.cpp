@@ -593,10 +593,10 @@ void Engine::initAppRealm() {
     js::installGestureBindings(appCtx, audioEngine_.get(), audioInference_.get());
     js::installMicBindings(appCtx, audioEngine_.get());
 
-    // Scene graph bindings (3D-only; needs renderer)
-#if BRO_WITH_3D
+    // Scene graph bindings (3D-only; needs renderer). Unguarded: with 3D off
+    // this resolves to the stub in feature_stubs.cpp, which installs
+    // bro.impostor as unavailable rather than leaving it undefined.
     js::SceneBindings::install(appCtx);
-#endif
 
     // Global pause + timescale (bro.time.*) — scale/paused/now over the
     // engine's scaled clock.
@@ -606,10 +606,8 @@ void Engine::initAppRealm() {
     // (resetMenuBarDefaults in the constructor / performAppReload).
     js::MenuBindings::install(appCtx, this);
 
-    // Engine gizmo (bro.gizmo.*) — 3D-only.
-#if BRO_WITH_3D
+    // Engine gizmo (bro.gizmo.*) — 3D-only; stubbed, not absent, when 3D is off.
     js::GizmoBindings::install(appCtx, this);
-#endif
 
     // 6. Load the application
     //

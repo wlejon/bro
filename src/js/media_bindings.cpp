@@ -179,27 +179,6 @@ void installMediaBindings(JSContext* ctx, const std::string& basePath) {
     JS_FreeValue(ctx, global);
 }
 
-} // namespace bro::js
-
-#else  // !BRO_WITH_VIDEO
-
-namespace bro::js {
-
-void installMediaBindings(JSContext* ctx, const std::string&) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-    if (!JS_IsObject(broObj)) {
-        JS_FreeValue(ctx, broObj);
-        broObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-    }
-    JSValue media = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, media, "available", JS_FALSE);
-    JS_SetPropertyStr(ctx, broObj, "media", media);
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
-}
-
 
 } // namespace bro::js
 
