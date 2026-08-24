@@ -60,7 +60,6 @@
 #include "js/tts_bindings.h"
 #include "js/diar_bindings.h"
 #include "js/rave_bindings.h"
-#include "js/worldgen_bindings.h"
 #include "layout/element_ref_adapter.h"
 #include "render/skia_backend.h"
 #if BRO_WITH_3D
@@ -232,7 +231,6 @@ void Engine::performAppReload() {
     js::cleanupTtsBindings(oldCtx);
     js::cleanupDiarBindings(oldCtx);
     js::cleanupRaveBindings(oldCtx);
-    js::cleanupWorldgenBindings(oldCtx);
 #endif
 #if BRO_WITH_LM
     js::cleanupLmBindings(oldCtx);

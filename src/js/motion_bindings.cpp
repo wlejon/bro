@@ -277,19 +277,19 @@ JSValue mtInit(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 
 void installMotionBindings(JSContext* ctx) {
     mtRegisterClass(ctx);
-    
+
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
     if (JS_IsUndefined(broObj)) {
         broObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
     }
-    
+
     JSValue ns = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, ns, "init", JS_NewCFunction(ctx, mtInit, "init", 0));
     JS_SetPropertyStr(ctx, ns, "load", JS_NewCFunction(ctx, mtLoad, "load", 1));
     JS_SetPropertyStr(ctx, broObj, "motion", ns);
-    
+
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }

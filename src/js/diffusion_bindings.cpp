@@ -19,9 +19,7 @@
 #include "js/diffusion_bindings.h"
 #include "util/interrupt.h"
 #include "util/asset_mounts.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <brodiffusion/pipeline.h>
 #include <brodiffusion/controlnet.h>
 #include <brotensor/safetensors.h>
@@ -33,11 +31,9 @@
 #include <brolm/tokenizer.h>
 #include <brodiffusion/unet.h>
 #include <brodiffusion/version.h>
-
 #include <brotensor/ops/elementwise.h>
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -45,12 +41,20 @@
 #include <variant>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
+namespace bro::js {
+
+
+// Short names for the four libraries this TU reaches into. Everything
+// below is inside bro::js, so the aliases live here rather than at file
+// scope.
 namespace bdp   = brodiffusion::pipeline;
 namespace bds   = brotensor::safetensors;
 namespace bdc   = brolm::clip;
 namespace bdsch = brodiffusion::scheduler;
-
-namespace bro::js {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Wrapper structs (opaque handles)
@@ -1700,6 +1704,11 @@ static JSValue js_expandNoise(JSContext* ctx, JSValueConst,
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installDiffusionBindings(JSContext* ctx) {
     registerPipelineClass(ctx);
     registerPipelineStateClass(ctx);
@@ -1729,6 +1738,7 @@ void installDiffusionBindings(JSContext* ctx) {
     JS_FreeValue(ctx, global);
 }
 
+
 void cleanupDiffusionBindings(JSContext* /*ctx*/) {
     // No-op: qjsbind owns the class finalizers; bro.diffusion is reached from
     // globalThis and swept by runtime teardown.
@@ -1740,6 +1750,8 @@ void setDiffusionAppContext(const std::string& basePath,
     s_mounts = mounts;
 }
 
+
+
 } // namespace bro::js
 
-#endif  // BRO_WITH_DIFFUSION
+#endif // BRO_WITH_DIFFUSION

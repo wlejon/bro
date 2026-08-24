@@ -6,7 +6,12 @@
 #include <string>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
+
 
 static const char* kSettingsKey = "__bro_settings_ptr";
 static const char* kWindowKey = "__bro_settings_window_ptr";
@@ -368,6 +373,11 @@ void SettingsBindings::cleanup(JSContext* ctx) {
     JS_FreeValue(ctx, global);
 }
 
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void SettingsBindings::install(JSContext* ctx, engine::Settings* settings, platform::Window* window, engine::Engine* engine) {
     auto* state = new SettingsState();
     state->store = settings;
@@ -425,5 +435,6 @@ void SettingsBindings::install(JSContext* ctx, engine::Settings* settings, platf
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
+
 
 } // namespace bro::js

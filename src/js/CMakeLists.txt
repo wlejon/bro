@@ -91,7 +91,6 @@ add_library(bro_js STATIC
     tensor_bindings_audio.cpp
     async_job.cpp
     diffusion_bindings.cpp
-    worldgen_bindings.cpp
     lm_bindings.cpp
     stt_bindings.cpp
     tts_bindings.cpp

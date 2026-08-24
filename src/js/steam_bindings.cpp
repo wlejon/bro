@@ -766,411 +766,411 @@ static void defineGetter(JSContext* ctx, JSValue obj, const char* name, JSCFunct
 // ---------------------------------------------------------------------------
 
 void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
-        if (s_state) {
-            LOG_WARN("[steam] SteamBindings::install called twice on the same thread");
-            return;
-        }
-        auto* state = new SteamCtxState();
-        state->service = service;
-        state->ctx = ctx;
-        state->subscriber = service ? service->createSubscriber() : nullptr;
-        s_state = state;
-    
-        if (state->subscriber) {
-            // Fires synchronously during poll() on this context's thread.
-            state->subscriber->onPulse = [ctx](uint64_t tick) {
-                auto* s = getState();
-                if (!s || JS_IsUndefined(s->onPulse) || JS_IsNull(s->onPulse)) return;
-                JSValue func = JS_DupValue(ctx, s->onPulse);
-                JSValue arg = JS_NewInt64(ctx, static_cast<int64_t>(tick));
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, arg);
-                JS_FreeValue(ctx, func);
+    if (s_state) {
+        LOG_WARN("[steam] SteamBindings::install called twice on the same thread");
+        return;
+    }
+    auto* state = new SteamCtxState();
+    state->service = service;
+    state->ctx = ctx;
+    state->subscriber = service ? service->createSubscriber() : nullptr;
+    s_state = state;
+
+    if (state->subscriber) {
+        // Fires synchronously during poll() on this context's thread.
+        state->subscriber->onPulse = [ctx](uint64_t tick) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onPulse) || JS_IsNull(s->onPulse)) return;
+            JSValue func = JS_DupValue(ctx, s->onPulse);
+            JSValue arg = JS_NewInt64(ctx, static_cast<int64_t>(tick));
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
+        };
+        // Snapshot ownership stays on the service side; we copy into the JS-thread
+        // cache, then notify. getFriends() reads the cache synchronously.
+        state->subscriber->onFriends = [ctx](const std::vector<steam::FriendInfo>& list) {
+            auto* s = getState();
+            if (!s) return;
+            s->friends = list;
+            if (JS_IsUndefined(s->onFriends) || JS_IsNull(s->onFriends)) return;
+            JSValue func = JS_DupValue(ctx, s->onFriends);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 0, nullptr);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, func);
+        };
+        state->subscriber->onOverlay = [ctx](bool active) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onOverlay) || JS_IsNull(s->onOverlay)) return;
+            JSValue func = JS_DupValue(ctx, s->onOverlay);
+            JSValue arg = JS_NewBool(ctx, active);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
+        };
+        state->subscriber->onJoinRequest = [ctx](uint64_t friendId, const std::string& connect) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onJoinRequest) || JS_IsNull(s->onJoinRequest)) return;
+            JSValue func = JS_DupValue(ctx, s->onJoinRequest);
+            JSValue argv[2] = {
+                JS_NewString(ctx, std::to_string(friendId).c_str()),
+                JS_NewString(ctx, connect.c_str()),
             };
-            // Snapshot ownership stays on the service side; we copy into the JS-thread
-            // cache, then notify. getFriends() reads the cache synchronously.
-            state->subscriber->onFriends = [ctx](const std::vector<steam::FriendInfo>& list) {
-                auto* s = getState();
-                if (!s) return;
-                s->friends = list;
-                if (JS_IsUndefined(s->onFriends) || JS_IsNull(s->onFriends)) return;
-                JSValue func = JS_DupValue(ctx, s->onFriends);
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 0, nullptr);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, func);
-            };
-            state->subscriber->onOverlay = [ctx](bool active) {
-                auto* s = getState();
-                if (!s || JS_IsUndefined(s->onOverlay) || JS_IsNull(s->onOverlay)) return;
-                JSValue func = JS_DupValue(ctx, s->onOverlay);
-                JSValue arg = JS_NewBool(ctx, active);
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, arg);
-                JS_FreeValue(ctx, func);
-            };
-            state->subscriber->onJoinRequest = [ctx](uint64_t friendId, const std::string& connect) {
-                auto* s = getState();
-                if (!s || JS_IsUndefined(s->onJoinRequest) || JS_IsNull(s->onJoinRequest)) return;
-                JSValue func = JS_DupValue(ctx, s->onJoinRequest);
-                JSValue argv[2] = {
-                    JS_NewString(ctx, std::to_string(friendId).c_str()),
-                    JS_NewString(ctx, connect.c_str()),
-                };
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, argv[0]);
-                JS_FreeValue(ctx, argv[1]);
-                JS_FreeValue(ctx, func);
-            };
-            state->subscriber->onAvatar = [ctx](uint32_t reqId, int w, int h,
-                                                const uint8_t* rgba, size_t len) {
-                auto* s = getState();
-                if (!s) return;
-                auto it = s->pendingAvatars.find(reqId);
-                if (it == s->pendingAvatars.end()) return;
-                JSValue resolve = it->second[0];
-                JSValue reject  = it->second[1];
-                s->pendingAvatars.erase(it);
-    
-                JSValue result;
-                if (w > 0 && h > 0 && len > 0) {
-                    result = JS_NewObject(ctx);
-                    JS_SetPropertyStr(ctx, result, "width", JS_NewInt32(ctx, w));
-                    JS_SetPropertyStr(ctx, result, "height", JS_NewInt32(ctx, h));
-                    // RGBA as a Uint8ClampedArray, so it drops straight into
-                    // `new ImageData(data, w, h)` / createImageBitmap.
-                    JSValue abuf = JS_NewArrayBufferCopy(ctx, rgba, len);
-                    JSValue global = JS_GetGlobalObject(ctx);
-                    JSValue ctor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
-                    JSValue arr = JS_CallConstructor(ctx, ctor, 1, &abuf);
-                    JS_SetPropertyStr(ctx, result, "data", arr);
-                    JS_FreeValue(ctx, ctor);
-                    JS_FreeValue(ctx, global);
-                    JS_FreeValue(ctx, abuf);
-                } else {
-                    result = JS_NULL;
-                }
-                JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &result);
-                JS_FreeValue(ctx, r);
-                JS_FreeValue(ctx, result);
-                JS_FreeValue(ctx, resolve);
-                JS_FreeValue(ctx, reject);
-            };
-    
-            // createLobby() result → resolve the pending promise with the lobby id
-            // (decimal string) or null on failure.
-            state->subscriber->onLobbyCreated = [ctx](uint32_t reqId, uint64_t lobbyId, bool success) {
-                auto* s = getState();
-                if (!s) return;
-                auto it = s->pendingLobby.find(reqId);
-                if (it == s->pendingLobby.end()) return;
-                JSValue resolve = it->second[0];
-                JSValue reject  = it->second[1];
-                s->pendingLobby.erase(it);
-                JSValue val = (success && lobbyId)
-                    ? JS_NewString(ctx, std::to_string(lobbyId).c_str()) : JS_NULL;
-                JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &val);
-                JS_FreeValue(ctx, r);
-                JS_FreeValue(ctx, val);
-                JS_FreeValue(ctx, resolve);
-                JS_FreeValue(ctx, reject);
-            };
-            // Entered a lobby. Resolve a pending joinLobby() promise (reqId set), then
-            // always fire the onlobbyentered event.
-            state->subscriber->onLobbyEntered = [ctx](uint32_t reqId, uint64_t lobbyId, int response, bool fireEvent) {
-                auto* s = getState();
-                if (!s) return;
-                bool success = (response == 1); // k_EChatRoomEnterResponseSuccess
-                if (reqId) {
-                    auto it = s->pendingLobby.find(reqId);
-                    if (it != s->pendingLobby.end()) {
-                        JSValue resolve = it->second[0];
-                        JSValue reject  = it->second[1];
-                        s->pendingLobby.erase(it);
-                        JSValue res = JS_NewObject(ctx);
-                        JS_SetPropertyStr(ctx, res, "success", JS_NewBool(ctx, success));
-                        JS_SetPropertyStr(ctx, res, "lobbyId", JS_NewString(ctx, std::to_string(lobbyId).c_str()));
-                        JS_SetPropertyStr(ctx, res, "response", JS_NewInt32(ctx, response));
-                        JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &res);
-                        JS_FreeValue(ctx, r);
-                        JS_FreeValue(ctx, res);
-                        JS_FreeValue(ctx, resolve);
-                        JS_FreeValue(ctx, reject);
-                    }
-                }
-                if (!fireEvent) return; // promise-only refire; entry already announced
-                if (JS_IsUndefined(s->onLobbyEntered) || JS_IsNull(s->onLobbyEntered)) return;
-                JSValue func = JS_DupValue(ctx, s->onLobbyEntered);
-                JSValue argv[2] = {
-                    JS_NewString(ctx, std::to_string(lobbyId).c_str()),
-                    JS_NewBool(ctx, success),
-                };
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, argv[0]);
-                JS_FreeValue(ctx, argv[1]);
-                JS_FreeValue(ctx, func);
-            };
-            // Lobby membership/data changed — refresh the JS-thread cache, then fire
-            // onlobbyupdated so the app re-reads getLobbyMembers/Data.
-            state->subscriber->onLobbyUpdated = [ctx](const steam::LobbyState& st) {
-                auto* s = getState();
-                if (!s) return;
-                s->lobbies[st.lobbyId] = st;
-                if (JS_IsUndefined(s->onLobbyUpdated) || JS_IsNull(s->onLobbyUpdated)) return;
-                JSValue func = JS_DupValue(ctx, s->onLobbyUpdated);
-                JSValue arg = JS_NewString(ctx, std::to_string(st.lobbyId).c_str());
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, arg);
-                JS_FreeValue(ctx, func);
-            };
-            state->subscriber->onLobbyLeft = [ctx](uint64_t lobbyId) {
-                auto* s = getState();
-                if (!s) return;
-                s->lobbies.erase(lobbyId);
-                if (JS_IsUndefined(s->onLobbyLeft) || JS_IsNull(s->onLobbyLeft)) return;
-                JSValue func = JS_DupValue(ctx, s->onLobbyLeft);
-                JSValue arg = JS_NewString(ctx, std::to_string(lobbyId).c_str());
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, arg);
-                JS_FreeValue(ctx, func);
-            };
-            // requestLobbyList() result → resolve the pending promise with an array
-            // of lobby snapshots.
-            state->subscriber->onLobbyList = [ctx](uint32_t reqId, const std::vector<steam::LobbyState>& list) {
-                auto* s = getState();
-                if (!s) return;
-                auto it = s->pendingLobby.find(reqId);
-                if (it == s->pendingLobby.end()) return;
-                JSValue resolve = it->second[0];
-                JSValue reject  = it->second[1];
-                s->pendingLobby.erase(it);
-                JSValue arr = JS_NewArray(ctx);
-                uint32_t i = 0;
-                for (const auto& st : list)
-                    JS_SetPropertyUint32(ctx, arr, i++, lobbyStateToObject(ctx, st));
-                JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &arr);
-                JS_FreeValue(ctx, r);
-                JS_FreeValue(ctx, arr);
-                JS_FreeValue(ctx, resolve);
-                JS_FreeValue(ctx, reject);
-            };
-            state->subscriber->onLobbyInvite = [ctx](uint64_t friendId, uint64_t lobbyId) {
-                auto* s = getState();
-                if (!s || JS_IsUndefined(s->onLobbyInvite) || JS_IsNull(s->onLobbyInvite)) return;
-                JSValue func = JS_DupValue(ctx, s->onLobbyInvite);
-                JSValue argv[2] = {
-                    JS_NewString(ctx, std::to_string(friendId).c_str()),
-                    JS_NewString(ctx, std::to_string(lobbyId).c_str()),
-                };
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, argv[0]);
-                JS_FreeValue(ctx, argv[1]);
-                JS_FreeValue(ctx, func);
-            };
-            state->subscriber->onLobbyJoinRequested = [ctx](uint64_t lobbyId, uint64_t friendId) {
-                auto* s = getState();
-                if (!s || JS_IsUndefined(s->onLobbyJoinRequest) || JS_IsNull(s->onLobbyJoinRequest)) return;
-                JSValue func = JS_DupValue(ctx, s->onLobbyJoinRequest);
-                JSValue argv[2] = {
-                    JS_NewString(ctx, std::to_string(lobbyId).c_str()),
-                    JS_NewString(ctx, std::to_string(friendId).c_str()),
-                };
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, argv[0]);
-                JS_FreeValue(ctx, argv[1]);
-                JS_FreeValue(ctx, func);
-            };
-            // Local compressed voice frame → onvoicecaptured(Uint8Array). The app
-            // forwards these bytes to peers (e.g. over bro.net).
-            state->subscriber->onVoiceCaptured = [ctx](const uint8_t* data, size_t len) {
-                auto* s = getState();
-                if (!s || JS_IsUndefined(s->onVoiceCaptured) || JS_IsNull(s->onVoiceCaptured)) return;
-                JSValue func = JS_DupValue(ctx, s->onVoiceCaptured);
-                JSValue abuf = JS_NewArrayBufferCopy(ctx, data, len);
-                JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-                JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8);
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arr);
-                JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, arr);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, argv[0]);
+            JS_FreeValue(ctx, argv[1]);
+            JS_FreeValue(ctx, func);
+        };
+        state->subscriber->onAvatar = [ctx](uint32_t reqId, int w, int h,
+                                            const uint8_t* rgba, size_t len) {
+            auto* s = getState();
+            if (!s) return;
+            auto it = s->pendingAvatars.find(reqId);
+            if (it == s->pendingAvatars.end()) return;
+            JSValue resolve = it->second[0];
+            JSValue reject  = it->second[1];
+            s->pendingAvatars.erase(it);
+
+            JSValue result;
+            if (w > 0 && h > 0 && len > 0) {
+                result = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, result, "width", JS_NewInt32(ctx, w));
+                JS_SetPropertyStr(ctx, result, "height", JS_NewInt32(ctx, h));
+                // RGBA as a Uint8ClampedArray, so it drops straight into
+                // `new ImageData(data, w, h)` / createImageBitmap.
+                JSValue abuf = JS_NewArrayBufferCopy(ctx, rgba, len);
+                JSValue global = JS_GetGlobalObject(ctx);
+                JSValue ctor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
+                JSValue arr = JS_CallConstructor(ctx, ctor, 1, &abuf);
+                JS_SetPropertyStr(ctx, result, "data", arr);
+                JS_FreeValue(ctx, ctor);
+                JS_FreeValue(ctx, global);
                 JS_FreeValue(ctx, abuf);
-                JS_FreeValue(ctx, func);
+            } else {
+                result = JS_NULL;
+            }
+            JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &result);
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, result);
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, reject);
+        };
+
+        // createLobby() result → resolve the pending promise with the lobby id
+        // (decimal string) or null on failure.
+        state->subscriber->onLobbyCreated = [ctx](uint32_t reqId, uint64_t lobbyId, bool success) {
+            auto* s = getState();
+            if (!s) return;
+            auto it = s->pendingLobby.find(reqId);
+            if (it == s->pendingLobby.end()) return;
+            JSValue resolve = it->second[0];
+            JSValue reject  = it->second[1];
+            s->pendingLobby.erase(it);
+            JSValue val = (success && lobbyId)
+                ? JS_NewString(ctx, std::to_string(lobbyId).c_str()) : JS_NULL;
+            JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &val);
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, val);
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, reject);
+        };
+        // Entered a lobby. Resolve a pending joinLobby() promise (reqId set), then
+        // always fire the onlobbyentered event.
+        state->subscriber->onLobbyEntered = [ctx](uint32_t reqId, uint64_t lobbyId, int response, bool fireEvent) {
+            auto* s = getState();
+            if (!s) return;
+            bool success = (response == 1); // k_EChatRoomEnterResponseSuccess
+            if (reqId) {
+                auto it = s->pendingLobby.find(reqId);
+                if (it != s->pendingLobby.end()) {
+                    JSValue resolve = it->second[0];
+                    JSValue reject  = it->second[1];
+                    s->pendingLobby.erase(it);
+                    JSValue res = JS_NewObject(ctx);
+                    JS_SetPropertyStr(ctx, res, "success", JS_NewBool(ctx, success));
+                    JS_SetPropertyStr(ctx, res, "lobbyId", JS_NewString(ctx, std::to_string(lobbyId).c_str()));
+                    JS_SetPropertyStr(ctx, res, "response", JS_NewInt32(ctx, response));
+                    JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &res);
+                    JS_FreeValue(ctx, r);
+                    JS_FreeValue(ctx, res);
+                    JS_FreeValue(ctx, resolve);
+                    JS_FreeValue(ctx, reject);
+                }
+            }
+            if (!fireEvent) return; // promise-only refire; entry already announced
+            if (JS_IsUndefined(s->onLobbyEntered) || JS_IsNull(s->onLobbyEntered)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyEntered);
+            JSValue argv[2] = {
+                JS_NewString(ctx, std::to_string(lobbyId).c_str()),
+                JS_NewBool(ctx, success),
             };
-            // decodeVoice() result → resolve the pending promise with normalized PCM.
-            state->subscriber->onVoiceDecoded = [ctx](uint32_t reqId, int sampleRate,
-                                                      const uint8_t* pcm, size_t len) {
-                auto* s = getState();
-                if (!s) return;
-                auto it = s->pendingVoice.find(reqId);
-                if (it == s->pendingVoice.end()) return;
-                JSValue resolve = it->second[0];
-                JSValue reject  = it->second[1];
-                s->pendingVoice.erase(it);
-                // Steam PCM is signed 16-bit; hand JS a Float32Array in [-1,1].
-                size_t n = len / sizeof(int16_t);
-                std::vector<float> f(n);
-                const int16_t* src = reinterpret_cast<const int16_t*>(pcm);
-                for (size_t i = 0; i < n; ++i) f[i] = src[i] / 32768.0f;
-                JSValue res = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, res, "pcm", qjsbind::make_float32_array(ctx, f.data(), f.size()));
-                JS_SetPropertyStr(ctx, res, "sampleRate", JS_NewInt32(ctx, sampleRate));
-                JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &res);
-                JS_FreeValue(ctx, r);
-                JS_FreeValue(ctx, res);
-                JS_FreeValue(ctx, resolve);
-                JS_FreeValue(ctx, reject);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, argv[0]);
+            JS_FreeValue(ctx, argv[1]);
+            JS_FreeValue(ctx, func);
+        };
+        // Lobby membership/data changed — refresh the JS-thread cache, then fire
+        // onlobbyupdated so the app re-reads getLobbyMembers/Data.
+        state->subscriber->onLobbyUpdated = [ctx](const steam::LobbyState& st) {
+            auto* s = getState();
+            if (!s) return;
+            s->lobbies[st.lobbyId] = st;
+            if (JS_IsUndefined(s->onLobbyUpdated) || JS_IsNull(s->onLobbyUpdated)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyUpdated);
+            JSValue arg = JS_NewString(ctx, std::to_string(st.lobbyId).c_str());
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
+        };
+        state->subscriber->onLobbyLeft = [ctx](uint64_t lobbyId) {
+            auto* s = getState();
+            if (!s) return;
+            s->lobbies.erase(lobbyId);
+            if (JS_IsUndefined(s->onLobbyLeft) || JS_IsNull(s->onLobbyLeft)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyLeft);
+            JSValue arg = JS_NewString(ctx, std::to_string(lobbyId).c_str());
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
+        };
+        // requestLobbyList() result → resolve the pending promise with an array
+        // of lobby snapshots.
+        state->subscriber->onLobbyList = [ctx](uint32_t reqId, const std::vector<steam::LobbyState>& list) {
+            auto* s = getState();
+            if (!s) return;
+            auto it = s->pendingLobby.find(reqId);
+            if (it == s->pendingLobby.end()) return;
+            JSValue resolve = it->second[0];
+            JSValue reject  = it->second[1];
+            s->pendingLobby.erase(it);
+            JSValue arr = JS_NewArray(ctx);
+            uint32_t i = 0;
+            for (const auto& st : list)
+                JS_SetPropertyUint32(ctx, arr, i++, lobbyStateToObject(ctx, st));
+            JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &arr);
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, arr);
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, reject);
+        };
+        state->subscriber->onLobbyInvite = [ctx](uint64_t friendId, uint64_t lobbyId) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onLobbyInvite) || JS_IsNull(s->onLobbyInvite)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyInvite);
+            JSValue argv[2] = {
+                JS_NewString(ctx, std::to_string(friendId).c_str()),
+                JS_NewString(ctx, std::to_string(lobbyId).c_str()),
             };
-        }
-    
-        // Build bro.steam namespace.
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
-            JS_FreeValue(ctx, broObj);
-            broObj = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-        }
-    
-        JSValue steamObj = JS_NewObject(ctx);
-        defineGetter(ctx, steamObj, "available",    js_steam_get_available);
-        defineGetter(ctx, steamObj, "reason",       js_steam_get_reason);
-        defineGetter(ctx, steamObj, "steamId",      js_steam_get_steamId);
-        defineGetter(ctx, steamObj, "personaName",  js_steam_get_personaName);
-        defineGetter(ctx, steamObj, "appId",        js_steam_get_appId);
-    
-        JSAtom aPulse = JS_NewAtom(ctx, "onpulse");
-        JS_DefinePropertyGetSet(ctx, steamObj, aPulse,
-            JS_NewCFunction(ctx, js_steam_get_onpulse, "get onpulse", 0),
-            JS_NewCFunction(ctx, js_steam_set_onpulse, "set onpulse", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aPulse);
-    
-        // Friends (M2): list query, rich presence, overlay.
-        JS_SetPropertyStr(ctx, steamObj, "getFriends",
-            JS_NewCFunction(ctx, js_steam_getFriends, "getFriends", 0));
-        JS_SetPropertyStr(ctx, steamObj, "getAvatar",
-            JS_NewCFunction(ctx, js_steam_getAvatar, "getAvatar", 2));
-        JS_SetPropertyStr(ctx, steamObj, "setRichPresence",
-            JS_NewCFunction(ctx, js_steam_setRichPresence, "setRichPresence", 2));
-        JS_SetPropertyStr(ctx, steamObj, "clearRichPresence",
-            JS_NewCFunction(ctx, js_steam_clearRichPresence, "clearRichPresence", 0));
-        JS_SetPropertyStr(ctx, steamObj, "activateOverlay",
-            JS_NewCFunction(ctx, js_steam_activateOverlay, "activateOverlay", 1));
-        JS_SetPropertyStr(ctx, steamObj, "activateOverlayToUser",
-            JS_NewCFunction(ctx, js_steam_activateOverlayToUser, "activateOverlayToUser", 2));
-        JS_SetPropertyStr(ctx, steamObj, "activateInviteDialog",
-            JS_NewCFunction(ctx, js_steam_activateInviteDialog, "activateInviteDialog", 1));
-    
-        JSAtom aFriends = JS_NewAtom(ctx, "onfriends");
-        JS_DefinePropertyGetSet(ctx, steamObj, aFriends,
-            JS_NewCFunction(ctx, js_steam_get_onfriends, "get onfriends", 0),
-            JS_NewCFunction(ctx, js_steam_set_onfriends, "set onfriends", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aFriends);
-    
-        JSAtom aOverlay = JS_NewAtom(ctx, "onoverlay");
-        JS_DefinePropertyGetSet(ctx, steamObj, aOverlay,
-            JS_NewCFunction(ctx, js_steam_get_onoverlay, "get onoverlay", 0),
-            JS_NewCFunction(ctx, js_steam_set_onoverlay, "set onoverlay", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aOverlay);
-    
-        JSAtom aJoin = JS_NewAtom(ctx, "onjoinrequest");
-        JS_DefinePropertyGetSet(ctx, steamObj, aJoin,
-            JS_NewCFunction(ctx, js_steam_get_onjoinrequest, "get onjoinrequest", 0),
-            JS_NewCFunction(ctx, js_steam_set_onjoinrequest, "set onjoinrequest", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aJoin);
-    
-        // Lobbies (M3): lifecycle, data, membership reads.
-        JS_SetPropertyStr(ctx, steamObj, "createLobby",
-            JS_NewCFunction(ctx, js_steam_createLobby, "createLobby", 2));
-        JS_SetPropertyStr(ctx, steamObj, "joinLobby",
-            JS_NewCFunction(ctx, js_steam_joinLobby, "joinLobby", 1));
-        JS_SetPropertyStr(ctx, steamObj, "leaveLobby",
-            JS_NewCFunction(ctx, js_steam_leaveLobby, "leaveLobby", 1));
-        JS_SetPropertyStr(ctx, steamObj, "setLobbyData",
-            JS_NewCFunction(ctx, js_steam_setLobbyData, "setLobbyData", 3));
-        JS_SetPropertyStr(ctx, steamObj, "setLobbyMemberData",
-            JS_NewCFunction(ctx, js_steam_setLobbyMemberData, "setLobbyMemberData", 3));
-        JS_SetPropertyStr(ctx, steamObj, "setLobbyJoinable",
-            JS_NewCFunction(ctx, js_steam_setLobbyJoinable, "setLobbyJoinable", 2));
-        JS_SetPropertyStr(ctx, steamObj, "setLobbyType",
-            JS_NewCFunction(ctx, js_steam_setLobbyType, "setLobbyType", 2));
-        JS_SetPropertyStr(ctx, steamObj, "setLobbyMemberLimit",
-            JS_NewCFunction(ctx, js_steam_setLobbyMemberLimit, "setLobbyMemberLimit", 2));
-        JS_SetPropertyStr(ctx, steamObj, "getLobbyMembers",
-            JS_NewCFunction(ctx, js_steam_getLobbyMembers, "getLobbyMembers", 1));
-        JS_SetPropertyStr(ctx, steamObj, "getLobbyOwner",
-            JS_NewCFunction(ctx, js_steam_getLobbyOwner, "getLobbyOwner", 1));
-        JS_SetPropertyStr(ctx, steamObj, "getLobbyData",
-            JS_NewCFunction(ctx, js_steam_getLobbyData, "getLobbyData", 2));
-        JS_SetPropertyStr(ctx, steamObj, "requestLobbyList",
-            JS_NewCFunction(ctx, js_steam_requestLobbyList, "requestLobbyList", 1));
-        JS_SetPropertyStr(ctx, steamObj, "inviteUserToLobby",
-            JS_NewCFunction(ctx, js_steam_inviteUserToLobby, "inviteUserToLobby", 2));
-    
-        JSAtom aLobbyEnter = JS_NewAtom(ctx, "onlobbyentered");
-        JS_DefinePropertyGetSet(ctx, steamObj, aLobbyEnter,
-            JS_NewCFunction(ctx, js_steam_get_onlobbyentered, "get onlobbyentered", 0),
-            JS_NewCFunction(ctx, js_steam_set_onlobbyentered, "set onlobbyentered", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aLobbyEnter);
-    
-        JSAtom aLobbyUpd = JS_NewAtom(ctx, "onlobbyupdated");
-        JS_DefinePropertyGetSet(ctx, steamObj, aLobbyUpd,
-            JS_NewCFunction(ctx, js_steam_get_onlobbyupdated, "get onlobbyupdated", 0),
-            JS_NewCFunction(ctx, js_steam_set_onlobbyupdated, "set onlobbyupdated", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aLobbyUpd);
-    
-        JSAtom aLobbyLeft = JS_NewAtom(ctx, "onlobbyleft");
-        JS_DefinePropertyGetSet(ctx, steamObj, aLobbyLeft,
-            JS_NewCFunction(ctx, js_steam_get_onlobbyleft, "get onlobbyleft", 0),
-            JS_NewCFunction(ctx, js_steam_set_onlobbyleft, "set onlobbyleft", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aLobbyLeft);
-    
-        JSAtom aLobbyInvite = JS_NewAtom(ctx, "onlobbyinvite");
-        JS_DefinePropertyGetSet(ctx, steamObj, aLobbyInvite,
-            JS_NewCFunction(ctx, js_steam_get_onlobbyinvite, "get onlobbyinvite", 0),
-            JS_NewCFunction(ctx, js_steam_set_onlobbyinvite, "set onlobbyinvite", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aLobbyInvite);
-    
-        JSAtom aLobbyJoinReq = JS_NewAtom(ctx, "onlobbyjoinrequest");
-        JS_DefinePropertyGetSet(ctx, steamObj, aLobbyJoinReq,
-            JS_NewCFunction(ctx, js_steam_get_onlobbyjoinrequest, "get onlobbyjoinrequest", 0),
-            JS_NewCFunction(ctx, js_steam_set_onlobbyjoinrequest, "set onlobbyjoinrequest", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aLobbyJoinReq);
-    
-        // Voice (M4): capture toggle, decode, metering.
-        JS_SetPropertyStr(ctx, steamObj, "startVoiceRecording",
-            JS_NewCFunction(ctx, js_steam_startVoiceRecording, "startVoiceRecording", 0));
-        JS_SetPropertyStr(ctx, steamObj, "stopVoiceRecording",
-            JS_NewCFunction(ctx, js_steam_stopVoiceRecording, "stopVoiceRecording", 0));
-        JS_SetPropertyStr(ctx, steamObj, "decodeVoice",
-            JS_NewCFunction(ctx, js_steam_decodeVoice, "decodeVoice", 2));
-        defineGetter(ctx, steamObj, "isVoiceRecording", js_steam_get_isVoiceRecording);
-        defineGetter(ctx, steamObj, "voiceSampleRate", js_steam_get_voiceSampleRate);
-    
-        JSAtom aVoiceCap = JS_NewAtom(ctx, "onvoicecaptured");
-        JS_DefinePropertyGetSet(ctx, steamObj, aVoiceCap,
-            JS_NewCFunction(ctx, js_steam_get_onvoicecaptured, "get onvoicecaptured", 0),
-            JS_NewCFunction(ctx, js_steam_set_onvoicecaptured, "set onvoicecaptured", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aVoiceCap);
-    
-        JS_SetPropertyStr(ctx, broObj, "steam", steamObj);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, argv[0]);
+            JS_FreeValue(ctx, argv[1]);
+            JS_FreeValue(ctx, func);
+        };
+        state->subscriber->onLobbyJoinRequested = [ctx](uint64_t lobbyId, uint64_t friendId) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onLobbyJoinRequest) || JS_IsNull(s->onLobbyJoinRequest)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyJoinRequest);
+            JSValue argv[2] = {
+                JS_NewString(ctx, std::to_string(lobbyId).c_str()),
+                JS_NewString(ctx, std::to_string(friendId).c_str()),
+            };
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, argv[0]);
+            JS_FreeValue(ctx, argv[1]);
+            JS_FreeValue(ctx, func);
+        };
+        // Local compressed voice frame → onvoicecaptured(Uint8Array). The app
+        // forwards these bytes to peers (e.g. over bro.net).
+        state->subscriber->onVoiceCaptured = [ctx](const uint8_t* data, size_t len) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onVoiceCaptured) || JS_IsNull(s->onVoiceCaptured)) return;
+            JSValue func = JS_DupValue(ctx, s->onVoiceCaptured);
+            JSValue abuf = JS_NewArrayBufferCopy(ctx, data, len);
+            JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+            JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arr);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arr);
+            JS_FreeValue(ctx, abuf);
+            JS_FreeValue(ctx, func);
+        };
+        // decodeVoice() result → resolve the pending promise with normalized PCM.
+        state->subscriber->onVoiceDecoded = [ctx](uint32_t reqId, int sampleRate,
+                                                  const uint8_t* pcm, size_t len) {
+            auto* s = getState();
+            if (!s) return;
+            auto it = s->pendingVoice.find(reqId);
+            if (it == s->pendingVoice.end()) return;
+            JSValue resolve = it->second[0];
+            JSValue reject  = it->second[1];
+            s->pendingVoice.erase(it);
+            // Steam PCM is signed 16-bit; hand JS a Float32Array in [-1,1].
+            size_t n = len / sizeof(int16_t);
+            std::vector<float> f(n);
+            const int16_t* src = reinterpret_cast<const int16_t*>(pcm);
+            for (size_t i = 0; i < n; ++i) f[i] = src[i] / 32768.0f;
+            JSValue res = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, res, "pcm", qjsbind::make_float32_array(ctx, f.data(), f.size()));
+            JS_SetPropertyStr(ctx, res, "sampleRate", JS_NewInt32(ctx, sampleRate));
+            JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &res);
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, res);
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, reject);
+        };
+    }
+
+    // Build bro.steam namespace.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
         JS_FreeValue(ctx, broObj);
-        JS_FreeValue(ctx, global);
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+
+    JSValue steamObj = JS_NewObject(ctx);
+    defineGetter(ctx, steamObj, "available",    js_steam_get_available);
+    defineGetter(ctx, steamObj, "reason",       js_steam_get_reason);
+    defineGetter(ctx, steamObj, "steamId",      js_steam_get_steamId);
+    defineGetter(ctx, steamObj, "personaName",  js_steam_get_personaName);
+    defineGetter(ctx, steamObj, "appId",        js_steam_get_appId);
+
+    JSAtom aPulse = JS_NewAtom(ctx, "onpulse");
+    JS_DefinePropertyGetSet(ctx, steamObj, aPulse,
+        JS_NewCFunction(ctx, js_steam_get_onpulse, "get onpulse", 0),
+        JS_NewCFunction(ctx, js_steam_set_onpulse, "set onpulse", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aPulse);
+
+    // Friends (M2): list query, rich presence, overlay.
+    JS_SetPropertyStr(ctx, steamObj, "getFriends",
+        JS_NewCFunction(ctx, js_steam_getFriends, "getFriends", 0));
+    JS_SetPropertyStr(ctx, steamObj, "getAvatar",
+        JS_NewCFunction(ctx, js_steam_getAvatar, "getAvatar", 2));
+    JS_SetPropertyStr(ctx, steamObj, "setRichPresence",
+        JS_NewCFunction(ctx, js_steam_setRichPresence, "setRichPresence", 2));
+    JS_SetPropertyStr(ctx, steamObj, "clearRichPresence",
+        JS_NewCFunction(ctx, js_steam_clearRichPresence, "clearRichPresence", 0));
+    JS_SetPropertyStr(ctx, steamObj, "activateOverlay",
+        JS_NewCFunction(ctx, js_steam_activateOverlay, "activateOverlay", 1));
+    JS_SetPropertyStr(ctx, steamObj, "activateOverlayToUser",
+        JS_NewCFunction(ctx, js_steam_activateOverlayToUser, "activateOverlayToUser", 2));
+    JS_SetPropertyStr(ctx, steamObj, "activateInviteDialog",
+        JS_NewCFunction(ctx, js_steam_activateInviteDialog, "activateInviteDialog", 1));
+
+    JSAtom aFriends = JS_NewAtom(ctx, "onfriends");
+    JS_DefinePropertyGetSet(ctx, steamObj, aFriends,
+        JS_NewCFunction(ctx, js_steam_get_onfriends, "get onfriends", 0),
+        JS_NewCFunction(ctx, js_steam_set_onfriends, "set onfriends", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aFriends);
+
+    JSAtom aOverlay = JS_NewAtom(ctx, "onoverlay");
+    JS_DefinePropertyGetSet(ctx, steamObj, aOverlay,
+        JS_NewCFunction(ctx, js_steam_get_onoverlay, "get onoverlay", 0),
+        JS_NewCFunction(ctx, js_steam_set_onoverlay, "set onoverlay", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aOverlay);
+
+    JSAtom aJoin = JS_NewAtom(ctx, "onjoinrequest");
+    JS_DefinePropertyGetSet(ctx, steamObj, aJoin,
+        JS_NewCFunction(ctx, js_steam_get_onjoinrequest, "get onjoinrequest", 0),
+        JS_NewCFunction(ctx, js_steam_set_onjoinrequest, "set onjoinrequest", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aJoin);
+
+    // Lobbies (M3): lifecycle, data, membership reads.
+    JS_SetPropertyStr(ctx, steamObj, "createLobby",
+        JS_NewCFunction(ctx, js_steam_createLobby, "createLobby", 2));
+    JS_SetPropertyStr(ctx, steamObj, "joinLobby",
+        JS_NewCFunction(ctx, js_steam_joinLobby, "joinLobby", 1));
+    JS_SetPropertyStr(ctx, steamObj, "leaveLobby",
+        JS_NewCFunction(ctx, js_steam_leaveLobby, "leaveLobby", 1));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyData",
+        JS_NewCFunction(ctx, js_steam_setLobbyData, "setLobbyData", 3));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyMemberData",
+        JS_NewCFunction(ctx, js_steam_setLobbyMemberData, "setLobbyMemberData", 3));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyJoinable",
+        JS_NewCFunction(ctx, js_steam_setLobbyJoinable, "setLobbyJoinable", 2));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyType",
+        JS_NewCFunction(ctx, js_steam_setLobbyType, "setLobbyType", 2));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyMemberLimit",
+        JS_NewCFunction(ctx, js_steam_setLobbyMemberLimit, "setLobbyMemberLimit", 2));
+    JS_SetPropertyStr(ctx, steamObj, "getLobbyMembers",
+        JS_NewCFunction(ctx, js_steam_getLobbyMembers, "getLobbyMembers", 1));
+    JS_SetPropertyStr(ctx, steamObj, "getLobbyOwner",
+        JS_NewCFunction(ctx, js_steam_getLobbyOwner, "getLobbyOwner", 1));
+    JS_SetPropertyStr(ctx, steamObj, "getLobbyData",
+        JS_NewCFunction(ctx, js_steam_getLobbyData, "getLobbyData", 2));
+    JS_SetPropertyStr(ctx, steamObj, "requestLobbyList",
+        JS_NewCFunction(ctx, js_steam_requestLobbyList, "requestLobbyList", 1));
+    JS_SetPropertyStr(ctx, steamObj, "inviteUserToLobby",
+        JS_NewCFunction(ctx, js_steam_inviteUserToLobby, "inviteUserToLobby", 2));
+
+    JSAtom aLobbyEnter = JS_NewAtom(ctx, "onlobbyentered");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyEnter,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyentered, "get onlobbyentered", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyentered, "set onlobbyentered", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyEnter);
+
+    JSAtom aLobbyUpd = JS_NewAtom(ctx, "onlobbyupdated");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyUpd,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyupdated, "get onlobbyupdated", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyupdated, "set onlobbyupdated", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyUpd);
+
+    JSAtom aLobbyLeft = JS_NewAtom(ctx, "onlobbyleft");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyLeft,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyleft, "get onlobbyleft", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyleft, "set onlobbyleft", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyLeft);
+
+    JSAtom aLobbyInvite = JS_NewAtom(ctx, "onlobbyinvite");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyInvite,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyinvite, "get onlobbyinvite", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyinvite, "set onlobbyinvite", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyInvite);
+
+    JSAtom aLobbyJoinReq = JS_NewAtom(ctx, "onlobbyjoinrequest");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyJoinReq,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyjoinrequest, "get onlobbyjoinrequest", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyjoinrequest, "set onlobbyjoinrequest", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyJoinReq);
+
+    // Voice (M4): capture toggle, decode, metering.
+    JS_SetPropertyStr(ctx, steamObj, "startVoiceRecording",
+        JS_NewCFunction(ctx, js_steam_startVoiceRecording, "startVoiceRecording", 0));
+    JS_SetPropertyStr(ctx, steamObj, "stopVoiceRecording",
+        JS_NewCFunction(ctx, js_steam_stopVoiceRecording, "stopVoiceRecording", 0));
+    JS_SetPropertyStr(ctx, steamObj, "decodeVoice",
+        JS_NewCFunction(ctx, js_steam_decodeVoice, "decodeVoice", 2));
+    defineGetter(ctx, steamObj, "isVoiceRecording", js_steam_get_isVoiceRecording);
+    defineGetter(ctx, steamObj, "voiceSampleRate", js_steam_get_voiceSampleRate);
+
+    JSAtom aVoiceCap = JS_NewAtom(ctx, "onvoicecaptured");
+    JS_DefinePropertyGetSet(ctx, steamObj, aVoiceCap,
+        JS_NewCFunction(ctx, js_steam_get_onvoicecaptured, "get onvoicecaptured", 0),
+        JS_NewCFunction(ctx, js_steam_set_onvoicecaptured, "set onvoicecaptured", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aVoiceCap);
+
+    JS_SetPropertyStr(ctx, broObj, "steam", steamObj);
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
 }
 
 

@@ -2376,7 +2376,7 @@ void installSttBindings(JSContext* ctx) {
         registerWhisperSessionClass(ctx);
         registerParakeetSessionClass(ctx);
         registerQwenAsrSessionClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -2384,7 +2384,7 @@ void installSttBindings(JSContext* ctx) {
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue stt = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, stt, "init",
             JS_NewCFunction(ctx, js_init, "init", 0));
@@ -2403,7 +2403,7 @@ void installSttBindings(JSContext* ctx) {
         JS_SetPropertyStr(ctx, stt, "transcribe",
             JS_NewCFunction(ctx, js_stt_transcribe, "transcribe", 4));
         JS_SetPropertyStr(ctx, broObj, "stt", stt);
-    
+
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);
 }

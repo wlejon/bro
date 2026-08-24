@@ -1009,9 +1009,9 @@ void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::A
     g_kws.audioEngine = audioEngine;
         g_kws.inference   = inference;
         g_kws.ctx         = ctx;
-    
+
         registerKwsViewClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -1019,7 +1019,7 @@ void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::A
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue kws = JS_NewObject(ctx);
         // Namespace ops (shared net u2014 not stream-scoped).
         JS_SetPropertyStr(ctx, kws, "load",
@@ -1071,7 +1071,7 @@ void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::A
         JS_SetPropertyStr(ctx, kws, "feed",
             JS_NewCFunction(ctx, js_feed, "feed", 1));
         JS_SetPropertyStr(ctx, broObj, "kws", kws);
-    
+
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);
 }

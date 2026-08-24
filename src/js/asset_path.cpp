@@ -1,8 +1,10 @@
 #include "js/asset_path.h"
-
 #include "util/asset_mounts.h"
-
 #include <filesystem>
+
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
 
@@ -47,6 +49,10 @@ JSValue js_resolvePath(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installAssetPathBindings(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -82,5 +88,6 @@ std::string resolveAssetWritePath(const std::string& src) {
     std::string dir = resolveAssetPath(p.parent_path().generic_string());
     return (fs::path(dir) / p.filename()).generic_string();
 }
+
 
 } // namespace bro::js

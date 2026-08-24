@@ -1319,6 +1319,7 @@ static inline void _unused_scene_fx_install(JSContext* ctx)
     (void)ctx;
 }
 
+
 } // namespace bro::js
 
 #endif // BRO_WITH_3D

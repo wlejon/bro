@@ -997,17 +997,6 @@ JSValue createTileWorldJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst
 // Install / Cleanup
 // -------------------------------------------------------------------------
 
-void TileBindings::setAppContext(const std::string& basePath,
-                                 const util::AssetMounts* mounts) {
-    setAssetPathContext(basePath, mounts);
-}
-
-void TileBindings::cleanup(JSContext*) {
-    for (auto* tw : TWld::allInstances()) {
-        if (tw->world) { tw->world->clear(); tw->world.reset(); }
-    }
-}
-
 void TileBindings::install(JSContext* ctx)
 {
     qjsbind::Class<TWld>(ctx, "TileWorld")
@@ -1083,6 +1072,18 @@ void TileBindings::install(JSContext* ctx)
             .get("vertexCount",   [](TWld* self) -> int { return self->world ? self->world->totalVertices() : 0; })
             .get("triangleCount", [](TWld* self) -> int { return self->world ? self->world->totalTriangles(): 0; });
 }
+
+void TileBindings::setAppContext(const std::string& basePath,
+                                 const util::AssetMounts* mounts) {
+    setAssetPathContext(basePath, mounts);
+}
+
+void TileBindings::cleanup(JSContext*) {
+    for (auto* tw : TWld::allInstances()) {
+        if (tw->world) { tw->world->clear(); tw->world.reset(); }
+    }
+}
+
 
 } // namespace bro::js
 

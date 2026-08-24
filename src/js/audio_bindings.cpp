@@ -2243,7 +2243,7 @@ static JSValue js_seq_automationInterpMode(JSContext* ctx, JSValueConst this_val
 void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
 {
     s_audioEngine = engine;
-    
+
         // --- AudioParam ---
         {
             qjsbind::Class<AudioParamData>(ctx, "AudioParam")
@@ -2277,12 +2277,12 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                         }
                     });
         }
-    
+
         // --- AudioDestinationNode ---
         {
             qjsbind::Class<AudioDestNodeData>(ctx, "AudioDestinationNode");
         }
-    
+
         // --- AnalyserNode ---
         {
             qjsbind::Class<AnalyserNodeData>(ctx, "AnalyserNode")
@@ -2319,19 +2319,19 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .method("disconnect",
                     [](AnalyserNodeData*) {});
         }
-    
+
         // --- MediaStream ---
         {
             qjsbind::Class<MicStreamData>(ctx, "MediaStream");
         }
-    
+
         // --- MediaStreamAudioSourceNode ---
         {
             qjsbind::Class<MicSourceData>(ctx, "MediaStreamAudioSourceNode")
                 .method_raw("connect", js_micsource_connect, 1)
                 .method("disconnect", [](MicSourceData*) {});
         }
-    
+
         // --- OscillatorNode ---
         {
             qjsbind::Class<OscNodeData>(ctx, "OscillatorNode")
@@ -2363,7 +2363,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .method_raw("start", js_osc_start, 1)
                 .method_raw("stop", js_osc_stop, 1);
         }
-    
+
         // --- GainNode ---
         {
             qjsbind::Class<GainNodeData>(ctx, "GainNode")
@@ -2373,13 +2373,13 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     })
                 .method("disconnect", [](GainNodeData*) {});
         }
-    
+
         // --- BiquadFilterNode ---
         {
             qjsbind::Class<BiquadFilterNodeData>(ctx, "BiquadFilterNode")
                 .method_raw("connect", js_biquadfilter_connect, 1)
                 .method_raw("disconnect", js_biquadfilter_disconnect, 0);
-    
+
             // type getter/setter needs this_val for __type property, use method_raw workaround
             // We register type as methods since prop() doesn't support this_val access
             // Actually, the original used JS_CGETSET_DEF which maps to prop. But
@@ -2393,7 +2393,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             // making the type methods work on the biquad data directly, storing the type
             // string in the wrapper struct. Actually simpler: just use method_raw for get/set.
         }
-    
+
         // --- VoiceAllocator ---
         {
             qjsbind::Class<VoiceAllocatorData>(ctx, "VoiceAllocator")
@@ -2413,7 +2413,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .get("activeVoiceCount",
                     [](VoiceAllocatorData* d) -> int { return d->allocator->activeVoiceCount(); });
         }
-    
+
         // --- ModMatrix ---
         {
             qjsbind::Class<ModMatrixData>(ctx, "ModMatrix")
@@ -2444,7 +2444,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .get("routeCount",
                     [](ModMatrixData* d) -> int { return d->modMatrix->routeCount(); });
         }
-    
+
         // --- MidiInput ---
         {
             qjsbind::Class<MidiInputData>(ctx, "MidiInput")
@@ -2467,7 +2467,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .get("isOpen",
                     [](MidiInputData* d) -> bool { return d->midi->isOpen(); });
         }
-    
+
         // --- Sequence ---
         {
             qjsbind::Class<SequenceData>(ctx, "Sequence")
@@ -2563,7 +2563,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .get("automationLaneCount",
                     [](SequenceData* d) -> int { return d->seq->automationLaneCount(); });
         }
-    
+
         // --- AudioContext ---
         {
             qjsbind::Class<AudioCtxData>(ctx, "AudioContext")
@@ -2597,14 +2597,14 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int v) { d->engine->setMicBus(v); })
                 .get("recording",
                     [](AudioCtxData* d) -> bool { return d->engine->isRecording(); })
-    
+
                 // Node creation (raw u2014 they create objects of other types)
                 .method_raw("createOscillator", js_audioctx_createOscillator, 0)
                 .method_raw("createGain", js_audioctx_createGain, 0)
                 .method_raw("createAnalyser", js_audioctx_createAnalyser, 0)
                 .method_raw("createBiquadFilter", js_audioctx_createBiquadFilter, 0)
                 .method_raw("createMediaStreamSource", js_audioctx_createMediaStreamSource, 1)
-    
+
                 // Master delay
                 .method("setDelayEnabled",
                     [](AudioCtxData* d, bool v) { d->engine->setDelayEnabled(v); })
@@ -2614,7 +2614,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, double v) { d->engine->setDelayFeedback(static_cast<float>(v)); })
                 .method("setDelayMix",
                     [](AudioCtxData* d, double v) { d->engine->setDelayMix(static_cast<float>(v)); })
-    
+
                 // Master reverb
                 .method("setReverbEnabled",
                     [](AudioCtxData* d, bool v) { d->engine->setBusReverbEnabled(0, v); })
@@ -2624,7 +2624,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, double v) { d->engine->setBusReverbDamping(0, static_cast<float>(v)); })
                 .method("setReverbMix",
                     [](AudioCtxData* d, double v) { d->engine->setBusReverbMix(0, static_cast<float>(v)); })
-    
+
                 // Master chorus
                 .method("setChorusEnabled",
                     [](AudioCtxData* d, bool v) { d->engine->setBusChorusEnabled(0, v); })
@@ -2638,7 +2638,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, double v) { d->engine->setBusChorusFeedback(0, static_cast<float>(v)); })
                 .method("setChorusBaseDelay",
                     [](AudioCtxData* d, double v) { d->engine->setBusChorusBaseDelay(0, static_cast<float>(v)); })
-    
+
                 // Master compressor
                 .method("setCompressorEnabled",
                     [](AudioCtxData* d, bool v) { d->engine->setBusCompressorEnabled(0, v); })
@@ -2650,7 +2650,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, double v) { d->engine->setBusCompressorAttack(0, static_cast<float>(v)); })
                 .method("setCompressorRelease",
                     [](AudioCtxData* d, double v) { d->engine->setBusCompressorRelease(0, static_cast<float>(v)); })
-    
+
                 // Master limiter (lookahead peak limiter on the master bus)
                 .method("setLimiterEnabled",
                     [](AudioCtxData* d, bool v) { d->engine->setLimiterEnabled(v); })
@@ -2658,7 +2658,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, double dB) { d->engine->setLimiterThreshold(static_cast<float>(dB)); })
                 .method("setLimiterRelease",
                     [](AudioCtxData* d, double ms) { d->engine->setLimiterRelease(static_cast<float>(ms)); })
-    
+
                 // Mix bus API
                 .method("createBus",
                     [](AudioCtxData* d) -> int { return d->engine->createBus(); })
@@ -2687,7 +2687,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterQ(busId, slot, static_cast<float>(v)); })
                 .method("setBusFilterGain",
                     [](AudioCtxData* d, int busId, int slot, double v) { d->engine->setBusFilterGain(busId, slot, static_cast<float>(v)); })
-    
+
                 // Per-bus effects
                 .method("setBusDelayEnabled",
                     [](AudioCtxData* d, int busId, bool v) { d->engine->setBusDelayEnabled(busId, v); })
@@ -2756,7 +2756,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionCrushRate(busId, static_cast<float>(v)); })
                 .method("setBusCompressorSidechain",
                     [](AudioCtxData* d, int busId, int scBusId) { d->engine->setBusCompressorSidechain(busId, scBusId); })
-    
+
                 // Bus metering
                 .method("getBusPeakL",
                     [](AudioCtxData* d, int busId) -> double { return d->engine->getBusPeakL(busId); })
@@ -2766,25 +2766,25 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int busId) -> double { return d->engine->getBusRmsL(busId); })
                 .method("getBusRmsR",
                     [](AudioCtxData* d, int busId) -> double { return d->engine->getBusRmsR(busId); })
-    
+
                 // Sample-accurate scheduling
                 .method("scheduleNoteOn",
                     [](AudioCtxData* d, int voiceId, double when) { d->engine->scheduleNoteOn(voiceId, when); })
                 .method("scheduleNoteOff",
                     [](AudioCtxData* d, int voiceId, double when) { d->engine->scheduleNoteOff(voiceId, when); })
-    
+
                 // Voice/clip bus routing
                 .method("setVoiceBus",
                     [](AudioCtxData* d, int voiceId, int busId) { d->engine->setVoiceBus(voiceId, busId); })
                 .method("setPlaybackBus",
                     [](AudioCtxData* d, int id, int busId) { d->engine->setPlaybackBus(id, busId); })
-    
+
                 // Offline effect processing
                 .method_raw("processEffectsOffline", js_audioctx_processEffectsOffline, 2)
-    
+
                 // Offline render (headless u2014 pump the full pipeline without a device)
                 .method_raw("renderBlock", js_audioctx_renderBlock, 1)
-    
+
                 // Preset serialization (JS object <-> JSON) + apply to live engine
                 .method_raw("voicePresetToJson", js_audioctx_voicePresetToJson, 1)
                 .method_raw("busPresetToJson", js_audioctx_busPresetToJson, 1)
@@ -2800,7 +2800,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .method_raw("applyEnginePreset", js_audioctx_applyEnginePreset, 1)
                 .method_raw("savePreset", js_audioctx_savePreset, 2)
                 .method_raw("loadPreset", js_audioctx_loadPreset, 1)
-    
+
                 // Voice lifecycle
                 .method("createVoice",
                     [](AudioCtxData* d) -> int { return d->engine->createVoice(); })
@@ -2812,13 +2812,13 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int voiceId, double when) { d->engine->stopVoice(voiceId, when); })
                 .method("setVoicePersistent",
                     [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoicePersistent(voiceId, v); })
-    
+
                 // Voice note context
                 .method("setVoiceNote",
                     [](AudioCtxData* d, int voiceId, int note, double vel) {
                         d->engine->setVoiceNote(voiceId, note, static_cast<float>(vel));
                     })
-    
+
                 // Direct voice parameter control
                 .method_raw("setVoiceWaveform", js_audioctx_setVoiceWaveform, 2)
                 .method("setVoiceFrequency",
@@ -2837,7 +2837,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int voiceId, double v) { d->engine->setReleaseTime(voiceId, static_cast<float>(v)); })
                 .method("setVoicePitchBend",
                     [](AudioCtxData* d, int voiceId, double semitones) { d->engine->setVoicePitchBend(voiceId, static_cast<float>(semitones)); })
-    
+
                 // Unison
                 .method("setVoiceUnisonCount",
                     [](AudioCtxData* d, int voiceId, int count) { d->engine->setVoiceUnisonCount(voiceId, count); })
@@ -2845,7 +2845,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceUnisonDetune(voiceId, static_cast<float>(v)); })
                 .method("setVoiceUnisonStereoWidth",
                     [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceUnisonStereoWidth(voiceId, static_cast<float>(v)); })
-    
+
                 // Per-voice filter
                 .method("setVoiceFilterEnabled",
                     [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoiceFilterEnabled(voiceId, v); })
@@ -2854,20 +2854,20 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceFilterFrequency(voiceId, static_cast<float>(v)); })
                 .method("setVoiceFilterQ",
                     [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceFilterQ(voiceId, static_cast<float>(v)); })
-    
+
                 // Bus effect order
                 .method_raw("setBusEffectOrder", js_audioctx_setBusEffectOrder, 2)
-    
+
                 // Wavetable
                 .method_raw("createWavetable", js_audioctx_createWavetable, 1)
                 .method_raw("createWavetableFromWaveform", js_audioctx_createWavetableFromWaveform, 1)
                 .method("deleteWavetable",
                     [](AudioCtxData*, int id) { s_wavetables.erase(id); })
                 .method_raw("setVoiceWavetable", js_audioctx_setVoiceWavetable, 2)
-    
+
                 // Spectrum
                 .method_raw("getSpectrum", js_audioctx_getSpectrum, 1)
-    
+
                 // Spatial audio u2014 listener
                 .method("setListenerPosition",
                     [](AudioCtxData* d, double x, double y, double z) {
@@ -2883,7 +2883,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, double x, double y, double z) {
                         d->engine->setListenerVelocity(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
                     })
-    
+
                 // Doppler
                 .prop("dopplerFactor",
                     [](AudioCtxData* d) -> double { return d->engine->dopplerFactor(); },
@@ -2892,7 +2892,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackDopplerRatio(id); })
                 .method("getVoiceDopplerRatio",
                     [](AudioCtxData* d, int id) -> double { return d->engine->getVoiceDopplerRatio(id); })
-    
+
                 // Spatial audio u2014 voice sources
                 .method("setVoiceSpatialEnabled",
                     [](AudioCtxData* d, int voiceId, bool v) { d->engine->setVoiceSpatialEnabled(voiceId, v); })
@@ -2911,7 +2911,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .method("setVoiceSpatialRolloff",
                     [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialRolloff(voiceId, static_cast<float>(v)); })
                 .method_raw("setVoiceSpatialDistanceModel", js_audioctx_setVoiceSpatialDistanceModel, 2)
-    
+
                 // Spatial audio u2014 playback sources
                 .method("setPlaybackSpatialEnabled",
                     [](AudioCtxData* d, int id, bool v) { d->engine->setPlaybackSpatialEnabled(id, v); })
@@ -2930,7 +2930,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .method("setPlaybackSpatialRolloff",
                     [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialRolloff(id, static_cast<float>(v)); })
                 .method_raw("setPlaybackSpatialDistanceModel", js_audioctx_setPlaybackSpatialDistanceModel, 2)
-    
+
                 // Head model
                 .method("setHeadModelEnabled",
                     [](AudioCtxData* d, bool v) { d->engine->setHeadModelEnabled(v); })
@@ -2952,7 +2952,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, double minHz, double maxHz) {
                         d->engine->setHeadModelCutoffRange(static_cast<float>(minHz), static_cast<float>(maxHz));
                     })
-    
+
                 // Aux sends
                 .method("setVoiceSend",
                     [](AudioCtxData* d, int voiceId, int sendBusId, double v) {
@@ -2966,18 +2966,18 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                     [](AudioCtxData* d, int busId, int sendBusId, double v) {
                         d->engine->setBusSend(busId, sendBusId, static_cast<float>(v));
                     })
-    
+
                 // Factory methods
                 .method_raw("createVoiceAllocator", js_audioctx_createVoiceAllocator, 1)
                 .method_raw("getModMatrix", js_audioctx_getModMatrix, 0)
                 .method_raw("createMidiInput", js_audioctx_createMidiInput, 0)
                 .method_raw("createSequence", js_audioctx_createSequence, 1)
-    
+
                 // Recording
                 .method("startRecording",
                     [](AudioCtxData* d) { d->engine->startRecording(); })
                 .method_raw("stopRecording", js_audioctx_stopRecording, 0)
-    
+
                 // Audio file I/O
                 .method_raw("createClipFromFile", js_audioctx_createClipFromFile, 1)
                 .method_raw("createClipFromFileAsync", js_audioctx_createClipFromFileAsync, 1)
@@ -2993,7 +2993,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                         return JS_NewBool(ctx, ok);
                     })
                 .method_raw("saveWav", js_audioctx_saveWav, 4)
-    
+
                 // Clips
                 .method_raw("createClip", js_audioctx_createClip, 1)
                 .method("deleteClip",
@@ -3032,20 +3032,20 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 .method("seekPlayback",
                     [](AudioCtxData* d, int id, double seconds) { d->engine->seekPlayback(id, seconds); });
         }
-    
+
         // The AudioContext constructor created by qjsbind doesn't add the destination property.
         // We need to patch it so that `new AudioContext()` gets a destination property.
         // We do this by evaluating a small JS shim that wraps the constructor.
         {
             JSValue global = JS_GetGlobalObject(ctx);
-    
+
             // Install native getUserMedia
             JS_SetPropertyStr(ctx, global, "__nativeGetUserMedia",
                               JS_NewCFunction(ctx, js_getUserMedia, "__nativeGetUserMedia", 1));
-    
+
             JS_FreeValue(ctx, global);
         }
-    
+
         // Wire destination and getUserMedia via JS shim
         const char* shim =
             "(function() {"

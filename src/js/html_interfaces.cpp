@@ -117,89 +117,89 @@ JSValue js_illegal_constructor(JSContext* ctx, JSValueConst, int, JSValueConst*)
 
 void installHtmlInterfaces(JSContext* ctx, JSClassID elementClassId)
 {
-        if (s_interfaces.count(ctx)) return;
-    
-        JSValue global = JS_GetGlobalObject(ctx);
-    
-        // HTMLElement is installed by custom_elements.cpp (user classes extend it
-        // via super()), and its prototype already sits on Element.prototype. Reuse
-        // it so there is one hierarchy rather than two that disagree.
-        JSValue htmlProto = JS_UNDEFINED;
-        JSValue htmlCtor = JS_GetPropertyStr(ctx, global, "HTMLElement");
-        if (JS_IsFunction(ctx, htmlCtor)) {
-            htmlProto = JS_GetPropertyStr(ctx, htmlCtor, "prototype");
-        }
-        JS_FreeValue(ctx, htmlCtor);
-        if (!JS_IsObject(htmlProto)) {
-            // No HTMLElement yet — sit directly on Element.prototype rather than
-            // leaving the interfaces rootless.
-            JS_FreeValue(ctx, htmlProto);
-            htmlProto = JS_GetClassProto(ctx, elementClassId);
-        }
-    
-        auto* ifs = new Interfaces();
-        ifs->defaultProto = JS_DupValue(ctx, htmlProto);
-        std::unordered_map<std::string, JSValue> byName;   // borrowed
-    
-        for (const auto& def : interfaceDefs()) {
-            JSValue parentProto = htmlProto;
-            if (def.parent) {
-                auto it = byName.find(def.parent);
-                if (it != byName.end()) parentProto = it->second;
-            }
-    
-            JSValue proto = JS_NewObjectProto(ctx, parentProto);
-            JSValue ctor = JS_NewCFunction2(ctx, js_illegal_constructor, def.name, 0,
-                                            JS_CFUNC_constructor, 0);
-            JS_SetPropertyStr(ctx, ctor, "prototype", JS_DupValue(ctx, proto));
-            JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor));
-            JS_SetPropertyStr(ctx, global, def.name, ctor);
-    
-            byName[def.name] = proto;
-            ifs->protos.push_back(proto);            // owns this ref
-            for (const char* tag : def.tags) {
-                ifs->byTag[tag] = JS_DupValue(ctx, proto);
-            }
-        }
-    
+    if (s_interfaces.count(ctx)) return;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+
+    // HTMLElement is installed by custom_elements.cpp (user classes extend it
+    // via super()), and its prototype already sits on Element.prototype. Reuse
+    // it so there is one hierarchy rather than two that disagree.
+    JSValue htmlProto = JS_UNDEFINED;
+    JSValue htmlCtor = JS_GetPropertyStr(ctx, global, "HTMLElement");
+    if (JS_IsFunction(ctx, htmlCtor)) {
+        htmlProto = JS_GetPropertyStr(ctx, htmlCtor, "prototype");
+    }
+    JS_FreeValue(ctx, htmlCtor);
+    if (!JS_IsObject(htmlProto)) {
+        // No HTMLElement yet — sit directly on Element.prototype rather than
+        // leaving the interfaces rootless.
         JS_FreeValue(ctx, htmlProto);
-        s_interfaces[ctx] = ifs;
-    
-        // Wrappers minted before this point still carry the bare Element prototype.
-        // The DOM polyfills run during DomBindings::install — two steps before
-        // interfaces can exist, since they need the HTMLElement that custom
-        // elements create — and touching document.body there caches its wrapper
-        // for good. Re-prototype whatever is already in the cache so the handful of
-        // elements that predate the interfaces are not permanently second-class.
-        JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
-        if (JS_IsObject(elemMap)) {
-            JSPropertyEnum* props = nullptr;
-            uint32_t count = 0;
-            if (JS_GetOwnPropertyNames(ctx, &props, &count, elemMap,
-                                       JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
-                for (uint32_t i = 0; i < count; ++i) {
-                    JSValue wrapper = JS_GetProperty(ctx, elemMap, props[i].atom);
-                    if (JS_IsObject(wrapper)) {
-                        // Read the tag through JS rather than unwrapping the opaque:
-                        // the accessor already normalises, and this file stays clear
-                        // of dom_bindings internals.
-                        JSValue tagVal = JS_GetPropertyStr(ctx, wrapper, "tagName");
-                        if (const char* tag = JS_ToCString(ctx, tagVal)) {
-                            JSValue proto = htmlInterfaceProto(ctx, tag);
-                            if (JS_IsObject(proto)) JS_SetPrototype(ctx, wrapper, proto);
-                            JS_FreeCString(ctx, tag);
-                        }
-                        JS_FreeValue(ctx, tagVal);
-                    }
-                    JS_FreeValue(ctx, wrapper);
-                    JS_FreeAtom(ctx, props[i].atom);
-                }
-                js_free(ctx, props);
-            }
+        htmlProto = JS_GetClassProto(ctx, elementClassId);
+    }
+
+    auto* ifs = new Interfaces();
+    ifs->defaultProto = JS_DupValue(ctx, htmlProto);
+    std::unordered_map<std::string, JSValue> byName;   // borrowed
+
+    for (const auto& def : interfaceDefs()) {
+        JSValue parentProto = htmlProto;
+        if (def.parent) {
+            auto it = byName.find(def.parent);
+            if (it != byName.end()) parentProto = it->second;
         }
-        JS_FreeValue(ctx, elemMap);
-    
-        JS_FreeValue(ctx, global);
+
+        JSValue proto = JS_NewObjectProto(ctx, parentProto);
+        JSValue ctor = JS_NewCFunction2(ctx, js_illegal_constructor, def.name, 0,
+                                        JS_CFUNC_constructor, 0);
+        JS_SetPropertyStr(ctx, ctor, "prototype", JS_DupValue(ctx, proto));
+        JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor));
+        JS_SetPropertyStr(ctx, global, def.name, ctor);
+
+        byName[def.name] = proto;
+        ifs->protos.push_back(proto);            // owns this ref
+        for (const char* tag : def.tags) {
+            ifs->byTag[tag] = JS_DupValue(ctx, proto);
+        }
+    }
+
+    JS_FreeValue(ctx, htmlProto);
+    s_interfaces[ctx] = ifs;
+
+    // Wrappers minted before this point still carry the bare Element prototype.
+    // The DOM polyfills run during DomBindings::install — two steps before
+    // interfaces can exist, since they need the HTMLElement that custom
+    // elements create — and touching document.body there caches its wrapper
+    // for good. Re-prototype whatever is already in the cache so the handful of
+    // elements that predate the interfaces are not permanently second-class.
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+    if (JS_IsObject(elemMap)) {
+        JSPropertyEnum* props = nullptr;
+        uint32_t count = 0;
+        if (JS_GetOwnPropertyNames(ctx, &props, &count, elemMap,
+                                   JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < count; ++i) {
+                JSValue wrapper = JS_GetProperty(ctx, elemMap, props[i].atom);
+                if (JS_IsObject(wrapper)) {
+                    // Read the tag through JS rather than unwrapping the opaque:
+                    // the accessor already normalises, and this file stays clear
+                    // of dom_bindings internals.
+                    JSValue tagVal = JS_GetPropertyStr(ctx, wrapper, "tagName");
+                    if (const char* tag = JS_ToCString(ctx, tagVal)) {
+                        JSValue proto = htmlInterfaceProto(ctx, tag);
+                        if (JS_IsObject(proto)) JS_SetPrototype(ctx, wrapper, proto);
+                        JS_FreeCString(ctx, tag);
+                    }
+                    JS_FreeValue(ctx, tagVal);
+                }
+                JS_FreeValue(ctx, wrapper);
+                JS_FreeAtom(ctx, props[i].atom);
+            }
+            js_free(ctx, props);
+        }
+    }
+    JS_FreeValue(ctx, elemMap);
+
+    JS_FreeValue(ctx, global);
 }
 
 JSValue htmlInterfaceProto(JSContext* ctx, const std::string& tagName) {

@@ -464,9 +464,9 @@ void installGestureBindings(JSContext* ctx, broaudio::Engine* audioEngine, engin
     g_gesture.audioEngine = audioEngine;
         g_gesture.inference   = inference;
         g_gesture.ctx         = ctx;
-    
+
         registerGestureViewClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -474,7 +474,7 @@ void installGestureBindings(JSContext* ctx, broaudio::Engine* audioEngine, engin
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue ges = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, ges, "enrollFromAudio",
             JS_NewCFunction(ctx, js_enrollFromAudio, "enrollFromAudio", 3));
@@ -497,7 +497,7 @@ void installGestureBindings(JSContext* ctx, broaudio::Engine* audioEngine, engin
         JS_SetPropertyStr(ctx, ges, "sampleRate",
             JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
         JS_SetPropertyStr(ctx, broObj, "gesture", ges);
-    
+
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);
 }

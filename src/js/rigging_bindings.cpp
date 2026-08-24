@@ -854,89 +854,44 @@ static JSValue js_ik_lookAt(JSContext* ctx, JSValueConst, int argc, JSValueConst
 // Install
 // ---------------------------------------------------------------------------
 
-void RiggingBindings::cleanup(JSContext*) {
-    // No persistent JSValue/atom storage in this binding — qjsbind finalizers
-    // handle SkinData/Skeleton/Pose/Animation wrappers.
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-bromesh::SkinData* RiggingBindings::getSkinData(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<SDW>(ctx, val);
-    return w ? w->data.get() : nullptr;
-}
-
-JSValue RiggingBindings::wrapSkinData(JSContext* ctx, bromesh::SkinData&& data) {
-    return bro::js::wrapSkinData(ctx, std::move(data));
-}
-
-bromesh::Skeleton* RiggingBindings::getSkeleton(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<SKW>(ctx, val);
-    return w ? w->skel.get() : nullptr;
-}
-
-JSValue RiggingBindings::wrapSkeleton(JSContext* ctx, bromesh::Skeleton&& skel) {
-    return bro::js::wrapSkeleton(ctx, std::move(skel));
-}
-
-bromesh::Pose* RiggingBindings::getPose(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<PW>(ctx, val);
-    return w ? w->pose.get() : nullptr;
-}
-
-JSValue RiggingBindings::wrapPose(JSContext* ctx, bromesh::Pose&& pose) {
-    return bro::js::wrapPose(ctx, std::move(pose));
-}
-
-bromesh::Animation* RiggingBindings::getAnimation(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<AW>(ctx, val);
-    return w ? w->anim.get() : nullptr;
-}
-
-JSValue RiggingBindings::wrapAnimation(JSContext* ctx, bromesh::Animation&& a) {
-    return bro::js::wrapAnimation(ctx, std::move(a));
-}
-
 void RiggingBindings::install(JSContext* ctx)
 {
     // =======================================================================
         // SkinData — per-vertex bone weights/indices + inverse bind matrices
         // =======================================================================
         qjsbind::Class<SDW>(ctx, "SkinData")
-    
+
         .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> SDW* {
             auto sd = std::make_unique<bromesh::SkinData>();
             if (argc > 0 && JS_IsObject(argv[0])) {
                 JSValue v;
-    
+
                 v = JS_GetPropertyStr(ctx, argv[0], "boneWeights");
                 if (!JS_IsUndefined(v)) readFloatArrayVal(ctx, v, sd->boneWeights);
                 JS_FreeValue(ctx, v);
-    
+
                 v = JS_GetPropertyStr(ctx, argv[0], "boneIndices");
                 if (!JS_IsUndefined(v)) readUint32ArrayVal(ctx, v, sd->boneIndices);
                 JS_FreeValue(ctx, v);
-    
+
                 v = JS_GetPropertyStr(ctx, argv[0], "inverseBindMatrices");
                 if (!JS_IsUndefined(v)) readFloatArrayVal(ctx, v, sd->inverseBindMatrices);
                 JS_FreeValue(ctx, v);
-    
+
                 v = JS_GetPropertyStr(ctx, argv[0], "boneCount");
                 if (!JS_IsUndefined(v)) {
                     int32_t bc = 0; JS_ToInt32(ctx, &bc, v);
                     sd->boneCount = (size_t)bc;
                 }
                 JS_FreeValue(ctx, v);
-    
+
                 // Default boneCount from inverseBindMatrices size if not set.
                 if (sd->boneCount == 0 && !sd->inverseBindMatrices.empty())
                     sd->boneCount = sd->inverseBindMatrices.size() / 16;
             }
             return new SDW{std::move(sd)};
         })
-    
+
         // ── TypedArray properties (getter + setter) ─────────────────────────
         .prop("boneWeights",
             [](SDW* w, JSContext* ctx) -> JSValue {
@@ -962,22 +917,22 @@ void RiggingBindings::install(JSContext* ctx)
         .prop("boneCount",
             [](SDW* w) { return (int)(w->data ? w->data->boneCount : 0); },
             [](SDW* w, int n) { if (w->data) w->data->boneCount = (size_t)(n < 0 ? 0 : n); })
-    
+
         // Vertex count derivable from boneWeights / 4
         .get("vertexCount", [](SDW* w) {
             return (int)(w->data ? w->data->boneWeights.size() / 4 : 0);
         })
-    
+
         // ── Methods ─────────────────────────────────────────────────────────
         .method("clone", [](SDW* w, JSContext* ctx) -> JSValue {
             if (!w->data) return JS_UNDEFINED;
             return wrapSkinData(ctx, bromesh::SkinData(*w->data));
         })
-    
+
         .method("normalize", [](SDW* w) {
             if (w->data) bromesh::normalizeWeights(*w->data);
         }, qjsbind::returns_this)
-    
+
         // ── Static methods ──────────────────────────────────────────────────
         .static_method("validate", [](JSContext* ctx, JSValue meshVal, JSValue skinVal,
                                       std::optional<JSValue> options) -> JSValue {
@@ -985,7 +940,7 @@ void RiggingBindings::install(JSContext* ctx)
             auto* sw   = qjsbind::unwrap<SDW>(ctx, skinVal);
             if (!mesh || !sw || !sw->data)
                 return JS_ThrowTypeError(ctx, "validate requires (Mesh, SkinData)");
-    
+
             int influences = 4;
             float sumTol = 1e-3f;
             if (options && JS_IsObject(*options)) {
@@ -997,7 +952,7 @@ void RiggingBindings::install(JSContext* ctx)
                 if (!JS_IsUndefined(v)) { double x; JS_ToFloat64(ctx, &x, v); sumTol = (float)x; }
                 JS_FreeValue(ctx, v);
             }
-    
+
             auto v = bromesh::validateSkin(*mesh, *sw->data, influences, sumTol);
             JSValue obj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, obj, "vertexCount",            JS_NewInt64(ctx, (int64_t)v.vertexCount));
@@ -1009,7 +964,7 @@ void RiggingBindings::install(JSContext* ctx)
             JS_SetPropertyStr(ctx, obj, "clean",                  JS_NewBool(ctx, v.clean()));
             return obj;
         })
-    
+
         .static_method("transfer", [](JSContext* ctx, JSValue targetMesh, JSValue sourceMesh,
                                       JSValue sourceSkin, std::optional<double> maxDistance) -> JSValue {
             auto* tgt = MeshBindings::getMeshData(ctx, targetMesh);
@@ -1022,12 +977,12 @@ void RiggingBindings::install(JSContext* ctx)
             return wrapSkinData(ctx, std::move(out));
         })
         ;
-    
+
         // =======================================================================
         // Skeleton — bones + sockets + bind pose
         // =======================================================================
         qjsbind::Class<SKW>(ctx, "Skeleton")
-    
+
         .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> SKW* {
             auto s = std::make_unique<bromesh::Skeleton>();
             if (argc > 0 && JS_IsObject(argv[0])) {
@@ -1041,13 +996,13 @@ void RiggingBindings::install(JSContext* ctx)
             }
             return new SKW{std::move(s)};
         })
-    
+
         .static_method("fromBones", [](JSContext* ctx, JSValue bones) -> JSValue {
             bromesh::Skeleton s;
             readBonesArray(ctx, bones, s.bones);
             return wrapSkeleton(ctx, std::move(s));
         })
-    
+
         .prop("bones",
             [](SKW* w, JSContext* ctx) -> JSValue {
                 return w->skel ? makeBonesArray(ctx, w->skel->bones) : JS_UNDEFINED;
@@ -1062,42 +1017,42 @@ void RiggingBindings::install(JSContext* ctx)
             [](SKW* w, JSContext* ctx, JSValue val) {
                 if (w->skel) readSocketsArray(ctx, val, w->skel->sockets);
             })
-    
+
         .get("boneCount",   [](SKW* w) { return (int)(w->skel ? w->skel->bones.size()   : 0); })
         .get("socketCount", [](SKW* w) { return (int)(w->skel ? w->skel->sockets.size() : 0); })
-    
+
         .method("findBone",   [](SKW* w, std::string name) -> int {
             return w->skel ? w->skel->findBone(name) : -1;
         })
         .method("findSocket", [](SKW* w, std::string name) -> int {
             return w->skel ? w->skel->findSocket(name) : -1;
         })
-    
+
         .method("addSocket", [](SKW* w, JSContext* ctx, JSValue obj) -> int {
             if (!w->skel || !JS_IsObject(obj)) return -1;
             w->skel->sockets.push_back(readSocket(ctx, obj));
             return (int)w->skel->sockets.size() - 1;
         })
-    
+
         .method("bindPose", [](SKW* w, JSContext* ctx) -> JSValue {
             if (!w->skel) return JS_UNDEFINED;
             return wrapPose(ctx, bromesh::bindPose(*w->skel));
         })
-    
+
         .method("addRigifySockets", [](SKW* w) -> int {
             return w->skel ? bromesh::addRigifySockets(*w->skel) : 0;
         })
-    
+
         .method("findBoneBySuffix", [](SKW* w, std::string suffix) -> int {
             return w->skel ? bromesh::findBoneBySuffix(*w->skel, suffix) : -1;
         })
         ;
-    
+
         // =======================================================================
         // Pose — flat array of local TRS per bone (stride 10)
         // =======================================================================
         qjsbind::Class<PW>(ctx, "Pose")
-    
+
         .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> PW* {
             auto p = std::make_unique<bromesh::Pose>();
             if (argc > 0) {
@@ -1122,7 +1077,7 @@ void RiggingBindings::install(JSContext* ctx)
             }
             return new PW{std::move(p)};
         })
-    
+
         .prop("data",
             [](PW* w, JSContext* ctx) -> JSValue {
                 return w->pose ? make_float32_array(ctx, w->pose->data) : JS_UNDEFINED;
@@ -1130,16 +1085,16 @@ void RiggingBindings::install(JSContext* ctx)
             [](PW* w, JSContext* ctx, JSValue val) {
                 if (w->pose) readFloatArrayVal(ctx, val, w->pose->data);
             })
-    
+
         .get("boneCount", [](PW* w) {
             return (int)(w->pose ? w->pose->boneCount() : 0);
         })
-    
+
         .method("clone", [](PW* w, JSContext* ctx) -> JSValue {
             if (!w->pose) return JS_UNDEFINED;
             return wrapPose(ctx, bromesh::Pose(*w->pose));
         })
-    
+
         .method("computeWorldMatrices", [](PW* w, JSContext* ctx, JSValue skelVal) -> JSValue {
             if (!w->pose) return JS_UNDEFINED;
             auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
@@ -1148,7 +1103,7 @@ void RiggingBindings::install(JSContext* ctx)
             bromesh::computeWorldMatrices(*sk->skel, *w->pose, out);
             return make_float32_array(ctx, out);
         })
-    
+
         .method("computeSkinningMatrices", [](PW* w, JSContext* ctx, JSValue skelVal) -> JSValue {
             if (!w->pose) return JS_UNDEFINED;
             auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
@@ -1157,7 +1112,7 @@ void RiggingBindings::install(JSContext* ctx)
             bromesh::computeSkinningMatrices(*sk->skel, *w->pose, out);
             return make_float32_array(ctx, out);
         })
-    
+
         .method("socketWorld", [](PW* w, JSContext* ctx, JSValue skelVal, std::string name) -> JSValue {
             if (!w->pose) return JS_NULL;
             auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
@@ -1167,7 +1122,7 @@ void RiggingBindings::install(JSContext* ctx)
             std::vector<float> v(optM->begin(), optM->end());
             return make_float32_array(ctx, v);
         })
-    
+
         .static_method("blend", [](JSContext* ctx, JSValue aVal, JSValue bVal, double weight,
                                     std::optional<JSValue> mask) -> JSValue {
             auto* aw = qjsbind::unwrap<PW>(ctx, aVal);
@@ -1183,7 +1138,7 @@ void RiggingBindings::install(JSContext* ctx)
             bromesh::blendPoses(*aw->pose, *bw->pose, (float)weight, maskPtr);
             return JS_DupValue(ctx, aVal);
         })
-    
+
         // Weighted N-way blend → NEW Pose. Translations/scales are normalized
         // weighted sums; rotations are weighted nlerp hemisphere-aligned to the
         // highest-weight pose (2 poses take an exact slerp path identical to
@@ -1233,18 +1188,18 @@ void RiggingBindings::install(JSContext* ctx)
             return wrapPose(ctx, std::move(out));
         })
         ;
-    
+
         // =======================================================================
         // Animation — keyframed channels, evaluated to Pose
         // =======================================================================
         qjsbind::Class<AW>(ctx, "Animation")
-    
+
         .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> AW* {
             auto a = std::make_unique<bromesh::Animation>();
             if (argc > 0 && JS_IsObject(argv[0])) readAnimationFromObj(ctx, argv[0], *a);
             return new AW{std::move(a)};
         })
-    
+
         .prop("name",
             [](AW* w, JSContext* ctx) -> JSValue {
                 return w->anim ? JS_NewString(ctx, w->anim->name.c_str()) : JS_UNDEFINED;
@@ -1254,11 +1209,11 @@ void RiggingBindings::install(JSContext* ctx)
                 const char* s = JS_ToCString(ctx, val);
                 if (s) { w->anim->name = s; JS_FreeCString(ctx, s); }
             })
-    
+
         .prop("duration",
             [](AW* w) { return (double)(w->anim ? w->anim->duration : 0.0f); },
             [](AW* w, double d) { if (w->anim) w->anim->duration = (float)d; })
-    
+
         .prop("channels",
             [](AW* w, JSContext* ctx) -> JSValue {
                 return w->anim ? makeChannelsArray(ctx, w->anim->channels) : JS_UNDEFINED;
@@ -1266,9 +1221,9 @@ void RiggingBindings::install(JSContext* ctx)
             [](AW* w, JSContext* ctx, JSValue val) {
                 if (w->anim) readChannelsArray(ctx, val, w->anim->channels);
             })
-    
+
         .get("channelCount", [](AW* w) { return (int)(w->anim ? w->anim->channels.size() : 0); })
-    
+
         .method("evaluate", [](AW* w, JSContext* ctx, JSValue skelVal, double t,
                                 std::optional<JSValue> opts) -> JSValue {
             if (!w->anim) return JS_UNDEFINED;
@@ -1282,7 +1237,7 @@ void RiggingBindings::install(JSContext* ctx)
             }
             return wrapPose(ctx, bromesh::evaluateAnimation(*sk->skel, *w->anim, (float)t, loop));
         })
-    
+
         .method("evaluateInto", [](AW* w, JSContext* ctx, JSValue skelVal, double t,
                                     JSValue poseVal, std::optional<JSValue> opts) -> JSValue {
             if (!w->anim) return JS_UNDEFINED;
@@ -1299,7 +1254,7 @@ void RiggingBindings::install(JSContext* ctx)
             bromesh::evaluateAnimationInto(*sk->skel, *w->anim, (float)t, loop, *pw->pose);
             return JS_DupValue(ctx, poseVal);
         })
-    
+
         .static_method("retarget", [](JSContext* ctx, JSValue animVal, JSValue srcSkel, JSValue dstSkel) -> JSValue {
             auto* aw = qjsbind::unwrap<AW>(ctx, animVal);
             auto* ss = qjsbind::unwrap<SKW>(ctx, srcSkel);
@@ -1309,7 +1264,7 @@ void RiggingBindings::install(JSContext* ctx)
             return wrapAnimation(ctx, bromesh::retargetAnimation(*aw->anim, *ss->skel, *ds->skel));
         })
         ;
-    
+
         // RigSpec — opaque wrapper for bromesh::RigSpec (build via Rig.spec/.specFromJSON)
         // =======================================================================
         qjsbind::Class<RSW>(ctx, "RigSpec")
@@ -1342,12 +1297,12 @@ void RiggingBindings::install(JSContext* ctx)
             return makeStringArray(ctx, names);
         })
         ;
-    
+
         // =======================================================================
         // VoxelChunk — fixed-height voxel grid with greedy meshing
         // =======================================================================
         qjsbind::Class<VCW>(ctx, "VoxelChunk")
-    
+
         .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> VCW* {
             int32_t sx = 0, sy = 0, sz = 0;
             double cs = 1.0;
@@ -1361,40 +1316,40 @@ void RiggingBindings::install(JSContext* ctx)
             }
             return new VCW{std::make_unique<bromesh::VoxelChunk>(sx, sy, sz, (float)cs)};
         })
-    
+
         .get("sizeX",    [](VCW* w) { return w->chunk ? w->chunk->sizeX() : 0; })
         .get("sizeY",    [](VCW* w) { return w->chunk ? w->chunk->sizeY() : 0; })
         .get("sizeZ",    [](VCW* w) { return w->chunk ? w->chunk->sizeZ() : 0; })
         .get("cellSize", [](VCW* w) { return (double)(w->chunk ? w->chunk->cellSize() : 0.0f); })
-    
+
         .prop("isDirty",
             [](VCW* w) { return w->chunk && w->chunk->isDirty(); },
             [](VCW* w, bool v) {
                 if (!w->chunk) return;
                 if (v) w->chunk->markDirty(); else w->chunk->clearDirty();
             })
-    
+
         .method("getVoxel", [](VCW* w, int x, int y, int z) -> int {
             return w->chunk ? (int)w->chunk->getVoxel(x, y, z) : 0;
         })
-    
+
         .method("setVoxel", [](VCW* w, int x, int y, int z, int material) {
             if (w->chunk) w->chunk->setVoxel(x, y, z, (uint8_t)material);
         }, qjsbind::returns_this)
-    
+
         .method("fill", [](VCW* w, int value) {
             if (w->chunk) w->chunk->fill((uint8_t)value);
         }, qjsbind::returns_this)
-    
+
         .method("markDirty",  [](VCW* w) { if (w->chunk) w->chunk->markDirty(); }, qjsbind::returns_this)
         .method("clearDirty", [](VCW* w) { if (w->chunk) w->chunk->clearDirty(); }, qjsbind::returns_this)
-    
+
         .method("data", [](VCW* w, JSContext* ctx) -> JSValue {
             if (!w->chunk) return JS_UNDEFINED;
             size_t n = (size_t)w->chunk->sizeX() * (size_t)w->chunk->sizeY() * (size_t)w->chunk->sizeZ();
             return makeUint8Array(ctx, w->chunk->data(), n);
         })
-    
+
         .method("setData", [](VCW* w, JSContext* ctx, JSValue val) {
             if (!w->chunk) return;
             std::vector<uint8_t> bytes;
@@ -1404,7 +1359,7 @@ void RiggingBindings::install(JSContext* ctx)
             std::memcpy(w->chunk->data(), bytes.data(), copyN);
             w->chunk->markDirty();
         }, qjsbind::returns_this)
-    
+
         .method("buildMesh", [](VCW* w, JSContext* ctx, std::optional<JSValue> palette,
                                  std::optional<int> paletteCount) -> JSValue {
             if (!w->chunk) return JS_UNDEFINED;
@@ -1422,13 +1377,13 @@ void RiggingBindings::install(JSContext* ctx)
                 std::make_unique<bromesh::MeshData>(std::move(mesh)));
         })
         ;
-    
+
         // =======================================================================
         // IK + Rig — global namespace objects
         // =======================================================================
         {
             JSValue global = JS_GetGlobalObject(ctx);
-    
+
             JSValue ikObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, ikObj, "twoBone",
                 JS_NewCFunction(ctx, js_ik_twoBone, "twoBone", 7));
@@ -1437,7 +1392,7 @@ void RiggingBindings::install(JSContext* ctx)
             JS_SetPropertyStr(ctx, ikObj, "lookAt",
                 JS_NewCFunction(ctx, js_ik_lookAt,  "lookAt",  5));
             JS_SetPropertyStr(ctx, global, "IK", ikObj);
-    
+
             JSValue rigObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, rigObj, "spec",
                 JS_NewCFunction(ctx, js_rig_spec, "spec", 1));
@@ -1466,10 +1421,56 @@ void RiggingBindings::install(JSContext* ctx)
             JS_SetPropertyStr(ctx, rigObj, "generateLocomotionCycle",
                 JS_NewCFunction(ctx, js_rig_generateLocomotionCycle, "generateLocomotionCycle", 3));
             JS_SetPropertyStr(ctx, global, "Rig", rigObj);
-    
+
             JS_FreeValue(ctx, global);
         }
 }
+
+void RiggingBindings::cleanup(JSContext*) {
+    // No persistent JSValue/atom storage in this binding — qjsbind finalizers
+    // handle SkinData/Skeleton/Pose/Animation wrappers.
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+bromesh::SkinData* RiggingBindings::getSkinData(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<SDW>(ctx, val);
+    return w ? w->data.get() : nullptr;
+}
+
+JSValue RiggingBindings::wrapSkinData(JSContext* ctx, bromesh::SkinData&& data) {
+    return bro::js::wrapSkinData(ctx, std::move(data));
+}
+
+bromesh::Skeleton* RiggingBindings::getSkeleton(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<SKW>(ctx, val);
+    return w ? w->skel.get() : nullptr;
+}
+
+JSValue RiggingBindings::wrapSkeleton(JSContext* ctx, bromesh::Skeleton&& skel) {
+    return bro::js::wrapSkeleton(ctx, std::move(skel));
+}
+
+bromesh::Pose* RiggingBindings::getPose(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<PW>(ctx, val);
+    return w ? w->pose.get() : nullptr;
+}
+
+JSValue RiggingBindings::wrapPose(JSContext* ctx, bromesh::Pose&& pose) {
+    return bro::js::wrapPose(ctx, std::move(pose));
+}
+
+bromesh::Animation* RiggingBindings::getAnimation(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<AW>(ctx, val);
+    return w ? w->anim.get() : nullptr;
+}
+
+JSValue RiggingBindings::wrapAnimation(JSContext* ctx, bromesh::Animation&& a) {
+    return bro::js::wrapAnimation(ctx, std::move(a));
+}
+
 
 } // namespace bro::js
 

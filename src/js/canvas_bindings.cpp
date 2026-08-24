@@ -652,155 +652,155 @@ static void defineRawProp(JSContext* ctx, JSValue proto, const char* name,
 
 void CanvasBindings::install(JSContext* ctx)
 {
-        // Register CanvasGradient first — returned by context createLinear/Radial.
-        {
-            qjsbind::Class<CanvasGradient>(ctx, "CanvasGradient")
-                .method("addColorStop", [](CanvasGradient* g, double offset, std::string color) {
-                    if (!g) return;
-                    if (!std::isfinite(offset)) return;
-                    offset = offset < 0.0 ? 0.0 : (offset > 1.0 ? 1.0 : offset);
-                    uint8_t r, gc, b, a;
-                    if (!canvas::parseCSSColor(color, r, gc, b, a)) return;
-                    uint32_t argb = (static_cast<uint32_t>(a) << 24) |
-                                    (static_cast<uint32_t>(r)  << 16) |
-                                    (static_cast<uint32_t>(gc) << 8)  |
-                                     static_cast<uint32_t>(b);
-                    g->stops.emplace_back(static_cast<float>(offset), argb);
-                });
-        }
-    
-        // Register the class with qjsbind — destructor finalizes at end of block
-        {
-            qjsbind::Class<CW>(ctx, "CanvasRenderingContext2D")
-                // --- Simple numeric/bool properties ---
-                .prop("lineWidth",
-                    [](CW* w) -> double { return w->scene ? w->scene->lineWidth() : 0; },
-                    [](CW* w, double v) { if (w->scene) w->scene->setLineWidth((float)v); })
-                .prop("globalAlpha",
-                    [](CW* w) -> double { return w->scene ? w->scene->globalAlpha() : 0; },
-                    [](CW* w, double v) { if (w->scene) w->scene->setGlobalAlpha((float)v); })
-                .prop("font",
-                    [](CW* w, JSContext* c) -> JSValue {
-                        return w->scene ? JS_NewString(c, w->scene->fontString().c_str()) : JS_UNDEFINED;
-                    },
-                    [](CW* w, std::string v) { if (w->scene) w->scene->setFont(v); })
-                .prop("miterLimit",
-                    [](CW* w) -> double { return w->scene ? w->scene->miterLimit() : 0; },
-                    [](CW* w, double v) { if (w->scene) w->scene->setMiterLimit((float)v); })
-                .prop("shadowBlur",
-                    [](CW* w) -> double { return w->scene ? w->scene->shadowBlur() : 0; },
-                    [](CW* w, double v) { if (w->scene) w->scene->setShadowBlur((float)v); })
-                .prop("shadowOffsetX",
-                    [](CW* w) -> double { return w->scene ? w->scene->shadowOffsetX() : 0; },
-                    [](CW* w, double v) { if (w->scene) w->scene->setShadowOffsetX((float)v); })
-                .prop("shadowOffsetY",
-                    [](CW* w) -> double { return w->scene ? w->scene->shadowOffsetY() : 0; },
-                    [](CW* w, double v) { if (w->scene) w->scene->setShadowOffsetY((float)v); })
-                .prop("imageSmoothingEnabled",
-                    [](CW* w) -> bool { return w->scene ? w->scene->imageSmoothingEnabled() : false; },
-                    [](CW* w, bool v) { if (w->scene) w->scene->setImageSmoothingEnabled(v); })
-    
-                // --- Read-only properties ---
-                .get("canvasWidth",
-                    [](CW* w) -> int { return w->scene ? w->scene->width() : 0; })
-                .get("canvasHeight",
-                    [](CW* w) -> int { return w->scene ? w->scene->height() : 0; })
-    
-                // --- Simple void methods ---
-                .method("save", [](CW* w) { if (w->scene) w->scene->save(); })
-                .method("restore", [](CW* w) { if (w->scene) w->scene->restore(); })
-                .method("reset", [](CW* w) { if (w->scene) w->scene->reset(); })
-                .method("beginPath", [](CW* w) { if (w->scene) w->scene->beginPath(); })
-                .method("closePath", [](CW* w) { if (w->scene) w->scene->closePath(); })
-                .method("stroke", [](CW* w) { if (w->scene) w->scene->stroke(); })
-                .method("fill", [](CW* w) { if (w->scene) w->scene->fill(); })
-                .method("clip", [](CW* w) { if (w->scene) w->scene->clip(); })
-                .method("resetTransform", [](CW* w) { if (w->scene) w->scene->resetTransform(); })
-    
-                // --- Methods with typed args ---
-                .method("fillRect", [](CW* w, double x, double y, double wi, double h) {
-                    if (w->scene) w->scene->fillRect((float)x, (float)y, (float)wi, (float)h);
-                })
-                .method("strokeRect", [](CW* w, double x, double y, double wi, double h) {
-                    if (w->scene) w->scene->strokeRect((float)x, (float)y, (float)wi, (float)h);
-                })
-                .method("clearRect", [](CW* w, double x, double y, double wi, double h) {
-                    if (w->scene) w->scene->clearRect((float)x, (float)y, (float)wi, (float)h);
-                })
-                .method("fillText", [](CW* w, std::string text, double x, double y) {
-                    if (w->scene) w->scene->fillText(text, (float)x, (float)y);
-                })
-                .method("strokeText", [](CW* w, std::string text, double x, double y) {
-                    if (w->scene) w->scene->strokeText(text, (float)x, (float)y);
-                })
-                .method("translate", [](CW* w, double x, double y) {
-                    if (w->scene) w->scene->translate((float)x, (float)y);
-                })
-                .method("rotate", [](CW* w, double angle) {
-                    if (w->scene) w->scene->rotate((float)angle);
-                })
-                .method("scale", [](CW* w, double x, double y) {
-                    if (w->scene) w->scene->scale((float)x, (float)y);
-                })
-                .method("setTransform", [](CW* w, double a, double b, double c, double d, double e, double f) {
-                    if (w->scene) w->scene->setTransform((float)a, (float)b, (float)c, (float)d, (float)e, (float)f);
-                })
-                .method("transform", [](CW* w, double a, double b, double c, double d, double e, double f) {
-                    if (w->scene) w->scene->transform((float)a, (float)b, (float)c, (float)d, (float)e, (float)f);
-                })
-                .method("moveTo", [](CW* w, double x, double y) {
-                    if (w->scene) w->scene->moveTo((float)x, (float)y);
-                })
-                .method("lineTo", [](CW* w, double x, double y) {
-                    if (w->scene) w->scene->lineTo((float)x, (float)y);
-                })
-                .method("arcTo", [](CW* w, double x1, double y1, double x2, double y2, double r) {
-                    if (w->scene) w->scene->arcTo((float)x1, (float)y1, (float)x2, (float)y2, (float)r);
-                })
-                .method("bezierCurveTo", [](CW* w, double cp1x, double cp1y, double cp2x, double cp2y, double x, double y) {
-                    if (w->scene) w->scene->bezierCurveTo((float)cp1x, (float)cp1y, (float)cp2x, (float)cp2y, (float)x, (float)y);
-                })
-                .method("quadraticCurveTo", [](CW* w, double cpx, double cpy, double x, double y) {
-                    if (w->scene) w->scene->quadraticCurveTo((float)cpx, (float)cpy, (float)x, (float)y);
-                })
-                .method("rect", [](CW* w, double x, double y, double wi, double h) {
-                    if (w->scene) w->scene->rect((float)x, (float)y, (float)wi, (float)h);
-                })
-                .method("isPointInPath", [](CW* w, double x, double y) -> bool {
-                    return w->scene ? w->scene->isPointInPath((float)x, (float)y) : false;
-                })
-    
-                // --- Complex methods needing raw argc/argv ---
-                .method_raw("arc", js_arc, 6)
-                .method_raw("ellipse", js_ellipse, 8)
-                .method_raw("polyline", js_polyline, 1)
-                .method_raw("drawImage", js_drawImage, 9)
-                .method_raw("getImageData", js_getImageData, 4)
-                .method_raw("putImageData", js_putImageData, 3)
-                .method_raw("createImageData", js_createImageData, 2)
-                .method_raw("createLinearGradient", js_createLinearGradient, 4)
-                .method_raw("createRadialGradient", js_createRadialGradient, 6)
-                .method_raw("measureText", js_measureText, 1)
-                .method_raw("setLineDash", js_setLineDash, 1)
-                .method_raw("getLineDash", js_getLineDash, 0)
-                .prop("lineDashOffset",
-                    [](CW* w) -> double { return w->scene ? w->scene->lineDashOffset() : 0; },
-                    [](CW* w, double v) { if (w->scene) w->scene->setLineDashOffset((float)v); });
-        }
-        // Class destructor has run — proto is now registered. Add raw string-enum properties.
-        JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<CW>());
-    
-        defineRawProp(ctx, proto, "fillStyle",               raw_get_fillStyle,       raw_set_fillStyle);
-        defineRawProp(ctx, proto, "strokeStyle",             raw_get_strokeStyle,     raw_set_strokeStyle);
-        defineRawProp(ctx, proto, "lineCap",                 raw_get_lineCap,         raw_set_lineCap);
-        defineRawProp(ctx, proto, "lineJoin",                raw_get_lineJoin,        raw_set_lineJoin);
-        defineRawProp(ctx, proto, "globalCompositeOperation",raw_get_globalCompositeOp, raw_set_globalCompositeOp);
-        defineRawProp(ctx, proto, "textAlign",               raw_get_textAlign,       raw_set_textAlign);
-        defineRawProp(ctx, proto, "textBaseline",            raw_get_textBaseline,    raw_set_textBaseline);
-        defineRawProp(ctx, proto, "direction",               raw_get_direction,       raw_set_direction);
-        defineRawProp(ctx, proto, "shadowColor",             raw_get_shadowColor,     raw_set_shadowColor);
-    
-        JS_FreeValue(ctx, proto);
+    // Register CanvasGradient first — returned by context createLinear/Radial.
+    {
+        qjsbind::Class<CanvasGradient>(ctx, "CanvasGradient")
+            .method("addColorStop", [](CanvasGradient* g, double offset, std::string color) {
+                if (!g) return;
+                if (!std::isfinite(offset)) return;
+                offset = offset < 0.0 ? 0.0 : (offset > 1.0 ? 1.0 : offset);
+                uint8_t r, gc, b, a;
+                if (!canvas::parseCSSColor(color, r, gc, b, a)) return;
+                uint32_t argb = (static_cast<uint32_t>(a) << 24) |
+                                (static_cast<uint32_t>(r)  << 16) |
+                                (static_cast<uint32_t>(gc) << 8)  |
+                                 static_cast<uint32_t>(b);
+                g->stops.emplace_back(static_cast<float>(offset), argb);
+            });
+    }
+
+    // Register the class with qjsbind — destructor finalizes at end of block
+    {
+        qjsbind::Class<CW>(ctx, "CanvasRenderingContext2D")
+            // --- Simple numeric/bool properties ---
+            .prop("lineWidth",
+                [](CW* w) -> double { return w->scene ? w->scene->lineWidth() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setLineWidth((float)v); })
+            .prop("globalAlpha",
+                [](CW* w) -> double { return w->scene ? w->scene->globalAlpha() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setGlobalAlpha((float)v); })
+            .prop("font",
+                [](CW* w, JSContext* c) -> JSValue {
+                    return w->scene ? JS_NewString(c, w->scene->fontString().c_str()) : JS_UNDEFINED;
+                },
+                [](CW* w, std::string v) { if (w->scene) w->scene->setFont(v); })
+            .prop("miterLimit",
+                [](CW* w) -> double { return w->scene ? w->scene->miterLimit() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setMiterLimit((float)v); })
+            .prop("shadowBlur",
+                [](CW* w) -> double { return w->scene ? w->scene->shadowBlur() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setShadowBlur((float)v); })
+            .prop("shadowOffsetX",
+                [](CW* w) -> double { return w->scene ? w->scene->shadowOffsetX() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setShadowOffsetX((float)v); })
+            .prop("shadowOffsetY",
+                [](CW* w) -> double { return w->scene ? w->scene->shadowOffsetY() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setShadowOffsetY((float)v); })
+            .prop("imageSmoothingEnabled",
+                [](CW* w) -> bool { return w->scene ? w->scene->imageSmoothingEnabled() : false; },
+                [](CW* w, bool v) { if (w->scene) w->scene->setImageSmoothingEnabled(v); })
+
+            // --- Read-only properties ---
+            .get("canvasWidth",
+                [](CW* w) -> int { return w->scene ? w->scene->width() : 0; })
+            .get("canvasHeight",
+                [](CW* w) -> int { return w->scene ? w->scene->height() : 0; })
+
+            // --- Simple void methods ---
+            .method("save", [](CW* w) { if (w->scene) w->scene->save(); })
+            .method("restore", [](CW* w) { if (w->scene) w->scene->restore(); })
+            .method("reset", [](CW* w) { if (w->scene) w->scene->reset(); })
+            .method("beginPath", [](CW* w) { if (w->scene) w->scene->beginPath(); })
+            .method("closePath", [](CW* w) { if (w->scene) w->scene->closePath(); })
+            .method("stroke", [](CW* w) { if (w->scene) w->scene->stroke(); })
+            .method("fill", [](CW* w) { if (w->scene) w->scene->fill(); })
+            .method("clip", [](CW* w) { if (w->scene) w->scene->clip(); })
+            .method("resetTransform", [](CW* w) { if (w->scene) w->scene->resetTransform(); })
+
+            // --- Methods with typed args ---
+            .method("fillRect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->fillRect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("strokeRect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->strokeRect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("clearRect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->clearRect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("fillText", [](CW* w, std::string text, double x, double y) {
+                if (w->scene) w->scene->fillText(text, (float)x, (float)y);
+            })
+            .method("strokeText", [](CW* w, std::string text, double x, double y) {
+                if (w->scene) w->scene->strokeText(text, (float)x, (float)y);
+            })
+            .method("translate", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->translate((float)x, (float)y);
+            })
+            .method("rotate", [](CW* w, double angle) {
+                if (w->scene) w->scene->rotate((float)angle);
+            })
+            .method("scale", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->scale((float)x, (float)y);
+            })
+            .method("setTransform", [](CW* w, double a, double b, double c, double d, double e, double f) {
+                if (w->scene) w->scene->setTransform((float)a, (float)b, (float)c, (float)d, (float)e, (float)f);
+            })
+            .method("transform", [](CW* w, double a, double b, double c, double d, double e, double f) {
+                if (w->scene) w->scene->transform((float)a, (float)b, (float)c, (float)d, (float)e, (float)f);
+            })
+            .method("moveTo", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->moveTo((float)x, (float)y);
+            })
+            .method("lineTo", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->lineTo((float)x, (float)y);
+            })
+            .method("arcTo", [](CW* w, double x1, double y1, double x2, double y2, double r) {
+                if (w->scene) w->scene->arcTo((float)x1, (float)y1, (float)x2, (float)y2, (float)r);
+            })
+            .method("bezierCurveTo", [](CW* w, double cp1x, double cp1y, double cp2x, double cp2y, double x, double y) {
+                if (w->scene) w->scene->bezierCurveTo((float)cp1x, (float)cp1y, (float)cp2x, (float)cp2y, (float)x, (float)y);
+            })
+            .method("quadraticCurveTo", [](CW* w, double cpx, double cpy, double x, double y) {
+                if (w->scene) w->scene->quadraticCurveTo((float)cpx, (float)cpy, (float)x, (float)y);
+            })
+            .method("rect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->rect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("isPointInPath", [](CW* w, double x, double y) -> bool {
+                return w->scene ? w->scene->isPointInPath((float)x, (float)y) : false;
+            })
+
+            // --- Complex methods needing raw argc/argv ---
+            .method_raw("arc", js_arc, 6)
+            .method_raw("ellipse", js_ellipse, 8)
+            .method_raw("polyline", js_polyline, 1)
+            .method_raw("drawImage", js_drawImage, 9)
+            .method_raw("getImageData", js_getImageData, 4)
+            .method_raw("putImageData", js_putImageData, 3)
+            .method_raw("createImageData", js_createImageData, 2)
+            .method_raw("createLinearGradient", js_createLinearGradient, 4)
+            .method_raw("createRadialGradient", js_createRadialGradient, 6)
+            .method_raw("measureText", js_measureText, 1)
+            .method_raw("setLineDash", js_setLineDash, 1)
+            .method_raw("getLineDash", js_getLineDash, 0)
+            .prop("lineDashOffset",
+                [](CW* w) -> double { return w->scene ? w->scene->lineDashOffset() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setLineDashOffset((float)v); });
+    }
+    // Class destructor has run — proto is now registered. Add raw string-enum properties.
+    JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<CW>());
+
+    defineRawProp(ctx, proto, "fillStyle",               raw_get_fillStyle,       raw_set_fillStyle);
+    defineRawProp(ctx, proto, "strokeStyle",             raw_get_strokeStyle,     raw_set_strokeStyle);
+    defineRawProp(ctx, proto, "lineCap",                 raw_get_lineCap,         raw_set_lineCap);
+    defineRawProp(ctx, proto, "lineJoin",                raw_get_lineJoin,        raw_set_lineJoin);
+    defineRawProp(ctx, proto, "globalCompositeOperation",raw_get_globalCompositeOp, raw_set_globalCompositeOp);
+    defineRawProp(ctx, proto, "textAlign",               raw_get_textAlign,       raw_set_textAlign);
+    defineRawProp(ctx, proto, "textBaseline",            raw_get_textBaseline,    raw_set_textBaseline);
+    defineRawProp(ctx, proto, "direction",               raw_get_direction,       raw_set_direction);
+    defineRawProp(ctx, proto, "shadowColor",             raw_get_shadowColor,     raw_set_shadowColor);
+
+    JS_FreeValue(ctx, proto);
 }
 
 

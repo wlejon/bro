@@ -3078,7 +3078,7 @@ void installTtsBindings(JSContext* ctx) {
         registerSpeakerEncoderClass(ctx);
         registerKokoroSessionClass(ctx);
         registerQwenSessionClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -3086,7 +3086,7 @@ void installTtsBindings(JSContext* ctx) {
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue tts = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, tts, "init",
             JS_NewCFunction(ctx, js_init, "init", 0));
@@ -3111,7 +3111,7 @@ void installTtsBindings(JSContext* ctx) {
         JS_SetPropertyStr(ctx, tts, "decodeFrom",
             JS_NewCFunction(ctx, js_tts_decodeFrom, "decodeFrom", 7));
         JS_SetPropertyStr(ctx, broObj, "tts", tts);
-    
+
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);
 }

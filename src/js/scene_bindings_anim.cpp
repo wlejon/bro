@@ -794,6 +794,7 @@ static inline void _unused_scene_anim_install(JSContext* ctx)
     (void)ctx;
 }
 
+
 } // namespace bro::js
 
 #endif // BRO_WITH_3D

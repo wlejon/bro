@@ -562,9 +562,9 @@ void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::
     g_wake.audioEngine = audioEngine;
         g_wake.inference   = inference;
         g_wake.ctx         = ctx;
-    
+
         registerWakeViewClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -572,7 +572,7 @@ void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue wake = JS_NewObject(ctx);
         // Namespace ops (shared net u2014 not stream-scoped).
         JS_SetPropertyStr(ctx, wake, "load",
@@ -604,7 +604,7 @@ void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine::
         JS_SetPropertyStr(ctx, wake, "feed",
             JS_NewCFunction(ctx, js_feed, "feed", 1));
         JS_SetPropertyStr(ctx, broObj, "wake", wake);
-    
+
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);
 }

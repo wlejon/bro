@@ -285,7 +285,7 @@ void cleanupRaveBindings(JSContext* /*ctx*/) {}
 
 void installRaveBindings(JSContext* ctx) {
     registerRaveClass(ctx);
-    
+
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
     if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -293,14 +293,14 @@ void installRaveBindings(JSContext* ctx) {
         broObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
     }
-    
+
     JSValue rave = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, rave, "init",
         JS_NewCFunction(ctx, js_init, "init", 0));
     JS_SetPropertyStr(ctx, rave, "loadRave",
         JS_NewCFunction(ctx, js_loadRave, "loadRave", 2));
     JS_SetPropertyStr(ctx, broObj, "rave", rave);
-    
+
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }

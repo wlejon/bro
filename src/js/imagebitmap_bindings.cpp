@@ -291,6 +291,38 @@ static JSValue js_imagebitmap_close(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+void ImageBitmapBindings::install(JSContext* ctx)
+{
+    qjsbind::Class<IB>(ctx, "ImageBitmap", qjsbind::NoGlobal)
+            .get("width",  [](IB* d) -> int { return d->width; })
+            .get("height", [](IB* d) -> int { return d->height; })
+            .method_raw("close", js_imagebitmap_close, 0);
+
+        JSValue global = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, global, "createImageBitmap",
+            JS_NewCFunction(ctx, js_createImageBitmap, "createImageBitmap", 1));
+
+        {
+            JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<IB>());
+            JSValue ibCtor = JS_NewCFunction2(ctx,
+                [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+                    return JS_ThrowTypeError(c, "Illegal constructor: use createImageBitmap()");
+                }, "ImageBitmap", 0, JS_CFUNC_constructor, 0);
+            JS_SetConstructor(ctx, ibCtor, proto);
+            JS_FreeValue(ctx, proto);
+            JS_SetPropertyStr(ctx, global, "ImageBitmap", ibCtor);
+        }
+        {
+            JSValue idCtor = JS_NewCFunction2(ctx, js_imageData_ctor, "ImageData", 2,
+                                              JS_CFUNC_constructor, 0);
+            JSValue idProto = JS_NewObject(ctx);
+            JS_SetConstructor(ctx, idCtor, idProto);
+            JS_FreeValue(ctx, idProto);
+            JS_SetPropertyStr(ctx, global, "ImageData", idCtor);
+        }
+        JS_FreeValue(ctx, global);
+}
+
 JSClassID ImageBitmapBindings::classId() {
     return qjsbind::class_id<IB>();
 }
@@ -318,36 +350,5 @@ sk_sp<SkImage> ImageBitmapBindings::takeImage(JSValueConst val) {
     return img;
 }
 
-void ImageBitmapBindings::install(JSContext* ctx)
-{
-    qjsbind::Class<IB>(ctx, "ImageBitmap", qjsbind::NoGlobal)
-            .get("width",  [](IB* d) -> int { return d->width; })
-            .get("height", [](IB* d) -> int { return d->height; })
-            .method_raw("close", js_imagebitmap_close, 0);
-    
-        JSValue global = JS_GetGlobalObject(ctx);
-        JS_SetPropertyStr(ctx, global, "createImageBitmap",
-            JS_NewCFunction(ctx, js_createImageBitmap, "createImageBitmap", 1));
-    
-        {
-            JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<IB>());
-            JSValue ibCtor = JS_NewCFunction2(ctx,
-                [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
-                    return JS_ThrowTypeError(c, "Illegal constructor: use createImageBitmap()");
-                }, "ImageBitmap", 0, JS_CFUNC_constructor, 0);
-            JS_SetConstructor(ctx, ibCtor, proto);
-            JS_FreeValue(ctx, proto);
-            JS_SetPropertyStr(ctx, global, "ImageBitmap", ibCtor);
-        }
-        {
-            JSValue idCtor = JS_NewCFunction2(ctx, js_imageData_ctor, "ImageData", 2,
-                                              JS_CFUNC_constructor, 0);
-            JSValue idProto = JS_NewObject(ctx);
-            JS_SetConstructor(ctx, idCtor, idProto);
-            JS_FreeValue(ctx, idProto);
-            JS_SetPropertyStr(ctx, global, "ImageData", idCtor);
-        }
-        JS_FreeValue(ctx, global);
-}
 
 } // namespace bro::js

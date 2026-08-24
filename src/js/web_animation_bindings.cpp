@@ -1,18 +1,3 @@
-#include "js/web_animation_bindings.h"
-#include "js/dom_bindings_internal.h"
-#include "js/runtime.h"
-#include "engine/engine.h"
-#include "engine/css_transitions.h"
-#include "engine/web_animations.h"
-#include "util/log.h"
-
-#include <qjsbind/qjsbind.h>
-
-#include <algorithm>
-#include <cmath>
-#include <string>
-#include <vector>
-
 // ===========================================================================
 // element.animate() — Web Animations API (commonly-used subset).
 //
@@ -36,7 +21,27 @@
 //    still holding a forwards fill.
 // ===========================================================================
 
+#include "js/web_animation_bindings.h"
+#include "dom/element.h"
+#include "dom/document.h"
+#include "js/dom_bindings_internal.h"
+#include "engine/web_animations.h"
+#include "engine/engine.h"
+#include "engine/css_transitions.h"
+#include "util/log.h"
+#include "js/runtime.h"
+#include <qjsbind/qjsbind.h>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 namespace bro::js {
+
 
 using bro::engine::WebAnimation;
 using bro::engine::WebAnimationManager;
@@ -816,7 +821,9 @@ JSValue js_document_getAnimations(JSContext* ctx, JSValueConst /*this_val*/,
 // Public API
 // ---------------------------------------------------------------------------
 
-void installWebAnimationBindings(JSContext* ctx) {
+
+void installWebAnimationBindings(JSContext* ctx)
+{
     qjsbind::Class<AnimationJS>(ctx, "Animation", qjsbind::NoGlobal)
         .gc_mark([](AnimationJS* a, JSRuntime* rt, JS_MarkFunc* mark) {
             JS_MarkValue(rt, a->onfinish, mark);
@@ -846,6 +853,7 @@ void installWebAnimationBindings(JSContext* ctx) {
     JS_FreeValue(ctx, dproto);
 }
 
+
 void cleanupWebAnimationBindings(JSContext* ctx) {
     auto& pins = strongPins();
     for (auto it = pins.begin(); it != pins.end(); ) {
@@ -871,5 +879,7 @@ void deliverWebAnimationFinishEvents(JSContext* ctx, std::vector<uint64_t> ids) 
         JS_FreeValue(ctx, obj);
     }
 }
+
+
 
 } // namespace bro::js

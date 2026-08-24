@@ -22,7 +22,6 @@
 #include "js/ai_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/diffusion_bindings.h"
-#include "js/worldgen_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
@@ -86,10 +85,6 @@ void installLmBindings(JSContext* ctx) {
 void installDiffusionBindings(JSContext* ctx) {
     installUnavailableNamespace(ctx, "diffusion", "BRO_WITH_DIFFUSION");
 }
-void installWorldgenBindings(JSContext* ctx) {
-    installUnavailableNamespace(ctx, "worldgen", "BRO_WITH_DIFFUSION");
-}
-void cleanupWorldgenBindings(JSContext*) {}
 #endif
 
 // ── VISION ───────────────────────────────────────────────────────────────────

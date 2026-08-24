@@ -1,7 +1,5 @@
 #include "js/math_bindings.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <bromath/aabb.h>
 #include <bromath/angle.h>
 #include <bromath/color.h>
@@ -18,11 +16,14 @@
 #include <bromath/spatial_hash.h>
 #include <bromath/sphere.h>
 #include <bromath/vec.h>
-
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
 
@@ -689,6 +690,10 @@ static void aliasCtor(JSContext* ctx, JSValue global, JSValue mathObj,
     JS_FreeValue(ctx, ctor);
 }
 
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void MathBindings::install(JSContext* ctx) {
     installSpatialHash(ctx);
     installRng(ctx);
@@ -727,5 +732,6 @@ void MathBindings::cleanup(JSContext*) {
     // qjsbind owns the class registration + finalizer; bro.math is reached
     // from globalThis and dropped by the engine-level globalThis sweep.
 }
+
 
 } // namespace bro::js

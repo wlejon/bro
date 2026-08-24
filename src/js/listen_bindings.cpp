@@ -333,7 +333,7 @@ JSValue js_apps(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 
 void installListenBindings(JSContext* ctx) {
     registerListenStreamClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -341,7 +341,7 @@ void installListenBindings(JSContext* ctx) {
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue listen = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, listen, "open",
             JS_NewCFunction(ctx, js_open, "open", 1));
@@ -358,7 +358,7 @@ void installListenBindings(JSContext* ctx) {
         JS_SetPropertyStr(ctx, listen, "info",
             JS_NewCFunction(ctx, js_info, "info", 0));
         JS_SetPropertyStr(ctx, broObj, "listen", listen);
-    
+
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);
 }

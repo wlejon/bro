@@ -370,6 +370,25 @@ JSValue js_matchMedia(JSContext* ctx, JSValueConst /*this_val*/,
 
 } // namespace
 
+void installMatchMediaBindings(JSContext* ctx)
+{
+    qjsbind::Class<MediaQueryListJS>(ctx, "MediaQueryList", qjsbind::NoGlobal)
+            .gc_mark([](MediaQueryListJS* a, JSRuntime* rt, JS_MarkFunc* mark) {
+                if (!JS_IsUndefined(a->onchange)) JS_MarkValue(rt, a->onchange, mark);
+                for (ChangeListener& l : a->listeners) {
+                    JS_MarkValue(rt, l.fn, mark);
+                    if (!JS_IsUndefined(l.signal)) JS_MarkValue(rt, l.signal, mark);
+                }
+            })
+            .function_list(js_mql_proto_funcs,
+                           sizeof(js_mql_proto_funcs) / sizeof(js_mql_proto_funcs[0]));
+
+        JSValue global = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, global, "matchMedia",
+                          JS_NewCFunction(ctx, js_matchMedia, "matchMedia", 1));
+        JS_FreeValue(ctx, global);
+}
+
 void cleanupMatchMediaBindings(JSContext* ctx) {
     auto& pins = mqlPins();
     for (auto it = pins.begin(); it != pins.end(); ) {
@@ -415,23 +434,5 @@ void deliverMediaQueryChanges(JSContext* ctx) {
     }
 }
 
-void installMatchMediaBindings(JSContext* ctx)
-{
-    qjsbind::Class<MediaQueryListJS>(ctx, "MediaQueryList", qjsbind::NoGlobal)
-            .gc_mark([](MediaQueryListJS* a, JSRuntime* rt, JS_MarkFunc* mark) {
-                if (!JS_IsUndefined(a->onchange)) JS_MarkValue(rt, a->onchange, mark);
-                for (ChangeListener& l : a->listeners) {
-                    JS_MarkValue(rt, l.fn, mark);
-                    if (!JS_IsUndefined(l.signal)) JS_MarkValue(rt, l.signal, mark);
-                }
-            })
-            .function_list(js_mql_proto_funcs,
-                           sizeof(js_mql_proto_funcs) / sizeof(js_mql_proto_funcs[0]));
-    
-        JSValue global = JS_GetGlobalObject(ctx);
-        JS_SetPropertyStr(ctx, global, "matchMedia",
-                          JS_NewCFunction(ctx, js_matchMedia, "matchMedia", 1));
-        JS_FreeValue(ctx, global);
-}
 
 } // namespace bro::js

@@ -1572,120 +1572,120 @@ static void registerImageKernels(JSContext* ctx) {
 // ---------------------------------------------------------------------------
 
 void ImageBindings::install(JSContext* ctx, const std::string& basePath, const util::AssetMounts* mounts) {
-        s_bases[ctx] = AssetBase{ basePath, mounts };
-        s_fallbackBase = AssetBase{ basePath, mounts };
-    
-        qjsbind::Class<ID>(ctx, "Image")
-            .constructor([](JSContext* ctx, int /*argc*/, JSValueConst* /*argv*/) -> ID* {
-                auto* img = new ID();
-                img->ctx = ctx;
-                return img;
-            })
-            .get("width", [](ID* self) -> int { return self->width; })
-            .get("height", [](ID* self) -> int { return self->height; })
-            .get("naturalWidth", [](ID* self) -> int { return self->width; })
-            .get("naturalHeight", [](ID* self) -> int { return self->height; })
-            .get("complete", [](ID* self) -> bool { return self->complete; })
-            .get("src", [](ID* self) -> std::string { return self->src; })
-            // src setter is complex (decode + onload callback) — use prop with raw setter
-            // We can't use .prop() with a raw setter, so register src getter above and
-            // override with DefinePropertyGetSet below after the chain.
-            .get("onload", [](ID* self, JSContext* ctx) -> JSValue {
-                return JS_DupValue(ctx, self->onload);
-            })
-            .method_raw("addEventListener", js_image_addEventListener, 2)
-            .method_raw("removeEventListener", js_image_removeEventListener, 2)
-            .gc_mark([](ID* img, JSRuntime* rt, JS_MarkFunc* mark) {
-                JS_MarkValue(rt, img->onload, mark);
-                JS_MarkValue(rt, img->onerror, mark);
-            });
-    
-        // Manually set up src and onload as read-write properties with raw setters.
-        // We need to override the read-only getters set above with proper get+set pairs.
-        JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<ID>());
-    
-        // src property: getter (returns string) + raw setter (loads image)
-        {
-            JSAtom atom = JS_NewAtom(ctx, "src");
-            JS_DefinePropertyGetSet(ctx, proto, atom,
-                JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
-                    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
-                    if (!img) return JS_UNDEFINED;
-                    return JS_NewString(ctx, img->src.c_str());
-                }, "src", 0),
-                JS_NewCFunction(ctx, js_image_set_src, "src", 1),
-                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-            JS_FreeAtom(ctx, atom);
+    s_bases[ctx] = AssetBase{ basePath, mounts };
+    s_fallbackBase = AssetBase{ basePath, mounts };
+
+    qjsbind::Class<ID>(ctx, "Image")
+        .constructor([](JSContext* ctx, int /*argc*/, JSValueConst* /*argv*/) -> ID* {
+            auto* img = new ID();
+            img->ctx = ctx;
+            return img;
+        })
+        .get("width", [](ID* self) -> int { return self->width; })
+        .get("height", [](ID* self) -> int { return self->height; })
+        .get("naturalWidth", [](ID* self) -> int { return self->width; })
+        .get("naturalHeight", [](ID* self) -> int { return self->height; })
+        .get("complete", [](ID* self) -> bool { return self->complete; })
+        .get("src", [](ID* self) -> std::string { return self->src; })
+        // src setter is complex (decode + onload callback) — use prop with raw setter
+        // We can't use .prop() with a raw setter, so register src getter above and
+        // override with DefinePropertyGetSet below after the chain.
+        .get("onload", [](ID* self, JSContext* ctx) -> JSValue {
+            return JS_DupValue(ctx, self->onload);
+        })
+        .method_raw("addEventListener", js_image_addEventListener, 2)
+        .method_raw("removeEventListener", js_image_removeEventListener, 2)
+        .gc_mark([](ID* img, JSRuntime* rt, JS_MarkFunc* mark) {
+            JS_MarkValue(rt, img->onload, mark);
+            JS_MarkValue(rt, img->onerror, mark);
+        });
+
+    // Manually set up src and onload as read-write properties with raw setters.
+    // We need to override the read-only getters set above with proper get+set pairs.
+    JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<ID>());
+
+    // src property: getter (returns string) + raw setter (loads image)
+    {
+        JSAtom atom = JS_NewAtom(ctx, "src");
+        JS_DefinePropertyGetSet(ctx, proto, atom,
+            JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+                if (!img) return JS_UNDEFINED;
+                return JS_NewString(ctx, img->src.c_str());
+            }, "src", 0),
+            JS_NewCFunction(ctx, js_image_set_src, "src", 1),
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    }
+
+    // onload property: getter (returns dup'd JSValue) + raw setter (ref-counted)
+    {
+        JSAtom atom = JS_NewAtom(ctx, "onload");
+        JS_DefinePropertyGetSet(ctx, proto, atom,
+            JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+                if (!img) return JS_UNDEFINED;
+                return JS_DupValue(ctx, img->onload);
+            }, "onload", 0),
+            JS_NewCFunction(ctx, js_image_set_onload, "onload", 1),
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    }
+
+    // onerror property: fires when the decode fails (missing/corrupt asset)
+    {
+        JSAtom atom = JS_NewAtom(ctx, "onerror");
+        JS_DefinePropertyGetSet(ctx, proto, atom,
+            JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+                if (!img) return JS_UNDEFINED;
+                return JS_DupValue(ctx, img->onerror);
+            }, "onerror", 0),
+            JS_NewCFunction(ctx, js_image_set_onerror, "onerror", 1),
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    }
+
+    JS_FreeValue(ctx, proto);
+
+    // Sit Image.prototype on HTMLImageElement.prototype rather than aliasing the
+    // two constructors together (which would replace the interface object
+    // installHtmlInterfaces put on the global, and leave a DOM <img> failing
+    // `instanceof HTMLImageElement`).
+    //
+    // `new Image()` builds this decode helper, not a DOM element, but the web
+    // says the result is an HTMLImageElement and libraries test for it: three.js
+    // asks `image instanceof HTMLImageElement` to decide whether a texture can
+    // be serialized, and answers "no" by dropping it. Chaining the prototypes
+    // makes both spellings of an image — the helper and a real <img> — pass the
+    // same guard.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue htmlImageCtor = JS_GetPropertyStr(ctx, global, "HTMLImageElement");
+    if (JS_IsFunction(ctx, htmlImageCtor)) {
+        JSValue htmlImageProto = JS_GetPropertyStr(ctx, htmlImageCtor, "prototype");
+        JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
+        JSValue imageProto = JS_GetPropertyStr(ctx, imageCtor, "prototype");
+        if (JS_IsObject(htmlImageProto) && JS_IsObject(imageProto)) {
+            JS_SetPrototype(ctx, imageProto, htmlImageProto);
         }
-    
-        // onload property: getter (returns dup'd JSValue) + raw setter (ref-counted)
-        {
-            JSAtom atom = JS_NewAtom(ctx, "onload");
-            JS_DefinePropertyGetSet(ctx, proto, atom,
-                JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
-                    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
-                    if (!img) return JS_UNDEFINED;
-                    return JS_DupValue(ctx, img->onload);
-                }, "onload", 0),
-                JS_NewCFunction(ctx, js_image_set_onload, "onload", 1),
-                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-            JS_FreeAtom(ctx, atom);
-        }
-    
-        // onerror property: fires when the decode fails (missing/corrupt asset)
-        {
-            JSAtom atom = JS_NewAtom(ctx, "onerror");
-            JS_DefinePropertyGetSet(ctx, proto, atom,
-                JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
-                    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
-                    if (!img) return JS_UNDEFINED;
-                    return JS_DupValue(ctx, img->onerror);
-                }, "onerror", 0),
-                JS_NewCFunction(ctx, js_image_set_onerror, "onerror", 1),
-                JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
-            JS_FreeAtom(ctx, atom);
-        }
-    
-        JS_FreeValue(ctx, proto);
-    
-        // Sit Image.prototype on HTMLImageElement.prototype rather than aliasing the
-        // two constructors together (which would replace the interface object
-        // installHtmlInterfaces put on the global, and leave a DOM <img> failing
-        // `instanceof HTMLImageElement`).
-        //
-        // `new Image()` builds this decode helper, not a DOM element, but the web
-        // says the result is an HTMLImageElement and libraries test for it: three.js
-        // asks `image instanceof HTMLImageElement` to decide whether a texture can
-        // be serialized, and answers "no" by dropping it. Chaining the prototypes
-        // makes both spellings of an image — the helper and a real <img> — pass the
-        // same guard.
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue htmlImageCtor = JS_GetPropertyStr(ctx, global, "HTMLImageElement");
-        if (JS_IsFunction(ctx, htmlImageCtor)) {
-            JSValue htmlImageProto = JS_GetPropertyStr(ctx, htmlImageCtor, "prototype");
-            JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
-            JSValue imageProto = JS_GetPropertyStr(ctx, imageCtor, "prototype");
-            if (JS_IsObject(htmlImageProto) && JS_IsObject(imageProto)) {
-                JS_SetPrototype(ctx, imageProto, htmlImageProto);
-            }
-            JS_FreeValue(ctx, imageProto);
-            JS_FreeValue(ctx, imageCtor);
-            JS_FreeValue(ctx, htmlImageProto);
-        } else {
-            // No interface objects in this realm (a worker, say) — keep the old
-            // alias so HTMLImageElement is at least defined.
-            JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
-            JS_SetPropertyStr(ctx, global, "HTMLImageElement", JS_DupValue(ctx, imageCtor));
-            JS_FreeValue(ctx, imageCtor);
-        }
-        JS_FreeValue(ctx, htmlImageCtor);
-        JS_FreeValue(ctx, global);
-    
-        // Augment the brokit-built bro.image with the rest of broimage's surface
-        // (decode/encode, geometric, alpha, color, preproc, normalize, multi-channel
-        // stencil, tiling). brokit::api::installAll() ran earlier and created
-        // bro.image with the core verb kernels; this adds onto the same object.
-        registerImageKernels(ctx);
+        JS_FreeValue(ctx, imageProto);
+        JS_FreeValue(ctx, imageCtor);
+        JS_FreeValue(ctx, htmlImageProto);
+    } else {
+        // No interface objects in this realm (a worker, say) — keep the old
+        // alias so HTMLImageElement is at least defined.
+        JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
+        JS_SetPropertyStr(ctx, global, "HTMLImageElement", JS_DupValue(ctx, imageCtor));
+        JS_FreeValue(ctx, imageCtor);
+    }
+    JS_FreeValue(ctx, htmlImageCtor);
+    JS_FreeValue(ctx, global);
+
+    // Augment the brokit-built bro.image with the rest of broimage's surface
+    // (decode/encode, geometric, alpha, color, preproc, normalize, multi-channel
+    // stencil, tiling). brokit::api::installAll() ran earlier and created
+    // bro.image with the core verb kernels; this adds onto the same object.
+    registerImageKernels(ctx);
 }
 
 void ImageBindings::cleanup(JSContext* ctx) {

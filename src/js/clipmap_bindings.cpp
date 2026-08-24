@@ -409,17 +409,6 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
 // Install / Cleanup
 // -------------------------------------------------------------------------
 
-void ClipmapBindings::cleanup(JSContext*) {
-    // Drop every live terrain before scene graphs are destroyed, so their
-    // destructors don't touch a dangling SceneGraph reference.
-    for (auto* cw : CW::allInstances()) {
-        if (cw->terrain) {
-            cw->terrain->destroy();
-            cw->terrain.reset();
-        }
-    }
-}
-
 void ClipmapBindings::install(JSContext* ctx)
 {
     qjsbind::Class<CW>(ctx, "ClipmapTerrain")
@@ -523,6 +512,18 @@ void ClipmapBindings::install(JSContext* ctx)
                     : 0.0;
             });
 }
+
+void ClipmapBindings::cleanup(JSContext*) {
+    // Drop every live terrain before scene graphs are destroyed, so their
+    // destructors don't touch a dangling SceneGraph reference.
+    for (auto* cw : CW::allInstances()) {
+        if (cw->terrain) {
+            cw->terrain->destroy();
+            cw->terrain.reset();
+        }
+    }
+}
+
 
 } // namespace bro::js
 

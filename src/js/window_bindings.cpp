@@ -4,15 +4,11 @@
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
-
 #include "window_polyfill.js.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <cstring>
 #include <limits>
 #include <unordered_map>
-
 #include <SDL3/SDL_misc.h>   // SDL_OpenURL
 #include <SDL3/SDL_power.h>  // SDL_GetPowerInfo
 #include <SDL3/SDL_stdinc.h> // SDL_free
@@ -565,9 +561,11 @@ static const JSCFunctionListEntry js_brw_funcs[] = {
     JS_CFUNC_DEF("moveToDisplay", 1, js_brw_moveToDisplay),
 };
 
-void installBroWindowBindings(JSContext* ctx, platform::Window* window,
-                              bool headless)
-{
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
+void installBroWindowBindings(JSContext* ctx, platform::Window* window, bool headless) {
     {
         RealmWindowState& st = realmFor(ctx);
         if (window) st.window = window;
@@ -626,5 +624,6 @@ void installWindowClose(JSContext* ctx, platform::EventLoop* eventLoop) {
     JS_FreeValue(ctx, ptrVal);
     JS_FreeValue(ctx, global);
 }
+
 
 } // namespace bro::js

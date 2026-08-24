@@ -488,43 +488,43 @@ JSValue js_gifEncoder_finish(JSContext* ctx, JSValueConst this_val,
 
 void VideoBindings::install(JSContext* ctx, const std::string& basePath)
 {
-        qjsbind::Class<ED>(ctx, "VideoEncoder")
-            .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> ED* {
-                return js_videoEncoderCtor(ctx, argc, argv);
-            })
-            .get("width",          [](ED* d) -> int { return d->width; })
-            .get("height",         [](ED* d) -> int { return d->height; })
-            .get("framesWritten",  [](ED* d) -> int {
-                return d->enc ? d->enc->framesWritten() : 0;
-            })
-            .get("lastError",      [](ED* d) -> std::string {
-                if (d->enc) return d->enc->lastError();
-                return d->lastErr;
-            })
-            .method_raw("addFrameRGBA",       js_videoEncoder_addFrameRGBA, 1)
-            .method_raw("addCanvasFrame",     js_videoEncoder_addCanvasFrame, 1)
-            .method_raw("addViewportFrame",   js_videoEncoder_addViewportFrame, 0)
-            .method_raw("addAudioFramesPCM",  js_videoEncoder_addAudioFramesPCM, 1)
-            .method_raw("finish",             js_videoEncoder_finish, 0);
-    
-        qjsbind::Class<GD>(ctx, "GifEncoder")
-            .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> GD* {
-                return js_gifEncoderCtor(ctx, argc, argv);
-            })
-            .get("width",          [](GD* d) -> int { return d->width; })
-            .get("height",         [](GD* d) -> int { return d->height; })
-            .get("framesWritten",  [](GD* d) -> int {
-                return d->enc ? d->enc->framesWritten() : 0;
-            })
-            .get("lastError",      [](GD* d) -> std::string {
-                if (d->enc) return d->enc->lastError();
-                return d->lastErr;
-            })
-            .method_raw("addFrameRGBA",       js_gifEncoder_addFrameRGBA, 1)
-            .method_raw("addCanvasFrame",     js_gifEncoder_addCanvasFrame, 1)
-            .method_raw("addViewportFrame",   js_gifEncoder_addViewportFrame, 0)
-            .method_raw("setNextFrameDelayCs", js_gifEncoder_setNextDelay, 1)
-            .method_raw("finish",             js_gifEncoder_finish, 0);
+    qjsbind::Class<ED>(ctx, "VideoEncoder")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> ED* {
+            return js_videoEncoderCtor(ctx, argc, argv);
+        })
+        .get("width",          [](ED* d) -> int { return d->width; })
+        .get("height",         [](ED* d) -> int { return d->height; })
+        .get("framesWritten",  [](ED* d) -> int {
+            return d->enc ? d->enc->framesWritten() : 0;
+        })
+        .get("lastError",      [](ED* d) -> std::string {
+            if (d->enc) return d->enc->lastError();
+            return d->lastErr;
+        })
+        .method_raw("addFrameRGBA",       js_videoEncoder_addFrameRGBA, 1)
+        .method_raw("addCanvasFrame",     js_videoEncoder_addCanvasFrame, 1)
+        .method_raw("addViewportFrame",   js_videoEncoder_addViewportFrame, 0)
+        .method_raw("addAudioFramesPCM",  js_videoEncoder_addAudioFramesPCM, 1)
+        .method_raw("finish",             js_videoEncoder_finish, 0);
+
+    qjsbind::Class<GD>(ctx, "GifEncoder")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> GD* {
+            return js_gifEncoderCtor(ctx, argc, argv);
+        })
+        .get("width",          [](GD* d) -> int { return d->width; })
+        .get("height",         [](GD* d) -> int { return d->height; })
+        .get("framesWritten",  [](GD* d) -> int {
+            return d->enc ? d->enc->framesWritten() : 0;
+        })
+        .get("lastError",      [](GD* d) -> std::string {
+            if (d->enc) return d->enc->lastError();
+            return d->lastErr;
+        })
+        .method_raw("addFrameRGBA",       js_gifEncoder_addFrameRGBA, 1)
+        .method_raw("addCanvasFrame",     js_gifEncoder_addCanvasFrame, 1)
+        .method_raw("addViewportFrame",   js_gifEncoder_addViewportFrame, 0)
+        .method_raw("setNextFrameDelayCs", js_gifEncoder_setNextDelay, 1)
+        .method_raw("finish",             js_gifEncoder_finish, 0);
 }
 
 

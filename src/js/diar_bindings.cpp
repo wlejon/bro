@@ -31,18 +31,13 @@
 #include "js/async_job.h"
 #include "js/model_gate.h"
 #include "js/marshal.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <api/api.h>  // brokit::api::resolveAssetPath
-
 #include <brosoundml/sortformer.h>
 #include <brosoundml/cluster_diarizer.h>
 #include <brosoundml/audio.h>
-
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -50,6 +45,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+extern "C" {
+#include "quickjs.h"
+}
 
 namespace bro::js {
 
@@ -755,6 +754,10 @@ static JSValue js_diar_clusterDiarize(JSContext* ctx, JSValueConst,
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installDiarBindings(JSContext* ctx) {
     registerSortformerClass(ctx);
     registerSortformerSessionClass(ctx);
@@ -787,6 +790,7 @@ void installDiarBindings(JSContext* ctx) {
 
 void cleanupDiarBindings(JSContext* /*ctx*/) {}
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_SOUNDML
+} // namespace bro::js
+
+#endif // BRO_WITH_SOUNDML

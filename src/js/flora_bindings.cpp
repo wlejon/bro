@@ -245,7 +245,7 @@ static void installWorldClass(JSContext* ctx) {
 
 void FloraBindings::install(JSContext* ctx) {
     installWorldClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -259,12 +259,12 @@ void FloraBindings::install(JSContext* ctx) {
             floraObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, broObj, "flora", JS_DupValue(ctx, floraObj));
         }
-    
+
         JSValue createFn = JS_NewCFunction(ctx, createWorld, "createWorld", 1);
         JS_SetPropertyStr(ctx, floraObj, "createWorld", createFn);
         JS_SetPropertyStr(ctx, floraObj, "leafCluster",
                           JS_NewCFunction(ctx, jsLeafCluster, "leafCluster", 2));
-    
+
         JSValue phylObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, phylObj, "alternate",       JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Alternate));
         JS_SetPropertyStr(ctx, phylObj, "opposite",        JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Opposite));
@@ -278,7 +278,7 @@ void FloraBindings::install(JSContext* ctx) {
         JS_SetPropertyStr(ctx, phylObj, "CompoundPinnate", JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::CompoundPinnate));
         JS_SetPropertyStr(ctx, floraObj, "phyllotaxy", JS_DupValue(ctx, phylObj));
         JS_SetPropertyStr(ctx, floraObj, "Phyllotaxy", phylObj);
-    
+
         JSValue protos = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, protos, "straight",
                           JS_NewCFunction(ctx, protoStraight, "straight", 0));
@@ -297,7 +297,7 @@ void FloraBindings::install(JSContext* ctx) {
         JS_SetPropertyStr(ctx, protos, "weeping",
                           JS_NewCFunction(ctx, protoWeeping, "weeping", 2));
         JS_SetPropertyStr(ctx, floraObj, "prototypes", protos);
-    
+
         JS_FreeValue(ctx, floraObj);
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);

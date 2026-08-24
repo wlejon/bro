@@ -2106,7 +2106,7 @@ static brogameagent::AgentAction parseAgentAction(JSContext* ctx, JSValueConst o
 // ---------------------------------------------------------------------------
 
 void AIBindings::install(JSContext* ctx) {
-    
+
         // ─── NavGrid class ─────────────────────────────────────────────────
         {
             qjsbind::Class<NavGridData>(ctx, "AINavGrid", qjsbind::NoGlobal)
@@ -2152,7 +2152,7 @@ void AIBindings::install(JSContext* ctx) {
                         return JS_UNDEFINED;
                     }, 2);
         }
-    
+
     #ifdef BROGAMEAGENT_HAS_NAVMESH
         // ─── NavMesh class (polygon navmesh — bakeNavMesh / loadNavMesh) ────
         {
@@ -2364,7 +2364,7 @@ void AIBindings::install(JSContext* ctx) {
                     }, 1);
         }
     #endif  // BROGAMEAGENT_HAS_NAVMESH
-    
+
         // ─── Unit class (accessor proxy for Agent's Unit) ──────────────────
         {
             qjsbind::Class<UnitData>(ctx, "AIUnit", qjsbind::NoGlobal | qjsbind::NoDestructor)
@@ -2520,7 +2520,7 @@ void AIBindings::install(JSContext* ctx) {
                     [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().attackCooldown : 0; },
                     [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().attackCooldown = (float)v; });
         }
-    
+
         // ─── Agent class ───────────────────────────────────────────────────
         {
             qjsbind::Class<AgentData>(ctx, "AIAgent", qjsbind::NoGlobal)
@@ -2620,7 +2620,7 @@ void AIBindings::install(JSContext* ctx) {
                         return arr;
                     });
         }
-    
+
         // ─── World class ───────────────────────────────────────────────────
         {
             qjsbind::Class<WorldData>(ctx, "AIWorld", qjsbind::NoGlobal)
@@ -2718,7 +2718,7 @@ void AIBindings::install(JSContext* ctx) {
                         p.remainingLife = (float)getDoubleProp(ctx, opts, "remainingLife", 2);
                         p.splashRadius = (float)getDoubleProp(ctx, opts, "splashRadius", 0);
                         p.maxHits = getInt32Prop(ctx, opts, "maxHits", 0);
-    
+
                         // Parse kind string
                         JSValue kindVal = JS_GetPropertyStr(ctx, opts, "kind");
                         if (JS_IsString(kindVal)) {
@@ -2727,7 +2727,7 @@ void AIBindings::install(JSContext* ctx) {
                             JS_FreeCString(ctx, s);
                         }
                         JS_FreeValue(ctx, kindVal);
-    
+
                         // Parse mode string
                         JSValue modeVal = JS_GetPropertyStr(ctx, opts, "mode");
                         if (JS_IsString(modeVal)) {
@@ -2737,7 +2737,7 @@ void AIBindings::install(JSContext* ctx) {
                             JS_FreeCString(ctx, s);
                         }
                         JS_FreeValue(ctx, modeVal);
-    
+
                         int id = wd->world.spawnProjectile(p);
                         return JS_NewInt32(ctx, id);
                     }, 1)
@@ -2776,7 +2776,7 @@ void AIBindings::install(JSContext* ctx) {
                         double range = 0;
                         JS_ToFloat64(ctx, &range, argv[1]);
                         auto enemies = wd->world.enemiesInRange(ad->agent, (float)range);
-    
+
                         // Build result array by matching C++ pointers to JS agent refs
                         JSValue result = JS_NewArray(ctx);
                         JSValue agents = JS_GetPropertyStr(ctx, this_val, "__agents");
@@ -2873,12 +2873,12 @@ void AIBindings::install(JSContext* ctx) {
                         JS_ToInt32(ctx, &abilityId, argv[0]);
                         if (!JS_IsObject(argv[1])) return JS_ThrowTypeError(ctx, "spec must be an object");
                         JSValue spec = argv[1];
-    
+
                         brogameagent::AbilitySpec s;
                         s.cooldown = (float)getDoubleProp(ctx, spec, "cooldown", 1);
                         s.manaCost = (float)getDoubleProp(ctx, spec, "manaCost", 0);
                         s.range    = (float)getDoubleProp(ctx, spec, "range", 0);
-    
+
                         // JS callback fn(caster, world, targetId)
                         //
                         // Deliberately holds NO owned JSValue refs in the C++
@@ -2926,7 +2926,7 @@ void AIBindings::install(JSContext* ctx) {
                                     }
                                 }
                                 JS_FreeValue(ctx, agents);
-    
+
                                 JSValue tbl2 = JS_GetPropertyStr(ctx, this_val, "__abilityFns");
                                 JSValue fnRef = JS_GetPropertyStr(ctx, tbl2, fnKey.c_str());
                                 JS_FreeValue(ctx, tbl2);
@@ -2939,7 +2939,7 @@ void AIBindings::install(JSContext* ctx) {
                             };
                         }
                         JS_FreeValue(ctx, fnVal);
-    
+
                         wd->world.registerAbility(abilityId, std::move(s));
                         return JS_UNDEFINED;
                     }, 2)
@@ -3009,7 +3009,7 @@ void AIBindings::install(JSContext* ctx) {
                         auto* wd = qjsbind::unwrap<WorldData>(ctx, this_val);
                         if (!wd) return JS_NULL;
                         auto snap = wd->world.snapshot();
-    
+
                         JSValue obj = JS_NewObject(ctx);
                         // Agents
                         JSValue agentsArr = JS_NewArray(ctx);
@@ -3043,10 +3043,10 @@ void AIBindings::install(JSContext* ctx) {
                     [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                         auto* wd = qjsbind::unwrap<WorldData>(ctx, this_val);
                         if (!wd || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
-    
+
                         brogameagent::WorldSnapshot snap;
                         JSValue obj = argv[0];
-    
+
                         // Parse agents
                         JSValue agentsArr = JS_GetPropertyStr(ctx, obj, "agents");
                         if (JS_IsArray(agentsArr)) {
@@ -3078,13 +3078,13 @@ void AIBindings::install(JSContext* ctx) {
                             }
                         }
                         JS_FreeValue(ctx, agentsArr);
-    
+
                         snap.nextProjectileId = getInt32Prop(ctx, obj, "nextProjectileId", 1);
                         wd->world.restore(snap);
                         return JS_UNDEFINED;
                     }, 1);
         }
-    
+
         // ─── RewardTracker class ───────────────────────────────────────────
         {
             qjsbind::Class<RewardTrackerData>(ctx, "AIRewardTracker", qjsbind::NoGlobal)
@@ -3114,7 +3114,7 @@ void AIBindings::install(JSContext* ctx) {
                         return JS_UNDEFINED;
                     }, 2);
         }
-    
+
         // ─── Simulation class ──────────────────────────────────────────────
         {
             qjsbind::Class<SimulationData>(ctx, "AISimulation", qjsbind::NoGlobal)
@@ -3135,10 +3135,10 @@ void AIBindings::install(JSContext* ctx) {
                         int32_t agentId = 0;
                         JS_ToInt32(ctx, &agentId, argv[0]);
                         if (!JS_IsFunction(ctx, argv[1])) return JS_ThrowTypeError(ctx, "policy must be a function");
-    
+
                         JSValue fnRef = JS_DupValue(ctx, argv[1]);
                         JSValue worldRef = JS_GetPropertyStr(ctx, this_val, "__world");
-    
+
                         sd->sim->addPolicy(agentId, [ctx, fnRef, worldRef](
                                 brogameagent::Agent& self,
                                 const brogameagent::World& /*world*/) -> brogameagent::AgentAction {
@@ -3146,7 +3146,7 @@ void AIBindings::install(JSContext* ctx) {
                             // For simplicity, create a temporary wrapper
                             // This is called from C++ sim step — we need to invoke JS
                             JSValue args[2] = { JS_UNDEFINED, worldRef };
-    
+
                             // Find the JS agent from the world's __agents
                             JSValue agents = JS_GetPropertyStr(ctx, worldRef, "__agents");
                             if (JS_IsArray(agents)) {
@@ -3163,7 +3163,7 @@ void AIBindings::install(JSContext* ctx) {
                                 }
                             }
                             JS_FreeValue(ctx, agents);
-    
+
                             JSValue ret = JS_Call(ctx, fnRef, JS_UNDEFINED, 2, args);
                             brogameagent::AgentAction action;
                             if (JS_IsObject(ret)) {
@@ -3173,7 +3173,7 @@ void AIBindings::install(JSContext* ctx) {
                             JS_FreeValue(ctx, args[0]);
                             return action;
                         });
-    
+
                         // Store ref to policy function to prevent GC
                         JSValue policies = JS_GetPropertyStr(ctx, this_val, "__policies");
                         if (!JS_IsObject(policies)) {
@@ -3186,13 +3186,13 @@ void AIBindings::install(JSContext* ctx) {
                         JS_SetPropertyStr(ctx, policies, key, JS_DupValue(ctx, argv[1]));
                         JS_FreeValue(ctx, policies);
                         JS_FreeValue(ctx, worldRef);
-    
+
                         return JS_UNDEFINED;
                     }, 2)
                 .method("removePolicy",
                     [](SimulationData* d, int agentId) { if (d->sim) d->sim->removePolicy(agentId); });
         }
-    
+
         // ─── Recorder class ────────────────────────────────────────────────
         {
             qjsbind::Class<RecorderData>(ctx, "AIRecorder", qjsbind::NoGlobal)
@@ -3229,7 +3229,7 @@ void AIBindings::install(JSContext* ctx) {
                 .get("frameCount",
                     [](RecorderData* d) -> int { return (int)d->recorder.frameCount(); });
         }
-    
+
         // ─── ReplayReader class ────────────────────────────────────────────
         {
             qjsbind::Class<ReplayReaderData>(ctx, "AIReplayReader", qjsbind::NoGlobal)
@@ -3246,7 +3246,7 @@ void AIBindings::install(JSContext* ctx) {
                         JSValue obj = JS_NewObject(ctx);
                         JS_SetPropertyStr(ctx, obj, "stepIdx", JS_NewInt32(ctx, f.header.stepIdx));
                         JS_SetPropertyStr(ctx, obj, "elapsed", JS_NewFloat64(ctx, f.header.elapsed));
-    
+
                         JSValue agentsArr = JS_NewArray(ctx);
                         for (size_t i = 0; i < f.agents.size(); i++) {
                             const auto& a = f.agents[i];
@@ -3261,7 +3261,7 @@ void AIBindings::install(JSContext* ctx) {
                             JS_SetPropertyUint32(ctx, agentsArr, (uint32_t)i, ao);
                         }
                         JS_SetPropertyStr(ctx, obj, "agents", agentsArr);
-    
+
                         JSValue eventsArr = JS_NewArray(ctx);
                         for (size_t i = 0; i < f.events.size(); i++) {
                             const auto& e = f.events[i];
@@ -3307,7 +3307,7 @@ void AIBindings::install(JSContext* ctx) {
                         return arr;
                     });
         }
-    
+
         // ─── Mcts class ────────────────────────────────────────────────────
         {
             qjsbind::Class<MctsData>(ctx, "AIMcts", qjsbind::NoGlobal)
@@ -3321,7 +3321,7 @@ void AIBindings::install(JSContext* ctx) {
                         auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
                         auto* ad = qjsbind::unwrap<AgentData>(ctx, argv[1]);
                         if (!wd || !ad) return JS_ThrowTypeError(ctx, "search(world, hero)");
-    
+
                         auto action = md->mcts.search(wd->world, ad->agent);
                         JSValue obj = JS_NewObject(ctx);
                         JS_SetPropertyStr(ctx, obj, "moveDir", JS_NewInt32(ctx, (int)action.move_dir));
@@ -3347,7 +3347,7 @@ void AIBindings::install(JSContext* ctx) {
                         return makeSearchStats(ctx, d->mcts.last_stats());
                     });
         }
-    
+
         // ─── DecoupledMcts class ───────────────────────────────────────────
         {
             qjsbind::Class<DecoupledMctsData>(ctx, "AIDecoupledMcts", qjsbind::NoGlobal)
@@ -3383,7 +3383,7 @@ void AIBindings::install(JSContext* ctx) {
                         return makeSearchStats(ctx, d->mcts.last_stats());
                     });
         }
-    
+
         // ─── TeamMcts class ────────────────────────────────────────────────
         {
             qjsbind::Class<TeamMctsData>(ctx, "AITeamMcts", qjsbind::NoGlobal)
@@ -3421,7 +3421,7 @@ void AIBindings::install(JSContext* ctx) {
                         return makeSearchStats(ctx, d->mcts.last_stats());
                     });
         }
-    
+
         // ─── TacticMcts class ──────────────────────────────────────────────
         {
             qjsbind::Class<TacticMctsData>(ctx, "AITacticMcts", qjsbind::NoGlobal)
@@ -3452,7 +3452,7 @@ void AIBindings::install(JSContext* ctx) {
                         return makeSearchStats(ctx, d->mcts.last_stats());
                     });
         }
-    
+
         // ─── LayeredPlanner class ──────────────────────────────────────────
         {
             qjsbind::Class<LayeredPlannerData>(ctx, "AILayeredPlanner", qjsbind::NoGlobal)
@@ -3501,7 +3501,7 @@ void AIBindings::install(JSContext* ctx) {
                         return obj;
                     });
         }
-    
+
         // ─── Option class (handle for JS-authored options) ─────────────────
         {
             qjsbind::Class<OptionData>(ctx, "AIOption", qjsbind::NoGlobal)
@@ -3516,7 +3516,7 @@ void AIBindings::install(JSContext* ctx) {
                         return JS_NewString(ctx, d->option->name().c_str());
                     });
         }
-    
+
         // ─── TeamOption class ─────────────────────────────────────────────
         {
             qjsbind::Class<TeamOptionData>(ctx, "AITeamOption", qjsbind::NoGlobal)
@@ -3531,7 +3531,7 @@ void AIBindings::install(JSContext* ctx) {
                         return JS_NewString(ctx, d->option->name().c_str());
                     });
         }
-    
+
         // ─── OptionMcts class ─────────────────────────────────────────────
         {
             qjsbind::Class<OptionMctsData>(ctx, "AIOptionMcts", qjsbind::NoGlobal)
@@ -3591,7 +3591,7 @@ void AIBindings::install(JSContext* ctx) {
                         return makeSearchStats(ctx, d->mcts.last_stats());
                     });
         }
-    
+
         // ─── TeamOptionMcts class ─────────────────────────────────────────
         {
             qjsbind::Class<TeamOptionMctsData>(ctx, "AITeamOptionMcts", qjsbind::NoGlobal)
@@ -3651,7 +3651,7 @@ void AIBindings::install(JSContext* ctx) {
                         return makeSearchStats(ctx, d->mcts.last_stats());
                     });
         }
-    
+
         // ─── Commander class ──────────────────────────────────────────────
         {
             qjsbind::Class<CommanderData>(ctx, "AICommander", qjsbind::NoGlobal)
@@ -3708,11 +3708,11 @@ void AIBindings::install(JSContext* ctx) {
                         return arr;
                     });
         }
-    
+
         // ═══════════════════════════════════════════════════════════════════
         // Build namespace: bro.ai.game
         // ═══════════════════════════════════════════════════════════════════
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -3720,20 +3720,20 @@ void AIBindings::install(JSContext* ctx) {
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue aiObj = JS_GetPropertyStr(ctx, broObj, "ai");
         if (JS_IsUndefined(aiObj) || JS_IsException(aiObj)) {
             JS_FreeValue(ctx, aiObj);
             aiObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, broObj, "ai", JS_DupValue(ctx, aiObj));
         }
-    
+
         JSValue gameObj = JS_NewObject(ctx);
-    
+
         // Factory functions
         JS_SetPropertyStr(ctx, gameObj, "createNavGrid",
             JS_NewCFunction(ctx, js_createNavGrid, "createNavGrid", 1));
-    
+
         // Polygon navmesh (Recast/Detour via brogameagent) — present when the
         // build was configured with -DBROGAMEAGENT_WITH_NAVMESH=ON. Otherwise the
         // factories throw and navMeshAvailable === false so apps feature-detect.
@@ -3761,7 +3761,7 @@ void AIBindings::install(JSContext* ctx) {
             JS_NewCFunction(ctx, js_createAgent, "createAgent", 1));
         JS_SetPropertyStr(ctx, gameObj, "createWorld",
             JS_NewCFunction(ctx, js_createWorld, "createWorld", 0));
-    
+
         // Perception
         JS_SetPropertyStr(ctx, gameObj, "hasLineOfSight",
             JS_NewCFunction(ctx, js_hasLOS, "hasLineOfSight", 5));
@@ -3771,7 +3771,7 @@ void AIBindings::install(JSContext* ctx) {
             JS_NewCFunction(ctx, js_computeAim, "computeAim", 6));
         JS_SetPropertyStr(ctx, gameObj, "computeLeadAim",
             JS_NewCFunction(ctx, js_computeLeadAim, "computeLeadAim", 10));
-    
+
         // Observation / training
         JS_SetPropertyStr(ctx, gameObj, "buildObservation",
             JS_NewCFunction(ctx, js_buildObservation, "buildObservation", 2));
@@ -3779,17 +3779,17 @@ void AIBindings::install(JSContext* ctx) {
             JS_NewCFunction(ctx, js_buildActionMask, "buildActionMask", 2));
         JS_SetPropertyStr(ctx, gameObj, "createRewardTracker",
             JS_NewCFunction(ctx, js_createRewardTracker, "createRewardTracker", 2));
-    
+
         // Simulation
         JS_SetPropertyStr(ctx, gameObj, "createSimulation",
             JS_NewCFunction(ctx, js_createSimulation, "createSimulation", 1));
-    
+
         // Replay
         JS_SetPropertyStr(ctx, gameObj, "createRecorder",
             JS_NewCFunction(ctx, js_createRecorder, "createRecorder", 0));
         JS_SetPropertyStr(ctx, gameObj, "createReplayReader",
             JS_NewCFunction(ctx, js_createReplayReader, "createReplayReader", 0));
-    
+
         // MCTS
         JS_SetPropertyStr(ctx, gameObj, "createMcts",
             JS_NewCFunction(ctx, js_createMcts, "createMcts", 1));
@@ -3819,10 +3819,10 @@ void AIBindings::install(JSContext* ctx) {
             JS_NewCFunction(ctx, js_tacticToAction, "tacticToAction", 3));
         JS_SetPropertyStr(ctx, gameObj, "applyCombatAction",
             JS_NewCFunction(ctx, js_applyCombatAction, "applyCombatAction", 4));
-    
+
         // Capabilities (JS-authored capability registration)
         installRegisterCapability(ctx, gameObj);
-    
+
         // NN + Learn subsystems: bro.ai.game.nn / bro.ai.game.learn. These are the
         // brotensor-backed neural layer; only present when it was built in.
     #if BRO_WITH_GAMEAI_NN
@@ -3841,19 +3841,19 @@ void AIBindings::install(JSContext* ctx) {
             JS_SetPropertyStr(ctx, gameObj, "learn", learnStub);
         }
     #endif
-    
+
         // Belief / observability / InfoSetMcts
         installBeliefBindings(ctx, gameObj);
-    
+
         // Snapshots, projectiles, VecSimulation, classic MCTS primitives
         installExtrasBindings(ctx, gameObj);
-    
+
         // Env-agnostic GenericMcts (bro.ai.game.createGenericMcts)
         installGenericMctsBindings(ctx, gameObj);
-    
+
         // Root-parallel search (bro.ai.game.rootParallelSearch[Decoupled])
         installParallelBindings(ctx, gameObj);
-    
+
         // Grid-world / platformer kit (bro.ai.game.grid.*) — neural training kit,
         // built only with the game-AI neural layer.
     #if BRO_WITH_GAMEAI_NN
@@ -3865,10 +3865,10 @@ void AIBindings::install(JSContext* ctx) {
             JS_SetPropertyStr(ctx, gameObj, "grid", gridStub);
         }
     #endif
-    
+
         // ── Steering sub-namespace: bro.ai.game.steer ──────────────────────
         JSValue steerObj = JS_NewObject(ctx);
-    
+
         JS_SetPropertyStr(ctx, steerObj, "seek",
             JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
                 if (argc < 4) return JS_NULL;
@@ -3877,7 +3877,7 @@ void AIBindings::install(JSContext* ctx) {
                 JS_ToFloat64(ctx, &tx, argv[2]); JS_ToFloat64(ctx, &tz, argv[3]);
                 return makeSteeringOutput(ctx, brogameagent::seek({(float)px,(float)pz}, {(float)tx,(float)tz}));
             }, "seek", 4));
-    
+
         JS_SetPropertyStr(ctx, steerObj, "arrive",
             JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
                 if (argc < 5) return JS_NULL;
@@ -3887,7 +3887,7 @@ void AIBindings::install(JSContext* ctx) {
                 JS_ToFloat64(ctx, &sr, argv[4]);
                 return makeSteeringOutput(ctx, brogameagent::arrive({(float)px,(float)pz}, {(float)tx,(float)tz}, (float)sr));
             }, "arrive", 5));
-    
+
         JS_SetPropertyStr(ctx, steerObj, "flee",
             JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
                 if (argc < 4) return JS_NULL;
@@ -3896,7 +3896,7 @@ void AIBindings::install(JSContext* ctx) {
                 JS_ToFloat64(ctx, &tx, argv[2]); JS_ToFloat64(ctx, &tz, argv[3]);
                 return makeSteeringOutput(ctx, brogameagent::flee({(float)px,(float)pz}, {(float)tx,(float)tz}));
             }, "flee", 4));
-    
+
         JS_SetPropertyStr(ctx, steerObj, "pursue",
             JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
                 if (argc < 7) return JS_NULL;
@@ -3908,7 +3908,7 @@ void AIBindings::install(JSContext* ctx) {
                 return makeSteeringOutput(ctx, brogameagent::pursue(
                     {(float)px,(float)pz}, {(float)tx,(float)tz}, {(float)tvx,(float)tvz}, (float)speed));
             }, "pursue", 7));
-    
+
         JS_SetPropertyStr(ctx, steerObj, "evade",
             JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
                 if (argc < 7) return JS_NULL;
@@ -3920,9 +3920,9 @@ void AIBindings::install(JSContext* ctx) {
                 return makeSteeringOutput(ctx, brogameagent::evade(
                     {(float)px,(float)pz}, {(float)tx,(float)tz}, {(float)tvx,(float)tvz}, (float)speed));
             }, "evade", 7));
-    
+
         JS_SetPropertyStr(ctx, gameObj, "steer", steerObj);
-    
+
         // ── Constants ──
         JS_SetPropertyStr(ctx, gameObj, "OBS_TOTAL",
             JS_NewInt32(ctx, brogameagent::observation::TOTAL));
@@ -3930,7 +3930,7 @@ void AIBindings::install(JSContext* ctx) {
             JS_NewInt32(ctx, brogameagent::action_mask::TOTAL));
         JS_SetPropertyStr(ctx, gameObj, "N_ENEMY_SLOTS",
             JS_NewInt32(ctx, brogameagent::action_mask::N_ENEMY_SLOTS));
-    
+
         // Tactic kind string constants — passed to createLayeredPlanner priors,
         // TacticMcts.advanceRoot, tacticToAction, etc.
         {
@@ -3941,7 +3941,7 @@ void AIBindings::install(JSContext* ctx) {
             JS_SetPropertyStr(ctx, t, "Retreat",       JS_NewString(ctx, "Retreat"));
             JS_SetPropertyStr(ctx, gameObj, "TACTIC", t);
         }
-    
+
         // Move direction integer constants — match CombatAction.move_dir values
         // returned by search() and accepted by advanceRoot().
         {
@@ -3957,7 +3957,7 @@ void AIBindings::install(JSContext* ctx) {
             JS_SetPropertyStr(ctx, m, "NW",   JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::NW));
             JS_SetPropertyStr(ctx, gameObj, "MOVE_DIR", m);
         }
-    
+
         JS_SetPropertyStr(ctx, aiObj, "game", gameObj);
         JS_FreeValue(ctx, aiObj);
         JS_FreeValue(ctx, broObj);

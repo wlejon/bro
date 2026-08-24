@@ -14,27 +14,20 @@
 #include "js/triposplat_bindings.h"
 #include "js/imagebitmap_bindings.h"
 #include "util/interrupt.h"
-
 #include <qjsbind/qjsbind.h>
-
 #include <brovisionml/dinov3.h>
 #include <brovisionml/birefnet.h>
-
 #include <brodiffusion/triposplat/vae_encoder.h>
 #include <brodiffusion/triposplat/flow_model.h>
 #include <brodiffusion/triposplat/octree_decoder.h>
 #include <brodiffusion/triposplat/sampler.h>
-
 #include <brotensor/runtime.h>
 #include <brotensor/safetensors.h>
 #include <brotensor/tensor.h>
-
 #include <broimage/encode.h>
-
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -48,7 +41,12 @@
 #include <string>
 #include <vector>
 
+extern "C" {
+#include "quickjs.h"
+}
+
 namespace bro::js {
+
 
 namespace bt  = ::brotensor;
 namespace st  = ::brotensor::safetensors;
@@ -609,6 +607,11 @@ JSValue tsInit(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 
 }  // namespace
 
+
+// ---------------------------------------------------------------------------
+// Install
+// ---------------------------------------------------------------------------
+
 void installTriposplatBindings(JSContext* ctx) {
     tsRegisterClass(ctx);
 
@@ -629,6 +632,7 @@ void installTriposplatBindings(JSContext* ctx) {
     JS_FreeValue(ctx, global);
 }
 
-}  // namespace bro::js
 
-#endif  // BRO_WITH_TRIPOSPLAT
+} // namespace bro::js
+
+#endif // BRO_WITH_TRIPOSPLAT

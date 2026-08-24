@@ -157,26 +157,26 @@ JSValue js_media_thumbnails(JSContext* ctx, JSValueConst, int argc, JSValueConst
 // ---------------------------------------------------------------------------
 
 void installMediaBindings(JSContext* ctx, const std::string& basePath) {
-        s_basePath = basePath;
-    
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-        if (!JS_IsObject(broObj)) {
-            JS_FreeValue(ctx, broObj);
-            broObj = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-        }
-    
-        JSValue media = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, media, "available", JS_TRUE);
-        JS_SetPropertyStr(ctx, media, "peaks",
-                          JS_NewCFunction(ctx, js_media_peaks, "peaks", 2));
-        JS_SetPropertyStr(ctx, media, "thumbnails",
-                          JS_NewCFunction(ctx, js_media_thumbnails, "thumbnails", 2));
-        JS_SetPropertyStr(ctx, broObj, "media", media);
-    
+    s_basePath = basePath;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (!JS_IsObject(broObj)) {
         JS_FreeValue(ctx, broObj);
-        JS_FreeValue(ctx, global);
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+
+    JSValue media = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, media, "available", JS_TRUE);
+    JS_SetPropertyStr(ctx, media, "peaks",
+                      JS_NewCFunction(ctx, js_media_peaks, "peaks", 2));
+    JS_SetPropertyStr(ctx, media, "thumbnails",
+                      JS_NewCFunction(ctx, js_media_thumbnails, "thumbnails", 2));
+    JS_SetPropertyStr(ctx, broObj, "media", media);
+
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js

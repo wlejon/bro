@@ -418,177 +418,177 @@ static const JSCFunctionListEntry js_net_funcs[] = {
 // ---------------------------------------------------------------------------
 
 void NetBindings::install(JSContext* ctx, net::NetService* service) {
-        if (s_state) {
-            LOG_WARN("[net] NetBindings::install called twice on the same thread");
-            return;
+    if (s_state) {
+        LOG_WARN("[net] NetBindings::install called twice on the same thread");
+        return;
+    }
+    auto* state = new NetCtxState();
+    state->service = service;
+    state->ctx = ctx;
+    state->subscriber = service->createSubscriber();
+    s_state = state;
+
+    // Wire subscriber callbacks → JS callbacks on this context.
+    // These fire synchronously during poll() on this context's thread.
+    state->subscriber->onHostResult = [ctx](bool success) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        s->hostPending = false;
+        s->hosting = success;
+    };
+    state->subscriber->onConnectResult = [ctx](bool success) {
+        // Initiation ack only — app listens for onConnect for the actual
+        // link. A failed initiation is the end of that connect attempt.
+        auto* s = getState(ctx);
+        if (s && !success && s->connectsPending > 0) s->connectsPending--;
+    };
+    state->subscriber->onConnect = [ctx](uint32_t conn) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        if (s->connectsPending > 0) s->connectsPending--;
+        s->connections[conn] = true;
+        if (!JS_IsUndefined(s->onConnect) && !JS_IsNull(s->onConnect)) {
+            JSValue func = JS_DupValue(ctx, s->onConnect);
+            JSValue arg = JS_NewUint32(ctx, conn);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
+            else JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
         }
-        auto* state = new NetCtxState();
-        state->service = service;
-        state->ctx = ctx;
-        state->subscriber = service->createSubscriber();
-        s_state = state;
-    
-        // Wire subscriber callbacks → JS callbacks on this context.
-        // These fire synchronously during poll() on this context's thread.
-        state->subscriber->onHostResult = [ctx](bool success) {
-            auto* s = getState(ctx);
-            if (!s) return;
-            s->hostPending = false;
-            s->hosting = success;
-        };
-        state->subscriber->onConnectResult = [ctx](bool success) {
-            // Initiation ack only — app listens for onConnect for the actual
-            // link. A failed initiation is the end of that connect attempt.
-            auto* s = getState(ctx);
-            if (s && !success && s->connectsPending > 0) s->connectsPending--;
-        };
-        state->subscriber->onConnect = [ctx](uint32_t conn) {
-            auto* s = getState(ctx);
-            if (!s) return;
-            if (s->connectsPending > 0) s->connectsPending--;
-            s->connections[conn] = true;
-            if (!JS_IsUndefined(s->onConnect) && !JS_IsNull(s->onConnect)) {
-                JSValue func = JS_DupValue(ctx, s->onConnect);
-                JSValue arg = JS_NewUint32(ctx, conn);
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
-                if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
-                else JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, arg);
-                JS_FreeValue(ctx, func);
-            }
-        };
-        state->subscriber->onDisconnect = [ctx](uint32_t conn, int reason) {
-            auto* s = getState(ctx);
-            if (!s) return;
-            if (s->connections.erase(conn) == 0 && s->connectsPending > 0) {
-                // A conn we never saw Connected — an outgoing connect that
-                // failed after initiation.
-                s->connectsPending--;
-            }
-            if (!JS_IsUndefined(s->onDisconnect) && !JS_IsNull(s->onDisconnect)) {
-                JSValue func = JS_DupValue(ctx, s->onDisconnect);
-                JSValue args[2] = {
-                    JS_NewUint32(ctx, conn),
-                    JS_NewInt32(ctx, reason),
-                };
-                JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, args);
-                if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
-                else JS_FreeValue(ctx, ret);
-                JS_FreeValue(ctx, args[0]);
-                JS_FreeValue(ctx, args[1]);
-                JS_FreeValue(ctx, func);
-            }
-        };
-        state->subscriber->onMessage = [ctx](net::NetworkMessage&& msg) {
-            auto* s = getState(ctx);
-            if (!s) return;
-            if (JS_IsUndefined(s->onMessage) || JS_IsNull(s->onMessage)) return;
-    
-            // Parse the wire frame. The peer is untrusted: anything that doesn't
-            // carry our magic + a known frame type is dropped with a diagnostic —
-            // never surfaced to JS, never allowed to crash.
-            if (msg.data.size() < kWireHeaderSize || msg.data[0] != kWireMagic) {
-                LOG_WARN("[net] conn %u: dropping message with unrecognized wire "
-                         "framing (%zu bytes)", msg.connection, msg.data.size());
-                return;
-            }
-            const uint8_t frameType = msg.data[1];
-    
-            JSValue payload;
-            if (frameType == kWireRaw) {
-                payload = JS_NewArrayBufferCopy(ctx, msg.data.data() + kWireHeaderSize,
-                                                msg.data.size() - kWireHeaderSize);
-            } else if (frameType == kWireClone) {
-                // Deserialize in THIS context — each subscriber's onMessage runs
-                // on its own JS context's thread (main or worker), so values are
-                // materialized where they will be used.
-                Message m;
-                m.data = std::move(msg.data);
-                payload = deserializeMessage(ctx, m, kWireHeaderSize);
-                if (JS_IsException(payload)) {
-                    // Malformed clone payload (truncated, hostile, or version
-                    // skew). Drop with a diagnostic; the connection stays up.
-                    JSValue exc = JS_GetException(ctx);
-                    const char* what = JS_ToCString(ctx, exc);
-                    LOG_WARN("[net] conn %u: dropping malformed clone payload: %s",
-                             msg.connection, what ? what : "(unknown)");
-                    if (what) JS_FreeCString(ctx, what);
-                    JS_FreeValue(ctx, exc);
-                    return;
-                }
-            } else {
-                LOG_WARN("[net] conn %u: dropping message with unknown frame type "
-                         "0x%02x", msg.connection, frameType);
-                return;
-            }
-    
-            JSValue func = JS_DupValue(ctx, s->onMessage);
-            JSValue args[3] = {
-                JS_NewUint32(ctx, msg.connection),
-                payload,
-                JS_NewInt32(ctx, msg.channel),
+    };
+    state->subscriber->onDisconnect = [ctx](uint32_t conn, int reason) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        if (s->connections.erase(conn) == 0 && s->connectsPending > 0) {
+            // A conn we never saw Connected — an outgoing connect that
+            // failed after initiation.
+            s->connectsPending--;
+        }
+        if (!JS_IsUndefined(s->onDisconnect) && !JS_IsNull(s->onDisconnect)) {
+            JSValue func = JS_DupValue(ctx, s->onDisconnect);
+            JSValue args[2] = {
+                JS_NewUint32(ctx, conn),
+                JS_NewInt32(ctx, reason),
             };
-            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 3, args);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, args);
             if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
             else JS_FreeValue(ctx, ret);
             JS_FreeValue(ctx, args[0]);
             JS_FreeValue(ctx, args[1]);
-            JS_FreeValue(ctx, args[2]);
             JS_FreeValue(ctx, func);
+        }
+    };
+    state->subscriber->onMessage = [ctx](net::NetworkMessage&& msg) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        if (JS_IsUndefined(s->onMessage) || JS_IsNull(s->onMessage)) return;
+
+        // Parse the wire frame. The peer is untrusted: anything that doesn't
+        // carry our magic + a known frame type is dropped with a diagnostic —
+        // never surfaced to JS, never allowed to crash.
+        if (msg.data.size() < kWireHeaderSize || msg.data[0] != kWireMagic) {
+            LOG_WARN("[net] conn %u: dropping message with unrecognized wire "
+                     "framing (%zu bytes)", msg.connection, msg.data.size());
+            return;
+        }
+        const uint8_t frameType = msg.data[1];
+
+        JSValue payload;
+        if (frameType == kWireRaw) {
+            payload = JS_NewArrayBufferCopy(ctx, msg.data.data() + kWireHeaderSize,
+                                            msg.data.size() - kWireHeaderSize);
+        } else if (frameType == kWireClone) {
+            // Deserialize in THIS context — each subscriber's onMessage runs
+            // on its own JS context's thread (main or worker), so values are
+            // materialized where they will be used.
+            Message m;
+            m.data = std::move(msg.data);
+            payload = deserializeMessage(ctx, m, kWireHeaderSize);
+            if (JS_IsException(payload)) {
+                // Malformed clone payload (truncated, hostile, or version
+                // skew). Drop with a diagnostic; the connection stays up.
+                JSValue exc = JS_GetException(ctx);
+                const char* what = JS_ToCString(ctx, exc);
+                LOG_WARN("[net] conn %u: dropping malformed clone payload: %s",
+                         msg.connection, what ? what : "(unknown)");
+                if (what) JS_FreeCString(ctx, what);
+                JS_FreeValue(ctx, exc);
+                return;
+            }
+        } else {
+            LOG_WARN("[net] conn %u: dropping message with unknown frame type "
+                     "0x%02x", msg.connection, frameType);
+            return;
+        }
+
+        JSValue func = JS_DupValue(ctx, s->onMessage);
+        JSValue args[3] = {
+            JS_NewUint32(ctx, msg.connection),
+            payload,
+            JS_NewInt32(ctx, msg.channel),
         };
-    
-        // Build bro.net namespace.
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
-            broObj = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-        }
-    
-        JSValue netObj = JS_NewObject(ctx);
-        JS_SetPropertyFunctionList(ctx, netObj, js_net_funcs,
-                                   sizeof(js_net_funcs) / sizeof(js_net_funcs[0]));
-    
-        JSAtom aConnect = JS_NewAtom(ctx, "onconnect");
-        JS_DefinePropertyGetSet(ctx, netObj, aConnect,
-            JS_NewCFunction(ctx, js_net_get_onconnect, "get onconnect", 0),
-            JS_NewCFunction(ctx, js_net_set_onconnect, "set onconnect", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aConnect);
-    
-        JSAtom aDisconnect = JS_NewAtom(ctx, "ondisconnect");
-        JS_DefinePropertyGetSet(ctx, netObj, aDisconnect,
-            JS_NewCFunction(ctx, js_net_get_ondisconnect, "get ondisconnect", 0),
-            JS_NewCFunction(ctx, js_net_set_ondisconnect, "set ondisconnect", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aDisconnect);
-    
-        JSAtom aMessage = JS_NewAtom(ctx, "onmessage");
-        JS_DefinePropertyGetSet(ctx, netObj, aMessage,
-            JS_NewCFunction(ctx, js_net_get_onmessage, "get onmessage", 0),
-            JS_NewCFunction(ctx, js_net_set_onmessage, "set onmessage", 1),
-            JS_PROP_CONFIGURABLE);
-        JS_FreeAtom(ctx, aMessage);
-    
-        JS_SetPropertyStr(ctx, broObj, "net", netObj);
-        JS_FreeValue(ctx, broObj);
-        JS_FreeValue(ctx, global);
-    
-        // --- bro.net.sync — Godot-style high-level multiplayer (spawn/despawn
-        //     replication, authority, delta state sync, RPC) layered in pure JS
-        //     over the primitives just installed. Runs in every context with a
-        //     real bro.net (main + workers); the BRO_WITH_NET=OFF stub install
-        //     never evaluates it, so bro.net.sync simply doesn't exist there. ---
-        JSValue r = JS_Eval(ctx, js_net_sync, std::strlen(js_net_sync),
-                            "<bro.net.sync>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(r)) {
-            JSValue exc = JS_GetException(ctx);
-            const char* what = JS_ToCString(ctx, exc);
-            LOG_ERROR("[net] bro.net.sync install failed: %s", what ? what : "(unknown)");
-            if (what) JS_FreeCString(ctx, what);
-            JS_FreeValue(ctx, exc);
-        }
-        JS_FreeValue(ctx, r);
+        JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 3, args);
+        if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
+        else JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, args[0]);
+        JS_FreeValue(ctx, args[1]);
+        JS_FreeValue(ctx, args[2]);
+        JS_FreeValue(ctx, func);
+    };
+
+    // Build bro.net namespace.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+
+    JSValue netObj = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, netObj, js_net_funcs,
+                               sizeof(js_net_funcs) / sizeof(js_net_funcs[0]));
+
+    JSAtom aConnect = JS_NewAtom(ctx, "onconnect");
+    JS_DefinePropertyGetSet(ctx, netObj, aConnect,
+        JS_NewCFunction(ctx, js_net_get_onconnect, "get onconnect", 0),
+        JS_NewCFunction(ctx, js_net_set_onconnect, "set onconnect", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aConnect);
+
+    JSAtom aDisconnect = JS_NewAtom(ctx, "ondisconnect");
+    JS_DefinePropertyGetSet(ctx, netObj, aDisconnect,
+        JS_NewCFunction(ctx, js_net_get_ondisconnect, "get ondisconnect", 0),
+        JS_NewCFunction(ctx, js_net_set_ondisconnect, "set ondisconnect", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aDisconnect);
+
+    JSAtom aMessage = JS_NewAtom(ctx, "onmessage");
+    JS_DefinePropertyGetSet(ctx, netObj, aMessage,
+        JS_NewCFunction(ctx, js_net_get_onmessage, "get onmessage", 0),
+        JS_NewCFunction(ctx, js_net_set_onmessage, "set onmessage", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aMessage);
+
+    JS_SetPropertyStr(ctx, broObj, "net", netObj);
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
+
+    // --- bro.net.sync — Godot-style high-level multiplayer (spawn/despawn
+    //     replication, authority, delta state sync, RPC) layered in pure JS
+    //     over the primitives just installed. Runs in every context with a
+    //     real bro.net (main + workers); the BRO_WITH_NET=OFF stub install
+    //     never evaluates it, so bro.net.sync simply doesn't exist there. ---
+    JSValue r = JS_Eval(ctx, js_net_sync, std::strlen(js_net_sync),
+                        "<bro.net.sync>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) {
+        JSValue exc = JS_GetException(ctx);
+        const char* what = JS_ToCString(ctx, exc);
+        LOG_ERROR("[net] bro.net.sync install failed: %s", what ? what : "(unknown)");
+        if (what) JS_FreeCString(ctx, what);
+        JS_FreeValue(ctx, exc);
+    }
+    JS_FreeValue(ctx, r);
 }
 
 

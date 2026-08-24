@@ -5839,56 +5839,83 @@ declare class Worker {
   terminate(): void;
 }
 
-declare class World {
-  /**
-   * World generation random seed.
-   */
-  readonly seed: number;
-  /**
-   * Model weights filesystem directory.
-   */
-  readonly directory: string;
-  /**
-   * Fine resolution cell size in metres.
-   */
-  readonly cellSize: number;
-  /**
-   * Intermediate latent stage cell size in metres.
-   */
-  readonly latentCellSize: number;
-  /**
-   * Coarse overview stage cell size in metres.
-   */
-  readonly coarseCellSize: number;
-  /**
-   * Asynchronously compute fine elevation in metres for cell region [i1, j1, i2, j2).
-   */
-  elevation(i1: number, j1: number, i2: number, j2: number, opts?: object): AsyncHandle;
-  /**
-   * Synchronously compute fine elevation grid in metres.
-   */
-  elevationSync(i1: number, j1: number, i2: number, j2: number, opts?: object): object;
-  /**
-   * Synchronously compute coarse terrain elevation channel at 7.68 km resolution.
-   */
-  coarse(i1: number, j1: number, i2: number, j2: number, opts?: object): object;
-  /**
-   * Asynchronously compute intermediate DAG stage buffer.
-   */
-  stage(name: string, i1: number, j1: number, i2: number, j2: number, opts?: object): AsyncHandle;
-  /**
-   * Synchronously compute intermediate DAG stage buffer.
-   */
-  stageSync(name: string, i1: number, j1: number, i2: number, j2: number): object;
-  /**
-   * Invalidate cached memoized tiles.
-   */
-  clearCache(): void;
+// ── Global 'Physics' Namespace ──────────────────────────────────────────
+
+declare namespace Physics {
+  function createWorldHandle(opts?: object): PhysicsWorldHandle;
+  function createWorld(opts?: object): void;
+  function setGravity(x: number, y: number, z: number): void;
+  function getGravity(): number[];
+  function setLayers(config: object): void;
+  function createBody(config: object): number;
+  function destroyBody(tag: number): void;
+  function destroyAll(): void;
+  function getTransform(tag: number): object;
+  function getVelocity(tag: number): object;
+  function setPosition(tag: number, x: number, y: number, z: number): void;
+  function setRotation(tag: number, x: number, y: number, z: number, w: number): void;
+  function setLinearVelocity(tag: number, x: number, y: number, z: number): void;
+  function setAngularVelocity(tag: number, x: number, y: number, z: number): void;
+  function addForce(tag: number, x: number, y: number, z: number): void;
+  function addImpulse(tag: number, x: number, y: number, z: number): void;
+  function addTorque(tag: number, x: number, y: number, z: number): void;
+  function setUserData(tag: number, data: any): void;
+  function getUserData(tag: number): any;
+  function setLayer(tag: number, layer: number): void;
+  function setKinematic(tag: number): void;
+  function setMotionType(tag: number, type: string | number): void;
+  function moveKinematic(tag: number, x: number, y: number, z: number, dt: number): void;
+  function raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
+  function raycastClosest(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
+  function castShape(config: object): object[];
+  function castShapeClosest(config: object): object | null;
+  function overlapShape(config: object): number[];
+  function overlapPoint(x: number, y: number, z: number, mask?: number): number[];
+  function getContacts(): object[];
+  function setFrictionCombine(tag: number, mode: string): void;
+  function setRestitutionCombine(tag: number, mode: string): void;
+  function setMass(tag: number, mass: number): void;
+  function setLinearDamping(tag: number, damping: number): void;
+  function setAngularDamping(tag: number, damping: number): void;
+  function setGravityFactor(tag: number, factor: number): void;
+  function setFriction(tag: number, friction: number): void;
+  function setRestitution(tag: number, restitution: number): void;
+  function getBodyProperties(tag: number): object | null;
+  function setAreaOverride(tag: number, config: object): void;
+  function setTimeStep(dt: number): void;
+  function setInterpolation(enabled: boolean): void;
+  function getInterpolation(): boolean;
+  function isActive(tag: number): boolean;
+  function activate(tag: number): void;
+  function getAllTransforms(worldHandle?: number): Float32Array;
+  function createCharacter(config: object): PhysicsCharacter;
+  function createVehicle(config: object): PhysicsVehicle;
+  function createRagdoll(config: object): PhysicsRagdoll;
+  function createSoftBody(config: object): PhysicsSoftBody;
+  function createConstraint(config: object): number;
+  function destroyConstraint(tag: number): void;
+  function setConstraintEnabled(tag: number, enabled: boolean): void;
+  function setWheelMotor(vehicleTag: number, wheelIndex: number, motorTorque: number, brakeTorque: number): void;
+  function setConstraintMotor(tag: number, config: object): void;
+  function setConstraintBreakingImpulse(tag: number, impulse: number): void;
+  function getConstraintBreakingImpulse(tag: number): number;
+  function getBrokenConstraints(): number[];
 }
 
 // ── Global 'bro' Namespace ───────────────────────────────────────────────────
 
 declare namespace bro {
+  /**
+   * Absolute native filesystem path of the running application's root directory.
+   */
+  const appDir: string;
+  /**
+   * Resolves a virtual mount path or relative application path to an absolute native filesystem path.
+   * @param path Input path string
+   * @returns Resolved absolute filesystem path
+   */
+  function resolvePath(path: string): string;
+
   namespace game {
     function createAgent(world: AIWorld, opts?: object): AIAgent;
     function createWorld(opts?: object): AIWorld;
@@ -6813,83 +6840,6 @@ declare namespace bro {
   }
 
   /**
-   * Engine asset and application filesystem path resolution namespace.
-   */
-  namespace paths {
-    /**
-     * Absolute native filesystem path of the running application's root directory.
-     */
-    const appDir: string;
-    /**
-     * Resolves a virtual mount path or relative application path to an absolute native filesystem path.
-     * @param path Input path string
-     * @returns Resolved absolute filesystem path
-     */
-    function resolvePath(path: string): string;
-  }
-
-  namespace Physics {
-    function createWorldHandle(opts?: object): PhysicsWorldHandle;
-    function createWorld(opts?: object): void;
-    function setGravity(x: number, y: number, z: number): void;
-    function getGravity(): number[];
-    function setLayers(config: object): void;
-    function createBody(config: object): number;
-    function destroyBody(tag: number): void;
-    function destroyAll(): void;
-    function getTransform(tag: number): object;
-    function getVelocity(tag: number): object;
-    function setPosition(tag: number, x: number, y: number, z: number): void;
-    function setRotation(tag: number, x: number, y: number, z: number, w: number): void;
-    function setLinearVelocity(tag: number, x: number, y: number, z: number): void;
-    function setAngularVelocity(tag: number, x: number, y: number, z: number): void;
-    function addForce(tag: number, x: number, y: number, z: number): void;
-    function addImpulse(tag: number, x: number, y: number, z: number): void;
-    function addTorque(tag: number, x: number, y: number, z: number): void;
-    function setUserData(tag: number, data: any): void;
-    function getUserData(tag: number): any;
-    function setLayer(tag: number, layer: number): void;
-    function setKinematic(tag: number): void;
-    function setMotionType(tag: number, type: string | number): void;
-    function moveKinematic(tag: number, x: number, y: number, z: number, dt: number): void;
-    function raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
-    function raycastClosest(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
-    function castShape(config: object): object[];
-    function castShapeClosest(config: object): object | null;
-    function overlapShape(config: object): number[];
-    function overlapPoint(x: number, y: number, z: number, mask?: number): number[];
-    function getContacts(): object[];
-    function setFrictionCombine(tag: number, mode: string): void;
-    function setRestitutionCombine(tag: number, mode: string): void;
-    function setMass(tag: number, mass: number): void;
-    function setLinearDamping(tag: number, damping: number): void;
-    function setAngularDamping(tag: number, damping: number): void;
-    function setGravityFactor(tag: number, factor: number): void;
-    function setFriction(tag: number, friction: number): void;
-    function setRestitution(tag: number, restitution: number): void;
-    function getBodyProperties(tag: number): object | null;
-    function setAreaOverride(tag: number, config: object): void;
-    function setTimeStep(dt: number): void;
-    function setInterpolation(enabled: boolean): void;
-    function getInterpolation(): boolean;
-    function isActive(tag: number): boolean;
-    function activate(tag: number): void;
-    function getAllTransforms(worldHandle?: number): Float32Array;
-    function createCharacter(config: object): PhysicsCharacter;
-    function createVehicle(config: object): PhysicsVehicle;
-    function createRagdoll(config: object): PhysicsRagdoll;
-    function createSoftBody(config: object): PhysicsSoftBody;
-    function createConstraint(config: object): number;
-    function destroyConstraint(tag: number): void;
-    function setConstraintEnabled(tag: number, enabled: boolean): void;
-    function setWheelMotor(vehicleTag: number, wheelIndex: number, motorTorque: number, brakeTorque: number): void;
-    function setConstraintMotor(tag: number, config: object): void;
-    function setConstraintBreakingImpulse(tag: number, impulse: number): void;
-    function getConstraintBreakingImpulse(tag: number): number;
-    function getBrokenConstraints(): number[];
-  }
-
-  /**
    * RAVE audio model namespace.
    */
   namespace rave {
@@ -7379,50 +7329,28 @@ declare namespace bro {
   }
 
   /**
-   * =============================================================================
-   * bro.worldgen — learned neural terrain diffusion pipeline
-   * =============================================================================
-   *
-   * Deterministic, infinite neural world generation using brodiffusion WorldPipeline.
-   * Generates continuous elevation grids in metres from multi-scale UNets with coherent
-   * drainage networks, hydrological ridges, and coarse/latent stage intermediate diagnostics.
-   *
-   * @example
-   *   bro.worldgen.loadWorld("weights/terrain", {
-   *     seed: 42,
-   *     onReady: (world) => {
-   *       const tile = world.elevationSync(0, 0, 256, 256);
-   *       console.log(`Generated ${tile.width}x${tile.height} tile with cell size ${tile.cellSize}m`);
-   *     }
-   *   });
-   */
-  namespace worldgen {
-    /**
-     * Initialize brotensor acceleration runtime for neural terrain generation.
-     */
-    function init(): void;
-    /**
-     * Load a neural terrain world pipeline asynchronously from a model directory.
-     *
-     * @param dir Checkpoint model directory path.
-     * @param opts Seed and callback hooks (onReady, onError).
-     * @return Async job handle.
-     */
-    function loadWorld(dir: string, opts?: object): AsyncHandle;
-  }
-
-  /**
    * FastNoise procedural SIMD-accelerated noise generator.
    */
   const noise: typeof FastNoise;
-  /**
-   * WebGL2-backed GPU image rendering and procedural generation.
-   */
-  const image.gpu: typeof image_gpu;
+  namespace image {
+    /**
+     * WebGL2-backed GPU image rendering and procedural generation.
+     */
+    const gpu: typeof image_gpu;
+  }
 }
-
+/**
+ * Custom element registry for registering and querying custom element definitions.
+ */
 declare const customElements: CustomElementRegistry;
 
-declare const createImageBitmap: ImageBitmap;
+/**
+ * W3C ImageBitmap interface representing a bitmap image that can be drawn to a canvas.
+ */
+declare function createImageBitmap(source: any, sx?: number, sy?: number, sw?: number, sh?: number, options?: any): Promise<ImageBitmap>;
 
-declare const matchMedia: MediaQueryList;
+/**
+ * Stores information on a media query applied to a document, with support for real-time listener updates.
+ */
+declare function matchMedia(query: string): MediaQueryList;
+

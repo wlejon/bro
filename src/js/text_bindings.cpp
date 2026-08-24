@@ -101,13 +101,13 @@ static JSValue js_text_shape(JSContext* ctx, JSValueConst, int argc, JSValueCons
     Opts opts;
     const render::ShapedRun* run = shapeArgs(ctx, eng, argc, argv, text, opts);
     if (!run) return JS_NULL;
-    
+
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "text", JS_NewString(ctx, text.c_str()));
     JS_SetPropertyStr(ctx, out, "glyphCount",
                       JS_NewInt32(ctx, static_cast<int>(run->glyphCount())));
     JS_SetPropertyStr(ctx, out, "width", JS_NewFloat64(ctx, run->width(opts.spacing)));
-    
+
     auto list = run->clusterList(opts.spacing);
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
@@ -183,7 +183,7 @@ static JSValue js_text_cache_stats(JSContext* ctx, JSValueConst, int argc, JSVal
 static JSValue js_text_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
     const std::string text = qjsbind::Convert<std::string>::from_js(ctx, argv[0]);
-    
+
     render::bidi::BaseDirection base = render::bidi::BaseDirection::Auto;
     if (argc > 1 && JS_IsString(argv[1])) {
         const std::string b = qjsbind::Convert<std::string>::from_js(ctx, argv[1]);
@@ -192,15 +192,15 @@ static JSValue js_text_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst
     }
     render::bidi::Override ov = render::bidi::Override::Normal;
     if (argc > 2 && JS_ToBool(ctx, argv[2])) ov = render::bidi::Override::Override;
-    
+
     const render::bidi::Paragraph para =
         render::bidi::resolveParagraph(text, base, ov);
-    
+
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "paragraphLevel",
                       JS_NewInt32(ctx, para.paragraphLevel));
     JS_SetPropertyStr(ctx, out, "uniform", JS_NewBool(ctx, para.uniform));
-    
+
     JSValue levels = JS_NewArray(ctx);
     uint32_t li = 0;
     for (std::size_t i = 0; i < text.size(); ++i) {
@@ -209,7 +209,7 @@ static JSValue js_text_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst
                              JS_NewInt32(ctx, para.levels[i]));
     }
     JS_SetPropertyStr(ctx, out, "levels", levels);
-    
+
     JSValue runs = JS_NewArray(ctx);
     uint32_t ri = 0;
     for (const auto& r : para.runs()) {

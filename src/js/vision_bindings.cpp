@@ -2550,58 +2550,58 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 // ---------------------------------------------------------------------------
 
 void installVisionBindings(JSContext* ctx) {
-        registerDepthClass(ctx);
-        registerSamClass(ctx);
-        registerNormalClass(ctx);
-        registerHedClass(ctx);
-        registerLineartClass(ctx);
-        registerMlsdClass(ctx);
-        registerOpenposeClass(ctx);
-        registerSegformerClass(ctx);
-        registerBirefnetClass(ctx);
-        registerStyleGAN3Class(ctx);
-        registerDinov2Class(ctx);
-        registerDinov3Class(ctx);
-    
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-        if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
-            JS_FreeValue(ctx, broObj);
-            broObj = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
-        }
-    
-        JSValue vision = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, vision, "init",
-            JS_NewCFunction(ctx, js_init, "init", 0));
-        JS_SetPropertyStr(ctx, vision, "loadDepth",
-            JS_NewCFunction(ctx, js_loadDepth, "loadDepth", 2));
-        JS_SetPropertyStr(ctx, vision, "loadSam",
-            JS_NewCFunction(ctx, js_loadSam, "loadSam", 2));
-        JS_SetPropertyStr(ctx, vision, "loadNormal",
-            JS_NewCFunction(ctx, js_loadNormal, "loadNormal", 2));
-        JS_SetPropertyStr(ctx, vision, "loadHed",
-            JS_NewCFunction(ctx, js_loadHed, "loadHed", 2));
-        JS_SetPropertyStr(ctx, vision, "loadLineart",
-            JS_NewCFunction(ctx, js_loadLineart, "loadLineart", 2));
-        JS_SetPropertyStr(ctx, vision, "loadMlsd",
-            JS_NewCFunction(ctx, js_loadMlsd, "loadMlsd", 2));
-        JS_SetPropertyStr(ctx, vision, "loadOpenpose",
-            JS_NewCFunction(ctx, js_loadOpenpose, "loadOpenpose", 2));
-        JS_SetPropertyStr(ctx, vision, "loadSegformer",
-            JS_NewCFunction(ctx, js_loadSegformer, "loadSegformer", 2));
-        JS_SetPropertyStr(ctx, vision, "loadBirefnet",
-            JS_NewCFunction(ctx, js_loadBirefnet, "loadBirefnet", 2));
-        JS_SetPropertyStr(ctx, vision, "loadStyleGAN3",
-            JS_NewCFunction(ctx, js_loadStyleGAN3, "loadStyleGAN3", 2));
-        JS_SetPropertyStr(ctx, vision, "loadDinov2",
-            JS_NewCFunction(ctx, js_loadDinov2, "loadDinov2", 2));
-        JS_SetPropertyStr(ctx, vision, "loadDinov3",
-            JS_NewCFunction(ctx, js_loadDinov3, "loadDinov3", 2));
-        JS_SetPropertyStr(ctx, broObj, "vision", vision);
-    
+    registerDepthClass(ctx);
+    registerSamClass(ctx);
+    registerNormalClass(ctx);
+    registerHedClass(ctx);
+    registerLineartClass(ctx);
+    registerMlsdClass(ctx);
+    registerOpenposeClass(ctx);
+    registerSegformerClass(ctx);
+    registerBirefnetClass(ctx);
+    registerStyleGAN3Class(ctx);
+    registerDinov2Class(ctx);
+    registerDinov3Class(ctx);
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
         JS_FreeValue(ctx, broObj);
-        JS_FreeValue(ctx, global);
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+
+    JSValue vision = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, vision, "init",
+        JS_NewCFunction(ctx, js_init, "init", 0));
+    JS_SetPropertyStr(ctx, vision, "loadDepth",
+        JS_NewCFunction(ctx, js_loadDepth, "loadDepth", 2));
+    JS_SetPropertyStr(ctx, vision, "loadSam",
+        JS_NewCFunction(ctx, js_loadSam, "loadSam", 2));
+    JS_SetPropertyStr(ctx, vision, "loadNormal",
+        JS_NewCFunction(ctx, js_loadNormal, "loadNormal", 2));
+    JS_SetPropertyStr(ctx, vision, "loadHed",
+        JS_NewCFunction(ctx, js_loadHed, "loadHed", 2));
+    JS_SetPropertyStr(ctx, vision, "loadLineart",
+        JS_NewCFunction(ctx, js_loadLineart, "loadLineart", 2));
+    JS_SetPropertyStr(ctx, vision, "loadMlsd",
+        JS_NewCFunction(ctx, js_loadMlsd, "loadMlsd", 2));
+    JS_SetPropertyStr(ctx, vision, "loadOpenpose",
+        JS_NewCFunction(ctx, js_loadOpenpose, "loadOpenpose", 2));
+    JS_SetPropertyStr(ctx, vision, "loadSegformer",
+        JS_NewCFunction(ctx, js_loadSegformer, "loadSegformer", 2));
+    JS_SetPropertyStr(ctx, vision, "loadBirefnet",
+        JS_NewCFunction(ctx, js_loadBirefnet, "loadBirefnet", 2));
+    JS_SetPropertyStr(ctx, vision, "loadStyleGAN3",
+        JS_NewCFunction(ctx, js_loadStyleGAN3, "loadStyleGAN3", 2));
+    JS_SetPropertyStr(ctx, vision, "loadDinov2",
+        JS_NewCFunction(ctx, js_loadDinov2, "loadDinov2", 2));
+    JS_SetPropertyStr(ctx, vision, "loadDinov3",
+        JS_NewCFunction(ctx, js_loadDinov3, "loadDinov3", 2));
+    JS_SetPropertyStr(ctx, broObj, "vision", vision);
+
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
 }
 
 

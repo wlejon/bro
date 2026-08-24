@@ -165,7 +165,7 @@ void installGamepadBindings(JSContext* ctx, engine::Engine* engine)
     JS_SetPropertyStr(ctx, global, kGamepadEngineKey,
                       JS_NewInt64(ctx, static_cast<int64_t>(
                           reinterpret_cast<intptr_t>(engine))));
-    
+
     JSValue nav = JS_GetPropertyStr(ctx, global, "navigator");
     if (JS_IsUndefined(nav) || JS_IsNull(nav)) {
         JS_FreeValue(ctx, nav);
@@ -177,5 +177,6 @@ void installGamepadBindings(JSContext* ctx, engine::Engine* engine)
     JS_FreeValue(ctx, nav);
     JS_FreeValue(ctx, global);
 }
+
 
 } // namespace bro::js

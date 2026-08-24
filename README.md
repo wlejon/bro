@@ -66,7 +66,7 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 | Reach for | to |
 |---|---|
 | `bro.scene` | 3D scene graph: meshes, sprites, particles, PBR lighting, skinned characters |
-| `scene.createTerrain` · `createClipmapTerrain` · `createTileWorld` · `bro.worldgen` | chunked height-field terrain, camera-centred clipmaps, square/hex tile grids, learned elevation |
+| `scene.createTerrain` · `createClipmapTerrain` · `createTileWorld` | chunked height-field terrain, camera-centred clipmaps, square/hex tile grids |
 | `Physics` / physics nodes | Jolt rigid bodies, contact events, constraints, raycasts, characters, vehicles |
 | `AudioContext` (broaudio) | real-time audio: synthesis, effects, spatial, MIDI |
 | `bro.mesh` · `bro.ai.game` · `bro.net` | mesh generation + CSG · navmesh + A* pathfinding · game networking (GNS) |
@@ -169,7 +169,7 @@ Full TypeScript autocompletion and typechecking definitions for the `bro` namesp
 
 Annotated `.js` files in [docs/](docs/) are emitted directly from [`brosurface`](https://github.com/wlejon/brosurface). Load them in your editor for JSDoc on every binding:
 
-**Graphics & world.** `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile_world-api.js`, `worldgen-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`, `canvas-api.js`, `webgl2-api.js`.
+**Graphics & world.** `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile_world-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`, `canvas-api.js`, `webgl2-api.js`.
 
 **Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web_animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `net-api.js`, `settings-api.js`, `intl-api.js`.
 

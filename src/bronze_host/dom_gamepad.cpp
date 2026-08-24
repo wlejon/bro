@@ -166,17 +166,26 @@ Value makeNavigatorValue() {
 void installGamepadButtonGlobals() {
     g_gamepad_buttonClass.install(
         "GamepadButton", 0,
-        [](Value, std::span<const Value>) { return ev::undefined(); },
+        // Not constructible: the IDL declares no constructor, and
+        // HostClass::install turns a null body into the TypeError the
+        // web specifies for `new GamepadButton()`.
+        nullptr,
         decorateGamepadButtonProto);
 
     g_gamepadClass.install(
         "Gamepad", 0,
-        [](Value, std::span<const Value>) { return ev::undefined(); },
+        // Not constructible: the IDL declares no constructor, and
+        // HostClass::install turns a null body into the TypeError the
+        // web specifies for `new Gamepad()`.
+        nullptr,
         nullptr);
 
     g_gamepad_eventClass.install(
         "GamepadEvent", 0,
-        [](Value, std::span<const Value>) { return ev::undefined(); },
+        // Not constructible: the IDL declares no constructor, and
+        // HostClass::install turns a null body into the TypeError the
+        // web specifies for `new GamepadEvent()`.
+        nullptr,
         decorateGamepadEventProto);
 
 }

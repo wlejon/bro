@@ -404,9 +404,9 @@ void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine:
     g_sense.audioEngine = audioEngine;
         g_sense.inference   = inference;
         g_sense.ctx         = ctx;
-    
+
         registerSenseViewClass(ctx);
-    
+
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
         if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -414,7 +414,7 @@ void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine:
             broObj = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
         }
-    
+
         JSValue sense = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, sense, "start",
             JS_NewCFunction(ctx, js_start, "start", 1));
@@ -433,7 +433,7 @@ void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine, engine:
         JS_SetPropertyStr(ctx, sense, "analyze",
             JS_NewCFunction(ctx, js_analyze, "analyze", 2));
         JS_SetPropertyStr(ctx, broObj, "sense", sense);
-    
+
         JS_FreeValue(ctx, broObj);
         JS_FreeValue(ctx, global);
 }

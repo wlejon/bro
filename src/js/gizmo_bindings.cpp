@@ -152,7 +152,7 @@ static JSValue js_gizmo_configure(JSContext* ctx, JSValueConst, int argc, JSValu
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "gizmo.configure() requires an options object");
     auto& cfg = e->gizmo().config();
-    
+
     auto readFloat = [&](const char* name, float& out) {
         JSValue v = JS_GetPropertyStr(ctx, argv[0], name);
         if (JS_IsNumber(v)) { double d; JS_ToFloat64(ctx, &d, v); out = static_cast<float>(d); }
@@ -161,11 +161,11 @@ static JSValue js_gizmo_configure(JSContext* ctx, JSValueConst, int argc, JSValu
     readFloat("size", cfg.targetPixelSize);
     readFloat("emissive", cfg.emissive);
     readFloat("emissiveHover", cfg.emissiveHover);
-    
+
     JSValue aot = JS_GetPropertyStr(ctx, argv[0], "alwaysOnTop");
     if (JS_IsBool(aot)) cfg.alwaysOnTop = JS_ToBool(ctx, aot);
     JS_FreeValue(ctx, aot);
-    
+
     JSValue colors = JS_GetPropertyStr(ctx, argv[0], "colors");
     if (JS_IsObject(colors)) {
         JSValue xv = JS_GetPropertyStr(ctx, colors, "x");
@@ -211,7 +211,7 @@ static JSValue js_gizmo_attach(JSContext* ctx, JSValueConst, int argc, JSValueCo
     if (!e) return JS_UNDEFINED;
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "gizmo.attach() requires an object");
-    
+
     e->gizmo().setJSContext(ctx);
     const char* keys[] = {
         "position", "orientation", "beginDrag", "translate",
