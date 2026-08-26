@@ -7,6 +7,7 @@
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
+#include "layout/formatting_context.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "dom/text_node.h"
@@ -277,43 +278,82 @@ static render::BlendMode parseBlendMode(const std::string& v) {
 
 /// Parse a CSS `clip-path: polygon(...)` value into vertex points (border-box
 /// relative). Returns empty when the value is none/auto/empty/unrecognized.
-/// Supports `polygon(<x1> <y1>, <x2> <y2>, ...)` with px or % units. Skips a
-/// leading `<fill-rule>,` (nonzero|evenodd) since we treat the path as a
-/// simple polygon outline.
+/// Each coordinate is a <length-percentage> resolved through the shared
+/// htmlayout length resolver, so px, %, font-relative units, and the math
+/// functions (calc()/min()/max()/clamp()) all work. Skips a leading
+/// `<fill-rule>,` (nonzero|evenodd) since we treat the path as a simple
+/// polygon outline. A vertex that isn't exactly two components invalidates
+/// the whole value — no clip — matching CSS's declaration-level error
+/// handling. Tokenization is paren-depth aware and always consumes input, so
+/// no value can stall it (a bare `calc(...)` coordinate used to livelock the
+/// old strtof cursor loop here and hang the frame).
 static std::vector<render::PointF> parseClipPathPolygon(
-    const std::string& val, float refW, float refH) {
+    const std::string& val, float refW, float refH, float fontSize) {
     std::vector<render::PointF> out;
-    if (val.empty() || val == "none") return out;
-    auto skip = [](const char*& p) {
-        while (*p && std::isspace(static_cast<unsigned char>(*p))) ++p;
+    size_t start = val.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return out;
+    if (val.compare(start, 8, "polygon(") != 0) return out;
+    size_t open = start + 8;
+    size_t close = val.rfind(')');
+    if (close == std::string::npos || close < open) return out;
+    const std::string body = val.substr(open, close - open);
+
+    auto isWs = [](char c) {
+        return std::isspace(static_cast<unsigned char>(c)) != 0;
     };
-    const char* p = val.c_str();
-    skip(p);
-    if (std::strncmp(p, "polygon(", 8) != 0) return out;
-    p += 8;
-    skip(p);
-    // Optional fill-rule prefix.
-    if (std::strncmp(p, "nonzero", 7) == 0 || std::strncmp(p, "evenodd", 7) == 0) {
-        p += 7;
-        skip(p);
-        if (*p == ',') { ++p; skip(p); }
+    auto trim = [&](const std::string& s) -> std::string {
+        size_t b = 0, e = s.size();
+        while (b < e && isWs(s[b])) ++b;
+        while (e > b && isWs(s[e - 1])) --e;
+        return s.substr(b, e - b);
+    };
+
+    // Split the vertex list on top-level commas — min()/max()/clamp() carry
+    // commas of their own, so track paren depth.
+    std::vector<std::string> verts;
+    int depth = 0;
+    size_t vstart = 0;
+    for (size_t i = 0; i <= body.size(); ++i) {
+        char c = i < body.size() ? body[i] : ',';
+        if (c == '(') ++depth;
+        else if (c == ')') --depth;
+        else if (c == ',' && depth == 0) {
+            verts.push_back(trim(body.substr(vstart, i - vstart)));
+            vstart = i + 1;
+        }
     }
-    auto parseLen = [&](float ref) -> float {
-        skip(p);
-        char* end = nullptr;
-        float v = std::strtof(p, &end);
-        if (end == p) return 0.0f;
-        p = end;
-        if (*p == '%') { v = v * ref / 100.0f; ++p; }
-        else if (std::strncmp(p, "px", 2) == 0) { p += 2; }
-        return v;
-    };
-    while (*p && *p != ')') {
-        float xv = parseLen(refW);
-        float yv = parseLen(refH);
-        out.push_back({xv, yv});
-        skip(p);
-        if (*p == ',') { ++p; skip(p); }
+    if (verts.size() == 1 && verts[0].empty()) return out;  // polygon()
+
+    size_t first = 0;
+    if (!verts.empty() && (verts[0] == "nonzero" || verts[0] == "evenodd"))
+        first = 1;
+
+    out.reserve(verts.size() - first);
+    for (size_t vi = first; vi < verts.size(); ++vi) {
+        // Split the vertex into its x and y components on top-level
+        // whitespace — spaces inside calc(100% - 8px) don't separate.
+        std::vector<std::string> comps;
+        const std::string& v = verts[vi];
+        depth = 0;
+        size_t cstart = std::string::npos;
+        for (size_t i = 0; i <= v.size(); ++i) {
+            char c = i < v.size() ? v[i] : ' ';
+            if (c == '(') ++depth;
+            else if (c == ')') --depth;
+            if (depth == 0 && isWs(c)) {
+                if (cstart != std::string::npos) {
+                    comps.push_back(v.substr(cstart, i - cstart));
+                    cstart = std::string::npos;
+                }
+            } else if (cstart == std::string::npos) {
+                cstart = i;
+            }
+        }
+        if (comps.size() != 2) return {};
+        out.push_back({
+            htmlayout::layout::resolveLength(comps[0], refW, fontSize),
+            htmlayout::layout::resolveLength(comps[1], refH, fontSize),
+        });
     }
     return out;
 }
@@ -925,7 +965,11 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     bool hasClipPath = false;
     auto cpIt = style.find("clip-path");
     if (cpIt != style.end() && !cpIt->second.empty() && cpIt->second != "none") {
-        auto pts = parseClipPathPolygon(cpIt->second, bw, bh);
+        float cpFontSize = 16.0f;
+        auto fsIt = style.find("font-size");
+        if (fsIt != style.end())
+            cpFontSize = htmlayout::layout::resolveLength(fsIt->second, 16.0f, 16.0f);
+        auto pts = parseClipPathPolygon(cpIt->second, bw, bh, cpFontSize);
         if (!pts.empty()) {
             for (auto& pt : pts) { pt.x += bx; pt.y += by; }
             hasClipPath = true;
