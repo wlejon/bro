@@ -26,6 +26,95 @@
 
 namespace bro::js {
 
+// A node's local frame plus the inverse that carries a world-space ray into
+// it. Every pick path reduces to this: the mesh path builds one from the
+// node's world matrix, the instanced path from that matrix composed with a
+// per-instance affine. Going through the *world* matrix is what makes a
+// parented node pick where it draws rather than at its local offset.
+namespace {
+
+struct PickFrame {
+    bromath::Vec3 bx, by, bz, bt;   // local→world basis columns, then origin
+    bromath::Vec3 r0, r1, r2;       // rows of the inverted basis
+    bool ok = false;
+
+    bromath::Vec3 pointToWorld(const bromath::Vec3& v) const {
+        return bx * v.x + by * v.y + bz * v.z + bt;
+    }
+    bromath::Vec3 dirToLocal(const bromath::Vec3& v) const {
+        return {bromath::vdot(v, r0), bromath::vdot(v, r1), bromath::vdot(v, r2)};
+    }
+    bromath::Vec3 pointToLocal(const bromath::Vec3& p) const {
+        return dirToLocal(p - bt);
+    }
+    // Normals transform by the inverse-transpose, not the basis: under
+    // non-uniform scale the basis skews a normal off its own surface.
+    bromath::Vec3 normalToWorld(const bromath::Vec3& n) const {
+        return r0 * n.x + r1 * n.y + r2 * n.z;
+    }
+};
+
+PickFrame makePickFrame(const bromath::Vec3& bx, const bromath::Vec3& by,
+                        const bromath::Vec3& bz, const bromath::Vec3& bt) {
+    PickFrame f;
+    f.bx = bx; f.by = by; f.bz = bz; f.bt = bt;
+    float det = bromath::vdot(bx, bromath::vcross(by, bz));
+    if (std::fabs(det) < 1e-20f) return f;   // degenerate — leaves ok = false
+    float invDet = 1.0f / det;
+    f.r0 = bromath::vcross(by, bz) * invDet;
+    f.r1 = bromath::vcross(bz, bx) * invDet;
+    f.r2 = bromath::vcross(bx, by) * invDet;
+    f.ok = true;
+    return f;
+}
+
+PickFrame pickFrameOf(const bromath::Mat4& m) {
+    return makePickFrame({m.at(0, 0), m.at(1, 0), m.at(2, 0)},
+                         {m.at(0, 1), m.at(1, 1), m.at(2, 1)},
+                         {m.at(0, 2), m.at(1, 2), m.at(2, 2)},
+                         {m.at(0, 3), m.at(1, 3), m.at(2, 3)});
+}
+
+// `m` * the 4x3 affine held in `rows12` (m00 m01 m02 tx, m10 …), as one frame.
+PickFrame pickFrameOf(const bromath::Mat4& m, const float* rows12) {
+    auto mul3 = [&](float x, float y, float z) {
+        return bromath::Vec3{m.at(0, 0) * x + m.at(0, 1) * y + m.at(0, 2) * z,
+                             m.at(1, 0) * x + m.at(1, 1) * y + m.at(1, 2) * z,
+                             m.at(2, 0) * x + m.at(2, 1) * y + m.at(2, 2) * z};
+    };
+    bromath::Vec3 t = mul3(rows12[3], rows12[7], rows12[11]);
+    t.x += m.at(0, 3); t.y += m.at(1, 3); t.z += m.at(2, 3);
+    return makePickFrame(mul3(rows12[0], rows12[4], rows12[8]),
+                         mul3(rows12[1], rows12[5], rows12[9]),
+                         mul3(rows12[2], rows12[6], rows12[10]), t);
+}
+
+// Slab test of a local-space ray against a local AABB. `tNear` receives the
+// entry distance, negative when the origin is already inside the box.
+bool slabHit(const bromath::AABB3& b, const bromath::Vec3& o,
+             const bromath::Vec3& d, float& tNear) {
+    const float bmin[3] = {b.min.x, b.min.y, b.min.z};
+    const float bmax[3] = {b.max.x, b.max.y, b.max.z};
+    const float o3[3] = {o.x, o.y, o.z};
+    const float d3[3] = {d.x, d.y, d.z};
+    float tmin = -1e30f, tmax = 1e30f;
+    for (int a = 0; a < 3; ++a) {
+        float dv = d3[a];
+        float invD = (std::fabs(dv) > 1e-30f) ? 1.0f / dv : (dv >= 0.0f ? 1e30f : -1e30f);
+        float t1 = (bmin[a] - o3[a]) * invD;
+        float t2 = (bmax[a] - o3[a]) * invD;
+        float lo = t1 < t2 ? t1 : t2;
+        float hi = t1 < t2 ? t2 : t1;
+        if (lo > tmin) tmin = lo;
+        if (hi < tmax) tmax = hi;
+    }
+    if (tmax < 0.0f || tmin > tmax) return false;
+    tNear = tmin;
+    return true;
+}
+
+}  // namespace
+
 // raycast(origin, direction, maxDistance) → { hit, point, normal, distance, node } | null
 JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -63,9 +152,46 @@ JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     scene::LightNode* closestLight = nullptr;
     scene::InstancedMeshNode* closestInstanced = nullptr;
     int closestInstance = -1;
-    bromesh::RayHit closestHit;
     bromath::Vec3 closestWorldPoint;
     bromath::Vec3 closestWorldNormal;
+
+    // Intersect one mesh through `f`, keeping it when it beats the running
+    // nearest. `bvhOf` is called only once the cheap AABB reject has passed,
+    // so a mesh the ray misses never pays to build its BVH. Every geometry
+    // node funnels through here, which is what keeps one nearest-hit
+    // comparison across meshes and instances.
+    auto tryMesh = [&](const PickFrame& f, const bromesh::MeshData& md,
+                       const bromath::AABB3& lb, auto&& bvhOf) -> bool {
+        if (!f.ok) return false;
+        bromath::Vec3 lo = f.pointToLocal(origin);
+        bromath::Vec3 ld = f.dirToLocal(dir);
+        float ldLen = bromath::vlen(ld);
+        if (ldLen < 1e-20f) return false;
+        bromath::Vec3 ldN = ld * (1.0f / ldLen);
+        // One world unit spans `ldLen` local units along the ray, whatever the
+        // frame does — so a single factor converts distances both ways and the
+        // comparison stays in world units even under non-uniform scale.
+        float localMax = closestDist * ldLen;
+
+        float tNear = 0.0f;
+        if (!slabHit(lb, lo, ldN, tNear) || tNear > localMax) return false;
+
+        const float o[3] = {lo.x, lo.y, lo.z};
+        const float d[3] = {ldN.x, ldN.y, ldN.z};
+        bromesh::RayHit hit = bvhOf().raycast(md, o, d, localMax);
+        if (!hit.hit) return false;
+
+        bromath::Vec3 worldHit =
+            f.pointToWorld({hit.position[0], hit.position[1], hit.position[2]});
+        float worldDist = bromath::vlen(worldHit - origin);
+        if (worldDist >= closestDist) return false;
+
+        closestDist = worldDist;
+        closestWorldPoint = worldHit;
+        closestWorldNormal = bromath::vnorm(
+            f.normalToWorld({hit.normal[0], hit.normal[1], hit.normal[2]}));
+        return true;
+    };
 
     g->root()->traverse([&](scene::SceneNode* node) {
         if (!node || node->type() != scene::SceneNode::Type::Mesh) return;
@@ -74,91 +200,25 @@ JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
         const bromesh::MeshData& md = mn->mesh();
         if (md.positions.empty() || md.indices.empty()) return;
 
-        const bromath::Vec3& nodePos = node->position();
-        const bromath::Quat& nodeRot = node->rotation();
-        const bromath::Vec3& nodeScl = node->scale();
-
-        bromath::Vec3 localOrigin = origin - nodePos;
-        localOrigin = bromath::qrotate(bromath::qconjugate(nodeRot), localOrigin);
-        if (nodeScl.x != 0.0f) localOrigin.x /= nodeScl.x;
-        if (nodeScl.y != 0.0f) localOrigin.y /= nodeScl.y;
-        if (nodeScl.z != 0.0f) localOrigin.z /= nodeScl.z;
-
-        bromath::Vec3 localDir = bromath::qrotate(bromath::qconjugate(nodeRot), dir);
-        if (nodeScl.x != 0.0f) localDir.x /= nodeScl.x;
-        if (nodeScl.y != 0.0f) localDir.y /= nodeScl.y;
-        if (nodeScl.z != 0.0f) localDir.z /= nodeScl.z;
-
-        float localDirLen = bromath::vlen(localDir);
-        if (localDirLen < 1e-12f) return;
-        bromath::Vec3 localDirN = localDir * (1.0f / localDirLen);
-        float scale = nodeScl.x != 0.0f ? nodeScl.x : 1.0f;
-        float localMaxDist = closestDist / scale;
-
-        // Early-out: local-space AABB slab test
-        {
-            const bromath::AABB3& lb = mn->localBounds();
-            float bmin[3] = { lb.min.x, lb.min.y, lb.min.z };
-            float bmax[3] = { lb.max.x, lb.max.y, lb.max.z };
-            float invD[3];
-            for (int a = 0; a < 3; ++a) {
-                float dv = (&localDirN.x)[a];
-                invD[a] = (std::fabs(dv) > 1e-30f) ? 1.0f / dv
-                                                    : (dv >= 0.0f ?  1e30f : -1e30f);
-            }
-            float o[3] = { localOrigin.x, localOrigin.y, localOrigin.z };
-            float tmin = -1e30f, tmax = 1e30f;
-            for (int a = 0; a < 3; ++a) {
-                float t1 = (bmin[a] - o[a]) * invD[a];
-                float t2 = (bmax[a] - o[a]) * invD[a];
-                float lo = t1 < t2 ? t1 : t2;
-                float hi = t1 < t2 ? t2 : t1;
-                if (lo > tmin) tmin = lo;
-                if (hi < tmax) tmax = hi;
-            }
-            if (tmax < 0.0f || tmin > tmax || tmin > localMaxDist) return;
+        auto bvhOf = [&]() -> const bromesh::MeshBVH& { return mn->bvh(); };
+        if (tryMesh(pickFrameOf(node->worldMatrix()), md, mn->localBounds(), bvhOf)) {
+            closestNode = mn;
+            closestLight = nullptr;
+            closestInstanced = nullptr;
+            closestInstance = -1;
         }
-
-        float o[3] = { localOrigin.x, localOrigin.y, localOrigin.z };
-        float d[3] = { localDirN.x, localDirN.y, localDirN.z };
-        bromesh::RayHit hit = mn->bvh().raycast(md, o, d, localMaxDist);
-        if (!hit.hit) return;
-
-        bromath::Vec3 localHit{hit.position[0], hit.position[1], hit.position[2]};
-        localHit.x *= nodeScl.x;
-        localHit.y *= nodeScl.y;
-        localHit.z *= nodeScl.z;
-        bromath::Vec3 worldHit = bromath::qrotate(nodeRot, localHit) + nodePos;
-
-        bromath::Vec3 toHit = worldHit - origin;
-        float worldDist = bromath::vlen(toHit);
-        if (worldDist >= closestDist) return;
-
-        bromath::Vec3 localNormal{hit.normal[0], hit.normal[1], hit.normal[2]};
-        bromath::Vec3 worldNormal = bromath::vnorm(bromath::qrotate(nodeRot, localNormal));
-
-        closestDist = worldDist;
-        closestNode = mn;
-        closestLight = nullptr;
-        closestInstanced = nullptr;
-        closestInstance = -1;
-        closestHit = hit;
-        closestWorldPoint = worldHit;
-        closestWorldNormal = worldNormal;
     });
 
     // Instanced geometry is geometry: an InstancedMeshNode is a distinct node
-    // type from Mesh, so the traversal above skips it entirely, and until this
-    // existed *nothing* instanced could be picked — neither scene.createInstancedMesh
+    // type from Mesh, so the traversal above skips it, and until this existed
+    // *nothing* instanced could be picked — neither scene.createInstancedMesh
     // nodes nor a TileWorld's object kinds (props, buildings), which are drawn
     // as one InstancedMeshNode per kind. Callers were left raycasting the tile
     // height field instead, which looks straight through anything standing on
     // it and answers with the ground behind.
     //
     // One BVH is shared by every instance (they all draw the same mesh); the
-    // ray is transformed into each instance's space instead. The per-instance
-    // record is a 4x3 affine (rows) — inverting it directly keeps this exact
-    // for the rotate+uniform-scale transforms instancing actually emits.
+    // ray is carried into each instance's own frame instead.
     g->root()->traverse([&](scene::SceneNode* node) {
         if (!node || node->type() != scene::SceneNode::Type::InstancedMesh) return;
         if (!node->visible()) return;
@@ -171,93 +231,17 @@ JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
         // The node's own transform sits above the instance transform.
         const bromath::Mat4& nodeM = node->worldMatrix();
         const bromath::AABB3& lb = in->localBounds();
+        auto bvhOf = [&]() -> const bromesh::MeshBVH& { return in->bvh(); };
 
         for (size_t i = 0; i < count; ++i) {
-            float r[12];
-            if (!in->instanceRows(i, r)) continue;
-
-            // Full instance→world basis: node world matrix * instance affine.
-            bromath::Vec3 bx{r[0], r[4], r[8]};
-            bromath::Vec3 by{r[1], r[5], r[9]};
-            bromath::Vec3 bz{r[2], r[6], r[10]};
-            bromath::Vec3 bt{r[3], r[7], r[11]};
-            auto xf = [&](const bromath::Vec3& v) {
-                bromath::Vec3 p = bx * v.x + by * v.y + bz * v.z + bt;
-                return bromath::Vec3{
-                    nodeM.at(0,0)*p.x + nodeM.at(0,1)*p.y + nodeM.at(0,2)*p.z + nodeM.at(0,3),
-                    nodeM.at(1,0)*p.x + nodeM.at(1,1)*p.y + nodeM.at(1,2)*p.z + nodeM.at(1,3),
-                    nodeM.at(2,0)*p.x + nodeM.at(2,1)*p.y + nodeM.at(2,2)*p.z + nodeM.at(2,3)};
-            };
-            auto xfDir = [&](const bromath::Vec3& v) {
-                bromath::Vec3 p = bx * v.x + by * v.y + bz * v.z;
-                return bromath::Vec3{
-                    nodeM.at(0,0)*p.x + nodeM.at(0,1)*p.y + nodeM.at(0,2)*p.z,
-                    nodeM.at(1,0)*p.x + nodeM.at(1,1)*p.y + nodeM.at(1,2)*p.z,
-                    nodeM.at(2,0)*p.x + nodeM.at(2,1)*p.y + nodeM.at(2,2)*p.z};
-            };
-
-            // Invert by solving the 3x3 basis (instance→world, sans node scale
-            // shear, which instancing does not emit) for the ray in local space.
-            bromath::Vec3 e0 = xfDir({1, 0, 0});
-            bromath::Vec3 e1 = xfDir({0, 1, 0});
-            bromath::Vec3 e2 = xfDir({0, 0, 1});
-            float det = bromath::vdot(e0, bromath::vcross(e1, e2));
-            if (std::fabs(det) < 1e-20f) continue;
-            float invDet = 1.0f / det;
-            bromath::Vec3 c0 = bromath::vcross(e1, e2) * invDet;
-            bromath::Vec3 c1 = bromath::vcross(e2, e0) * invDet;
-            bromath::Vec3 c2 = bromath::vcross(e0, e1) * invDet;
-            bromath::Vec3 worldOrg = xf({0, 0, 0});
-            bromath::Vec3 rel = origin - worldOrg;
-            bromath::Vec3 lo{bromath::vdot(rel, c0), bromath::vdot(rel, c1), bromath::vdot(rel, c2)};
-            bromath::Vec3 ld{bromath::vdot(dir, c0), bromath::vdot(dir, c1), bromath::vdot(dir, c2)};
-            float ldLen = bromath::vlen(ld);
-            if (ldLen < 1e-20f) continue;
-            bromath::Vec3 ldN = ld * (1.0f / ldLen);
-            // World distance per unit of local distance, so the closest-hit
-            // comparison stays in world units across differently scaled instances.
-            float localToWorld = 1.0f / ldLen;
-
-            // Cheap reject against the shared local AABB before the BVH.
-            {
-                float bmin[3] = { lb.min.x, lb.min.y, lb.min.z };
-                float bmax[3] = { lb.max.x, lb.max.y, lb.max.z };
-                float o3[3] = { lo.x, lo.y, lo.z };
-                float d3[3] = { ldN.x, ldN.y, ldN.z };
-                float tmin = -1e30f, tmax = 1e30f;
-                bool miss = false;
-                for (int a = 0; a < 3; ++a) {
-                    float dv = d3[a];
-                    float invD = (std::fabs(dv) > 1e-30f) ? 1.0f / dv : (dv >= 0.0f ? 1e30f : -1e30f);
-                    float t1 = (bmin[a] - o3[a]) * invD;
-                    float t2 = (bmax[a] - o3[a]) * invD;
-                    float loT = t1 < t2 ? t1 : t2;
-                    float hiT = t1 < t2 ? t2 : t1;
-                    if (loT > tmin) tmin = loT;
-                    if (hiT < tmax) tmax = hiT;
-                }
-                if (tmax < 0.0f || tmin > tmax) miss = true;
-                if (!miss && tmin * localToWorld > closestDist) miss = true;
-                if (miss) continue;
+            float rows[12];
+            if (!in->instanceRows(i, rows)) continue;
+            if (tryMesh(pickFrameOf(nodeM, rows), md, lb, bvhOf)) {
+                closestNode = nullptr;
+                closestLight = nullptr;
+                closestInstanced = in;
+                closestInstance = static_cast<int>(i);
             }
-
-            float o3[3] = { lo.x, lo.y, lo.z };
-            float d3[3] = { ldN.x, ldN.y, ldN.z };
-            bromesh::RayHit hit = in->bvh().raycast(md, o3, d3, closestDist / localToWorld);
-            if (!hit.hit) continue;
-
-            bromath::Vec3 worldHit = xf({hit.position[0], hit.position[1], hit.position[2]});
-            float worldDist = bromath::vlen(worldHit - origin);
-            if (worldDist >= closestDist) continue;
-
-            closestDist = worldDist;
-            closestNode = nullptr;
-            closestLight = nullptr;
-            closestInstanced = in;
-            closestInstance = static_cast<int>(i);
-            closestWorldPoint = worldHit;
-            closestWorldNormal = bromath::vnorm(
-                xfDir({hit.normal[0], hit.normal[1], hit.normal[2]}));
         }
     });
 
