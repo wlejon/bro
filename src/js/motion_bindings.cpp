@@ -13,6 +13,7 @@
 #include <brotensor/runtime.h>
 #include <brotensor/safetensors.h>
 #include <brotensor/tensor.h>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -113,6 +114,58 @@ JSValue mtInt32Array(JSContext* ctx, const std::int32_t* d, std::size_t n) {
     return arr;
 }
 
+// ARDY's G1Skeleton34 joint names, in bone order. The C++ skeleton carries the
+// topology and the neutral offsets but not the names, which JS consumers need to
+// bind geometry to joints by something other than a magic index.
+const char* const kG1JointNames[ardy::G1Skeleton::kNumJoints] = {
+    "pelvis",
+    "left_hip_pitch",  "left_hip_roll",  "left_hip_yaw",
+    "left_knee",       "left_ankle_pitch", "left_ankle_roll", "left_toe_base",
+    "right_hip_pitch", "right_hip_roll", "right_hip_yaw",
+    "right_knee",      "right_ankle_pitch", "right_ankle_roll", "right_toe_base",
+    "waist_yaw", "waist_roll", "waist_pitch",
+    "left_shoulder_pitch",  "left_shoulder_roll",  "left_shoulder_yaw",
+    "left_elbow",  "left_wrist_roll",  "left_wrist_pitch",  "left_wrist_yaw",  "left_hand_roll",
+    "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw",
+    "right_elbow", "right_wrist_roll", "right_wrist_pitch", "right_wrist_yaw", "right_hand_roll",
+};
+
+// Row-major 3x3 -> quaternion (x, y, z, w). Shepperd's method: pick the branch
+// with the largest divisor so the square root never loses precision.
+void mtMat3ToQuat(const double* m, float* q) {
+    const double m00 = m[0], m01 = m[1], m02 = m[2];
+    const double m10 = m[3], m11 = m[4], m12 = m[5];
+    const double m20 = m[6], m21 = m[7], m22 = m[8];
+    const double tr = m00 + m11 + m22;
+    double x, y, z, w;
+    if (tr > 0.0) {
+        const double s = std::sqrt(tr + 1.0) * 2.0;
+        w = 0.25 * s; x = (m21 - m12) / s; y = (m02 - m20) / s; z = (m10 - m01) / s;
+    } else if (m00 > m11 && m00 > m22) {
+        const double s = std::sqrt(1.0 + m00 - m11 - m22) * 2.0;
+        w = (m21 - m12) / s; x = 0.25 * s; y = (m01 + m10) / s; z = (m02 + m20) / s;
+    } else if (m11 > m22) {
+        const double s = std::sqrt(1.0 + m11 - m00 - m22) * 2.0;
+        w = (m02 - m20) / s; x = (m01 + m10) / s; y = 0.25 * s; z = (m12 + m21) / s;
+    } else {
+        const double s = std::sqrt(1.0 + m22 - m00 - m11) * 2.0;
+        w = (m10 - m01) / s; x = (m02 + m20) / s; y = (m12 + m21) / s; z = 0.25 * s;
+    }
+    q[0] = static_cast<float>(x); q[1] = static_cast<float>(y);
+    q[2] = static_cast<float>(z); q[3] = static_cast<float>(w);
+}
+
+// Pack a (T, J, 3, 3) double rotation buffer as (T, J, 4) float quaternions.
+std::vector<float> mtQuatsFromMats(const std::vector<double>& mats, int T, int J) {
+    if (mats.size() < static_cast<std::size_t>(T) * J * 9) T = 0;  // short buffer: no guessing
+    std::vector<float> q(static_cast<std::size_t>(T) * J * 4);
+    for (int t = 0; t < T; ++t)
+        for (int j = 0; j < J; ++j)
+            mtMat3ToQuat(mats.data() + (static_cast<std::size_t>(t) * J + j) * 9,
+                         q.data() + (static_cast<std::size_t>(t) * J + j) * 4);
+    return q;
+}
+
 struct ArdyMotionWrapper {
     std::unique_ptr<brolm::llama3::Tokenizer>   tok;
     std::unique_ptr<brolm::llm2vec::Encoder>    enc;
@@ -186,6 +239,22 @@ JSValue mtGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         const int* jp = ardy::G1Skeleton::joint_parents();
         for (int j = 0; j < J; ++j) parents[j] = jp[j];
 
+        // The decoder produces rotations and FKs the positions from them, so the
+        // rotations are the primary signal and `positions` is derived. Hand both
+        // over: a skinned rig wants the rotations, a point cloud wants the
+        // positions, and nothing has to reconstruct one from the other.
+        std::vector<float> rootPos(static_cast<std::size_t>(F) * 3);
+        for (std::size_t i = 0; i < rootPos.size() && i < dec.root_positions.size(); ++i)
+            rootPos[i] = static_cast<float>(dec.root_positions[i]);
+        std::vector<float> localRot(dec.local_rot_mats.size());
+        for (std::size_t i = 0; i < localRot.size(); ++i)
+            localRot[i] = static_cast<float>(dec.local_rot_mats[i]);
+        std::vector<float> globalRot(dec.global_rot_mats.size());
+        for (std::size_t i = 0; i < globalRot.size(); ++i)
+            globalRot[i] = static_cast<float>(dec.global_rot_mats[i]);
+        std::vector<float> localQuat  = mtQuatsFromMats(dec.local_rot_mats,  F, J);
+        std::vector<float> globalQuat = mtQuatsFromMats(dec.global_rot_mats, F, J);
+
         JSValue out = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, out, "frames",      JS_NewInt32(ctx, F));
         JS_SetPropertyStr(ctx, out, "joints",      JS_NewInt32(ctx, J));
@@ -193,6 +262,11 @@ JSValue mtGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         JS_SetPropertyStr(ctx, out, "positions",   mtFloat32Array(ctx, pos.data(), pos.size()));
         JS_SetPropertyStr(ctx, out, "parents",     mtInt32Array(ctx, parents.data(), parents.size()));
         JS_SetPropertyStr(ctx, out, "footContacts", mtFloat32Array(ctx, contacts.data(), contacts.size()));
+        JS_SetPropertyStr(ctx, out, "rootPositions",    mtFloat32Array(ctx, rootPos.data(), rootPos.size()));
+        JS_SetPropertyStr(ctx, out, "localRotations",   mtFloat32Array(ctx, localRot.data(), localRot.size()));
+        JS_SetPropertyStr(ctx, out, "globalRotations",  mtFloat32Array(ctx, globalRot.data(), globalRot.size()));
+        JS_SetPropertyStr(ctx, out, "localQuaternions",  mtFloat32Array(ctx, localQuat.data(), localQuat.size()));
+        JS_SetPropertyStr(ctx, out, "globalQuaternions", mtFloat32Array(ctx, globalQuat.data(), globalQuat.size()));
         (void)mrd;
         return out;
     } catch (const std::exception& e) {
@@ -262,6 +336,45 @@ JSValue mtLoad(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     }
 }
 
+// bro.motion.skeleton() — the G1Skeleton34 rest pose and topology. Available
+// without loading a pipeline: it is baked-in model architecture, not weights, so
+// a tool can build a rig against it with no checkpoint and no GPU.
+JSValue mtSkeleton(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const int J = ardy::G1Skeleton::kNumJoints;
+    const int* jp = ardy::G1Skeleton::joint_parents();
+    const double* nj = ardy::G1Skeleton::neutral_joints();
+
+    std::vector<std::int32_t> parents(J);
+    for (int j = 0; j < J; ++j) parents[j] = jp[j];
+
+    // Rest offsets are root-relative; hand over the parent-relative bone vectors
+    // too, since that is what a bind pose is actually built from.
+    std::vector<float> neutral(static_cast<std::size_t>(J) * 3);
+    std::vector<float> local(static_cast<std::size_t>(J) * 3);
+    for (int j = 0; j < J; ++j) {
+        for (int c = 0; c < 3; ++c) {
+            const double v = nj[j * 3 + c];
+            neutral[j * 3 + c] = static_cast<float>(v);
+            local[j * 3 + c] = static_cast<float>(jp[j] < 0 ? v : v - nj[jp[j] * 3 + c]);
+        }
+    }
+
+    JSValue names = JS_NewArray(ctx);
+    for (int j = 0; j < J; ++j)
+        JS_SetPropertyUint32(ctx, names, static_cast<std::uint32_t>(j),
+                             JS_NewString(ctx, kG1JointNames[j]));
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "name",    JS_NewString(ctx, "g1skel34"));
+    JS_SetPropertyStr(ctx, out, "joints",  JS_NewInt32(ctx, J));
+    JS_SetPropertyStr(ctx, out, "root",    JS_NewInt32(ctx, ardy::G1Skeleton::kRootIdx));
+    JS_SetPropertyStr(ctx, out, "names",   names);
+    JS_SetPropertyStr(ctx, out, "parents", mtInt32Array(ctx, parents.data(), parents.size()));
+    JS_SetPropertyStr(ctx, out, "neutral", mtFloat32Array(ctx, neutral.data(), neutral.size()));
+    JS_SetPropertyStr(ctx, out, "localOffsets", mtFloat32Array(ctx, local.data(), local.size()));
+    return out;
+}
+
 JSValue mtInit(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     try { bt::init(); } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "motion.init failed: %s", e.what());
@@ -288,6 +401,7 @@ void installMotionBindings(JSContext* ctx) {
     JSValue ns = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, ns, "init", JS_NewCFunction(ctx, mtInit, "init", 0));
     JS_SetPropertyStr(ctx, ns, "load", JS_NewCFunction(ctx, mtLoad, "load", 1));
+    JS_SetPropertyStr(ctx, ns, "skeleton", JS_NewCFunction(ctx, mtSkeleton, "skeleton", 0));
     JS_SetPropertyStr(ctx, broObj, "motion", ns);
 
     JS_FreeValue(ctx, broObj);

@@ -26,6 +26,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 #include <SDL3/SDL_keyboard.h>
@@ -99,6 +102,81 @@ static JSValue js_screenshot(JSContext* ctx, JSValueConst, int argc, JSValueCons
     }
     JS_FreeCString(ctx, path);
     return JS_TRUE;
+}
+
+// writeFile(path, data) — write a string (UTF-8) or ArrayBuffer/TypedArray to
+// disk. The counterpart to screenshot(): headless is the project's build and
+// test harness, so a tool that bakes an asset needs somewhere to put it. It is
+// deliberately headless-only — a shipped app gets no filesystem write.
+// Missing parent directories are created, matching screenshot().
+static JSValue js_writeFile(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "writeFile(path, data) requires both arguments");
+
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
+
+    const std::uint8_t* bytes = nullptr;
+    std::size_t len = 0;
+    std::string text;
+    std::size_t byteOff = 0, byteLen = 0, bytesPer = 0;
+
+    // A TypedArray view has to be resolved to its buffer plus offset; handing
+    // over the whole buffer would silently write the wrong range. Both probes
+    // throw when the value is the wrong shape, so each miss clears the pending
+    // exception before the next one -- leaving one set would surface later as a
+    // spurious throw from unrelated JS.
+    JSValue buf = JS_GetTypedArrayBuffer(ctx, argv[1], &byteOff, &byteLen, &bytesPer);
+    if (!JS_IsException(buf)) {
+        std::size_t total = 0;
+        std::uint8_t* base = JS_GetArrayBuffer(ctx, &total, buf);
+        if (base) { bytes = base + byteOff; len = byteLen; }
+        JS_FreeValue(ctx, buf);
+    } else {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        std::size_t total = 0;
+        std::uint8_t* base = JS_GetArrayBuffer(ctx, &total, argv[1]);
+        if (base) {
+            bytes = base;
+            len = total;
+        } else {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            // Anything else object-shaped (a DataView, a plain array, a detached
+            // buffer) would stringify to "[object Object]" and write a file that
+            // looks like it worked. Say so instead.
+            if (JS_IsObject(argv[1])) {
+                JS_FreeCString(ctx, path);
+                return JS_ThrowTypeError(
+                    ctx, "writeFile: data must be a string, ArrayBuffer, or TypedArray");
+            }
+            const char* s = JS_ToCString(ctx, argv[1]);
+            if (!s) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
+            text = s;
+            JS_FreeCString(ctx, s);
+            bytes = reinterpret_cast<const std::uint8_t*>(text.data());
+            len = text.size();
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::path p(path);
+    if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
+
+    std::ofstream out(p, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        JSValue err = JS_ThrowInternalError(ctx, "writeFile: could not open %s", path);
+        JS_FreeCString(ctx, path);
+        return err;
+    }
+    if (len) out.write(reinterpret_cast<const char*>(bytes), static_cast<std::streamsize>(len));
+    out.close();
+    if (!out) {
+        JSValue err = JS_ThrowInternalError(ctx, "writeFile: could not write %s", path);
+        JS_FreeCString(ctx, path);
+        return err;
+    }
+
+    JS_FreeCString(ctx, path);
+    return JS_NewInt64(ctx, static_cast<int64_t>(len));
 }
 
 // screenshotCanvas(path, selector) — direct snapshot of a <canvas> element's
@@ -1485,6 +1563,7 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
     qjsbind::Global(ctx)
         // Core
         .function("screenshot", js_screenshot, 1)
+        .function("writeFile", js_writeFile, 2)
         .function("advanceTime", js_advanceTime, 1)
         .function("flush", js_flush, 0)
         .function("sleep", js_advanceTime, 1)

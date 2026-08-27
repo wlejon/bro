@@ -38,6 +38,7 @@ These functions are available in addition to all standard DOM APIs:
 | `wallSleep(ms)` | Block for N milliseconds of *real* wall-clock time without advancing virtual time. Gives real threads (network, child process, mic) time to produce work; pair it with `advanceTime()` to deliver that work into JS (see "Waiting in scripts" below). |
 | `flush()` | Force layout recalculation (called automatically after `advanceTime`) |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
+| `writeFile(path, data)` | Write `data` to `path` and return the byte count. A string is written as UTF-8; an `ArrayBuffer` or TypedArray is written verbatim (a view writes only its own range, not the whole buffer). Missing parent directories are created, like `screenshot()`. Throws on anything else object-shaped, and on an open/write failure, naming the path. Headless-only, so a bake/export tool can drop an asset next to its test; a shipped app gets no filesystem write from this. |
 
 ### Screenshots
 

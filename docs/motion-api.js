@@ -54,6 +54,23 @@
  * @property {Float32Array} [positions] -  World joint positions (frames * joints * 3 floats in meters)
  * @property {Int32Array} [parents] -  Joint parent indices (34 entries, -1 for root)
  * @property {Float32Array} [footContacts] -  Foot contact indicator flags (frames * 4 floats: L-heel, L-toe, R-heel, R-toe)
+ * @property {Float32Array} [rootPositions] -  World root (pelvis) translation (frames * 3 floats in meters)
+ * @property {Float32Array} [localRotations] -  Parent-relative joint rotations, row-major 3x3 (frames * joints * 9 floats)
+ * @property {Float32Array} [globalRotations] -  World-space joint rotations, row-major 3x3 (frames * joints * 9 floats)
+ * @property {Float32Array} [localQuaternions] -  `localRotations` as quaternions, (x, y, z, w) (frames * joints * 4 floats)
+ * @property {Float32Array} [globalQuaternions] -  `globalRotations` as quaternions, (x, y, z, w) (frames * joints * 4 floats)
+ */
+
+/**
+ * The G1Skeleton34 rest pose and topology, independent of any loaded checkpoint.
+ * @typedef {Object} MotionSkeleton
+ * @property {string} [name] -  Skeleton identifier ('g1skel34')
+ * @property {number} [joints] -  Joint count (34)
+ * @property {number} [root] -  Root joint index (0, the pelvis)
+ * @property {string[]} [names] -  Joint names in bone order, e.g. 'pelvis', 'left_knee', 'right_hand_roll'
+ * @property {Int32Array} [parents] -  Joint parent indices (-1 for root); always topologically sorted, so FK is one pass
+ * @property {Float32Array} [neutral] -  Rest offsets relative to the root (joints * 3 floats in meters)
+ * @property {Float32Array} [localOffsets] -  Rest offsets relative to each joint's parent — the bind-pose bone vectors (joints * 3 floats)
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
@@ -98,4 +115,13 @@ bro.motion.init = function() {};
  * @returns {ArdyMotionPipeline} Loaded motion generation pipeline
  */
 bro.motion.load = function(opts) {};
+
+/**
+ * Returns the G1Skeleton34 rest pose and topology. Baked-in model architecture
+ * rather than trained weights, so it needs no checkpoint, no GPU, and no
+ * `load()` — a tool can build a rig against it before any model exists.
+ *
+ * @returns {MotionSkeleton} Joint names, parents, and rest offsets
+ */
+bro.motion.skeleton = function() {};
 
