@@ -30,6 +30,7 @@ void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
     batchDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
+    bvhDirty_ = true;
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
 }
 
@@ -40,7 +41,16 @@ void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
     batchDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
+    bvhDirty_ = true;
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
+}
+
+const bromesh::MeshBVH& InstancedMeshNode::bvh() const {
+    if (bvhDirty_) {
+        bvh_ = bromesh::MeshBVH::build(mesh_);
+        bvhDirty_ = false;
+    }
+    return bvh_;
 }
 
 void InstancedMeshNode::setStaticBatch(bool b) {

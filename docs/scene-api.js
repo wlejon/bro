@@ -31,6 +31,10 @@
  * @property {Array<number>} [point]
  * @property {Array<number>} [normal]
  * @property {number} [distance]
+ * @property {number} [instance] - which copy was struck, for a hit on an
+ *   instanced node. Absent on plain-mesh and light hits. Use it to map a hit
+ *   back to whatever you placed (a cell, an entity id): instance indices match
+ *   the order they were written in setInstances().
  */
 
 /**
@@ -754,11 +758,31 @@ class SceneGraph {
   syncPhysics() {}
 
   /**
+   * Cast a world-space ray at the scene and return the nearest hit.
+   *
+   * Covers mesh nodes AND instanced nodes (createInstancedMesh, and every
+   * TileWorld object kind — props and buildings are one InstancedMeshNode per
+   * kind), plus light marker icons when showLightIcons is on. Instanced hits
+   * carry an `instance` index saying which copy was struck; all node types share
+   * one nearest-hit comparison, so a plain mesh in front of an instance wins.
+   *
+   * Note this is the geometry pick. For a TileWorld, `raycastCell` remains the
+   * right call when you want the *cell* under the ray — but be aware it tests
+   * the tile height field only, so it looks straight through anything standing
+   * on the tiles and answers with the ground behind. Pick geometry with this;
+   * pick terrain cells with raycastCell; don't use one for the other's job.
+   *
+   * Not covered: scatter-mode instanced nodes (setScatterSegments / the
+   * `scatter` option), whose copies are generated on the GPU and have no
+   * CPU-side records to intersect. Those return no hit rather than a wrong one.
+   * staticBatch nodes do pick — the per-instance records survive the bake.
+   *
    * @param {Array<number>} origin
    * @param {Array<number>} direction
+   * @param {number} [maxDist]
    * @returns {SceneRaycastResult|null}
    */
-  raycast(origin, direction) {}
+  raycast(origin, direction, maxDist) {}
 
   /**
    * @param {SceneNode} node

@@ -10,6 +10,7 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/mesh_node.h"
+#include "scene/instanced_mesh_node.h"
 #include "scene/light_node.h"
 
 #include <qjsbind/qjsbind.h>
@@ -60,6 +61,8 @@ JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     float closestDist = (maxDist > 0.0) ? (float)maxDist : 1e30f;
     scene::MeshNode* closestNode = nullptr;
     scene::LightNode* closestLight = nullptr;
+    scene::InstancedMeshNode* closestInstanced = nullptr;
+    int closestInstance = -1;
     bromesh::RayHit closestHit;
     bromath::Vec3 closestWorldPoint;
     bromath::Vec3 closestWorldNormal;
@@ -137,9 +140,125 @@ JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
         closestDist = worldDist;
         closestNode = mn;
         closestLight = nullptr;
+        closestInstanced = nullptr;
+        closestInstance = -1;
         closestHit = hit;
         closestWorldPoint = worldHit;
         closestWorldNormal = worldNormal;
+    });
+
+    // Instanced geometry is geometry: an InstancedMeshNode is a distinct node
+    // type from Mesh, so the traversal above skips it entirely, and until this
+    // existed *nothing* instanced could be picked — neither scene.createInstancedMesh
+    // nodes nor a TileWorld's object kinds (props, buildings), which are drawn
+    // as one InstancedMeshNode per kind. Callers were left raycasting the tile
+    // height field instead, which looks straight through anything standing on
+    // it and answers with the ground behind.
+    //
+    // One BVH is shared by every instance (they all draw the same mesh); the
+    // ray is transformed into each instance's space instead. The per-instance
+    // record is a 4x3 affine (rows) — inverting it directly keeps this exact
+    // for the rotate+uniform-scale transforms instancing actually emits.
+    g->root()->traverse([&](scene::SceneNode* node) {
+        if (!node || node->type() != scene::SceneNode::Type::InstancedMesh) return;
+        if (!node->visible()) return;
+        auto* in = static_cast<scene::InstancedMeshNode*>(node);
+        const bromesh::MeshData& md = in->mesh();
+        if (md.positions.empty() || md.indices.empty()) return;
+        const size_t count = in->instanceCount();
+        if (count == 0) return;
+
+        // The node's own transform sits above the instance transform.
+        const bromath::Mat4& nodeM = node->worldMatrix();
+        const bromath::AABB3& lb = in->localBounds();
+
+        for (size_t i = 0; i < count; ++i) {
+            float r[12];
+            if (!in->instanceRows(i, r)) continue;
+
+            // Full instance→world basis: node world matrix * instance affine.
+            bromath::Vec3 bx{r[0], r[4], r[8]};
+            bromath::Vec3 by{r[1], r[5], r[9]};
+            bromath::Vec3 bz{r[2], r[6], r[10]};
+            bromath::Vec3 bt{r[3], r[7], r[11]};
+            auto xf = [&](const bromath::Vec3& v) {
+                bromath::Vec3 p = bx * v.x + by * v.y + bz * v.z + bt;
+                return bromath::Vec3{
+                    nodeM.at(0,0)*p.x + nodeM.at(0,1)*p.y + nodeM.at(0,2)*p.z + nodeM.at(0,3),
+                    nodeM.at(1,0)*p.x + nodeM.at(1,1)*p.y + nodeM.at(1,2)*p.z + nodeM.at(1,3),
+                    nodeM.at(2,0)*p.x + nodeM.at(2,1)*p.y + nodeM.at(2,2)*p.z + nodeM.at(2,3)};
+            };
+            auto xfDir = [&](const bromath::Vec3& v) {
+                bromath::Vec3 p = bx * v.x + by * v.y + bz * v.z;
+                return bromath::Vec3{
+                    nodeM.at(0,0)*p.x + nodeM.at(0,1)*p.y + nodeM.at(0,2)*p.z,
+                    nodeM.at(1,0)*p.x + nodeM.at(1,1)*p.y + nodeM.at(1,2)*p.z,
+                    nodeM.at(2,0)*p.x + nodeM.at(2,1)*p.y + nodeM.at(2,2)*p.z};
+            };
+
+            // Invert by solving the 3x3 basis (instance→world, sans node scale
+            // shear, which instancing does not emit) for the ray in local space.
+            bromath::Vec3 e0 = xfDir({1, 0, 0});
+            bromath::Vec3 e1 = xfDir({0, 1, 0});
+            bromath::Vec3 e2 = xfDir({0, 0, 1});
+            float det = bromath::vdot(e0, bromath::vcross(e1, e2));
+            if (std::fabs(det) < 1e-20f) continue;
+            float invDet = 1.0f / det;
+            bromath::Vec3 c0 = bromath::vcross(e1, e2) * invDet;
+            bromath::Vec3 c1 = bromath::vcross(e2, e0) * invDet;
+            bromath::Vec3 c2 = bromath::vcross(e0, e1) * invDet;
+            bromath::Vec3 worldOrg = xf({0, 0, 0});
+            bromath::Vec3 rel = origin - worldOrg;
+            bromath::Vec3 lo{bromath::vdot(rel, c0), bromath::vdot(rel, c1), bromath::vdot(rel, c2)};
+            bromath::Vec3 ld{bromath::vdot(dir, c0), bromath::vdot(dir, c1), bromath::vdot(dir, c2)};
+            float ldLen = bromath::vlen(ld);
+            if (ldLen < 1e-20f) continue;
+            bromath::Vec3 ldN = ld * (1.0f / ldLen);
+            // World distance per unit of local distance, so the closest-hit
+            // comparison stays in world units across differently scaled instances.
+            float localToWorld = 1.0f / ldLen;
+
+            // Cheap reject against the shared local AABB before the BVH.
+            {
+                float bmin[3] = { lb.min.x, lb.min.y, lb.min.z };
+                float bmax[3] = { lb.max.x, lb.max.y, lb.max.z };
+                float o3[3] = { lo.x, lo.y, lo.z };
+                float d3[3] = { ldN.x, ldN.y, ldN.z };
+                float tmin = -1e30f, tmax = 1e30f;
+                bool miss = false;
+                for (int a = 0; a < 3; ++a) {
+                    float dv = d3[a];
+                    float invD = (std::fabs(dv) > 1e-30f) ? 1.0f / dv : (dv >= 0.0f ? 1e30f : -1e30f);
+                    float t1 = (bmin[a] - o3[a]) * invD;
+                    float t2 = (bmax[a] - o3[a]) * invD;
+                    float loT = t1 < t2 ? t1 : t2;
+                    float hiT = t1 < t2 ? t2 : t1;
+                    if (loT > tmin) tmin = loT;
+                    if (hiT < tmax) tmax = hiT;
+                }
+                if (tmax < 0.0f || tmin > tmax) miss = true;
+                if (!miss && tmin * localToWorld > closestDist) miss = true;
+                if (miss) continue;
+            }
+
+            float o3[3] = { lo.x, lo.y, lo.z };
+            float d3[3] = { ldN.x, ldN.y, ldN.z };
+            bromesh::RayHit hit = in->bvh().raycast(md, o3, d3, closestDist / localToWorld);
+            if (!hit.hit) continue;
+
+            bromath::Vec3 worldHit = xf({hit.position[0], hit.position[1], hit.position[2]});
+            float worldDist = bromath::vlen(worldHit - origin);
+            if (worldDist >= closestDist) continue;
+
+            closestDist = worldDist;
+            closestNode = nullptr;
+            closestLight = nullptr;
+            closestInstanced = in;
+            closestInstance = static_cast<int>(i);
+            closestWorldPoint = worldHit;
+            closestWorldNormal = bromath::vnorm(
+                xfDir({hit.normal[0], hit.normal[1], hit.normal[2]}));
+        }
     });
 
     // Light marker icons are also pickable when showLightIcons is on —
@@ -165,12 +284,14 @@ JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
             closestDist = t;
             closestLight = static_cast<scene::LightNode*>(node);
             closestNode = nullptr;
+            closestInstanced = nullptr;
+            closestInstance = -1;
             closestWorldPoint = origin + dir * t;
             closestWorldNormal = bromath::vnorm(closestWorldPoint - c);
         });
     }
 
-    if (!closestNode && !closestLight) return JS_NULL;
+    if (!closestNode && !closestLight && !closestInstanced) return JS_NULL;
 
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "hit", JS_TRUE);
@@ -195,8 +316,13 @@ JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
 
     scene::SceneNode* hitNode = closestNode
         ? static_cast<scene::SceneNode*>(closestNode)
-        : static_cast<scene::SceneNode*>(closestLight);
+        : (closestInstanced ? static_cast<scene::SceneNode*>(closestInstanced)
+                            : static_cast<scene::SceneNode*>(closestLight));
     JS_SetPropertyStr(ctx, out, "node", wrapNode(ctx, hitNode, g));
+    // Which copy was struck, for instanced hits — a caller needs this to map a
+    // hit back to whatever it placed (a cell, an entity id). Absent otherwise.
+    if (closestInstance >= 0)
+        JS_SetPropertyStr(ctx, out, "instance", JS_NewInt32(ctx, closestInstance));
 
     return out;
 }

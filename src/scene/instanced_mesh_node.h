@@ -5,6 +5,7 @@
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bbox.h>
+#include <bromesh/analysis/bvh.h>
 #include <glad/gl.h>
 
 #include <vector>
@@ -58,6 +59,19 @@ public:
     void updateInstance(size_t i, const float* data16);
 
     size_t instanceCount() const { return instanceCount_; }
+
+    /// Decompose instance `i` into its affine rows: `outRows` receives 12
+    /// floats (m00 m01 m02 tx, m10 …). False when `i` is out of range.
+    bool instanceRows(size_t i, float* outRows) const {
+        if (i >= instanceCount_ || instanceData_.size() < (i + 1) * 16) return false;
+        const float* rec = instanceData_.data() + i * 16;
+        for (int k = 0; k < 12; ++k) outRows[k] = rec[k];
+        return true;
+    }
+
+    /// Lazily-built, cached BVH over the instance mesh — one BVH shared by every
+    /// instance, since they all draw the same geometry. Mirrors MeshNode::bvh().
+    const bromesh::MeshBVH& bvh() const;
 
     // --- Material (mirrors MeshNode) ---
 
@@ -331,6 +345,11 @@ private:
     bromesh::MeshData mesh_;
     bool meshDirty_ = false;
     bromath::AABB3 bounds_;
+
+    // Cached BVH over mesh_, invalidated by setMesh. Covers the instance mesh
+    // in its own local space; instance transforms are applied to the ray.
+    mutable bromesh::MeshBVH bvh_;
+    mutable bool bvhDirty_ = true;
 
     std::vector<float> instanceData_;
     size_t instanceCount_ = 0;

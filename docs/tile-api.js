@@ -238,6 +238,14 @@ class TileWorld {
    * (a near plateau hides the ground behind it). Analytic grid traversal; no
    * BVH, so it works the instant the grid is authored, before any mesh build.
    *
+   * TILES ONLY — objects placed with addObject() are NOT tested. A ray aimed at
+   * a prop or a building passes straight through it and returns the ground
+   * behind, which under an isometric camera is a miss of √2 metres of ground
+   * per metre of object height (a 16 m block mis-picks by nearly six 4 m cells).
+   * To pick the objects, use scene.raycast(), whose result carries the node and
+   * an `instance` index; keep this call for "which cell is under the cursor" on
+   * bare terrain.
+   *
    * Pair it with scene.unprojectLocal(screenX, screenY) for click picking:
    *
    *     const r = scene.unprojectLocal(mouseX, mouseY);   // { origin, dir }
