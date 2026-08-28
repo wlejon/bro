@@ -143,7 +143,7 @@ constexpr float kHexSqrt3 = 1.7320508075688772f;
 // TileWorld
 // -------------------------------------------------------------------------
 
-TileWorld::TileWorld(SceneGraph& graph) : graph_(graph) {}
+TileWorld::TileWorld(SceneGraph& graph) : graphToken_(graph.livenessToken()) {}
 
 TileWorld::~TileWorld() { clear(); }
 
@@ -317,8 +317,11 @@ void TileWorld::loadGrid(tile::TileGrid&& newGrid) {
     grid_ = std::make_unique<tile::TileGrid>(std::move(newGrid));
     objectKinds_ = std::move(kinds);
     initFromGrid();
-    for (auto& k : objectKinds_)
-        if (k.node) root_->addChild(k.node);
+    // rootNode() is null when the graph is gone — initFromGrid() built nothing
+    // and every k.node is a pointer the reclaimed graph already freed.
+    if (auto* r = rootNode())
+        for (auto& k : objectKinds_)
+            if (k.node) r->addChild(k.node);
     rebuildObjects();
 }
 
@@ -340,26 +343,31 @@ void TileWorld::initFromGrid() {
         animOf_[id] = static_cast<int>(i);
     }
 
-    root_ = graph_.createNode("tileworld");
-    graph_.root()->addChild(root_);
+    auto* g = graph();
+    if (!g) return;   // graph destroyed under us — the grid stands, unmeshed
+    root_ = g->createNode("tileworld");
+    g->root()->addChild(root_);
     root_->setPosition(config_.origin);
 
     rebuildAll();
 }
 
 void TileWorld::clear() {
-    for (auto& c : chunks_) {
-        if (c.ground) graph_.destroyNode(c.ground);
-        for (auto* ov : c.overlays) if (ov) graph_.destroyNode(ov);
+    // A dead graph already destroyed every node it owned; the pointers below
+    // are the freed ones. Drop them without dereferencing. This is the path
+    // ~TileWorld takes when a JS handle outlives its canvas.
+    if (auto* g = graph()) {
+        for (auto& c : chunks_) {
+            if (c.ground) g->destroyNode(c.ground);
+            for (auto* ov : c.overlays) if (ov) g->destroyNode(ov);
+        }
+        for (auto& k : objectKinds_)
+            if (k.node) g->destroyNode(k.node);
+        if (root_) g->destroyNode(root_);
     }
     chunks_.clear();
-    for (auto& k : objectKinds_)
-        if (k.node) graph_.destroyNode(k.node);
     objectKinds_.clear();
-    if (root_) {
-        graph_.destroyNode(root_);
-        root_ = nullptr;
-    }
+    root_ = nullptr;
     grid_.reset();
     tint_.clear();
     chunkAnimated_.clear();
@@ -712,12 +720,14 @@ TileWorld::CellRayHit TileWorld::raycastCell(const bromath::Vec3& origin,
 
 void TileWorld::setOrigin(float x, float y, float z) {
     config_.origin = {x, y, z};
-    if (root_) root_->setPosition(config_.origin);
+    if (auto* r = rootNode()) r->setPosition(config_.origin);
 }
 
 // ---- meshing ------------------------------------------------------------
 
 void TileWorld::buildChunkMesh(int ccx, int ccy) {
+    auto* g = graph();
+    if (!g) return;   // graph gone: nothing to mesh into
     const int idx = chunkIdx(ccx, ccy);
     Chunk& chunk = chunks_[idx];
     chunk.dirty = false;
@@ -728,7 +738,7 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
     // per-chunk overlay slot list to match the layer count.
     const int overlayLayers = grid_ ? std::max(0, grid_->layerCount() - 1) : 0;
     if (static_cast<int>(chunk.overlays.size()) != overlayLayers) {
-        for (auto* ov : chunk.overlays) if (ov) graph_.destroyNode(ov);
+        for (auto* ov : chunk.overlays) if (ov) g->destroyNode(ov);
         chunk.overlays.assign(overlayLayers, nullptr);
     }
     for (int L = 1; L <= overlayLayers; ++L)
@@ -770,6 +780,8 @@ bool TileWorld::advance(double dtMs) {
 }
 
 void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
+    auto* g = graph();
+    if (!g) return;
     const float cs = config_.cellSize;
     const int   cz = config_.chunkSize;
     const int   x0 = ccx * cz, x1 = std::min(x0 + cz, config_.width);
@@ -974,12 +986,12 @@ void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
 
     if (mesh.empty()) {
         // Nothing solid in this chunk — drop any stale node.
-        if (chunk.ground) { graph_.destroyNode(chunk.ground); chunk.ground = nullptr; }
+        if (chunk.ground) { g->destroyNode(chunk.ground); chunk.ground = nullptr; }
         return;
     }
 
     if (!chunk.ground) {
-        chunk.ground = graph_.createMesh("tile-chunk");
+        chunk.ground = g->createMesh("tile-chunk");
         root_->addChild(chunk.ground);
         chunk.ground->setColor(1, 1, 1, 1);
         chunk.ground->setRoughness(0.92f);
@@ -997,11 +1009,13 @@ void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
 // the ground top face, atlas-textured by the layer tile id (autotile-aware),
 // tinted per cell. The whole layer carries its style's opacity + alphaCutoff.
 void TileWorld::buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer) {
+    auto* g = graph();
+    if (!g) return;
     MeshNode*& node = chunk.overlays[layer - 1];
 
     const bool atlas = hasAtlas();
     if (!atlas) {                    // overlays are atlas-only
-        if (node) { graph_.destroyNode(node); node = nullptr; }
+        if (node) { g->destroyNode(node); node = nullptr; }
         return;
     }
 
@@ -1062,7 +1076,7 @@ void TileWorld::buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer) {
     }
 
     if (mesh.empty()) {
-        if (node) { graph_.destroyNode(node); node = nullptr; }
+        if (node) { g->destroyNode(node); node = nullptr; }
         return;
     }
 
@@ -1071,7 +1085,7 @@ void TileWorld::buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer) {
         style = config_.overlays[layer];
 
     if (!node) {
-        node = graph_.createMesh("tile-overlay");
+        node = g->createMesh("tile-overlay");
         root_->addChild(node);
         node->setRoughness(0.95f);
         node->setMetallic(0.0f);
@@ -1104,9 +1118,10 @@ void TileWorld::rebuildAll() {
 // ---- objects ------------------------------------------------------------
 
 int TileWorld::addObjectKind(bromesh::MeshData&& mesh, const ObjectStyle& style) {
-    if (!root_ || mesh.empty()) return -1;
+    auto* g = graph();
+    if (!g || !root_ || mesh.empty()) return -1;
 
-    auto* node = graph_.createInstancedMesh("tile-objects");
+    auto* node = g->createInstancedMesh("tile-objects");
     root_->addChild(node);
     node->setMesh(std::move(mesh));
     node->setColor(style.color[0], style.color[1], style.color[2], style.color[3]);

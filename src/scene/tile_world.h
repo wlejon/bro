@@ -21,6 +21,7 @@
 // Edits mark the touched chunk (and its border neighbours) dirty; rebuildDirty()
 // remeshes only those — the same lifecycle TerrainManager uses.
 
+#include "scene/graph_liveness.h"
 #include "tile/grid.h"
 #include "tile/coord.h"
 
@@ -221,7 +222,8 @@ public:
 
     // ---- placement ------------------------------------------------------
     void setOrigin(float x, float y, float z);
-    SceneNode* rootNode() const { return root_; }
+    // Null once the graph has been reclaimed — it destroyed this node with it.
+    SceneNode* rootNode() const { return graph() ? root_ : nullptr; }
 
     // ---- animation ------------------------------------------------------
     // Advance animated tiles by `dtMs` milliseconds. Remeshes only the chunks
@@ -340,7 +342,23 @@ private:
     // UV rect (u0,u1,v0,v1) of an atlas cell, inset by config_.atlasInset texels.
     void atlasCellRect(int cell, float& u0, float& u1, float& v0, float& v1) const;
 
-    SceneGraph& graph_;
+    // The owning graph, held WEAKLY. A TileWorld is reachable from JS
+    // (scene.createTileWorld returns a handle), and the engine destroys a
+    // SceneGraph the moment its canvas leaves the DOM — so a JS handle that
+    // outlives its canvas by even one frame outlives this object's graph. A
+    // SceneGraph& member made every such handle a use-after-free waiting to
+    // fire: ~TileWorld → clear() → graph_.destroyNode() on freed memory,
+    // which is what "removing a live scene canvas segfaults the engine"
+    // actually was. See scene/graph_liveness.h.
+    std::weak_ptr<GraphLivenessToken> graphToken_;
+    // Live graph, or nullptr once it has been destroyed. Every use goes
+    // through this; nothing here may hold the result across a call that
+    // could destroy the graph.
+    SceneGraph* graph() const {
+        auto t = graphToken_.lock();
+        return t ? t->graph : nullptr;
+    }
+
     TileWorldConfig config_;
     std::unique_ptr<tile::TileGrid> grid_;
     std::vector<uint32_t> tint_;   // per-cell RGBA8, row-major; 0xFFFFFFFF = none

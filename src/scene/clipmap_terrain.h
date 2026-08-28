@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene/graph_liveness.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -332,7 +334,8 @@ public:
     /// (the height data's own space, which generators and editors want).
     float renderedElevationAt(float x, float z) const;
 
-    MeshNode* node() const { return node_; }
+    // Null once the graph has been reclaimed — it destroyed this node with it.
+    MeshNode* node() const { return liveNode(); }
 
     /// The composed GLSL this terrain handed to setCustomShader, for
     /// `stage` = "vertex" or "fragment" (anything else returns empty).
@@ -467,7 +470,20 @@ private:
     /// margin, which has to bound what the shader will emit.
     float detailBound() const;
 
-    SceneGraph&   graph_;
+    // Held weakly — see scene/graph_liveness.h and the identical note on
+    // TileWorld::graphToken_. A JS clipmap handle outlives its canvas, and
+    // ~ClipmapTerrain → destroy() → graph_.destroyNode() then ran on a
+    // SceneGraph the engine had already reclaimed.
+    std::weak_ptr<GraphLivenessToken> graphToken_;
+    SceneGraph* graph() const {
+        auto t = graphToken_.lock();
+        return t ? t->graph : nullptr;
+    }
+    /// The mesh node, or nullptr once the graph that owned it was reclaimed —
+    /// which destroyed the node too, leaving node_ pointing at freed memory.
+    /// Every entry point that touches node_ tests this rather than node_.
+    MeshNode* liveNode() const { return graph() ? node_ : nullptr; }
+
     ClipmapConfig cfg_;
     MeshNode*     node_ = nullptr;
 

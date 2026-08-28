@@ -7,6 +7,26 @@
  *
  * 3D Scene Graph containing hierarchically nested nodes (MeshNode, SkinnedMeshNode,
  * InstancedMeshNode, LightNode, CameraNode, ParticleNode, HtmlNode, ShapeNode, SpriteNode).
+ *
+ * ── Lifetime: the graph dies with its canvas ─────────────────────────────────
+ *
+ * A scene belongs to the <canvas> it was asked for. The engine reclaims the
+ * whole graph — every node, every TileWorld/Terrain/Clipmap it owns — the frame
+ * after that canvas leaves the document, however it leaves: remove(),
+ * removeChild(), or a parent's innerHTML being replaced.
+ *
+ * Handles you are still holding stay SAFE to hold and safe to call. Every
+ * wrapper re-resolves through the graph on each call, so once the graph is gone
+ * a node accessor reads null and a method that would author geometry no-ops.
+ * Data that lives outside the graph survives: a TileWorld still answers
+ * getTile() after its canvas is gone, it just has nothing to mesh into.
+ *
+ * What does NOT happen is resurrection — re-attaching the canvas does not bring
+ * the graph back. Ask the re-attached canvas for getContext('scene') again and
+ * rebuild. So a view that tears down and re-creates its canvas should drop its
+ * old scene handles at the same time; keeping them is harmless, but they will
+ * never do anything again.
+ *
  * @typedef {Object} SceneNodeOptions
  * @property {string} [name]
  * @property {Array<number>} [position]

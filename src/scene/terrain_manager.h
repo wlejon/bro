@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/graph_liveness.h"
 #include "scene/scene_node.h"
 #include <bromesh/mesh_data.h>
 
@@ -243,7 +244,15 @@ private:
     void worldToLocal(float wx, float wy, float wz,
                       ChunkCoord& outChunk, int& lx, int& ly, int& lz) const;
 
-    SceneGraph& graph_;
+    // Held weakly — see scene/graph_liveness.h and the note on
+    // TileWorld::graphToken_. scene.createTerrain hands JS a handle that can
+    // outlive its canvas, and ~TerrainManager → clear() destroys chunk nodes.
+    std::weak_ptr<GraphLivenessToken> graphToken_;
+    SceneGraph* graph() const {
+        auto t = graphToken_.lock();
+        return t ? t->graph : nullptr;
+    }
+
     TerrainConfig config_;
 
     std::unordered_map<ChunkCoord, ChunkEntry, ChunkCoordHash> chunks_;

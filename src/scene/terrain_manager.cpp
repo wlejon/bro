@@ -87,7 +87,7 @@ struct TerrainManager::NoiseState {
 // -------------------------------------------------------------------------
 
 TerrainManager::TerrainManager(SceneGraph& graph)
-    : graph_(graph), noise_(std::make_unique<NoiseState>()) {}
+    : graphToken_(graph.livenessToken()), noise_(std::make_unique<NoiseState>()) {}
 
 TerrainManager::~TerrainManager() {
     clear();
@@ -433,6 +433,8 @@ void TerrainManager::colorizeByHeight(bromesh::MeshData& mesh) {
 // -------------------------------------------------------------------------
 
 void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) {
+    auto* g = graph();
+    if (!g) return;   // graph reclaimed with its canvas — nothing to mesh into
     if (entry.heightmap.empty()) return;
 
     int gridW = config_.chunkSizeX + 1;
@@ -518,12 +520,12 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
             /*borderX=*/1, /*borderY=*/0, /*borderZ=*/1);
 
         if (!entry.meshNode) {
-            entry.meshNode = graph_.createMesh("terrain-chunk");
-            graph_.root()->addChild(entry.meshNode);
+            entry.meshNode = g->createMesh("terrain-chunk");
+            g->root()->addChild(entry.meshNode);
         }
         if (mesh.positions.empty()) {
             nodeToChunk_.erase(entry.meshNode);
-            graph_.destroyNode(entry.meshNode);
+            g->destroyNode(entry.meshNode);
             entry.meshNode = nullptr;
             return;
         }
@@ -565,8 +567,8 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
     }
 
     if (!entry.meshNode) {
-        entry.meshNode = graph_.createMesh("terrain-chunk");
-        graph_.root()->addChild(entry.meshNode);
+        entry.meshNode = g->createMesh("terrain-chunk");
+        g->root()->addChild(entry.meshNode);
     }
 
     entry.meshNode->setMesh(std::move(mesh));
@@ -603,7 +605,7 @@ void TerrainManager::unloadChunk(const ChunkCoord& coord) {
 
     if (it->second.meshNode) {
         nodeToChunk_.erase(it->second.meshNode);
-        graph_.destroyNode(it->second.meshNode);
+        if (auto* g = graph()) g->destroyNode(it->second.meshNode);
     }
     chunks_.erase(it);
 }
@@ -995,9 +997,11 @@ float TerrainManager::farDistance() const {
 // -------------------------------------------------------------------------
 
 void TerrainManager::clear() {
-    for (auto& [coord, entry] : chunks_) {
-        if (entry.meshNode) {
-            graph_.destroyNode(entry.meshNode);
+    // A reclaimed graph already destroyed these nodes with itself; the
+    // pointers are freed memory by the time ~TerrainManager runs.
+    if (auto* g = graph()) {
+        for (auto& [coord, entry] : chunks_) {
+            if (entry.meshNode) g->destroyNode(entry.meshNode);
         }
     }
     chunks_.clear();

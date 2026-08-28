@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/graph_liveness.h"
 #include "scene/scene_node.h"
 #include "scene/camera_node.h"
 #include "scene/shape_node.h"
@@ -87,7 +88,10 @@ public:
     /// OutputTextureSource below, kept separate so texture-handle and
     /// JS-wrapper lifetimes stay independently documented. Created in the
     /// constructor; `graph` is nulled first thing in ~SceneGraph.
-    struct LivenessToken { SceneGraph* graph = nullptr; };
+    /// Defined in scene/graph_liveness.h so that headers which cannot include
+    /// this one (tile_world.h, clipmap_terrain.h, terrain_manager.h — all
+    /// included by scene_graph.h's own dependents) can hold a weak_ptr to it.
+    using LivenessToken = GraphLivenessToken;
     const std::shared_ptr<LivenessToken>& livenessToken() const { return liveToken_; }
 
     /// Find a node by name (first match).

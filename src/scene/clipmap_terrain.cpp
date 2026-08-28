@@ -58,7 +58,7 @@ float smoothstep01(float edge1, float x) {
 // ---------------------------------------------------------------------------
 
 ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
-    : graph_(graph), cfg_(cfg) {
+    : graphToken_(graph.livenessToken()), cfg_(cfg) {
     // The central hole is resolution/2 quads inset by resolution/4 on each
     // side, so the resolution must be a multiple of 4 for the rings to tile
     // exactly. Round rather than reject — a 126 that silently became a
@@ -67,9 +67,9 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     cfg_.levels     = std::clamp(cfg_.levels, 1, 20);
     if (!(cfg_.cellSize > 0.0f)) cfg_.cellSize = 1.0f;
 
-    node_ = graph_.createMesh("clipmapTerrain");
+    node_ = graph.createMesh("clipmapTerrain");
     if (!node_) return;
-    graph_.root()->addChild(node_);
+    graph.root()->addChild(node_);
 
     buildGeometry();
 
@@ -159,8 +159,10 @@ std::string ClipmapTerrain::shaderSource(const std::string& stage) const {
 ClipmapTerrain::~ClipmapTerrain() { destroy(); }
 
 void ClipmapTerrain::destroy() {
+    // A reclaimed graph destroyed the node with itself; node_ is freed memory
+    // by then, so drop it rather than hand it back for a second destruction.
     if (node_) {
-        graph_.destroyNode(node_);
+        if (auto* g = graph()) g->destroyNode(node_);
         node_ = nullptr;
     }
     for (auto& l : layers_) l = ClipmapLayer{};
@@ -172,6 +174,7 @@ void ClipmapTerrain::destroy() {
 // ---------------------------------------------------------------------------
 
 void ClipmapTerrain::buildGeometry() {
+    if (!liveNode()) return;
     const int N = cfg_.resolution;
     const int L = cfg_.levels;
     const int row = N + 1;
@@ -270,7 +273,7 @@ void ClipmapTerrain::buildGeometry() {
 // ---------------------------------------------------------------------------
 
 void ClipmapTerrain::pushStaticUniforms() {
-    if (!node_) return;
+    if (!liveNode()) return;
     auto set = [&](const char* n, std::initializer_list<float> v) {
         node_->setCustomShaderUniform(n, static_cast<int>(v.size()), v.begin());
     };
@@ -309,7 +312,7 @@ void ClipmapTerrain::pushStaticUniforms() {
 }
 
 void ClipmapTerrain::pushLayerUniforms() {
-    if (!node_) return;
+    if (!liveNode()) return;
     float wrap[kMaxLayers] = {};
     float band[kMaxLayers] = {};
     for (int i = 0; i < kMaxLayers; ++i) {
@@ -362,7 +365,7 @@ void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
                                     int height, float originX, float originZ,
                                     float metresPerCell, bool wrapX,
                                     bool bandLimited) {
-    if (!node_ || index < 0 || index >= kMaxLayers) return;
+    if (!liveNode() || index < 0 || index >= kMaxLayers) return;
     ClipmapLayer& l = layers_[index];
 
     if (!data || width <= 0 || height <= 0) {
@@ -401,7 +404,8 @@ void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
 // ---------------------------------------------------------------------------
 
 void ClipmapTerrain::update(float camX, float camY, float camZ) {
-    if (!node_) return;
+    auto* g = graph();
+    if (!node_ || !g) return;   // graph reclaimed: node_ is freed memory
 
     // Parking the node on the eye is what makes the renderer's camera-relative
     // subtraction leave the model matrix at identity, so the camera-relative
@@ -475,8 +479,8 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
     // framebuffer can resolve, which is a screen-space question and therefore
     // depends on FOV and viewport — neither of which is constant, so this is
     // pushed per frame rather than baked with the static uniforms.
-    const int   vh    = graph_.canvasHeight();
-    const float fovY  = graph_.cameraFovY();
+    const int   vh    = g->canvasHeight();
+    const float fovY  = g->cameraFovY();
     const float scale = (vh > 0 && fovY > 0.0f)
         ? 2.0f * std::tan(fovY * 0.5f) / static_cast<float>(vh)
         : 0.0f;   // 0 disables the term; the geometry limit still applies
@@ -1067,7 +1071,7 @@ void ClipmapTerrain::setSurfaceLayer(int index, const float* data, int width, in
 }
 
 void ClipmapTerrain::pushSurfaceUniforms() {
-    if (!node_) return;
+    if (!liveNode()) return;
     for (int i = 0; i < kMaxLayers; ++i) {
         const SurfaceLayer& s = surf_[i];
         const float a[3] = {s.originX, s.originZ,
