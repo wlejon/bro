@@ -10,7 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace bro::dom { class Element; }
+namespace bro::dom { class Element; class Document; }
 
 namespace bro::engine {
 
@@ -100,6 +100,28 @@ public:
     std::vector<PendingCSSEvent> takePendingEvents() {
         return std::move(pendingEvents_);
     }
+
+    // Forget everything this manager holds about `elem`: its registered
+    // transitions, its slot in the most recent tick's active list, and any
+    // queued event naming it.
+    //
+    // MUST be called before the Element's storage goes away. The keys here are
+    // raw Element* (unlike WebAnimationManager, whose records are generation-
+    // checked through Document::resolveNode), and tick() dereferences them —
+    // `elem->markDirty()` when a transition completes — while takePendingEvents
+    // hands the pointer to dispatchEvent a few lines later. An element removed
+    // mid-transition therefore crashed the process on the first tick after its
+    // deferred free drained. Document::freeNode is the one call site: it fires
+    // for every doomed node, deepest first, so a transition on any descendant
+    // of a removed subtree is dropped with it. Removal cancels the transition
+    // per CSS, so nothing is owed a transitionend.
+    void forgetElement(dom::Element* elem);
+
+    // The same, for every element belonging to `doc`. For the paths that
+    // destroy a document's node storage wholesale without routing each node
+    // through freeNode(): Document::parse() re-parsing over an existing tree,
+    // and ~Document. Dereferences the keys, so call while they are still alive.
+    void forgetDocument(const dom::Document* doc);
 
     // Drop every registered transition and queued event. Used when the app
     // document is torn down as a whole (top-level location.reload()) — the
@@ -192,6 +214,16 @@ public:
     std::vector<PendingCSSEvent> takePendingEvents() {
         return std::move(pendingEvents_);
     }
+
+    // See TransitionManager::forgetElement / forgetDocument — the entries here
+    // are keyed by raw Element* in exactly the same way, and this manager holds
+    // them even longer: a completed animation's entry stays behind so
+    // `previousName` can stop the cascade from restarting it, so a removed
+    // element leaks its slot forever unless something drops it. tick()
+    // dereferences the key (`elem->markDirty()`) whenever an animation
+    // completes, which is the crash an element removed mid-animation takes.
+    void forgetElement(dom::Element* elem);
+    void forgetDocument(const dom::Document* doc);
 
     // Whole-document teardown reset — see TransitionManager::clearAll().
     // Also drops the keyframe-store pointer: it aims into the old document's

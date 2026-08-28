@@ -573,6 +573,66 @@ void TransitionManager::applyOverrides(dom::Element* elem,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Lifetime: forgetting elements whose storage is going away
+// ---------------------------------------------------------------------------
+//
+// Both managers key on raw dom::Element* and both dereference the key (tick()
+// calls markDirty() on completion; the queued events carry the pointer to
+// dispatchEvent). Nothing else drops these entries, so an element removed while
+// it still owns one leaves a dangling key that the next tick walks straight
+// into. Document::freeNode() and the two wholesale-teardown paths call these.
+
+// Erase `elem` from a manager's three raw-pointer holders. Shared by both
+// managers because the members are shaped identically.
+template <typename Map>
+static void forgetElementIn(Map& elements,
+                            std::vector<dom::Element*>& activeThisTick,
+                            std::vector<PendingCSSEvent>& pendingEvents,
+                            dom::Element* elem) {
+    if (!elem) return;
+    elements.erase(elem);
+    activeThisTick.erase(
+        std::remove(activeThisTick.begin(), activeThisTick.end(), elem),
+        activeThisTick.end());
+    pendingEvents.erase(
+        std::remove_if(pendingEvents.begin(), pendingEvents.end(),
+                       [elem](const PendingCSSEvent& ev) { return ev.element == elem; }),
+        pendingEvents.end());
+}
+
+// Same, for every element owned by `doc`. Safe to dereference the keys: the
+// callers run while the document's node storage is still intact.
+template <typename Map>
+static void forgetDocumentIn(Map& elements,
+                             std::vector<dom::Element*>& activeThisTick,
+                             std::vector<PendingCSSEvent>& pendingEvents,
+                             const dom::Document* doc) {
+    if (!doc) return;
+    auto belongs = [doc](const dom::Element* e) {
+        return e && e->document() == doc;
+    };
+    for (auto it = elements.begin(); it != elements.end(); ) {
+        if (belongs(it->first)) it = elements.erase(it);
+        else ++it;
+    }
+    activeThisTick.erase(
+        std::remove_if(activeThisTick.begin(), activeThisTick.end(), belongs),
+        activeThisTick.end());
+    pendingEvents.erase(
+        std::remove_if(pendingEvents.begin(), pendingEvents.end(),
+                       [&](const PendingCSSEvent& ev) { return belongs(ev.element); }),
+        pendingEvents.end());
+}
+
+void TransitionManager::forgetElement(dom::Element* elem) {
+    forgetElementIn(elements_, activeThisTick_, pendingEvents_, elem);
+}
+
+void TransitionManager::forgetDocument(const dom::Document* doc) {
+    forgetDocumentIn(elements_, activeThisTick_, pendingEvents_, doc);
+}
+
 bool TransitionManager::hasActive(dom::Element* elem) const {
     auto it = elements_.find(elem);
     return it != elements_.end() && !it->second.active.empty();
@@ -996,6 +1056,14 @@ void AnimationManager::applyOverrides(dom::Element* elem,
             }
         }
     }
+}
+
+void AnimationManager::forgetElement(dom::Element* elem) {
+    forgetElementIn(elements_, activeThisTick_, pendingEvents_, elem);
+}
+
+void AnimationManager::forgetDocument(const dom::Document* doc) {
+    forgetDocumentIn(elements_, activeThisTick_, pendingEvents_, doc);
 }
 
 bool AnimationManager::hasActive(dom::Element* elem) const {

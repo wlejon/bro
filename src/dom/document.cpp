@@ -54,6 +54,12 @@ Document::~Document() {
     if (nodeDestroyingCb_) {
         forEachLiveElement([this](Element* el) { nodeDestroyingCb_(this, el); });
     }
+    // The CSS transition/animation managers outlive individual documents (they
+    // are Engine members), and index by raw Element*. Same bypass as above:
+    // ownedNodes_ is destroyed without freeNode(), so drop this document's
+    // entries here, while the keys are still valid to compare.
+    if (transitionManager_) transitionManager_->forgetDocument(this);
+    if (animationManager_) animationManager_->forgetDocument(this);
     selection_.reset();
     auto ranges = std::move(liveRanges_);
     for (auto* r : ranges) {
@@ -197,6 +203,12 @@ void Document::parse(const std::string& html, const std::string& authorCss,
             r->onNodeDestroyed(r->endContainer());
         }
     }
+    // The CSS transition/animation managers hold raw Element* keys into the
+    // storage cleared just below. This path bypasses freeNode(), so the
+    // per-node scrub there never runs for them — drop the whole document's
+    // entries while the keys are still alive to be compared.
+    if (transitionManager_) transitionManager_->forgetDocument(this);
+    if (animationManager_) animationManager_->forgetDocument(this);
     pendingFrees_.clear();
     pendingSet_.clear();
     ownedNodes_.clear();
@@ -1441,6 +1453,17 @@ void Document::freeNode(Node* node) {
         // the next mousemove. Engine::reapDeadInputPointers scrubs the
         // engine's own cached pointers but not this document-owned one.)
         if (elem == focusedElement_) focusedElement_ = nullptr;
+        // Same reasoning, one layer up: the CSS transition and animation
+        // managers index by raw Element* and dereference the key on the next
+        // tick (markDirty() when a transition/animation completes, and the
+        // queued transitionend/animationend carries the pointer to
+        // dispatchEvent). An element removed while a transition was still
+        // running therefore crashed the process on the tick after this node's
+        // deferred free drained — which is what a fading toast that removes
+        // itself does every single time. Removal cancels both per CSS, so
+        // there is no event still owed.
+        if (transitionManager_) transitionManager_->forgetElement(elem);
+        if (animationManager_) animationManager_->forgetElement(elem);
     }
     // Let the JS layer drop this node's wrapper (raw Element* + elem-map entry)
     // while the memory is still valid. Children were handled by the recursion
