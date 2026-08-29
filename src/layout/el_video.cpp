@@ -188,6 +188,10 @@ void ElVideo::pumpStreamingAudio() {
     bro::video::MediaPacket pkt;
     bro::video::AudioFrame frame;
     while (buffered < target) {
+        // Nothing to take yet, and this is the UI thread: come back next frame
+        // rather than standing here while a source makes the block. Not an end
+        // — the source says so itself, below. See MediaSource::packetReady.
+        if (!audioSource_->packetReady()) break;
         if (!audioSource_->readPacket(pkt)) { audioSourceEnded_ = true; break; }
         if (pkt.trackId != audioSourceTrackId_) continue;
         if (!audioStreamDec_->decode(pkt, frame) || frame.samples.empty()) continue;

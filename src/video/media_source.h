@@ -80,6 +80,26 @@ public:
     // Packets are emitted in container order; callers route by trackId.
     virtual bool readPacket(MediaPacket& out) = 0;
 
+    // Can the next readPacket answer without waiting?
+    //
+    // A demuxer always can: the packet is bytes on a disk or in a socket
+    // buffer, and reading it is the only way to find out whether it is there.
+    // A source that *makes* its packets cannot — a render being played while
+    // it is made needs real time to produce the next block, and the only
+    // answer readPacket has for "not yet" is to wait, because false means the
+    // stream ended.
+    //
+    // That wait lands on whichever thread asked, and one of them is the UI
+    // thread: pumpStreamingAudio tops the audio ring up once a frame from
+    // pumpEvents. A source that waits four seconds for its first block is a
+    // window that stops for four seconds — measured at 5.9 s on a thirteen-cut
+    // mix of four six-hour recordings, the whole of it inside one frame.
+    //
+    // So a caller on a thread that must keep moving asks this first and comes
+    // back next frame. Waiting never made the sound arrive sooner; it only
+    // decided who stood still while it did.
+    virtual bool packetReady() const { return true; }
+
     // Optional: seek to the nearest keyframe at or before `pts`. Returns
     // false if the source doesn't support seeking (network live).
     virtual bool seekTo(TimeNs pts) { (void)pts; return false; }
