@@ -48,10 +48,45 @@ static void dialogCallback(void* userdata, const char* const* filelist, int /*fi
     result->callbackCount.fetch_add(1, std::memory_order_release);
 }
 
+/// How long a dialog that has already answered once is given to answer again.
+///
+/// See `waitForDialog`. Any second callback is delivered from the same place as
+/// the first and arrives immediately; this is a bound, not a poll interval.
+static constexpr Uint64 kExtraCallbackGraceMs = 500;
+
+/// Block until the dialog has answered, keeping timers running while it is up.
+///
+/// **An error answers once, and waiting for a second answer that is not coming
+/// is a window that never comes back.** SDL calls back with a null `filelist`
+/// when it refuses the request — most easily by handing it a filter pattern
+/// with anything but `[a-zA-Z0-9_.-]` in it, which it validates *before* it
+/// opens anything — and on Windows this loop wanted two callbacks before it
+/// would return. One bad filter string therefore hung the application with its
+/// last frame on the screen and no dialog to close: it went on pumping events
+/// and ticking timers for ever, which is why it looked like a freeze rather
+/// than a crash and why nothing anywhere said what had happened.
+///
+/// The second callback is still waited for, because the thing it was guarding
+/// is real: `DialogResult` lives on the caller's stack, and a callback arriving
+/// after this returns would write into a frame that is gone. So the wait is
+/// *bounded* instead of abandoned, and the reason is logged — an application
+/// that has been refused should be able to find out why.
 static void waitForDialog(DialogResult& result)
 {
-    while (!result.haveResult.load(std::memory_order_acquire) &&
-           result.callbackCount.load(std::memory_order_acquire) < kMaxDialogCallbacks) {
+    Uint64 answeredAt = 0;
+    for (;;) {
+        const bool have = result.haveResult.load(std::memory_order_acquire);
+        const int count = result.callbackCount.load(std::memory_order_acquire);
+        if (have || count >= kMaxDialogCallbacks) break;
+        if (count > 0) {
+            const Uint64 now = SDL_GetTicks();
+            if (!answeredAt) {
+                answeredAt = now;
+                LOG_WARN("dialog: refused — %s", SDL_GetError());
+            } else if (now - answeredAt >= kExtraCallbackGraceMs) {
+                break;
+            }
+        }
         SDL_PumpEvents();
         if (s_tickCb) s_tickCb();
         SDL_Delay(8);
