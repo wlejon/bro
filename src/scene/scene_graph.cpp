@@ -578,14 +578,34 @@ void SceneGraph::render() {
     renderer_.render3D();
 
     // --- 2D canvas pass ---------------------------------------------------
-    // Render non-world-anchored Shape/Sprite into the 2D overlay layer.
-    // World-anchored nodes already rendered into the FBO above.
+    // Render non-world-anchored Shape/Sprite/Particles into the 2D overlay
+    // layer. World-anchored ones already rendered into the FBO above.
+    //
+    // The set of types here is a WHITELIST on purpose. It used to be a
+    // blacklist ("anything that is not a Mesh or an Html node"), and that let
+    // every 3D node type whose onRender() issues GL through — most damagingly
+    // InstancedMeshNode, whose onRender() is the instanced draw itself. Every
+    // instanced node was therefore drawn a SECOND time here, outside the 3D
+    // pass: no mesh program bound, no uVP/uCameraEye, the tonemap pass's
+    // framebuffer and viewport still current. The re-draw put raw mesh-LOCAL
+    // vertex coordinates straight into clip space, so any geometry authored
+    // across its own origin landed inside the NDC cube and rasterized at full
+    // framebuffer size, once per instance, every frame — invisible (the
+    // compositor overwrites it) and ~370x the cost of the real draw for a
+    // TileWorld-scale instance count. Geometry authored clear of its origin
+    // fell outside NDC and was clipped away, which is why the cost looked
+    // like it depended on where the mesh sat relative to its own origin.
+    //
+    // Only 2D node types draw here. A node type that renders in 3D belongs to
+    // SceneRenderer::render3D() and must never be reached from this walk.
     {
         std::function<void(SceneNode*)> walk2D = [&](SceneNode* n) {
             if (!n->renderVisible()) return;
-            if (n->type() != SceneNode::Type::Mesh &&
-                n->type() != SceneNode::Type::Html &&
-                !n->hasWorldAnchor()) {
+            const SceneNode::Type t = n->type();
+            const bool is2D = t == SceneNode::Type::Shape ||
+                              t == SceneNode::Type::Sprite ||
+                              t == SceneNode::Type::Particles;
+            if (is2D && !n->hasWorldAnchor()) {
                 n->onRender(*this);
             }
             for (auto* c : n->children()) walk2D(c);
