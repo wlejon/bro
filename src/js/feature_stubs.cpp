@@ -54,10 +54,44 @@ namespace bro::engine { class AudioInference; }
 namespace bro::js {
 
 // ── TENSOR (bro.tensor + bro.gpu) ────────────────────────────────────────────
-#if !BRO_WITH_TENSOR
+//
+// The two halves are gated differently, and that asymmetry is the point.
+//
+// **bro.tensor is a GPU surface**, built on the GpuTensorData wrapper in
+// tensor_bindings_internal.h, which brotensor only makes available with a CUDA
+// or Metal backend compiled in (BROTENSOR_HAS_GPU). So a build with the tower
+// on and no card has no real binding to install, and needs the stub — which is
+// a configuration that could not previously link at all, because the eight
+// tensor_bindings*.cpp TUs were guarded on BRO_WITH_TENSOR alone while the
+// header they all include was guarded on BROTENSOR_HAS_GPU. See the block at
+// the top of tensor_bindings.cpp.
+//
+// **bro.gpu is the runtime backend probe** and is real whenever brotensor is
+// linked at all: gpu_bindings.cpp names brotensor directly instead of going
+// through that header, and answers `cpu` honestly on a machine with no card.
+// So its stub is still needed only when the feature itself is off.
+#if !BRO_WITH_TENSOR || !defined(BROTENSOR_HAS_GPU)
 void installTensorBindings(JSContext* ctx) {
-    installUnavailableNamespace(ctx, "tensor", "BRO_WITH_TENSOR");
+    installUnavailableNamespace(ctx, "tensor",
+#if BRO_WITH_TENSOR
+        // The flag is on. What is missing is a backend for it to run on, so
+        // naming BRO_WITH_TENSOR here would send somebody to set a flag that is
+        // already set.
+        "a GPU backend (BRO_WITH_TENSOR_CUDA or BRO_WITH_TENSOR_METAL)");
+#else
+        "BRO_WITH_TENSOR");
+#endif
 }
+
+/// ai_bindings.h promises this returns nullptr when no GPU backend is
+/// available, and until now nothing made that true: the only definition was in
+/// tensor_bindings.cpp, which is compiled out in exactly that case. Nothing
+/// outside those TUs calls it today, so it linked by luck rather than by
+/// design. Four lines is cheaper than the next caller finding out.
+::brotensor::Tensor* gpuTensorFromJS(JSContext*, JSValueConst) { return nullptr; }
+#endif
+
+#if !BRO_WITH_TENSOR
 void installGpuBindings(JSContext* ctx) {
     // bro.gpu is the always-present runtime backend probe. With no GPU tensor
     // backend built, make the stub behaviorally identical to a real CPU-only

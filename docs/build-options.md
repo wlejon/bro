@@ -116,7 +116,7 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 
 | Flag | Pulls in | `full` | Requires |
 |---|:--|:--:|---|
-| `BRO_WITH_TENSOR` | brotensor (CPU); gpu/tensor bindings | on | none |
+| `BRO_WITH_TENSOR` | brotensor (CPU); `bro.gpu`, and `bro.tensor` only with a GPU backend (below) | on | none |
 | `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend | **off** | `TENSOR` + CUDA toolkit |
 | `BRO_WITH_TENSOR_METAL` | brotensor Metal backend | **off** | `TENSOR` + macOS |
 | `BRO_WITH_LM` | brolm | on | `TENSOR` |
@@ -130,6 +130,22 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 and is the single biggest build-time cost. It maps to the existing
 `BROTENSOR_WITH_CUDA` (see the forwarding block in the top-level `CMakeLists.txt`)
 and is turned on explicitly, orthogonal to the feature flags.
+
+**`bro.tensor` needs one of those two backends, and `bro.gpu` does not.** The
+tensor surface is built on brotensor's GPU tensor type, which only exists with
+CUDA or Metal compiled in, so `BRO_WITH_TENSOR=ON` on its own gives you
+`bro.tensor.available === false` and the usual unavailable-namespace error
+naming the backend rather than the flag. `bro.gpu` is the runtime probe and
+stays real either way, answering `cpu`. Everything else in the tower —
+`bro.lm`, `bro.diffusion`, `bro.vision`, the soundml family — has a CPU path
+and is real with the flag alone; the tensor bindings are the one exception.
+
+That was true of the design and not of the code until recently: the eight
+`tensor_bindings*.cpp` were guarded on `BRO_WITH_TENSOR` while the header they
+all include was guarded on `BROTENSOR_HAS_GPU`, so this configuration did not
+compile at all. No profile anybody built was in it — CI builds `app` with the
+tower off, the nightly always compiles a backend in — until ffmpeg-bro, whose
+`BRO_WITH_SOUNDML` pulls `BRO_WITH_TENSOR` in on three GPU-less runners.
 
 ### Tier 3: outside the profiles
 

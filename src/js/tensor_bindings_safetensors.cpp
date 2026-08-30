@@ -1,4 +1,4 @@
-#if BRO_WITH_TENSOR
+#if BRO_WITH_TENSOR && defined(BROTENSOR_HAS_GPU)
 // JS bindings — safetensors load / save, on bro.tensor.
 //
 //   bro.tensor.openSafetensors(path) -> handle

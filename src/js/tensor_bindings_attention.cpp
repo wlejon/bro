@@ -1,4 +1,4 @@
-#if BRO_WITH_TENSOR
+#if BRO_WITH_TENSOR && defined(BROTENSOR_HAS_GPU)
 // JS bindings — self/cross attention, flash-attention family, kv-cache,
 // resblock. See tensor_bindings.cpp for the architectural overview.
 

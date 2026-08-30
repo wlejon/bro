@@ -1,6 +1,29 @@
-#if BRO_WITH_TENSOR
+#if BRO_WITH_TENSOR && defined(BROTENSOR_HAS_GPU)
+// JS bindings for brotensor's GPU tensor type and its op family (bro.tensor).
+//
+// **The BROTENSOR_HAS_GPU half of that guard is load-bearing and was missing.**
+// tensor_bindings_internal.h — which this TU and its seven siblings all include,
+// and which holds the `namespace nngpu = brotensor` alias and the GpuTensorData
+// wrapper — is itself `#ifdef BROTENSOR_HAS_GPU`, and says in its own header
+// comment that consumers are expected to guard their `#include` with the same
+// macro. They did not: all eight carried `#if BRO_WITH_TENSOR` alone. brotensor
+// only defines BROTENSOR_HAS_GPU with the CUDA or Metal backend compiled in, so
+// `BRO_WITH_TENSOR=ON` with neither produced eight translation units in which
+// the alias did not exist and every use of it was a hard error.
+//
+// Nothing noticed for a simple reason: no configuration anybody built was in
+// that state. bro's CI builds the `app` profile, where BRO_WITH_TENSOR is off,
+// and bro's nightly always compiles CUDA or Metal in. The configuration that
+// hits it is a GPU-less build with the tower on — which is exactly what
+// `_bro_require` produces from BRO_WITH_SOUNDML, and therefore what ffmpeg-bro
+// is, and what its CI is on all three platforms.
+//
+// bro.gpu is deliberately NOT gated this way: gpu_bindings.cpp names brotensor
+// directly rather than through this header, and its CPU-only answers are the
+// honest ones for a build with no card. It stays real. bro.tensor becomes the
+// unavailable stub instead (feature_stubs.cpp), which tests/tensor already
+// covers as its `available === false` branch.
 
-#include "js/ai_bindings.h"
 #include "js/ai_bindings.h"
 #include "js/tensor_bindings_internal.h"
 #include <cstdint>

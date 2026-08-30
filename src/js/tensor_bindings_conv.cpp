@@ -1,4 +1,4 @@
-#if BRO_WITH_TENSOR
+#if BRO_WITH_TENSOR && defined(BROTENSOR_HAS_GPU)
 // JS bindings — conv2d (forward + per-input/weight/bias backward), 2x
 // up/downsample (forward + backward), and NCHW↔sequence transpose. See
 // tensor_bindings.cpp for the architectural overview.

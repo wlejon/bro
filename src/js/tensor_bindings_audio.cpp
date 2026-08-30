@@ -1,4 +1,4 @@
-#if BRO_WITH_TENSOR
+#if BRO_WITH_TENSOR && defined(BROTENSOR_HAS_GPU)
 // JS bindings — brosoundml audio ops: spectral / FFT core, STFT / iSTFT, the
 // 1D convolution family, vocoder + codec activations, codec quantization, 1D
 // resampling, log/exp/round elementwise, and the autoregressive logit sampler.

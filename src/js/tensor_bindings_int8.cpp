@@ -1,4 +1,4 @@
-#if BRO_WITH_TENSOR
+#if BRO_WITH_TENSOR && defined(BROTENSOR_HAS_GPU)
 // JS bindings — INT8 weight-only quantisation helpers and W8A16 ops.
 // See tensor_bindings.cpp for the architectural overview.
 
