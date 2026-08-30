@@ -154,6 +154,11 @@ void Node::removeChild(Node* child) {
     }
 }
 
+void Node::releaseChildren() {
+    for (auto* child : children_) child->setParent(nullptr);
+    children_.clear();
+}
+
 void Node::insertBefore(Node* newChild, Node* refChild) {
     if (!newChild) return;
     if (!refChild) {

@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cstring>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::js {
@@ -51,6 +52,14 @@ std::unordered_map<JSContext*, DomBindings::GetContextFactory> s_ctx_factories;
 std::unordered_map<JSContext*, void*> s_ctx_sdl_windows;
 std::unordered_map<JSContext*, void*> s_ctx_engines;
 
+// Elements the orphan sweep has taken back out of __bro_elem_map because they
+// are no longer in a tree — see the rooting rule above sweepOrphanedWrappers().
+// Raw pointers, kept correct by fireNodeFreed(), which erases a node here
+// before its memory can be reused. The set is bounded by how many detached
+// elements are alive at once, which for a list being rebuilt is one frame's
+// worth.
+std::unordered_map<JSContext*, std::unordered_set<bro::dom::Element*>> s_unrooted;
+
 bro::dom::Document* getDocumentForCtx(JSContext* ctx) {
     auto it = s_ctx_documents.find(ctx);
     return it != s_ctx_documents.end() ? it->second : nullptr;
@@ -73,11 +82,15 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
 
     auto* elem = static_cast<bro::dom::Element*>(element_ptr);
 
-    // Fast path: the element already knows its wrapper. The map keeps a strong
-    // ref to every cached wrapper, so a non-null pointer is always a live object
-    // (the finalizer / detach paths null it otherwise). This skips the global
-    // fetch + "__bro_elem_map" atom intern + itoa + hash lookup below, which is
-    // the bulk of the per-crossing cost on DOM-heavy code.
+    // Fast path: the element already knows its wrapper. A non-null pointer is
+    // always a live object, because every path that ends a wrapper's life nulls
+    // this slot first — the element finalizer, fireNodeFreed, fireNodeDestroying
+    // and invalidateWrapper. That is the whole guarantee, and it is *not* "the
+    // map holds a strong ref to it": the map roots only elements that are in a
+    // tree (see sweepOrphanedWrappers), so a detached element's wrapper is held
+    // by whatever JS still points at it and by nothing else. This skips the
+    // global fetch + "__bro_elem_map" atom intern + itoa + hash lookup below,
+    // which is the bulk of the per-crossing cost on DOM-heavy code.
     if (void* w = elem->jsWrapper()) {
         return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, w));
     }
@@ -369,6 +382,14 @@ static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node) {
     auto it = s_doc_to_ctx.find(doc);
     if (it == s_doc_to_ctx.end() || !it->second) return;
     JSContext* ctx = it->second;
+
+    // Out of the sweep's detached set before the memory can be reused. That set
+    // holds raw pointers and asks them for a parent on the next pass, so a freed
+    // Element left in it would be answered by whatever is allocated at that
+    // address next.
+    auto sit = s_unrooted.find(ctx);
+    if (sit != s_unrooted.end())
+        sit->second.erase(static_cast<bro::dom::Element*>(node));
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
@@ -671,12 +692,60 @@ void DomBindings::cleanup(JSContext* ctx) {
     s_ctx_factories.erase(ctx);
     s_ctx_sdl_windows.erase(ctx);
     s_ctx_engines.erase(ctx);
+    s_unrooted.erase(ctx);
 }
 
 void DomBindings::cleanupRuntime(JSRuntime* rt) {
     cleanupCanvasContextCache(rt);
 }
 
+// ── What the strong element map is allowed to keep alive ───────────────────
+//
+// **__bro_elem_map roots the elements that are in a tree, and nothing else.**
+// That sentence is the whole of this pass, and it used to be missing — with the
+// consequence that a bro application could not run for an afternoon.
+//
+// The map holds a strong reference to every element wrapper it caches, and the
+// only thing that ever calls Document::freeNode for an ordinary removal is the
+// element finalizer's parentless branch. So while the map held a detached
+// element's wrapper, that wrapper could never be collected, its finalizer could
+// never run, and the Element behind it — with its computed style, its attribute
+// maps and its interned map key — was retained for the life of the process.
+// removeChild(), textContent=, innerHTML= and replaceChildren() all detach
+// without destroying, deliberately and per spec, so **every one of them leaked**;
+// only el.remove(), which calls freeNode outright, did not.
+//
+// Measured, because the size of it is the reason this is not a tidy-up: a list
+// of ten rows rebuilt a hundred times the way `put()` in an app's DOM helper
+// rebuilds one — clear with removeChild, append the replacement — retained all
+// two thousand elements it built, at **1.5 kB apiece**. Both halves of the
+// once-a-second pass below are linear in what is retained, so at 1.2 M held
+// elements the enumeration cost 121 ms and JS_RunGC 441 ms: **56% of every
+// second**, climbing, until the window stops answering. An application whose
+// panels redraw off a progress number reached that in an afternoon.
+//
+// **Why demotion rather than destruction.** A detached element stays
+// re-insertable per spec, and this engine leans on that — a live <video> or a
+// canvas kept across a rebuild is the documented reason replaceChildren() stopped
+// invalidating the wrappers of the children it removes. So this does not free
+// anything. It takes the map's reference away and leaves Element::jsWrapper()
+// pointing at the wrapper, exactly as the detached-document (DOMParser) path
+// already does: JS still holding the element keeps it alive and re-insertable,
+// and JS holding nothing lets the wrapper collect, at which point the finalizer's
+// existing parentless branch frees the node. The GC decides, which is what should
+// have been deciding all along.
+//
+// **Why the second pass exists.** JS listeners live *on the wrapper*
+// (`__bro_listeners`), so an element that is in a tree must stay rooted or a
+// collection would silently take its handlers with it. An element demoted while
+// detached and put back afterwards has to be rooted again, and there is no one
+// place to hook that: appendChild, insertBefore, replaceChild, append, prepend,
+// before, after, replaceWith and replaceChildren all insert, and textContent=
+// and innerHTML= reach into the child list directly. So re-rooting is asked here,
+// of the small set of elements this pass has taken out, rather than asserted at
+// nine call sites where the tenth is the bug. The window in which a re-attached
+// element is unrooted is bounded by one sweep, and throughout it the element is
+// held by whatever JS reference performed the re-insertion.
 void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
@@ -698,6 +767,7 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
                            JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY);
 
     int dangling = 0;
+    auto& detached = s_unrooted[ctx];
     for (uint32_t i = 0; i < len; i++) {
         JSValue val = JS_GetProperty(ctx, elemMap, props[i].atom);
         auto* el = static_cast<bro::dom::Element*>(
@@ -726,8 +796,45 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
             JS_SetOpaque(val, nullptr);
             JS_DeleteProperty(ctx, elemMap, props[i].atom, 0);
             if (doc) doc->freeNode(el);
+            JS_FreeValue(ctx, val);
+            continue;
+        }
+
+        // Detached: stop rooting it. The opaque is deliberately left alone —
+        // this is not a free and the element goes on working for anyone still
+        // holding it. `val` keeps the wrapper alive until the end of this
+        // iteration, so the collection happens in the JS_RunGC that follows
+        // this sweep rather than under it.
+        //
+        // The document element is exempt because it is parentless by
+        // construction and is the root of everything; template content because
+        // it hangs off its template rather than off a parent, which is the same
+        // exemption the branch above and the element finalizer both make.
+        if (el && el->isAlive() && !el->parentNode() && !el->isTemplateContent() &&
+            (!ctxDoc || ctxDoc->documentElement() != el)) {
+            detached.insert(el);
+            JS_DeleteProperty(ctx, elemMap, props[i].atom, 0);
+            JS_FreeValue(ctx, val);
+            continue;
         }
         JS_FreeValue(ctx, val);
+    }
+
+    // Back in a tree since the last sweep: root it again, before a collection
+    // can take the listeners registered on its wrapper with it. A wrapper that
+    // has already gone (jsWrapper_ null) means nothing was holding the element
+    // and nothing re-inserted it from JS; there is nothing left to root and the
+    // entry simply goes.
+    for (auto it = detached.begin(); it != detached.end(); ) {
+        bro::dom::Element* el = *it;
+        if (!ctxDoc || !ctxDoc->isNodeLive(el)) { it = detached.erase(it); continue; }
+        if (!el->parentNode()) { ++it; continue; }
+        if (void* w = el->jsWrapper()) {
+            const std::string key = std::to_string(el->nodeId());
+            JS_SetPropertyStr(ctx, elemMap, key.c_str(),
+                              JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, w)));
+        }
+        it = detached.erase(it);
     }
 
     // Any dangling entry means an eager-clear path was missed — should be zero

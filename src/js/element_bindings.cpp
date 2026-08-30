@@ -142,8 +142,17 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
         // it is the parentless ROOT of a tree that stays reachable through the
         // Document wrapper — collecting its (uncached-strongly) wrapper must
         // not eat the whole parsed tree. The main document's root never gets
-        // here (its wrapper is pinned by __bro_elem_map until shutdown).
-        if (doc && doc->documentElement() != el) doc->freeNode(el);
+        // here (it is in a tree, and the strong map roots what is in a tree).
+        if (doc && doc->documentElement() != el) {
+            // The children go free rather than down with it. This runs when
+            // nothing in JS can reach *this* element any more, which says
+            // nothing about what may still be holding one of its children —
+            // see Node::releaseChildren for the case that found it. Each child
+            // becomes a detached root and is reclaimed on its own terms by the
+            // next sweep, or kept by whoever is holding it.
+            el->releaseChildren();
+            doc->freeNode(el);
+        }
     }
 }
 

@@ -48,6 +48,29 @@ public:
     void removeChild(Node* child);
     void insertBefore(Node* newChild, Node* refChild);
 
+    // Give up every child without destroying any of them: each becomes a
+    // parentless root, alive and re-insertable.
+    //
+    // **What a doomed element does before it is freed.** Document::freeNode
+    // destroys the whole subtree it is given, which is right for remove() — the
+    // caller said it was finished with it — and wrong for the JS wrapper's
+    // finalizer, which runs precisely when nothing in JS points at *this*
+    // element any more. Something may still point at a child: the case that
+    // found this is a card holding the <video> that decodes its preview across
+    // a rebuild, where freeing the detached card destroyed the element the
+    // holder was about to put back, leaving it with a wrapper whose node was
+    // gone and a `cannot read property of undefined` two frames later.
+    //
+    // Detaching first is safe exactly because of when it happens. Nothing can
+    // reach this element to notice that its children left; anything that reaches
+    // a child through a reference of its own still has that child whole, with
+    // its own subtree under it. The children become detached roots and are
+    // reclaimed on their own terms — see DomBindings::sweepOrphanedWrappers.
+    //
+    // No notice is fired and none is owed: this node is leaving, it is in no
+    // tree, and there is nothing to lay out.
+    void releaseChildren();
+
     uint32_t nodeId() const { return id_; }
 
 protected:
