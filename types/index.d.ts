@@ -2929,7 +2929,7 @@ declare class Dialogs {
   static prompt(message?: any, defaultText?: string): string | null;
   /**
    * Opens a native modal file picker dialog.
-   * @param filter Filter pattern string (e.g. "Images|png;jpg")
+   * @param filter Name and pattern, alternating, for one filter or several (e.g. "Images|png;jpg" or "Images|png;jpg|All files|*"). A pattern is `[a-zA-Z0-9_.-]` extensions separated by `;`, or a bare `*`; anything else is refused and throws.
    * @param allowMultiple Whether to allow multiple file selection
    * @returns Array of selected absolute file paths
    */
@@ -2943,7 +2943,7 @@ declare class Dialogs {
   static showOpenFolderDialog(defaultLocation?: string, allowMultiple?: boolean): string[];
   /**
    * Opens a native modal file save dialog.
-   * @param filter Filter pattern string (e.g. "JSON|json")
+   * @param filter Name and pattern, alternating, for one filter or several (e.g. "JSON|json" or "JSON|json|All files|*"). Refused patterns throw.
    * @param defaultName Default location or file path
    * @returns Selected file path string or null if cancelled
    */

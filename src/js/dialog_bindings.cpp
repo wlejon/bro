@@ -34,6 +34,14 @@ struct DialogResult {
     std::atomic<bool> haveResult{false};
     std::atomic<int>  callbackCount{0};
     std::vector<std::string> files;
+    /// Why the dialog was refused, read out of SDL on the thread that set it.
+    ///
+    /// SDL's error is thread-local and the refusal that matters here — a filter
+    /// SDL will not accept — is delivered synchronously from
+    /// `SDL_ShowOpenFileDialog` itself, but a backend may refuse from a thread
+    /// of its own. Taking it here rather than after the wait is the only
+    /// spelling that is right in both cases.
+    std::string error;
 };
 
 static void dialogCallback(void* userdata, const char* const* filelist, int /*filter*/)
@@ -44,8 +52,61 @@ static void dialogCallback(void* userdata, const char* const* filelist, int /*fi
             result->files.emplace_back(*p);
         }
         result->haveResult.store(true, std::memory_order_release);
+    } else if (result->error.empty()) {
+        const char* msg = SDL_GetError();
+        result->error = msg && *msg ? msg : "the dialog was refused";
     }
     result->callbackCount.fetch_add(1, std::memory_order_release);
+}
+
+/// Read a filter string into SDL's filter array.
+///
+/// `"Images|png;jpg"` is one filter and `"Documents|json|Media|mp4;mkv|All
+/// files|*"` is three: names and patterns alternating, which is the spelling
+/// every native file dialog has taken since the eighties and the one people
+/// write without being told to. This used to split at the **first** `|` and
+/// keep the rest as one pattern, which put the second filter's name inside the
+/// first filter's extensions — and SDL validates a pattern *before* it opens
+/// anything (`[a-zA-Z0-9_.-]`, `;` between extensions, or a bare `*`, and
+/// nothing else). So a caller offering more than one filter was refused, and a
+/// refused dialog is one that never appears: the press did nothing at all.
+///
+/// A pattern with no `|` in it at all keeps the old reading — it is the
+/// pattern, and the filter is called "Files". A trailing name with no pattern
+/// is dropped rather than guessed at.
+struct FileFilters {
+    std::vector<std::string> parts;          // name, pattern, name, pattern, …
+    std::vector<SDL_DialogFileFilter> list;  // built once `parts` has stopped growing
+
+    const SDL_DialogFileFilter* data() const { return list.empty() ? nullptr : list.data(); }
+    int count() const { return static_cast<int>(list.size()); }
+};
+
+static FileFilters filtersFrom(const std::string& filterStr)
+{
+    FileFilters f;
+    if (filterStr.empty()) return f;
+
+    for (size_t start = 0;;) {
+        const size_t bar = filterStr.find('|', start);
+        if (bar == std::string::npos) {
+            f.parts.push_back(filterStr.substr(start));
+            break;
+        }
+        f.parts.push_back(filterStr.substr(start, bar - start));
+        start = bar + 1;
+    }
+    if (f.parts.size() == 1) f.parts.insert(f.parts.begin(), "Files");
+    if (f.parts.size() % 2 != 0) f.parts.pop_back();
+
+    f.list.reserve(f.parts.size() / 2);
+    for (size_t i = 0; i + 1 < f.parts.size(); i += 2) {
+        SDL_DialogFileFilter one;
+        one.name = f.parts[i].c_str();
+        one.pattern = f.parts[i + 1].c_str();
+        f.list.push_back(one);
+    }
+    return f;
 }
 
 /// How long a dialog that has already answered once is given to answer again.
@@ -71,7 +132,12 @@ static constexpr Uint64 kExtraCallbackGraceMs = 500;
 /// after this returns would write into a frame that is gone. So the wait is
 /// *bounded* instead of abandoned, and the reason is logged — an application
 /// that has been refused should be able to find out why.
-static void waitForDialog(DialogResult& result)
+///
+/// Answers false when it was refused, which is **not** the same as cancelled:
+/// SDL hands over an empty list for a cancel and a null one for a refusal, and
+/// reporting both as "no files" is what let a broken filter look to the
+/// application exactly like a person pressing Escape.
+static bool waitForDialog(DialogResult& result)
 {
     Uint64 answeredAt = 0;
     for (;;) {
@@ -82,7 +148,7 @@ static void waitForDialog(DialogResult& result)
             const Uint64 now = SDL_GetTicks();
             if (!answeredAt) {
                 answeredAt = now;
-                LOG_WARN("dialog: refused — %s", SDL_GetError());
+                LOG_WARN("dialog: refused — %s", result.error.c_str());
             } else if (now - answeredAt >= kExtraCallbackGraceMs) {
                 break;
             }
@@ -91,6 +157,20 @@ static void waitForDialog(DialogResult& result)
         if (s_tickCb) s_tickCb();
         SDL_Delay(8);
     }
+    return result.haveResult.load(std::memory_order_acquire);
+}
+
+/// The refusal as a JS exception.
+///
+/// A file dialog that will not open is the one thing a caller cannot see for
+/// itself — the return is an empty list either way — so it is thrown rather
+/// than returned, and it carries SDL's own sentence because the caller wrote
+/// the filter SDL is objecting to.
+static JSValue throwRefusal(JSContext* ctx, const DialogResult& result)
+{
+    return JS_ThrowTypeError(ctx, "file dialog refused: %s",
+                             result.error.empty() ? "unknown reason"
+                                                  : result.error.c_str());
 }
 
 static JSValue js_showOpenFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
@@ -106,30 +186,14 @@ static JSValue js_showOpenFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         allowMany = JS_ToBool(ctx, argv[1]);
     }
 
-    SDL_DialogFileFilter sdlFilter;
-    bool hasFilter = false;
-    std::string filterName, filterPattern;
-    if (!filterStr.empty()) {
-        auto pos = filterStr.find('|');
-        if (pos != std::string::npos) {
-            filterName = filterStr.substr(0, pos);
-            filterPattern = filterStr.substr(pos + 1);
-        } else {
-            filterName = "Files";
-            filterPattern = filterStr;
-        }
-        sdlFilter.name = filterName.c_str();
-        sdlFilter.pattern = filterPattern.c_str();
-        hasFilter = true;
-    }
+    const FileFilters filters = filtersFrom(filterStr);
 
     DialogResult result;
     SDL_ShowOpenFileDialog(dialogCallback, &result, s_window,
-                           hasFilter ? &sdlFilter : nullptr,
-                           hasFilter ? 1 : 0,
+                           filters.data(), filters.count(),
                            nullptr, allowMany);
 
-    waitForDialog(result);
+    if (!waitForDialog(result)) return throwRefusal(ctx, result);
 
     JSValue arr = JS_NewArray(ctx);
     for (size_t i = 0; i < result.files.size(); i++) {
@@ -157,7 +221,7 @@ static JSValue js_showOpenFolderDialog(JSContext* ctx, JSValueConst /*this_val*/
                              defaultLoc.empty() ? nullptr : defaultLoc.c_str(),
                              allowMany);
 
-    waitForDialog(result);
+    if (!waitForDialog(result)) return throwRefusal(ctx, result);
 
     JSValue arr = JS_NewArray(ctx);
     for (size_t i = 0; i < result.files.size(); i++) {
@@ -181,30 +245,14 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         if (s) { defaultLoc = normalizeSeparators(s); JS_FreeCString(ctx, s); }
     }
 
-    SDL_DialogFileFilter sdlFilter;
-    bool hasFilter = false;
-    std::string filterName, filterPattern;
-    if (!filterStr.empty()) {
-        auto pos = filterStr.find('|');
-        if (pos != std::string::npos) {
-            filterName = filterStr.substr(0, pos);
-            filterPattern = filterStr.substr(pos + 1);
-        } else {
-            filterName = "Files";
-            filterPattern = filterStr;
-        }
-        sdlFilter.name = filterName.c_str();
-        sdlFilter.pattern = filterPattern.c_str();
-        hasFilter = true;
-    }
+    const FileFilters filters = filtersFrom(filterStr);
 
     DialogResult result;
     SDL_ShowSaveFileDialog(dialogCallback, &result, s_window,
-                            hasFilter ? &sdlFilter : nullptr,
-                            hasFilter ? 1 : 0,
+                            filters.data(), filters.count(),
                             defaultLoc.empty() ? nullptr : defaultLoc.c_str());
 
-    waitForDialog(result);
+    if (!waitForDialog(result)) return throwRefusal(ctx, result);
 
     if (result.files.empty()) return JS_NULL;
     return JS_NewString(ctx, result.files[0].c_str());

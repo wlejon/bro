@@ -33,7 +33,21 @@ if (typeof setDialogAnswer === "function") {
     assert(prompt("Should accept", "good") === "good", "prompt returns default when accept restored");
 }
 
-// 3. Various argument types stringify safely
+// 3. A filter SDL will not accept is an exception, not an empty list.
+//
+// The open/save dialogs themselves cannot be driven from a test — they are
+// modal and native — but a refused filter is answered *before* anything opens,
+// so this half is testable and is the half that used to be silent: the call
+// came back with no files, which is exactly what a cancel looks like, and the
+// application had no way to tell "you wrote a bad filter" from "somebody
+// pressed Escape". `*` is only a pattern on its own, so `png*` is refused.
+let refused = null;
+try { showOpenFileDialog("Pictures|png*"); }
+catch (e) { refused = e; }
+assert(refused !== null, "an invalid filter pattern throws");
+assert(/refused/.test(String(refused.message)), "the refusal says so: " + refused.message);
+
+// 4. Various argument types stringify safely
 assert(confirm(12345) === true, "confirm with number argument");
 assert(confirm(null) === true, "confirm with null argument");
 assert(confirm(undefined) === true, "confirm with undefined argument");

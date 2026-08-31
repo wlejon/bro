@@ -52,7 +52,10 @@ class Dialogs {
   /**
    * Opens a native modal file picker dialog.
    *
-   * @param {string} [filter] - Filter pattern string (e.g. "Images|png;jpg")
+   * @param {string} [filter] - Name and pattern, alternating, for one filter or
+   *   several (e.g. "Images|png;jpg" or "Images|png;jpg|All files|*"). A
+   *   pattern is `[a-zA-Z0-9_.-]` extensions separated by `;`, or a bare `*`;
+   *   anything else is refused before the dialog opens and throws.
    * @param {boolean} [allowMultiple] - Whether to allow multiple file selection
    * @returns {Array<string>} Array of selected absolute file paths
    */
@@ -70,7 +73,9 @@ class Dialogs {
   /**
    * Opens a native modal file save dialog.
    *
-   * @param {string} [filter] - Filter pattern string (e.g. "JSON|json")
+   * @param {string} [filter] - Name and pattern, alternating, for one filter or
+   *   several (e.g. "JSON|json" or "JSON|json|All files|*"). Refused patterns
+   *   throw.
    * @param {string} [defaultName] - Default location or file path
    * @returns {string|null} Selected file path string or null if cancelled
    */
