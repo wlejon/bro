@@ -540,6 +540,18 @@ bot.setTarget(10, 5);
 bot.clearTarget();
 
 /**
+ * Follow an externally planned route verbatim: the waypoints are walked in
+ * order with the usual steering/avoidance/dynamics, and are never re-planned
+ * by NavGrid A* — the embedder owns the route (its own pathfinder, terrain
+ * costs the grid can't express), the agent owns the movement. The final
+ * waypoint becomes the target for hasTarget/atTarget; an empty array is
+ * clearTarget(). A later setTarget at the route's own goal keeps the route.
+ * Routes are not captured by snapshots — re-issue them after applySnapshot.
+ * @param {Array<{x:number,z:number}|[number,number]>} waypoints - world XZ, in order
+ */
+bot.setPath([{ x: 0, z: 8 }, { x: 8, z: 8 }]);
+
+/**
  * Advance the agent by dt seconds. Moves along the current path
  * using steering behaviors (seek for intermediate waypoints, arrive for final).
  * @param {number} dt - Delta time in seconds

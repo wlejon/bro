@@ -2528,12 +2528,60 @@ void AIBindings::install(JSContext* ctx) {
                     [](AgentData* d, double x, double z) { d->agent.setTarget((float)x, (float)z); })
                 .method("clearTarget",
                     [](AgentData* d) { d->agent.clearTarget(); })
+                // setPath(waypoints): follow an externally planned route
+                // verbatim — the waypoints are walked in order and never
+                // re-planned by NavGrid A* (the embedder owns the route; the
+                // agent owns steering/avoidance/dynamics). Each waypoint is
+                // {x, z} or [x, z]; the final one becomes the target for
+                // hasTarget/atTarget. An empty array clears the target.
+                .method_raw("setPath",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<AgentData>(ctx, this_val);
+                        if (!d || argc < 1 || !JS_IsArray(argv[0]))
+                            return JS_ThrowTypeError(ctx, "setPath(waypoints: [{x,z}|[x,z], ...])");
+                        int64_t n = 0;
+                        JSValue lenv = JS_GetPropertyStr(ctx, argv[0], "length");
+                        JS_ToInt64(ctx, &n, lenv);
+                        JS_FreeValue(ctx, lenv);
+                        std::vector<bromath::Vec2> path;
+                        path.reserve((size_t)n);
+                        for (int64_t i = 0; i < n; i++) {
+                            JSValue wp = JS_GetPropertyUint32(ctx, argv[0], (uint32_t)i);
+                            double x = 0, z = 0;
+                            if (JS_IsArray(wp)) {
+                                JSValue xv = JS_GetPropertyUint32(ctx, wp, 0);
+                                JSValue zv = JS_GetPropertyUint32(ctx, wp, 1);
+                                JS_ToFloat64(ctx, &x, xv);
+                                JS_ToFloat64(ctx, &z, zv);
+                                JS_FreeValue(ctx, xv);
+                                JS_FreeValue(ctx, zv);
+                            } else if (JS_IsObject(wp)) {
+                                JSValue xv = JS_GetPropertyStr(ctx, wp, "x");
+                                JSValue zv = JS_GetPropertyStr(ctx, wp, "z");
+                                JS_ToFloat64(ctx, &x, xv);
+                                JS_ToFloat64(ctx, &z, zv);
+                                JS_FreeValue(ctx, xv);
+                                JS_FreeValue(ctx, zv);
+                            } else {
+                                JS_FreeValue(ctx, wp);
+                                return JS_ThrowTypeError(ctx, "setPath: waypoint %d must be {x,z} or [x,z]", (int)i);
+                            }
+                            JS_FreeValue(ctx, wp);
+                            path.push_back({(float)x, (float)z});
+                        }
+                        d->agent.setPath(std::move(path));
+                        return JS_UNDEFINED;
+                    }, 1)
                 .method("update",
                     [](AgentData* d, double dt) { d->agent.update((float)dt); })
                 .method("setPosition",
                     [](AgentData* d, double x, double z) { d->agent.setPosition((float)x, (float)z); })
                 .method("setYaw",
                     [](AgentData* d, double yaw) { d->agent.setYaw((float)yaw); })
+                // Velocity is dynamics state (ORCA reciprocity reads it) — an
+                // embedder restoring agents from its own save seeds it here.
+                .method("setVelocity",
+                    [](AgentData* d, double vx, double vz) { d->agent.setVelocity((float)vx, (float)vz); })
                 .method("setSpeed",
                     [](AgentData* d, double s) { d->agent.setSpeed((float)s); })
                 .method("setRadius",
@@ -2588,6 +2636,11 @@ void AIBindings::install(JSContext* ctx) {
                 .get("aimPitch", [](AgentData* d) -> double { return d->agent.aimPitch(); })
                 .get("hasTarget", [](AgentData* d) -> bool { return d->agent.hasTarget(); })
                 .get("atTarget", [](AgentData* d) -> bool { return d->agent.atTarget(); })
+                // Index of the waypoint the path follower is currently walking
+                // toward (see .path) — lets an embedder that supplied the route
+                // via setPath consume its own mirror of it as the agent passes
+                // each waypoint.
+                .get("currentWaypoint", [](AgentData* d) -> double { return d->agent.currentWaypoint(); })
                 .get("unit",
                     [](AgentData* d, JSContext* ctx) -> JSValue {
                         // Lazily allocate a proxy per AgentData. The proxy is
