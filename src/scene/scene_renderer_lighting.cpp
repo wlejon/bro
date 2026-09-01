@@ -116,6 +116,12 @@ void SceneRenderer::uploadLights(const std::vector<LightNode*>& lights,
     if (locs.shadowBias >= 0 && shadowTileCount_ > 0) {
         glUniform2fv(locs.shadowBias, shadowTileCount_, &shadowBias_[0][0]);
     }
+    if (locs.shadowTexelWorld >= 0 && shadowTileCount_ > 0) {
+        glUniform2fv(locs.shadowTexelWorld, shadowTileCount_, &shadowTexelWorld_[0][0]);
+    }
+    if (locs.shadowDepthParams >= 0 && shadowTileCount_ > 0) {
+        glUniform3fv(locs.shadowDepthParams, shadowTileCount_, &shadowDepthParams_[0][0]);
+    }
     if (locs.lightShadowSlot >= 0) {
         // Always send 32 slots so any light index is safe to read; -1 default.
         glUniform1iv(locs.lightShadowSlot, 32, lightShadowSlot_);

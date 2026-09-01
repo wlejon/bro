@@ -628,13 +628,23 @@ JSValue js_sg_setWind(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// setShadowQuality({atlasSize, pcfTaps}) — atlas side length and PCF kernel.
+// setShadowQuality({atlasSize, pcfTaps}) or setShadowQuality(atlasSize,
+// pcfTaps) — atlas side length and PCF grid side (1, 3 or 5). The
+// positional form is what every workshop app was already calling; until now
+// it was silently ignored.
 JSValue js_sg_setShadowQuality(JSContext* ctx, JSValueConst this_val,
                                        int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
-    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
-    int atlasSize = (int)qjsbind::get_prop_number(ctx, argv[0], "atlasSize", 4096.0);
-    int pcfTaps   = (int)qjsbind::get_prop_number(ctx, argv[0], "pcfTaps",   3.0);
+    if (!g || argc < 1) return JS_UNDEFINED;
+    int atlasSize = 4096, pcfTaps = 3;
+    if (JS_IsObject(argv[0])) {
+        atlasSize = (int)qjsbind::get_prop_number(ctx, argv[0], "atlasSize", 4096.0);
+        pcfTaps   = (int)qjsbind::get_prop_number(ctx, argv[0], "pcfTaps",   3.0);
+    } else {
+        double v = 0.0;
+        if (JS_ToFloat64(ctx, &v, argv[0]) == 0 && v > 0.0) atlasSize = (int)v;
+        if (argc >= 2 && JS_ToFloat64(ctx, &v, argv[1]) == 0 && v > 0.0) pcfTaps = (int)v;
+    }
     g->setShadowQuality(atlasSize, pcfTaps);
     return JS_UNDEFINED;
 }

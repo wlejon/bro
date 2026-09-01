@@ -169,6 +169,8 @@ void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
     l.shadowBias           = U("uShadowBias");
     l.shadowAtlasTexel     = U("uShadowAtlasTexel");
     l.shadowPCFTaps        = U("uShadowPCFTaps");
+    l.shadowTexelWorld     = U("uShadowTexelWorld");
+    l.shadowDepthParams    = U("uShadowDepthParams");
     l.iblEnabled           = U("uIBLEnabled");
     l.iblIrradiance        = U("uIBLIrradiance");
     l.iblPrefilter         = U("uIBLPrefilter");

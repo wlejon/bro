@@ -62,21 +62,26 @@ public:
     bool castsShadow() const { return castsShadow_; }
     void setCastsShadow(bool b) { castsShadow_ = b; }
 
-    /// Constant depth bias added to the shadow comparison reference value
-    /// (in light-clip [0,1] depth space). Tweak up if acne appears, down if
-    /// peter-panning. Sensible default ~5e-4 for directional, slightly more
-    /// for spot/point. Negative values are allowed.
+    /// Extra constant depth bias added to the shadow comparison reference
+    /// value, in light-clip [0,1] depth space, on top of the renderer's own
+    /// texel-scaled slope bias. Default 0: the automatic bias is sized from
+    /// the shadow texel the fit produced, so it stays "about a texel" at any
+    /// scale, where a fixed clip-space constant was a metre over a kilometre
+    /// depth range and nothing over a metre. Negative values are allowed.
     float shadowBias() const { return shadowBias_; }
     void setShadowBias(float b) { shadowBias_ = b; }
 
-    /// World-space distance to push shadow-receiving fragments along their
-    /// normal before sampling the shadow map. Cheap fix for self-shadow
-    /// acne on curved surfaces; default 0.03.
+    /// World-space floor on the distance shadow-receiving fragments are
+    /// pushed along their normal before sampling the shadow map. The
+    /// renderer adds a texel-proportional offset of its own (larger at
+    /// grazing incidence); this is an absolute minimum for thin two-sided
+    /// geometry that needs one. Default 0.03.
     float shadowNormalBias() const { return shadowNormalBias_; }
     void setShadowNormalBias(float b) { shadowNormalBias_ = b; }
 
     /// Number of cascades for directional CSM. Clamped to [1, 4]; ignored
-    /// for non-directional lights. 1 = single map (no cascading); higher
+    /// for non-directional lights and under an orthographic camera (one
+    /// on-screen scale, so one map). 1 = single map (no cascading); higher
     /// gives sharper near-camera shadows at the cost of one atlas tile each.
     int cascadeCount() const { return cascadeCount_; }
     void setCascadeCount(int n) { cascadeCount_ = (n < 1) ? 1 : (n > 4 ? 4 : n); }
@@ -96,7 +101,7 @@ private:
     float innerAngle_ = 0.35f;  // ~20 deg
     float outerAngle_ = 0.52f;  // ~30 deg
     bool castsShadow_ = false;
-    float shadowBias_ = 5e-4f;
+    float shadowBias_ = 0.0f;
     float shadowNormalBias_ = 0.03f;
     int   cascadeCount_ = 4;
     float cascadeSplitLambda_ = 0.5f;

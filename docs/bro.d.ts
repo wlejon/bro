@@ -624,11 +624,10 @@ interface AmbientConfig {
 }
 
 interface ShadowQualityConfig {
-  resolution?: number;
-  cascades?: number;
-  maxDistance?: number;
-  bias?: number;
-  normalBias?: number;
+  /** Side of the square shadow depth atlas in texels (default 4096). */
+  atlasSize?: number;
+  /** PCF grid side: 1, 3 (default) or 5 hardware-bilinear taps per axis. */
+  pcfTaps?: number;
 }
 
 interface ShadowCacheConfig {

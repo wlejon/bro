@@ -241,9 +241,15 @@ public:
     void resetWindTime() { windTime_ = 0.0f; }
     float windTime() const { return windTime_; }
 
+    /// `atlasSize` is the side of the square depth atlas (default 4096).
+    /// `pcfTaps` is the side of the receiver's PCF grid: 1 (one hardware-
+    /// bilinear tap), 3 (3x3 taps, a 4-texel tent — default) or 5 (5x5 taps,
+    /// softer). Tile size is NOT set here: the atlas is cut into a 1x1, 2x2
+    /// or 4x4 grid per frame from how many tiles the lights ask for, so one
+    /// sun over an orthographic camera gets the whole atlas.
     void setShadowQuality(int atlasSize, int pcfTaps) {
-        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 8192;
-        shadowPCFTaps_ = (pcfTaps == 1) ? 1 : 3;
+        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 4096;
+        shadowPCFTaps_ = (pcfTaps >= 5) ? 5 : (pcfTaps >= 3) ? 3 : 1;
         shadowAtlasDirty_ = true;
     }
     int shadowAtlasSize() const { return shadowAtlasSize_; }
@@ -631,6 +637,8 @@ private:
         GLint shadowBias = -1;
         GLint shadowAtlasTexel = -1;
         GLint shadowPCFTaps = -1;
+        GLint shadowTexelWorld = -1;
+        GLint shadowDepthParams = -1;
         GLint iblEnabled = -1;
         GLint iblIrradiance = -1;
         GLint iblPrefilter = -1;
@@ -735,10 +743,14 @@ private:
     // the depth-only shadow program. Leaves shadowAtlasFBO_ unbound on exit.
     void renderShadowPass();
 
-    // Compute the world-space AABB enclosing all shadow-casting meshes.
-    // Used to fit directional shadow frustums; returns empty BBox if none.
-    struct WorldAABB { float min[3]; float max[3]; bool empty; };
-    WorldAABB computeShadowCasterBounds() const;
+    // World-space AABBs of (a) every shadow caster and (b) every lit mesh
+    // that receives shadows (casters included). The directional fit clips
+    // the camera's visible volume against `receivers` — that is what makes
+    // a 1400 m ortho far plane over a 60 m-tall scene fit to the 60 m — and
+    // stretches its depth range over `casters` so an off-screen caster still
+    // lands in the map. Either box may come back empty (bromath::aisEmpty).
+    void computeShadowBounds(bromath::AABB3& casters,
+                             bromath::AABB3& receivers) const;
 
     // Render a ringed-disc billboard for one light. Used by the editor-
     // affordance pass gated on showLightIcons_.
@@ -1088,9 +1100,13 @@ private:
     // unshadowed.
     static constexpr int kMaxShadowTiles = 16;
 
-    int shadowAtlasSize_ = 2048;
-    int shadowPCFTaps_ = 1;       // 1 (hardware PCF) or 3 (3x3 PCF)
+    int shadowAtlasSize_ = 4096;
+    int shadowPCFTaps_ = 3;       // PCF grid side: 1, 3 or 5 (see setShadowQuality)
     bool shadowAtlasDirty_ = true;
+    // Atlas grid for the current frame: 1, 2 or 4 tiles per side, chosen by
+    // prepareShadows from the tile demand (1 -> whole atlas, <=4 -> quarters,
+    // else 16ths). Changing it moves every tile, so it invalidates the cache.
+    int shadowGridDim_ = 4;
 
     GLuint shadowProgram_ = 0;
     GLint  shadowUMVP_ = -1;
@@ -1108,6 +1124,16 @@ private:
     float shadowMatrixCamRel_[kMaxShadowTiles][16] = {};
     float shadowAtlasRect_[kMaxShadowTiles][4]     = {};   // origin.xy, size.xy in [0,1]
     float shadowBias_[kMaxShadowTiles][2]          = {};   // const, normal-bias world units
+    // World size of one shadow texel at the receiver: .x constant (ortho
+    // directional tiles), .y per metre of light distance (spot/point tiles,
+    // whose texels grow with distance). The FS scales its normal offset and
+    // slope bias by this, so the bias is always "about a texel" whatever the
+    // fit came out at.
+    float shadowTexelWorld_[kMaxShadowTiles][2]    = {};
+    // (near, far, isOrtho) of the tile's projection, so the FS can turn a
+    // world-unit depth bias into [0,1] depth: linear for ortho, 1/z for the
+    // perspective tiles.
+    float shadowDepthParams_[kMaxShadowTiles][3]   = {};
 
     // Per-light shadow slot (-1 if unshadowed). Indexed by light index.
     int lightShadowSlot_[32] = {};

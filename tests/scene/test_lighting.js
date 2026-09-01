@@ -65,7 +65,9 @@ if (!scene) {
     assert(Math.abs(d[0] - 1) < 0.01 && Math.abs(d[1]) < 0.01, 'direction setter');
 
     // Shadow tuning knobs (directional-specific + shared).
-    assert(Math.abs(sun.shadowBias - 5e-4) < 1e-6, 'shadowBias default');
+    // 0: the renderer sizes its own depth bias from the shadow texel; this
+    // is an extra constant on top (see LightNode::shadowBias).
+    assert(Math.abs(sun.shadowBias) < 1e-6, 'shadowBias default');
     assert(Math.abs(sun.shadowNormalBias - 0.03) < 1e-6, 'shadowNormalBias default');
     assert(sun.cascadeCount === 4, 'cascadeCount default');
     assert(Math.abs(sun.cascadeSplitLambda - 0.5) < 1e-6, 'cascadeSplitLambda default');

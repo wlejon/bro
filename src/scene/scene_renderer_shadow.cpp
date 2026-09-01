@@ -150,28 +150,11 @@ void SceneRenderer::destroyShadowAtlas() {
     invalidateShadowCache();
 }
 
-SceneRenderer::WorldAABB SceneRenderer::computeShadowCasterBounds() const {
-    WorldAABB out{};
-    out.empty = true;
-    out.min[0] = out.min[1] = out.min[2] =  1e30f;
-    out.max[0] = out.max[1] = out.max[2] = -1e30f;
+void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
+                                        bromath::AABB3& receivers) const {
+    casters = bromath::aempty3();
+    receivers = bromath::aempty3();
 
-    auto expand = [&](const float lo[3], const float hi[3]) {
-        for (int c = 0; c < 8; ++c) {
-            float p[3] = {
-                (c & 1) ? hi[0] : lo[0],
-                (c & 2) ? hi[1] : lo[1],
-                (c & 4) ? hi[2] : lo[2],
-            };
-            out.min[0] = std::min(out.min[0], p[0]);
-            out.min[1] = std::min(out.min[1], p[1]);
-            out.min[2] = std::min(out.min[2], p[2]);
-            out.max[0] = std::max(out.max[0], p[0]);
-            out.max[1] = std::max(out.max[1], p[1]);
-            out.max[2] = std::max(out.max[2], p[2]);
-            out.empty = false;
-        }
-    };
     auto walk = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->renderVisible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
@@ -186,39 +169,131 @@ SceneRenderer::WorldAABB SceneRenderer::computeShadowCasterBounds() const {
                 // geometry along the light direction past the bind-pose
                 // AABB, and the directional depth range is fit from these
                 // bounds.
-                const auto& bb = m->localBounds();
                 const float cm = m->cullMargin();
-                const Mat4& M = m->worldMatrix();
-                for (int c = 0; c < 8; ++c) {
-                    Vec3 lp{
-                        (c & 1) ? bb.max.x : bb.min.x,
-                        (c & 2) ? bb.max.y : bb.min.y,
-                        (c & 4) ? bb.max.z : bb.min.z,
-                    };
-                    Vec3 wp = bromath::mtransformPoint(M, lp);
-                    out.min[0] = std::min(out.min[0], wp.x - cm);
-                    out.min[1] = std::min(out.min[1], wp.y - cm);
-                    out.min[2] = std::min(out.min[2], wp.z - cm);
-                    out.max[0] = std::max(out.max[0], wp.x + cm);
-                    out.max[1] = std::max(out.max[1], wp.y + cm);
-                    out.max[2] = std::max(out.max[2], wp.z + cm);
-                    out.empty = false;
-                }
+                bromath::AABB3 wb = bromath::atransform(m->localBounds(), m->worldMatrix());
+                wb.min -= Vec3{cm, cm, cm};
+                wb.max += Vec3{cm, cm, cm};
+                if (m->castsShadow()) casters = bromath::amerge(casters, wb);
+                if (m->receivesShadow() || m->castsShadow())
+                    receivers = bromath::amerge(receivers, wb);
             }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
             auto* m = static_cast<InstancedMeshNode*>(n);
             float wlo[3], whi[3];
-            if (m->computeWorldInstanceBounds(wlo, whi)) {
+            if (!m->effectiveUnlit() && m->computeWorldInstanceBounds(wlo, whi)) {
                 const float cm = m->cullMargin();
-                for (int i = 0; i < 3; ++i) { wlo[i] -= cm; whi[i] += cm; }
-                expand(wlo, whi);
+                bromath::AABB3 wb{{wlo[0] - cm, wlo[1] - cm, wlo[2] - cm},
+                                  {whi[0] + cm, whi[1] + cm, whi[2] + cm}};
+                if (m->castsShadow()) casters = bromath::amerge(casters, wb);
+                if (m->receivesShadow() || m->castsShadow())
+                    receivers = bromath::amerge(receivers, wb);
             }
         }
         for (auto* c : n->children()) self(self, c);
     };
     walk(walk, graph_.root_.get());
-    return out;
 }
+
+namespace {
+
+// A half-space: inside where dot(n, p) + d >= 0.
+struct HalfSpace { Vec3 n; float d; };
+
+// Clip the segment a->b against a set of half-spaces (Cyrus–Beck). Returns
+// false when nothing of it survives; otherwise a/b are moved to the clipped
+// endpoints.
+bool clipSegment(Vec3& a, Vec3& b, const HalfSpace* hs, int count) {
+    float t0 = 0.0f, t1 = 1.0f;
+    const Vec3 ab = b - a;
+    for (int i = 0; i < count; ++i) {
+        const float da = bromath::vdot(hs[i].n, a) + hs[i].d;
+        const float db = bromath::vdot(hs[i].n, b) + hs[i].d;
+        if (da < 0.0f && db < 0.0f) return false;
+        if (da >= 0.0f && db >= 0.0f) continue;
+        const float t = da / (da - db);   // crossing parameter
+        if (da < 0.0f) t0 = std::max(t0, t); else t1 = std::min(t1, t);
+        if (t0 > t1) return false;
+    }
+    const Vec3 na = a + ab * t0;
+    const Vec3 nb = a + ab * t1;
+    a = na; b = nb;
+    return true;
+}
+
+bool insideAll(const Vec3& p, const HalfSpace* hs, int count) {
+    for (int i = 0; i < count; ++i)
+        if (bromath::vdot(hs[i].n, p) + hs[i].d < 0.0f) return false;
+    return true;
+}
+
+// Corner layout shared by the fit: index k*4 + j, k = 0 near / 1 far,
+// j bit 0 = +x side, j bit 1 = +y side.
+constexpr int kBoxEdges[12][2] = {
+    {0, 1}, {1, 3}, {3, 2}, {2, 0},   // near ring
+    {4, 5}, {5, 7}, {7, 6}, {6, 4},   // far ring
+    {0, 4}, {1, 5}, {3, 7}, {2, 6},   // near -> far
+};
+constexpr int kBoxFaces[6][4] = {
+    {0, 1, 3, 2}, {4, 5, 7, 6},       // near, far
+    {0, 2, 6, 4}, {1, 3, 7, 5},       // -x, +x
+    {0, 1, 5, 4}, {2, 3, 7, 6},       // -y, +y
+};
+
+// The vertex set of (convex frustum given by its 8 corners) ∩ (AABB): the
+// corners of each inside the other, plus every edge of each clipped to the
+// other. Every vertex of an intersection of two convex polytopes is one of
+// those, so bounding this set bounds the intersection exactly. Returns the
+// number of points written (0 = disjoint). `out` needs room for 64.
+int clipFrustumToBox(const Vec3 corners[8], const bromath::AABB3& box, Vec3* out) {
+    // Frustum half-spaces from its faces, oriented toward the centroid.
+    Vec3 centroid{0, 0, 0};
+    for (int i = 0; i < 8; ++i) centroid += corners[i];
+    centroid *= 0.125f;
+    HalfSpace fh[6]; int fhCount = 0;
+    for (int f = 0; f < 6; ++f) {
+        const Vec3& a = corners[kBoxFaces[f][0]];
+        const Vec3& b = corners[kBoxFaces[f][1]];
+        const Vec3& c = corners[kBoxFaces[f][2]];
+        const Vec3& d = corners[kBoxFaces[f][3]];
+        // Two triangles' normals summed: robust to one degenerate corner
+        // pair (a perspective near face at a tiny near plane).
+        Vec3 n = bromath::vcross(b - a, c - a) + bromath::vcross(c - a, d - a);
+        const float L = bromath::vlen(n);
+        if (L < 1e-12f) continue;               // degenerate face: no constraint
+        n *= 1.0f / L;
+        float dd = -bromath::vdot(n, a);
+        if (bromath::vdot(n, centroid) + dd < 0.0f) { n = -n; dd = -dd; }
+        fh[fhCount++] = {n, dd};
+    }
+    const HalfSpace bh[6] = {
+        {{ 1, 0, 0}, -box.min.x}, {{-1, 0, 0},  box.max.x},
+        {{ 0, 1, 0}, -box.min.y}, {{ 0,-1, 0},  box.max.y},
+        {{ 0, 0, 1}, -box.min.z}, {{ 0, 0,-1},  box.max.z},
+    };
+    Vec3 bc[8];
+    for (int c = 0; c < 8; ++c) {
+        bc[c] = Vec3{(c & 1) ? box.max.x : box.min.x,
+                     (c & 2) ? box.max.y : box.min.y,
+                     (c & 4) ? box.max.z : box.min.z};
+    }
+
+    int n = 0;
+    for (int i = 0; i < 8; ++i)
+        if (insideAll(corners[i], bh, 6)) out[n++] = corners[i];
+    for (int i = 0; i < 8; ++i)
+        if (insideAll(bc[i], fh, fhCount)) out[n++] = bc[i];
+    for (const auto& e : kBoxEdges) {
+        Vec3 a = corners[e[0]], b = corners[e[1]];
+        if (clipSegment(a, b, bh, 6)) { out[n++] = a; out[n++] = b; }
+    }
+    for (const auto& e : kBoxEdges) {
+        Vec3 a = bc[e[0]], b = bc[e[1]];
+        if (clipSegment(a, b, fh, fhCount)) { out[n++] = a; out[n++] = b; }
+    }
+    return n;
+}
+
+}  // namespace
 
 void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     // Reset per-frame shadow state. Default every light to "no shadow".
@@ -292,10 +367,11 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         shadowCustomCasters_.empty() && shadowSkinnedCustomCasters_.empty() &&
         shadowInstancedCasters_.empty() && shadowTubeCasters_.empty()) return;
 
-    // Scene bounds for fitting directional frustums. CSM uses view-frustum
-    // slices instead — added in a follow-up commit.
-    WorldAABB bounds = computeShadowCasterBounds();
-    if (bounds.empty) return;
+    // Scene bounds: casters stretch the directional depth range; receivers
+    // clip the camera volume the directional fit covers.
+    bromath::AABB3 casterBounds, receiverBounds;
+    computeShadowBounds(casterBounds, receiverBounds);
+    if (bromath::aisEmpty(casterBounds)) return;
 
     // Bias matrix maps NDC to UV [0,1]. XY always need the half-scale-and-
     // offset, but Z only does under the conventional [-1,1] mapping: with
@@ -307,12 +383,40 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     Mat4 bias = bromath::mmul(bromath::mtranslate({0.5f, 0.5f, zo}),
                               bromath::mscale({0.5f, 0.5f, zs}));
 
-    // Allocate atlas tiles in a square grid: ceil(sqrt(MAX)) x ceil(sqrt(MAX)).
-    // For MAX=16 this gives a clean 4x4. Each tile gets equal area.
-    const int gridDim = 4;                     // 4x4 = 16 tiles
-    const float tileUV = 1.0f / (float)gridDim; // 0.25 per tile
+    // Atlas grid from the tile demand: one sun over an ortho camera (or a
+    // single-cascade sun) takes the WHOLE atlas, up to four tiles take a
+    // quarter each, anything more falls back to 16ths. A 512 px tile — the
+    // old fixed 4x4 of a 2048 atlas — is what made every shadow a blob: at
+    // 64 m across the view that is a 6 m texel. The demand is an upper
+    // bound on what gets allocated (a point light that no longer fits is
+    // skipped), so the grid always has room.
+    int demand = 0;
+    for (auto* L : lights) {
+        if (!L || !L->castsShadow()) continue;
+        switch (L->kind()) {
+        case LightNode::Kind::Directional:
+            demand += graph_.cameraIsPerspective_ ? L->cascadeCount() : 1; break;
+        case LightNode::Kind::Spot:  demand += 1; break;
+        case LightNode::Kind::Point: demand += 6; break;
+        }
+    }
+    const int gridDim = demand <= 1 ? 1 : (demand <= 4 ? 2 : 4);
+    if (gridDim != shadowGridDim_) {
+        // Every tile moved: cached texels are at the wrong place.
+        shadowGridDim_ = gridDim;
+        invalidateShadowCache();
+        shadowAtlasNeedsClear_ = true;
+    }
+    const float tileUV = 1.0f / (float)gridDim;
+    const int   tilePx = shadowAtlasSize_ / gridDim;
 
-    auto bakeTile = [&](int slot, const Mat4& lightProjView, LightNode* L) {
+    // texelConst / texelPerDist: world size of one shadow texel at the
+    // receiver — a constant for an ortho tile, per metre of light distance
+    // for a perspective one. zNear/zFar/ortho describe the tile's depth
+    // mapping so the FS can express a world-unit bias in [0,1] depth.
+    auto bakeTile = [&](int slot, const Mat4& lightProjView, LightNode* L,
+                        float texelConst, float texelPerDist,
+                        float zNear, float zFar, bool ortho) {
         // shadowMatrixCamRel = bias * proj * view * translate(cameraEye)
         // so the FS can multiply directly against vWorldPos (camera-relative).
         Mat4 t = bromath::mtranslate({graph_.cameraEye_.x, graph_.cameraEye_.y, graph_.cameraEye_.z});
@@ -329,13 +433,16 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
 
         shadowBias_[slot][0] = L->shadowBias();
         shadowBias_[slot][1] = L->shadowNormalBias();
+        shadowTexelWorld_[slot][0] = texelConst;
+        shadowTexelWorld_[slot][1] = texelPerDist;
+        shadowDepthParams_[slot][0] = zNear;
+        shadowDepthParams_[slot][1] = zFar;
+        shadowDepthParams_[slot][2] = ortho ? 1.0f : 0.0f;
 
         shadowTileLight_[slot] = L;
     };
 
     // For each shadow-casting light, allocate slot(s) and build matrices.
-    // Spot/Point are deferred to follow-up commits — only Directional fits
-    // the scene-bounds-ortho path here.
     for (int i = 0; i < (int)lights.size() && i < 32; ++i) {
         LightNode* L = lights[i];
         if (!L || !L->castsShadow()) continue;
@@ -352,12 +459,14 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             Vec3 sBasis{graph_.viewMatrix_.at(0, 0), graph_.viewMatrix_.at(0, 1), graph_.viewMatrix_.at(0, 2)};
             Vec3 uBasis{graph_.viewMatrix_.at(1, 0), graph_.viewMatrix_.at(1, 1), graph_.viewMatrix_.at(1, 2)};
             Vec3 fBasis{-graph_.viewMatrix_.at(2, 0), -graph_.viewMatrix_.at(2, 1), -graph_.viewMatrix_.at(2, 2)};
+            const bool persp = graph_.cameraIsPerspective_;
 
             // Number of cascades. Cap to remaining tile budget so we don't
             // blow past the atlas — better to drop late cascades than to
-            // silently corrupt allocations.
+            // silently corrupt allocations. An orthographic camera has one
+            // on-screen scale, so depth slices buy it nothing: one map.
             int N = L->cascadeCount();
-            if (graph_.cameraIsPerspective_ == false) N = 1;  // ortho cam = no need for splits
+            if (!persp) N = 1;
             int budgetLeft = kMaxShadowTiles - shadowTileCount_;
             if (N > budgetLeft) N = budgetLeft;
             if (N <= 0) continue;
@@ -386,10 +495,37 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             }
             // The last cascade absorbs anything farther — already 1e30f from reset.
 
-            // Per-cascade fit: find the world-space corners of the camera
-            // sub-frustum [splitFar[c], splitFar[c+1]], then bound them
-            // with a sphere (rotation-stable; eliminates shimmer when the
-            // camera turns) and fit an ortho frustum in the light's view.
+            // A fixed light basis (eye at the world origin, looking along d)
+            // so the projection window can be snapped to whole texels in a
+            // frame that does not move with the camera. Looking AT the
+            // cascade centre — the old way — puts the centre at light-space
+            // (0,0) every frame, so snapping it snapped nothing and the map
+            // shimmered under every pan.
+            Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
+            Mat4 lightRot = bromath::mlookAt(Vec3{0, 0, 0}, d, up);
+
+            // Caster extent along the light, in world units, for the depth
+            // range: casters outside the fitted sphere (behind the camera,
+            // above the view) must still write depth or they cast nothing
+            // onto what IS in view.
+            float castMinD =  1e30f, castMaxD = -1e30f;
+            for (int c = 0; c < 8; ++c) {
+                Vec3 p{(c & 1) ? casterBounds.max.x : casterBounds.min.x,
+                       (c & 2) ? casterBounds.max.y : casterBounds.min.y,
+                       (c & 4) ? casterBounds.max.z : casterBounds.min.z};
+                float t = bromath::vdot(p, d);
+                castMinD = std::min(castMinD, t);
+                castMaxD = std::max(castMaxD, t);
+            }
+
+            // Per-cascade fit: the world-space corners of the camera
+            // sub-volume [splitFar[c], splitFar[c+1]] — a frustum slice for
+            // a perspective camera, a box for an orthographic one — CLIPPED
+            // to the receiver bounds (the exact convex intersection), then
+            // bounded with a sphere (rotation-stable) and fit as an ortho
+            // frustum in light space. The clip is the whole story for an
+            // ortho camera: its volume is near..far deep whatever is in it,
+            // and an unclipped 1400 m slab over a 60 m scene is a 6 m texel.
             for (int c = 0; c < N; ++c) {
                 float zNear = splitFar[c];
                 float zFar  = splitFar[c + 1];
@@ -397,91 +533,70 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
 
                 Vec3 corners[8];
                 for (int k = 0; k < 2; ++k) {
-                    float z  = (k == 0) ? zNear : zFar;
-                    float hh = z * tanH;
-                    float hw = hh * graph_.cameraAspect_;
-                    Vec3 cz{graph_.cameraEye_.x + fBasis.x * z,
-                            graph_.cameraEye_.y + fBasis.y * z,
-                            graph_.cameraEye_.z + fBasis.z * z};
+                    float z = (k == 0) ? zNear : zFar;
+                    float hw, hh, cx = 0.0f, cy = 0.0f;
+                    if (persp) {
+                        hh = z * tanH;
+                        hw = hh * graph_.cameraAspect_;
+                    } else {
+                        hw = 0.5f * (graph_.cameraOrthoR_ - graph_.cameraOrthoL_);
+                        hh = 0.5f * (graph_.cameraOrthoT_ - graph_.cameraOrthoB_);
+                        cx = 0.5f * (graph_.cameraOrthoR_ + graph_.cameraOrthoL_);
+                        cy = 0.5f * (graph_.cameraOrthoT_ + graph_.cameraOrthoB_);
+                    }
+                    Vec3 cz = graph_.cameraEye_ + fBasis * z;
                     for (int j = 0; j < 4; ++j) {
                         float xs = (j & 1) ? 1.0f : -1.0f;
                         float ys = (j & 2) ? 1.0f : -1.0f;
-                        corners[k*4 + j] = Vec3{
-                            cz.x + sBasis.x * (hw * xs) + uBasis.x * (hh * ys),
-                            cz.y + sBasis.y * (hw * xs) + uBasis.y * (hh * ys),
-                            cz.z + sBasis.z * (hw * xs) + uBasis.z * (hh * ys)};
+                        corners[k*4 + j] = cz + sBasis * (cx + hw * xs)
+                                              + uBasis * (cy + hh * ys);
                     }
                 }
 
-                Vec3 center{0,0,0};
-                for (int k = 0; k < 8; ++k) {
-                    center.x += corners[k].x;
-                    center.y += corners[k].y;
-                    center.z += corners[k].z;
+                Vec3 pts[64];
+                int np = 0;
+                if (!bromath::aisEmpty(receiverBounds))
+                    np = clipFrustumToBox(corners, receiverBounds, pts);
+                if (np == 0) {
+                    // Nothing that receives shadow in this slice (or no
+                    // bounds at all): fall back to the raw slice.
+                    for (int k = 0; k < 8; ++k) pts[k] = corners[k];
+                    np = 8;
                 }
-                center.x *= 0.125f; center.y *= 0.125f; center.z *= 0.125f;
 
+                bromath::AABB3 pb = bromath::aempty3();
+                for (int k = 0; k < np; ++k) pb = bromath::aexpand(pb, pts[k]);
+                Vec3 center = bromath::acenter(pb);
                 float radius = 0.0f;
-                for (int k = 0; k < 8; ++k) {
-                    float dx = corners[k].x - center.x;
-                    float dy = corners[k].y - center.y;
-                    float dz = corners[k].z - center.z;
-                    radius = std::max(radius, std::sqrt(dx*dx + dy*dy + dz*dz));
-                }
+                for (int k = 0; k < np; ++k)
+                    radius = std::max(radius, bromath::vlen(pts[k] - center));
                 if (radius < 1e-3f) radius = 1.0f;
-                // Snap radius to 16ths of a unit so it doesn't change every
-                // micro-frame; combined with sphere fit this is the second
-                // half of the texel-snap shimmer fix.
-                radius = std::ceil(radius * 16.0f) / 16.0f;
+                // Quantise the radius to eighth-octave steps: a pan that
+                // changes the clipped shape a little must not change the
+                // texel size a little, or every shadow edge re-samples every
+                // frame. It now steps (~9%) rarely instead.
+                radius = std::exp2(std::ceil(std::log2(radius) * 8.0f) / 8.0f);
 
-                // Light-space view: looking from above the bounding sphere
-                // along the light direction, looking AT the sphere center.
-                Vec3 eye{ center.x - d.x * radius * 2.0f,
-                          center.y - d.y * radius * 2.0f,
-                          center.z - d.z * radius * 2.0f };
-                Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
-                Mat4 view = bromath::mlookAt(eye, center, up);
+                // Snap the window to the texel grid in the fixed light basis.
+                const float texelSize = (2.0f * radius) / (float)tilePx;
+                Vec3 cLS = bromath::mtransformPoint(lightRot, center);
+                cLS.x = std::floor(cLS.x / texelSize) * texelSize;
+                cLS.y = std::floor(cLS.y / texelSize) * texelSize;
 
-                // Texel-snap the cascade origin in light-space xy. Without
-                // this the shadow edges shimmer as the camera moves because
-                // the same world fragment maps to slightly different texels
-                // each frame. Snap the world center, not the projection.
-                int tilePx = shadowAtlasSize_ / 4;
-                float texelSize = (2.0f * radius) / (float)tilePx;
-                Vec3 centerLS = bromath::mtransformPoint(view, center);
-                float snapX = std::floor(centerLS.x / texelSize) * texelSize;
-                float snapY = std::floor(centerLS.y / texelSize) * texelSize;
-                float dxLS = centerLS.x - snapX;
-                float dyLS = centerLS.y - snapY;
-                // Build ortho extents around the snapped origin.
-                Mat4 proj = makeOrthoZeroToOne(
-                    -radius - dxLS, radius - dxLS,
-                    -radius - dyLS, radius - dyLS,
-                    -radius * 2.0f - radius, -(-radius * 2.0f) + radius);
-                // Expand the depth range: scene casters outside the sphere
-                // should still write their depths (otherwise close objects
-                // behind the cascade get omitted from the shadow). Use the
-                // scene AABB extent along the light direction as an extra
-                // pad on the near side.
-                Vec3 boundsCenter{
-                    0.5f * (bounds.min[0] + bounds.max[0]),
-                    0.5f * (bounds.min[1] + bounds.max[1]),
-                    0.5f * (bounds.min[2] + bounds.max[2])};
-                Vec3 boundsExt{
-                    0.5f * (bounds.max[0] - bounds.min[0]),
-                    0.5f * (bounds.max[1] - bounds.min[1]),
-                    0.5f * (bounds.max[2] - bounds.min[2])};
-                float sceneRadius = std::sqrt(boundsExt.x*boundsExt.x +
-                                              boundsExt.y*boundsExt.y +
-                                              boundsExt.z*boundsExt.z);
-                float depthExt = std::max(sceneRadius * 2.0f, radius * 4.0f);
-                proj = makeOrthoZeroToOne(
-                    -radius - dxLS, radius - dxLS,
-                    -radius - dyLS, radius - dyLS,
-                    0.0f, depthExt);
+                // Depth along d (light view looks down -z, so depth = -z).
+                // Cover the sphere, then stretch over every caster.
+                const float centerD = bromath::vdot(center, d);
+                float nearD = std::min(centerD - radius, castMinD);
+                float farD  = std::max(centerD + radius, castMaxD);
+                const float pad = std::max(0.5f, 0.01f * (farD - nearD));
+                nearD -= pad; farD += pad;
 
-                Mat4 projView = bromath::mmul(proj, view);
-                bakeTile(firstSlot + c, projView, L);
+                Mat4 proj = makeOrthoZeroToOne(cLS.x - radius, cLS.x + radius,
+                                               cLS.y - radius, cLS.y + radius,
+                                               nearD, farD);
+                Mat4 projView = bromath::mmul(proj, lightRot);
+                bakeTile(firstSlot + c, projView, L, texelSize, 0.0f,
+                         nearD, farD, true);
                 shadowTileCount_++;
             }
         }
@@ -509,7 +624,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             Mat4 view = bromath::mlookAt(eye, target, up);
             Mat4 proj = makePerspectiveZeroToOne(fov, 1.0f, near, far);
             Mat4 projView = bromath::mmul(proj, view);
-            bakeTile(shadowTileCount_, projView, L);
+            bakeTile(shadowTileCount_, projView, L,
+                     0.0f, 2.0f * std::tan(fov * 0.5f) / (float)tilePx,
+                     near, far, false);
             lightShadowSlot_[i] = shadowTileCount_;
             lightShadowSlotCount_[i] = 1;
             shadowTileCount_++;
@@ -551,7 +668,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                             eye.z + forward[f].z};
                 Mat4 view = bromath::mlookAt(eye, target, upVec[f]);
                 Mat4 projView = bromath::mmul(proj, view);
-                bakeTile(firstSlot + f, projView, L);
+                // 90 deg face: a texel spans 2*tan(45deg)/tilePx per metre.
+                bakeTile(firstSlot + f, projView, L,
+                         0.0f, 2.0f / (float)tilePx, near, far, false);
                 shadowTileCount_++;
             }
         }
@@ -569,7 +688,7 @@ void SceneRenderer::renderShadowPass() {
     const bool hasSkinnedCustomCasters = !shadowSkinnedCustomCasters_.empty();
     const bool hasTubeCasters = !shadowTubeCasters_.empty();
 
-    const int tileSize = shadowAtlasSize_ / 4;  // matches gridDim in prepareShadows
+    const int tileSize = shadowAtlasSize_ / shadowGridDim_;  // grid chosen in prepareShadows
 
     // Per-tile frustum culling: casters are tested against each tile's light
     // volume (cascade ortho box, spot cone, point cube face — all encoded by
@@ -747,8 +866,8 @@ void SceneRenderer::renderShadowPass() {
 
     for (int slot = 0; slot < shadowTileCount_; ++slot) {
         if (!renderSlot[slot]) continue;  // tile reused from a previous frame
-        int gx = slot % 4;
-        int gy = slot / 4;
+        int gx = slot % shadowGridDim_;
+        int gy = slot / shadowGridDim_;
         glViewport(gx * tileSize, gy * tileSize, tileSize, tileSize);
         if (!fullClear) {
             // Scissored per-tile clear: only re-rendered tiles are wiped;

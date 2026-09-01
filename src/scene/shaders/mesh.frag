@@ -92,7 +92,15 @@ uniform mat4  uShadowMatrix[MAX_SHADOWS];
 uniform vec4  uShadowAtlasRect[MAX_SHADOWS];
 uniform vec2  uShadowBias[MAX_SHADOWS];
 uniform float uShadowAtlasTexel;          // 1.0 / atlasSize, for PCF kernel
-uniform int   uShadowPCFTaps;             // 1 (single sample) or 3 (3x3 PCF)
+uniform int   uShadowPCFTaps;             // PCF grid side: 1, 3 or 5
+//   uShadowTexelWorld: world size of one shadow texel at the receiver —
+//     .x constant (ortho tiles), .y per metre of light distance (perspective
+//     tiles). Every bias below is expressed in these, so "about a texel"
+//     means the same thing whether the fit came out at 3 cm or 3 m.
+//   uShadowDepthParams: (near, far, isOrtho) of the tile's projection, to
+//     turn a world-unit depth bias into [0,1] depth.
+uniform vec2  uShadowTexelWorld[MAX_SHADOWS];
+uniform vec3  uShadowDepthParams[MAX_SHADOWS];
 
 // IBL — when uIBLEnabled == 1, replaces uAmbient with split-sum env lighting.
 //   uIBLIrradiance: pre-convolved cosine hemisphere → diffuse term.
@@ -209,67 +217,73 @@ float distanceAttenuation(float dist, float range) {
     return win / (dist * dist + 1.0);
 }
 
-// Rotated Poisson-disk taps for PCF. Pre-unit-scaled; caller multiplies by
-// (texel * radius) and rotates per-fragment. 16 taps give enough coverage
-// to hide individual shadow-map texel edges when the light projects the
-// atlas at a grazing angle (long sun shadows on a near-horizontal plane).
-const vec2 kPoisson16[16] = vec2[16](
-    vec2(-0.94201624, -0.39906216),
-    vec2( 0.94558609, -0.76890725),
-    vec2(-0.09418410, -0.92938870),
-    vec2( 0.34495938,  0.29387760),
-    vec2(-0.91588581,  0.45771432),
-    vec2(-0.81544232, -0.87912464),
-    vec2(-0.38277543,  0.27676845),
-    vec2( 0.97484398,  0.75648379),
-    vec2( 0.44323325, -0.97511554),
-    vec2( 0.53742981, -0.47373420),
-    vec2(-0.26496911, -0.41893023),
-    vec2( 0.79197514,  0.19090188),
-    vec2(-0.24188840,  0.99706507),
-    vec2(-0.81409955,  0.91437590),
-    vec2( 0.19984126,  0.78641367),
-    vec2( 0.14383161, -0.14100790)
-);
+// World size of one texel of tile `slot` at a receiver `lightDist` metres
+// from the light (ignored for ortho tiles, whose .y is 0).
+float shadowTexelWorld(int slot, float lightDist) {
+    return uShadowTexelWorld[slot].x + uShadowTexelWorld[slot].y * lightDist;
+}
 
 // Sample one tile of the shadow atlas. Returns 1.0 = lit, 0.0 = shadowed.
 // `posCamRel` is the camera-relative world position to test (already normal-
-// biased by the caller). `slot` is the per-light shadow slot 0..MAX_SHADOWS-1.
-// Out-of-frustum points return 1.0 (no shadow). PCF kernel stays inside the
-// tile via inset clamping so neighbouring tiles don't bleed in.
-float sampleShadow(int slot, vec3 posCamRel) {
+// biased by the caller); `biasWorld` is a depth bias in world units along the
+// light, converted here to the tile's [0,1] depth (linear for ortho tiles,
+// 1/z for perspective ones). `slot` is the per-light shadow slot
+// 0..MAX_SHADOWS-1. Out-of-frustum points return 1.0 (no shadow).
+//
+// The filter is a grid of hardware-bilinear compares, uShadowPCFTaps on a
+// side at one-texel spacing: 3x3 is a 4-texel tent, 5x5 a 6-texel one. A
+// fixed grid over small texels gives a smooth, tight penumbra; the rotated
+// Poisson disk it replaces only hid 6 m texels behind grain. The kernel stays
+// inside the tile via inset clamping so neighbouring tiles don't bleed in.
+float sampleShadow(int slot, vec3 posCamRel, float biasWorld) {
     vec4 sc = uShadowMatrix[slot] * vec4(posCamRel, 1.0);
     if (sc.w <= 0.0) return 1.0;
+    float zEye = sc.w;
     sc /= sc.w;
     if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0)
         return 1.0;
-    float ref = sc.z - uShadowBias[slot].x;
+    vec3  dp   = uShadowDepthParams[slot];
+    float span = max(dp.y - dp.x, 1e-6);
+    float b01  = (dp.z > 0.5) ? biasWorld / span
+                              : biasWorld * dp.x * dp.y / (span * zEye * zEye);
+    float ref = sc.z - uShadowBias[slot].x - b01;
     vec2  rect_o = uShadowAtlasRect[slot].xy;
     vec2  rect_s = uShadowAtlasRect[slot].zw;
     vec2  texel  = vec2(uShadowAtlasTexel);
     vec2  base   = rect_o + sc.xy * rect_s;
-    // Inset by the PCF radius so rotated taps can't straddle into a
-    // neighbouring tile (which would sample unrelated depths).
-    float radius = 2.0;
-    vec2  minUV  = rect_o + texel * (radius + 0.5);
-    vec2  maxUV  = rect_o + rect_s - texel * (radius + 0.5);
-    if (uShadowPCFTaps <= 1) {
+    int   taps   = uShadowPCFTaps;
+    int   hk     = (taps - 1) / 2;            // 0, 1 or 2 texels of reach
+    vec2  minUV  = rect_o + texel * (float(hk) + 1.0);
+    vec2  maxUV  = rect_o + rect_s - texel * (float(hk) + 1.0);
+    if (hk <= 0) {
         vec2 uv = clamp(base, minUV, maxUV);
         return texture(uShadowAtlas, vec3(uv, ref));
     }
-    // Per-fragment rotation randomises the kernel so nearby fragments sample
-    // in different directions — dithers away banded Mach lines at shadow
-    // edges and shadow-map texel stretch at grazing light angles.
-    float ang = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
-    float cs = cos(ang), sn = sin(ang);
-    mat2 rot = mat2(cs, -sn, sn, cs);
     float s = 0.0;
-    for (int k = 0; k < 16; ++k) {
-        vec2 off = rot * kPoisson16[k] * texel * radius;
-        vec2 uv  = clamp(base + off, minUV, maxUV);
-        s += texture(uShadowAtlas, vec3(uv, ref));
+    for (int y = -hk; y <= hk; ++y) {
+        for (int x = -hk; x <= hk; ++x) {
+            vec2 uv = clamp(base + vec2(float(x), float(y)) * texel, minUV, maxUV);
+            s += texture(uShadowAtlas, vec3(uv, ref));
+        }
     }
-    return s * (1.0 / 16.0);
+    float side = float(2 * hk + 1);
+    return s / (side * side);
+}
+
+// Shadow term of tile `slot` for this fragment: normal-offset the lookup
+// point, then compare with a slope-scaled depth bias. Both are sized in
+// shadow texels — the offset about half a texel head-on rising to one and a
+// half at grazing incidence (where one texel of map covers a long stretch of
+// surface), the depth bias a fraction of a texel. The caster pass already
+// culls light-facing faces and applies a slope polygon offset, so this is
+// the small remainder that keeps thin geometry acne-free without lifting
+// contact shadows off the ground.
+float shadowFromTile(int slot, float lightDist, vec3 N, float NdotL) {
+    float texelW = shadowTexelWorld(slot, lightDist);
+    float sinT   = sqrt(max(1.0 - NdotL * NdotL, 0.0));
+    float nOff   = uShadowBias[slot].y + texelW * (0.5 + 1.0 * sinT);
+    float bWorld = texelW * (0.3 + 0.5 * sinT);
+    return sampleShadow(slot, vWorldPos + N * nOff, bWorld);
 }
 
 // Fog factor in [0,1] for a fragment `camDist` from the eye at world height
@@ -435,6 +449,7 @@ void main() {
         int t = uLightType[i];
         vec3 L;
         float atten = 1.0;
+        float lightDist = 0.0;   // metres to a point/spot light; 0 for directional
 
         if (t == 0) {
             // Directional: uLightDir points FROM light TO scene; invert for L.
@@ -443,6 +458,7 @@ void main() {
             vec3 toLight = uLightPos[i] - vWorldPos;
             float d = length(toLight);
             if (d < 1e-4) continue;
+            lightDist = d;
             L = toLight / d;
             atten = distanceAttenuation(d, uLightRange[i]);
             if (t == 2) {
@@ -475,11 +491,6 @@ void main() {
         int slot = uLightShadowSlot[i];
         if (slot >= 0) {
             int sc = uLightShadowSlotCount[i];
-            // Slope-scaled normal offset: grazing surfaces (NdotL near 0) are
-            // where constant bias falls down and acne shows up. Push harder
-            // there, stay tight where the surface faces the light.
-            float slopeK = clamp(1.0 - NdotL, 0.0, 1.0);
-            float biasScale = 1.0 + slopeK * 4.0;
             if (t == 1 && sc == 6) {
                 // Point light cube unfolded to 6 atlas tiles. Slot order
                 // follows the standard cube-map face convention:
@@ -493,9 +504,7 @@ void main() {
                     face = (toFrag.y > 0.0) ? 2 : 3;
                 else
                     face = (toFrag.z > 0.0) ? 4 : 5;
-                int chosen = slot + face;
-                vec3 posBiased = vWorldPos + N * uShadowBias[chosen].y * biasScale;
-                shadow = sampleShadow(chosen, posBiased);
+                shadow = shadowFromTile(slot + face, lightDist, N, NdotL);
             } else if (t == 0 && sc > 1) {
                 // Directional CSM: pick the tightest cascade containing this
                 // fragment by view-space distance. Splits[] are padded with a
@@ -510,9 +519,7 @@ void main() {
                 else if (c == 1) { thisFar = splits.y; prevFar = splits.x;  }
                 else if (c == 2) { thisFar = splits.z; prevFar = splits.y;  }
                 else             { thisFar = splits.w; prevFar = splits.z;  }
-                int chosen = slot + c;
-                vec3 posBiased = vWorldPos + N * uShadowBias[chosen].y * biasScale;
-                shadow = sampleShadow(chosen, posBiased);
+                shadow = shadowFromTile(slot + c, lightDist, N, NdotL);
                 // Fade-blend into the next cascade across the last 15% of
                 // this one so the resolution hand-off doesn't leave a seam.
                 if (c < sc - 1) {
@@ -521,16 +528,13 @@ void main() {
                     float tb = clamp((vCamDist - blendStart)
                                    / max(thisFar - blendStart, 1e-4), 0.0, 1.0);
                     if (tb > 0.0) {
-                        int nxt = slot + c + 1;
-                        vec3 pb2 = vWorldPos + N * uShadowBias[nxt].y * biasScale;
-                        float s2 = sampleShadow(nxt, pb2);
+                        float s2 = shadowFromTile(slot + c + 1, lightDist, N, NdotL);
                         shadow = mix(shadow, s2, tb);
                     }
                 }
             } else {
                 // Single-tile: spot, single-cascade directional, etc.
-                vec3 posBiased = vWorldPos + N * uShadowBias[slot].y * biasScale;
-                shadow = sampleShadow(slot, posBiased);
+                shadow = shadowFromTile(slot, lightDist, N, NdotL);
             }
             if (uReceivesShadow == 0) shadow = 1.0;
         }
