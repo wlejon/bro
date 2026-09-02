@@ -113,6 +113,174 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
 
 
 // -----------------------------------------------------------------------------
+// HexNav, weighted pathfinding over a hex grid
+// -----------------------------------------------------------------------------
+//
+// For a game whose world is a pointy-top, odd-r offset hex grid with a cost
+// per step that is a *rule* of the game (terrain × locomotion class, walls,
+// elevation), not a property of geometry. NavGrid is binary walkable/blocked
+// over squares; HexNav searches a cost table the embedder authors — the
+// rules stay where they are written, the engine does only the search.
+//
+// Grid: `size × size` cells, `idx = y * size + x`, directions 0=E 1=NE 2=NW
+// 3=W 4=SW 5=SE, odd rows shoved right. A step table is one Float64Array of
+// `size*size*6` where slot `c*6 + d` is the cost of ENTERING cell `c` from
+// its neighbour in direction `d` (Infinity = impassable). Tables are keyed by
+// any string (a locomotion class, say); a clearance table — one byte per
+// cell: 1 clear, 2 crushing (doubles the step), anything else cannot be
+// stood on — gates a multi-hex footprint on top of a step table.
+//
+// The searches reproduce a reference JS A* exactly, not just to equal cost:
+// the frontier orders by (f, h, insertion sequence), the cost field is single
+// precision while keys and sums are double, `maxCost` refuses any step past
+// it, the goal is answered when it is settled, and the path is the parent
+// chain from the goal. An embedder replacing its own search gets the same
+// path for every query, so replays and gates that compare paths hold.
+// Deterministic: no threads, no reordered float sums. Typed arrays in and
+// out, never a per-cell JS call.
+
+/**
+ * Create a hex navigator over a `size × size` grid.
+ * @param {Object} opts
+ * @param {number} opts.size - cells per side (1..4096)
+ * @returns {HexNav}
+ */
+const hex = bro.ai.game.createHexNav({ size: 256 });
+hex.size;   // 256
+
+/**
+ * Install a step table under `id` (copied). Replaces any table with that id
+ * and drops the cached components for it.
+ * @param {string} id - the table's name (e.g. a locomotion class)
+ * @param {Float64Array|Float32Array} costs - size*size*6 entry costs
+ * @returns {boolean}
+ * @throws {RangeError} on a size mismatch
+ */
+hex.setStepCosts('biped', bipedTable);
+
+/**
+ * Rewrite the six entry slots of a few cells in place — a wall breached at
+ * runtime touches only its cell and its six neighbours.
+ * @param {string} id
+ * @param {Int32Array} cells - cell indices
+ * @param {Float64Array|Float32Array} values - cells.length * 6 costs, in cell order
+ * @returns {boolean} false when `id` has no table
+ */
+hex.updateStepCosts('biped', new Int32Array([idx, n0, n1]), new Float64Array(18));
+hex.hasStepCosts('biped');   // true
+
+/**
+ * Install a clearance table under `id` (copied): a Uint8Array of size*size,
+ * 1 clear, 2 crushing, else cannot stand.
+ * @param {string} id
+ * @param {Uint8Array} table
+ * @returns {boolean}
+ */
+hex.setClearance('octopod|8|-1', table);
+
+/**
+ * Compute a clearance table natively and install it under `id`: a
+ * radius-`radius` footprint (the hex disk) can stand centred on a cell when
+ * every footprint cell is in bounds, passable, within ±1 elevation level of
+ * the centre, and either has no structure or is crushable — `crushFloors >= 0`
+ * and the structure's `floors <= crushFloors` — in which case the cell
+ * answers 2 (crushing) rather than 1. Any failure answers 3. A 217-cell
+ * walk per cell of a 256 map runs in a few milliseconds.
+ * @param {string} id
+ * @param {number} radius - footprint radius in cells (0 = the centre alone)
+ * @param {Uint8Array} passable - size*size, non-zero where the class may enter
+ * @param {Int8Array} elevation - size*size levels
+ * @param {Int16Array} floors - size*size storey counts, −1 for no structure
+ * @param {number} crushFloors - tallest crushable structure, −1 for never
+ * @returns {Uint8Array} the installed table (a copy the caller may keep)
+ */
+const clr = hex.buildClearance('octopod|8|-1', 8, passable, elevation, floors, -1);
+hex.hasClearance('octopod|8|-1');   // true
+
+/**
+ * A* over a step table. Cell indices start..goal inclusive, or null when no
+ * path costs `maxCost` or less (a goal in another connected component is
+ * answered without a search — see components()).
+ * @param {string} id - the step table
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} [maxCost=Infinity]
+ * @returns {Int32Array|null}
+ */
+const route = hex.findPath('biped', 12, 12, 200, 190, 400);
+// route = Int32Array [ 3084, 3085, ... ]; x = i % size, y = (i / size) | 0
+
+/**
+ * The clearance search: the same A* with every destination's step multiplied
+ * by its clearance (1 or 2); a destination that cannot be stood on is
+ * impassable, and a goal that cannot be stood on answers null.
+ * @param {string} id - the step table
+ * @param {string} clearanceId - the clearance table
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} x1
+ * @param {number} y1
+ * @param {number} [maxCost=Infinity]
+ * @returns {Int32Array|null}
+ */
+const hull = hex.findPathRadius('octopod', 'octopod|8|-1', 35, 35, 220, 220);
+
+/**
+ * Dijkstra out from a cell to `maxCost`, over the whole grid: the range wash.
+ * @param {string} id
+ * @param {number} x0
+ * @param {number} y0
+ * @param {number} [maxCost=Infinity]
+ * @returns {{cost: Float32Array, parent: Int32Array}|null} cost Infinity =
+ *   unreached, parent −1 = none; null for an unknown table or a start off
+ *   the grid
+ */
+const wash = hex.movementField('biped', 40, 40, 30);
+
+/**
+ * A reversed Dijkstra to a set of target cells: `dist[cell]` is the cost of
+ * walking from that cell to the nearest seed, each step paying the entered
+ * cell's cost from table `id`, times `auraMult` when the entered cell is in
+ * `aura`. `blocked` cells are walls: never relaxed, Infinity. The frontier
+ * is a bucket queue in units of `quantum` with a ring of `ring` buckets and
+ * FIFO order within a bucket, so a build whose costs are all whole quanta
+ * pops in exact distance order with no comparisons; any edge the ring cannot
+ * order (off the quantum grid, or longer than the ring) restarts the build on
+ * a plain heap — same distances. `pops` counts every frontier pop, stale
+ * entries included: an embedder that used to slice this build under a
+ * per-tick pop budget can land the finished field on the same tick it
+ * would have.
+ * @param {string} id - the step table
+ * @param {Object} opts
+ * @param {Int32Array} opts.seeds - target cells (distance 0), duplicates ignored
+ * @param {Uint8Array} [opts.blocked] - size*size wall mask
+ * @param {Uint8Array} [opts.aura] - size*size discount mask
+ * @param {number} [opts.auraMult=1]
+ * @param {number} [opts.quantum=0.25]
+ * @param {number} [opts.ring=64]
+ * @returns {{dist: Float64Array, parent: Int32Array, pops: number}} parent
+ *   is the neighbour a cell's distance came through (−1 for seeds and
+ *   unreached cells)
+ */
+const lane = hex.field('biped', { seeds, blocked, aura, auraMult: 0.5, quantum: 0.25, ring: 64 });
+
+/**
+ * Weakly connected components of a table's finite edges (with a clearance
+ * table: of the edges whose destination can be stood on), one label per
+ * cell numbered in first-visit order. Two cells with different labels have
+ * no path between them in either direction. Cached per (table, clearance)
+ * and rebuilt after the table changes.
+ * @param {string} id
+ * @param {string} [clearanceId]
+ * @returns {Int32Array}
+ */
+const comp = hex.components('biped');
+comp[a] === comp[b];   // false ⇒ findPath(a → b) is null without a search
+
+
+// -----------------------------------------------------------------------------
 // NavMesh, polygon navigation mesh (Recast/Detour)
 // -----------------------------------------------------------------------------
 //

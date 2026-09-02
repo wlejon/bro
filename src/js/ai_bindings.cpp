@@ -16,6 +16,7 @@
 #include <brogameagent/nav_mesh.h>
 #endif
 #include <cfloat>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -35,6 +36,12 @@ namespace bro::js {
 
 struct NavGridData {
     std::unique_ptr<brogameagent::NavGrid> grid;
+};
+
+// bro.ai.game.createHexNav({ size }): the weighted hex-grid navigator. Owns
+// only C++ state (tables the embedder pushes as typed arrays), so no gc_mark.
+struct HexNavData {
+    std::unique_ptr<brogameagent::HexNav> nav;
 };
 
 #ifdef BROGAMEAGENT_HAS_NAVMESH
@@ -430,6 +437,69 @@ static JSValue js_createNavGrid(JSContext* ctx, JSValueConst, int argc, JSValueC
     JS_FreeValue(ctx, fromPhys);
 
     return qjsbind::wrap<NavGridData>(ctx, data);
+}
+
+// ─── HexNav helpers ────────────────────────────────────────────────────────
+
+// bro.ai.game.createHexNav({ size })
+static JSValue js_createHexNav(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "createHexNav() requires an options object");
+    const int32_t size = getInt32Prop(ctx, argv[0], "size", 0);
+    if (size < 1 || size > 4096)
+        return JS_ThrowRangeError(ctx, "createHexNav: size must be 1..4096");
+    auto* data = new HexNavData{ std::make_unique<brogameagent::HexNav>(size) };
+    return qjsbind::wrap<HexNavData>(ctx, data);
+}
+
+// A typed array (copy) of the given element type over `bytes` of `data`.
+static JSValue makeTypedArrayCopy(JSContext* ctx, const void* data, size_t bytes, JSTypedArrayEnum type) {
+    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), bytes);
+    if (JS_IsException(abuf)) return abuf;
+    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+    JSValue arr = JS_NewTypedArray(ctx, 1, args, type);
+    JS_FreeValue(ctx, abuf);
+    return arr;
+}
+
+// A table id: any string-convertible value.
+static std::string hexNavId(JSContext* ctx, JSValueConst v) {
+    std::string out;
+    const char* s = JS_ToCString(ctx, v);
+    if (s) { out = s; JS_FreeCString(ctx, s); }
+    return out;
+}
+
+// A step table as doubles: a Float64Array is read in place; a Float32Array is
+// widened into `tmp`. Returns nullptr (count 0) for anything else.
+static const double* hexNavDoubles(JSContext* ctx, JSValueConst v, size_t& count, std::vector<double>& tmp) {
+    if (const double* d = qjsbind::read_typed_array_view<double>(ctx, v, count)) return d;
+    size_t n = 0;
+    if (const float* f = qjsbind::read_float32_view(ctx, v, n)) {
+        tmp.assign(f, f + n);
+        count = n;
+        return tmp.data();
+    }
+    count = 0;
+    return nullptr;
+}
+
+// An optional per-cell byte mask argument (Uint8Array of `cells` entries, or
+// null/undefined for none). False when present but the wrong size.
+static bool hexNavMask(JSContext* ctx, JSValueConst v, size_t cells, const uint8_t*& out) {
+    out = nullptr;
+    if (JS_IsUndefined(v) || JS_IsNull(v)) return true;
+    size_t n = 0;
+    const uint8_t* p = qjsbind::read_typed_array_view<uint8_t>(ctx, v, n);
+    if (!p || n != cells) return false;
+    out = p;
+    return true;
+}
+
+// The path a search returns: an Int32Array of cell indices, or null.
+static JSValue hexNavPathResult(JSContext* ctx, bool ok, const std::vector<int32_t>& path) {
+    if (!ok) return JS_NULL;
+    return makeTypedArrayCopy(ctx, path.data(), path.size() * sizeof(int32_t), JS_TYPED_ARRAY_INT32);
 }
 
 #ifdef BROGAMEAGENT_HAS_NAVMESH
@@ -2153,6 +2223,177 @@ void AIBindings::install(JSContext* ctx) {
                     }, 2);
         }
 
+        // ─── HexNav class (weighted odd-r hex grid A*, createHexNav) ────────
+        // Typed arrays in and out, no per-cell JS calls: a step table is one
+        // Float64Array push, a path one Int32Array back. See docs/ai-game-api.js.
+        {
+            qjsbind::Class<HexNavData>(ctx, "AIHexNav", qjsbind::NoGlobal)
+                .get("size", [](HexNavData* d) -> int { return d->nav ? d->nav->size() : 0; })
+                // setStepCosts(id, Float64Array|Float32Array size*size*6) → bool
+                .method_raw("setStepCosts",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 2) return JS_ThrowTypeError(ctx, "setStepCosts(id, costs)");
+                        size_t n = 0;
+                        std::vector<double> tmp;
+                        const double* t = hexNavDoubles(ctx, argv[1], n, tmp);
+                        if (!t) return JS_ThrowTypeError(ctx, "setStepCosts: costs must be a Float64Array or Float32Array");
+                        if (!d->nav->setStepCosts(hexNavId(ctx, argv[0]), t, n))
+                            return JS_ThrowRangeError(ctx, "setStepCosts: costs must hold size*size*6 entries");
+                        return JS_TRUE;
+                    }, 2)
+                // updateStepCosts(id, Int32Array cells, Float64Array cells.length*6) → bool
+                .method_raw("updateStepCosts",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 3) return JS_ThrowTypeError(ctx, "updateStepCosts(id, cells, values)");
+                        size_t nc = 0, nv = 0;
+                        const int32_t* cells = qjsbind::read_int32_view(ctx, argv[1], nc);
+                        std::vector<double> tmp;
+                        const double* vals = hexNavDoubles(ctx, argv[2], nv, tmp);
+                        if (!cells || !vals || nv != nc * 6)
+                            return JS_ThrowTypeError(ctx, "updateStepCosts: cells is an Int32Array, values a Float64Array of 6 per cell");
+                        return JS_NewBool(ctx, d->nav->updateStepCosts(hexNavId(ctx, argv[0]), cells, nc, vals));
+                    }, 3)
+                .method_raw("hasStepCosts",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 1) return JS_FALSE;
+                        return JS_NewBool(ctx, d->nav->hasStepCosts(hexNavId(ctx, argv[0])));
+                    }, 1)
+                // setClearance(id, Uint8Array size*size) → bool
+                .method_raw("setClearance",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 2) return JS_ThrowTypeError(ctx, "setClearance(id, table)");
+                        size_t n = 0;
+                        const uint8_t* t = qjsbind::read_typed_array_view<uint8_t>(ctx, argv[1], n);
+                        if (!t || !d->nav->setClearance(hexNavId(ctx, argv[0]), t, n))
+                            return JS_ThrowRangeError(ctx, "setClearance: table must be a Uint8Array of size*size entries");
+                        return JS_TRUE;
+                    }, 2)
+                // buildClearance(id, radius, Uint8Array passable, Int8Array elevation,
+                //                Int16Array floors, crushFloors) → Uint8Array (copy)
+                .method_raw("buildClearance",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 6)
+                            return JS_ThrowTypeError(ctx, "buildClearance(id, radius, passable, elevation, floors, crushFloors)");
+                        const size_t cells = (size_t)d->nav->cells();
+                        int32_t radius = 0, crush = -1;
+                        JS_ToInt32(ctx, &radius, argv[1]);
+                        JS_ToInt32(ctx, &crush, argv[5]);
+                        size_t np = 0, ne = 0, nf = 0;
+                        const uint8_t* passable = qjsbind::read_typed_array_view<uint8_t>(ctx, argv[2], np);
+                        const int8_t* elevation = qjsbind::read_typed_array_view<int8_t>(ctx, argv[3], ne);
+                        const int16_t* floors = qjsbind::read_typed_array_view<int16_t>(ctx, argv[4], nf);
+                        if (!passable || !elevation || !floors || np != cells || ne != cells || nf != cells)
+                            return JS_ThrowTypeError(ctx, "buildClearance: passable (Uint8Array), elevation (Int8Array) and floors (Int16Array) must each hold size*size entries");
+                        const auto& out = d->nav->buildClearance(hexNavId(ctx, argv[0]), radius, passable, elevation, floors, crush);
+                        return makeTypedArrayCopy(ctx, out.data(), out.size(), JS_TYPED_ARRAY_UINT8);
+                    }, 6)
+                .method_raw("hasClearance",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 1) return JS_FALSE;
+                        return JS_NewBool(ctx, d->nav->hasClearance(hexNavId(ctx, argv[0])));
+                    }, 1)
+                // findPath(id, x0, y0, x1, y1, maxCost = Infinity) → Int32Array | null
+                .method_raw("findPath",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 5) return JS_ThrowTypeError(ctx, "findPath(id, x0, y0, x1, y1, maxCost?)");
+                        int32_t c[4] = {0, 0, 0, 0};
+                        for (int i = 0; i < 4; i++) JS_ToInt32(ctx, &c[i], argv[1 + i]);
+                        double maxCost = std::numeric_limits<double>::infinity();
+                        if (argc > 5 && !JS_IsUndefined(argv[5])) JS_ToFloat64(ctx, &maxCost, argv[5]);
+                        std::vector<int32_t> path;
+                        const bool ok = d->nav->findPath(hexNavId(ctx, argv[0]), c[0], c[1], c[2], c[3], maxCost, path);
+                        return hexNavPathResult(ctx, ok, path);
+                    }, 6)
+                // findPathRadius(id, clearanceId, x0, y0, x1, y1, maxCost = Infinity) → Int32Array | null
+                .method_raw("findPathRadius",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 6)
+                            return JS_ThrowTypeError(ctx, "findPathRadius(id, clearanceId, x0, y0, x1, y1, maxCost?)");
+                        int32_t c[4] = {0, 0, 0, 0};
+                        for (int i = 0; i < 4; i++) JS_ToInt32(ctx, &c[i], argv[2 + i]);
+                        double maxCost = std::numeric_limits<double>::infinity();
+                        if (argc > 6 && !JS_IsUndefined(argv[6])) JS_ToFloat64(ctx, &maxCost, argv[6]);
+                        std::vector<int32_t> path;
+                        const bool ok = d->nav->findPathRadius(hexNavId(ctx, argv[0]), hexNavId(ctx, argv[1]),
+                                                               c[0], c[1], c[2], c[3], maxCost, path);
+                        return hexNavPathResult(ctx, ok, path);
+                    }, 7)
+                // movementField(id, x0, y0, maxCost = Infinity) → { cost: Float32Array, parent: Int32Array } | null
+                .method_raw("movementField",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 3) return JS_ThrowTypeError(ctx, "movementField(id, x0, y0, maxCost?)");
+                        int32_t x0 = 0, y0 = 0;
+                        JS_ToInt32(ctx, &x0, argv[1]);
+                        JS_ToInt32(ctx, &y0, argv[2]);
+                        double maxCost = std::numeric_limits<double>::infinity();
+                        if (argc > 3 && !JS_IsUndefined(argv[3])) JS_ToFloat64(ctx, &maxCost, argv[3]);
+                        std::vector<float> cost;
+                        std::vector<int32_t> parent;
+                        if (!d->nav->movementField(hexNavId(ctx, argv[0]), x0, y0, maxCost, cost, parent)) return JS_NULL;
+                        JSValue o = JS_NewObject(ctx);
+                        JS_SetPropertyStr(ctx, o, "cost", qjsbind::make_float32_array(ctx, cost));
+                        JS_SetPropertyStr(ctx, o, "parent", qjsbind::make_int32_array(ctx, parent));
+                        return o;
+                    }, 4)
+                // field(id, { seeds: Int32Array, blocked?: Uint8Array, aura?: Uint8Array,
+                //             auraMult = 1, quantum = 0.25, ring = 64 })
+                //   → { dist: Float64Array, parent: Int32Array, pops: number } | null
+                .method_raw("field",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 2 || !JS_IsObject(argv[1]))
+                            return JS_ThrowTypeError(ctx, "field(id, { seeds, blocked?, aura?, auraMult?, quantum?, ring? })");
+                        const size_t cells = (size_t)d->nav->cells();
+                        JSValue seedsV = JS_GetPropertyStr(ctx, argv[1], "seeds");
+                        size_t nSeeds = 0;
+                        const int32_t* seeds = qjsbind::read_int32_view(ctx, seedsV, nSeeds);
+                        JS_FreeValue(ctx, seedsV);   // the view stays valid: the buffer is held by opts
+                        if (!seeds) nSeeds = 0;      // no seeds: an all-Infinity field
+                        JSValue blockedV = JS_GetPropertyStr(ctx, argv[1], "blocked");
+                        JSValue auraV = JS_GetPropertyStr(ctx, argv[1], "aura");
+                        const uint8_t* blocked = nullptr;
+                        const uint8_t* aura = nullptr;
+                        const bool okB = hexNavMask(ctx, blockedV, cells, blocked);
+                        const bool okA = hexNavMask(ctx, auraV, cells, aura);
+                        JS_FreeValue(ctx, blockedV);
+                        JS_FreeValue(ctx, auraV);
+                        if (!okB || !okA)
+                            return JS_ThrowTypeError(ctx, "field: blocked and aura must be Uint8Arrays of size*size entries");
+                        const double auraMult = getDoubleProp(ctx, argv[1], "auraMult", 1.0);
+                        const double quantum = getDoubleProp(ctx, argv[1], "quantum", 0.25);
+                        const int32_t ring = getInt32Prop(ctx, argv[1], "ring", 64);
+                        std::vector<double> dist;
+                        std::vector<int32_t> parent;
+                        const size_t pops = d->nav->targetField(hexNavId(ctx, argv[0]), seeds, nSeeds, blocked, aura,
+                                                                auraMult, quantum, ring, dist, parent);
+                        JSValue o = JS_NewObject(ctx);
+                        JS_SetPropertyStr(ctx, o, "dist",
+                            makeTypedArrayCopy(ctx, dist.data(), dist.size() * sizeof(double), JS_TYPED_ARRAY_FLOAT64));
+                        JS_SetPropertyStr(ctx, o, "parent", qjsbind::make_int32_array(ctx, parent));
+                        JS_SetPropertyStr(ctx, o, "pops", JS_NewFloat64(ctx, (double)pops));
+                        return o;
+                    }, 2)
+                // components(id, clearanceId?) → Int32Array (copy)
+                .method_raw("components",
+                    [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        auto* d = qjsbind::unwrap<HexNavData>(ctx, this_val);
+                        if (!d || !d->nav || argc < 1) return JS_ThrowTypeError(ctx, "components(id, clearanceId?)");
+                        std::string clr;
+                        if (argc > 1 && !JS_IsUndefined(argv[1]) && !JS_IsNull(argv[1])) clr = hexNavId(ctx, argv[1]);
+                        const auto& labels = d->nav->components(hexNavId(ctx, argv[0]), clr);
+                        return qjsbind::make_int32_array(ctx, labels);
+                    }, 2);
+        }
+
     #ifdef BROGAMEAGENT_HAS_NAVMESH
         // ─── NavMesh class (polygon navmesh — bakeNavMesh / loadNavMesh) ────
         {
@@ -3786,6 +4027,8 @@ void AIBindings::install(JSContext* ctx) {
         // Factory functions
         JS_SetPropertyStr(ctx, gameObj, "createNavGrid",
             JS_NewCFunction(ctx, js_createNavGrid, "createNavGrid", 1));
+        JS_SetPropertyStr(ctx, gameObj, "createHexNav",
+            JS_NewCFunction(ctx, js_createHexNav, "createHexNav", 1));
 
         // Polygon navmesh (Recast/Detour via brogameagent) — present when the
         // build was configured with -DBROGAMEAGENT_WITH_NAVMESH=ON. Otherwise the
