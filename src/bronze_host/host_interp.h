@@ -1,14 +1,20 @@
 #pragma once
 
-// The interpreter bridge: compiled code's `new Function(source)`, answered by
-// the QuickJS realm the same Engine is already running.
+// The interpreter bridge: compiled code's `new Function(source)`, `eval` and
+// a non-constant `import()`, answered by the QuickJS realm the same Engine is
+// already running.
 //
 // bronze refuses dynamic code by name — compiling a string at run time is the
 // one thing an ahead-of-time compiler cannot do — and for a standalone bronze
 // program that refusal is the whole story. bro is not that situation: it runs
 // an interpreter beside the compiled code, on the same thread, against the
-// same DOM. So bronze offers a seam (embed.h, setDynamicFunctionHook) and this
-// file is what bro puts in it.
+// same DOM. So bronze offers three seams (embed.h: setDynamicFunctionHook,
+// setDynamicEvalHook, setDynamicImportHook) and this file is what bro puts in
+// them. The third is a loader rather than a compiler: an `import()` whose
+// specifier bronze could not read at build time resolves against the
+// importer's `import.meta.url` through the page's own module loader (import
+// map, asset mounts, relative paths), evaluates in the interpreted realm, and
+// the namespace comes back as a bronze Promise of a wrapper.
 //
 // WHAT THIS COSTS THE BOUNDARY RULE. src/bronze_host/README.md states it
 // flatly: "Engine objects are shared. Event data is copied. Heap values never
@@ -32,6 +38,18 @@
 // Typed arrays do not wrap at all: both realms hold real views over one
 // external byte store (embed.h's externalizeArrayBuffer), so writes on either
 // side are simply visible on the other.
+//
+// A compiled ARRAY going out is the one value that is neither wrapped nor
+// shared: it crosses as a real QuickJS Array holding a snapshot of its
+// elements (each element crossing by the ordinary rule, so an object inside
+// is still a live wrapper). The interpreter's `Array.isArray` is a class
+// check that no proxy can pass, and library code begins with that check —
+// `setPath(waypoints)`, `JSON.stringify`, `.map` — so a wrapper would be an
+// array that fails to be one. The snapshot carries its source under a private
+// symbol and is entered in the crossing table, so it comes home as the array
+// that went out; what it does NOT do is forward a later `push` or index write
+// back to the compiled side. An array the interpreter builds still crosses
+// inbound as a wrapper.
 
 #include "embed/embed.h"
 

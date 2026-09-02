@@ -168,6 +168,20 @@ check_interp() {
     bh_run_check bronze_host_interp         "$SCRIPT_DIR/appdir_interp"         "$SCRIPT_DIR/apps/interp_probe.js"         "$SCRIPT_DIR/expected/interp_probe.expected"         --expr "advanceTime(64);"
 }
 
+# A non-constant `import()` in compiled code, loaded by the page's QuickJS
+# realm from a module beside the probe's SOURCE (apps/import_mods/). Only this
+# check catches a specifier resolved against the wrong base, a namespace that
+# crosses as a copy, and a missing file that resolves instead of rejecting.
+# Frames rather than an expression: the load settles on the interpreter's job
+# queue and the compiled continuation on the next microtask checkpoint.
+check_import() {
+    bh_run_check bronze_host_import \
+        "$SCRIPT_DIR/appdir_import" \
+        "$SCRIPT_DIR/apps/import_probe.js" \
+        "$SCRIPT_DIR/expected/import_probe.expected" \
+        --frames 6
+}
+
 # The native codecs from compiled code: bro.mesh's Draco round trip and
 # bro.image's KTX2 transcode (host_codecs.cpp), typed-array payloads sized for
 # generated code's ABI element access. What only this catches: a build that
@@ -272,6 +286,19 @@ check_ai() {
         --diff-head 30
 }
 
+# `bro.ai.game` from compiled code (host_ai_game.cpp): the namespace the
+# interpreted binding publishes, over the same brogameagent objects — HexNav
+# over a hand-derived table, an ORCA world with two agents crossing, a route
+# handed over as a plain array. Only this catches a compiled program binding
+# `bro.ai.game` at module load and finding nothing there.
+check_aigame() {
+    bh_run_check bronze_host_aigame \
+        "$SCRIPT_DIR/appdir_aigame" \
+        "$SCRIPT_DIR/apps/aigame_probe.js" \
+        "$SCRIPT_DIR/expected/aigame_probe.expected" \
+        --diff-head 30
+}
+
 # The networking surface (host_net.cpp): bro.net over GNS, WebSocket, the
 # remote fetch/XHR transport.
 check_net() {
@@ -318,8 +345,8 @@ check_pixi() {
 
 # ---------------------------------------------------------------------------
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
-        parser proxy class interp codecs input video audio physics ai net wild
-        instanced pixi)
+        parser proxy class interp import codecs input video audio physics ai
+        aigame net wild instanced pixi)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before
 # they are ever listed, so the runner does not even see them. CI uses it for

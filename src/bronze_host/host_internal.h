@@ -139,6 +139,8 @@ inline constexpr uint32_t kHostPhysicsSoftBodyTag = 0x50534259u;   // 'PSBY'
 inline constexpr uint32_t kHostNavGridTag = 0x4E564744u;  // 'NVGD'
 inline constexpr uint32_t kHostNavMeshTag = 0x4E564D53u;  // 'NVMS'
 inline constexpr uint32_t kHostAgentTag   = 0x41474E54u;  // 'AGNT'
+inline constexpr uint32_t kHostHexNavTag  = 0x48584E56u;  // 'HXNV'
+inline constexpr uint32_t kHostWorldTag   = 0x41574C44u;  // 'AWLD'
 inline constexpr uint32_t kHostWebSocketTag = 0x57534F43u; // 'WSOC'
 
 // ---------------------------------------------------------------------------
@@ -705,6 +707,15 @@ void drainPhysicsContactEvents();
 // ---------------------------------------------------------------------------
 
 void installAIGlobals();
+
+// `bro.ai` for the compiled realm: `{ game }`, the same surface the
+// interpreted side has under that name (src/js/ai_bindings.cpp, documented in
+// docs/ai-game-api.js) — the ORCA World, the HexNav navigator, the agent and
+// grid factories and the perception helpers — over the same brogameagent
+// objects the `AI` global wraps. Built by host_ai_game.cpp; hung on the `bro`
+// value by dom_globals.cpp. Must run AFTER installAIGlobals, which installs
+// the classes the factories birth instances on.
+Value makeBroAiValue();
 
 // ---------------------------------------------------------------------------
 // Networking & Remote Transport (host_net.cpp)

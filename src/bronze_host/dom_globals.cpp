@@ -822,6 +822,9 @@ Value makeBroValue() {
     b.set("net", makeBroNetValue());
     b.set("mesh", makeBroMeshValue());
     b.set("image", makeBroImageValue());
+    // bro.ai.game (host_ai_game.cpp): after installAIGlobals, which installs
+    // the classes its factories birth instances on.
+    b.set("ai", makeBroAiValue());
     return b.get();
 }
 

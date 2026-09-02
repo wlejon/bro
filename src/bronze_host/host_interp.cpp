@@ -54,10 +54,12 @@
 
 #include "quickjs.h"
 
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -115,6 +117,24 @@ struct Bridge {
     // weak simply contributes nothing until the sweep frees its row.
     std::unordered_map<uint64_t, size_t> byBronze;
     uint64_t byBronzeEpoch = ~0ULL;
+
+    // The symbol under which an array snapshot carries its keeper — the
+    // BronzeRef whose finalizer is the snapshot's death signal (see "Arrays"
+    // below). A symbol so that Object.keys, JSON.stringify and for-in never
+    // see it; non-enumerable besides.
+    JSAtom keeperAtom = JS_ATOM_NULL;
+    // `Array.isArray`, the builtin's own answer to "is this bronze value an
+    // Array" — embed has no predicate for it. Heap-allocated and never freed
+    // for host_class.cpp's reason: a static Persistent would be destroyed
+    // after the runtime it roots into is gone.
+    ev::Persistent* isArrayFn = nullptr;
+
+    // The compiled `import()`s the interpreter is loading: one bronze promise
+    // per call, settled from the QuickJS promise JS_LoadModule answered.
+    // Indexed, because a QuickJS C function can carry an integer in its data
+    // slot but not a Persistent; a settled slot is reused.
+    std::vector<std::unique_ptr<ev::Persistent>> pendingImports;
+    std::vector<size_t> freeImports;
 };
 
 Bridge& bridge() {
@@ -232,11 +252,14 @@ void freeRow(size_t index, bool freeOwnedJs) {
     Crossing& row = *b.rows[index];
     if (row.kind == CrossKind::Free) return;
     const bool ownsJs = row.kind != CrossKind::BronzeOut;
-    if (ownsJs) {
+    // Every kind may be keyed by its JS half: the owned kinds always are, and
+    // a BronzeOut row is when its JS half is an array snapshot (so the
+    // snapshot going home resolves to the array it copied).
+    if (JS_VALUE_GET_TAG(row.js) == JS_TAG_OBJECT) {
         auto it = b.byJs.find(JS_VALUE_GET_PTR(row.js));
         if (it != b.byJs.end() && it->second == index) b.byJs.erase(it);
-        if (freeOwnedJs && b.ctx) JS_FreeValue(b.ctx, row.js);
     }
+    if (ownsJs && freeOwnedJs && b.ctx) JS_FreeValue(b.ctx, row.js);
     if (b.byBronzeEpoch == ev::relocationEpoch()) {
         Value v = bronzeHalfOf(row);
         if (ev::isObject(v)) {
@@ -480,6 +503,89 @@ JSValue makeJsRef(Value bronze) {
     const size_t index = addBronzeOut(bronze, obj);
     JS_SetOpaque(obj, reinterpret_cast<void*>(index + 1));
     return obj;
+}
+
+// ---------------------------------------------------------------------------
+// Arrays: a real QuickJS Array, holding wrapped elements
+// ---------------------------------------------------------------------------
+//
+// A bronze Array cannot cross as a BronzeRef. The interpreted side's bindings
+// validate an array argument with JS_IsArray (src/js/ai_bindings.cpp's
+// `setPath(waypoints)`, and a dozen others), and in this QuickJS that is a
+// class-id test — `p->class_id == JS_CLASS_ARRAY` — which no exotic class and
+// no Proxy passes (quickjs.h says so at the declaration: it no longer punches
+// through proxies). The only value that answers is a real Array, so that is
+// what crosses: a SNAPSHOT, each element converted the way any value
+// crossing this way is — primitives copied, objects wrapped, typed arrays
+// shared — built fresh on EVERY crossing so a script that reads
+// `scene.children` after adding to it sees the addition.
+//
+// What this gives up is in-place mutation across the boundary: a `push` on
+// the snapshot is the snapshot's, and an element written through it is not
+// written to the bronze array. The elements themselves are live (an object
+// element is the wrapper it always was); only the container is a copy. That
+// is the trade the JS_IsArray gate forces, and it is the shape the
+// interpreted side's own bindings want — an argument array is read once.
+//
+// IDENTITY still round-trips. The snapshot is registered in the JS-keyed map
+// beside the owned kinds, so a snapshot handed back to compiled code resolves
+// to the bronze array it copied — `identity(arr) === arr` holds from the
+// compiled side. A snapshot's death is signalled by a KEEPER: an ordinary
+// BronzeRef over the same array, stored on the snapshot under a symbol key,
+// whose class finalizer marks the row exactly as it does for any wrapper.
+
+Value isArrayFn() {
+    Bridge& b = bridge();
+    if (!b.isArrayFn) {
+        b.isArrayFn = new ev::Persistent();
+        ev::GlobalValue arrayCtor = ev::globalValue("Array");
+        if (arrayCtor.found) {
+            ev::Persistent ctorP(arrayCtor.value);
+            b.isArrayFn->set(ev::getProperty(ctorP.get(), "isArray"));
+        }
+    }
+    return b.isArrayFn->get();
+}
+
+bool isBronzeArray(Value v) {
+    if (!ev::isObject(v) || ev::isTypedArray(v) || ev::isFunction(v)) return false;
+    // Rooted across the lookup and the call, both of which may allocate.
+    ev::Persistent vP(v);
+    ev::Persistent fn(isArrayFn());
+    if (!ev::isFunction(fn.get())) return false;
+    const Value arg = vP.get();
+    ev::CallResult r = ev::call(fn.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+    return !r.thrown && ev::toBool(r.value);
+}
+
+// Nesting past this depth crosses as a plain wrapper: an array that contains
+// itself would otherwise snapshot forever.
+int g_arrayDepth = 0;
+
+JSValue arrayToJs(Value arr) {
+    Bridge& b = bridge();
+    ev::Persistent aP(arr);
+    const uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(aP.get(), "length")));
+    JSValue out = JS_NewArray(b.ctx);
+    if (JS_IsException(out)) return out;
+    ++g_arrayDepth;
+    for (uint32_t i = 0; i < n; ++i) {
+        Value e = ev::getElement(aP.get(), i);
+        JS_SetPropertyUint32(b.ctx, out, i, toJs(e));
+    }
+    --g_arrayDepth;
+
+    // The keeper: its row roots the array and its finalizer ends the row.
+    // The row's JS half is the SNAPSHOT (unowned, like every BronzeOut half),
+    // so the JS-keyed map can take the snapshot home.
+    JSValue keeper = makeJsRef(aP.get());
+    if (JS_IsException(keeper)) return out;
+    const size_t index = indexOfJsRef(keeper);
+    Crossing& row = *b.rows[index];
+    row.js = out;
+    b.byJs[JS_VALUE_GET_PTR(out)] = index;
+    JS_DefinePropertyValue(b.ctx, out, b.keeperAtom, keeper, 0);
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,10 +1129,16 @@ JSValue toJs(Value v) {
     if (dom::Element* el = hostElementOf(vP.get()))
         return js::DomBindings::wrapElement(b.ctx, el);
     if (Crossing* row = rowForBronze(vP.get())) {
-        if (row->kind == CrossKind::BronzeOut) return JS_DupValue(b.ctx, row->js);
-        // A proxy for a JS object, going home: the original.
-        return JS_DupValue(b.ctx, row->js);
+        // A proxy for a JS object, going home: the original. A bronze object
+        // that crossed before: its wrapper — unless it is an Array, whose
+        // every crossing is a fresh snapshot (see "Arrays" above), so the
+        // row found here is only the last snapshot's keeper.
+        if (row->kind != CrossKind::BronzeOut) return JS_DupValue(b.ctx, row->js);
+        if (!isBronzeArray(vP.get())) return JS_DupValue(b.ctx, row->js);
+        if (g_arrayDepth < 32) return arrayToJs(vP.get());
+        return makeJsRef(vP.get());  // an array nested past the cap: a plain wrapper
     }
+    if (g_arrayDepth < 32 && isBronzeArray(vP.get())) return arrayToJs(vP.get());
     return makeJsRef(vP.get());
 }
 
@@ -1058,6 +1170,8 @@ Value toBronze(JSValueConst v) {
     if (auto* el = static_cast<dom::Element*>(js::DomBindings::unwrapElement(b.ctx, v)))
         return hostElementValue(el);
     if (Crossing* row = rowForJs(v)) {
+        // An array snapshot going home: the bronze array it copied.
+        if (row->kind == CrossKind::BronzeOut) return row->bronze.get();
         Value wrapper = derefWeakRef(row->bronze.get());
         if (ev::isObject(wrapper)) return wrapper;
         // The wrapper died between sweeps; fall through and cross afresh.
@@ -1188,6 +1302,171 @@ Value dynamicEval(Value source) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// import(), performed by the interpreter (16.2.1.7 HostLoadImportedModule)
+// ---------------------------------------------------------------------------
+//
+// The third seam. bronze answers every `import()` whose specifier it could
+// read at compile time from the compiled graph; one it could not — a
+// variable, a template bounded by nothing — reaches the runtime, and without
+// a host it rejects. bro HAS a module loader: the one the page's own
+// `<script type=module>` and every `import` in it go through
+// (src/js/runtime.cpp, module_normalize + module_loader, hooked into the
+// realm by JS_SetModuleLoaderFunc). So the specifier is resolved the way that
+// loader resolves one — relative to the importer, through the app's import
+// map for a bare name, over the asset mounts for a rooted one — by handing
+// JS_LoadModule the importer's PATH as the base, loaded and evaluated in the
+// page's realm, and the namespace comes back through toBronze as a wrapper,
+// exactly as any interpreted object does.
+//
+// The importer is named by its `import.meta.url` (bronze's lowering spells it
+// `file:///D:/x/main.js`, `file:///home/x/main.js`), and the loader keys on
+// filesystem paths, so the URL is turned back into one first: a relative
+// specifier then lands beside the compiled SOURCE, which is what
+// `import.meta.url` means and what a relative import in that source would
+// have meant had the compiler been able to read it.
+//
+// The answer is a bronze promise settled from the QuickJS one: `.then` on
+// the loader's promise with two C functions that carry the pending slot's
+// index, so the settle runs on the engine's own job pump — a plain host
+// stack — and the compiled continuation runs at the next microtask
+// checkpoint (hostFrame). A failed load rejects with the loader's own message
+// (the file that could not be opened, the syntax error), never a silent
+// undefined.
+
+// "file:///D:/x/y.js" -> "D:/x/y.js"; "file:///home/x/y.js" -> "/home/x/y.js";
+// anything else unchanged. The bare "file:///" (a build with no source path)
+// becomes "", which the loader reads as "relative to the working directory".
+std::string importerPathOf(const std::string& url) {
+    if (url.rfind("file://", 0) != 0) return url;
+    std::string p = url.substr(7);
+    // %XX escapes, the only encoding a file URL applies to a path.
+    std::string out;
+    out.reserve(p.size());
+    for (size_t i = 0; i < p.size(); ++i) {
+        if (p[i] == '%' && i + 2 < p.size() && std::isxdigit(static_cast<unsigned char>(p[i + 1])) &&
+            std::isxdigit(static_cast<unsigned char>(p[i + 2]))) {
+            out.push_back(static_cast<char>(std::stoi(p.substr(i + 1, 2), nullptr, 16)));
+            i += 2;
+        } else {
+            out.push_back(p[i]);
+        }
+    }
+    // "/D:/x" is a Windows path behind a leading slash the URL form requires.
+    if (out.size() >= 3 && out[0] == '/' && std::isalpha(static_cast<unsigned char>(out[1])) &&
+        out[2] == ':') {
+        out.erase(0, 1);
+    }
+    return out;
+}
+
+size_t takeImportSlot(Value promise) {
+    Bridge& b = bridge();
+    size_t index;
+    if (!b.freeImports.empty()) {
+        index = b.freeImports.back();
+        b.freeImports.pop_back();
+        b.pendingImports[index] = std::make_unique<ev::Persistent>(promise);
+    } else {
+        index = b.pendingImports.size();
+        b.pendingImports.push_back(std::make_unique<ev::Persistent>(promise));
+    }
+    return index;
+}
+
+Value importError(const std::string& message);
+
+// The two reactions. `magic` 0 fulfils, 1 rejects; func_data[0] is the slot.
+JSValue importSettled(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int magic,
+                      JSValueConst* func_data) {
+    Bridge& b = bridge();
+    int32_t slot = -1;
+    JS_ToInt32(ctx, &slot, func_data[0]);
+    if (slot < 0 || static_cast<size_t>(slot) >= b.pendingImports.size() ||
+        !b.pendingImports[static_cast<size_t>(slot)]) {
+        return JS_UNDEFINED;
+    }
+    std::unique_ptr<ev::Persistent> promise = std::move(b.pendingImports[static_cast<size_t>(slot)]);
+    b.freeImports.push_back(static_cast<size_t>(slot));
+
+    JSValueConst arg = argc > 0 ? argv[0] : JS_UNDEFINED;
+    if (magic == 0) {
+        // The namespace, wrapped: a proxy whose reads are the module's
+        // exports. Rooted across resolvePromise, which allocates.
+        ev::Persistent ns(toBronze(arg));
+        ev::resolvePromise(promise->get(), ns.get());
+    } else {
+        // The reason crosses as a bronze Error carrying the message — the
+        // same rule throwIntoJs applies the other way: an Error's class and
+        // stack belong to the heap it was made in.
+        std::string message;
+        const char* s = JS_ToCString(ctx, arg);
+        message = s ? s : "(unknown error)";
+        if (s) JS_FreeCString(ctx, s);
+        ev::Persistent reason(importError(message));
+        ev::rejectPromise(promise->get(), reason.get());
+    }
+    return JS_UNDEFINED;
+}
+
+// A bronze Error for a failed import, built the language's way so the
+// compiled `catch` sees an instance of Error with a message — never through
+// throwError, whose pending cell belongs to a call that is not happening
+// here: the caller is awaiting a promise, and a failure is a rejection.
+Value importError(const std::string& message) {
+    ev::Persistent msg(ev::fromUtf8("import(): " + message));
+    ev::GlobalValue errorCtor = ev::globalValue("Error");
+    if (!errorCtor.found) return msg.get();
+    ev::Persistent ctorP(errorCtor.value);
+    const Value a0 = msg.get();
+    ev::CallResult r = ev::construct(ctorP.get(), std::span<const Value>(&a0, 1));
+    return r.thrown ? msg.get() : r.value;
+}
+
+Value rejectedImport(const std::string& message) {
+    ev::Persistent promise(ev::createPromise());
+    ev::Persistent reason(importError(message));
+    ev::rejectPromise(promise.get(), reason.get());
+    return promise.get();
+}
+
+Value dynamicImport(Value specifier, const std::string& referrerUrl) {
+    Bridge& b = bridge();
+    if (!b.ctx) {
+        return rejectedImport("no interpreter realm to load in (the bridge is not installed)");
+    }
+    if (b.ownerThread != std::thread::id{} && std::this_thread::get_id() != b.ownerThread) {
+        return rejectedImport("must execute on the main interpreter thread");
+    }
+    if (ev::isObject(specifier) || ev::isSymbol(specifier)) {
+        return rejectedImport("the specifier must be a string");
+    }
+    const std::string spec = ev::toUtf8(specifier);
+    const std::string base = importerPathOf(referrerUrl);
+
+    JSValue jsPromise = JS_LoadModule(b.ctx, base.c_str(), spec.c_str());
+    if (JS_IsException(jsPromise)) {
+        JS_FreeValue(b.ctx, jsPromise);
+        return rejectedImport(describeJsException(b.ctx));
+    }
+
+    ev::Persistent promise(ev::createPromise());
+    const size_t slot = takeImportSlot(promise.get());
+    JSValue slotV = JS_NewInt32(b.ctx, static_cast<int32_t>(slot));
+    JSValue onFulfilled = JS_NewCFunctionData(b.ctx, importSettled, 1, 0, 1, &slotV);
+    JSValue onRejected = JS_NewCFunctionData(b.ctx, importSettled, 1, 1, 1, &slotV);
+    JSValue then = JS_GetPropertyStr(b.ctx, jsPromise, "then");
+    JSValue reactions[2] = {onFulfilled, onRejected};
+    JSValue chained = JS_Call(b.ctx, then, jsPromise, 2, reactions);
+    if (JS_IsException(chained)) (void)describeJsException(b.ctx);
+    JS_FreeValue(b.ctx, chained);
+    JS_FreeValue(b.ctx, then);
+    JS_FreeValue(b.ctx, onFulfilled);
+    JS_FreeValue(b.ctx, onRejected);
+    JS_FreeValue(b.ctx, jsPromise);
+    return promise.get();
+}
+
 }  // namespace
 
 void installInterpBridge(engine::Engine& engine) {
@@ -1203,12 +1482,21 @@ void installInterpBridge(engine::Engine& engine) {
         JS_NewClassID(JS_GetRuntime(b.ctx), &b.refClass);
         JS_NewClass(JS_GetRuntime(b.ctx), b.refClass, &g_refClassDef);
     }
+    if (b.keeperAtom == JS_ATOM_NULL) {
+        // The private symbol an array snapshot carries its source under
+        // (arrayToJs). A symbol, not a string key, so no `for..in`, no
+        // Object.keys and no JSON.stringify of the snapshot ever sees it.
+        JSValue sym = JS_NewSymbol(b.ctx, "bronze.array", false);
+        b.keeperAtom = JS_ValueToAtom(b.ctx, sym);
+        JS_FreeValue(b.ctx, sym);
+    }
     ev::setDynamicFunctionHook(dynamicFunction);
     ev::setDynamicEvalHook(dynamicEval);
+    ev::setDynamicImportHook(dynamicImport);
     installGlobalsFallback();
-    LOG_INFO("bronze_host: interpreter bridge installed (compiled `new Function` and "
-             "`eval` compile in the app's QuickJS realm, whose global lookups fall "
-             "back to the compiled realm's globals)");
+    LOG_INFO("bronze_host: interpreter bridge installed (compiled `new Function`, "
+             "`eval` and a non-constant `import()` go through the app's QuickJS realm, "
+             "whose global lookups fall back to the compiled realm's globals)");
 }
 
 Value bridgeJsGlobal(const char* name) {

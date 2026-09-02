@@ -99,6 +99,37 @@ void decorateAgentProto(ObjectBuilder& b) {
             return ev::undefined();
         });
 
+    // The docs' bare coordinates (docs/ai-game-api.js `bot.x`, `bot.z`),
+    // beside the {x,y,z} `position` above.
+    b.accessor("x", [](Value self_, std::span<const Value>) {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        return ev::fromDouble(h->agent.x());
+    }, nullptr);
+
+    b.accessor("z", [](Value self_, std::span<const Value>) {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        return ev::fromDouble(h->agent.z());
+    }, nullptr);
+
+    // Index of the waypoint the path follower is walking toward — what lets a
+    // program that supplied the route via setPath consume its own mirror of
+    // it as the agent passes each waypoint.
+    b.accessor("currentWaypoint", [](Value self_, std::span<const Value>) {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        return ev::fromDouble(h->agent.currentWaypoint());
+    }, nullptr);
+
+    // The route as [{x, z}, ...] — a real array, as the QuickJS binding answers.
+    b.accessor("path", [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        const std::vector<bromath::Vec2>& p = h->agent.path();
+        return makePathArray(p);
+    }, nullptr);
+
     b.accessor("atTarget", [](Value self_, std::span<const Value>) {
         HostAgent* h = unwrapAgent(self_);
         if (!h) return ev::undefined();
@@ -312,6 +343,87 @@ void decorateAgentProto(ObjectBuilder& b) {
         return ev::undefined();
     });
 
+    // The docs' spelling of `stop` for the scripted path: the target goes,
+    // and so does any navmesh route this layer was walking.
+    b.def("clearTarget", 0, [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        h->navActive = false;
+        h->navPath.clear();
+        h->agent.clearTarget();
+        return ev::undefined();
+    });
+
+    // setPath(waypoints): follow an externally planned route verbatim — the
+    // waypoints are walked in order and never re-planned by NavGrid A*; the
+    // embedder owns the route, the agent owns steering/avoidance/dynamics.
+    // Each waypoint is {x, z} or [x, z]; the final one becomes the target for
+    // hasTarget/atTarget; an empty array is clearTarget(). Any array-like
+    // (a `length` and indices) is accepted: an array that crossed the
+    // interpreter bridge is a proxy, not an Array, and is a route all the same.
+    b.def("setPath", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        Value list = argAt(a, 0);
+        if (!ev::isObject(list) || ev::isFunction(list))
+            return ev::throwTypeError("setPath(waypoints: [{x,z}|[x,z], ...])");
+        ev::Persistent root(list);
+        Value lenV = ev::getProperty(root.get(), "length");
+        if (ev::isUndefined(lenV) || ev::isObject(lenV))
+            return ev::throwTypeError("setPath(waypoints: [{x,z}|[x,z], ...])");
+        const uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+        std::vector<bromath::Vec2> path;
+        path.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            Value wp = ev::getElement(root.get(), i);
+            if (!ev::isObject(wp))
+                return ev::throwTypeError("setPath: waypoint " + std::to_string(i) +
+                                          " must be {x,z} or [x,z]");
+            path.push_back(parseVec2(wp));
+        }
+        h->navActive = false;
+        h->navPath.clear();
+        h->agent.setPath(std::move(path));
+        return ev::undefined();
+    });
+
+    // Velocity is dynamics state (ORCA reciprocity reads neighbours'
+    // velocities): a program restoring agents from its own save seeds it here.
+    b.def("setVelocity", 2, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        h->agent.setVelocity(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)));
+        return ev::undefined();
+    });
+
+    b.def("setYaw", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        h->agent.setYaw(static_cast<float>(numAt(a, 0)));
+        return ev::undefined();
+    });
+
+    b.def("setMaxAccel", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        h->agent.setMaxAccel(static_cast<float>(numAt(a, 0)));
+        return ev::undefined();
+    });
+
+    b.def("setMaxTurnRate", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        h->agent.setMaxTurnRate(static_cast<float>(numAt(a, 0)));
+        return ev::undefined();
+    });
+
+    b.def("setAvoidance", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        applyAgentAvoidance(argAt(a, 0), h->agent);
+        return ev::undefined();
+    });
+
     b.def("setRadius", 1, [](Value self_, std::span<const Value> a) -> Value {
         HostAgent* h = unwrapAgent(self_);
         if (!h) return ev::undefined();
@@ -369,6 +481,33 @@ void decorateAgentProto(ObjectBuilder& b) {
     });
 }
 
+void applyAgentAvoidance(Value opts, brogameagent::Agent& agent) {
+    brogameagent::AgentAvoidance av;  // library defaults
+    if (ev::isBool(opts)) {
+        av.enabled = ev::toBool(opts);
+    } else if (ev::isObject(opts)) {
+        ev::Persistent root(opts);
+        av.enabled = getBoolProperty(root.get(), "enabled", av.enabled);
+        av.radius = static_cast<float>(getDoubleProperty(root.get(), "radius", av.radius));
+        av.maxSpeed = static_cast<float>(getDoubleProperty(root.get(), "maxSpeed", av.maxSpeed));
+        av.neighborDist =
+            static_cast<float>(getDoubleProperty(root.get(), "neighborDist", av.neighborDist));
+        av.maxNeighbors =
+            static_cast<int>(getDoubleProperty(root.get(), "maxNeighbors", av.maxNeighbors));
+        av.timeHorizon =
+            static_cast<float>(getDoubleProperty(root.get(), "timeHorizon", av.timeHorizon));
+        av.timeHorizonObst = static_cast<float>(
+            getDoubleProperty(root.get(), "timeHorizonObst", av.timeHorizonObst));
+        av.height = static_cast<float>(getDoubleProperty(root.get(), "height", av.height));
+        av.priority = static_cast<float>(getDoubleProperty(root.get(), "priority", av.priority));
+        av.layers = static_cast<uint32_t>(getDoubleProperty(root.get(), "layers", av.layers));
+        av.mask = static_cast<uint32_t>(getDoubleProperty(root.get(), "mask", av.mask));
+    } else {
+        return;
+    }
+    agent.setAvoidance(av);
+}
+
 Value makeAgentHandle(HostAgent* h) {
     ObjectBuilder b(g_agentClass.make(h, [](void* p) {
         delete static_cast<HostAgent*>(p);
@@ -407,6 +546,14 @@ Value aiCreateAgent(Value, std::span<const Value> a) {
 
         double maxTurnRate = getDoubleProperty(root.get(), "maxTurnRate", -1.0);
         if (maxTurnRate > 0) h->agent.setMaxTurnRate(static_cast<float>(maxTurnRate));
+
+        // The unit identity the world's queries key on (docs/ai-game-api.js
+        // createAgent: `id`, `teamId`), and the ORCA participation —
+        // `avoidance: true | false | {...}` — when the world's pass is on.
+        h->agent.unit().id = static_cast<int>(getDoubleProperty(root.get(), "id", 0.0));
+        h->agent.unit().teamId = static_cast<int>(getDoubleProperty(root.get(), "teamId", 0.0));
+        Value avoidV = ev::getProperty(root.get(), "avoidance");
+        if (!ev::isUndefined(avoidV) && !ev::isNull(avoidV)) applyAgentAvoidance(avoidV, h->agent);
 
         Value nmV = ev::getProperty(root.get(), "navMesh");
         if (auto* nm = unwrapNavMesh(nmV)) {

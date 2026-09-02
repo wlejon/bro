@@ -15,6 +15,7 @@
 #include <brogameagent/nav_mesh.h>
 #include <brogameagent/agent.h>
 #include <brogameagent/avoidance.h>
+#include <brogameagent/hex_nav.h>
 #include <brogameagent/world.h>
 #include <brogameagent/perception.h>
 
@@ -57,6 +58,30 @@ struct HostAgent {
     bool destroyed = false;
 };
 
+// bro.ai.game.createHexNav({ size }): the weighted hex-grid navigator. Owns
+// its tables (copies), so the program's arrays may go away after a push.
+struct HostHexNav {
+    uint32_t tag = kHostHexNavTag;
+    std::unique_ptr<brogameagent::HexNav> nav;
+};
+
+// bro.ai.game.createWorld(): the ORCA world. brogameagent::World holds RAW
+// Agent pointers, so every agent added is rooted here until it is removed —
+// a roster of Persistents the world's own handle owns. That is only legal
+// because the handle is born Finalize::Deferred (embed.h): its destructor
+// runs on a plain host stack at the finalizer drain, where releasing a root is
+// an ordinary embed call rather than the forbidden mid-collection one
+// host_internal.h's GC rule names.
+struct HostWorld {
+    uint32_t tag = kHostWorldTag;
+    brogameagent::World world;
+    struct Roster {
+        const brogameagent::Agent* agent;  // identity for removeAgent
+        ev::Persistent value;              // the handle, kept alive
+    };
+    std::vector<Roster> roster;
+};
+
 // ---------------------------------------------------------------------------
 // Host Classes
 // ---------------------------------------------------------------------------
@@ -64,6 +89,8 @@ struct HostAgent {
 extern HostClass g_navGridClass;
 extern HostClass g_navMeshClass;
 extern HostClass g_agentClass;
+extern HostClass g_hexNavClass;
+extern HostClass g_worldClass;
 
 // ---------------------------------------------------------------------------
 // Unwrap Helpers
@@ -88,6 +115,20 @@ inline HostAgent* unwrapAgent(Value v) {
     if (!ptr) return nullptr;
     auto* h = static_cast<HostAgent*>(ptr);
     return (h->tag == kHostAgentTag) ? h : nullptr;
+}
+
+inline HostHexNav* unwrapHexNav(Value v) {
+    void* ptr = ev::handleData(v);
+    if (!ptr) return nullptr;
+    auto* h = static_cast<HostHexNav*>(ptr);
+    return (h->tag == kHostHexNavTag) ? h : nullptr;
+}
+
+inline HostWorld* unwrapWorld(Value v) {
+    void* ptr = ev::handleData(v);
+    if (!ptr) return nullptr;
+    auto* h = static_cast<HostWorld*>(ptr);
+    return (h->tag == kHostWorldTag) ? h : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +315,23 @@ void decorateAgentProto(ObjectBuilder& b);
 Value makeAgentHandle(HostAgent* h);
 inline Value makeAgentValue(HostAgent* h) { return makeAgentHandle(h); }
 Value aiCreateAgent(Value, std::span<const Value> a);
+
+// `true | false | { enabled?, radius?, maxSpeed?, neighborDist?, maxNeighbors?,
+// timeHorizon?, timeHorizonObst?, height?, priority?, layers?, mask? }` onto an
+// agent's ORCA parameters — the shape docs/ai-game-api.js gives for
+// createAgent's `avoidance` and for agent.setAvoidance, and the same parser
+// src/js/ai_bindings.cpp applies (applyAgentAvoidanceOpts). Anything else is
+// ignored, as there.
+void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);
+
+// HexNav + World + the bro.ai.game object (host_ai_game.cpp)
+void decorateHexNavProto(ObjectBuilder& b);
+void decorateWorldProto(ObjectBuilder& b);
+Value aiCreateHexNav(Value, std::span<const Value> a);
+Value aiCreateWorld(Value, std::span<const Value> a);
+Value aiCanSee(Value, std::span<const Value> a);
+Value aiComputeLeadAim(Value, std::span<const Value> a);
+Value makeAiGameValue();
 
 // Core (host_ai_core.cpp)
 Value aiHasLineOfSight(Value, std::span<const Value> a);

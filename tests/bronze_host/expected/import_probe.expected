@@ -1,0 +1,9 @@
+APP nsType=object
+APP greeting=hello
+APP greet=hi bronze!
+APP default=42
+APP sameNamespace=true
+APP missingRejected=true
+APP missingIsError=true
+APP missingMessage=true
+APP done=true

@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Twenty-three checks, one manifest. `tests/run_tests.sh` enumerates them
+Twenty-five checks, one manifest. `tests/run_tests.sh` enumerates them
 (`run_checks.sh --list`) and runs each with the rest of the suite — exit 77
 counts as SKIP there, and `BRO_TEST_BRONZE=0` leaves them out. Individual
 checks drop out with `BRO_TEST_BRONZE_SKIP=<names>` (space- or comma-separated,
@@ -36,12 +36,14 @@ four synthetic C modules to hit every refusal branch.
 | `parser` | DOMParser: a second document, and adoption out of it |
 | `proxy` | the four proxy-backed live views: style, computed, dataset, localStorage |
 | `class` | host classes, via Image: born-on-prototype, shared methods, instanceof |
-| `interp` | the interpreter bridge: compiled `new Function`, and values crossing both ways |
+| `interp` | the interpreter bridge: compiled `new Function`, and values crossing both ways (arrays as real arrays) |
+| `import` | a non-constant compiled `import()`, loaded by the page's realm from beside the probe's source |
 | `input` | pointer lock, fullscreen, Gamepad |
 | `video` | VideoEncoder, GifEncoder: every pixel source, and every refusal |
 | `audio` | Web Audio & Sound Engine: nodes, params, buffers, decodeAudioData |
 | `physics` | Jolt Physics: bodies, character controller, soft bodies, queries |
 | `ai` | navmesh, nav grid, agents |
+| `aigame` | `bro.ai.game` from compiled code: HexNav over a hand-derived table, an ORCA world |
 | `net` | bro.net over GNS, WebSocket, remote HTTP transport |
 | `wild` | wild three.js scene + OrbitControls |
 | `instanced` | instanced mesh under load (2,500 instances) |

@@ -278,4 +278,27 @@ say('busPair', pair);
 const invoke = new Function('f', 'o', 'return f.call(null, o) + "|" + f(o);');
 say('busInvoke', invoke(function (o) { return o.domElement; }, payload));
 
+// --- Compiled arrays are arrays over there --------------------------------
+//
+// A compiled Array crosses as a real QuickJS Array — a snapshot of its
+// elements, each element crossing by the ordinary rule — and not as a
+// wrapper, because the interpreter's own `Array.isArray` is a class check
+// that no proxy can pass, and library code (`setPath(waypoints)`,
+// `JSON.stringify`, `.map`) starts with that check. The snapshot remembers
+// its source, so it comes home as the array that went out.
+
+const compiledArr = [1, 2, 3];
+say('arrayIsArray', new Function('a', 'return Array.isArray(a)')(compiledArr));
+say('arrayReadOver', new Function('a', 'return a.length + ":" + a[2]')(compiledArr));
+say('arrayJson', new Function('a', 'return JSON.stringify(a)')(compiledArr));
+say('arrayMap', new Function('a', 'return a.map(function (x) { return x * 2; }).join(",")')(compiledArr));
+say('arrayRoundTrip', identity(compiledArr) === compiledArr);
+say('arrayNested', new Function('o', 'return Array.isArray(o.list) + ":" + o.list[1].n')({ list: [{ n: 1 }, { n: 2 }] }));
+
+// The elements are not copies: an object inside the array is still wrapped,
+// so a write through the snapshot's element lands on the compiled object.
+const holder = { list: [{ n: 1 }] };
+new Function('o', 'o.list[0].n = 7')(holder);
+say('arrayElementLive', holder.list[0].n);
+
 say('done', 'true');

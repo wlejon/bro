@@ -112,6 +112,8 @@ AI
 AINavGrid
 AINavMesh
 AIAgent
+AIHexNav
+AIWorld
 WebSocket
 CloseEvent
 MessageEvent

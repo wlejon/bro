@@ -37,11 +37,11 @@ Off by default; nothing here is in the default build.
 | `host_fetch.cpp` | `fetch()` over the engine's asset mounts, into a real bronze Promise |
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
 | `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, `localStorage`, and behind a bridged interpreted object |
-| `host_interp.cpp` | **the interpreter bridge**: compiled `new Function` compiled by the page's QuickJS realm, and values crossing between the two heaps in both directions |
+| `host_interp.cpp` | **the interpreter bridge**: compiled `new Function`, `eval` and a non-constant `import()` answered by the page's QuickJS realm, and values crossing between the two heaps in both directions |
 | `host_vendor_globals.cpp` | the names a page loads with plain `<script>` tags — `signals`, `CodeMirror`, `acorn`, `tern`, `esprima`, `jsonlint` — registered as the page's own objects, through that bridge |
 | `host_audio_*.cpp`, `host_audio_internal.h` | the Web Audio SURFACE ? `AudioContext` and the node/param objects ? over broaudio. `connect()` routes nothing and most node state is inaudible; see the header of `host_audio_core.cpp` for what actually reaches the engine. `_core` context + globals install, `_param` AudioParam, `_buffer` AudioBuffer + decode, `_nodes` oscillator/filter/analyser/source, `_spatial` Panner + StereoPanner, `_dsp` Delay/Compressor/WaveShaper/Convolver/Splitter/Merger |
 | `host_physics_*.cpp`, `host_physics_internal.h` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt. `_core` bodies + globals, `_constraints` joints/motors/limits, `_character`, `_softbody`, `_queries` raycast/overlap |
-| `host_ai_*.cpp`, `host_ai_internal.h` | the `AI` namespace, over brogameagent. `_core` globals + aim math, `_navgrid`, `_navmesh`, `_agent` |
+| `host_ai_*.cpp`, `host_ai_internal.h` | the `AI` namespace and `bro.ai.game`, over brogameagent. `_core` globals + aim math, `_navgrid`, `_navmesh`, `_agent`, `_game` the `bro.ai.game` namespace the interpreted binding publishes (docs/ai-game-api.js): `createHexNav`, `createWorld` (the ORCA world), perception, over the same objects |
 | `host_net.cpp` | `bro.net` over GameNetworkingSockets, and the `WebSocket` client |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `web_host.globals` | the manifest of global names bronze admits; every one must be registered ? an unregistered name is `fatal()`, not a miss |
@@ -179,8 +179,20 @@ functions by a wrapper that forwards property reads, writes, calls, `in`,
 `delete` and enumeration to the other heap, typed arrays as **two views over
 one byte store** (embed's `externalizeArrayBuffer` pins the bytes outside the
 moving heap, so a script's write to `position.array[0]` is the compiled
-renderer's write too — the copy that silently diverged is gone), and thrown
-values as throws rather than as silent undefined.
+renderer's write too — the copy that silently diverged is gone), compiled
+arrays as **real arrays** (a snapshot of the elements, each crossing by the
+ordinary rule, remembering its source so it round-trips — because the
+interpreter's `Array.isArray` is a class check no wrapper can pass, and
+`setPath(waypoints)` or `JSON.stringify` begins with it), and thrown values
+as throws rather than as silent undefined.
+
+The third seam is `import()`. bronze folds every import it can read into the
+compiled graph; a specifier built at run time reaches the runtime's
+dynamic-import host, and bro answers it with the page's own module loader —
+resolved against the importer's `import.meta.url` (so a relative path lands
+beside the compiled SOURCE), through the import map for a bare name, loaded
+and evaluated in the interpreted realm. The namespace comes back as a bronze
+Promise of a wrapper; a failed load rejects with the loader's message.
 
 Three things make that safe to say rather than merely to hope:
 
