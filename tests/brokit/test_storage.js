@@ -46,3 +46,43 @@ assert(localStorage.getItem('shared') === 'L', 'local vs session L');
 assert(sessionStorage.getItem('shared') === 'S', 'local vs session S');
 localStorage.clear();
 sessionStorage.clear();
+
+// ── The file is real JSON ──────────────────────────────────────────────────
+//
+// localStorage persists to <appDir>/.storage.json. It used to be written by a
+// hand escaper that knew four escapes, so a value carrying anything else came
+// back changed. Every value below round-trips through the file AND the file
+// itself parses with JSON.parse, which is the contract.
+
+const fs = require('fs');
+const path = require('path');
+const storePath = path.join(bro.appDir, '.storage.json');
+
+const awkward = {
+  quotes: 'she said "hi" \\ back',
+  lines: 'a\nb\r\nc\td',
+  ctrl: 'bell form\f back\b nul-adjacent',
+  unicode: 'héllo — ✓ 日本 😀',
+  json: JSON.stringify({ nested: { arr: [1, 'two', null], s: 'q"uote' } }),
+  slash: 'a/b\\/c',
+  'key "with" quotes\n': 'k'
+};
+for (const [k, v] of Object.entries(awkward)) localStorage.setItem(k, v);
+for (const [k, v] of Object.entries(awkward)) {
+  assert(localStorage.getItem(k) === v, 'in-memory round trip: ' + k);
+}
+
+assert(fs.existsSync(storePath), '.storage.json exists at ' + storePath);
+assert(!fs.existsSync(storePath + '.tmp'), 'the atomic write leaves no .tmp behind');
+const onDisk = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+for (const [k, v] of Object.entries(awkward)) {
+  assert(onDisk[k] === v, 'the file is JSON.parse-able and holds the value for: ' + k +
+         ' (got ' + JSON.stringify(onDisk[k]) + ')');
+}
+assert(Object.keys(onDisk).length === Object.keys(awkward).length,
+       'the file holds exactly the stored keys: ' + Object.keys(onDisk).length);
+
+localStorage.clear();
+assert(JSON.stringify(JSON.parse(fs.readFileSync(storePath, 'utf-8'))) === '{}',
+       'clear() writes an empty object');
+

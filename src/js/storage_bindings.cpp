@@ -1,10 +1,9 @@
 #include "js/storage_bindings.h"
 #include "util/log.h"
+#include "util/storage_file.h"
 
 #include <qjsbind/qjsbind.h>
 
-#include <fstream>
-#include <sstream>
 #include <map>
 #include <string>
 
@@ -35,94 +34,20 @@ static StorageState* getStorageState(JSContext* ctx) {
     return state;
 }
 
+// The file format — real JSON, written atomically — lives in
+// util/storage_file.cpp, shared with the bronze host's Storage.
 static void loadStorage(StorageState* state)
 {
     state->storage.clear();
     if (state->storagePath.empty()) return;
-
-    std::ifstream file(state->storagePath);
-    if (!file.is_open()) return;
-
-    std::string content((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
-
-    // Minimal JSON object parser: {"key":"value","key2":"value2"}
-    size_t pos = content.find('{');
-    if (pos == std::string::npos) return;
-    pos++;
-
-    auto parseString = [&](size_t& p) -> std::string {
-        if (p >= content.size() || content[p] != '"') return "";
-        p++; // skip opening quote
-        std::string result;
-        while (p < content.size() && content[p] != '"') {
-            if (content[p] == '\\' && p + 1 < content.size()) {
-                p++;
-                switch (content[p]) {
-                    case '"': result += '"'; break;
-                    case '\\': result += '\\'; break;
-                    case 'n': result += '\n'; break;
-                    case 't': result += '\t'; break;
-                    default: result += content[p]; break;
-                }
-            } else {
-                result += content[p];
-            }
-            p++;
-        }
-        if (p < content.size()) p++; // skip closing quote
-        return result;
-    };
-
-    while (pos < content.size()) {
-        // Skip whitespace and commas
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\n' ||
-               content[pos] == '\r' || content[pos] == '\t' || content[pos] == ','))
-            pos++;
-        if (pos >= content.size() || content[pos] == '}') break;
-
-        std::string key = parseString(pos);
-        // Skip colon
-        while (pos < content.size() && content[pos] != ':') pos++;
-        if (pos < content.size()) pos++;
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t')) pos++;
-
-        std::string value = parseString(pos);
-        if (!key.empty()) {
-            state->storage[key] = value;
-        }
-    }
+    util::readStorageFile(state->storagePath, state->storage);
 }
 
 static void saveStorage(StorageState* state)
 {
     if (!state || state->storagePath.empty()) return;
-
-    std::ofstream file(state->storagePath);
-    if (!file.is_open()) return;
-
-    auto escapeJson = [](const std::string& s) -> std::string {
-        std::string result;
-        for (char c : s) {
-            switch (c) {
-                case '"': result += "\\\""; break;
-                case '\\': result += "\\\\"; break;
-                case '\n': result += "\\n"; break;
-                case '\t': result += "\\t"; break;
-                default: result += c; break;
-            }
-        }
-        return result;
-    };
-
-    file << "{\n";
-    bool first = true;
-    for (auto& [key, val] : state->storage) {
-        if (!first) file << ",\n";
-        file << "  \"" << escapeJson(key) << "\": \"" << escapeJson(val) << "\"";
-        first = false;
-    }
-    file << "\n}\n";
+    if (!util::writeStorageFile(state->storagePath, state->storage))
+        LOG_WARN("localStorage: could not write %s", state->storagePath.c_str());
 }
 
 // ---------------------------------------------------------------------------

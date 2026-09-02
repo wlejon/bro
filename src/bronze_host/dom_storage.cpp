@@ -5,10 +5,9 @@
 #include "bronze_host/host_internal.h"
 
 #include "engine/engine.h"
+#include "util/storage_file.h"
 
-#include <fstream>
 #include <map>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -27,22 +26,9 @@ struct StorageState {
 
 static StorageState g_storage;
 
-static std::string escapeJsonString(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (char c : s) {
-        switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\t': out += "\\t"; break;
-            case '\r': out += "\\r"; break;
-            default: out += c; break;
-        }
-    }
-    return out;
-}
-
+// The file format — real JSON, written atomically — lives in
+// util/storage_file.cpp, shared with the QuickJS Storage, so a bronze app and
+// a script app read and write the same .storage.json.
 static void loadStorageFile() {
     if (g_storage.loaded) return;
     g_storage.loaded = true;
@@ -55,70 +41,12 @@ static void loadStorageFile() {
     } else {
         g_storage.path = ".storage.json";
     }
-
-    std::ifstream file(g_storage.path);
-    if (!file.is_open()) return;
-    std::string content((std::istreambuf_iterator<char>(file)),
-                        std::istreambuf_iterator<char>());
-
-    size_t pos = content.find('{');
-    if (pos == std::string::npos) return;
-    pos++;
-
-    auto parseString = [&](size_t& p) -> std::string {
-        if (p >= content.size() || content[p] != '"') return "";
-        p++; // skip opening quote
-        std::string result;
-        while (p < content.size() && content[p] != '"') {
-            if (content[p] == '\\' && p + 1 < content.size()) {
-                p++;
-                switch (content[p]) {
-                    case '"': result += '"'; break;
-                    case '\\': result += '\\'; break;
-                    case 'n': result += '\n'; break;
-                    case 't': result += '\t'; break;
-                    case 'r': result += '\r'; break;
-                    default: result += content[p]; break;
-                }
-            } else {
-                result += content[p];
-            }
-            p++;
-        }
-        if (p < content.size()) p++; // skip closing quote
-        return result;
-    };
-
-    while (pos < content.size()) {
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\n' ||
-               content[pos] == '\r' || content[pos] == '\t' || content[pos] == ','))
-            pos++;
-        if (pos >= content.size() || content[pos] == '}') break;
-
-        std::string key = parseString(pos);
-        while (pos < content.size() && content[pos] != ':') pos++;
-        if (pos < content.size()) pos++;
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t')) pos++;
-
-        std::string value = parseString(pos);
-        if (!key.empty()) {
-            g_storage.items[key] = value;
-        }
-    }
+    util::readStorageFile(g_storage.path, g_storage.items);
 }
 
 static void saveStorageFile() {
     if (g_storage.path.empty()) return;
-    std::ofstream file(g_storage.path);
-    if (!file.is_open()) return;
-    file << "{\n";
-    size_t idx = 0;
-    for (const auto& [k, v] : g_storage.items) {
-        if (idx > 0) file << ",\n";
-        file << "  \"" << escapeJsonString(k) << "\": \"" << escapeJsonString(v) << "\"";
-        idx++;
-    }
-    file << "\n}\n";
+    util::writeStorageFile(g_storage.path, g_storage.items);
 }
 
 }  // namespace

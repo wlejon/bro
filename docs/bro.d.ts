@@ -5909,6 +5909,11 @@ declare namespace bro {
    */
   const appDir: string;
   /**
+   * Absolute native path of the per-user, per-app directory this app's persistent data
+   * belongs in (saves, caches). Created on first read; empty when there is no app directory.
+   */
+  const userDataDir: string;
+  /**
    * Resolves a virtual mount path or relative application path to an absolute native filesystem path.
    * @param path Input path string
    * @returns Resolved absolute filesystem path

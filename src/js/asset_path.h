@@ -47,6 +47,10 @@ std::string resolveAssetPath(const std::string& src);
 ///
 /// resolvePath applies exactly the rules above and returns a real filesystem
 /// path; appDir is the app's own root, the value most callers actually want.
+///
+/// Also `bro.userDataDir`: the per-user, per-app directory an app's saves and
+/// caches belong in (util/user_dirs.h) — the app directory is where an app is
+/// installed, not where it writes. Created on first read; empty with no app.
 void installAssetPathBindings(JSContext* ctx);
 
 /// The same rules, for a path being WRITTEN to. A write target does not exist

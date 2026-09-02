@@ -1,6 +1,7 @@
 #include "util/remote_asset.h"
 
 #include "util/log.h"
+#include "util/user_dirs.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -67,24 +68,6 @@ std::string removeDotSegments(const std::string& url) {
     if (rebuilt.empty()) rebuilt = "/";
     else if (trailingSlash) rebuilt += '/';
     return origin + rebuilt + tail;
-}
-
-std::string userDataDir() {
-#ifdef _WIN32
-    if (const char* appdata = std::getenv("APPDATA"))
-        return std::string(appdata) + "/bro";
-    if (const char* home = std::getenv("USERPROFILE"))
-        return std::string(home) + "/AppData/Roaming/bro";
-#elif defined(__APPLE__)
-    if (const char* home = std::getenv("HOME"))
-        return std::string(home) + "/Library/Application Support/bro";
-#else
-    if (const char* xdg = std::getenv("XDG_DATA_HOME"))
-        return std::string(xdg) + "/bro";
-    if (const char* home = std::getenv("HOME"))
-        return std::string(home) + "/.local/share/bro";
-#endif
-    return ".bro";
 }
 
 /// FNV-1a, enough to key a cache. Not a security boundary: the worst a

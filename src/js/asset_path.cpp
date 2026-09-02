@@ -1,6 +1,8 @@
 #include "js/asset_path.h"
 #include "util/asset_mounts.h"
+#include "util/user_dirs.h"
 #include <filesystem>
+#include <system_error>
 
 extern "C" {
 #include "quickjs.h"
@@ -47,6 +49,17 @@ JSValue js_resolvePath(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     return JS_NewString(ctx, std::filesystem::path(resolved).make_preferred().string().c_str());
 }
 
+// bro.userDataDir — created on first read, so an app that never stores
+// anything leaves nothing behind, and one that does can write to the path it
+// was handed without a mkdir of its own. Native separators, like appDir.
+JSValue js_get_userDataDir(JSContext* ctx, JSValueConst) {
+    std::string dir = util::appUserDataDir(s_basePath);
+    if (dir.empty()) return JS_NewString(ctx, "");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return JS_NewString(ctx, std::filesystem::path(dir).make_preferred().string().c_str());
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -71,6 +84,17 @@ void installAssetPathBindings(JSContext* ctx) {
                           ? std::string()
                           : std::filesystem::path(s_basePath).make_preferred().string();
     JS_SetPropertyStr(ctx, broObj, "appDir", JS_NewString(ctx, dir.c_str()));
+
+    // Where the app's own persistent data belongs (util/user_dirs.h). A getter
+    // rather than a value: the directory is created when it is first asked for.
+    {
+        JSAtom atom = JS_NewAtom(ctx, "userDataDir");
+        JSValue getter = JS_NewCFunction2(ctx, reinterpret_cast<JSCFunction*>(js_get_userDataDir),
+                                          "get userDataDir", 0, JS_CFUNC_getter, 0);
+        JS_DefinePropertyGetSet(ctx, broObj, atom, getter, JS_UNDEFINED,
+                                JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+        JS_FreeAtom(ctx, atom);
+    }
 
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);

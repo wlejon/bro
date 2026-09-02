@@ -24,6 +24,30 @@ assert(fs.existsSync(path.join(bro.appDir, 'index.html')),
 // from, so just assert the useful half: appDir holds the app.
 assert(typeof process.cwd() === 'string', 'process.cwd() still works');
 
+// ── userDataDir ────────────────────────────────────────────────────────────
+//
+// Where the app WRITES. appDir is where it is installed — a repo checkout, an
+// install directory, a zip mount — and none of those are a place for a save.
+
+assert(typeof bro.userDataDir === 'string', 'bro.userDataDir is a string');
+assert(bro.userDataDir.length > 0, 'bro.userDataDir is set when running an app');
+assert(path.isAbsolute(bro.userDataDir), 'bro.userDataDir is absolute: ' + bro.userDataDir);
+assert(fs.existsSync(bro.userDataDir), 'reading bro.userDataDir creates it: ' + bro.userDataDir);
+assert(fs.statSync(bro.userDataDir).isDirectory(), 'bro.userDataDir is a directory');
+assert(path.basename(bro.userDataDir) === path.basename(bro.appDir),
+       'the app is identified by its folder name (' + bro.userDataDir + ' vs ' + bro.appDir + ')');
+assert(path.basename(path.dirname(bro.userDataDir)) === 'apps',
+       'apps live under <user data>/bro/apps/');
+assert(path.resolve(bro.userDataDir) !== path.resolve(bro.appDir),
+       'userDataDir is not the app directory');
+assert(bro.userDataDir === bro.userDataDir, 'stable across reads');
+
+// It is writable, which is the point.
+const probeFile = path.join(bro.userDataDir, '.paths-probe');
+fs.writeFileSync(probeFile, 'ok');
+assert(fs.readFileSync(probeFile, 'utf-8') === 'ok', 'a file written under userDataDir reads back');
+fs.unlinkSync(probeFile);
+
 // ── resolvePath: the four spellings ────────────────────────────────────────
 
 // Relative — against the app directory, NOT the cwd.

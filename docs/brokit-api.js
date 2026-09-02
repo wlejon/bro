@@ -631,6 +631,10 @@ localStorage.clear();
 localStorage.key(index);
 localStorage.length;
 
+// localStorage persists to `<appDir>/.storage.json`: one JSON object of string
+// values, rewritten whole (atomically, via a .tmp rename) on every setItem. It is
+// a key/value store for small state — a save file belongs in its own file under
+// bro.userDataDir, written with fs (see paths-api.js).
 // sessionStorage has the same API (always in-memory, not persisted)
 
 
