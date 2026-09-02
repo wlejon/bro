@@ -1473,6 +1473,11 @@ static JSValue js_perf_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
         JS_SetPropertyStr(ctx, o, k, JS_NewFloat64(ctx, v));
     };
     num("styleMs", p.styleMs);
+    num("cascadeMs", p.cascadeMs);
+    num("styleDiffMs", p.styleDiffMs);
+    num("styleManagersMs", p.styleManagersMs);
+    num("genContentMs", p.genContentMs);
+    num("pseudoResolves", static_cast<double>(p.pseudoResolves));
     num("buildMs", p.buildMs);
     num("invalidateMs", p.invalidateMs);
     num("layoutMs", p.layoutMs);
@@ -1486,6 +1491,7 @@ static JSValue js_perf_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     num("elementsStyled", static_cast<double>(p.elementsStyled));
     num("nodesLaidOut", static_cast<double>(p.nodesLaidOut));
     num("nodeVisits", static_cast<double>(p.nodeVisits));
+    num("nodeRevisitsSkipped", static_cast<double>(p.nodeRevisitsSkipped));
     num("nodesReused", static_cast<double>(p.nodesReused));
     num("measureCalls", static_cast<double>(p.measureCalls));
     num("styleLookups", static_cast<double>(p.styleLookups));

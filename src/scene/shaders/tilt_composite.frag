@@ -16,17 +16,21 @@ uniform float uContrast;
 out vec4 FragColor;
 
 void main() {
-    vec3 sharp = texture(uSharp, vUV).rgb;
-    vec3 blur  = texture(uBlur,  vUV).rgb;
+    vec4 sharp = texture(uSharp, vUV);
+    vec4 blur  = texture(uBlur,  vUV);
 
     // Vertical distance from the sharp band → blur weight.
     float d = abs(vUV.y - uFocusCenter);
     float t = smoothstep(uFocusWidth, uFocusWidth + uFeather, d);
-    vec3 c = mix(sharp, blur, t);
+    vec3 c = mix(sharp.rgb, blur.rgb, t);
 
     // Miniature grade: punch chroma, then contrast around mid-gray.
     float luma = dot(c, vec3(0.299, 0.587, 0.114));
     c = mix(vec3(luma), c, uSaturation);
     c = (c - 0.5) * uContrast + 0.5;
-    FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    // Alpha rides through like the DoF composite's (blur.frag blurs all four
+    // channels for exactly this): a scene canvas with no background stays
+    // transparent under the tilt-shift, so the compositor can lay it over
+    // the page rather than an opaque black box.
+    FragColor = vec4(clamp(c, 0.0, 1.0), mix(sharp.a, blur.a, t));
 }

@@ -120,10 +120,19 @@
  */
 
 /**
+ * Screen-space miniature DOF: a sharp band across the frame, blur feathered
+ * in above and below, with a saturation/contrast grade. `enabled` must be
+ * true (omitting it, or `{ enabled: false }`, turns the pass off). The
+ * canvas's alpha rides through, so a transparent scene canvas stays
+ * transparent under it.
  * @typedef {Object} TiltShiftConfig
- * @property {number} [blur]
- * @property {number} [focus]
- * @property {number} [range]
+ * @property {boolean} [enabled]      default false
+ * @property {number} [focusCenter]   0..1 of the frame height, default 0.5
+ * @property {number} [focusWidth]    half-height of the sharp band, default 0.12
+ * @property {number} [feather]       blend past the band, default 0.25
+ * @property {number} [strength]      blur radius in texels of the half-res pass, default 2
+ * @property {number} [saturation]    default 1
+ * @property {number} [contrast]      default 1
  */
 
 /**

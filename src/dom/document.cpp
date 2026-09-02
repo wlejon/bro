@@ -436,7 +436,10 @@ void Document::resolveStyles() {
     // invalidation, not just a re-resolve of the values already matched.
     resolveStylesRecursive(documentElement_, nullptr, /*force=*/sheetAdded,
                            /*selectorForce=*/sheetAdded);
+    auto genT0 = std::chrono::steady_clock::now();
     resolveGeneratedContent();
+    perf_.genContentMs += std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - genT0).count();
     restyled_.clear();
     layout::ElementRefAdapter::clearCache();
     perf_.styleMs += std::chrono::duration<double, std::milli>(
@@ -574,6 +577,12 @@ StyleChange classifyStyleChange(const htmlayout::css::ComputedStyle& a,
     StyleChange c;
     bool layoutDone = !wantLayout;   // "already answered" ⇒ skip the layout half
 
+    // Inherited custom properties are not in the maps: they are a set shared by
+    // pointer down the tree (see htmlayout ComputedStyle). A different pointer
+    // means an ancestor's tokens changed, and every var() below may resolve
+    // differently — an inherited change, exactly like a changed `color`.
+    if (a.inheritedVars != b.inheritedVars) c.inherited = true;
+
     // New or changed: every key in b, compared against a.
     for (const auto& [k, v] : b) {
         const uint8_t f = propFlags(k);                      // one lookup, both flags
@@ -659,7 +668,10 @@ void Document::resolveStylesRecursive(Element* elem,
         // Inline style: StyleProxy is the sole source (Element::setAttribute
         // routes "style" attribute writes into it too, see element.cpp), so
         // there's only one declaration block to resolve, not two to merge.
+        auto cascadeT0 = std::chrono::steady_clock::now();
         auto computed = cascade_.resolve(*adapter, elem->style().cssText(), parentStyle);
+        perf_.cascadeMs += std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - cascadeT0).count();
 
         // <svg> width/height attributes are presentational hints: they map to
         // the CSS width/height properties below author-stylesheet priority
@@ -737,6 +749,7 @@ void Document::resolveStylesRecursive(Element* elem,
             }
         }
 
+        auto mgrT0 = std::chrono::steady_clock::now();
         // CSS transitions: detect property changes and start transitions
         if (transitionManager_ && !elem->computedStyle().empty()) {
             transitionManager_->onStyleChange(elem, elem->computedStyle(), computed, transitionTime_);
@@ -757,8 +770,12 @@ void Document::resolveStylesRecursive(Element* elem,
         // Both questions in one walk. When fullLayout_ is set the whole tree is
         // already relaying out, so the layout-affecting half is skipped (and can
         // never come back true).
+        auto diffT0 = std::chrono::steady_clock::now();
+        perf_.styleManagersMs += std::chrono::duration<double, std::milli>(diffT0 - mgrT0).count();
         StyleChange change = classifyStyleChange(elem->computedStyle(), computed,
                                                  /*wantLayout=*/!fullLayout_);
+        perf_.styleDiffMs += std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - diffT0).count();
         if (change.layoutAffecting) {
             layoutDirty_ = true;
             elem->markLayoutDirty();
@@ -769,6 +786,10 @@ void Document::resolveStylesRecursive(Element* elem,
         // own account.
         passedDownChanged = change.inherited;
 
+        // Keep the custom-property set this element hands its children on the
+        // same pointer when its contents did not change, so the descendants'
+        // pointer comparison above stays quiet across an unrelated re-resolve.
+        computed.stableChildVarsFrom(elem->computedStyle());
         elem->setComputedStyle(std::move(computed));
 
         // CSS transitions: apply interpolated overrides after setting style
@@ -1075,6 +1096,7 @@ void Document::applyPseudo(Element* elem, const char* which, int depth, GenConte
     // adapter allocation per element just to be told nothing matched.
     if (!cascade_.hasPseudoElementRules(which)) { dropPseudo(); return; }
     auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
+    perf_.pseudoResolves++;
     auto pseudoStyle = cascade_.resolvePseudo(*adapter, which, elem->computedStyle());
     auto cIt = pseudoStyle.find("content");
     if (cIt == pseudoStyle.end()) { dropPseudo(); return; }
@@ -1265,6 +1287,7 @@ void Document::performLayout(float viewportWidth, float viewportHeight, htmlayou
     const auto& ls = htmlayout::layout::lastLayoutStats();
     perf_.nodesLaidOut += ls.laidOut;
     perf_.nodeVisits += ls.visits;
+    perf_.nodeRevisitsSkipped += ls.revisitsSkipped;
     perf_.nodesReused += ls.reused;
     perf_.layoutTreeMs += ls.treeMs;
     perf_.layoutAbsMs += ls.absoluteMs;

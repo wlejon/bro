@@ -59,6 +59,12 @@ std::string computedProperty(dom::Element* el, const std::string& prop,
                              SkiaTextMetrics* metrics) {
     if (!el) return "";
     auto& style = el->computedStyle();
+    // A custom property an ancestor declared is not in this element's map; it
+    // is in the set the element inherited by pointer (htmlayout ComputedStyle).
+    if (htmlayout::css::ComputedStyle::isCustom(prop)) {
+        const std::string* v = style.customProperty(prop);
+        return v ? *v : std::string();
+    }
     std::string value;
     auto it = style.find(prop);
     if (it != style.end()) {

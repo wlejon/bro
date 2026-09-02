@@ -244,6 +244,10 @@ public:
     // a speed problem, and only the counts show that.
     struct Perf {
         double styleMs = 0;        // resolveStyles(): cascade + computed-style diff
+        double cascadeMs = 0;      //   of which: Cascade::resolve() per element
+        double styleDiffMs = 0;    //   of which: old/new computed-style diff
+        double styleManagersMs = 0;//   of which: transition/animation hooks + overrides
+        double genContentMs = 0;   //   of which: ::before/::after resolution
         double buildMs = 0;        // rebuilding the whole layout tree from the DOM
         double invalidateMs = 0;   // carrying element dirt in, incl. per-element rebuilds
         double layoutMs = 0;       // htmlayout::layout::layoutTree(), which is:
@@ -254,8 +258,10 @@ public:
         uint64_t passes = 0;       // performLayout() calls
         uint64_t treeRebuilds = 0; // layout subtrees rebuilt from the DOM
         uint64_t elementsStyled = 0;
+        uint64_t pseudoResolves = 0; // Cascade::resolvePseudo() calls (before/after)
         uint64_t nodesLaidOut = 0;
         uint64_t nodeVisits = 0;
+        uint64_t nodeRevisitsSkipped = 0; // same-pass re-visits answered from the box
         uint64_t nodesReused = 0;
         uint64_t measureCalls = 0;
         uint64_t styleLookups = 0; // styleVal() map lookups inside layoutTree()

@@ -284,6 +284,11 @@ Toggle a subsystem's scene nodes `.visible` on/off across two such runs and subt
 | Field | Meaning |
 |-------|---------|
 | `styleMs` | `resolveStyles()`: selector matching + the computed-style diff |
+| `cascadeMs` | of `styleMs`: time inside htmlayout's `Cascade::resolve()`, per element |
+| `styleDiffMs` | of `styleMs`: diffing each element's old and new computed style |
+| `styleManagersMs` | of `styleMs`: the transition/animation hooks and their overrides |
+| `genContentMs` | of `styleMs`: `::before`/`::after` resolution for the restyled elements |
+| `pseudoResolves` | `Cascade::resolvePseudo()` calls (two per restyled element when the sheet has any `::before`/`::after` rule) |
 | `buildMs` | rebuilding the whole layout tree from the DOM |
 | `invalidateMs` | carrying element dirt into the layout tree, including per-element subtree rebuilds |
 | `layoutMs` | `layoutTree()` itself: the sum of the three sub-passes below |
@@ -296,6 +301,7 @@ Toggle a subsystem's scene nodes `.visible` on/off across two such runs and subt
 | `elementsStyled` | elements whose computed style was re-resolved |
 | `nodesLaidOut` | layout nodes that ran a formatting context |
 | `nodeVisits` | every `layoutNodeInner()` call, including re-entrant ones: a flex or grid container lays an item out to measure it, then again to push the resolved size through. `nodeVisits` far above `nodesLaidOut` means the pass is dominated by re-measurement, not by what changed. |
+| `nodeRevisitsSkipped` | same-pass re-visits answered from the box: a flex or grid container asked for an item's layout again with every input equal to the last time (available size, override, and the preset size it wrote in), so nothing was re-run. Nested flex re-visits each level from every visit of its parent; this is what keeps that from doubling per level. |
 | `nodesReused` | layout nodes handed back from cache untouched |
 | `measureCalls` | text measurements (shaping) requested |
 | `styleLookups` | string-keyed style map lookups inside `layoutTree()` |
