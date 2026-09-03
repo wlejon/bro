@@ -13,6 +13,9 @@ namespace bro::js {
 
 static SDL_Window* s_window = nullptr;
 static DialogBindings::TickCallback s_tickCb;
+static bool s_interactive = true;
+static bool s_autoAccept = true;
+static std::vector<std::string> s_queuedPicks;
 
 static std::string normalizeSeparators(std::string s)
 {
@@ -186,6 +189,17 @@ static JSValue js_showOpenFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         allowMany = JS_ToBool(ctx, argv[1]);
     }
 
+    if (!s_interactive) {
+        std::vector<std::string> picked;
+        picked.swap(s_queuedPicks);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < picked.size(); i++) {
+            JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i),
+                                 JS_NewString(ctx, picked[i].c_str()));
+        }
+        return arr;
+    }
+
     const FileFilters filters = filtersFrom(filterStr);
 
     DialogResult result;
@@ -214,6 +228,17 @@ static JSValue js_showOpenFolderDialog(JSContext* ctx, JSValueConst /*this_val*/
     }
     if (argc >= 2) {
         allowMany = JS_ToBool(ctx, argv[1]);
+    }
+
+    if (!s_interactive) {
+        std::vector<std::string> picked;
+        picked.swap(s_queuedPicks);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < picked.size(); i++) {
+            JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i),
+                                 JS_NewString(ctx, picked[i].c_str()));
+        }
+        return arr;
     }
 
     DialogResult result;
@@ -245,6 +270,17 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         if (s) { defaultLoc = normalizeSeparators(s); JS_FreeCString(ctx, s); }
     }
 
+    if (!s_interactive) {
+        if (!s_autoAccept) return JS_NULL;
+        if (!s_queuedPicks.empty()) {
+            std::string p = s_queuedPicks.front();
+            s_queuedPicks.erase(s_queuedPicks.begin());
+            return JS_NewString(ctx, p.c_str());
+        }
+        std::string p = defaultLoc.empty() ? "untitled" : defaultLoc;
+        return JS_NewString(ctx, p.c_str());
+    }
+
     const FileFilters filters = filtersFrom(filterStr);
 
     DialogResult result;
@@ -257,9 +293,6 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
     if (result.files.empty()) return JS_NULL;
     return JS_NewString(ctx, result.files[0].c_str());
 }
-
-static bool s_interactive = true;
-static bool s_autoAccept = true;
 
 enum : int { kBtnCancel = 0, kBtnOk = 1 };
 
@@ -356,8 +389,6 @@ static JSValue js_prompt(JSContext* ctx, JSValueConst /*this_val*/,
     if (!answer) return JS_NULL;
     return JS_NewString(ctx, answer->c_str());
 }
-
-static std::vector<std::string> s_queuedPicks;
 
 void DialogBindings::setPickedFiles(std::vector<std::string> paths)
 {
