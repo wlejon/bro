@@ -831,10 +831,36 @@ void dispatchDocMouseRelease(
         js::dispatchDomEvent(ctx.jsCtx, target, upEvt);
     }
 
-    // Click fires only when mouseup lands on the same element as mousedown —
-    // and never on a disabled form control (which has no activation behavior).
-    bool sameTarget = (target && target == state.mouseDownTarget.get());
-    if (sameTarget && !isInDisabledControl(target)) {
+    // A click is on the nearest element containing both the press and the
+    // release — the UI Events rule. Most presses are on one element and the
+    // click is on it; a press on a button's icon that releases a pixel later on
+    // the button's own padding is a click on the button, where requiring the
+    // two to be the same element (what this did before) dropped it, and
+    // hands drift by a pixel all the time. Siblings click their parent, which
+    // is what the spec says and rarely what anybody listens for.
+    //
+    // A press target that has left the tree by the release is a click on
+    // nothing — a browser's answer too. An application that rebuilds a button
+    // between the press and the release has replaced the thing that was
+    // pressed, and putting the click on whatever stands there now would press
+    // controls nobody pressed; the one interleaving the engine itself causes,
+    // a redraw off `change`, is put back at the press (see
+    // dispatchDocMousePress). Never on a disabled form control, which has no
+    // activation behavior.
+    dom::Element* clickTarget = nullptr;
+    if (target) {
+        dom::Element* down = state.mouseDownTarget.get();
+        if (down == target) clickTarget = target;
+        else if (down && isAttached(ctx.document, down)) {
+            for (auto* a = target; a && !clickTarget; a = a->parentElement())
+                for (auto* d = down; d; d = d->parentElement())
+                    if (d == a) { clickTarget = a; break; }
+        }
+    }
+    if (clickTarget && !isInDisabledControl(clickTarget)) {
+        // The click's own target from here on: the double-click bookkeeping,
+        // the activation behaviours and the form walk are all about it.
+        dom::Element* target = clickTarget;
         // Rolling double-click detection.
         if (state.lastClickTarget.get() == target &&
             (nowMs - state.lastClickTimeMs) < dblThresholdMs &&
