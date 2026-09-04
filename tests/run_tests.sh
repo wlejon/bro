@@ -255,8 +255,8 @@ run_one_test() {
         return 2
     else
         echo "  FAIL  $REL"
-        # Show first 20 lines of output for diagnosis
-        echo "$OUTPUT" | head -20 | sed 's/^/        /'
+        # Show output for diagnosis (tail captures the error and stack trace after engine startup logs)
+        echo "$OUTPUT" | tail -40 | sed 's/^/        /'
         return 1
     fi
 }

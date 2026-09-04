@@ -47,7 +47,25 @@ catch (e) { refused = e; }
 assert(refused !== null, "an invalid filter pattern throws");
 assert(/refused/.test(String(refused.message)), "the refusal says so: " + refused.message);
 
-// 4. Various argument types stringify safely
+let saveRefused = null;
+try { showSaveFileDialog("Pictures|png*"); }
+catch (e) { saveRefused = e; }
+assert(saveRefused !== null, "an invalid save filter pattern throws");
+assert(/refused/.test(String(saveRefused.message)), "the save refusal says so: " + saveRefused.message);
+
+// 4. Headless picking via setPickedFiles
+if (typeof setPickedFiles === "function") {
+    setPickedFiles(["/path/to/file1.png", "/path/to/file2.png"]);
+    let picked = showOpenFileDialog("Images|png;jpg", true);
+    assert(Array.isArray(picked) && picked.length === 2, "picked returns queued files");
+    assert(picked[0] === "/path/to/file1.png" && picked[1] === "/path/to/file2.png", "picked files match queued");
+
+    setPickedFiles(["/path/to/saved.png"]);
+    let saved = showSaveFileDialog("Images|png");
+    assert(saved === "/path/to/saved.png", "saved returns queued file");
+}
+
+// 5. Various argument types stringify safely
 assert(confirm(12345) === true, "confirm with number argument");
 assert(confirm(null) === true, "confirm with null argument");
 assert(confirm(undefined) === true, "confirm with undefined argument");

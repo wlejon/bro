@@ -6,6 +6,7 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
 #include <atomic>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -112,6 +113,39 @@ static FileFilters filtersFrom(const std::string& filterStr)
     return f;
 }
 
+static const char* validateFilterPattern(const char* list)
+{
+    if (!list || !*list) return "Empty pattern not allowed";
+    if (std::strcmp(list, "*") == 0) return nullptr;
+    for (const char* c = list; *c; ++c) {
+        if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z')
+         || (*c >= '0' && *c <= '9') || *c == '-' || *c == '_'
+         || *c == '.') {
+            continue;
+        } else if (*c == ';') {
+            if (c == list || c[-1] == ';') {
+                return "Empty pattern not allowed";
+            }
+        } else {
+            return "Invalid character in pattern (Only [a-zA-Z0-9_.-] allowed, or a single *)";
+        }
+    }
+    if (list[std::strlen(list) - 1] == ';') {
+        return "Empty pattern not allowed";
+    }
+    return nullptr;
+}
+
+static const char* validateFilters(const FileFilters& filters)
+{
+    for (const auto& filter : filters.list) {
+        if (const char* err = validateFilterPattern(filter.pattern)) {
+            return err;
+        }
+    }
+    return nullptr;
+}
+
 /// How long a dialog that has already answered once is given to answer again.
 ///
 /// See `waitForDialog`. Any second callback is delivered from the same place as
@@ -189,6 +223,11 @@ static JSValue js_showOpenFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         allowMany = JS_ToBool(ctx, argv[1]);
     }
 
+    const FileFilters filters = filtersFrom(filterStr);
+    if (const char* err = validateFilters(filters)) {
+        return JS_ThrowTypeError(ctx, "file dialog refused: Invalid dialog file filters: %s", err);
+    }
+
     if (!s_interactive) {
         std::vector<std::string> picked;
         picked.swap(s_queuedPicks);
@@ -199,8 +238,6 @@ static JSValue js_showOpenFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         }
         return arr;
     }
-
-    const FileFilters filters = filtersFrom(filterStr);
 
     DialogResult result;
     SDL_ShowOpenFileDialog(dialogCallback, &result, s_window,
@@ -270,6 +307,11 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         if (s) { defaultLoc = normalizeSeparators(s); JS_FreeCString(ctx, s); }
     }
 
+    const FileFilters filters = filtersFrom(filterStr);
+    if (const char* err = validateFilters(filters)) {
+        return JS_ThrowTypeError(ctx, "file dialog refused: Invalid dialog file filters: %s", err);
+    }
+
     if (!s_interactive) {
         if (!s_autoAccept) return JS_NULL;
         if (!s_queuedPicks.empty()) {
@@ -280,8 +322,6 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
         std::string p = defaultLoc.empty() ? "untitled" : defaultLoc;
         return JS_NewString(ctx, p.c_str());
     }
-
-    const FileFilters filters = filtersFrom(filterStr);
 
     DialogResult result;
     SDL_ShowSaveFileDialog(dialogCallback, &result, s_window,
