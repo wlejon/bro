@@ -89,5 +89,32 @@ const rBtn = btn.getBoundingClientRect();
 click(rBtn.left + rBtn.width / 2, rBtn.top + rBtn.height / 2);
 assert(clicked, 'button click fired');
 
+// --- focus() on an input made in the same handler takes typing ---
+// A control is created by the layout pass, so an input built and focused
+// inside a press handler has none on the line focus() is called. The focus
+// used to take — activeElement moved and the caret was drawn — and the typing
+// went nowhere, because text is handed only to a control that says it is
+// focused. What is asserted is the whole shape: press a cell, type, read it.
+const cellHost = document.createElement('div');
+cellHost.id = 'cell';
+cellHost.style.cssText = 'width:80px;height:24px;background:#ddd';
+root.appendChild(cellHost);
+flush();
+let madeInput = null;
+cellHost.addEventListener('mousedown', () => {
+    madeInput = document.createElement('input');
+    madeInput.type = 'text';
+    madeInput.id = 'made';
+    cellHost.appendChild(madeInput);
+    madeInput.focus();
+});
+const rCell = cellHost.getBoundingClientRect();
+click(rCell.left + rCell.width / 2, rCell.top + rCell.height / 2);
+assert(madeInput, 'the press made an input');
+assert(document.activeElement === madeInput, 'focus() took on the new input');
+textInput('typed');
+assert(madeInput.value === 'typed',
+       'typing reached an input made and focused in one handler, got: "' + madeInput.value + '"');
+
 // Cleanup
 root.innerHTML = '';

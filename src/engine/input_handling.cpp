@@ -2535,6 +2535,14 @@ void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
     if (auto* prevInput = getElInput(oldEl)) prevInput->setFocused(false);
     if (auto* prevTa = getElTextarea(oldEl)) prevTa->setFocused(false);
 
+    // A control is created on the next layout pass, so an element made and
+    // focused in the same handler — an editor a click opens over a cell — has
+    // none yet. Without this, the focus took: activeElement moved, the caret
+    // was drawn, and every keystroke went nowhere, because handleTextInput
+    // hands text only to a control that says it is focused. So the control is
+    // created here, exactly as the layout pass would create it a frame later.
+    if (newEl) ensureReplacedElements(newEl);
+
     auto* newInput = getElInput(newEl);
     auto* newTa = getElTextarea(newEl);
     if (newInput) {
