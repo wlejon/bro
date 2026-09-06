@@ -33,7 +33,10 @@ endif()
 
 `BRO_BUILD_EXECUTABLES` defaults OFF when bro is not the top-level project, so
 this does not also produce a `bro.exe` you did not ask for. Pass
-`-DBRO_BUILD_EXECUTABLES=ON` if you want them anyway.
+`-DBRO_BUILD_EXECUTABLES=ON` if you want them anyway. `BRO_BUILD_TESTS` follows
+the same rule for bro's own C++ unit tests and smoke tools (`bro_tile_test`,
+the `bro_video*` and `bro_media*` executables): they test bro, not your
+application, and stay out of your build unless you ask for them.
 
 ## Finding your UI and starting the engine
 

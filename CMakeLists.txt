@@ -168,6 +168,12 @@ else()
     set(_d_exes OFF)
 endif()
 option(BRO_BUILD_EXECUTABLES "Build the bro/bro-headless/bro-server binaries" ${_d_exes})
+# bro's own C++ unit tests and smoke tools (bro_tile_test, bro_videoinspect,
+# bro_videoencodetest, bro_mediabackendtest, bro_mediaclocktest). They test
+# bro, not the application embedding it, so they follow the same rule as the
+# executables: ON for a plain bro build, OFF under add_subdirectory. The JS
+# suite in tests/ is unaffected — it runs on bro-headless.
+option(BRO_BUILD_TESTS "Build bro's C++ unit tests and smoke tools" ${_d_exes})
 
 # Host layer for bronze-compiled (AOT) JavaScript apps: src/bronze_host wraps
 # the engine's WebGL2 context and a minimal DOM as bronze host globals, so a

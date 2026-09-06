@@ -21,18 +21,22 @@ endif()
 
 # Self-contained C++ unit tests. Build target: bro_tile_test.
 # Run: ./build/<config>/bro_tile_test  (exit 0 = all pass).
-add_executable(bro_tile_test
-    tests/main.cpp
-    tests/test_coord.cpp
-    tests/test_grid.cpp
-    tests/test_region.cpp
-    tests/test_autotile.cpp
-    tests/test_pathfind.cpp
-    tests/test_serialize.cpp
-)
-target_link_libraries(bro_tile_test PRIVATE bro_tile)
-target_compile_features(bro_tile_test PRIVATE cxx_std_20)
+# Gated on BRO_BUILD_TESTS: an embedding application gets bro_tile, not
+# bro's tests of it.
+if(BRO_BUILD_TESTS)
+    add_executable(bro_tile_test
+        tests/main.cpp
+        tests/test_coord.cpp
+        tests/test_grid.cpp
+        tests/test_region.cpp
+        tests/test_autotile.cpp
+        tests/test_pathfind.cpp
+        tests/test_serialize.cpp
+    )
+    target_link_libraries(bro_tile_test PRIVATE bro_tile)
+    target_compile_features(bro_tile_test PRIVATE cxx_std_20)
 
-if(MSVC)
-    target_compile_options(bro_tile_test PRIVATE /MP /permissive- /utf-8)
+    if(MSVC)
+        target_compile_options(bro_tile_test PRIVATE /MP /permissive- /utf-8)
+    endif()
 endif()

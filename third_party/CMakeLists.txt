@@ -91,11 +91,19 @@ if(BRO_QUICKJS_CLANG_CL)
         CMAKE_GENERATOR "${CMAKE_GENERATOR}"
         CMAKE_GENERATOR_PLATFORM "${CMAKE_GENERATOR_PLATFORM}"
         CMAKE_GENERATOR_TOOLSET "ClangCL"
+        # The nested build is configured without a vcpkg toolchain (qjs has no
+        # dependencies), so nothing writes VcpkgEnabled=false into its
+        # projects the way the toolchain does for the outer tree. MSBuild's
+        # global vcpkg integration then wakes up, walks up from the build
+        # directory, finds the vcpkg.json of whatever project this tree sits
+        # under, and warns on every build that the manifest was found but not
+        # enabled. Turn the integration off explicitly instead.
         CMAKE_ARGS
             -DQJS_BUILD_CLI=OFF
             -DQJS_BUILD_EXAMPLES=OFF
             -DQJS_ENABLE_INSTALL=OFF
             -DBUILD_QJS_LIBC=ON
+            -DCMAKE_VS_GLOBALS=VcpkgEnabled=false
             "-DCMAKE_C_FLAGS_DEBUG=${CMAKE_C_FLAGS_DEBUG} /DENABLE_DUMPS"
         BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG> --target qjs
         BUILD_ALWAYS 1            # let the nested build do its own up-to-date check

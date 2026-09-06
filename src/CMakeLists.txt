@@ -33,7 +33,9 @@ endif()
 # The three stock executables. A host application that embeds bro (links
 # bro_engine and supplies its own main) turns these off with
 # -DBRO_BUILD_EXECUTABLES=OFF: it wants the libraries, not a second bro.exe
-# in its build tree. The libraries above are always built.
+# in its build tree. The libraries above are always built; bro's own C++
+# tests and smoke tools (tile/, video/) sit behind BRO_BUILD_TESTS by the
+# same rule.
 if(BRO_BUILD_EXECUTABLES)
     add_subdirectory(headless)
     add_subdirectory(server)
