@@ -26,6 +26,10 @@ head, title, meta, link, style, script, noscript {
     display: none;
 }
 
+[hidden] {
+    display: none;
+}
+
 /* ---------- Directionality ---------- */
 /* The HTML `dir` attribute is a presentational hint for the `direction`
    property (HTML §15.3.3). A nested dir="ltr"/"rtl" overrides the inherited
