@@ -495,6 +495,56 @@ static JSValue js_tile_fillTint(JSContext* ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+static JSValue js_tile_setShade(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 3) return JS_UNDEFINED;
+    w->world->setShade(argInt(ctx, argv[0]), argInt(ctx, argv[1]),
+                       (float)argFloat(ctx, argv[2], 1.0));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_tile_fillShade(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 5) return JS_UNDEFINED;
+    w->world->fillShade(argInt(ctx, argv[0]), argInt(ctx, argv[1]),
+                        argInt(ctx, argv[2]), argInt(ctx, argv[3]),
+                        (float)argFloat(ctx, argv[4], 1.0));
+    return JS_UNDEFINED;
+}
+
+// setShadeMap(values): a Float32Array of 0..1, a Uint8Array of 0..255, or a
+// plain Array of numbers 0..1, width*height long, row-major.
+static JSValue js_tile_setShadeMap(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 1) return JS_UNDEFINED;
+    size_t offset = 0, byteLen = 0, bpe = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &byteLen, &bpe);
+    if (!JS_IsException(abuf)) {
+        size_t abufLen = 0;
+        uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+        if (raw && byteLen > 0) {
+            if (bpe == 4) {
+                w->world->setShadeMap(reinterpret_cast<const float*>(raw + offset), byteLen / 4);
+            } else if (bpe == 1) {
+                w->world->setShadeMap(raw + offset, byteLen);
+            }
+        }
+        JS_FreeValue(ctx, abuf);
+        return JS_UNDEFINED;
+    }
+    JS_FreeValue(ctx, abuf);
+    std::vector<float> values;
+    readFloatArray(ctx, argv[0], values);
+    w->world->setShadeMap(values.data(), values.size());
+    return JS_UNDEFINED;
+}
+
+static JSValue js_tile_getShade(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 2) return JS_NewFloat64(ctx, 1.0);
+    return JS_NewFloat64(ctx, w->world->shadeAt(argInt(ctx, argv[0]), argInt(ctx, argv[1])));
+}
+
 // getTint(x, y) -> {r,g,b,a} — the stored (8-bit-quantized) tint of a cell.
 // White {1,1,1,1} for untinted or out-of-bounds cells.
 static JSValue js_tile_getTint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -1016,6 +1066,10 @@ void TileBindings::install(JSContext* ctx)
             .method_raw("setTint", js_tile_setTint, 6)
             .method_raw("fillTint", js_tile_fillTint, 8)
             .method_raw("getTint", js_tile_getTint, 2)
+            .method_raw("setShade", js_tile_setShade, 3)
+            .method_raw("fillShade", js_tile_fillShade, 5)
+            .method_raw("setShadeMap", js_tile_setShadeMap, 1)
+            .method_raw("getShade", js_tile_getShade, 2)
             .method("setFlag", [](TWld* self, int x, int y, double bit, bool on) {
                 if (self->world) self->world->setFlag(x, y, (uint32_t)bit, on);
             })

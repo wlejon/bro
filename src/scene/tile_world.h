@@ -22,6 +22,7 @@
 // remeshes only those — the same lifecycle TerrainManager uses.
 
 #include "scene/graph_liveness.h"
+#include "scene/shade_map.h"
 #include "tile/grid.h"
 #include "tile/coord.h"
 
@@ -176,6 +177,21 @@ public:
     // channel, inputs clamped to 0..1). 0xFFFFFFFF (white) for OOB / untinted.
     uint32_t tintAt(int x, int y) const;
 
+    // Per-cell shade (0..1), multiplied into the LIT colour of everything the
+    // world draws on the cell — ground, cliffs, overlays and placed objects —
+    // after lighting and scene fog, so 0 is black whatever the lights do (see
+    // shade_map.h). Default 1. Stored as 8 bits per cell and uploaded as one
+    // texture the nodes sample; a change never remeshes a chunk. Out-of-range
+    // cells are ignored; values are clamped to 0..1.
+    void setShade(int x, int y, float v);
+    void fillShade(int x0, int y0, int x1, int y1, float v);
+    // Replace the whole map from width*height values (0..1); shorter input
+    // fills what it covers and leaves the rest.
+    void setShadeMap(const float* values, size_t count);
+    void setShadeMap(const uint8_t* values, size_t count);
+    // Stored shade of a cell as quantized (0..1); 1 for OOB.
+    float shadeAt(int x, int y) const;
+
     // ---- query ----------------------------------------------------------
     uint16_t tile(int x, int y, int layer = 0) const;
     int      elevation(int x, int y) const;
@@ -309,6 +325,15 @@ private:
     float topY(int x, int y) const;        // world Y of a cell's top surface
     void cellTint(int x, int y, float out[4]) const;  // per-cell RGBA, white default
 
+    // The shade-map provider every node of this world carries (shade_map.h):
+    // uploads the R8 texture when the map changed since the last draw and
+    // fills the binding. False until a shade has ever been set, so a world
+    // that never shades draws exactly as before. GL thread (draw time).
+    bool shadeBinding(ShadeMapBinding& out);
+    void attachShadeMap(MeshNode* node);
+    void attachShadeMap(InstancedMeshNode* node);
+    void releaseShadeTexture();
+
     // Grid-local (no origin) XZ center of a cell; square cell-center or hex
     // pointy-top pixel center depending on grid_->topology().
     void cellCenterLocal(int x, int y, float& px, float& pz) const;
@@ -362,6 +387,19 @@ private:
     TileWorldConfig config_;
     std::unique_ptr<tile::TileGrid> grid_;
     std::vector<uint32_t> tint_;   // per-cell RGBA8, row-major; 0xFFFFFFFF = none
+
+    // Shade map: per-cell 0..255 (255 = untouched), the GL texture built from
+    // it, and the dirty rows still to upload.
+    std::vector<uint8_t> shade_;
+    bool shadeUsed_ = false;
+    unsigned shadeTex_ = 0;
+    int shadeTexW_ = 0, shadeTexH_ = 0;
+    int shadeDirtyY0_ = 0, shadeDirtyY1_ = -1;
+    void markShadeDirty(int y) {
+        if (shadeDirtyY1_ < shadeDirtyY0_) { shadeDirtyY0_ = shadeDirtyY1_ = y; return; }
+        if (y < shadeDirtyY0_) shadeDirtyY0_ = y;
+        if (y > shadeDirtyY1_) shadeDirtyY1_ = y;
+    }
 
     // Animation state
     std::vector<int>  animOf_;        // tile id -> animation index, or -1

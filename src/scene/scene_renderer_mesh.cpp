@@ -57,6 +57,36 @@ inline void uni4fv(GLint loc, float* cached, const float* v) {
 
 }  // namespace
 
+void SceneRenderer::queryShadeLocs(GLuint prog, ShadeLocs& s) {
+    s.has    = glGetUniformLocation(prog, "uHasShadeMap");
+    s.map    = glGetUniformLocation(prog, "uShadeMap");
+    s.origin = glGetUniformLocation(prog, "uShadeOrigin");
+    s.params = glGetUniformLocation(prog, "uShadeParams");
+}
+
+void SceneRenderer::uploadShadeMapForDraw(const ShadeMapProvider* provider,
+                                          const ShadeLocs& L, int& cachedHas) {
+    ShadeMapBinding b;
+    const bool on = provider && (*provider)(b) && b.tex != 0 &&
+                    b.width > 0 && b.height > 0;
+    if (!on) {
+        uni1i(L.has, cachedHas, 0);
+        return;
+    }
+    glActiveTexture(GL_TEXTURE12);
+    glBindTexture(GL_TEXTURE_2D, b.tex);
+    glActiveTexture(GL_TEXTURE0);
+    if (L.map >= 0) glUniform1i(L.map, 12);
+    if (L.origin >= 0)
+        glUniform3f(L.origin, b.origin.x - graph_.cameraEye_.x,
+                    b.origin.y - graph_.cameraEye_.y,
+                    b.origin.z - graph_.cameraEye_.z);
+    if (L.params >= 0)
+        glUniform4f(L.params, b.cellSize, b.hex ? 1.0f : 0.0f,
+                    static_cast<float>(b.width), static_cast<float>(b.height));
+    uni1i(L.has, cachedHas, 1);
+}
+
 // Query every uniform location the mesh draw path uses. Shared by the regular
 // and skinned mesh pipelines — both link mesh.frag against mesh.vert (the
 // skinned one with the SKINNED define), so the uniform surface is identical.
@@ -105,6 +135,7 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
     d.fogStartDist   = U("uFogStartDist");
     d.fogCamY        = U("uFogCamY");
     resolveAtmLocs(prog, d.atm);
+    queryShadeLocs(prog, d.shade);
     d.ambient        = U("uAmbient");
     d.windDir        = U("uWindDir");
     d.windStrength   = U("uWindStrength");
@@ -444,6 +475,7 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     // Local reflection probe: select the probe containing this mesh's bounds
     // center (or upload "none") — one probe per draw, sampler on unit 9.
     uploadProbeForDraw(mesh, L.probe);
+    uploadShadeMapForDraw(mesh->shadeMap(), L.shade, C.hasShadeMap);
 
     // Skinned nodes: flush palette/skin-VBO updates and bind the palette UBO
     // before the draw. Only reached with the skinned program bound — the

@@ -2,6 +2,7 @@
 
 #include "scene/custom_shader.h"
 #include "scene/scene_node.h"
+#include "scene/shade_map.h"
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bbox.h>
@@ -125,6 +126,13 @@ public:
     /// foliage so the back face of a leaf card is also visible.
     void setDoubleSided(bool b) { doubleSided_ = b; }
     bool doubleSided() const { return doubleSided_; }
+
+    /// Shade map (see shade_map.h): same contract as MeshNode::setShadeMap.
+    void setShadeMap(ShadeMapProvider p) { shadeMap_ = std::move(p); }
+    void clearShadeMap() { shadeMap_ = nullptr; }
+    const ShadeMapProvider* shadeMap() const {
+        return shadeMap_ ? &shadeMap_ : nullptr;
+    }
 
     // --- Static batching ---
     // Collapse ALL instances into ONE merged mesh drawn as a single instance.
@@ -443,6 +451,7 @@ private:
     // Custom shader chunks + user-uniform values (null = default pipeline).
     std::unique_ptr<CustomShaderState> customShader_;
     float cullMargin_ = 0.0f;
+    ShadeMapProvider shadeMap_;
 };
 
 } // namespace bro::scene

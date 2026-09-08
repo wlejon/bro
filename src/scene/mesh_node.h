@@ -2,6 +2,7 @@
 
 #include "scene/custom_shader.h"
 #include "scene/scene_node.h"
+#include "scene/shade_map.h"
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bvh.h>
@@ -285,6 +286,16 @@ public:
     /// vertex-coloured meshes don't ripple. Flora meshes set this to 1.
     void setWindMask(float m) { windMask_ = m; }
     float windMask() const { return windMask_; }
+
+    // --- Shade map ---
+    // A per-cell scalar sampled after lighting (see shade_map.h). Set by a
+    // TileWorld on the nodes it owns; the provider resolves the texture and
+    // the grid mapping per draw. Sampled on texture unit 12.
+    void setShadeMap(ShadeMapProvider p) { shadeMap_ = std::move(p); }
+    void clearShadeMap() { shadeMap_ = nullptr; }
+    const ShadeMapProvider* shadeMap() const {
+        return shadeMap_ ? &shadeMap_ : nullptr;
+    }
 
     // --- Custom shader ---
     // See custom_shader.h for the shared state struct (same surface exists
@@ -579,6 +590,7 @@ private:
     // releaseGL() alongside the material textures.
     std::vector<UserTexture> userTextures_;
     float cullMargin_ = 0.0f;
+    ShadeMapProvider shadeMap_;
 };
 
 } // namespace bro::scene

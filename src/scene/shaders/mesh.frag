@@ -123,6 +123,19 @@ uniform float       uIBLPrefilterMaxLOD;
 // global (irradiance or flat uAmbient) — probes are specular-only. Probe
 // captures are world-axis-aligned (no uIBLRotation analog). One probe per
 // draw, selected CPU-side (see scene_renderer_probes.cpp).
+// Shade map — a per-cell scalar a TileWorld hands to the nodes it draws
+// (scene/shade_map.h). Looked up from the fragment's world XZ on the owner's
+// grid and multiplied into the FINAL colour, after lighting, ambient and fog,
+// so a 0 is black whatever the lights do (a tint only darkens the albedo and
+// leaves specular and ambient on the surface). The lookup point is pushed a
+// little behind the surface along the geometric normal so a cliff or a wall
+// standing on a cell edge reads the cell behind its face, not a coin toss
+// between the two cells it separates.
+uniform int       uHasShadeMap;
+uniform sampler2D uShadeMap;      // R8, one texel per cell
+uniform vec3      uShadeOrigin;   // grid origin, camera-relative
+uniform vec4      uShadeParams;   // cellSize, hex (1/0), width, height
+
 uniform int         uProbeEnabled;
 uniform samplerCube uProbeSpecular;
 uniform mat4        uProbeWorldToLocal;  // camera-relative world -> unit-box space
@@ -336,6 +349,35 @@ vec3 applyAerialPerspective(vec3 color) {
     return color * tr + inscatter;
 }
 
+// The cell under this fragment on the shade map's grid — square cells by
+// floor division, pointy-top odd-r hex cells by axial cube rounding (the
+// inverse of the tile world's cell centre placement). 1.0 off the grid.
+float cellShade() {
+    float R = max(uShadeParams.x, 1e-6);
+    vec3 nudged = vWorldPos - normalize(vNormal) * (0.05 * R);
+    vec2 p = nudged.xz - uShadeOrigin.xz;
+    int cx, cy;
+    if (uShadeParams.y > 0.5) {
+        float r = p.y / (1.5 * R);
+        float q = p.x / (1.7320508 * R) - r * 0.5;
+        float x = q, z = r, y = -x - z;
+        float rx = floor(x + 0.5), ry = floor(y + 0.5), rz = floor(z + 0.5);
+        float dx = abs(rx - x), dy = abs(ry - y), dz = abs(rz - z);
+        if (dx > dy && dx > dz) rx = -ry - rz;
+        else if (dy > dz)       ry = -rx - rz;
+        else                    rz = -rx - ry;
+        int hq = int(rx), hr = int(rz);
+        cy = hr;
+        cx = hq + (hr - (hr & 1)) / 2;
+    } else {
+        cx = int(floor(p.x / R));
+        cy = int(floor(p.y / R));
+    }
+    if (cx < 0 || cy < 0 || cx >= int(uShadeParams.z) || cy >= int(uShadeParams.w))
+        return 1.0;
+    return texelFetch(uShadeMap, ivec2(cx, cy), 0).r;
+}
+
 float fogFactorFor(float camDist, float worldY) {
     if (uFogDensity > 0.0) {
         float d = max(camDist - uFogStartDist, 0.0);
@@ -395,6 +437,7 @@ void main() {
                 baseAlpha = mix(baseAlpha, 0.0, fogFactorU);
             }
         }
+        if (uHasShadeMap == 1) color *= cellShade();
         // SSR mask phase: unlit surfaces don't reflect (mask 0). Coverage
         // is restored by the SSR pass right after the opaque passes.
         FragColor = vec4(color, (uSSRMask == 1) ? 0.0 : baseAlpha);
@@ -625,6 +668,8 @@ void main() {
             baseAlpha = mix(baseAlpha, 0.0, fogFactor);
         }
     }
+
+    if (uHasShadeMap == 1) color *= cellShade();
 
     FragColor = vec4(color, baseAlpha);
 }

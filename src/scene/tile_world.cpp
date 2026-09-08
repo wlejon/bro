@@ -1,11 +1,14 @@
 #include "scene/tile_world.h"
 
 #include "scene/scene_graph.h"
+#include "scene/gl_available.h"
 #include "scene/mesh_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/scene_node.h"
 
 #include "tile/autotile.h"
+
+#include <glad/gl.h>
 
 #include <algorithm>
 #include <array>
@@ -332,6 +335,9 @@ void TileWorld::initFromGrid() {
     chunkAnimated_.assign(chunks_.size(), 0);
 
     tint_.assign(static_cast<size_t>(config_.width) * config_.height, 0xFFFFFFFFu);
+    shade_.assign(static_cast<size_t>(config_.width) * config_.height, 255);
+    shadeDirtyY0_ = 0;
+    shadeDirtyY1_ = -1;
 
     // Build the tile-id -> animation index map and reset frame state.
     animClock_ = 0.0;
@@ -364,7 +370,11 @@ void TileWorld::clear() {
         for (auto& k : objectKinds_)
             if (k.node) g->destroyNode(k.node);
         if (root_) g->destroyNode(root_);
+        releaseShadeTexture();
     }
+    shadeTex_ = 0;
+    shadeUsed_ = false;
+    shade_.clear();
     chunks_.clear();
     objectKinds_.clear();
     root_ = nullptr;
@@ -470,6 +480,130 @@ uint32_t TileWorld::tintAt(int x, int y) const {
     if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) return 0xFFFFFFFFu;
     size_t idx = static_cast<size_t>(y) * config_.width + x;
     return idx < tint_.size() ? tint_[idx] : 0xFFFFFFFFu;
+}
+
+// ---- shade map ----------------------------------------------------------
+
+static uint8_t quantizeShade(float v) {
+    if (!(v > 0.0f)) return 0;
+    if (v >= 1.0f) return 255;
+    return static_cast<uint8_t>(v * 255.0f + 0.5f);
+}
+
+void TileWorld::setShade(int x, int y, float v) {
+    if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) return;
+    size_t idx = static_cast<size_t>(y) * config_.width + x;
+    if (idx >= shade_.size()) return;
+    const uint8_t q = quantizeShade(v);
+    shadeUsed_ = true;
+    if (shade_[idx] == q) return;
+    shade_[idx] = q;
+    markShadeDirty(y);
+}
+
+void TileWorld::fillShade(int x0, int y0, int x1, int y1, float v) {
+    const uint8_t q = quantizeShade(v);
+    int lo_x = std::max(0, std::min(x0, x1)), hi_x = std::min(config_.width - 1, std::max(x0, x1));
+    int lo_y = std::max(0, std::min(y0, y1)), hi_y = std::min(config_.height - 1, std::max(y0, y1));
+    if (lo_x > hi_x || lo_y > hi_y || shade_.empty()) return;
+    shadeUsed_ = true;
+    for (int y = lo_y; y <= hi_y; ++y) {
+        bool rowChanged = false;
+        for (int x = lo_x; x <= hi_x; ++x) {
+            uint8_t& cell = shade_[static_cast<size_t>(y) * config_.width + x];
+            if (cell == q) continue;
+            cell = q;
+            rowChanged = true;
+        }
+        if (rowChanged) markShadeDirty(y);
+    }
+}
+
+void TileWorld::setShadeMap(const float* values, size_t count) {
+    if (!values || shade_.empty()) return;
+    shadeUsed_ = true;
+    const size_t n = std::min(count, shade_.size());
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t q = quantizeShade(values[i]);
+        if (shade_[i] == q) continue;
+        shade_[i] = q;
+        markShadeDirty(static_cast<int>(i / config_.width));
+    }
+}
+
+void TileWorld::setShadeMap(const uint8_t* values, size_t count) {
+    if (!values || shade_.empty()) return;
+    shadeUsed_ = true;
+    const size_t n = std::min(count, shade_.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (shade_[i] == values[i]) continue;
+        shade_[i] = values[i];
+        markShadeDirty(static_cast<int>(i / config_.width));
+    }
+}
+
+float TileWorld::shadeAt(int x, int y) const {
+    if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) return 1.0f;
+    size_t idx = static_cast<size_t>(y) * config_.width + x;
+    return idx < shade_.size() ? shade_[idx] / 255.0f : 1.0f;
+}
+
+bool TileWorld::shadeBinding(ShadeMapBinding& out) {
+    if (!shadeUsed_ || shade_.empty() || !root_) return false;
+    if (!glFunctionsLoaded()) return false;
+    const int w = config_.width, h = config_.height;
+    if (shadeTex_ && (shadeTexW_ != w || shadeTexH_ != h)) releaseShadeTexture();
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (!shadeTex_) {
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, shade_.data());
+        shadeTex_ = tex;
+        shadeTexW_ = w;
+        shadeTexH_ = h;
+        shadeDirtyY1_ = -1;
+        shadeDirtyY0_ = 0;
+    } else if (shadeDirtyY1_ >= shadeDirtyY0_) {
+        const int y0 = std::max(0, shadeDirtyY0_), y1 = std::min(h - 1, shadeDirtyY1_);
+        glBindTexture(GL_TEXTURE_2D, shadeTex_);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, GL_RED, GL_UNSIGNED_BYTE,
+                        shade_.data() + static_cast<size_t>(y0) * w);
+        shadeDirtyY1_ = -1;
+        shadeDirtyY0_ = 0;
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    const bromath::Mat4& m = root_->worldMatrix();
+    out.tex = shadeTex_;
+    out.origin = Vec3{m.at(0, 3), m.at(1, 3), m.at(2, 3)};
+    out.cellSize = config_.cellSize;
+    out.hex = grid_ && grid_->topology() == tile::Topology::Hex;
+    out.width = w;
+    out.height = h;
+    return true;
+}
+
+void TileWorld::attachShadeMap(MeshNode* node) {
+    if (node) node->setShadeMap([this](ShadeMapBinding& b) { return shadeBinding(b); });
+}
+
+void TileWorld::attachShadeMap(InstancedMeshNode* node) {
+    if (node) node->setShadeMap([this](ShadeMapBinding& b) { return shadeBinding(b); });
+}
+
+void TileWorld::releaseShadeTexture() {
+    if (shadeTex_ && glFunctionsLoaded()) {
+        GLuint tex = shadeTex_;
+        glDeleteTextures(1, &tex);
+    }
+    shadeTex_ = 0;
+    shadeTexW_ = shadeTexH_ = 0;
+    shadeDirtyY1_ = -1;
+    shadeDirtyY0_ = 0;
 }
 
 // ---- query --------------------------------------------------------------
@@ -993,6 +1127,7 @@ void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
     if (!chunk.ground) {
         chunk.ground = g->createMesh("tile-chunk");
         root_->addChild(chunk.ground);
+        attachShadeMap(chunk.ground);
         chunk.ground->setColor(1, 1, 1, 1);
         chunk.ground->setRoughness(0.92f);
         chunk.ground->setMetallic(0.0f);
@@ -1087,6 +1222,7 @@ void TileWorld::buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer) {
     if (!node) {
         node = g->createMesh("tile-overlay");
         root_->addChild(node);
+        attachShadeMap(node);
         node->setRoughness(0.95f);
         node->setMetallic(0.0f);
         node->setDepthBias(-1.0f, -static_cast<float>(layer) - 1.0f);
@@ -1123,6 +1259,7 @@ int TileWorld::addObjectKind(bromesh::MeshData&& mesh, const ObjectStyle& style)
 
     auto* node = g->createInstancedMesh("tile-objects");
     root_->addChild(node);
+    attachShadeMap(node);
     node->setMesh(std::move(mesh));
     node->setColor(style.color[0], style.color[1], style.color[2], style.color[3]);
     node->setRoughness(style.roughness);

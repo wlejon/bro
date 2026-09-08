@@ -6,6 +6,7 @@
 
 #include "scene/atmosphere.h"
 #include "scene/light_node.h"
+#include "scene/shade_map.h"
 
 #include <cstdint>
 #include <limits>
@@ -367,6 +368,13 @@ private:
 
     struct FrameProbe;   // defined below; the per-frame resolved probe list
 
+    // Shade-map uniform locations (uShade*, see shade_map.h), embedded in
+    // both draw-loc structs like the probe locs so uploadShadeMapForDraw
+    // serves either pipeline.
+    struct ShadeLocs {
+        GLint has = -1, map = -1, origin = -1, params = -1;
+    };
+
     struct ProbeLocs {
         GLint enabled = -1, specular = -1, worldToLocal = -1,
               localToWorld = -1, pos = -1, boxSize = -1, boxProjection = -1,
@@ -411,6 +419,7 @@ private:
         int baseColorTex = kI, normalMap = kI, mrMap = kI, aoMap = kI;
         int emissiveMap = kI, hasTangent = kI, hasNormalMap = kI, hasMRMap = kI;
         int hasAOMap = kI, hasEmissiveMap = kI, receivesShadow = kI;
+        int hasShadeMap = kI;
     };
 
     struct MeshDrawLocs {
@@ -427,6 +436,7 @@ private:
               fogCamY = -1,
               windDir = -1, windStrength = -1, windTime = -1, windFreq = -1,
               ssrMask = -1;
+        ShadeLocs shade;
         ProbeLocs probe;
         AtmLocs   atm;
         // Travels with the locs because both are per-program: same program,
@@ -459,10 +469,21 @@ private:
         // GPU procedural branch-tube uniforms (branch_tube.vert). uSegments
         // reuses `segments` above; these two are tube-only. -1 elsewhere.
         GLint tubeSides = -1, tubeRadiusScale = -1;
+        ShadeLocs shade;
         ProbeLocs probe;
         AtmLocs   atm;
+        mutable int cachedHasShadeMap = INT32_MIN;
     };
     struct MeshProgramLocs;  // lighting/shadow/IBL locs — defined below
+
+    // Resolve a node's shade map (shade_map.h) for this draw and upload the
+    // uShade* uniforms: the R8 cell texture on unit 12, the grid origin made
+    // camera-relative, and the cell mapping. A node without a provider, or
+    // whose provider declines, gets uHasShadeMap = 0 — cached per program so
+    // the common unshaded draw sends nothing.
+    void uploadShadeMapForDraw(const ShadeMapProvider* provider,
+                               const ShadeLocs& L, int& cachedHas);
+    static void queryShadeLocs(GLuint prog, ShadeLocs& s);
 
     void renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L);
     void renderInstancedMeshNode(InstancedMeshNode* mesh,

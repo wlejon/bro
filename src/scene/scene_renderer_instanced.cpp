@@ -131,6 +131,8 @@ void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
     d.fogStartDist   = U("uFogStartDist");
     d.fogCamY        = U("uFogCamY");
     resolveAtmLocs(prog, d.atm);
+    queryShadeLocs(prog, d.shade);
+    d.cachedHasShadeMap = INT32_MIN;
     d.ambient        = U("uAmbient");
     d.atlasGrid      = U("uAtlasGrid");
     d.alphaCutoff    = U("uAlphaCutoff");
@@ -289,6 +291,7 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
     // Local reflection probe: whole-node selection by instance-bounds center
     // (one probe for all instances of this draw), sampler on unit 9.
     uploadProbeForDraw(mesh, L.probe);
+    uploadShadeMapForDraw(mesh->shadeMap(), L.shade, L.cachedHasShadeMap);
 
     // GPU foliage scatter: bind the per-segment texture buffer (unit 10, past
     // the material/probe units) and push the placement params. Only the scatter

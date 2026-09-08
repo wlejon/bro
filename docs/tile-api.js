@@ -194,6 +194,40 @@ class TileWorld {
    */
   getTint(x, y) {}
 
+  /**
+   * Set a per-cell shade (0..1): a scalar multiplied into the LIT colour of
+   * everything the world draws on that cell — the ground top, its cliff
+   * faces, overlay decals and every placed object — after lighting, ambient
+   * and scene fog, so 0 is black whatever the lights do. A tint cannot do
+   * that: it darkens the albedo and leaves specular and ambient on the
+   * surface. Default 1 = no change.
+   *
+   * The lookup is by the fragment's world XZ on this grid, nudged a little
+   * behind the surface along its normal, so a cliff or a wall standing on a
+   * cell edge shows the cell behind each of its faces. An object straddling
+   * an edge therefore takes one shade per face, never a per-pixel coin toss.
+   *
+   * Shade is stored at 8 bits per cell and uploaded as one texture the nodes
+   * sample; changing it never remeshes a chunk, so it is the channel for
+   * anything that changes every tick (fog of war, a light front, a burn).
+   * Values are clamped to 0..1; out-of-bounds cells are ignored.
+   */
+  setShade(x, y, v) {}
+
+  /** Fill an inclusive rectangle of cells with one shade. */
+  fillShade(x0, y0, x1, y1, v) {}
+
+  /**
+   * Replace the whole shade map in one call: a Float32Array of 0..1, a
+   * Uint8Array of 0..255, or a plain Array of numbers, width*height long and
+   * row-major (index = y * width + x). Shorter input fills the cells it
+   * covers and leaves the rest. Only the rows that changed are re-uploaded.
+   */
+  setShadeMap(values) {}
+
+  /** The stored (8-bit-quantized) shade of cell (x, y); 1 for out-of-bounds. */
+  getShade(x, y) {}
+
   // --- Query -----------------------------------------------------------------
 
   /** Tile id at (x, y) on `layer` (default 0). 0 if empty / out of bounds. */
