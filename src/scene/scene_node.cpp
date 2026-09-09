@@ -39,20 +39,33 @@ void SceneNode::setPosition(const Vec3& pos) {
 
 void SceneNode::setRotation(const Quat& q) {
     rotation_ = q;
+    eulerValid_ = false;
     localDirty_ = true;
     markDirty();
 }
 
 void SceneNode::setRotationEuler(float rx, float ry, float rz) {
     rotation_ = bromath::qfromEuler(rx, ry, rz);
+    euler_ = {rx, ry, rz};
+    eulerValid_ = true;
     localDirty_ = true;
     markDirty();
 }
 
 void SceneNode::setRotationZ(float radians) {
     rotation_ = bromath::qaxisAngle({0, 0, 1}, radians);
+    euler_ = {0, 0, radians};
+    eulerValid_ = true;
     localDirty_ = true;
     markDirty();
+}
+
+const Vec3& SceneNode::rotationEuler() const {
+    if (!eulerValid_) {
+        euler_ = bromath::qtoEuler(rotation_);
+        eulerValid_ = true;
+    }
+    return euler_;
 }
 
 void SceneNode::setScale(float sx, float sy, float sz) {

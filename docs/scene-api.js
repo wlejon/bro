@@ -216,9 +216,43 @@ class SceneNode {
   position;
 
   /**
-   * @type {Array<number>}
+   * Rotation about Z in radians — the 2D rotation. Same axis as `rotationZ`,
+   * but writing it zeroes X and Y.
+   * @type {number}
    */
   rotation;
+
+  /**
+   * Per-axis Euler rotation in radians (XYZ order). Exact and composable: the
+   * node keeps the triple you wrote, so a write to one axis leaves the other
+   * two exactly as they were and reads back the value you set — including
+   * angles past ±90°, where decomposing the quaternion would fold a yaw of
+   * 2.0 into (π, π − 2.0, π) and mirror the node on the next write. Set
+   * `quaternion` for an orientation no Euler triple names; the next per-axis
+   * read decomposes it.
+   * @type {number}
+   */
+  rotationX;
+
+  /**
+   * @type {number}
+   */
+  rotationY;
+
+  /**
+   * @type {number}
+   */
+  rotationZ;
+
+  /**
+   * Orientation as [x, y, z, w], normalized on write. The atomic alternative
+   * to `rotationX`/`rotationY`/`rotationZ`: one write sets the whole
+   * orientation, which is what an arbitrary rotation (port-to-port mating, a
+   * slerp result) needs. It replaces the stored Euler triple, so the next
+   * per-axis read is a decomposition of this quaternion.
+   * @type {Array<number>}
+   */
+  quaternion;
 
   /**
    * @type {Array<number>}

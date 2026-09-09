@@ -32,6 +32,15 @@ public:
     const bromath::Quat& rotation() const { return rotation_; }
     const bromath::Vec3& scale() const { return scale_; }
 
+    /// The canonical Euler triple (radians, XYZ) behind the current rotation.
+    /// setRotationEuler/setRotationZ store exactly what the caller passed, so
+    /// a per-axis write reads back unchanged and leaves the other two axes
+    /// alone — qtoEuler folds a yaw past ±90° into (pi, pi - yaw, pi), which
+    /// would otherwise mirror the node on the next single-axis write. After
+    /// setRotation (quaternion, lookAt, animation, physics) the triple is
+    /// re-derived from the quaternion once and cached.
+    const bromath::Vec3& rotationEuler() const;
+
     void setPosition(float x, float y, float z = 0);
     void setPosition(const bromath::Vec3& pos);
     void setRotation(const bromath::Quat& q);
@@ -184,6 +193,8 @@ private:
 
     bromath::Vec3 position_;
     bromath::Quat rotation_;
+    mutable bromath::Vec3 euler_{0, 0, 0};
+    mutable bool eulerValid_ = true;
     bromath::Vec3 scale_{1, 1, 1};
     bool visible_ = true;
     uint64_t changeGeneration_ = 1;

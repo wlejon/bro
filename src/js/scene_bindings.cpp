@@ -854,36 +854,37 @@ void SceneBindings::install(JSContext* ctx)
                 [](NodeWrapper* w) -> double { return w->node() ? w->node()->position().z : 0; },
                 [](NodeWrapper* w, double val) { if (w->node()) w->node()->setPosition(w->node()->position().x, w->node()->position().y, (float)val); })
             .prop("rotation",
-                [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).z : 0; },
+                [](NodeWrapper* w) -> double { return w->node() ? w->node()->rotationEuler().z : 0; },
                 [](NodeWrapper* w, double val) { if (w->node()) w->node()->setRotationZ((float)val); })
             .prop("rotationX",
-                [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).x : 0; },
+                [](NodeWrapper* w) -> double { return w->node() ? w->node()->rotationEuler().x : 0; },
                 [](NodeWrapper* w, double val) {
                     if (w->node()) {
-                        auto e = bromath::qtoEuler(w->node()->rotation());
+                        const auto e = w->node()->rotationEuler();
                         w->node()->setRotationEuler((float)val, e.y, e.z);
                     }
                 })
             .prop("rotationY",
-                [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).y : 0; },
+                [](NodeWrapper* w) -> double { return w->node() ? w->node()->rotationEuler().y : 0; },
                 [](NodeWrapper* w, double val) {
                     if (w->node()) {
-                        auto e = bromath::qtoEuler(w->node()->rotation());
+                        const auto e = w->node()->rotationEuler();
                         w->node()->setRotationEuler(e.x, (float)val, e.z);
                     }
                 })
             .prop("rotationZ",
-                [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).z : 0; },
+                [](NodeWrapper* w) -> double { return w->node() ? w->node()->rotationEuler().z : 0; },
                 [](NodeWrapper* w, double val) {
                     if (w->node()) {
-                        auto e = bromath::qtoEuler(w->node()->rotation());
+                        const auto e = w->node()->rotationEuler();
                         w->node()->setRotationEuler(e.x, e.y, (float)val);
                     }
                 })
-            // [x,y,z,w] quaternion. Unlike rotationX/Y/Z (which round-trip
-            // through Euler each set), this writes the node orientation
-            // atomically — required when assigning arbitrary rotations
-            // (e.g. port-to-port mating in the parts DSL).
+            // [x,y,z,w] quaternion. The atomic alternative to rotationX/Y/Z:
+            // it writes the orientation in one go, for arbitrary rotations
+            // (e.g. port-to-port mating in the parts DSL) that no Euler triple
+            // needs to name. It drops the canonical triple, so the next
+            // per-axis read decomposes this quaternion.
             .prop("quaternion",
                 [](NodeWrapper* w, JSContext* ctx) -> JSValue {
                     if (!w || !w->node()) return JS_UNDEFINED;
