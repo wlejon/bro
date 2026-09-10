@@ -8,6 +8,7 @@
 #include <qjsbind/qjsbind.h>
 #include <brosoundml/kokoro.h>
 #include <brosoundml/qwen_tts.h>
+#include <brosoundml/omnivoice.h>
 #include <brosoundml/supertonic.h>
 #include <brosoundml/speaker_encoder.h>
 #include <brosoundml/audio.h>
@@ -75,6 +76,20 @@ struct QwenTtsWrapper {
     std::shared_ptr<brosoundml::QwenTts> qwen;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
     // shared_ptr so sessions share this exact gate with the model.
+    ModelGate busy;
+};
+
+// OmniVoice u2014 masked-diffusion zero-shot TTS (k2-fsa): a Qwen3-0.6B trunk with
+// eight audio heads over the HiggsAudio v2 codec. Text-driven; a voice is either
+// an in-context prompt (codec codes + transcript of a reference clip, a plain JS
+// object so a lab can store / splice / JSON it) or a fixed-vocabulary instruct.
+// Single-owner like the others: `busy` rejects a second concurrent op, and the
+// sync codec / prompt methods refuse to run while an async op holds the GPU.
+struct OmniVoiceWrapper {
+    std::shared_ptr<brosoundml::OmniVoice> model;
+    brotensor::Device                      device = brotensor::Device::CPU;  // captured at load
+    brosoundml::OmniVoicePrecision precision = brosoundml::OmniVoicePrecision::BF16;
+    bool                                   decoderOnly = false;   // codec encoder + HuBERT skipped
     ModelGate busy;
 };
 
@@ -1127,6 +1142,851 @@ static void registerQwenClass(JSContext* ctx) {
         .method_raw("createSession",  js_qwen_createSession,   0);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// OmniVoice methods
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The JS surface maps 1:1 onto brosoundml/omnivoice.h. Every option name is the
+// camelCase of the OmniVoiceParams field; a prompt is the plain-object form of
+// OmniVoicePrompt ({ codes, numFrames, text, rms }); an init grid is
+// OmniVoiceInit ({ tokens, keep }); a trace is OmniVoiceTrace; a step is
+// OmniVoiceStep with the two host arrays copied out (the C++ pointers are only
+// valid during the callback, which runs on the worker thread).
+
+static OmniVoiceWrapper* omniSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<OmniVoiceWrapper>(ctx, this_val);
+}
+
+static const char* omniPrecisionName(brosoundml::OmniVoicePrecision p) {
+    return p == brosoundml::OmniVoicePrecision::BF16 ? "bf16" : "fp32";
+}
+
+// Option readers that leave the destination untouched when the key is absent
+// (undefined / null), so OmniVoiceParams' upstream defaults survive a partial
+// opts object.
+static void getBoolOpt(JSContext* ctx, JSValueConst obj, const char* key, bool& dst) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) dst = JS_ToBool(ctx, v) == 1;
+    JS_FreeValue(ctx, v);
+}
+
+static void getIntOpt(JSContext* ctx, JSValueConst obj, const char* key, int& dst) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    if (JS_IsNumber(v)) { int32_t t = dst; JS_ToInt32(ctx, &t, v); dst = t; }
+    JS_FreeValue(ctx, v);
+}
+
+static void getStrOpt(JSContext* ctx, JSValueConst obj, const char* key, std::string& dst) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    std::string s;
+    if (JS_IsString(v) && argStr(ctx, v, s)) dst = std::move(s);
+    JS_FreeValue(ctx, v);
+}
+
+// Read a Uint8Array (any 1-byte typed array) or a number[] / boolean[] as bytes.
+static std::vector<uint8_t> readByteArray(JSContext* ctx, JSValueConst v) {
+    std::vector<uint8_t> out;
+    size_t cnt = 0;
+    if (const uint8_t* p = qjsbind::read_typed_array_view<uint8_t>(ctx, v, cnt)) {
+        out.assign(p, p + cnt);
+        return out;
+    }
+    if (JS_IsArray(v)) {
+        std::uint32_t n = 0;
+        JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+        JS_ToUint32(ctx, &n, lv);
+        JS_FreeValue(ctx, lv);
+        out.reserve(n);
+        for (std::uint32_t i = 0; i < n; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, v, i);
+            out.push_back(JS_ToBool(ctx, e) == 1 ? 1 : 0);
+            JS_FreeValue(ctx, e);
+        }
+    }
+    return out;
+}
+
+// opts -> OmniVoiceParams. Omitted keys keep the upstream defaults.
+static void readOmniParams(JSContext* ctx, JSValueConst opts,
+                           brosoundml::OmniVoiceParams& p) {
+    if (!JS_IsObject(opts)) return;
+    getIntOpt(ctx, opts, "numSteps",            p.num_steps);
+    getNum   (ctx, opts, "tShift",              p.t_shift);
+    getNum   (ctx, opts, "guidanceScale",       p.guidance_scale);
+    getNum   (ctx, opts, "layerPenalty",        p.layer_penalty);
+    getNum   (ctx, opts, "positionTemperature", p.position_temperature);
+    getNum   (ctx, opts, "classTemperature",    p.class_temperature);
+    getBoolOpt(ctx, opts, "gumbelNoise",        p.gumbel_noise);
+    JSValue sd = JS_GetPropertyStr(ctx, opts, "seed");
+    if (JS_IsNumber(sd)) {
+        int64_t t = 0; JS_ToInt64(ctx, &t, sd);
+        p.seed = static_cast<std::uint64_t>(t);
+    }
+    JS_FreeValue(ctx, sd);
+    getNum   (ctx, opts, "speed",               p.speed);
+    getNum   (ctx, opts, "duration",            p.duration);
+    getStrOpt(ctx, opts, "language",            p.language);
+    getStrOpt(ctx, opts, "instruct",            p.instruct);
+    getBoolOpt(ctx, opts, "denoise",            p.denoise);
+    getBoolOpt(ctx, opts, "preprocessPrompt",   p.preprocess_prompt);
+    getBoolOpt(ctx, opts, "postprocess",        p.postprocess_output);
+    getNum   (ctx, opts, "chunkDuration",       p.audio_chunk_duration);
+    getNum   (ctx, opts, "chunkThreshold",      p.audio_chunk_threshold);
+    getNum   (ctx, opts, "padDuration",         p.pad_duration);
+    getNum   (ctx, opts, "fadeDuration",        p.fade_duration);
+}
+
+// { codes: Int32Array|number[], numFrames?, text?, rms? } -> OmniVoicePrompt.
+// numFrames defaults to codes.length / numCodebooks. False + err on a malformed
+// object (the caller turns that into a TypeError).
+static bool promptFromJs(JSContext* ctx, JSValueConst pv, int numCodebooks,
+                         brosoundml::OmniVoicePrompt& out, std::string& err) {
+    if (!JS_IsObject(pv)) {
+        err = "prompt must be an object { codes, numFrames, text, rms } "
+              "(from createPrompt / loadPrompt)";
+        return false;
+    }
+    JSValue cv = JS_GetPropertyStr(ctx, pv, "codes");
+    out.codes = readIdArray(ctx, cv);
+    JS_FreeValue(ctx, cv);
+    if (out.codes.empty()) {
+        err = "prompt.codes must be a non-empty Int32Array or number[]";
+        return false;
+    }
+    out.num_frames = 0;
+    getIntOpt(ctx, pv, "numFrames", out.num_frames);
+    if (out.num_frames <= 0 && numCodebooks > 0)
+        out.num_frames = static_cast<int>(out.codes.size() / numCodebooks);
+    if (out.num_frames <= 0 ||
+        static_cast<size_t>(numCodebooks) * static_cast<size_t>(out.num_frames)
+            != out.codes.size()) {
+        err = "prompt.codes length must equal numCodebooks * prompt.numFrames";
+        return false;
+    }
+    out.text.clear();
+    getStrOpt(ctx, pv, "text", out.text);
+    out.rms = 0.0f;
+    getNum(ctx, pv, "rms", out.rms);
+    return true;
+}
+
+// opts.prompt -> OmniVoicePrompt. Returns 0 when absent, 1 when read, -1 (and
+// err) when present but malformed.
+static int readOmniPrompt(JSContext* ctx, JSValueConst opts, int numCodebooks,
+                          brosoundml::OmniVoicePrompt& out, std::string& err) {
+    if (!JS_IsObject(opts)) return 0;
+    JSValue pv = JS_GetPropertyStr(ctx, opts, "prompt");
+    if (JS_IsUndefined(pv) || JS_IsNull(pv)) { JS_FreeValue(ctx, pv); return 0; }
+    const bool ok = promptFromJs(ctx, pv, numCodebooks, out, err);
+    JS_FreeValue(ctx, pv);
+    return ok ? 1 : -1;
+}
+
+static JSValue promptToJs(JSContext* ctx, const brosoundml::OmniVoicePrompt& p) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "codes",     qjsbind::make_int32_array(ctx, p.codes));
+    JS_SetPropertyStr(ctx, obj, "numFrames", JS_NewInt32(ctx, p.num_frames));
+    JS_SetPropertyStr(ctx, obj, "text",      JS_NewString(ctx, p.text.c_str()));
+    JS_SetPropertyStr(ctx, obj, "rms",       JS_NewFloat64(ctx, p.rms));
+    return obj;
+}
+
+// opts.init -> OmniVoiceInit ({ tokens: Int32Array, keep: Uint8Array }). Sets
+// `has`; false + err when present but malformed. The frame-count match against
+// `frames` is left to generate_codes, which reports it through onError.
+static bool readOmniInit(JSContext* ctx, JSValueConst opts,
+                         brosoundml::OmniVoiceInit& out, bool& has, std::string& err) {
+    has = false;
+    if (!JS_IsObject(opts)) return true;
+    JSValue iv = JS_GetPropertyStr(ctx, opts, "init");
+    if (JS_IsUndefined(iv) || JS_IsNull(iv)) { JS_FreeValue(ctx, iv); return true; }
+    if (!JS_IsObject(iv)) {
+        JS_FreeValue(ctx, iv);
+        err = "init must be { tokens: Int32Array, keep: Uint8Array }";
+        return false;
+    }
+    JSValue tv = JS_GetPropertyStr(ctx, iv, "tokens");
+    out.tokens = readIdArray(ctx, tv);
+    JS_FreeValue(ctx, tv);
+    JSValue kv = JS_GetPropertyStr(ctx, iv, "keep");
+    out.keep = readByteArray(ctx, kv);
+    JS_FreeValue(ctx, kv);
+    JS_FreeValue(ctx, iv);
+    if (out.tokens.empty() || out.keep.size() != out.tokens.size()) {
+        err = "init.tokens and init.keep must be the same non-empty length "
+              "(numCodebooks * numFrames)";
+        return false;
+    }
+    has = true;
+    return true;
+}
+
+static JSValue omniTraceToJs(JSContext* ctx, const brosoundml::OmniVoiceTrace& tr) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "textIds",      qjsbind::make_int32_array(ctx, tr.text_ids));
+    JS_SetPropertyStr(ctx, obj, "numFrames",    JS_NewInt32(ctx, tr.num_frames));
+    JS_SetPropertyStr(ctx, obj, "codes",        qjsbind::make_int32_array(ctx, tr.codes));
+    JS_SetPropertyStr(ctx, obj, "unmaskStep",   qjsbind::make_int32_array(ctx, tr.unmask_step));
+    JS_SetPropertyStr(ctx, obj, "chunkFrames",  qjsbind::make_int32_array(ctx, tr.chunk_frames));
+    JS_SetPropertyStr(ctx, obj, "lmSeconds",    JS_NewFloat64(ctx, tr.lm_seconds));
+    JS_SetPropertyStr(ctx, obj, "codecSeconds", JS_NewFloat64(ctx, tr.codec_seconds));
+    return obj;
+}
+
+static JSValue omniConfigToJs(JSContext* ctx, const OmniVoiceWrapper* w) {
+    const auto& c = w->model->config();
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "sampleRate",     JS_NewInt32(ctx, c.sample_rate));
+    JS_SetPropertyStr(ctx, obj, "frameRate",      JS_NewInt32(ctx, c.frame_rate));
+    JS_SetPropertyStr(ctx, obj, "numCodebooks",   JS_NewInt32(ctx, c.lm.num_codebooks));
+    JS_SetPropertyStr(ctx, obj, "audioVocabSize", JS_NewInt32(ctx, c.lm.audio_vocab_size));
+    JS_SetPropertyStr(ctx, obj, "maskId",         JS_NewInt32(ctx, c.lm.audio_mask_id));
+    JS_SetPropertyStr(ctx, obj, "hiddenSize",     JS_NewInt32(ctx, c.lm.hidden_size));
+    JS_SetPropertyStr(ctx, obj, "numLayers",      JS_NewInt32(ctx, c.lm.num_hidden_layers));
+    JS_SetPropertyStr(ctx, obj, "precision",      JS_NewString(ctx, omniPrecisionName(w->precision)));
+    JS_SetPropertyStr(ctx, obj, "device",         JS_NewString(ctx, deviceName(w->device)));
+    JS_SetPropertyStr(ctx, obj, "decoderOnly",    JS_NewBool(ctx, w->decoderOnly));
+    return obj;
+}
+
+// The sync methods below touch the GPU (codec) or read state an in-flight
+// worker may be using; refuse while an async op holds the model.
+static bool omniCheckIdle(JSContext* ctx, const OmniVoiceWrapper* w, const char* fn,
+                          JSValue& thrown) {
+    if (!w->model || !w->model->loaded()) {
+        thrown = JS_ThrowInternalError(ctx, "%s: model is not loaded", fn);
+        return false;
+    }
+    if (w->busy.isBusy()) {
+        thrown = JS_ThrowInternalError(ctx,
+            "%s: an operation is already in flight on this model", fn);
+        return false;
+    }
+    return true;
+}
+
+// omni.decodeCodes(codes, numFrames?) -> { samples, sampleRate }   (sync, ~60 ms)
+//   The HiggsAudio v2 decoder on its own: numCodebooks * numFrames codes laid
+//   out [q * numFrames + t] (what generateCodes / trace.codes / encodeAudio
+//   give) -> 24 kHz PCM. numFrames defaults to codes.length / numCodebooks.
+static JSValue js_omni_decode_codes(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "decodeCodes: not an OmniVoice");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "decodeCodes(codes, numFrames?): codes required");
+    std::vector<int32_t> codes = readIdArray(ctx, argv[0]);
+    if (codes.empty())
+        return JS_ThrowTypeError(ctx, "decodeCodes: codes must be a non-empty Int32Array");
+    JSValue thrown;
+    if (!omniCheckIdle(ctx, w, "decodeCodes", thrown)) return thrown;
+    const int nq = w->model->config().lm.num_codebooks;
+    int32_t nf = 0;
+    if (argc >= 2 && JS_IsNumber(argv[1])) JS_ToInt32(ctx, &nf, argv[1]);
+    if (nf <= 0) nf = static_cast<int32_t>(codes.size() / static_cast<size_t>(nq));
+    if (nf <= 0 || static_cast<size_t>(nq) * static_cast<size_t>(nf) != codes.size())
+        return JS_ThrowTypeError(ctx,
+            "decodeCodes: codes.length must equal numCodebooks (%d) * numFrames", nq);
+    try {
+        brotensor::DeviceScope scope(w->device);
+        return audioBufferToJs(ctx, w->model->decode_codes(codes, nf));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "decodeCodes: %s", e.what());
+    }
+}
+
+// Read (samples, sampleRate) from either (Float32Array, number) or
+// (Float32Array, { sampleRate }) or ({ samples, sampleRate }).
+static bool readAudioArgs(JSContext* ctx, int argc, JSValueConst* argv,
+                          brosoundml::AudioBuffer& out, const char* fn) {
+    if (argc < 1) return false;
+    out.sample_rate = 24000;
+    if (JS_IsObject(argv[0]) && !JS_IsArray(argv[0])) {
+        // An { samples, sampleRate } object (an earlier synthesize result)?
+        JSValue sv = JS_GetPropertyStr(ctx, argv[0], "samples");
+        if (!JS_IsUndefined(sv)) {
+            out.samples = qjsbind::read_float32_array(ctx, sv);
+            float sr = 24000.0f;
+            getNum(ctx, argv[0], "sampleRate", sr);
+            out.sample_rate = static_cast<int>(sr);
+        }
+        JS_FreeValue(ctx, sv);
+    }
+    if (out.samples.empty()) out.samples = qjsbind::read_float32_array(ctx, argv[0]);
+    if (argc >= 2) {
+        if (JS_IsNumber(argv[1])) {
+            double d = 0; JS_ToFloat64(ctx, &d, argv[1]);
+            out.sample_rate = static_cast<int>(d);
+        } else if (JS_IsObject(argv[1])) {
+            float sr = static_cast<float>(out.sample_rate);
+            getNum(ctx, argv[1], "sampleRate", sr);
+            out.sample_rate = static_cast<int>(sr);
+        }
+    }
+    (void)fn;
+    return !out.samples.empty() && out.sample_rate > 0;
+}
+
+// omni.encodeAudio(samples, sampleRate?) -> { codes, numFrames, numCodebooks }  (sync)
+//   The codec encoder (DAC + HuBERT) on its own; resamples to 24 kHz. Throws
+//   when the model was loaded with decoderOnly.
+static JSValue js_omni_encode_audio(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encodeAudio: not an OmniVoice");
+    brosoundml::AudioBuffer audio;
+    if (!readAudioArgs(ctx, argc, argv, audio, "encodeAudio"))
+        return JS_ThrowTypeError(ctx,
+            "encodeAudio(samples, sampleRate?): samples must be a non-empty Float32Array");
+    JSValue thrown;
+    if (!omniCheckIdle(ctx, w, "encodeAudio", thrown)) return thrown;
+    if (w->decoderOnly)
+        return JS_ThrowInternalError(ctx,
+            "encodeAudio: the model was loaded with decoderOnly (no codec encoder)");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        int nf = 0;
+        std::vector<int32_t> codes = w->model->encode_audio(audio, &nf);
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "codes",        qjsbind::make_int32_array(ctx, codes));
+        JS_SetPropertyStr(ctx, obj, "numFrames",    JS_NewInt32(ctx, nf));
+        JS_SetPropertyStr(ctx, obj, "numCodebooks", JS_NewInt32(ctx, w->model->config().lm.num_codebooks));
+        return obj;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encodeAudio: %s", e.what());
+    }
+}
+
+// State for an async createPrompt. Same handoff as embedSpeaker: the work
+// thread fills `out` (or throws); done() marshals it and fires onDone / onError.
+struct OmniPromptJob {
+    std::shared_ptr<const brosoundml::OmniVoice> model;
+    brotensor::Device          device = brotensor::Device::CPU;
+    brosoundml::AudioBuffer    ref;
+    std::string                refText;
+    bool                       preprocess = true;
+    brosoundml::OmniVoicePrompt out;
+    JSValue modelRef = JS_UNDEFINED;
+    JSValue onDone   = JS_UNDEFINED;
+    JSValue onError  = JS_UNDEFINED;
+    bool    hasError = false;
+};
+
+// omni.createPrompt(samples, opts?) -> prompt                (sync)
+//                                   -> AsyncHandle           (async, if opts.onDone)
+//   Build a voice prompt from a reference clip: opts.sampleRate (default 24000;
+//   resampled), opts.refText (its transcript; "" is allowed and yields a
+//   text-free reference), opts.preprocess (default true: RMS boost, trim,
+//   silence removal, frame alignment, terminal punctuation). The result is a
+//   plain object { codes: Int32Array, numFrames, text, rms } accepted back as
+//   opts.prompt by synthesize / generateCodes / estimateFrames. With
+//   opts.onDone(prompt) the encoder runs on a background thread and
+//   onDone / onError(message) fire on the JS thread. Throws when decoderOnly.
+static JSValue js_omni_create_prompt(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createPrompt: not an OmniVoice");
+    brosoundml::AudioBuffer ref;
+    if (!readAudioArgs(ctx, argc, argv, ref, "createPrompt"))
+        return JS_ThrowTypeError(ctx,
+            "createPrompt(samples, opts?): samples must be a non-empty Float32Array");
+    std::string refText;
+    bool preprocess = true;
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    if (haveOpts) {
+        getStrOpt(ctx, argv[1], "refText", refText);
+        getBoolOpt(ctx, argv[1], "preprocess", preprocess);
+    }
+    JSValue thrown;
+    if (!omniCheckIdle(ctx, w, "createPrompt", thrown)) return thrown;
+    if (w->decoderOnly)
+        return JS_ThrowInternalError(ctx,
+            "createPrompt: the model was loaded with decoderOnly (no codec encoder)");
+
+    JSValue onDone  = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onDone")  : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError") : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onDone);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onError);
+        try {
+            brotensor::DeviceScope scope(w->device);
+            return promptToJs(ctx, w->model->create_prompt(ref, refText, preprocess));
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "createPrompt: %s", e.what());
+        }
+    }
+
+    // ── Async path ── claims the model: the encoder shares the device.
+    if (!w->busy.tryClaim()) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onError);
+        return JS_ThrowInternalError(ctx,
+            "createPrompt: an operation is already in flight on this model");
+    }
+    auto job = std::make_shared<OmniPromptJob>();
+    job->model      = w->model;
+    job->device     = w->device;
+    job->ref        = std::move(ref);
+    job->refText    = std::move(refText);
+    job->preprocess = preprocess;
+    job->modelRef   = JS_DupValue(ctx, this_val);
+    job->onDone     = JS_DupValue(ctx, onDone);
+    job->hasError   = JS_IsFunction(ctx, onError);
+    job->onError    = job->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onError);
+
+    OmniVoiceWrapper* mw = w;
+    auto work = [job](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(job->device);
+        job->out = job->model->create_prompt(job->ref, job->refText, job->preprocess);
+    };
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        mw->busy.release();
+        if (!error.empty() || cancelled) {
+            if (job->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "createPrompt cancelled"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, job->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = promptToJs(c, job->out);
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        JS_FreeValue(c, job->onDone);
+        if (job->hasError) JS_FreeValue(c, job->onError);
+        JS_FreeValue(c, job->modelRef);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// omni.savePrompt(prompt, path)   — write the .ovcp file (OmniVoicePrompt::save)
+// omni.loadPrompt(path) -> prompt — read one back. Paths resolve app-relative
+// like the loaders (brokit::api::resolveAssetPath).
+static JSValue js_omni_save_prompt(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "savePrompt: not an OmniVoice");
+    std::string path;
+    if (argc < 2 || !argStr(ctx, argv[1], path))
+        return JS_ThrowTypeError(ctx, "savePrompt(prompt, path): prompt and path required");
+    brosoundml::OmniVoicePrompt p;
+    std::string err;
+    if (!promptFromJs(ctx, argv[0], w->model ? w->model->config().lm.num_codebooks : 8, p, err))
+        return JS_ThrowTypeError(ctx, "savePrompt: %s", err.c_str());
+    try {
+        p.save(brokit::api::resolveAssetPath(ctx, path));
+        return JS_UNDEFINED;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "savePrompt: %s", e.what());
+    }
+}
+
+static JSValue js_omni_load_prompt(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "loadPrompt: not an OmniVoice");
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx, "loadPrompt(path): path string required");
+    try {
+        return promptToJs(ctx, brosoundml::OmniVoicePrompt::load(
+            brokit::api::resolveAssetPath(ctx, path)));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "loadPrompt: %s", e.what());
+    }
+}
+
+// omni.estimateFrames(text, opts?) -> number
+//   The duration rule: frames synthesize would generate for `text` given
+//   opts.prompt / speed / duration (25 frames per second).
+static JSValue js_omni_estimate_frames(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "estimateFrames: not an OmniVoice");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "estimateFrames(text, opts?): text string required");
+    if (!w->model || !w->model->loaded())
+        return JS_ThrowInternalError(ctx, "estimateFrames: model is not loaded");
+    brosoundml::OmniVoiceParams params;
+    brosoundml::OmniVoicePrompt prompt;
+    int hasPrompt = 0;
+    if (argc >= 2) {
+        readOmniParams(ctx, argv[1], params);
+        std::string err;
+        hasPrompt = readOmniPrompt(ctx, argv[1], w->model->config().lm.num_codebooks, prompt, err);
+        if (hasPrompt < 0) return JS_ThrowTypeError(ctx, "estimateFrames: %s", err.c_str());
+    }
+    try {
+        return JS_NewInt32(ctx, w->model->estimate_frames(text, params,
+                                                          hasPrompt ? &prompt : nullptr));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "estimateFrames: %s", e.what());
+    }
+}
+
+// omni.tokenize(text) -> Int32Array   (the prompt's text ids; tags standalone)
+static JSValue js_omni_tokenize(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "tokenize: not an OmniVoice");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "tokenize(text): text string required");
+    if (!w->model || !w->model->loaded())
+        return JS_ThrowInternalError(ctx, "tokenize: model is not loaded");
+    try {
+        return qjsbind::make_int32_array(ctx, w->model->tokenize(text));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "tokenize: %s", e.what());
+    }
+}
+
+// omni.languages() -> string[]    (names accepted by opts.language)
+static JSValue js_omni_languages(JSContext* ctx, JSValueConst this_val,
+                                 int, JSValueConst*) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "languages: not an OmniVoice");
+    if (!w->model || !w->model->loaded())
+        return JS_ThrowInternalError(ctx, "languages: model is not loaded");
+    return stringVecToJs(ctx, w->model->languages());
+}
+
+// omni.instructAttributes() -> [{ name, values: string[] }]
+//   The voice-design vocabulary; an instruct picks at most one value per
+//   category, comma-separated.
+static JSValue js_omni_instruct_attributes(JSContext* ctx, JSValueConst this_val,
+                                           int, JSValueConst*) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "instructAttributes: not an OmniVoice");
+    if (!w->model || !w->model->loaded())
+        return JS_ThrowInternalError(ctx, "instructAttributes: model is not loaded");
+    JSValue arr = JS_NewArray(ctx);
+    std::uint32_t i = 0;
+    for (const auto& cat : w->model->instruct_attributes()) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "name",   JS_NewString(ctx, cat.name.c_str()));
+        JS_SetPropertyStr(ctx, o, "values", stringVecToJs(ctx, cat.values));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+// omni.nonverbalTags() -> string[]   ("[laughter]", ...)
+static JSValue js_omni_nonverbal_tags(JSContext* ctx, JSValueConst this_val,
+                                      int, JSValueConst*) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "nonverbalTags: not an OmniVoice");
+    if (!w->model || !w->model->loaded())
+        return JS_ThrowInternalError(ctx, "nonverbalTags: model is not loaded");
+    return stringVecToJs(ctx, w->model->nonverbal_tags());
+}
+
+// omni.unload() — drop the weights (GPU memory included). Refused while an op
+// is in flight; afterwards `loaded` is false and every method throws.
+static JSValue js_omni_unload(JSContext* ctx, JSValueConst this_val,
+                              int, JSValueConst*) {
+    auto* w = omniSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "unload: not an OmniVoice");
+    if (w->busy.isBusy())
+        return JS_ThrowInternalError(ctx, "unload: an operation is in flight on this model");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        w->model = std::make_shared<brosoundml::OmniVoice>();   // an unloaded pipeline
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "unload: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// ── Async synthesize / generateCodes ──────────────────────────────────────────
+//
+// One launcher serves both: synthesize runs the whole pipeline (chunking, codec,
+// post-processing) to PCM; generateCodes runs the LM alone for one chunk at an
+// exact frame count, optionally seeded by an init grid, and returns the codes.
+// The masked-diffusion loop polls the async-job cancel flag once per step.
+//
+// opts.onStep(step) observes every diffusion step on the JS thread. The C++
+// callback fires on the worker thread with pointers valid only for the call,
+// so it copies the grid + scores into the next pre-sized slot and publishes it
+// through `produced`; the JS-thread poll drains up to `produced` — the same
+// SPSC handoff as Qwen's streaming chunks. Copies are made only when onStep is
+// set. Slots are bounded: numSteps * kOmniMaxChunks + 1 (a chunk is ~15 s of
+// speech, so 256 chunks is over an hour of long-form text).
+static constexpr size_t kOmniMaxChunks = 256;
+
+struct OmniStepSlot {
+    int step = 0, numSteps = 0, numFrames = 0, numCodebooks = 0, unmasked = 0;
+    std::vector<int32_t> tokens;
+    std::vector<float>   scores;
+};
+
+struct OmniJob {
+    std::shared_ptr<const brosoundml::OmniVoice> model;
+    brotensor::Device            device = brotensor::Device::CPU;
+    std::string                  text;
+    brosoundml::OmniVoiceParams  params;
+    bool                         hasPrompt = false;
+    brosoundml::OmniVoicePrompt  prompt;
+    // generateCodes mode
+    bool                         codesMode = false;
+    int                          frames = 0;            // <= 0 -> estimate
+    bool                         hasInit = false;
+    brosoundml::OmniVoiceInit    init;
+    // outputs (work thread writes, done reads)
+    bool                         wantTrace = false;
+    brosoundml::OmniVoiceTrace   trace;
+    std::vector<float>           samples;
+    int                          sample_rate = 24000;
+    std::vector<int32_t>         codes;
+    int                          numFrames = 0;
+    int                          numCodebooks = 8;
+    // callbacks
+    JSValue onDone   = JS_UNDEFINED;
+    JSValue onError  = JS_UNDEFINED;
+    JSValue onStep   = JS_UNDEFINED;
+    JSValue modelRef = JS_UNDEFINED;
+    bool hasOnDone = false, hasOnError = false, hasOnStep = false;
+    // SPSC step handoff
+    std::vector<OmniStepSlot> stepSlots;
+    std::atomic<size_t>       produced{0};
+    size_t                    drained = 0;
+};
+
+static JSValue omniLaunch(JSContext* ctx, JSValueConst modelVal, JSValueConst textVal,
+                          JSValueConst optsVal, bool codesMode) {
+    const char* fn = codesMode ? "generateCodes" : "synthesize";
+    auto* w = omniSelf(ctx, modelVal);
+    if (!w) return JS_ThrowTypeError(ctx, "%s: not an OmniVoice", fn);
+    if (!w->model || !w->model->loaded())
+        return JS_ThrowInternalError(ctx, "%s: model is not loaded", fn);
+    std::string text;
+    if (!argStr(ctx, textVal, text) || text.empty())
+        return JS_ThrowTypeError(ctx, "%s(text, opts?): non-empty text string required", fn);
+
+    auto job = std::make_shared<OmniJob>();
+    job->model        = w->model;
+    job->device       = w->device;
+    job->text         = std::move(text);
+    job->codesMode    = codesMode;
+    job->numCodebooks = w->model->config().lm.num_codebooks;
+
+    JSValue onDone = JS_UNDEFINED, onError = JS_UNDEFINED, onStep = JS_UNDEFINED;
+    if (JS_IsObject(optsVal)) {
+        readOmniParams(ctx, optsVal, job->params);
+        std::string err;
+        const int pr = readOmniPrompt(ctx, optsVal, job->numCodebooks, job->prompt, err);
+        if (pr < 0) return JS_ThrowTypeError(ctx, "%s: %s", fn, err.c_str());
+        job->hasPrompt = pr > 0;
+        job->wantTrace = getBool(ctx, optsVal, "trace");
+        if (codesMode) {
+            getIntOpt(ctx, optsVal, "frames", job->frames);
+            if (!readOmniInit(ctx, optsVal, job->init, job->hasInit, err))
+                return JS_ThrowTypeError(ctx, "%s: %s", fn, err.c_str());
+        }
+        onDone  = JS_GetPropertyStr(ctx, optsVal, "onDone");
+        onError = JS_GetPropertyStr(ctx, optsVal, "onError");
+        onStep  = JS_GetPropertyStr(ctx, optsVal, "onStep");
+    }
+    auto freeCbs = [&] {
+        JS_FreeValue(ctx, onDone); JS_FreeValue(ctx, onError); JS_FreeValue(ctx, onStep);
+    };
+    if (job->params.num_steps < 1) {
+        freeCbs();
+        return JS_ThrowTypeError(ctx, "%s: numSteps must be >= 1", fn);
+    }
+
+    // Claim the model (single-owner; one op in flight).
+    if (!w->busy.tryClaim()) {
+        freeCbs();
+        return JS_ThrowInternalError(ctx,
+            "%s: an operation is already in flight on this model", fn);
+    }
+
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone  ? JS_DupValue(ctx, onDone)  : JS_UNDEFINED;
+    job->hasOnError = JS_IsFunction(ctx, onError);
+    job->onError    = job->hasOnError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    job->hasOnStep  = JS_IsFunction(ctx, onStep);
+    job->onStep     = job->hasOnStep  ? JS_DupValue(ctx, onStep)  : JS_UNDEFINED;
+    job->modelRef   = JS_DupValue(ctx, modelVal);   // keep the model alive
+    freeCbs();
+    if (job->hasOnStep)
+        job->stepSlots.resize(static_cast<size_t>(job->params.num_steps) *
+                              (codesMode ? 1 : kOmniMaxChunks) + 1);
+
+    OmniVoiceWrapper* mw = w;
+
+    auto work = [job](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(job->device);
+        auto cancelFn = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
+        brosoundml::OmniVoiceStepFn stepFn;
+        if (job->hasOnStep) {
+            // Worker thread: copy the host grid + scores into the next slot and
+            // publish. No JS here — the poll below fires onStep.
+            stepFn = [job](const brosoundml::OmniVoiceStep& s) {
+                const size_t idx = job->produced.load(std::memory_order_relaxed);
+                if (idx >= job->stepSlots.size()) return;   // bound guard
+                OmniStepSlot& slot = job->stepSlots[idx];
+                slot.step = s.step; slot.numSteps = s.num_steps;
+                slot.numFrames = s.num_frames; slot.numCodebooks = s.num_codebooks;
+                slot.unmasked = s.unmasked;
+                const size_t n = static_cast<size_t>(s.num_frames) *
+                                 static_cast<size_t>(s.num_codebooks);
+                if (s.tokens) slot.tokens.assign(s.tokens, s.tokens + n);
+                if (s.scores) slot.scores.assign(s.scores, s.scores + n);
+                job->produced.store(idx + 1, std::memory_order_release);
+            };
+        }
+        const brosoundml::OmniVoicePrompt* prompt = job->hasPrompt ? &job->prompt : nullptr;
+        brosoundml::OmniVoiceTrace* trace = job->wantTrace ? &job->trace : nullptr;
+        if (job->codesMode) {
+            job->codes = job->model->generate_codes(
+                job->text, job->frames, job->params, prompt,
+                job->hasInit ? &job->init : nullptr, cancelFn, trace, stepFn);
+            job->numFrames = job->numCodebooks > 0
+                ? static_cast<int>(job->codes.size() / static_cast<size_t>(job->numCodebooks))
+                : 0;
+        } else {
+            auto buf = job->model->synthesize(job->text, job->params, prompt,
+                                              cancelFn, trace, stepFn);
+            job->samples     = std::move(buf.samples);
+            job->sample_rate = buf.sample_rate;
+        }
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnStep) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            OmniStepSlot& slot = job->stepSlots[job->drained];
+            JSValue st = JS_NewObject(c);
+            JS_SetPropertyStr(c, st, "step",         JS_NewInt32(c, slot.step));
+            JS_SetPropertyStr(c, st, "numSteps",     JS_NewInt32(c, slot.numSteps));
+            JS_SetPropertyStr(c, st, "numFrames",    JS_NewInt32(c, slot.numFrames));
+            JS_SetPropertyStr(c, st, "numCodebooks", JS_NewInt32(c, slot.numCodebooks));
+            JS_SetPropertyStr(c, st, "unmasked",     JS_NewInt32(c, slot.unmasked));
+            JS_SetPropertyStr(c, st, "tokens",       qjsbind::make_int32_array(c, slot.tokens));
+            JS_SetPropertyStr(c, st, "scores",       qjsbind::make_float32_array(c, slot.scores));
+            JSValue r = JS_Call(c, job->onStep, JS_UNDEFINED, 1, &st);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, st);
+            std::vector<int32_t>().swap(slot.tokens);   // release the slot's memory
+            std::vector<float>().swap(slot.scores);
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the model BEFORE the callbacks so one may start the next op.
+        mw->busy.release();
+        if (!error.empty() && job->hasOnError) {
+            JSValue e = JS_NewString(c, error.c_str());
+            JSValue r = JS_Call(c, job->onError, JS_UNDEFINED, 1, &e);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, e);
+        }
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            if (job->codesMode) {
+                JS_SetPropertyStr(c, result, "codes",
+                    qjsbind::make_int32_array(c, job->codes));
+                JS_SetPropertyStr(c, result, "numFrames",    JS_NewInt32(c, job->numFrames));
+                JS_SetPropertyStr(c, result, "numCodebooks", JS_NewInt32(c, job->numCodebooks));
+            } else {
+                JS_SetPropertyStr(c, result, "samples",
+                    qjsbind::make_float32_array(c, job->samples));
+                JS_SetPropertyStr(c, result, "sampleRate",
+                    JS_NewInt32(c, job->sample_rate));
+            }
+            if (job->wantTrace && !cancelled && error.empty())
+                JS_SetPropertyStr(c, result, "trace", omniTraceToJs(c, job->trace));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        if (job->hasOnError) JS_FreeValue(c, job->onError);
+        if (job->hasOnStep)  JS_FreeValue(c, job->onStep);
+        JS_FreeValue(c, job->modelRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+// omni.synthesize(text, opts?) -> AsyncHandle
+//   opts: the OmniVoiceParams knobs (numSteps, tShift, guidanceScale,
+//   layerPenalty, positionTemperature, classTemperature, gumbelNoise, seed,
+//   speed, duration, language, instruct, denoise, preprocessPrompt,
+//   postprocess, chunkDuration, chunkThreshold, padDuration, fadeDuration),
+//   prompt (a voice prompt object), trace, onStep(step), onDone(result, info),
+//   onError(message). result = { samples, sampleRate, trace? }, info =
+//   { cancelled, error? }. .cancel() stops at the next diffusion step.
+static JSValue js_omni_synthesize(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "synthesize(text, opts?): text string required");
+    return omniLaunch(ctx, this_val, argv[0], argc >= 2 ? argv[1] : JS_UNDEFINED, false);
+}
+
+// omni.generateCodes(text, opts?) -> AsyncHandle
+//   The LM alone: one chunk at exactly opts.frames frames (<= 0 -> the duration
+//   rule), no chunking / codec / post-processing. opts.init = { tokens, keep }
+//   seeds the grid (inpainting / re-roll). result = { codes: Int32Array
+//   [q * numFrames + t], numFrames, numCodebooks, trace? }; feed to decodeCodes.
+static JSValue js_omni_generate_codes(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "generateCodes(text, opts?): text string required");
+    return omniLaunch(ctx, this_val, argv[0], argc >= 2 ? argv[1] : JS_UNDEFINED, true);
+}
+
+static void registerOmniVoiceClass(JSContext* ctx) {
+    qjsbind::Class<OmniVoiceWrapper>(ctx, "OmniVoice", qjsbind::NoGlobal)
+        .get("loaded",     [](OmniVoiceWrapper* w) { return w->model && w->model->loaded(); })
+        .get("device",     [](OmniVoiceWrapper* w) { return std::string(deviceName(w->device)); })
+        .get("precision",  [](OmniVoiceWrapper* w) { return std::string(omniPrecisionName(w->precision)); })
+        .get("sampleRate", [](OmniVoiceWrapper* w) { return w->model ? w->model->config().sample_rate : 0; })
+        .get("config",     [](OmniVoiceWrapper* w, JSContext* c) -> JSValue {
+            if (!w->model) return JS_NULL;
+            return omniConfigToJs(c, w);
+        })
+        .method_raw("synthesize",         js_omni_synthesize,          2)
+        .method_raw("generateCodes",      js_omni_generate_codes,      2)
+        .method_raw("decodeCodes",        js_omni_decode_codes,        2)
+        .method_raw("encodeAudio",        js_omni_encode_audio,        2)
+        .method_raw("createPrompt",       js_omni_create_prompt,       2)
+        .method_raw("savePrompt",         js_omni_save_prompt,         2)
+        .method_raw("loadPrompt",         js_omni_load_prompt,         1)
+        .method_raw("estimateFrames",     js_omni_estimate_frames,     2)
+        .method_raw("tokenize",           js_omni_tokenize,            1)
+        .method_raw("languages",          js_omni_languages,           0)
+        .method_raw("instructAttributes", js_omni_instruct_attributes, 0)
+        .method_raw("nonverbalTags",      js_omni_nonverbal_tags,      0)
+        .method_raw("unload",             js_omni_unload,              0);
+}
+
 // u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
 // bro.tts free functions
 // u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550u2550
@@ -1543,6 +2403,163 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
             }
         } else {
             JSValue out = qjsbind::wrap<QwenTtsWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OmniVoice loader
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Build + load OmniVoice from a checkpoint dir (config.json + tokenizer.json +
+// model.safetensors + audio_tokenizer/). Heavy + blocking; shared by the sync
+// and async loadOmniVoice paths. Throws on error.
+static void buildOmniVoice(const std::string& dir, brotensor::Device dev,
+                           brosoundml::OmniVoicePrecision precision, bool decoderOnly,
+                           std::unique_ptr<OmniVoiceWrapper>& w_out) {
+    auto w = std::make_unique<OmniVoiceWrapper>();
+    w->device      = dev;
+    w->precision   = precision;
+    w->decoderOnly = decoderOnly;
+    w->model = std::make_shared<brosoundml::OmniVoice>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->model->load(dir, dev, precision, decoderOnly);
+    }
+    std::fprintf(stderr, "[INFO] [tts] OmniVoice loaded on %s (%s%s)\n", deviceName(dev),
+                 omniPrecisionName(precision), decoderOnly ? ", codec decoder only" : "");
+    w_out = std::move(w);
+}
+
+struct OmniVoiceLoadState {
+    std::string                       dir;
+    brotensor::Device                 dev = brotensor::Device::CPU;
+    brosoundml::OmniVoicePrecision    precision = brosoundml::OmniVoicePrecision::BF16;
+    bool                              decoderOnly = false;
+    std::unique_ptr<OmniVoiceWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.tts.loadOmniVoice(modelDir, opts?) -> OmniVoice     (sync)
+//                                        -> AsyncHandle   (async, if opts.onReady)
+//   modelDir holds config.json + tokenizer.json + model.safetensors and the
+//   HiggsAudio audio_tokenizer/. Text-driven end to end; a voice is a prompt
+//   object (createPrompt / loadPrompt) or an instruct.
+//   opts.device:      'cuda' | 'metal' | 'cpu' — defaults to the GPU. The LM is
+//                     a full bidirectional Qwen3-0.6B forward per diffusion
+//                     step, so when the resolved device is the CPU the load is
+//                     refused unless opts.device is 'cpu' explicitly.
+//   opts.precision:   'bf16' (default on CUDA: tensor-core GEMMs + fused
+//                     attention, ~6x faster, same transcript) | 'fp32' (the
+//                     bit-exact-vs-upstream mode; the default elsewhere).
+//   opts.decoderOnly: skip the codec encoder + HuBERT (createPrompt /
+//                     encodeAudio then throw); saves load time + memory when
+//                     only synthesis from saved prompts / instructs is needed.
+//   opts.onReady(omni) / opts.onError(message): when onReady is a function the
+//   load runs on a background thread and these fire on the JS thread.
+static JSValue js_loadOmniVoice(JSContext* ctx, JSValueConst,
+                                int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadOmniVoice(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    bool explicitDevice = false;
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadOmniVoice: %s", err.c_str());
+        if (haveOpts) {
+            JSValue dv = JS_GetPropertyStr(ctx, argv[1], "device");
+            explicitDevice = JS_IsString(dv);
+            JS_FreeValue(ctx, dv);
+        }
+    }
+    // The GPU is the default and the CPU is opt-in: a CPU fallback here would
+    // silently turn a ~1 s synthesis into minutes.
+    if (dev.type == brotensor::DeviceType::CPU && !explicitDevice)
+        return JS_ThrowInternalError(ctx,
+            "loadOmniVoice: no GPU backend is available (CUDA/Metal) and OmniVoice's "
+            "language model is not practical on the CPU; pass { device: 'cpu' } "
+            "to run it there anyway");
+
+    auto precision = dev.type == brotensor::DeviceType::CUDA
+        ? brosoundml::OmniVoicePrecision::BF16 : brosoundml::OmniVoicePrecision::FP32;
+    bool decoderOnly = false;
+    if (haveOpts) {
+        JSValue pv = JS_GetPropertyStr(ctx, argv[1], "precision");
+        const bool hasPrec = !JS_IsUndefined(pv) && !JS_IsNull(pv);
+        std::string prec;
+        if (hasPrec) argStr(ctx, pv, prec);
+        JS_FreeValue(ctx, pv);
+        if (hasPrec) {
+            if (prec == "bf16")      precision = brosoundml::OmniVoicePrecision::BF16;
+            else if (prec == "fp32") precision = brosoundml::OmniVoicePrecision::FP32;
+            else return JS_ThrowTypeError(ctx,
+                "loadOmniVoice: opts.precision must be 'fp32' or 'bf16'");
+        }
+        decoderOnly = getBool(ctx, argv[1], "decoderOnly");
+    }
+
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<OmniVoiceWrapper> w;
+            buildOmniVoice(dir, dev, precision, decoderOnly, w);
+            return qjsbind::wrap<OmniVoiceWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadOmniVoice: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<OmniVoiceLoadState>();
+    ls->dir         = dir;
+    ls->dev         = dev;
+    ls->precision   = precision;
+    ls->decoderOnly = decoderOnly;
+    ls->hasReady    = true;
+    ls->onReady     = JS_DupValue(ctx, onReady);
+    ls->hasError    = JS_IsFunction(ctx, onError);
+    ls->onError     = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildOmniVoice(ls->dir, ls->dev, ls->precision, ls->decoderOnly, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadOmniVoice failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<OmniVoiceWrapper>(c, ls->w.release());
             JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
             if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
             JS_FreeValue(c, r);
@@ -2537,10 +3554,16 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         return js_qwen_synthesize_async(ctx, argc, argv);
     if (qjsbind::unwrap<SupertonicWrapper>(ctx, argv[0]))
         return js_supertonic_synthesize_async(ctx, argc, argv);
+    // OmniVoice: synthesize(omni, text, opts?) — identical to omni.synthesize.
+    if (qjsbind::unwrap<OmniVoiceWrapper>(ctx, argv[0])) {
+        if (argc < 2)
+            return JS_ThrowTypeError(ctx, "synthesize(omni, text, opts?): text string required");
+        return omniLaunch(ctx, argv[0], argv[1], argc >= 3 ? argv[2] : JS_UNDEFINED, false);
+    }
 
     auto* w = qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]);
     if (!w) return JS_ThrowTypeError(ctx,
-        "synthesize: arg 0 must be a Kokoro, QwenTts, or Supertonic");
+        "synthesize: arg 0 must be a Kokoro, QwenTts, Supertonic, or OmniVoice");
     if (argc < 3)
         return JS_ThrowTypeError(ctx,
             "synthesize(kokoro, phonemeIds, voice, opts?): kokoro, phonemeIds "
@@ -3073,6 +4096,7 @@ void installTtsBindings(JSContext* ctx) {
     registerVoiceClass(ctx);
         registerKokoroClass(ctx);
         registerQwenClass(ctx);
+        registerOmniVoiceClass(ctx);
         registerSupertonicVoiceClass(ctx);
         registerSupertonicClass(ctx);
         registerSpeakerEncoderClass(ctx);
@@ -3094,6 +4118,18 @@ void installTtsBindings(JSContext* ctx) {
             JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 2));
         JS_SetPropertyStr(ctx, tts, "loadQwen",
             JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
+        JS_SetPropertyStr(ctx, tts, "loadOmniVoice",
+            JS_NewCFunction(ctx, js_loadOmniVoice, "loadOmniVoice", 2));
+        // bro.tts.OmniVoice: the class object (not constructible from JS) so an
+        // app can `instanceof` a handle and a weights-free test can see the
+        // prototype. qjsbind linked ctor <-> proto before dropping its own ctor
+        // ref under NoGlobal, so proto.constructor is that function.
+        {
+            JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<OmniVoiceWrapper>());
+            JSValue ctor  = JS_GetPropertyStr(ctx, proto, "constructor");
+            JS_FreeValue(ctx, proto);
+            JS_SetPropertyStr(ctx, tts, "OmniVoice", ctor);
+        }
         JS_SetPropertyStr(ctx, tts, "loadSupertonic",
             JS_NewCFunction(ctx, js_loadSupertonic, "loadSupertonic", 2));
         JS_SetPropertyStr(ctx, tts, "loadSpeakerEncoder",
