@@ -470,6 +470,16 @@ void Engine::handleResize(int w, int h) {
     int cw = contentWidth();
     int ch = contentHeight();
     if (document_) {
+        // An <input>/<select>/<img> whose replaced-element control has not been
+        // attached yet has no intrinsic size, and laying it out before then
+        // measures it at nothing — the same wrong answer flushLayoutForRead
+        // guards against. A resize normally arrives long after the structure
+        // pass, but bro.menu.show() routes through here, and an app that shows
+        // its menu bar from a startup script lands exactly there: mid-parse,
+        // before the engine has built a single control. Gated on the structure
+        // flag so a live window drag doesn't walk the tree per resize event.
+        if (document_->isStructureDirty())
+            ensureReplacedElements(document_->documentElement());
         // Re-evaluate @media blocks against the new viewport before restyling.
         document_->setMediaViewport(static_cast<float>(cw), static_cast<float>(ch));
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());

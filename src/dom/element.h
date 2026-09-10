@@ -363,9 +363,14 @@ public:
     /// The src these dimensions were probed for; empty until one is.
     const std::string& imageProbedSrc() const { return imageProbedSrc_; }
     void setImageNaturalSize(const std::string& src, int w, int h) {
+        const bool sizeChanged = (w != imageNaturalWidth_ || h != imageNaturalHeight_);
         imageProbedSrc_ = src;
         imageNaturalWidth_ = w;
         imageNaturalHeight_ = h;
+        // Same contract as the controls below: this size IS the <img>'s
+        // intrinsic size, so a box laid out before the probe ran is the wrong
+        // box and has to be recomputed. See noteReplacedControlInstalled().
+        if (sizeChanged) markDirty();
     }
 
     // Pre-layout <select> selection. selectedIndex is a DOM property scripts
@@ -377,6 +382,11 @@ public:
     bool hasPendingSelectedIndex() const { return pendingSelIndexSet_; }
     int  pendingSelectedIndex() const { return pendingSelIndex_; }
     void setPendingSelectedIndex(int i) { pendingSelIndex_ = i; pendingSelIndexSet_ = true; }
+
+    // Layout-dirty this element because a replaced-element control (the thing
+    // that gives it an intrinsic size) has just been installed. See the
+    // definition in element.cpp.
+    void noteReplacedControlInstalled(bool rebuildChildren = false);
 
     void setInputControl(std::unique_ptr<layout::ElInput> ctrl);
     void setTextareaControl(std::unique_ptr<layout::ElTextarea> ctrl);

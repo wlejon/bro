@@ -1,0 +1,25 @@
+/* Shared by menu_startup_app (synchronous bro.menu.show()) and
+   menu_startup_defer_app (the same call deferred past the first layout).
+   Every box below is fully specified here so measure.js can assert against
+   the CSS rather than against whatever the last run happened to produce. */
+body { margin: 0; font: 13px sans-serif; background: #101010; color: #ddd; }
+
+#d {
+  width: 300px; height: 40px; padding: 5px; border: 2px solid #c33;
+}
+
+input[type=text] {
+  width: 420px; padding: 6px 9px; border: 1px solid #333; font: 13px sans-serif;
+}
+input[type=number] {
+  width: 90px; padding: 6px 9px; border: 1px solid #333; font: 13px sans-serif;
+}
+select {
+  width: 220px; padding: 6px 9px; border: 1px solid #333; font: 13px sans-serif;
+}
+textarea {
+  width: 200px; height: 60px; padding: 6px; border: 1px solid #333;
+}
+button {
+  padding: 6px 9px; border: 1px solid #333; font: 13px sans-serif;
+}

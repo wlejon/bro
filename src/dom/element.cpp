@@ -1178,24 +1178,53 @@ ShadowRoot* Element::attachShadow(ShadowRoot::Mode mode) {
     return shadowRoot_;
 }
 
+// A replaced-element control is what gives its element an intrinsic size:
+// LayoutNodeAdapter::intrinsicSize() answers `false` for an <input>/<select>/
+// <textarea>/<svg>/<video> that has none, so layout treats it as an ordinary
+// empty box — a text field collapses to its padding and border, losing the
+// whole line of content height, and the geometry gets cached that way.
+//
+// The controls are created lazily, by engine::ensureReplacedElements on the
+// structure pass, and normally that runs before the first layout. It does not
+// have to: anything that lays the document out earlier — bro.menu.show() at
+// startup, which resizes the content area and relayouts, is the case that
+// found this — leaves clean, control-less boxes behind, and nothing else marks
+// these elements when their control finally arrives. So the arrival is the
+// mark: layout-dirty here, and every later pass re-measures the control.
+//
+// `rebuildChildren` additionally rebuilds the element's layout children. Only
+// <svg> needs it: LayoutNodeAdapter::buildChildren decides whether to descend
+// by asking for the *control* (unlike <select>/<textarea>, which it recognises
+// by tag), so a tree built before the ElSvg existed laid the SVG's children
+// out as CSS boxes, and dirtying the geometry alone would keep them.
+void Element::noteReplacedControlInstalled(bool rebuildChildren) {
+    markDirty();
+    if (rebuildChildren) markStructureDirty();
+}
+
 void Element::setInputControl(std::unique_ptr<layout::ElInput> ctrl) {
     inputControl_ = std::move(ctrl);
+    if (inputControl_) noteReplacedControlInstalled();
 }
 
 void Element::setTextareaControl(std::unique_ptr<layout::ElTextarea> ctrl) {
     textareaControl_ = std::move(ctrl);
+    if (textareaControl_) noteReplacedControlInstalled();
 }
 
 void Element::setSelectControl(std::unique_ptr<layout::ElSelect> ctrl) {
     selectControl_ = std::move(ctrl);
+    if (selectControl_) noteReplacedControlInstalled();
 }
 
 void Element::setSvgControl(std::unique_ptr<layout::ElSvg> ctrl) {
     svgControl_ = std::move(ctrl);
+    if (svgControl_) noteReplacedControlInstalled(/*rebuildChildren=*/true);
 }
 
 void Element::setVideoControl(std::unique_ptr<layout::ElVideo> ctrl) {
     videoControl_ = std::move(ctrl);
+    if (videoControl_) noteReplacedControlInstalled();
 }
 
 } // namespace bro::dom

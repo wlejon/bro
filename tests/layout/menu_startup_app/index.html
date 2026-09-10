@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Menu Startup Layout</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="d">div</div>
+  <input id="t" type="text" value="hello">
+  <input id="e" type="text">
+  <input id="n" type="number" value="7">
+  <select id="s"><option>alpha</option><option>beta</option></select>
+  <textarea id="a">x</textarea>
+  <button id="b">Go</button>
+  <!-- The bug under test: showing the menu bar synchronously here resizes the
+       content area and lays the document out BEFORE the engine has attached
+       the replaced-element controls, so every form control was left sized as
+       an empty box (its padding and border, with no line of content). -->
+  <script type="module">bro.menu.show();</script>
+</body>
+</html>

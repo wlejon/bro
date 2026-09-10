@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Menu Startup Layout (deferred)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="d">div</div>
+  <input id="t" type="text" value="hello">
+  <input id="e" type="text">
+  <input id="n" type="number" value="7">
+  <select id="s"><option>alpha</option><option>beta</option></select>
+  <textarea id="a">x</textarea>
+  <button id="b">Go</button>
+  <!-- Identical to menu_startup_app except that the menu call waits for a
+       task, i.e. until after the engine's own first style + layout pass.
+       This is the reference the synchronous version has to match. -->
+  <script type="module">setTimeout(() => bro.menu.show(), 0);</script>
+</body>
+</html>
