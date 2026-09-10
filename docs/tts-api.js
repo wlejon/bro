@@ -139,18 +139,39 @@
 /**
  * One observation per diffusion step, delivered on the JS thread through
  * `opts.onStep`. `tokens` is the grid so far (`config.maskId` where still
- * masked), `scores` this step's unmask scores (-Infinity where already fixed),
- * both `numCodebooks * numFrames` laid out `[q * numFrames + t]`. The copies
- * are made only when `onStep` is set.
+ * masked), `scores` this step's unmask scores, `confidence` this step's raw
+ * model confidence — all three `numCodebooks * numFrames` laid out
+ * `[q * numFrames + t]`. The copies are made only when `onStep` is set.
+ *
+ * `scores` and `confidence` are not the same signal:
+ *
+ * - `scores` is what the step actually ranked cells by: the raw confidence
+ *   minus `q * layerPenalty`, then divided by `positionTemperature` with
+ *   Gumbel noise added when that is > 0, and `-Infinity` at every cell that is
+ *   already fixed. Its range is dominated by the codebook penalty and the
+ *   noise, so it says which cell won, not how sure the model was.
+ * - `confidence` is the model's raw maximum CFG log-probability at the cell,
+ *   before the penalty and before any noise, and it is finite at *every* cell,
+ *   already-unmasked ones included (the model predicts every target position on
+ *   every forward). This is the signal to colour a heat map with.
+ *
+ * A long-form `synthesize` restarts the schedule per chunk, so `step` runs
+ * `0 … numSteps-1` once per chunk and `chunk` (0-based) / `numChunks` say which
+ * one; `generateCodes` and an unchunked `synthesize` always report
+ * `chunk: 0, numChunks: 1`.
  *
  * @typedef {Object} OmniVoiceStep
- * @property {number} step
- * @property {number} numSteps
- * @property {number} numFrames
+ * @property {number} step Step within this chunk, 0-based.
+ * @property {number} numSteps Steps per chunk.
+ * @property {number} chunk Long-form chunk index, 0-based.
+ * @property {number} numChunks Chunks in this synthesis (1 when unchunked).
+ * @property {number} numFrames Frames in THIS chunk.
  * @property {number} numCodebooks
  * @property {number} unmasked Cells fixed by this step.
  * @property {Int32Array} tokens
  * @property {Float32Array} scores
+ * @property {Float32Array} confidence Raw max log-prob per cell, no penalty,
+ *   no noise; finite everywhere.
  */
 
 /**
@@ -162,6 +183,10 @@
  * @property {Int32Array} codes numCodebooks * numFrames, `[q * numFrames + t]`.
  * @property {Int32Array} unmaskStep Step at which each cell was fixed (-1 =
  *   kept by an init grid).
+ * @property {Float32Array} confidence numCodebooks * numFrames raw confidence
+ *   (see {@link OmniVoiceStep}), sampled at the step each cell was committed,
+ *   so it pairs cell-for-cell with `unmaskStep`. A cell an init grid kept is
+ *   never committed and carries the last step's value instead.
  * @property {Int32Array} chunkFrames Per-chunk frame counts (one entry when unchunked).
  * @property {number} lmSeconds
  * @property {number} codecSeconds

@@ -1150,8 +1150,9 @@ static void registerQwenClass(JSContext* ctx) {
 // camelCase of the OmniVoiceParams field; a prompt is the plain-object form of
 // OmniVoicePrompt ({ codes, numFrames, text, rms }); an init grid is
 // OmniVoiceInit ({ tokens, keep }); a trace is OmniVoiceTrace; a step is
-// OmniVoiceStep with the two host arrays copied out (the C++ pointers are only
-// valid during the callback, which runs on the worker thread).
+// OmniVoiceStep with its three host arrays (tokens, scores, confidence) copied
+// out (the C++ pointers are only valid during the callback, which runs on the
+// worker thread).
 
 static OmniVoiceWrapper* omniSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<OmniVoiceWrapper>(ctx, this_val);
@@ -1327,6 +1328,7 @@ static JSValue omniTraceToJs(JSContext* ctx, const brosoundml::OmniVoiceTrace& t
     JS_SetPropertyStr(ctx, obj, "numFrames",    JS_NewInt32(ctx, tr.num_frames));
     JS_SetPropertyStr(ctx, obj, "codes",        qjsbind::make_int32_array(ctx, tr.codes));
     JS_SetPropertyStr(ctx, obj, "unmaskStep",   qjsbind::make_int32_array(ctx, tr.unmask_step));
+    JS_SetPropertyStr(ctx, obj, "confidence",   qjsbind::make_float32_array(ctx, tr.confidence));
     JS_SetPropertyStr(ctx, obj, "chunkFrames",  qjsbind::make_int32_array(ctx, tr.chunk_frames));
     JS_SetPropertyStr(ctx, obj, "lmSeconds",    JS_NewFloat64(ctx, tr.lm_seconds));
     JS_SetPropertyStr(ctx, obj, "codecSeconds", JS_NewFloat64(ctx, tr.codec_seconds));
@@ -1718,17 +1720,24 @@ static JSValue js_omni_unload(JSContext* ctx, JSValueConst this_val,
 //
 // opts.onStep(step) observes every diffusion step on the JS thread. The C++
 // callback fires on the worker thread with pointers valid only for the call,
-// so it copies the grid + scores into the next pre-sized slot and publishes it
-// through `produced`; the JS-thread poll drains up to `produced` — the same
-// SPSC handoff as Qwen's streaming chunks. Copies are made only when onStep is
-// set. Slots are bounded: numSteps * kOmniMaxChunks + 1 (a chunk is ~15 s of
-// speech, so 256 chunks is over an hour of long-form text).
+// so it copies the grid + scores + confidence into the next pre-sized slot and
+// publishes it through `produced`; the JS-thread poll drains up to `produced` —
+// the same SPSC handoff as Qwen's streaming chunks. Copies are made only when
+// onStep is set. A chunked synthesize restarts `step` at 0 for every chunk, so
+// the slot index is the running total, not `step`: slots are bounded at
+// numSteps * kOmniMaxChunks + 1 (a chunk is ~15 s of speech, so 256 chunks is
+// over an hour of long-form text — chunk_text never produces more from any
+// text a single synthesize call would accept), and the worker drops a step
+// rather than overrun if that ever fails to hold. `chunk` / `numChunks` on the
+// step object say which chunk a step belongs to.
 static constexpr size_t kOmniMaxChunks = 256;
 
 struct OmniStepSlot {
     int step = 0, numSteps = 0, numFrames = 0, numCodebooks = 0, unmasked = 0;
+    int chunk = 0, numChunks = 1;
     std::vector<int32_t> tokens;
     std::vector<float>   scores;
+    std::vector<float>   confidence;
 };
 
 struct OmniJob {
@@ -1841,12 +1850,14 @@ static JSValue omniLaunch(JSContext* ctx, JSValueConst modelVal, JSValueConst te
                 if (idx >= job->stepSlots.size()) return;   // bound guard
                 OmniStepSlot& slot = job->stepSlots[idx];
                 slot.step = s.step; slot.numSteps = s.num_steps;
+                slot.chunk = s.chunk; slot.numChunks = s.num_chunks;
                 slot.numFrames = s.num_frames; slot.numCodebooks = s.num_codebooks;
                 slot.unmasked = s.unmasked;
                 const size_t n = static_cast<size_t>(s.num_frames) *
                                  static_cast<size_t>(s.num_codebooks);
                 if (s.tokens) slot.tokens.assign(s.tokens, s.tokens + n);
                 if (s.scores) slot.scores.assign(s.scores, s.scores + n);
+                if (s.confidence) slot.confidence.assign(s.confidence, s.confidence + n);
                 job->produced.store(idx + 1, std::memory_order_release);
             };
         }
@@ -1875,17 +1886,21 @@ static JSValue omniLaunch(JSContext* ctx, JSValueConst modelVal, JSValueConst te
             JSValue st = JS_NewObject(c);
             JS_SetPropertyStr(c, st, "step",         JS_NewInt32(c, slot.step));
             JS_SetPropertyStr(c, st, "numSteps",     JS_NewInt32(c, slot.numSteps));
+            JS_SetPropertyStr(c, st, "chunk",        JS_NewInt32(c, slot.chunk));
+            JS_SetPropertyStr(c, st, "numChunks",    JS_NewInt32(c, slot.numChunks));
             JS_SetPropertyStr(c, st, "numFrames",    JS_NewInt32(c, slot.numFrames));
             JS_SetPropertyStr(c, st, "numCodebooks", JS_NewInt32(c, slot.numCodebooks));
             JS_SetPropertyStr(c, st, "unmasked",     JS_NewInt32(c, slot.unmasked));
             JS_SetPropertyStr(c, st, "tokens",       qjsbind::make_int32_array(c, slot.tokens));
             JS_SetPropertyStr(c, st, "scores",       qjsbind::make_float32_array(c, slot.scores));
+            JS_SetPropertyStr(c, st, "confidence",   qjsbind::make_float32_array(c, slot.confidence));
             JSValue r = JS_Call(c, job->onStep, JS_UNDEFINED, 1, &st);
             if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
             JS_FreeValue(c, r);
             JS_FreeValue(c, st);
             std::vector<int32_t>().swap(slot.tokens);   // release the slot's memory
             std::vector<float>().swap(slot.scores);
+            std::vector<float>().swap(slot.confidence);
             job->drained++;
         }
     };
