@@ -345,9 +345,27 @@ typedef struct BroDiffusionBridge {
 void bro_set_diffusion_bridge(const BroDiffusionBridge* bridge);
 const BroDiffusionBridge* bro_get_diffusion_bridge(void);
 
+typedef struct BroLMBridge {
+    void  (*init)(void);
+    void* (*loadQwen)(const char* ggufPath, void* opts);
+    void* (*loadMistral)(const char* ggufPath, void* opts);
+    void* (*loadGemma2)(const char* modelDir, void* opts);
+    void* (*loadQwen35)(const char* checkpointDir, void* opts);
+    void* (*loadQwen3VL)(const char* checkpointDir, void* opts);
+    void* (*loadNllb)(const char* checkpointDir, void* opts);
+    void* (*loadTokenizer)(void* opts);
+    void* (*loadClip)(void* opts);
+    void* (*loadT5)(void* opts);
+    void* (*generate)(void* model, void* prompt, void* opts);
+} BroLMBridge;
+
+void bro_set_lm_bridge(const BroLMBridge* bridge);
+const BroLMBridge* bro_get_lm_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif // BRO_ENGINE_C_ABI_H
+
 

@@ -47,6 +47,7 @@ add_library(bro_c_abi STATIC
     bro_tensor_c_abi.cpp
     bro_vision_c_abi.cpp
     bro_diffusion_c_abi.cpp
+    bro_lm_c_abi.cpp
 )
 
 

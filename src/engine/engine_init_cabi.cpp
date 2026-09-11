@@ -740,6 +740,21 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         .loadModel = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; }
     };
     bro_set_diffusion_bridge(&s_engine_diffusion_bridge);
+
+    static BroLMBridge s_engine_lm_bridge = {
+        .init = []() {},
+        .loadQwen = [](const char* /*ggufPath*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadMistral = [](const char* /*ggufPath*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadGemma2 = [](const char* /*modelDir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadQwen35 = [](const char* /*checkpointDir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadQwen3VL = [](const char* /*checkpointDir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadNllb = [](const char* /*checkpointDir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadTokenizer = [](void* /*opts*/) -> void* { return nullptr; },
+        .loadClip = [](void* /*opts*/) -> void* { return nullptr; },
+        .loadT5 = [](void* /*opts*/) -> void* { return nullptr; },
+        .generate = [](void* /*model*/, void* /*prompt*/, void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_lm_bridge(&s_engine_lm_bridge);
 }
 
 } // namespace bro::engine

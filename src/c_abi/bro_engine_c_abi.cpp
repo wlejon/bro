@@ -333,6 +333,21 @@ const BroDiffusionBridge* bro_get_diffusion_bridge(void) {
     return &s_diffusion_bridge;
 }
 
+static BroLMBridge s_lm_bridge = {};
+
+void bro_set_lm_bridge(const BroLMBridge* bridge) {
+    if (bridge) {
+        s_lm_bridge = *bridge;
+    } else {
+        s_lm_bridge = {};
+    }
 }
+
+const BroLMBridge* bro_get_lm_bridge(void) {
+    return &s_lm_bridge;
+}
+
+}
+
 
 
