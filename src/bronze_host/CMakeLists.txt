@@ -45,25 +45,6 @@ endif()
 # its cause.
 set(BRONZE_BUILD_SHARED_RUNTIME ON CACHE BOOL "" FORCE)
 
-# The codegen backend, so this tree can COMPILE an app and not only run one.
-# bronze's own default is OFF and its reason is good — the runtime does not
-# need LLVM and neither does a host that only loads finished modules — but a
-# bro checkout is where apps get built and where the bronze_host checks compile
-# their own probes, and a check that cannot produce its subject is a check that
-# reports "skipped" forever.
-#
-# A plain cache default rather than FORCE: unlike the shared runtime, OFF here
-# is a real configuration (run pre-built apps, build no new ones), so
-# -DBRONZE_WITH_LLVM=OFF stays available to anyone who wants a lighter tree.
-# bronze searches the usual install locations itself when LLVM_DIR is unset.
-#
-# Being a default and not a FORCE, it applies to a FRESH cache only: a tree
-# configured before this line keeps whatever it already decided, and turning
-# the compiler on there is one -DBRONZE_WITH_LLVM=ON. That is the normal
-# meaning of a cached default, and the alternative — FORCE — would take the
-# choice away from every tree on every reconfigure to save that one flag.
-set(BRONZE_WITH_LLVM ON CACHE BOOL "Build bronze's LLVM codegen backend (the app compiler)")
-
 # EXCLUDE_FROM_ALL: only the bronze targets our libraries name get built;
 # bronze's CLI, backend, and test binaries stay out of bro's default target.
 # Note bronze's own configure requires doctest (find_package REQUIRED) — the
@@ -74,7 +55,9 @@ set(BRONZE_WITH_LLVM ON CACHE BOOL "Build bronze's LLVM codegen backend (the app
 # is already there. On Windows the exe is bronze.exe and the two never meet;
 # on Linux and macOS the link fails with "cannot open output file: Is a
 # directory", pointing at ld rather than at the name clash that caused it.
-add_subdirectory("${BRONZE_DIR}" "${CMAKE_BINARY_DIR}/bronze-build" EXCLUDE_FROM_ALL)
+if(NOT TARGET bronze_runtime_shared)
+    add_subdirectory("${BRONZE_DIR}" "${CMAKE_BINARY_DIR}/bronze-build" EXCLUDE_FROM_ALL)
+endif()
 
 # One name for "build the compiler", on every generator. `--target bronze`
 # works under Ninja and Make and CANNOT work under Visual Studio: the targets
@@ -83,11 +66,7 @@ add_subdirectory("${BRONZE_DIR}" "${CMAKE_BINARY_DIR}/bronze-build" EXCLUDE_FROM
 # bronze.vcxproj". A target declared HERE is in the solution, and naming
 # bronze as its dependency is what pulls bronze.vcxproj in with it — the same
 # mechanism that already puts bronze_runtime_shared there, via bro_bronze_host.
-#
-# Guarded because the compiler is optional: -DBRONZE_WITH_LLVM=OFF is a tree
-# that runs compiled apps without building them, and there is no `bronze`
-# target in it to depend on.
-if(TARGET bronze)
+if(TARGET bronze AND NOT TARGET bronze-cli)
     add_custom_target(bronze-cli COMMENT "bronze compiler")
     add_dependencies(bronze-cli bronze)
 endif()
@@ -229,5 +208,5 @@ endif()
 #
 # Building an app is `bronze build <entry>.js -o <appdir>/app.dll --emit-shared
 # --host-globals src/bronze_host/web_host.globals`, and this tree can produce
-# the compiler that does it (BRONZE_WITH_LLVM above). src/bronze_host/README.md
+# the compiler that does it. src/bronze_host/README.md
 # has the sequence.

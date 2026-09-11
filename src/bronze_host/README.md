@@ -9,7 +9,7 @@ WebGL2 surface three.js r160's renderer drives, and owns the per-frame seam that
 advances the clock, delivers completions, fires callbacks and performs the
 microtask checkpoint.
 
-Off by default; nothing here is in the default build.
+Enabled by default (`BRO_WITH_BRONZE=ON`).
 
 ## The files
 
@@ -35,7 +35,7 @@ Off by default; nothing here is in the default build.
 | `host_fetch.cpp` | `fetch()` over the engine's asset mounts, into a real bronze Promise |
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
 | `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, and `localStorage` |
-| `host_interp.cpp` | runtime evaluation stubs |
+| `host_interp.cpp` | runtime evaluation stubs (no-op stubs for the legacy interpreter bridge, retained for compatibility) |
 | `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |
 | `host_audio_*.cpp`, `host_audio_internal.h` | the Web Audio surface over broaudio. `_core` context + globals, `_param` AudioParam, `_buffer` AudioBuffer + decode, `_nodes` oscillator/filter/analyser/source, `_spatial` Panner + StereoPanner, `_dsp` Delay/Compressor/WaveShaper/Convolver/Splitter/Merger |
 | `host_physics_*.cpp`, `host_physics_internal.h` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt. `_core` bodies + globals, `_constraints` joints/motors/limits, `_character`, `_softbody`, `_queries` raycast/overlap |
@@ -285,11 +285,10 @@ bronze build src/bronze_host/fixtures/main_scenegraph.js     -o src/bronze_host/
 ./build/Release/bro-headless src/bronze_host/fixtures/appdir drive.js
 ```
 
-A tree configured with `-DBRONZE_WITH_LLVM=ON` (bro's default for a fresh cache)
-builds that compiler itself, as `build/Release/bronze.exe` — `cmake --build
-build --config Release --target bronze-cli` (`bronze-cli`, not `bronze`: the
-Visual Studio generator leaves an `EXCLUDE_FROM_ALL` subdirectory's targets out
-of the solution). Under a multi-config
+The bronze compiler (which uses brass for codegen) is built as
+`build/Release/bronze.exe` via `cmake --build build --config Release --target bronze-cli`
+(`bronze-cli`, not `bronze`: the Visual Studio generator leaves an
+`EXCLUDE_FROM_ALL` subdirectory's targets out of the solution). Under a multi-config
 generator the CLI cannot find the shared runtime's import library on its own —
 it searches `shared/` beside and above itself, and MSBuild puts the library one
 level deeper in `shared/<Config>/` — so pass it:

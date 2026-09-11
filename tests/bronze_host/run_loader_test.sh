@@ -211,7 +211,7 @@ check() {  # name, module-path-or-empty, must-contain, [must-not-contain]
 
 # An app dir that declares "compiled": true and carries nothing: the engine's
 # own diagnostic, not the loader's ? the loader is never reached.
-check "no module" "" 'carries no compiled module'
+check "no module" "" 'host provides no compiled app module'
 
 # A file that is not a loadable image at all.
 printf 'this is not a shared library' > "$WORK/garbage$EXT"

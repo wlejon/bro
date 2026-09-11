@@ -177,11 +177,10 @@ option(BRO_BUILD_TESTS "Build bro's C++ unit tests and smoke tools" ${_d_exes})
 
 # Host layer for bronze-compiled (AOT) JavaScript apps: src/bronze_host wraps
 # the engine's WebGL2 context and a minimal DOM as bronze host globals, so a
-# compiled three.js app can render through bro. OFF by default and entirely
-# outside the default configure path — turning it ON resolves a bronze
-# checkout (`../bronze` standalone repo, else `third_party/bronze` submodule) and
+# compiled three.js app can render through bro. Resolves a bronze checkout
+# (`../bronze` standalone repo, else `third_party/bronze` submodule) and
 # builds its runtime + embed libraries into this tree.
-option(BRO_WITH_BRONZE "bronze AOT host layer (resolves ../bronze or third_party/bronze)" OFF)
+option(BRO_WITH_BRONZE "bronze AOT host layer (resolves ../bronze or third_party/bronze)" ON)
 
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
