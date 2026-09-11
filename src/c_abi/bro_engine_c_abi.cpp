@@ -151,5 +151,48 @@ const BroListenBridge* bro_get_listen_bridge(void) {
     return &s_listen_bridge;
 }
 
+static BroSteamBridge s_steam_bridge = {};
+
+void bro_set_steam_bridge(const BroSteamBridge* bridge) {
+    if (bridge) {
+        s_steam_bridge = *bridge;
+    } else {
+        s_steam_bridge = {};
+    }
 }
+
+const BroSteamBridge* bro_get_steam_bridge(void) {
+    return &s_steam_bridge;
+}
+
+static BroServerBridge s_server_bridge = {};
+
+void bro_set_server_bridge(const BroServerBridge* bridge) {
+    if (bridge) {
+        s_server_bridge = *bridge;
+    } else {
+        s_server_bridge = {};
+    }
+}
+
+const BroServerBridge* bro_get_server_bridge(void) {
+    return &s_server_bridge;
+}
+
+static BroNetBridge s_net_bridge = {};
+
+void bro_set_net_bridge(const BroNetBridge* bridge) {
+    if (bridge) {
+        s_net_bridge = *bridge;
+    } else {
+        s_net_bridge = {};
+    }
+}
+
+const BroNetBridge* bro_get_net_bridge(void) {
+    return &s_net_bridge;
+}
+
+}
+
 

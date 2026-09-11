@@ -142,6 +142,74 @@ typedef struct BroListenBridge {
 void bro_set_listen_bridge(const BroListenBridge* bridge);
 const BroListenBridge* bro_get_listen_bridge(void);
 
+typedef struct BroSteamBridge {
+    bool        (*getAvailable)(void);
+    const char* (*getReason)(void);
+    uint32_t    (*getAppId)(void);
+    const char* (*getSteamId)(void);
+    const char* (*getPersonaName)(void);
+    bool        (*getIsLoggedOn)(void);
+    bool        (*getIsVoiceRecording)(void);
+    int32_t     (*getVoiceSampleRate)(void);
+    bool        (*getAchievement)(const char* name);
+    bool        (*setAchievement)(const char* name);
+    bool        (*clearAchievement)(const char* name);
+    double      (*getStat)(const char* name);
+    bool        (*setStat)(const char* name, double value);
+    bool        (*storeStats)(void);
+    void        (*activateOverlay)(const char* dialog);
+    void        (*activateOverlayToWebPage)(const char* url);
+    void*       (*getFriends)(void);
+    void*       (*getAvatar)(const char* steamId, void* size);
+    bool        (*setRichPresence)(const char* key, const char* value);
+    void        (*clearRichPresence)(void);
+    void*       (*createLobby)(const char* type, int32_t maxMembers);
+    void*       (*joinLobby)(const char* lobbyId);
+    void        (*leaveLobby)(const char* lobbyId);
+    bool        (*setLobbyData)(const char* lobbyId, const char* key, const char* value);
+    void*       (*getLobbyMembers)(const char* lobbyId);
+    const char* (*getLobbyOwner)(const char* lobbyId);
+    const char* (*getLobbyData)(const char* lobbyId, const char* key);
+    void        (*requestLobbyList)(void* filter);
+    bool        (*inviteUserToLobby)(const char* lobbyId, const char* steamId);
+    void        (*startVoiceRecording)(void);
+    void        (*stopVoiceRecording)(void);
+    void*       (*decodeVoice)(void* data, int32_t sampleRate);
+} BroSteamBridge;
+
+void bro_set_steam_bridge(const BroSteamBridge* bridge);
+const BroSteamBridge* bro_get_steam_bridge(void);
+
+typedef struct BroServerBridge {
+    double (*getTickrate)(void);
+    void   (*setTickrate)(double val);
+    double (*getUptime)(void);
+    void   (*stop)(void);
+} BroServerBridge;
+
+void bro_set_server_bridge(const BroServerBridge* bridge);
+const BroServerBridge* bro_get_server_bridge(void);
+
+typedef struct BroNetBridge {
+    void        (*host)(int32_t port, void* callback);
+    void        (*unhost)(void);
+    int32_t     (*connect)(const char* address, int32_t port, void* callback);
+    void        (*disconnect)(int32_t peerId);
+    void        (*disconnectAll)(void);
+    void        (*send)(int32_t peerId, void* data, int32_t channel);
+    void        (*broadcast)(void* data, int32_t channel);
+    void        (*sendClone)(int32_t peerId, void* value, int32_t channel);
+    void        (*broadcastClone)(void* value, int32_t channel);
+    void*       (*peers)(void);
+    const char* (*getPeerAddress)(int32_t peerId);
+    void*       (*stats)(void);
+    void*       (*getPeerStats)(int32_t peerId);
+    void        (*setPeerSimulatedLoss)(int32_t peerId, double chance, double latencyMin, double latencyMax);
+} BroNetBridge;
+
+void bro_set_net_bridge(const BroNetBridge* bridge);
+const BroNetBridge* bro_get_net_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

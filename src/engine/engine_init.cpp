@@ -492,6 +492,141 @@ Engine::Engine(const EngineConfig& config)
     };
     bro_set_listen_bridge(&s_engine_listen_bridge);
 
+    static BroSteamBridge s_engine_steam_bridge = {
+        .getAvailable = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng && eng->steamService() && eng->steamService()->available();
+        },
+        .getReason = []() -> const char* {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return (eng && eng->steamService()) ? eng->steamService()->reason() : "bro.steam not initialized";
+        },
+        .getAppId = []() -> uint32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return (eng && eng->steamService() && eng->steamService()->available()) ? eng->steamService()->appId() : 0;
+        },
+        .getSteamId = []() -> const char* {
+            static std::string s_steamIdStr;
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            uint64_t id = (eng && eng->steamService() && eng->steamService()->available()) ? eng->steamService()->localSteamId() : 0;
+            s_steamIdStr = std::to_string(id);
+            return s_steamIdStr.c_str();
+        },
+        .getPersonaName = []() -> const char* {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->steamService() && eng->steamService()->available()) {
+                return eng->steamService()->personaName().c_str();
+            }
+            return "";
+        },
+        .getIsLoggedOn = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng && eng->steamService() && eng->steamService()->available();
+        },
+        .getIsVoiceRecording = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng && eng->steamService() && eng->steamService()->voiceRecording();
+        },
+        .getVoiceSampleRate = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return (eng && eng->steamService()) ? static_cast<int32_t>(eng->steamService()->voiceSampleRate()) : 0;
+        },
+        .getAchievement = [](const char*) -> bool { return false; },
+        .setAchievement = [](const char*) -> bool { return false; },
+        .clearAchievement = [](const char*) -> bool { return false; },
+        .getStat = [](const char*) -> double { return 0.0; },
+        .setStat = [](const char*, double) -> bool { return false; },
+        .storeStats = []() -> bool { return false; },
+        .activateOverlay = [](const char* dialog) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->steamService()) eng->steamService()->activateOverlay(dialog ? dialog : "");
+        },
+        .activateOverlayToWebPage = [](const char*) {},
+        .getFriends = []() -> void* { return nullptr; },
+        .getAvatar = [](const char*, void*) -> void* { return nullptr; },
+        .setRichPresence = [](const char* key, const char* value) -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->steamService() && key && value) {
+                eng->steamService()->setRichPresence(key, value);
+                return true;
+            }
+            return false;
+        },
+        .clearRichPresence = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->steamService()) eng->steamService()->clearRichPresence();
+        },
+        .createLobby = [](const char*, int32_t) -> void* { return nullptr; },
+        .joinLobby = [](const char*) -> void* { return nullptr; },
+        .leaveLobby = [](const char* lobbyId) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->steamService() && lobbyId) {
+                try {
+                    uint64_t id = std::stoull(lobbyId);
+                    eng->steamService()->leaveLobby(id);
+                } catch (...) {}
+            }
+        },
+        .setLobbyData = [](const char*, const char*, const char*) -> bool { return false; },
+        .getLobbyMembers = [](const char*) -> void* { return nullptr; },
+        .getLobbyOwner = [](const char*) -> const char* { return "0"; },
+        .getLobbyData = [](const char*, const char*) -> const char* { return ""; },
+        .requestLobbyList = [](void*) {},
+        .inviteUserToLobby = [](const char*, const char*) -> bool { return false; },
+        .startVoiceRecording = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->steamService()) eng->steamService()->startVoiceRecording();
+        },
+        .stopVoiceRecording = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->steamService()) eng->steamService()->stopVoiceRecording();
+        },
+        .decodeVoice = [](void*, int32_t) -> void* { return nullptr; }
+    };
+    bro_set_steam_bridge(&s_engine_steam_bridge);
+
+    static BroServerBridge s_engine_server_bridge = {
+        .getTickrate = []() -> double {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->serverTickRate() : 60.0;
+        },
+        .setTickrate = [](double val) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) {
+                if (val < 1.0) val = 1.0;
+                if (val > 1000.0) val = 1000.0;
+                eng->setServerTickRate(val);
+            }
+        },
+        .getUptime = []() -> double {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->serverUptime() : 0.0;
+        },
+        .stop = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->requestServerStop();
+        }
+    };
+    bro_set_server_bridge(&s_engine_server_bridge);
+
+    static BroNetBridge s_engine_net_bridge = {
+        .host = [](int32_t, void*) {},
+        .unhost = []() {},
+        .connect = [](const char*, int32_t, void*) -> int32_t { return 0; },
+        .disconnect = [](int32_t) {},
+        .disconnectAll = []() {},
+        .send = [](int32_t, void*, int32_t) {},
+        .broadcast = [](void*, int32_t) {},
+        .sendClone = [](int32_t, void*, int32_t) {},
+        .broadcastClone = [](void*, int32_t) {},
+        .peers = []() -> void* { return nullptr; },
+        .getPeerAddress = [](int32_t) -> const char* { return ""; },
+        .stats = []() -> void* { return nullptr; },
+        .getPeerStats = [](int32_t) -> void* { return nullptr; },
+        .setPeerSimulatedLoss = [](int32_t, double, double, double) {}
+    };
+    bro_set_net_bridge(&s_engine_net_bridge);
+
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the
     // app dir is known to exist.

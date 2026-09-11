@@ -14,6 +14,11 @@ add_library(bro_c_abi STATIC
     bro_media_c_abi.cpp
     bro_listen_c_abi.cpp
     bro_audio_c_abi.cpp
+    bro_steam_c_abi.cpp
+    bro_server_c_abi.cpp
+    bro_net_c_abi.cpp
+    bro_worker_c_abi.cpp
+    bro_abort_c_abi.cpp
 )
 
 
