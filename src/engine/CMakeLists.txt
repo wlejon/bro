@@ -31,6 +31,7 @@ add_library(bro_engine STATIC
     audio_subsystem.cpp
     engine_compositor.cpp
     engine_init.cpp
+    engine_init_cabi.cpp
     engine_lifecycle.cpp
     engine_threads.cpp
     engine_frame.cpp

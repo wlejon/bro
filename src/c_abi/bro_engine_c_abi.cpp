@@ -207,6 +207,20 @@ const BroTextBridge* bro_get_text_bridge(void) {
     return &s_text_bridge;
 }
 
+static BroGpuBridge s_gpu_bridge = {};
+
+void bro_set_gpu_bridge(const BroGpuBridge* bridge) {
+    if (bridge) {
+        s_gpu_bridge = *bridge;
+    } else {
+        s_gpu_bridge = {};
+    }
+}
+
+const BroGpuBridge* bro_get_gpu_bridge(void) {
+    return &s_gpu_bridge;
+}
+
 }
 
 

@@ -224,6 +224,20 @@ typedef struct BroTextBridge {
 void bro_set_text_bridge(const BroTextBridge* bridge);
 const BroTextBridge* bro_get_text_bridge(void);
 
+typedef struct BroGpuBridge {
+    bool        (*getAvailable)(void);
+    const char* (*getBackend)(void);
+    void*       (*getDevices)(void);
+    int32_t     (*deviceCount)(const char* device);
+    void*       (*getCompiledBackends)(void);
+    void*       (*memoryInfo)(const char* device);
+    const char* (*deviceName)(const char* device);
+    bool        (*trim)(const char* device, uint64_t keepBytes);
+} BroGpuBridge;
+
+void bro_set_gpu_bridge(const BroGpuBridge* bridge);
+const BroGpuBridge* bro_get_gpu_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

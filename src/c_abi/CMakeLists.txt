@@ -24,6 +24,11 @@ add_library(bro_c_abi STATIC
     bro_text_c_abi.cpp
     bro_domparser_c_abi.cpp
     bro_events_c_abi.cpp
+    bro_canvas_c_abi.cpp
+    bro_webgl2_c_abi.cpp
+    bro_image_c_abi.cpp
+    bro_imagebitmap_c_abi.cpp
+    bro_gpu_c_abi.cpp
 )
 
 
