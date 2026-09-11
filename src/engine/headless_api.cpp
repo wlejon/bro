@@ -252,8 +252,6 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     webgl::WebGL2RenderingContext::invalidateCurrent();
     if (activeWebGL) activeWebGL->bindCanvasFBO();
 
-    if (!timePaused_) fireFrameCallbacks(0.0);
-
     webgl::WebGL2RenderingContext::endAppGL();
 
 #if BRO_WITH_3D

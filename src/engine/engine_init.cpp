@@ -322,6 +322,7 @@ void Engine::initAppRealm() {
     }
 
     manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
+    util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     std::string html = AppLoader::loadFile(manifest_.htmlPath);
     if (html.empty()) {
         throw std::runtime_error("Failed to load index.html from " + appDir_);
