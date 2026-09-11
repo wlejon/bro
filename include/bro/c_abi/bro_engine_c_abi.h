@@ -442,6 +442,58 @@ typedef struct BroRaveBridge {
 void bro_set_rave_bridge(const BroRaveBridge* bridge);
 const BroRaveBridge* bro_get_rave_bridge(void);
 
+typedef struct BroGestureBridge {
+    void    (*init)(void);
+    int32_t (*enrollFromAudio)(const char* name, void* samples, void* policy);
+    bool    (*remove)(const char* name);
+    void    (*clear)(void);
+    void*   (*templates)(void);
+    void*   (*inspect)(const char* name);
+    void    (*reset)(void);
+    void    (*listen)(void* opts);
+    void    (*stop)(void);
+    bool    (*isActive)(void);
+    int32_t (*sampleRate)(void);
+} BroGestureBridge;
+
+void bro_set_gesture_bridge(const BroGestureBridge* bridge);
+const BroGestureBridge* bro_get_gesture_bridge(void);
+
+typedef struct BroSenseBridge {
+    void    (*init)(void);
+    void    (*start)(void* opts);
+    void    (*stop)(void);
+    bool    (*isActive)(void);
+    void*   (*snapshot)(void);
+    int32_t (*sampleRate)(void);
+    void*   (*stats)(void);
+    void*   (*feed)(void* samples);
+    void*   (*analyze)(void* samples, void* opts);
+} BroSenseBridge;
+
+void bro_set_sense_bridge(const BroSenseBridge* bridge);
+const BroSenseBridge* bro_get_sense_bridge(void);
+
+typedef struct BroWakeBridge {
+    void    (*init)(void);
+    void    (*load)(void* opts);
+    void    (*unload)(void);
+    void    (*listen)(void* opts);
+    void    (*stop)(void);
+    void    (*suspend)(void);
+    void    (*resume)(void);
+    double  (*lastScore)(void);
+    bool    (*isActive)(void);
+    bool    (*isSuspended)(void);
+    bool    (*isLoaded)(void);
+    void    (*setThreshold)(double threshold);
+    void*   (*stats)(void);
+    void*   (*feed)(void* samples, int32_t sampleRate);
+} BroWakeBridge;
+
+void bro_set_wake_bridge(const BroWakeBridge* bridge);
+const BroWakeBridge* bro_get_wake_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

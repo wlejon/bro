@@ -417,6 +417,48 @@ const BroRaveBridge* bro_get_rave_bridge(void) {
     return &s_rave_bridge;
 }
 
+static BroGestureBridge s_gesture_bridge = {};
+
+void bro_set_gesture_bridge(const BroGestureBridge* bridge) {
+    if (bridge) {
+        s_gesture_bridge = *bridge;
+    } else {
+        s_gesture_bridge = {};
+    }
+}
+
+const BroGestureBridge* bro_get_gesture_bridge(void) {
+    return &s_gesture_bridge;
+}
+
+static BroSenseBridge s_sense_bridge = {};
+
+void bro_set_sense_bridge(const BroSenseBridge* bridge) {
+    if (bridge) {
+        s_sense_bridge = *bridge;
+    } else {
+        s_sense_bridge = {};
+    }
+}
+
+const BroSenseBridge* bro_get_sense_bridge(void) {
+    return &s_sense_bridge;
+}
+
+static BroWakeBridge s_wake_bridge = {};
+
+void bro_set_wake_bridge(const BroWakeBridge* bridge) {
+    if (bridge) {
+        s_wake_bridge = *bridge;
+    } else {
+        s_wake_bridge = {};
+    }
+}
+
+const BroWakeBridge* bro_get_wake_bridge(void) {
+    return &s_wake_bridge;
+}
+
 }
 
 

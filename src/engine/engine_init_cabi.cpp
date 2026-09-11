@@ -1,4 +1,5 @@
 #include "engine/engine_init_cabi.h"
+#include "engine/engine_init_cabi_sensors.h"
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
@@ -825,6 +826,8 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         .loadRave = [](const char* /*modelDir*/, void* /*opts*/) -> void* { return nullptr; }
     };
     bro_set_rave_bridge(&s_engine_rave_bridge);
+
+    bro_engine_register_cabi_sensor_bridges();
 }
 
 } // namespace bro::engine

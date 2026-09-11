@@ -53,6 +53,9 @@ add_library(bro_c_abi STATIC
     bro_kws_c_abi.cpp
     bro_diar_c_abi.cpp
     bro_rave_c_abi.cpp
+    bro_gesture_c_abi.cpp
+    bro_sense_c_abi.cpp
+    bro_wake_c_abi.cpp
 )
 
 
