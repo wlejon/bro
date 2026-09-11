@@ -81,4 +81,46 @@ const BroSettingsBridge* bro_get_settings_bridge(void) {
     return &s_settings_bridge;
 }
 
+static BroMenuBridge s_menu_bridge = {};
+
+void bro_set_menu_bridge(const BroMenuBridge* bridge) {
+    if (bridge) {
+        s_menu_bridge = *bridge;
+    } else {
+        s_menu_bridge = {};
+    }
+}
+
+const BroMenuBridge* bro_get_menu_bridge(void) {
+    return &s_menu_bridge;
+}
+
+static BroMicBridge s_mic_bridge = {};
+
+void bro_set_mic_bridge(const BroMicBridge* bridge) {
+    if (bridge) {
+        s_mic_bridge = *bridge;
+    } else {
+        s_mic_bridge = {};
+    }
+}
+
+const BroMicBridge* bro_get_mic_bridge(void) {
+    return &s_mic_bridge;
+}
+
+static BroGamepadBridge s_gamepad_bridge = {};
+
+void bro_set_gamepad_bridge(const BroGamepadBridge* bridge) {
+    if (bridge) {
+        s_gamepad_bridge = *bridge;
+    } else {
+        s_gamepad_bridge = {};
+    }
+}
+
+const BroGamepadBridge* bro_get_gamepad_bridge(void) {
+    return &s_gamepad_bridge;
+}
+
 }

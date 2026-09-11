@@ -8,6 +8,9 @@ add_library(bro_c_abi STATIC
     bro_dialogs_c_abi.cpp
     bro_window_c_abi.cpp
     bro_settings_c_abi.cpp
+    bro_menu_c_abi.cpp
+    bro_mic_c_abi.cpp
+    bro_gamepad_c_abi.cpp
 )
 
 target_include_directories(bro_c_abi PUBLIC

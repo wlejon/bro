@@ -386,6 +386,94 @@ Engine::Engine(const EngineConfig& config)
     };
     bro_set_settings_bridge(&s_engine_settings_bridge);
 
+    static BroMenuBridge s_engine_menu_bridge = {
+        .getVisible = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->menuBar().visible : false;
+        },
+        .show = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) {
+                eng->menuBar().visible = true;
+                eng->menuBar().dirty = true;
+                eng->onMenuChanged();
+            }
+        },
+        .hide = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) {
+                eng->menuBar().visible = false;
+                eng->menuBar().dirty = true;
+                eng->onMenuChanged();
+            }
+        },
+        .set = [](void*) {},
+        .addItem = [](const char*, void*, int32_t) -> bool { return true; },
+        .updateItem = [](const char*, void*) -> bool { return true; },
+        .removeItem = [](const char* id) -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !id) return false;
+            bool ok = eng->menuBar().removeItem(id);
+            if (ok) eng->onMenuChanged();
+            return ok;
+        },
+        .on = [](const char*, void*) {}
+    };
+    bro_set_menu_bridge(&s_engine_menu_bridge);
+
+    static BroMicBridge s_engine_mic_bridge = {
+        .start = [](void*) {},
+        .stop = []() {},
+        .isActive = []() -> bool { return false; },
+        .engineRate = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return (eng && eng->audioEngine()) ? eng->audioEngine()->sampleRate() : 48000;
+        },
+        .stats = []() -> void* { return nullptr; },
+        .levels = [](int32_t) -> void* { return nullptr; },
+        .feed = [](void*, int32_t) {}
+    };
+    bro_set_mic_bridge(&s_engine_mic_bridge);
+
+    static BroGamepadBridge s_engine_gamepad_bridge = {
+        .isConnected = [](int32_t index) -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || index < 0) return false;
+            const auto& pads = eng->gamepads();
+            if (static_cast<size_t>(index) < pads.size()) {
+                return pads[static_cast<size_t>(index)].connected;
+            }
+            return false;
+        },
+        .getAxis = [](int32_t index, int32_t axis) -> double {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || index < 0 || axis < 0 || axis >= kGamepadAxisCount) return 0.0;
+            const auto& pads = eng->gamepads();
+            if (static_cast<size_t>(index) < pads.size() && pads[static_cast<size_t>(index)].connected) {
+                return static_cast<double>(pads[static_cast<size_t>(index)].axes[axis]);
+            }
+            return 0.0;
+        },
+        .getButton = [](int32_t index, int32_t button) -> double {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || index < 0 || button < 0 || button >= kGamepadButtonCount) return 0.0;
+            const auto& pads = eng->gamepads();
+            if (static_cast<size_t>(index) < pads.size() && pads[static_cast<size_t>(index)].connected) {
+                return static_cast<double>(pads[static_cast<size_t>(index)].buttons[button]);
+            }
+            return 0.0;
+        },
+        .rumble = [](int32_t index, float strong, float weak, int32_t duration) -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->gamepadRumble(index, strong, weak, duration) : false;
+        },
+        .rumbleTriggers = [](int32_t index, float left, float right, int32_t duration) -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->gamepadRumbleTriggers(index, left, right, duration) : false;
+        }
+    };
+    bro_set_gamepad_bridge(&s_engine_gamepad_bridge);
+
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the
     // app dir is known to exist.

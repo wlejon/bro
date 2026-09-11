@@ -82,6 +82,44 @@ typedef struct BroSettingsBridge {
 void bro_set_settings_bridge(const BroSettingsBridge* bridge);
 const BroSettingsBridge* bro_get_settings_bridge(void);
 
+typedef struct BroMenuBridge {
+    bool (*getVisible)(void);
+    void (*show)(void);
+    void (*hide)(void);
+    void (*set)(void* items);
+    bool (*addItem)(const char* parentId, void* item, int32_t index);
+    bool (*updateItem)(const char* id, void* props);
+    bool (*removeItem)(const char* id);
+    void (*on)(const char* id, void* callback);
+} BroMenuBridge;
+
+void bro_set_menu_bridge(const BroMenuBridge* bridge);
+const BroMenuBridge* bro_get_menu_bridge(void);
+
+typedef struct BroMicBridge {
+    void    (*start)(void* opts);
+    void    (*stop)(void);
+    bool    (*isActive)(void);
+    int32_t (*engineRate)(void);
+    void*   (*stats)(void);
+    void*   (*levels)(int32_t maxCount);
+    void    (*feed)(void* samples, int32_t sampleRate);
+} BroMicBridge;
+
+void bro_set_mic_bridge(const BroMicBridge* bridge);
+const BroMicBridge* bro_get_mic_bridge(void);
+
+typedef struct BroGamepadBridge {
+    bool   (*isConnected)(int32_t index);
+    double (*getAxis)(int32_t index, int32_t axis);
+    double (*getButton)(int32_t index, int32_t button);
+    bool   (*rumble)(int32_t index, float strong, float weak, int32_t duration);
+    bool   (*rumbleTriggers)(int32_t index, float left, float right, int32_t duration);
+} BroGamepadBridge;
+
+void bro_set_gamepad_bridge(const BroGamepadBridge* bridge);
+const BroGamepadBridge* bro_get_gamepad_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif
