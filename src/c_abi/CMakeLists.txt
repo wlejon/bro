@@ -1,6 +1,8 @@
 # bro/src/c_abi/CMakeLists.txt — Direct C-ABI Layer
 add_library(bro_c_abi STATIC
+    bro_engine_c_abi.cpp
     bro_math_c_abi.cpp
+    bro_time_c_abi.cpp
 )
 
 target_include_directories(bro_c_abi PUBLIC

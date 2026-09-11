@@ -2,6 +2,7 @@
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/scene_audio_sync.h"
+#include "bro/c_abi/bro_engine_c_abi.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
@@ -161,6 +162,8 @@ void Engine::shutdown() {
 }
 
 Engine::~Engine() {
+    bro_set_time_bridge(nullptr);
+    bro_set_active_engine(nullptr);
     // Quiesce the worker threads and GPU contexts. run() already called this on
     // the windowed path; it is a no-op then. Headless and Server early-return
     // out of run() before its shutdown, so for them this IS the shutdown.

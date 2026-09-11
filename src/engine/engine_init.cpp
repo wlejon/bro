@@ -22,6 +22,7 @@
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
+#include "bro/c_abi/bro_engine_c_abi.h"
 #include "js/asset_path.h"
 #include "js/runtime.h"
 #include "js/timers.h"
@@ -132,6 +133,31 @@ Engine::Engine(const EngineConfig& config)
     appDir_ = config.appDir;
     titleOverride_ = config.title;
     installHostBindings_ = config.installHostBindings;
+
+    bro_set_active_engine(this);
+    static BroTimeBridge s_engine_time_bridge = {
+        .getTimeScale = []() -> double {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->timeScale() : 1.0;
+        },
+        .setTimeScale = [](double scale) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->setTimeScale(scale);
+        },
+        .getTimePaused = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->timePaused() : false;
+        },
+        .setTimePaused = [](bool paused) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->setTimePaused(paused);
+        },
+        .getTimeNowMs = []() -> double {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->timeNowMs() : 0.0;
+        }
+    };
+    bro_set_time_bridge(&s_engine_time_bridge);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the
