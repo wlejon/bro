@@ -87,7 +87,18 @@ command -v cmake >/dev/null 2>&1 || skip "cmake not on PATH (needed to build the
 if [[ -z "${BRONZE_DIR:-}" ]]; then
     BRONZE_DIR="$(grep "^BRONZE_DIR:PATH=" "$CACHE" | head -1 | cut -d= -f2-)"
 fi
+BRONZE_DIR="${BRONZE_DIR//$'\r'/}"
 [[ -z "${BRONZE_DIR:-}" ]] && BRONZE_DIR="$PROJECT_DIR/../bronze"
+if [[ "$BRONZE_DIR" =~ ^([a-zA-Z]):[/\\](.*) ]]; then
+    letter="${BASH_REMATCH[1]}"
+    letter_lower="$(echo "$letter" | tr '[:upper:]' '[:lower:]')"
+    rest="${BASH_REMATCH[2]}"
+    if [[ -d "/mnt/$letter_lower" ]]; then
+        BRONZE_DIR="/mnt/$letter_lower/$rest"
+    elif [[ -d "/$letter_lower" ]]; then
+        BRONZE_DIR="/$letter_lower/$rest"
+    fi
+fi
 ABI_HEADER="$BRONZE_DIR/src/abi/bronze_abi.h"
 [[ -f "$ABI_HEADER" ]] || skip "cannot find bronze_abi.h under $BRONZE_DIR"
 FP="$(sha256sum "$ABI_HEADER" | cut -c1-8)"
@@ -95,7 +106,10 @@ FP="$(sha256sum "$ABI_HEADER" | cut -c1-8)"
 case "$(uname -s)" in
     Darwin) EXT=".dylib" ;;
     MINGW*|MSYS*|CYGWIN*) EXT=".dll" ;;
-    *) EXT=".so" ;;
+    *)
+        if [[ "$BIN" == *.exe ]]; then EXT=".dll"
+        else EXT=".so"; fi
+        ;;
 esac
 
 to_win_path() {
@@ -109,7 +123,7 @@ to_win_path() {
     fi
 }
 
-WORK="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/bro_loader_$$")"
+WORK="$(mktemp -d -p "$BUILD_DIR" 2>/dev/null || mktemp -d 2>/dev/null || echo "$BUILD_DIR/bro_loader_$$")"
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
