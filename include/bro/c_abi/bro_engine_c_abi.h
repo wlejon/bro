@@ -8,8 +8,23 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
-void  bro_set_active_engine(void* engine);
-void* bro_get_active_engine(void);
+#ifndef BRO_C_ABI_EXPORT
+#if defined(_WIN32) || defined(__CYGWIN__)
+#if defined(bro_c_abi_EXPORTS) || defined(BRO_C_ABI_EXPORTS)
+#define BRO_C_ABI_EXPORT __declspec(dllexport)
+#else
+#define BRO_C_ABI_EXPORT
+#endif
+#elif defined(__GNUC__) && __GNUC__ >= 4
+#define BRO_C_ABI_EXPORT __attribute__((visibility("default")))
+#else
+#define BRO_C_ABI_EXPORT
+#endif
+#endif
+
+
+BRO_C_ABI_EXPORT void  bro_set_active_engine(void* engine);
+BRO_C_ABI_EXPORT void* bro_get_active_engine(void);
 
 typedef struct BroTimeBridge {
     double (*getTimeScale)(void);
@@ -19,8 +34,8 @@ typedef struct BroTimeBridge {
     double (*getTimeNowMs)(void);
 } BroTimeBridge;
 
-void bro_set_time_bridge(const BroTimeBridge* bridge);
-const BroTimeBridge* bro_get_time_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_time_bridge(const BroTimeBridge* bridge);
+BRO_C_ABI_EXPORT const BroTimeBridge* bro_get_time_bridge(void);
 
 typedef struct BroPathsBridge {
     const char* (*getAppDir)(void);
@@ -29,8 +44,8 @@ typedef struct BroPathsBridge {
     const char* (*resolveWritePath)(const char* src);
 } BroPathsBridge;
 
-void bro_set_paths_bridge(const BroPathsBridge* bridge);
-const BroPathsBridge* bro_get_paths_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_paths_bridge(const BroPathsBridge* bridge);
+BRO_C_ABI_EXPORT const BroPathsBridge* bro_get_paths_bridge(void);
 
 typedef struct BroDialogsBridge {
     void        (*alert)(const char* message);
@@ -41,8 +56,8 @@ typedef struct BroDialogsBridge {
     const char* (*showOpenFolderDialog)(const char* defaultLocation, bool allowMultiple);
 } BroDialogsBridge;
 
-void bro_set_dialogs_bridge(const BroDialogsBridge* bridge);
-const BroDialogsBridge* bro_get_dialogs_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_dialogs_bridge(const BroDialogsBridge* bridge);
+BRO_C_ABI_EXPORT const BroDialogsBridge* bro_get_dialogs_bridge(void);
 
 typedef struct BroWindowBridge {
     const char* (*getState)(void);
@@ -66,8 +81,8 @@ typedef struct BroWindowBridge {
     bool        (*moveToDisplay)(uint32_t id);
 } BroWindowBridge;
 
-void bro_set_window_bridge(const BroWindowBridge* bridge);
-const BroWindowBridge* bro_get_window_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_window_bridge(const BroWindowBridge* bridge);
+BRO_C_ABI_EXPORT const BroWindowBridge* bro_get_window_bridge(void);
 
 typedef struct BroSettingsBridge {
     void        (*load)(void);
@@ -79,8 +94,8 @@ typedef struct BroSettingsBridge {
     double      (*getActionStrength)(const char* action);
 } BroSettingsBridge;
 
-void bro_set_settings_bridge(const BroSettingsBridge* bridge);
-const BroSettingsBridge* bro_get_settings_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_settings_bridge(const BroSettingsBridge* bridge);
+BRO_C_ABI_EXPORT const BroSettingsBridge* bro_get_settings_bridge(void);
 
 typedef struct BroMenuBridge {
     bool (*getVisible)(void);
@@ -93,8 +108,8 @@ typedef struct BroMenuBridge {
     void (*on)(const char* id, void* callback);
 } BroMenuBridge;
 
-void bro_set_menu_bridge(const BroMenuBridge* bridge);
-const BroMenuBridge* bro_get_menu_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_menu_bridge(const BroMenuBridge* bridge);
+BRO_C_ABI_EXPORT const BroMenuBridge* bro_get_menu_bridge(void);
 
 typedef struct BroMicBridge {
     void    (*start)(void* opts);
@@ -106,8 +121,8 @@ typedef struct BroMicBridge {
     void    (*feed)(void* samples, int32_t sampleRate);
 } BroMicBridge;
 
-void bro_set_mic_bridge(const BroMicBridge* bridge);
-const BroMicBridge* bro_get_mic_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_mic_bridge(const BroMicBridge* bridge);
+BRO_C_ABI_EXPORT const BroMicBridge* bro_get_mic_bridge(void);
 
 typedef struct BroGamepadBridge {
     bool   (*isConnected)(int32_t index);
@@ -117,8 +132,8 @@ typedef struct BroGamepadBridge {
     bool   (*rumbleTriggers)(int32_t index, float left, float right, int32_t duration);
 } BroGamepadBridge;
 
-void bro_set_gamepad_bridge(const BroGamepadBridge* bridge);
-const BroGamepadBridge* bro_get_gamepad_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_gamepad_bridge(const BroGamepadBridge* bridge);
+BRO_C_ABI_EXPORT const BroGamepadBridge* bro_get_gamepad_bridge(void);
 
 typedef struct BroMediaBridge {
     bool  (*getAvailable)(void);
@@ -126,8 +141,8 @@ typedef struct BroMediaBridge {
     void* (*thumbnails)(const char* path, void* options);
 } BroMediaBridge;
 
-void bro_set_media_bridge(const BroMediaBridge* bridge);
-const BroMediaBridge* bro_get_media_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_media_bridge(const BroMediaBridge* bridge);
+BRO_C_ABI_EXPORT const BroMediaBridge* bro_get_media_bridge(void);
 
 typedef struct BroListenBridge {
     void*   (*open)(void* source);
@@ -139,8 +154,8 @@ typedef struct BroListenBridge {
     void*   (*info)(void);
 } BroListenBridge;
 
-void bro_set_listen_bridge(const BroListenBridge* bridge);
-const BroListenBridge* bro_get_listen_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_listen_bridge(const BroListenBridge* bridge);
+BRO_C_ABI_EXPORT const BroListenBridge* bro_get_listen_bridge(void);
 
 typedef struct BroSteamBridge {
     bool        (*getAvailable)(void);
@@ -177,8 +192,8 @@ typedef struct BroSteamBridge {
     void*       (*decodeVoice)(void* data, int32_t sampleRate);
 } BroSteamBridge;
 
-void bro_set_steam_bridge(const BroSteamBridge* bridge);
-const BroSteamBridge* bro_get_steam_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_steam_bridge(const BroSteamBridge* bridge);
+BRO_C_ABI_EXPORT const BroSteamBridge* bro_get_steam_bridge(void);
 
 typedef struct BroServerBridge {
     double (*getTickrate)(void);
@@ -187,8 +202,8 @@ typedef struct BroServerBridge {
     void   (*stop)(void);
 } BroServerBridge;
 
-void bro_set_server_bridge(const BroServerBridge* bridge);
-const BroServerBridge* bro_get_server_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_server_bridge(const BroServerBridge* bridge);
+BRO_C_ABI_EXPORT const BroServerBridge* bro_get_server_bridge(void);
 
 typedef struct BroNetBridge {
     void        (*host)(int32_t port, void* callback);
@@ -207,8 +222,8 @@ typedef struct BroNetBridge {
     void        (*setPeerSimulatedLoss)(int32_t peerId, double chance, double latencyMin, double latencyMax);
 } BroNetBridge;
 
-void bro_set_net_bridge(const BroNetBridge* bridge);
-const BroNetBridge* bro_get_net_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_net_bridge(const BroNetBridge* bridge);
+BRO_C_ABI_EXPORT const BroNetBridge* bro_get_net_bridge(void);
 
 typedef struct BroTextBridge {
     bool    (*getBidiAvailable)(void);
@@ -221,8 +236,8 @@ typedef struct BroTextBridge {
     void*   (*bidiReorder)(void* levels);
 } BroTextBridge;
 
-void bro_set_text_bridge(const BroTextBridge* bridge);
-const BroTextBridge* bro_get_text_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_text_bridge(const BroTextBridge* bridge);
+BRO_C_ABI_EXPORT const BroTextBridge* bro_get_text_bridge(void);
 
 typedef struct BroGpuBridge {
     bool        (*getAvailable)(void);
@@ -235,8 +250,8 @@ typedef struct BroGpuBridge {
     bool        (*trim)(const char* device, uint64_t keepBytes);
 } BroGpuBridge;
 
-void bro_set_gpu_bridge(const BroGpuBridge* bridge);
-const BroGpuBridge* bro_get_gpu_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_gpu_bridge(const BroGpuBridge* bridge);
+BRO_C_ABI_EXPORT const BroGpuBridge* bro_get_gpu_bridge(void);
 
 typedef struct BroGizmoBridge {
     bool        (*getVisible)(void);
@@ -253,8 +268,8 @@ typedef struct BroGizmoBridge {
     void        (*detach)(void);
 } BroGizmoBridge;
 
-void bro_set_gizmo_bridge(const BroGizmoBridge* bridge);
-const BroGizmoBridge* bro_get_gizmo_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_gizmo_bridge(const BroGizmoBridge* bridge);
+BRO_C_ABI_EXPORT const BroGizmoBridge* bro_get_gizmo_bridge(void);
 
 typedef struct BroPhysicsBridge {
     void    (*setGravity)(double x, double y, double z);
@@ -285,8 +300,8 @@ typedef struct BroPhysicsBridge {
     void*   (*createSoftBody)(void* config);
 } BroPhysicsBridge;
 
-void bro_set_physics_bridge(const BroPhysicsBridge* bridge);
-const BroPhysicsBridge* bro_get_physics_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_physics_bridge(const BroPhysicsBridge* bridge);
+BRO_C_ABI_EXPORT const BroPhysicsBridge* bro_get_physics_bridge(void);
 
 typedef struct BroFloraBridge {
     void   (*setWind)(double strength, double dirX, double dirY);
@@ -298,16 +313,16 @@ typedef struct BroFloraBridge {
     void*  (*createWorld)(void* opts);
 } BroFloraBridge;
 
-void bro_set_flora_bridge(const BroFloraBridge* bridge);
-const BroFloraBridge* bro_get_flora_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_flora_bridge(const BroFloraBridge* bridge);
+BRO_C_ABI_EXPORT const BroFloraBridge* bro_get_flora_bridge(void);
 
 typedef struct BroMotionBridge {
     void  (*init)(void);
     void* (*load)(void* opts);
 } BroMotionBridge;
 
-void bro_set_motion_bridge(const BroMotionBridge* bridge);
-const BroMotionBridge* bro_get_motion_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_motion_bridge(const BroMotionBridge* bridge);
+BRO_C_ABI_EXPORT const BroMotionBridge* bro_get_motion_bridge(void);
 
 typedef struct BroAIBridge {
     void* (*createWorld)(void* opts);
@@ -315,8 +330,8 @@ typedef struct BroAIBridge {
     void  (*step)(void* world, double dt);
 } BroAIBridge;
 
-void bro_set_ai_bridge(const BroAIBridge* bridge);
-const BroAIBridge* bro_get_ai_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_ai_bridge(const BroAIBridge* bridge);
+BRO_C_ABI_EXPORT const BroAIBridge* bro_get_ai_bridge(void);
 
 typedef struct BroTensorBridge {
     void  (*init)(void);
@@ -325,16 +340,16 @@ typedef struct BroTensorBridge {
     const char* (*getBackend)(void);
 } BroTensorBridge;
 
-void bro_set_tensor_bridge(const BroTensorBridge* bridge);
-const BroTensorBridge* bro_get_tensor_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_tensor_bridge(const BroTensorBridge* bridge);
+BRO_C_ABI_EXPORT const BroTensorBridge* bro_get_tensor_bridge(void);
 
 typedef struct BroVisionBridge {
     void  (*init)(void);
     void* (*loadDepth)(const char* modelDir, void* opts);
 } BroVisionBridge;
 
-void bro_set_vision_bridge(const BroVisionBridge* bridge);
-const BroVisionBridge* bro_get_vision_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_vision_bridge(const BroVisionBridge* bridge);
+BRO_C_ABI_EXPORT const BroVisionBridge* bro_get_vision_bridge(void);
 
 typedef struct BroDiffusionBridge {
     void  (*init)(void);
@@ -342,8 +357,8 @@ typedef struct BroDiffusionBridge {
     void* (*loadModel)(const char* dir, void* opts);
 } BroDiffusionBridge;
 
-void bro_set_diffusion_bridge(const BroDiffusionBridge* bridge);
-const BroDiffusionBridge* bro_get_diffusion_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_diffusion_bridge(const BroDiffusionBridge* bridge);
+BRO_C_ABI_EXPORT const BroDiffusionBridge* bro_get_diffusion_bridge(void);
 
 typedef struct BroLMBridge {
     void  (*init)(void);
@@ -359,8 +374,8 @@ typedef struct BroLMBridge {
     void* (*generate)(void* model, void* prompt, void* opts);
 } BroLMBridge;
 
-void bro_set_lm_bridge(const BroLMBridge* bridge);
-const BroLMBridge* bro_get_lm_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_lm_bridge(const BroLMBridge* bridge);
+BRO_C_ABI_EXPORT const BroLMBridge* bro_get_lm_bridge(void);
 
 typedef struct BroSttBridge {
     void  (*init)(void);
@@ -373,8 +388,8 @@ typedef struct BroSttBridge {
     void* (*transcribe)(void* model, void* audio, void* promptOrOpts, void* opts);
 } BroSttBridge;
 
-void bro_set_stt_bridge(const BroSttBridge* bridge);
-const BroSttBridge* bro_get_stt_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_stt_bridge(const BroSttBridge* bridge);
+BRO_C_ABI_EXPORT const BroSttBridge* bro_get_stt_bridge(void);
 
 typedef struct BroTtsBridge {
     void  (*init)(void);
@@ -390,8 +405,8 @@ typedef struct BroTtsBridge {
     void* (*decodeFrom)(void* kokoro, void* voice, void* asr, void* F0, void* N, int32_t nPhonemes, void* opts);
 } BroTtsBridge;
 
-void bro_set_tts_bridge(const BroTtsBridge* bridge);
-const BroTtsBridge* bro_get_tts_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_tts_bridge(const BroTtsBridge* bridge);
+BRO_C_ABI_EXPORT const BroTtsBridge* bro_get_tts_bridge(void);
 
 typedef struct BroKwsBridge {
     void    (*init)(void);
@@ -420,8 +435,8 @@ typedef struct BroKwsBridge {
     void*   (*feed)(void* samples);
 } BroKwsBridge;
 
-void bro_set_kws_bridge(const BroKwsBridge* bridge);
-const BroKwsBridge* bro_get_kws_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_kws_bridge(const BroKwsBridge* bridge);
+BRO_C_ABI_EXPORT const BroKwsBridge* bro_get_kws_bridge(void);
 
 typedef struct BroDiarBridge {
     void  (*init)(void);
@@ -431,16 +446,16 @@ typedef struct BroDiarBridge {
     void* (*clusterDiarize)(void* model, void* audio, void* opts);
 } BroDiarBridge;
 
-void bro_set_diar_bridge(const BroDiarBridge* bridge);
-const BroDiarBridge* bro_get_diar_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_diar_bridge(const BroDiarBridge* bridge);
+BRO_C_ABI_EXPORT const BroDiarBridge* bro_get_diar_bridge(void);
 
 typedef struct BroRaveBridge {
     void  (*init)(void);
     void* (*loadRave)(const char* modelDir, void* opts);
 } BroRaveBridge;
 
-void bro_set_rave_bridge(const BroRaveBridge* bridge);
-const BroRaveBridge* bro_get_rave_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_rave_bridge(const BroRaveBridge* bridge);
+BRO_C_ABI_EXPORT const BroRaveBridge* bro_get_rave_bridge(void);
 
 typedef struct BroGestureBridge {
     void    (*init)(void);
@@ -456,8 +471,8 @@ typedef struct BroGestureBridge {
     int32_t (*sampleRate)(void);
 } BroGestureBridge;
 
-void bro_set_gesture_bridge(const BroGestureBridge* bridge);
-const BroGestureBridge* bro_get_gesture_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_gesture_bridge(const BroGestureBridge* bridge);
+BRO_C_ABI_EXPORT const BroGestureBridge* bro_get_gesture_bridge(void);
 
 typedef struct BroSenseBridge {
     void    (*init)(void);
@@ -471,8 +486,8 @@ typedef struct BroSenseBridge {
     void*   (*analyze)(void* samples, void* opts);
 } BroSenseBridge;
 
-void bro_set_sense_bridge(const BroSenseBridge* bridge);
-const BroSenseBridge* bro_get_sense_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_sense_bridge(const BroSenseBridge* bridge);
+BRO_C_ABI_EXPORT const BroSenseBridge* bro_get_sense_bridge(void);
 
 typedef struct BroWakeBridge {
     void    (*init)(void);
@@ -491,8 +506,8 @@ typedef struct BroWakeBridge {
     void*   (*feed)(void* samples, int32_t sampleRate);
 } BroWakeBridge;
 
-void bro_set_wake_bridge(const BroWakeBridge* bridge);
-const BroWakeBridge* bro_get_wake_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_wake_bridge(const BroWakeBridge* bridge);
+BRO_C_ABI_EXPORT const BroWakeBridge* bro_get_wake_bridge(void);
 
 typedef struct BroCustomElementsBridge {
     void* (*getRegistry)(void);
@@ -504,8 +519,8 @@ typedef struct BroCustomElementsBridge {
     void  (*destroyElement)(void* self);
 } BroCustomElementsBridge;
 
-void bro_set_custom_elements_bridge(const BroCustomElementsBridge* bridge);
-const BroCustomElementsBridge* bro_get_custom_elements_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_custom_elements_bridge(const BroCustomElementsBridge* bridge);
+BRO_C_ABI_EXPORT const BroCustomElementsBridge* bro_get_custom_elements_bridge(void);
 
 typedef struct BroIframeBridge {
     void*       (*create)(void);
@@ -522,8 +537,8 @@ typedef struct BroIframeBridge {
     void*       (*capture)(void* self);
 } BroIframeBridge;
 
-void bro_set_iframe_bridge(const BroIframeBridge* bridge);
-const BroIframeBridge* bro_get_iframe_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_iframe_bridge(const BroIframeBridge* bridge);
+BRO_C_ABI_EXPORT const BroIframeBridge* bro_get_iframe_bridge(void);
 
 typedef struct BroMatchMediaBridge {
     void*       (*create)(const char* query);
@@ -539,8 +554,8 @@ typedef struct BroMatchMediaBridge {
     void*       (*matchMedia)(const char* query);
 } BroMatchMediaBridge;
 
-void bro_set_matchmedia_bridge(const BroMatchMediaBridge* bridge);
-const BroMatchMediaBridge* bro_get_matchmedia_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_matchmedia_bridge(const BroMatchMediaBridge* bridge);
+BRO_C_ABI_EXPORT const BroMatchMediaBridge* bro_get_matchmedia_bridge(void);
 
 typedef struct BroVendorGlobalsBridge {
     void* (*getSignals)(void);
@@ -552,8 +567,10 @@ typedef struct BroVendorGlobalsBridge {
     void* (*getDracoEncoder)(void);
 } BroVendorGlobalsBridge;
 
-void bro_set_vendor_globals_bridge(const BroVendorGlobalsBridge* bridge);
-const BroVendorGlobalsBridge* bro_get_vendor_globals_bridge(void);
+BRO_C_ABI_EXPORT void bro_set_vendor_globals_bridge(const BroVendorGlobalsBridge* bridge);
+BRO_C_ABI_EXPORT const BroVendorGlobalsBridge* bro_get_vendor_globals_bridge(void);
+
+BRO_C_ABI_EXPORT void bro_c_abi_sync_bridges_to_module(void* moduleHandle);
 
 #ifdef __cplusplus
 }

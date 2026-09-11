@@ -515,6 +515,82 @@ const BroVendorGlobalsBridge* bro_get_vendor_globals_bridge(void) {
     return &s_vendor_globals_bridge;
 }
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+static void* bro_get_module_proc(void* handle, const char* name) {
+    return reinterpret_cast<void*>(::GetProcAddress(static_cast<HMODULE>(handle), name));
+}
+#else
+#include <dlfcn.h>
+static void* bro_get_module_proc(void* handle, const char* name) {
+    return ::dlsym(handle, name);
+}
+#endif
+
+void bro_c_abi_sync_bridges_to_module(void* moduleHandle) {
+    if (!moduleHandle) return;
+
+    using SetEngineFn = void (*)(void*);
+    auto set_eng = reinterpret_cast<SetEngineFn>(bro_get_module_proc(moduleHandle, "bro_set_active_engine"));
+    if (set_eng) {
+        set_eng(bro_get_active_engine());
+    }
+
+#define BRO_SYNC_ONE_BRIDGE(name_suffix, BridgeType, getter_fn) \
+    do { \
+        using SetterFn = void (*)(const BridgeType*); \
+        auto pSetter = reinterpret_cast<SetterFn>(bro_get_module_proc(moduleHandle, "bro_set_" #name_suffix "_bridge")); \
+        if (pSetter) { \
+            pSetter(getter_fn()); \
+        } \
+    } while (0)
+
+    BRO_SYNC_ONE_BRIDGE(time, BroTimeBridge, bro_get_time_bridge);
+    BRO_SYNC_ONE_BRIDGE(paths, BroPathsBridge, bro_get_paths_bridge);
+    BRO_SYNC_ONE_BRIDGE(dialogs, BroDialogsBridge, bro_get_dialogs_bridge);
+    BRO_SYNC_ONE_BRIDGE(window, BroWindowBridge, bro_get_window_bridge);
+    BRO_SYNC_ONE_BRIDGE(settings, BroSettingsBridge, bro_get_settings_bridge);
+    BRO_SYNC_ONE_BRIDGE(menu, BroMenuBridge, bro_get_menu_bridge);
+    BRO_SYNC_ONE_BRIDGE(mic, BroMicBridge, bro_get_mic_bridge);
+    BRO_SYNC_ONE_BRIDGE(gamepad, BroGamepadBridge, bro_get_gamepad_bridge);
+    BRO_SYNC_ONE_BRIDGE(media, BroMediaBridge, bro_get_media_bridge);
+    BRO_SYNC_ONE_BRIDGE(listen, BroListenBridge, bro_get_listen_bridge);
+    BRO_SYNC_ONE_BRIDGE(steam, BroSteamBridge, bro_get_steam_bridge);
+    BRO_SYNC_ONE_BRIDGE(server, BroServerBridge, bro_get_server_bridge);
+    BRO_SYNC_ONE_BRIDGE(net, BroNetBridge, bro_get_net_bridge);
+    BRO_SYNC_ONE_BRIDGE(text, BroTextBridge, bro_get_text_bridge);
+    BRO_SYNC_ONE_BRIDGE(gpu, BroGpuBridge, bro_get_gpu_bridge);
+    BRO_SYNC_ONE_BRIDGE(gizmo, BroGizmoBridge, bro_get_gizmo_bridge);
+    BRO_SYNC_ONE_BRIDGE(physics, BroPhysicsBridge, bro_get_physics_bridge);
+    BRO_SYNC_ONE_BRIDGE(flora, BroFloraBridge, bro_get_flora_bridge);
+    BRO_SYNC_ONE_BRIDGE(motion, BroMotionBridge, bro_get_motion_bridge);
+    BRO_SYNC_ONE_BRIDGE(ai, BroAIBridge, bro_get_ai_bridge);
+    BRO_SYNC_ONE_BRIDGE(tensor, BroTensorBridge, bro_get_tensor_bridge);
+    BRO_SYNC_ONE_BRIDGE(vision, BroVisionBridge, bro_get_vision_bridge);
+    BRO_SYNC_ONE_BRIDGE(diffusion, BroDiffusionBridge, bro_get_diffusion_bridge);
+    BRO_SYNC_ONE_BRIDGE(lm, BroLMBridge, bro_get_lm_bridge);
+    BRO_SYNC_ONE_BRIDGE(stt, BroSttBridge, bro_get_stt_bridge);
+    BRO_SYNC_ONE_BRIDGE(tts, BroTtsBridge, bro_get_tts_bridge);
+    BRO_SYNC_ONE_BRIDGE(kws, BroKwsBridge, bro_get_kws_bridge);
+    BRO_SYNC_ONE_BRIDGE(diar, BroDiarBridge, bro_get_diar_bridge);
+    BRO_SYNC_ONE_BRIDGE(rave, BroRaveBridge, bro_get_rave_bridge);
+    BRO_SYNC_ONE_BRIDGE(gesture, BroGestureBridge, bro_get_gesture_bridge);
+    BRO_SYNC_ONE_BRIDGE(sense, BroSenseBridge, bro_get_sense_bridge);
+    BRO_SYNC_ONE_BRIDGE(wake, BroWakeBridge, bro_get_wake_bridge);
+    BRO_SYNC_ONE_BRIDGE(custom_elements, BroCustomElementsBridge, bro_get_custom_elements_bridge);
+    BRO_SYNC_ONE_BRIDGE(iframe, BroIframeBridge, bro_get_iframe_bridge);
+    BRO_SYNC_ONE_BRIDGE(matchmedia, BroMatchMediaBridge, bro_get_matchmedia_bridge);
+    BRO_SYNC_ONE_BRIDGE(vendor_globals, BroVendorGlobalsBridge, bro_get_vendor_globals_bridge);
+
+#undef BRO_SYNC_ONE_BRIDGE
+}
+
 }
 
 
