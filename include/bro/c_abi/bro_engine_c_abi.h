@@ -256,6 +256,51 @@ typedef struct BroGizmoBridge {
 void bro_set_gizmo_bridge(const BroGizmoBridge* bridge);
 const BroGizmoBridge* bro_get_gizmo_bridge(void);
 
+typedef struct BroPhysicsBridge {
+    void    (*setGravity)(double x, double y, double z);
+    void*   (*getGravity)(void);
+    int32_t (*createBody)(void* config);
+    void    (*destroyBody)(int32_t tag);
+    void    (*destroyAll)(void);
+    void*   (*getTransform)(int32_t tag);
+    void*   (*getVelocity)(int32_t tag);
+    void    (*setPosition)(int32_t tag, double x, double y, double z);
+    void    (*setRotation)(int32_t tag, double x, double y, double z, double w);
+    void    (*setLinearVelocity)(int32_t tag, double x, double y, double z);
+    void    (*setAngularVelocity)(int32_t tag, double x, double y, double z);
+    void    (*addForce)(int32_t tag, double x, double y, double z);
+    void    (*addImpulse)(int32_t tag, double x, double y, double z);
+    void    (*addTorque)(int32_t tag, double x, double y, double z);
+    void*   (*raycast)(double ox, double oy, double oz, double dx, double dy, double dz, double maxDist, int32_t mask);
+    void*   (*raycastClosest)(double ox, double oy, double oz, double dx, double dy, double dz, double maxDist, int32_t mask);
+    void    (*step)(double dt);
+    void    (*setTimeStep)(double dt);
+    void    (*setInterpolation)(bool enabled);
+    bool    (*getInterpolation)(void);
+    bool    (*isActive)(int32_t tag);
+    void    (*activate)(int32_t tag);
+    void*   (*createCharacter)(void* config);
+    void*   (*createVehicle)(void* config);
+    void*   (*createRagdoll)(void* config);
+    void*   (*createSoftBody)(void* config);
+} BroPhysicsBridge;
+
+void bro_set_physics_bridge(const BroPhysicsBridge* bridge);
+const BroPhysicsBridge* bro_get_physics_bridge(void);
+
+typedef struct BroFloraBridge {
+    void   (*setWind)(double strength, double dirX, double dirY);
+    void   (*setDensity)(double density);
+    void   (*update)(double dt);
+    void   (*clear)(void);
+    void   (*placement)(void* config);
+    void*  (*batches)(void);
+    void*  (*createWorld)(void* opts);
+} BroFloraBridge;
+
+void bro_set_flora_bridge(const BroFloraBridge* bridge);
+const BroFloraBridge* bro_get_flora_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

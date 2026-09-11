@@ -235,6 +235,34 @@ const BroGizmoBridge* bro_get_gizmo_bridge(void) {
     return &s_gizmo_bridge;
 }
 
+static BroPhysicsBridge s_physics_bridge = {};
+
+void bro_set_physics_bridge(const BroPhysicsBridge* bridge) {
+    if (bridge) {
+        s_physics_bridge = *bridge;
+    } else {
+        s_physics_bridge = {};
+    }
+}
+
+const BroPhysicsBridge* bro_get_physics_bridge(void) {
+    return &s_physics_bridge;
+}
+
+static BroFloraBridge s_flora_bridge = {};
+
+void bro_set_flora_bridge(const BroFloraBridge* bridge) {
+    if (bridge) {
+        s_flora_bridge = *bridge;
+    } else {
+        s_flora_bridge = {};
+    }
+}
+
+const BroFloraBridge* bro_get_flora_bridge(void) {
+    return &s_flora_bridge;
+}
+
 }
 
 

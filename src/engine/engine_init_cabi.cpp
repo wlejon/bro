@@ -15,6 +15,10 @@
 #include "render/bidi.h"
 #endif
 
+#if BRO_WITH_PHYSICS
+#include "physics/physics_world.h"
+#endif
+
 namespace bro::engine {
 
 void bro_engine_register_cabi_bridges(Engine* eng) {
@@ -610,6 +614,98 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         }
     };
     bro_set_gizmo_bridge(&s_engine_gizmo_bridge);
+
+    static BroPhysicsBridge s_engine_physics_bridge = {
+        .setGravity = [](double x, double y, double z) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+#if BRO_WITH_PHYSICS
+            if (eng && eng->physicsWorld()) {
+                eng->physicsWorld()->setGravity(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+            }
+#else
+            (void)eng; (void)x; (void)y; (void)z;
+#endif
+        },
+        .getGravity = []() -> void* {
+            static double s_g[3] = {0.0, -9.81, 0.0};
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+#if BRO_WITH_PHYSICS
+            if (eng && eng->physicsWorld()) {
+                auto g = eng->physicsWorld()->gravity();
+                s_g[0] = static_cast<double>(g.GetX());
+                s_g[1] = static_cast<double>(g.GetY());
+                s_g[2] = static_cast<double>(g.GetZ());
+            }
+#else
+            (void)eng;
+#endif
+            return s_g;
+        },
+        .createBody = [](void* /*config*/) -> int32_t { return 0; },
+        .destroyBody = [](int32_t /*tag*/) {},
+        .destroyAll = []() {},
+        .getTransform = [](int32_t /*tag*/) -> void* { return nullptr; },
+        .getVelocity = [](int32_t /*tag*/) -> void* { return nullptr; },
+        .setPosition = [](int32_t /*tag*/, double /*x*/, double /*y*/, double /*z*/) {},
+        .setRotation = [](int32_t /*tag*/, double /*x*/, double /*y*/, double /*z*/, double /*w*/) {},
+        .setLinearVelocity = [](int32_t /*tag*/, double /*x*/, double /*y*/, double /*z*/) {},
+        .setAngularVelocity = [](int32_t /*tag*/, double /*x*/, double /*y*/, double /*z*/) {},
+        .addForce = [](int32_t /*tag*/, double /*x*/, double /*y*/, double /*z*/) {},
+        .addImpulse = [](int32_t /*tag*/, double /*x*/, double /*y*/, double /*z*/) {},
+        .addTorque = [](int32_t /*tag*/, double /*x*/, double /*y*/, double /*z*/) {},
+        .raycast = [](double /*ox*/, double /*oy*/, double /*oz*/, double /*dx*/, double /*dy*/, double /*dz*/, double /*maxDist*/, int32_t /*mask*/) -> void* { return nullptr; },
+        .raycastClosest = [](double /*ox*/, double /*oy*/, double /*oz*/, double /*dx*/, double /*dy*/, double /*dz*/, double /*maxDist*/, int32_t /*mask*/) -> void* { return nullptr; },
+        .step = [](double /*dt*/) {},
+        .setTimeStep = [](double dt) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+#if BRO_WITH_PHYSICS
+            if (eng && eng->physicsWorld()) {
+                eng->physicsWorld()->setTimeStep(static_cast<float>(dt));
+            }
+#else
+            (void)eng; (void)dt;
+#endif
+        },
+        .setInterpolation = [](bool enabled) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+#if BRO_WITH_PHYSICS
+            if (eng && eng->physicsWorld()) {
+                eng->physicsWorld()->setInterpolation(enabled);
+            }
+#else
+            (void)eng; (void)enabled;
+#endif
+        },
+        .getInterpolation = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+#if BRO_WITH_PHYSICS
+            if (eng && eng->physicsWorld()) {
+                return eng->physicsWorld()->interpolation();
+            }
+#else
+            (void)eng;
+#endif
+            return false;
+        },
+        .isActive = [](int32_t /*tag*/) -> bool { return false; },
+        .activate = [](int32_t /*tag*/) {},
+        .createCharacter = [](void* /*config*/) -> void* { return nullptr; },
+        .createVehicle = [](void* /*config*/) -> void* { return nullptr; },
+        .createRagdoll = [](void* /*config*/) -> void* { return nullptr; },
+        .createSoftBody = [](void* /*config*/) -> void* { return nullptr; }
+    };
+    bro_set_physics_bridge(&s_engine_physics_bridge);
+
+    static BroFloraBridge s_engine_flora_bridge = {
+        .setWind = [](double /*strength*/, double /*dirX*/, double /*dirY*/) {},
+        .setDensity = [](double /*density*/) {},
+        .update = [](double /*dt*/) {},
+        .clear = []() {},
+        .placement = [](void* /*config*/) {},
+        .batches = []() -> void* { return nullptr; },
+        .createWorld = [](void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_flora_bridge(&s_engine_flora_bridge);
 }
 
 } // namespace bro::engine

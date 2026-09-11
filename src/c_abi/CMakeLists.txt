@@ -34,6 +34,11 @@ add_library(bro_c_abi STATIC
     bro_lighting_c_abi.cpp
     bro_gizmo_c_abi.cpp
     bro_animation_c_abi.cpp
+    bro_physics_c_abi.cpp
+    bro_terrain_c_abi.cpp
+    bro_clipmap_c_abi.cpp
+    bro_tile_world_c_abi.cpp
+    bro_flora_c_abi.cpp
 )
 
 
