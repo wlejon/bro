@@ -25,4 +25,18 @@ const BroTimeBridge* bro_get_time_bridge(void) {
     return &s_time_bridge;
 }
 
+static BroPathsBridge s_paths_bridge = {};
+
+void bro_set_paths_bridge(const BroPathsBridge* bridge) {
+    if (bridge) {
+        s_paths_bridge = *bridge;
+    } else {
+        s_paths_bridge = {};
+    }
+}
+
+const BroPathsBridge* bro_get_paths_bridge(void) {
+    return &s_paths_bridge;
+}
+
 }

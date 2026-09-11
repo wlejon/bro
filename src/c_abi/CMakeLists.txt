@@ -3,6 +3,8 @@ add_library(bro_c_abi STATIC
     bro_engine_c_abi.cpp
     bro_math_c_abi.cpp
     bro_time_c_abi.cpp
+    bro_paths_c_abi.cpp
+    bro_noise_c_abi.cpp
 )
 
 target_include_directories(bro_c_abi PUBLIC
@@ -10,7 +12,8 @@ target_include_directories(bro_c_abi PUBLIC
     ${bro_SOURCE_DIR}/include
     ${bro_SOURCE_DIR}/src
     ${bro_SOURCE_DIR}/third_party/bromath/include
+    ${bro_SOURCE_DIR}/third_party/brokit/third_party/FastNoise2/include
 )
 
-target_link_libraries(bro_c_abi PUBLIC bromath)
+target_link_libraries(bro_c_abi PUBLIC bromath FastNoise)
 target_compile_features(bro_c_abi PUBLIC cxx_std_20)

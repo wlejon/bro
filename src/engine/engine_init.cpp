@@ -24,6 +24,7 @@
 #include "render/gl_context.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
 #include "js/asset_path.h"
+#include "util/user_dirs.h"
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
@@ -158,6 +159,43 @@ Engine::Engine(const EngineConfig& config)
         }
     };
     bro_set_time_bridge(&s_engine_time_bridge);
+
+    static BroPathsBridge s_engine_paths_bridge = {
+        .getAppDir = []() -> const char* {
+            thread_local std::string s_appDir;
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || eng->appDir().empty()) return "";
+            s_appDir = std::filesystem::path(eng->appDir()).make_preferred().string();
+            return s_appDir.c_str();
+        },
+        .getUserDataDir = []() -> const char* {
+            thread_local std::string s_userDataDir;
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || eng->appDir().empty()) return "";
+            std::string dir = util::appUserDataDir(eng->appDir());
+            if (!dir.empty()) {
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                s_userDataDir = std::filesystem::path(dir).make_preferred().string();
+            } else {
+                s_userDataDir.clear();
+            }
+            return s_userDataDir.c_str();
+        },
+        .resolvePath = [](const char* src) -> const char* {
+            thread_local std::string s_resolved;
+            if (!src) return "";
+            s_resolved = js::resolveAssetPath(src);
+            return s_resolved.c_str();
+        },
+        .resolveWritePath = [](const char* src) -> const char* {
+            thread_local std::string s_resolvedWrite;
+            if (!src) return "";
+            s_resolvedWrite = js::resolveAssetWritePath(src);
+            return s_resolvedWrite.c_str();
+        }
+    };
+    bro_set_paths_bridge(&s_engine_paths_bridge);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the

@@ -22,6 +22,16 @@ typedef struct BroTimeBridge {
 void bro_set_time_bridge(const BroTimeBridge* bridge);
 const BroTimeBridge* bro_get_time_bridge(void);
 
+typedef struct BroPathsBridge {
+    const char* (*getAppDir)(void);
+    const char* (*getUserDataDir)(void);
+    const char* (*resolvePath)(const char* src);
+    const char* (*resolveWritePath)(const char* src);
+} BroPathsBridge;
+
+void bro_set_paths_bridge(const BroPathsBridge* bridge);
+const BroPathsBridge* bro_get_paths_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif
