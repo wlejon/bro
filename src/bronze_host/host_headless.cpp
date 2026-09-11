@@ -4,6 +4,7 @@
 #include "bronze_host/gl_internal.h"
 
 #include "engine/engine.h"
+#include "engine/gamepad.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -200,6 +201,59 @@ void installHeadlessGlobals(engine::Engine& engine) {
 
     // 14. scriptArgs
     ev::registerGlobal("scriptArgs", makeScriptArgsValue());
+
+    // 15. gamepadConnect(id)
+    ev::registerGlobal("gamepadConnect", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            std::string id = a.size() > 0 ? ev::toUtf8(a[0]) : "Virtual Gamepad";
+            int idx = engine.gamepadConnectVirtual(id);
+            return ev::fromDouble(idx);
+        }, 1, "gamepadConnect"));
+
+    // 16. gamepadDisconnect(index)
+    ev::registerGlobal("gamepadDisconnect", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            int idx = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
+            bool ok = engine.gamepadDisconnectVirtual(idx);
+            return ev::fromBool(ok);
+        }, 1, "gamepadDisconnect"));
+
+    // 17. gamepadButton(index, button, pressed, value)
+    ev::registerGlobal("gamepadButton", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            int idx = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
+            int buttonIdx = 0;
+            if (a.size() > 1) {
+                if (ev::isNumber(a[1])) {
+                    buttonIdx = static_cast<int>(ev::toDouble(a[1]));
+                } else {
+                    std::string bname = ev::toUtf8(a[1]);
+                    buttonIdx = engine::gamepadButtonIndex(bname);
+                }
+            }
+            bool pressed = a.size() > 2 ? ev::toBool(a[2]) : false;
+            float val = a.size() > 3 ? static_cast<float>(ev::toDouble(a[3])) : (pressed ? 1.0f : 0.0f);
+            bool ok = engine.gamepadSetVirtualButton(idx, buttonIdx, pressed, val);
+            return ev::fromBool(ok);
+        }, 4, "gamepadButton"));
+
+    // 18. gamepadAxis(index, axis, value)
+    ev::registerGlobal("gamepadAxis", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            int idx = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
+            int axisIdx = 0;
+            if (a.size() > 1) {
+                if (ev::isNumber(a[1])) {
+                    axisIdx = static_cast<int>(ev::toDouble(a[1]));
+                } else {
+                    std::string aname = ev::toUtf8(a[1]);
+                    axisIdx = engine::gamepadAxisIndex(aname);
+                }
+            }
+            float val = a.size() > 2 ? static_cast<float>(ev::toDouble(a[2])) : 0.0f;
+            bool ok = engine.gamepadSetVirtualAxis(idx, axisIdx, val);
+            return ev::fromBool(ok);
+        }, 3, "gamepadAxis"));
 }
 
 } // namespace bro::bronze_host

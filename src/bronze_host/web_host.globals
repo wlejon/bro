@@ -138,3 +138,7 @@ keyDown
 keyUp
 textInput
 scriptArgs
+gamepadConnect
+gamepadDisconnect
+gamepadButton
+gamepadAxis

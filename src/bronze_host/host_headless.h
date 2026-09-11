@@ -10,7 +10,8 @@ class Engine;
 namespace bro::bronze_host {
 
 /// Register headless host globals (advanceTime, flush, sleep, screenshot, assert,
-/// click, mouseDown, mouseUp, mouseMove, wheel, keyDown, keyUp, textInput, scriptArgs)
+/// click, mouseDown, mouseUp, mouseMove, wheel, keyDown, keyUp, textInput, scriptArgs,
+/// gamepadConnect, gamepadDisconnect, gamepadButton, gamepadAxis)
 /// on `engine`.
 void installHeadlessGlobals(engine::Engine& engine);
 
