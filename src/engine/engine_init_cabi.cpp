@@ -554,14 +554,23 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
 
     static BroGizmoBridge s_engine_gizmo_bridge = {
         .getVisible = []() -> bool {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             return eng ? eng->gizmo().visible() : false;
+#else
+            return false;
+#endif
         },
         .getDragging = []() -> bool {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             return eng ? eng->gizmo().isDragging() : false;
+#else
+            return false;
+#endif
         },
         .getHovered = []() -> const char* {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (!eng) return nullptr;
             switch (eng->gizmo().hovered()) {
@@ -575,44 +584,71 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
                 case GizmoAxis::Center: return "center";
                 default: return nullptr;
             }
+#else
+            return nullptr;
+#endif
         },
         .show = []() {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (eng) eng->gizmo().show();
+#endif
         },
         .hide = []() {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (eng) eng->gizmo().hide();
+#endif
         },
         .setMode = [](const char* mode) {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (!eng || !mode) return;
             if (std::strcmp(mode, "translate") == 0)      eng->gizmo().setMode(GizmoMode::Translate);
             else if (std::strcmp(mode, "rotate") == 0)    eng->gizmo().setMode(GizmoMode::Rotate);
             else if (std::strcmp(mode, "scale") == 0)     eng->gizmo().setMode(GizmoMode::Scale);
+#else
+            (void)mode;
+#endif
         },
         .setSpace = [](const char* space) {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (!eng || !space) return;
             if (std::strcmp(space, "local") == 0) eng->gizmo().setSpace(GizmoSpace::Local);
             else                                  eng->gizmo().setSpace(GizmoSpace::World);
+#else
+            (void)space;
+#endif
         },
         .setPosition = [](double x, double y, double z) {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (eng) eng->gizmo().setPosition(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+#else
+            (void)x; (void)y; (void)z;
+#endif
         },
         .setOrientation = [](double x, double y, double z, double w) {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (eng) eng->gizmo().setOrientation(bromath::Quat(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z), static_cast<float>(w)));
+#else
+            (void)x; (void)y; (void)z; (void)w;
+#endif
         },
         .configure = [](void* /*config*/) {},
         .attach = [](void* /*handlers*/) {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (eng) eng->gizmo().show();
+#endif
         },
         .detach = []() {
+#if BRO_WITH_3D
             auto* eng = static_cast<Engine*>(bro_get_active_engine());
             if (eng) eng->gizmo().hide();
+#endif
         }
     };
     bro_set_gizmo_bridge(&s_engine_gizmo_bridge);
