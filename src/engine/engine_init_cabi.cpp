@@ -545,6 +545,71 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         .trim = [](const char*, uint64_t) -> bool { return false; }
     };
     bro_set_gpu_bridge(&s_engine_gpu_bridge);
+
+    static BroGizmoBridge s_engine_gizmo_bridge = {
+        .getVisible = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->gizmo().visible() : false;
+        },
+        .getDragging = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->gizmo().isDragging() : false;
+        },
+        .getHovered = []() -> const char* {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng) return nullptr;
+            switch (eng->gizmo().hovered()) {
+                case GizmoAxis::X: return "x";
+                case GizmoAxis::Y: return "y";
+                case GizmoAxis::Z: return "z";
+                case GizmoAxis::XY: return "xy";
+                case GizmoAxis::YZ: return "yz";
+                case GizmoAxis::XZ: return "xz";
+                case GizmoAxis::View: return "view";
+                case GizmoAxis::Center: return "center";
+                default: return nullptr;
+            }
+        },
+        .show = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->gizmo().show();
+        },
+        .hide = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->gizmo().hide();
+        },
+        .setMode = [](const char* mode) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !mode) return;
+            if (std::strcmp(mode, "translate") == 0)      eng->gizmo().setMode(GizmoMode::Translate);
+            else if (std::strcmp(mode, "rotate") == 0)    eng->gizmo().setMode(GizmoMode::Rotate);
+            else if (std::strcmp(mode, "scale") == 0)     eng->gizmo().setMode(GizmoMode::Scale);
+        },
+        .setSpace = [](const char* space) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !space) return;
+            if (std::strcmp(space, "local") == 0) eng->gizmo().setSpace(GizmoSpace::Local);
+            else                                  eng->gizmo().setSpace(GizmoSpace::World);
+        },
+        .setPosition = [](double x, double y, double z) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->gizmo().setPosition(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+        },
+        .setOrientation = [](double x, double y, double z, double w) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->gizmo().setOrientation(bromath::Quat(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z), static_cast<float>(w)));
+        },
+        .configure = [](void* /*config*/) {},
+        .attach = [](void* /*handlers*/) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->gizmo().show();
+        },
+        .detach = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng) eng->gizmo().hide();
+        }
+    };
+    bro_set_gizmo_bridge(&s_engine_gizmo_bridge);
 }
 
 } // namespace bro::engine

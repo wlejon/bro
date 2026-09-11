@@ -238,6 +238,24 @@ typedef struct BroGpuBridge {
 void bro_set_gpu_bridge(const BroGpuBridge* bridge);
 const BroGpuBridge* bro_get_gpu_bridge(void);
 
+typedef struct BroGizmoBridge {
+    bool        (*getVisible)(void);
+    bool        (*getDragging)(void);
+    const char* (*getHovered)(void);
+    void        (*show)(void);
+    void        (*hide)(void);
+    void        (*setMode)(const char* mode);
+    void        (*setSpace)(const char* space);
+    void        (*setPosition)(double x, double y, double z);
+    void        (*setOrientation)(double x, double y, double z, double w);
+    void        (*configure)(void* config);
+    void        (*attach)(void* handlers);
+    void        (*detach)(void);
+} BroGizmoBridge;
+
+void bro_set_gizmo_bridge(const BroGizmoBridge* bridge);
+const BroGizmoBridge* bro_get_gizmo_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

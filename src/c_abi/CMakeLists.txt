@@ -29,6 +29,11 @@ add_library(bro_c_abi STATIC
     bro_image_c_abi.cpp
     bro_imagebitmap_c_abi.cpp
     bro_gpu_c_abi.cpp
+    bro_scene_c_abi.cpp
+    bro_mesh_c_abi.cpp
+    bro_lighting_c_abi.cpp
+    bro_gizmo_c_abi.cpp
+    bro_animation_c_abi.cpp
 )
 
 

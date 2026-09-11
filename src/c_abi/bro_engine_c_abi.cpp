@@ -221,6 +221,20 @@ const BroGpuBridge* bro_get_gpu_bridge(void) {
     return &s_gpu_bridge;
 }
 
+static BroGizmoBridge s_gizmo_bridge = {};
+
+void bro_set_gizmo_bridge(const BroGizmoBridge* bridge) {
+    if (bridge) {
+        s_gizmo_bridge = *bridge;
+    } else {
+        s_gizmo_bridge = {};
+    }
+}
+
+const BroGizmoBridge* bro_get_gizmo_bridge(void) {
+    return &s_gizmo_bridge;
+}
+
 }
 
 
