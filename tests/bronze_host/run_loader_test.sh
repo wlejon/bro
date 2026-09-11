@@ -179,6 +179,9 @@ if ! cmake -S "$SRC" -B "$WORK/b" > "$WORK/cmake.log" 2>&1 \
     skip "could not build the synthetic modules (see $WORK/cmake.log)"
 fi
 OUT="$WORK/b/out"
+if [[ ! -f "$OUT/good$EXT" && -f "$OUT/Release/good$EXT" ]]; then
+    OUT="$OUT/Release"
+fi
 [[ -f "$OUT/good$EXT" ]] || skip "synthetic modules did not land in $OUT"
 
 # --- The app directory each case is run against ----------------------------
