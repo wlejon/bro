@@ -257,12 +257,12 @@ bh_run_check() {
     app_lines="$(printf '%s\n' "$clean_out" | grep '^APP ' || true)"
     if [[ $split -eq 1 ]]; then
         clean_err="$(printf '%s\n' "$err_raw" | tr -d '\r')"
-        js_lines="$(printf '%s\n' "$clean_err" \
-            | sed -n 's/^.*\[console\] \(\(PAGE\|DRV\) .*\)$/\1/p' || true)"
+        js_lines="$(printf '%s\n%s\n' "$clean_out" "$clean_err" \
+            | sed -n 's/^\(.*\[console\] \)*\(\(PAGE\|DRV\) .*\)$/\2/p' || true)"
         actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
     elif [[ $twoblock -eq 1 ]]; then
         js_lines="$(printf '%s\n' "$clean_out" \
-            | sed -n 's/^.*\[console\] \(\(PAGE\|DRV\) .*\)$/\1/p' || true)"
+            | sed -n 's/^\(.*\[console\] \)*\(\(PAGE\|DRV\) .*\)$/\2/p' || true)"
         actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
     else
         actual="$app_lines"
