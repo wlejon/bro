@@ -37,8 +37,7 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         auto* gl = live(c);
         GLenum pname = u32At(a, 0);
         switch (pname) {
-            // String parameters — same fixed strings the QuickJS binding
-            // reports, so three.js's version sniffing sees one engine.
+            // String parameters
             case 0x1F02:  // GL_VERSION
                 return ev::fromUtf8("WebGL 2.0");
             case 0x8B8C:  // GL_SHADING_LANGUAGE_VERSION
@@ -103,8 +102,7 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x9243:  // UNPACK_COLORSPACE_CONVERSION_WEBGL
                 return ev::fromDouble(gl->unpackColorspaceConversion());
 
-            // Object-binding queries: the QuickJS binding answers null
-            // (unbound) because it cannot re-wrap; same answer, same reason.
+            // Object-binding queries: answers null (unbound).
             case 0x8894:  // ARRAY_BUFFER_BINDING
             case 0x8895:  // ELEMENT_ARRAY_BUFFER_BINDING
             case 0x8B8D:  // CURRENT_PROGRAM
@@ -153,9 +151,8 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
     });
 
-    // getExtension: the same names, the same constant sets, the same null for
-    // anything the context does not report — copied from the QuickJS binding,
-    // which copied them from the WebGL extension specs.
+    // getExtension: maps supported extension names to their constant objects
+    // or null when not supported.
     b.def("getExtension", 1, [c](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
         if (ev::isObject(nameV)) return ev::null();
@@ -187,11 +184,7 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             def("TEXTURE_MAX_ANISOTROPY_EXT", 0x84FE);
             def("MAX_TEXTURE_MAX_ANISOTROPY_EXT", 0x84FF);
         }
-        // BRO_buffer_map exists in the QuickJS layer; the mapping API is not
-        // bound here, so the extension is not advertised as an object either —
-        // but getExtension(name) above already answered from the context's own
-        // list, so an unknown-to-us supported name still returns a truthy
-        // (empty) object, the WebGL convention for "present, no constants".
+        // Return truthy (empty) object for unknown-to-us supported names (WebGL convention).
         return o.get();
     });
 
@@ -207,7 +200,6 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
 
     b.def("getShaderPrecisionFormat", 2, [](Value, std::span<const Value>) {
-        // Hardcoded highp float — the QuickJS binding's answer verbatim.
         ObjectBuilder o;
         o.set("rangeMin", ev::fromDouble(127));
         o.set("rangeMax", ev::fromDouble(127));

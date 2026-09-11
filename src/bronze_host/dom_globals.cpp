@@ -51,18 +51,6 @@ namespace {
 // State
 // ---------------------------------------------------------------------------
 
-struct CanvasState {
-    dom::Element* el = nullptr;  // owned by the Document
-    webgl::WebGL2RenderingContext* glCtx = nullptr;  // owned by the Engine
-    ev::Persistent jsObj;  // the host canvas object handed to the program
-    ev::Persistent glObj;  // the B2 context object, once getContext ran
-    ev::Persistent ctx2dObj;
-    bool hasGl = false;
-    // No listener list here: canvas listeners live in the ENGINE's native
-    // listener list on `el`, which is what makes them fire from a real click
-    // (host_dom_events.cpp).
-};
-
 struct RafEntry {
     int32_t id;
     ev::Persistent fn;
@@ -76,9 +64,6 @@ struct WindowListener {
 
 struct HostState {
     engine::Engine* engine = nullptr;
-    // unique_ptr entries so CanvasState addresses stay stable while the
-    // vector grows — the accessors' lambdas capture raw CanvasState*.
-    std::vector<std::unique_ptr<CanvasState>> canvases;
     std::vector<RafEntry> rafPending;
     int32_t nextRafId = 1;
     // The rAF/performance clock: accumulated scaled-frame deltas, so
@@ -94,12 +79,10 @@ HostState* g_host = nullptr;
 // requestAnimationFrame
 // ---------------------------------------------------------------------------
 
-// REENTRANCY: the pending list is MOVED OUT before any callback runs —
-// mirroring js::Timers::fireAnimationFrames — so a callback that registers
-// another rAF appends to the fresh list (fires next frame), and a
-// cancelAnimationFrame from inside a callback affects only not-yet-moved future
-// entries; cancelling a sibling of the currently-firing batch is a no-op,
-// exactly as it is in bro's own rAF.
+// REENTRANCY: the pending list is MOVED OUT before any callback runs,
+// so a callback that registers another rAF appends to the fresh list (fires next frame),
+// and a cancelAnimationFrame from inside a callback affects only not-yet-moved future
+// entries; cancelling a sibling of the currently-firing batch is a no-op.
 void fireAnimationFrames() {
     if (g_host->rafPending.empty()) return;
 
@@ -128,18 +111,12 @@ void fireAnimationFrames() {
 //
 // THE ORDER, and what each position is answering to:
 //
-//  1. A leftover drain. bro's loop drains QuickJS TWICE — once right after rAF
-//     (step 3b) and again after the late pumps that can resolve a promise
-//     (framePumps_ + tickAsync). This layer is fired at the FIRST of those two
-//     seams and there is no host hook at the second, so anything that could
-//     enqueue a bronze job after we return this frame — any listener the
-//     engine dispatches during the next frame's event poll, on the window or
-//     on an element — would otherwise wait a whole frame to be seen. That is
-//     no longer hypothetical: a compiled click handler runs inside the input
-//     pipeline (host_dom_events.cpp), well outside this seam. Draining here
-//     costs a queue check when there is nothing to do and bounds that wait at
-//     one frame instead of forever. It matters because an unhandled rejection
-//     is only REPORTED at quiescence: a drain that never runs is a rejection
+//  1. A leftover drain. Any task that enqueued a bronze job after we returned
+//     last frame — e.g. a listener dispatched during input processing — is
+//     drained here before advancing time and firing frame callbacks.
+//     Draining here costs a queue check when there is nothing to do and ensures
+//     jobs are processed without waiting an extra frame.
+//     It matters because an unhandled rejection is only REPORTED at quiescence:
 //     nobody ever hears about.
 //
 //  2. The clock. Advanced before anything reads it, so a timer deadline, an
@@ -184,373 +161,6 @@ void hostFrame(double dtMs) {
     sweepInterpBridge();                                 // 7
 }
 
-// ---------------------------------------------------------------------------
-// Canvas
-// ---------------------------------------------------------------------------
-
-int attributeOr(dom::Element* el, const char* name, int fallback) {
-    const std::string& v = el->getAttribute(name);
-    return v.empty() ? fallback : std::atoi(v.c_str());
-}
-
-// Per HTML the width/height ATTRIBUTES are the drawing-buffer size; 300x150
-// is the spec default for a canvas that never set them.
-int canvasWidthOf(CanvasState* cs) {
-    if (cs->glCtx) return cs->glCtx->canvasWidth();
-    return attributeOr(cs->el, "width", 300);
-}
-
-int canvasHeightOf(CanvasState* cs) {
-    if (cs->glCtx) return cs->glCtx->canvasHeight();
-    return attributeOr(cs->el, "height", 150);
-}
-
-Value makeCanvasValue(dom::Element* el) {
-    auto owned = std::make_unique<CanvasState>();
-    CanvasState* cs = owned.get();
-    cs->el = el;
-    g_host->canvases.push_back(std::move(owned));
-
-    // A canvas IS an element — it lives in the tree, carries classes, is styled
-    // and is measured — and then it also owns a drawing buffer. The element half
-    // is the shared core (host_element.cpp); what follows overrides only the
-    // handful of members the drawing buffer changes the answer to.
-    ObjectBuilder b(makeElementHandleObject(el));
-    installElementCore(b, el);
-
-    // width/height: reads answer the live drawing-buffer size; a write is
-    // both the attribute (the HTML source of truth the engine's
-    // syncWebGLCanvasSizes respects — an app that sets them owns the size)
-    // and, once a GL context exists, an immediate FBO resize.
-    b.accessor("width",
-               [cs](Value, std::span<const Value>) {
-                   return ev::fromDouble(canvasWidthOf(cs));
-               },
-               [cs](Value, std::span<const Value> a) {
-                   int w = i32At(a, 0);
-                   cs->el->setAttribute("width", std::to_string(w));
-                   if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
-                   return ev::undefined();
-               });
-    b.accessor("height",
-               [cs](Value, std::span<const Value>) {
-                   return ev::fromDouble(canvasHeightOf(cs));
-               },
-               [cs](Value, std::span<const Value> a) {
-                   int h = i32At(a, 0);
-                   cs->el->setAttribute("height", std::to_string(h));
-                   if (cs->glCtx) cs->glCtx->resize(cs->glCtx->canvasWidth(), h);
-                   return ev::undefined();
-               });
-
-    // clientWidth/clientHeight: an honest layout read, flushed first so an
-    // element appended and measured in one turn measures correctly (the
-    // Engine::flushLayoutForRead contract). A canvas with no box yet answers
-    // its drawing-buffer size, which is what a just-created offscreen canvas
-    // is on the web too.
-    b.accessor("clientWidth",
-               [cs](Value, std::span<const Value>) {
-                   g_host->engine->flushLayoutForRead(cs->el->document());
-                   auto& box = cs->el->layoutBox();
-                   double w = box.contentRect.width;
-                   return ev::fromDouble(w > 0 ? w : canvasWidthOf(cs));
-               },
-               nullptr);
-    b.accessor("clientHeight",
-               [cs](Value, std::span<const Value>) {
-                   g_host->engine->flushLayoutForRead(cs->el->document());
-                   auto& box = cs->el->layoutBox();
-                   double h = box.contentRect.height;
-                   return ev::fromDouble(h > 0 ? h : canvasHeightOf(cs));
-               },
-               nullptr);
-
-    b.def("getBoundingClientRect", 0, [cs](Value, std::span<const Value>) {
-        g_host->engine->flushLayoutForRead(cs->el->document());
-        auto& box = cs->el->layoutBox();
-        double w = box.contentRect.width > 0 ? box.contentRect.width : canvasWidthOf(cs);
-        double h = box.contentRect.height > 0 ? box.contentRect.height : canvasHeightOf(cs);
-        double x = box.contentRect.x;
-        double y = box.contentRect.y;
-        ObjectBuilder r;
-        r.set("left", ev::fromDouble(x));
-        r.set("top", ev::fromDouble(y));
-        r.set("right", ev::fromDouble(x + w));
-        r.set("bottom", ev::fromDouble(y + h));
-        r.set("width", ev::fromDouble(w));
-        r.set("height", ev::fromDouble(h));
-        r.set("x", ev::fromDouble(x));
-        r.set("y", ev::fromDouble(y));
-        return r.get();
-    });
-    b.def("setAttribute", 2, [cs](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        Value valV = argAt(a, 1);
-        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
-            std::string name = ev::toUtf8(nameV);
-            std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
-            cs->el->setAttribute(name, val);
-            if (name == "width") {
-                int w = std::atoi(val.c_str());
-                if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
-            } else if (name == "height") {
-                int h = std::atoi(val.c_str());
-                if (cs->glCtx) cs->glCtx->resize(cs->glCtx->canvasWidth(), h);
-            }
-        }
-        return ev::undefined();
-    });
-    // getContext('webgl2'|'webgl') → the B2 context object, built over the
-    // SAME Engine path the QuickJS factory takes (Engine::createWebGL2Context
-    // — one construction path, no drift), and cached so a second call answers
-    // the same object, per spec. '2d' answers a CanvasRenderingContext2D wrapper.
-    b.def("getContext", 1, [cs](Value, std::span<const Value> a) {
-        Value typeV = argAt(a, 0);
-        if (ev::isObject(typeV)) return ev::null();
-        std::string type = ev::toUtf8(typeV);
-        if (type == "2d") {
-            if (ev::isObject(cs->ctx2dObj.get())) return cs->ctx2dObj.get();
-            Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get());
-            cs->ctx2dObj.set(ctx2d);
-            return ctx2d;
-        }
-        if (type != "webgl2" && type != "webgl") return ev::null();
-        if (cs->hasGl) return cs->glObj.get();
-        webgl::WebGL2RenderingContext* ctx = g_host->engine->createWebGL2Context(cs->el);
-        if (!ctx) return ev::null();
-        cs->glCtx = ctx;
-        Value glValue = createGlContextValue(ctx, cs->jsObj.get());
-        cs->glObj.set(glValue);
-        cs->hasGl = true;
-        return cs->glObj.get();
-    });
-
-    Value built = b.get();
-    cs->jsObj.set(built);
-    noteHostElementValue(el, built);
-    return built;
-}
-
-// "Which host canvas is this Value?" — through the element handle every
-// wrapper now carries, rather than by comparing raw Value addresses. The old
-// compare was correct only while nothing allocated during the scan; this asks
-// the value what element it is and looks that up, which has no such condition.
-CanvasState* canvasFor(Value v) {
-    dom::Element* el = hostElementOf(v);
-    if (!el) return nullptr;
-    for (auto& cs : g_host->canvases) {
-        if (cs->el == el) return cs.get();
-    }
-    return nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// generic elements
-// ---------------------------------------------------------------------------
-
-Value makeGenericElementValue(dom::Element* el) {
-    return makePlainElementValue(el);
-}
-
-Value wrapElement(dom::Element* el) {
-    return hostElementValue(el);
-}
-
-// Which document a wrapper speaks for.
-//
-// `fixed` is null for the `document` global and only for it. That global is
-// registered before the engine has parsed anything, so it cannot capture a
-// document — it has to ask for the current one every time, and asking is also
-// what lets it survive a reparse that swaps the whole tree out. Every OTHER
-// document wrapper — the ones DOMParser hands back — names one document for
-// good, and naming it is the point: `parsed.getElementById('x')` must not
-// quietly answer from the live page.
-dom::Document* documentFor(dom::Document* fixed) {
-    if (fixed) return fixed;
-    return (g_host && g_host->engine) ? g_host->engine->document() : nullptr;
-}
-
-// document.createElement / createElementNS. An unknown tag is not a refusal:
-// every HTML tag is a real dom::Element here, and the element surface is the
-// same one for all of them. `img` gets MORE than that surface rather than a
-// different one — a decoder behind `.src`, added by host_element_image.cpp on
-// top of the element, because an image built this way is still a node the
-// program may append.
-Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
-                        size_t tagIndex) {
-    Value tagV = argAt(a, tagIndex);
-    if (ev::isObject(tagV)) return ev::throwTypeError("createElement: tag must be a string");
-    std::string tag = ev::toUtf8(tagV);
-    for (char& ch : tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    dom::Document* doc = documentFor(fixed);
-    if (!doc) return ev::throwError("bronze host: engine has no document");
-    dom::Element* el = doc->createElement(tag);
-    if (!el) return ev::throwError("bronze host: createElement failed");
-    return hostElementValue(el);
-}
-
-Value makeDocumentValue(dom::Document* fixed) {
-    ObjectBuilder b;
-    b.def("createElement", 1, [fixed](Value, std::span<const Value> a) {
-        return createElementImpl(fixed, a, 0);
-    });
-    // three.js spells it createElementNS('http://www.w3.org/1999/xhtml',
-    // 'canvas'); the namespace is accepted and ignored, as bro's own DOM does
-    // for HTML content.
-    b.def("createElementNS", 2, [fixed](Value, std::span<const Value> a) {
-        return createElementImpl(fixed, a, 1);
-    });
-    // The other three node factories. All go through the DOCUMENT so the node
-    // lands in Document::ownedNodes_ — which is what makes it freed on teardown
-    // and what makes the freed-node observer the registry depends on fire for
-    // it (host_element.cpp). A node allocated any other way would outlive its
-    // wrapper's ability to notice it died.
-    b.def("createTextNode", 1, [fixed](Value, std::span<const Value> a) {
-        dom::Document* doc = documentFor(fixed);
-        if (!doc) return ev::throwError("bronze host: engine has no document");
-        Value v = argAt(a, 0);
-        std::string text =
-            (ev::isObject(v) || ev::isUndefined(v)) ? "" : ev::toUtf8(v);
-        return hostNodeValue(doc->createTextNode(text));
-    });
-    b.def("createComment", 1, [fixed](Value, std::span<const Value> a) {
-        dom::Document* doc = documentFor(fixed);
-        if (!doc) return ev::throwError("bronze host: engine has no document");
-        Value v = argAt(a, 0);
-        std::string text =
-            (ev::isObject(v) || ev::isUndefined(v)) ? "" : ev::toUtf8(v);
-        return hostNodeValue(doc->createComment(text));
-    });
-    b.def("createDocumentFragment", 0, [fixed](Value, std::span<const Value>) {
-        dom::Document* doc = documentFor(fixed);
-        if (!doc) return ev::throwError("bronze host: engine has no document");
-        return hostNodeValue(doc->createDocumentFragment());
-    });
-    b.def("getElementById", 1, [fixed](Value, std::span<const Value> a) {
-        Value idV = argAt(a, 0);
-        if (ev::isObject(idV) || ev::isUndefined(idV)) return ev::null();
-        std::string id = ev::toUtf8(idV);
-        dom::Document* doc = documentFor(fixed);
-        if (!doc) return ev::null();
-        dom::Element* el = doc->getElementById(id);
-        return wrapElement(el);
-    });
-    b.def("querySelector", 1, [fixed](Value, std::span<const Value> a) {
-        Value selV = argAt(a, 0);
-        if (ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
-        std::string sel = ev::toUtf8(selV);
-        dom::Document* doc = documentFor(fixed);
-        if (!doc) return ev::null();
-        dom::Element* el = doc->querySelector(sel);
-        return wrapElement(el);
-    });
-    b.def("querySelectorAll", 1, [fixed](Value, std::span<const Value> a) {
-        auto empty = []() {
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        };
-        Value selV = argAt(a, 0);
-        if (ev::isObject(selV) || ev::isUndefined(selV)) return empty();
-        dom::Document* doc = documentFor(fixed);
-        if (!doc) return empty();
-        std::vector<dom::Element*> list = doc->querySelectorAll(ev::toUtf8(selV));
-        return hostArrayOf(list.size(),
-                           [&list](size_t i) { return hostElementValue(list[i]); });
-    });
-
-    // body / documentElement are ACCESSORS, not values captured at install
-    // time: the `document` global is registered before the engine has parsed a
-    // document, so there is nothing to capture yet, and a reparse would replace
-    // whatever had been. (A parsed document could capture safely — its tree is
-    // final the moment parseFromString returns — but one builder serves both
-    // and the accessor is correct for each.) Each answers the real element
-    // through the registry, which is what makes `document.body.appendChild
-    // (panel)` an ordinary tree insert rather than the canvas-only special case
-    // it used to be.
-    auto defDocElement = [&b, fixed](const char* name,
-                                     dom::Element* (dom::Document::*get)() const) {
-        b.accessor(name,
-                   [get, fixed](Value, std::span<const Value>) {
-                       dom::Document* doc = documentFor(fixed);
-                       if (!doc) return ev::null();
-                       return hostElementValue((doc->*get)());
-                   },
-                   nullptr);
-    };
-    defDocElement("body", &dom::Document::body);
-    defDocElement("documentElement", &dom::Document::documentElement);
-    b.accessor("activeElement",
-               [fixed](Value, std::span<const Value>) {
-                   dom::Document* doc = documentFor(fixed);
-                   if (!doc) return ev::null();
-                   return hostElementValue(doc->activeElement());
-               },
-               nullptr);
-    b.accessor("pointerLockElement",
-               [fixed](Value, std::span<const Value>) {
-                   if (fixed) return ev::null();
-                   auto* e = hostEngine();
-                   if (!e) return ev::null();
-                   return hostElementValue(e->pointerLockElement());
-               },
-               nullptr);
-    b.def("exitPointerLock", 0, [fixed](Value, std::span<const Value>) {
-        if (!fixed) {
-            if (auto* e = hostEngine()) {
-                e->exitPointerLock();
-            }
-        }
-        return ev::undefined();
-    });
-    b.accessor("fullscreenElement",
-               [fixed](Value, std::span<const Value>) {
-                   if (fixed) return ev::null();
-                   return hostElementValue(hostFullscreenElement());
-               },
-               nullptr);
-    b.accessor("fullscreenEnabled",
-               [](Value, std::span<const Value>) {
-                   return ev::fromBool(true);
-               },
-               nullptr);
-    b.def("exitFullscreen", 0, [fixed](Value, std::span<const Value>) {
-        if (!fixed) {
-            setHostFullscreenElement(nullptr);
-            if (auto* e = hostEngine()) {
-                e->setFullscreenState(false);
-                if (auto* win = e->window()) {
-                    win->setFullscreen(false);
-                }
-            }
-        }
-        ev::Persistent p{ev::createPromise()};
-        ev::resolvePromise(p.get(), ev::undefined());
-        return p.get();
-    });
-
-    // Document listeners are documentElement's listeners — the exact
-    // delegation js_document_addEventListener performs for the interpreted
-    // side (src/js/document_bindings.cpp), and for its reason: a document is
-    // not an Element, the event path is built from Elements, so an event aimed
-    // at the document has to be registered and dispatched where it will
-    // actually be walked. The visible consequence is the same one the
-    // interpreted side already lives with — `currentTarget` inside such a
-    // handler is <html>, not the document.
-    //
-    // Resolved per call rather than captured: the globals are registered
-    // before anyone has asked the engine for its document element.
-    installElementEventTarget(b, [fixed]() -> dom::Element* {
-        dom::Document* doc = documentFor(fixed);
-        return doc ? doc->documentElement() : nullptr;
-    }, "document");
-    return b.get();
-}
-
-// ---------------------------------------------------------------------------
-// window
-// ---------------------------------------------------------------------------
-
-// One function value, installed BOTH on window and as a bare global. Both
-// spellings are how it is reached on the web — `getComputedStyle(el)` and
 // `window.getComputedStyle(el)` — and three.js's editor uses the bare one
 // (editor/js/Sidebar.js), so registering only the window property would leave
 // it a ReferenceError in exactly the code that needs it.
@@ -747,13 +357,7 @@ Value makePerformanceValue() {
 // element accessors, the event-target delegation — bound to `doc` instead of to
 // whatever the engine is showing. host_parser.cpp hands DOMParser results
 // through here, which is why it exists at all: the builder itself is private to
-// this file, and duplicating it would produce a second document surface that
-// drifted from this one the first time either gained a method.
-//
-// Null `doc` is not defended against here; the only caller has just parsed one.
-Value hostDocumentValue(dom::Document* doc) {
-    return makeDocumentValue(doc);
-}
+
 
 Value makeBrandConstructor(const char* name) {
     std::string msg = std::string("bronze host ") + name +
@@ -762,10 +366,8 @@ Value makeBrandConstructor(const char* name) {
         [msg](Value, std::span<const Value>) { return ev::throwTypeError(msg); }, 0);
 }
 
-// Where an exception out of compiled code ends up. bro's JS funnel
-// (js::Runtime::callJs) is QuickJS-shaped end to end, so a bronze throw cannot
-// ride it; this is the same report-and-continue behaviour aimed at the same log
-// stream. The Error's own fields are read through embed property reads — the
+// Where an exception out of compiled code ends up. Reports to the log stream.
+// The Error's own fields are read through embed property reads — the
 // throw was already caught, so running a getter here is safe.
 void reportBronzeError(const char* origin, Value thrown) {
     if (!ev::isObject(thrown)) {
@@ -791,10 +393,7 @@ double hostClockMs() { return g_host ? g_host->clockMs : 0.0; }
 
 engine::Engine* hostEngine() { return g_host ? g_host->engine : nullptr; }
 
-// The canvas wrapper, reached from host_element.cpp's factory: an element that
-// also owns a drawing buffer and a GL context. It lives here because the GL
-// context does.
-Value makeCanvasElementValue(dom::Element* el) { return makeCanvasValue(el); }
+
 
 // Identity — the value the program already holds for `el`, so
 // `event.target === canvas` is true inside a compiled listener. It asks the

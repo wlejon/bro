@@ -27,8 +27,7 @@ struct StorageState {
 static StorageState g_storage;
 
 // The file format — real JSON, written atomically — lives in
-// util/storage_file.cpp, shared with the QuickJS Storage, so a bronze app and
-// a script app read and write the same .storage.json.
+// util/storage_file.cpp, so apps read and write .storage.json.
 static void loadStorageFile() {
     if (g_storage.loaded) return;
     g_storage.loaded = true;

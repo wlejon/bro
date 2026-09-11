@@ -10,8 +10,7 @@
 #include "broaudio/dsp/resampler.h"
 #include "dom/element.h"
 #include "dom/event.h"
-#include "../../third_party/quickjs/quickjs.h"
-#include "js/event_dispatch.h"
+#include "dom/event_dispatch.h"
 #include "util/log.h"
 #include "video/audio_decoder.h"
 #include "video/media_backend.h"
@@ -651,7 +650,7 @@ void ElVideo::draw(render::Renderer* renderer,
     // pictureless <video> is.
     if (pipeline_->hasVideo()) pipeline_->advance();
     // NOTE: pumpEvents() runs on the main thread (Engine::pumpVideoEvents)
-    // — QuickJS is not thread-safe, and draw() executes on the raster
+    // — event dispatching occurs on the main thread, and draw() executes on the raster
     // thread. Pipeline state read here (currentPts, hasFrame) is written by
     // this advance() call; main-thread pumpEvents reads it with a stale-
     // read tolerance (same discipline as the rest of the pipeline state).
@@ -744,7 +743,7 @@ void ElVideo::pumpEvents() {
     // no frame to decode and draw() bows out — so walk it here. Safe on this
     // thread precisely because the raster side is not touching it.
     if (!pipeline_->hasVideo()) pipeline_->advance();
-    if (!jsCtx_ || !elem_) return;
+    if (!elem_) return;
 
     // loadedmetadata fires once after a successful open(). HTMLMediaElement
     // fires loadedmetadata even before the first frame has been decoded, but
@@ -754,7 +753,7 @@ void ElVideo::pumpEvents() {
         pendingLoadedMetadata_ = false;
         dom::Event evt("loadedmetadata", false, false);
         evt.setIsTrusted(true);
-        js::dispatchDomEvent(jsCtx_, elem_, evt);
+        dom::dispatchDomEvent(elem_, evt);
         // durationchange fires alongside loadedmetadata when duration first
         // becomes known. Also fires if duration changes later (e.g. on reload).
         const double dur = duration();
@@ -762,11 +761,11 @@ void ElVideo::pumpEvents() {
             lastDurationSec_ = dur;
             dom::Event devt("durationchange", false, false);
             devt.setIsTrusted(true);
-            js::dispatchDomEvent(jsCtx_, elem_, devt);
+            dom::dispatchDomEvent(elem_, devt);
         }
         dom::Event canplay("canplay", false, false);
         canplay.setIsTrusted(true);
-        js::dispatchDomEvent(jsCtx_, elem_, canplay);
+        dom::dispatchDomEvent(elem_, canplay);
     }
 
     // canplaythrough: bro predecodes audio into a single clip and demuxes
@@ -776,7 +775,7 @@ void ElVideo::pumpEvents() {
         pendingCanPlayThrough_ = false;
         dom::Event evt("canplaythrough", false, false);
         evt.setIsTrusted(true);
-        js::dispatchDomEvent(jsCtx_, elem_, evt);
+        dom::dispatchDomEvent(elem_, evt);
     }
 
     const double t = currentTime();
@@ -793,12 +792,12 @@ void ElVideo::pumpEvents() {
             waiting_ = true;
             dom::Event evt("waiting", false, false);
             evt.setIsTrusted(true);
-            js::dispatchDomEvent(jsCtx_, elem_, evt);
+            dom::dispatchDomEvent(elem_, evt);
         } else if (hasFrame && waiting_) {
             waiting_ = false;
             dom::Event evt("playing", false, false);
             evt.setIsTrusted(true);
-            js::dispatchDomEvent(jsCtx_, elem_, evt);
+            dom::dispatchDomEvent(elem_, evt);
         }
     } else if (waiting_ && !pipeline_->isPlaying()) {
         // Paused while waiting — drop the flag so a later play() can recover.
@@ -813,7 +812,7 @@ void ElVideo::pumpEvents() {
             lastTimeUpdateSec_ = t;
             dom::Event evt("timeupdate", false, false);
             evt.setIsTrusted(true);
-            js::dispatchDomEvent(jsCtx_, elem_, evt);
+            dom::dispatchDomEvent(elem_, evt);
         }
     }
 
@@ -837,7 +836,7 @@ void ElVideo::pumpEvents() {
         } else {
             dom::Event evt("ended", false, false);
             evt.setIsTrusted(true);
-            js::dispatchDomEvent(jsCtx_, elem_, evt);
+            dom::dispatchDomEvent(elem_, evt);
         }
     }
 }

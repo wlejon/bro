@@ -11,15 +11,8 @@
 // real font metrics. Every one of those needs something the style map alone
 // does not have.
 //
-// WHY IT IS HERE AND NOT IN src/js. It used to be a static function inside
-// style_bindings.cpp, which made it reachable from exactly one caller: the
-// QuickJS realm. The bronze host layer (src/bronze_host) hands a compiled app
-// the same DOM through a different binding surface, and a getComputedStyle
-// there that answered from the inline style — the stub it started as — is not
-// a smaller version of this, it is a different and wrong answer. Two binding
-// layers over one engine must not carry two ideas of what an element's
-// computed width is, so the resolution lives beside the layout it reads from
-// and both bindings call it.
+// The resolution lives beside the layout it reads from so all consumers have
+// a single consistent computed style representation.
 
 #include "dom/element.h"
 

@@ -1,8 +1,8 @@
-// Secondary window hosts — the engine side of bro.window.open().
+// Secondary window hosts — the engine side of secondary windows.
 //
 // Each host owns a real OS window (platform::Window::createSecondary —
-// SDL_WINDOW_OPENGL, NO GL context) AND the isolated document realm rendered
-// into it: its own JSContext, timers, DOM tree and 2D canvas scenes, built from
+// SDL_WINDOW_OPENGL, NO GL context) AND the isolated document rendered
+// into it: its own DOM tree and 2D canvas scenes, built from
 // `opts.src` by the shared sub-document core (engine/sub_document.h) that also
 // backs <iframe>. Per frame the host document records on the main thread,
 // replays into a window-sized GPU surface on the raster thread, and composites
@@ -18,8 +18,7 @@
 // the raster-idle point (processPendingWindowHosts — beside
 // processPendingIframeReloads in the frame loop, and in headless flush()).
 // That is the one point where future chunks can tear down a host's document
-// and GPU surfaces without racing the raster thread, and it keeps 'close'
-// callbacks (which run app JS) off the input-event stack.
+// and GPU surfaces without racing the raster thread.
 
 #include "engine/engine.h"
 #include "engine/config_loader.h"
@@ -27,11 +26,7 @@
 
 #include "dom/document.h"
 #include "dom/event.h"
-#include "js/event_dispatch.h"
-#include "js/runtime.h"
-#include "js/timers.h"
-#include "js/message_serializer.h"
-#include "js/window_host_bindings.h"
+#include "dom/event_dispatch.h"
 #include "canvas/canvas_scene.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
@@ -86,7 +81,6 @@ bool Engine::anyWindowHostFocused() const {
 uint64_t Engine::openWindowHost(const WindowHostOptions& opts) {
     // No primary window (Server mode, or --no-gpu headless where SDL video
     // was never initialized) — there is nothing to share a swap chain with.
-    // The binding turns 0 into a clean JS error.
     if (!window_) return 0;
 
     auto host = std::make_unique<WindowHost>();
@@ -114,7 +108,7 @@ void Engine::processPendingWindowHosts() {
         uint64_t id = h->id;
         // The keyboard cannot stay pointed at a window that is going away.
         if (focusedHostId_ == id) focusedHostId_ = 0;
-        // Document first (frees JS/DOM state the raster thread replays), then
+        // Document first (frees DOM state the raster thread replays), then
         // the surface into the owning context's free list, then the window.
         teardownWindowHostDoc(*h);
         queueIframeSurfaceFree(std::move(h->surface));
@@ -122,17 +116,10 @@ void Engine::processPendingWindowHosts() {
         h->fboTexture = 0;
         h->window.reset();  // destroys the SDL window (no GL context to touch)
         windowHosts_.erase(windowHosts_.begin() + static_cast<ptrdiff_t>(i));
-        // Fire the handle's 'close' AFTER the registry forgot the id, so
-        // handle.closed reads true inside the listener. Runs app JS — legal
-        // here (the drain point runs other JS too, e.g. iframe reload load
-        // events) and never on the input-event stack.
-        if (jsRuntime_)
-            js::windowHostNotifyClosed(jsRuntime_->getContext(), id);
     }
 
     // Creates. A create that fails closes the handle the same way an OS
-    // close would (registry entry removed + 'close' fired), so JS never
-    // holds a forever-pending window.
+    // close would (registry entry removed), so no forever-pending window.
     std::vector<uint64_t> failed;
     for (auto& hptr : windowHosts_) {
         WindowHost* h = hptr.get();
@@ -210,8 +197,6 @@ void Engine::processPendingWindowHosts() {
                 break;
             }
         }
-        if (jsRuntime_)
-            js::windowHostNotifyClosed(jsRuntime_->getContext(), id);
     }
 }
 
@@ -285,28 +270,16 @@ void Engine::compositeWindowHosts() {
     }
 }
 
-void Engine::destroyAllWindowHosts(bool notifyJs) {
+void Engine::destroyAllWindowHosts() {
     if (windowHosts_.empty()) return;
-    std::vector<uint64_t> ids;
-    ids.reserve(windowHosts_.size());
     for (auto& h : windowHosts_) {
-        ids.push_back(h->id);
         teardownWindowHostDoc(*h);
-        // The surface belongs to whichever context replayed it. Windowed, the
-        // raster thread already released it on its way out (rasterThreadFunc's
-        // exit cleanup runs before shutdown() gets here) and this is a no-op.
-        // Headless, the main renderer owns it and ~Engine drains the queue
-        // right after shutdown() returns.
         queueIframeSurfaceFree(std::move(h->surface));
         h->surfW = h->surfH = 0;
         h->fboTexture = 0;
     }
     windowHosts_.clear();  // destroys the SDL windows
     focusedHostId_ = 0;
-    if (notifyJs && jsRuntime_) {
-        for (uint64_t id : ids)
-            js::windowHostNotifyClosed(jsRuntime_->getContext(), id);
-    }
 }
 
 void Engine::closeWindowHost(uint64_t id) {
@@ -346,9 +319,8 @@ void Engine::handleHostResized(uint32_t sdlWindowId, int w, int h) {
     if (WindowHost* host = windowHostBySdlId(sdlWindowId)) {
         host->width = w;
         host->height = h;
-        // The realm's innerWidth/innerHeight + 'resize' event follow at the
-        // next record (syncWindowHostBox) — that runs at the raster-idle point,
-        // so the app JS a resize listener triggers never lands mid-frame.
+        // The document's media viewport and 'resize' event follow at the
+        // next record (syncWindowHostBox).
         uiDirty_ = true;  // repaint the host at its new size
     }
 }
@@ -440,197 +412,41 @@ void Engine::applyChildManifestDefaults(WindowHost& h, const std::string& appDir
 }
 
 // Build one host's document from the already-loaded `source`. Runs at the
-// raster-idle drain only (processPendingWindowHosts). Leaves h.document null if
-// the realm can't be built; the caller treats that like a failed window create,
-// so JS gets a clean 'close' instead of a live handle onto a blank window.
+// raster-idle drain only (processPendingWindowHosts).
 void Engine::createWindowHostDoc(WindowHost& h, SubDocSource& source) {
     SubDocRef ref = windowHostSubDoc(h);
     buildSubDocDocument(ref, source, effectiveColorScheme());
 
-    SubDocRealmOptions ropts;
-    // The host realm's window globals describe ITS window, not the primary one:
-    // window.screen, navigator, and the scoped bro.window.* below all resolve
-    // through the per-JSContext state window_bindings now keeps.
-    ropts.window = h.window.get();
-    ropts.displayScale = h.displayScale;
-    ropts.headless = displayMode_ == DisplayMode::Headless;
-    ropts.settings = settings_.get();
-    ropts.installBroWindow = true;
-    ropts.warnOnWebGL = true;
-    ropts.nowMs = engineNowMs_;
-    ropts.what = "bro.window";
-    buildSubDocRealm(ref, jsRuntime_.get(), this, source, renderer_.get(), ropts);
-
-    runSubDocScripts(ref, source, "bro.window");
     finishSubDocLoad(ref, source, renderer_.get(), audioEngine_.get(), *textMetrics_);
-    // v1 refusal: syncIframes() only walks the app document, so a nested
-    // <iframe> would silently never load. Say so.
     warnNestedIframes(ref, "bro.window");
 
     LOG_INFO("bro.window: loaded document '%s' (%dx%d, id=%llu)",
              source.appDir.c_str(), h.boxW, h.boxH,
              static_cast<unsigned long long>(h.id));
 
-    // 'load' on the PARENT-side handle, once the document is parsed, scripted
-    // and laid out — the same point <iframe> fires its element 'load'. Runs on
-    // the parent realm's context (the handle lives there).
     h.loadFired = true;
-    if (jsRuntime_)
-        js::windowHostNotifyLoaded(jsRuntime_->getContext(), h.id);
 }
 
 void Engine::teardownWindowHostDoc(WindowHost& h) {
-    if (!h.jsCtx && !h.document) return;
+    if (!h.document) return;
     h.hoveredElement = nullptr;
     h.activeElement = nullptr;
-    // Surface deliberately untouched — see teardownSubDoc; every caller routes
-    // it through queueIframeSurfaceFree.
     teardownSubDoc(windowHostSubDoc(h));
 }
 
-// Track the OS window's client size. SDL_EVENT_WINDOW_RESIZED already updated
-// width/height; this is where the layout box and the realm catch up.
 void Engine::syncWindowHostBox(WindowHost& h) {
     int w = std::max(1, h.width);
     int ht = std::max(1, h.height);
     if (w == h.boxW && ht == h.boxH) return;
     h.boxW = w;
     h.boxH = ht;
-    // The parent observes the same resize on its handle ('resize' with
-    // width/height), so an app can react to the user dragging a tool window's
-    // edge without the child having to relay it.
-    if (jsRuntime_)
-        js::windowHostNotifyResized(jsRuntime_->getContext(), h.id, w, ht);
     if (h.document) {
         h.document->setMediaViewport(static_cast<float>(w), static_cast<float>(ht));
         h.document->markDirty();
     }
-    // Per-realm innerWidth/innerHeight + a 'resize' event — the same bridge the
-    // app realm gets in handleResize().
-    if (h.jsCtx) {
-        JSValue global = JS_GetGlobalObject(h.jsCtx);
-        JS_SetPropertyStr(h.jsCtx, global, "innerWidth", JS_NewInt32(h.jsCtx, w));
-        JS_SetPropertyStr(h.jsCtx, global, "innerHeight", JS_NewInt32(h.jsCtx, ht));
-        JS_SetPropertyStr(h.jsCtx, global, "outerWidth", JS_NewInt32(h.jsCtx, w));
-        JS_SetPropertyStr(h.jsCtx, global, "outerHeight", JS_NewInt32(h.jsCtx, ht));
-        JS_FreeValue(h.jsCtx, global);
-    }
-    // A real dom::Event, like the app realm and <iframe> realms get. Fires
-    // this realm's C++ window listeners even without a JSContext.
     dom::Event resizeEvt("resize", /*bubbles=*/false, /*cancelable=*/false);
     resizeEvt.setIsTrusted(true);
-    js::dispatchWindowEvent(h.jsCtx, h.document.get(), resizeEvt);
-    if (h.jsCtx && jsRuntime_) jsRuntime_->executePendingJobs();
-}
-
-// Advance every host document's timers + rAF, and report whether any needs
-// (re)recording this frame. Same role tickIframes plays for <iframe>: host
-// activity has no other route to uiDirty_, so without it an animating secondary
-// window would never re-record.
-// ---------------------------------------------------------------------------
-// Messaging (see the header block on postMessageToWindowHost)
-// ---------------------------------------------------------------------------
-
-namespace {
-
-// Fire a 'message' event at a host realm's window: addEventListener('message')
-// listeners through the window polyfill's dispatcher, plus window.onmessage for
-// the classic handler property. Takes ownership of `data`.
-void dispatchRealmMessage(JSContext* ctx, JSValue data) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue evt = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, evt, "type", JS_NewString(ctx, "message"));
-    JS_SetPropertyStr(ctx, evt, "data", data);  // takes ownership
-    JS_SetPropertyStr(ctx, evt, "target", JS_DupValue(ctx, global));
-
-    JSValue dispatch = JS_GetPropertyStr(ctx, global,
-                                         "__bro_dispatch_window_event");
-    if (JS_IsFunction(ctx, dispatch)) {
-        JSValue type = JS_NewString(ctx, "message");
-        JSValue args[2] = {type, evt};
-        JSValue ret = JS_Call(ctx, dispatch, global, 2, args);
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, type);
-    }
-    JS_FreeValue(ctx, dispatch);
-
-    JSValue onmessage = JS_GetPropertyStr(ctx, global, "onmessage");
-    if (JS_IsFunction(ctx, onmessage)) {
-        JSValue ret = JS_Call(ctx, onmessage, global, 1, &evt);
-        JS_FreeValue(ctx, ret);
-    }
-    JS_FreeValue(ctx, onmessage);
-
-    JS_FreeValue(ctx, evt);
-    JS_FreeValue(ctx, global);
-}
-
-} // namespace
-
-uint64_t Engine::windowHostIdForContext(JSContext* ctx) const {
-    if (!ctx) return 0;
-    for (auto& h : windowHosts_)
-        if (h->jsCtx == ctx) return h->id;
-    return 0;
-}
-
-bool Engine::postMessageToWindowHost(uint64_t id, std::unique_ptr<js::Message> msg) {
-    WindowHost* host = windowHostById(id);
-    if (!host || host->pendingClose) return false;
-    host->inbox.push_back(std::move(msg));
-    uiDirty_ = true;  // make sure a frame reaches the drain point
-    return true;
-}
-
-void Engine::postMessageToParent(uint64_t hostId, std::unique_ptr<js::Message> msg) {
-    hostToParentMessages_.emplace_back(hostId, std::move(msg));
-    uiDirty_ = true;
-}
-
-void Engine::drainWindowHostMessages() {
-    if (!jsRuntime_) return;
-
-    // Children first. Each host's inbox is swapped out before dispatch so a
-    // handler that posts back to its own window queues for the NEXT drain
-    // instead of extending this loop forever.
-    for (auto& hptr : windowHosts_) {
-        WindowHost* h = hptr.get();
-        if (h->inbox.empty()) continue;
-        std::vector<std::unique_ptr<js::Message>> batch;
-        batch.swap(h->inbox);
-        // A window that closed (or failed to build a realm) between post and
-        // drain drops its mail — resolving the destination at DELIVERY time is
-        // what makes a message racing teardown a no-op rather than a crash.
-        if (!h->jsCtx || h->pendingClose) continue;
-        JSContext* ctx = h->jsCtx;
-        for (auto& m : batch) {
-            JSValue data = js::deserializeMessage(ctx, *m);
-            if (JS_IsException(data)) {
-                js::Runtime::checkException(ctx, data);
-                continue;
-            }
-            dispatchRealmMessage(ctx, data);
-        }
-    }
-
-    // Then the parent side, in global post order — taken AFTER the child pass
-    // so a reply posted from a child's 'message' handler lands in this same
-    // drain (one round trip per drain, in both directions).
-    if (!hostToParentMessages_.empty()) {
-        std::vector<std::pair<uint64_t, std::unique_ptr<js::Message>>> batch;
-        batch.swap(hostToParentMessages_);
-        JSContext* ctx = jsRuntime_->getContext();
-        for (auto& [hostId, m] : batch) {
-            JSValue data = js::deserializeMessage(ctx, *m);
-            if (JS_IsException(data)) {
-                js::Runtime::checkException(ctx, data);
-                continue;
-            }
-            // Unknown ids are a no-op inside the binding (handle already gone).
-            js::windowHostNotifyMessage(ctx, hostId, data);
-        }
-    }
-    jsRuntime_->executePendingJobs();
+    dom::dispatchWindowEvent(h.document.get(), resizeEvt);
 }
 
 bool Engine::tickWindowHosts(double nowMs) {
@@ -640,7 +456,6 @@ bool Engine::tickWindowHosts(double nowMs) {
         if (!h->document || h->pendingClose) continue;
         if (tickSubDoc(windowHostSubDoc(*h), nowMs)) active = true;
     }
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
     return active;
 }
 

@@ -4,7 +4,7 @@
 // top-level location.reload() with live listener-bearing MediaQueryLists.
 // The listening lists are strong-pinned by the engine so change delivery
 // works after the app drops its references; every teardown path must release
-// those pins (no crash, and no QuickJS leak assert under a Debug binary).
+// those pins (no crash under teardown).
 //
 // Deliberately does NOT touch bro.settings: engine-group tests run in
 // parallel with the chained settings/style groups that own the persisted

@@ -1,5 +1,4 @@
-// ECMA-402 (`Intl`) is absent from QuickJS, so bro installs a polyfill into
-// every realm at context creation (src/js/js/intl_polyfill.js). Real pages
+// ECMA-402 (`Intl`) support. Real pages
 // reach for it constantly and mostly without naming it: the three.js editor's
 // status bar says "1 Object" / "2 Objects" through Intl.PluralRules, and
 // (1234567).toLocaleString() is how any UI writes a number a human can read.
@@ -86,7 +85,7 @@ assert('a'.localeCompare('b') < 0, 'String#localeCompare routes through Collator
 
 // --- Number/Date prototype hooks -----------------------------------------
 assert((1234567).toLocaleString('en-US') === '1,234,567',
-       'Number#toLocaleString groups (QuickJS aliases it to toString without this)');
+       'Number#toLocaleString groups');
 const d = new Date(2024, 2, 5, 14, 30, 0);   // 5 March 2024, 14:30 local
 assert(d.toLocaleDateString('en-US') === '3/5/2024',
        'en-US writes the month first: ' + d.toLocaleDateString('en-US'));

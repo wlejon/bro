@@ -257,9 +257,8 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
 
     // --- Vector uniforms. One shape per element type; the component count
-    //     divides the data length into the GLsizei `count` GL wants, exactly
-    //     as the QuickJS layer computes it. Registration below stays a fixed
-    //     def() sequence — the lambdas here are only the shared bodies. ---
+    //     divides the data length into the GLsizei `count` GL wants.
+    //     Registration below stays a fixed def() sequence. ---
     using Ctx = webgl::WebGL2RenderingContext;
     auto defFv = [&](const char* name, int comps,
                      void (Ctx::*fn)(webgl::WebGLUniformLocation, GLsizei, const GLfloat*)) {

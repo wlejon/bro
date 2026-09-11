@@ -5,7 +5,6 @@ add_subdirectory(audio_inference)
 add_subdirectory(platform)
 add_subdirectory(svg)
 add_subdirectory(render)
-add_subdirectory(js)
 add_subdirectory(dom)
 add_subdirectory(layout)
 add_subdirectory(canvas)
@@ -62,8 +61,7 @@ if(BRO_BUILD_EXECUTABLES)
     endif()
     target_include_directories(bro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-    # QuickJS's JS_CallInternal has a large stack frame; deep JS recursion
-    # (e.g. Vue template compiler) needs more than the default 1 MB stack.
+    # Set stack size to 8 MB.
     if(MSVC)
         target_link_options(bro PRIVATE /STACK:8388608)
         # GUI subsystem but keep int main() as the entry point.

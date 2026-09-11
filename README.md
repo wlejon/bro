@@ -6,7 +6,7 @@
 [![Download nightly](https://img.shields.io/github/v/release/wlejon/bro?label=download%20nightly)](https://github.com/wlejon/bro/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, audio, and on-device AI wired into javascript, in one native process. QuickJS, a custom layout engine, Skia, and OpenGL. Windows, Mac, and Linux.
+Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, audio, and on-device AI, in one native process. Custom layout engine, Skia, and OpenGL. Windows, Mac, and Linux.
 
 ** this is pre-alpha **
 
@@ -90,9 +90,7 @@ The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc r
 
 ## Architecture
 
-- **QuickJS.** JavaScript engine (ES2020+).
 - **bromath.** Header-only C++20 math: Vec/Quat/Mat, Color, AABB, easing curves. Used transitively by most siblings. See [bromath](https://github.com/wlejon/bromath).
-- **qjsbind.** Header-only C++20 binding library for exposing C++ classes/functions to QuickJS with automatic type conversion. See [qjsbind](https://github.com/wlejon/qjsbind).
 - **brokit.** Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
 - **htmlayout.** HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
 - **broaudio.** Real-time audio engine. See [broaudio](https://github.com/wlejon/broaudio).
@@ -106,14 +104,14 @@ The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc r
 - **brovisionml.** Vision-model inference: SAM segmentation, Depth-Anything-V2 depth, DSINE surface normals, BiRefNet matting, and the ControlNet conditioning annotators (HED, lineart, MLSD, OpenPose, SegFormer). See [brovisionml](https://github.com/wlejon/brovisionml).
 - **broimage.** Image decode/encode (stb) plus composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric ops, alpha-correct compositing, color/HSV/sRGB, normalization presets, and NHWC/NCHW preproc. Backs `bro.image` and host-side preprocessing in brolm/brodiffusion. See [broimage](https://github.com/wlejon/broimage).
 - **bronze.** Ahead-of-time compiler that turns JavaScript into native machine code (LLVM-backed; standalone binaries and a shared runtime). Powers compiled apps in bro via `src/bronze_host` under `BRO_WITH_BRONZE`. See [bronze](https://github.com/wlejon/bronze).
-- **brosurface.** Single-source WebIDL code generation toolchain. Emits QuickJS C++ bindings (`src/js/`), bronze_host C++ bindings (`src/bronze_host/`), availability stubs, JSDoc documentation (`docs/`), and global TypeScript definitions (`types/index.d.ts` and `docs/bro.d.ts`). See [brosurface](https://github.com/wlejon/brosurface).
+- **brosurface.** Single-source WebIDL code generation toolchain. Emits bronze_host C++ bindings (`src/bronze_host/`), availability stubs, JSDoc documentation (`docs/`), and global TypeScript definitions (`types/index.d.ts` and `docs/bro.d.ts`). See [brosurface](https://github.com/wlejon/brosurface).
 - **Jolt Physics.** Rigid body physics with contact listeners, integrated into the scene graph.
 - **Skia.** 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs. Text runs through HarfBuzz shaping and Skia's UAX#9 bidi subset, both compiled from the Skia source bundle and on in every build profile, so ligatures, cursive joining, and RTL reordering are the one text path rather than an optional upgrade.
 - **SDL3.** Windowing, input events, and OpenGL contexts. All GPU work is OpenGL 3.3 Core (via glad) on SDL_GL contexts; there is no SDL_GPU, D3D12, or Metal path. The Skia-rasterized UI texture (Ganesh-GL) and the 3D scene layer are composited together as textured quads in the main GL context.
 
 Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), **glad** (OpenGL 3.3 Core loader), and **FastNoise2** (via brokit).
 
-C++20, roughly 215K lines under `src/`, with the JS bindings in `src/js/` generated directly from IDL specifications. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless JS scripting and testing), and `bro-server` (dedicated game server, a fixed-tickrate JS loop with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
+C++20 under `src/`. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless scripting and testing), and `bro-server` (dedicated game server with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
 ## Building
 

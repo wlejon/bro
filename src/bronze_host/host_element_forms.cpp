@@ -5,7 +5,6 @@
 #include "bronze_host/host_internal.h"
 
 #include "dom/element.h"
-#include "js/dom_bindings.h"
 #include "layout/form_control.h"
 
 #include <string>
@@ -14,8 +13,7 @@
 namespace bro::bronze_host {
 
 namespace {
-// Where a non-reflecting element's `value` actually lives. Same key as the
-// QuickJS binding's, so one <div> has one `value` whichever realm wrote it.
+// Where a non-reflecting element's `value` actually lives.
 constexpr const char* kValueExpando = "__broValue";
 } // namespace
 
@@ -83,7 +81,7 @@ void decorateElementForms(ObjectBuilder& b) {
                },
                nullptr);
 
-    // `checked` writes go through js::clearRadioGroup rather than straight to
+    // `checked` writes go through layout::clearRadioGroup rather than straight to
     // the attribute: a radio's group is cleared however its checkedness became
     // true, not only by a click, and leaving the old member checked would show
     // two picked radios in a group that can only mean one.
@@ -98,7 +96,7 @@ void decorateElementForms(ObjectBuilder& b) {
                    if (!st) return ev::undefined();
                    if (!st->el) return ev::undefined();
                    if (ev::toBool(argAt(a, 0))) {
-                       js::clearRadioGroup(st->el);
+                       layout::clearRadioGroup(st->el);
                        st->el->setAttribute("checked", "");
                    } else {
                        st->el->removeAttribute("checked");

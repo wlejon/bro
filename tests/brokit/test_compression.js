@@ -208,7 +208,7 @@ await expectStreamError(
 }
 
 // ── Teardown safety: abandon a half-written stream mid-flight ────────────
-// (leak-prone path — Debug QuickJS asserts catch dangling codec state)
+// (leak-prone path — tests verify dangling codec state is cleaned up)
 {
     const abandoned = new CompressionStream('gzip');
     const w = abandoned.writable.getWriter();

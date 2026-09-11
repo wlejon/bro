@@ -1,16 +1,7 @@
-// Every GL constant the context object carries, as data properties —
-// `ctx.ARRAY_BUFFER`, `ctx.TRIANGLES`, and the rest of what three.js reads
-// off the context instead of hardcoding.
+// GL constants carried by the context object as data properties —
+// `ctx.ARRAY_BUFFER`, `ctx.TRIANGLES`, and related WebGL2 constants.
 //
-// The values are COPIED from src/js/webgl2_bindings.cpp's webgl2_constants
-// table (bro's QuickJS binding), in that table's order — never written from
-// memory. If a constant is wrong there, it is wrong here, and the fix lands
-// in both places by diffing against that file, which remains the single
-// reference for this surface.
-//
-// One flat array registered by one loop: registration order is array order,
-// deterministic by construction — no map, no sort, no iteration over
-// anything unordered feeding property creation.
+// Registered in deterministic array order.
 
 #include "bronze_host/gl_internal.h"
 
@@ -496,8 +487,7 @@ const ConstantEntry kConstants[] = {
     {"UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER", 0x8A46},
     {"UNIFORM_BLOCK_DATA_SIZE", 0x8A40},
     // getUniformBlockIndex answers this as unsigned 4294967295 — the constant
-    // must match (an int32 -1 would never compare equal in JS). Same note,
-    // same value, as the QuickJS table.
+    // must match (an int32 -1 would never compare equal in JS).
     {"INVALID_INDEX", 4294967295.0},
 };
 

@@ -23,9 +23,7 @@
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/event.h"
-#include "js/runtime.h"
-#include "js/event_dispatch.h"
-#include "js/timers.h"
+#include "dom/event_dispatch.h"
 #include "canvas/canvas_scene.h"
 
 #include <algorithm>
@@ -146,19 +144,9 @@ void Engine::syncIframeBox(IframeDoc& d) {
     // Per-realm innerWidth/innerHeight + a 'resize' event — the same bridge the
     // app realm gets in handleResize() and a secondary window gets in
     // syncWindowHostBox().
-    if (d.jsCtx) {
-        JSValue global = JS_GetGlobalObject(d.jsCtx);
-        JS_SetPropertyStr(d.jsCtx, global, "innerWidth", JS_NewInt32(d.jsCtx, w));
-        JS_SetPropertyStr(d.jsCtx, global, "innerHeight", JS_NewInt32(d.jsCtx, h));
-        JS_FreeValue(d.jsCtx, global);
-    }
-    // A real dom::Event, so a C++ window listener on this sub-document's
-    // realm gets the same object shape as one on the app realm. Fires the
-    // realm's C++ listeners even when it has no JSContext.
     dom::Event resizeEvt("resize", /*bubbles=*/false, /*cancelable=*/false);
     resizeEvt.setIsTrusted(true);
-    js::dispatchWindowEvent(d.jsCtx, d.document.get(), resizeEvt);
-    if (d.jsCtx && jsRuntime_) jsRuntime_->executePendingJobs();
+    dom::dispatchWindowEvent(d.document.get(), resizeEvt);
 }
 
 void Engine::syncAllIframeBoxes() {
@@ -184,50 +172,10 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     SubDocRef ref = iframeSubDoc(*dp);
     buildSubDocDocument(ref, source, effectiveColorScheme());
 
-    SubDocRealmOptions ropts;
-    ropts.window = window_.get();
-    ropts.displayScale = displayScale_;
-    ropts.headless = displayMode_ == DisplayMode::Headless;
-    ropts.settings = settings_.get();
-    ropts.nowMs = engineNowMs_;
-    ropts.what = "iframe";
-    buildSubDocRealm(ref, jsRuntime_.get(), this, source, renderer_.get(), ropts);
-
-    // location.reload() inside the sub-document reloads THIS iframe — the same
-    // deferred teardown/rebuild as the host calling iframe.reload(). The hook
-    // resolves the iframe by id at call time, so a call racing the sub-doc's
-    // own destruction (already torn down, id gone) is a safe no-op.
-    {
-        JSValue global = JS_GetGlobalObject(dp->jsCtx);
-        JSValue fdata[2] = {
-            JS_NewInt64(dp->jsCtx,
-                        static_cast<int64_t>(reinterpret_cast<intptr_t>(this))),
-            JS_NewInt64(dp->jsCtx, static_cast<int64_t>(dp->id)),
-        };
-        JS_SetPropertyStr(dp->jsCtx, global, "__bro_location_reload",
-            JS_NewCFunctionData(dp->jsCtx, [](JSContext* cx, JSValue, int,
-                                              JSValue*, int, JSValue* fd) -> JSValue {
-                int64_t p = 0, id = 0;
-                JS_ToInt64(cx, &p, fd[0]);
-                JS_ToInt64(cx, &id, fd[1]);
-                auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
-                if (self) {
-                    if (auto* d = self->iframeDocById(static_cast<uint64_t>(id)))
-                        self->reloadIframe(d->element);
-                }
-                return JS_UNDEFINED;
-            }, 0, 0, 2, fdata));
-        JS_FreeValue(dp->jsCtx, fdata[0]);
-        JS_FreeValue(dp->jsCtx, fdata[1]);
-        JS_FreeValue(dp->jsCtx, global);
-    }
-
-    // Register before running scripts so the getContext factory + element hook
-    // resolve during script execution.
+    // Register before finishSubDocLoad so element hooks resolve.
     iframeDocs_.push_back(std::move(doc));
     el->setIframeDoc(dp);
 
-    runSubDocScripts(ref, source, "iframe");
     finishSubDocLoad(ref, source, renderer_.get(), audioEngine_.get(), *textMetrics_);
 
     LOG_INFO("iframe: loaded sub-document '%s' (%dx%d, id=%llu)",
@@ -235,11 +183,9 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
              static_cast<unsigned long long>(dp->id));
 
     // Fire a non-bubbling "load" event on the host-side <iframe> element once the
-    // sub-document is parsed, scripted, and laid out — the signal host code waits
-    // on before it looks at or drives the embedded app. Dispatched on the host
-    // document's context (the element lives in the host realm).
+    // sub-document is parsed and laid out.
     dom::Event loadEvent("load", /*bubbles=*/false, /*cancelable=*/false);
-    js::dispatchDomEvent(jsRuntime_->getContext(), el, loadEvent);
+    dom::dispatchDomEvent(el, loadEvent);
 }
 
 // Request an <iframe>'s sub-document be reloaded from its current src. This is
@@ -346,13 +292,11 @@ bool Engine::tickIframes(double nowMs) {
     for (auto& d : iframeDocs_) {
         if (tickSubDoc(iframeSubDoc(*d), nowMs)) active = true;
     }
-    jsRuntime_->executePendingJobs();
     return active;
 }
 
 // Tear down one iframe sub-document. Destroy order mirrors destroySystemPanels:
-// timers → DOM bindings → document (fires Element finalizers into the still-live
-// canvasScenes) → JSContext. canvasScenes (a member, declared before `document`)
+// timers → document. canvasScenes (a member, declared before `document`)
 // destruct when the owning IframeDoc unique_ptr is finally erased.
 //
 // Deliberately does NOT touch doc->surface: it belongs to whichever GL context

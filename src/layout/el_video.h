@@ -6,8 +6,6 @@
 #include <memory>
 #include <string>
 
-extern "C" { typedef struct JSContext JSContext; }
-
 namespace bro::dom { class Element; }
 namespace bro::video { class VideoPipeline; class MediaSource; class AudioDecoder; }
 namespace broaudio { class Engine; }
@@ -34,10 +32,7 @@ public:
     void setElement(dom::Element* el) { elem_ = el; }
     dom::Element* element() const { return elem_; }
 
-    // Set once by the engine so media events (loadedmetadata, timeupdate,
-    // ended) can be dispatched to JS listeners. Null in contexts without a
-    // JS runtime — events are silently dropped in that case.
-    void setJsContext(JSContext* ctx) { jsCtx_ = ctx; }
+
 
     // Set once by the engine so decoded audio can be routed through the
     // shared broaudio graph. Null in contexts without an audio engine.
@@ -104,10 +99,9 @@ public:
 
     bro::video::VideoPipeline* pipeline() const { return pipeline_; }
 
-    // Dispatch any pending HTMLMediaElement events on the element's JS
-    // listeners. MUST be called on the main thread — uses the JSContext
-    // passed via setJsContext(). draw() runs on the raster thread, so the
-    // engine pumps events from its main loop instead.
+    // Dispatch any pending HTMLMediaElement events on the element's
+    // listeners. MUST be called on the main thread. draw() runs on the raster
+    // thread, so the engine pumps events from its main loop instead.
     void pumpEvents();
 
     // Pull the pipeline up to its clock without drawing anything.
@@ -137,10 +131,7 @@ private:
     // still reports the spec's 300x150 fallback rather than 0.
     bool hasPicture_ = true;
 
-    // Event-lifecycle bookkeeping. ElVideo fires media events during draw()
-    // (on the main thread, with a known JSContext). Fields here latch what
-    // still needs to be dispatched on the next pump.
-    JSContext* jsCtx_ = nullptr;
+    // Event-lifecycle bookkeeping.
     bool pendingLoadedMetadata_ = false;
     bool pendingCanPlayThrough_ = false;
     bool endedFired_ = false;

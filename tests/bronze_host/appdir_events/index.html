@@ -14,12 +14,12 @@
 </head>
 <!-- THE HYBRID APP DIR. Unlike src/bronze_host/fixtures/appdir, this one is not an
      empty page holding a compiled program's place: it carries interpreted UI
-     JS of its own, running in the Engine's QuickJS realm, beside a compiled
+     JS of its own, running in the Engine's page realm, beside a compiled
      app running as machine code — the two halves the bro.json's
      `"compiled": true` declares.
 
      They share the Engine's DOM, on one thread, and they talk through it. This
-     script never sees a bronze value and the compiled app never sees a QuickJS
+     script never sees a bronze value and the compiled app never sees a script host
      one; what crosses is a CustomEvent with a string `detail`, dispatched on a
      document both of them already have. -->
 <body>

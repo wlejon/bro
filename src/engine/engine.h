@@ -5,6 +5,7 @@
 #include "engine/dom_undo.h"
 #include "engine/engine_config.h"
 #include "engine/engine_types.h"
+#include "engine/frame_presenter.h"
 #include "engine/gamepad.h"
 #include "engine/iframe.h"
 #include "engine/inspector_state.h"
@@ -20,7 +21,6 @@
 #include "dom/event_target.h"
 #include "dom/node_handle.h"
 #include "engine/drag_drop.h"
-#include "js/message_queue.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "render/skia_backend.h"
@@ -43,7 +43,6 @@
 #include <glad/gl.h>
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
-#include <quickjs.h>
 
 typedef struct SDL_GLContextState* SDL_GLContext;
 
@@ -64,13 +63,11 @@ namespace bro::steam { class SteamService; }
 namespace bro::scene { class SceneGraph; class HtmlNode; struct CullStats; }
 namespace bro::canvas { class CanvasScene; class CanvasRasterThread; }
 namespace bro::platform { class Window; class EventLoop; }
-namespace bro::js { class Runtime; class Timers; }
 namespace bro::dom { class Document; class Element; class Event; class TextNode; }
 namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }
 
 namespace bro::engine {
 
-class FramePresenter;
 class LayoutPipeline;
 class AudioInference;
 struct SubDocRef;
@@ -161,12 +158,6 @@ public:
     void handleHostMinimized(uint32_t sdlWindowId, bool minimized);
     void handleHostOccluded(uint32_t sdlWindowId, bool occluded);
     void processPendingWindowHosts();
-
-    // Messaging between window host and app realm
-    bool postMessageToWindowHost(uint64_t id, std::unique_ptr<js::Message> msg);
-    void postMessageToParent(uint64_t hostId, std::unique_ptr<js::Message> msg);
-    void drainWindowHostMessages();
-    uint64_t windowHostIdForContext(JSContext* ctx) const;
 
     // Per-window input routing (window_host_input.cpp)
     void hostMouseDown(uint64_t hostId, float x, float y, int sdlButton);
@@ -262,8 +253,6 @@ public:
     bool processPendingAppReload();
     std::vector<uint8_t> captureIframe(dom::Element* el, int& outW, int& outH);
 
-    js::Runtime* jsRuntime() const { return jsRuntime_.get(); }
-    js::Timers* timers() const { return timers_.get(); }
     void onFrame(std::function<void(double dtMs)> cb) {
         frameCallbacks_.push_back(std::move(cb));
     }
@@ -339,10 +328,7 @@ public:
     DisplayMode displayMode() const { return displayMode_; }
 
     /// The platform window, or nullptr in Server mode (Headless still has one
-    /// — a hidden SDL window, which is what keeps the GPU path real). Exposed
-    /// because a binding layer that is not the QuickJS realm has no other way
-    /// to reach it: the JS side finds its window through a per-realm map that
-    /// only realms are in.
+    /// — a hidden SDL window, which is what keeps the GPU path real).
     platform::Window* window() const { return window_.get(); }
 
     /// The app directory this Engine was booted from, absolute. Exposed for
@@ -380,9 +366,6 @@ public:
     void inspectorSetPickerMode(bool on);
     void inspectorPickElement(dom::Element* el);
     void inspectorSelectById(int id);
-    JSValue inspectorBuildTreeJS(JSContext* ctx, int maxDepth);
-    JSValue inspectorChildrenJS(JSContext* ctx, int parentId);
-    JSValue inspectorSelectedJS(JSContext* ctx);
 
     double virtualTime() const { return virtualTime_; }
 
@@ -472,6 +455,9 @@ private:
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
     void compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO = 0,
                          int offsetY = 0, int layerW = -1, int layerH = -1);
+    FramePresenter::Snapshot buildRasterSnapshot() const;
+    void renderAndPresentFrame(double frameStart, double now, double wallFrameDtMs,
+                               bool layoutSignaled, bool baseWasDirty);
 
     void recordAppLayers(render::CommandBuffer& outBuffer,
                          int vpW, int vpH,
@@ -500,7 +486,6 @@ private:
     void ensureReplacedElements(dom::Element* elem);
 
     // App-realm lifecycle (engine_init.cpp + app_reload.cpp)
-    void installCoreBindings(JSContext* ctx);
     void initAppRealm();
     void performAppReload();
     void resetMenuBarDefaults();
@@ -510,7 +495,6 @@ private:
     void destroySystemPanels();
     void loadSystemPanels(const std::string& systemDir);
     void scanSystemPanelDir(const std::string& baseDir, const std::string& relPath);
-    void installBroObject(SystemDocument& doc);
     bool isSystemDocVisible(const SystemDocument& doc) const;
     void toggleSystemPerf();
     void toggleSystemSettings();
@@ -576,8 +560,6 @@ private:
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<render::GLContext> gl_;
     std::unique_ptr<render::Renderer> renderer_;
-    std::unique_ptr<js::Runtime> jsRuntime_;
-    std::unique_ptr<js::Timers> timers_;
     std::unique_ptr<dom::Document> document_;
     TransitionManager transitionManager_;
     AnimationManager animationManager_;
@@ -609,10 +591,8 @@ private:
     float displayScale_ = 1.0f;
     std::string resolvedCursor_ = "default";
 
-    JSValue observerCheckFn_ = JS_UNDEFINED;
     AppManifest manifest_;
     std::string appDir_;
-    std::function<void(JSContext*)> installHostBindings_;
     std::string titleOverride_;
     util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
@@ -691,7 +671,6 @@ private:
     std::vector<std::unique_ptr<WindowHost>> windowHosts_;
     uint64_t nextWindowHostId_ = 1;
     uint64_t focusedHostId_ = 0;
-    std::vector<std::pair<uint64_t, std::unique_ptr<js::Message>>> hostToParentMessages_;
     void applyChildManifestDefaults(WindowHost& h, const std::string& appDir);
     void compositeWindowHosts();
     void createWindowHostDoc(WindowHost& h, struct SubDocSource& source);
@@ -700,7 +679,7 @@ private:
     bool tickWindowHosts(double nowMs);
     void recordWindowHostLayers();
     void replayWindowHostLayers(render::SkiaRenderer* renderer);
-    void destroyAllWindowHosts(bool notifyJs);
+    void destroyAllWindowHosts();
 
     // Window host input internals (window_host_input.cpp)
     dom::Element* windowHostHitTest(WindowHost& h, float x, float y);
@@ -876,7 +855,5 @@ private:
     unsigned int uiQuadVAO_ = 0;
     unsigned int uiQuadVBO_ = 0;
 };
-
-Engine* engineForContext(JSContext* ctx);
 
 } // namespace bro::engine

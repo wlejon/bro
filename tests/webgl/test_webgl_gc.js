@@ -1,8 +1,6 @@
 // WebGL2 object lifetime / GC churn — WebGL object wrappers (buffers,
-// textures, shaders, programs, FBOs, RBOs, VAOs, uniform locations) are a
-// QuickJS GC-hazard class. Create/delete churn plus dropped references, with
-// periodic virtual-time GC sweeps; Debug builds assert on leaked JS values at
-// teardown. Exercises the qjsbind wrappers in src/js/webgl2_bindings*.cpp.
+// textures, shaders, programs, FBOs, RBOs, VAOs, uniform locations).
+// Create/delete churn plus dropped references, with periodic GC sweeps.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '32');

@@ -39,7 +39,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 
-#include "js/asset_path.h"
+#include "util/asset_path.h"
 #include "util/object_url.h"
 #include "util/remote_asset.h"
 #include "util/log.h"
@@ -161,7 +161,7 @@ Value xhrSend(Value thisValue, std::span<const Value>) {
         xhr->statusText = "OK";
         xhr->ok = true;
     } else {
-        const std::string path = js::resolveAssetPath(xhr->url);
+        const std::string path = util::resolveAssetPath(xhr->url);
         if (readWholeFile(path, xhr->responseText)) {
             xhr->status = 200;
             xhr->statusText = "OK";

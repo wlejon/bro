@@ -33,7 +33,7 @@
 #include "runtime/heap.h"
 #include "runtime/value.h"
 
-#include "js/asset_path.h"
+#include "util/asset_path.h"
 #include "util/object_url.h"
 #include "util/remote_asset.h"
 #include "util/log.h"
@@ -461,7 +461,7 @@ Value fetchCall(Value, std::span<const Value> a) {
             resp->statusText = "OK";
             resp->ok = true;
         } else {
-            const std::string path = js::resolveAssetPath(url);
+            const std::string path = util::resolveAssetPath(url);
             std::ifstream in(path, std::ios::binary);
             if (in) {
                 in.seekg(0, std::ios::end);

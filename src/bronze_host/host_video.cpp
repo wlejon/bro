@@ -21,17 +21,10 @@
 // without the engine handing it over.
 //
 // ---------------------------------------------------------------------------
-// finish() IS NOT OPTIONAL HERE, and this is the one place this layer's
-// behaviour genuinely differs from bro's JS.
+// finish() is required to ensure complete output files.
 //
-// Both encoders finish from their destructor, so on the QuickJS side a program
-// that forgets `finish()` still gets a complete file: the context teardown
-// frees every object and the destructor runs. bronze has no teardown sweep —
-// a handle's destructor runs from the post-collection hook of a collection
-// that actually reclaims it (runtime/heap.cpp), and nothing collects at exit.
-// So an encoder the program drops on the floor is finished only if a GC
-// happens to reclaim it first, and otherwise the file keeps whatever the muxer
-// had written and no trailer.
+// Both encoders write trailers from finish(). An encoder dropped without
+// calling finish() may keep only what was flushed prior and lack final metadata.
 //
 // The destructor still calls finish(), because the collection case is real and
 // a half-written file is worse than a closed one. But the contract this layer

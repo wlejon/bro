@@ -1,10 +1,8 @@
-// Implementation notes live in form_control.h. Every rule below was moved
-// verbatim out of src/js/element_bindings.cpp — its comments came with it,
-// because they record WHY the rule is what it is and that is the part a
-// reimplementation would lose.
+// Form control IDL properties and DOM interaction helpers.
 
 #include "layout/form_control.h"
 
+#include "dom/document.h"
 #include "layout/el_input.h"
 #include "layout/el_select.h"
 #include "layout/el_textarea.h"
@@ -219,6 +217,55 @@ int tabIndex(const dom::Element* el) {
 
 void setTabIndex(dom::Element* el, int value) {
     if (el) el->setAttribute("tabindex", std::to_string(value));
+}
+
+bool isRadioInput(dom::Element* el) {
+    if (!el) return false;
+    const std::string& tag = el->tagName();
+    if (tag != "INPUT" && tag != "input") return false;
+    return el->getAttribute("type") == "radio";
+}
+
+dom::Element* formOwnerOf(dom::Element* el) {
+    for (auto* p = el ? el->parentElement() : nullptr; p; p = p->parentElement()) {
+        const std::string& tag = p->tagName();
+        if (tag == "FORM" || tag == "form") return p;
+    }
+    return nullptr;
+}
+
+void clearRadioGroup(dom::Element* el) {
+    if (!isRadioInput(el)) return;
+    const std::string name = el->getAttribute("name");
+    if (name.empty()) return;
+    auto* doc = el->document();
+    auto* root = doc ? doc->documentElement() : nullptr;
+    if (!root) return;
+    auto* owner = formOwnerOf(el);
+    for (auto* other : root->querySelectorAll("input[type=\"radio\"]")) {
+        if (other == el) continue;
+        if (other->getAttribute("name") != name) continue;
+        if (formOwnerOf(other) != owner) continue;
+        other->removeAttribute("checked");
+    }
+}
+
+dom::Element* checkedRadioInGroup(dom::Element* el) {
+    if (!isRadioInput(el)) return nullptr;
+    if (el->hasAttribute("checked")) return el;
+    const std::string name = el->getAttribute("name");
+    if (name.empty()) return nullptr;
+    auto* doc = el->document();
+    auto* root = doc ? doc->documentElement() : nullptr;
+    if (!root) return nullptr;
+    auto* owner = formOwnerOf(el);
+    for (auto* other : root->querySelectorAll("input[type=\"radio\"]")) {
+        if (other == el) continue;
+        if (other->getAttribute("name") != name) continue;
+        if (formOwnerOf(other) != owner) continue;
+        if (other->hasAttribute("checked")) return other;
+    }
+    return nullptr;
 }
 
 }  // namespace bro::layout

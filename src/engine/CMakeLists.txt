@@ -1,29 +1,3 @@
-## ── Embed JS scripts as C++ headers at build time ────────────────────────────
-set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
-set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-file(MAKE_DIRECTORY "${GEN_DIR}")
-
-function(embed_js JS_FILE VAR_NAME)
-    set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/js/${JS_FILE}")
-    set(OUTPUT "${GEN_DIR}/${JS_FILE}.h")
-    add_custom_command(
-        OUTPUT  "${OUTPUT}"
-        COMMAND ${CMAKE_COMMAND}
-                -DINPUT="${INPUT}"
-                -DOUTPUT="${OUTPUT}"
-                -DVAR_NAME="${VAR_NAME}"
-                -P "${EMBED_SCRIPT}"
-        DEPENDS "${INPUT}" "${EMBED_SCRIPT}"
-        COMMENT "Embedding js/${JS_FILE} -> ${JS_FILE}.h"
-    )
-    list(APPEND GENERATED_HEADERS "${OUTPUT}")
-    set(GENERATED_HEADERS "${GENERATED_HEADERS}" PARENT_SCOPE)
-endfunction()
-
-embed_js(observer_check.js  js_observer_check)
-
-## ── Library ──────────────────────────────────────────────────────────────────
-
 add_library(bro_engine STATIC
     app_reload.cpp
     engine.cpp
@@ -37,9 +11,16 @@ add_library(bro_engine STATIC
     engine_lifecycle.cpp
     engine_threads.cpp
     engine_frame.cpp
+    engine_frame_render.cpp
     css_transitions.cpp
     web_animations.cpp
-    input_handling.cpp
+    input_common.cpp
+    input_editable.cpp
+    input_keyboard.cpp
+    input_mouse.cpp
+    input_mouse_move.cpp
+    input_text.cpp
+    input_wheel_drag.cpp
     drag_drop.cpp
     action_input.cpp
     touch_input.cpp
@@ -53,6 +34,7 @@ add_library(bro_engine STATIC
     config_loader.cpp
     launcher.cpp
     replaced_elements.cpp
+    replaced_elements_input.cpp
     system_panels.cpp
     iframe.cpp
     sub_document.cpp
@@ -64,7 +46,6 @@ add_library(bro_engine STATIC
     color_picker_overlay.cpp
     menu_bar.cpp
     inspector_highlight.cpp
-    ${GENERATED_HEADERS}
 )
 # navmesh_subsystem.cpp needs brogameagent; compile only when BRO_WITH_GAMEAI.
 if(BRO_WITH_GAMEAI)
@@ -73,11 +54,10 @@ endif()
 # gizmo.cpp / gizmo_routing.cpp are 3D-only (scene::MeshNode + bromesh); compile
 # them only when BRO_WITH_3D. Their engine call sites are #if-guarded too.
 if(BRO_WITH_3D)
-    target_sources(bro_engine PRIVATE gizmo.cpp gizmo_routing.cpp)
+    target_sources(bro_engine PRIVATE gizmo.cpp gizmo_mesh.cpp gizmo_routing.cpp)
 endif()
 target_include_directories(bro_engine PUBLIC ${bro_SOURCE_DIR}/src)
-target_include_directories(bro_engine PRIVATE ${GEN_DIR})
-target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_js bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util bro_c_abi glad)
+target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util bro_c_abi glad)
 # <img> intrinsic sizing probes WebP headers too, so the engine needs the same
 # decoder the two image paths use (render/webp_image.h).
 if(BRO_WITH_WEBP)

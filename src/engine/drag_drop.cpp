@@ -2,8 +2,8 @@
 
 #include "dom/element.h"
 #include "dom/event.h"
+#include "dom/event_dispatch.h"
 #include "engine/replaced_elements.h"
-#include "js/event_dispatch.h"
 
 #include <cmath>
 #include <string>
@@ -12,14 +12,8 @@ namespace bro::engine {
 
 namespace {
 
-// How far the pointer must travel before a press becomes a drag. Below this a
-// press-and-release is a click, and a hand that shakes on the button does not
-// start dragging things around.
 constexpr float kDragThreshold = 4.0f;
 
-/// The nearest ancestor (self included) marked draggable. `draggable` is a
-/// real attribute, not a boolean one: only "true" enables it, and "false"
-/// turns it off for a subtree that would otherwise inherit nothing anyway.
 dom::Element* draggableAncestor(dom::Element* el) {
     for (auto* e = el; e; e = e->parentElement()) {
         if (!e->hasAttribute("draggable")) continue;
@@ -31,49 +25,16 @@ dom::Element* draggableAncestor(dom::Element* el) {
     return nullptr;
 }
 
-/// Create the session's DataTransfer and park it where the binding layer
-/// looks for it. One object for the whole gesture — see DragEvent::isSessionDrag.
-void openDataTransfer(JSContext* ctx) {
-    if (!ctx) return;
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue factory = JS_GetPropertyStr(ctx, global, "__bro_newDataTransfer");
-    JSValue dt = JS_UNDEFINED;
-    if (JS_IsFunction(ctx, factory)) {
-        dt = JS_Call(ctx, factory, JS_UNDEFINED, 0, nullptr);
-        if (JS_IsException(dt)) {
-            JS_FreeValue(ctx, JS_GetException(ctx));
-            dt = JS_UNDEFINED;
-        }
-    }
-    JS_FreeValue(ctx, factory);
-    if (JS_IsUndefined(dt)) dt = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, global, "__bro_dragDataTransfer", dt);
-    JS_FreeValue(ctx, global);
-}
-
-void closeDataTransfer(JSContext* ctx) {
-    if (!ctx) return;
-    JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "__bro_dragDataTransfer", JS_UNDEFINED);
-    JS_FreeValue(ctx, global);
-}
-
-/// Dispatch one drag event and report whether its default was prevented,
-/// which is how a target says "you may drop here".
-bool fireDrag(JSContext* ctx, dom::Element* target, const char* type,
-              float x, float y) {
-    if (!ctx || !target) return false;
+bool fireDrag(dom::Element* target, const char* type, float x, float y) {
+    if (!target) return false;
     dom::DragEvent evt(type, /*bubbles=*/true, /*cancelable=*/true);
     evt.setSessionDrag(true);
     evt.setIsTrusted(true);
     evt.setClientX(x);   evt.setClientY(y);
     evt.setScreenX(x);   evt.setScreenY(y);
     evt.setPageX(x);     evt.setPageY(y);
-    // offsetX/offsetY relative to the target. Drop handlers lean on it hard —
-    // "did this land on the top quarter, the middle, or the bottom quarter?"
-    // is how a tree decides between reordering and reparenting.
     applyMouseOffset(evt, target);
-    js::dispatchDomEvent(ctx, target, evt);
+    dom::dispatchDomEvent(target, evt);
     return evt.defaultPrevented();
 }
 
@@ -91,12 +52,9 @@ void DragDrop::arm(dom::Element* target, float x, float y) {
     armed_ = true;
 }
 
-bool DragDrop::update(JSContext* ctx, dom::Element* under, float x, float y,
-                      int buttons) {
-    // The button went away without a mouseup we saw (focus loss, a modal):
-    // end the gesture rather than dragging forever.
+bool DragDrop::update(dom::Element* under, float x, float y, int buttons) {
     if (active_ && (buttons & 1) == 0) {
-        cancel(ctx);
+        cancel();
         return false;
     }
 
@@ -110,10 +68,7 @@ bool DragDrop::update(JSContext* ctx, dom::Element* under, float x, float y,
         candidate_.reset();
         if (!src) return false;
 
-        openDataTransfer(ctx);
-        // A source that cancels dragstart refuses to be dragged.
-        if (fireDrag(ctx, src, "dragstart", x, y)) {
-            closeDataTransfer(ctx);
+        if (fireDrag(src, "dragstart", x, y)) {
             return false;
         }
         source_.assign(src->document(), src);
@@ -123,18 +78,13 @@ bool DragDrop::update(JSContext* ctx, dom::Element* under, float x, float y,
     }
 
     if (dom::Element* src = source_.get())
-        fireDrag(ctx, src, "drag", x, y);
+        fireDrag(src, "drag", x, y);
 
     dom::Element* prev = target_.get();
     if (under != prev) {
-        // dragleave first, so a handler that clears its highlight runs before
-        // the next element sets one.
-        if (prev) fireDrag(ctx, prev, "dragleave", x, y);
+        if (prev) fireDrag(prev, "dragleave", x, y);
         if (under) {
-            // dragenter is the first chance to accept the drop, and a target
-            // that accepts there without repeating it on every dragover is
-            // common enough to honour.
-            dropAllowed_ = fireDrag(ctx, under, "dragenter", x, y);
+            dropAllowed_ = fireDrag(under, "dragenter", x, y);
             target_.assign(under->document(), under);
         } else {
             target_.reset();
@@ -143,42 +93,38 @@ bool DragDrop::update(JSContext* ctx, dom::Element* under, float x, float y,
     }
 
     if (dom::Element* t = target_.get()) {
-        // Each dragover re-answers the question: a target may accept only part
-        // of itself, or change its mind as the pointer moves across it.
-        if (fireDrag(ctx, t, "dragover", x, y)) dropAllowed_ = true;
+        if (fireDrag(t, "dragover", x, y)) dropAllowed_ = true;
     }
     return true;
 }
 
-bool DragDrop::finish(JSContext* ctx, dom::Element* under, float x, float y) {
+bool DragDrop::finish(dom::Element* under, float x, float y) {
     armed_ = false;
     candidate_.reset();
     if (!active_) return false;
 
     dom::Element* t = under ? under : target_.get();
-    if (dropAllowed_ && t) fireDrag(ctx, t, "drop", x, y);
+    if (dropAllowed_ && t) fireDrag(t, "drop", x, y);
 
-    if (dom::Element* src = source_.get()) fireDrag(ctx, src, "dragend", x, y);
+    if (dom::Element* src = source_.get()) fireDrag(src, "dragend", x, y);
 
     source_.reset();
     target_.reset();
     active_ = false;
     dropAllowed_ = false;
-    closeDataTransfer(ctx);
     return true;
 }
 
-void DragDrop::cancel(JSContext* ctx) {
+void DragDrop::cancel() {
     armed_ = false;
     candidate_.reset();
     if (!active_) return;
-    if (dom::Element* prev = target_.get()) fireDrag(ctx, prev, "dragleave", 0, 0);
-    if (dom::Element* src = source_.get()) fireDrag(ctx, src, "dragend", 0, 0);
+    if (dom::Element* prev = target_.get()) fireDrag(prev, "dragleave", 0, 0);
+    if (dom::Element* src = source_.get()) fireDrag(src, "dragend", 0, 0);
     source_.reset();
     target_.reset();
     active_ = false;
     dropAllowed_ = false;
-    closeDataTransfer(ctx);
 }
 
 } // namespace bro::engine

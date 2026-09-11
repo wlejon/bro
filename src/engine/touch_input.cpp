@@ -31,9 +31,7 @@
 #include "engine/overlay.h"
 #include "engine/replaced_elements.h"
 
-#include "js/runtime.h"
-#include "js/event_dispatch.h"
-#include "js/dom_bindings.h"
+#include "dom/event_dispatch.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -64,7 +62,7 @@ Engine::TouchContact* Engine::touchByFinger(uint64_t fingerId) {
 
 bool Engine::dispatchTouchPointerEvent(const char* type, const TouchContact& c,
                                        bool cancelable) {
-    if (!jsRuntime_ || !document_) return false;
+    if (!document_) return false;
 
     const bool isDown   = std::strcmp(type, "pointerdown") == 0;
     const bool isMove   = std::strcmp(type, "pointermove") == 0;
@@ -114,7 +112,7 @@ bool Engine::dispatchTouchPointerEvent(const char* type, const TouchContact& c,
         pe.setIsPrimaryPointer(c.primary);
         pe.setPressure(ends ? 0.0 : static_cast<double>(c.pressure));
         applyMouseOffset(pe, target);
-        js::dispatchDomEvent(jsRuntime_->getContext(), target, pe);
+        dom::dispatchDomEvent(target, pe);
         prevented = pe.defaultPrevented();
     }
 
@@ -135,122 +133,18 @@ bool Engine::dispatchTouchPointerEvent(const char* type, const TouchContact& c,
 // ---------------------------------------------------------------------------
 
 // Wrap a JS array of Touch objects in a polyfill TouchList. Consumes `arr`.
-static JSValue makeJsTouchList(JSContext* ctx, JSValue arr) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor = JS_GetPropertyStr(ctx, global, "TouchList");
-    JSValue list = JS_IsConstructor(ctx, ctor)
-        ? JS_CallConstructor(ctx, ctor, 1, &arr)
-        : JS_DupValue(ctx, arr);   // degrade to the raw array
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    JS_FreeValue(ctx, arr);
-    return list;
-}
-
 bool Engine::dispatchTouchEvent(const char* type, const TouchContact& changed,
                                 bool cancelable) {
-    if (!jsRuntime_ || !document_) return false;
+    if (!document_) return false;
     // Touch events fire at the contact's touchstart target for its whole
     // lifetime (W3C targeting rule) — a finger sliding off the element keeps
-    // reporting to it. Target freed by earlier JS ⇒ nothing to dispatch to.
+    // reporting to it.
     dom::Element* target = changed.startTarget.get();
     if (!target) return false;
 
-    JSContext* ctx = jsRuntime_->getContext();
-    const float ct = static_cast<float>(contentTop());
-    const float scroll = scrollY_;
-
-    // Build a JS `Touch` instance via the polyfill constructor.
-    // Touch.identifier is the contact's pointerId, so the pointer and touch
-    // streams correlate 1:1.
-    auto makeJsTouch = [&](const TouchContact& c,
-                           dom::Element* touchTarget) -> JSValue {
-        JSValue opts = JS_NewObject(ctx);
-        float clientY = c.y - ct;
-        JS_SetPropertyStr(ctx, opts, "identifier", JS_NewInt32(ctx, c.pointerId));
-        JS_SetPropertyStr(ctx, opts, "target",
-                          touchTarget ? js::DomBindings::wrapElement(ctx, touchTarget)
-                                      : JS_NULL);
-        JS_SetPropertyStr(ctx, opts, "clientX", JS_NewFloat64(ctx, c.x));
-        JS_SetPropertyStr(ctx, opts, "clientY", JS_NewFloat64(ctx, clientY));
-        JS_SetPropertyStr(ctx, opts, "pageX", JS_NewFloat64(ctx, c.x));
-        JS_SetPropertyStr(ctx, opts, "pageY", JS_NewFloat64(ctx, clientY + scroll));
-        JS_SetPropertyStr(ctx, opts, "screenX", JS_NewFloat64(ctx, c.x));
-        JS_SetPropertyStr(ctx, opts, "screenY", JS_NewFloat64(ctx, c.y));
-        JS_SetPropertyStr(ctx, opts, "force", JS_NewFloat64(ctx, c.pressure));
-
-        JSValue global = JS_GetGlobalObject(ctx);
-        JSValue ctor = JS_GetPropertyStr(ctx, global, "Touch");
-        JSValue touch = JS_IsConstructor(ctx, ctor)
-            ? JS_CallConstructor(ctx, ctor, 1, &opts)
-            : JS_UNDEFINED;
-        JS_FreeValue(ctx, ctor);
-        JS_FreeValue(ctx, global);
-        JS_FreeValue(ctx, opts);
-        return touch;
-    };
-
-    // Live lists come from the contact table: `touches` = every finger on the
-    // surface (the caller has already removed ended/cancelled contacts, per
-    // spec), `targetTouches` = the live subset that started on this event's
-    // target, `changedTouches` = the one contact this event reports.
-    JSValue touchesArr = JS_NewArray(ctx);
-    JSValue targetArr = JS_NewArray(ctx);
-    uint32_t ti = 0, gi = 0;
-    for (const auto& c : touchContacts_) {
-        dom::Element* cTarget = c.startTarget.get();
-        JSValue t = makeJsTouch(c, cTarget);
-        JS_SetPropertyUint32(ctx, touchesArr, ti++, JS_DupValue(ctx, t));
-        if (cTarget == target) {
-            JS_SetPropertyUint32(ctx, targetArr, gi++, JS_DupValue(ctx, t));
-        }
-        JS_FreeValue(ctx, t);
-    }
-    JSValue changedArr = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, changedArr, 0, makeJsTouch(changed, target));
-
-    int mod = currentModState();
-    JSValue opts = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, opts, "bubbles", JS_TRUE);
-    JS_SetPropertyStr(ctx, opts, "cancelable", JS_NewBool(ctx, cancelable));
-    JS_SetPropertyStr(ctx, opts, "composed", JS_TRUE);
-    JS_SetPropertyStr(ctx, opts, "touches", makeJsTouchList(ctx, touchesArr));
-    JS_SetPropertyStr(ctx, opts, "targetTouches", makeJsTouchList(ctx, targetArr));
-    JS_SetPropertyStr(ctx, opts, "changedTouches", makeJsTouchList(ctx, changedArr));
-    JS_SetPropertyStr(ctx, opts, "ctrlKey", JS_NewBool(ctx, (mod & SDL_KMOD_CTRL) != 0));
-    JS_SetPropertyStr(ctx, opts, "shiftKey", JS_NewBool(ctx, (mod & SDL_KMOD_SHIFT) != 0));
-    JS_SetPropertyStr(ctx, opts, "altKey", JS_NewBool(ctx, (mod & SDL_KMOD_ALT) != 0));
-    JS_SetPropertyStr(ctx, opts, "metaKey", JS_NewBool(ctx, (mod & SDL_KMOD_GUI) != 0));
-
-    // Dispatch a real polyfill TouchEvent instance (so `e instanceof
-    // TouchEvent` holds) through the standard three-phase path: the C++
-    // Event drives propagation, the JS object carries the touch payload.
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor = JS_GetPropertyStr(ctx, global, "TouchEvent");
-    JSValue jsEvent = JS_UNDEFINED;
-    if (JS_IsConstructor(ctx, ctor)) {
-        JSValue typeVal = JS_NewString(ctx, type);
-        JSValueConst args[2] = { typeVal, opts };
-        jsEvent = JS_CallConstructor(ctx, ctor, 2, args);
-        JS_FreeValue(ctx, typeVal);
-    }
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, global);
-    JS_FreeValue(ctx, opts);
-    if (JS_IsException(jsEvent) || JS_IsUndefined(jsEvent)) {
-        if (JS_IsException(jsEvent)) {
-            JS_FreeValue(ctx, JS_GetException(ctx));  // clear a throwing ctor
-        }
-        JS_FreeValue(ctx, jsEvent);
-        jsEvent = JS_UNDEFINED;   // polyfill unavailable — plain dispatch
-    } else {
-        JS_SetPropertyStr(ctx, jsEvent, "isTrusted", JS_TRUE);
-    }
-
     dom::Event evt(type, /*bubbles=*/true, cancelable);
     evt.setIsTrusted(true);
-    js::dispatchDomEvent(ctx, target, evt, jsEvent);
-    JS_FreeValue(ctx, jsEvent);
+    dom::dispatchDomEvent(target, evt);
     return evt.defaultPrevented();
 }
 
@@ -259,7 +153,7 @@ bool Engine::dispatchTouchEvent(const char* type, const TouchContact& changed,
 // ---------------------------------------------------------------------------
 
 void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
-    if (!document_ || !jsRuntime_) return;
+    if (!document_) return;
 
     const float x = c.x, y = c.y;
     const float ct = static_cast<float>(contentTop());
@@ -269,7 +163,7 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
     int mod = currentModState();
     double nowMs = util::currentTimeMs();
 
-    ControlContext cctx{document_.get(), jsRuntime_->getContext(),
+    ControlContext cctx{document_.get(),
                         renderer_.get(), window_.get(), &uiDirty_,
                         &overlayMgr_, OverlayContext::App,
                         contentWidth(), contentHeight()};
@@ -302,7 +196,6 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
                                   inputConfig_.doubleClickDistancePx);
     dispatchDocMousePress(cctx, appMouseState_, target, downEvt,
                           x, clientY, intent);
-    jsRuntime_->executePendingJobs();
 
     // mouseup + click / dblclick via the shared release helper.
     dom::MouseEvent upEvt("mouseup");
@@ -314,7 +207,6 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
                             nowMs,
                             inputConfig_.doubleClickThresholdMs,
                             inputConfig_.doubleClickDistancePx);
-    jsRuntime_->executePendingJobs();
     // Focus/caret chrome lives in the cached base layer.
     markAppBaseDirty();
 }
@@ -334,34 +226,18 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
 // no change.
 
 void Engine::dispatchGestureEvent(const char* type) {
-    if (!jsRuntime_ || !document_) return;
+    if (!document_) return;
     dom::Element* target = gesture_.target.get();
-    if (!target) return;   // start target freed by earlier JS
-
-    JSContext* ctx = jsRuntime_->getContext();
-    const float ct = static_cast<float>(contentTop());
-    JSValue jsEvent = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, jsEvent, "type", JS_NewString(ctx, type));
-    JS_SetPropertyStr(ctx, jsEvent, "bubbles", JS_NewBool(ctx, 1));
-    JS_SetPropertyStr(ctx, jsEvent, "cancelable", JS_NewBool(ctx, 1));
-    JS_SetPropertyStr(ctx, jsEvent, "scale",
-                      JS_NewFloat64(ctx, static_cast<double>(gesture_.scale)));
-    JS_SetPropertyStr(ctx, jsEvent, "rotation",
-                      JS_NewFloat64(ctx, static_cast<double>(gesture_.rotation)));
-    JS_SetPropertyStr(ctx, jsEvent, "clientX",
-                      JS_NewFloat64(ctx, static_cast<double>(gesture_.cx)));
-    JS_SetPropertyStr(ctx, jsEvent, "clientY",
-                      JS_NewFloat64(ctx, static_cast<double>(gesture_.cy - ct)));
+    if (!target) return;
 
     dom::Event evt(type, /*bubbles=*/true, /*cancelable=*/true);
     evt.setIsTrusted(true);
-    js::dispatchDomEvent(ctx, target, evt, jsEvent);
-    JS_FreeValue(ctx, jsEvent);
+    dom::dispatchDomEvent(target, evt);
 }
 
 void Engine::gestureMaybeStart() {
     if (gesture_.active || touchContacts_.size() < 2) return;
-    if (!jsRuntime_ || !document_) return;
+    if (!document_) return;
 
     // Founding pair = the two oldest contacts (table is push_back order).
     const TouchContact& a = touchContacts_[0];
@@ -432,7 +308,7 @@ void Engine::gestureEndIfFounder(uint64_t endedFinger) {
 // ---------------------------------------------------------------------------
 
 void Engine::handleTouchDown(uint64_t fingerId, float x, float y, float pressure) {
-    if (!document_ || !jsRuntime_) return;
+    if (!document_) return;
     if (touchByFinger(fingerId)) return;   // duplicate down for a live contact
     uiDirty_ = true;
 
@@ -449,9 +325,7 @@ void Engine::handleTouchDown(uint64_t fingerId, float x, float y, float pressure
     c.startTarget.assign(document_.get(), target);
     touchContacts_.push_back(c);
 
-    // Spec order: pointerdown, then touchstart. Listeners run JS that can
-    // re-enter the touch API (headless injection) and reallocate the table,
-    // so our entry is only mutated through a fingerId re-lookup afterwards.
+    // Spec order: pointerdown, then touchstart.
     bool prevented = dispatchTouchPointerEvent("pointerdown", c, /*cancelable=*/true);
     prevented = dispatchTouchEvent("touchstart", c, /*cancelable=*/true) || prevented;
     if (prevented) {
@@ -462,11 +336,10 @@ void Engine::handleTouchDown(uint64_t fingerId, float x, float y, float pressure
     // A second finger landing starts a two-finger gesture (after the normal
     // pointer/touch dispatch, which is never affected by gestures).
     gestureMaybeStart();
-    jsRuntime_->executePendingJobs();
 }
 
 void Engine::handleTouchMove(uint64_t fingerId, float x, float y, float pressure) {
-    if (!document_ || !jsRuntime_) return;
+    if (!document_) return;
     TouchContact* live = touchByFinger(fingerId);
     if (!live) return;   // move for an unknown/ended contact
     uiDirty_ = true;
@@ -479,15 +352,14 @@ void Engine::handleTouchMove(uint64_t fingerId, float x, float y, float pressure
         if (dx * dx + dy * dy > kTapSlopPx * kTapSlopPx) live->moved = true;
     }
 
-    TouchContact snapshot = *live;   // JS below can invalidate the pointer
+    TouchContact snapshot = *live;
     dispatchTouchPointerEvent("pointermove", snapshot, /*cancelable=*/true);
     dispatchTouchEvent("touchmove", snapshot, /*cancelable=*/true);
     gestureUpdate(fingerId);   // gesturechange when a founding finger moved
-    jsRuntime_->executePendingJobs();
 }
 
 void Engine::handleTouchUp(uint64_t fingerId, float x, float y) {
-    if (!document_ || !jsRuntime_) return;
+    if (!document_) return;
     TouchContact* live = touchByFinger(fingerId);
     if (!live) return;
     uiDirty_ = true;
@@ -503,9 +375,7 @@ void Engine::handleTouchUp(uint64_t fingerId, float x, float y) {
     // pointerup first (implicit capture release inside) …
     dispatchTouchPointerEvent("pointerup", ended, /*cancelable=*/true);
 
-    // … then remove the contact — TouchEvent.touches excludes fingers lifted
-    // in this event — and fire touchend. Re-find by fingerId: the JS above
-    // may have mutated the table.
+    // … then remove the contact and fire touchend.
     for (auto it = touchContacts_.begin(); it != touchContacts_.end(); ++it) {
         if (it->fingerId == fingerId) { touchContacts_.erase(it); break; }
     }
@@ -521,11 +391,10 @@ void Engine::handleTouchUp(uint64_t fingerId, float x, float y) {
     if (ended.primary && !ended.moved && !ended.compatSuppressed && !endPrevented) {
         dispatchCompatMouseForTap(ended);
     }
-    jsRuntime_->executePendingJobs();
 }
 
 void Engine::handleTouchCancel(uint64_t fingerId, float x, float y) {
-    if (!document_ || !jsRuntime_) return;
+    if (!document_) return;
     TouchContact* live = touchByFinger(fingerId);
     if (!live) return;
     uiDirty_ = true;
@@ -542,7 +411,6 @@ void Engine::handleTouchCancel(uint64_t fingerId, float x, float y) {
     }
     dispatchTouchEvent("touchcancel", ended, /*cancelable=*/false);
     gestureEndIfFounder(fingerId);
-    jsRuntime_->executePendingJobs();
 }
 
 } // namespace bro::engine

@@ -1,5 +1,5 @@
 // The interpreter bridge: `new Function(source)` in COMPILED code, compiled by
-// the engine's QuickJS realm, and the value boundary that makes the result
+// the engine's script realm, and the value boundary that makes the result
 // usable (src/bronze_host/host_interp.h).
 //
 // Every line is `APP <name>=<value>` and every expectation beside it was
@@ -192,7 +192,7 @@ say('windowSelf', window.self === window && window.window === window);
 
 // `new` across the boundary: the scene-script idiom is `new THREE.Vector3()`
 // where THREE and its classes are compiled. The wrapper must carry the
-// constructor bit or QuickJS refuses before the call trap is consulted.
+// constructor bit or the interpreter refuses before the call trap is consulted.
 class BridgePair {
     constructor(a, b) { this.sum = a + b; }
 }
@@ -280,7 +280,7 @@ say('busInvoke', invoke(function (o) { return o.domElement; }, payload));
 
 // --- Compiled arrays are arrays over there --------------------------------
 //
-// A compiled Array crosses as a real QuickJS Array — a snapshot of its
+// A compiled Array crosses as a real Array — a snapshot of its
 // elements, each element crossing by the ordinary rule — and not as a
 // wrapper, because the interpreter's own `Array.isArray` is a class check
 // that no proxy can pass, and library code (`setPath(waypoints)`,

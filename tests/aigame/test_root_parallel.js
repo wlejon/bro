@@ -59,7 +59,7 @@ function isCombatAction(a) {
 }
 
 // A JS-function evaluator must be rejected — worker threads cannot safely
-// call back into QuickJS.
+// call back into the script host.
 {
     const worlds = [makeWorld(), makeWorld()];
     let threw = false;

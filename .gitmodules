@@ -1,6 +1,3 @@
-[submodule "third_party/quickjs"]
-	path = third_party/quickjs
-	url = https://github.com/quickjs-ng/quickjs.git
 [submodule "third_party/SDL"]
 	path = third_party/SDL
 	url = https://github.com/libsdl-org/SDL.git
@@ -16,9 +13,6 @@
 [submodule "third_party/jolt"]
 	path = third_party/jolt
 	url = https://github.com/jrouwe/JoltPhysics.git
-[submodule "third_party/qjsbind"]
-	path = third_party/qjsbind
-	url = https://github.com/wlejon/qjsbind.git
 [submodule "third_party/bromesh"]
 	path = third_party/bromesh
 	url = https://github.com/wlejon/bromesh.git

@@ -476,7 +476,7 @@ assert(fired, 'timer fired after advancing past deadline');
 
 ## Architecture
 
-Headless mode shares the same `Engine` class as windowed mode, configured via `EngineConfig` with `DisplayMode::Headless`. The JS runtime is the same QuickJS instance that runs app code, headless globals (`screenshot`, `advanceTime`, etc.) are installed as additional bindings after `engine.run()` returns (which performs initial layout and returns immediately in headless mode).
+Headless mode shares the same `Engine` class as windowed mode, configured via `EngineConfig` with `DisplayMode::Headless`. Headless testing APIs (`screenshot`, `advanceTime`, etc.) operate directly against the engine after `engine.run()` initializes layout.
 
 ### GPU mode (default)
 
@@ -489,7 +489,7 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 
 ### WebGL2 support matrix
 
-The `webgl2` context (src/webgl/ + src/js/webgl2_bindings*) maps WebGL2 onto
+The `webgl2` context (src/webgl/) maps WebGL2 onto
 raw OpenGL 3.3 core. Behavioral tests live in `tests/webgl/`.
 
 **Implemented:** context state + `getParameter`/`getError` (including

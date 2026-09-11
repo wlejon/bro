@@ -15,9 +15,6 @@
 #include "engine/gamepad.h"
 #include "engine/settings.h"
 
-#include "js/runtime.h"
-#include "js/event_dispatch.h"
-#include "js/gamepad_bindings.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -135,26 +132,11 @@ GamepadState& Engine::allocateGamepadSlot() {
 // Connection events + action dispatch
 // ---------------------------------------------------------------------------
 
-void Engine::dispatchGamepadConnectionEvent(const GamepadState& gp, bool connected) {
-    if (!jsRuntime_) return;
-    JSContext* ctx = jsRuntime_->getContext();
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
-    if (JS_IsFunction(ctx, dispatch)) {
-        const char* type = connected ? "gamepadconnected" : "gamepaddisconnected";
-        JSValue evtType = JS_NewString(ctx, type);
-        JSValue evt = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, evt, "type", JS_NewString(ctx, type));
-        JS_SetPropertyStr(ctx, evt, "gamepad", js::buildGamepadSnapshot(ctx, this, gp));
-        JSValue args[2] = { evtType, evt };
-        JSValue ret = JS_Call(ctx, dispatch, global, 2, args);
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, evtType);
-        JS_FreeValue(ctx, evt);
-    }
-    JS_FreeValue(ctx, dispatch);
-    JS_FreeValue(ctx, global);
-    jsRuntime_->executePendingJobs();
+void Engine::dispatchGamepadConnectionEvent(const GamepadState&, bool connected) {
+    const char* type = connected ? "gamepadconnected" : "gamepaddisconnected";
+    dom::Event evt(type);
+    evt.setIsTrusted(true);
+    dispatchWindowEvent(evt);
 }
 
 // A button's analog value changed. Updates the slot, and on a press/release

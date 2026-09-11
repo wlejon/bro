@@ -13,14 +13,8 @@
 // laid-out/not-yet-laid-out split, with a pending slot on the element bridging
 // the two.
 //
-// WHY IT IS HERE AND NOT IN A BINDING FILE. It was written inside
-// src/js/element_bindings.cpp, reachable from the QuickJS realm alone. The
-// bronze host layer (src/bronze_host) binds the same DOM for compiled apps, and
-// three.js's editor is built on a widget library that is nothing but these
-// properties — every row of its sidebar is an <input> or a <select> read and
-// written through them. A second implementation over there would be a second
-// set of rules about where a <select>'s selection lives, and they would drift
-// on the first bug fixed in one of them.
+// Form control property operations live here at the engine layer so all
+// callers share the same state transitions.
 //
 // What is NOT here: events. Setting a value from script fires neither `input`
 // nor `change` (HTML reserves both for user interaction), so these functions
@@ -67,5 +61,17 @@ void setSelectedIndex(dom::Element* el, int index);
 // makes every element either focusable or none of them.
 int tabIndex(const dom::Element* el);
 void setTabIndex(dom::Element* el, int value);
+
+// Check if an element is an <input type="radio">.
+bool isRadioInput(dom::Element* el);
+
+// Scoped form owner of an element (nearest <form> ancestor), or nullptr.
+dom::Element* formOwnerOf(dom::Element* el);
+
+// Uncheck all same-named radio inputs sharing the same form owner.
+void clearRadioGroup(dom::Element* el);
+
+// Return the currently checked same-named radio input in the group, or nullptr.
+dom::Element* checkedRadioInGroup(dom::Element* el);
 
 }  // namespace bro::layout

@@ -6,8 +6,6 @@
 #include <functional>
 #include <string>
 
-struct JSContext;
-
 namespace bro::engine {
 
 enum class DisplayMode { Windowed, Headless, Server };
@@ -59,7 +57,6 @@ struct EngineConfig {
     bool showSplash = true;
     bool compiledApp = false;
     bool hostProvidesCompiledApp = false;
-    std::function<void(JSContext*)> installHostBindings;
     GraphicsConfig graphics;
     InputConfig input;
     Scrollbar::Style viewportScrollbar;

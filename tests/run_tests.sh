@@ -107,7 +107,7 @@ TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
 # docs/multi-repo-workflow.md) — an edit in ../htmlayout is just as capable of
 # invalidating a binary as an edit in src/.
 SOURCE_ROOTS=("$PROJECT_DIR/src")
-for SIB in htmlayout brokit qjsbind bromath broaudio bromesh broflora brotensor \
+for SIB in htmlayout brokit bromath broaudio bromesh broflora brotensor \
            brogameagent brolm brodiffusion broimage brosoundml brovisionml; do
     [[ -d "$PROJECT_DIR/../$SIB/src" ]] && SOURCE_ROOTS+=("$PROJECT_DIR/../$SIB/src")
     [[ -d "$PROJECT_DIR/../$SIB/include" ]] && SOURCE_ROOTS+=("$PROJECT_DIR/../$SIB/include")

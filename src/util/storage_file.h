@@ -16,8 +16,7 @@ namespace bro::util {
 /// to UTF-8 on the way in and control characters encoded on the way out, and
 /// a value that is not a string (a file edited by hand) is skipped rather
 /// than truncating everything after it.
-///
-/// Both Storage implementations (QuickJS `js/storage_bindings.cpp`, bronze
+/// Storage implementations (such as bronze
 /// `bronze_host/dom_storage.cpp`) go through here, so there is one format.
 
 /// Read `path` into `out`. A missing or unreadable file leaves `out` empty and

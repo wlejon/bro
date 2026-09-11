@@ -59,64 +59,6 @@ std::string MenuBar::toJSON() const {
 }
 
 // ---------------------------------------------------------------------------
-// JS parsing
-// ---------------------------------------------------------------------------
-
-static std::string readString(JSContext* ctx, JSValueConst obj, const char* key) {
-    std::string result;
-    JSValue v = JS_GetPropertyStr(ctx, obj, key);
-    if (JS_IsString(v)) {
-        const char* s = JS_ToCString(ctx, v);
-        if (s) { result = s; JS_FreeCString(ctx, s); }
-    }
-    JS_FreeValue(ctx, v);
-    return result;
-}
-
-static bool readBool(JSContext* ctx, JSValueConst obj, const char* key, bool def) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, key);
-    bool result = def;
-    if (JS_IsBool(v)) result = (JS_ToBool(ctx, v) != 0);
-    JS_FreeValue(ctx, v);
-    return result;
-}
-
-MenuBar::Item MenuBar::parseItem(JSContext* ctx, JSValueConst obj) {
-    Item item;
-    if (!JS_IsObject(obj)) return item;
-    item.id        = readString(ctx, obj, "id");
-    item.label     = readString(ctx, obj, "label");
-    item.accel     = readString(ctx, obj, "accel");
-    item.separator = readBool(ctx, obj, "separator", false);
-    item.enabled   = readBool(ctx, obj, "enabled", true);
-    item.hidden    = readBool(ctx, obj, "hidden", false);
-    item.checked   = readBool(ctx, obj, "checked", false);
-
-    JSValue children = JS_GetPropertyStr(ctx, obj, "items");
-    if (JS_IsUndefined(children)) {
-        JS_FreeValue(ctx, children);
-        children = JS_GetPropertyStr(ctx, obj, "children");
-    }
-    if (JS_IsArray(children)) parseChildren(ctx, children, item.children);
-    JS_FreeValue(ctx, children);
-    return item;
-}
-
-void MenuBar::parseChildren(JSContext* ctx, JSValueConst arr,
-                            std::vector<Item>& out) {
-    uint32_t len = 0;
-    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
-    JS_ToUint32(ctx, &len, lenVal);
-    JS_FreeValue(ctx, lenVal);
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        JSValue el = JS_GetPropertyUint32(ctx, arr, i);
-        out.push_back(parseItem(ctx, el));
-        JS_FreeValue(ctx, el);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
 
@@ -125,9 +67,8 @@ void MenuBar::clear() {
     dirty = true;
 }
 
-void MenuBar::setRootsFromJS(JSContext* ctx, JSValueConst arr) {
-    roots.clear();
-    if (JS_IsArray(arr)) parseChildren(ctx, arr, roots);
+void MenuBar::setRoots(std::vector<Item> items) {
+    roots = std::move(items);
     dirty = true;
 }
 
@@ -163,41 +104,24 @@ bool MenuBar::addItem(const std::string& parentId, Item item, int index) {
     return true;
 }
 
-bool MenuBar::updateItem(JSContext* ctx, const std::string& id, JSValueConst props) {
-    auto* item = find(id);
-    if (!item || !JS_IsObject(props)) return false;
-
-    JSValue v;
-    v = JS_GetPropertyStr(ctx, props, "label");
-    if (JS_IsString(v)) { const char* s = JS_ToCString(ctx, v); if (s) { item->label = s; JS_FreeCString(ctx, s); } }
-    JS_FreeValue(ctx, v);
-
-    v = JS_GetPropertyStr(ctx, props, "accel");
-    if (JS_IsString(v)) { const char* s = JS_ToCString(ctx, v); if (s) { item->accel = s; JS_FreeCString(ctx, s); } }
-    JS_FreeValue(ctx, v);
-
-    v = JS_GetPropertyStr(ctx, props, "enabled");
-    if (JS_IsBool(v)) item->enabled = (JS_ToBool(ctx, v) != 0);
-    JS_FreeValue(ctx, v);
-
-    v = JS_GetPropertyStr(ctx, props, "hidden");
-    if (JS_IsBool(v)) item->hidden = (JS_ToBool(ctx, v) != 0);
-    JS_FreeValue(ctx, v);
-
-    v = JS_GetPropertyStr(ctx, props, "checked");
-    if (JS_IsBool(v)) item->checked = (JS_ToBool(ctx, v) != 0);
-    JS_FreeValue(ctx, v);
-
-    dirty = true;
-    return true;
-}
-
 static bool removeIn(std::vector<MenuBar::Item>& items, const std::string& id) {
     for (auto it = items.begin(); it != items.end(); ++it) {
         if (it->id == id) { items.erase(it); return true; }
         if (removeIn(it->children, id)) return true;
     }
     return false;
+}
+
+bool MenuBar::updateItem(const std::string& id, const Item& props) {
+    auto* item = find(id);
+    if (!item) return false;
+    if (!props.label.empty()) item->label = props.label;
+    if (!props.accel.empty()) item->accel = props.accel;
+    item->enabled = props.enabled;
+    item->hidden = props.hidden;
+    item->checked = props.checked;
+    dirty = true;
+    return true;
 }
 
 bool MenuBar::removeItem(const std::string& id) {
@@ -210,14 +134,8 @@ bool MenuBar::removeItem(const std::string& id) {
 // Handlers
 // ---------------------------------------------------------------------------
 
-void MenuBar::on(JSContext* ctx, const std::string& id, JSValueConst fn) {
-    if (!JS_IsFunction(ctx, fn)) return;
-    auto it = handlers_.find(id);
-    if (it != handlers_.end()) {
-        JS_FreeValue(it->second.ctx, it->second.fn);
-        handlers_.erase(it);
-    }
-    handlers_[id] = Handler{ ctx, JS_DupValue(ctx, fn) };
+void MenuBar::on(const std::string& id, std::function<void()> fn) {
+    handlers_[id] = std::move(fn);
 }
 
 bool MenuBar::hasHandler(const std::string& id) const {
@@ -226,27 +144,12 @@ bool MenuBar::hasHandler(const std::string& id) const {
 
 bool MenuBar::triggerHandler(const std::string& id) {
     auto it = handlers_.find(id);
-    if (it == handlers_.end()) return false;
-    JSContext* ctx = it->second.ctx;
-    JSValue fn = JS_DupValue(ctx, it->second.fn);
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue result = JS_Call(ctx, fn, global, 0, nullptr);
-    if (JS_IsException(result)) {
-        JSValue ex = JS_GetException(ctx);
-        const char* s = JS_ToCString(ctx, ex);
-        if (s) { LOG_ERROR("menu handler '%s' threw: %s", id.c_str(), s); JS_FreeCString(ctx, s); }
-        JS_FreeValue(ctx, ex);
-    }
-    JS_FreeValue(ctx, result);
-    JS_FreeValue(ctx, fn);
-    JS_FreeValue(ctx, global);
+    if (it == handlers_.end() || !it->second) return false;
+    it->second();
     return true;
 }
 
 void MenuBar::releaseHandlers() {
-    for (auto& kv : handlers_) {
-        JS_FreeValue(kv.second.ctx, kv.second.fn);
-    }
     handlers_.clear();
 }
 

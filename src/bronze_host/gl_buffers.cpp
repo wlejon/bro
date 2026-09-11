@@ -30,10 +30,9 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::fromBool(live(c)->isBuffer({idOf(argAt(a, 0), GlCell::Buffer)}) != GL_FALSE);
     });
 
-    // Signatures, matching the QuickJS binding: bufferData(target, size,
-    // usage), bufferData(target, data, usage), and the WebGL2 form
-    // bufferData(target, srcData, usage, srcOffset[, length]) where
-    // srcOffset/length count ELEMENTS of the source view, not bytes.
+    // Signatures: bufferData(target, size, usage), bufferData(target, data, usage),
+    // and the WebGL2 form bufferData(target, srcData, usage, srcOffset[, length])
+    // where srcOffset/length count ELEMENTS of the source view, not bytes.
     b.def("bufferData", 3, [c](Value, std::span<const Value> a) {
         GLenum target = u32At(a, 0);
         GLenum usage = u32At(a, 2);
@@ -99,9 +98,7 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
-    // The indexed forms. The QuickJS layer also stashes the wrapper object so
-    // getIndexedParameter can answer it back; getIndexedParameter is not
-    // bound here (left out, named in the module README), so no stash.
+    // The indexed forms.
     b.def("bindBufferBase", 3, [c](Value, std::span<const Value> a) {
         live(c)->bindBufferBase(u32At(a, 0), u32At(a, 1), {idOf(argAt(a, 2), GlCell::Buffer)});
         return ev::undefined();
@@ -115,18 +112,18 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // --- Vertex array objects ---
     b.def("createVertexArray", 0, [c](Value, std::span<const Value>) {
-        return wrapGlObj(GlCell::Vao, live(c)->createVertexArray().id);
+        return wrapGlObj(GlCell::VertexArray, live(c)->createVertexArray().id);
     });
     b.def("deleteVertexArray", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteVertexArray({idOf(argAt(a, 0), GlCell::Vao)});
+        live(c)->deleteVertexArray({idOf(argAt(a, 0), GlCell::VertexArray)});
         return ev::undefined();
     });
     b.def("bindVertexArray", 1, [c](Value, std::span<const Value> a) {
-        live(c)->bindVertexArray({idOf(argAt(a, 0), GlCell::Vao)});
+        live(c)->bindVertexArray({idOf(argAt(a, 0), GlCell::VertexArray)});
         return ev::undefined();
     });
     b.def("isVertexArray", 1, [c](Value, std::span<const Value> a) {
-        return ev::fromBool(live(c)->isVertexArray({idOf(argAt(a, 0), GlCell::Vao)}) != GL_FALSE);
+        return ev::fromBool(live(c)->isVertexArray({idOf(argAt(a, 0), GlCell::VertexArray)}) != GL_FALSE);
     });
 
     // --- Vertex attributes ---

@@ -433,9 +433,7 @@ if (!scene) {
 }
 
 // =========================================================================
-// Teardown/GC: leave live handles in globals, no explicit destroy. The
-// Debug-build QuickJS leak assert is the real gate (worldRef gc_mark +
-// ~JsWorld back-pointer severing).
+// Teardown/GC: leave live handles in globals, no explicit destroy.
 // =========================================================================
 globalThis.__ragdollGcWorld = Physics.createWorldHandle({ maxBodies: 32 });
 globalThis.__ragdollGcWorld.createBody({

@@ -1,8 +1,6 @@
 // <input pattern=...> must use the ECMAScript RegExp dialect (compiled with
 // the 'u' flag — the spec-sanctioned approximation of 'v'), implicitly anchored as ^(?:pattern)$, and
-// matched over the UTF-16 form of the value. The engine is QuickJS's own
-// libregexp — the dialect-divergent cases below (named groups, lookbehind,
-// \u{...}) all failed or mis-matched under the previous std::regex build.
+// matched over the UTF-16 form of the value.
 
 const root = document.getElementById('root');
 root.innerHTML = '<input id="p" type="text">';

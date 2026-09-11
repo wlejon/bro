@@ -1,12 +1,7 @@
 // The observer probe: MutationObserver over the DOM layer's own notices.
 //
-// The claim worth testing is not "records arrive". It is WHERE they come from.
-// This layer could have watched its own mutators — appendChild, setAttribute
-// and the rest all pass through host_element.cpp and host_node.cpp — and every
-// assertion below except one would still pass. The one is `page.*`: a script in
-// the page's QuickJS realm sets an attribute, and the compiled observer has to
-// see it. That only works because the notice is fired by dom::Element itself
-// (Document::notifyMutation), which is the point of putting it there.
+// The claim worth testing is that notices are fired by dom::Element itself
+// (Document::notifyMutation).
 //
 // The other three claims:
 //

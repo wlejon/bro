@@ -35,8 +35,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
-#include "js/event_dispatch.h"
-#include "js/runtime.h"
+#include "dom/event_dispatch.h"
 #include "layout/el_input.h"
 #include "layout/el_select.h"
 #include "layout/el_textarea.h"
@@ -78,21 +77,15 @@ dom::Element* Engine::windowHostHitTest(WindowHost& h, float x, float y) {
 }
 
 ControlContext Engine::windowHostControlContext(WindowHost& h) {
-    // overlays = nullptr: a <select> or <input type=color> in a secondary
-    // window focuses and takes keys, but does not open a popup — the overlay
-    // manager draws into the MAIN window's compositor pass, so an overlay
-    // opened from here would appear on the wrong window. focusNewControl
-    // guards every overlay use on ctx.overlays, so this degrades cleanly.
-    // window = the host's OWN window, which is what routes SDL text input
-    // (and therefore the IME) to the window the user is typing in.
-    return ControlContext{h.document.get(), h.jsCtx, renderer_.get(),
+    return ControlContext{h.document.get(), renderer_.get(),
                           h.window.get(), &uiDirty_, /*overlays=*/nullptr,
                           OverlayContext::App, h.boxW, h.boxH};
 }
 
 void Engine::windowHostDispatch(WindowHost& h, dom::Element* el, dom::Event& evt) {
-    if (!el || !h.jsCtx) return;
-    js::dispatchDomEvent(h.jsCtx, el, evt);
+    if (!el) return;
+    (void)h;
+    dom::dispatchDomEvent(el, evt);
 }
 
 void Engine::windowHostDispatchInput(WindowHost& h, dom::Element* el,
@@ -215,7 +208,7 @@ void Engine::windowHostUpdateCursor(WindowHost& h, dom::Element* target) {
 
 void Engine::hostMouseDown(uint64_t hostId, float x, float y, int sdlButton) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
 
     const float prevX = h.lastMouseX, prevY = h.lastMouseY;
@@ -255,14 +248,13 @@ void Engine::hostMouseDown(uint64_t hostId, float x, float y, int sdlButton) {
     // dispatchDocMousePress already moved document->activeElement; mirror it
     // so the keyboard path can read the focus without re-deriving it.
     h.activeElement = h.document ? h.document->activeElement() : nullptr;
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
     windowHostUpdateTextInputArea(h);
     windowHostRepaint(h);
 }
 
 void Engine::hostMouseUp(uint64_t hostId, float x, float y, int sdlButton) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
 
     const float prevX = h.lastMouseX, prevY = h.lastMouseY;
@@ -301,14 +293,13 @@ void Engine::hostMouseUp(uint64_t hostId, float x, float y, int sdlButton) {
                             inputConfig_.doubleClickThresholdMs,
                             inputConfig_.doubleClickDistancePx);
     h.activeElement = h.document ? h.document->activeElement() : nullptr;
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
     windowHostRepaint(h);
 }
 
 void Engine::hostMouseMove(uint64_t hostId, float x, float y,
                            float xrel, float yrel) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
 
     const int mod = currentModState();
@@ -350,9 +341,7 @@ void Engine::hostMouseMove(uint64_t hostId, float x, float y,
         // :hover restyle. recordSubDoc points ElementRefAdapter at
         // h.hoveredElement before resolving this document, so the pseudo-class
         // resolves per window with no cross-talk. Both endpoints are marked so
-        // the leaving element loses its highlight too. The JS above can free
-        // either element, so re-read nothing but what we just dispatched to —
-        // hoveredElement is a raw pointer like IframeDoc's, refreshed here.
+        // the leaving element loses its highlight too.
         if (prevHover) prevHover->markDirty();
         if (target) target->markDirty();
         h.hoveredElement = target;
@@ -371,7 +360,6 @@ void Engine::hostMouseMove(uint64_t hostId, float x, float y,
         applyMouseOffset(moveEvt, target);
         windowHostDispatch(h, target, moveEvt);
     }
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
 
     h.lastMouseX = x;
     h.lastMouseY = y;
@@ -450,13 +438,12 @@ void Engine::windowHostAdvanceFocus(WindowHost& h, bool reverse) {
 
     windowHostUpdateTextInputArea(h);
     windowHostRepaint(h);
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
                          bool repeat) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
 
     // The physical keyboard is one device shared by every window: keep the
@@ -488,7 +475,6 @@ void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
         if (!target) target = h.document->body();
         if (target) windowHostDispatch(h, target, evt);
         if (!evt.defaultPrevented()) windowHostAdvanceFocus(h, (mod & SDL_KMOD_SHIFT) != 0);
-        if (jsRuntime_) jsRuntime_->executePendingJobs();
         return;
     }
 
@@ -504,7 +490,6 @@ void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
         windowHostApplyKeyResult(h, activeEl, result);
         auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
         windowHostDispatch(h, activeEl, evt);
-        if (jsRuntime_) jsRuntime_->executePendingJobs();
         return;
     }
 
@@ -512,17 +497,12 @@ void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
     auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
     dom::Element* target = activeEl ? activeEl : h.document->body();
     if (target) windowHostDispatch(h, target, evt);
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
-    // NOTE: "action" events (bro.settings key bindings) are deliberately NOT
-    // fired from a host window. They are app-input semantics bound to the main
-    // app realm (v1 cut, like gamepad) — firing them here would turn typing a
-    // "w" into a palette window's text field into a movement action.
 }
 
 void Engine::hostKeyUp(uint64_t hostId, int keycode, int scancode, int mod,
                        bool repeat) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
 
     heldModifierMask_ &= ~modifierBitForKeycode(keycode);
@@ -536,12 +516,11 @@ void Engine::hostKeyUp(uint64_t hostId, int keycode, int scancode, int mod,
     if (getElSelect(activeEl)) focusedControl = true;
     dom::Element* target = focusedControl ? activeEl : h.document->body();
     if (target) windowHostDispatch(h, target, evt);
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 void Engine::hostTextInput(uint64_t hostId, const std::string& text) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
     if (isControlChar(text)) return;
 
@@ -565,7 +544,6 @@ void Engine::hostTextInput(uint64_t hostId, const std::string& text) {
             windowHostDispatchComposition(h, activeEl, "compositionend", text);
             windowHostRepaint(h);
             windowHostUpdateTextInputArea(h);
-            if (jsRuntime_) jsRuntime_->executePendingJobs();
             return;
         }
     }
@@ -577,11 +555,6 @@ void Engine::hostTextInput(uint64_t hostId, const std::string& text) {
         result = input->handleTextInput(activeEl, text);
     }
     if (result.handled) windowHostApplyKeyResult(h, activeEl, result);
-    // v1 cut: contenteditable editing (and its IME composition) stays app-
-    // document-only. A contenteditable host in a secondary window still gets
-    // keydown/keyup/textinput DOM events; the engine just doesn't splice text
-    // into it. See docs/window-api.js.
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 // ---------------------------------------------------------------------------
@@ -615,7 +588,7 @@ void Engine::windowHostCommitComposition(WindowHost& h) {
 void Engine::hostTextEditing(uint64_t hostId, const std::string& text,
                              int start, int /*length*/) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
 
     auto* activeEl = h.document->activeElement();
@@ -623,8 +596,6 @@ void Engine::hostTextEditing(uint64_t hostId, const std::string& text,
     auto* ta = getElTextarea(activeEl);
     const bool inputOk = input && input->isFocused();
     const bool taOk = !inputOk && ta && ta->isFocused();
-    // v1: only text controls compose in a secondary window (contenteditable
-    // composition is app-document-only).
     if (!inputOk && !taOk) return;
 
     const bool wasComposing = inputOk ? input->isComposing() : ta->isComposing();
@@ -640,7 +611,6 @@ void Engine::hostTextEditing(uint64_t hostId, const std::string& text,
         windowHostDispatchComposition(h, activeEl, "compositionend", "");
         windowHostRepaint(h);
         windowHostUpdateTextInputArea(h);
-        if (jsRuntime_) jsRuntime_->executePendingJobs();
         return;
     }
 
@@ -660,7 +630,6 @@ void Engine::hostTextEditing(uint64_t hostId, const std::string& text,
     windowHostDispatchInput(h, activeEl, text, "insertCompositionText", true);
     windowHostRepaint(h);
     windowHostUpdateTextInputArea(h);
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 void Engine::windowHostUpdateTextInputArea(WindowHost& h) {
@@ -691,7 +660,7 @@ void Engine::windowHostUpdateTextInputArea(WindowHost& h) {
 
 void Engine::hostWheel(uint64_t hostId, float x, float y, float dx, float dy) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     WindowHost& h = *hp;
 
     dom::Element* target = windowHostHitTest(h, x, y);
@@ -715,16 +684,13 @@ void Engine::hostWheel(uint64_t hostId, float x, float y, float dx, float dy) {
         applyMouseOffset(wheelEvt, target);
         windowHostDispatch(h, target, wheelEvt);
         if (wheelEvt.defaultPrevented()) {
-            if (jsRuntime_) jsRuntime_->executePendingJobs();
             return;
         }
     }
 
     // Default scroll: the nearest scrollable overflow ancestor, with the same
     // browser-style chaining the app document uses (fall through to the next
-    // scroller when this one is pinned at that edge). There is NO engine
-    // viewport scrollbar for a secondary window in v1 — a host document that
-    // overflows its window scrolls only through its own overflow boxes.
+    // scroller when this one is pinned at that edge).
     for (auto* el = target; el; el = composedParent(el)) {
         if (!overflowScrollable(getOverflowY(el->computedStyle()))) continue;
         const float maxST = maxScrollTop(el);
@@ -742,7 +708,6 @@ void Engine::hostWheel(uint64_t hostId, float x, float y, float dx, float dy) {
         }
         break;
     }
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
     windowHostRepaint(h);
 }
 
@@ -764,13 +729,12 @@ void Engine::windowHostDispatchDrop(WindowHost& h, float x, float y,
         evt.setIsTrusted(true);
         windowHostDispatch(h, target, evt);
     }
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 void Engine::hostDropFile(uint64_t hostId, const std::vector<std::string>& paths,
                           float x, float y) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     if (paths.empty()) return;
     windowHostDispatchDrop(*hp, (x >= 0) ? x : hp->lastMouseX,
                            (y >= 0) ? y : hp->lastMouseY, &paths, nullptr);
@@ -779,7 +743,7 @@ void Engine::hostDropFile(uint64_t hostId, const std::vector<std::string>& paths
 void Engine::hostDropText(uint64_t hostId, const std::string& text,
                           float x, float y) {
     WindowHost* hp = windowHostById(hostId);
-    if (!hp || !hp->document || !hp->jsCtx) return;
+    if (!hp || !hp->document) return;
     windowHostDispatchDrop(*hp, (x >= 0) ? x : hp->lastMouseX,
                            (y >= 0) ? y : hp->lastMouseY, nullptr, &text);
 }
@@ -789,20 +753,11 @@ void Engine::hostDropText(uint64_t hostId, const std::string& text,
 // ---------------------------------------------------------------------------
 
 void Engine::windowHostSetVisibility(WindowHost& h, bool visible) {
-    if (!h.jsCtx) return;
-    // Per-realm: window_bindings installs __bro_set_visibility into every
-    // realm, and the JS side guards a repeat so redundant calls are free.
-    JSValue global = JS_GetGlobalObject(h.jsCtx);
-    JSValue fn = JS_GetPropertyStr(h.jsCtx, global, "__bro_set_visibility");
-    if (JS_IsFunction(h.jsCtx, fn)) {
-        JSValue arg = JS_NewBool(h.jsCtx, visible);
-        JSValue ret = JS_Call(h.jsCtx, fn, JS_UNDEFINED, 1, &arg);
-        JS_FreeValue(h.jsCtx, ret);
-        JS_FreeValue(h.jsCtx, arg);
-    }
-    JS_FreeValue(h.jsCtx, fn);
-    JS_FreeValue(h.jsCtx, global);
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
+    if (!h.document) return;
+    (void)visible;
+    dom::Event evt("visibilitychange", /*bubbles=*/true, /*cancelable=*/false);
+    evt.setIsTrusted(true);
+    dom::dispatchWindowEvent(h.document.get(), evt);
 }
 
 } // namespace bro::engine

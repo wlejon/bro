@@ -25,8 +25,7 @@ target_link_libraries(myapp PRIVATE bro_engine)
 target_include_directories(myapp PRIVATE "${BRO_DIR}/src")
 
 if(MSVC)
-    # QuickJS's interpreter frame is large; deep JS recursion overflows the
-    # default 1 MB stack. Same reason bro.exe needs it.
+    # Set stack size to 8 MB. Same reason bro.exe needs it.
     target_link_options(myapp PRIVATE /STACK:8388608 /ENTRY:mainCRTStartup)
 endif()
 ```
@@ -388,6 +387,4 @@ tell you what it drew.
 - **`process.cwd()` is where the user ran the binary**, not where the app lives,
   and `__dirname` is undefined in app scripts. Use `bro.appDir` and
   `bro.resolvePath()`.
-- **The QuickJS context must outlive every DOM element** — elements hold JS
-  function references. Let `~Engine()` do the teardown; don't destroy services
-  early.
+- **Teardown**: Let `~Engine()` do the teardown; don't destroy subsystems early.

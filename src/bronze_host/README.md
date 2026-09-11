@@ -7,9 +7,7 @@ and friends, the observers, Web Audio, `Physics`, `AI`, `bro.net`/`WebSocket`)
 backed by the engine, wraps `webgl::WebGL2RenderingContext` as a bronze object covering the
 WebGL2 surface three.js r160's renderer drives, and owns the per-frame seam that
 advances the clock, delivers completions, fires callbacks and performs the
-microtask checkpoint. `src/js/webgl2_bindings*` is the reference for the GL
-surface and for every constant value; this layer mirrors it, QuickJS values
-swapped for bronze embed Values.
+microtask checkpoint.
 
 Off by default; nothing here is in the default build.
 
@@ -36,12 +34,12 @@ Off by default; nothing here is in the default build.
 | `host_video.cpp` | `VideoEncoder` / `GifEncoder`: RGBA frames, a 2D canvas or the composited viewport in; a `.webm` or `.gif` file out |
 | `host_fetch.cpp` | `fetch()` over the engine's asset mounts, into a real bronze Promise |
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
-| `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, `localStorage`, and behind a bridged interpreted object |
-| `host_interp.cpp` | **the interpreter bridge**: compiled `new Function`, `eval` and a non-constant `import()` answered by the page's QuickJS realm, and values crossing between the two heaps in both directions |
-| `host_vendor_globals.cpp` | the names a page loads with plain `<script>` tags — `signals`, `CodeMirror`, `acorn`, `tern`, `esprima`, `jsonlint` — registered as the page's own objects, through that bridge |
-| `host_audio_*.cpp`, `host_audio_internal.h` | the Web Audio SURFACE ? `AudioContext` and the node/param objects ? over broaudio. `connect()` routes nothing and most node state is inaudible; see the header of `host_audio_core.cpp` for what actually reaches the engine. `_core` context + globals install, `_param` AudioParam, `_buffer` AudioBuffer + decode, `_nodes` oscillator/filter/analyser/source, `_spatial` Panner + StereoPanner, `_dsp` Delay/Compressor/WaveShaper/Convolver/Splitter/Merger |
+| `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, and `localStorage` |
+| `host_interp.cpp` | runtime evaluation stubs |
+| `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |
+| `host_audio_*.cpp`, `host_audio_internal.h` | the Web Audio surface over broaudio. `_core` context + globals, `_param` AudioParam, `_buffer` AudioBuffer + decode, `_nodes` oscillator/filter/analyser/source, `_spatial` Panner + StereoPanner, `_dsp` Delay/Compressor/WaveShaper/Convolver/Splitter/Merger |
 | `host_physics_*.cpp`, `host_physics_internal.h` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt. `_core` bodies + globals, `_constraints` joints/motors/limits, `_character`, `_softbody`, `_queries` raycast/overlap |
-| `host_ai_*.cpp`, `host_ai_internal.h` | the `AI` namespace and `bro.ai.game`, over brogameagent. `_core` globals + aim math, `_navgrid`, `_navmesh`, `_agent`, `_game` the `bro.ai.game` namespace the interpreted binding publishes (docs/ai-game-api.js): `createHexNav`, `createWorld` (the ORCA world), perception, over the same objects |
+| `host_ai_*.cpp`, `host_ai_internal.h` | the `AI` namespace and `bro.ai.game`, over brogameagent. `_core` globals + aim math, `_navgrid`, `_navmesh`, `_agent`, `_game`: `createHexNav`, `createWorld` (the ORCA world), perception |
 | `host_net.cpp` | `bro.net` over GameNetworkingSockets, and the `WebSocket` client |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `web_host.globals` | the manifest of global names bronze admits; every one must be registered ? an unregistered name is `fatal()`, not a miss |
@@ -105,139 +103,47 @@ continuations one frame late, against the wrong state, and would mean the last
 rAF before shutdown never reaches quiescence — which is where an unhandled
 rejection is reported, so that rejection would never be reported at all.
 
-Step 1 exists because bro drains QuickJS **twice** per frame (once right after
-rAF, once after the late pumps that can resolve a promise) and there is only one
-host hook, at the first of those points. A producer that enqueues a bronze job
-after we return this frame is therefore seen at the top of the next one, rather
-than whenever something else happens to drain.
+Step 1 drains any pending host tasks before advancing the frame.
 
-`dom_globals.cpp` carries the same explanation at the code.
+`dom_globals.cpp` carries the explanation at the code.
 
-## Events, and the one dispatch walk they arrive on
+## Events, and the dispatch walk they arrive on
 
 A listener a compiled app registers on its canvas, on `document` or on `window`
-fires from a real click. It does so because it is not this layer's listener at
-all: `canvas.addEventListener` calls `dom::Element::addEventListener`, the
-engine's own C++ registration, and `js::dispatchDomEvent` already walks the
-event path ONCE with both listener kinds merged on a shared registration
-sequence (`dom/event_target.h`). So a compiled handler gets the capture /
-at-target / bubble phases, the shadow retargeting, and its place in
-registration order beside the page's own handlers — for the same reason an
-interpreted one does, not by a parallel arrangement that agrees with it.
+fires from real user input. It does so because `canvas.addEventListener` calls
+`dom::Element::addEventListener`, the engine's native C++ registration, and
+`dom::dispatchDomEvent` walks the event path with capture / at-target / bubble
+phases and shadow retargeting in registration order.
 
-`document.addEventListener` is `documentElement.addEventListener`, exactly the
-delegation `src/js/document_bindings.cpp` performs for the interpreted side and
-for its reason: the event path is built from Elements. The visible consequence
-is the one the interpreted side already lives with — `currentTarget` inside a
-document handler is `<html>`, not the document.
+`document.addEventListener` delegates to `documentElement.addEventListener`,
+because the event path is built from Elements.
 
 ### The boundary rule
 
 **Engine objects are shared. Event data is copied. Heap values never cross.**
 
-Both worlds run in one Engine, on one thread, against one DOM, interleaved and
-never concurrent. What they share is the *engine's* objects: the same
-`dom::Element`, the same document, the same clock, the same GL context. What
-crosses the language boundary is a copy:
+Engine objects are shared: the same `dom::Element`, the same document, the same
+clock, the same GL context. What crosses the host boundary is a copy:
 
 - A listener is handed a fresh bronze object holding **copies** of the fields
   its event kind carries — type, coordinates, key, button, deltas, modifiers —
-  never a QuickJS value and never a pointer into either heap.
+  never an unmanaged pointer across heaps.
 - `event.target` is the exception that proves it: a canvas this layer created
   answers as **itself**, the very value the program holds, because identity is
   the whole use of a target. Anything else answers a `{tagName, id, nodeId}`
   descriptor.
 - `preventDefault()` / `stopPropagation()` / `stopImmediatePropagation()` write
-  through to the `dom::Event` dispatch is walking with, so a compiled listener
-  cancels an event for the interpreted listeners after it, and vice versa. The
-  event object is **live only for the duration of the listener call**: calling
-  one of the three on a stored event object afterwards is a named `TypeError`,
-  not a silent no-op and not a write through a dangling pointer.
+  through to the `dom::Event` dispatch is walking with. The event object is
+  **live only for the duration of the listener call**: calling one of the three
+  on a stored event object afterwards is a named `TypeError`.
 
-### The exception, and it is one exception: the interpreter bridge
-
-`host_interp.cpp` is where heap values DO cross, and it exists because one
-thing an AOT compiler cannot do is compile a string the program builds at run
-time. `new Function(source)` is not a corner: it is how the three.js editor's
-Play button runs a user's script (`editor/js/libs/app.js`), and refusing it
-refuses the feature.
-
-So a compiled `new Function` is compiled by **the page's QuickJS realm** — the
-one already in the process, running the page's own `<script>` tags — and the
-function it produces comes back wrapped — and so is a compiled `eval`, with
-global-environment semantics for both spellings (an AOT frame has no local
-scope to hand over; the compiler warns at any direct `eval(...)` site). The
-interpreted realm's global lookups **fall back to the compiled realm's
-globals** — a fallback object on the QuickJS global's prototype chain answers
-misses from embed's `globalValue`, resolving in the same order a compiled read
-does — because the string being compiled was authored against the app's
-namespace: the editor assigns `window.THREE` and its scene scripts open with
-`new THREE.Vector3`. Reads only; a write shadows on the QuickJS global by the
-ordinary prototype rule, and an unresolved name is still a ReferenceError. From
-there values cross in both directions: primitives by value, objects and
-functions by a wrapper that forwards property reads, writes, calls, `in`,
-`delete` and enumeration to the other heap, typed arrays as **two views over
-one byte store** (embed's `externalizeArrayBuffer` pins the bytes outside the
-moving heap, so a script's write to `position.array[0]` is the compiled
-renderer's write too — the copy that silently diverged is gone), compiled
-arrays as **real arrays** (a snapshot of the elements, each crossing by the
-ordinary rule, remembering its source so it round-trips — because the
-interpreter's `Array.isArray` is a class check no wrapper can pass, and
-`setPath(waypoints)` or `JSON.stringify` begins with it), and thrown values
-as throws rather than as silent undefined.
-
-The third seam is `import()`. bronze folds every import it can read into the
-compiled graph; a specifier built at run time reaches the runtime's
-dynamic-import host, and bro answers it with the page's own module loader —
-resolved against the importer's `import.meta.url` (so a relative path lands
-beside the compiled SOURCE), through the import map for a bare name, loaded
-and evaluated in the interpreted realm. The namespace comes back as a bronze
-Promise of a wrapper; a failed load rejects with the loader's message.
-
-Three things make that safe to say rather than merely to hope:
-
-- **Identity is a table, not an address.** A value that has crossed once is
-  wrapped once, so a round trip returns the object that went in. bronze's
-  collector MOVES, so the bronze side of the table is a bits-keyed map
-  rebuilt whenever embed's `relocationEpoch()` has advanced — bits only go
-  stale when that does. QuickJS is refcounted and does not move, so its side
-  is a plain hash.
-- **The table roots only the FOREIGN half; its own side it holds weakly.**
-  An outbound wrapper's QuickJS finalizer and an inbound proxy's bronze
-  `WeakRef` are the death signals; a per-frame sweep (`sweepInterpBridge`,
-  from `hostFrame`) turns them into freed rows. What crosses and is dropped
-  is reclaimed; the table's size tracks what is live across the boundary.
-- **Neither finalizer touches the other collector.** A wrapper's finalizer
-  records an index and nothing else; every release happens at the frame
-  boundary, on a plain host stack.
-
-Engine objects still do not cross — they are *shared*, which is the rule above
-and not an exception to it. A `<div>` handed through the bridge in either
-direction resolves to the same `dom::Element`, so `appendChild` gets a node
-rather than a wrapper that merely answers `nodeType`.
-
-`host_vendor_globals.cpp` is what the bridge bought: `CodeMirror`, `esprima`,
-`acorn`, `tern`, `signals` and `jsonlint` used to be four hundred and fifty
-lines of hollow C++ reimplementation — a `CodeMirror` you could not type in, an
-`esprima.parse` that approved every program. They are now the page's real
-libraries. A page that did not load one gets `undefined` for it, which is what
-the same page gets in a browser.
-
-### CustomEvent, which is the sanctioned channel between the two worlds
+### CustomEvent
 
 `dispatchEvent` from compiled code takes a plain descriptor —
-`{type, bubbles, cancelable, detail}` — rather than a `new CustomEvent(...)`.
-That was forced when nothing here could be built on a chosen prototype, and is
-now merely unwritten: see **Host classes** below. The descriptor is the
-documented channel and compiled code already speaks it, so it stays until
-someone needs the constructor. `bubbles` and `cancelable` default to true.
+`{type, bubbles, cancelable, detail}`:
 
 ```js
-// compiled → interpreted
 document.dispatchEvent({ type: 'app:ready', detail: 'v2' });
-
-// interpreted → compiled  (an ordinary page script)
-document.dispatchEvent(new CustomEvent('page:reset', { detail: 'hard' }));
 ```
 
 **`detail` is a string and only a string.** A `detail` is an arbitrary JS value
@@ -503,16 +409,6 @@ A host executable that has a compiled app linked in says so with
 `EngineConfig::hostProvidesCompiledApp` (or `HeadlessHooks::providesCompiledApp`
 in driver mode); that flag describes the *binary*, and is not a manifest key.
 
-### Why an app dir can carry interpreted JS at all
-
-The engine executes the page's `<script>` tags unconditionally
-(`engine_init.cpp` step 10), before the host runs the compiled top level. So a
-hybrid dir is not a special mode: it is an ordinary app dir whose page happens
-to hold UI script, running in the Engine's QuickJS realm beside a compiled
-program running as machine code. They share the DOM on one thread and talk
-through it — see "The boundary rule" above, and
-`tests/bronze_host/appdir_events/` for a working one.
-
 `tests/bronze_host/` holds the integration check that runs the compiled app and
 diffs its output against a committed expectation.
 
@@ -527,20 +423,19 @@ uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
 **Events**: the exact list is under "Not supported, precisely" above.
 
 **Loading**: nothing outstanding. `fetch` and `XMLHttpRequest` read the
-engine's asset mounts (`js/asset_path.h`) and take http(s) through
-`util::fetchRemoteCached`, the same remote-asset path both share so they agree
+engine's asset mounts (`util/asset_path.h`) and take http(s) through
+`util::fetchRemoteCached`, the same remote-asset path so they agree
 about what a URL means and what is cached. `WebSocket` and `bro.net` are in
 `host_net.cpp`, checked by `tests/bronze_host/run_checks.sh net`.
 
 `Blob`, `File`, `FileReader` and object URLs are DONE — `host_file.cpp`,
 checked by `tests/bronze_host/run_checks.sh file`. `blob:` and `data:` URLs
-resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of the ENGINE's
+resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of the engine's
 object-URL table (`util/object_url.h`), so a URL minted by compiled code
 resolves in the page's markup and vice versa.
 
 A DROPPED file is one of those `File`s — bytes read off disk, the MIME type its
-extension implies, and the non-standard `.path` the interpreted realm also
-hands over (`makeFileFromPath`, used by `host_dom_events.cpp`). It used to be a
+extension implies, and the `.path` attribute (`makeFileFromPath`, used by `host_dom_events.cpp`).
 descriptor with `size: 0` and no content, which passes every shape check a page
 makes and fails every read. `dataTransfer.items` answers with the same Files,
 and its `webkitGetAsEntry().file(cb)` calls back on the FRAME SEAM rather than
@@ -597,11 +492,8 @@ not a `dom::Element` — it has no layout box. It IS a real class, though: see
 
 `MutationObserver` is DONE — `host_observers.cpp`, checked by
 `tests/bronze_host/run_checks.sh observer` — and it is built on a notice fired by
-the DOM layer itself (`Document::notifyMutation`, new in `src/dom/document.h`)
-rather than on this layer's own mutators. That is the difference between an
-observer that sees every change to the tree and one that sees only the changes
-compiled code made: the check's `page.*` assertion is a script in the page's
-QuickJS realm setting an attribute, and the compiled observer hearing about it.
+the DOM layer itself (`Document::notifyMutation`, in `src/dom/document.h`)
+rather than on this layer's own mutators.
 
 Records are delivered once per frame from the frame seam, after
 requestAnimationFrame and before the closing microtask drain, rather than at the
@@ -621,8 +513,7 @@ at all, where `TextNode` funnels all five of its mutators through one.
 `ResizeObserver` is DONE too, in the same file and the same frame slot, and it
 is a POLL rather than a notification — a box changes size because a window
 resized, a font arrived or a sibling grew, and none of those is a mutation to
-hang a notice on. bro's own JS ResizeObserver polls too, from the engine's
-post-layout hook; this one polls from the frame seam and gets current geometry
+hang a notice on. This polls from the frame seam and gets current geometry
 through `Engine::flushLayoutForRead` like every other read here. The first pass
 after `observe()` reports the current size unprompted, which is the behaviour
 code actually reaches for one for. The web runs its observation loop until
@@ -633,15 +524,11 @@ target is heard about on the next frame and cannot loop.
 `tests/bronze_host/run_checks.sh parser`. `parseFromString` builds a real
 `dom::Document` through the same gumbo path the app document uses and hands
 back the full document surface bound to it, so the queries, the node factories
-and `body`/`documentElement` all answer from the parsed tree. The mime-type
-argument is read and discarded: bro has no XML parser, and the interpreted side
-made the same choice.
+and `body`/`documentElement` all answer from the parsed tree.
 
 Two things about it are policy rather than plumbing.
 
 **Parsed documents are never freed.** They are owned by a process-lived vector.
-The obvious alternative — a handle finalizer that deletes the document when its
-wrapper is collected, which is exactly what the QuickJS side does — does not
 port. `~Document` severs wrappers through `nodeDestroyingCb_`, a single callback
 slot the JS realm owns, and it visits elements only; the freed-node observer
 LIST this layer's registry depends on is not fired from `~Document` at all, so a
@@ -702,14 +589,9 @@ the check's `canvas.*` lines exercise. `GifEncoder.addViewportFrame` did not
 exist on the interpreted side and was added there in the same change, since
 without it "record this to a GIF" had no answer at all for a WebGL app.
 
-**`finish()` is not optional here**, and it is the one place this layer's
-behaviour differs from bro's JS rather than merely narrowing it. Both encoders
-finish from their destructor, so on the QuickJS side a forgotten `finish()`
-still yields a complete file when the context is torn down. bronze has no
-teardown sweep: a handle's destructor runs from the post-collection hook of a
-collection that reclaims it, and nothing collects at exit. An encoder dropped on
-the floor is therefore finished only if a GC happens to reach it, and otherwise
-the file keeps whatever the muxer wrote and no trailer.
+**`finish()` is required to write complete output files.** Both encoders
+write final trailers from `finish()`. An encoder dropped without calling
+`finish()` will keep whatever was flushed prior.
 
 ### A name in `web_host.globals` must be registered in EVERY build
 
@@ -721,10 +603,7 @@ the host registry, then `globalThis`, and then calls `fatal()`
 and not an `undefined` it can test, it aborts the process. So in a
 `BRO_WITH_VIDEO=0` build `host_video.cpp` still registers both names, bound to
 `undefined`. That is explicitly not a miss (`runtime/host_globals.h` says so),
-so the lookup succeeds, `typeof VideoEncoder === 'undefined'` is true, and the
-feature detection bro's own docs tell an app to write keeps working — which is
-also exactly what the interpreted side of a video-less build looks like, where
-the classes are simply not installed.
+so the lookup succeeds, and `typeof VideoEncoder === 'undefined'` is true.
 
 `dataset` is DONE, and so is the reach that blocked it — `host_proxy.cpp`,
 checked by `tests/bronze_host/run_checks.sh proxy`. It was blocked rather than

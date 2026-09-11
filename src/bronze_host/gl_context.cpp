@@ -1,9 +1,5 @@
-// Assembly of the WebGL2 context object a bronze-compiled program sees —
-// the bronze counterpart of WebGL2Bindings::install + wrapContext in
-// src/js/webgl2_bindings.cpp, collapsed into one object: QuickJS hangs the
-// methods on a class prototype, but bronze host objects have no class
-// registry, so constants and functions all land on the instance. Same
-// surface, flatter shape.
+// Assembly of the WebGL2 context object a bronze-compiled program sees.
+// Methods and constants land on the instance with reproducible property shape.
 //
 // Registration order is FIXED: constants first, then the families in the
 // order below, then the instance extras. Every step is a source-ordered
@@ -29,8 +25,7 @@ Value createGlContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue) 
 
     // gl.canvas — the real host canvas object, so three.js's
     // state.reset()-era reads of gl.canvas.width/height see the live drawing
-    // buffer size instead of a snapshot (the QuickJS layer snapshots; the
-    // accessors on the host canvas make the live answer free here).
+    // buffer size instead of a snapshot.
     b.set("canvas", canvas.get());
 
     // drawingBufferWidth/Height, live from the context's FBO size.
@@ -45,9 +40,7 @@ Value createGlContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue) 
                },
                nullptr);
 
-    // three.js sniffs `gl.constructor.name === "WebGL2RenderingContext"` —
-    // the same shim the QuickJS binding installs, per-context here because
-    // there is no shared prototype to hang it on.
+    // three.js sniffs `gl.constructor.name === "WebGL2RenderingContext"`.
     {
         ObjectBuilder ctor;
         Value name = ev::fromUtf8("WebGL2RenderingContext");

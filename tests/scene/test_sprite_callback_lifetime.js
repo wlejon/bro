@@ -1,11 +1,8 @@
-// Sprite animation-end callback lifetime. The JS callback is owned by the
-// SpriteNode itself (a JSFnRef inside the std::function — see
-// scene_bindings_fx.cpp), replacing a process-global registry keyed by node
+// Sprite animation-end callback lifetime. The callback is owned by the
+// SpriteNode itself, replacing a process-global registry keyed by node
 // id that leaked its entries when a sprite died via ancestor subtree destroy
-// or whole-graph prune. The real gate is the Debug build's QuickJS
-// leaked-object assertion at engine teardown: every path below installs a
-// callback and then kills the sprite through a path the old registry never
-// swept.
+// or whole-graph prune. Every path below installs a callback and then
+// kills the sprite to ensure clean teardown.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '128');

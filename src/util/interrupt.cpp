@@ -1,6 +1,5 @@
 #include "util/interrupt.h"
 #include "util/log.h"
-#include "quickjs.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -34,11 +33,6 @@ void sigintHandler(int /*sig*/) {
     ::bro::util::requestInterrupt();
 }
 #endif
-
-int jsInterruptHandler(JSRuntime* /*rt*/, void* /*opaque*/) {
-    // Non-zero: break out of currently executing JS.
-    return g_interrupted.load(std::memory_order_relaxed) ? 1 : 0;
-}
 } // namespace
 
 bool interrupted() {
@@ -46,12 +40,11 @@ bool interrupted() {
 }
 
 void requestInterrupt() {
-    // Second hit: hard exit. JS is probably misbehaving.
     if (g_interrupted.exchange(true)) {
         LOG_ERROR("Second interrupt received — forcing exit.");
         std::_Exit(130);
     }
-    LOG_INFO("Interrupt requested — stopping JS.");
+    LOG_INFO("Interrupt requested — stopping.");
 }
 
 void beginShutdown() {
@@ -72,11 +65,6 @@ void installSignalHandler() {
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 #endif
-}
-
-void installJsInterruptHandler(JSRuntime* rt) {
-    if (!rt) return;
-    JS_SetInterruptHandler(rt, jsInterruptHandler, nullptr);
 }
 
 } // namespace bro::util

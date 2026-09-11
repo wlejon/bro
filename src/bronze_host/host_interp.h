@@ -1,56 +1,5 @@
 #pragma once
 
-// The interpreter bridge: compiled code's `new Function(source)`, `eval` and
-// a non-constant `import()`, answered by the QuickJS realm the same Engine is
-// already running.
-//
-// bronze refuses dynamic code by name — compiling a string at run time is the
-// one thing an ahead-of-time compiler cannot do — and for a standalone bronze
-// program that refusal is the whole story. bro is not that situation: it runs
-// an interpreter beside the compiled code, on the same thread, against the
-// same DOM. So bronze offers three seams (embed.h: setDynamicFunctionHook,
-// setDynamicEvalHook, setDynamicImportHook) and this file is what bro puts in
-// them. The third is a loader rather than a compiler: an `import()` whose
-// specifier bronze could not read at build time resolves against the
-// importer's `import.meta.url` through the page's own module loader (import
-// map, asset mounts, relative paths), evaluates in the interpreted realm, and
-// the namespace comes back as a bronze Promise of a wrapper.
-//
-// WHAT THIS COSTS THE BOUNDARY RULE. src/bronze_host/README.md states it
-// flatly: "Engine objects are shared. Event data is copied. Heap values never
-// cross." That rule was written for the EVENT path, where a copy is not merely
-// safe but correct — an event's fields are a snapshot and a listener has no
-// business holding the dispatch's own object. It cannot hold here. A script
-// the page compiled is handed the compiled program's renderer, its scene and
-// its camera, and it calls methods on them; a copy of a Scene is not a Scene.
-// So this file does the other thing, and does it in one place so the rest of
-// the layer keeps the simpler rule: values are WRAPPED, never copied, and each
-// wrapper forwards to the object it stands for.
-//
-// The two collectors do not trace each other, so the crossing table roots the
-// FOREIGN half of every crossing and holds its OWN side only weakly — a
-// QuickJS finalizer on the outbound wrapper class, a bronze WeakRef on the
-// inbound proxy. When a wrapper dies, sweepInterpBridge (called once per frame
-// from hostFrame) releases the row and the foreign object with it, so the
-// table's size tracks what is LIVE across the boundary, not what has ever
-// crossed. resetInterpBridge() still empties it when the app realm goes away.
-//
-// Typed arrays do not wrap at all: both realms hold real views over one
-// external byte store (embed.h's externalizeArrayBuffer), so writes on either
-// side are simply visible on the other.
-//
-// A compiled ARRAY going out is the one value that is neither wrapped nor
-// shared: it crosses as a real QuickJS Array holding a snapshot of its
-// elements (each element crossing by the ordinary rule, so an object inside
-// is still a live wrapper). The interpreter's `Array.isArray` is a class
-// check that no proxy can pass, and library code begins with that check —
-// `setPath(waypoints)`, `JSON.stringify`, `.map` — so a wrapper would be an
-// array that fails to be one. The snapshot carries its source under a private
-// symbol and is entered in the crossing table, so it comes home as the array
-// that went out; what it does NOT do is forward a later `push` or index write
-// back to the compiled side. An array the interpreter builds still crosses
-// inbound as a wrapper.
-
 #include "embed/embed.h"
 
 namespace bro::engine { class Engine; }
@@ -60,33 +9,16 @@ namespace bro::bronze_host {
 namespace ev = bronze::embed;
 using Value = bronze::Value;
 
-// Install the hook. Called once from installWebHostGlobals, after the Engine's
-// QuickJS realm exists — a compiled `new Function` before that point still
-// gets bronze's own refusal, which is the truthful answer when there is no
-// interpreter to delegate to.
+// Install the interpreter bridge hooks.
 void installInterpBridge(engine::Engine& engine);
 
-// The value the interpreted realm has under `name`, as something compiled code
-// can use — or undefined when the page never defined it.
-//
-// This is what a vendor library IS to a compiled app. The page loads
-// CodeMirror, signals, esprima and the rest with ordinary <script> tags, into
-// the QuickJS realm; the compiled program reads them as bare globals. Before
-// the bridge, the only way to answer was to REIMPLEMENT them in C++, and
-// src/bronze_host/host_vendor_globals.cpp did — a CodeMirror whose getValue
-// answered a string held in a shared_ptr and whose every other method was a
-// no-op. It looked like an editor and edited nothing. Bridging the real object
-// is not a better fake; it is the library.
+// The value under `name` as something compiled code can use, or undefined if not set.
 Value bridgeJsGlobal(const char* name);
 
-// Reclaim rows whose own-side wrapper has died: run once per frame, from
-// hostFrame, after the microtask/finalizer drain — a plain host stack where
-// releasing either half is unconditionally safe.
+// Reclaim inactive bridge entries.
 void sweepInterpBridge();
 
-// Drop every crossing. The wrappers handed out before this keep working
-// against the objects they already hold; what goes is the table's claim on
-// them, which is what lets both collectors reclaim the graph.
+// Drop all bridge entries.
 void resetInterpBridge();
 
 }  // namespace bro::bronze_host

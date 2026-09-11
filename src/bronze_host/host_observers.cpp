@@ -9,13 +9,9 @@
 // WHERE THE NOTICES COME FROM, and why that is the whole design. This does not
 // watch the bronze host's own mutators. It registers with the DOM
 // (Document::addMutationObserver) and is told about every change to the tree —
-// one made by compiled code, one made by the page's own script, one made by the
+// one made by compiled code, one made by the host, or one made by the
 // engine's C++ — because a mutation is a property of the tree and not of who
-// made it. That hook is new (src/dom/document.h) and it replaces the older
-// arrangement where the only mutation notifications in the process were built
-// inside the QuickJS bindings and were therefore invisible to everything else.
-// The alternative — a second observer system watching only this layer's own
-// calls — is exactly the mistake host_dom_events.cpp exists to avoid.
+// made it. All mutations funnel through Document::notifyMutation.
 //
 // WHEN THEY ARE DELIVERED. The web delivers records at the end of the microtask
 // checkpoint that follows the mutation. Here they are delivered once per frame,

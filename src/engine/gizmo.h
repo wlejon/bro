@@ -6,9 +6,7 @@
 #include <memory>
 #include <vector>
 
-extern "C" {
-#include <quickjs.h>
-}
+
 
 namespace bro::scene { class SceneGraph; class MeshNode; }
 
@@ -161,45 +159,35 @@ public:
     void setHovered(GizmoAxis axis);
     GizmoAxis hovered() const { return hovered_; }
 
-    // --- JS callbacks -----------------------------------------------------
+    // --- Callbacks --------------------------------------------------------
     //
-    // Stored as owned JSValues; the bindings layer is responsible for
-    // calling setJSContext() at install time and for freeing any previous
-    // callback values when they are replaced. Fire* methods are called by
-    // the engine during drag updates.
+    // Callbacks invoked by the engine during drag updates and frame refresh.
 
-    void setJSContext(JSContext* ctx) { jsCtx_ = ctx; }
-    JSContext* jsContext() const { return jsCtx_; }
+    using TranslateCallback = std::function<void(const bromath::Vec3&)>;
+    using RotateCallback = std::function<void(const bromath::Quat&)>;
+    using ScaleCallback = std::function<void(const bromath::Vec3&)>;
+    using DragCallback = std::function<void()>;
+    using DragEndCallback = std::function<void(bool committed)>;
+    using HoverCallback = std::function<void()>;
+    using PositionCallback = std::function<bromath::Vec3()>;
+    using OrientationCallback = std::function<bromath::Quat()>;
 
-    void setCallback(int slot, JSValue fn);
+    PositionCallback onGetPosition;
+    OrientationCallback onGetOrientation;
+    TranslateCallback onTranslate;
+    RotateCallback onRotate;
+    ScaleCallback onScale;
+    DragCallback onBeginDrag;
+    DragEndCallback onEndDrag;
+    HoverCallback onHoverChange;
 
-    /// Free all stored JS callback values. Must be called before the
-    /// JS runtime is destroyed; the engine invokes this during shutdown
-    /// because the GizmoManager itself outlives the runtime in member-
-    /// destruction order.
     void clearCallbacks();
-
-    // Slot IDs — mirrored in gizmo_bindings.cpp.
-    enum CallbackSlot : int {
-        CB_Position    = 0,   // () -> [x,y,z]           - called each frame to read pivot
-        CB_Orientation = 1,   // () -> [x,y,z,w]          - (local-space only)
-        CB_BeginDrag   = 2,   // ({mode, axis}) -> void
-        CB_Translate   = 3,   // (dx,dy,dz) -> bool?      - true suppresses default
-        CB_Rotate      = 4,   // (qx,qy,qz,qw) -> bool?
-        CB_Scale       = 5,   // (sx,sy,sz) -> bool?
-        CB_EndDrag     = 6,   // ({mode, axis, committed}) -> void
-        CB_HoverChange = 7,   // (axis|null) -> void
-        CB_COUNT       = 8,
-    };
 
     /// Invoke the position/orientation callback if set, and update the
     /// cached pivot/orientation used for rendering + picking this frame.
     void refreshFromCallbacks();
 
     /// Apply a per-frame translate delta to the attached target.
-    /// Calls CB_Translate if set; if the JS callback returns a truthy
-    /// value the engine treats the drag as "consumed" and does not fall
-    /// back to the default setPosition behavior.
     void fireTranslate(const bromath::Vec3& worldDelta);
     void fireRotate(const bromath::Quat& worldRot);
     void fireScale(const bromath::Vec3& factor);
@@ -380,10 +368,6 @@ private:
     float       dragLastAngle_ = 0.0f;
     bromath::Vec3 dragLastScale_{1, 1, 1};
 
-    // --- JS callbacks -----------------------------------------------------
-    JSContext* jsCtx_ = nullptr;
-    JSValue callbacks_[CB_COUNT];
-    bool callbacksInited_ = false;
 
     /// Rotate axis-angle by `q` about `axisDir` through angle `delta`.
     static bromath::Quat quatAxisAngle(const bromath::Vec3& axis, float radians);

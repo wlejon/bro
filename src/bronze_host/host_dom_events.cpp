@@ -2,24 +2,16 @@
 // document listeners a compiled program registers, the event data that reaches
 // them, and the dispatch it can start itself.
 //
-// THE SEAM, and why there is no second dispatch here. bro's DOM already keeps
-// TWO listener lists per target — the interpreted ones the QuickJS bindings
-// store, and the native ones dom::Element::addEventListener holds — and
-// js::dispatchDomEvent walks the event path ONCE, merging both on the shared
-// registration sequence (dom/event_target.h). A compiled listener is just
-// another native listener: it goes in the same list, fires in the same walk,
-// in registration order against the page's own handlers, with the same capture
-// / at-target / bubble phases and the same shadow retargeting. So a click()
-// from the headless driver — which goes through hit testing and the real input
-// pipeline — reaches a compiled handler for exactly the reason it reaches an
-// interpreted one, and nothing in this file has an opinion about propagation.
+// THE SEAM, and why there is no second dispatch here. The DOM listener
+// registration is held natively on dom::Element, and dom::dispatchDomEvent
+// walks the event path with capture / at-target / bubble phases and shadow
+// retargeting. A compiled listener is a native listener: it fires in the same
+// walk, in registration order, with the same phases. So input dispatch reaches
+// a compiled handler naturally.
 //
-// WHAT CROSSES, which is the other half of the design: nothing. The listener
-// is handed a freshly built bronze object with COPIES of the fields the event
-// kind carries — never a QuickJS value, never a pointer into either heap. The
-// one thing that is shared rather than copied is the engine object behind
-// `target`: a compiled listener that clicked its own canvas gets back the very
-// canvas value it created, because identity is the whole use of a target.
+// WHAT CROSSES: The listener is handed a freshly built bronze object with
+// copies of the fields the event kind carries. The engine object behind `target`
+// is resolved to its wrapper because identity is the whole use of a target.
 //
 // PROPAGATION, which needs a live event and therefore a lifetime. preventDefault
 // / stopPropagation / stopImmediatePropagation must reach the dom::Event that

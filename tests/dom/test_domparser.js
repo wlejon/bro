@@ -105,8 +105,6 @@ assert(keeper.ownerDocument.querySelector('i').textContent === 'deep',
 keeper = null;
 
 // ---- GC: parse in a loop, drop everything — no crash, no leak -------------
-// (Debug builds assert on QuickJS leaks at exit; this loop plus the drops
-// above is the coverage.)
 for (let i = 0; i < 50; i++) {
     const d = parser.parseFromString(
         '<div class="g">' + i + '</div><span>s</span>', 'text/html');

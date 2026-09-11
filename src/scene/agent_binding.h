@@ -14,11 +14,10 @@ namespace bro::scene {
 
 class SceneNode;
 
-/// JS-neutral hook invoked when a binding needs to decide its next action.
+/// Neutral hook invoked when a binding needs to decide its next action.
 ///
-/// scene/ must not depend on QuickJS, so the JS binding layer subclasses this
-/// to call a stored JSValue think() function. C++-only consumers can also
-/// implement it for bespoke behaviour without going through Policy.
+/// Consumers can implement this to provide bespoke behavior without
+/// going through Policy.
 ///
 /// Contract: on return, `out` is either a valid Action (out.capId != kCapNone)
 /// or left untouched (the binding falls through to Hold).

@@ -3,10 +3,10 @@
 #include "engine/engine_init_cabi_dom.h"
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
+#include "platform/dialogs.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
-#include "js/asset_path.h"
-#include "js/dialog_bindings.h"
 #include "util/user_dirs.h"
+#include "util/asset_path.h"
 #include "steam/steam_service.h"
 #include <broaudio/engine.h>
 #include <filesystem>
@@ -75,13 +75,13 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         .resolvePath = [](const char* src) -> const char* {
             thread_local std::string s_resolved;
             if (!src) return "";
-            s_resolved = js::resolveAssetPath(src);
+            s_resolved = util::resolveAssetPath(src);
             return s_resolved.c_str();
         },
         .resolveWritePath = [](const char* src) -> const char* {
             thread_local std::string s_resolvedWrite;
             if (!src) return "";
-            s_resolvedWrite = js::resolveAssetWritePath(src);
+            s_resolvedWrite = util::resolveAssetWritePath(src);
             return s_resolvedWrite.c_str();
         }
     };
@@ -89,14 +89,14 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
 
     static BroDialogsBridge s_engine_dialogs_bridge = {
         .alert = [](const char* message) {
-            js::DialogBindings::showAlert(message ? message : "");
+            platform::Dialogs::showAlert(message ? message : "");
         },
         .confirm = [](const char* message) -> bool {
-            return js::DialogBindings::showConfirm(message ? message : "");
+            return platform::Dialogs::showConfirm(message ? message : "");
         },
         .prompt = [](const char* message, const char* defaultText) -> const char* {
             thread_local std::string s_ans;
-            auto res = js::DialogBindings::showPrompt(message ? message : "", defaultText ? defaultText : "");
+            auto res = platform::Dialogs::showPrompt(message ? message : "", defaultText ? defaultText : "");
             if (!res) return "";
             s_ans = *res;
             return s_ans.c_str();
@@ -109,7 +109,7 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         },
         .showOpenFileDialog = [](const char* filter, bool allowMultiple) -> const char* {
             thread_local std::string s_path;
-            auto picks = js::DialogBindings::pickFiles(filter ? filter : "", allowMultiple);
+            auto picks = platform::Dialogs::pickFiles(filter ? filter : "", allowMultiple);
             if (picks.empty()) return "";
             s_path = picks[0];
             return s_path.c_str();

@@ -17,7 +17,7 @@
 
 <!-- The cross-realm case, and the reason MutationObserver's notices live in
      the DOM layer rather than in either wrapper. This listener runs in the
-     PAGE's QuickJS realm; the observer that must see the change runs in
+     PAGE realm; the observer that must see the change runs in
      compiled code. A host that watched only its own mutators would report
      nothing here and look perfectly healthy doing it.
 

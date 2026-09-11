@@ -15,8 +15,7 @@ else()
 endif()
 target_include_directories(bro-headless PRIVATE ${bro_SOURCE_DIR}/src)
 
-# QuickJS's JS_CallInternal has a large stack frame; Vue's template compiler
-# recurses deeply.  Default 1 MB stack is not enough — use 8 MB.
+# Set stack size to 8 MB.
 if(MSVC)
     target_link_options(bro-headless PRIVATE /STACK:8388608)
 endif()

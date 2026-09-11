@@ -9,10 +9,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 
-extern "C" { typedef struct JSContext JSContext; }
-
 namespace bro::dom { class Document; }
-namespace bro::js { class Runtime; }
 namespace bro::platform { class Window; }
 namespace broaudio { class Engine; }
 
@@ -26,7 +23,6 @@ namespace bro::engine {
 /// controllers to any replaced elements that don't already have one.
 /// Used by the Engine for both the app document and system panels.
 void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
-                            JSContext* jsCtx = nullptr,
                             broaudio::Engine* audioEngine = nullptr);
 
 /// Resolve an `<img>`'s `src` against its document and read the file's header
@@ -34,7 +30,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
 /// at 0, for a missing file or an unreadable one — a broken image, as on the
 /// web. Handles raster formats and SVG alike.
 ///
-/// Shared with the JS `img.src =` setter, which needs the same answer for an
+/// Shared with the image setter, which needs the same answer for an
 /// image that is never inserted into the document: a loader that builds an
 /// `<img>`, sets `src` and reads the size back without appending it (three.js's
 /// ImageLoader does exactly this) is never reached by the layout walk.
@@ -49,7 +45,6 @@ bool probeImageSize(dom::Element* elem, const std::string& src, int& w, int& h);
 /// window) and system panels (per-panel document, no scroll).
 struct ControlContext {
     dom::Document* document;
-    JSContext* jsCtx;
     render::Renderer* renderer;
     platform::Window* window;   // may be nullptr (headless / overlay)
     bool* dirtyFlag;            // points to uiDirty_ or renderDirty_

@@ -83,7 +83,7 @@ if (G.navMeshAvailable !== true) {
 
     // ...and the other stays attached and navigating while the whole canvas
     // is detached: the graph prune destroys the binding + ticker + pins, and
-    // engine teardown must be leak-clean (Debug QuickJS assert is the gate).
+    // engine teardown must be leak-clean.
     document.body.removeChild(canvas);
     flush();
     advanceTime(300);

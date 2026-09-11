@@ -1,6 +1,6 @@
 # System panels
 
-bro ships a handful of engine-level UI overlays, the menu bar, the perf HUD, the preferences modal and its settings tabs, the startup splash screen, and the DOM inspector. These are **system panels**: HTML files rendered through the same layout/CSS/Skia pipeline as an app's own document, but each with its own `dom::Document` and its own `JSContext` on the shared QuickJS runtime.
+bro ships a handful of engine-level UI overlays, the menu bar, the perf HUD, the preferences modal and its settings tabs, the startup splash screen, and the DOM inspector. These are **system panels**: HTML files rendered through the same layout/CSS/Skia pipeline as an app's own document, each with its own `dom::Document`.
 
 This doc is the single reference for how that layer works and how to author or override a panel. It replaces scattered mentions in `docs/settings.md` and `docs/menu-api.js`, which now link here instead of describing `__bro` inline.
 
@@ -27,9 +27,9 @@ Both scans match panels by relative path (`menu.html`, `settings/graphics.html`,
 | Splash screen | `system/splash.html` | `Engine::splashVisible_` | shown automatically at startup if `splashEnabled_`; dismisses itself |
 | DOM inspector | `system/inspector.html` | `Engine::inspector().visible` | the `__system.inspector` menu item |
 
-## Panel JS context: what's available, what isn't
+## Panel DOM and APIs
 
-Each panel gets a full `JSContext` sharing the engine's QuickJS runtime, with the same DOM/Canvas 2D bindings as an app document (`document`, `console`, timers, `requestAnimationFrame`, Canvas 2D). Notably:
+Each panel gets its own `dom::Document`, with DOM and Canvas 2D layout. Notably:
 
 - **`bro.settings.*`** is available (it's installed on every context via `SettingsBindings`), so panels can read/write settings directly. See [settings.md](settings.md).
 - **`bro.menu.*`** (the app-facing menu tree *mutation* API, `set`, `addItem`, `updateItem`, `on`, etc., documented in [menu-api.js](menu-api.js)) is **not** available here. It's installed only on the app's own `JSContext`. Panels read/dispatch the menu through `__bro.menu` instead (below), a much narrower, render-only surface.
@@ -131,4 +131,4 @@ The preferences-modal chrome, distinct from `bro.settings.*` (the settings *valu
 There's no automated test suite for this layer, coverage is manual, build + `bro.exe`/`bro-headless.exe` + `screenshot()`. Two things to know if you're scripting a check:
 
 - **`bro-headless` suppresses the menu bar** regardless of `MenuBar::visible`, so screenshots stay consistent with a no-menu viewport. You can't screenshot-verify the menu bar from a headless script.
-- **Panel DOMs need the overlay globals, not the app ones.** `document.querySelector`/`inspect()`/`inspectTree()` only see the app's own document, each panel is a separate `Document`/`JSContext`. Query a panel with `inspectOverlay(panelName, selector [, verbose])` and `inspectOverlayTree(panelName, selector [, depth])`, which resolve the selector against that panel's `Document` (`Engine::overlayQuerySelector`); `overlayPanels()` lists the names they accept (`"perf"`, `"menu"`, `"nav"`, `"settings/graphics"`, ...). See [inspect.md](inspect.md). There is still no way to *mutate* a panel from a script, so drive it with screen-coordinate `click(x, y)` (routed through the same input path as a real click) and then assert with the overlay inspectors or `screenshot()`.
+- **Panel DOMs need the overlay globals, not the app ones.** `document.querySelector`/`inspect()`/`inspectTree()` only see the app's own document, each panel is a separate `Document`. Query a panel with `inspectOverlay(panelName, selector [, verbose])` and `inspectOverlayTree(panelName, selector [, depth])`, which resolve the selector against that panel's `Document` (`Engine::overlayQuerySelector`); `overlayPanels()` lists the names they accept (`"perf"`, `"menu"`, `"nav"`, `"settings/graphics"`, ...). See [inspect.md](inspect.md). There is still no way to *mutate* a panel from a script, so drive it with screen-coordinate `click(x, y)` (routed through the same input path as a real click) and then assert with the overlay inspectors or `screenshot()`.

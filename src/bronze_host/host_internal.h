@@ -516,8 +516,7 @@ void installTimerGlobals();
 
 // Fire every timer whose deadline has passed, in (deadline, id) order — HTML's
 // order for same-deadline timers is creation order. Called once per frame from
-// the bronze frame seam, before requestAnimationFrame, which is where bro's own
-// loop ticks js::Timers relative to rAF (engine_frame.cpp step 2 vs step 3a).
+// the bronze frame seam, before requestAnimationFrame.
 void fireHostTimers(double nowMs);
 
 // ---------------------------------------------------------------------------
@@ -663,6 +662,7 @@ void installParserGlobal();
 // bound to `doc` rather than to whatever the engine is currently showing. The
 // `document` global is the one wrapper NOT built this way; dom_globals.cpp's
 // documentFor() says why. Defined there, beside the builder it shares.
+Value makeDocumentValue(dom::Document* fixed);
 Value hostDocumentValue(dom::Document* doc);
 
 // ---------------------------------------------------------------------------

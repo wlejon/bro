@@ -33,7 +33,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 
-#include "js/asset_path.h"
+#include "util/asset_path.h"
 #include "util/object_url.h"
 #include "util/log.h"
 
@@ -74,8 +74,7 @@ void loadHostImage(HostImage& image, const std::string& src) {
 
     std::string err;
     if (src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0) {
-        // The network belongs to brokit, which is QuickJS-native; there is no
-        // bronze-side fetch to route this through (see host_xhr.cpp).
+        // Network fetches for remote image URLs are not supported by this path (see host_xhr.cpp).
         err = "http(s) image URLs are not fetched by the bronze host image path";
         LOG_ERROR("bronze_host: Image.src = %s needs a network fetch this layer "
                   "does not provide", src.c_str());
@@ -102,10 +101,10 @@ void loadHostImage(HostImage& image, const std::string& src) {
             LOG_WARN("bronze_host: Image inline-URL decode failed (%s)", err.c_str());
         }
     } else {
-        // The shared app-path rules every bro binding uses (js/asset_path.h):
+        // The shared app-path rules every bro binding uses (util/asset_path.h):
         // drive-qualified passes through, a leading slash resolves against the
         // engine mounts, anything else is relative to the app directory.
-        const std::string path = js::resolveAssetPath(src);
+        const std::string path = util::resolveAssetPath(src);
         broimage::Image decoded;
         if (broimage::decode_file(path, decoded, &err)) {
             img->width = decoded.width;

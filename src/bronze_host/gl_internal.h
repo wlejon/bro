@@ -2,12 +2,8 @@
 
 // Shared plumbing for the bronze-side WebGL2 binding (src/bronze_host).
 //
-// This is the bronze twin of src/js/webgl2_bindings_util.h: the same
-// webgl::WebGL2RenderingContext is wrapped, the same call surface is exposed,
-// but the values crossing the boundary are bronze embed Values instead of
-// QuickJS JSValues. The QuickJS files remain the reference for the call
-// surface and for every GL constant value — nothing here is written from
-// memory.
+// Wraps webgl::WebGL2RenderingContext, exposing the WebGL2 call surface with
+// bronze embed Values.
 //
 // GC DISCIPLINE (the one rule of this layer): bronze's heap is a moving
 // semispace collector. A Value held in a plain C++ variable is stale after
@@ -41,17 +37,13 @@ using Value = bronze::Value;
 
 // The payload behind every WebGL object value the binding hands the program
 // (WebGLBuffer, WebGLTexture, ... WebGLUniformLocation). One struct for all
-// kinds, so there is exactly one finalizer; the kind tag is what unwrap
-// checks, standing in for the per-kind JSClassID the QuickJS layer uses.
+// kinds, so there is exactly one finalizer; the kind tag is checked on unwrap.
 //
 // TEARDOWN ORDER, decided here: the finalizer NEVER touches GL. bronze's
 // collector may prove a texture handle dead long after the Engine — and with
 // it the GL context — has been destroyed, and the finalizer runs
 // mid-collection where even a live context must not be called into. So GL
-// object lifetime is owned elsewhere: the program deletes explicitly
-// (three.js's dispose() path calls gl.deleteTexture and friends), and
-// whatever it never deleted dies wholesale when the Engine destroys the
-// WebGL2RenderingContext. The finalizer's whole job is freeing this struct.
+// deletion remains explicit via deleteBuffer/deleteTexture/etc.
 struct GlCell {
     enum Kind : uint32_t {
         Buffer = 1,
@@ -60,25 +52,23 @@ struct GlCell {
         Shader,
         Framebuffer,
         Renderbuffer,
-        Vao,
+        VertexArray,
         UniformLoc,
         Sampler,
         Sync,
-        Query,
         TransformFeedback,
+        Query,
     };
     uint32_t kind = 0;
-    GLuint id = 0;          // GL name (every kind but UniformLoc and Sync)
-    GLsync sync = nullptr;  // Sync only
-    GLenum shaderType = 0;  // Shader only
-    GLint location = -1;    // UniformLoc only
-    GLuint program = 0;     // UniformLoc only
+    GLuint id = 0;
+    GLenum shaderType = 0;
+    int32_t location = -1;
+    uint32_t program = 0;
+    GLsync sync = nullptr;
 };
 
-inline void glCellDtor(void* p) {
-    // Mid-collection, possibly after the GL context is gone: free host
-    // memory, nothing else (see GlCell).
-    delete static_cast<GlCell*>(p);
+inline void glCellDtor(void* data) {
+    delete static_cast<GlCell*>(data);
 }
 
 // ALLOCATES (makeHandle).
@@ -91,8 +81,7 @@ inline Value wrapGlObj(uint32_t kind, GLuint id, GLenum shaderType = 0) {
 }
 
 // ALLOCATES (makeHandle). null for the -1 location, which is what three.js's
-// `location === null` checks expect — matching wrapUniformLocation's callers
-// in the QuickJS layer, where getUniformLocation answers JS null.
+// `location === null` checks expect — where getUniformLocation answers null.
 inline Value wrapUniformLocation(webgl::WebGLUniformLocation loc) {
     if (loc.location < 0) return ev::null();
     auto* cell = new GlCell{};
@@ -120,9 +109,8 @@ inline Value wrapQuery(webgl::WebGLQuery q) {
     return wrapGlObj(GlCell::Query, q.id);
 }
 
-// nullptr for null/undefined/foreign values and kind mismatches — the same
-// id-0 fail-soft the QuickJS unwrap helpers answer, so a wrong argument is a
-// GL no-op rather than a crash.
+// nullptr for null/undefined/foreign values and kind mismatches —
+// id-0 fail-soft, so a wrong argument is a GL no-op rather than a crash.
 inline GlCell* cellOf(Value v, uint32_t kind) {
     auto* cell = static_cast<GlCell*>(ev::handleData(v));
     if (!cell || cell->kind != kind) return nullptr;
@@ -157,8 +145,8 @@ inline webgl::WebGLQuery queryOf(Value v) {
 // The live context
 // ---------------------------------------------------------------------------
 
-// Every wrapped call funnels through here, exactly as the QuickJS layer's
-// getCtx() does: makeCurrent() re-applies this context's shadow state if
+// Every wrapped call funnels through here:
+// makeCurrent() re-applies this context's shadow state if
 // another canvas (or the engine's own compositing) touched GL since — a
 // pointer compare in the common single-canvas case.
 inline webgl::WebGL2RenderingContext* live(webgl::WebGL2RenderingContext* c) {
@@ -173,8 +161,7 @@ inline webgl::WebGL2RenderingContext* live(webgl::WebGL2RenderingContext* c) {
 // Defensive by design: embed::toDouble on an OBJECT is a hard runtime error
 // (rt_convert.cpp), and a padded missing argument arrives as undefined (NaN).
 // GL argument decoding must never take the process down over a bad call, so
-// objects and NaN read as 0 — the same fail-soft the JS_ToInt32 paths in the
-// QuickJS files have.
+// objects and NaN read as 0.
 inline double numAt(std::span<const Value> args, size_t i) {
     if (i >= args.size()) return 0.0;
     Value v = args[i];

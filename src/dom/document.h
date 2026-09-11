@@ -401,15 +401,9 @@ public:
         nodeDestroyingCb_ = cb;
     }
 
-    // The same two notices, for a wrapper layer that is not the JS realm.
-    //
-    // The two slots above are single pointers because there is exactly one
-    // QuickJS realm per document and it owns them. A NATIVE host that also
-    // wraps elements — the bronze host holds a compiled-side object per
-    // element, keyed by raw Element* — needs the identical warning and cannot
-    // take a slot the realm already has. It is a list rather than a third slot
-    // because none of these observers owns the document, and a second one
-    // arriving must not silently unhook the first.
+    // The same two notices, for external host layers that wrap elements (e.g.
+    // the bronze host holds a compiled-side object per element, keyed by raw
+    // Element*). Observers receive node destruction notices in registration order.
     //
     // Fired after the corresponding single callback, in registration order.
     // An observer must not mutate the DOM from inside: it is called mid-tear.
@@ -424,8 +418,8 @@ public:
     // notifyChildListChanged() in element.cpp says MutationObserver records
     // stay in the JS bindings because they are "per-realm observer lists, JS
     // callbacks". That is true of the DELIVERY and not of the NOTICE. A
-    // function-pointer list carries no realm and no JSContext, and each
-    // wrapper layer above — the QuickJS bindings, the bronze host — turns the
+    // function-pointer list carries no realm and no runtime-specific context, and each
+    // wrapper layer above — such as the bronze host — turns the
     // same notice into its own records for its own callbacks. It is the shape
     // the live-Range notifications above already have, for the same reason:
     // what changed is a property of the tree, not of who changed it.

@@ -30,27 +30,26 @@ macOS: `tests/run_tests.sh` needs bash 4+ (`brew install bash`); system bash is 
 
 ## Architecture
 
-Lightweight app runtime: HTML/CSS/JS apps, GPU-accelerated. ~215K LOC C++20 under `src/` (`src/js/` bindings are ~92K of it). Stack: QuickJS + qjsbind + brokit + htmlayout + broaudio + bromesh + Jolt + Skia (Ganesh-GL on GPU, CPU raster otherwise) + SDL3. All GPU work is OpenGL 3.3 core via glad; there is no SDL_GPU, D3D12, or Metal path.
+Lightweight app runtime: HTML/CSS apps, GPU-accelerated. C++20 under `src/`. Stack: brokit + htmlayout + broaudio + bromesh + Jolt + Skia (Ganesh-GL on GPU, CPU raster otherwise) + SDL3. All GPU work is OpenGL 3.3 core via glad; there is no SDL_GPU, D3D12, or Metal path.
 
-Three executables, one `Engine` (via `EngineConfig.displayMode`): `bro` (windowed), `bro-headless` (JS-scripted; GPU by default through a hidden SDL window, same pipeline including WebGL), and `bro-server` (`bro-server <appdir> <script.js>`, a dedicated game server running a fixed-tickrate JS loop with `bro.net`/`bro.physics`/`bro.mesh`/`bro.noise`, no window or renderer). Headless globals: `screenshot()`, `advanceTime(ms)` (virtual time, for deterministic tests), `flush()`, `sleep()`, `assert()`; all standard DOM APIs work. Full reference: [docs/headless.md](docs/headless.md).
+Three executables, one `Engine` (via `EngineConfig.displayMode`): `bro` (windowed), `bro-headless` (GPU by default through a hidden SDL window, same pipeline including WebGL), and `bro-server` (`bro-server <appdir>`, a dedicated game server running with `bro.net`/`bro.physics`/`bro.mesh`/`bro.noise`, no window or renderer). Headless functions: `screenshot()`, `advanceTime(ms)` (virtual time, for deterministic tests), `flush()`, `sleep()`, `assert()`; all standard DOM APIs work. Full reference: [docs/headless.md](docs/headless.md).
 
 Module layering (each names only layers left of it):
 ```
-util → platform (SDL3, event loop) → render (Renderer iface) → svg → layout (htmlayout adapters, DrawTraversal) → dom → canvas | webgl | scene | physics → js (bindings) → engine (main loop)
+util → platform (SDL3, event loop) → render (Renderer iface) → svg → layout (htmlayout adapters, DrawTraversal) → dom → canvas | webgl | scene | physics → engine (main loop)
 ```
-The js/engine edge is in practice a cycle (a dozen `*_bindings` files take `Engine*`, wired in `engine_init.cpp`); scene/canvas stay clean via callbacks. `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
+`src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
 
-`src/bronze_host/` (17K lines, `BRO_WITH_BRONZE=OFF` by default) is a second, parallel binding layer: the same engine exposed to [bronze](../bronze)-compiled AOT JavaScript instead of QuickJS. An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and the configure says which. CI turns it on everywhere and builds the compiler on Linux, where the 22 `tests/bronze_host` checks run; the nightly zip ships the compiler under `bronze/` beside binaries that load what it emits. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
+`src/bronze_host/` (`BRO_WITH_BRONZE=OFF` by default) exposes the engine to [bronze](../bronze)-compiled AOT JavaScript. An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and the configure says which. CI turns it on everywhere and builds the compiler on Linux, where the 22 `tests/bronze_host` checks run; the nightly zip ships the compiler under `bronze/` beside binaries that load what it emits. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
 
 Key patterns:
-- **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read from JS (`getBoundingClientRect`, `offsetWidth`, `getComputedStyle`, …) lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
+- **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
 - **GPU rendering: three GL contexts, one share group, three threads.** The main context composites and runs WebGL + the 3D scene. The raster thread replays the frame's recorded `CommandBuffer` (from `RecordingRenderer`, which never reads the DOM) into FBO layer surfaces with its own `GrDirectContext`. One shared canvas worker rasterizes all `CanvasScene` surfaces serially (per-canvas contexts crashed on Windows/NVIDIA; see `canvas_scene.h`). Handoff = GLsync fences + the lock-free `FrameWorker` CAS machine (`render/frame_worker.h`). The compositor (`engine_compositor.cpp`) draws DOM-ordered quads: HTML segments interleaved with canvas/WebGL/scene textures at `LayerBreak` points.
-- **Threading policy: data plane lock-free, control plane may lock.** Per-frame handoffs, RT-audio rings, and JS-poll rings use atomics/snapshots, never a lock on an RT audio thread. Cold control paths (service command queues, physics phase handshake, canvas sync RPC) use mutex+condvar.
+- **Threading policy: data plane lock-free, control plane may lock.** Per-frame handoffs and RT-audio rings use atomics/snapshots, never a lock on an RT audio thread. Cold control paths (service command queues, physics phase handshake, canvas sync RPC) use mutex+condvar.
 - **Renderer abstraction:** `bro::render::Renderer` is a CSS-shaped 2D interface implemented by `SkiaRenderer`, `RasterRenderer` (pure CPU, used for headless `--no-gpu` and layout-thread text metrics), and `RecordingRenderer`. Native font backends (DirectWrite on Windows, FreeType+fontconfig elsewhere). The 3D scene, WebGL, and compositing bypass it.
-- **Text shaping:** all text goes through HarfBuzz behind a byte-domain `ShapedRun` (`render/shaped_run.h`), recorded as an `SkTextBlob`; bidi levels resolve via Skia's UAX#9 subset (`render/bidi.h`) and runs reorder into visual order. The shaper's cluster map is what answers htmlayout's caret/selection queries, so carets snap to clusters. HarfBuzz and the ICU bidi subset compile from the Skia source bundle (`third_party/skia/skia_modules.cmake`), and `BRO_WITH_TEXT_SHAPING` defaults ON in *every* profile, minimal included, so there is one text path rather than two. `bro.text` (`src/js/text_bindings.cpp`) exposes the cluster map for diagnostics.
-- **Events:** SDL feeds `EventLoop`, which calls `Engine::handle*`, which runs `hitTest()` and then `js::dispatchDomEvent()` (`src/js/event_dispatch.cpp`): full three-phase dispatch with shadow retargeting. Keys also fire `"action"` events via `bro.settings` bindings.
-- **Settings:** three-layer (engine < app < user), persisted to `.bro_settings.json`, exposed as `bro.settings.*`. See [docs/settings.md](docs/settings.md).
-- **JS lifetime:** the QuickJS context must outlive all DOM elements (they hold JS function refs).
+- **Text shaping:** all text goes through HarfBuzz behind a byte-domain `ShapedRun` (`render/shaped_run.h`), recorded as an `SkTextBlob`; bidi levels resolve via Skia's UAX#9 subset (`render/bidi.h`) and runs reorder into visual order. The shaper's cluster map is what answers htmlayout's caret/selection queries, so carets snap to clusters. HarfBuzz and the ICU bidi subset compile from the Skia source bundle (`third_party/skia/skia_modules.cmake`), and `BRO_WITH_TEXT_SHAPING` defaults ON in *every* profile, minimal included, so there is one text path rather than two.
+- **Events:** SDL feeds `EventLoop`, which calls `Engine::handle*`, which runs `hitTest()` and then `dom::dispatchEvent()`: full three-phase dispatch with shadow retargeting.
+- **Settings:** three-layer (engine < app < user), persisted to `.bro_settings.json`. See [docs/settings.md](docs/settings.md).
 
 ## Third-party dependencies (third_party/)
 
@@ -58,8 +57,6 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 
 | Library | Target | What |
 |---------|--------|------|
-| QuickJS | `qjs` | JS engine |
-| qjsbind | `qjsbind` | header-only C++20 QuickJS bindings (all bindings go through it) |
 | bromath | `bromath` | header-only math: Vec/Quat/Mat, Color, AABB, easing |
 | brokit | `brokit` | web/system APIs: fetch, streams, storage, fs, crypto, child_process |
 | htmlayout | `htmlayout` | HTML5 parsing (gumbo), CSS cascade/selectors, layout |
@@ -136,10 +133,8 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis, `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |
 
-Bindings without a `docs/` file yet: `bro.steam` (`src/js/steam_bindings.cpp`, Steamworks via a runtime-loaded flat C API), `bro.text` (`src/js/text_bindings.cpp`, shaping diagnostics), and the global `Rig.*` / `IK.*` namespaces (`src/js/rigging_bindings.cpp`, skeleton + IK solvers). Read the binding source for those.
-
-Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: host bindings, media backends, the headless driver), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage).
+Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: media backends, the headless driver), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage).
 
 ## Namespace
 
-All code under `bro::` with sub-namespaces matching module directories: `bro::render`, `bro::dom`, `bro::js`, `bro::platform`, `bro::engine`, `bro::layout`, `bro::canvas`, `bro::webgl`, `bro::scene`, `bro::physics`, `bro::svg`.
+All code under `bro::` with sub-namespaces matching module directories: `bro::render`, `bro::dom`, `bro::platform`, `bro::engine`, `bro::layout`, `bro::canvas`, `bro::webgl`, `bro::scene`, `bro::physics`, `bro::svg`.

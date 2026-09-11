@@ -22,8 +22,7 @@
 #include "engine/gamepad.h"
 #include "engine/settings.h"
 
-#include "js/runtime.h"
-#include "js/event_dispatch.h"
+#include "dom/event_dispatch.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -101,31 +100,16 @@ static const char* mouseButtonBindingName(int domButton) {
 
 void Engine::dispatchActionEventForKey(const std::string& key, const char* phase,
                                        float strength, int gamepadIndex) {
-    if (!settings_ || !jsRuntime_ || !document_ || !document_->body()) return;
+    (void)phase;
+    (void)strength;
+    (void)gamepadIndex;
+    if (!settings_ || !document_ || !document_->body()) return;
     std::string action = settings_->getActionForKey(key);
     if (action.empty()) return;
 
-    JSContext* ctx = jsRuntime_->getContext();
-    JSValue jsEvent = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, jsEvent, "type", JS_NewString(ctx, "action"));
-    JS_SetPropertyStr(ctx, jsEvent, "bubbles", JS_NewBool(ctx, 1));
-    JS_SetPropertyStr(ctx, jsEvent, "cancelable", JS_NewBool(ctx, 1));
-
-    JSValue detail = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, detail, "action", JS_NewString(ctx, action.c_str()));
-    JS_SetPropertyStr(ctx, detail, "phase", JS_NewString(ctx, phase));
-    JS_SetPropertyStr(ctx, detail, "key", JS_NewString(ctx, key.c_str()));
-    JS_SetPropertyStr(ctx, detail, "strength",
-                      JS_NewFloat64(ctx, static_cast<double>(strength)));
-    if (gamepadIndex >= 0) {
-        JS_SetPropertyStr(ctx, detail, "gamepad", JS_NewInt32(ctx, gamepadIndex));
-    }
-    JS_SetPropertyStr(ctx, jsEvent, "detail", detail);
-
-    dom::Event evt("action");
+    dom::CustomEvent evt("action", /*bubbles=*/true, /*cancelable=*/true);
     evt.setIsTrusted(true);
-    js::dispatchDomEvent(ctx, document_->body(), evt, jsEvent);
-    JS_FreeValue(ctx, jsEvent);
+    dom::dispatchDomEvent(document_->body(), evt);
 }
 
 // ---------------------------------------------------------------------------

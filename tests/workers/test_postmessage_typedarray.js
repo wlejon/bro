@@ -7,9 +7,7 @@
 // same bytes — no error, no warning, just silently reinterpreted numbers.
 // A 64-bit id sent to a worker came back as two garbage floats.
 //
-// Reading constructor.name was also wrong for subclasses, which report their
-// own name and so hit the same default; the serializer now asks QuickJS for
-// the element type instead, and refuses anything it cannot name.
+// The serializer checks the element type and refuses anything it cannot name.
 
 const workerPath = '../workers/worker_postmessage_typedarray.js';
 

@@ -48,10 +48,10 @@ endif()
 
 # Submodule preflight: a `git clone` without --recursive leaves the third_party
 # submodule dirs empty and produces cryptic downstream failures. Only check
-# non-sibling submodules — the brokit/htmlayout/broaudio/bromesh/qjsbind/
+# non-sibling submodules — the brokit/htmlayout/broaudio/bromesh/
 # brogameagent deps fall back to sibling repos at ../<name> (see third_party/
 # CMakeLists.txt), so it's fine if their third_party/<name> dirs are empty.
-foreach(_bro_submodule IN ITEMS quickjs SDL jolt)
+foreach(_bro_submodule IN ITEMS SDL jolt)
     set(_bro_submodule_dir "${CMAKE_CURRENT_SOURCE_DIR}/third_party/${_bro_submodule}")
     file(GLOB _bro_submodule_contents "${_bro_submodule_dir}/*")
     if(_bro_submodule_contents STREQUAL "")
@@ -97,9 +97,9 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 else()
-    # Embedded JS bundles contain UTF-8 bytes > 127; require unsigned char
-    # so string literals don't trip narrowing-conversion errors on platforms
-    # where `char` is signed (Apple clang).
+    # String literals with UTF-8 bytes > 127 require unsigned char so they
+    # don't trip narrowing-conversion errors on platforms where `char` is
+    # signed (Apple clang).
     add_compile_options(-funsigned-char)
 endif()
 

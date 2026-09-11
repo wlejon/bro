@@ -1,15 +1,14 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on sixteen sibling repos with submodule fallbacks under `third_party/`: fourteen libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the AOT JavaScript compiler, resolved under `BRO_WITH_BRONZE=ON`), and **[brosurface](https://github.com/wlejon/brosurface)** (the WebIDL code generation toolchain).
+bro depends on fifteen sibling repos with submodule fallbacks under `third_party/`: thirteen libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the AOT JavaScript compiler, resolved under `BRO_WITH_BRONZE=ON`), and **[brosurface](https://github.com/wlejon/brosurface)** (the WebIDL code generation toolchain).
 
 Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. Because bronze is off by default, the configure that resolves it says which of the two trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
 
-A seventeenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library / Tool | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
 | **bromath** | `../bromath` | `third_party/bromath` |
-| **qjsbind** | `../qjsbind` | `third_party/qjsbind` |
 | **brokit** | `../brokit` | `third_party/brokit` |
 | **htmlayout** | `../htmlayout` | `third_party/htmlayout` |
 | **broaudio** | `../broaudio` | `third_party/broaudio` |
@@ -32,7 +31,6 @@ D:/projects/
 ├── bro/                          # main project
 │   └── third_party/
 │       ├── bromath/              # submodule (CI / fallback)
-│       ├── qjsbind/              # submodule (CI / fallback)
 │       ├── brokit/               # submodule (CI / fallback)
 │       ├── htmlayout/            # submodule (CI / fallback)
 │       ├── broaudio/             # submodule (CI / fallback)
@@ -48,7 +46,6 @@ D:/projects/
 │       ├── bronze/               # submodule (CI / nightly; BRO_WITH_BRONZE only)
 │       └── brosurface/           # submodule (CI / fallback)
 ├── bromath/                      # standalone repo (preferred for dev)
-├── qjsbind/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
 ├── htmlayout/                    # standalone repo (preferred for dev)
 ├── broaudio/                     # standalone repo (preferred for dev)
@@ -90,7 +87,7 @@ Note: bromath is pulled in transitively by several siblings (bromesh, brogameage
 
 ### Feature gates
 
-Most siblings are added **conditionally**, behind the modular-build flags (see [build-options.md](build-options.md)). `bromath`, `qjsbind`, `brokit`, `htmlayout`, `broaudio`, and `broimage` are unconditional; the rest are gated:
+Most siblings are added **conditionally**, behind the modular-build flags (see [build-options.md](build-options.md)). `bromath`, `brokit`, `htmlayout`, `broaudio`, and `broimage` are unconditional; the rest are gated:
 
 | Sibling | Gate |
 |---------|------|
@@ -181,9 +178,9 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, and `bronze`.
+Same shape for `bromath`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, and `bronze`.
 
-## Status, pull, sync across all seventeen repos
+## Status, pull, sync across all sixteen repos
 
 `scripts/repo-status.ps1` (Windows) and `scripts/repo-status.sh` (Linux/macOS) are the same tool in two ports. Run either from anywhere; both resolve paths from the script location.
 
@@ -218,7 +215,6 @@ scripts/repo-status.sh --sync --push
 ```bash
 cmake -B build \
     -DBROMATH_DIR=/path/to/bromath \
-    -DQJSBIND_DIR=/path/to/qjsbind \
     -DBROKIT_DIR=/path/to/brokit \
     -DHTMLAYOUT_DIR=/path/to/htmlayout \
     -DBROAUDIO_DIR=/path/to/broaudio \
@@ -237,7 +233,7 @@ cmake -B build \
 Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
 
 ```bash
-cmake -B build -DBROMATH_DIR=none -DQJSBIND_DIR=none -DBROKIT_DIR=none \
+cmake -B build -DBROMATH_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
                -DBROFLORA_DIR=none -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none \
                -DBROLM_DIR=none -DBRODIFFUSION_DIR=none -DBROIMAGE_DIR=none \

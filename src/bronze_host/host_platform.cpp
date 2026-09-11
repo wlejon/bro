@@ -30,7 +30,7 @@
 
 #include "engine/engine.h"
 #include "engine/engine_config.h"
-#include "js/dialog_bindings.h"
+#include "platform/dialogs.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
 
@@ -243,7 +243,7 @@ std::string messageArg(std::span<const Value> a, size_t i) {
 Value makeAlert() {
     return ev::makeFunction(
         [](Value, std::span<const Value> a) {
-            js::DialogBindings::showAlert(messageArg(a, 0));
+            platform::Dialogs::showAlert(messageArg(a, 0));
             return ev::undefined();
         },
         1);
@@ -252,7 +252,7 @@ Value makeAlert() {
 Value makeConfirm() {
     return ev::makeFunction(
         [](Value, std::span<const Value> a) {
-            return ev::fromBool(js::DialogBindings::showConfirm(messageArg(a, 0)));
+            return ev::fromBool(platform::Dialogs::showConfirm(messageArg(a, 0)));
         },
         1);
 }
@@ -260,7 +260,7 @@ Value makeConfirm() {
 Value makePrompt() {
     return ev::makeFunction(
         [](Value, std::span<const Value> a) {
-            auto answer = js::DialogBindings::showPrompt(messageArg(a, 0),
+            auto answer = platform::Dialogs::showPrompt(messageArg(a, 0),
                                                          messageArg(a, 1));
             if (!answer) return ev::null();
             return ev::fromUtf8(*answer);

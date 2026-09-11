@@ -1,8 +1,5 @@
-// State management + draw calls — the bronze twin of
-// src/js/webgl2_bindings_state.cpp, function for function. Every entry routes
-// through live(c) (makeCurrent) for the same reason every QuickJS entry
-// routes through getCtx(): a call issued after another canvas or the engine's
-// compositor touched GL must land in THIS context's framebuffer and state.
+// State management + draw calls for WebGL2. Every entry routes
+// through live(c) (makeCurrent) so calls land in this context's framebuffer and state.
 //
 // Nothing in this file touches the bronze heap after decoding its arguments:
 // the argument readers may allocate nothing, so no Value here ever goes

@@ -163,7 +163,7 @@ leaves them empty and CMake stops with a clear error):
 git submodule update --init --recursive
 ```
 
-Sibling libraries (`brokit`, `htmlayout`, `broaudio`, `bromesh`, `qjsbind`,
+Sibling libraries (`brokit`, `htmlayout`, `broaudio`, `bromesh`,
 `brogameagent`, …) are also picked up from standalone checkouts at `../<name>`
 if present — as is `bronze`, under `-DBRO_WITH_BRONZE=ON`. See
 [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).

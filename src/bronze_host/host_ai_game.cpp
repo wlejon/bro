@@ -2,24 +2,11 @@
 // and the game object that hangs the factories and the perception helpers
 // together under the name docs/ai-game-api.js documents.
 //
-// WHY A SECOND SPELLING OF THE AI SURFACE. The `AI` global (host_ai_core.cpp)
-// is this layer's own name for brogameagent, and it predates the interpreted
-// side settling on `bro.ai.game`. A program written against bro's docs binds
-// `bro.ai.game` at module load and calls `createHexNav`, `createWorld`,
-// `createAgent` off it — and until this file it found the compiled `bro`
-// carrying no `ai` at all, so the only way through was a bridge crossing per
-// engine call into the page's QuickJS binding. Every object here is the SAME
-// brogameagent object the `AI` global wraps (an agent from either factory is
-// an AIAgent and goes into either world); what this adds is the two classes
-// the `AI` global never had — the world and the hex navigator — and the name.
+// The `bro.ai.game` namespace: provides `createHexNav`, `createWorld`,
+// `createAgent` wrapping brogameagent objects.
 //
-// TYPED ARRAYS CROSS AS VIEWS, in both directions. A step table comes in as
-// the program's own Float64Array and is read through embed::typedArrayInfo —
-// a pointer into the moving heap, consumed by the brogameagent call before
-// anything allocates (gl_internal.h's one rule). A path goes out as a fresh
-// Int32Array (createTypedArray + fillTypedArray), which is what the QuickJS
-// binding hands back too, so `route[i]` and `route.length` read the same on
-// either side of the boundary.
+// TYPED ARRAYS: A step table comes in as Float64Array and is read through
+// embed::typedArrayInfo. A path goes out as a fresh Int32Array (createTypedArray + fillTypedArray).
 //
 // THE WORLD ROOTS ITS AGENTS. brogameagent::World keeps raw Agent pointers,
 // and an agent handle the program dropped would otherwise be collected out
@@ -390,7 +377,7 @@ void decorateWorldProto(ObjectBuilder& b) {
 
     // setAvoidance(true|false) or setAvoidance({ enabled?, navGrid? }): the
     // ORCA pass in tick(). A navGrid rebases the avoidance-only walls on its
-    // obstacle boxes (copied; no reference kept), as the QuickJS binding does.
+    // obstacle boxes (copied; no reference kept).
     b.def("setAvoidance", 1, [](Value self, std::span<const Value> a) -> Value {
         HostWorld* w = unwrapWorld(self);
         if (!w) return ev::undefined();

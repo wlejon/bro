@@ -257,8 +257,7 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
 
     // Compressed uploads, with the WebGL2 srcOffset/srcLengthOverride tail in
-    // ELEMENT units of the source view — the same clamping the QuickJS
-    // binding performs before the context's block-size validation runs.
+    // ELEMENT units of the source view.
     b.def("compressedTexImage2D", 7, [c](Value, std::span<const Value> a) {
         const uint8_t* data = nullptr;
         size_t len = 0, elemSize = 1;

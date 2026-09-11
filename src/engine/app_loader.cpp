@@ -90,15 +90,12 @@ std::string AppLoader::resolvePath(const std::string& base,
         result += path;
     }
 
-    // Canonicalize lexically, matching js::module_normalize (runtime.cpp)'s
-    // treatment of the same "/"-prefixed specifiers. Without this, a
+    // Canonicalize lexically. Without this, a
     // `<script type="module" src="/app/app.js">` tag and an `import ... from
     // "/app/app.js"` statement resolve to different-looking strings (this
     // function leaves mount-resolved paths with forward slashes, while
     // lexically_normal() rewrites them to the platform separator on
-    // Windows), so QuickJS's specifier-keyed module cache treats the same
-    // file as two distinct modules and re-executes it — silently doubling
-    // any module-level singleton state.
+    // Windows), so module caches could treat the same file as distinct modules.
     if (result.find('/') != std::string::npos || result.find('\\') != std::string::npos) {
         std::error_code ec;
         std::string normalized = std::filesystem::path(result).lexically_normal().string();

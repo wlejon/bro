@@ -122,7 +122,7 @@ void decorateAgentProto(ObjectBuilder& b) {
         return ev::fromDouble(h->agent.currentWaypoint());
     }, nullptr);
 
-    // The route as [{x, z}, ...] — a real array, as the QuickJS binding answers.
+    // The route as [{x, z}, ...] — a real array.
     b.accessor("path", [](Value self_, std::span<const Value>) -> Value {
         HostAgent* h = unwrapAgent(self_);
         if (!h) return ev::undefined();

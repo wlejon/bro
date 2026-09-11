@@ -1,9 +1,6 @@
 // bro.mesh.decodeDraco / bro.mesh.encodeDraco / bro.image.transcodeKTX2 for
-// the COMPILED realm — the same native codecs src/js/mesh_bindings.cpp and
-// src/js/image_bindings.cpp expose to QuickJS. These exist because the web's
-// answer to Draco and KTX2 is a Worker spinning a WASM decoder, and this
-// stack has no WASM engine anywhere by design: bromesh carries google/draco
-// and broimage carries the basis_universal transcoder as ordinary C++, so a
+// the compiled realm. bromesh carries google/draco
+// and broimage carries the basis_universal transcoder as native C++, so a
 // loader is one synchronous call. The DRACOLoader/KTX2Loader shims an app's
 // import map installs (three.js editor) are thin wrappers over these.
 

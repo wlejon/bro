@@ -1,25 +1,13 @@
 // setTimeout / clearTimeout / setInterval / clearInterval for a bronze-compiled
 // app, plus the main-thread task queue the other host bindings deliver
 // completions through.
-//
-// WHY NOT js::Timers. bro's own timer table (src/js/timers.h) stores JSValue
-// callbacks and calls them through QuickJS — there is no non-QuickJS entry
-// point on it, and adding one would put a bronze Value in a JSValue field.
-// What matters for parity is not the table but the CLOCK, and this one runs on
-// exactly the clock bro's JS gets: hostClockMs(), the accumulated
-// Engine::onFrame deltas, which is engineNowMs_ scaled by bro.time. A compiled
-// app and a JS app in the same engine therefore see time stop together when the
-// app is paused, stretch together under a timescale, and step together under
-// headless advanceTime.
+// CLOCK AND RESOLUTION.
+// This timer table runs on hostClockMs(), the accumulated Engine::onFrame
+// deltas (engineNowMs_ scaled by timescale).
 //
 // WHERE THEY FIRE. fireHostTimers runs once per frame from the bronze frame
-// seam, before requestAnimationFrame — the same order bro's own loop uses
-// (engine_frame.cpp: timers_->tick at step 2, fireAnimationFrames at step 3a).
-// Resolution is therefore one frame: a 1 ms timeout and a 5 ms timeout set in
-// the same turn both fire on the next frame, in creation order. That is the
-// honest consequence of having exactly one host seam per frame, and it is
-// stated here rather than papered over with a sub-frame poll that the engine
-// would never call.
+// seam, before requestAnimationFrame. Resolution is one frame: timers whose
+// deadline has passed fire in creation order.
 //
 // LIFETIME. A timer's callback lives in an ev::Persistent, which is a GC root.
 // A one-shot's entry is erased as it fires, so its root goes with it. An

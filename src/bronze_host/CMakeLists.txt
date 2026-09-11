@@ -105,6 +105,8 @@ add_library(bro_bronze_host STATIC
     gl_profile.cpp
     app_module.cpp
     dom_globals.cpp
+    dom_canvas.cpp
+    dom_document.cpp
     host_canvas2d.cpp
     dom_storage.cpp
     dom_gamepad.cpp

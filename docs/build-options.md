@@ -15,20 +15,18 @@ quickstart, see [BUILDING.md](../BUILDING.md).
 2. **Heavy, self-contained subsystems are opt-in**, gated at their one real seam.
 3. **Adding a module later is incremental**: flip a flag, reconfigure, relink;
    not a from-scratch rebuild.
-4. **The JS API surface stays stable whether or not a module is compiled in**:
+4. **The API surface stays stable whether or not a module is compiled in**:
    an absent module reports `{ available: false }` (the existing `bro.steam` /
    `bro.gpu` pattern), so apps feature-detect instead of crashing.
 
 Non-goal (for now): runtime-loaded plugin `.so`/`.dll`s that add a module with
 *zero* relink. That's a plausible later step but a real architecture change
-(must respect the no-mutex rule and the "QuickJS context outlives all handles"
-lifetime constraint); it is out of scope here.
+(must respect the no-mutex rule); it is out of scope here.
 
 ## Why this is worth doing (the cost centers)
 
-The current build is one chain: `bro` → `bro_engine` → `bro_js` (one monolithic
-static lib) → **every** sibling, linked unconditionally in
-`src/js/CMakeLists.txt`. The onboarding friction is concentrated in three places,
+The build chain connects `bro` → `bro_engine` → dependencies configured through
+feature flags. The onboarding friction is concentrated in three places,
 each isolated to a small number of edges:
 
 | Friction | Caused by | Isolated to |
@@ -69,7 +67,7 @@ pathfinding) still ships.
 
 | Profile | What it is | Needs vcpkg? | Needs CUDA? |
 |---|---|---|---|
-| `minimal` | HTML/CSS/JS + Canvas2D + WebGL + audio. 2D renderer only. | no | no |
+| `minimal` | HTML/CSS + Canvas2D + WebGL + audio. 2D renderer only. | no | no |
 | **`app`** (default) | Full renderer (3D scene graph, physics, audio, core game-AI) + net/video/steam. No AI tower. | yes | no |
 | `full` | Everything except the CUDA sub-lever (still opt-in). | yes | no (opt-in) |
 
@@ -86,16 +84,12 @@ cmake -B build -DBRO_PROFILE=app -DBRO_WITH_LM=ON   # app + language models (add
 
 ## Flags
 
-All default-off flags, when OFF, still install their JS namespace as a stub that
-reports `{ available: false }` and throws a clear "built without BRO_WITH_X"
-error on use.
-
 ### Tier 0: CORE (always on, no flag)
 
 `util · platform · render · svg · layout · dom · canvas · webgl · engine ·
-headless` + Skia · SDL · glad · qjs · qjsbind · brokit · htmlayout ·
-**broimage (tensor-free)**. The core, always-compiled `*_bindings.cpp`. A complete
-HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
+headless` + Skia · SDL · glad · brokit · htmlayout ·
+**broimage (tensor-free)**. A complete
+HTML/CSS + Canvas2D + WebGL runtime with working screenshots.
 
 ### Tier 1: feature groups (brotensor-free)
 
@@ -157,7 +151,6 @@ feature flags do not.
 | `BRO_BUILD_EXECUTABLES` | ON top-level, **OFF** under `add_subdirectory` | Builds `bro` / `bro-headless` / `bro-server`. An embedder linking `bro_engine` with its own `main` wants the libraries, not a second `bro.exe` in its tree, and gets that without asking. See [embedding.md](embedding.md). |
 | `BRO_BUILD_TESTS` | ON top-level, **OFF** under `add_subdirectory` | Builds bro's own C++ unit tests and smoke tools: `bro_tile_test`, `bro_videoinspect`, `bro_videoencodetest`, `bro_mediabackendtest`, `bro_mediaclocktest`. They test bro, not the application embedding it, so an embedder's build never compiles or links them. The JS suite under `tests/` is separate and runs on `bro-headless`. |
 | `BRO_WITH_BRONZE` | **OFF** | The host layer for bronze-compiled (AOT) JavaScript: `src/bronze_host` re-exposes the engine's DOM, WebGL2, audio, physics and AI as bronze host globals, so an app compiled to machine code runs on the stock binaries. Entirely outside the default configure path — turning it ON resolves a bronze checkout, `../bronze` first and the `third_party/bronze` submodule second, and builds its shared runtime into this tree. The configure prints which of the two it chose. `-DBRONZE_WITH_LLVM=ON` (the default for a fresh cache) additionally builds the `bronze` compiler itself, as an `EXCLUDE_FROM_ALL` target: `cmake --build build --target bronze-cli` (that name, not `bronze` — the Visual Studio generator keeps an `EXCLUDE_FROM_ALL` subdirectory's targets out of the solution, and `bronze-cli` is declared in bro's own tree so every generator can reach it). `src/bronze_host/README.md` is the reference. |
-| `BRO_QUICKJS_CLANG_CL` | ON when the VS ClangCL toolset is installed (Windows only) | Builds **only** `qjs.lib` with clang-cl, as a nested ExternalProject. MSVC optimises QuickJS's interpreter loop badly; clang-cl is worth ~1.3-1.5x on real-world JS for no source change. Configuring all of bro with `-T ClangCL` does not work (SDL3 fails on a PCH C-standard mismatch), which is why it is scoped to one library. A CI image without the "C++ Clang tools for Windows" component silently gets the slower interpreter. |
 
 An app built for `BRO_WITH_BRONZE` is a **folder** carrying
 `app.dll`/`app.so`/`app.dylib` beside its `index.html`; nothing in bro's build
@@ -192,55 +185,9 @@ chain settles in one pass.
 
 (All of the above also imply `TENSOR` transitively via `LM`/direct.)
 
-## How a module is compiled in or stubbed
+## How a module is compiled in
 
-There is **one** `x_bindings.cpp` per cluster, always in `bro_js`'s source list.
-Its body is wrapped in `#if BRO_WITH_X`, and the `#else` branch installs the
-stub via the shared helper in `src/js/feature_stub.h`:
-
-```cpp
-#if BRO_WITH_LM
-void installLmBindings(qjs::Context& ctx) { /* the real thing */ }
-#else
-void installLmBindings(qjs::Context& ctx) {
-    installUnavailableNamespace(ctx, "lm", "BRO_WITH_LM");
-}
-#endif
-```
-
-`installUnavailableNamespace` installs `bro.x` as a **Proxy** over
-`{available: false}`: any property other than `available` resolves to a function
-that throws `"bro.x is unavailable: this build was compiled without BRO_WITH_X"`.
-
-> Feature-detect with `bro.x.available === false`, **not** `if (bro.x)`. The
-> namespace object always exists and is always truthy, and so is every method
-> reached through it; the throw happens on call, not on lookup.
-
-`src/js/CMakeLists.txt` doesn't swap sources; it only wraps each optional
-sibling's `target_link_libraries` entry in the matching `if()`. The
-`installXBindings()` call in `engine_init.cpp` stays **unconditional**: the call
-site never learns whether the module is real. `third_party/CMakeLists.txt` wraps
-each optional sibling's `add_subdirectory` in `if(BRO_WITH_X)`.
-
-This keeps `bro_js` monolithic (no new libraries) while making its heavy code
-and sibling links conditional, and keeps `engine_init.cpp` clean.
-
-## Seam files that need special handling
-
-The binding→sibling comb found 9 files that straddle clusters. Each has a
-contained fix:
-
-| File | Straddles | Handling |
-|---|---|---|
-| `scene_bindings.cpp` | bromesh + Jolt | belongs to `3D`; physics-specific code behind `#if BRO_WITH_PHYSICS` |
-| `triposplat_bindings.cpp` | vision + diffusion + tensor + image | its own flag `BRO_WITH_TRIPOSPLAT` |
-| `message_serializer.cpp` | bromesh (worker plumbing) | mesh-serialization branch behind `#if BRO_WITH_3D`; forward-decl otherwise |
-| `tile_bindings.cpp` | broimage (core) + brogameagent nav_grid | tile is `3D`; the nav_grid branch behind `#if BRO_WITH_GAMEAI` |
-| `diffusion_bindings.cpp` | brodiffusion + brolm | no file work: auto-enable pulls `LM` |
-| `stt_bindings.cpp` | brosoundml + brolm | no file work: auto-enable pulls `LM` |
-| `ai_nn_bindings.cpp` | brogameagent + brotensor | `BRO_WITH_GAMEAI_NN` |
-| `ai_learn_bindings.cpp` | brogameagent + brotensor | `BRO_WITH_GAMEAI_NN` |
-| `flora_bindings.cpp` | broflora + bromesh | `BRO_WITH_FLORA` (implies `3D`) |
+Feature flags (`BRO_WITH_*`) control which optional subsystems and sibling libraries are compiled and linked into `bro_engine`. When a flag is disabled, its code and dependencies are excluded at CMake configure time. Optional subsystems compile behind feature guards (`#if BRO_WITH_*`) so that headers and call sites remain clean.
 
 ## Skia: orthogonal but required
 
@@ -282,15 +229,10 @@ an existing build dir won't move flags already cached. Clear the specific
   brotensor `add_subdirectory` + link + `tensor_adapter.cpp`).
 - **`../brogameagent/CMakeLists.txt`**: `BROGAMEAGENT_WITH_NN` option (gate the
   brotensor dep + the `nn/*` `learn/*` source list + NN tools).
-- **`src/js/CMakeLists.txt`**: conditional sibling links (the source list is
-  unconditional; the gating lives in `#if BRO_WITH_X` inside each
-  `*_bindings.cpp`).
 - **`src/scene/CMakeLists.txt`**: conditional brogameagent/physics/flora links;
   gate the AI-world files (`agent_binding.*`, `ai_world_ticker.*`) and the
   `scene_graph` AI/physics hooks.
-- **`src/js/feature_stub.h` + `feature_stubs.cpp`**: the one shared
-  `installUnavailableNamespace` helper every compiled-out cluster falls back to.
-- **`engine_init.cpp`**: unchanged call sites (the point of the stub pattern).
+- **`src/engine/CMakeLists.txt`**: links enabled subsystem libraries.
 
 ## Testing implications
 

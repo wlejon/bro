@@ -9,7 +9,7 @@
 // listener-bearing MediaQueryLists with no JS references. Those are exactly
 // the wrappers the engine strong-pins for change delivery; the host tears
 // this realm down (iframe removal / reload) and the pins must be released
-// cleanly (no crash windowed, no QuickJS leak assert under Debug).
+// cleanly (no crash windowed).
 var ok = false;
 try {
   ok = typeof window.matchMedia === 'function' &&

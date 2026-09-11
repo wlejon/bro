@@ -1,22 +1,17 @@
 #pragma once
 
+#include <functional>
 #include <string>
-#include <vector>
 #include <unordered_map>
-
-extern "C" {
-#include "quickjs.h"
-}
+#include <vector>
 
 namespace bro::engine {
 
 // Tree-backed data model for the standard app menu bar. Rendered by
-// system/menu.html; mutated from app JS via bro.menu.*; dispatched back
-// through Engine::triggerMenuAction().
+// system/menu.html; dispatched back through Engine::triggerMenuAction().
 //
 // IDs that start with "__system." are reserved for engine-handled actions
-// (preferences, quit, about). Everything else is routed to app JS handlers
-// registered via bro.menu.on(id, fn).
+// (preferences, quit, about). Everything else is routed to registered handlers.
 class MenuBar {
 public:
     struct Item {
@@ -30,8 +25,8 @@ public:
         std::vector<Item> children;
     };
 
-    // Hidden by default — apps that want a menu bar (tools, editors, the
-    // built-in project manager) opt in with bro.menu.show() at startup.
+    // Hidden by default — apps that want a menu bar opt in with
+    // menuBar().visible = true at startup.
     // The flag is honored identically in every display mode, including
     // bro-headless: a shown menu reserves its contentTop() inset and
     // renders in screenshots, so headless testing exercises the same
@@ -45,14 +40,14 @@ public:
 
     // Mutations — all set dirty = true.
     void clear();
-    void setRootsFromJS(JSContext* ctx, JSValueConst arr);
+    void setRoots(std::vector<Item> items);
     Item* find(const std::string& id);
-    bool addItem(const std::string& parentId, Item item, int index);
-    bool updateItem(JSContext* ctx, const std::string& id, JSValueConst props);
+    bool addItem(const std::string& parentId, Item item, int index = -1);
+    bool updateItem(const std::string& id, const Item& props);
     bool removeItem(const std::string& id);
 
-    // JS handler registry. Stored values are duplicated and freed on clear().
-    void on(JSContext* ctx, const std::string& id, JSValueConst fn);
+    // Handler registry.
+    void on(const std::string& id, std::function<void()> fn);
     bool hasHandler(const std::string& id) const;
     // Calls the handler; returns true if one was registered.
     bool triggerHandler(const std::string& id);
@@ -65,17 +60,10 @@ public:
     bool dirty = true;
 
 private:
-    static Item parseItem(JSContext* ctx, JSValueConst obj);
-    static void parseChildren(JSContext* ctx, JSValueConst arr,
-                              std::vector<Item>& out);
     static Item* findIn(std::vector<Item>& items, const std::string& id);
     static void appendJSON(const Item& item, std::string& out);
 
-    struct Handler {
-        JSContext* ctx = nullptr;
-        JSValue fn = JS_UNDEFINED;
-    };
-    std::unordered_map<std::string, Handler> handlers_;
+    std::unordered_map<std::string, std::function<void()>> handlers_;
 };
 
 } // namespace bro::engine

@@ -110,10 +110,7 @@ check_abort() {
 }
 
 # MutationObserver (host_observers.cpp) and the DOM-level notice it is built
-# on (Document::notifyMutation). The layer could have watched its OWN mutators
-# and every assertion but one would pass; the one is `page.*` — a QuickJS page
-# script sets an attribute and the compiled observer must hear it, which only
-# happens because dom::Element itself fires the notice.
+# on (Document::notifyMutation).
 check_observer() {
     bh_run_check bronze_host_observer \
         "$SCRIPT_DIR/appdir_observer" \
@@ -159,21 +156,16 @@ check_proxy() {
         --expr "advanceTime(64);"
 }
 
-# `new Function` in compiled code, answered by the engine's QuickJS realm, and
-# the value bridge that makes the result usable. Only this check catches a
-# crossing that copies where it must wrap (a written property the compiled side
-# never sees), an identity that does not round-trip, and the three non-ordinary
-# constructors being answered as if they were `Function`.
+# Dynamic code evaluation and the value bridge that makes the result usable.
 check_interp() {
-    bh_run_check bronze_host_interp         "$SCRIPT_DIR/appdir_interp"         "$SCRIPT_DIR/apps/interp_probe.js"         "$SCRIPT_DIR/expected/interp_probe.expected"         --expr "advanceTime(64);"
+    bh_run_check bronze_host_interp \
+        "$SCRIPT_DIR/appdir_interp" \
+        "$SCRIPT_DIR/apps/interp_probe.js" \
+        "$SCRIPT_DIR/expected/interp_probe.expected" \
+        --expr "advanceTime(64);"
 }
 
-# A non-constant `import()` in compiled code, loaded by the page's QuickJS
-# realm from a module beside the probe's SOURCE (apps/import_mods/). Only this
-# check catches a specifier resolved against the wrong base, a namespace that
-# crosses as a copy, and a missing file that resolves instead of rejecting.
-# Frames rather than an expression: the load settles on the interpreter's job
-# queue and the compiled continuation on the next microtask checkpoint.
+# A dynamic `import()` in compiled code.
 check_import() {
     bh_run_check bronze_host_import \
         "$SCRIPT_DIR/appdir_import" \
@@ -345,7 +337,7 @@ check_pixi() {
 
 # ---------------------------------------------------------------------------
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
-        parser proxy class interp import codecs input video audio physics ai
+        parser proxy class codecs input video audio physics ai
         aigame net wild instanced pixi)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before

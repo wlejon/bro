@@ -47,7 +47,7 @@ OpenCppCoverage.exe `
 | Repo | Driver under `--cover_children` |
 |---|---|
 | bro | `scripts/_coverage_run_all.ps1` loops over `tests/**/test_*.js` through `bro-headless.exe` |
-| qjsbind, brokit, htmlayout | the single test exe directly (no ctest registration) |
+| brokit, htmlayout | the single test exe directly (no ctest registration) |
 | broaudio, brogameagent | `ctest --test-dir build` runs every registered test exe |
 | bromesh | `bromesh_test.exe` directly, Release config |
 

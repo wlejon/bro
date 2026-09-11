@@ -11,42 +11,13 @@
 #include <filesystem>
 #include <fstream>
 
-#include "observer_check.js.h"
-
+#include "dom/event_dispatch.h"
 #include "platform/sdl_window.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
-#include "js/runtime.h"
-#include "js/timers.h"
-#include "js/dom_bindings.h"
-#include "js/canvas_bindings.h"
-#include "js/event_dispatch.h"
-#include "js/audio_bindings.h"
-#include "js/storage_bindings.h"
-#include "js/settings_bindings.h"
-#include "js/dialog_bindings.h"
-#include "js/window_bindings.h"
-#include "js/custom_elements.h"
-#include "js/webgl2_bindings.h"
-#include "js/image_bindings.h"
-#include "js/video_bindings.h"
-#include "js/headless_bindings.h"
-#include "js/worker.h"
-#if BRO_WITH_PHYSICS
-#include "js/physics_bindings.h"
-#endif
-#include "js/scene_bindings.h"
-#include "js/menu_bindings.h"
-#include "js/gizmo_bindings.h"
-#include "js/mesh_bindings.h"
-#include "js/rigging_bindings.h"
-#include "js/ai_bindings.h"
-#include "js/terrain_bindings.h"
-#include "js/net_bindings.h"
-#include "js/server_bindings.h"
 
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
@@ -57,8 +28,6 @@
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
 #endif
-#include "api/api.h"
-#include "runtime/runtime.h"
 #include <broaudio/engine.h>
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
@@ -126,20 +95,11 @@ using bromath::cfromColor8;
 
 void Engine::tickTimersOnly()
 {
-    if (jsRuntime_ && jsRuntime_->isExecuting()) {
-        return;
-    }
-    // Advance the bro.time scaled clock exactly like a frame top would, so
-    // timers keep obeying pause/timescale during modal blocking, and the
-    // frame loop resumes with a fresh wall reference (no post-modal jump).
+    // Advance the time scaled clock during modal blocking.
     double wallNow = util::currentTimeMs();
     if (lastWallTickMs_ > 0.0 && wallNow > lastWallTickMs_)
         engineNowMs_ += (wallNow - lastWallTickMs_) * effectiveTimeScale();
     lastWallTickMs_ = wallNow;
-    if (displayMode_ != DisplayMode::Headless)
-        timers_->setWallClockAnchor(wallNow, effectiveTimeScale());
-    timers_->tick(engineNowMs_);
-    jsRuntime_->executePendingJobs();
 }
 
 // ---------------------------------------------------------------------------
@@ -189,12 +149,12 @@ dom::Element* Engine::hitTest(float x, float y) {
 }
 
 // ---------------------------------------------------------------------------
-// Event dispatch to JS (delegates to shared implementation)
+// Event dispatch
 // ---------------------------------------------------------------------------
 
 void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
-    if (!target || !jsRuntime_) return;
-    js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
+    if (!target) return;
+    dom::dispatchDomEvent(target, event);
 }
 
 // The public halves of the same thing. Separate names rather than a public
@@ -202,17 +162,13 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
 // is called from a dozen places inside the engine; a host reaching in gets a
 // name that says which target kind it means.
 void Engine::dispatchElementEvent(dom::Element* target, dom::Event& event) {
-    // No jsRuntime_ is not a failure here the way it is above: a realm with no
-    // JS still has C++ listeners, and dispatchDomEvent runs them with a null
-    // ctx (js/event_dispatch.h).
     if (!target) return;
-    js::dispatchDomEvent(jsRuntime_ ? jsRuntime_->getContext() : nullptr, target, event);
+    dom::dispatchDomEvent(target, event);
 }
 
 void Engine::dispatchWindowEvent(dom::Event& event) {
     if (!document_) return;
-    js::dispatchWindowEvent(jsRuntime_ ? jsRuntime_->getContext() : nullptr,
-                            document_.get(), event);
+    dom::dispatchWindowEvent(document_.get(), event);
 }
 
 dom::Element* Engine::pointerCaptureFor(int pointerId) const {
@@ -222,7 +178,6 @@ dom::Element* Engine::pointerCaptureFor(int pointerId) const {
 
 void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
                                   const dom::MouseEvent& src) {
-    if (!jsRuntime_) return;
     // Pointer capture: pointermove/pointerup/pointercancel retarget to the
     // captured element — the web's drag idiom, so the element that captured
     // on pointerdown keeps seeing the gesture wherever the cursor goes.
@@ -265,7 +220,7 @@ void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
     // offsetX/Y in `src` are relative to the hit target — recompute against
     // the element actually receiving the event.
     if (captured) applyMouseOffset(pe, captured);
-    js::dispatchDomEvent(jsRuntime_->getContext(), target, pe);
+    dom::dispatchDomEvent(target, pe);
     // Implicit release (spec): the pointerup/pointercancel that ends the
     // gesture also ends the capture.
     auto capIt = pointerCaptures_.find(kMousePointerId);
@@ -321,8 +276,7 @@ bool Engine::hasPointerCapture(const dom::Element* target, int pointerId) const 
 
 // Walk the document + shadow trees and pump any pending HTMLMediaElement
 // events (loadedmetadata, timeupdate, ended) on each ElVideo. Called from
-// the main thread because QuickJS is not thread-safe; ElVideo::draw() runs
-// on the raster thread and deliberately does not touch JS.
+// the main thread; ElVideo::draw() runs on the raster thread.
 static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying, bool advance) {
     if (!el) return;
     if (auto* v = el->videoControl()) {
@@ -611,8 +565,7 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
 // ---------------------------------------------------------------------------
 
 void Engine::ensureReplacedElements(dom::Element* elem) {
-    JSContext* jsCtx = jsRuntime_ ? jsRuntime_->getContext() : nullptr;
-    bro::engine::ensureReplacedElements(elem, renderer_.get(), jsCtx,
+    bro::engine::ensureReplacedElements(elem, renderer_.get(),
                                          audioEngine_.get());
 }
 

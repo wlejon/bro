@@ -13,8 +13,8 @@
 //     but leaves an app-provided one ({body: tag}) alone.
 //  5. getContacts() overflow flag: dropped events (fixed-capacity buffer) are
 //     reported via events.overflow instead of vanishing silently.
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
-// Run under Debug too — the Jolt asserts + QuickJS leak assert are the gates.
+// Exercises src/physics/physics_world.cpp.
+// Run under Debug too — the Jolt asserts are the gates.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 Physics.destroyAll();

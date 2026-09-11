@@ -53,7 +53,7 @@ $ProjectsRoot = (Resolve-Path (Join-Path $BroRoot '..')).Path
 # tree being ahead of the recorded pointer means exactly what it means for the
 # others - CI and the nightly package are building an older bronze than you are.
 $Siblings = @(
-    'bromath', 'qjsbind', 'brokit', 'htmlayout', 'broaudio', 'bromesh', 'broflora',
+    'bromath', 'brokit', 'htmlayout', 'broaudio', 'bromesh', 'broflora',
     'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml', 'brovisionml',
     'bronze', 'brosurface'
 )

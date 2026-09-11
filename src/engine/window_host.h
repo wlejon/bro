@@ -3,7 +3,6 @@
 #include "engine/engine_config.h"
 #include "engine/replaced_elements.h"
 #include "dom/node_handle.h"
-#include "js/message_queue.h"
 #include "render/command_buffer.h"
 #include "render/skia_backend.h"
 
@@ -12,12 +11,9 @@
 #include <string>
 #include <vector>
 
-struct JSContext;
-
 namespace bro::platform { class Window; }
 namespace bro::dom { class Document; class Element; }
 namespace bro::canvas { class CanvasScene; }
-namespace bro::js { class Timers; }
 
 namespace bro::engine {
 
@@ -65,8 +61,6 @@ struct WindowHost {
     // Document realm
     double displayScale = 1.0;
     bool loadFired = false;
-    JSContext* jsCtx = nullptr;
-    std::unique_ptr<js::Timers> timers;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
     std::unique_ptr<dom::Document> document;
 
@@ -85,8 +79,6 @@ struct WindowHost {
     render::SkiaRenderer::GPUSurface surface;
     int surfW = 0, surfH = 0;
     unsigned int fboTexture = 0;
-
-    std::vector<std::unique_ptr<js::Message>> inbox;
 };
 
 } // namespace bro::engine

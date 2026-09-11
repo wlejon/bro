@@ -205,8 +205,7 @@ bike2.destroy();
 advanceTime(500);                                  // must not crash
 
 // =========================================================================
-// Teardown/GC: leave live handles in globals, no explicit destroy (Debug
-// QuickJS leak assert is the real gate).
+// Teardown/GC: leave live handles in globals, no explicit destroy.
 // =========================================================================
 globalThis.__motoGcWorld = Physics.createWorldHandle({ maxBodies: 32 });
 globalThis.__motoGcWorld.createBody({

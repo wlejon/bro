@@ -4,7 +4,7 @@
 // assertion is the exit code. bro-headless now destroys the Engine for real
 // (it used to _exit() past ~Engine(), which meant NOTHING in this suite ever
 // ran teardown, and bugs there accumulated unseen for months). A fault, a
-// deadlock, or a QuickJS gc_obj_list leak assertion in the destructor chain
+// deadlock, or a leak assertion in the destructor chain
 // all surface as a non-zero exit, which run_tests.sh reports as a failure.
 //
 // Every other test in the suite exercises teardown incidentally now. This one

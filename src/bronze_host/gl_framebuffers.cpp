@@ -44,10 +44,9 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::fromDouble(live(c)->checkFramebufferStatus(u32At(a, 0)));
     });
 
-    // readPixels(x, y, w, h, format, type, dstView). The WebGL-level
-    // destination validation runs first, exactly as the QuickJS binding runs
-    // it: a too-small view records the synthetic INVALID_OPERATION and the
-    // driver is never handed an overrunnable pointer.
+    // readPixels(x, y, w, h, format, type, dstView). WebGL-level
+    // destination validation runs first: a too-small view records the
+    // synthetic INVALID_OPERATION and the driver is never handed an overrunnable pointer.
     b.def("readPixels", 7, [c](Value, std::span<const Value> a) {
         auto info = ev::typedArrayInfo(argAt(a, 6));
         if (!info) return ev::undefined();

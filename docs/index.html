@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bro: an HTML/CSS/JS runtime for desktop apps and games</title>
-<meta name="description" content="Bro is a desktop app and game runtime that renders HTML/CSS/JS with its own pipeline (QuickJS, a custom layout engine, Skia, and OpenGL) and wires 3D, physics, audio, game networking, and on-device AI/ML straight into the DOM.">
+<meta name="description" content="Bro is a desktop app and game runtime that renders HTML/CSS/JS with its own pipeline (a custom layout engine, Skia, and OpenGL) and wires 3D, physics, audio, game networking, and on-device AI/ML straight into the DOM.">
 <meta property="og:title" content="Bro: an HTML/CSS/JS runtime for desktop apps and games">
 <meta property="og:description" content="An Electron-shaped runtime with its own rendering pipeline: HTML/CSS/JS for the UI, with 3D, physics, audio, game networking, and on-device AI/ML wired straight into the DOM.">
 <meta property="og:type" content="website">
@@ -223,7 +223,7 @@ footer { padding: 40px 0 56px; }
       <div>
         <span class="pill"><span class="blip"></span> pre-alpha</span>
         <h1>An HTML/CSS/JS runtime for <span class="grad">desktop apps and games</span>.</h1>
-        <p class="lede">Electron-shaped, but the rendering pipeline is ours: QuickJS, a custom layout engine, Skia, and OpenGL. So 3D, physics, audio, game networking, and on-device AI/ML wire straight into the DOM, in one process, no IPC to a Chromium renderer.</p>
+        <p class="lede">Electron-shaped, but the rendering pipeline is ours: a custom layout engine, Skia, and OpenGL. So 3D, physics, audio, game networking, and on-device AI/ML wire straight into the DOM, in one process, no IPC to a Chromium renderer.</p>
         <div class="cta-row">
           <a class="btn primary" href="reference.html">Browse the reference →</a>
           <a class="btn ghost" href="https://github.com/wlejon/bro">View on GitHub ↗</a>
@@ -352,13 +352,10 @@ footer { padding: 40px 0 56px; }
 <span class="ar">         ↑</span>
 <span class="a">canvas</span>  <span class="a">webgl</span>  <span class="a">scene</span>  <span class="a">physics</span>  <span class="a">tensor</span>   <span class="ar">2D · WebGL2 · 3D · Jolt · ML</span>
 <span class="ar">         ↑</span>
-<span class="ar">       </span><span class="l">js</span>  <span class="ar">QuickJS + qjsbind bindings for all of the above</span>
-<span class="ar">         ↑</span>
 <span class="ar">     </span><span class="l">engine</span>  <span class="ar">orchestrates every subsystem · main loop</span></div>
 
     <p class="section-lede" style="margin-bottom:18px;">Each piece lives in its own sibling repo so it can be used independently of bro:</p>
     <div class="repos">
-      <a class="repo" href="https://github.com/wlejon/qjsbind"><div class="n">qjsbind</div><div class="d">C++/JS bindings for QuickJS</div></a>
       <a class="repo" href="https://github.com/wlejon/brokit"><div class="n">brokit</div><div class="d">web + system APIs (fetch, fs, crypto)</div></a>
       <a class="repo" href="https://github.com/wlejon/htmlayout"><div class="n">htmlayout</div><div class="d">HTML parse · CSS · layout</div></a>
       <a class="repo" href="https://github.com/wlejon/broaudio"><div class="n">broaudio</div><div class="d">real-time audio engine</div></a>
@@ -374,7 +371,7 @@ footer { padding: 40px 0 56px; }
       <a class="repo" href="https://github.com/wlejon/broflora"><div class="n">broflora</div><div class="d">ecosystem simulation</div></a>
       <a class="repo" href="https://github.com/wlejon/bronze"><div class="n">bronze</div><div class="d">AOT JavaScript compiler</div></a>
     </div>
-    <p class="section-lede" style="margin-top:24px; font-size:15px;">Plus <b>Jolt</b> for physics, <b>Skia</b> for rasterization, <b>SDL3</b> for windowing and GL contexts, and <b>QuickJS</b> as the JS engine.</p>
+    <p class="section-lede" style="margin-top:24px; font-size:15px;">Plus <b>Jolt</b> for physics, <b>Skia</b> for rasterization, and <b>SDL3</b> for windowing and GL contexts.</p>
   </div>
 </section>
 
@@ -394,7 +391,7 @@ footer { padding: 40px 0 56px; }
   <div class="wrap">
     <div class="foot-inner">
       <span><a href="https://github.com/wlejon/bro">github.com/wlejon/bro</a> · MIT</span>
-      <span>QuickJS · htmlayout · Skia · OpenGL · Jolt · brotensor</span>
+      <span>htmlayout · Skia · OpenGL · Jolt · brotensor</span>
     </div>
     <p class="foot-note">Heads up: bro exposes far more of your system to JavaScript than a browser does, and was not built with a security sandbox. Don't point it at untrusted code.</p>
   </div>

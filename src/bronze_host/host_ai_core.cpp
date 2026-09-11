@@ -119,10 +119,8 @@ void installAIGlobals() {
     g_navGridClass.install("AINavGrid", 0, nullptr, decorateNavGridProto);
     g_navMeshClass.install("AINavMesh", 0, nullptr, decorateNavMeshProto);
     g_agentClass.install("AIAgent", 0, nullptr, decorateAgentProto);
-    // The two classes only bro.ai.game hands out (host_ai_game.cpp). Named
-    // as the QuickJS binding names them, and registered because every class
-    // this layer births instances on is — an instance answers `instanceof`
-    // for a name the program can read.
+    // The two classes only bro.ai.game hands out (host_ai_game.cpp).
+    // Registered so instances answer instanceof correctly.
     g_hexNavClass.install("AIHexNav", 0, nullptr, decorateHexNavProto);
     g_worldClass.install("AIWorld", 0, nullptr, decorateWorldProto);
 }

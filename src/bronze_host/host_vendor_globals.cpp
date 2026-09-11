@@ -1,30 +1,5 @@
-// The vendor globals a page loads with plain <script> tags — signals,
-// CodeMirror, acorn, tern, esprima, jsonlint, draco_encoder — as values a
-// COMPILED app can read.
-//
-// WHAT THIS FILE USED TO BE, AND WHY IT IS NOT THAT ANY MORE. There was no way
-// for a compiled program to reach a value living in the engine's QuickJS
-// realm, so this file reimplemented the libraries in C++: four hundred and
-// fifty lines of them, and necessarily hollow. `CodeMirror` was a `getValue`
-// that answered a string held in a shared_ptr, a `setValue` that replaced it,
-// and `on`, `refresh`, `showHint`, `setSelection` and two dozen more that did
-// nothing at all. In the three.js editor it rendered as a script pane you
-// could not type in. `esprima.parse` answered an empty program, so the
-// editor's syntax checking approved everything.
-//
-// Those were not shortcuts to be filled in later. A native CodeMirror is a
-// text editor, and writing one to stand in for the text editor the page has
-// already loaded is not a smaller job than the bridge that reaches it — it is
-// a much larger one, and it is wrong the whole way, because what the page
-// loaded is what the app's users configured, themed and extended.
-//
-// src/bronze_host/host_interp.cpp made the reach possible. So each name here
-// is now the REAL object: the page's own, wrapped so that compiled code can
-// call it, read its statics, and hold onto what it returns. There is no
-// fallback implementation, deliberately — a page that did not load CodeMirror
-// gets `undefined` for it and fails where it uses it, which is what the same
-// page does in a browser and is a far better answer than a shape that responds
-// to everything and does nothing.
+// The vendor globals a page loads — signals, CodeMirror, acorn, tern, esprima,
+// jsonlint, draco_encoder — as values a compiled app can read. Unset globals resolve to undefined.
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"

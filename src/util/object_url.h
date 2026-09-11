@@ -10,8 +10,7 @@ namespace bro::util {
 // Object URLs — the `blob:` URLs `URL.createObjectURL(blob)` hands out.
 //
 // On the web an object URL is a name for some bytes the page already holds, and
-// every URL consumer resolves it: <img src>, fetch, <video>, a worker. In bro
-// most of those consumers are C++ and do not have (or want) a JSContext, so the
+// In bro most of those consumers are C++ and do not interact with a script runtime, so the
 // bytes are copied out of the Blob when the URL is minted and kept here, in one
 // process-global table, until the page revokes it.
 //

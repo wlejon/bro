@@ -202,7 +202,7 @@ struct SteamEvent {
 class SteamService;
 
 // ---------------------------------------------------------------------------
-// SteamSubscriber — a per-JSContext handle into the SteamService.
+// SteamSubscriber — a per-client handle into the SteamService.
 //
 // Method calls push commands; poll() drains the event queue and fires
 // callbacks synchronously on the calling thread, once per frame.
