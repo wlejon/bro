@@ -9,7 +9,7 @@
 // (updateMesh + recomputeNormals — lit, not black, and moving), and GC
 // teardown without explicit destroy (worldRef gc_mark + ~JsWorld severing —
 // the Debug leak assert is the gate).
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 assert(typeof Physics.createSoftBody === 'function', 'createSoftBody exists');

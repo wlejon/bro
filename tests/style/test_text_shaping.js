@@ -1,5 +1,5 @@
 // Cluster-map assertions on the render layer's shaper (bro.text — see
-// src/js/text_bindings.h). These are the regression net for the caret and
+// text shaping). These are the regression net for the caret and
 // selection work that consumes the cluster map: they fail loudly if shaping
 // stops fusing ligatures, stops kerning, stops joining Arabic, or starts
 // reporting byte ranges that don't tile the string.

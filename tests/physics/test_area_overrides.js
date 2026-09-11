@@ -12,7 +12,7 @@
 //  - damping override: set on enter / restored on exit; runtime
 //    setLinearDamping while inside updates the restored BASE.
 //  - runtime setAreaOverride affects bodies already inside; null clears.
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 assert(typeof Physics.setAreaOverride === 'function', 'setAreaOverride exists');

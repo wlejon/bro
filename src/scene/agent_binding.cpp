@@ -16,8 +16,7 @@ AgentBinding::AgentBinding(SceneNode* node) : node_(node) {
 }
 
 AgentBinding::~AgentBinding() {
-    // Give the current capability a chance to clean up (e.g. JS-registered
-    // caps that hold a JSValue in Action::jsState).
+    // Give the current capability a chance to clean up.
     if (!current_.done && current_.capId != brogameagent::kCapNone) {
         if (auto* cap = capSet_.get(current_.capId)) {
             brogameagent::CapContext ctx;

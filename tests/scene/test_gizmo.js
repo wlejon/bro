@@ -1,5 +1,5 @@
 // Test bro.gizmo — show/hide, modes, configure, attach.
-// Exercises src/engine/gizmo.cpp and src/js/gizmo_bindings.cpp.
+// Exercises src/engine/gizmo.cpp and gizmo API.
 
 assert(typeof bro === 'object', 'bro');
 assert(typeof bro.gizmo === 'object', 'bro.gizmo');

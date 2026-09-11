@@ -4,7 +4,7 @@
 // (PhysicsWorld::collectStaticTriangles), fromTerrain height sampling,
 // multi-level paths (the NavGrid-impossible case), save/load round-trips,
 // query methods, and AgentBinding navmesh route-following composed with ORCA
-// avoidance. (src/js/ai_bindings.cpp, src/js/ai_binding_integration.cpp,
+// avoidance. (AI game API, AI agent integration,
 // src/scene/agent_binding.cpp, src/physics/physics_world.cpp)
 
 const G = bro.ai.game;

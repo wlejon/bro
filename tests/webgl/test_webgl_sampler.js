@@ -1,7 +1,7 @@
 // WebGL2 conformance subset — sampler objects: create/bind/parameter
 // round-trips, sampler state overriding texture state (proven via pixels),
 // unbind restores texture state, deletion semantics, isSampler lifecycle.
-// Exercises src/js/webgl2_bindings_objects.cpp + src/webgl/webgl2_context.cpp.
+// Exercises WebGL2 object API + src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

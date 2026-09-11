@@ -3,7 +3,7 @@
 // target, getQuery(CURRENT_QUERY) object identity, non-stalling
 // QUERY_RESULT_AVAILABLE polling bounded by finish() + a wall deadline,
 // isQuery lifecycle, error paths.
-// Exercises src/js/webgl2_bindings_objects.cpp + src/webgl/webgl2_context.cpp.
+// Exercises WebGL2 object API + src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

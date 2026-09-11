@@ -1,7 +1,7 @@
 // Test Element traversal and mutation methods beyond append/remove —
 // insertBefore, replaceChild, matches, closest, insertAdjacentHTML,
 // before/after/prepend/append/replaceWith, scrollIntoView, attribute helpers.
-// Exercises src/js/element_bindings.cpp.
+// Exercises element API.
 
 const root = document.getElementById('root');
 root.innerHTML = '<div id="a">A</div><div id="b">B</div><div id="c">C</div>';

@@ -2,7 +2,7 @@
 // surface normals), castShape (all-hits + closest), overlapShape,
 // overlapPoint, layer filtering, ignoreBody, and the heightfield collision
 // shape (create, query against, settle a body on it).
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 assert(typeof Physics.castShape === 'function', 'castShape exists');

@@ -11,9 +11,9 @@
  *
  * Where the pieces live:
  *   - `Blob` / `File`         brokit (C++, bytes held natively)
- *   - `FileReader`            src/js/js/file_polyfills.js & bronze_host
- *   - `URL.createObjectURL`   src/js/js/file_polyfills.js + src/util/object_url.h
- *   - dropped-file payloads   src/js/event_dispatch_populate.cpp
+ *   - `FileReader`            src/bronze_host/host_file.cpp
+ *   - `URL.createObjectURL`   src/util/object_url.h
+ *   - dropped-file payloads   src/dom/event_dispatch.cpp
  *
  * @example
  *   // --- Blob / File Example ------------------------------------------------

@@ -95,7 +95,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots.
 
 | Flag | Pulls in | `minimal` | `app` | `full` | Notes |
 |---|:--|:--:|:--:|:--:|---|
-| `BRO_WITH_3D` | bromesh + scene graph + mesh/rigging/terrain/tile/gizmo bindings | off | on | on | 3D node types embed `bromesh` by value |
+| `BRO_WITH_3D` | bromesh + scene graph + mesh/rigging/terrain/tile/gizmo subsystems | off | on | on | 3D node types embed `bromesh` by value |
 | `BRO_WITH_PHYSICS` | Jolt | off | on | on | header-isolated behind `physics::PhysicsWorld` |
 | `BRO_WITH_AUDIO` | broaudio + audio_inference | off | on | on | self-contained, no vcpkg |
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | brotensor-free |
@@ -132,14 +132,7 @@ CUDA or Metal compiled in, so `BRO_WITH_TENSOR=ON` on its own gives you
 naming the backend rather than the flag. `bro.gpu` is the runtime probe and
 stays real either way, answering `cpu`. Everything else in the tower —
 `bro.lm`, `bro.diffusion`, `bro.vision`, the soundml family — has a CPU path
-and is real with the flag alone; the tensor bindings are the one exception.
-
-That was true of the design and not of the code until recently: the eight
-`tensor_bindings*.cpp` were guarded on `BRO_WITH_TENSOR` while the header they
-all include was guarded on `BROTENSOR_HAS_GPU`, so this configuration did not
-compile at all. No profile anybody built was in it — CI builds `app` with the
-tower off, the nightly always compiles a backend in — until ffmpeg-bro, whose
-`BRO_WITH_SOUNDML` pulls `BRO_WITH_TENSOR` in on three GPU-less runners.
+and is real with the flag alone; GPU acceleration is backend-dependent.
 
 ### Tier 3: outside the profiles
 
@@ -208,7 +201,7 @@ vendored deps, HarfBuzz, zlib, libpng/jpeg/webp, expat, …) is permitted.
 ## Adding a module later
 
 With the static-lib structure, `-DBRO_WITH_LM=ON` + rebuild reconfigures,
-compiles only brolm (+ brotensor) and `lm_bindings.cpp`, and **relinks**
+compiles only brolm (+ brotensor) and the host interfaces, and **relinks**
 `bro`/`bro-headless`. As long as the build dir is intact, that is incremental
 (minutes, mostly the sibling), not a from-scratch rebuild. ccache/incremental
 compilation covers the rest.

@@ -71,7 +71,7 @@ if (!scene) {
     // ---------------------------------------------------------------------
     // Whole-graph prune with a live callback installed: detach the canvas
     // and flush. The old registry had NO sweep on this path at all — the
-    // dup'd JSValue leaked and Debug teardown asserted.
+    // callback lifetime cleaned up.
     // ---------------------------------------------------------------------
     const sp4 = mkSprite();
     sp4.onAnimationEnd = () => {};

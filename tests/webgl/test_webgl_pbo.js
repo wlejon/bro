@@ -3,7 +3,7 @@
 // readPixels), texture upload from a PIXEL_UNPACK PBO (verified via pixels),
 // the WebGL2 client-memory-vs-PBO INVALID_OPERATION rules, PBO bounds
 // checking, and copyTexImage2D/copyTexSubImage2D round-trips.
-// Exercises src/js/webgl2_bindings_framebuffers.cpp, _textures.cpp +
+// Exercises WebGL2 framebuffer API, _textures.cpp +
 // src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');

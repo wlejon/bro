@@ -2,7 +2,7 @@
 // combos, checkFramebufferStatus, multisample renderbuffer + blitFramebuffer
 // resolve, readPixels format/type combos + destination-size validation,
 // drawBuffers MRT with readBuffer, getFragDataLocation.
-// Exercises src/js/webgl2_bindings_framebuffers.cpp + context FBO paths.
+// Exercises WebGL2 framebuffer API + context FBO paths.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

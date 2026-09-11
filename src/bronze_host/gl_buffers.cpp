@@ -1,5 +1,4 @@
-// Buffers, vertex arrays and vertex attributes — the bronze twin of
-// src/js/webgl2_bindings_buffers.cpp for the surface three.js's renderer
+// Buffers, vertex arrays and vertex attributes for the surface three.js's renderer
 // actually drives (create/bind/data/subdata, VAOs, attribute pointers,
 // instancing divisors, indexed uniform-buffer bindings).
 //

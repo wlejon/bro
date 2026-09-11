@@ -1,5 +1,5 @@
 // Worker event-loop wait regimes — guards the deadline-aware wait in
-// src/js/worker.cpp. The loop blocks when fully idle, sleeps to the next
+// worker subsystem. The loop blocks when fully idle, sleeps to the next
 // timer deadline when timers are pending, and keeps polling while pollables
 // (fetch etc.) are in flight. Each section would hang or stall if one of
 // those wake sources were missed.

@@ -1,5 +1,5 @@
 // Test bro.wake bindings and API surface
-// Exercises src/js/wake_bindings.cpp
+// Exercises wake word API
 
 assert(typeof bro === "object", "bro namespace exists");
 assert(typeof bro.wake === "object", "bro.wake namespace exists");

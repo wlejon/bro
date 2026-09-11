@@ -1,5 +1,5 @@
 // Test ImageBitmap global and basic lifecycle
-// Exercises src/js/imagebitmap_bindings.cpp
+// Exercises ImageBitmap API
 
 assert(typeof ImageBitmap === 'function', 'ImageBitmap constructor exists');
 assert(typeof createImageBitmap === 'function', 'createImageBitmap global exists');

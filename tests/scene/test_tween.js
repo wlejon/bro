@@ -1,6 +1,6 @@
 // Test scene.createTween — the engine-ticked property tween system.
 // Exercises src/scene/tween.cpp and the Tween bindings in
-// src/js/scene_bindings.cpp: linear + eased interpolation against analytic
+// scene subsystem: linear + eased interpolation against analytic
 // formulas, chained steps (including tick-overshoot carry across step
 // boundaries), parallel properties and parallel() cross-node merging, delay,
 // wait steps, loop counts, callback steps, onUpdate custom tweens, rotation

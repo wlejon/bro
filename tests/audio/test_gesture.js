@@ -1,5 +1,5 @@
 // Test bro.gesture acoustic non-speech gesture spotter
-// Exercises src/js/gesture_bindings.cpp
+// Exercises gesture API
 
 assert(typeof bro === "object", "bro namespace exists");
 assert(typeof bro.gesture === "object", "bro.gesture namespace exists");

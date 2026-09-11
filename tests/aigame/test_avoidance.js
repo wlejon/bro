@@ -1,8 +1,8 @@
 // ORCA local avoidance — world.setAvoidance() makes agents flow around each
 // other instead of walking through. Exercises brogameagent::AvoidanceSim +
 // World::tick's avoidance pass through the bro.ai.game bindings
-// (src/js/ai_bindings.cpp) and the scene attachAgent path
-// (src/js/ai_binding_integration.cpp).
+// (AI game API) and the scene attachAgent path
+// (AI agent integration).
 
 const G = bro.ai.game;
 const dt = 1 / 60;

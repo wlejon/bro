@@ -3,7 +3,7 @@
 // spring): stays upright while driving, moves forward, steers both ways,
 // brakes, falls over when the lean controller is disabled (and recovers from
 // the same kick when it is enabled), destroy paths, GC teardown.
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 //
 // The vehicle steps inside the engine's fixed physics tick; under headless,
 // advanceTime(ms) drives that tick deterministically at ~60 steps/sec.

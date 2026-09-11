@@ -1,6 +1,6 @@
 // Test focus, blur, focusin, focusout, document.activeElement.
 // Exercises focus management in src/engine/input_handling.cpp and event
-// dispatch in src/js/event_dispatch.cpp.
+// dispatch in src/dom/event_dispatch.cpp.
 
 const root = document.getElementById('root');
 root.innerHTML =

@@ -2,7 +2,7 @@
 // surfacing (S3TC / RGTC / BPTC — desktop GL has no ETC2),
 // getParameter(COMPRESSED_TEXTURE_FORMATS), hand-encoded DXT1/RGTC1 blocks
 // uploaded and verified via pixels, block-size and alignment validation.
-// Exercises src/js/webgl2_bindings_textures.cpp, _queries.cpp +
+// Exercises WebGL2 texture API, _queries.cpp +
 // src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');

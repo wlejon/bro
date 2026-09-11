@@ -3,7 +3,7 @@
 // with layer / Y-band filters, the whole-grid-footprint floor skip, and
 // support for both sandbox world handles and the default Physics world.
 // Exercises PhysicsWorld::collectStaticBodies + js_createNavGrid
-// (src/physics/physics_world.cpp + src/js/ai_bindings.cpp).
+// (src/physics/physics_world.cpp + AI game API).
 
 const G = bro.ai.game;
 assert(typeof G.createNavGrid === 'function', 'createNavGrid exists');

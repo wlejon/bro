@@ -1,5 +1,5 @@
 // Test document-level factory and query methods — exercises
-// src/js/document_bindings.cpp paths beyond createElement that
+// document API paths beyond createElement that
 // existing tests already cover (importNode, adoptNode,
 // getElementsByTagName/ClassName/Name, createDocumentFragment,
 // createElementNS, activeElement).

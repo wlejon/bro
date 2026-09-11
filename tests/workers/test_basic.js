@@ -1,6 +1,6 @@
 // Test Worker basic functionality — postMessage, onmessage, terminate,
-// structured clone, error handling. Exercises src/js/worker.cpp and
-// the message-serialization in src/js/message_serializer.cpp.
+// structured clone, error handling. Exercises worker subsystem and
+// the message-serialization in message serializer.
 
 const workerPath = '../workers/worker_basic.js';
 

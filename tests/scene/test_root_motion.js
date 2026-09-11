@@ -3,7 +3,7 @@
 // model space and removed from the pose, continuous across loop wraps and
 // crossfades. Exercises the extraction hook in
 // src/scene/animation_player.cpp and the bindings in
-// src/js/scene_bindings_anim.cpp. All time advance is advanceTime() virtual
+// scene animation. All time advance is advanceTime() virtual
 // time; every expectation is compensated with the player's own clock
 // (animationTime / blendState().phase) so clock granularity never matters.
 //

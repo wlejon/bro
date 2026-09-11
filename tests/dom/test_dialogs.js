@@ -1,5 +1,5 @@
 // Test Native Dialogs (alert, confirm, prompt)
-// Exercises src/js/dialog_bindings.cpp
+// Exercises dialogs API
 
 assert(typeof alert === "function", "alert global exists");
 assert(typeof confirm === "function", "confirm global exists");

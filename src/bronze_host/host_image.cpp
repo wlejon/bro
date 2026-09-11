@@ -15,8 +15,7 @@
 //
 // THREADING, stated because it is the question an image path usually raises:
 // there is no thread. broimage::decode_file is synchronous and runs on the main
-// thread — exactly what bro's own Image binding does (src/js/image_bindings.cpp)
-// — so no bronze value is ever produced, touched, or freed off the main thread,
+// thread — so no bronze value is ever produced, touched, or freed off the main thread,
 // and there is no cross-thread queue to get the memory ordering wrong on. If a
 // later chunk moves the decode onto bro's async job machinery, the decoded
 // BYTES may cross threads but the bronze side must not: the completion has to

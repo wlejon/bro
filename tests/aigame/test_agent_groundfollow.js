@@ -4,7 +4,7 @@
 // terrain raycast; 'raycast' mode uses a physics down-raycast against the
 // default world. Exercises scene::AgentBinding::syncToNode +
 // js_node_attachAgent (src/scene/agent_binding.cpp +
-// src/js/ai_binding_integration.cpp) and js::terrainSampleHeight.
+// AI agent integration) and js::terrainSampleHeight.
 
 const G = bro.ai.game;
 

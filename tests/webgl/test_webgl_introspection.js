@@ -4,7 +4,7 @@
 // MATRIX_STRIDE/IS_ROW_MAJOR), getActiveUniformBlockParameter,
 // getActiveUniformBlockName, uniformBlockBinding round-trip. Plus the full
 // is* object-predicate sweep (lifecycle + cross-type + null).
-// Exercises src/js/webgl2_bindings_shaders.cpp and friends +
+// Exercises WebGL2 shader API and friends +
 // src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');

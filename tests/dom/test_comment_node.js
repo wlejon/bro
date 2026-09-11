@@ -1,6 +1,6 @@
 // Test DOM CommentNode and TextNode CharacterData methods.
 // Exercises src/dom/comment_node.cpp and the shared CharacterData
-// bindings in src/js/node_bindings.cpp.
+// bindings in node API.
 
 const root = document.getElementById('root');
 

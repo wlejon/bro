@@ -8,7 +8,7 @@
 //
 // What this covers that the in-realm test can't: performAppReload destroying
 // live host documents, their canvas scenes, and their GPU surfaces — the path
-// where an unrouted surface leaks or a stale JSContext faults.
+// where an unrouted surface leaks or a stale execution context faults.
 
 const cp = require('child_process');
 const path = require('path');

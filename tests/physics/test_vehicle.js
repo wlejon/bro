@@ -4,7 +4,7 @@
 // per-wheel render state, sandbox-world form, destroy mid-sim (handle and
 // chassis-body paths), and GC teardown without explicit destroy (the
 // PhysicsCharacter lesson: worldRef needs gc_mark + ~JsWorld severing).
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 //
 // The vehicle steps inside the engine's fixed physics tick (the constraint is
 // a Jolt StepListener); under headless, advanceTime(ms) drives that tick

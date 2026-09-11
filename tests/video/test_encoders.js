@@ -1,5 +1,5 @@
 // Test VideoEncoder (WebM/VP9) and GifEncoder — exercises
-// src/js/video_bindings.cpp, src/video/webm_encoder.cpp, and
+// video encoder API, src/video/webm_encoder.cpp, and
 // src/video/gif_encoder.cpp.
 
 const os = require('os');

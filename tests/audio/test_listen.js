@@ -1,5 +1,5 @@
 // Test bro.listen stream host, retention buffer, and multi-tenant streams
-// Exercises src/js/listen_bindings.cpp and src/js/listen_host.h
+// Exercises listen API and host
 
 assert(typeof bro === "object", "bro namespace exists");
 assert(typeof bro.listen === "object", "bro.listen namespace exists");

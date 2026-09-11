@@ -59,7 +59,7 @@ assert(shot.width > 0 && shot.height > 0,
        'captured sub-doc has a real size, got ' + shot.width + 'x' + shot.height);
 
 // The child defines window.__ticks / #label. Neither may leak into the host
-// realm — separate JSContext, separate DOM.
+// realm — separate execution context, separate DOM.
 assert(typeof window.__ticks === 'undefined',
        'child globals do not leak into the host realm');
 assert(document.querySelector('#label') === null,

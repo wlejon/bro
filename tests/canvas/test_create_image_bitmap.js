@@ -1,5 +1,5 @@
 // Test createImageBitmap canvas 2D source, drawing, cropping, and error handling.
-// Exercises src/js/imagebitmap_bindings.cpp and CanvasRenderingContext2D::drawImage
+// Exercises ImageBitmap API and CanvasRenderingContext2D::drawImage
 
 assert(typeof createImageBitmap === 'function', 'createImageBitmap global exists');
 

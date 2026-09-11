@@ -1,7 +1,7 @@
 // Test CustomEvent, dispatchEvent, Event constructor, event.detail.
-// Exercises src/js/element_bindings.cpp dispatchEvent path,
-// src/js/event_dispatch.cpp, and the CustomEvent polyfill in
-// src/js/js/dom_polyfills.js.
+// Exercises element API dispatchEvent path,
+// src/dom/event_dispatch.cpp, and the CustomEvent polyfill in
+// DOM implementation.
 
 const root = document.getElementById('root');
 root.innerHTML = '<div id="parent"><div id="child">x</div></div>';

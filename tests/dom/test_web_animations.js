@@ -1,5 +1,5 @@
 // Test Web Animations API (element.animate, Animation, getAnimations)
-// Exercises src/js/web_animation_bindings.cpp
+// Exercises web animations API
 
 const div = document.createElement('div');
 document.body.appendChild(div);

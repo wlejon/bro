@@ -1,9 +1,9 @@
 // Test ImageBitmap / createImageBitmap — the pixels-to-drawable primitive.
-// Exercises src/js/imagebitmap_bindings.cpp: createImageBitmap from an
+// Exercises ImageBitmap API: createImageBitmap from an
 // ImageData-shaped source, an HTMLCanvasElement, an Image, and another
 // ImageBitmap (shared vs. cropped copy); drawImage consumption (3/5/9-arg
 // forms); WebGL texImage2D consumption; close(); and zero-copy Worker
-// transfer (src/js/message_serializer.cpp). See docs/imagebitmap-api.js.
+// transfer (message serializer). See docs/imagebitmap-api.js.
 
 // --- helpers -------------------------------------------------------------
 // A WxH RGBA buffer split into four solid-colour quadrants so crops/scales
@@ -199,7 +199,7 @@ if (!gl) {
 document.body.removeChild(glCanvas);
 
 // =========================================================================
-// Worker transfer — zero-copy, source neutered (src/js/message_serializer.cpp)
+// Worker transfer — zero-copy, source neutered (message serializer)
 // =========================================================================
 const w1 = new Worker('../canvas/worker_imagebitmap.js');
 let workerReply = null;

@@ -14,7 +14,7 @@ Run any of them from the bro repo root:
 
 | Script | Needs | What it does |
 |---|---|---|
-| `coverage.js` | bro + broworkshop source trees | Scans `src/js/*_bindings.cpp` vs test files and prints a JS-API coverage report (analysis tool, not pass/fail) |
+| `coverage.js` | bro + broworkshop source trees | Scans `src/bronze_host/*.cpp` vs test files and prints a host API coverage report (analysis tool, not pass/fail) |
 | `net_roundtrip.js` | — | Original single-context bro.net host/connect/send smoke; superseded for CI purposes by `tests/net/test_net_loopback.js` and `test_net_channels_clone.js` |
 | `repro_wake_passes.js` | wake weights + positives dataset | Multi-pass wake detection through the real mic tap (suspend/resume, no-warmup regression) |
 | `smoke_voice_pipeline.js` | STT/LM/TTS weights | End-to-end bro.stt → bro.lm → bro.tts pass; writes a WAV to listen to |

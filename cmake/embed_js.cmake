@@ -1,6 +1,6 @@
 # embed_js.cmake — Embed any text file into a C++ header as a null-terminated
 # byte array. Generic despite the name: driven by INPUT / OUTPUT / VAR_NAME and
-# used for JS polyfills (src/js, src/engine) and GLSL shaders (src/scene). The
+# used for scripts (src/engine) and GLSL shaders (src/scene). The
 # brokit sibling also resolves this file via ${CMAKE_SOURCE_DIR} when built in
 # tree, so keep the filename stable.
 #

@@ -5,7 +5,7 @@
 // channel 2. The host verifies the decoded value + channel, sendClones a
 // reply on channel 4, and the worker reports the decoded reply back over
 // postMessage. This proves per-context correctness: each side serializes in
-// its own JSContext and deserializes in the receiving JSContext.
+// its own execution context and deserializes in the receiving execution context.
 
 const PORT = 27900 + (Date.now() % 400);
 

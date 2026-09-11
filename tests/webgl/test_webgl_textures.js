@@ -2,7 +2,7 @@
 // texStorage2D/3D, explicit + generated mipmaps, NPOT/CLAMP_TO_EDGE,
 // UNPACK_ALIGNMENT, UNPACK_FLIP_Y_WEBGL / UNPACK_PREMULTIPLY_ALPHA_WEBGL,
 // 2D-array textures, cube maps. Verified via FBO attachment readback and
-// shader sampling. Exercises src/js/webgl2_bindings_textures.cpp +
+// shader sampling. Exercises WebGL2 texture API +
 // src/webgl/webgl2_context.cpp texture paths.
 
 const canvas = document.createElement('canvas');

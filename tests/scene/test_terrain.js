@@ -1,5 +1,5 @@
 // Test bro scene.createTerrain — exercises src/scene/terrain_manager.cpp
-// and src/js/terrain_bindings.cpp.
+// and terrain API.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '128');

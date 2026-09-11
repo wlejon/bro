@@ -1,6 +1,6 @@
 // Worker for test_imagebitmap.js — receives a transferred/cloned ImageBitmap
 // and reports its dimensions back, exercising the zero-copy Worker transfer
-// path in src/js/message_serializer.cpp (kTransferImageBitmap).
+// path in message serializer (kTransferImageBitmap).
 
 self.onmessage = (e) => {
     const data = e.data;

@@ -2,7 +2,7 @@
 // travel / wildcard transitions / autoAdvance / syncPhase / suspension by
 // manual play() / node.state / onStateChanged / blendState().state.
 // Exercises the machine tier in src/scene/animation_player.cpp and the
-// bindings in src/js/scene_bindings_anim.cpp.
+// bindings in scene animation.
 //
 // Rig: the same 2-bone hinge as test_skeletal_animation.js (bone 1 at
 // (0,1,0)). Clips animate only bone 1's rotation about distinct axes, so

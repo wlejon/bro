@@ -1,7 +1,7 @@
 // BRO_buffer_map — glMapBufferRange exposed as a zero-copy ArrayBuffer.
 // WebGL has no equivalent (a browser must not hand a page a raw pointer into
 // driver memory), so this is a bro extension, not a conformance surface.
-// Exercises src/js/webgl2_bindings_buffers.cpp + src/webgl/webgl2_context.cpp.
+// Exercises WebGL2 buffer API + src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

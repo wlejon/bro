@@ -1,5 +1,5 @@
 // Test bro.kws bindings and API surface
-// Exercises src/js/kws_bindings.cpp
+// Exercises keyword spotting API
 
 assert(typeof bro === "object", "bro namespace exists");
 assert(typeof bro.kws === "object", "bro.kws namespace exists");

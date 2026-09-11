@@ -17,7 +17,7 @@
 //   - a screenshot (the only thing that populates the screenshot GPU surface
 //     pool — headless-only state that ~Engine() releases)
 //   - a Worker (joined during binding cleanup)
-//   - live timers and event listeners (JSValues that must be freed before
+//   - live timers and event listeners (callbacks that must be freed before
 //     JS_FreeRuntime)
 
 const os = require('os');

@@ -563,10 +563,11 @@ void loadHostImage(HostImage& img, const std::string& src);
 void installPlatformGlobals();
 
 // ---------------------------------------------------------------------------
-// Blob / File / FileReader / URL (host_file.cpp)
+// Blob / File / FileReader / URL (host_file.cpp, host_url.cpp)
 // ---------------------------------------------------------------------------
 
 void installFileGlobals();
+void installUrlGlobals();
 
 // The bytes behind a Blob or File value, or nullptr for anything else. HOST
 // memory (a std::vector owned by the value's handle cell), not heap bytes — so
@@ -590,8 +591,7 @@ Value makeBlobValue(std::vector<uint8_t> bytes, std::string type);
 // A real `File` over the bytes at `path`, or `undefined` when it cannot be
 // read — a dropped directory, a permission error, a file that vanished between
 // the drop and the dispatch. The caller falls back to a `{ name, path }`
-// descriptor so a drop never fails outright, which is what the interpreted
-// realm does with the same failure (src/js/event_dispatch_populate.cpp).
+// descriptor so a drop never fails outright.
 Value makeFileFromPath(const std::string& path);
 
 // ---------------------------------------------------------------------------
@@ -708,9 +708,8 @@ void drainPhysicsContactEvents();
 
 void installAIGlobals();
 
-// `bro.ai` for the compiled realm: `{ game }`, the same surface the
-// interpreted side has under that name (src/js/ai_bindings.cpp, documented in
-// docs/ai-game-api.js) — the ORCA World, the HexNav navigator, the agent and
+// `bro.ai` for the compiled realm: `{ game }`, documented in
+// docs/ai-game-api.js — the ORCA World, the HexNav navigator, the agent and
 // grid factories and the perception helpers — over the same brogameagent
 // objects the `AI` global wraps. Built by host_ai_game.cpp; hung on the `bro`
 // value by dom_globals.cpp. Must run AFTER installAIGlobals, which installs

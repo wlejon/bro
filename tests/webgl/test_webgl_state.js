@@ -1,6 +1,6 @@
 // WebGL2 conformance subset — context info, getParameter, initial state,
 // enable/disable/isEnabled round-trips, getError semantics, pixelStorei.
-// Exercises src/webgl/webgl2_context.cpp + src/js/webgl2_bindings_queries.cpp
+// Exercises src/webgl/webgl2_context.cpp + WebGL2 query API
 // + webgl2_bindings_state.cpp.
 
 const canvas = document.createElement('canvas');

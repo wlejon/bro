@@ -7,7 +7,7 @@
 //      document, iframe sub-documents and system panels, but not windowHosts_.
 //      A host realm therefore never had its scheme updated or its lists
 //      re-evaluated.
-//   2. Even once delivery reached the right JSContext, change events wait on
+//   2. Even once delivery reached the right execution context, change events wait on
 //      Document::mediaRestylePending(), which only clears in resolveStyles().
 //      For a host document that runs from recordWindowHostLayers(), called
 //      solely from the windowed frame loop — so under headless the flag was

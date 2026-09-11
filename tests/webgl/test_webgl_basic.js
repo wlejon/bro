@@ -1,5 +1,5 @@
 // Test WebGL2 context — exercises src/webgl/webgl2_context.cpp,
-// src/js/webgl2_bindings*.cpp (buffers, shaders, state, textures,
+// WebGL2 API (buffers, shaders, state, textures,
 // framebuffers).
 
 const canvas = document.createElement('canvas');

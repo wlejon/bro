@@ -2,7 +2,7 @@
 // scissor, blending, depth test ordering, stencil masking, colorMask,
 // drawElements with all three index types, drawRangeElements, point
 // rendering with gl_PointSize.
-// Exercises src/js/webgl2_bindings_state.cpp + context draw paths.
+// Exercises WebGL2 state API + context draw paths.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

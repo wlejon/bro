@@ -1,5 +1,5 @@
 // Test bro.steam availability, structure, properties, methods, and stub behavior.
-// Exercises src/js/steam_bindings.cpp
+// Exercises Steam API
 
 assert(typeof bro === "object", "bro namespace exists");
 assert(typeof bro.steam === "object", "bro.steam namespace exists");

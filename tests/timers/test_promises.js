@@ -1,6 +1,6 @@
 // Test Promise microtask scheduling, async/await, queueMicrotask, and
-// unhandled-rejection tracking. Exercises src/js/runtime.cpp microtask
-// pump and src/js/timers.cpp scheduler integration.
+// unhandled-rejection tracking. Exercises runtime microtask
+// pump and timers scheduler integration.
 
 // Install a handler that calls preventDefault on the rejections we expect
 // in this test, so the harness doesn't log "[js error] unhandled rejection".

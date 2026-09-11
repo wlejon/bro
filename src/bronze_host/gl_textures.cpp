@@ -1,4 +1,4 @@
-// Textures — the bronze twin of src/js/webgl2_bindings_textures.cpp for the
+// Textures — the bronze host implementation for the
 // 2D + cube-map surface three.js's texture system drives: bind/params/upload/
 // mipmap/texStorage2D, plus the compressed 2D uploads a KTX/DDS loader feeds.
 //
@@ -71,8 +71,8 @@ SourcePixels resolveSource(Value source, const char* who) {
         return {s_dummy.data(), 1, 1};
     }
 
-    // ImageData-shaped { width, height, data }: the duck type bro's own canvas
-    // and createImageBitmap paths already consume (src/js/imagebitmap_bindings.cpp),
+    // ImageData-shaped { width, height, data }: the standard duck type canvas
+    // and createImageBitmap paths consume,
     // matched here so a texture built from raw RGBA needs no new object kind.
     if (ev::isObject(source)) {
         ev::Persistent root(source);

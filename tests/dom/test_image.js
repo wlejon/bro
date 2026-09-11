@@ -1,5 +1,5 @@
 // Test HTMLImageElement / Image constructor — exercises
-// src/js/image_bindings.cpp (the DOM Image wrapper, not bro.image).
+// Image API (the DOM Image wrapper, not bro.image).
 
 // Constructor exists and creates an object
 const img = new Image();

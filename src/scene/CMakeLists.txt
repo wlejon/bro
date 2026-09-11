@@ -1,5 +1,5 @@
 ## ── Embed GLSL shaders as C++ headers at build time ──────────────────────────
-## Mirrors the pattern in src/js/CMakeLists.txt. Each shaders/<file>.glsl becomes
+## Each shaders/<file>.glsl becomes
 ## generated/<file>.h holding `static const char <VAR>[]` (a null-terminated byte
 ## array — dodges MSVC's ~16KB single-literal limit that mesh.frag exceeds).
 set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")

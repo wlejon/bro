@@ -1,6 +1,6 @@
 // Test scene.createAnimationPlayer — data-driven multi-track keyframe clips
 // for arbitrary scene-node properties (src/scene/clip_player.cpp + the
-// clipDef bindings in src/js/scene_bindings_clip.cpp). Covers: linear / step /
+// clipDef bindings in animation clips). Covers: linear / step /
 // cubic (Catmull-Rom) interpolation against analytic values (via seek(), which
 // is exact), per-key easing, quaternion slerp shortest path, scalar props
 // (light intensity, camera fov), event tracks (exactly once, per-loop re-fire,

@@ -1,5 +1,5 @@
 // Test bro.scene basic API — SceneGraph via canvas.getContext('scene').
-// Exercises src/js/scene_bindings.cpp factory paths and SceneNode properties.
+// Exercises scene subsystem factory paths and SceneNode properties.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '256');

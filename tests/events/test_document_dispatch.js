@@ -8,8 +8,8 @@
 // non-bubbling event could not reach a document listener at all, and nothing
 // could say "this happened to the page" rather than "this happened to a div".
 //
-// Exercises src/js/document_bindings.cpp (js_document_dispatchEvent) against
-// src/js/event_dispatch.cpp. Document listeners are stored on documentElement,
+// Exercises document API (js_document_dispatchEvent) against
+// src/dom/event_dispatch.cpp. Document listeners are stored on documentElement,
 // so dispatching is delegated there and the event takes the ordinary
 // propagation path: window capture, the document's listeners at target, then
 // the bubble back out to window.

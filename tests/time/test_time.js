@@ -1,4 +1,4 @@
-// Test bro.time — global pause + timescale (src/js/time_bindings.cpp,
+// Test bro.time — global pause + timescale (time API,
 // scaled clock in src/engine/engine_frame.cpp / headless_api.cpp).
 //
 // Headless composition: advanceTime(ms) advances the scaled clock by

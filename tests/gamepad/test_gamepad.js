@@ -2,7 +2,7 @@
 // navigator.getGamepads() snapshot shape, gamepadconnected/disconnected window
 // events, button press/release + analog triggers, stick axes, slot reuse,
 // dual-rumble actuator, and bro.settings "gamepad:<name>" action bindings.
-// Exercises src/engine/gamepad.cpp + src/js/gamepad_bindings.cpp.
+// Exercises src/engine/gamepad.cpp + gamepad API.
 
 // =========================================================================
 // Baseline — API present, no pads connected

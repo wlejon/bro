@@ -1,7 +1,7 @@
 // =============================================================================
 // bro_triposplat_c_abi.h — Pure C-ABI declarations for bro.triposplat
 // Generated automatically by brosurface (gen/emit_c_abi.mjs).
-// Zero dynamic boxing, zero JSContext, direct native CPU register call.
+// Zero dynamic boxing, direct native CPU register call.
 // =============================================================================
 
 #ifndef BRO_TRIPOSPLAT_C_ABI_H

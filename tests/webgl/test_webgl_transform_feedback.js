@@ -4,7 +4,7 @@
 // computed values numerically. Also: TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
 // query, pause/resume, RASTERIZER_DISCARD, getTransformFeedbackVarying,
 // getIndexedParameter rows, isTransformFeedback lifecycle.
-// Exercises src/js/webgl2_bindings_objects.cpp + src/webgl/webgl2_context.cpp.
+// Exercises WebGL2 object API + src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

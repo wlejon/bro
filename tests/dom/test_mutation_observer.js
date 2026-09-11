@@ -1,5 +1,5 @@
 // Test MutationObserver — exercises both the JS polyfill and the native
-// notifyMutationObservers C++ pump (src/js/mutation_observer.cpp).
+// notifyMutationObservers C++ pump (mutation observer).
 
 const root = document.getElementById('root');
 root.innerHTML = '<div id="host"><span id="child">x</span></div>';

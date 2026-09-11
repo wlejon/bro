@@ -1,5 +1,5 @@
 // Test headless clipboard helpers (copy/cut/paste) and drop simulation
-// (dropFiles, dropText). Exercises src/js/headless_bindings.cpp paths
+// (dropFiles, dropText). Exercises headless API paths
 // beyond keyboard/mouse already tested in test_input_simulation.js.
 
 const root = document.getElementById('root');

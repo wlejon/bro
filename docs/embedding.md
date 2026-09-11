@@ -1,9 +1,9 @@
 # Embedding bro in your own executable
 
 bro builds as static libraries with three thin `main()`s on top. Nothing stops a
-fourth: link `bro_engine`, add your own JS bindings and media backends, and ship
-one binary. This is how [ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro) links
-GPL libav\* without ffmpeg ever entering bro's MIT tree.
+fourth: link `bro_engine`, add your own custom subsystems, media backends, and UI
+controllers, and ship one binary. This is how [ffmpeg-bro](https://github.com/wlejon/ffmpeg-bro)
+links GPL libav\* without ffmpeg ever entering bro's MIT tree.
 
 ## Why you would
 
@@ -67,46 +67,23 @@ bro::engine::Engine engine(config);
 engine.run();
 ```
 
-## Adding your own `bro.*` namespace
+## Configuring the Engine
 
-`EngineConfig::installHostBindings` runs during JS init, after every built-in
-binding and before any app script — once per realm, so reloads and `<iframe>`
-sub-documents get it too.
-
-```cpp
-config.installHostBindings = [](JSContext* ctx) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
-
-    JSValue ns = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, ns, "available", JS_TRUE);
-    JS_SetPropertyStr(ctx, ns, "doThing", JS_NewCFunction(ctx, js_doThing, "doThing", 1));
-    JS_SetPropertyStr(ctx, broObj, "myapp", ns);
-
-    JS_FreeValue(ctx, broObj);
-    JS_FreeValue(ctx, global);
-};
-```
-
-Keep it to installing bindings — the Engine is still mid-init when this runs.
-
-## Getting the `Engine*` from a binding
-
-The installer hook is `void(JSContext*)`, and in headless the host never sees
-the Engine at all (`runHeadless` builds it internally). To get from a realm to
-the engine that owns it:
+`bro::engine::EngineConfig` lets you configure application attributes, window display mode,
+custom directories, and graphics/input parameters before construction:
 
 ```cpp
-#include "engine/engine.h"
+bro::engine::EngineConfig config;
+config.title = "myapp";
+config.displayMode = bro::engine::DisplayMode::Windowed;
+config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
+config.compiledApp = true; // when running a compiled or C++-driven application
 
-bro::engine::Engine* engine = bro::engine::engineForContext(ctx);
-if (!engine) return JS_ThrowInternalError(ctx, "no Engine for this realm");
+bro::engine::Engine engine(config);
 ```
 
-Main thread only. Answers for the app realm — including inside the installer
-itself — and `nullptr` for sub-document and system-panel realms, so check it.
-Don't cache it across a `location.reload()`: the realm is replaced and the
-installer runs again on the new one.
+When building an embedded or native application, you have direct access to the `Engine`
+instance and its subsystems (document, layout, rendering, scene context, audio).
 
 ## Building the page from C++
 
@@ -243,7 +220,7 @@ mirrors, so:
   up the tree stops, and the engine's default actions (form submission,
   `<details>` toggling, label activation) are suppressed.
 - `dynamic_cast` to `MouseEvent` / `KeyboardEvent` / `WheelEvent` / `DragEvent`
-  / … for the typed payload, the same way `js/event_dispatch.cpp` does. Cast
+  / … for the typed payload, the same way `dom/event_dispatch.cpp` does. Cast
   defensively: `click` is a `MouseEvent`, but a `CustomEvent` dispatched from
   script arrives as a plain `Event`.
 
@@ -260,8 +237,8 @@ Payload a *script* hung on an event object does not cross into C++.
 listener with the right `type` and cancellation wired up in both directions,
 but `detail` is a JS value with no C++ representation and is not on the
 `dom::Event`. If the host needs structured data, dispatch the event from the
-host (`js::dispatchWindowEvent`) with an `Event` subclass of your own, or pass
-it through a binding.
+host (`dom::dispatchWindowEvent`) with an `Event` subclass of your own, or handle
+it with direct C++ callbacks.
 
 ### Which realm
 
@@ -278,19 +255,15 @@ doc->windowListeners().remove(handle);
 Element listeners have no such question — they live on the element.
 
 Listeners are owned by the DOM object they are on and die with it. A
-`location.reload()` builds a new `Document`, so window listeners registered on
-the old one are gone; re-register from `installHostBindings`, which runs again
-on the new realm.
+location reload builds a new `Document`, so window listeners registered on
+the old one are gone; re-register when a new Document is loaded.
 
-### Without a JS realm
+### Native event dispatch
 
-Element and window dispatch both run their C++ listeners with no `JSContext` at
-all (`js::dispatchDomEvent(nullptr, …)`, `js::dispatchWindowEvent(nullptr, doc,
-…)`): same path building, same phases, same retargeting. Only the JS-defined
-parts are skipped, because they cannot exist — registered JS listeners, inline
-`on*` attributes, and `el.onclick` properties. In practice every realm bro
-builds today has a context; this matters only if you drive a `dom::Document`
-yourself.
+Element and window dispatch both run their C++ listeners natively
+(`dom::dispatchDomEvent`, `dom::dispatchWindowEvent`): same path building,
+same phases, same retargeting. This drives element interactions directly from
+C++ callbacks.
 
 ## Playing formats bro doesn't ship
 
@@ -371,7 +344,7 @@ int main(int argc, char* argv[]) {
     bro::engine::HeadlessHooks hooks;
     hooks.programName = "myapp-headless";
     hooks.beforeEngine = [] { registerMyBackend(); };
-    hooks.installHostBindings = installMyBindings;
+    hooks.afterEngine = [](bro::engine::Engine& engine) { setupMyApplication(engine); };
     return bro::engine::runHeadless(argc, argv, hooks);
 }
 ```

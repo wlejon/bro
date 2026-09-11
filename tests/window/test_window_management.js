@@ -1,5 +1,5 @@
 // bro.window — runtime window management surface.
-// Exercises src/js/window_bindings.cpp (installBroWindowBindings) and
+// Exercises window API (installBroWindowBindings) and
 // src/platform/sdl_window.cpp. Headless runs against the hidden window:
 // flag/limit setters round-trip (pure window state), while state-affecting
 // ops (minimize/maximize/restore/setPosition/moveToDisplay) no-op so tests

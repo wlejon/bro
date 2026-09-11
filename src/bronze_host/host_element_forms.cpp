@@ -28,9 +28,8 @@ void decorateElementForms(ObjectBuilder& b) {
     // and got "" instead, so `parseInt` made a NaN, `getObjectById` answered
     // undefined, and selecting anything threw on `object.uuid`.
     //
-    // The fallback is src/js/element_bindings.cpp's, down to the key: both
-    // realms bind the same elements, and a page that sets `div.value` in one
-    // and reads it in the other must see one property and not two.
+    // The fallback is stored on an expando property so non-form elements
+    // setting `div.value` can read it back cleanly.
     b.accessor("value",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);

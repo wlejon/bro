@@ -2,7 +2,7 @@
 // reporting, getActiveUniform/getActiveAttrib metadata, every uniform setter
 // shape (scalar / vecN / matN / arrays / plain JS arrays) verified by
 // rendering, uniform blocks (UBO), getUniformBlockIndex/INVALID_INDEX.
-// Exercises src/js/webgl2_bindings_shaders.cpp.
+// Exercises WebGL2 shader API.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

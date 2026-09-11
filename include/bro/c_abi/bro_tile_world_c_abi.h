@@ -1,7 +1,7 @@
 // =============================================================================
 // bro_tile_world_c_abi.h — Pure C-ABI declarations for bro.tile_world
 // Generated automatically by brosurface (gen/emit_c_abi.mjs).
-// Zero dynamic boxing, zero JSContext, direct native CPU register call.
+// Zero dynamic boxing, direct native CPU register call.
 // =============================================================================
 
 #ifndef BRO_TILE_WORLD_C_ABI_H

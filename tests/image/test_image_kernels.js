@@ -1,6 +1,6 @@
 // Test bro.image typed-array kernels — reduce, map, combine, lookup,
 // stencil, resample, gradient, alloc. Exercises bro.image namespace
-// in src/js/image_bindings.cpp (and the kernel impls in brokit-like
+// in Image API (and the kernel impls in brokit-like
 // shared code).
 
 assert(typeof bro === 'object', 'bro namespace');

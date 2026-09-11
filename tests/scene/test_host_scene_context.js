@@ -1,12 +1,10 @@
 // A scene context built from C++ must be the same thing canvas.getContext('scene')
 // builds — same registration, same rendering, same compositing.
 //
-// This is the test for Engine::createSceneContext(dom::Element*) and for the
-// host's route to an Engine*, bro::engine::engineForContext(JSContext*). It is
+// This is the test for Engine::createSceneContext(dom::Element*). It is
 // driven through `__host`, a deliberately tiny host application installed by
-// bro-headless via HeadlessHooks::installHostBindings (src/headless/main.cpp) —
-// the same hook planet-bro and ffmpeg-bro use, and the same shape host-generated
-// C++ has. Nothing here reaches into the engine any other way.
+// bro-headless — the same shape host-generated C++ has.
+// Nothing here reaches into the engine any other way.
 //
 // Why it matters: a SceneGraph built with make_unique outside createSceneContext
 // is not in Engine::sceneGraphs_, so the frame loop never renders it, and has no
@@ -70,10 +68,9 @@ function centerOf(el) {
 // Section 0: the host can reach the Engine at all.
 // =========================================================================
 assert(typeof __host === 'object' && __host,
-    '__host bindings installed (EngineConfig::installHostBindings ran)');
+    '__host interfaces installed');
 assert(__host.engineResolvedAtInstall() === true,
-    'engineForContext() answers INSIDE the host installer, not just later — ' +
-    'the engine back-pointer must be registered before installCoreBindings');
+    'engine context answers inside the host installer, not just later');
 
 // =========================================================================
 // Section 1: the JS path, as the baseline.

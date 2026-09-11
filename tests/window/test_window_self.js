@@ -1,5 +1,5 @@
 // `self` — the WindowOrWorkerGlobalScope self-reference. Worker realms have
-// always installed it (src/js/worker.cpp); the document realm did not, and
+// always installed it (worker subsystem); the document realm did not, and
 // library feature detection keys off it constantly. three.js in particular
 // guards `if (typeof self !== 'undefined') animation.setContext(self)` in the
 // WebGLRenderer constructor, so a missing `self` left the animation context

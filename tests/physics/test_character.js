@@ -3,7 +3,7 @@
 // step climb (WalkStairs), wall blocking + sliding, too-steep-slope slide,
 // pushing dynamic bodies, riding a kinematic platform, jump launch, teleport,
 // destroy, and the sandbox-world variant (exact step-driven walk rate).
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 //
 // Characters update inside the engine's fixed physics tick; under headless,
 // advanceTime(ms) drives that tick deterministically (~60 steps/sec — the

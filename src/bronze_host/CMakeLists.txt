@@ -126,6 +126,7 @@ add_library(bro_bronze_host STATIC
     host_xhr.cpp
     host_fetch.cpp
     host_file.cpp
+    host_url.cpp
     host_abort.cpp
     host_observers.cpp
     host_parser.cpp

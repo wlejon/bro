@@ -2,7 +2,7 @@
 // vertex attributes: uniform1ui..4ui, uniform*uiv (typed arrays AND plain JS
 // arrays per the sequence<GLuint> overloads), vertexAttribI4i/ui/iv/uiv, all
 // verified numerically via pixels through uint shader plumbing.
-// Exercises src/js/webgl2_bindings_shaders.cpp, _buffers.cpp +
+// Exercises WebGL2 shader API, _buffers.cpp +
 // src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');

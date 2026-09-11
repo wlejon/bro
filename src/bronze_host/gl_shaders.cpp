@@ -1,5 +1,4 @@
-// Shaders, programs and uniforms — the bronze twin of
-// src/js/webgl2_bindings_shaders.cpp for the surface three.js's program
+// Shaders, programs and uniforms for the surface three.js's program
 // system drives: compile/link/introspect, uniform location lookup, scalar and
 // vector uniform uploads, and the square matrix uploads WebGLUniforms leans
 // on.

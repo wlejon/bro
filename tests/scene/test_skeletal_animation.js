@@ -1,7 +1,7 @@
 // Test the skeletal animation player on SkinnedMeshNode — setSkeleton /
 // addClip / play / crossfade / masked layer / pause / scrub / finished
 // callback / getBoneWorldMatrix. Exercises src/scene/animation_player.cpp
-// and the player bindings in src/js/scene_bindings.cpp.
+// and the player bindings in scene subsystem.
 //
 // Rig: the same procedural 2-bone strip as test_skinned_mesh.js (flat
 // vertical strip split rigidly at the y=1 hinge; bone 1's hinge at (0,1,0)).

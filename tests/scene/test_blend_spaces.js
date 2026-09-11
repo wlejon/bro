@@ -2,7 +2,7 @@
 // addBlendSpace1D/2D / setBlendPos / phase sync / playLayer stack /
 // setLayerWeight / stopLayer / blendState / crossfade into a blend space.
 // Exercises src/scene/animation_player.cpp, bromesh::blendPosesN, and the
-// bindings in src/js/scene_bindings_anim.cpp.
+// bindings in scene animation.
 //
 // Rig: the same 2-bone hinge as test_skeletal_animation.js (bone 1 at
 // (0,1,0)). All clips animate only bone 1's rotation, each about a distinct

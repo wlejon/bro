@@ -1,6 +1,6 @@
 // Test Physics API — default world + sandbox handles, body creation across
 // shape kinds, transform queries, raycasts, constraints, contact events,
-// kinematic motion. Exercises src/js/physics_bindings.cpp.
+// kinematic motion. Exercises physics API.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 

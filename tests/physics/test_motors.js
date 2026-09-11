@@ -3,7 +3,7 @@
 // per-axis free/limited/locked config, sixdof per-axis motors, and motors
 // configured at create time. Exercises PhysicsWorld::setConstraintMotor and
 // the SixDOF path in createConstraint (src/physics/physics_world.cpp +
-// src/js/physics_bindings.cpp).
+// physics API).
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 assert(typeof Physics.setConstraintMotor === 'function', 'Physics.setConstraintMotor exists');

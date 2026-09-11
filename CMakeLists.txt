@@ -256,8 +256,8 @@ elseif(BRO_WITH_TENSOR_METAL)
 endif()
 
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
-# Applied to the targets that carry feature-gated code (bro_js, bro_engine,
-# bro_scene). See src/js/*_bindings.cpp for the #if BRO_WITH_X convention.
+# Applied to the targets that carry feature-gated code (bro_engine, bro_c_abi,
+# bro_scene, bro_bronze_host). Uses the #if BRO_WITH_X convention.
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
     NET VIDEO STEAM

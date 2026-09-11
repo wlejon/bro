@@ -1,8 +1,7 @@
 #pragma once
 
 // Web Animations API (element.animate) — the script-driven sibling of the CSS
-// transition/animation managers in css_transitions.h. JS creates records via
-// the bindings (src/js/web_animation_bindings.cpp); the manager plugs into the
+// transition/animation managers in css_transitions.h. Animations plug into the
 // exact same seams the CSS managers use: applyOverrides() during style
 // resolution injects interpolated values into computed style, tick() advances
 // the clock on the engine's scaled (bro.time) timeline, and activeThisTick()

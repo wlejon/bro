@@ -1,7 +1,7 @@
 // WebGL2 conformance subset — vertex array objects: per-VAO attribute and
 // element-array state, vertexAttribIPointer integer attributes,
 // vertexAttribDivisor + instanced drawing, verified via rendered pixels.
-// Exercises src/js/webgl2_bindings_buffers.cpp + draw paths.
+// Exercises WebGL2 buffer API + draw paths.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

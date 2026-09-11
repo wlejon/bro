@@ -1,5 +1,5 @@
 // Test bro.sense bindings and acoustic sensing hub
-// Exercises src/js/sense_bindings.cpp
+// Exercises audio sense API
 
 assert(typeof bro === "object", "bro namespace exists");
 assert(typeof bro.sense === "object", "bro.sense namespace exists");

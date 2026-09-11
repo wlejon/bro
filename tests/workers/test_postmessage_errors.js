@@ -1,4 +1,4 @@
-// Error paths of the structured-clone serializer (src/js/message_serializer.cpp)
+// Error paths of the structured-clone serializer (message serializer)
 // via the Worker postMessage surface. The bro.net sendClone surface exercises
 // the same paths in tests/net/test_net_channels_clone.js; this covers the
 // worker channel and the worker-side (worker -> main) writer.

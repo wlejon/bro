@@ -1,6 +1,6 @@
 // Scene JS-wrapper liveness — stale GraphWrapper/NodeWrapper/TweenWrapper
 // safety. Wrappers hold {weak liveness token, id} and re-resolve through the
-// graph on every call (src/js/scene_bindings_internal.h), so a destroyed
+// graph on every call (scene graph), so a destroyed
 // node/tween/graph must read as gone through EVERY wrapper of it, on every
 // destruction path: direct destroy via another wrapper, ancestor subtree
 // destroy, and whole-graph teardown when the canvas is detached and pruned.

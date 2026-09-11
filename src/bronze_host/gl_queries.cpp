@@ -1,8 +1,6 @@
-// getParameter / getExtension and friends — the bronze twin of
-// src/js/webgl2_bindings_queries.cpp, dispatch case for dispatch case. What
-// that file answers, this answers; what it refuses (an unknown pname falls to
-// the generic int path, an unknown extension is null), this refuses the same
-// way — mirrored, not invented.
+// getParameter / getExtension and friends — query dispatch implementations
+// for WebGL2 pnames and extensions. An unknown pname falls to the generic
+// int path; an unknown extension returns null.
 //
 // Array-shaped pnames (VIEWPORT, COMPRESSED_TEXTURE_FORMATS, ...) answer a
 // PSEUDO-array: a plain object with numeric keys and a `length` property,

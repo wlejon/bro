@@ -4,7 +4,7 @@
 // The engine destroys a SceneGraph the instant its canvas leaves the DOM
 // (Engine::pruneDetachedSceneGraphs). SceneNode wrappers already survive that —
 // they hold {weak liveness token, node id} and re-resolve on every call, see
-// the design note at the top of src/js/scene_bindings_internal.h. The three
+// the design note at the top of scene graph. The three
 // scene-side helper objects did NOT: TileWorld, ClipmapTerrain and
 // TerrainManager each held a `SceneGraph&`, so a JS handle that outlived its
 // canvas by one frame left them pointing at freed memory, and their own

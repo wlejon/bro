@@ -1,7 +1,7 @@
 // WebGL2 conformance subset — buffer objects: bufferData (all signatures),
 // bufferSubData with element-unit srcOffset/length, copyBufferSubData,
 // getBufferSubData round-trips, WebGL2 binding points, error cases.
-// Exercises src/js/webgl2_bindings_buffers.cpp + src/webgl/webgl2_context.cpp.
+// Exercises WebGL2 buffer API + src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

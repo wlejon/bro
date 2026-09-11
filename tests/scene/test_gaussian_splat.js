@@ -1,6 +1,6 @@
 // Test scene.createGaussianSplat — exercises src/scene/gaussian_splat_node.cpp
 // and the createGaussianSplat/savePly/splatCount bindings in
-// src/js/scene_bindings.cpp. Builds an in-memory SoA cloud (the same shape
+// scene subsystem. Builds an in-memory SoA cloud (the same shape
 // bro.triposplat.generate returns) rather than depending on a real .ply asset,
 // then round-trips it through savePly/path-load.
 

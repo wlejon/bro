@@ -1,5 +1,5 @@
 // Test scene.createTileWorld tile map authoring, rebuilding, and spatial queries
-// Exercises src/js/tile_bindings.cpp and src/scene/tile_world.cpp
+// Exercises tile API and src/scene/tile_world.cpp
 
 const canvas = document.createElement("canvas");
 canvas.setAttribute("width", "128");

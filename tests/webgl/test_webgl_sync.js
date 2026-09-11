@@ -2,7 +2,7 @@
 // clientWaitSync with the MAX_CLIENT_WAIT_TIMEOUT_WEBGL cap, waitSync
 // argument validation, isSync lifecycle. Completion is forced with finish()
 // so the asserts are deterministic across drivers.
-// Exercises src/js/webgl2_bindings_objects.cpp + src/webgl/webgl2_context.cpp.
+// Exercises WebGL2 object API + src/webgl/webgl2_context.cpp.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');

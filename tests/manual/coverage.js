@@ -1,9 +1,9 @@
 // Test coverage analyzer for bro.
 // Runs via: bro-headless --no-gpu ../broworkshop/demos/example tests/coverage.js
 //
-// Scans src/js/*_bindings.cpp for the JS API surface (.method/.function/.getter/.property),
-// then scans all test files (tests/**\/test_*.js + ../broworkshop/**\/test*.js) for usage.
-// Outputs a per-binding-file coverage report.
+// Scans src/bronze_host/*.cpp for the host API surface (def/accessor/set/setStatic),
+// then scans all test files (tests/**/test_*.js + ../broworkshop/**/test*.js) for usage.
+// Outputs a per-file coverage report.
 
 var fs = globalThis.__brokit_fs;
 
@@ -11,12 +11,12 @@ var fs = globalThis.__brokit_fs;
 // Config
 // ---------------------------------------------------------------------------
 
-var SRC_DIR   = 'src/js';
+var SRC_DIR   = 'src/bronze_host';
 var TEST_DIRS = ['tests', '../broworkshop'];
 
-// Patterns that register JS-visible names in the C++ bindings
-// Matches: .method("name"   .function("name"   .getter("name"   .property("name"
-var BINDING_RE = /\.(method|function|getter|setter|property)\("([^"]+)"/;
+// Patterns that register JS-visible names in the host bindings
+// Matches: .def("name"   .accessor("name"   .set("name"   .setStatic("name"
+var BINDING_RE = /\.(def|accessor|set|setStatic)\("([^"]+)"/;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,11 +49,11 @@ function listFilesRecursive(dir, filter) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Extract JS API surface from binding files
+// 1. Extract JS API surface from host files
 // ---------------------------------------------------------------------------
 
 var bindingFiles = listFilesRecursive(SRC_DIR, function(name) {
-    return name.endsWith('_bindings.cpp') || name === 'custom_elements.cpp';
+    return (name.startsWith('host_') || name.startsWith('dom_') || name.startsWith('gl_')) && name.endsWith('.cpp');
 });
 
 // Map: binding file -> array of { name, kind, line }
@@ -70,31 +70,16 @@ for (var i = 0; i < bindingFiles.length; i++) {
         if (match) {
             var kind = match[1];
             var name = match[2];
-            entries.push({ name: name, kind: kind, line: ln + 1 });
-            if (!allApiNames[name]) allApiNames[name] = [];
-            allApiNames[name].push({ file: bfile, kind: kind });
-        }
-    }
-
-    // Also pick up JS_SetPropertyStr for direct property installs
-    // Pattern: JS_SetPropertyStr(ctx, obj, "name", ...)
-    var setPropRe = /JS_SetPropertyStr\([^,]+,\s*[^,]+,\s*"([a-zA-Z_]\w*)"/;
-    for (var ln = 0; ln < lines.length; ln++) {
-        var match = lines[ln].match(setPropRe);
-        if (match) {
-            var name = match[1];
-            // Skip internal/duplicate names and constructor/prototype wiring
             if (name === 'constructor' || name === 'prototype' || name === 'length')
                 continue;
-            // Skip if already captured by method/function/etc
             var dup = false;
             for (var e = 0; e < entries.length; e++) {
                 if (entries[e].name === name) { dup = true; break; }
             }
             if (!dup) {
-                entries.push({ name: name, kind: 'property', line: ln + 1 });
+                entries.push({ name: name, kind: kind, line: ln + 1 });
                 if (!allApiNames[name]) allApiNames[name] = [];
-                allApiNames[name].push({ file: bfile, kind: 'property' });
+                allApiNames[name].push({ file: bfile, kind: kind });
             }
         }
     }

@@ -8,7 +8,7 @@
 // - Behavioral checks are exact: impulse response dv = J/m, damping decay
 //   v_N = v0*(1 - c*dt)^N (Jolt's per-step damping model), gravity-factor
 //   integration dv = g*gf*dt per step. Sandbox world, deterministic.
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 assert(typeof Physics.setMass === 'function', 'setMass exists');

@@ -62,8 +62,7 @@ const T* viewAt(std::span<const Value> a, size_t i, bronze::ElementKind kind, si
 }
 
 // A step-cost argument as doubles: a Float64Array reads in place, a
-// Float32Array is widened into `tmp` (host memory, stable). Null for anything
-// else. Mirrors hexNavDoubles in src/js/ai_bindings.cpp.
+// Float32Array is widened into `tmp` (host memory, stable). Null for anything else.
 const double* doublesAt(std::span<const Value> a, size_t i, size_t& count,
                         std::vector<double>& tmp) {
     count = 0;

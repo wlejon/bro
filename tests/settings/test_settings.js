@@ -1,5 +1,5 @@
 // Test bro.settings API — get/set, defaults, reset, action binding.
-// Exercises src/js/settings_bindings.cpp and src/engine/settings.cpp.
+// Exercises settings API and src/engine/settings.cpp.
 
 assert(typeof bro === 'object', 'bro namespace exists');
 assert(typeof bro.settings === 'object', 'bro.settings exists');

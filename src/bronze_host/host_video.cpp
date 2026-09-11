@@ -1,10 +1,9 @@
 // VideoEncoder and GifEncoder: RGBA frames in, a .webm or .gif file out.
 //
-// The engine already owns both encoders (src/video/webm_encoder.h,
-// src/video/gif_encoder.h) and bro's own JS binds them in
-// src/js/video_bindings.cpp. So this file is a wrapper and deliberately
-// nothing more: same class names, same method names, same argument shapes,
-// same refusals. An app that records itself should not have to know which
+// The engine owns both encoders (src/video/webm_encoder.h,
+// src/video/gif_encoder.h). This file wraps them as bronze host globals:
+// class names, method names, argument shapes, and refusals match the video
+// encoder specification. An app that records itself should not have to know which
 // half of the runtime is executing it.
 //
 // THERE IS NO `VideoFrame` HERE because there is none in bro. The name comes

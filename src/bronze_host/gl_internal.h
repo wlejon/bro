@@ -358,7 +358,7 @@ struct ObjectBuilder {
 };
 
 // ---------------------------------------------------------------------------
-// Family installers (one per file, mirroring src/js/webgl2_bindings_*.cpp)
+// Family installers (one per file for modularity)
 // ---------------------------------------------------------------------------
 
 // Each takes the under-construction context object and the wrapped context.

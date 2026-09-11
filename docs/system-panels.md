@@ -31,9 +31,9 @@ Both scans match panels by relative path (`menu.html`, `settings/graphics.html`,
 
 Each panel gets its own `dom::Document`, with DOM and Canvas 2D layout. Notably:
 
-- **`bro.settings.*`** is available (it's installed on every context via `SettingsBindings`), so panels can read/write settings directly. See [settings.md](settings.md).
-- **`bro.menu.*`** (the app-facing menu tree *mutation* API, `set`, `addItem`, `updateItem`, `on`, etc., documented in [menu-api.js](menu-api.js)) is **not** available here. It's installed only on the app's own `JSContext`. Panels read/dispatch the menu through `__bro.menu` instead (below), a much narrower, render-only surface.
-- **ES modules are not supported.** Each panel is a separate `JSContext`, so `<script type="module">` is skipped with a `LOG_WARN` rather than misevaluated. Use classic scripts (inline or `<script src="...">`) and share code via plain functions attached to `window`.
+- **`bro.settings.*`** is available, so panels can read/write settings directly. See [settings.md](settings.md).
+- **`bro.menu.*`** (the app-facing menu tree *mutation* API, `set`, `addItem`, `updateItem`, `on`, etc., documented in [menu-api.js](menu-api.js)) is **not** available here. It is installed only on the application's main document context. Panels read/dispatch the menu through `__bro.menu` instead (below), a much narrower, render-only surface.
+- **ES modules are not supported.** Each panel is an isolated execution context, so `<script type="module">` is skipped with a `LOG_WARN` rather than misevaluated. Use classic scripts (inline or `<script src="...">`) and share code via plain functions attached to `window`.
 
 ### Lifecycle hooks
 

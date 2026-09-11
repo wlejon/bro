@@ -1,5 +1,5 @@
 // Test bro scene.createTileWorld — exercises src/scene/tile_world.cpp and
-// src/js/tile_bindings.cpp.
+// tile API.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '128');

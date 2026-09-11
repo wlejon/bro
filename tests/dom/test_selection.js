@@ -1,5 +1,5 @@
 // Test DOM Selection API (document.getSelection, collapse/extend, addRange,
-// containsNode, toString). Exercises src/js/selection_bindings.cpp.
+// containsNode, toString). Exercises selection API.
 
 const root = document.getElementById('root');
 root.innerHTML = '<p id="p1">Alpha</p><p id="p2">Beta</p><p id="p3">Gamma</p>';

@@ -4,7 +4,7 @@
 // explicit leftRatio/rightRatio), braking, per-wheel render state, config
 // rejection (missing/short tracks, empty track, unassigned/doubly-assigned
 // wheels), destroy paths, and GC teardown.
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 //
 // The vehicle steps inside the engine's fixed physics tick; under headless,
 // advanceTime(ms) drives that tick deterministically at ~60 steps/sec.

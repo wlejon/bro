@@ -4,7 +4,7 @@
 // changes, incremental tile rebuilds apply them (mesh.update() pump or the
 // engine's per-frame auto-pump), generation bumps once per applied batch, and
 // navigating agents repath automatically when the surface changes under their
-// active route. (brogameagent/src/nav_mesh.cpp, src/js/ai_bindings.cpp,
+// active route. (brogameagent/src/nav_mesh.cpp, AI game API,
 // src/scene/agent_binding.cpp, pumpNavMeshObstacles in engine_frame.cpp /
 // headless_api.cpp)
 

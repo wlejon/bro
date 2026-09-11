@@ -12,9 +12,9 @@
 // libwebp compiled out of the Skia source bundle (third_party/skia/
 // skia_modules.cmake) — no vcpkg, and ON in every profile including minimal.
 //
-// WHY ITS OWN TARGET: bro has two independent image entry points, and both
-// have to agree or the split just moves rather than closes.
-//   - src/js/image_bindings.cpp   `new Image()` / <img> — broimage::decode_file
+// WHY ITS OWN TARGET: bro has image entry points that both
+// have to agree:
+//   - HTML image loading (`Image` / <img>) — broimage::decode_file
 //   - src/render/image_cache.cpp  the renderer's draw path — SkCodec, then
 //                                 broimage::decode_memory
 // Neither links the other, so this lives in a small library both depend on

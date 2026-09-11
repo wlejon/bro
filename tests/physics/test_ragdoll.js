@@ -8,7 +8,7 @@
 // (localPose -> bromesh Pose -> setSkinningMatrices, verified numerically
 // and in pixels), and GC teardown without explicit destroy (worldRef
 // gc_mark + ~JsWorld severing — the Debug leak assert is the gate).
-// Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
+// Exercises physics API + src/physics/physics_world.cpp.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
 assert(typeof Physics.createRagdoll === 'function', 'createRagdoll exists');

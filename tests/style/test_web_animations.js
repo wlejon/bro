@@ -1,5 +1,5 @@
 // Test element.animate() — Web Animations API (src/engine/web_animations.cpp
-// + src/js/web_animation_bindings.cpp). Exercises keyframe parsing (array and
+// + web animations API). Exercises keyframe parsing (array and
 // object forms), interpolation over virtual time (opacity/length/color/
 // transform), fill modes, iterations + alternate direction, pause/resume (both
 // animation.pause() and bro.time), currentTime seek, playbackRate, reverse(),

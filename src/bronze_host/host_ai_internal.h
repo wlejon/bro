@@ -319,9 +319,7 @@ Value aiCreateAgent(Value, std::span<const Value> a);
 // `true | false | { enabled?, radius?, maxSpeed?, neighborDist?, maxNeighbors?,
 // timeHorizon?, timeHorizonObst?, height?, priority?, layers?, mask? }` onto an
 // agent's ORCA parameters — the shape docs/ai-game-api.js gives for
-// createAgent's `avoidance` and for agent.setAvoidance, and the same parser
-// src/js/ai_bindings.cpp applies (applyAgentAvoidanceOpts). Anything else is
-// ignored, as there.
+// createAgent's `avoidance` and for agent.setAvoidance. Anything else is ignored.
 void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);
 
 // HexNav + World + the bro.ai.game object (host_ai_game.cpp)

@@ -1,5 +1,5 @@
 // Test window.matchMedia and MediaQueryList
-// Exercises src/js/matchmedia_bindings.cpp
+// Exercises matchMedia API
 
 assert(typeof matchMedia === "function", "matchMedia global exists");
 assert(typeof window.matchMedia === "function", "window.matchMedia exists");

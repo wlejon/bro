@@ -1,5 +1,4 @@
-// Framebuffers and renderbuffers — the bronze twin of
-// src/js/webgl2_bindings_framebuffers.cpp for the render-target surface
+// Framebuffers and renderbuffers for the render-target surface
 // three.js drives: create/bind/attach/status, renderbuffer storage (plain and
 // multisampled), the resolve blit, MRT draw-buffer selection, and readPixels
 // into a caller-supplied typed array.

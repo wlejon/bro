@@ -1,5 +1,5 @@
 // Test bro.menu in engine test suite
-// Exercises src/js/menu_bindings.cpp and src/engine/menu_bar.cpp
+// Exercises menu API and src/engine/menu_bar.cpp
 
 assert(typeof bro === "object", "bro exists");
 assert(typeof bro.menu === "object", "bro.menu exists");

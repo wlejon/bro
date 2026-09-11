@@ -1,5 +1,5 @@
 // Test scene.createClipmapTerrain bindings and basic surface queries
-// Exercises src/js/clipmap_bindings.cpp and src/scene/clipmap_terrain.cpp
+// Exercises clipmap subsystem and src/scene/clipmap_terrain.cpp
 
 const canvas = document.createElement("canvas");
 canvas.setAttribute("width", "128");

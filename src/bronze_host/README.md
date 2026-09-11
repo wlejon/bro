@@ -565,10 +565,9 @@ node this layer ever wrapped came from a parsed document, the LIVE document was
 left unwatched and every wrapper it handed out could outlive its node.
 
 `VideoEncoder` and `GifEncoder` are DONE — `host_video.cpp`, checked by
-`tests/bronze_host/run_checks.sh video`. Same class names, same methods, same
-argument shapes and the same refusals as bro's own bindings
-(`src/js/video_bindings.cpp`), because both wrap the same encoders in
-`src/video`. Recording is worth having here for a reason none of the rest of
+`tests/bronze_host/run_checks.sh video`. Class names, methods, argument
+shapes and refusals wrap the encoders in `src/video`. Recording is worth having
+here for a reason none of the rest of
 this layer has: an app can write its own observer or its own parser, and it
 cannot write VP9 or read the composited framebuffer.
 
