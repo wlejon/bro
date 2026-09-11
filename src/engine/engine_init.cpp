@@ -32,6 +32,9 @@
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
+#if BRO_WITH_BRONZE
+#include "bronze_host/eval.h"
+#endif
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
@@ -386,6 +389,29 @@ void Engine::initAppRealm() {
         }
         syncIframes();
     }
+
+#if BRO_WITH_BRONZE
+    if (!manifest_.scripts.empty()) {
+        std::string combinedScripts;
+        for (const auto& script : manifest_.scripts) {
+            std::string code;
+            if (script.isInline()) {
+                code = script.code;
+            } else {
+                code = AppLoader::loadFile(script.path);
+            }
+            if (!code.empty()) {
+                if (!combinedScripts.empty()) combinedScripts += "\n;\n";
+                combinedScripts += code;
+            }
+        }
+        if (!combinedScripts.empty()) {
+            if (!bro::bronze_host::evalScript(*this, combinedScripts, manifest_.htmlPath)) {
+                setTestFailure(true);
+            }
+        }
+    }
+#endif
 
     documentReadyState_ = "interactive";
     if (auto* root = document_ ? document_->documentElement() : nullptr) {

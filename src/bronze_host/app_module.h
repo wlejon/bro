@@ -46,6 +46,14 @@ class Engine;
 
 namespace bro::bronze_host {
 
+using ModuleHandle = void*;
+
+/// Load a shared library/module at `path`. On failure, sets `error` and returns nullptr.
+ModuleHandle openModule(const std::string& path, std::string& error);
+
+/// Look up an exported symbol by name from `handle`.
+void* moduleSymbol(ModuleHandle handle, const char* name);
+
 /// Path of the compiled module `appDir` carries, or nothing when it carries
 /// none. Existence only — whether the file is loadable, matches this
 /// runtime's ABI, or is a bronze module at all is `runAppModule`'s business.

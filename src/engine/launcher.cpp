@@ -101,17 +101,26 @@ std::string absolutePath(const std::string& path) {
 }
 
 bool resolveLaunchTarget(const std::string& target, EngineConfig& config) {
-    if (!target.empty()) {
-        if (isJsonFile(target) && fileExists(target)) {
-            applyManifest(target, dirOf(target), config);
+    std::string actualTarget = target;
+    if (!actualTarget.empty() && !fileExists(actualTarget) &&
+        !fileExists(actualTarget + "/bro.json") && !fileExists(actualTarget + "/index.html")) {
+        std::string candidate = "src/bronze_host/" + actualTarget;
+        if (fileExists(candidate) || fileExists(candidate + "/bro.json") ||
+            fileExists(candidate + "/index.html")) {
+            actualTarget = candidate;
+        }
+    }
+    if (!actualTarget.empty()) {
+        if (isJsonFile(actualTarget) && fileExists(actualTarget)) {
+            applyManifest(actualTarget, dirOf(actualTarget), config);
         } else {
             // A directory. Do NOT preset config.appDir first: config_loader
             // skips default_app when appDir is already set.
-            std::string broJson = target + "/bro.json";
+            std::string broJson = actualTarget + "/bro.json";
             if (fileExists(broJson)) {
-                applyManifest(broJson, target, config);
-            } else if (fileExists(target + "/index.html")) {
-                config.appDir = target;   // bare directory of HTML
+                applyManifest(broJson, actualTarget, config);
+            } else if (fileExists(actualTarget + "/index.html")) {
+                config.appDir = actualTarget;   // bare directory of HTML
             } else {
                 // Neither manifest nor index.html: this is not an app. Say so
                 // rather than accepting it and failing later inside the

@@ -51,7 +51,7 @@ constexpr const char* kFingerprintSymbol = "bronze_object_abi_fingerprint";
 constexpr const char* kEntrySymbol = "bronze_main";
 constexpr const char* kGlobalsSymbol = "bronze_main_host_globals";
 
-using ModuleHandle = void*;
+}  // namespace
 
 // --- The two platform primitives, and nothing else ------------------------
 
@@ -99,6 +99,8 @@ void* moduleSymbol(ModuleHandle handle, const char* name) {
     return ::dlsym(handle, name);
 #endif
 }
+
+namespace {
 
 // The `<entry>_host_globals` manifest: a uint32 count, then that many
 // NUL-terminated UTF-8 names back to back (bronze_abi.h, "the loadable-module

@@ -124,3 +124,17 @@ tern
 esprima
 jsonlint
 draco_encoder
+advanceTime
+flush
+sleep
+screenshot
+assert
+click
+mouseDown
+mouseUp
+mouseMove
+wheel
+keyDown
+keyUp
+textInput
+scriptArgs

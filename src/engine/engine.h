@@ -299,6 +299,9 @@ public:
     void flush();
     void advanceTime(double ms);
     std::string eval(const std::string& code);
+    bool hasTestFailure() const { return testFailure_; }
+    void setTestFailure(bool f = true) { testFailure_ = f; }
+    void clearTestFailure() { testFailure_ = false; }
     bool screenshot(const std::string& path);
     bool screenshot(const std::string& path, int x, int y, int w, int h);
     std::vector<uint8_t> capturePixels();
@@ -854,6 +857,7 @@ private:
 
     unsigned int uiQuadVAO_ = 0;
     unsigned int uiQuadVBO_ = 0;
+    bool testFailure_ = false;
 };
 
 } // namespace bro::engine

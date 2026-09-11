@@ -28,6 +28,9 @@ namespace bro::bronze_host {
 /// register-once convention.
 void installWebHostGlobals(engine::Engine& engine);
 
+/// Whether installWebHostGlobals has already been called on this process.
+bool isWebHostGlobalsInstalled();
+
 /// Backwards compatibility alias for installWebHostGlobals.
 inline void installThreejsHostGlobals(engine::Engine& engine) {
     installWebHostGlobals(engine);

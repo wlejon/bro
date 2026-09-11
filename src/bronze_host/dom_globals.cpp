@@ -27,6 +27,7 @@
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_interp.h"
+#include "bronze_host/host_headless.h"
 
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
@@ -707,6 +708,11 @@ void installWebHostGlobals(engine::Engine& engine) {
     }
     installNetGlobals();
     installVendorGlobals();
+    installHeadlessGlobals(engine);
+}
+
+bool isWebHostGlobalsInstalled() {
+    return g_host != nullptr;
 }
 
 }  // namespace bro::bronze_host

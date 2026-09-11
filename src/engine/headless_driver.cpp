@@ -3,6 +3,11 @@
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 
+#if BRO_WITH_BRONZE
+#include "bronze_host/eval.h"
+#include "bronze_host/host_headless.h"
+#endif
+
 using bro::engine::parseConfig;
 using bro::engine::findAncestorProjectRoot;
 #include "util/interrupt.h"
@@ -83,39 +88,50 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     bool realAudio = false;
     int cliSplash = -1;
     std::string appDir;
+    std::string scriptPath;
+    std::vector<std::string> inlineExprs;
     std::vector<std::string> scriptArgs;
 
+    bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+        if (passThrough) {
+            scriptArgs.push_back(argv[i]);
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
                 "%s — %s\n\n"
-                "Usage: %s [options] <app-directory> [-- args...]\n\n"
+                "Usage: %s [options] <app-directory> [script.js] [-- args...]\n\n"
                 "Options:\n"
                 "  --width N       Viewport width  (default: 1280)\n"
                 "  --height N      Viewport height (default: 720)\n"
                 "  --cpu           Use software renderer\n"
+                "  --no-gpu        Use software renderer\n"
                 "  --real-audio    Enable real audio output\n"
+                "  --audio         Enable real audio output\n"
                 "  --splash        Show splash screen during load\n"
-                "  --no-splash     Skip splash screen\n",
+                "  --no-splash     Skip splash screen\n"
+                "  -e <expr>       Evaluate JavaScript expression\n",
                 hooks.programName.c_str(), hooks.tagline.c_str(), hooks.programName.c_str());
             return 0;
+        } else if (strcmp(argv[i], "--") == 0) {
+            passThrough = true;
         } else if (strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
             width = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
             height = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--cpu") == 0) {
+        } else if (strcmp(argv[i], "--cpu") == 0 || strcmp(argv[i], "--no-gpu") == 0) {
             useGPU = false;
-        } else if (strcmp(argv[i], "--real-audio") == 0) {
+        } else if (strcmp(argv[i], "--real-audio") == 0 || strcmp(argv[i], "--audio") == 0) {
             realAudio = true;
         } else if (strcmp(argv[i], "--splash") == 0) {
             cliSplash = 1;
         } else if (strcmp(argv[i], "--no-splash") == 0) {
             cliSplash = 0;
-        } else if (strcmp(argv[i], "--") == 0) {
-            for (++i; i < argc; ++i) scriptArgs.push_back(argv[i]);
-            break;
+        } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
+            inlineExprs.push_back(argv[++i]);
         } else if (appDir.empty()) {
             appDir = argv[i];
+        } else if (scriptPath.empty() && argv[i][0] != '-') {
+            scriptPath = argv[i];
         } else {
             scriptArgs.push_back(argv[i]);
         }
@@ -125,6 +141,24 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         fprintf(stderr, "Error: no app directory specified\n");
         return 1;
     }
+
+    {
+        auto fileExists = [](const std::string& p) {
+            std::ifstream f(p);
+            return f.good();
+        };
+        if (!fileExists(appDir) && !fileExists(appDir + "/bro.json") && !fileExists(appDir + "/index.html")) {
+            std::string candidate = "src/bronze_host/" + appDir;
+            if (fileExists(candidate) || fileExists(candidate + "/bro.json") || fileExists(candidate + "/index.html")) {
+                appDir = candidate;
+            }
+        }
+    }
+
+#if BRO_WITH_BRONZE
+    bro::bronze_host::setScriptArgs(scriptArgs);
+    bro::bronze_host::clearTestFailure();
+#endif
 
     int exitCode = 0;
 
@@ -220,6 +254,31 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         engine->run();
 
         if (hooks.afterEngine) hooks.afterEngine(*engine);
+
+#if BRO_WITH_BRONZE
+        if (bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
+            exitCode = 1;
+        }
+
+        if (!inlineExprs.empty()) {
+            std::ostringstream oss;
+            for (size_t i = 0; i < inlineExprs.size(); ++i) {
+                if (i > 0) oss << ";\n";
+                oss << inlineExprs[i];
+            }
+            std::string err = engine->eval(oss.str());
+            if (!err.empty() || bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
+                exitCode = 1;
+            }
+        }
+
+        if (!scriptPath.empty()) {
+            bool ok = bro::bronze_host::evalScriptFile(*engine, scriptPath);
+            if (!ok || bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
+                exitCode = 1;
+            }
+        }
+#endif
 
         delete engine;
     } catch (const std::exception& e) {

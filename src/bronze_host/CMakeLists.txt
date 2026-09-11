@@ -130,6 +130,8 @@ add_library(bro_bronze_host STATIC
     host_ai_game.cpp
     host_net.cpp
     host_vendor_globals.cpp
+    host_headless.cpp
+    eval.cpp
 )
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
@@ -179,7 +181,7 @@ endfunction()
 # INSIDE the shared image — the host↔runtime boundary is a C++ one no export
 # list could carry — so this one target supplies both halves.
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_net bro_webgl glad broimage::broimage brogameagent bronze::runtime_shared
+    PUBLIC bro_engine bro_net bro_webgl glad broimage::broimage brogameagent bronze::runtime_shared bronze::cli
 )
 
 # bromesh backs bro.mesh.decodeDraco/encodeDraco in the compiled realm
