@@ -43,6 +43,10 @@ add_library(bro_c_abi STATIC
     bro_motion_c_abi.cpp
     bro_triposplat_c_abi.cpp
     bro_web_animations_c_abi.cpp
+    bro_ai_c_abi.cpp
+    bro_tensor_c_abi.cpp
+    bro_vision_c_abi.cpp
+    bro_diffusion_c_abi.cpp
 )
 
 

@@ -277,6 +277,62 @@ const BroMotionBridge* bro_get_motion_bridge(void) {
     return &s_motion_bridge;
 }
 
+static BroAIBridge s_ai_bridge = {};
+
+void bro_set_ai_bridge(const BroAIBridge* bridge) {
+    if (bridge) {
+        s_ai_bridge = *bridge;
+    } else {
+        s_ai_bridge = {};
+    }
+}
+
+const BroAIBridge* bro_get_ai_bridge(void) {
+    return &s_ai_bridge;
+}
+
+static BroTensorBridge s_tensor_bridge = {};
+
+void bro_set_tensor_bridge(const BroTensorBridge* bridge) {
+    if (bridge) {
+        s_tensor_bridge = *bridge;
+    } else {
+        s_tensor_bridge = {};
+    }
+}
+
+const BroTensorBridge* bro_get_tensor_bridge(void) {
+    return &s_tensor_bridge;
+}
+
+static BroVisionBridge s_vision_bridge = {};
+
+void bro_set_vision_bridge(const BroVisionBridge* bridge) {
+    if (bridge) {
+        s_vision_bridge = *bridge;
+    } else {
+        s_vision_bridge = {};
+    }
+}
+
+const BroVisionBridge* bro_get_vision_bridge(void) {
+    return &s_vision_bridge;
+}
+
+static BroDiffusionBridge s_diffusion_bridge = {};
+
+void bro_set_diffusion_bridge(const BroDiffusionBridge* bridge) {
+    if (bridge) {
+        s_diffusion_bridge = *bridge;
+    } else {
+        s_diffusion_bridge = {};
+    }
+}
+
+const BroDiffusionBridge* bro_get_diffusion_bridge(void) {
+    return &s_diffusion_bridge;
+}
+
 }
 
 

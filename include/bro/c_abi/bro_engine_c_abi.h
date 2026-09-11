@@ -309,6 +309,42 @@ typedef struct BroMotionBridge {
 void bro_set_motion_bridge(const BroMotionBridge* bridge);
 const BroMotionBridge* bro_get_motion_bridge(void);
 
+typedef struct BroAIBridge {
+    void* (*createWorld)(void* opts);
+    void* (*createAgent)(void* world, void* opts);
+    void  (*step)(void* world, double dt);
+} BroAIBridge;
+
+void bro_set_ai_bridge(const BroAIBridge* bridge);
+const BroAIBridge* bro_get_ai_bridge(void);
+
+typedef struct BroTensorBridge {
+    void  (*init)(void);
+    void  (*sync)(void);
+    bool  (*getAvailable)(void);
+    const char* (*getBackend)(void);
+} BroTensorBridge;
+
+void bro_set_tensor_bridge(const BroTensorBridge* bridge);
+const BroTensorBridge* bro_get_tensor_bridge(void);
+
+typedef struct BroVisionBridge {
+    void  (*init)(void);
+    void* (*loadDepth)(const char* modelDir, void* opts);
+} BroVisionBridge;
+
+void bro_set_vision_bridge(const BroVisionBridge* bridge);
+const BroVisionBridge* bro_get_vision_bridge(void);
+
+typedef struct BroDiffusionBridge {
+    void  (*init)(void);
+    void* (*createPipeline)(void* config);
+    void* (*loadModel)(const char* dir, void* opts);
+} BroDiffusionBridge;
+
+void bro_set_diffusion_bridge(const BroDiffusionBridge* bridge);
+const BroDiffusionBridge* bro_get_diffusion_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -712,6 +712,34 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         .load = [](void* /*opts*/) -> void* { return nullptr; }
     };
     bro_set_motion_bridge(&s_engine_motion_bridge);
+
+    static BroAIBridge s_engine_ai_bridge = {
+        .createWorld = [](void* /*opts*/) -> void* { return nullptr; },
+        .createAgent = [](void* /*world*/, void* /*opts*/) -> void* { return nullptr; },
+        .step = [](void* /*world*/, double /*dt*/) {}
+    };
+    bro_set_ai_bridge(&s_engine_ai_bridge);
+
+    static BroTensorBridge s_engine_tensor_bridge = {
+        .init = []() {},
+        .sync = []() {},
+        .getAvailable = []() -> bool { return true; },
+        .getBackend = []() -> const char* { return "cpu"; }
+    };
+    bro_set_tensor_bridge(&s_engine_tensor_bridge);
+
+    static BroVisionBridge s_engine_vision_bridge = {
+        .init = []() {},
+        .loadDepth = [](const char* /*modelDir*/, void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_vision_bridge(&s_engine_vision_bridge);
+
+    static BroDiffusionBridge s_engine_diffusion_bridge = {
+        .init = []() {},
+        .createPipeline = [](void* /*config*/) -> void* { return nullptr; },
+        .loadModel = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_diffusion_bridge(&s_engine_diffusion_bridge);
 }
 
 } // namespace bro::engine
