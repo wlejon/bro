@@ -56,6 +56,10 @@ add_library(bro_c_abi STATIC
     bro_gesture_c_abi.cpp
     bro_sense_c_abi.cpp
     bro_wake_c_abi.cpp
+    bro_custom_elements_c_abi.cpp
+    bro_iframe_c_abi.cpp
+    bro_matchmedia_c_abi.cpp
+    bro_vendor_globals_c_abi.cpp
 )
 
 

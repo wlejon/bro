@@ -494,6 +494,67 @@ typedef struct BroWakeBridge {
 void bro_set_wake_bridge(const BroWakeBridge* bridge);
 const BroWakeBridge* bro_get_wake_bridge(void);
 
+typedef struct BroCustomElementsBridge {
+    void* (*getRegistry)(void);
+    void  (*define)(void* self, const char* name, void* constructor, void* options);
+    void* (*get)(void* self, const char* name);
+    void* (*whenDefined)(void* self, const char* name);
+    void  (*upgrade)(void* self, void* root);
+    void* (*createElement)(void);
+    void  (*destroyElement)(void* self);
+} BroCustomElementsBridge;
+
+void bro_set_custom_elements_bridge(const BroCustomElementsBridge* bridge);
+const BroCustomElementsBridge* bro_get_custom_elements_bridge(void);
+
+typedef struct BroIframeBridge {
+    void*       (*create)(void);
+    void        (*destroy)(void* self);
+    const char* (*getSrc)(void* self);
+    void        (*setSrc)(void* self, const char* val);
+    const char* (*getWidth)(void* self);
+    void        (*setWidth)(void* self, const char* val);
+    const char* (*getHeight)(void* self);
+    void        (*setHeight)(void* self, const char* val);
+    void*       (*getContentDocument)(void* self);
+    void*       (*getContentWindow)(void* self);
+    void        (*reload)(void* self);
+    void*       (*capture)(void* self);
+} BroIframeBridge;
+
+void bro_set_iframe_bridge(const BroIframeBridge* bridge);
+const BroIframeBridge* bro_get_iframe_bridge(void);
+
+typedef struct BroMatchMediaBridge {
+    void*       (*create)(const char* query);
+    void        (*destroy)(void* self);
+    bool        (*getMatches)(void* self);
+    const char* (*getMedia)(void* self);
+    void*       (*getOnchange)(void* self);
+    void        (*setOnchange)(void* self, void* cb);
+    void        (*addEventListener)(void* self, const char* type, void* listener, void* options);
+    void        (*removeEventListener)(void* self, const char* type, void* listener, void* options);
+    void        (*addListener)(void* self, void* listener);
+    void        (*removeListener)(void* self, void* listener);
+    void*       (*matchMedia)(const char* query);
+} BroMatchMediaBridge;
+
+void bro_set_matchmedia_bridge(const BroMatchMediaBridge* bridge);
+const BroMatchMediaBridge* bro_get_matchmedia_bridge(void);
+
+typedef struct BroVendorGlobalsBridge {
+    void* (*getSignals)(void);
+    void* (*getCodeMirror)(void);
+    void* (*getAcorn)(void);
+    void* (*getTern)(void);
+    void* (*getEsprima)(void);
+    void* (*getJsonlint)(void);
+    void* (*getDracoEncoder)(void);
+} BroVendorGlobalsBridge;
+
+void bro_set_vendor_globals_bridge(const BroVendorGlobalsBridge* bridge);
+const BroVendorGlobalsBridge* bro_get_vendor_globals_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

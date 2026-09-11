@@ -459,6 +459,62 @@ const BroWakeBridge* bro_get_wake_bridge(void) {
     return &s_wake_bridge;
 }
 
+static BroCustomElementsBridge s_custom_elements_bridge = {};
+
+void bro_set_custom_elements_bridge(const BroCustomElementsBridge* bridge) {
+    if (bridge) {
+        s_custom_elements_bridge = *bridge;
+    } else {
+        s_custom_elements_bridge = {};
+    }
+}
+
+const BroCustomElementsBridge* bro_get_custom_elements_bridge(void) {
+    return &s_custom_elements_bridge;
+}
+
+static BroIframeBridge s_iframe_bridge = {};
+
+void bro_set_iframe_bridge(const BroIframeBridge* bridge) {
+    if (bridge) {
+        s_iframe_bridge = *bridge;
+    } else {
+        s_iframe_bridge = {};
+    }
+}
+
+const BroIframeBridge* bro_get_iframe_bridge(void) {
+    return &s_iframe_bridge;
+}
+
+static BroMatchMediaBridge s_matchmedia_bridge = {};
+
+void bro_set_matchmedia_bridge(const BroMatchMediaBridge* bridge) {
+    if (bridge) {
+        s_matchmedia_bridge = *bridge;
+    } else {
+        s_matchmedia_bridge = {};
+    }
+}
+
+const BroMatchMediaBridge* bro_get_matchmedia_bridge(void) {
+    return &s_matchmedia_bridge;
+}
+
+static BroVendorGlobalsBridge s_vendor_globals_bridge = {};
+
+void bro_set_vendor_globals_bridge(const BroVendorGlobalsBridge* bridge) {
+    if (bridge) {
+        s_vendor_globals_bridge = *bridge;
+    } else {
+        s_vendor_globals_bridge = {};
+    }
+}
+
+const BroVendorGlobalsBridge* bro_get_vendor_globals_bridge(void) {
+    return &s_vendor_globals_bridge;
+}
+
 }
 
 

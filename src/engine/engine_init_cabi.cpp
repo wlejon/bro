@@ -1,5 +1,6 @@
 #include "engine/engine_init_cabi.h"
 #include "engine/engine_init_cabi_sensors.h"
+#include "engine/engine_init_cabi_dom.h"
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
@@ -828,6 +829,7 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
     bro_set_rave_bridge(&s_engine_rave_bridge);
 
     bro_engine_register_cabi_sensor_bridges();
+    bro_engine_register_cabi_dom_bridges();
 }
 
 } // namespace bro::engine

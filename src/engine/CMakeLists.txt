@@ -33,6 +33,7 @@ add_library(bro_engine STATIC
     engine_init.cpp
     engine_init_cabi.cpp
     engine_init_cabi_sensors.cpp
+    engine_init_cabi_dom.cpp
     engine_lifecycle.cpp
     engine_threads.cpp
     engine_frame.cpp
