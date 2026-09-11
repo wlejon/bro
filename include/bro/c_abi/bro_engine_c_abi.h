@@ -120,8 +120,31 @@ typedef struct BroGamepadBridge {
 void bro_set_gamepad_bridge(const BroGamepadBridge* bridge);
 const BroGamepadBridge* bro_get_gamepad_bridge(void);
 
+typedef struct BroMediaBridge {
+    bool  (*getAvailable)(void);
+    void* (*peaks)(const char* path, void* options);
+    void* (*thumbnails)(const char* path, void* options);
+} BroMediaBridge;
+
+void bro_set_media_bridge(const BroMediaBridge* bridge);
+const BroMediaBridge* bro_get_media_bridge(void);
+
+typedef struct BroListenBridge {
+    void*   (*open)(void* source);
+    bool    (*supported)(void);
+    void*   (*apps)(void);
+    void    (*retain)(int32_t seconds);
+    void*   (*audio)(int64_t startFrame, int64_t endFrame);
+    int64_t (*frame)(void);
+    void*   (*info)(void);
+} BroListenBridge;
+
+void bro_set_listen_bridge(const BroListenBridge* bridge);
+const BroListenBridge* bro_get_listen_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif // BRO_ENGINE_C_ABI_H
+

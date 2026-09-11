@@ -123,4 +123,33 @@ const BroGamepadBridge* bro_get_gamepad_bridge(void) {
     return &s_gamepad_bridge;
 }
 
+static BroMediaBridge s_media_bridge = {};
+
+void bro_set_media_bridge(const BroMediaBridge* bridge) {
+    if (bridge) {
+        s_media_bridge = *bridge;
+    } else {
+        s_media_bridge = {};
+    }
 }
+
+const BroMediaBridge* bro_get_media_bridge(void) {
+    return &s_media_bridge;
+}
+
+static BroListenBridge s_listen_bridge = {};
+
+void bro_set_listen_bridge(const BroListenBridge* bridge) {
+    if (bridge) {
+        s_listen_bridge = *bridge;
+    } else {
+        s_listen_bridge = {};
+    }
+}
+
+const BroListenBridge* bro_get_listen_bridge(void) {
+    return &s_listen_bridge;
+}
+
+}
+

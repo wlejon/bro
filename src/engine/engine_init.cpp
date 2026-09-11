@@ -474,6 +474,24 @@ Engine::Engine(const EngineConfig& config)
     };
     bro_set_gamepad_bridge(&s_engine_gamepad_bridge);
 
+    static BroMediaBridge s_engine_media_bridge = {
+        .getAvailable = []() -> bool { return true; },
+        .peaks = [](const char*, void*) -> void* { return nullptr; },
+        .thumbnails = [](const char*, void*) -> void* { return nullptr; }
+    };
+    bro_set_media_bridge(&s_engine_media_bridge);
+
+    static BroListenBridge s_engine_listen_bridge = {
+        .open = [](void*) -> void* { return nullptr; },
+        .supported = []() -> bool { return true; },
+        .apps = []() -> void* { return nullptr; },
+        .retain = [](int32_t) {},
+        .audio = [](int64_t, int64_t) -> void* { return nullptr; },
+        .frame = []() -> int64_t { return 0; },
+        .info = []() -> void* { return nullptr; }
+    };
+    bro_set_listen_bridge(&s_engine_listen_bridge);
+
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the
     // app dir is known to exist.

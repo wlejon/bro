@@ -11,7 +11,11 @@ add_library(bro_c_abi STATIC
     bro_menu_c_abi.cpp
     bro_mic_c_abi.cpp
     bro_gamepad_c_abi.cpp
+    bro_media_c_abi.cpp
+    bro_listen_c_abi.cpp
+    bro_audio_c_abi.cpp
 )
+
 
 target_include_directories(bro_c_abi PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
