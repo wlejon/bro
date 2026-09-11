@@ -197,6 +197,195 @@ Engine::Engine(const EngineConfig& config)
     };
     bro_set_paths_bridge(&s_engine_paths_bridge);
 
+    static BroDialogsBridge s_engine_dialogs_bridge = {
+        .alert = [](const char* message) {
+            js::DialogBindings::showAlert(message ? message : "");
+        },
+        .confirm = [](const char* message) -> bool {
+            return js::DialogBindings::showConfirm(message ? message : "");
+        },
+        .prompt = [](const char* message, const char* defaultText) -> const char* {
+            thread_local std::string s_ans;
+            auto res = js::DialogBindings::showPrompt(message ? message : "", defaultText ? defaultText : "");
+            if (!res) return "";
+            s_ans = *res;
+            return s_ans.c_str();
+        },
+        .showSaveFileDialog = [](const char* filter, const char* defaultName) -> const char* {
+            (void)filter;
+            thread_local std::string s_path;
+            s_path = defaultName ? defaultName : "untitled";
+            return s_path.c_str();
+        },
+        .showOpenFileDialog = [](const char* filter, bool allowMultiple) -> const char* {
+            thread_local std::string s_path;
+            auto picks = js::DialogBindings::pickFiles(filter ? filter : "", allowMultiple);
+            if (picks.empty()) return "";
+            s_path = picks[0];
+            return s_path.c_str();
+        },
+        .showOpenFolderDialog = [](const char* defaultLocation, bool allowMultiple) -> const char* {
+            (void)allowMultiple;
+            thread_local std::string s_path;
+            s_path = defaultLocation ? defaultLocation : "";
+            return s_path.c_str();
+        }
+    };
+    bro_set_dialogs_bridge(&s_engine_dialogs_bridge);
+
+    static BroWindowBridge s_engine_window_bridge = {
+        .getState = []() -> const char* {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return "normal";
+            if (eng->window()->isMinimized()) return "minimized";
+            if (eng->window()->isFullscreen()) return "fullscreen";
+            if (eng->window()->isMaximized()) return "maximized";
+            return "normal";
+        },
+        .getBorderless = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return (eng && eng->window()) ? eng->window()->isBorderless() : false;
+        },
+        .setBorderless = [](bool val) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window()) eng->window()->setBorderless(val);
+        },
+        .getAlwaysOnTop = []() -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return (eng && eng->window()) ? eng->window()->isAlwaysOnTop() : false;
+        },
+        .setAlwaysOnTop = [](bool val) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window()) eng->window()->setAlwaysOnTop(val);
+        },
+        .minimize = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window() && eng->displayMode() != DisplayMode::Headless)
+                eng->window()->minimize();
+        },
+        .maximize = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window() && eng->displayMode() != DisplayMode::Headless)
+                eng->window()->maximize();
+        },
+        .restore = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window() && eng->displayMode() != DisplayMode::Headless)
+                eng->window()->restore();
+        },
+        .getPositionX = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return 0;
+            int x = 0, y = 0;
+            eng->window()->getPosition(x, y);
+            return x;
+        },
+        .getPositionY = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return 0;
+            int x = 0, y = 0;
+            eng->window()->getPosition(x, y);
+            return y;
+        },
+        .setPosition = [](int32_t x, int32_t y) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window() && eng->displayMode() != DisplayMode::Headless)
+                eng->window()->setPosition(x, y);
+        },
+        .getMinWidth = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return 0;
+            int w = 0, h = 0;
+            eng->window()->getMinimumSize(w, h);
+            return w;
+        },
+        .getMinHeight = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return 0;
+            int w = 0, h = 0;
+            eng->window()->getMinimumSize(w, h);
+            return h;
+        },
+        .setMinSize = [](int32_t width, int32_t height) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window()) eng->window()->setMinimumSize(width, height);
+        },
+        .getMaxWidth = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return 0;
+            int w = 0, h = 0;
+            eng->window()->getMaximumSize(w, h);
+            return w;
+        },
+        .getMaxHeight = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return 0;
+            int w = 0, h = 0;
+            eng->window()->getMaximumSize(w, h);
+            return h;
+        },
+        .setMaxSize = [](int32_t width, int32_t height) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->window()) eng->window()->setMaximumSize(width, height);
+        },
+        .getDisplayCount = []() -> int32_t {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window()) return 1;
+            return static_cast<int32_t>(eng->window()->getDisplays().size());
+        },
+        .moveToDisplay = [](uint32_t id) -> bool {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->window() || eng->displayMode() == DisplayMode::Headless)
+                return false;
+            return eng->window()->moveToDisplay(id);
+        }
+    };
+    bro_set_window_bridge(&s_engine_window_bridge);
+
+    static BroSettingsBridge s_engine_settings_bridge = {
+        .load = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->settings()) eng->settings()->load();
+        },
+        .save = []() {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->settings()) eng->settings()->save();
+        },
+        .get = [](const char* key) -> const char* {
+            thread_local std::string s_val;
+            if (!key) return "";
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->settings()) return "";
+            s_val = eng->settings()->getString(key);
+            return s_val.c_str();
+        },
+        .set = [](const char* key, const char* val) {
+            if (!key || !val) return;
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (eng && eng->settings()) eng->settings()->setUser(key, val);
+        },
+        .reset = [](const char* category) {
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            if (!eng || !eng->settings()) return;
+            if (category && *category) {
+                eng->settings()->resetCategory(category);
+            } else {
+                eng->settings()->resetAll();
+            }
+        },
+        .isActionPressed = [](const char* action) -> bool {
+            if (!action) return false;
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? eng->actionPressed(action) : false;
+        },
+        .getActionStrength = [](const char* action) -> double {
+            if (!action) return 0.0;
+            auto* eng = static_cast<Engine*>(bro_get_active_engine());
+            return eng ? static_cast<double>(eng->actionStrength(action)) : 0.0;
+        }
+    };
+    bro_set_settings_bridge(&s_engine_settings_bridge);
+
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the
     // app dir is known to exist.

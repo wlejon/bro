@@ -10,7 +10,6 @@
 
 extern "C" {
 
-
 struct FastNoiseHandle {
     FastNoise::SmartNode<> node;
 };

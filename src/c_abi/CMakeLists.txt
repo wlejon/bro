@@ -5,6 +5,9 @@ add_library(bro_c_abi STATIC
     bro_time_c_abi.cpp
     bro_paths_c_abi.cpp
     bro_noise_c_abi.cpp
+    bro_dialogs_c_abi.cpp
+    bro_window_c_abi.cpp
+    bro_settings_c_abi.cpp
 )
 
 target_include_directories(bro_c_abi PUBLIC

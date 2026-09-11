@@ -14,7 +14,6 @@
 
 extern "C" {
 
-
 double bro_math_lerp(double a, double b, double t) {
     return static_cast<double>(bromath::lerp(static_cast<float>(a), static_cast<float>(b), static_cast<float>(t)));
 }

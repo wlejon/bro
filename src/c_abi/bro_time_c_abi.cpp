@@ -8,7 +8,6 @@
 
 extern "C" {
 
-
 static double s_fallback_time_scale = 1.0;
 static bool s_fallback_time_paused = false;
 

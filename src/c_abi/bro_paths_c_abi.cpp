@@ -9,7 +9,6 @@
 
 extern "C" {
 
-
 static std::string s_fallback_appDir = ".";
 static std::string s_fallback_userDataDir = ".";
 static std::string s_fallback_resolved;

@@ -39,4 +39,46 @@ const BroPathsBridge* bro_get_paths_bridge(void) {
     return &s_paths_bridge;
 }
 
+static BroDialogsBridge s_dialogs_bridge = {};
+
+void bro_set_dialogs_bridge(const BroDialogsBridge* bridge) {
+    if (bridge) {
+        s_dialogs_bridge = *bridge;
+    } else {
+        s_dialogs_bridge = {};
+    }
+}
+
+const BroDialogsBridge* bro_get_dialogs_bridge(void) {
+    return &s_dialogs_bridge;
+}
+
+static BroWindowBridge s_window_bridge = {};
+
+void bro_set_window_bridge(const BroWindowBridge* bridge) {
+    if (bridge) {
+        s_window_bridge = *bridge;
+    } else {
+        s_window_bridge = {};
+    }
+}
+
+const BroWindowBridge* bro_get_window_bridge(void) {
+    return &s_window_bridge;
+}
+
+static BroSettingsBridge s_settings_bridge = {};
+
+void bro_set_settings_bridge(const BroSettingsBridge* bridge) {
+    if (bridge) {
+        s_settings_bridge = *bridge;
+    } else {
+        s_settings_bridge = {};
+    }
+}
+
+const BroSettingsBridge* bro_get_settings_bridge(void) {
+    return &s_settings_bridge;
+}
+
 }

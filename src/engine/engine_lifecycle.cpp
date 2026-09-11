@@ -164,6 +164,9 @@ void Engine::shutdown() {
 Engine::~Engine() {
     bro_set_time_bridge(nullptr);
     bro_set_paths_bridge(nullptr);
+    bro_set_dialogs_bridge(nullptr);
+    bro_set_window_bridge(nullptr);
+    bro_set_settings_bridge(nullptr);
     bro_set_active_engine(nullptr);
     // Quiesce the worker threads and GPU contexts. run() already called this on
     // the windowed path; it is a no-op then. Headless and Server early-return
