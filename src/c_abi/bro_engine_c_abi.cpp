@@ -193,6 +193,20 @@ const BroNetBridge* bro_get_net_bridge(void) {
     return &s_net_bridge;
 }
 
+static BroTextBridge s_text_bridge = {};
+
+void bro_set_text_bridge(const BroTextBridge* bridge) {
+    if (bridge) {
+        s_text_bridge = *bridge;
+    } else {
+        s_text_bridge = {};
+    }
+}
+
+const BroTextBridge* bro_get_text_bridge(void) {
+    return &s_text_bridge;
+}
+
 }
 
 

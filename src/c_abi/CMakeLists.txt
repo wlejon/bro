@@ -19,6 +19,11 @@ add_library(bro_c_abi STATIC
     bro_net_c_abi.cpp
     bro_worker_c_abi.cpp
     bro_abort_c_abi.cpp
+    bro_file_c_abi.cpp
+    bro_intl_c_abi.cpp
+    bro_text_c_abi.cpp
+    bro_domparser_c_abi.cpp
+    bro_events_c_abi.cpp
 )
 
 

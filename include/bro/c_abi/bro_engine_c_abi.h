@@ -210,6 +210,20 @@ typedef struct BroNetBridge {
 void bro_set_net_bridge(const BroNetBridge* bridge);
 const BroNetBridge* bro_get_net_bridge(void);
 
+typedef struct BroTextBridge {
+    bool    (*getBidiAvailable)(void);
+    void*   (*shape)(const char* text, void* options);
+    void*   (*byteOffsetToX)(const char* text, void* options, int32_t byteOffset);
+    int32_t (*xToByteOffset)(const char* text, void* options, double x);
+    void*   (*clusterRange)(const char* text, void* options, int32_t byteOffset);
+    void*   (*cacheStats)(void);
+    void*   (*bidi)(const char* text, const char* base, bool override);
+    void*   (*bidiReorder)(void* levels);
+} BroTextBridge;
+
+void bro_set_text_bridge(const BroTextBridge* bridge);
+const BroTextBridge* bro_get_text_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

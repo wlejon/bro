@@ -22,6 +22,7 @@
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
+#include "render/bidi.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
 #include "js/asset_path.h"
 #include "util/user_dirs.h"
@@ -626,6 +627,24 @@ Engine::Engine(const EngineConfig& config)
         .setPeerSimulatedLoss = [](int32_t, double, double, double) {}
     };
     bro_set_net_bridge(&s_engine_net_bridge);
+
+    static BroTextBridge s_engine_text_bridge = {
+        .getBidiAvailable = []() -> bool {
+#if BRO_WITH_TEXT_SHAPING
+            return render::bidi::available();
+#else
+            return false;
+#endif
+        },
+        .shape = [](const char*, void*) -> void* { return nullptr; },
+        .byteOffsetToX = [](const char*, void*, int32_t) -> void* { return nullptr; },
+        .xToByteOffset = [](const char*, void*, double) -> int32_t { return 0; },
+        .clusterRange = [](const char*, void*, int32_t) -> void* { return nullptr; },
+        .cacheStats = []() -> void* { return nullptr; },
+        .bidi = [](const char*, const char*, bool) -> void* { return nullptr; },
+        .bidiReorder = [](void*) -> void* { return nullptr; }
+    };
+    bro_set_text_bridge(&s_engine_text_bridge);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the

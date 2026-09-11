@@ -173,6 +173,7 @@ Engine::~Engine() {
     bro_set_steam_bridge(nullptr);
     bro_set_server_bridge(nullptr);
     bro_set_net_bridge(nullptr);
+    bro_set_text_bridge(nullptr);
     bro_set_active_engine(nullptr);
     // Quiesce the worker threads and GPU contexts. run() already called this on
     // the windowed path; it is a no-op then. Headless and Server early-return
