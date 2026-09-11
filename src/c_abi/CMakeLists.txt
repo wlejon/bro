@@ -39,6 +39,10 @@ add_library(bro_c_abi STATIC
     bro_clipmap_c_abi.cpp
     bro_tile_world_c_abi.cpp
     bro_flora_c_abi.cpp
+    bro_rigging_c_abi.cpp
+    bro_motion_c_abi.cpp
+    bro_triposplat_c_abi.cpp
+    bro_web_animations_c_abi.cpp
 )
 
 

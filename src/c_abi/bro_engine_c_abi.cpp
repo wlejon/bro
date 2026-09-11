@@ -263,6 +263,20 @@ const BroFloraBridge* bro_get_flora_bridge(void) {
     return &s_flora_bridge;
 }
 
+static BroMotionBridge s_motion_bridge = {};
+
+void bro_set_motion_bridge(const BroMotionBridge* bridge) {
+    if (bridge) {
+        s_motion_bridge = *bridge;
+    } else {
+        s_motion_bridge = {};
+    }
+}
+
+const BroMotionBridge* bro_get_motion_bridge(void) {
+    return &s_motion_bridge;
+}
+
 }
 
 

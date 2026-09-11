@@ -301,6 +301,14 @@ typedef struct BroFloraBridge {
 void bro_set_flora_bridge(const BroFloraBridge* bridge);
 const BroFloraBridge* bro_get_flora_bridge(void);
 
+typedef struct BroMotionBridge {
+    void  (*init)(void);
+    void* (*load)(void* opts);
+} BroMotionBridge;
+
+void bro_set_motion_bridge(const BroMotionBridge* bridge);
+const BroMotionBridge* bro_get_motion_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif

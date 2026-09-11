@@ -706,6 +706,12 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         .createWorld = [](void* /*opts*/) -> void* { return nullptr; }
     };
     bro_set_flora_bridge(&s_engine_flora_bridge);
+
+    static BroMotionBridge s_engine_motion_bridge = {
+        .init = []() {},
+        .load = [](void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_motion_bridge(&s_engine_motion_bridge);
 }
 
 } // namespace bro::engine
