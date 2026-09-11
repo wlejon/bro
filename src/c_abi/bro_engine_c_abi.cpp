@@ -347,7 +347,78 @@ const BroLMBridge* bro_get_lm_bridge(void) {
     return &s_lm_bridge;
 }
 
+static BroSttBridge s_stt_bridge = {};
+
+void bro_set_stt_bridge(const BroSttBridge* bridge) {
+    if (bridge) {
+        s_stt_bridge = *bridge;
+    } else {
+        s_stt_bridge = {};
+    }
 }
+
+const BroSttBridge* bro_get_stt_bridge(void) {
+    return &s_stt_bridge;
+}
+
+static BroTtsBridge s_tts_bridge = {};
+
+void bro_set_tts_bridge(const BroTtsBridge* bridge) {
+    if (bridge) {
+        s_tts_bridge = *bridge;
+    } else {
+        s_tts_bridge = {};
+    }
+}
+
+const BroTtsBridge* bro_get_tts_bridge(void) {
+    return &s_tts_bridge;
+}
+
+static BroKwsBridge s_kws_bridge = {};
+
+void bro_set_kws_bridge(const BroKwsBridge* bridge) {
+    if (bridge) {
+        s_kws_bridge = *bridge;
+    } else {
+        s_kws_bridge = {};
+    }
+}
+
+const BroKwsBridge* bro_get_kws_bridge(void) {
+    return &s_kws_bridge;
+}
+
+static BroDiarBridge s_diar_bridge = {};
+
+void bro_set_diar_bridge(const BroDiarBridge* bridge) {
+    if (bridge) {
+        s_diar_bridge = *bridge;
+    } else {
+        s_diar_bridge = {};
+    }
+}
+
+const BroDiarBridge* bro_get_diar_bridge(void) {
+    return &s_diar_bridge;
+}
+
+static BroRaveBridge s_rave_bridge = {};
+
+void bro_set_rave_bridge(const BroRaveBridge* bridge) {
+    if (bridge) {
+        s_rave_bridge = *bridge;
+    } else {
+        s_rave_bridge = {};
+    }
+}
+
+const BroRaveBridge* bro_get_rave_bridge(void) {
+    return &s_rave_bridge;
+}
+
+}
+
 
 
 

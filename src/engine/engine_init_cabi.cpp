@@ -755,6 +755,76 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
         .generate = [](void* /*model*/, void* /*prompt*/, void* /*opts*/) -> void* { return nullptr; }
     };
     bro_set_lm_bridge(&s_engine_lm_bridge);
+
+    static BroSttBridge s_engine_stt_bridge = {
+        .init = []() {},
+        .loadWhisper = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadTokenizer = [](void* /*opts*/) -> void* { return nullptr; },
+        .loadParakeet = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadParakeetTokenizer = [](const char* /*path*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadQwenAsr = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadQwenAsrStream = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .transcribe = [](void* /*model*/, void* /*audio*/, void* /*promptOrOpts*/, void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_stt_bridge(&s_engine_stt_bridge);
+
+    static BroTtsBridge s_engine_tts_bridge = {
+        .init = []() {},
+        .loadKokoro = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadQwen = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadSupertonic = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadSpeakerEncoder = [](const char* /*dir*/, void* /*opts*/) -> void* { return nullptr; },
+        .phonemize = [](const char* /*text*/, void* /*opts*/) -> void* { return nullptr; },
+        .setAssetRoot = [](const char* /*dir*/) {},
+        .setAssets = [](void* /*opts*/) {},
+        .synthesize = [](void* /*model*/, void* /*textOrPhonemes*/, void* /*voiceOrOpts*/, void* /*opts*/) -> void* { return nullptr; },
+        .synthesizeStream = [](void* /*model*/, void* /*textOrChunks*/, void* /*voiceOrOpts*/, void* /*opts*/) -> void* { return nullptr; },
+        .decodeFrom = [](void* /*kokoro*/, void* /*voice*/, void* /*asr*/, void* /*F0*/, void* /*N*/, int32_t /*nPhonemes*/, void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_tts_bridge(&s_engine_tts_bridge);
+
+    static BroKwsBridge s_engine_kws_bridge = {
+        .init = []() {},
+        .load = [](void* /*opts*/) {},
+        .unload = []() {},
+        .enroll = [](const char* /*name*/, void* /*phonemeIds*/, void* /*policy*/) -> int32_t { return 0; },
+        .enrollFromAudio = [](const char* /*name*/, void* /*samples*/, void* /*policy*/) -> int32_t { return 0; },
+        .enrollFromClasses = [](const char* /*name*/, void* /*classIds*/, void* /*policy*/) -> int32_t { return 0; },
+        .inspect = [](const char* /*name*/) -> void* { return nullptr; },
+        .remove = [](const char* /*name*/) -> bool { return false; },
+        .clear = []() {},
+        .templates = []() -> void* { return nullptr; },
+        .reset = []() {},
+        .listen = [](void* /*opts*/) {},
+        .stop = []() {},
+        .suspend = []() {},
+        .resume = []() {},
+        .isActive = []() -> bool { return false; },
+        .isSuspended = []() -> bool { return false; },
+        .isLoaded = []() -> bool { return true; },
+        .sampleRate = []() -> int32_t { return 16000; },
+        .prefixProgress = []() -> double { return 0.0; },
+        .progress = []() -> void* { return nullptr; },
+        .posterior = [](int32_t /*topK*/) -> void* { return nullptr; },
+        .stats = []() -> void* { return nullptr; },
+        .feed = [](void* /*samples*/) -> void* { return nullptr; }
+    };
+    bro_set_kws_bridge(&s_engine_kws_bridge);
+
+    static BroDiarBridge s_engine_diar_bridge = {
+        .init = []() {},
+        .loadSortformer = [](const char* /*modelDir*/, void* /*opts*/) -> void* { return nullptr; },
+        .diarize = [](void* /*model*/, void* /*audio*/, void* /*opts*/) -> void* { return nullptr; },
+        .loadClusterDiarizer = [](const char* /*embeddingDir*/, const char* /*vadDir*/, void* /*opts*/) -> void* { return nullptr; },
+        .clusterDiarize = [](void* /*model*/, void* /*audio*/, void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_diar_bridge(&s_engine_diar_bridge);
+
+    static BroRaveBridge s_engine_rave_bridge = {
+        .init = []() {},
+        .loadRave = [](const char* /*modelDir*/, void* /*opts*/) -> void* { return nullptr; }
+    };
+    bro_set_rave_bridge(&s_engine_rave_bridge);
 }
 
 } // namespace bro::engine

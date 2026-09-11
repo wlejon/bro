@@ -48,6 +48,11 @@ add_library(bro_c_abi STATIC
     bro_vision_c_abi.cpp
     bro_diffusion_c_abi.cpp
     bro_lm_c_abi.cpp
+    bro_stt_c_abi.cpp
+    bro_tts_c_abi.cpp
+    bro_kws_c_abi.cpp
+    bro_diar_c_abi.cpp
+    bro_rave_c_abi.cpp
 )
 
 

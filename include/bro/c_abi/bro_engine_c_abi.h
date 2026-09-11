@@ -362,6 +362,86 @@ typedef struct BroLMBridge {
 void bro_set_lm_bridge(const BroLMBridge* bridge);
 const BroLMBridge* bro_get_lm_bridge(void);
 
+typedef struct BroSttBridge {
+    void  (*init)(void);
+    void* (*loadWhisper)(const char* dir, void* opts);
+    void* (*loadTokenizer)(void* opts);
+    void* (*loadParakeet)(const char* dir, void* opts);
+    void* (*loadParakeetTokenizer)(const char* path, void* opts);
+    void* (*loadQwenAsr)(const char* dir, void* opts);
+    void* (*loadQwenAsrStream)(const char* dir, void* opts);
+    void* (*transcribe)(void* model, void* audio, void* promptOrOpts, void* opts);
+} BroSttBridge;
+
+void bro_set_stt_bridge(const BroSttBridge* bridge);
+const BroSttBridge* bro_get_stt_bridge(void);
+
+typedef struct BroTtsBridge {
+    void  (*init)(void);
+    void* (*loadKokoro)(const char* dir, void* opts);
+    void* (*loadQwen)(const char* dir, void* opts);
+    void* (*loadSupertonic)(const char* dir, void* opts);
+    void* (*loadSpeakerEncoder)(const char* dir, void* opts);
+    void* (*phonemize)(const char* text, void* opts);
+    void  (*setAssetRoot)(const char* dir);
+    void  (*setAssets)(void* opts);
+    void* (*synthesize)(void* model, void* textOrPhonemes, void* voiceOrOpts, void* opts);
+    void* (*synthesizeStream)(void* model, void* textOrChunks, void* voiceOrOpts, void* opts);
+    void* (*decodeFrom)(void* kokoro, void* voice, void* asr, void* F0, void* N, int32_t nPhonemes, void* opts);
+} BroTtsBridge;
+
+void bro_set_tts_bridge(const BroTtsBridge* bridge);
+const BroTtsBridge* bro_get_tts_bridge(void);
+
+typedef struct BroKwsBridge {
+    void    (*init)(void);
+    void    (*load)(void* opts);
+    void    (*unload)(void);
+    int32_t (*enroll)(const char* name, void* phonemeIds, void* policy);
+    int32_t (*enrollFromAudio)(const char* name, void* samples, void* policy);
+    int32_t (*enrollFromClasses)(const char* name, void* classIds, void* policy);
+    void*   (*inspect)(const char* name);
+    bool    (*remove)(const char* name);
+    void    (*clear)(void);
+    void*   (*templates)(void);
+    void    (*reset)(void);
+    void    (*listen)(void* opts);
+    void    (*stop)(void);
+    void    (*suspend)(void);
+    void    (*resume)(void);
+    bool    (*isActive)(void);
+    bool    (*isSuspended)(void);
+    bool    (*isLoaded)(void);
+    int32_t (*sampleRate)(void);
+    double  (*prefixProgress)(void);
+    void*   (*progress)(void);
+    void*   (*posterior)(int32_t topK);
+    void*   (*stats)(void);
+    void*   (*feed)(void* samples);
+} BroKwsBridge;
+
+void bro_set_kws_bridge(const BroKwsBridge* bridge);
+const BroKwsBridge* bro_get_kws_bridge(void);
+
+typedef struct BroDiarBridge {
+    void  (*init)(void);
+    void* (*loadSortformer)(const char* modelDir, void* opts);
+    void* (*diarize)(void* model, void* audio, void* opts);
+    void* (*loadClusterDiarizer)(const char* embeddingDir, const char* vadDir, void* opts);
+    void* (*clusterDiarize)(void* model, void* audio, void* opts);
+} BroDiarBridge;
+
+void bro_set_diar_bridge(const BroDiarBridge* bridge);
+const BroDiarBridge* bro_get_diar_bridge(void);
+
+typedef struct BroRaveBridge {
+    void  (*init)(void);
+    void* (*loadRave)(const char* modelDir, void* opts);
+} BroRaveBridge;
+
+void bro_set_rave_bridge(const BroRaveBridge* bridge);
+const BroRaveBridge* bro_get_rave_bridge(void);
+
 #ifdef __cplusplus
 }
 #endif
