@@ -1,4 +1,4 @@
-﻿#include "bronze_host/gl_internal.h"
+#include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "embed/embed.h"
 
@@ -8,8 +8,7 @@ void installAIGlobals() {
 }
 
 Value makeBroAiValue() {
-    ObjectBuilder ai;
-    return ai.get();
+    return makeUnavailableNamespace("ai", "BRO_WITH_GAMEAI");
 }
 
 }  // namespace bro::bronze_host

@@ -446,6 +446,10 @@ struct HostProxyTraps {
 // the target must stay empty for the 10.5 invariants to stay vacuous.
 Value makeHostProxy(HostProxyTraps traps);
 
+// Stubs for unavailable / compiled-out subsystems and backend probes
+Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
+Value makeGpuValue();
+
 // THE element wrapper for `el` — built on first ask, the same value every time
 // after that, because identity is what a UI tests (`event.target === this.dom`).
 // Answers null for nullptr, so it can be handed a parent/sibling lookup result
