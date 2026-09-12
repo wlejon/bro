@@ -192,6 +192,13 @@ if(BRO_WITH_3D)
         host_scene_2d.cpp
         host_scene_agent.cpp
         host_scene_terrain.cpp
+        host_mesh_core.cpp
+        host_mesh_primitives.cpp
+        host_mesh_manipulate.cpp
+        host_mesh_analysis.cpp
+        host_mesh_optimize.cpp
+        host_rigging.cpp
+        host_rigging_anim.cpp
     )
 endif()
 

@@ -10,6 +10,8 @@
 
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/manipulation/normals.h>
+#include "bronze_host/host_mesh_internal.h"
+#include "bronze_host/host_rigging_internal.h"
 
 #include <cmath>
 #include <vector>
@@ -177,15 +179,20 @@ void applyMeshNodeOptions(scene::MeshNode* node, Value opts) {
 
     Value meshVal = ev::getProperty(opts, "mesh");
     if (ev::isObject(meshVal)) {
-        Value pVal = ev::getProperty(meshVal, "positions");
-        Value iVal = ev::getProperty(meshVal, "indices");
-        if (!ev::isUndefined(pVal) && !ev::isUndefined(iVal)) {
-            if (readFloatVector(pVal, meshData.positions) && readUint32Vector(iVal, meshData.indices)) {
-                readFloatVector(ev::getProperty(meshVal, "normals"), meshData.normals);
-                readFloatVector(ev::getProperty(meshVal, "colors"), meshData.colors);
-                readFloatVector(ev::getProperty(meshVal, "uvs"), meshData.uvs);
-                readFloatVector(ev::getProperty(meshVal, "tangents"), meshData.tangents);
-                hasRawData = true;
+        if (auto* m = hostMeshDataOf(meshVal)) {
+            meshData = *m;
+            hasRawData = true;
+        } else {
+            Value pVal = ev::getProperty(meshVal, "positions");
+            Value iVal = ev::getProperty(meshVal, "indices");
+            if (!ev::isUndefined(pVal) && !ev::isUndefined(iVal)) {
+                if (readFloatVector(pVal, meshData.positions) && readUint32Vector(iVal, meshData.indices)) {
+                    readFloatVector(ev::getProperty(meshVal, "normals"), meshData.normals);
+                    readFloatVector(ev::getProperty(meshVal, "colors"), meshData.colors);
+                    readFloatVector(ev::getProperty(meshVal, "uvs"), meshData.uvs);
+                    readFloatVector(ev::getProperty(meshVal, "tangents"), meshData.tangents);
+                    hasRawData = true;
+                }
             }
         }
     }
@@ -378,11 +385,33 @@ void installSceneGraphMesh(ObjectBuilder& b) {
     b.def("createSkinnedMesh", 1, [](Value self_, std::span<const Value> a) {
         auto* g = sceneGraphOf(self_);
         if (!g) return ev::undefined();
+        if (a.empty() || !ev::isObject(a[0]))
+            return ev::throwTypeError("createSkinnedMesh requires an options object with mesh + skin");
+
         auto* node = g->createSkinnedMesh();
         g->root()->addChild(node);
-        if (!a.empty() && ev::isObject(a[0])) {
-            applyMeshNodeOptions(node, a[0]);
+        applyMeshNodeOptions(node, a[0]);
+
+        Value skinVal = ev::getProperty(a[0], "skin");
+        auto* sd = hostSkinDataOf(skinVal);
+        if (!sd) {
+            g->destroyNode(node);
+            return ev::throwTypeError("createSkinnedMesh: opts.skin must be a SkinData");
         }
+        if (!node->setSkin(*sd)) {
+            g->destroyNode(node);
+            return ev::throwTypeError("createSkinnedMesh: skin rejected (bone count 0 or > 256, or weight/index streams malformed)");
+        }
+        if (!node->skinReady()) {
+            g->destroyNode(node);
+            return ev::throwTypeError("createSkinnedMesh: skin vertex count does not match the mesh");
+        }
+
+        std::vector<float> palette;
+        if (readFloatVector(ev::getProperty(a[0], "skinningMatrices"), palette) && palette.size() >= 16) {
+            node->setSkinningMatrices(palette.data(), palette.size() / 16);
+        }
+
         return wrapSceneNode(node, g);
     });
 
@@ -691,6 +720,75 @@ void installSceneNodeMesh(ObjectBuilder& b) {
             if (meshData.normals.empty()) bromesh::computeNormals(meshData);
             meshNode->setMesh(std::move(meshData));
         }
+        return self_;
+    });
+
+    b.accessor("boneCount", [](Value self_, std::span<const Value>) {
+        auto* n = sceneNodeOf(self_);
+        if (n && n->type() == scene::SceneNode::Type::Mesh) {
+            auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
+            if (sm) return ev::fromDouble(sm->boneCount());
+        }
+        return ev::fromDouble(0.0);
+    }, nullptr);
+
+    b.accessor("skinReady", [](Value self_, std::span<const Value>) {
+        auto* n = sceneNodeOf(self_);
+        if (n && n->type() == scene::SceneNode::Type::Mesh) {
+            auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
+            if (sm) return ev::fromBool(sm->skinReady());
+        }
+        return ev::fromBool(false);
+    }, nullptr);
+
+    b.def("setSkinningMatrices", 1, [](Value self_, std::span<const Value> a) {
+        auto* n = sceneNodeOf(self_);
+        if (!n || n->type() != scene::SceneNode::Type::Mesh)
+            return ev::throwTypeError("setSkinningMatrices: not a mesh node");
+        auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
+        if (!sm)
+            return ev::throwTypeError("setSkinningMatrices: node is not a skinned mesh (use createSkinnedMesh)");
+        if (a.empty())
+            return ev::throwTypeError("setSkinningMatrices: missing matrix array");
+        std::vector<float> palette;
+        if (!readFloatVector(a[0], palette))
+            return ev::throwTypeError("setSkinningMatrices: expected a Float32Array");
+        int nMat = sm->setSkinningMatrices(palette.data(), palette.size() / 16);
+        return ev::fromDouble(nMat);
+    });
+
+    b.def("setLodMeshes", 1, [](Value self_, std::span<const Value> a) {
+        auto* n = sceneNodeOf(self_);
+        if (!n || n->type() != scene::SceneNode::Type::Mesh)
+            return ev::throwTypeError("setLodMeshes: not a MeshNode");
+        auto* meshNode = static_cast<scene::MeshNode*>(n);
+        if (meshNode->asSkinnedMesh())
+            return ev::throwTypeError("setLodMeshes: not supported on skinned meshes");
+        if (a.empty() || !ev::isObject(a[0]))
+            return ev::throwTypeError("setLodMeshes: argument must be an array of {mesh, maxDist}");
+
+        Value lenVal = ev::getProperty(a[0], "length");
+        if (!ev::isNumber(lenVal))
+            return ev::throwTypeError("setLodMeshes: argument must be an array of {mesh, maxDist}");
+        uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
+
+        std::vector<scene::MeshNode::LodLevel> levels;
+        levels.reserve(len);
+        for (uint32_t i = 0; i < len; ++i) {
+            Value entry = ev::getElement(a[0], i);
+            if (!ev::isObject(entry))
+                return ev::throwTypeError("setLodMeshes: entry is not an object");
+            Value meshVal = ev::getProperty(entry, "mesh");
+            bromesh::MeshData* md = hostMeshDataOf(meshVal);
+            if (!md)
+                return ev::throwTypeError("setLodMeshes: entry has no Mesh in `mesh`");
+            scene::MeshNode::LodLevel lv;
+            lv.mesh = *md;
+            lv.maxDist = static_cast<float>(numAtProp(entry, "maxDist", 1e30));
+            levels.push_back(std::move(lv));
+        }
+
+        meshNode->setLodMeshes(std::move(levels));
         return self_;
     });
 }

@@ -62,6 +62,7 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
     // too, and `Element.name` reading as a diagnosed absence rather than
     // "Element" was the last place a host object could be told from a real one.
     ev::Persistent ctor(ev::makeFunction(std::move(ctorBody), arity, name));
+    ctor_ = new ev::Persistent(ctor.get());
 
     {
         // Reading mints it. ObjectBuilder's own Persistent is what holds it
@@ -72,8 +73,7 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
         proto_ = new ev::Persistent(proto.get());
     }
 
-    ev::registerGlobal(name, ctor.get());
-    ctor_ = new ev::Persistent(ctor.get());
+    ev::registerGlobal(name, ctor_->get());
 }
 
 void HostClass::alias(const char* name) const {

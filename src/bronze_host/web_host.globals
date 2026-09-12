@@ -150,3 +150,17 @@ showOpenFolderDialog
 showSaveFileDialog
 setDialogAnswer
 setPickedFiles
+Mesh
+MeshBVH
+CapsuleField
+ProgressiveMesh
+PolyMesh
+LSystem
+SkinData
+Skeleton
+Pose
+Animation
+RigSpec
+VoxelChunk
+IK
+Rig

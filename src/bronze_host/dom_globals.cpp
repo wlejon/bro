@@ -776,6 +776,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     installVideoGlobals();
     installPhysicsGlobals();
     installAIGlobals();
+    installMeshGlobals();
+    installRiggingGlobals();
 
     {
         Value nav = makeNavigatorValue();

@@ -749,6 +749,18 @@ void drainPhysicsContactEvents();
 
 void installAIGlobals();
 
+// ---------------------------------------------------------------------------
+// 3D Mesh & Rigging (host_mesh_core.cpp / host_rigging.cpp)
+// ---------------------------------------------------------------------------
+
+#if BRO_WITH_3D
+void installMeshGlobals();
+void installRiggingGlobals();
+#else
+inline void installMeshGlobals() {}
+inline void installRiggingGlobals() {}
+#endif
+
 // `bro.ai` for the compiled realm: `{ game }`, documented in
 // docs/ai-game-api.js — the ORCA World, the HexNav navigator, the agent and
 // grid factories and the perception helpers — over the same brogameagent
@@ -800,6 +812,10 @@ inline Value makeFloat32Array(const float* data, size_t count) {
     return arr;
 }
 
+inline Value makeFloat32Array(const std::vector<float>& vec) {
+    return makeFloat32Array(vec.data(), vec.size());
+}
+
 inline Value makeUint32Array(const uint32_t* data, size_t count) {
     Value arr = ev::createTypedArray(ev::elements::Uint32, static_cast<uint32_t>(count));
     if (data && count > 0) {
@@ -807,6 +823,27 @@ inline Value makeUint32Array(const uint32_t* data, size_t count) {
         ev::fillTypedArray(arr, bytes);
     }
     return arr;
+}
+
+inline Value makeUint32Array(const std::vector<uint32_t>& vec) {
+    return makeUint32Array(vec.data(), vec.size());
+}
+
+inline Value makeUint8Array(const uint8_t* data, size_t count) {
+    Value arr = ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(count));
+    if (data && count > 0) {
+        std::span<const uint8_t> bytes(data, count);
+        ev::fillTypedArray(arr, bytes);
+    }
+    return arr;
+}
+
+inline Value makeUint8Array(const std::vector<uint8_t>& vec) {
+    return makeUint8Array(vec.data(), vec.size());
+}
+
+inline Value makeEmptyArray() {
+    return hostArrayOf(0, [](size_t) { return ev::undefined(); });
 }
 
 inline Value makeInt32Array(const int32_t* data, size_t count) {
@@ -878,6 +915,30 @@ inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
         Value e = ev::getElement(root.get(), i);
         double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
         out.push_back(static_cast<uint32_t>(d));
+    }
+    return true;
+}
+
+inline bool readU8Vector(Value v, std::vector<uint8_t>& out) {
+    if (ev::isUndefined(v) || ev::isNull(v)) return false;
+    if (auto info = ev::typedArrayInfo(v)) {
+        if (info.data && (info.bytesPerElement == sizeof(uint8_t) || info.bytesPerElement == 0)) {
+            const uint8_t* up = reinterpret_cast<const uint8_t*>(info.data);
+            out.assign(up, up + info.elementCount);
+            return true;
+        }
+    }
+    if (!ev::isObject(v)) return false;
+    ev::Persistent root(v);
+    Value lenV = ev::getProperty(root.get(), "length");
+    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+    out.clear();
+    out.reserve(len);
+    for (uint32_t i = 0; i < len; ++i) {
+        Value e = ev::getElement(root.get(), i);
+        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
+        out.push_back(static_cast<uint8_t>(d));
     }
     return true;
 }
