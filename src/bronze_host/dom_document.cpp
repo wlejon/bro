@@ -1,6 +1,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_globals_internal.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -39,6 +40,10 @@ Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
     if (!doc) return ev::throwError("bronze host: engine has no document");
     dom::Element* el = doc->createElement(tag);
     if (!el) return ev::throwError("bronze host: createElement failed");
+    Value customVal = constructCustomElement(el, tag);
+    if (!ev::isUndefined(customVal)) {
+        return customVal;
+    }
     return hostElementValue(el);
 }
 

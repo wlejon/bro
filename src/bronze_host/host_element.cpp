@@ -6,6 +6,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_globals_internal.h"
 
 #include "dom/document.h"
 #include "dom/document_fragment.h"
@@ -161,8 +162,13 @@ dom::Element* siblingOf(dom::Element* el, int direction) {
 HostNodeState* nodeStateOf(Value v) {
     if (!ev::isObject(v)) return nullptr;
     auto* st = static_cast<HostNodeState*>(ev::handleData(v));
-    if (!st || st->tag != kHostElementTag) return nullptr;
-    return st;
+    if (st && st->tag == kHostElementTag) return st;
+    Value idVal = ev::getProperty(v, "__bro_node_id__");
+    if (ev::isNumber(idVal)) {
+        auto* customSt = reinterpret_cast<HostNodeState*>(static_cast<uintptr_t>(ev::toDouble(idVal)));
+        if (customSt && customSt->tag == kHostElementTag) return customSt;
+    }
+    return nullptr;
 }
 
 void installInlineEventHandler(ObjectBuilder& b, const char* propName, const char* eventType) {
@@ -266,17 +272,13 @@ Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make) {
 }
 
 dom::Element* hostElementOf(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    auto* st = static_cast<HostNodeState*>(ev::handleData(v));
-    if (!st || st->tag != kHostElementTag) return nullptr;
-    return st->el;
+    HostNodeState* st = nodeStateOf(v);
+    return st ? st->el : nullptr;
 }
 
 dom::Node* hostNodeOf(Value v) {
-    if (!ev::isObject(v)) return nullptr;
-    auto* st = static_cast<HostNodeState*>(ev::handleData(v));
-    if (!st || st->tag != kHostElementTag) return nullptr;
-    return st->node;
+    HostNodeState* st = nodeStateOf(v);
+    return st ? st->node : nullptr;
 }
 
 Value hostNodeValue(dom::Node* node) {
@@ -381,7 +383,9 @@ void installElementGlobals() {
     // tests. `HTMLElement` is registered as the same object: they are distinct
     // constructors on the web, with HTMLElement extending Element, and one
     // object answering both is closer than two names that brand nothing.
-    g_elementClass.install("Element", 0, nullptr, decorateElementProto);
+    g_elementClass.install("Element", 0, [](Value, std::span<const Value>) -> Value {
+        return constructCustomElementBase();
+    }, decorateElementProto);
     g_elementClass.alias("HTMLElement");
 }
 
@@ -502,9 +506,14 @@ void decorateElementProto(ObjectBuilder& b) {
         Value nameV = argAt(a, 0), valV = argAt(a, 1);
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
             return ev::undefined();
+        std::string name = ev::toUtf8(nameV);
         std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV))
                               ? ev::toUtf8(valV) : "";
-        st->el->setAttribute(ev::toUtf8(nameV), val);
+        std::string oldVal;
+        bool had = st->el->hasAttribute(name);
+        if (had) oldVal = st->el->getAttribute(name);
+        st->el->setAttribute(name, val);
+        onCustomElementAttributeChanged(st->el, name, had ? oldVal.c_str() : nullptr, val.c_str());
         return ev::undefined();
     });
     b.def("getAttribute", 1, [](Value self_, std::span<const Value> a) {
@@ -529,8 +538,14 @@ void decorateElementProto(ObjectBuilder& b) {
         HostNodeState* st = nodeStateOf(self_);
         if (!st) return ev::undefined();
         Value nameV = argAt(a, 0);
-        if (st->el && !ev::isObject(nameV) && !ev::isUndefined(nameV))
-            st->el->removeAttribute(ev::toUtf8(nameV));
+        if (st->el && !ev::isObject(nameV) && !ev::isUndefined(nameV)) {
+            std::string name = ev::toUtf8(nameV);
+            if (st->el->hasAttribute(name)) {
+                std::string oldVal = st->el->getAttribute(name);
+                st->el->removeAttribute(name);
+                onCustomElementAttributeChanged(st->el, name, oldVal.c_str(), nullptr);
+            }
+        }
         return ev::undefined();
     });
     b.def("toggleAttribute", 1, [](Value self_, std::span<const Value> a) {

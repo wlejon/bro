@@ -102,6 +102,8 @@ std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& 
     return {};
 }
 
+} // namespace
+
 std::filesystem::path getEvalTempDir() {
     std::filesystem::path p = std::filesystem::temp_directory_path() / "bro_eval";
     std::error_code ec;
@@ -154,8 +156,6 @@ void ensureSharedRuntimeEnv() {
         }
     }
 }
-
-} // namespace
 
 std::string getWebHostGlobalsPath() {
     std::error_code ec;
@@ -225,6 +225,30 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     std::error_code ec;
     std::filesystem::remove(tempJs, ec);
 
+    if ((status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) ||
+        (err.find("unresolved name 'await'") != std::string::npos)) {
+        std::string wrappedCode = "(async () => {\n" + std::string(code) + "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
+        std::filesystem::path tempJsWrap = tempDir / (stem + "_wrap.js");
+        {
+            std::ofstream ofs(tempJsWrap, std::ios::binary);
+            if (ofs.is_open()) {
+                ofs.write(wrappedCode.data(), wrappedCode.size());
+            }
+        }
+        err.clear();
+        status = bronze::cli::runBuild(
+            tempJsWrap.string(), outDll.string(), &err,
+            /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
+            /*hostGlobals=*/globalsPath, /*inferStats=*/false,
+            /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
+            /*emitShared=*/true, /*retainFnSource=*/true,
+            /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
+            /*pinsPath=*/{}, /*censusOutPath=*/{},
+            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/{},
+            /*nativeLibPath=*/{}, /*entryResolvesAs=*/resolvesAs);
+        std::filesystem::remove(tempJsWrap, ec);
+    }
+
     if (status != 0) {
         LOG_ERROR("eval compilation failed:\n%s", err.c_str());
         setTestFailure(true);
@@ -257,6 +281,9 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     }
 
     bronze::embed::runEntry(entry);
+    if (ev::microtasksPending()) {
+        ev::drainMicrotasks();
+    }
     std::fflush(stdout);
 
     if (hasTestFailure() || engine.hasTestFailure()) {
@@ -286,8 +313,42 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     const std::string globalsPath = getWebHostGlobalsPath();
     const auto roots = moduleRootsFor(engine);
     std::string err;
+
+    std::ifstream ifs(absSource, std::ios::binary);
+    std::string content;
+    if (ifs) {
+        content.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    }
+
+    auto hasAwaitStmt = [](const std::string& code) {
+        size_t i = 0;
+        while (i < code.size()) {
+            while (i < code.size() && (code[i] == ' ' || code[i] == '\t')) i++;
+            if (i + 5 <= code.size() && code.compare(i, 5, "await") == 0) {
+                char next = (i + 5 < code.size()) ? code[i + 5] : '\0';
+                if (next == ' ' || next == '\t' || next == '(') {
+                    return true;
+                }
+            }
+            while (i < code.size() && code[i] != '\n') i++;
+            if (i < code.size() && code[i] == '\n') i++;
+        }
+        return false;
+    };
+
+    std::filesystem::path wrapFile;
+    std::string buildSrc = absSource.string();
+    if (hasAwaitStmt(content)) {
+        std::string wrapped = "(async () => {\n" + content + "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
+        wrapFile = tempDir / (stem + "_wrap.js");
+        std::ofstream ofs(wrapFile, std::ios::binary);
+        ofs.write(wrapped.data(), wrapped.size());
+        ofs.close();
+        buildSrc = wrapFile.string();
+    }
+
     int status = bronze::cli::runBuild(
-        absSource.string(), outDll.string(), &err,
+        buildSrc, outDll.string(), &err,
         /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
         /*hostGlobals=*/globalsPath, /*inferStats=*/false,
         /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
@@ -295,6 +356,30 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/{}, /*censusOutPath=*/{},
         /*pinsAllowObserved=*/false);
+
+    if (!wrapFile.empty()) {
+        std::filesystem::remove(wrapFile, ec);
+    }
+
+    if (status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) {
+        std::string wrapped = "(async () => {\n" + content + "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
+        auto wrappedFile = tempDir / (stem + "_wrap2.js");
+        std::ofstream ofs(wrappedFile, std::ios::binary);
+        ofs.write(wrapped.data(), wrapped.size());
+        ofs.close();
+
+        err.clear();
+        status = bronze::cli::runBuild(
+            wrappedFile.string(), outDll.string(), &err,
+            /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
+            /*hostGlobals=*/globalsPath, /*inferStats=*/false,
+            /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
+            /*emitShared=*/true, /*retainFnSource=*/true,
+            /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
+            /*pinsPath=*/{}, /*censusOutPath=*/{},
+            /*pinsAllowObserved=*/false);
+        std::filesystem::remove(wrappedFile, ec);
+    }
 
     if (status != 0) {
         LOG_ERROR("evalScriptFile compilation failed for %s:\n%s", filePath.c_str(), err.c_str());
@@ -328,6 +413,9 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     }
 
     bronze::embed::runEntry(entry);
+    if (ev::microtasksPending()) {
+        ev::drainMicrotasks();
+    }
     std::fflush(stdout);
 
     if (hasTestFailure() || engine.hasTestFailure()) {

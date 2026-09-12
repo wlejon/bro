@@ -143,6 +143,13 @@ set(BRO_BRONZE_HOST_SOURCES
     host_node_core.cpp
     host_headless.cpp
     eval.cpp
+    host_buffer.cpp
+    host_structured_clone.cpp
+    host_noise.cpp
+    host_custom_elements.cpp
+    host_imagebitmap.cpp
+    host_worker_msg.cpp
+    host_worker.cpp
 )
 
 if(BRO_WITH_PHYSICS)

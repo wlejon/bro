@@ -18,6 +18,7 @@
 
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_globals_internal.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
@@ -43,6 +44,14 @@ struct SourcePixels {
 };
 
 SourcePixels resolveSource(Value source, const char* who) {
+    if (const HostImageBitmap* bmp = hostImageBitmapOf(source)) {
+        if (bmp->closed || bmp->pixels.empty()) {
+            LOG_WARN("bronze_host: %s was given an ImageBitmap with no pixels", who);
+            return {};
+        }
+        return {bmp->pixels.data(), static_cast<GLsizei>(bmp->width), static_cast<GLsizei>(bmp->height)};
+    }
+
     if (const HostImage* img = hostImageOf(source)) {
         if (img->rgba.empty()) {
             // A broken image: HTML gives it zero natural dimensions and no

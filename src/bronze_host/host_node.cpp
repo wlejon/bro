@@ -35,6 +35,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_globals_internal.h"
 
 #include "engine/engine.h"
 #include "dom/comment_node.h"
@@ -235,11 +236,23 @@ void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref) {
         for (dom::Node* kid : childrenOf(child)) {
             child->removeChild(kid);
             parent->insertBefore(kid, ref);
+            if (kid->nodeType() == dom::NodeType::Element) {
+                onCustomElementConnected(static_cast<dom::Element*>(kid));
+            }
         }
         return;
     }
-    if (child->parentNode()) child->parentNode()->removeChild(child);
+    if (child->parentNode()) {
+        dom::Node* oldP = child->parentNode();
+        oldP->removeChild(child);
+        if (child->nodeType() == dom::NodeType::Element) {
+            onCustomElementDisconnected(static_cast<dom::Element*>(child));
+        }
+    }
     parent->insertBefore(child, ref);
+    if (child->nodeType() == dom::NodeType::Element) {
+        onCustomElementConnected(static_cast<dom::Element*>(child));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +278,12 @@ void installNodeTree(ObjectBuilder& b) {
         dom::Node* child = hostNodeOf(argAt(a, 0));
         if (!st->node || !child)
             return ev::throwTypeError("removeChild: argument is not a node");
-        if (child->parentNode() == st->node) st->node->removeChild(child);
+        if (child->parentNode() == st->node) {
+            st->node->removeChild(child);
+            if (child->nodeType() == dom::NodeType::Element) {
+                onCustomElementDisconnected(static_cast<dom::Element*>(child));
+            }
+        }
         return argAt(a, 0);
     });
     b.def("insertBefore", 2, [](Value self_, std::span<const Value> a) {
@@ -292,13 +310,21 @@ void installNodeTree(ObjectBuilder& b) {
         if (old->parentNode() != st->node) return argAt(a, 1);
         hostInsertNode(st->node, fresh, old);
         st->node->removeChild(old);
+        if (old->nodeType() == dom::NodeType::Element) {
+            onCustomElementDisconnected(static_cast<dom::Element*>(old));
+        }
         return argAt(a, 1);
     });
     b.def("remove", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st) return ev::undefined();
-        if (st->node && st->node->parentNode())
-            st->node->parentNode()->removeChild(st->node);
+        if (st->node && st->node->parentNode()) {
+            dom::Node* n = st->node;
+            n->parentNode()->removeChild(n);
+            if (n->nodeType() == dom::NodeType::Element) {
+                onCustomElementDisconnected(static_cast<dom::Element*>(n));
+            }
+        }
         return ev::undefined();
     });
     // The real answer, not the constant `false` the earliest wrapper returned:

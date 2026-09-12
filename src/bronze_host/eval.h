@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 
 namespace bro::engine {
@@ -7,6 +8,12 @@ class Engine;
 }
 
 namespace bro::bronze_host {
+
+/// Temporary directory for compiled eval/worker DLLs.
+std::filesystem::path getEvalTempDir();
+
+/// Ensure BRONZE_SHARED_RT_LIB is populated for runtime compilation.
+void ensureSharedRuntimeEnv();
 
 /// Compile JS code in-process using bronze CLI and run it on `engine`.
 /// `filename` is the document the code came from (an app's index.html for its

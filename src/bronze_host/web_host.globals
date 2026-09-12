@@ -164,3 +164,13 @@ RigSpec
 VoxelChunk
 IK
 Rig
+createImageBitmap
+ImageBitmap
+ImageData
+FastNoise
+customElements
+structuredClone
+Buffer
+Worker
+postMessage
+close

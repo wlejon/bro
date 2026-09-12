@@ -28,6 +28,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_globals_internal.h"
 
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
@@ -151,6 +152,7 @@ void hostFrame(double dtMs) {
     g_host->clockMs += dtMs;                             // 2
     drainHostTasks();                                    // 3
     drainNetEvents();                                    // 3b
+    drainWorkerMessages();                               // 3c
     fireHostTimers(g_host->clockMs);                     // 4
     drainPhysicsContactEvents();                         // 4b
     fireAnimationFrames();                               // 5
@@ -904,6 +906,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installVendorGlobals();
     installNodeCoreGlobals(engine);
     installHeadlessGlobals(engine);
+    installPlatformExtensions(engine);
 }
 
 bool isWebHostGlobalsInstalled() {

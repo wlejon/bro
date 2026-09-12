@@ -7,6 +7,10 @@
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "canvas/canvas_scene.h"
+#include "webgl/webgl2_context.h"
+#include "broimage/encode.h"
+#include "util/string_utils.h"
 
 #include <cstdlib>
 #include <memory>
@@ -171,6 +175,144 @@ Value makeCanvasValue(dom::Element* el) {
         cs->glObj.set(glValue);
         cs->hasGl = true;
         return cs->glObj.get();
+    });
+
+    b.def("toDataURL", 2, [cs](Value, std::span<const Value> a) -> Value {
+        std::string type = "image/png";
+        double quality = -1.0;
+        if (!a.empty() && ev::isString(a[0])) {
+            type = util::toLower(ev::toUtf8(a[0]));
+        }
+        if (a.size() > 1 && ev::isNumber(a[1])) {
+            quality = ev::toDouble(a[1]);
+        }
+        std::vector<uint8_t> owned;
+        const uint8_t* px = nullptr;
+        int w = 0, h = 0;
+        if (cs->glCtx) {
+            if (cs->glCtx->readCanvasPixels(owned)) {
+                px = owned.data();
+                w = cs->glCtx->canvasWidth();
+                h = cs->glCtx->canvasHeight();
+            }
+        } else if (auto* scene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
+            int cw = canvasWidthOf(cs);
+            int ch = canvasHeightOf(cs);
+            const uint8_t* p = scene->snapshotPixels(cw, ch);
+            if (p) {
+                owned.assign(p, p + static_cast<size_t>(cw) * ch * 4);
+                px = owned.data();
+                w = cw;
+                h = ch;
+            }
+        }
+        if (!px || w <= 0 || h <= 0) {
+            return ev::fromUtf8("data:,");
+        }
+        std::vector<uint8_t> bytes;
+        std::string outType = "image/png";
+        if (type == "image/jpeg" || type == "image/jpg") {
+            std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+            for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) {
+                const uint8_t alpha = px[i * 4 + 3];
+                for (int c = 0; c < 3; ++c) {
+                    rgb[i * 3 + c] = static_cast<uint8_t>((px[i * 4 + c] * alpha + 127) / 255);
+                }
+            }
+            int q = (quality > 0.0 && quality <= 1.0) ? static_cast<int>(quality * 100.0 + 0.5) : 92;
+            if (q < 1) q = 1;
+            if (broimage::encode_jpeg_memory(bytes, rgb.data(), w, h, 3, q)) {
+                outType = "image/jpeg";
+            }
+        }
+        if (outType == "image/png") {
+            if (!broimage::encode_png_memory(bytes, px, w, h, 4) || bytes.empty()) {
+                return ev::fromUtf8("data:,");
+            }
+        }
+        std::string url = "data:" + outType + ";base64," + util::base64Encode(bytes.data(), bytes.size());
+        return ev::fromUtf8(url);
+    });
+
+    b.def("toBlob", 3, [cs](Value, std::span<const Value> a) -> Value {
+        if (a.empty() || !ev::isFunction(a[0])) {
+            return ev::throwTypeError("toBlob requires a callback function");
+        }
+        Value callback = a[0];
+        std::string type = "image/png";
+        double quality = -1.0;
+        if (a.size() > 1 && ev::isString(a[1])) {
+            type = util::toLower(ev::toUtf8(a[1]));
+        }
+        if (a.size() > 2 && ev::isNumber(a[2])) {
+            quality = ev::toDouble(a[2]);
+        }
+        std::vector<uint8_t> owned;
+        const uint8_t* px = nullptr;
+        int w = 0, h = 0;
+        if (cs->glCtx) {
+            if (cs->glCtx->readCanvasPixels(owned)) {
+                px = owned.data();
+                w = cs->glCtx->canvasWidth();
+                h = cs->glCtx->canvasHeight();
+            }
+        } else if (auto* scene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
+            int cw = canvasWidthOf(cs);
+            int ch = canvasHeightOf(cs);
+            const uint8_t* p = scene->snapshotPixels(cw, ch);
+            if (p) {
+                owned.assign(p, p + static_cast<size_t>(cw) * ch * 4);
+                px = owned.data();
+                w = cw;
+                h = ch;
+            }
+        }
+
+        Value blobVal = ev::null();
+        if (px && w > 0 && h > 0) {
+            std::vector<uint8_t> bytes;
+            std::string outType = "image/png";
+            if (type == "image/jpeg" || type == "image/jpg") {
+                std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+                for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) {
+                    const uint8_t alpha = px[i * 4 + 3];
+                    for (int c = 0; c < 3; ++c) {
+                        rgb[i * 3 + c] = static_cast<uint8_t>((px[i * 4 + c] * alpha + 127) / 255);
+                    }
+                }
+                int q = (quality > 0.0 && quality <= 1.0) ? static_cast<int>(quality * 100.0 + 0.5) : 92;
+                if (q < 1) q = 1;
+                if (broimage::encode_jpeg_memory(bytes, rgb.data(), w, h, 3, q)) {
+                    outType = "image/jpeg";
+                }
+            }
+            if (outType == "image/png") {
+                broimage::encode_png_memory(bytes, px, w, h, 4);
+            }
+            if (!bytes.empty()) {
+                Value ab = ev::createArrayBuffer(std::span<const uint8_t>(bytes.data(), bytes.size()));
+                Value blobCtor = ev::globalValue("Blob").value;
+                if (ev::isFunction(blobCtor)) {
+                    Value parts = ev::parseJson("[]").value;
+                    ev::setElement(parts, 0, ab);
+                    ObjectBuilder opts;
+                    opts.set("type", ev::fromUtf8(outType));
+                    const Value ctorArgs[2] = { parts, opts.get() };
+                    auto res = ev::construct(blobCtor, std::span<const Value>(ctorArgs, 2));
+                    if (!res.thrown) {
+                        blobVal = res.value;
+                    }
+                }
+            }
+        }
+        Value promise = ev::createPromise();
+        ev::resolvePromise(promise, blobVal);
+        Value thenFn = ev::getProperty(promise, "then");
+        if (ev::isFunction(thenFn)) {
+            const Value thenArgs[1] = { callback };
+            ev::call(thenFn, promise, std::span<const Value>(thenArgs, 1));
+        }
+        return ev::undefined();
     });
 
     Value built = b.get();

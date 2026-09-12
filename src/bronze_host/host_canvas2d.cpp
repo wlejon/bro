@@ -1,6 +1,7 @@
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_globals_internal.h"
 #include "canvas/canvas2d.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
@@ -240,7 +241,73 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     b.def("clip", 0, noop);
     b.def("bezierCurveTo", 6, noop);
     b.def("quadraticCurveTo", 4, noop);
-    b.def("drawImage", 9, noop);
+    b.def("drawImage", 9, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        Value src = a[0];
+
+        const uint8_t* rgba = nullptr;
+        int imgW = 0, imgH = 0;
+        sk_sp<SkImage> skImg;
+
+        if (auto* bmp = hostImageBitmapOfMut(src)) {
+            if (bmp->closed) return ev::undefined();
+            if (bmp->image) {
+                skImg = bmp->image;
+                imgW = bmp->width;
+                imgH = bmp->height;
+            } else if (!bmp->pixels.empty()) {
+                rgba = bmp->pixels.data();
+                imgW = bmp->width;
+                imgH = bmp->height;
+            }
+        } else if (const HostImage* img = hostImageOf(src)) {
+            if (img && img->ok && !img->rgba.empty()) {
+                rgba = img->rgba.data();
+                imgW = img->width;
+                imgH = img->height;
+            }
+        } else if (dom::Element* srcEl = hostElementOf(src)) {
+            if (auto* srcCs = static_cast<canvas::CanvasScene*>(srcEl->canvasScene())) {
+                skImg = srcCs->snapshotImage();
+                if (skImg) {
+                    imgW = skImg->width();
+                    imgH = skImg->height();
+                }
+            }
+        }
+
+        if (!rgba && !skImg) return ev::undefined();
+
+        float sx = 0, sy = 0, sw = static_cast<float>(imgW), sh = static_cast<float>(imgH);
+        float dx = 0, dy = 0, dw = static_cast<float>(imgW), dh = static_cast<float>(imgH);
+
+        if (a.size() >= 9) {
+            sx = static_cast<float>(ev::toDouble(a[1]));
+            sy = static_cast<float>(ev::toDouble(a[2]));
+            sw = static_cast<float>(ev::toDouble(a[3]));
+            sh = static_cast<float>(ev::toDouble(a[4]));
+            dx = static_cast<float>(ev::toDouble(a[5]));
+            dy = static_cast<float>(ev::toDouble(a[6]));
+            dw = static_cast<float>(ev::toDouble(a[7]));
+            dh = static_cast<float>(ev::toDouble(a[8]));
+        } else if (a.size() >= 5) {
+            dx = static_cast<float>(ev::toDouble(a[1]));
+            dy = static_cast<float>(ev::toDouble(a[2]));
+            dw = static_cast<float>(ev::toDouble(a[3]));
+            dh = static_cast<float>(ev::toDouble(a[4]));
+        } else if (a.size() >= 3) {
+            dx = static_cast<float>(ev::toDouble(a[1]));
+            dy = static_cast<float>(ev::toDouble(a[2]));
+        }
+
+        if (skImg) {
+            cs->drawImage(skImg, sx, sy, sw, sh, dx, dy, dw, dh);
+        } else {
+            cs->drawImage(rgba, imgW, imgH, sx, sy, sw, sh, dx, dy, dw, dh);
+        }
+        return ev::undefined();
+    });
 
     b.def("measureText", 1, [](Value, std::span<const Value> a) -> Value {
         std::string s = a.empty() ? "" : ev::toUtf8(a[0]);
@@ -262,15 +329,37 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         if (pixels.empty()) {
             pixels.resize(static_cast<size_t>(w) * h * 4, 0);
         }
-        ObjectBuilder img;
-        img.set("width", ev::fromDouble(w));
-        img.set("height", ev::fromDouble(h));
-        Value arr = ev::createTypedArray(bronze::embed::elements::Uint8Clamped, static_cast<uint32_t>(pixels.size()));
-        if (!pixels.empty()) {
-            ev::fillTypedArray(arr, std::span<const uint8_t>(pixels.data(), pixels.size()));
+        return makeImageDataValue(w, h, pixels.data());
+    });
+
+    b.def("createImageData", 2, [](Value, std::span<const Value> a) -> Value {
+        int w = 1, h = 1;
+        if (a.size() >= 2) {
+            w = static_cast<int>(ev::toDouble(a[0]));
+            h = static_cast<int>(ev::toDouble(a[1]));
+        } else if (a.size() == 1 && ev::isObject(a[0])) {
+            w = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
+            h = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
         }
-        img.set("data", arr);
-        return img.get();
+        if (w <= 0) w = 1;
+        if (h <= 0) h = 1;
+        return makeImageDataValue(w, h, nullptr);
+    });
+
+    b.def("putImageData", 3, [el](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 3 || !el || !el->canvasScene()) return ev::undefined();
+        Value imgData = a[0];
+        int dx = static_cast<int>(ev::toDouble(a[1]));
+        int dy = static_cast<int>(ev::toDouble(a[2]));
+        int w = static_cast<int>(ev::toDouble(ev::getProperty(imgData, "width")));
+        int h = static_cast<int>(ev::toDouble(ev::getProperty(imgData, "height")));
+        Value dataVal = ev::getProperty(imgData, "data");
+        auto info = ev::typedArrayInfo(dataVal);
+        if (info.data && w > 0 && h > 0) {
+            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+            cs->putImageData(info.data, w, h, dx, dy);
+        }
+        return ev::undefined();
     });
 
     return b.get();
