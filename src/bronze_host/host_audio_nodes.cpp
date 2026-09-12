@@ -238,6 +238,11 @@ void decorateOscillatorNodeProto(ObjectBuilder& b) {
         return ev::undefined();
     });
 
+    b.accessor("voiceId", [](Value self_, std::span<const Value>) {
+        HostOscillatorNode* osc = oscOf(self_);
+        return ev::fromDouble(osc ? osc->voiceId : -1);
+    }, nullptr);
+
     b.def("setPeriodicWave", 1, [](Value self_, std::span<const Value> a) -> Value {
         HostOscillatorNode* osc = oscOf(self_);
         if (!osc || a.empty()) return ev::undefined();
@@ -266,6 +271,13 @@ Value makeOscillatorNodeValue() {
 
     b.set("frequency", makeAudioParamValue(AudioParamTarget::VoiceFrequency, voiceId, 440.0f, 0.0f, 24000.0f, 440.0f));
     b.set("detune", makeAudioParamValue(AudioParamTarget::VoiceDetune, voiceId, 0.0f, -153600.0f, 153600.0f, 0.0f));
+    b.set("pan", makeAudioParamValue(AudioParamTarget::VoicePan, voiceId, 0.0f, -1.0f, 1.0f, 0.0f));
+    b.set("attack", makeAudioParamValue(AudioParamTarget::VoiceAttack, voiceId, 0.01f, 0.0f, 60.0f, 0.01f));
+    b.set("decay", makeAudioParamValue(AudioParamTarget::VoiceDecay, voiceId, 0.1f, 0.0f, 60.0f, 0.1f));
+    b.set("sustain", makeAudioParamValue(AudioParamTarget::VoiceSustain, voiceId, 1.0f, 0.0f, 1.0f, 1.0f));
+    b.set("release", makeAudioParamValue(AudioParamTarget::VoiceRelease, voiceId, 0.04f, 0.0f, 60.0f, 0.04f));
+    b.set("pitchBend", makeAudioParamValue(AudioParamTarget::VoicePitchBend, voiceId, 0.0f, -24.0f, 24.0f, 0.0f));
+    b.set("gain", makeAudioParamValue(AudioParamTarget::Gain, voiceId, 1.0f, 0.0f, 10.0f, 1.0f));
 
     return b.get();
 }

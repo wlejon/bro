@@ -9,6 +9,7 @@
 #include "scene/camera_node.h"
 #include "scene/physics_node.h"
 #include "canvas/canvas2d.h"
+#include "engine/scene_audio_sync.h"
 
 #include <bromesh/analysis/raycast.h>
 #include <bromesh/analysis/bvh.h>
@@ -423,6 +424,16 @@ void installSceneGraphCore(ObjectBuilder& b) {
     b.def("syncPhysics", 0, [](Value self_, std::span<const Value>) {
         auto* g = sceneGraphOf(self_);
         if (g) g->syncPhysics();
+        return ev::undefined();
+    });
+
+    b.def("bindAudioListenerToCamera", 1, [](Value self_, std::span<const Value> a) {
+        auto* cell = sceneGraphCellOf(self_);
+        if (!cell) return ev::undefined();
+        auto* g = cell->graph();
+        if (!g) return ev::undefined();
+        bool enable = a.empty() || ev::toBool(a[0]);
+        bro::engine::SceneAudioSync::bindAudioListenerToCamera(cell->token, g, enable);
         return ev::undefined();
     });
 

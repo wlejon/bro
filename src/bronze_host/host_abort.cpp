@@ -136,10 +136,20 @@ const HostAbortSignal* hostAbortSignalOf(Value v) { return signalOf(v); }
 Value makeAbortSignalValue() { return makeSignal(); }
 
 Value hostMakeDomError(const char* name, const std::string& message) {
-    ObjectBuilder b;
-    b.set("name", ev::fromUtf8(name));
-    b.set("message", ev::fromUtf8(message));
-    return b.get();
+    auto g = ev::globalValue("Error");
+    Value errObj;
+    Value msgVal = ev::fromUtf8(message);
+    if (g.found) {
+        ev::CallResult res = ev::construct(g.value, std::span<const Value>(&msgVal, 1));
+        errObj = res.thrown ? ev::createObject() : res.value;
+    } else {
+        errObj = ev::createObject();
+    }
+    if (name && *name) {
+        errObj = ev::setProperty(errObj, "name", ev::fromUtf8(name));
+    }
+    errObj = ev::setProperty(errObj, "message", msgVal);
+    return errObj;
 }
 
 void hostAbortSignal(Value signal, Value reason) {

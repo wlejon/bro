@@ -45,9 +45,26 @@ void syncAudioParamValue(HostAudioParam* p, float val) {
         case AudioParamTarget::DelayTime:
             e->setDelayTime(p->value);
             break;
+        case AudioParamTarget::Gain:
+            e->setGain(p->targetId, p->value);
+            break;
+        case AudioParamTarget::VoiceAttack:
+            e->setAttackTime(p->targetId, p->value);
+            break;
+        case AudioParamTarget::VoiceDecay:
+            e->setDecayTime(p->targetId, p->value);
+            break;
+        case AudioParamTarget::VoiceSustain:
+            e->setSustainLevel(p->targetId, p->value);
+            break;
+        case AudioParamTarget::VoiceRelease:
+            e->setReleaseTime(p->targetId, p->value);
+            break;
+        case AudioParamTarget::VoicePitchBend:
+            e->setVoicePitchBend(p->targetId, p->value);
+            break;
         case AudioParamTarget::VoiceDetune:
         case AudioParamTarget::PlaybackDetune:
-        case AudioParamTarget::Gain:
         case AudioParamTarget::PannerPositionX:
         case AudioParamTarget::PannerPositionY:
         case AudioParamTarget::PannerPositionZ:

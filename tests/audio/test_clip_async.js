@@ -24,6 +24,7 @@ const tone = new Float32Array(N);
 for (let i = 0; i < N; i++) tone[i] = 0.5 * Math.sin(2 * Math.PI * 440 * i / sr);
 assert(ctx.saveWav(wavPath, tone, 1, sr), 'wrote async fixture WAV');
 
+(async function() {
 // --- success: resolves with a playable clip id -------------------------------
 {
     const p = ctx.createClipFromFileAsync(wavPath);
@@ -88,3 +89,7 @@ assert(ctx.saveWav(wavPath, tone, 1, sr), 'wrote async fixture WAV');
 
 fs.unlinkSync(wavPath);
 console.log('clip async test done');
+})().catch(err => {
+    console.error('test_clip_async failed:', err);
+    throw err;
+});

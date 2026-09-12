@@ -127,6 +127,7 @@ draco_encoder
 advanceTime
 flush
 sleep
+wallSleep
 screenshot
 assert
 click

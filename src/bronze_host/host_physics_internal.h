@@ -35,15 +35,31 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::bronze_host {
 
 // ---------------------------------------------------------------------------
-// Tag state & PhysicsWorld lookup
+// Host Physics World and Sub-object Structures
 // ---------------------------------------------------------------------------
 
-struct PhysicsState {
+struct HostPhysicsCharacter;
+struct HostPhysicsSoftBody;
+struct HostPhysicsVehicle;
+struct HostPhysicsRagdoll;
+struct HostPhysicsWorld;
+
+struct HostPhysicsWorld {
+    uint32_t tag = kHostPhysicsWorldTag;
+    physics::PhysicsWorld* world = nullptr;
+    bool ownsWorld = false;
+
+    std::unordered_set<HostPhysicsCharacter*> liveCharacters;
+    std::unordered_set<HostPhysicsVehicle*> liveVehicles;
+    std::unordered_set<HostPhysicsRagdoll*> liveRagdolls;
+    std::unordered_set<HostPhysicsSoftBody*> liveSoftBodies;
+
     std::unordered_map<uint32_t, int32_t> bodyTags;   // BodyID idx+seq -> tag
     std::unordered_map<int32_t, uint32_t> tagToBody;  // tag -> BodyID idx+seq
     int32_t nextTag = 1;
@@ -54,14 +70,14 @@ struct PhysicsState {
 
     int32_t registerBody(JPH::BodyID id) {
         if (id.IsInvalid()) return -1;
-        int32_t tag = nextTag++;
-        bodyTags[id.GetIndexAndSequenceNumber()] = tag;
-        tagToBody[tag] = id.GetIndexAndSequenceNumber();
-        return tag;
+        int32_t t = nextTag++;
+        bodyTags[id.GetIndexAndSequenceNumber()] = t;
+        tagToBody[t] = id.GetIndexAndSequenceNumber();
+        return t;
     }
 
-    void unregisterBody(int32_t tag) {
-        auto it = tagToBody.find(tag);
+    void unregisterBody(int32_t t) {
+        auto it = tagToBody.find(t);
         if (it == tagToBody.end()) return;
         bodyTags.erase(it->second);
         tagToBody.erase(it);
@@ -74,8 +90,8 @@ struct PhysicsState {
         bodyTags.erase(it);
     }
 
-    JPH::BodyID bodyIdForTag(int32_t tag) const {
-        auto it = tagToBody.find(tag);
+    JPH::BodyID bodyIdForTag(int32_t t) const {
+        auto it = tagToBody.find(t);
         if (it == tagToBody.end()) return JPH::BodyID();
         return JPH::BodyID(it->second);
     }
@@ -90,28 +106,57 @@ struct PhysicsState {
         tagToBody.clear();
         lastContactEvents.clear();
     }
+
+    physics::PhysicsWorld* getWorld() const;
+    ~HostPhysicsWorld();
 };
 
-extern PhysicsState g_phys;
+extern HostPhysicsWorld g_defaultWorld;
+#define g_phys g_defaultWorld
+
+inline HostPhysicsWorld* unwrapWorld(Value v) {
+    if (ev::isObject(v)) {
+        if (auto* w = static_cast<HostPhysicsWorld*>(ev::handleData(v))) {
+            if (w->tag == kHostPhysicsWorldTag) return w;
+        }
+    }
+    return &g_defaultWorld;
+}
 
 physics::PhysicsWorld* getPhysicsWorld();
 
-// ---------------------------------------------------------------------------
-// Character Controller & Soft Body Structures
-// ---------------------------------------------------------------------------
-
 struct HostPhysicsCharacter {
     uint32_t tag = kHostPhysicsCharacterTag;
+    HostPhysicsWorld* world = nullptr;
     uint32_t handle = 0;
     int32_t innerTag = -1;
 };
 
 struct HostPhysicsSoftBody {
     uint32_t tag = kHostPhysicsSoftBodyTag;
+    HostPhysicsWorld* world = nullptr;
     uint32_t handle = 0;
     int32_t bodyTag = -1;
     int gridX = 0;
     int gridZ = 0;
+};
+
+struct HostPhysicsVehicle {
+    uint32_t tag = kHostPhysicsVehicleTag;
+    HostPhysicsWorld* world = nullptr;
+    uint32_t handle = 0;
+    int32_t bodyTag = -1;
+    bool ownsChassis = false;
+    physics::VehicleOptions::Controller type = physics::VehicleOptions::ControllerWheeled;
+};
+
+struct HostPhysicsRagdoll {
+    uint32_t tag = kHostPhysicsRagdollTag;
+    HostPhysicsWorld* world = nullptr;
+    uint32_t handle = 0;
+    std::vector<int32_t> partTags;
+    std::vector<int32_t> parents;
+    std::vector<std::string> names;
 };
 
 inline HostPhysicsCharacter* unwrapCharacter(Value v) {
@@ -124,8 +169,21 @@ inline HostPhysicsSoftBody* unwrapSoftBody(Value v) {
     return (h && h->tag == kHostPhysicsSoftBodyTag) ? h : nullptr;
 }
 
+inline HostPhysicsVehicle* unwrapVehicle(Value v) {
+    auto* h = static_cast<HostPhysicsVehicle*>(ev::handleData(v));
+    return (h && h->tag == kHostPhysicsVehicleTag) ? h : nullptr;
+}
+
+inline HostPhysicsRagdoll* unwrapRagdoll(Value v) {
+    auto* h = static_cast<HostPhysicsRagdoll*>(ev::handleData(v));
+    return (h && h->tag == kHostPhysicsRagdollTag) ? h : nullptr;
+}
+
+extern HostClass g_physicsWorldClass;
 extern HostClass g_characterClass;
 extern HostClass g_softBodyClass;
+extern HostClass g_vehicleClass;
+extern HostClass g_ragdollClass;
 
 // ---------------------------------------------------------------------------
 // Helpers: Read JS inputs (Vec3, Quat, Arrays, Properties)
@@ -289,11 +347,33 @@ inline bool getPropBool(const ev::Persistent& root, const char* name, bool def =
     return ev::toBool(v);
 }
 
+inline Value makeBigIntValue(uint64_t val) {
+    auto bi = ev::globalValue("BigInt");
+    if (bi.found && ev::isFunction(bi.value)) {
+        ev::Persistent strVal(ev::fromUtf8(std::to_string(val)));
+        Value args[] = { strVal.get() };
+        auto res = ev::call(bi.value, ev::undefined(), args);
+        if (!res.thrown) return res.value;
+    }
+    return ev::fromDouble(static_cast<double>(val));
+}
+
 inline uint64_t getPropU64(const ev::Persistent& root, const char* name, uint64_t def = 0) {
     Value v = ev::getProperty(root.get(), name);
     if (ev::isUndefined(v) || ev::isNull(v)) return def;
-    double d = ev::toDouble(v);
-    return std::isnan(d) ? def : static_cast<uint64_t>(d);
+    if (ev::isNumber(v)) {
+        double d = ev::toDouble(v);
+        return std::isnan(d) ? def : static_cast<uint64_t>(d);
+    }
+    std::string s = ev::toUtf8(v);
+    if (s.empty()) return def;
+    try {
+        size_t idx = 0;
+        unsigned long long val = std::stoull(s, &idx);
+        return static_cast<uint64_t>(val);
+    } catch (...) {
+        return def;
+    }
 }
 
 inline bool parseCombineMode(const std::string& s, physics::CombineMode& out) {
@@ -339,7 +419,7 @@ inline bool readAreaOverride(const ev::Persistent& o, physics::AreaOverride& a, 
     return true;
 }
 
-inline bool readBodyOptions(Value optsVal, physics::BodyOptions& out, std::string& err) {
+inline bool readBodyOptions(Value optsVal, physics::BodyOptions& out, std::string& err, physics::PhysicsWorld* world = nullptr) {
     if (!ev::isObject(optsVal)) { err = "opts must be an object"; return false; }
     ev::Persistent opts(optsVal);
 
@@ -424,7 +504,7 @@ inline bool readBodyOptions(Value optsVal, physics::BodyOptions& out, std::strin
     }
 
     Value layerVal = ev::getProperty(opts.get(), "layer");
-    auto* world = getPhysicsWorld();
+    if (!world) world = getPhysicsWorld();
     if (!ev::isUndefined(layerVal) && !ev::isNull(layerVal)) {
         if (!ev::isObject(layerVal)) {
             std::string s = ev::toUtf8(layerVal);
@@ -521,10 +601,11 @@ inline bool readBodyOptions(Value optsVal, physics::BodyOptions& out, std::strin
     return true;
 }
 
-inline void readQueryFilter(Value optsVal, physics::QueryFilter& out) {
+inline void readQueryFilter(Value optsVal, physics::QueryFilter& out, HostPhysicsWorld* pw = nullptr) {
     if (!ev::isObject(optsVal)) return;
+    if (!pw) pw = &g_defaultWorld;
     ev::Persistent opts(optsVal);
-    auto* world = getPhysicsWorld();
+    auto* world = pw->getWorld();
 
     Value lv = ev::getProperty(opts.get(), "layers");
     if (ev::isObject(lv)) {
@@ -554,7 +635,7 @@ inline void readQueryFilter(Value optsVal, physics::QueryFilter& out) {
     }
 
     int32_t ignore = static_cast<int32_t>(getPropNumber(opts, "ignoreBody", -1.0));
-    if (ignore >= 0) out.ignoreBody = g_phys.bodyIdForTag(ignore);
+    if (ignore >= 0) out.ignoreBody = pw->bodyIdForTag(ignore);
 
     Value iv = ev::getProperty(opts.get(), "ignoreBodies");
     if (ev::isObject(iv)) {
@@ -567,7 +648,7 @@ inline void readQueryFilter(Value optsVal, physics::QueryFilter& out) {
                 Value el = ev::getElement(ivPersist.get(), i);
                 int32_t tag = (!ev::isUndefined(el) && !ev::isObject(el)) ? static_cast<int32_t>(ev::toDouble(el)) : -1;
                 if (tag >= 0) {
-                    JPH::BodyID id = g_phys.bodyIdForTag(tag);
+                    JPH::BodyID id = pw->bodyIdForTag(tag);
                     if (!id.IsInvalid()) out.ignoreBodies.push_back(id);
                 }
             }
@@ -630,7 +711,7 @@ inline Value makeTransformValue(physics::PhysicsWorld* world, JPH::BodyID id, bo
                                    static_cast<float>(pos.GetY()),
                                    static_cast<float>(pos.GetZ())));
     b.set("rotation", makeQuatValue(rot.GetX(), rot.GetY(), rot.GetZ(), rot.GetW()));
-    b.set("userData", ev::fromDouble(static_cast<double>(udata)));
+    b.set("userData", makeBigIntValue(udata));
     return b.get();
 }
 
@@ -650,7 +731,7 @@ inline Value makeRayHitValue(int32_t tag, const physics::RayHit& hit, uint64_t u
                                    static_cast<float>(hit.position.GetY()),
                                    static_cast<float>(hit.position.GetZ())));
     b.set("normal", makeVec3Value(hit.normal.GetX(), hit.normal.GetY(), hit.normal.GetZ()));
-    b.set("userData", ev::fromDouble(static_cast<double>(udata)));
+    b.set("userData", makeBigIntValue(udata));
     return b.get();
 }
 
@@ -679,12 +760,23 @@ inline Value makeCharacterStateValue(const physics::CharacterState& st, int32_t 
 // Cross-module Function Declarations
 // ---------------------------------------------------------------------------
 
+void decorateWorldHandleProto(ObjectBuilder& wb);
+Value physicsCreateWorldHandle(Value self, std::span<const Value> a);
+Value physicsCreateWorld(Value self, std::span<const Value> a);
+
 void decorateCharacterProto(ObjectBuilder& cb);
 Value physicsCreateCharacter(Value self, std::span<const Value> a);
 
 void decorateSoftBodyProto(ObjectBuilder& sbb);
 Value physicsCreateSoftBody(Value self, std::span<const Value> a);
 
+void decorateVehicleProto(ObjectBuilder& vb);
+Value physicsCreateVehicle(Value self, std::span<const Value> a);
+
+void decorateRagdollProto(ObjectBuilder& rb);
+Value physicsCreateRagdoll(Value self, std::span<const Value> a);
+
+void registerCommonWorldMethods(ObjectBuilder& b);
 void registerConstraintMethods(ObjectBuilder& b);
 void registerQueryMethods(ObjectBuilder& b);
 

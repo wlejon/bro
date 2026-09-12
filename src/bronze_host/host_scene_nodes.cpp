@@ -5,6 +5,7 @@
 #include "scene/scene_node.h"
 #include "scene/mesh_node.h"
 #include "scene/physics_node.h"
+#include "engine/scene_audio_sync.h"
 
 #include <cmath>
 
@@ -503,6 +504,24 @@ void installSceneNodeCore(ObjectBuilder& b) {
             if (c->graph() && c->graph()->physicsWorld())
                 pn->syncToPhysics(c->graph()->physicsWorld());
         }
+        return ev::undefined();
+    });
+
+    b.def("attachAudioEmitter", 2, [](Value self_, std::span<const Value> a) {
+        auto* cell = sceneNodeCellOf(self_);
+        if (!cell || a.empty()) return ev::undefined();
+        auto* n = cell->node();
+        if (!n) return ev::undefined();
+        int handle = static_cast<int>(ev::toDouble(a[0]));
+        bool isVoice = a.size() >= 2 && ev::toBool(a[1]);
+        bro::engine::SceneAudioSync::attachAudioEmitter(cell->token, n, handle, isVoice);
+        return ev::undefined();
+    });
+
+    b.def("detachAudioEmitter", 0, [](Value self_, std::span<const Value>) {
+        auto* cell = sceneNodeCellOf(self_);
+        if (!cell) return ev::undefined();
+        bro::engine::SceneAudioSync::detachAudioEmitter(cell->id);
         return ev::undefined();
     });
 }

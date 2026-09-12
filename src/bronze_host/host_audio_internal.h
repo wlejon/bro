@@ -8,8 +8,13 @@
 
 #include <broaudio/dsp/fft.h>
 #include <broaudio/synth/wavetable.h>
-#include <broaudio/dsp/resampler.h>
+#include <broaudio/synth/voice_allocator.h>
+#include <broaudio/synth/modulation.h>
+#include <broaudio/midi/midi_input.h>
+#include <broaudio/sequencer/sequence.h>
 #include <broaudio/io/audio_file.h>
+#include <broaudio/io/serialization.h>
+#include <broaudio/dsp/resampler.h>
 #include <broaudio/engine.h>
 
 #include <algorithm>
@@ -27,6 +32,12 @@
 namespace bro::bronze_host {
 
 inline constexpr uint32_t kHostPeriodicWaveTag = 0x50574156u;  // 'PWAV'
+inline constexpr uint32_t kHostVoiceAllocatorTag = 0x56414C43u; // 'VALC'
+inline constexpr uint32_t kHostModMatrixTag      = 0x4D4F444Du; // 'MODM'
+inline constexpr uint32_t kHostMidiInputTag      = 0x4D494449u; // 'MIDI'
+inline constexpr uint32_t kHostSequenceTag       = 0x53455155u; // 'SEQU'
+inline constexpr uint32_t kHostMediaStreamTag    = 0x4D535452u; // 'MSTR'
+inline constexpr uint32_t kHostMediaStreamNodeTag= 0x4D534E44u; // 'MSND'
 
 // ---------------------------------------------------------------------------
 // Structs & Handle Cells
@@ -83,6 +94,11 @@ enum class AudioParamTarget : uint8_t {
     CompressorRatio,
     CompressorAttack,
     CompressorRelease,
+    VoiceAttack,
+    VoiceDecay,
+    VoiceSustain,
+    VoiceRelease,
+    VoicePitchBend,
 };
 
 struct HostAudioParam {
@@ -201,6 +217,39 @@ struct HostChannelMergerNode {
     int numberOfInputs = 6;
 };
 
+struct HostVoiceAllocator {
+    uint32_t tag = kHostVoiceAllocatorTag;
+    std::unique_ptr<broaudio::VoiceAllocator> allocator;
+    ev::Persistent voiceSetupCallback;
+};
+
+struct HostModMatrix {
+    uint32_t tag = kHostModMatrixTag;
+    broaudio::ModMatrix* matrix = nullptr;
+};
+
+struct HostMidiInput {
+    uint32_t tag = kHostMidiInputTag;
+    std::unique_ptr<broaudio::MidiInput> midi;
+    ev::Persistent pitchBendCb;
+    ev::Persistent rawCb;
+    std::vector<ev::Persistent> ccCallbacks = std::vector<ev::Persistent>(128);
+};
+
+struct HostSequence {
+    uint32_t tag = kHostSequenceTag;
+    std::unique_ptr<broaudio::Sequence> seq;
+    std::vector<ev::Persistent> automationCallbacks;
+};
+
+struct HostMediaStream {
+    uint32_t tag = kHostMediaStreamTag;
+};
+
+struct HostMediaStreamAudioSourceNode {
+    HostAudioNode base;
+};
+
 // ---------------------------------------------------------------------------
 // HostClass Declarations (extern)
 // ---------------------------------------------------------------------------
@@ -223,6 +272,12 @@ extern HostClass g_waveShaperNodeClass;
 extern HostClass g_convolverNodeClass;
 extern HostClass g_channelSplitterNodeClass;
 extern HostClass g_channelMergerNodeClass;
+extern HostClass g_voiceAllocatorClass;
+extern HostClass g_modMatrixClass;
+extern HostClass g_midiInputClass;
+extern HostClass g_sequenceClass;
+extern HostClass g_mediaStreamClass;
+extern HostClass g_mediaStreamAudioSourceNodeClass;
 
 // ---------------------------------------------------------------------------
 // Destructors (Finalizers)
@@ -246,6 +301,12 @@ void hostWaveShaperDtor(void* p);
 void hostConvolverDtor(void* p);
 void hostChannelSplitterDtor(void* p);
 void hostChannelMergerDtor(void* p);
+void hostVoiceAllocatorDtor(void* p);
+void hostModMatrixDtor(void* p);
+void hostMidiInputDtor(void* p);
+void hostSequenceDtor(void* p);
+void hostMediaStreamDtor(void* p);
+void hostMediaStreamAudioSourceNodeDtor(void* p);
 
 // ---------------------------------------------------------------------------
 // Unwrap Helpers
@@ -301,6 +362,13 @@ inline HostChannelMergerNode* channelMergerOf(Value v) {
     return nodeOfKind<HostChannelMergerNode>(v, AudioNodeType::ChannelMerger);
 }
 
+HostVoiceAllocator* hostVoiceAllocatorOf(Value v);
+HostModMatrix* hostModMatrixOf(Value v);
+HostMidiInput* hostMidiInputOf(Value v);
+HostSequence* hostSequenceOf(Value v);
+HostMediaStream* hostMediaStreamOf(Value v);
+HostMediaStreamAudioSourceNode* hostMediaStreamNodeOf(Value v);
+
 // ---------------------------------------------------------------------------
 // Helpers & Node Value Creators
 // ---------------------------------------------------------------------------
@@ -352,10 +420,45 @@ Value makeConvolverNodeValue();
 Value makeChannelSplitterNodeValue(int numberOfOutputs = 6);
 Value makeChannelMergerNodeValue(int numberOfInputs = 6);
 
+// Modular AudioContext registration chunks
+void registerAudioContextClips(ObjectBuilder& b);
+void registerAudioContextVoice(ObjectBuilder& b);
+void registerAudioContextBuses(ObjectBuilder& b);
+void registerAudioContextSynth(ObjectBuilder& b);
+void registerAudioContextSequencer(ObjectBuilder& b);
+
+// Synth creators & globals (host_audio_synth.cpp & host_audio_sequencer.cpp)
+void installAudioSynthGlobals();
+void installAudioSequencerGlobals();
+Value makeVoiceAllocatorValue(int maxVoices);
+Value makeModMatrixValue();
+Value makeMidiInputValue();
+Value makeSequenceValue(HostVoiceAllocator* va);
+Value makeMediaStreamValue();
+Value makeMediaStreamAudioSourceNodeValue();
+
+// Wavetable bank registry helpers
+std::shared_ptr<broaudio::WavetableBank> findWavetable(int id);
+int registerWavetable(std::shared_ptr<broaudio::WavetableBank> bank);
+void deleteWavetable(int id);
+
 // Helpers
 broaudio::BiquadFilter::Type parseFilterType(const std::string& str);
 const char* filterTypeToString(broaudio::BiquadFilter::Type type);
 broaudio::Waveform parseWaveform(const std::string& str);
 const char* waveformToString(broaudio::Waveform wf);
+broaudio::DistortionMode parseDistortionMode(const std::string& str);
+const char* distortionModeToString(broaudio::DistortionMode mode);
+broaudio::LfoShape parseLfoShape(const std::string& str);
+const char* lfoShapeToString(broaudio::LfoShape shape);
+broaudio::ModSource parseModSource(const std::string& str);
+const char* modSourceToString(broaudio::ModSource src);
+broaudio::ModDest parseModDest(const std::string& str);
+const char* modDestToString(broaudio::ModDest dst);
+broaudio::DistanceModel parseDistanceModel(const std::string& str);
+const char* distanceModelToString(broaudio::DistanceModel model);
+broaudio::EffectSlot parseEffectSlot(const std::string& str, broaudio::EffectSlot def);
+const char* effectSlotToString(broaudio::EffectSlot slot);
+broaudio::StealPolicy parseStealPolicy(const std::string& str);
 
 }  // namespace bro::bronze_host

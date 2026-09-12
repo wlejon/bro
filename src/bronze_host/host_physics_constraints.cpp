@@ -86,8 +86,9 @@ static bool readSixDofAxis(Value v, physics::SixDofAxis& a, std::string& err) {
 
 void registerConstraintMethods(ObjectBuilder& b) {
     // Physics.createConstraint(opts)
-    b.def("createConstraint", 1, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("createConstraint", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world) return ev::throwError("PhysicsWorld not available");
         if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("createConstraint(opts) requires an object");
 
@@ -112,8 +113,8 @@ void registerConstraintMethods(ObjectBuilder& b) {
         int32_t t1 = static_cast<int32_t>(getPropNumber(o, "body1", -1.0));
         int32_t t2 = static_cast<int32_t>(getPropNumber(o, "body2", -1.0));
 
-        cs.body1 = g_phys.bodyIdForTag(t1);
-        cs.body2 = g_phys.bodyIdForTag(t2);
+        cs.body1 = pw->bodyIdForTag(t1);
+        cs.body2 = pw->bodyIdForTag(t2);
         if (cs.body1.IsInvalid())
             return ev::throwTypeError("constraint body1 tag is invalid");
 
@@ -248,8 +249,9 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.destroyConstraint(handle)
-    b.def("destroyConstraint", 1, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("destroyConstraint", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (world && !a.empty()) {
             uint32_t h = static_cast<uint32_t>(numAt(a, 0));
             world->destroyConstraint(h);
@@ -258,8 +260,9 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.setConstraintEnabled(handle, enabled)
-    b.def("setConstraintEnabled", 2, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("setConstraintEnabled", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (world && a.size() >= 2) {
             uint32_t h = static_cast<uint32_t>(numAt(a, 0));
             bool en = boolAt(a, 1);
@@ -269,16 +272,18 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.isConstraintEnabled(handle)
-    b.def("isConstraintEnabled", 1, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("isConstraintEnabled", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world || a.empty()) return ev::fromBool(false);
         uint32_t h = static_cast<uint32_t>(numAt(a, 0));
         return ev::fromBool(world->isConstraintEnabled(h));
     });
 
     // Physics.setWheelMotor(handle, enabled, speed, maxTorque)
-    b.def("setWheelMotor", 4, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("setWheelMotor", 4, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world || a.size() < 4) return ev::throwTypeError("setWheelMotor(handle, enabled, speed, maxTorque)");
         uint32_t h = static_cast<uint32_t>(numAt(a, 0));
         bool en = boolAt(a, 1);
@@ -289,8 +294,9 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.setConstraintMotor(handle, opts)
-    b.def("setConstraintMotor", 2, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("setConstraintMotor", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world || a.size() < 2) return ev::throwTypeError("setConstraintMotor(handle, opts)");
         uint32_t h = static_cast<uint32_t>(numAt(a, 0));
         physics::MotorOptions m;
@@ -302,8 +308,9 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.setConstraintBreakingImpulse(handle, threshold)
-    b.def("setConstraintBreakingImpulse", 2, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("setConstraintBreakingImpulse", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world || a.size() < 2) return ev::throwTypeError("setConstraintBreakingImpulse(handle, threshold)");
         uint32_t h = static_cast<uint32_t>(numAt(a, 0));
         double t = numAt(a, 1);
@@ -312,16 +319,18 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.getConstraintBreakingImpulse(handle)
-    b.def("getConstraintBreakingImpulse", 1, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("getConstraintBreakingImpulse", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world || a.empty()) return ev::fromDouble(0.0);
         uint32_t h = static_cast<uint32_t>(numAt(a, 0));
         return ev::fromDouble(world->getConstraintBreakingImpulse(h));
     });
 
     // Physics.getBrokenConstraints()
-    b.def("getBrokenConstraints", 0, [](Value, std::span<const Value>) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("getBrokenConstraints", 0, [](Value self, std::span<const Value>) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         auto broken = world->drainBrokenConstraints();
         return hostArrayOf(broken.size(), [&](size_t i) {
@@ -330,8 +339,9 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.getConstraintLimits(handle)
-    b.def("getConstraintLimits", 1, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("getConstraintLimits", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world || a.empty()) return ev::null();
         uint32_t h = static_cast<uint32_t>(numAt(a, 0));
         JPH::Constraint* c = world->getConstraint(h);
@@ -394,8 +404,9 @@ void registerConstraintMethods(ObjectBuilder& b) {
     });
 
     // Physics.setConstraintLimits(handle, opts)
-    b.def("setConstraintLimits", 2, [](Value, std::span<const Value> a) -> Value {
-        auto* world = getPhysicsWorld();
+    b.def("setConstraintLimits", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostPhysicsWorld* pw = unwrapWorld(self);
+        auto* world = pw->getWorld();
         if (!world || a.size() < 2 || !ev::isObject(a[1])) return ev::fromBool(false);
         uint32_t h = static_cast<uint32_t>(numAt(a, 0));
         JPH::Constraint* c = world->getConstraint(h);

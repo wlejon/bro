@@ -287,8 +287,8 @@ canvas.setAttribute('height', '256');
 document.body.appendChild(canvas);
 flush();
 const scene = canvas.getContext('scene');
-if (!scene) {
-    console.log('scene context not available — skipping ragdoll skinning recipe test');
+if (!scene || typeof SkinData === 'undefined' || typeof Skeleton === 'undefined') {
+    console.log('scene context or rigging types not available — skipping ragdoll skinning recipe test');
 } else {
     const FOV = 40, EYE = [0, 1, 8];
     scene.setCamera({ fov: FOV, near: 0.1, far: 100, position: EYE, target: [0, 1, 0] });

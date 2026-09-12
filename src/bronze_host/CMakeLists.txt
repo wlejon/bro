@@ -127,6 +127,12 @@ set(BRO_BRONZE_HOST_SOURCES
     host_class.cpp
     host_video.cpp
     host_audio_core.cpp
+    host_audio_context.cpp
+    host_audio_clips.cpp
+    host_audio_voice.cpp
+    host_audio_buses.cpp
+    host_audio_synth.cpp
+    host_audio_sequencer.cpp
     host_audio_param.cpp
     host_audio_buffer.cpp
     host_audio_nodes.cpp
@@ -141,9 +147,12 @@ set(BRO_BRONZE_HOST_SOURCES
 if(BRO_WITH_PHYSICS)
     list(APPEND BRO_BRONZE_HOST_SOURCES
         host_physics_core.cpp
+        host_physics_world.cpp
         host_physics_constraints.cpp
         host_physics_character.cpp
         host_physics_softbody.cpp
+        host_physics_vehicle.cpp
+        host_physics_ragdoll.cpp
         host_physics_queries.cpp
     )
 else()

@@ -1,26 +1,7 @@
 // Web Audio & Sound Engine Integration — Core Subsystem
 //
 // AudioContext, AudioNode base, AudioParam automation, AudioBuffer,
-// AudioDestinationNode, AudioListener, decodeAudioData, and globals installation.
-//
-// WHAT THIS LAYER IS, said plainly so nobody plans around it: a Web Audio
-// SURFACE over broaudio's engine, not a Web Audio graph. `connect()` returns
-// its destination so a chain reads the way the web's does, and routes nothing —
-// there is no node graph behind these objects. What actually reaches the audio
-// engine is the handful of AudioParams that carry a real target id: an
-// oscillator's frequency/detune/pan, a filter's frequency/Q/gain, a buffer
-// source's playbackRate (syncAudioParamValue, host_audio_param.cpp). Everything
-// else stores its own state, reports it back faithfully, and is inaudible —
-// the whole of host_audio_dsp.cpp is in that category, as are the Panner's
-// position params.
-//
-// That is worth having: a library that constructs a compressor, sets its
-// threshold and reads it back gets the answers it expects instead of a crash,
-// and the graph it builds is a graph this layer can be taught to route later
-// without the app changing. It is NOT worth mistaking for working audio, and
-// the audio check (tests/bronze_host/run_checks.sh audio) asserts property
-// round-tripping for exactly that reason — it is evidence about the surface,
-// and it is not evidence about the sound.
+// AudioDestinationNode, AudioListener, and globals installation.
 
 #include "bronze_host/host_audio_internal.h"
 
@@ -150,7 +131,7 @@ Value makeListenerValue() {
 
     b.def("setPosition", 3, [](Value, std::span<const Value> a) -> Value {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) {
+        if (e && a.size() >= 3) {
             e->setListenerPosition(static_cast<float>(numAt(a, 0)),
                                    static_cast<float>(numAt(a, 1)),
                                    static_cast<float>(numAt(a, 2)));
@@ -160,7 +141,7 @@ Value makeListenerValue() {
 
     b.def("setOrientation", 6, [](Value, std::span<const Value> a) -> Value {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) {
+        if (e && a.size() >= 6) {
             e->setListenerOrientation(static_cast<float>(numAt(a, 0)),
                                       static_cast<float>(numAt(a, 1)),
                                       static_cast<float>(numAt(a, 2)),
@@ -173,7 +154,7 @@ Value makeListenerValue() {
 
     b.def("setVelocity", 3, [](Value, std::span<const Value> a) -> Value {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) {
+        if (e && a.size() >= 3) {
             e->setListenerVelocity(static_cast<float>(numAt(a, 0)),
                                    static_cast<float>(numAt(a, 1)),
                                    static_cast<float>(numAt(a, 2)));
@@ -183,7 +164,7 @@ Value makeListenerValue() {
 
     b.def("setListenerPosition", 3, [](Value, std::span<const Value> a) -> Value {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) {
+        if (e && a.size() >= 3) {
             e->setListenerPosition(static_cast<float>(numAt(a, 0)),
                                    static_cast<float>(numAt(a, 1)),
                                    static_cast<float>(numAt(a, 2)));
@@ -193,7 +174,7 @@ Value makeListenerValue() {
 
     b.def("setListenerOrientation", 6, [](Value, std::span<const Value> a) -> Value {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) {
+        if (e && a.size() >= 6) {
             e->setListenerOrientation(static_cast<float>(numAt(a, 0)),
                                       static_cast<float>(numAt(a, 1)),
                                       static_cast<float>(numAt(a, 2)),
@@ -215,498 +196,6 @@ Value makeListenerValue() {
     b.set("upZ", makeAudioParamValue(AudioParamTarget::Generic, -1, 0.0f, -1.0f, 1.0f, 0.0f));
 
     return b.get();
-}
-
-// ---------------------------------------------------------------------------
-// decodeAudioData
-// ---------------------------------------------------------------------------
-
-Value audioCtxDecodeAudioData(Value, std::span<const Value> a) {
-    Value inputV = argAt(a, 0);
-    Value successCb = argAt(a, 1);
-    Value errorCb = argAt(a, 2);
-
-    ev::Persistent promise(ev::createPromise());
-    ev::Persistent successP(ev::isFunction(successCb) ? successCb : ev::undefined());
-    ev::Persistent errorP(ev::isFunction(errorCb) ? errorCb : ev::undefined());
-
-    const uint8_t* rawData = nullptr;
-    size_t rawLen = 0;
-    size_t elemSize = 1;
-
-    if (!bufferBytes(inputV, &rawData, &rawLen, &elemSize) || rawLen == 0) {
-        Value err = hostMakeDomError("DataCloneError", "decodeAudioData: invalid or empty buffer");
-        ev::Persistent errP(err);
-        ev::rejectPromise(promise.get(), errP.get());
-        if (ev::isFunction(errorP.get())) {
-            Value evErr = errP.get();
-            ev::call(errorP.get(), ev::undefined(), std::span<const Value>(&evErr, 1));
-        }
-        return promise.get();
-    }
-
-    broaudio::AudioFileData data = broaudio::loadAudioFileFromMemory(rawData, rawLen);
-    if (!data.valid()) {
-        std::string msg = data.error.empty() ? "decodeAudioData: failed to decode audio" : data.error;
-        Value err = hostMakeDomError("EncodingError", msg);
-        ev::Persistent errP(err);
-        ev::rejectPromise(promise.get(), errP.get());
-        if (ev::isFunction(errorP.get())) {
-            Value evErr = errP.get();
-            ev::call(errorP.get(), ev::undefined(), std::span<const Value>(&evErr, 1));
-        }
-        return promise.get();
-    }
-
-    Value bufferVal = makeAudioBufferValue(data.channels, data.numFrames, data.sampleRate);
-    ev::Persistent bufferP(bufferVal);
-    HostAudioBuffer* hostBuf = hostAudioBufferOf(bufferP.get());
-    if (hostBuf) {
-        int chs = data.channels;
-        int frames = data.numFrames;
-        for (int c = 0; c < chs; ++c) {
-            std::vector<float>& chData = hostBuf->channels[c];
-            chData.resize(frames);
-            for (int f = 0; f < frames; ++f) {
-                chData[f] = data.samples[f * chs + c];
-            }
-            Value arr = ev::getProperty(bufferP.get(), "_ch" + std::to_string(c));
-            if (ev::isTypedArray(arr)) {
-                ev::fillTypedArray(arr, std::span<const uint8_t>(
-                    reinterpret_cast<const uint8_t*>(chData.data()),
-                    frames * sizeof(float)));
-            }
-        }
-    }
-
-    ev::resolvePromise(promise.get(), bufferP.get());
-    if (ev::isFunction(successP.get())) {
-        Value bufV = bufferP.get();
-        ev::call(successP.get(), ev::undefined(), std::span<const Value>(&bufV, 1));
-    }
-
-    return promise.get();
-}
-
-// ---------------------------------------------------------------------------
-// AudioContext Prototype Decoration
-// ---------------------------------------------------------------------------
-
-void decorateAudioContextProto(ObjectBuilder& b) {
-    b.accessor("currentTime", [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->currentTime() : 0.0);
-    }, nullptr);
-    b.accessor("sampleRate", [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? static_cast<double>(e->sampleRate()) : 44100.0);
-    }, nullptr);
-    b.accessor("state", [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e && e->masterPaused()) return ev::fromUtf8("suspended");
-        return ev::fromUtf8("running");
-    }, nullptr);
-    b.accessor("outputLatency", [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->outputLatencySeconds() : 0.0);
-    }, nullptr);
-    b.accessor("baseLatency", [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        double sr = (e && e->sampleRate() > 0) ? static_cast<double>(e->sampleRate()) : 44100.0;
-        return ev::fromDouble(512.0 / sr);
-    }, nullptr);
-    b.accessor("masterGain",
-               [](Value, std::span<const Value>) {
-                   auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-                   return ev::fromDouble(e ? e->masterGain() : 1.0);
-               },
-               [](Value, std::span<const Value> a) {
-                   auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-                   if (e) e->setMasterGain(static_cast<float>(numAt(a, 0)));
-                   return ev::undefined();
-               });
-
-    // Standard node factories
-    b.def("createGain", 0, [](Value, std::span<const Value>) { return makeGainNodeValue(); });
-    b.def("createOscillator", 0, [](Value, std::span<const Value>) { return makeOscillatorNodeValue(); });
-    b.def("createPeriodicWave", 3, [](Value, std::span<const Value> a) {
-        std::vector<float> rStorage, iStorage;
-        const float* rData = nullptr;
-        const float* iData = nullptr;
-        size_t rCount = 0, iCount = 0;
-        if (!a.empty()) floatData(a[0], rStorage, &rData, &rCount);
-        if (a.size() >= 2) floatData(a[1], iStorage, &iData, &iCount);
-        bool disableNorm = false;
-        if (a.size() >= 3 && ev::isObject(a[2])) {
-            Value opt = a[2];
-            Value dn = ev::getProperty(opt, "disableNormalization");
-            if (!ev::isUndefined(dn)) disableNorm = ev::toBool(dn);
-        }
-        int count = static_cast<int>(std::max(rCount, iCount));
-        return makePeriodicWaveValue(rData, iData, count, disableNorm);
-    });
-    b.def("createBiquadFilter", 0, [](Value, std::span<const Value>) { return makeBiquadFilterNodeValue(); });
-    b.def("createAnalyser", 0, [](Value, std::span<const Value>) { return makeAnalyserNodeValue(); });
-    b.def("createBufferSource", 0, [](Value, std::span<const Value>) { return makeAudioBufferSourceNodeValue(); });
-    b.def("createBuffer", 3, [](Value, std::span<const Value> a) {
-        int channels = i32At(a, 0);
-        int length = i32At(a, 1);
-        int sampleRate = i32At(a, 2);
-        return makeAudioBufferValue(channels, length, sampleRate);
-    });
-    b.def("createPanner", 0, [](Value, std::span<const Value>) { return makePannerNodeValue(); });
-    b.def("createStereoPanner", 0, [](Value, std::span<const Value>) { return makeStereoPannerNodeValue(); });
-    b.def("createDelay", 1, [](Value, std::span<const Value> a) {
-        double maxDelay = a.empty() ? 1.0 : numAt(a, 0);
-        return makeDelayNodeValue(maxDelay);
-    });
-    b.def("createDynamicsCompressor", 0, [](Value, std::span<const Value>) { return makeDynamicsCompressorNodeValue(); });
-    b.def("createWaveShaper", 0, [](Value, std::span<const Value>) { return makeWaveShaperNodeValue(); });
-    b.def("createConvolver", 0, [](Value, std::span<const Value>) { return makeConvolverNodeValue(); });
-    b.def("createChannelSplitter", 1, [](Value, std::span<const Value> a) {
-        int outputs = a.empty() ? 6 : i32At(a, 0);
-        return makeChannelSplitterNodeValue(outputs);
-    });
-    b.def("createChannelMerger", 1, [](Value, std::span<const Value> a) {
-        int inputs = a.empty() ? 6 : i32At(a, 0);
-        return makeChannelMergerNodeValue(inputs);
-    });
-
-    b.def("decodeAudioData", 3, audioCtxDecodeAudioData);
-
-    b.def("resume", 0, [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setMasterPaused(false);
-        ev::Persistent p(ev::createPromise());
-        ev::resolvePromise(p.get(), ev::undefined());
-        return p.get();
-    });
-    b.def("suspend", 0, [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setMasterPaused(true);
-        ev::Persistent p(ev::createPromise());
-        ev::resolvePromise(p.get(), ev::undefined());
-        return p.get();
-    });
-    b.def("close", 0, [](Value, std::span<const Value>) {
-        ev::Persistent p(ev::createPromise());
-        ev::resolvePromise(p.get(), ev::undefined());
-        return p.get();
-    });
-
-    // Bro Mix Bus & Effects methods
-    b.def("createBus", 0, [](Value, std::span<const Value>) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->createBus() : -1);
-    });
-    b.def("deleteBus", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->deleteBus(i32At(a, 0));
-        return ev::undefined();
-    });
-    b.def("setBusGain", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusGain(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusPan", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusPan(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusMuted", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusMuted(i32At(a, 0), boolAt(a, 1));
-        return ev::undefined();
-    });
-    b.def("setBusSolo", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusSolo(i32At(a, 0), boolAt(a, 1));
-        return ev::undefined();
-    });
-    b.def("getBusSolo", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromBool(e ? e->getBusSolo(i32At(a, 0)) : false);
-    });
-    b.def("setBusDelayEnabled", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusDelayEnabled(i32At(a, 0), boolAt(a, 1));
-        return ev::undefined();
-    });
-    b.def("setBusDelayTime", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusDelayTime(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusDelayFeedback", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusDelayFeedback(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusDelayMix", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusDelayMix(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusReverbEnabled", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusReverbEnabled(i32At(a, 0), boolAt(a, 1));
-        return ev::undefined();
-    });
-    b.def("setBusReverbRoomSize", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusReverbRoomSize(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusReverbDamping", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusReverbDamping(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusReverbMix", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusReverbMix(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusChorusEnabled", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusChorusEnabled(i32At(a, 0), boolAt(a, 1));
-        return ev::undefined();
-    });
-    b.def("setBusChorusRate", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusChorusRate(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusChorusDepth", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusChorusDepth(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusChorusMix", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusChorusMix(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusChorusFeedback", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusChorusFeedback(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusCompressorEnabled", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusCompressorEnabled(i32At(a, 0), boolAt(a, 1));
-        return ev::undefined();
-    });
-    b.def("setBusCompressorThreshold", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusCompressorThreshold(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusCompressorRatio", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusCompressorRatio(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusCompressorAttack", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusCompressorAttack(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setBusCompressorRelease", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusCompressorRelease(i32At(a, 0), static_cast<float>(numAt(a, 1)));
-        return ev::undefined();
-    });
-    b.def("setDelayEnabled", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setDelayEnabled(boolAt(a, 0));
-        return ev::undefined();
-    });
-    b.def("setDelayTime", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setDelayTime(static_cast<float>(numAt(a, 0)));
-        return ev::undefined();
-    });
-    b.def("setDelayFeedback", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setDelayFeedback(static_cast<float>(numAt(a, 0)));
-        return ev::undefined();
-    });
-    b.def("setDelayMix", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setDelayMix(static_cast<float>(numAt(a, 0)));
-        return ev::undefined();
-    });
-    b.def("setReverbEnabled", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setBusReverbEnabled(0, boolAt(a, 0));
-        return ev::undefined();
-    });
-    b.def("getBusPeakL", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->getBusPeakL(i32At(a, 0)) : 0.0);
-    });
-    b.def("getBusPeakR", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->getBusPeakR(i32At(a, 0)) : 0.0);
-    });
-    b.def("getBusRmsL", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->getBusRmsL(i32At(a, 0)) : 0.0);
-    });
-    b.def("getBusRmsR", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->getBusRmsR(i32At(a, 0)) : 0.0);
-    });
-    b.def("createClip", 3, [](Value, std::span<const Value> a) -> Value {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (!e || a.empty()) return ev::fromDouble(-1);
-
-        Value first = a[0];
-        if (auto* hostBuf = hostAudioBufferOf(first)) {
-            int channels = hostBuf->numberOfChannels;
-            int frames = hostBuf->length;
-            if (frames <= 0 || channels <= 0) return ev::fromDouble(-1);
-
-            std::vector<std::vector<float>> chData(channels);
-            for (int c = 0; c < channels; ++c) {
-                chData[c].resize(frames, 0.0f);
-                std::string key = "_ch" + std::to_string(c);
-                Value arr = ev::getProperty(first, key);
-                if (ev::isTypedArray(arr)) {
-                    ev::TypedArrayInfo info = ev::typedArrayInfo(arr);
-                    if (info && info.data) {
-                        size_t count = std::min(static_cast<size_t>(frames), static_cast<size_t>(info.elementCount));
-                        std::memcpy(chData[c].data(), info.data, count * sizeof(float));
-                    }
-                } else if (c < static_cast<int>(hostBuf->channels.size())) {
-                    chData[c] = hostBuf->channels[c];
-                }
-            }
-
-            std::vector<float> interleaved(frames * channels);
-            for (int f = 0; f < frames; ++f) {
-                for (int c = 0; c < channels; ++c) {
-                    interleaved[f * channels + c] = chData[c][f];
-                }
-            }
-
-            int clipId = e->createClip(interleaved.data(), frames * channels, channels);
-            return ev::fromDouble(clipId);
-        }
-
-        const uint8_t* rawData = nullptr;
-        size_t rawLen = 0;
-        size_t elemSize = 1;
-        if (!bufferBytes(first, &rawData, &rawLen, &elemSize) || rawLen == 0) {
-            return ev::throwTypeError("createClip: expected AudioBuffer or Float32Array");
-        }
-
-        int numSamples = static_cast<int>(rawLen / sizeof(float));
-        int channels = a.size() >= 2 ? i32At(a, 1) : 1;
-        if (channels <= 0) channels = 1;
-
-        const float* samples = reinterpret_cast<const float*>(rawData);
-        std::vector<float> resampled;
-        if (a.size() >= 3 && !ev::isUndefined(a[2])) {
-            int srcRate = i32At(a, 2);
-            int engRate = e->sampleRate();
-            if (srcRate > 0 && srcRate != engRate && channels > 0) {
-                resampled = broaudio::resample(samples, numSamples / channels, channels, srcRate, engRate);
-                if (!resampled.empty()) {
-                    samples = resampled.data();
-                    numSamples = static_cast<int>(resampled.size());
-                }
-            }
-        }
-
-        int clipId = e->createClip(samples, numSamples, channels);
-        return ev::fromDouble(clipId);
-    });
-    b.def("deleteClip", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->deleteClip(i32At(a, 0));
-        return ev::undefined();
-    });
-    b.def("playClip", 4, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (!e || a.empty()) return ev::fromDouble(-1);
-        int clipId = i32At(a, 0);
-        float gain = a.size() >= 2 ? static_cast<float>(numAt(a, 1)) : 1.0f;
-        bool loop = false;
-        float pan = 0.0f;
-
-        if (a.size() >= 3) {
-            if (a[2].isBool()) {
-                loop = boolAt(a, 2);
-            } else {
-                pan = static_cast<float>(numAt(a, 2));
-                if (a.size() >= 4) loop = boolAt(a, 3);
-            }
-        }
-
-        int playbackId = e->playClip(clipId, gain, loop);
-        if (pan != 0.0f && playbackId >= 0) {
-            e->setPlaybackPan(playbackId, pan);
-        }
-        return ev::fromDouble(playbackId);
-    });
-    b.def("stopPlayback", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->stopPlayback(i32At(a, 0));
-        return ev::undefined();
-    });
-    b.def("createClipFromFile", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (!e || a.empty()) return ev::fromDouble(-1);
-        std::string path = ev::toUtf8(a[0]);
-        int clipId = e->createClipFromFile(path.c_str());
-        return ev::fromDouble(clipId);
-    });
-    b.def("getClipSampleCount", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->getClipSampleCount(i32At(a, 0)) : 0);
-    });
-    b.def("getClipChannels", 1, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        return ev::fromDouble(e ? e->getClipChannels(i32At(a, 0)) : 0);
-    });
-    b.def("getClipWaveform", 2, [](Value, std::span<const Value> a) -> Value {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (!e || a.size() < 2) return ev::null();
-        int clipId = i32At(a, 0);
-        int numBins = i32At(a, 1);
-        if (numBins <= 0 || numBins > 1024) return ev::null();
-
-        auto wf = e->getClipWaveform(clipId, numBins);
-        if (wf.empty()) return ev::null();
-
-        Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(wf.size()));
-        ev::fillTypedArray(arr, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(wf.data()), wf.size() * sizeof(float)));
-        return arr;
-    });
-    b.def("setListenerPosition", 3, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setListenerPosition(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
-        return ev::undefined();
-    });
-    b.def("setListenerOrientation", 6, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setListenerOrientation(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
-                                         static_cast<float>(numAt(a, 3)), static_cast<float>(numAt(a, 4)), static_cast<float>(numAt(a, 5)));
-        return ev::undefined();
-    });
-    b.def("setVoiceBus", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setVoiceBus(i32At(a, 0), i32At(a, 1));
-        return ev::undefined();
-    });
-    b.def("setPlaybackBus", 2, [](Value, std::span<const Value> a) {
-        auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-        if (e) e->setPlaybackBus(i32At(a, 0), i32At(a, 1));
-        return ev::undefined();
-    });
 }
 
 Value makeAudioContextValue() {
@@ -865,6 +354,10 @@ void installAudioGlobals() {
             return makePeriodicWaveValue(rData, iData, count, disableNorm);
         },
         decoratePeriodicWaveProto);
+
+    // 16. Synth & Sequencer Globals
+    installAudioSynthGlobals();
+    installAudioSequencerGlobals();
 }
 
 }  // namespace bro::bronze_host

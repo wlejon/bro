@@ -9,6 +9,8 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
+#include <chrono>
+#include <thread>
 #include <string>
 #include <vector>
 #include <span>
@@ -83,6 +85,16 @@ void installHeadlessGlobals(engine::Engine& engine) {
             engine.advanceTime(ms);
             return ev::undefined();
         }, 1, "sleep"));
+
+    // 3b. wallSleep(double ms)
+    ev::registerGlobal("wallSleep", ev::makeFunction(
+        [](Value, std::span<const Value> a) -> Value {
+            double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
+            if (ms > 0.0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>(ms)));
+            }
+            return ev::undefined();
+        }, 1, "wallSleep"));
 
     // 4. screenshot(const std::string& path)
     ev::registerGlobal("screenshot", ev::makeFunction(

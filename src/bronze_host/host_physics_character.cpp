@@ -7,9 +7,10 @@ namespace bro::bronze_host {
 void decorateCharacterProto(ObjectBuilder& cb) {
     cb.def("setVelocity", 3, [](Value self_, std::span<const Value> args) {
         HostPhysicsCharacter* pc = unwrapCharacter(self_);
-        if (!pc) return ev::undefined();
-        auto* w = getPhysicsWorld();
-        if (w && pc->handle) {
+        if (!pc || !pc->handle) return ev::undefined();
+        HostPhysicsWorld* pw = pc->world ? pc->world : &g_defaultWorld;
+        auto* w = pw->getWorld();
+        if (w) {
             JPH::Vec3 v;
             if (args.size() >= 3) {
                 v = JPH::Vec3(static_cast<float>(numAt(args, 0)),
@@ -25,9 +26,10 @@ void decorateCharacterProto(ObjectBuilder& cb) {
 
     cb.def("getVelocity", 0, [](Value self_, std::span<const Value>) {
         HostPhysicsCharacter* pc = unwrapCharacter(self_);
-        if (!pc) return ev::undefined();
-        auto* w = getPhysicsWorld();
-        if (!w || !pc->handle) return ev::null();
+        if (!pc || !pc->handle) return ev::null();
+        HostPhysicsWorld* pw = pc->world ? pc->world : &g_defaultWorld;
+        auto* w = pw->getWorld();
+        if (!w) return ev::null();
         physics::CharacterState st;
         if (!w->getCharacterState(pc->handle, st)) return ev::null();
         return makeVec3Value(st.velocity.GetX(), st.velocity.GetY(), st.velocity.GetZ());
@@ -35,9 +37,10 @@ void decorateCharacterProto(ObjectBuilder& cb) {
 
     cb.def("setPosition", 3, [](Value self_, std::span<const Value> args) {
         HostPhysicsCharacter* pc = unwrapCharacter(self_);
-        if (!pc) return ev::undefined();
-        auto* w = getPhysicsWorld();
-        if (w && pc->handle) {
+        if (!pc || !pc->handle) return ev::undefined();
+        HostPhysicsWorld* pw = pc->world ? pc->world : &g_defaultWorld;
+        auto* w = pw->getWorld();
+        if (w) {
             JPH::RVec3 p;
             if (args.size() >= 3) {
                 p = JPH::RVec3(static_cast<float>(numAt(args, 0)),
@@ -53,9 +56,10 @@ void decorateCharacterProto(ObjectBuilder& cb) {
 
     cb.def("getPosition", 0, [](Value self_, std::span<const Value>) {
         HostPhysicsCharacter* pc = unwrapCharacter(self_);
-        if (!pc) return ev::undefined();
-        auto* w = getPhysicsWorld();
-        if (!w || !pc->handle) return ev::null();
+        if (!pc || !pc->handle) return ev::null();
+        HostPhysicsWorld* pw = pc->world ? pc->world : &g_defaultWorld;
+        auto* w = pw->getWorld();
+        if (!w) return ev::null();
         physics::CharacterState st;
         if (!w->getCharacterState(pc->handle, st)) return ev::null();
         return makeVec3Value(static_cast<float>(st.position.GetX()),
@@ -65,20 +69,22 @@ void decorateCharacterProto(ObjectBuilder& cb) {
 
     cb.def("getState", 0, [](Value self_, std::span<const Value>) {
         HostPhysicsCharacter* pc = unwrapCharacter(self_);
-        if (!pc) return ev::undefined();
-        auto* w = getPhysicsWorld();
-        if (!w || !pc->handle) return ev::null();
+        if (!pc || !pc->handle) return ev::null();
+        HostPhysicsWorld* pw = pc->world ? pc->world : &g_defaultWorld;
+        auto* w = pw->getWorld();
+        if (!w) return ev::null();
         physics::CharacterState st;
         if (!w->getCharacterState(pc->handle, st)) return ev::null();
-        int32_t groundTag = st.groundBody.IsInvalid() ? -1 : g_phys.tagForBodyId(st.groundBody);
+        int32_t groundTag = st.groundBody.IsInvalid() ? -1 : pw->tagForBodyId(st.groundBody);
         return makeCharacterStateValue(st, groundTag);
     });
 
     cb.def("setShape", 1, [](Value self_, std::span<const Value> args) {
         HostPhysicsCharacter* pc = unwrapCharacter(self_);
-        if (!pc) return ev::undefined();
-        auto* w = getPhysicsWorld();
-        if (!w || !pc->handle || args.empty() || !ev::isObject(args[0])) return ev::fromBool(false);
+        if (!pc || !pc->handle || args.empty() || !ev::isObject(args[0])) return ev::fromBool(false);
+        HostPhysicsWorld* pw = pc->world ? pc->world : &g_defaultWorld;
+        auto* w = pw->getWorld();
+        if (!w) return ev::fromBool(false);
         physics::BodyOptions shape;
         std::string err;
         if (!readBodyOptions(args[0], shape, err)) return ev::throwTypeError("setShape: " + err);
@@ -93,20 +99,23 @@ void decorateCharacterProto(ObjectBuilder& cb) {
 
     cb.def("destroy", 0, [](Value self_, std::span<const Value>) {
         HostPhysicsCharacter* pc = unwrapCharacter(self_);
-        if (!pc) return ev::undefined();
-        auto* w = getPhysicsWorld();
-        if (w && pc->handle) {
-            if (pc->innerTag >= 0) g_phys.unregisterBody(pc->innerTag);
+        if (!pc || !pc->handle) return ev::undefined();
+        HostPhysicsWorld* pw = pc->world ? pc->world : &g_defaultWorld;
+        auto* w = pw->getWorld();
+        if (w) {
+            if (pc->innerTag >= 0) pw->unregisterBody(pc->innerTag);
             w->destroyCharacter(pc->handle);
         }
+        if (pc->world) pc->world->liveCharacters.erase(pc);
         pc->handle = 0;
         pc->innerTag = -1;
         return ev::undefined();
     });
 }
 
-Value physicsCreateCharacter(Value, std::span<const Value> a) {
-    auto* world = getPhysicsWorld();
+Value physicsCreateCharacter(Value self, std::span<const Value> a) {
+    HostPhysicsWorld* pw = unwrapWorld(self);
+    auto* world = pw->getWorld();
     if (!world) return ev::throwError("PhysicsWorld not available");
     if (a.empty() || !ev::isObject(a[0])) return ev::throwTypeError("createCharacter(options) requires an object");
 
@@ -141,11 +150,26 @@ Value physicsCreateCharacter(Value, std::span<const Value> a) {
     pc->handle = handle;
     if (copts.innerBody) {
         JPH::BodyID innerId = world->characterInnerBody(handle);
-        pc->innerTag = g_phys.registerBody(innerId);
+        pc->innerTag = pw->registerBody(innerId);
+    }
+    if (pw->ownsWorld) {
+        pc->world = pw;
+        pw->liveCharacters.insert(pc);
     }
 
     ObjectBuilder cb(g_characterClass.make(pc, [](void* p) {
-        delete static_cast<HostPhysicsCharacter*>(p);
+        auto* c = static_cast<HostPhysicsCharacter*>(p);
+        if (c && c->handle) {
+            HostPhysicsWorld* w = c->world ? c->world : &g_defaultWorld;
+            auto* pwld = w->getWorld();
+            if (pwld) {
+                if (c->innerTag >= 0) w->unregisterBody(c->innerTag);
+                pwld->destroyCharacter(c->handle);
+            }
+            if (c->world) c->world->liveCharacters.erase(c);
+            c->handle = 0;
+        }
+        delete c;
     }));
 
     return cb.get();

@@ -605,6 +605,7 @@ Value makeBroValue() {
     b.set("sense", makeUnavailableNamespace("sense", "BRO_WITH_SOUNDML"));
     b.set("gesture", makeUnavailableNamespace("gesture", "BRO_WITH_SOUNDML"));
     b.set("listen", makeUnavailableNamespace("listen", "BRO_WITH_SOUNDML"));
+    b.set("mic", makeUnavailableNamespace("mic", "BRO_WITH_SOUNDML"));
     b.set("vision", makeUnavailableNamespace("vision", "BRO_WITH_VISION"));
     b.set("diffusion", makeUnavailableNamespace("diffusion", "BRO_WITH_DIFFUSION"));
     b.set("tensor", makeUnavailableNamespace("tensor", "BRO_WITH_TENSOR"));

@@ -69,27 +69,42 @@ Value makeBtoa() {
             Value v = argAt(a, 0);
             if (ev::isObject(v) || ev::isUndefined(v))
                 return ev::throwTypeError("btoa: expected a string");
-            // toUtf8 gives us UTF-8 bytes; a source string that stayed inside
-            // Latin-1 is exactly the input btoa accepts, and anything above it
-            // would have been an error anyway, so the multi-byte encoding of a
-            // rejected character never reaches the output.
             std::string s = ev::toUtf8(v);
+            std::vector<uint8_t> latin1;
+            latin1.reserve(s.size());
+            const uint8_t* u = reinterpret_cast<const uint8_t*>(s.data());
+            size_t len = s.size();
+            for (size_t k = 0; k < len;) {
+                uint8_t b0 = u[k];
+                if (b0 < 0x80) {
+                    latin1.push_back(b0);
+                    k++;
+                } else if ((b0 & 0xE0) == 0xC0 && k + 1 < len) {
+                    uint32_t cp = ((b0 & 0x1F) << 6) | (u[k + 1] & 0x3F);
+                    if (cp > 255) return ev::throwTypeError("btoa: character out of range");
+                    latin1.push_back(static_cast<uint8_t>(cp));
+                    k += 2;
+                } else {
+                    return ev::throwTypeError("btoa: character out of range");
+                }
+            }
+
             std::string out;
-            out.reserve((s.size() + 2) / 3 * 4);
+            out.reserve((latin1.size() + 2) / 3 * 4);
             size_t i = 0;
-            for (; i + 2 < s.size(); i += 3) {
-                uint32_t n = (static_cast<uint8_t>(s[i]) << 16) |
-                             (static_cast<uint8_t>(s[i + 1]) << 8) |
-                             static_cast<uint8_t>(s[i + 2]);
+            for (; i + 2 < latin1.size(); i += 3) {
+                uint32_t n = (latin1[i] << 16) |
+                             (latin1[i + 1] << 8) |
+                             latin1[i + 2];
                 out += kB64[(n >> 18) & 63];
                 out += kB64[(n >> 12) & 63];
                 out += kB64[(n >> 6) & 63];
                 out += kB64[n & 63];
             }
-            if (i < s.size()) {
-                uint32_t n = static_cast<uint8_t>(s[i]) << 16;
-                bool two = (i + 1 < s.size());
-                if (two) n |= static_cast<uint8_t>(s[i + 1]) << 8;
+            if (i < latin1.size()) {
+                uint32_t n = latin1[i] << 16;
+                bool two = (i + 1 < latin1.size());
+                if (two) n |= latin1[i + 1] << 8;
                 out += kB64[(n >> 18) & 63];
                 out += kB64[(n >> 12) & 63];
                 out += two ? kB64[(n >> 6) & 63] : '=';
@@ -107,11 +122,11 @@ Value makeAtob() {
             if (ev::isObject(v) || ev::isUndefined(v))
                 return ev::throwTypeError("atob: expected a string");
             std::string s = ev::toUtf8(v);
-            std::string out;
+            std::vector<uint8_t> decoded;
             int bits = 0;
             uint32_t acc = 0;
             for (char c : s) {
-                if (c == '=' ) break;
+                if (c == '=') break;
                 // Whitespace is skipped rather than rejected: the web's atob
                 // does that, and base64 pasted out of a file is full of it.
                 if (c == '\n' || c == '\r' || c == '\t' || c == ' ' || c == '\f')
@@ -123,10 +138,23 @@ Value makeAtob() {
                 bits += 6;
                 if (bits >= 8) {
                     bits -= 8;
-                    out += static_cast<char>((acc >> bits) & 0xFF);
+                    decoded.push_back(static_cast<uint8_t>((acc >> bits) & 0xFF));
                 }
             }
-            return ev::fromUtf8(out);
+            // In WHATWG DOM spec, atob() returns a binary string where each
+            // character's code point is 0..255. In UTF-8, code points 128..255
+            // are 2-byte sequences: 0xC2/0xC3 followed by 0x80..0xBF.
+            std::string utf8_out;
+            utf8_out.reserve(decoded.size() * 2);
+            for (uint8_t b : decoded) {
+                if (b < 0x80) {
+                    utf8_out += static_cast<char>(b);
+                } else {
+                    utf8_out += static_cast<char>(0xC0 | (b >> 6));
+                    utf8_out += static_cast<char>(0x80 | (b & 0x3F));
+                }
+            }
+            return ev::fromUtf8(utf8_out);
         },
         1);
 }
