@@ -4,7 +4,6 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
-#include "bronze_host/host_interp.h"
 
 #include "util/log.h"
 
@@ -27,7 +26,8 @@ constexpr const char* kVendorGlobals[] = {
 void installVendorGlobals() {
     std::string missing;
     for (const char* name : kVendorGlobals) {
-        Value v = bridgeJsGlobal(name);
+        ev::GlobalValue g = ev::globalValue(name);
+        Value v = g.found ? g.value : ev::undefined();
         ev::registerGlobal(name, v);
         if (ev::isUndefined(v)) {
             if (!missing.empty()) missing += ", ";

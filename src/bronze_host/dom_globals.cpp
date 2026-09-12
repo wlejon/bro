@@ -26,7 +26,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
-#include "bronze_host/host_interp.h"
+#include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
 
 #include "engine/engine.h"
@@ -145,10 +145,6 @@ void fireAnimationFrames() {
 //     run the PREVIOUS frame's continuations against this frame's state, and a
 //     rejection thrown in the last rAF before shutdown would never be reported
 //     at all, because quiescence would never be reached again.
-//
-//  7. The bridge sweep, after the checkpoint: the drain runs bronze's deferred
-//     finalizers, which is when a crossing's own-side wrapper can die, and the
-//     sweep is what turns those deaths into freed rows (host_interp.h).
 void hostFrame(double dtMs) {
     if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
     g_host->clockMs += dtMs;                             // 2
@@ -159,7 +155,6 @@ void hostFrame(double dtMs) {
     fireAnimationFrames();                               // 5
     deliverHostObservers();                              // 5b
     ev::drainMicrotasks();                               // 6
-    sweepInterpBridge();                                 // 7
 }
 
 // `window.getComputedStyle(el)` — and three.js's editor uses the bare one
@@ -483,12 +478,9 @@ void installWebHostGlobals(engine::Engine& engine) {
     g_host = new HostState();
     g_host->engine = &engine;
 
-    // The interpreter bridge, before anything the compiled program can run:
-    // `new Function` is a BUILTIN read, not a host global, so it is not on the
-    // manifest and nothing below registers it — the hook is installed into
-    // bronze itself (host_interp.h). Early, because a module's top level may
-    // build a function from a string on its first line.
-    installInterpBridge(engine);
+    // Install dynamic evaluation and function hooks (eval, new Function)
+    // into bronze before anything the compiled program can run.
+    installDynamicHooks(engine);
 
     // The frame hook, registered exactly once (Engine::onFrame callbacks are
     // never unregistered). It fires at the point the engine's own rAF fires,
@@ -530,8 +522,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         };
         traps.has = [](const std::string& key) { return ev::globalValue(key).found; };
         traps.ownKeys = []() {
-            // Reflect.ownKeys(globalThis), string keys only — the same answer
-            // the interp bridge's wrapper enumeration gives (host_interp.cpp).
+            // Reflect.ownKeys(globalThis), string keys only.
             std::vector<std::string> keys;
             ev::GlobalValue reflect = ev::globalValue("Reflect");
             if (!reflect.found) return keys;

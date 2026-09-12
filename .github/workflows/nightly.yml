@@ -119,26 +119,30 @@ jobs:
           # full) there.
           sub-packages: ${{ runner.os == 'Linux' && '["nvcc", "cudart-dev"]' || '[]' }}
 
-      # Checkout and build brass, which bronze uses as its code generator backend.
-      - name: Checkout brass
-        uses: actions/checkout@v7
+      # Put cl.exe / the MSVC toolset on PATH so the Windows build can use the
+      # Ninja generator (below) instead of Visual Studio. The VS generator
+      # ignores CMAKE_*_COMPILER_LAUNCHER, so with it sccache saw zero compiles;
+      # Ninja honors the launcher. Also gives nvcc its cl host compiler.
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          repository: wlejon/brass
-          path: brass
+          arch: x64
 
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      # Build brass (submodule), which bronze uses as its code generator backend.
       - name: Build brass
         shell: bash
         run: |
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
-            GEN_ARGS="-G Ninja"
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
           fi
-          cmake -B brass/build brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
-          cmake --build brass/build --config Release
-          echo "BRASS_ROOT=$PWD/brass" >> "$GITHUB_ENV"
-
-      - name: sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+          cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
+          cmake --build third_party/brass/build --config Release --target brass --parallel ${{ matrix.jobs }}
+          echo "BRASS_ROOT=$PWD/third_party/brass" >> "$GITHUB_ENV"
 
       # Persist vcpkg's built-package archives across runs (same scheme as
       # ci.yml: per-run key + restore-keys pick the newest, so rebuilds after
@@ -171,16 +175,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/vcpkg-bincache"
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
           echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
-
-      # Put cl.exe / the MSVC toolset on PATH so the Windows build can use the
-      # Ninja generator (below) instead of Visual Studio. The VS generator
-      # ignores CMAKE_*_COMPILER_LAUNCHER, so with it sccache saw zero compiles;
-      # Ninja honors the launcher. Also gives nvcc its cl host compiler.
-      - name: MSVC dev environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
 
       - name: Configure
         shell: bash
@@ -226,8 +220,7 @@ jobs:
           cmake -B build \
             -DBRO_PROFILE=full \
             -DBROGAMEAGENT_WITH_NAVMESH=ON \
-            -DBRO_WITH_BRONZE=ON \
-            -DBRASS_ROOT=$PWD/brass \
+            -DBRASS_ROOT=$BRASS_ROOT \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \

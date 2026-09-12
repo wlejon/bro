@@ -1,18 +1,9 @@
 add_executable(bro-headless main.cpp)
-target_link_libraries(bro-headless PRIVATE bro_engine)
+target_link_libraries(bro-headless PRIVATE bro_engine bro_bronze_host)
 if(BRO_WITH_GAMEAI)
     target_link_libraries(bro-headless PRIVATE brogameagent)
 endif()
-# The compiled half of an app directory (bronze_host/app_module.h) — see the
-# matching block for bro.exe in src/CMakeLists.txt. A driver script must be
-# able to step a compiled app, so the loader belongs here too.
-if(BRO_WITH_BRONZE)
-    target_link_libraries(bro-headless PRIVATE bro_bronze_host)
-    target_compile_definitions(bro-headless PRIVATE BRO_WITH_BRONZE=1)
-    bro_bronze_stage_runtime(bro-headless)
-else()
-    target_compile_definitions(bro-headless PRIVATE BRO_WITH_BRONZE=0)
-endif()
+bro_bronze_stage_runtime(bro-headless)
 target_include_directories(bro-headless PRIVATE ${bro_SOURCE_DIR}/src)
 
 # Set stack size to 8 MB.

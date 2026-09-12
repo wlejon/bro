@@ -1,13 +1,13 @@
 name: CodeQL
 
 # Static analysis for bro's OWN C++ (engine core, DOM/layout/render/canvas/WebGL,
-# and the large src/js binding layer). The vendored siblings under third_party/
+# and the bronze host layer). The vendored siblings under third_party/
 # each run their own CodeQL and own their Security tab, so they're excluded here.
 #
 # Build-mode: none (build-free extraction). This is deliberate: for a *built*
 # C/C++ analysis, CodeQL extracts whatever the compiler touches and path filters
 # have no effect — and bro can't be built without compiling the submodules it
-# links (qjsbind, brokit, htmlayout, gumbo, …), so a traced build would always
+# links (bronze, brass, brokit, htmlayout, gumbo, …), so a traced build would always
 # drag third_party/ into the results. Build-free extraction is the one mode where
 # paths-ignore is honored for C/C++; it also needs no vcpkg/CUDA/X11 toolchain.
 # Submodules aren't checked out, so there is nothing under third_party/ to scan.

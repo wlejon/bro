@@ -49,3 +49,6 @@
 [submodule "third_party/brosurface"]
 	path = third_party/brosurface
 	url = https://github.com/wlejon/brosurface.git
+[submodule "third_party/brass"]
+	path = third_party/brass
+	url = https://github.com/wlejon/brass.git

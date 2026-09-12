@@ -1,12 +1,9 @@
 add_executable(bro-server main.cpp)
-target_link_libraries(bro-server PRIVATE bro_engine)
+target_link_libraries(bro-server PRIVATE bro_engine bro_bronze_host)
 if(BRO_WITH_GAMEAI)
     target_link_libraries(bro-server PRIVATE brogameagent)
 endif()
-if(BRO_WITH_BRONZE)
-    target_link_libraries(bro-server PRIVATE bro_bronze_host)
-    bro_bronze_stage_runtime(bro-server)
-endif()
+bro_bronze_stage_runtime(bro-server)
 target_include_directories(bro-server PRIVATE ${bro_SOURCE_DIR}/src)
 
 # Set stack size to 8 MB.

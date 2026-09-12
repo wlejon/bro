@@ -175,12 +175,10 @@ option(BRO_BUILD_EXECUTABLES "Build the bro/bro-headless/bro-server binaries" ${
 # suite in tests/ is unaffected — it runs on bro-headless.
 option(BRO_BUILD_TESTS "Build bro's C++ unit tests and smoke tools" ${_d_exes})
 
-# Host layer for bronze-compiled (AOT) JavaScript apps: src/bronze_host wraps
-# the engine's WebGL2 context and a minimal DOM as bronze host globals, so a
-# compiled three.js app can render through bro. Resolves a bronze checkout
-# (`../bronze` standalone repo, else `third_party/bronze` submodule) and
-# builds its runtime + embed libraries into this tree.
-option(BRO_WITH_BRONZE "bronze AOT host layer (resolves ../bronze or third_party/bronze)" ON)
+# Host layer for bronze JavaScript runtime: src/bronze_host wraps
+# the engine's WebGL2 context and a minimal DOM as bronze host globals.
+# Bronze is mandatory: it is the JS execution engine for bro.
+set(BRO_WITH_BRONZE ON CACHE BOOL "bronze runtime (mandatory)" FORCE)
 
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})

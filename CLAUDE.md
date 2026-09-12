@@ -40,7 +40,7 @@ util → platform (SDL3, event loop) → render (Renderer iface) → svg → lay
 ```
 `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
 
-`src/bronze_host/` (`BRO_WITH_BRONZE=OFF` by default) exposes the engine to [bronze](../bronze)-compiled AOT JavaScript. An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and the configure says which. CI turns it on everywhere and builds the compiler on Linux, where the 22 `tests/bronze_host` checks run; the nightly zip ships the compiler under `bronze/` beside binaries that load what it emits. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
+`src/bronze_host/` exposes the engine to the [bronze](../bronze) JavaScript runtime and AOT compiler (backed by [brass](../brass)). An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load, or interpreted scripts evaluated in-process via bronze CLI. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and brass resolves as `../brass` / `third_party/brass`. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
 
 Key patterns:
 - **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
@@ -70,7 +70,8 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 | broimage | `broimage::broimage` | image decode/encode + CPU kernels + ML preprocessing (no WebGL; `bro.image.gpu` is bro-side JS) |
 | brosoundml | `brosoundml` | audio-ML inference: TTS/STT/diarization/codec/wake |
 | brovisionml | `brovisionml::brovisionml` | vision-ML inference: SAM, depth, normals, matting, ControlNet annotators |
-| bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | AOT JavaScript compiler + shared runtime for `BRO_WITH_BRONZE` |
+| brass | `brass` | JIT / AOT native code generator backend for bronze |
+| bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
 | Skia | `skia` (imported) | pre-built 2D rasterization |

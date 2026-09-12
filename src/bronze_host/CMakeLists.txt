@@ -1,6 +1,4 @@
-# bronze host layer — only ever configured under BRO_WITH_BRONZE=ON
-# (src/CMakeLists.txt gates the add_subdirectory), so nothing here can touch
-# the default build.
+# bronze host layer — always configured (bronze is the JS runtime for bro).
 
 # --- Resolve the bronze compiler: sibling working tree, else submodule ---
 # Same resolution as the bro-* siblings (third_party/CMakeLists.txt's
@@ -34,6 +32,22 @@ if(_bronze_chosen STREQUAL _bronze_submodule)
     message(STATUS "bronze: submodule tree (${BRONZE_DIR})")
 else()
     message(STATUS "bronze: standalone tree (${BRONZE_DIR})")
+endif()
+
+# Resolve brass: sibling working tree, else submodule
+bro_default_sibling_dir(brass _brass_default)
+if(NOT EXISTS "${_brass_default}/include/brass/brass.hpp")
+    set(_brass_default "${bro_SOURCE_DIR}/third_party/brass")
+endif()
+if(NOT DEFINED BRASS_ROOT OR BRASS_ROOT STREQUAL "")
+    set(BRASS_ROOT "${_brass_default}" CACHE PATH "Path to Brass root directory" FORCE)
+endif()
+get_filename_component(_brass_submodule "${bro_SOURCE_DIR}/third_party/brass" ABSOLUTE)
+get_filename_component(_brass_chosen "${BRASS_ROOT}" ABSOLUTE)
+if(_brass_chosen STREQUAL _brass_submodule)
+    message(STATUS "brass: submodule tree (${BRASS_ROOT})")
+else()
+    message(STATUS "brass: standalone tree (${BRASS_ROOT})")
 endif()
 
 # bronze builds its runtime as a shared library only when asked, and its own
@@ -100,7 +114,6 @@ add_library(bro_bronze_host STATIC
     host_timers.cpp
     host_image.cpp
     host_codecs.cpp
-    host_interp.cpp
     host_platform.cpp
     host_xhr.cpp
     host_fetch.cpp

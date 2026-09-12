@@ -97,24 +97,29 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja
 
-      # Checkout and build brass, which bronze uses as its code generator backend.
-      - name: Checkout brass
-        if: matrix.bronze_compiler
-        uses: actions/checkout@v7
+      # Put cl.exe on PATH so Windows can use the Ninja generator below — the
+      # default Visual Studio generator ignores CMAKE_*_COMPILER_LAUNCHER, so
+      # sccache would see zero compiles (same setup as nightly.yml).
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          repository: wlejon/brass
-          path: brass
-
-      - name: Build brass
-        if: matrix.bronze_compiler
-        shell: bash
-        run: |
-          cmake -B brass/build brass -DCMAKE_BUILD_TYPE=Release
-          cmake --build brass/build --config Release
-          echo "BRASS_ROOT=$PWD/brass" >> "$GITHUB_ENV"
+          arch: x64
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
+
+      # Build brass (submodule), which bronze uses as its code generator backend.
+      - name: Build brass
+        shell: bash
+        run: |
+          GEN_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          fi
+          cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
+          cmake --build third_party/brass/build --config Release --target brass --parallel 4
+          echo "BRASS_ROOT=$PWD/third_party/brass" >> "$GITHUB_ENV"
 
       # Persist vcpkg's built-package archives across runs. The pinned manifest
       # keeps package ABIs stable, so after one warm run the configure-time dep
@@ -151,15 +156,6 @@ jobs:
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
           echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
 
-      # Put cl.exe on PATH so Windows can use the Ninja generator below — the
-      # default Visual Studio generator ignores CMAKE_*_COMPILER_LAUNCHER, so
-      # sccache would see zero compiles (same setup as nightly.yml).
-      - name: MSVC dev environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
       - name: Configure
         shell: bash
         run: |
@@ -177,7 +173,6 @@ jobs:
           cmake -B build \
             -DBRO_PROFILE=app \
             -DBROGAMEAGENT_WITH_NAVMESH=ON \
-            -DBRO_WITH_BRONZE=ON \
             $BRASS_ARGS \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
@@ -276,14 +271,31 @@ jobs:
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
-      - name: Configure
+      # Build brass (submodule), required by bronze runtime.
+      - name: Build brass
         shell: bash
         run: |
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
           fi
-          cmake -B build             -DBRO_PROFILE=minimal             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_C_COMPILER_LAUNCHER=sccache             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache             $GEN_ARGS
+          cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
+          cmake --build third_party/brass/build --config Release --target brass --parallel 4
+          echo "BRASS_ROOT=$PWD/third_party/brass" >> "$GITHUB_ENV"
+
+      - name: Configure
+        shell: bash
+        run: |
+          GEN_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DVCPKG_MANIFEST_MODE=OFF"
+          fi
+          cmake -B build \
+            -DBRO_PROFILE=minimal \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            $GEN_ARGS
 
       - name: Build
         run: cmake --build build --config Release --parallel 4

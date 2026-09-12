@@ -1,10 +1,10 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on fifteen sibling repos with submodule fallbacks under `third_party/`: thirteen libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the AOT JavaScript compiler, resolved under `BRO_WITH_BRONZE=ON`), and **[brosurface](https://github.com/wlejon/brosurface)** (the WebIDL code generation toolchain).
+bro depends on sixteen sibling repos with submodule fallbacks under `third_party/`: thirteen libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the JavaScript runtime & AOT compiler), **[brass](https://github.com/wlejon/brass)** (the backend JIT/AOT compiler required by bronze), and **[brosurface](https://github.com/wlejon/brosurface)** (the WebIDL code generation toolchain).
 
-Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. Because bronze is off by default, the configure that resolves it says which of the two trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
+Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. The configure that resolves bronze and brass reports which trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
 
-A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A seventeenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library / Tool | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -21,7 +21,8 @@ A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)
 | **broimage** | `../broimage` | `third_party/broimage` |
 | **brosoundml** | `../brosoundml` | `third_party/brosoundml` |
 | **brovisionml** | `../brovisionml` | `third_party/brovisionml` |
-| **bronze** (compiler, opt-in) | `../bronze` | `third_party/bronze` |
+| **brass** (compiler backend, required) | `../brass` | `third_party/brass` |
+| **bronze** (JS runtime, mandatory) | `../bronze` | `third_party/bronze` |
 | **brosurface** (generator tool) | `../brosurface` | `third_party/brosurface` |
 
 ## Directory Layout
@@ -43,7 +44,8 @@ D:/projects/
 │       ├── broimage/             # submodule (CI / fallback)
 │       ├── brosoundml/           # submodule (CI / fallback)
 │       ├── brovisionml/          # submodule (CI / fallback)
-│       ├── bronze/               # submodule (CI / nightly; BRO_WITH_BRONZE only)
+│       ├── brass/                # submodule (CI / fallback; backend for bronze)
+│       ├── bronze/               # submodule (CI / fallback; JS runtime)
 │       └── brosurface/           # submodule (CI / fallback)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
@@ -99,7 +101,7 @@ Most siblings are added **conditionally**, behind the modular-build flags (see [
 | brosoundml | `BRO_WITH_SOUNDML` |
 | brodiffusion | `BRO_WITH_DIFFUSION` |
 | brovisionml | `BRO_WITH_VISION` |
-| bronze | `BRO_WITH_BRONZE` |
+| bronze | Mandatory (always ON; `BRO_WITH_BRONZE=1`) |
 
 With a gate off, the sibling is never added and the features it backs are compiled out. The flags auto-resolve their prerequisites (`_bro_require` in the top-level `CMakeLists.txt`), so e.g. `BRO_WITH_DIFFUSION=ON` forces `BRO_WITH_LM` and `BRO_WITH_TENSOR` on.
 

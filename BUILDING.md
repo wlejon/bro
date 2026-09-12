@@ -77,15 +77,14 @@ cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + the 3D scene g
 > the CMake cache. Reconfigure fresh (or clear the specific `BRO_WITH_*` cache
 > entries) to re-baseline.
 
-### Compiled apps (bronze)
+### JavaScript execution (bronze)
 
-Orthogonal to the profiles: `-DBRO_WITH_BRONZE=ON` builds the host layer for
-apps whose JavaScript has been compiled ahead of time by
-[bronze](https://github.com/wlejon/bronze). It is **off by default** in a local
-configure and on in CI and the nightly.
+Bronze is bro's sole JavaScript engine: it compiles and runs JavaScript
+via [bronze](https://github.com/wlejon/bronze) (backed by [brass](https://github.com/wlejon/brass)).
+Bronze is **mandatory and included in all profiles**.
 
 ```bash
-cmake -B build -DBRO_WITH_BRONZE=ON                       # binaries that load a compiled app
+cmake -B build                                            # binaries with bronze JS runtime
 cmake --build build --config Release --target bronze-cli # ...and the compiler that makes one
 ```
 
@@ -165,7 +164,7 @@ git submodule update --init --recursive
 
 Sibling libraries (`brokit`, `htmlayout`, `broaudio`, `bromesh`,
 `brogameagent`, …) are also picked up from standalone checkouts at `../<name>`
-if present — as is `bronze`, under `-DBRO_WITH_BRONZE=ON`. See
+if present — as are `bronze` and `brass`. See
 [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).
 
 ## Skia

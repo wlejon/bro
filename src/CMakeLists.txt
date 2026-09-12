@@ -24,11 +24,8 @@ if(BRO_WITH_VIDEO)
 endif()
 add_subdirectory(engine)
 
-# bronze AOT host layer — strictly opt-in; the default build never sees it
-# (see the option's comment in the top-level CMakeLists.txt).
-if(BRO_WITH_BRONZE)
-    add_subdirectory(bronze_host)
-endif()
+# bronze JavaScript runtime host layer.
+add_subdirectory(bronze_host)
 
 # The three stock executables. A host application that embeds bro (links
 # bro_engine and supplies its own main) turns these off with
@@ -44,21 +41,11 @@ if(BRO_BUILD_EXECUTABLES)
     # main.cpp calls AttachConsole() at startup so stdout still shows when
     # launched from a terminal. Ignored on non-Windows platforms.
     add_executable(bro WIN32 main.cpp)
-    target_link_libraries(bro PRIVATE bro_engine)
+    target_link_libraries(bro PRIVATE bro_engine bro_bronze_host)
     if(BRO_WITH_GAMEAI)
         target_link_libraries(bro PRIVATE brogameagent)
     endif()
-    # The compiled half of an app directory (bronze_host/app_module.h). bro.exe
-    # opens an interpreted app and a compiled one with the same binary, so it
-    # needs the loader whenever the host layer is configured at all — the
-    # decision is per-FOLDER at runtime, not per-build.
-    if(BRO_WITH_BRONZE)
-        target_link_libraries(bro PRIVATE bro_bronze_host)
-        target_compile_definitions(bro PRIVATE BRO_WITH_BRONZE=1)
-        bro_bronze_stage_runtime(bro)
-    else()
-        target_compile_definitions(bro PRIVATE BRO_WITH_BRONZE=0)
-    endif()
+    bro_bronze_stage_runtime(bro)
     target_include_directories(bro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # Set stack size to 8 MB.

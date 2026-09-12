@@ -34,8 +34,8 @@ target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_b
 
 # WebP decoding. Its own small library rather than a part of bro_render,
 # because bro has two independent image entry points that must agree — the
-# renderer's draw path (image_cache.cpp, here) and `new Image()` (bro_js's
-# image_bindings.cpp) — and neither of those links the other. See
+# renderer's draw path (image_cache.cpp, here) and `new Image()` (bronze_host's
+# host_image.cpp) — and neither of those links the other. See
 # webp_image.h for the full why, and skia_modules.cmake for why libwebp is
 # compiled from the Skia source bundle rather than pulled from vcpkg.
 if(BRO_WITH_WEBP)

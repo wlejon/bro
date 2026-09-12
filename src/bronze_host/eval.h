@@ -18,4 +18,8 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath);
 /// Resolve path to web_host.globals manifest.
 std::string getWebHostGlobalsPath();
 
+/// Install dynamic evaluation and function hooks (eval(), new Function())
+/// into the Bronze runtime.
+void installDynamicHooks(engine::Engine& engine);
+
 } // namespace bro::bronze_host

@@ -232,4 +232,85 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     return true;
 }
 
+namespace {
+
+static engine::Engine* s_activeEngine = nullptr;
+
+const char* sourcePrefixFor(ev::DynamicFunctionKind kind) {
+    switch (kind) {
+        case ev::DynamicFunctionKind::Generator: return "(function* anonymous(";
+        case ev::DynamicFunctionKind::Async: return "(async function anonymous(";
+        case ev::DynamicFunctionKind::AsyncGenerator: return "(async function* anonymous(";
+        default: return "(function anonymous(";
+    }
+}
+
+bronze::Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const bronze::Value> args) {
+    if (!s_activeEngine) {
+        return ev::throwError("new Function: no active engine available");
+    }
+
+    std::string params;
+    std::string body;
+    for (size_t i = 0; i < args.size(); ++i) {
+        const bool last = (i + 1 == args.size());
+        std::string text =
+            ev::isUndefined(args[i]) ? std::string("undefined") : ev::toUtf8(args[i]);
+        if (last) {
+            body = std::move(text);
+        } else {
+            if (!params.empty()) params += ",";
+            params += text;
+        }
+    }
+
+    const uint64_t fnId = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
+    const std::string globalName = "__bro_dyn_fn_" + std::to_string(fnId);
+    const std::string code = "globalThis." + globalName + " = " + sourcePrefixFor(kind) + params + ") {\n" + body + "\n};";
+
+    if (!evalScript(*s_activeEngine, code, "<new Function>")) {
+        return ev::throwError("new Function: dynamic compilation failed");
+    }
+
+    ev::GlobalValue g = ev::globalValue(globalName);
+    if (!g.found) {
+        return ev::throwError("new Function: created function was not found");
+    }
+    return g.value;
+}
+
+bronze::Value dynamicEval(bronze::Value source) {
+    if (!ev::isString(source)) return source;
+    if (!s_activeEngine) {
+        return ev::throwError("eval: no active engine available");
+    }
+    const std::string code = ev::toUtf8(source);
+    const uint64_t evalId = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
+    const std::string resName = "__bro_eval_res_" + std::to_string(evalId);
+
+    // First try evaluating as an expression assigning to global:
+    std::string exprCode = "globalThis." + resName + " = (" + code + ");";
+    if (evalScript(*s_activeEngine, exprCode, "<eval>")) {
+        ev::GlobalValue g = ev::globalValue(resName);
+        if (g.found) return g.value;
+    }
+
+    // Fallback: evaluate as statements:
+    std::string stmtCode = "globalThis." + resName + " = undefined;\n" + code + ";";
+    if (evalScript(*s_activeEngine, stmtCode, "<eval>")) {
+        ev::GlobalValue g = ev::globalValue(resName);
+        if (g.found) return g.value;
+        return ev::undefined();
+    }
+    return ev::throwError("eval: evaluation failed");
+}
+
+} // namespace
+
+void installDynamicHooks(engine::Engine& engine) {
+    s_activeEngine = &engine;
+    ev::setDynamicFunctionHook(dynamicFunction);
+    ev::setDynamicEvalHook(dynamicEval);
+}
+
 } // namespace bro::bronze_host
