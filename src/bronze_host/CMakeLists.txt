@@ -110,6 +110,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_dataset.cpp
     host_element_forms.cpp
     host_element_image.cpp
+    host_html_interfaces.cpp
     host_node.cpp
     host_events.cpp
     host_dom_events.cpp

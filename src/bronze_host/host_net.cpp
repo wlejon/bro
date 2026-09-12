@@ -983,7 +983,10 @@ void installNetGlobals() {
     for (auto [name, v] : {std::pair{"CONNECTING", 0.0}, {"OPEN", 1.0}, {"CLOSING", 2.0}, {"CLOSED", 3.0}})
         g_webSocketClass.setStatic(name, ev::fromDouble(v));
     ev::registerGlobal("CloseEvent", makeBrandConstructor("CloseEvent"));
-    ev::registerGlobal("MessageEvent", makeBrandConstructor("MessageEvent"));
+    Value meCtor = makeEventConstructor("MessageEvent");
+    ev::registerGlobal("MessageEvent", meCtor);
+    auto g = ev::globalValue("globalThis");
+    if (g.found && ev::isObject(g.value)) ev::setProperty(g.value, "MessageEvent", meCtor);
 }
 
 void drainNetEvents() {

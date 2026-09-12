@@ -2,6 +2,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_html_interfaces.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -206,6 +207,7 @@ Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::stri
 
 Value makeDocumentValue(dom::Document* fixed) {
     ObjectBuilder b;
+    b.set("nodeType", ev::fromDouble(9));
     b.def("createElement", 1, [fixed](Value, std::span<const Value> a) {
         return createElementImpl(fixed, a, 0);
     });
@@ -425,7 +427,18 @@ Value makeDocumentValue(dom::Document* fixed) {
         dom::Document* doc = documentFor(fixed);
         return doc ? doc->documentElement() : nullptr;
     }, "document");
-    return b.get();
+    Value docVal = b.get();
+    ev::GlobalValue objectCtor = ev::globalValue("Object");
+    if (objectCtor.found) {
+        ev::Persistent objectNs(objectCtor.value);
+        ev::Persistent setProto(ev::getProperty(objectNs.get(), "setPrototypeOf"));
+        if (ev::isFunction(setProto.get())) {
+            Value nodeProto = nodeHostClass().prototype();
+            const Value args[2] = {docVal, nodeProto};
+            ev::call(setProto.get(), ev::undefined(), std::span<const Value>(args, 2));
+        }
+    }
+    return docVal;
 }
 
 namespace {

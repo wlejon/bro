@@ -233,27 +233,33 @@ void fireHostTimers(double nowMs) {
 // ---------------------------------------------------------------------------
 
 void installTimerGlobals() {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    bool hasGt = gt.found && ev::isObject(gt.value);
     {
         Value fn = ev::makeFunction(
             [](Value, std::span<const Value> a) { return addTimer(a, /*repeating=*/false); },
             2);
         ev::registerGlobal("setTimeout", fn);
+        if (hasGt) ev::setProperty(gt.value, "setTimeout", fn);
     }
     {
         Value fn = ev::makeFunction(
             [](Value, std::span<const Value> a) { return clearTimer(a); }, 1);
         ev::registerGlobal("clearTimeout", fn);
+        if (hasGt) ev::setProperty(gt.value, "clearTimeout", fn);
     }
     {
         Value fn = ev::makeFunction(
             [](Value, std::span<const Value> a) { return addTimer(a, /*repeating=*/true); },
             2);
         ev::registerGlobal("setInterval", fn);
+        if (hasGt) ev::setProperty(gt.value, "setInterval", fn);
     }
     {
         Value fn = ev::makeFunction(
             [](Value, std::span<const Value> a) { return clearTimer(a); }, 1);
         ev::registerGlobal("clearInterval", fn);
+        if (hasGt) ev::setProperty(gt.value, "clearInterval", fn);
     }
 }
 

@@ -76,4 +76,9 @@ void drainWorkerMessages();
 
 void installPlatformExtensions(engine::Engine& engine);
 
+// ---------------------------------------------------------------------------
+// sessionStorage
+// ---------------------------------------------------------------------------
+Value makeSessionStorageValue();
+
 } // namespace bro::bronze_host

@@ -25,6 +25,7 @@
 
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_html_interfaces.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
@@ -98,6 +99,8 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     return ev::undefined();
 }
 
+}  // namespace
+
 void decorateImageProto(ObjectBuilder& b) {
     b.accessor("src", imageSrcGetter, imageSrcSetter);
 
@@ -140,6 +143,8 @@ void decorateImageProto(ObjectBuilder& b) {
     }
 }
 
+namespace {
+
 // `new Image()` — a detached <img>, which is exactly what the web's
 // [[HTMLConstructor]] produces. The optional width/height arguments set the
 // element's LAYOUT box, not the decode, and this layer has no layout box for a
@@ -155,13 +160,14 @@ Value imageConstructor(Value, std::span<const Value>) {
 
 }  // namespace
 
+const HostClass& htmlImageElementClass() {
+    return g_imageClass;
+}
+
 void installImageGlobal() {
-    // AFTER installElementGlobals, and the only class in this layer that
-    // depends on that order: the prototype below is chained onto
-    // Element.prototype, which has to exist first.
-    g_imageClass.install("Image", 0, imageConstructor, decorateImageProto);
-    g_imageClass.alias("HTMLImageElement");
-    g_imageClass.inherit(elementHostClass());
+    g_imageClass.install("HTMLImageElement", 0, imageConstructor, decorateImageProto);
+    g_imageClass.alias("Image");
+    g_imageClass.inherit(htmlElementHostClass());
 }
 
 Value makeImageElementHandle(dom::Element* el) {

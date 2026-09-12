@@ -387,24 +387,6 @@ Value makeInterfaceValue(const char* name) {
 
 
 
-// Node is the one interface whose CONSTANTS are read as often as its name:
-// `el.nodeType === Node.ELEMENT_NODE` is how library code tests a node without
-// assuming a tag. The numbers are the DOM's, and they are not arbitrary.
-Value makeNodeInterface() {
-    ev::Persistent p(makeInterfaceValue("Node"));
-    struct { const char* name; double value; } kConstants[] = {
-        {"ELEMENT_NODE", 1},                {"ATTRIBUTE_NODE", 2},
-        {"TEXT_NODE", 3},                   {"CDATA_SECTION_NODE", 4},
-        {"ENTITY_REFERENCE_NODE", 5},       {"ENTITY_NODE", 6},
-        {"PROCESSING_INSTRUCTION_NODE", 7}, {"COMMENT_NODE", 8},
-        {"DOCUMENT_NODE", 9},               {"DOCUMENT_TYPE_NODE", 10},
-        {"DOCUMENT_FRAGMENT_NODE", 11},     {"NOTATION_NODE", 12},
-    };
-    for (const auto& c : kConstants)
-        p.set(ev::setProperty(p.get(), c.name, ev::fromDouble(c.value)));
-    return p.get();
-}
-
 // ---------------------------------------------------------------------------
 // TextDecoder / TextEncoder
 // ---------------------------------------------------------------------------
@@ -484,6 +466,14 @@ Value makeEventConstructor(const char* name) {
                 if (!ev::isUndefined(compProp)) composed = ev::toBool(compProp);
                 Value dProp = ev::getProperty(a[1], "detail");
                 if (!ev::isUndefined(dProp)) detail = dProp;
+                Value dataProp = ev::getProperty(a[1], "data");
+                if (!ev::isUndefined(dataProp)) b.set("data", dataProp);
+                Value originProp = ev::getProperty(a[1], "origin");
+                if (!ev::isUndefined(originProp)) b.set("origin", originProp);
+                Value lastEventIdProp = ev::getProperty(a[1], "lastEventId");
+                if (!ev::isUndefined(lastEventIdProp)) b.set("lastEventId", lastEventIdProp);
+                Value portsProp = ev::getProperty(a[1], "ports");
+                if (!ev::isUndefined(portsProp)) b.set("ports", portsProp);
             }
             b.set("bubbles", ev::fromBool(bubbles));
             b.set("cancelable", ev::fromBool(cancelable));
@@ -516,30 +506,16 @@ void installPlatformGlobals() {
     ev::registerGlobal("showOpenFileDialog", makeShowOpenFileDialog());
     ev::registerGlobal("showOpenFolderDialog", makeShowOpenFolderDialog());
     ev::registerGlobal("showSaveFileDialog", makeShowSaveFileDialog());
-    ev::registerGlobal("Node", makeNodeInterface());
     // The rest, in the manifest's order. Each is a name a real library tests
     // for before deciding what kind of environment it is in.
-    // Element and HTMLElement are NOT here: host_element.cpp registers them as
-    // a real class whose instances answer `instanceof`. These are the names
-    // that still brand nothing.
     for (const char* name : {
              "Event", "UIEvent", "MouseEvent", "PointerEvent", "KeyboardEvent",
              "WheelEvent", "InputEvent", "FocusEvent", "ProgressEvent",
          }) {
         ev::registerGlobal(name, makeEventConstructor(name));
     }
-    // BEFORE any element value exists: every one of them is born on this
-    // class's prototype, and one built ahead of the install would carry no
-    // members at all. It used to be the first line of installWebHostGlobals for
-    // that reason; it is safe here because nothing between that function's
-    // first line and this call constructs an element — makeDocumentValue and
-    // makeWindowValue only DEFINE methods, and no class in this layer inherits
-    // g_elementClass. Move it later than this and that stops being true.
-    installElementGlobals();
     for (const char* name : {
-             "HTMLInputElement", "HTMLSelectElement",
-             "HTMLTextAreaElement", "HTMLVideoElement", "HTMLMediaElement",
-             "HTMLAnchorElement", "HTMLDivElement", "Text", "CharacterData",
+             "Text", "CharacterData",
              "Comment", "DocumentFragment", "Gamepad", "GamepadButton",
              "GamepadEvent",
          }) {

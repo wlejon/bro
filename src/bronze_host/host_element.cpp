@@ -7,6 +7,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_html_interfaces.h"
 
 #include "dom/document.h"
 #include "dom/document_fragment.h"
@@ -337,26 +338,13 @@ bool isImgTag(const std::string& tag) { return tag == "IMG" || tag == "img"; }
 // with every instance born on it. Before this, an element carried its own copy
 // of all fifty-eight members — a thousand-element UI allocated fifty-eight
 // thousand function objects to say the same fifty-eight things.
-HostClass g_elementClass;
-
 Value makeNodeHandleObject(dom::Node* node) {
-    return ev::makeHandle(stateFor(node), [](void*) {});
+    return nodeHostClass().make(stateFor(node), [](void*) {});
 }
 
-// Born on Element.prototype. makeNodeHandleObject stays bare: host_node.cpp
-// builds Text, Comment and DocumentFragment through it, and none of those is an
-// Element.
-//
-// Both finalizers are deliberately empty. The entry belongs to the registry
-// keyed on the dom::Node, not to the wrapper, and freeing it here would destroy
-// its Persistents from inside a finalizer — the one thing host_internal.h's GC
-// rule forbids.
 Value makeElementHandleObject(dom::Element* el) {
-    // An <img> is born on Image.prototype, which chains to this one — so it is
-    // an Element and a node like any other and an Image besides
-    // (host_element_image.cpp).
-    if (isImgTag(el->tagName())) return makeImageElementHandle(el);
-    return g_elementClass.make(stateFor(el), [](void*) {});
+    Value tagProto = htmlInterfaceProto(el->tagName());
+    return ev::makeHandle(stateFor(el), [](void*) {}, ev::Finalize::InSweep, tagProto);
 }
 
 HostNodeState* hostNodeStateFor(dom::Node* node) { return stateFor(node); }
@@ -370,23 +358,8 @@ Value makePlainElementValue(dom::Element* el) {
     return b.get();
 }
 
-// The only per-instance properties an element has: its identity. Everything
-// else is the same for every element and lives on the prototype.
-void decorateElementProto(ObjectBuilder& b);
-
-const HostClass& elementHostClass() { return g_elementClass; }
-
 void installElementGlobals() {
-    // `new Element()` is illegal on the web (the [[HTMLConstructor]] rule), so
-    // the body refuses — but every element is born on this prototype, so
-    // `el instanceof Element` answers true, which is the form real library code
-    // tests. `HTMLElement` is registered as the same object: they are distinct
-    // constructors on the web, with HTMLElement extending Element, and one
-    // object answering both is closer than two names that brand nothing.
-    g_elementClass.install("Element", 0, [](Value, std::span<const Value>) -> Value {
-        return constructCustomElementBase();
-    }, decorateElementProto);
-    g_elementClass.alias("HTMLElement");
+    installHtmlInterfaces();
 }
 
 void installElementCore(ObjectBuilder& b, dom::Element* el) {

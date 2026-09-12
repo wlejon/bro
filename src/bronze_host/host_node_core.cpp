@@ -35,6 +35,15 @@ void installNodeCoreGlobals(engine::Engine& engine) {
     bk::installChildProcess();
     bk::installRequire();
 
+    bk::installConsole();
+    bk::installCrypto();
+    bk::installSubtleCrypto();
+    bk::installEventTarget();
+    bk::installMessageChannel();
+    bk::installReadableStream();
+    bk::installWritableStream();
+    bk::installCompression();
+
     for (const auto& [prefix, target] : engine.assetMounts().mounts()) {
         bk::addFsPrefixMount(prefix, target);
     }

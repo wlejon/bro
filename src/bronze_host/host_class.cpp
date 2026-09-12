@@ -68,17 +68,26 @@ void HostClass::install(const char* name, uint32_t arity, ev::NativeFn body,
         // Reading mints it. ObjectBuilder's own Persistent is what holds it
         // across the decorating allocations.
         ObjectBuilder proto(ev::getProperty(ctor.get(), "prototype"));
+        proto.set("constructor", ctor.get());
         if (decorate) decorate(proto);
         // Re-read after decoration: setProperty may have moved the object.
         proto_ = new ev::Persistent(proto.get());
     }
 
     ev::registerGlobal(name, ctor_->get());
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
+        ev::setProperty(gt.value, name, ctor_->get());
+    }
 }
 
 void HostClass::alias(const char* name) const {
     if (!ctor_) return;
     ev::registerGlobal(name, ctor_->get());
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
+        ev::setProperty(gt.value, name, ctor_->get());
+    }
 }
 
 void HostClass::inherit(const HostClass& base) const {

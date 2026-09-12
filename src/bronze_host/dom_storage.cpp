@@ -132,4 +132,76 @@ Value makeLocalStorageValue() {
     return makeHostProxy(std::move(t));
 }
 
+Value makeSessionStorageValue() {
+    static StorageState s_sessionStorage;
+    ObjectBuilder b;
+    b.def("getItem", 1, [](Value, std::span<const Value> a) {
+        Value keyV = argAt(a, 0);
+        if (ev::isObject(keyV) || ev::isUndefined(keyV)) return ev::null();
+        std::string key = ev::toUtf8(keyV);
+        auto it = s_sessionStorage.items.find(key);
+        if (it == s_sessionStorage.items.end()) return ev::null();
+        return ev::fromUtf8(it->second);
+    });
+    b.def("setItem", 2, [](Value, std::span<const Value> a) {
+        Value keyV = argAt(a, 0);
+        Value valV = argAt(a, 1);
+        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
+            std::string key = ev::toUtf8(keyV);
+            std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
+            s_sessionStorage.items[key] = val;
+        }
+        return ev::undefined();
+    });
+    b.def("removeItem", 1, [](Value, std::span<const Value> a) {
+        Value keyV = argAt(a, 0);
+        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
+            s_sessionStorage.items.erase(ev::toUtf8(keyV));
+        }
+        return ev::undefined();
+    });
+    b.def("clear", 0, [](Value, std::span<const Value>) {
+        s_sessionStorage.items.clear();
+        return ev::undefined();
+    });
+    b.def("key", 1, [](Value, std::span<const Value> a) {
+        int idx = i32At(a, 0);
+        if (idx < 0 || static_cast<size_t>(idx) >= s_sessionStorage.items.size()) return ev::null();
+        auto it = s_sessionStorage.items.begin();
+        std::advance(it, idx);
+        return ev::fromUtf8(it->first);
+    });
+    b.accessor("length", [](Value, std::span<const Value>) {
+        return ev::fromDouble(static_cast<double>(s_sessionStorage.items.size()));
+    }, nullptr);
+
+    HostProxyTraps t;
+    t.methods = b.get();
+    t.get = [](const std::string& key, Value& out) {
+        auto it = s_sessionStorage.items.find(key);
+        if (it == s_sessionStorage.items.end()) return false;
+        out = ev::fromUtf8(it->second);
+        return true;
+    };
+    t.set = [](const std::string& key, Value v) {
+        if (ev::isObject(v)) return;
+        s_sessionStorage.items[key] = ev::isUndefined(v) ? "undefined" : ev::toUtf8(v);
+    };
+    t.has = [](const std::string& key) {
+        return s_sessionStorage.items.find(key) != s_sessionStorage.items.end();
+    };
+    t.ownKeys = []() {
+        std::vector<std::string> keys;
+        for (const auto& [k, v] : s_sessionStorage.items) {
+            (void)v;
+            keys.push_back(k);
+        }
+        return keys;
+    };
+    t.remove = [](const std::string& key) {
+        s_sessionStorage.items.erase(key);
+    };
+    return makeHostProxy(std::move(t));
+}
+
 }  // namespace bro::bronze_host

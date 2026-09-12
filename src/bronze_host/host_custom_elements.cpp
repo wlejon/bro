@@ -109,7 +109,7 @@ Value constructCustomElementBase() {
     if (s_activeConstructingElement) {
         return hostElementValue(s_activeConstructingElement);
     }
-    return ev::throwTypeError("HTMLElement: illegal constructor");
+    return ev::throwTypeError("Illegal constructor");
 }
 
 void installCustomElementsGlobals() {
