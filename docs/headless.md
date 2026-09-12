@@ -8,9 +8,11 @@ Headless mode for bro runs the full engine pipeline (GPU rendering, real fonts, 
 bro-headless [--no-gpu] [--width N] [--height N] <app-directory> [script.js | -e "expr" ...]
 ```
 
-- No arguments after app directory = **interactive JS REPL**
 - With `.js` file = **script mode** (runs file, then exits)
 - With `-e` flags = **inline mode** (evaluates expressions, then exits)
+- No script and no `-e` = the app boots, runs its own scripts, and exits
+
+Scripts and `-e` expressions are compiled in-process by bronze and run against the live engine; there is no interpreter and no interactive REPL.
 
 ### Flags
 
@@ -349,25 +351,6 @@ loop; mutating the DOM ten times and flushing once measures one pass, not ten.
 
 ## Examples
 
-### Interactive REPL
-
-```
-> bro-headless ../broworkshop/demos/example
-
-bro> document.querySelector('#sidebar').className
-sidebar hidden-left
-
-bro> inspect('body')
-<BODY>
-  Box Model:
-    content:  1920 x 1080
-    ...
-
-bro> screenshot('dashboard.png')
-
-bro> quit
-```
-
 ### Inline expressions
 
 ```bash
@@ -391,15 +374,18 @@ bro-headless ../broworkshop/demos/example test.js
 
 Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occurs.
 
-### Top-level await
+### Await in scripts
 
-Scripts support top-level `await` (detected automatically when code contains the `await` keyword):
+Top-level `await` is not accepted by the compiler. Wrap asynchronous work in an async function and pump the engine until it settles (see "Waiting in scripts: pump, don't await" below):
 
 ```js
-let resp = await fetch('data.json');
-let data = await resp.json();
-assert(data.items.length > 0, 'data loaded');
-screenshot('loaded.png');
+async function main() {
+  let resp = await fetch('data.json');
+  let data = await resp.json();
+  assert(data.items.length > 0, 'data loaded');
+  screenshot('loaded.png');
+}
+main();
 ```
 
 ## Integration tests
@@ -691,11 +677,11 @@ different points:
 
 - **In the top-level document** it tears down the whole app document and its
   JS realm, then re-parses and re-runs the app in the same engine. In headless
-  mode the driving script (REPL line, `-e` expression, or script file) runs
+  mode the driving script (`-e` expression or script file) runs
   *inside* that realm, so the reload can never commit while the script is
   still on the stack. It is drained **between evaluation units**: after engine
   construction (an app that reloads itself during its first run), after each
-  `-e` expression, after a script file finishes, and between REPL lines. A
+  `-e` expression, and after a script file finishes. A
   single script file cannot observe its own top-level reload, the realm that
   would do the asserting is the one being replaced. To test it, let the app
   reload itself and pass a *second* script that runs in the fresh realm, or
@@ -708,9 +694,7 @@ not survive the swap.
 
 ## Notes
 
-- `[INFO]` and `[console.log]` lines go to stderr; REPL output and `-e` print results go to stdout. Separate them with `2>/dev/null`.
+- `[INFO]` and `[console.log]` lines go to stderr; `-e` print results go to stdout. Separate them with `2>/dev/null`.
 - Screenshots are PNG format.
 - The default viewport is 1920x1080. Override with `--width` and `--height`. These are applied *after* the app config loads, so an appdir's `bro.json` `width`/`height` has no effect in headless ? every headless run is 1920x1080 on every machine unless the flags are passed. Derive test expectations from `window.innerWidth`/`innerHeight` rather than from the manifest.
 - Audio engine runs in headless mode; by default no audio device is opened (pass `--audio` to open the real SDL device + mic). `advanceTime()` pumps the audio DSP pipeline, so voices, effects, sequencer, metering, recording, and FFT analysis all work. Use `getBusPeakL/R()`, `getBusRmsL/R()`, `getSpectrum()`, and `stopRecording()` to inspect audio output numerically.
-- In the REPL, the prompt (`bro>`) is printed to stderr so it doesn't contaminate piped output.
-- The REPL supports `quit` and `exit` to terminate.

@@ -48,7 +48,7 @@ four synthetic C modules to hit every refusal branch.
 | `instanced` | instanced mesh under load (2,500 instances) |
 | `pixi` | pixi.js v8: WebGL sprites + pixel readback |
 
-**All twenty-four run the stock `bro-headless`** — the same binary every other test in
+**All of them run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
 `app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
 rebuilds whenever the module is older than its probe **or than the compiler**

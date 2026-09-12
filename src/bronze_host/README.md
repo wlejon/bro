@@ -324,18 +324,20 @@ loop then drives everything the app scheduled.
 ## Driving a compiled app from a script
 
 There is no separate driver and no separate mode: bro-headless
-(`engine/headless_driver.h`) loads a compiled app exactly as it loads an
-interpreted one, with the same argument parsing, the same script / `-e` / REPL
+(`engine/headless_driver.h`) loads a compiled app exactly as it loads a
+script-driven one, with the same argument parsing, the same script / `-e`
 modes and the same globals [docs/headless.md](../../docs/headless.md) documents.
+The driver script is itself compiled in-process by bronze (`eval.cpp`) and
+loaded as a module; there is no interpreter and no REPL.
 
 ```bash
 bro-headless <appdir> script.js                      # run a script, then exit
 bro-headless <appdir> -e "advanceTime(500)" -e "screenshot('out.png')"
-bro-headless <appdir>                                # interactive REPL
 ```
 
-The compiled app has no JS realm — but the **Engine** does, because it still
-boots the app dir's page, and that realm is where the driver script runs.
+The compiled app and the driver script are both bronze modules sharing one
+runtime, and the **Engine** still boots the app dir's page, which is what
+the driver script observes.
 Driver and app share the Engine, the document and the clock, which is the whole
 mechanism:
 
@@ -353,8 +355,7 @@ What the script does **not** get is the app's own JS objects — there are none;
 its scene graph is machine code with no reflective surface. A driver observes
 the app the way a user does: through the DOM, the frame, and the pixels. The
 seam this rides on is `HeadlessHooks::afterEngine`, which runs the host-globals
-install and `runMain()` at the point an interpreted app's own JS would have
-just finished.
+install and `runMain()` after the page's own `<script>` tags have run.
 
 Frame counts come from the driver — `advanceTime(n)` over the virtual clock —
 rather than from a `--frames` flag, because the retired per-app host owned its

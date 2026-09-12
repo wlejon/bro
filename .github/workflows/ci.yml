@@ -7,12 +7,11 @@ name: CI
 # The `minimal` job below covers the other end: the profile BUILDING.md hands
 # to someone who has just cloned and has no vcpkg. See its own comment.
 #
-# The bronze host layer (src/bronze_host, 17K lines) is built on all three
-# platforms — it is off by default in a local configure, so without this it
-# would compile nowhere until someone noticed. Only Linux also builds the
-# bronze COMPILER (with brass backend): Linux is the job that runs the test suite,
-# and the twenty-four tests/bronze_host checks need a compiler to produce their subject —
-# without one they report SKIP forever, which is the failure mode this exists to avoid.
+# The bronze host layer (src/bronze_host) is built on all three platforms.
+# Only Linux also builds the bronze COMPILER (with brass backend): Linux is
+# the job that runs the test suite, and the tests/bronze_host checks need a
+# compiler to produce their subject — without one they report SKIP forever,
+# which is the failure mode this exists to avoid.
 # The other two get the host layer compiled and linked, which is what breaks
 # there. Nightly builds the compiler everywhere, because it ships it.
 

@@ -22,7 +22,7 @@ cmake -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release
 ```
 `scripts/package-release.sh` on Linux/macOS needs `--build-dir build-release` (its `--config` default is the Windows-style selector, a no-op for Ninja).
 
-Headless: `bro-headless <appdir>` (JS REPL), `bro-headless <appdir> test.js`, or `-e "expr"`; `--no-gpu` = CPU-only fallback. Submodules: `git submodule update --init`.
+Headless: `bro-headless <appdir> test.js` or `bro-headless <appdir> -e "expr"`; the script is compiled in-process by bronze and run against the engine. There is no REPL. `--no-gpu` = CPU-only fallback. Submodules: `git submodule update --init`.
 
 **Skia is pre-built.** Headers + Release lib auto-download at configure on Windows/Linux/arm64-macOS, pinned to one Skia commit (`chrome/m147`) so the lib always matches the headers; `-DBRO_FETCH_SKIA=OFF` disables. Hand-build only for Intel macOS, a Windows Debug lib, or a version change: `third_party/skia/build_skia_{linux,mac}.sh`, lib into `third_party/skia/lib/{Debug,Release}/`.
 
@@ -40,7 +40,7 @@ util → platform (SDL3, event loop) → render (Renderer iface) → svg → lay
 ```
 `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
 
-`src/bronze_host/` exposes the engine to the [bronze](../bronze) JavaScript runtime and AOT compiler (backed by [brass](../brass)). An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load, or interpreted scripts evaluated in-process via bronze CLI. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and brass resolves as `../brass` / `third_party/brass`. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
+`src/bronze_host/` exposes the engine to the [bronze](../bronze) JavaScript runtime and AOT compiler (backed by [brass](../brass)). An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load; a folder without one has its `<script>` tags compiled in-process by bronze at boot. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and brass resolves as `../brass` / `third_party/brass`. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
 
 Key patterns:
 - **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
