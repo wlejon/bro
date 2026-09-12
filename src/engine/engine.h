@@ -247,6 +247,7 @@ public:
     scene::SceneGraph* createSceneContext(dom::Element* canvas);
     size_t sceneContextCount() const;
     webgl::WebGL2RenderingContext* createWebGL2Context(dom::Element* canvas);
+    canvas::CanvasScene* createCanvasContext(dom::Element* canvas);
     void flushLayoutForRead(dom::Document* doc);
     void reloadIframe(dom::Element* el);
     void requestAppReload();

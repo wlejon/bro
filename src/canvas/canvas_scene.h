@@ -201,6 +201,7 @@ public:
     }
     void setIntrinsicWidth(int w)  { intrinsicW_.store(w, std::memory_order_relaxed); }
     void setIntrinsicHeight(int h) { intrinsicH_.store(h, std::memory_order_relaxed); }
+    void ensureSurface(int w, int h);
 
     void setViewportScroll(float scrollY) { viewportScrollY_ = scrollY; }
     bool isDetached() const { return detached_; }
@@ -444,7 +445,6 @@ private:
 
     int queryLayoutWidth() const;
     int queryLayoutHeight() const;
-    void ensureSurface(int w, int h);
     SkCanvas* skCanvas();
     SkPaint makeFillPaint() const;
     SkPaint makeStrokePaint() const;

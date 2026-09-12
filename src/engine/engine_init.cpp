@@ -448,6 +448,48 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas)
     return webglCtx;
 }
 
+canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
+    if (!canvas) return nullptr;
+    if (canvas->canvasScene()) {
+        return static_cast<canvas::CanvasScene*>(canvas->canvasScene());
+    }
+
+    auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+    int w = 300, h = 150;
+    const std::string wAttr = canvas->getAttribute("width");
+    const std::string hAttr = canvas->getAttribute("height");
+    if (!wAttr.empty()) w = std::atoi(wAttr.c_str());
+    if (!hAttr.empty()) h = std::atoi(hAttr.c_str());
+    canvasScene->setIntrinsicWidth(w);
+    canvasScene->setIntrinsicHeight(h);
+    canvasScene->ensureSurface(w, h);
+    canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
+        auto* elem = static_cast<dom::Element*>(ud);
+        if (!elem->parentNode()) {
+            ox = oy = ow = oh = 0;
+            return;
+        }
+        dom::AbsoluteRect r = dom::absoluteContentBox(elem);
+        ox = r.x; oy = r.y; ow = r.width; oh = r.height;
+    }, canvas);
+    canvasScene->setDetachedCallback([](void* ud) -> bool {
+        auto* n = static_cast<dom::Element*>(ud);
+        while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+        return n->tagName() != "html" && n->tagName() != "HTML";
+    }, canvas);
+    canvasScene->setLiveCheck([](void* doc, void* node) -> bool {
+        return static_cast<dom::Document*>(doc)->isNodeLive(
+            static_cast<dom::Element*>(node));
+    }, canvas->document());
+
+    auto* csPtr = canvasScene.get();
+    canvas->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
+    canvasScene->init(nullptr);
+    canvasSceneRegistry_[canvasScene->sceneId()] = csPtr;
+    canvasScenes_.push_back(std::move(canvasScene));
+    return csPtr;
+}
+
 scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
 #if !BRO_WITH_3D
     (void)canvas;

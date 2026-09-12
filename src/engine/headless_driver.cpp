@@ -83,7 +83,7 @@ namespace bro::engine {
 int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     bro::util::installSignalHandler();
 
-    int width = 1280, height = 720;
+    int width = 1920, height = 1080;
     bool useGPU = true;
     bool realAudio = false;
     int cliSplash = -1;
@@ -101,8 +101,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "%s — %s\n\n"
                 "Usage: %s [options] <app-directory> [script.js] [-- args...]\n\n"
                 "Options:\n"
-                "  --width N       Viewport width  (default: 1280)\n"
-                "  --height N      Viewport height (default: 720)\n"
+                "  --width N       Viewport width  (default: 1920)\n"
+                "  --height N      Viewport height (default: 1080)\n"
                 "  --cpu           Use software renderer\n"
                 "  --no-gpu        Use software renderer\n"
                 "  --real-audio    Enable real audio output\n"

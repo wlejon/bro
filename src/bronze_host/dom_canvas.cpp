@@ -136,8 +136,11 @@ Value makeCanvasValue(dom::Element* el) {
         if (ev::isObject(typeV)) return ev::null();
         std::string type = ev::toUtf8(typeV);
         if (type == "2d") {
+            if (auto* eng = hostEngine()) {
+                eng->createCanvasContext(cs->el);
+            }
             if (ev::isObject(cs->ctx2dObj.get())) return cs->ctx2dObj.get();
-            Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get());
+            Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get(), cs->el);
             cs->ctx2dObj.set(ctx2d);
             return ctx2d;
         }
