@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Twenty-five checks, one manifest. `tests/run_tests.sh` enumerates them
+Twenty-four checks, one manifest. `tests/run_tests.sh` enumerates them
 (`run_checks.sh --list`) and runs each with the rest of the suite — exit 77
 counts as SKIP there, and `BRO_TEST_BRONZE=0` leaves them out. Individual
 checks drop out with `BRO_TEST_BRONZE_SKIP=<names>` (space- or comma-separated,
@@ -36,8 +36,7 @@ four synthetic C modules to hit every refusal branch.
 | `parser` | DOMParser: a second document, and adoption out of it |
 | `proxy` | the four proxy-backed live views: style, computed, dataset, localStorage |
 | `class` | host classes, via Image: born-on-prototype, shared methods, instanceof |
-| `interp` | the interpreter bridge: compiled `new Function`, and values crossing both ways (arrays as real arrays) |
-| `import` | a non-constant compiled `import()`, loaded by the page's realm from beside the probe's source |
+| `codecs` | binary codecs: base64, typed arrays |
 | `input` | pointer lock, fullscreen, Gamepad |
 | `video` | VideoEncoder, GifEncoder: every pixel source, and every refusal |
 | `audio` | Web Audio & Sound Engine: nodes, params, buffers, decodeAudioData |
@@ -49,7 +48,7 @@ four synthetic C modules to hit every refusal branch.
 | `instanced` | instanced mesh under load (2,500 instances) |
 | `pixi` | pixi.js v8: WebGL sprites + pixel readback |
 
-**All twenty-three run the stock `bro-headless`** — the same binary every other test in
+**All twenty-four run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
 `app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
 rebuilds whenever the module is older than its probe **or than the compiler**
