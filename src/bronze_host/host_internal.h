@@ -18,6 +18,7 @@
 // property on the object instead.
 
 #include "embed/embed.h"
+#include "dom/event_target.h"
 
 #include <cstdint>
 #include <functional>
@@ -37,6 +38,7 @@ class Element;
 class Event;
 class Node;
 class DocumentFragment;
+struct AbsoluteRect;
 }  // namespace bro::dom
 
 namespace bro::bronze_host {
@@ -253,6 +255,7 @@ void dispatchHostEvent(ev::Persistent target, const std::string& type);
 using ElementSource = std::function<dom::Element*()>;
 void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                const char* what);
+dom::ListenerOptions readOptions(Value optV);
 
 // Hand `evt` to one compiled listener as PLAIN DATA — a fresh object carrying
 // the fields for the event's kind (coordinates, key, button, deltas, the
@@ -333,6 +336,9 @@ Value makeClassListObject(HostNodeState* st);
 void decorateElementDataset(ObjectBuilder& b);
 
 void decorateElementForms(ObjectBuilder& b);
+void decorateElementMutate(ObjectBuilder& b);
+dom::AbsoluteRect borderBoxOf(dom::Element* el);
+Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::string selector);
 
 // The <img> half of the element surface (host_element_image.cpp). `Image` is
 // an element CLASS here, so the members live on its prototype and an img

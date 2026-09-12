@@ -156,6 +156,64 @@ bool nodeContains(dom::Node* n, dom::Node* other) {
     return false;
 }
 
+bool nodesEqual(dom::Node* a, dom::Node* b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->nodeType() != b->nodeType()) return false;
+    if (a->nodeType() == dom::NodeType::Element) {
+        auto* ea = static_cast<dom::Element*>(a);
+        auto* eb = static_cast<dom::Element*>(b);
+        if (ea->tagName() != eb->tagName()) return false;
+        const auto& attrsA = ea->attributes();
+        const auto& attrsB = eb->attributes();
+        if (attrsA.size() != attrsB.size()) return false;
+        for (const auto& [k, v] : attrsA) {
+            if (!eb->hasAttribute(k) || eb->getAttribute(k) != v) return false;
+        }
+    } else if (a->nodeType() == dom::NodeType::Text || a->nodeType() == dom::NodeType::Comment) {
+        if (charsData(a) != charsData(b)) return false;
+    }
+    const auto& kidsA = a->childNodes();
+    const auto& kidsB = b->childNodes();
+    if (kidsA.size() != kidsB.size()) return false;
+    for (size_t i = 0; i < kidsA.size(); ++i) {
+        if (!nodesEqual(kidsA[i], kidsB[i])) return false;
+    }
+    return true;
+}
+
+uint16_t compareDocumentPositionNodes(dom::Node* a, dom::Node* b) {
+    if (!a || !b) return 1;  // disconnected
+    if (a == b) return 0;
+    for (dom::Node* p = a->parentNode(); p; p = p->parentNode()) {
+        if (p == b) return 8 | 2;  // CONTAINS | PRECEDING
+    }
+    for (dom::Node* p = b->parentNode(); p; p = p->parentNode()) {
+        if (p == a) return 16 | 4;  // CONTAINED_BY | FOLLOWING
+    }
+    std::vector<dom::Node*> chainA, chainB;
+    for (dom::Node* n = a; n; n = n->parentNode()) chainA.push_back(n);
+    for (dom::Node* n = b; n; n = n->parentNode()) chainB.push_back(n);
+    std::reverse(chainA.begin(), chainA.end());
+    std::reverse(chainB.begin(), chainB.end());
+    if (chainA.empty() || chainB.empty() || chainA[0] != chainB[0]) {
+        return 1 | 32 | (a < b ? 4 : 2);
+    }
+    size_t minLen = std::min(chainA.size(), chainB.size());
+    size_t divIdx = 0;
+    while (divIdx < minLen && chainA[divIdx] == chainB[divIdx]) {
+        divIdx++;
+    }
+    dom::Node* parent = chainA[divIdx - 1];
+    dom::Node* branchA = chainA[divIdx];
+    dom::Node* branchB = chainB[divIdx];
+    for (dom::Node* kid : parent->childNodes()) {
+        if (kid == branchA) return 4;  // b is FOLLOWING a
+        if (kid == branchB) return 2;  // b is PRECEDING a
+    }
+    return 1 | 32;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -284,13 +342,43 @@ void installNodeTree(ObjectBuilder& b) {
                    });
                },
                nullptr);
-    b.accessor("hasChildNodes",
-               [](Value self_, std::span<const Value>) {
+    b.def("hasChildNodes", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
-                   return ev::fromBool(st->node && !st->node->childNodes().empty());
-               },
-               nullptr);
+        return ev::fromBool(st && st->node && !st->node->childNodes().empty());
+    });
+    b.def("isSameNode", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node || a.empty()) return ev::fromBool(false);
+        dom::Node* other = hostNodeOf(a[0]);
+        return ev::fromBool(st->node == other);
+    });
+    b.def("isEqualNode", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node || a.empty()) return ev::fromBool(false);
+        dom::Node* other = hostNodeOf(a[0]);
+        return ev::fromBool(nodesEqual(st->node, other));
+    });
+    b.def("compareDocumentPosition", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node || a.empty()) return ev::fromDouble(0.0);
+        dom::Node* other = hostNodeOf(a[0]);
+        return ev::fromDouble(compareDocumentPositionNodes(st->node, other));
+    });
+    b.def("getRootNode", 1, [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node) return ev::null();
+        dom::Node* node = st->node;
+        while (node->parentNode()) node = node->parentNode();
+        dom::Document* doc = st->node->document();
+        if (doc && (node == doc->documentElement())) {
+            if (hostEngine() && doc == hostEngine()->document()) {
+                ev::GlobalValue g = ev::globalValue("document");
+                if (g.found) return g.value;
+            }
+            return hostDocumentValue(doc);
+        }
+        return hostNodeValue(node);
+    });
 
     b.accessor("parentNode",
                [](Value self_, std::span<const Value>) {

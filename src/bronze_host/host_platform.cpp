@@ -441,17 +441,24 @@ Value makeEventConstructor(const char* name) {
             b.set("type", typeV);
             bool bubbles = false;
             bool cancelable = false;
+            bool composed = false;
             Value detail = ev::null();
             if (a.size() > 1 && ev::isObject(a[1])) {
                 Value bProp = ev::getProperty(a[1], "bubbles");
                 if (!ev::isUndefined(bProp)) bubbles = ev::toBool(bProp);
                 Value cProp = ev::getProperty(a[1], "cancelable");
                 if (!ev::isUndefined(cProp)) cancelable = ev::toBool(cProp);
+                Value compProp = ev::getProperty(a[1], "composed");
+                if (!ev::isUndefined(compProp)) composed = ev::toBool(compProp);
                 Value dProp = ev::getProperty(a[1], "detail");
                 if (!ev::isUndefined(dProp)) detail = dProp;
             }
             b.set("bubbles", ev::fromBool(bubbles));
             b.set("cancelable", ev::fromBool(cancelable));
+            b.set("composed", ev::fromBool(composed));
+            b.set("target", ev::null());
+            b.set("currentTarget", ev::null());
+            b.set("timeStamp", ev::fromDouble(0.0));
             b.set("detail", detail);
             b.set("defaultPrevented", ev::fromBool(false));
             b.def("preventDefault", 0, [](Value self_, std::span<const Value>) {

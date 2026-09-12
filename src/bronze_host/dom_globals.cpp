@@ -35,6 +35,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "dom/event_target.h"
+#include "css/parser.h"
 #include "util/log.h"
 
 #include <cctype>
@@ -199,8 +200,9 @@ Value makeWindowValue() {
     // has no target and no dimensions anywhere in this DOM, so a resize
     // handler still reads the new size from window.innerWidth — exactly what
     // the C++ listener docs tell native listeners to do.
-    b.def("addEventListener", 3, [engine](Value thisValue,
-                                          std::span<const Value> a) {
+    b.def("addEventListener", 3, [engine](Value thisValue, std::span<const Value> a) {
+        // Root thisValue before anything below allocates (embed.h's NativeFn
+        // contract).
         ev::Persistent self(thisValue);
         Value typeV = argAt(a, 0);
         Value fn = argAt(a, 1);
@@ -212,12 +214,13 @@ Value makeWindowValue() {
                 "window.addEventListener: listener must be a function");
         }
         std::string type = ev::toUtf8(typeV);
+        dom::ListenerOptions opts = readOptions(argAt(a, 2));
         ev::Persistent fnP(fn);
         std::string origin = "window " + type + " listener";
         dom::ListenerHandle handle = engine->addWindowEventListener(
             type, [fnP, self, origin](dom::Event& evt) {
                 callBronzeListener(fnP, self, evt, origin.c_str());
-            });
+            }, opts);
         if (!handle) {
             return ev::throwError(
                 "window.addEventListener: the engine refused the registration");
@@ -228,7 +231,7 @@ Value makeWindowValue() {
     b.def("dispatchEvent", 1, [](Value, std::span<const Value> a) {
         return hostDispatchToWindow(argAt(a, 0));
     });
-    b.def("removeEventListener", 2, [engine](Value, std::span<const Value> a) {
+    b.def("removeEventListener", 3, [engine](Value, std::span<const Value> a) {
         Value typeV = argAt(a, 0);
         Value fn = argAt(a, 1);
         if (ev::isObject(typeV)) return ev::undefined();
@@ -246,18 +249,114 @@ Value makeWindowValue() {
 
     b.set("getComputedStyle", makeGetComputedStyle());
     b.set("localStorage", makeLocalStorageValue());
-    b.def("matchMedia", 1, [](Value, std::span<const Value> a) {
-        std::string query = a.empty() || ev::isUndefined(a[0]) ? "" : ev::toUtf8(a[0]);
-        bool matches = (query.find("dark") != std::string::npos);
+
+    auto makeMatchMediaObj = [](const std::string& rawQuery) -> Value {
+        std::string query = rawQuery;
+        size_t start = query.find_first_not_of(" \t\r\n");
+        size_t end = query.find_last_not_of(" \t\r\n");
+        if (start == std::string::npos) {
+            query = "";
+        } else {
+            query = query.substr(start, end - start + 1);
+        }
+        std::string mediaStr = query.empty() ? "all" : query;
+
+        bool matches = false;
+        if (query.empty() || mediaStr == "all") {
+            matches = true;
+        } else {
+            auto* engine = hostEngine();
+            dom::Document* doc = engine ? engine->document() : nullptr;
+            htmlayout::css::MediaContext mctx;
+            if (doc) {
+                mctx = doc->mediaContext();
+            } else if (engine) {
+                mctx.viewportWidth = static_cast<float>(engine->contentWidth());
+                mctx.viewportHeight = static_cast<float>(engine->contentHeight());
+            }
+            matches = htmlayout::css::evaluateMediaQuery(mediaStr, mctx);
+        }
+
         ObjectBuilder m;
         m.set("matches", ev::fromBool(matches));
-        m.set("media", ev::fromUtf8(query));
+        m.set("media", ev::fromUtf8(mediaStr));
+        m.set("onchange", ev::null());
         auto noop = [](Value, std::span<const Value>) { return ev::undefined(); };
         m.def("addEventListener", 2, noop);
         m.def("removeEventListener", 2, noop);
         m.def("addListener", 1, noop);
         m.def("removeListener", 1, noop);
         return m.get();
+    };
+
+    Value matchMediaFn = ev::makeFunction(
+        [makeMatchMediaObj](Value, std::span<const Value> a) -> Value {
+            std::string query = a.empty() || ev::isUndefined(a[0]) ? "" : ev::toUtf8(a[0]);
+            return makeMatchMediaObj(query);
+        },
+        1);
+    b.set("matchMedia", matchMediaFn);
+
+    auto parseScrollArgs = [](std::span<const Value> a, double& x, double& y) {
+        if (a.empty()) return;
+        if (ev::isObject(a[0])) {
+            Value leftV = ev::getProperty(a[0], "left");
+            Value topV = ev::getProperty(a[0], "top");
+            if (!ev::isUndefined(leftV)) x = ev::toDouble(leftV);
+            if (!ev::isUndefined(topV)) y = ev::toDouble(topV);
+        } else {
+            x = ev::toDouble(a[0]);
+            if (a.size() > 1) y = ev::toDouble(a[1]);
+        }
+    };
+    auto doWindowScrollTo = [](double, double y) {
+        auto* e = hostEngine();
+        if (e && e->document() && e->document()->documentElement()) {
+            e->document()->documentElement()->setScrollTopValue(static_cast<float>(y));
+        }
+    };
+
+    b.accessor("scrollX", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); }, nullptr);
+    b.accessor("pageXOffset", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); }, nullptr);
+    b.accessor("scrollY", [](Value, std::span<const Value>) {
+        auto* e = hostEngine();
+        float y = e ? e->viewportScrollY() : 0.0f;
+        if (y == 0.0f && e && e->document() && e->document()->documentElement()) {
+            y = e->document()->documentElement()->scrollTopValue();
+        }
+        return ev::fromDouble(y);
+    }, nullptr);
+    b.accessor("pageYOffset", [](Value, std::span<const Value>) {
+        auto* e = hostEngine();
+        float y = e ? e->viewportScrollY() : 0.0f;
+        if (y == 0.0f && e && e->document() && e->document()->documentElement()) {
+            y = e->document()->documentElement()->scrollTopValue();
+        }
+        return ev::fromDouble(y);
+    }, nullptr);
+
+    b.def("scrollTo", 2, [parseScrollArgs, doWindowScrollTo](Value, std::span<const Value> a) {
+        double x = 0, y = 0;
+        parseScrollArgs(a, x, y);
+        doWindowScrollTo(x, y);
+        return ev::undefined();
+    });
+    b.def("scroll", 2, [parseScrollArgs, doWindowScrollTo](Value, std::span<const Value> a) {
+        double x = 0, y = 0;
+        parseScrollArgs(a, x, y);
+        doWindowScrollTo(x, y);
+        return ev::undefined();
+    });
+    b.def("scrollBy", 2, [parseScrollArgs, doWindowScrollTo](Value, std::span<const Value> a) {
+        double dx = 0, dy = 0;
+        parseScrollArgs(a, dx, dy);
+        double curY = 0;
+        auto* e = hostEngine();
+        if (e && e->document() && e->document()->documentElement()) {
+            curY = e->document()->documentElement()->scrollTopValue();
+        }
+        doWindowScrollTo(0, curY + dy);
+        return ev::undefined();
     });
 
     {
@@ -628,6 +727,14 @@ void installWebHostGlobals(engine::Engine& engine) {
         ev::registerGlobal("dispatchEvent", ev::getProperty(win.get(), "dispatchEvent"));
         ev::registerGlobal("getComputedStyle",
                            ev::getProperty(win.get(), "getComputedStyle"));
+        ev::registerGlobal("matchMedia",
+                           ev::getProperty(win.get(), "matchMedia"));
+        ev::registerGlobal("scrollTo",
+                           ev::getProperty(win.get(), "scrollTo"));
+        ev::registerGlobal("scrollBy",
+                           ev::getProperty(win.get(), "scrollBy"));
+        ev::registerGlobal("scroll",
+                           ev::getProperty(win.get(), "scroll"));
     }
     {
         Value raf = makeRequestAnimationFrame();

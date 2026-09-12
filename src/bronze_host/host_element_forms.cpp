@@ -5,6 +5,11 @@
 #include "bronze_host/host_internal.h"
 
 #include "dom/element.h"
+#include "dom/event.h"
+#include "dom/event_dispatch.h"
+#include "engine/engine.h"
+#include "layout/el_input.h"
+#include "layout/el_textarea.h"
 #include "layout/form_control.h"
 
 #include <string>
@@ -183,6 +188,169 @@ void decorateElementForms(ObjectBuilder& b) {
                    if (st->el) layout::setTabIndex(st->el, i32At(a, 0));
                    return ev::undefined();
                });
+
+    // ---- Selection & Validity ---------------------------------------------
+    b.def("select", 0, [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->el) return ev::undefined();
+        if (auto* inp = st->el->inputControl()) inp->selectAll();
+        else if (auto* ta = st->el->textareaControl()) ta->selectAll();
+        return ev::undefined();
+    });
+
+    b.def("setSelectionRange", 2, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->el || a.size() < 2) return ev::undefined();
+        int start = static_cast<int>(ev::toDouble(a[0]));
+        int end = static_cast<int>(ev::toDouble(a[1]));
+        if (auto* inp = st->el->inputControl()) inp->setSelectionRange(start, end);
+        else if (auto* ta = st->el->textareaControl()) ta->setSelectionRange(start, end);
+        return ev::undefined();
+    });
+
+    b.accessor("selectionStart",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::null();
+                   if (auto* inp = st->el->inputControl()) return ev::fromDouble(inp->selectionStart());
+                   if (auto* ta = st->el->textareaControl()) return ev::fromDouble(ta->selectionStart());
+                   return ev::null();
+               },
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el || a.empty()) return ev::undefined();
+                   int start = static_cast<int>(ev::toDouble(a[0]));
+                   if (auto* inp = st->el->inputControl())
+                       inp->setSelectionRange(start, std::max(start, inp->selectionEnd()));
+                   else if (auto* ta = st->el->textareaControl())
+                       ta->setSelectionRange(start, std::max(start, ta->selectionEnd()));
+                   return ev::undefined();
+               });
+
+    b.accessor("selectionEnd",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::null();
+                   if (auto* inp = st->el->inputControl()) return ev::fromDouble(inp->selectionEnd());
+                   if (auto* ta = st->el->textareaControl()) return ev::fromDouble(ta->selectionEnd());
+                   return ev::null();
+               },
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el || a.empty()) return ev::undefined();
+                   int end = static_cast<int>(ev::toDouble(a[0]));
+                   if (auto* inp = st->el->inputControl())
+                       inp->setSelectionRange(std::min(end, inp->selectionStart()), end);
+                   else if (auto* ta = st->el->textareaControl())
+                       ta->setSelectionRange(std::min(end, ta->selectionStart()), end);
+                   return ev::undefined();
+               });
+
+    b.def("setCustomValidity", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->el || a.empty() || ev::isUndefined(a[0])) return ev::undefined();
+        st->el->setCustomValidity(ev::toUtf8(a[0]));
+        return ev::undefined();
+    });
+
+    auto checkVal = [](HostNodeState* st) -> bool {
+        if (!st || !st->el) return true;
+        bool valid = st->el->customValidity().empty();
+        if (valid && st->el->hasAttribute("required")) {
+            std::string val = layout::formValue(st->el);
+            if (val.empty()) valid = false;
+        }
+        if (!valid) {
+            dom::Event evt("invalid", false, true);
+            evt.setIsTrusted(true);
+            if (auto* eng = hostEngine()) eng->dispatchElementEvent(st->el, evt);
+        }
+        return valid;
+    };
+
+    b.def("checkValidity", 0, [checkVal](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        return ev::fromBool(checkVal(st));
+    });
+
+    b.def("reportValidity", 0, [checkVal](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        return ev::fromBool(checkVal(st));
+    });
+
+    b.accessor("validity",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   ObjectBuilder v;
+                   bool customError = st && st->el && !st->el->customValidity().empty();
+                   bool valueMissing = false;
+                   if (st && st->el && st->el->hasAttribute("required")) {
+                       if (layout::formValue(st->el).empty()) valueMissing = true;
+                   }
+                   bool valid = !customError && !valueMissing;
+                   v.set("valid", ev::fromBool(valid));
+                   v.set("customError", ev::fromBool(customError));
+                   v.set("valueMissing", ev::fromBool(valueMissing));
+                   v.set("typeMismatch", ev::fromBool(false));
+                   v.set("patternMismatch", ev::fromBool(false));
+                   v.set("tooLong", ev::fromBool(false));
+                   v.set("tooShort", ev::fromBool(false));
+                   v.set("rangeUnderflow", ev::fromBool(false));
+                   v.set("rangeOverflow", ev::fromBool(false));
+                   v.set("stepMismatch", ev::fromBool(false));
+                   v.set("badInput", ev::fromBool(false));
+                   return v.get();
+               },
+               nullptr);
+
+    b.accessor("validationMessage",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::fromUtf8("");
+                   if (!st->el->customValidity().empty())
+                       return ev::fromUtf8(st->el->customValidity());
+                   if (st->el->hasAttribute("required") && layout::formValue(st->el).empty())
+                       return ev::fromUtf8("Please fill out this field.");
+                   return ev::fromUtf8("");
+               },
+               nullptr);
+
+    b.accessor("willValidate",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::fromBool(false);
+                   return ev::fromBool(layout::reflectsValue(st->el) && !st->el->hasAttribute("disabled"));
+               },
+               nullptr);
+
+    b.def("click", 0, [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->el) return ev::undefined();
+        dom::MouseEvent ev("click");
+        dom::dispatchDomEvent(st->el, ev);
+        if (!ev.defaultPrevented() && (st->el->tagName() == "INPUT" || st->el->tagName() == "input")) {
+            std::string t = st->el->getAttribute("type");
+            for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (t == "radio") {
+                if (!st->el->hasAttribute("checked")) {
+                    layout::clearRadioGroup(st->el);
+                    st->el->setAttribute("checked", "");
+                    dom::Event inputEvt("input");
+                    dom::dispatchDomEvent(st->el, inputEvt);
+                    dom::Event changeEvt("change");
+                    dom::dispatchDomEvent(st->el, changeEvt);
+                }
+            } else if (t == "checkbox") {
+                if (st->el->hasAttribute("checked")) st->el->removeAttribute("checked");
+                else st->el->setAttribute("checked", "");
+                dom::Event inputEvt("input");
+                dom::dispatchDomEvent(st->el, inputEvt);
+                dom::Event changeEvt("change");
+                dom::dispatchDomEvent(st->el, changeEvt);
+            }
+        }
+        return ev::undefined();
+    });
 }
 
 }  // namespace bro::bronze_host

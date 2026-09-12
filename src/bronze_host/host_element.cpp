@@ -114,6 +114,8 @@ HostNodeState* stateFor(dom::Node* node) {
     return st;
 }
 
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // Geometry helpers
 // ---------------------------------------------------------------------------
@@ -122,6 +124,8 @@ dom::AbsoluteRect borderBoxOf(dom::Element* el) {
     hostEngine()->flushLayoutForRead(el->document());
     return dom::absoluteBorderBox(el);
 }
+
+namespace {
 
 Value makeRectValue(double x, double y, double w, double h) {
     ObjectBuilder r;
@@ -529,27 +533,70 @@ void decorateElementProto(ObjectBuilder& b) {
             st->el->removeAttribute(ev::toUtf8(nameV));
         return ev::undefined();
     });
+    b.def("toggleAttribute", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el || a.empty() || ev::isUndefined(a[0])) return ev::fromBool(false);
+        std::string name = ev::toUtf8(a[0]);
+        if (a.size() >= 2 && !ev::isUndefined(a[1])) {
+            bool force = ev::toBool(a[1]);
+            if (force) {
+                st->el->setAttribute(name, "");
+                return ev::fromBool(true);
+            } else {
+                st->el->removeAttribute(name);
+                return ev::fromBool(false);
+            }
+        }
+        if (st->el->hasAttribute(name)) {
+            st->el->removeAttribute(name);
+            return ev::fromBool(false);
+        } else {
+            st->el->setAttribute(name, "");
+            return ev::fromBool(true);
+        }
+    });
+    b.def("getAttributeNames", 0, [](Value self_, std::span<const Value>) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        std::vector<std::string> names;
+        for (const auto& [name, val] : st->el->attributes()) {
+            names.push_back(name);
+        }
+        if (st->el->hasAttribute("style")) {
+            names.push_back("style");
+        }
+        return hostArrayOf(names.size(), [&names](size_t i) {
+            return ev::fromUtf8(names[i]);
+        });
+    });
+    b.def("hasAttributes", 0, [](Value self_, std::span<const Value>) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el) return ev::fromBool(false);
+        return ev::fromBool(!st->el->attributes().empty() || st->el->hasAttribute("style"));
+    });
+    b.accessor("attributes",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+                   std::vector<std::pair<std::string, std::string>> attrs;
+                   for (const auto& [name, val] : st->el->attributes()) {
+                       attrs.emplace_back(name, val);
+                   }
+                   if (st->el->hasAttribute("style")) {
+                       attrs.emplace_back("style", st->el->getAttribute("style"));
+                   }
+                   return hostArrayOf(attrs.size(), [&attrs](size_t i) {
+                       ObjectBuilder ab;
+                       ab.set("name", ev::fromUtf8(attrs[i].first));
+                       ab.set("value", ev::fromUtf8(attrs[i].second));
+                       return ab.get();
+                   });
+               },
+               nullptr);
 
     // ---- the tree ---------------------------------------------------------
     installNodeTree(b);
-
-    b.def("append", 1, [](Value self_, std::span<const Value> a) {
-        HostNodeState* st = nodeStateOf(self_);
-        if (!st || !st->el) return ev::undefined();
-        for (const Value& v : a) {
-            // A string argument becomes a text node, as the web's append does.
-            // This is the shortest path from compiled code to text in the
-            // document, and without it `append("hi")` would silently do
-            // nothing.
-            if (dom::Node* child = hostNodeOf(v)) {
-                hostInsertNode(st->el, child, nullptr);
-            } else if (!ev::isObject(v) && !ev::isUndefined(v)) {
-                if (dom::Document* doc = st->el->document())
-                    st->el->appendChild(doc->createTextNode(ev::toUtf8(v)));
-            }
-        }
-        return ev::undefined();
-    });
+    decorateElementMutate(b);
 
     b.accessor("children",
                [](Value self_, std::span<const Value>) {
@@ -644,6 +691,29 @@ void decorateElementProto(ObjectBuilder& b) {
         std::vector<dom::Element*> found = st->el->querySelectorAll(ev::toUtf8(selV));
         return hostArrayOf(found.size(),
                            [&found](size_t i) { return hostElementValue(found[i]); });
+    });
+    b.def("matches", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el || a.empty() || ev::isUndefined(a[0])) return ev::fromBool(false);
+        return ev::fromBool(st->el->matches(ev::toUtf8(a[0])));
+    });
+    b.def("closest", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el || a.empty() || ev::isUndefined(a[0])) return ev::null();
+        dom::Element* found = st->el->closest(ev::toUtf8(a[0]));
+        return found ? hostElementValue(found) : ev::null();
+    });
+    b.def("getElementsByTagName", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        std::string tag = a.empty() || ev::isUndefined(a[0]) ? "*" : ev::toUtf8(a[0]);
+        return makeLiveHTMLCollection(st->el, st->el->document(), tag);
+    });
+    b.def("getElementsByClassName", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        std::string cls = a.empty() || ev::isUndefined(a[0]) ? "" : ev::toUtf8(a[0]);
+        return makeLiveHTMLCollection(st->el, st->el->document(), "." + cls);
     });
 
     // ---- geometry ---------------------------------------------------------

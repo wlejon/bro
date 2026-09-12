@@ -104,6 +104,7 @@ set(BRO_BRONZE_HOST_SOURCES
     dom_storage.cpp
     dom_gamepad.cpp
     host_element.cpp
+    host_element_mutate.cpp
     host_element_style.cpp
     host_element_dataset.cpp
     host_element_forms.cpp

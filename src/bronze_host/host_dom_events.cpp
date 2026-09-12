@@ -78,6 +78,39 @@ Value describeTarget(dom::Element* el) {
     return hostElementValue(el);
 }
 
+int legacyKeyCodeFor(const std::string& code, const std::string& key) {
+    if (key == "Enter") return 13;
+    if (key == "Backspace") return 8;
+    if (key == "Tab") return 9;
+    if (key == "Escape") return 27;
+    if (key == " " || key == "Space") return 32;
+    if (key == "ArrowLeft") return 37;
+    if (key == "ArrowUp") return 38;
+    if (key == "ArrowRight") return 39;
+    if (key == "ArrowDown") return 40;
+    if (key == "Delete") return 46;
+    if (key == "Insert") return 45;
+    if (key == "Home") return 36;
+    if (key == "End") return 35;
+    if (key == "PageUp") return 33;
+    if (key == "PageDown") return 34;
+    if (key.size() == 1) {
+        char c = key[0];
+        if (c >= 'a' && c <= 'z') return c - 'a' + 65;
+        if (c >= 'A' && c <= 'Z') return c;
+        if (c >= '0' && c <= '9') return c;
+    }
+    if (code.rfind("Key", 0) == 0 && code.size() == 4) {
+        char c = code[3];
+        if (c >= 'A' && c <= 'Z') return c;
+    }
+    if (code.rfind("Digit", 0) == 0 && code.size() == 6) {
+        char c = code[5];
+        if (c >= '0' && c <= '9') return c;
+    }
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // The event object
 // ---------------------------------------------------------------------------
@@ -105,6 +138,7 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
     b.set("eventPhase", ev::fromDouble(e.eventPhase()));
     b.set("bubbles", ev::fromBool(e.bubbles()));
     b.set("cancelable", ev::fromBool(e.cancelable()));
+    b.set("composed", ev::fromBool(true));
     b.set("defaultPrevented", ev::fromBool(e.defaultPrevented()));
     b.set("isTrusted", ev::fromBool(e.isTrusted()));
     b.set("timeStamp", ev::fromDouble(e.timeStamp()));
@@ -113,7 +147,26 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
     // event and as the click count for a mouse event — the same two meanings
     // the web gives the name, on the same two event kinds.
     if (auto* custom = dynamic_cast<dom::CustomEvent*>(&e)) {
-        Value detail = ev::fromUtf8(custom->detail());
+        const std::string& det = custom->detail();
+        Value detail = ev::null();
+        if (!det.empty()) {
+            if (det.front() == '{' || det.front() == '[') {
+                ev::GlobalValue g = ev::globalValue("JSON");
+                if (g.found && ev::isObject(g.value)) {
+                    Value parseFn = ev::getProperty(g.value, "parse");
+                    if (ev::isFunction(parseFn)) {
+                        Value sVal = ev::fromUtf8(det);
+                        ev::CallResult res = ev::call(parseFn, g.value, std::span<const Value>(&sVal, 1));
+                        if (!res.thrown && !ev::isUndefined(res.value)) {
+                            detail = res.value;
+                        }
+                    }
+                }
+            }
+            if (ev::isNull(detail) || ev::isUndefined(detail)) {
+                detail = ev::fromUtf8(det);
+            }
+        }
         b.set("detail", detail);
     }
 
@@ -130,6 +183,7 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("movementY", ev::fromDouble(m->movementY()));
         b.set("button", ev::fromDouble(m->button()));
         b.set("buttons", ev::fromDouble(m->buttons()));
+        b.set("which", ev::fromDouble(m->button() >= 0 ? m->button() + 1 : 0));
         b.set("detail", ev::fromDouble(m->detail()));
         b.set("ctrlKey", ev::fromBool(m->ctrlKey()));
         b.set("shiftKey", ev::fromBool(m->shiftKey()));
@@ -262,14 +316,19 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("shiftKey", ev::fromBool(k->shiftKey()));
         b.set("altKey", ev::fromBool(k->altKey()));
         b.set("metaKey", ev::fromBool(k->metaKey()));
+        int kc = legacyKeyCodeFor(k->code(), k->key());
+        b.set("keyCode", ev::fromDouble(kc));
+        b.set("which", ev::fromDouble(kc));
+        b.set("charCode", ev::fromDouble(0.0));
     }
 
     // The three write-throughs. `live` is captured by value: the closures
     // outlive this function (they live on the event object), and the box is
     // what tells them whether the event still exists.
-    b.def("preventDefault", 0, [live](Value, std::span<const Value>) {
+    b.def("preventDefault", 0, [live](Value self_, std::span<const Value>) {
         if (!live->ev) return staleEventThrow("preventDefault");
         live->ev->preventDefault();
+        ev::setProperty(self_, "defaultPrevented", ev::fromBool(true));
         return ev::undefined();
     });
     b.def("stopPropagation", 0, [live](Value, std::span<const Value>) {
@@ -307,6 +366,8 @@ std::vector<ElementListener>& registrations() {
     return *list;
 }
 
+} // namespace
+
 // addEventListener's third argument: `true` for capture, or an options object.
 // Anything else (absent, false, a number) is the default — the same shape the
 // web accepts, minus `passive`, which this DOM does not model anywhere.
@@ -324,14 +385,16 @@ dom::ListenerOptions readOptions(Value optV) {
     return opts;
 }
 
+namespace {
+
 // ---------------------------------------------------------------------------
 // Descriptors for a dispatch the program starts
 // ---------------------------------------------------------------------------
 
 struct EventSpec {
     std::string type;
-    bool bubbles = true;
-    bool cancelable = true;
+    bool bubbles = false;
+    bool cancelable = false;
     bool hasDetail = false;
     std::string detail;
     std::string key;
@@ -341,9 +404,7 @@ struct EventSpec {
 // Reads `{type, bubbles, cancelable, detail, key, code}`. False leaves a pending
 // TypeError naming what was wrong: a dispatch with no type is a program bug,
 // and a silently dropped one would look exactly like a listener that never
-// ran. `bubbles`/`cancelable` default to true — a custom event between the two
-// worlds is meant to be heard by a document listener, and a non-bubbling
-// default would make the common case look broken.
+// ran.
 bool readEventSpec(Value descV, const char* what, EventSpec& out) {
     if (!ev::isObject(descV)) {
         ev::throwTypeError(std::string(what) +
@@ -366,24 +427,27 @@ bool readEventSpec(Value descV, const char* what, EventSpec& out) {
     }
 
     Value bubblesV = ev::getProperty(desc.get(), "bubbles");
-    out.bubbles = ev::isUndefined(bubblesV) ? true : ev::toBool(bubblesV);
+    out.bubbles = ev::isUndefined(bubblesV) ? false : ev::toBool(bubblesV);
     Value cancelableV = ev::getProperty(desc.get(), "cancelable");
-    out.cancelable = ev::isUndefined(cancelableV) ? true : ev::toBool(cancelableV);
+    out.cancelable = ev::isUndefined(cancelableV) ? false : ev::toBool(cancelableV);
 
-    // Only a string detail crosses — dom::CustomEvent says why. A detail of
-    // any other type is refused rather than stringified: "[object Object]"
-    // arriving on the other side is worse than being told it cannot go.
     Value detailV = ev::getProperty(desc.get(), "detail");
     if (!ev::isUndefined(detailV) && !ev::isNull(detailV)) {
-        if (ev::isObject(detailV)) {
-            ev::throwTypeError(
-                std::string(what) +
-                ".dispatchEvent: `detail` must be a string — an object cannot cross "
-                "between the compiled and interpreted heaps (src/bronze_host/README.md)");
-            return false;
-        }
         out.hasDetail = true;
-        out.detail = ev::toUtf8(detailV);
+        if (ev::isObject(detailV)) {
+            ev::GlobalValue g = ev::globalValue("JSON");
+            if (g.found && ev::isObject(g.value)) {
+                Value stringifyFn = ev::getProperty(g.value, "stringify");
+                if (ev::isFunction(stringifyFn)) {
+                    ev::CallResult res = ev::call(stringifyFn, g.value, std::span<const Value>(&detailV, 1));
+                    if (!res.thrown && ev::isString(res.value)) {
+                        out.detail = ev::toUtf8(res.value);
+                    }
+                }
+            }
+        } else {
+            out.detail = ev::toUtf8(detailV);
+        }
     }
 
     Value keyV = ev::getProperty(desc.get(), "key");

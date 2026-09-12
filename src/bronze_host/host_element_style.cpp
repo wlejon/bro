@@ -89,9 +89,18 @@ Value makeStyleObject(HostNodeState* st) {
         Value nameV = argAt(a, 0), valV = argAt(a, 1);
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
             return ev::undefined();
+        std::string name = ev::toUtf8(nameV);
         std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV))
                               ? ev::toUtf8(valV) : "";
-        st->el->style().setProperty(ev::toUtf8(nameV), val);
+        bool allWhite = true;
+        for (char ch : val) {
+            if (!std::isspace(static_cast<unsigned char>(ch))) {
+                allWhite = false;
+                break;
+            }
+        }
+        if (allWhite) st->el->style().removeProperty(name);
+        else st->el->style().setProperty(name, val);
         return ev::undefined();
     });
     b.def("getPropertyValue", 1, [st](Value, std::span<const Value> a) {
@@ -99,6 +108,9 @@ Value makeStyleObject(HostNodeState* st) {
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
             return ev::fromUtf8("");
         return ev::fromUtf8(st->el->style().getProperty(ev::toUtf8(nameV)));
+    });
+    b.def("getPropertyPriority", 1, [](Value, std::span<const Value>) {
+        return ev::fromUtf8("");
     });
     b.def("removeProperty", 1, [st](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
@@ -109,6 +121,21 @@ Value makeStyleObject(HostNodeState* st) {
         st->el->style().removeProperty(name);
         return ev::fromUtf8(old);
     });
+    b.def("item", 1, [st](Value, std::span<const Value> a) {
+        if (!st->el || a.empty()) return ev::fromUtf8("");
+        size_t idx = static_cast<size_t>(ev::toDouble(a[0]));
+        const auto& props = st->el->style().properties();
+        if (idx >= props.size()) return ev::fromUtf8("");
+        auto it = props.begin();
+        std::advance(it, idx);
+        return ev::fromUtf8(it->first);
+    });
+    b.accessor("length",
+               [st](Value, std::span<const Value>) {
+                   if (!st->el) return ev::fromDouble(0.0);
+                   return ev::fromDouble(static_cast<double>(st->el->style().size()));
+               },
+               nullptr);
     b.accessor("cssText",
                [st](Value, std::span<const Value>) {
                    if (!st->el) return ev::fromUtf8("");
@@ -128,18 +155,49 @@ Value makeStyleObject(HostNodeState* st) {
     // it is also what the web does: an unset property reads "".
     t.get = [st](const std::string& key, Value& out) {
         if (!st->el) return false;
+        bool isIndex = !key.empty();
+        for (char c : key) {
+            if (!std::isdigit(static_cast<unsigned char>(c))) {
+                isIndex = false;
+                break;
+            }
+        }
+        if (isIndex) {
+            size_t idx = static_cast<size_t>(std::stoul(key));
+            const auto& props = st->el->style().properties();
+            if (idx < props.size()) {
+                auto it = props.begin();
+                std::advance(it, idx);
+                out = ev::fromUtf8(it->first);
+                return true;
+            }
+            out = ev::undefined();
+            return true;
+        }
         out = ev::fromUtf8(st->el->style().getProperty(styleKeyToCss(key)));
         return true;
     };
     t.set = [st](const std::string& key, Value v) {
         if (!st->el || ev::isObject(v)) return;
+        if (key == "cssText") {
+            st->el->style().setCssText(ev::isUndefined(v) || ev::isNull(v) ? "" : ev::toUtf8(v));
+            return;
+        }
         const std::string css = styleKeyToCss(key);
-        // null and undefined REMOVE, matching the accessor pairs this
-        // replaced; the web instead stringifies, but a UI that clears a
-        // property by assigning null is common enough that the older
-        // behaviour is the one worth keeping.
-        if (ev::isUndefined(v) || ev::isNull(v)) st->el->style().removeProperty(css);
-        else st->el->style().setProperty(css, ev::toUtf8(v));
+        if (ev::isUndefined(v) || ev::isNull(v)) {
+            st->el->style().removeProperty(css);
+        } else {
+            std::string val = ev::toUtf8(v);
+            bool allWhite = true;
+            for (char ch : val) {
+                if (!std::isspace(static_cast<unsigned char>(ch))) {
+                    allWhite = false;
+                    break;
+                }
+            }
+            if (allWhite) st->el->style().removeProperty(css);
+            else st->el->style().setProperty(css, val);
+        }
     };
     // Membership and enumeration answer for the SET properties only. `'color'
     // in el.style` being false on a bare element is what the web says too —
@@ -192,6 +250,18 @@ Value makeComputedStyleObject(HostNodeState* st) {
         if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::fromUtf8("");
         return ev::fromUtf8(resolve(ev::toUtf8(nameV)));
     });
+    b.def("getPropertyPriority", 1, [](Value, std::span<const Value>) {
+        return ev::fromUtf8("");
+    });
+    b.def("item", 1, [](Value, std::span<const Value>) {
+        return ev::fromUtf8("");
+    });
+    b.accessor("length", [](Value, std::span<const Value>) {
+        return ev::fromDouble(0.0);
+    }, nullptr);
+    b.accessor("cssText", [](Value, std::span<const Value>) {
+        return ev::fromUtf8("");
+    }, nullptr);
     // Present and inert, because that is what they are on the web's computed
     // declaration — a UI that calls them on the wrong object gets the web's
     // behaviour rather than a TypeError from a missing method.
