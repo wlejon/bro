@@ -64,6 +64,77 @@ bool extractTextureObj(Value texObj, std::vector<uint8_t>& outBytes, int& outW, 
     return true;
 }
 
+static scene::SpriteNode::AnimationSpec parseAnimSpec(Value specVal) {
+    scene::SpriteNode::AnimationSpec spec;
+    Value framesVal = ev::getProperty(specVal, "frames");
+    if (ev::isObject(framesVal)) {
+        Value lenVal = ev::getProperty(framesVal, "length");
+        if (ev::isNumber(lenVal)) {
+            int len = static_cast<int>(ev::toDouble(lenVal));
+            for (int i = 0; i < len; ++i) {
+                Value fVal = ev::getElement(framesVal, i);
+                if (ev::isNumber(fVal)) spec.frames.push_back(static_cast<int>(ev::toDouble(fVal)));
+            }
+        }
+    }
+    spec.fps = static_cast<float>(numAtProp(specVal, "fps", 12.0));
+    spec.loop = boolAtProp(specVal, "loop", true);
+    spec.next = strAtProp(specVal, "next", "");
+    return spec;
+}
+
+static void applySpriteSheet(Value opts, scene::SpriteNode* node) {
+    Value sheetVal = ev::getProperty(opts, "sheet");
+    if (!ev::isObject(sheetVal)) return;
+
+    Value framesVal = ev::getProperty(sheetVal, "frames");
+    if (ev::isObject(framesVal)) {
+        Value lenVal = ev::getProperty(framesVal, "length");
+        if (ev::isNumber(lenVal)) {
+            int len = static_cast<int>(ev::toDouble(lenVal));
+            std::vector<scene::SpriteNode::Frame> frames;
+            frames.reserve(len);
+            for (int i = 0; i < len; ++i) {
+                Value f = ev::getElement(framesVal, i);
+                scene::SpriteNode::Frame fr{};
+                fr.x = static_cast<float>(numAtProp(f, "x", 0));
+                fr.y = static_cast<float>(numAtProp(f, "y", 0));
+                fr.w = static_cast<float>(numAtProp(f, "w", 0));
+                fr.h = static_cast<float>(numAtProp(f, "h", 0));
+                frames.push_back(fr);
+            }
+            node->setSheetFrames(std::move(frames));
+            return;
+        }
+    }
+    int fw = static_cast<int>(numAtProp(sheetVal, "frameWidth", 0));
+    int fh = static_cast<int>(numAtProp(sheetVal, "frameHeight", 0));
+    int cols = static_cast<int>(numAtProp(sheetVal, "columns", 1));
+    int rows = static_cast<int>(numAtProp(sheetVal, "rows", 1));
+    if (fw > 0 && fh > 0) {
+        node->setSheetGrid(fw, fh, cols, rows);
+    }
+}
+
+static void applySpriteAnimations(Value opts, scene::SpriteNode* node) {
+    Value animsVal = ev::getProperty(opts, "animations");
+    if (!ev::isObject(animsVal)) return;
+
+    Value objCtor = ev::globalValue("Object").value;
+    Value keysFn = ev::getProperty(objCtor, "keys");
+    Value keysArr = ev::call(keysFn, objCtor, std::span<const Value>(&animsVal, 1)).value;
+    Value lenVal = ev::getProperty(keysArr, "length");
+    uint32_t len = ev::isNumber(lenVal) ? static_cast<uint32_t>(ev::toDouble(lenVal)) : 0;
+    for (uint32_t i = 0; i < len; ++i) {
+        Value kVal = ev::getElement(keysArr, i);
+        std::string key = ev::toUtf8(kVal);
+        Value specVal = ev::getProperty(animsVal, key.c_str());
+        if (ev::isObject(specVal)) {
+            node->addAnimation(key, parseAnimSpec(specVal));
+        }
+    }
+}
+
 }  // namespace
 
 void installSceneGraph2D(ObjectBuilder& b) {
@@ -120,6 +191,9 @@ void installSceneGraph2D(ObjectBuilder& b) {
             Value nameVal = ev::getProperty(opts, "name");
             if (ev::isString(nameVal)) node->setName(ev::toUtf8(nameVal));
 
+            Value srcVal = ev::getProperty(opts, "src");
+            if (ev::isString(srcVal)) node->setImagePath(ev::toUtf8(srcVal));
+
             double w = numAtProp(opts, "width", 32);
             double h = numAtProp(opts, "height", 32);
             node->setSize((float)w, (float)h);
@@ -138,6 +212,15 @@ void installSceneGraph2D(ObjectBuilder& b) {
             if (fw > 0 && fh > 0) {
                 node->setSheetGrid(static_cast<int>(fw), static_cast<int>(fh), static_cast<int>(cols), static_cast<int>(rows));
             }
+
+            applySpriteSheet(opts, node);
+            applySpriteAnimations(opts, node);
+
+            Value playVal = ev::getProperty(opts, "play");
+            if (ev::isString(playVal)) node->play(ev::toUtf8(playVal));
+
+            Value fiVal = ev::getProperty(opts, "frameIndex");
+            if (ev::isNumber(fiVal)) node->setFrameIndex(static_cast<int>(ev::toDouble(fiVal)));
 
             applyWorldAnchorAndBillboard(opts, node);
 
@@ -333,14 +416,18 @@ void installSceneNode2D(ObjectBuilder& b) {
         [](Value self_, std::span<const Value>) { return ev::undefined(); },
         [](Value self_, std::span<const Value> a) {
             auto* n = sceneNodeOf(self_);
-            if (n && n->type() == scene::SceneNode::Type::Sprite && !a.empty() && ev::isObject(a[0])) {
+            if (!n || n->type() != scene::SceneNode::Type::Sprite) return ev::undefined();
+            auto* sp = static_cast<scene::SpriteNode*>(n);
+            if (!a.empty() && ev::isFunction(a[0])) {
                 auto fnRef = std::make_shared<ev::Persistent>(a[0]);
-                static_cast<scene::SpriteNode*>(n)->setOnAnimationEnd([fnRef](const std::string& name) {
-                    if (fnRef && ev::isObject(fnRef->get())) {
+                sp->setOnAnimationEnd([fnRef](const std::string& name) {
+                    if (fnRef && ev::isFunction(fnRef->get())) {
                         Value arg = ev::fromUtf8(name);
                         ev::call(fnRef->get(), ev::undefined(), std::span<const Value>(&arg, 1));
                     }
                 });
+            } else {
+                sp->setOnAnimationEnd(nullptr);
             }
             return ev::undefined();
         });
@@ -348,21 +435,7 @@ void installSceneNode2D(ObjectBuilder& b) {
     b.def("addAnimation", 2, [](Value self_, std::span<const Value> a) {
         auto* n = sceneNodeOf(self_);
         if (n && n->type() == scene::SceneNode::Type::Sprite && a.size() >= 2 && ev::isString(a[0]) && ev::isObject(a[1])) {
-            auto* sp = static_cast<scene::SpriteNode*>(n);
-            std::string name = ev::toUtf8(a[0]);
-            Value specVal = a[1];
-            scene::SpriteNode::AnimationSpec spec;
-            Value framesVal = ev::getProperty(specVal, "frames");
-            if (ev::isObject(framesVal)) {
-                int len = static_cast<int>(ev::toDouble(ev::getProperty(framesVal, "length")));
-                for (int i = 0; i < len; ++i) {
-                    spec.frames.push_back(static_cast<int>(ev::toDouble(ev::getElement(framesVal, i))));
-                }
-            }
-            spec.fps = static_cast<float>(numAtProp(specVal, "fps", 12.0));
-            spec.loop = boolAtProp(specVal, "loop", true);
-            spec.next = strAtProp(specVal, "next", "");
-            sp->addAnimation(name, std::move(spec));
+            static_cast<scene::SpriteNode*>(n)->addAnimation(ev::toUtf8(a[0]), parseAnimSpec(a[1]));
         }
         return self_;
     });

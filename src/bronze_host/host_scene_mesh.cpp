@@ -314,15 +314,20 @@ void applyInstancedMeshNodeOptions(scene::InstancedMeshNode* node, Value opts) {
 
     Value meshVal = ev::getProperty(opts, "mesh");
     if (ev::isObject(meshVal)) {
-        Value pVal = ev::getProperty(meshVal, "positions");
-        Value iVal = ev::getProperty(meshVal, "indices");
-        if (!ev::isUndefined(pVal) && !ev::isUndefined(iVal)) {
-            if (readFloatVector(pVal, meshData.positions) && readUint32Vector(iVal, meshData.indices)) {
-                readFloatVector(ev::getProperty(meshVal, "normals"), meshData.normals);
-                readFloatVector(ev::getProperty(meshVal, "colors"), meshData.colors);
-                readFloatVector(ev::getProperty(meshVal, "uvs"), meshData.uvs);
-                readFloatVector(ev::getProperty(meshVal, "tangents"), meshData.tangents);
-                hasRawData = true;
+        if (auto* md = hostMeshDataOf(meshVal)) {
+            meshData = *md;
+            hasRawData = true;
+        } else {
+            Value pVal = ev::getProperty(meshVal, "positions");
+            Value iVal = ev::getProperty(meshVal, "indices");
+            if (!ev::isUndefined(pVal) && !ev::isUndefined(iVal)) {
+                if (readFloatVector(pVal, meshData.positions) && readUint32Vector(iVal, meshData.indices)) {
+                    readFloatVector(ev::getProperty(meshVal, "normals"), meshData.normals);
+                    readFloatVector(ev::getProperty(meshVal, "colors"), meshData.colors);
+                    readFloatVector(ev::getProperty(meshVal, "uvs"), meshData.uvs);
+                    readFloatVector(ev::getProperty(meshVal, "tangents"), meshData.tangents);
+                    hasRawData = true;
+                }
             }
         }
     }
@@ -366,6 +371,51 @@ void applyInstancedMeshNodeOptions(scene::InstancedMeshNode* node, Value opts) {
         bromesh::computeNormals(meshData);
     }
     node->setMesh(std::move(meshData));
+
+    Value instVal = ev::getProperty(opts, "instances");
+    auto instInfo = ev::typedArrayInfo(instVal);
+    if (instInfo && instInfo.data) {
+        size_t floatCount = instInfo.byteLength / sizeof(float);
+        node->setInstances(reinterpret_cast<const float*>(instInfo.data), floatCount / 16);
+    } else if (ev::isObject(instVal)) {
+        std::vector<float> floats;
+        if (readFloatVector(instVal, floats) && !floats.empty()) {
+            node->setInstances(floats.data(), floats.size() / 16);
+        }
+    } else {
+        Value instTrVal = ev::getProperty(opts, "instancesFromTransforms");
+        auto trInfo = ev::typedArrayInfo(instTrVal);
+        if (trInfo && trInfo.data) {
+            size_t floatCount = trInfo.byteLength / sizeof(float);
+            node->setInstancesFromPosQuatScale(reinterpret_cast<const float*>(trInfo.data), floatCount / 9);
+        } else if (ev::isObject(instTrVal)) {
+            std::vector<float> floats;
+            if (readFloatVector(instTrVal, floats) && !floats.empty()) {
+                node->setInstancesFromPosQuatScale(floats.data(), floats.size() / 9);
+            }
+        }
+    }
+
+    auto applyInstTex = [&](const char* key, void (scene::InstancedMeshNode::*setter)(int, int, const uint8_t*)) {
+        Value tex = ev::getProperty(opts, key);
+        if (ev::isObject(tex)) {
+            int w = static_cast<int>(numAtProp(tex, "width", 0));
+            int h = static_cast<int>(numAtProp(tex, "height", 0));
+            Value dataVal = ev::getProperty(tex, "data");
+            auto info = ev::typedArrayInfo(dataVal);
+            if (info && info.data && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * h * 4) {
+                (node->*setter)(w, h, info.data);
+            }
+        }
+    };
+    applyInstTex("texture", &scene::InstancedMeshNode::setBaseColorTexture);
+    applyInstTex("normalTexture", &scene::InstancedMeshNode::setNormalTexture);
+    applyInstTex("metallicRoughnessTexture", &scene::InstancedMeshNode::setMetallicRoughnessTexture);
+    applyInstTex("occlusionTexture", &scene::InstancedMeshNode::setOcclusionTexture);
+    applyInstTex("emissiveTexture", &scene::InstancedMeshNode::setEmissiveTexture);
+
+    Value sbVal = ev::getProperty(opts, "staticBatch");
+    if (!ev::isUndefined(sbVal)) node->setStaticBatch(ev::toBool(sbVal));
 }
 
 }  // namespace
@@ -699,6 +749,24 @@ void installSceneNodeMesh(ObjectBuilder& b) {
             std::vector<float> floats;
             readFloatVector(a[0], floats);
             inst->setInstances(floats.data(), floats.size() / 16);
+        }
+        return self_;
+    });
+
+    b.def("setInstancesFromTransforms", 1, [](Value self_, std::span<const Value> a) {
+        auto* n = sceneNodeOf(self_);
+        if (!n || n->type() != scene::SceneNode::Type::InstancedMesh)
+            return ev::throwTypeError("setInstancesFromTransforms: node is not an InstancedMeshNode");
+        if (a.empty()) return self_;
+        auto* inst = static_cast<scene::InstancedMeshNode*>(n);
+        ev::TypedArrayInfo info = ev::typedArrayInfo(a[0]);
+        if (info && info.data) {
+            size_t floatCount = info.byteLength / sizeof(float);
+            inst->setInstancesFromPosQuatScale(reinterpret_cast<const float*>(info.data), floatCount / 9);
+        } else if (ev::isObject(a[0])) {
+            std::vector<float> floats;
+            readFloatVector(a[0], floats);
+            inst->setInstancesFromPosQuatScale(floats.data(), floats.size() / 9);
         }
         return self_;
     });

@@ -134,6 +134,57 @@ void Engine::flush() {
     if (isSystemVisible()) {
         layoutSystemPanels(*textMetrics_);
     }
+
+#if BRO_WITH_3D
+    if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+        for (auto& sg : sceneGraphs_) {
+            if (sg.graph) sg.graph->materializeHtmlNodes(skia);
+        }
+    }
+    const bool gpuTiming = gl_ && !sceneGraphs_.empty() &&
+                           dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+    if (gpuTiming) {
+        if (gpuTimerQuery_ == 0) glGenQueries(1, &gpuTimerQuery_);
+        glBeginQuery(GL_TIME_ELAPSED, gpuTimerQuery_);
+    }
+    for (auto& sg : sceneGraphs_) {
+        if (sg.element) {
+            auto& box = sg.element->layoutBox();
+            int ew = static_cast<int>(box.contentRect.width);
+            int eh = static_cast<int>(box.contentRect.height);
+            if (ew > 0 && eh > 0 &&
+                (ew != sg.graph->canvasWidth() || eh != sg.graph->canvasHeight())) {
+                sg.graph->setCanvasSize(ew, eh);
+            }
+        }
+        if (sg.graph) sg.graph->render();
+    }
+    if (gpuTiming) { glEndQuery(GL_TIME_ELAPSED); gpuTimerPending_ = true; }
+
+    pruneDetachedSceneGraphs();
+#endif  // BRO_WITH_3D
+
+    webglEntries_.erase(
+        std::remove_if(webglEntries_.begin(), webglEntries_.end(),
+            [](auto& entry) {
+                if (!entry.element) return false;
+                auto* n = entry.element;
+                while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                return n->tagName() != "html" && n->tagName() != "HTML";
+            }),
+        webglEntries_.end());
+
+    for (auto& cs : canvasScenes_) {
+        cs->rasterize(gl_.get());
+        if (!cs->isDetached()) continue;
+        canvasSceneRegistry_.erase(cs->sceneId());
+        if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
+            el->setCanvasScene(nullptr);
+    }
+    canvasScenes_.erase(
+        std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
+            [](auto& cs) { return cs->isDetached(); }),
+        canvasScenes_.end());
 }
 
 void Engine::advanceTime(double ms) {

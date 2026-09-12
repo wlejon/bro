@@ -118,65 +118,7 @@ void installSceneGraphFx(ObjectBuilder& b) {
         return wrapSceneNode(node, g);
     });
 
-    b.def("createParticles3D", 1, [](Value self_, std::span<const Value> a) {
-        auto* g = sceneGraphOf(self_);
-        if (!g) return ev::undefined();
-        auto* node = g->createParticles3D();
-        g->root()->addChild(node);
-        if (!a.empty() && ev::isObject(a[0])) {
-            Value opts = a[0];
-            Value nameVal = ev::getProperty(opts, "name");
-            if (ev::isString(nameVal)) node->setName(ev::toUtf8(nameVal));
 
-            double cap = numAtProp(opts, "capacity", 256);
-            if (!ev::isUndefined(ev::getProperty(opts, "maxParticles")))
-                cap = numAtProp(opts, "maxParticles", cap);
-            node->setMaxParticles(static_cast<int>(cap));
-
-            double rate = numAtProp(opts, "rate", 32);
-            node->setRate((float)rate);
-
-            double lmin = numAtProp(opts, "lifetimeMin", 1);
-            double lmax = numAtProp(opts, "lifetimeMax", 2);
-            node->setLifetime((float)lmin, (float)lmax);
-
-            double sz0 = numAtProp(opts, "sizeStart", 0.1);
-            double sz1 = numAtProp(opts, "sizeEnd", 0.2);
-            node->setSize((float)sz0, (float)sz1);
-
-            double soft = numAtProp(opts, "softness", 0);
-            node->setSoftness((float)soft);
-
-            Value colVal = ev::getProperty(opts, "color");
-            float cr = 1, cg = 1, cb = 1, ca = 1;
-            if (parseColorValue(colVal, cr, cg, cb, ca)) {
-                node->setColors(bromath::Color{cr, cg, cb, ca}, bromath::Color{cr, cg, cb, 0.0f});
-            }
-
-            double dur = numAtProp(opts, "duration", 0);
-            bool loop = boolAtProp(opts, "loop", true);
-            node->setDuration((float)dur, loop);
-
-            Value fnVal = ev::getProperty(opts, "onFinished");
-            if (ev::isObject(fnVal)) {
-                auto fnRef = std::make_shared<ev::Persistent>(fnVal);
-                node->setOnFinished([fnRef]() {
-                    if (fnRef && ev::isObject(fnRef->get())) {
-                        ev::call(fnRef->get(), ev::undefined(), {});
-                    }
-                });
-            }
-
-            Value burstVal = ev::getProperty(opts, "burst");
-            if (ev::isNumber(burstVal)) node->burst(static_cast<int>(ev::toDouble(burstVal)));
-
-            double x = numAtProp(opts, "x", 0);
-            double y = numAtProp(opts, "y", 0);
-            double z = numAtProp(opts, "z", 0);
-            node->setPosition((float)x, (float)y, (float)z);
-        }
-        return wrapSceneNode(node, g);
-    });
 
     b.def("createDecal", 1, [](Value self_, std::span<const Value> a) {
         auto* g = sceneGraphOf(self_);
@@ -487,18 +429,6 @@ void installSceneNodeFx(ObjectBuilder& b) {
             return ev::undefined();
         });
 
-    b.def("setBaseColorTexture", 1, [](Value self_, std::span<const Value> a) {
-        auto* n = sceneNodeOf(self_);
-        if (n && n->type() == scene::SceneNode::Type::Decal && !a.empty()) {
-            std::vector<uint8_t> bytes;
-            int tw = 0, th = 0;
-            if (extractTextureObj(a[0], bytes, tw, th)) {
-                static_cast<scene::DecalNode*>(n)->setAlbedoTexture(tw, th, bytes.data());
-            }
-        }
-        return ev::undefined();
-    });
-
     b.def("setAlbedoTexture", 1, [](Value self_, std::span<const Value> a) {
         auto* n = sceneNodeOf(self_);
         if (n && n->type() == scene::SceneNode::Type::Decal && !a.empty()) {
@@ -607,128 +537,7 @@ void installSceneNodeFx(ObjectBuilder& b) {
         return ev::undefined();
     });
 
-    // Particle & Particles3D properties
-    b.accessor("particleCount", [](Value self_, std::span<const Value>) {
-        auto* n = sceneNodeOf(self_);
-        if (!n) return ev::fromDouble(0.0);
-        if (n->type() == scene::SceneNode::Type::Particles)
-            return ev::fromDouble(static_cast<scene::ParticleNode*>(n)->liveCount());
-        if (n->type() == scene::SceneNode::Type::Particles3D)
-            return ev::fromDouble(static_cast<scene::Particles3DNode*>(n)->liveCount());
-        return ev::fromDouble(0.0);
-    }, nullptr);
 
-    b.accessor("liveCount", [](Value self_, std::span<const Value>) {
-        auto* n = sceneNodeOf(self_);
-        if (!n) return ev::fromDouble(0.0);
-        if (n->type() == scene::SceneNode::Type::Particles3D)
-            return ev::fromDouble(static_cast<scene::Particles3DNode*>(n)->liveCount());
-        if (n->type() == scene::SceneNode::Type::Particles)
-            return ev::fromDouble(static_cast<scene::ParticleNode*>(n)->liveCount());
-        return ev::fromDouble(0.0);
-    }, nullptr);
-
-    b.accessor("rate",
-        [](Value self_, std::span<const Value>) {
-            auto* n = sceneNodeOf(self_);
-            if (!n) return ev::undefined();
-            if (n->type() == scene::SceneNode::Type::Particles)
-                return ev::fromDouble(static_cast<scene::ParticleNode*>(n)->rate());
-            if (n->type() == scene::SceneNode::Type::Particles3D)
-                return ev::fromDouble(static_cast<scene::Particles3DNode*>(n)->rate());
-            return ev::undefined();
-        },
-        [](Value self_, std::span<const Value> a) {
-            auto* n = sceneNodeOf(self_);
-            if (!n || a.empty() || !ev::isNumber(a[0])) return ev::undefined();
-            float r = static_cast<float>(ev::toDouble(a[0]));
-            if (n->type() == scene::SceneNode::Type::Particles)
-                static_cast<scene::ParticleNode*>(n)->setRate(r);
-            else if (n->type() == scene::SceneNode::Type::Particles3D)
-                static_cast<scene::Particles3DNode*>(n)->setRate(r);
-            return ev::undefined();
-        });
-
-    b.accessor("softness",
-        [](Value self_, std::span<const Value>) {
-            auto* n = sceneNodeOf(self_);
-            if (n && n->type() == scene::SceneNode::Type::Particles3D)
-                return ev::fromDouble(static_cast<scene::Particles3DNode*>(n)->softness());
-            return ev::undefined();
-        },
-        [](Value self_, std::span<const Value> a) {
-            auto* n = sceneNodeOf(self_);
-            if (n && n->type() == scene::SceneNode::Type::Particles3D && !a.empty() && ev::isNumber(a[0]))
-                static_cast<scene::Particles3DNode*>(n)->setSoftness(static_cast<float>(ev::toDouble(a[0])));
-            return ev::undefined();
-        });
-
-    b.accessor("onFinished",
-        [](Value self_, std::span<const Value>) { return ev::undefined(); },
-        [](Value self_, std::span<const Value> a) {
-            auto* n = sceneNodeOf(self_);
-            if (n && n->type() == scene::SceneNode::Type::Particles3D && !a.empty() && ev::isObject(a[0])) {
-                auto fnRef = std::make_shared<ev::Persistent>(a[0]);
-                static_cast<scene::Particles3DNode*>(n)->setOnFinished([fnRef]() {
-                    if (fnRef && ev::isObject(fnRef->get())) {
-                        ev::call(fnRef->get(), ev::undefined(), {});
-                    }
-                });
-            }
-            return ev::undefined();
-        });
-
-    b.def("burst", 1, [](Value self_, std::span<const Value> a) {
-        auto* n = sceneNodeOf(self_);
-        if (!n || a.empty() || !ev::isNumber(a[0])) return ev::undefined();
-        int count = static_cast<int>(ev::toDouble(a[0]));
-        if (n->type() == scene::SceneNode::Type::Particles)
-            static_cast<scene::ParticleNode*>(n)->burst(count);
-        else if (n->type() == scene::SceneNode::Type::Particles3D)
-            static_cast<scene::Particles3DNode*>(n)->burst(count);
-        return ev::undefined();
-    });
-
-    b.def("clear", 0, [](Value self_, std::span<const Value> a) {
-        auto* n = sceneNodeOf(self_);
-        if (!n) return ev::undefined();
-        if (n->type() == scene::SceneNode::Type::Particles)
-            static_cast<scene::ParticleNode*>(n)->clear();
-        else if (n->type() == scene::SceneNode::Type::Particles3D)
-            static_cast<scene::Particles3DNode*>(n)->clear();
-        return ev::undefined();
-    });
-
-    b.accessor("isPlaying", [](Value self_, std::span<const Value>) {
-        auto* n = sceneNodeOf(self_);
-        if (!n) return ev::fromBool(false);
-        if (n->type() == scene::SceneNode::Type::Particles)
-            return ev::fromBool(static_cast<scene::ParticleNode*>(n)->isPlaying());
-        if (n->type() == scene::SceneNode::Type::Particles3D)
-            return ev::fromBool(static_cast<scene::Particles3DNode*>(n)->isPlaying());
-        return ev::fromBool(false);
-    }, nullptr);
-
-    b.def("play", 1, [](Value self_, std::span<const Value> a) {
-        auto* n = sceneNodeOf(self_);
-        if (!n) return ev::undefined();
-        if (n->type() == scene::SceneNode::Type::Particles) {
-            static_cast<scene::ParticleNode*>(n)->play();
-        } else if (n->type() == scene::SceneNode::Type::Particles3D) {
-            static_cast<scene::Particles3DNode*>(n)->play();
-        }
-        return ev::undefined();
-    });
-
-    b.def("stop", 0, [](Value self_, std::span<const Value> a) {
-        auto* n = sceneNodeOf(self_);
-        if (!n) return ev::undefined();
-        if (n->type() == scene::SceneNode::Type::Particles)
-            static_cast<scene::ParticleNode*>(n)->stop();
-        else if (n->type() == scene::SceneNode::Type::Particles3D)
-            static_cast<scene::Particles3DNode*>(n)->stop();
-        return ev::undefined();
-    });
 
     // Gaussian Splat
     b.accessor("splatCount", [](Value self_, std::span<const Value>) {

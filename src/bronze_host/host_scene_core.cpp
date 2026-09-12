@@ -302,6 +302,10 @@ void ensureSceneClassesInstalled() {
         installSceneNodeFx(b);
         installSceneNode2D(b);
         installSceneNodeAgent(b);
+        installSceneNodeAnim(b);
+        ObjectBuilder bDummy;
+        installSceneShader(b, bDummy);
+        installSceneParticles(b, bDummy);
     });
 
     g_sceneGraphClass.install("SceneGraph", 0, nullptr, [](ObjectBuilder& b) {
@@ -313,17 +317,39 @@ void ensureSceneClassesInstalled() {
         installSceneGraph2D(b);
         installSceneGraphTerrain(b);
         installSceneGraphAgent(b);
+        ObjectBuilder bDummy;
+        installSceneShader(bDummy, b);
+        installSceneParticles(bDummy, b);
+        installSceneTileWorld(b);
+        installSceneClipmap(b);
     });
 
     ensureTerrainClassInstalled();
+    ensureTweenClassInstalled();
+    ensureClipPlayerClassInstalled();
+    ensureTileWorldClassInstalled();
+    ensureClipmapClassInstalled();
 }
 
 void installSceneGraphCore(ObjectBuilder& b) {
     b.accessor("root", [](Value self_, std::span<const Value>) {
         auto* c = sceneGraphCellOf(self_);
         auto* g = c ? c->graph() : nullptr;
-        return (g && g->root()) ? wrapSceneNode(g->root(), g) : ev::null();
+        if (!g) return ev::undefined();
+        return g->root() ? wrapSceneNode(g->root(), g) : ev::null();
     }, nullptr);
+
+    b.def("createTween", 0, [](Value self_, std::span<const Value>) {
+        auto* g = sceneGraphOf(self_);
+        if (!g) return ev::undefined();
+        return wrapTween(g->createTween(), g);
+    });
+
+    b.def("createAnimationPlayer", 0, [](Value self_, std::span<const Value>) {
+        auto* g = sceneGraphOf(self_);
+        if (!g) return ev::undefined();
+        return wrapClipPlayer(g->createClipPlayer(), g);
+    });
 
     b.def("createNode", 1, [](Value self_, std::span<const Value> a) {
         auto* g = sceneGraphOf(self_);

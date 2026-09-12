@@ -39,5 +39,6 @@ inline float toWindowY(engine::Engine* engine, double y, uint64_t windowId) {
 
 void installHeadlessInput(engine::Engine& engine);
 void installHeadlessFrame(engine::Engine& engine);
+void installHeadlessTestHooks(engine::Engine& engine);
 
 } // namespace bro::bronze_host

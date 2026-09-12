@@ -144,6 +144,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_headless.cpp
     host_headless_input.cpp
     host_headless_frame.cpp
+    host_headless_test_hooks.cpp
     host_touch.cpp
     dom_bro.cpp
     eval.cpp
@@ -210,6 +211,15 @@ if(BRO_WITH_3D)
         host_mesh_optimize.cpp
         host_rigging.cpp
         host_rigging_anim.cpp
+        host_scene_tween.cpp
+        host_scene_clip.cpp
+        host_scene_anim.cpp
+        host_scene_particles.cpp
+        host_scene_shader.cpp
+        host_scene_tile.cpp
+        host_scene_tile_extra.cpp
+        host_scene_clipmap.cpp
+        host_scene_gizmo.cpp
     )
 endif()
 

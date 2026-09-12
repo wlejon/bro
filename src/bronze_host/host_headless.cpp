@@ -55,6 +55,7 @@ void setScriptArgs(const std::vector<std::string>& args) {
 void installHeadlessGlobals(engine::Engine& engine) {
     installHeadlessInput(engine);
     installHeadlessFrame(engine);
+    installHeadlessTestHooks(engine);
 
     // 1. advanceTime(double ms)
     ev::registerGlobal("advanceTime", ev::makeFunction(

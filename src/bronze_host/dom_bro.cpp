@@ -7,6 +7,9 @@
 #include "util/user_dirs.h"
 #include "util/log.h"
 #include "api/api.h"
+#if BRO_WITH_3D
+#include "bronze_host/host_scene_internal.h"
+#endif
 
 #include <filesystem>
 #include <string>
@@ -121,7 +124,35 @@ Value makeBroValue() {
     }
     {
         ObjectBuilder time;
-        time.def("now", 0, [](Value, std::span<const Value>) { return ev::fromDouble(hostClockMs()); });
+        time.accessor("scale",
+            [](Value, std::span<const Value>) -> Value {
+                auto* eng = hostEngine();
+                return ev::fromDouble(eng ? eng->timeScale() : 1.0);
+            },
+            [](Value, std::span<const Value> a) -> Value {
+                auto* eng = hostEngine();
+                if (eng && !a.empty() && ev::isNumber(a[0])) {
+                    eng->setTimeScale(ev::toDouble(a[0]));
+                }
+                return ev::undefined();
+            });
+        time.accessor("paused",
+            [](Value, std::span<const Value>) -> Value {
+                auto* eng = hostEngine();
+                return ev::fromBool(eng ? eng->timePaused() : false);
+            },
+            [](Value, std::span<const Value> a) -> Value {
+                auto* eng = hostEngine();
+                if (eng && !a.empty()) {
+                    eng->setTimePaused(ev::toBool(a[0]));
+                }
+                return ev::undefined();
+            });
+        time.accessor("now",
+            [](Value, std::span<const Value>) -> Value {
+                auto* eng = hostEngine();
+                return ev::fromDouble(eng ? eng->timeNowMs() : hostClockMs());
+            }, nullptr);
         b.set("time", time.get());
     }
 
@@ -163,7 +194,11 @@ Value makeBroValue() {
     // Feature-gated stubs (GATED list from tests/_smoke_app/minimal_smoke.js)
     b.set("media", makeUnavailableNamespace("media", "BRO_WITH_VIDEO"));
     b.set("flora", makeUnavailableNamespace("flora", "BRO_WITH_FLORA"));
+#if BRO_WITH_3D
+    b.set("gizmo", makeBroGizmoValue());
+#else
     b.set("gizmo", makeUnavailableNamespace("gizmo", "BRO_WITH_3D"));
+#endif
     b.set("impostor", makeUnavailableNamespace("impostor", "BRO_WITH_3D"));
     b.set("lm", makeUnavailableNamespace("lm", "BRO_WITH_LM"));
     b.set("stt", makeUnavailableNamespace("stt", "BRO_WITH_SOUNDML"));
@@ -199,9 +234,11 @@ void installBroGlobals(engine::Engine& engine) {
         Value imgVal = ev::getProperty(broObj, "image");
         if (ev::isObject(imgVal)) {
             Value codecImg = makeBroImageValue();
-            Value transcodeFn = ev::getProperty(codecImg, "transcodeKTX2");
-            if (!ev::isUndefined(transcodeFn)) {
-                ev::setProperty(imgVal, "transcodeKTX2", transcodeFn);
+            for (const char* name : {"transcodeKTX2", "encodePngFile", "encodePng", "encodeJpegFile", "encodeJpeg"}) {
+                Value fn = ev::getProperty(codecImg, name);
+                if (!ev::isUndefined(fn)) {
+                    ev::setProperty(imgVal, name, fn);
+                }
             }
 
             static ev::Persistent s_imageGpuValue;

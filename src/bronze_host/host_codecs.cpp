@@ -13,6 +13,8 @@
 #if defined(BROIMAGE_HAS_KTX2)
 #include <broimage/ktx2.h>
 #endif
+#include <broimage/encode.h>
+#include "util/asset_path.h"
 
 #include <cstring>
 #include <string>
@@ -199,6 +201,70 @@ Value transcodeKtx2Value(Value, std::span<const Value> args) {
 
 #endif  // BROIMAGE_HAS_KTX2
 
+Value encodePngFileValue(Value, std::span<const Value> a) {
+    if (a.size() < 5) return ev::throwTypeError("encodePngFile(path, pixels, w, h, channels, strideBytes?)");
+    std::string path = ev::toUtf8(a[0]);
+    auto info = ev::typedArrayInfo(a[1]);
+    if (!info.data) return ev::throwTypeError("encodePngFile: pixels must be a TypedArray");
+    int32_t w = static_cast<int32_t>(ev::toDouble(a[2]));
+    int32_t h = static_cast<int32_t>(ev::toDouble(a[3]));
+    int32_t c = static_cast<int32_t>(ev::toDouble(a[4]));
+    int32_t stride = 0;
+    if (a.size() >= 6 && !ev::isUndefined(a[5])) {
+        stride = static_cast<int32_t>(ev::toDouble(a[5]));
+    }
+    bool ok = broimage::encode_png_file(util::resolveAssetPath(path), info.data, w, h, c, stride);
+    return ev::fromBool(ok);
+}
+
+Value encodePngValue(Value, std::span<const Value> a) {
+    if (a.size() < 4) return ev::throwTypeError("encodePng(pixels, w, h, channels, strideBytes?)");
+    auto info = ev::typedArrayInfo(a[0]);
+    if (!info.data) return ev::throwTypeError("encodePng: pixels must be a TypedArray");
+    int32_t w = static_cast<int32_t>(ev::toDouble(a[1]));
+    int32_t h = static_cast<int32_t>(ev::toDouble(a[2]));
+    int32_t c = static_cast<int32_t>(ev::toDouble(a[3]));
+    int32_t stride = 0;
+    if (a.size() >= 5 && !ev::isUndefined(a[4])) {
+        stride = static_cast<int32_t>(ev::toDouble(a[4]));
+    }
+    std::vector<uint8_t> out;
+    if (!broimage::encode_png_memory(out, info.data, w, h, c, stride)) return ev::null();
+    return typedArrayFrom(ev::elements::Uint8, out.data(), out.size(), static_cast<uint32_t>(out.size()));
+}
+
+Value encodeJpegFileValue(Value, std::span<const Value> a) {
+    if (a.size() < 5) return ev::throwTypeError("encodeJpegFile(path, pixels, w, h, channels, quality?)");
+    std::string path = ev::toUtf8(a[0]);
+    auto info = ev::typedArrayInfo(a[1]);
+    if (!info.data) return ev::throwTypeError("encodeJpegFile: pixels must be a TypedArray");
+    int32_t w = static_cast<int32_t>(ev::toDouble(a[2]));
+    int32_t h = static_cast<int32_t>(ev::toDouble(a[3]));
+    int32_t c = static_cast<int32_t>(ev::toDouble(a[4]));
+    int32_t quality = 90;
+    if (a.size() >= 6 && !ev::isUndefined(a[5])) {
+        quality = static_cast<int32_t>(ev::toDouble(a[5]));
+    }
+    bool ok = broimage::encode_jpeg_file(util::resolveAssetPath(path), info.data, w, h, c, quality);
+    return ev::fromBool(ok);
+}
+
+Value encodeJpegValue(Value, std::span<const Value> a) {
+    if (a.size() < 4) return ev::throwTypeError("encodeJpeg(pixels, w, h, channels, quality?)");
+    auto info = ev::typedArrayInfo(a[0]);
+    if (!info.data) return ev::throwTypeError("encodeJpeg: pixels must be a TypedArray");
+    int32_t w = static_cast<int32_t>(ev::toDouble(a[1]));
+    int32_t h = static_cast<int32_t>(ev::toDouble(a[2]));
+    int32_t c = static_cast<int32_t>(ev::toDouble(a[3]));
+    int32_t quality = 90;
+    if (a.size() >= 5 && !ev::isUndefined(a[4])) {
+        quality = static_cast<int32_t>(ev::toDouble(a[4]));
+    }
+    std::vector<uint8_t> out;
+    if (!broimage::encode_jpeg_memory(out, info.data, w, h, c, quality)) return ev::null();
+    return typedArrayFrom(ev::elements::Uint8, out.data(), out.size(), static_cast<uint32_t>(out.size()));
+}
+
 }  // namespace
 
 Value makeBroMeshValue() {
@@ -215,7 +281,12 @@ Value makeBroImageValue() {
 #if defined(BROIMAGE_HAS_KTX2)
     b.def("transcodeKTX2", 2, transcodeKtx2Value);
 #endif
+    b.def("encodePngFile", 5, encodePngFileValue);
+    b.def("encodePng", 4, encodePngValue);
+    b.def("encodeJpegFile", 5, encodeJpegFileValue);
+    b.def("encodeJpeg", 4, encodeJpegValue);
     return b.get();
 }
 
 }  // namespace bro::bronze_host
+

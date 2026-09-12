@@ -205,3 +205,4 @@ getFramePixel
 screenshotCanvas
 writeFile
 perf
+__host
