@@ -211,6 +211,12 @@ bh_run_check() {
 
     # Global, not local: bh_module_name reads it as a fallback.
     PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+    export BRO_PROJECT_ROOT="$PROJECT_DIR"
+    local rtlib
+    rtlib="$(bh_find_shared_rt_lib "$PROJECT_DIR")" || true
+    if [[ -n "$rtlib" ]]; then
+        export BRONZE_SHARED_RT_LIB="$(bh_to_win_path "$rtlib")"
+    fi
 
     local bin
     bin="$(bh_find_bro_headless "$PROJECT_DIR")" || {

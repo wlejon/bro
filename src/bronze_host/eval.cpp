@@ -18,6 +18,17 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace bro::bronze_host {
 
 namespace ev = bronze::embed;
@@ -35,6 +46,30 @@ constexpr const char* kModuleExt = ".dylib";
 constexpr const char* kModuleExt = ".so";
 #endif
 
+std::filesystem::path getExecutableDirectory() {
+#ifdef _WIN32
+    char buf[MAX_PATH];
+    DWORD len = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        return std::filesystem::path(std::string(buf, len)).parent_path();
+    }
+#elif defined(__APPLE__)
+    char buf[1024];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0) {
+        return std::filesystem::path(buf).parent_path();
+    }
+#else
+    char buf[4096];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len > 0) {
+        buf[len] = '\0';
+        return std::filesystem::path(buf).parent_path();
+    }
+#endif
+    return std::filesystem::current_path();
+}
+
 std::filesystem::path getEvalTempDir() {
     std::filesystem::path p = std::filesystem::temp_directory_path() / "bro_eval";
     std::error_code ec;
@@ -45,12 +80,37 @@ std::filesystem::path getEvalTempDir() {
 void ensureSharedRuntimeEnv() {
     if (std::getenv("BRONZE_SHARED_RT_LIB")) return;
     std::error_code ec;
-    for (const auto& cand : {
-        std::filesystem::path("build/Release/bronze_runtime_shared.lib"),
-        std::filesystem::path("build/shared/Release/bronze_runtime_shared.lib"),
-        std::filesystem::path("D:/projects/bro/build/Release/bronze_runtime_shared.lib"),
-        std::filesystem::path("D:/projects/bro/build/shared/Release/bronze_runtime_shared.lib"),
-    }) {
+
+#ifdef _WIN32
+    const char* const name = "bronze_runtime_shared.lib";
+#elif defined(__APPLE__)
+    const char* const name = "libbronze_runtime_shared.dylib";
+#else
+    const char* const name = "libbronze_runtime_shared.so";
+#endif
+
+    const auto exeDir = getExecutableDirectory();
+    std::vector<std::filesystem::path> bases = {
+        exeDir,
+        exeDir / "shared",
+        exeDir / "shared/Release",
+        exeDir / "shared/Debug",
+        exeDir.parent_path() / "shared",
+        exeDir.parent_path() / "shared/Release",
+        exeDir.parent_path() / "shared/Debug",
+        std::filesystem::current_path(),
+        std::filesystem::current_path() / "build/shared",
+        std::filesystem::current_path() / "build/shared/Release",
+        std::filesystem::current_path() / "build-release/shared",
+    };
+    if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
+        bases.push_back(std::filesystem::path(env) / "build/shared");
+        bases.push_back(std::filesystem::path(env) / "build/shared/Release");
+        bases.push_back(std::filesystem::path(env) / "build-release/shared");
+    }
+
+    for (const auto& base : bases) {
+        auto cand = base / name;
         if (std::filesystem::exists(cand, ec)) {
             std::string abs = std::filesystem::absolute(cand, ec).string();
 #ifdef _WIN32
@@ -71,18 +131,23 @@ std::string getWebHostGlobalsPath() {
         auto p = std::filesystem::path(env) / "src/bronze_host/web_host.globals";
         if (std::filesystem::exists(p, ec)) return std::filesystem::absolute(p, ec).string();
     }
-    for (const auto& rel : {
-        "src/bronze_host/web_host.globals",
-        "web_host.globals",
-        "bronze/web_host.globals",
-        "../src/bronze_host/web_host.globals",
-        "../../src/bronze_host/web_host.globals",
+    const auto exeDir = getExecutableDirectory();
+    for (const auto& base : {
+        exeDir,
+        exeDir.parent_path(),
+        exeDir.parent_path().parent_path(),
+        std::filesystem::current_path(),
+        std::filesystem::current_path().parent_path(),
     }) {
-        auto p = std::filesystem::path(rel);
-        if (std::filesystem::exists(p, ec)) return std::filesystem::absolute(p, ec).string();
+        for (const auto& rel : {
+            "src/bronze_host/web_host.globals",
+            "web_host.globals",
+            "bronze/web_host.globals",
+        }) {
+            auto p = base / rel;
+            if (std::filesystem::exists(p, ec)) return std::filesystem::absolute(p, ec).string();
+        }
     }
-    auto projPath = std::filesystem::path("D:/projects/bro/src/bronze_host/web_host.globals");
-    if (std::filesystem::exists(projPath, ec)) return projPath.string();
 
     return "src/bronze_host/web_host.globals";
 }

@@ -62,6 +62,7 @@ to_win_path() {
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+export BRO_PROJECT_ROOT="$PROJECT_DIR"
 
 # Find the headless binary. BRO_HEADLESS overrides auto-detection so the suite
 # can run against an arbitrary build dir or a packaged dist binary.
