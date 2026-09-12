@@ -167,6 +167,18 @@ else()
     list(APPEND BRO_BRONZE_HOST_SOURCES host_net_stub.cpp)
 endif()
 
+if(BRO_WITH_3D)
+    list(APPEND BRO_BRONZE_HOST_SOURCES
+        host_scene_core.cpp
+        host_scene_env.cpp
+        host_scene_nodes.cpp
+        host_scene_mesh.cpp
+        host_scene_lights.cpp
+        host_scene_fx.cpp
+        host_scene_2d.cpp
+    )
+endif()
+
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
@@ -262,6 +274,10 @@ endif()
 
 if(BRO_WITH_GAMEAI)
     target_link_libraries(bro_bronze_host PUBLIC brogameagent)
+endif()
+
+if(BRO_WITH_3D)
+    target_link_libraries(bro_bronze_host PUBLIC bro_scene)
 endif()
 
 bro_apply_feature_defs(bro_bronze_host)

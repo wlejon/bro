@@ -2,6 +2,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_scene_internal.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -23,6 +24,7 @@ struct CanvasState {
     ev::Persistent jsObj;
     ev::Persistent glObj;
     ev::Persistent ctx2dObj;
+    ev::Persistent sceneObj;
     bool hasGl = false;
 };
 
@@ -143,6 +145,20 @@ Value makeCanvasValue(dom::Element* el) {
             Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get(), cs->el);
             cs->ctx2dObj.set(ctx2d);
             return ctx2d;
+        }
+        if (type == "scene") {
+            if (ev::isObject(cs->sceneObj.get())) {
+                if (sceneGraphOf(cs->sceneObj.get()) != nullptr) {
+                    return cs->sceneObj.get();
+                }
+            }
+            auto* eng = hostEngine();
+            if (!eng) return ev::null();
+            scene::SceneGraph* sg = eng->createSceneContext(cs->el);
+            if (!sg) return ev::null();
+            Value scnVal = createSceneGraphValue(sg, cs->el);
+            cs->sceneObj.set(scnVal);
+            return scnVal;
         }
         if (type != "webgl2" && type != "webgl") return ev::null();
         if (cs->hasGl) return cs->glObj.get();
