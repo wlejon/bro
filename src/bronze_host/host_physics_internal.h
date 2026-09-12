@@ -273,60 +273,6 @@ inline JPH::Quat readQuat(Value v, JPH::Quat def = JPH::Quat::sIdentity()) {
     return def;
 }
 
-inline bool readFloatVector(Value v, std::vector<float>& out) {
-    if (ev::isUndefined(v) || ev::isNull(v)) return false;
-    if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && info.bytesPerElement == sizeof(float)) {
-            const float* fp = reinterpret_cast<const float*>(info.data);
-            out.assign(fp, fp + info.elementCount);
-            return true;
-        }
-    }
-    if (!ev::isObject(v)) return false;
-    ev::Persistent root(v);
-    Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.clear();
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        Value e = ev::getElement(root.get(), i);
-        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
-        out.push_back(static_cast<float>(d));
-    }
-    return true;
-}
-
-inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
-    if (ev::isUndefined(v) || ev::isNull(v)) return false;
-    if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && info.bytesPerElement == sizeof(uint32_t)) {
-            const uint32_t* up = reinterpret_cast<const uint32_t*>(info.data);
-            out.assign(up, up + info.elementCount);
-            return true;
-        }
-        if (info.data && info.bytesPerElement == sizeof(uint16_t)) {
-            const uint16_t* up = reinterpret_cast<const uint16_t*>(info.data);
-            out.clear();
-            out.reserve(info.elementCount);
-            for (uint32_t i = 0; i < info.elementCount; ++i) out.push_back(up[i]);
-            return true;
-        }
-    }
-    if (!ev::isObject(v)) return false;
-    ev::Persistent root(v);
-    Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.clear();
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        Value e = ev::getElement(root.get(), i);
-        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
-        out.push_back(static_cast<uint32_t>(d));
-    }
-    return true;
-}
 
 inline std::string getPropString(const ev::Persistent& root, const char* name, const std::string& def = "") {
     Value v = ev::getProperty(root.get(), name);
@@ -659,32 +605,6 @@ inline void readQueryFilter(Value optsVal, physics::QueryFilter& out, HostPhysic
 // ---------------------------------------------------------------------------
 // Helpers: Make JS Objects (Vec3, Quat, TypedArray, State)
 // ---------------------------------------------------------------------------
-
-inline Value makeFloat32Array(const float* data, size_t count) {
-    Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(count));
-    if (data && count > 0) {
-        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(float));
-        ev::fillTypedArray(arr, bytes);
-    }
-    return arr;
-}
-
-inline Value makeUint32Array(const uint32_t* data, size_t count) {
-    Value arr = ev::createTypedArray(ev::elements::Uint32, static_cast<uint32_t>(count));
-    if (data && count > 0) {
-        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(uint32_t));
-        ev::fillTypedArray(arr, bytes);
-    }
-    return arr;
-}
-
-inline Value makeVec3Value(float x, float y, float z) {
-    ObjectBuilder b;
-    b.set("x", ev::fromDouble(x));
-    b.set("y", ev::fromDouble(y));
-    b.set("z", ev::fromDouble(z));
-    return b.get();
-}
 
 inline Value makeQuatValue(float x, float y, float z, float w) {
     ObjectBuilder b;

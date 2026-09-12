@@ -18,6 +18,7 @@
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_objects.h"
 #include "embed/embed.h"
+#include "runtime/bigint.h"
 
 #include <cmath>
 #include <cstddef>
@@ -141,6 +142,15 @@ inline webgl::WebGLQuery queryOf(Value v) {
     return {idOf(v, GlCell::Query)};
 }
 
+inline Value wrapTransformFeedback(webgl::WebGLTransformFeedback tf) {
+    if (!tf.id) return ev::null();
+    return wrapGlObj(GlCell::TransformFeedback, tf.id);
+}
+
+inline webgl::WebGLTransformFeedback transformFeedbackOf(Value v) {
+    return {idOf(v, GlCell::TransformFeedback)};
+}
+
 // ---------------------------------------------------------------------------
 // The live context
 // ---------------------------------------------------------------------------
@@ -181,7 +191,13 @@ inline uint32_t u32At(std::span<const Value> args, size_t i) {
 }
 
 inline int64_t i64At(std::span<const Value> args, size_t i) {
-    return static_cast<int64_t>(numAt(args, i));
+    if (i >= args.size()) return 0;
+    return ev::toInt64(args[i]);
+}
+
+inline uint64_t u64At(std::span<const Value> args, size_t i) {
+    if (i >= args.size()) return 0;
+    return ev::toUint64(args[i]);
 }
 
 inline bool boolAt(std::span<const Value> args, size_t i) {
@@ -361,6 +377,13 @@ struct ObjectBuilder {
 // Family installers (one per file for modularity)
 // ---------------------------------------------------------------------------
 
+// Helper to build a real JS Array
+Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make);
+
+// Indexed buffer bindings (WebGLBuffer stash for getIndexedParameter)
+void stashIndexedBinding(uint32_t target, uint32_t index, Value bufVal);
+Value loadIndexedBinding(uint32_t target, uint32_t index);
+
 // Each takes the under-construction context object and the wrapped context.
 // gl_context.cpp calls them in one fixed order; the order of def() calls
 // inside each is likewise fixed. `c` outlives the program: the Engine owns it
@@ -372,6 +395,7 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
+void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 
 // The whole context object: constants + every family + gl.canvas +
 // drawingBufferWidth/Height + the constructor-name shim three.js sniffs.

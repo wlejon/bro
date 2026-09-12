@@ -2,6 +2,9 @@
 // 2D grid navigation, A* pathfinding, line-of-sight, obstacle rasterization.
 
 #include "bronze_host/host_ai_internal.h"
+#if BRO_WITH_PHYSICS
+#include "physics/physics_world.h"
+#endif
 
 namespace bro::bronze_host {
 
@@ -253,12 +256,40 @@ Value aiCreateNavGrid(Value, std::span<const Value> a) {
     }
 
     Value fromPhys = ev::getProperty(root.get(), "fromPhysics");
-    if (!ev::isUndefined(fromPhys) && !ev::isNull(fromPhys) && ev::toBool(fromPhys)) {
-        auto* e = hostEngine();
-        auto* world = e ? e->physicsWorld() : nullptr;
+    if (!ev::isUndefined(fromPhys) && !ev::isNull(fromPhys) &&
+        !(ev::isBool(fromPhys) && !ev::toBool(fromPhys))) {
+#if BRO_WITH_PHYSICS
+        physics::PhysicsWorld* world = unwrapPhysicsWorld(fromPhys);
         if (world) {
+            uint32_t layerMask = 0xffffffffu;
+            Value lv = ev::getProperty(root.get(), "physicsLayers");
+            if (ev::isObject(lv)) {
+                ev::Persistent lvRoot(lv);
+                Value lenV = ev::getProperty(lvRoot.get(), "length");
+                if (ev::isNumber(lenV)) {
+                    uint32_t mask = 0;
+                    uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+                    for (uint32_t i = 0; i < n; i++) {
+                        Value el = ev::getElement(lvRoot.get(), i);
+                        int32_t idx = -1;
+                        if (ev::isString(el)) {
+                            std::string s = ev::toUtf8(el);
+                            idx = world->layerIndex(s);
+                        } else if (ev::isNumber(el)) {
+                            idx = static_cast<int32_t>(ev::toDouble(el));
+                        }
+                        if (idx >= 0 && idx < 32) mask |= (1u << idx);
+                    }
+                    layerMask = mask;
+                }
+            }
+            float bandMinY = static_cast<float>(getDoubleProperty(root.get(), "physicsMinY", -1e9));
+            float bandMaxY = static_cast<float>(getDoubleProperty(root.get(), "physicsMaxY", 1e9));
+
             for (const auto& b : world->collectStaticBodies()) {
                 if (b.isSensor) continue;
+                if (b.layer >= 0 && b.layer < 32 && !(layerMask & (1u << b.layer))) continue;
+                if (b.max.GetY() < bandMinY || b.min.GetY() > bandMaxY) continue;
                 if (b.min.GetX() <= minX && b.max.GetX() >= maxX &&
                     b.min.GetZ() <= minZ && b.max.GetZ() >= maxZ) continue;
                 brogameagent::AABB box{
@@ -270,6 +301,7 @@ Value aiCreateNavGrid(Value, std::span<const Value> a) {
                 grid->addObstacle(box, static_cast<float>(padding));
             }
         }
+#endif
     }
 
     return makeNavGridHandle(std::move(grid));

@@ -189,9 +189,56 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             {idOf(argAt(a, 0), GlCell::Program)}, u32At(a, 1));
         return ev::fromUtf8(name);
     });
+    b.def("getUniformIndices", 2, [c](Value, std::span<const Value> a) {
+        auto prog = webgl::WebGLProgram{idOf(argAt(a, 0), GlCell::Program)};
+        Value namesVal = argAt(a, 1);
+        if (!ev::isObject(namesVal)) return ev::null();
+        ev::Persistent root(namesVal);
+        Value lenV = ev::getProperty(root.get(), "length");
+        if (ev::isUndefined(lenV) || ev::isObject(lenV)) return ev::null();
+        uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+        std::vector<std::string> names;
+        names.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            names.push_back(ev::toUtf8(ev::getElement(root.get(), i)));
+        }
+        auto indices = live(c)->getUniformIndices(prog, names);
+        return hostArrayOf(indices.size(), [&indices](size_t i) {
+            return ev::fromDouble(indices[i]);
+        });
+    });
+    b.def("getActiveUniforms", 3, [c](Value, std::span<const Value> a) {
+        auto prog = webgl::WebGLProgram{idOf(argAt(a, 0), GlCell::Program)};
+        uint32_t pname = u32At(a, 2);
+        std::vector<uint32_t> storage;
+        const uint32_t* data = nullptr;
+        size_t count = 0;
+        if (!uint32Data(argAt(a, 1), storage, &data, &count)) return ev::null();
+        auto params = live(c)->getActiveUniforms(prog, std::vector<GLuint>(data, data + count), pname);
+        return hostArrayOf(params.size(), [&params, pname](size_t i) {
+            if (pname == 0x8A3E /* UNIFORM_IS_ROW_MAJOR */) {
+                return ev::fromBool(params[i] != 0);
+            }
+            return ev::fromDouble(params[i]);
+        });
+    });
     b.def("getActiveUniformBlockParameter", 3, [c](Value, std::span<const Value> a) {
-        return ev::fromDouble(live(c)->getActiveUniformBlockParameteri(
-            {idOf(argAt(a, 0), GlCell::Program)}, u32At(a, 1), u32At(a, 2)));
+        auto prog = webgl::WebGLProgram{idOf(argAt(a, 0), GlCell::Program)};
+        uint32_t blockIndex = u32At(a, 1);
+        uint32_t pname = u32At(a, 2);
+        switch (pname) {
+            case 0x8A43: {  // UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES
+                auto indices = live(c)->getActiveUniformBlockIndices(prog, blockIndex);
+                return hostArrayOf(indices.size(), [&indices](size_t i) {
+                    return ev::fromDouble(static_cast<uint32_t>(indices[i]));
+                });
+            }
+            case 0x8A44:  // UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER
+            case 0x8A46:  // UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER
+                return ev::fromBool(live(c)->getActiveUniformBlockParameteri(prog, blockIndex, pname) != 0);
+            default:
+                return ev::fromDouble(live(c)->getActiveUniformBlockParameteri(prog, blockIndex, pname));
+        }
     });
     b.def("uniformBlockBinding", 3, [c](Value, std::span<const Value> a) {
         live(c)->uniformBlockBinding({idOf(argAt(a, 0), GlCell::Program)}, u32At(a, 1),
@@ -328,6 +375,12 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     defMat("uniformMatrix2fv", 4, &Ctx::uniformMatrix2fv);
     defMat("uniformMatrix3fv", 9, &Ctx::uniformMatrix3fv);
     defMat("uniformMatrix4fv", 16, &Ctx::uniformMatrix4fv);
+    defMat("uniformMatrix2x3fv", 6, &Ctx::uniformMatrix2x3fv);
+    defMat("uniformMatrix3x2fv", 6, &Ctx::uniformMatrix3x2fv);
+    defMat("uniformMatrix2x4fv", 8, &Ctx::uniformMatrix2x4fv);
+    defMat("uniformMatrix4x2fv", 8, &Ctx::uniformMatrix4x2fv);
+    defMat("uniformMatrix3x4fv", 12, &Ctx::uniformMatrix3x4fv);
+    defMat("uniformMatrix4x3fv", 12, &Ctx::uniformMatrix4x3fv);
 }
 
 }  // namespace bro::bronze_host

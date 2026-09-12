@@ -228,19 +228,27 @@ void decorateAgentProto(ObjectBuilder& b) {
         return ev::undefined();
     });
 
+    b.accessor("unit", [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
+        if (ev::isUndefined(h->unitProxy.get())) {
+            h->unitProxy = ev::Persistent(makeUnitHandle(h));
+        }
+        return h->unitProxy.get();
+    }, nullptr);
+
     b.def("setTarget", 2, [](Value self, std::span<const Value> a) -> Value {
         HostAgent* h = unwrapAgent(self);
         if (!h) return ev::undefined();
+        h->navActive = false;
+        h->navPath.clear();
         if (a.size() >= 2) {
             float x = static_cast<float>(numAt(a, 0));
             float z = static_cast<float>(numAt(a, 1));
-            Value gv = makeVec3Value(x, 0, z);
-            std::span<const Value> args(&gv, 1);
-            Value setGoalFn = ev::getProperty(self, "setGoal");
-            if (ev::isFunction(setGoalFn)) ev::call(setGoalFn, self, args);
+            h->agent.setTarget(x, z);
         } else if (!a.empty() && ev::isObject(a[0])) {
-            Value setGoalFn = ev::getProperty(self, "setGoal");
-            if (ev::isFunction(setGoalFn)) ev::call(setGoalFn, self, a);
+            auto p = parseVec2(a[0]);
+            h->agent.setTarget(p.x, p.y);
         }
         return ev::undefined();
     });
@@ -552,6 +560,18 @@ Value aiCreateAgent(Value, std::span<const Value> a) {
         // `avoidance: true | false | {...}` — when the world's pass is on.
         h->agent.unit().id = static_cast<int>(getDoubleProperty(root.get(), "id", 0.0));
         h->agent.unit().teamId = static_cast<int>(getDoubleProperty(root.get(), "teamId", 0.0));
+        double hp = getDoubleProperty(root.get(), "hp", 100.0);
+        h->agent.unit().hp = static_cast<float>(hp);
+        h->agent.unit().maxHp = static_cast<float>(getDoubleProperty(root.get(), "maxHp", hp));
+        h->agent.unit().damage = static_cast<float>(getDoubleProperty(root.get(), "damage", 10.0));
+        h->agent.unit().attackRange = static_cast<float>(getDoubleProperty(root.get(), "attackRange", 3.0));
+        h->agent.unit().mana = static_cast<float>(getDoubleProperty(root.get(), "mana", 0.0));
+        h->agent.unit().maxMana = static_cast<float>(getDoubleProperty(root.get(), "maxMana", 100.0));
+        h->agent.unit().armor = static_cast<float>(getDoubleProperty(root.get(), "armor", 0.0));
+        h->agent.unit().magicResist = static_cast<float>(getDoubleProperty(root.get(), "magicResist", 0.0));
+        h->agent.unit().attacksPerSec = static_cast<float>(getDoubleProperty(root.get(), "attacksPerSec", 1.0));
+        h->agent.unit().moveSpeed = static_cast<float>(speed);
+        h->agent.unit().radius = static_cast<float>(radius);
         Value avoidV = ev::getProperty(root.get(), "avoidance");
         if (!ev::isUndefined(avoidV) && !ev::isNull(avoidV)) applyAgentAvoidance(avoidV, h->agent);
 

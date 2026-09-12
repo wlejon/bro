@@ -16,6 +16,15 @@ physics::PhysicsWorld* getPhysicsWorld() {
     return e ? e->physicsWorld() : nullptr;
 }
 
+physics::PhysicsWorld* unwrapPhysicsWorld(Value v) {
+    if (ev::isObject(v)) {
+        if (auto* w = static_cast<HostPhysicsWorld*>(ev::handleData(v))) {
+            if (w->tag == kHostPhysicsWorldTag) return w->getWorld();
+        }
+    }
+    return getPhysicsWorld();
+}
+
 void registerCommonWorldMethods(ObjectBuilder& b) {
     // Body Management
     b.def("createBody", 1, [](Value self, std::span<const Value> a) -> Value {

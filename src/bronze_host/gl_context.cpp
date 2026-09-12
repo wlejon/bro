@@ -22,6 +22,7 @@ Value createGlContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue) 
     installGlTextures(b, c);
     installGlFramebuffers(b, c);
     installGlQueries(b, c);
+    installGlTransformFeedback(b, c);
 
     // gl.canvas — the real host canvas object, so three.js's
     // state.reset()-era reads of gl.canvas.width/height see the live drawing

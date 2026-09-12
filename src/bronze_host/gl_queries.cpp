@@ -16,16 +16,11 @@ namespace bro::bronze_host {
 
 namespace {
 
-// {0: v[0], ..., length: n} — see the pseudo-array note above.
 template <typename T>
 Value makeNumberList(const T* v, size_t n) {
-    ObjectBuilder o;
-    for (size_t i = 0; i < n; ++i) {
-        o.obj.set(ev::setElement(o.get(), static_cast<uint32_t>(i),
-                                 ev::fromDouble(static_cast<double>(v[i]))));
-    }
-    o.set("length", ev::fromDouble(static_cast<double>(n)));
-    return o.get();
+    return hostArrayOf(n, [v](size_t i) {
+        return ev::fromDouble(static_cast<double>(v[i]));
+    });
 }
 
 }  // namespace
@@ -84,12 +79,9 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x0C23: {  // GL_COLOR_WRITEMASK
                 GLboolean v[4] = {0, 0, 0, 0};
                 glGetBooleanv(pname, v);
-                ObjectBuilder o;
-                for (uint32_t i = 0; i < 4; ++i) {
-                    o.obj.set(ev::setElement(o.get(), i, ev::fromBool(v[i] != GL_FALSE)));
-                }
-                o.set("length", ev::fromDouble(4));
-                return o.get();
+                return hostArrayOf(4, [v](size_t i) {
+                    return ev::fromBool(v[i] != GL_FALSE);
+                });
             }
 
             // WebGL-only pixel-store state — shadow answers, not GL enums.
@@ -181,20 +173,43 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         } else if (name == "EXT_texture_filter_anisotropic") {
             def("TEXTURE_MAX_ANISOTROPY_EXT", 0x84FE);
             def("MAX_TEXTURE_MAX_ANISOTROPY_EXT", 0x84FF);
+        } else if (name == "BRO_buffer_map") {
+            def("MAP_READ_BIT", 0x0001);
+            def("MAP_WRITE_BIT", 0x0002);
+            def("MAP_INVALIDATE_RANGE_BIT", 0x0004);
+            def("MAP_INVALIDATE_BUFFER_BIT", 0x0008);
+            def("MAP_FLUSH_EXPLICIT_BIT", 0x0010);
+            def("MAP_UNSYNCHRONIZED_BIT", 0x0020);
         }
         // Return truthy (empty) object for unknown-to-us supported names (WebGL convention).
         return o.get();
     });
 
+    b.def("getIndexedParameter", 2, [c](Value, std::span<const Value> a) {
+        if (!live(c) || a.size() < 2) return ev::null();
+        uint32_t pname = u32At(a, 0);
+        uint32_t index = u32At(a, 1);
+        switch (pname) {
+            case 0x8C8F:  // TRANSFORM_FEEDBACK_BUFFER_BINDING
+                return loadIndexedBinding(0x8C8E /* TRANSFORM_FEEDBACK_BUFFER */, index);
+            case 0x8A28:  // UNIFORM_BUFFER_BINDING
+                return loadIndexedBinding(0x8A11 /* UNIFORM_BUFFER */, index);
+            case 0x8C84:  // TRANSFORM_FEEDBACK_BUFFER_START
+            case 0x8C85:  // TRANSFORM_FEEDBACK_BUFFER_SIZE
+            case 0x8A29:  // UNIFORM_BUFFER_START
+            case 0x8A2A:  // UNIFORM_BUFFER_SIZE
+                return ev::fromDouble(static_cast<double>(live(c)->getIndexedParameterInt64(pname, index)));
+            default:
+                live(c)->setSyntheticError(0x0500 /* GL_INVALID_ENUM */);
+                return ev::null();
+        }
+    });
+
     b.def("getSupportedExtensions", 0, [c](Value, std::span<const Value>) {
         auto exts = live(c)->getSupportedExtensions();
-        ObjectBuilder o;
-        for (size_t i = 0; i < exts.size(); ++i) {
-            Value s = ev::fromUtf8(exts[i]);
-            o.obj.set(ev::setElement(o.get(), static_cast<uint32_t>(i), s));
-        }
-        o.set("length", ev::fromDouble(static_cast<double>(exts.size())));
-        return o.get();
+        return hostArrayOf(exts.size(), [&exts](size_t i) {
+            return ev::fromUtf8(exts[i]);
+        });
     });
 
     b.def("getShaderPrecisionFormat", 2, [](Value, std::span<const Value>) {
@@ -256,13 +271,30 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         live(c)->deleteQuery(queryOf(argAt(a, 0)));
         return ev::undefined();
     });
+    static std::unordered_map<GLenum, ev::Persistent> s_activeQueries;
+
     b.def("beginQuery", 2, [c](Value, std::span<const Value> a) {
-        live(c)->beginQuery(u32At(a, 0), queryOf(argAt(a, 1)));
+        GLenum target = u32At(a, 0);
+        live(c)->beginQuery(target, queryOf(argAt(a, 1)));
+        s_activeQueries.insert_or_assign(target, ev::Persistent(argAt(a, 1)));
         return ev::undefined();
     });
     b.def("endQuery", 1, [c](Value, std::span<const Value> a) {
-        live(c)->endQuery(u32At(a, 0));
+        GLenum target = u32At(a, 0);
+        live(c)->endQuery(target);
+        s_activeQueries.erase(target);
         return ev::undefined();
+    });
+    b.def("getQuery", 2, [c](Value, std::span<const Value> a) {
+        if (!live(c) || a.size() < 2) return ev::null();
+        GLenum target = u32At(a, 0);
+        GLenum pname = u32At(a, 1);
+        if (pname != 0x8865 /* CURRENT_QUERY */) return ev::null();
+        auto it = s_activeQueries.find(target);
+        if (it != s_activeQueries.end()) {
+            return it->second.get();
+        }
+        return ev::null();
     });
     b.def("getQueryParameter", 2, [c](Value, std::span<const Value> a) {
         GLenum pname = u32At(a, 1);

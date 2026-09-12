@@ -30,26 +30,6 @@ std::string strAtProp(Value obj, const char* key, const std::string& defVal) {
     return ev::isString(v) ? ev::toUtf8(v) : defVal;
 }
 
-bool readFloatVector(Value v, std::vector<float>& out) {
-    if (auto info = ev::typedArrayInfo(v)) {
-        size_t count = info.byteLength / sizeof(float);
-        const float* p = reinterpret_cast<const float*>(info.data);
-        out.assign(p, p + count);
-        return true;
-    }
-    if (ev::isObject(v)) {
-        Value lenV = ev::getProperty(v, "length");
-        if (ev::isNumber(lenV)) {
-            size_t count = static_cast<size_t>(ev::toDouble(lenV));
-            out.resize(count);
-            for (size_t i = 0; i < count; ++i) {
-                out[i] = static_cast<float>(ev::toDouble(ev::getElement(v, i)));
-            }
-            return true;
-        }
-    }
-    return false;
-}
 
 bool readUint32Vector(Value v, std::vector<uint32_t>& out) {
     if (auto info = ev::typedArrayInfo(v)) {

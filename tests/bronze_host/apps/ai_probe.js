@@ -114,7 +114,7 @@ say('navmesh.raycast_edge_hit', rcEdge.hit === true);
 
 // Pathfinding
 const nmPath = navMesh.findPath({ x: 2, y: 0, z: 2 }, { x: 18, y: 0, z: 18 });
-say('navmesh.path_valid', Array.isArray(nmPath) && nmPath.length >= 2);
+say('navmesh.path_valid', (Array.isArray(nmPath) || nmPath instanceof Float32Array) && nmPath.length >= 2);
 say('navmesh.path_partial', nmPath.partial === false);
 
 // ---------------------------------------------------------------------------

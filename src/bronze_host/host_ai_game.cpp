@@ -406,6 +406,247 @@ void decorateWorldProto(ObjectBuilder& b) {
         return ev::fromBool(w && w->world.avoidanceEnabled());
     }, nullptr);
 
+    b.def("step", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return ev::undefined();
+        w->world.tick(static_cast<float>(numAt(a, 0)));
+        return ev::undefined();
+    });
+
+    b.def("nearestEnemy", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.empty()) return ev::null();
+        HostAgent* ag = unwrapAgent(a[0]);
+        if (!ag) return ev::null();
+        auto* enemy = w->world.nearestEnemy(ag->agent);
+        if (!enemy) return ev::null();
+        for (const auto& r : w->roster) {
+            if (r.agent == enemy) return r.value.get();
+        }
+        return ev::null();
+    });
+
+    b.def("enemiesInRange", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 2) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        HostAgent* ag = unwrapAgent(a[0]);
+        if (!ag) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        float range = static_cast<float>(numAt(a, 1));
+        auto enemies = w->world.enemiesInRange(ag->agent, range);
+        std::vector<Value> out;
+        for (auto* enemy : enemies) {
+            for (const auto& r : w->roster) {
+                if (r.agent == enemy) {
+                    out.push_back(r.value.get());
+                    break;
+                }
+            }
+        }
+        return hostArrayOf(out.size(), [&](size_t i) { return out[i]; });
+    });
+
+    b.def("findById", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.empty()) return ev::null();
+        int id = static_cast<int>(numAt(a, 0));
+        auto* found = w->world.findById(id);
+        if (!found) return ev::null();
+        for (const auto& r : w->roster) {
+            if (r.agent == found) return r.value.get();
+        }
+        return ev::null();
+    });
+
+    b.def("resolveAttack", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 2) return ev::fromBool(false);
+        HostAgent* ag = unwrapAgent(a[0]);
+        if (!ag) return ev::fromBool(false);
+        int targetId = static_cast<int>(numAt(a, 1));
+        return ev::fromBool(w->world.resolveAttack(ag->agent, targetId));
+    });
+
+    b.def("resolveAbility", 3, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 3) return ev::fromBool(false);
+        HostAgent* ag = unwrapAgent(a[0]);
+        if (!ag) return ev::fromBool(false);
+        int slot = static_cast<int>(numAt(a, 1));
+        int targetId = static_cast<int>(numAt(a, 2));
+        return ev::fromBool(w->world.resolveAbility(ag->agent, slot, targetId));
+    });
+
+    b.def("dealDamage", 4, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.size() < 3) return ev::fromDouble(0.0);
+        HostAgent* att = unwrapAgent(a[0]);
+        HostAgent* tgt = unwrapAgent(a[1]);
+        if (!att || !tgt) return ev::fromDouble(0.0);
+        float amount = static_cast<float>(numAt(a, 2));
+        std::string kindStr = "physical";
+        if (a.size() >= 4 && ev::isString(a[3])) kindStr = ev::toUtf8(a[3]);
+        float dealt = w->world.dealDamage(att->agent, tgt->agent, amount, parseDamageKind(kindStr.c_str()));
+        return ev::fromDouble(dealt);
+    });
+
+    b.accessor("events", [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        const auto& evs = w->world.events();
+        return hostArrayOf(evs.size(), [&](size_t i) {
+            const auto& e = evs[i];
+            ObjectBuilder obj;
+            obj.set("attackerId", ev::fromDouble(e.attackerId));
+            obj.set("targetId", ev::fromDouble(e.targetId));
+            obj.set("amount", ev::fromDouble(e.amount));
+            obj.set("kind", ev::fromUtf8(damageKindStr(e.kind)));
+            obj.set("killed", ev::fromBool(e.killed));
+            return obj.get();
+        });
+    }, nullptr);
+
+    b.def("clearEvents", 0, [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (w) w->world.clearEvents();
+        return ev::undefined();
+    });
+
+    b.def("spawnProjectile", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.empty() || !ev::isObject(a[0])) return ev::fromDouble(-1);
+        ev::Persistent opts(a[0]);
+        brogameagent::Projectile p;
+        p.ownerId = static_cast<int>(getDoubleProperty(opts.get(), "ownerId", -1));
+        p.teamId = static_cast<int>(getDoubleProperty(opts.get(), "teamId", 0));
+        p.targetId = static_cast<int>(getDoubleProperty(opts.get(), "targetId", -1));
+        p.x = static_cast<float>(getDoubleProperty(opts.get(), "x", 0));
+        p.z = static_cast<float>(getDoubleProperty(opts.get(), "z", 0));
+        p.vx = static_cast<float>(getDoubleProperty(opts.get(), "vx", 0));
+        p.vz = static_cast<float>(getDoubleProperty(opts.get(), "vz", 0));
+        p.speed = static_cast<float>(getDoubleProperty(opts.get(), "speed", 20));
+        p.radius = static_cast<float>(getDoubleProperty(opts.get(), "radius", 0.3));
+        p.damage = static_cast<float>(getDoubleProperty(opts.get(), "damage", 0));
+        p.remainingLife = static_cast<float>(getDoubleProperty(opts.get(), "remainingLife", 2));
+        p.splashRadius = static_cast<float>(getDoubleProperty(opts.get(), "splashRadius", 0));
+        p.maxHits = static_cast<int>(getDoubleProperty(opts.get(), "maxHits", 0));
+
+        Value kindVal = ev::getProperty(opts.get(), "kind");
+        if (ev::isString(kindVal)) p.kind = parseDamageKind(ev::toUtf8(kindVal).c_str());
+
+        Value modeVal = ev::getProperty(opts.get(), "mode");
+        if (ev::isString(modeVal)) {
+            std::string m = ev::toUtf8(modeVal);
+            if (m == "pierce") p.mode = brogameagent::ProjectileMode::Pierce;
+            else if (m == "aoe") p.mode = brogameagent::ProjectileMode::AoE;
+        }
+
+        int id = w->world.spawnProjectile(p);
+        return ev::fromDouble(id);
+    });
+
+    b.accessor("projectiles", [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return hostArrayOf(0, [](size_t) { return ev::null(); });
+        const auto& projs = w->world.projectiles();
+        std::vector<const brogameagent::Projectile*> alive;
+        for (const auto& p : projs) {
+            if (p.alive) alive.push_back(&p);
+        }
+        return hostArrayOf(alive.size(), [&](size_t i) {
+            const auto& p = *alive[i];
+            ObjectBuilder obj;
+            obj.set("id", ev::fromDouble(p.id));
+            obj.set("ownerId", ev::fromDouble(p.ownerId));
+            obj.set("teamId", ev::fromDouble(p.teamId));
+            obj.set("x", ev::fromDouble(p.x));
+            obj.set("z", ev::fromDouble(p.z));
+            obj.set("vx", ev::fromDouble(p.vx));
+            obj.set("vz", ev::fromDouble(p.vz));
+            obj.set("speed", ev::fromDouble(p.speed));
+            obj.set("damage", ev::fromDouble(p.damage));
+            obj.set("alive", ev::fromBool(p.alive));
+            const char* modeStr = "single";
+            if (p.mode == brogameagent::ProjectileMode::Pierce) modeStr = "pierce";
+            else if (p.mode == brogameagent::ProjectileMode::AoE) modeStr = "aoe";
+            obj.set("mode", ev::fromUtf8(modeStr));
+            return obj.get();
+        });
+    }, nullptr);
+
+    b.def("snapshot", 0, [](Value self, std::span<const Value>) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w) return ev::null();
+        auto snap = w->world.snapshot();
+        ObjectBuilder obj;
+        Value agentsArr = hostArrayOf(snap.agents.size(), [&](size_t i) {
+            const auto& a = snap.agents[i];
+            ObjectBuilder ao;
+            ao.set("id", ev::fromDouble(a.id));
+            ao.set("x", ev::fromDouble(a.x));
+            ao.set("z", ev::fromDouble(a.z));
+            ao.set("vx", ev::fromDouble(a.vx));
+            ao.set("vz", ev::fromDouble(a.vz));
+            ao.set("yaw", ev::fromDouble(a.yaw));
+            ao.set("aimYaw", ev::fromDouble(a.aimYaw));
+            ao.set("aimPitch", ev::fromDouble(a.aimPitch));
+            ao.set("speed", ev::fromDouble(a.speed));
+            ao.set("radius", ev::fromDouble(a.radius));
+            ao.set("hp", ev::fromDouble(a.unit.hp));
+            ao.set("maxHp", ev::fromDouble(a.unit.maxHp));
+            ao.set("mana", ev::fromDouble(a.unit.mana));
+            ao.set("teamId", ev::fromDouble(a.unit.teamId));
+            ao.set("hasTarget", ev::fromBool(a.hasTarget));
+            ao.set("targetX", ev::fromDouble(a.targetX));
+            ao.set("targetZ", ev::fromDouble(a.targetZ));
+            return ao.get();
+        });
+        obj.set("agents", agentsArr);
+        obj.set("nextProjectileId", ev::fromDouble(snap.nextProjectileId));
+        return obj.get();
+    });
+
+    b.def("restore", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostWorld* w = unwrapWorld(self);
+        if (!w || a.empty() || !ev::isObject(a[0])) return ev::undefined();
+        ev::Persistent root(a[0]);
+        brogameagent::WorldSnapshot snap;
+        Value agentsArr = ev::getProperty(root.get(), "agents");
+        if (ev::isObject(agentsArr)) {
+            Value lenV = ev::getProperty(agentsArr, "length");
+            if (ev::isNumber(lenV)) {
+                int n = static_cast<int>(ev::toDouble(lenV));
+                for (int i = 0; i < n; i++) {
+                    Value ao = ev::getElement(agentsArr, i);
+                    if (ev::isObject(ao)) {
+                        brogameagent::AgentSnapshot as;
+                        as.id = static_cast<int>(getDoubleProperty(ao, "id", 0));
+                        as.x = static_cast<float>(getDoubleProperty(ao, "x", 0));
+                        as.z = static_cast<float>(getDoubleProperty(ao, "z", 0));
+                        as.vx = static_cast<float>(getDoubleProperty(ao, "vx", 0));
+                        as.vz = static_cast<float>(getDoubleProperty(ao, "vz", 0));
+                        as.yaw = static_cast<float>(getDoubleProperty(ao, "yaw", 0));
+                        as.aimYaw = static_cast<float>(getDoubleProperty(ao, "aimYaw", 0));
+                        as.aimPitch = static_cast<float>(getDoubleProperty(ao, "aimPitch", 0));
+                        as.speed = static_cast<float>(getDoubleProperty(ao, "speed", 6));
+                        as.radius = static_cast<float>(getDoubleProperty(ao, "radius", 0.4));
+                        as.unit.hp = static_cast<float>(getDoubleProperty(ao, "hp", 100));
+                        as.unit.maxHp = static_cast<float>(getDoubleProperty(ao, "maxHp", 100));
+                        as.unit.mana = static_cast<float>(getDoubleProperty(ao, "mana", 0));
+                        as.unit.teamId = static_cast<int>(getDoubleProperty(ao, "teamId", 0));
+                        as.unit.id = as.id;
+                        as.hasTarget = getBoolProperty(ao, "hasTarget", false);
+                        as.targetX = static_cast<float>(getDoubleProperty(ao, "targetX", 0));
+                        as.targetZ = static_cast<float>(getDoubleProperty(ao, "targetZ", 0));
+                        snap.agents.push_back(as);
+                    }
+                }
+            }
+        }
+        snap.nextProjectileId = static_cast<int>(getDoubleProperty(root.get(), "nextProjectileId", 1));
+        w->world.restore(snap);
+        return ev::undefined();
+    });
+
     b.accessor("agentCount", [](Value self, std::span<const Value>) -> Value {
         HostWorld* w = unwrapWorld(self);
         return ev::fromDouble(w ? static_cast<double>(w->world.agents().size()) : 0.0);
@@ -485,6 +726,9 @@ Value makeAiGameValue() {
     b.def("canSee", 8, aiCanSee);
     b.def("computeAim", 6, gameComputeAim);
     b.def("computeLeadAim", 10, aiComputeLeadAim);
+    installAIExtras(b);
+    installAIMcts(b);
+    installRegisterCapability(b);
     return b.get();
 }
 

@@ -14,11 +14,21 @@
 #include <span>
 #include <unordered_map>
 
+namespace bro::scene { class TerrainManager; }
+
 namespace bro::bronze_host {
 
 inline constexpr uint32_t kHostSceneGraphTag   = 0x53434E47u;  // 'SCNG'
 inline constexpr uint32_t kHostSceneNodeTag    = 0x534E4F44u;  // 'SNOD'
 inline constexpr uint32_t kHostSceneTextureTag = 0x53544558u;  // 'STEX'
+inline constexpr uint32_t kHostTerrainTag      = 0x54455252u;  // 'TERR'
+
+struct HostTerrainCell {
+    uint32_t tag = kHostTerrainTag;
+    std::unique_ptr<bro::scene::TerrainManager> manager;
+    ev::Persistent heightSource;
+    bool hasHeightSource = false;
+};
 
 struct HostSceneGraphCell {
     uint32_t tag = kHostSceneGraphTag;
@@ -80,11 +90,21 @@ inline HostSceneTextureCell* sceneTextureCellOf(Value v) {
     return (h && h->tag == kHostSceneTextureTag) ? h : nullptr;
 }
 
+inline HostTerrainCell* terrainCellOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* h = static_cast<HostTerrainCell*>(ev::handleData(v));
+    return (h && h->tag == kHostTerrainTag) ? h : nullptr;
+}
+
 extern HostClass g_sceneGraphClass;
 extern HostClass g_sceneNodeClass;
 extern HostClass g_sceneTextureClass;
+extern HostClass g_terrainClass;
 
 void ensureSceneClassesInstalled();
+void ensureTerrainClassInstalled();
+bool terrainSampleHeight(void* handle, float x, float z,
+                         float rayStartY, float rayLength, float& outY);
 Value createSceneGraphValue(scene::SceneGraph* sg, dom::Element* canvas);
 Value wrapSceneNode(scene::SceneNode* node, scene::SceneGraph* graph);
 Value wrapSceneTexture(std::shared_ptr<scene::SceneGraph::OutputTextureSource> src);
@@ -104,11 +124,16 @@ void installSceneGraphMesh(ObjectBuilder& b);
 void installSceneGraphLights(ObjectBuilder& b);
 void installSceneGraphFx(ObjectBuilder& b);
 void installSceneGraph2D(ObjectBuilder& b);
+void installSceneGraphTerrain(ObjectBuilder& b);
+void installSceneGraphAgent(ObjectBuilder& b);
 
 void installSceneNodeCore(ObjectBuilder& b);
 void installSceneNodeMesh(ObjectBuilder& b);
 void installSceneNodeLights(ObjectBuilder& b);
 void installSceneNodeFx(ObjectBuilder& b);
 void installSceneNode2D(ObjectBuilder& b);
+void installSceneNodeAgent(ObjectBuilder& b);
+
+void installRegisterCapability(ObjectBuilder& b);
 
 }  // namespace bro::bronze_host

@@ -301,6 +301,7 @@ void ensureSceneClassesInstalled() {
         installSceneNodeLights(b);
         installSceneNodeFx(b);
         installSceneNode2D(b);
+        installSceneNodeAgent(b);
     });
 
     g_sceneGraphClass.install("SceneGraph", 0, nullptr, [](ObjectBuilder& b) {
@@ -310,7 +311,11 @@ void ensureSceneClassesInstalled() {
         installSceneGraphLights(b);
         installSceneGraphFx(b);
         installSceneGraph2D(b);
+        installSceneGraphTerrain(b);
+        installSceneGraphAgent(b);
     });
+
+    ensureTerrainClassInstalled();
 }
 
 void installSceneGraphCore(ObjectBuilder& b) {

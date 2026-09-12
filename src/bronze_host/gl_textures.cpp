@@ -171,6 +171,9 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         if (ev::isUndefined(data) || ev::isNull(data)) {
             live(c)->texImage2D(target, level, internalformat, width, height, border,
                                 format, type, nullptr);
+        } else if (ev::isNumber(data)) {
+            live(c)->texImage2DFromPBO(target, level, internalformat, width, height, border,
+                                       format, type, static_cast<GLintptr>(i64At(a, 8)));
         } else if (auto info = ev::typedArrayInfo(data)) {
             live(c)->texImage2D(target, level, internalformat, width, height, border,
                                 format, type, info.data);
@@ -211,7 +214,11 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         GLsizei height = i32At(a, 5);
         GLenum format = u32At(a, 6);
         GLenum type = u32At(a, 7);
-        if (auto info = ev::typedArrayInfo(argAt(a, 8))) {
+        Value data = argAt(a, 8);
+        if (ev::isNumber(data)) {
+            live(c)->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height,
+                                          format, type, static_cast<GLintptr>(i64At(a, 8)));
+        } else if (auto info = ev::typedArrayInfo(data)) {
             live(c)->texSubImage2D(target, level, xoffset, yoffset, width, height, format,
                                    type, info.data);
         }
@@ -330,9 +337,9 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
     b.def("getSamplerParameter", 2, [c](Value, std::span<const Value> a) {
         GLenum pname = u32At(a, 1);
-        if (pname == 0x813A /* TEXTURE_MAX_ANISOTROPY_EXT */ ||
-            pname == 0x8501 /* TEXTURE_MIN_LOD */ ||
-            pname == 0x8502 /* TEXTURE_MAX_LOD */) {
+        if (pname == 0x813A /* TEXTURE_MIN_LOD */ ||
+            pname == 0x813B /* TEXTURE_MAX_LOD */ ||
+            pname == 0x84FE /* TEXTURE_MAX_ANISOTROPY_EXT */) {
             return ev::fromDouble(live(c)->getSamplerParameterf(samplerOf(argAt(a, 0)), pname));
         }
         return ev::fromDouble(live(c)->getSamplerParameteri(samplerOf(argAt(a, 0)), pname));

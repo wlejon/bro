@@ -15,6 +15,7 @@ const gl = canvas.getContext('webgl2');
 if (!gl) {
     console.log('no webgl2; skipping');
 } else {
+    (async function() {
     function makeProgram(vsSrc, fsSrc) {
         const vs = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vs, vsSrc); gl.compileShader(vs);
@@ -367,6 +368,10 @@ if (!gl) {
     assert(gl.getError() === gl.NO_ERROR, 'no error after cleanup');
 
     console.log('webgl texture tests passed');
+    })().catch(err => {
+        console.error('test_webgl_textures failed:', err);
+        throw err;
+    });
 }
 
 document.body.removeChild(canvas);

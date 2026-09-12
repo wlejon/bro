@@ -46,12 +46,22 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // readPixels(x, y, w, h, format, type, dstView). WebGL-level
     // destination validation runs first: a too-small view records the
     // synthetic INVALID_OPERATION and the driver is never handed an overrunnable pointer.
+    // Also handles the PBO offset overload (when dstView is a number).
     b.def("readPixels", 7, [c](Value, std::span<const Value> a) {
-        auto info = ev::typedArrayInfo(argAt(a, 6));
-        if (!info) return ev::undefined();
         GLint x = i32At(a, 0), y = i32At(a, 1);
         GLsizei w = i32At(a, 2), h = i32At(a, 3);
         GLenum format = u32At(a, 4), type = u32At(a, 5);
+        Value dest = argAt(a, 6);
+        if (ev::isNumber(dest)) {
+            live(c)->readPixelsToPBO(x, y, w, h, format, type, static_cast<GLintptr>(i64At(a, 6)));
+            return ev::undefined();
+        }
+        auto info = ev::typedArrayInfo(dest);
+        if (!info) return ev::undefined();
+        if (live(c)->pixelPackBuffer()) {
+            live(c)->setSyntheticError(0x0502 /* GL_INVALID_OPERATION */);
+            return ev::undefined();
+        }
         if (live(c)->validateReadPixels(w, h, format, type, info.byteLength)) {
             live(c)->readPixels(x, y, w, h, format, type, info.data);
         }

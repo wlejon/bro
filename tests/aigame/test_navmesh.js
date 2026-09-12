@@ -41,7 +41,8 @@ function runNavMeshTests() {
         const b = verts.length / 3;
         const x0 = cx - hx, x1 = cx + hx, y0 = cy - hy, y1 = cy + hy, z0 = cz - hz, z1 = cz + hz;
         verts.push(
-            x0, y0, z0,  x1, y0, z0,  x1, y1, z0,  x0, y1, z0,   // -Z face verts
+            x0, y0, z0,  x1, y0, z0,  x1, y1, z0,  x0, y1, z0);   // -Z face verts
+        verts.push(
             x0, y0, z1,  x1, y0, z1,  x1, y1, z1,  x0, y1, z1);  // +Z face verts
         const q = (a, b2, c, d) => idx.push(b + a, b + b2, b + c, b + a, b + c, b + d);
         q(0, 1, 2, 3);  // -Z

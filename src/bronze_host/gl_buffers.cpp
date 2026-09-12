@@ -13,6 +13,26 @@
 
 namespace bro::bronze_host {
 
+static std::unordered_map<uint64_t, ev::Persistent> s_indexedBindings;
+
+void stashIndexedBinding(uint32_t target, uint32_t index, Value bufVal) {
+    uint64_t key = (static_cast<uint64_t>(target) << 32) | index;
+    if (ev::isNull(bufVal) || ev::isUndefined(bufVal)) {
+        s_indexedBindings.erase(key);
+    } else {
+        s_indexedBindings.insert_or_assign(key, ev::Persistent(bufVal));
+    }
+}
+
+Value loadIndexedBinding(uint32_t target, uint32_t index) {
+    uint64_t key = (static_cast<uint64_t>(target) << 32) | index;
+    auto it = s_indexedBindings.find(key);
+    if (it != s_indexedBindings.end()) {
+        return it->second.get();
+    }
+    return ev::null();
+}
+
 void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("createBuffer", 0, [c](Value, std::span<const Value>) {
         return wrapGlObj(GlCell::Buffer, live(c)->createBuffer().id);
@@ -84,28 +104,85 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
-    // getBufferSubData(target, srcByteOffset, dstView) — GL WRITES INTO the
-    // bronze heap here, which is safe under exactly the same rule as reads:
-    // the destination pointer is taken and consumed with no bronze allocation
-    // in between, and the GL call is synchronous.
+    // getBufferSubData(target, srcByteOffset, dstView [, dstOffset, length]) —
+    // GL WRITES INTO the bronze heap here, which is safe under exactly the same
+    // rule as reads: the destination pointer is taken and consumed with no
+    // bronze allocation in between, and the GL call is synchronous.
+    // dstOffset and length are in ELEMENT units of the destination view.
     b.def("getBufferSubData", 3, [c](Value, std::span<const Value> a) {
-        auto info = ev::typedArrayInfo(argAt(a, 2));
-        if (info) {
-            live(c)->getBufferSubData(u32At(a, 0), static_cast<GLintptr>(i64At(a, 1)),
-                                      info.data, static_cast<GLsizeiptr>(info.byteLength));
+        GLenum target = u32At(a, 0);
+        GLintptr srcOffset = static_cast<GLintptr>(i64At(a, 1));
+        const uint8_t* data = nullptr;
+        size_t len = 0, elemSize = 1;
+        if (bufferBytes(argAt(a, 2), &data, &len, &elemSize)) {
+            size_t elemCount = len / elemSize;
+            size_t dstOffset = static_cast<size_t>(u32At(a, 3));
+            if (dstOffset > elemCount) dstOffset = elemCount;
+            size_t count = elemCount - dstOffset;
+            if (hasArg(a, 4)) {
+                size_t l = static_cast<size_t>(u32At(a, 4));
+                if (l < count) count = l;
+            }
+            live(c)->getBufferSubData(target, srcOffset,
+                                      const_cast<uint8_t*>(data + dstOffset * elemSize),
+                                      static_cast<GLsizeiptr>(count * elemSize));
         }
+        return ev::undefined();
+    });
+
+    // --- Buffer mapping (BRO_buffer_map) ---
+    // Returns an ArrayBuffer backed directly by driver memory. Detached on unmapBuffer.
+    static std::unordered_map<GLuint, ev::Persistent> s_mappedBuffers;
+
+    b.def("mapBufferRange", 4, [c](Value, std::span<const Value> a) {
+        GLenum target = u32At(a, 0);
+        GLintptr offset = static_cast<GLintptr>(i64At(a, 1));
+        GLsizeiptr length = static_cast<GLsizeiptr>(i64At(a, 2));
+        GLbitfield access = u32At(a, 3);
+        void* ptr = live(c)->mapBufferRange(target, offset, length, access);
+        if (!ptr) return ev::null();
+        Value ab = ev::createExternalArrayBuffer(
+            reinterpret_cast<uint8_t*>(ptr), static_cast<uint32_t>(length),
+            [](void*, uint8_t*) {}, nullptr);
+        GLuint bufId = live(c)->boundBuffer(target);
+        s_mappedBuffers.insert_or_assign(bufId, ev::Persistent(ab));
+        return ab;
+    });
+
+    b.def("unmapBuffer", 1, [c](Value, std::span<const Value> a) {
+        GLenum target = u32At(a, 0);
+        GLuint bufId = live(c)->boundBuffer(target);
+        auto it = s_mappedBuffers.find(bufId);
+        if (it != s_mappedBuffers.end()) {
+            ev::detachArrayBuffer(it->second.get());
+            s_mappedBuffers.erase(it);
+        }
+        return ev::fromBool(live(c)->unmapBuffer(target));
+    });
+
+    b.def("flushMappedBufferRange", 3, [c](Value, std::span<const Value> a) {
+        live(c)->flushMappedBufferRange(u32At(a, 0), static_cast<GLintptr>(i64At(a, 1)),
+                                         static_cast<GLsizeiptr>(i64At(a, 2)));
         return ev::undefined();
     });
 
     // The indexed forms.
     b.def("bindBufferBase", 3, [c](Value, std::span<const Value> a) {
-        live(c)->bindBufferBase(u32At(a, 0), u32At(a, 1), {idOf(argAt(a, 2), GlCell::Buffer)});
+        uint32_t target = u32At(a, 0);
+        uint32_t index = u32At(a, 1);
+        Value bufVal = argAt(a, 2);
+        live(c)->bindBufferBase(target, index, {idOf(bufVal, GlCell::Buffer)});
+        stashIndexedBinding(target, index, bufVal);
         return ev::undefined();
     });
     b.def("bindBufferRange", 5, [c](Value, std::span<const Value> a) {
-        live(c)->bindBufferRange(u32At(a, 0), u32At(a, 1), {idOf(argAt(a, 2), GlCell::Buffer)},
+        uint32_t target = u32At(a, 0);
+        uint32_t index = u32At(a, 1);
+        Value bufVal = argAt(a, 2);
+        live(c)->bindBufferRange(target, index, {idOf(bufVal, GlCell::Buffer)},
                                  static_cast<GLintptr>(i64At(a, 3)),
                                  static_cast<GLsizeiptr>(i64At(a, 4)));
+        stashIndexedBinding(target, index, bufVal);
         return ev::undefined();
     });
 
@@ -147,6 +224,32 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
     b.def("vertexAttribDivisor", 2, [c](Value, std::span<const Value> a) {
         live(c)->vertexAttribDivisor(u32At(a, 0), u32At(a, 1));
+        return ev::undefined();
+    });
+    b.def("vertexAttribI4i", 5, [c](Value, std::span<const Value> a) {
+        live(c)->vertexAttribI4i(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4));
+        return ev::undefined();
+    });
+    b.def("vertexAttribI4ui", 5, [c](Value, std::span<const Value> a) {
+        live(c)->vertexAttribI4ui(u32At(a, 0), u32At(a, 1), u32At(a, 2), u32At(a, 3), u32At(a, 4));
+        return ev::undefined();
+    });
+    b.def("vertexAttribI4iv", 2, [c](Value, std::span<const Value> a) {
+        std::vector<int32_t> storage;
+        const int32_t* data = nullptr;
+        size_t count = 0;
+        if (int32Data(argAt(a, 1), storage, &data, &count) && count >= 4) {
+            live(c)->vertexAttribI4iv(u32At(a, 0), data);
+        }
+        return ev::undefined();
+    });
+    b.def("vertexAttribI4uiv", 2, [c](Value, std::span<const Value> a) {
+        std::vector<uint32_t> storage;
+        const uint32_t* data = nullptr;
+        size_t count = 0;
+        if (uint32Data(argAt(a, 1), storage, &data, &count) && count >= 4) {
+            live(c)->vertexAttribI4uiv(u32At(a, 0), data);
+        }
         return ev::undefined();
     });
 }

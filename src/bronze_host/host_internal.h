@@ -18,6 +18,7 @@
 // property on the object instead.
 
 #include "embed/embed.h"
+#include "runtime/bigint.h"
 #include "dom/event_target.h"
 
 #include <cstdint>
@@ -40,11 +41,19 @@ class Node;
 class DocumentFragment;
 struct AbsoluteRect;
 }  // namespace bro::dom
+namespace bro::physics {
+class PhysicsWorld;
+}  // namespace bro::physics
 
 namespace bro::bronze_host {
 
 namespace ev = bronze::embed;
 using Value = bronze::Value;
+
+#if BRO_WITH_PHYSICS
+physics::PhysicsWorld* unwrapPhysicsWorld(Value v);
+physics::PhysicsWorld* getPhysicsWorld();
+#endif
 
 // gl_internal.h owns it; a file that only registers properties does not need
 // the GL headers to say so.
@@ -73,6 +82,17 @@ public:
     // Call once, from the family's install function.
     void install(const char* name, uint32_t arity, ev::NativeFn body,
                  const std::function<void(ObjectBuilder&)>& decorate);
+
+    void init(const char* name, const std::function<void(ObjectBuilder&)>& decorate) {
+        install(name, 0, nullptr, decorate);
+    }
+
+    template <typename T>
+    Value createInstance(std::unique_ptr<T> cell, ev::Finalize when = ev::Finalize::InSweep) const {
+        if (!cell) return ev::undefined();
+        T* raw = cell.release();
+        return make(raw, [](void* p) { delete static_cast<T*>(p); }, when);
+    }
 
     // Register a second name for the same constructor (AudioContext and
     // webkitAudioContext; Image and HTMLImageElement).
@@ -146,6 +166,14 @@ inline constexpr uint32_t kHostNavMeshTag = 0x4E564D53u;  // 'NVMS'
 inline constexpr uint32_t kHostAgentTag   = 0x41474E54u;  // 'AGNT'
 inline constexpr uint32_t kHostHexNavTag  = 0x48584E56u;  // 'HXNV'
 inline constexpr uint32_t kHostWorldTag   = 0x41574C44u;  // 'AWLD'
+inline constexpr uint32_t kHostUnitTag    = 0x4149554Eu;  // 'AIUN'
+inline constexpr uint32_t kHostAgentSnapshotTag = 0x41534E50u;  // 'ASNP'
+inline constexpr uint32_t kHostWorldSnapshotTag = 0x57534E50u;  // 'WSNP'
+inline constexpr uint32_t kHostVecSimTag  = 0x5653494Du;  // 'VSIM'
+inline constexpr uint32_t kHostRewardTrackerTag = 0x52575452u;  // 'RWTR'
+inline constexpr uint32_t kHostGenericMctsTag   = 0x474D4354u;  // 'GMCT'
+inline constexpr uint32_t kHostOptionTag        = 0x4F50544Eu;  // 'OPTN'
+inline constexpr uint32_t kHostOptionMctsTag    = 0x4F4D4354u;  // 'OMCT'
 inline constexpr uint32_t kHostWebSocketTag = 0x57534F43u; // 'WSOC'
 
 // ---------------------------------------------------------------------------
@@ -758,5 +786,100 @@ void installVendorGlobals();
 // ---------------------------------------------------------------------------
 
 void installNodeCoreGlobals(engine::Engine& engine);
+
+// ---------------------------------------------------------------------------
+// Shared TypedArray and Vector Helpers
+// ---------------------------------------------------------------------------
+
+inline Value makeFloat32Array(const float* data, size_t count) {
+    Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(count));
+    if (data && count > 0) {
+        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(float));
+        ev::fillTypedArray(arr, bytes);
+    }
+    return arr;
+}
+
+inline Value makeUint32Array(const uint32_t* data, size_t count) {
+    Value arr = ev::createTypedArray(ev::elements::Uint32, static_cast<uint32_t>(count));
+    if (data && count > 0) {
+        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(uint32_t));
+        ev::fillTypedArray(arr, bytes);
+    }
+    return arr;
+}
+
+inline Value makeInt32Array(const int32_t* data, size_t count) {
+    Value arr = ev::createTypedArray(ev::elements::Int32, static_cast<uint32_t>(count));
+    if (data && count > 0) {
+        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(int32_t));
+        ev::fillTypedArray(arr, bytes);
+    }
+    return arr;
+}
+
+inline Value makeVec3Value(float x, float y, float z) {
+    Value obj = ev::createObject();
+    ev::Persistent p(obj);
+    p.set(ev::setProperty(p.get(), "x", ev::fromDouble(x)));
+    p.set(ev::setProperty(p.get(), "y", ev::fromDouble(y)));
+    p.set(ev::setProperty(p.get(), "z", ev::fromDouble(z)));
+    return p.get();
+}
+
+inline bool readFloatVector(Value v, std::vector<float>& out) {
+    if (ev::isUndefined(v) || ev::isNull(v)) return false;
+    if (auto info = ev::typedArrayInfo(v)) {
+        if (info.data && (info.bytesPerElement == sizeof(float) || info.bytesPerElement == 0)) {
+            const float* fp = reinterpret_cast<const float*>(info.data);
+            out.assign(fp, fp + info.elementCount);
+            return true;
+        }
+    }
+    if (!ev::isObject(v)) return false;
+    ev::Persistent root(v);
+    Value lenV = ev::getProperty(root.get(), "length");
+    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+    out.clear();
+    out.reserve(len);
+    for (uint32_t i = 0; i < len; ++i) {
+        Value e = ev::getElement(root.get(), i);
+        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
+        out.push_back(static_cast<float>(d));
+    }
+    return true;
+}
+
+inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
+    if (ev::isUndefined(v) || ev::isNull(v)) return false;
+    if (auto info = ev::typedArrayInfo(v)) {
+        if (info.data && (info.bytesPerElement == sizeof(uint32_t) || info.bytesPerElement == 0)) {
+            const uint32_t* up = reinterpret_cast<const uint32_t*>(info.data);
+            out.assign(up, up + info.elementCount);
+            return true;
+        }
+        if (info.data && info.bytesPerElement == sizeof(uint16_t)) {
+            const uint16_t* up = reinterpret_cast<const uint16_t*>(info.data);
+            out.clear();
+            out.reserve(info.elementCount);
+            for (uint32_t i = 0; i < info.elementCount; ++i) out.push_back(up[i]);
+            return true;
+        }
+    }
+    if (!ev::isObject(v)) return false;
+    ev::Persistent root(v);
+    Value lenV = ev::getProperty(root.get(), "length");
+    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
+    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+    out.clear();
+    out.reserve(len);
+    for (uint32_t i = 0; i < len; ++i) {
+        Value e = ev::getElement(root.get(), i);
+        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
+        out.push_back(static_cast<uint32_t>(d));
+    }
+    return true;
+}
 
 }  // namespace bro::bronze_host

@@ -56,6 +56,18 @@ struct HostAgent {
     int navWaypoint = 0;
     float navY = 0.0f;
     bool destroyed = false;
+    ev::Persistent unitProxy;
+};
+
+struct HostUnit {
+    uint32_t tag = kHostUnitTag;
+    HostAgent* owner = nullptr;
+    brogameagent::Agent* agentRef = nullptr;
+    ev::Persistent agentValue;
+    brogameagent::Agent* agent() const {
+        if (owner) return &owner->agent;
+        return agentRef;
+    }
 };
 
 // bro.ai.game.createHexNav({ size }): the weighted hex-grid navigator. Owns
@@ -89,6 +101,7 @@ struct HostWorld {
 extern HostClass g_navGridClass;
 extern HostClass g_navMeshClass;
 extern HostClass g_agentClass;
+extern HostClass g_unitClass;
 extern HostClass g_hexNavClass;
 extern HostClass g_worldClass;
 
@@ -117,6 +130,13 @@ inline HostAgent* unwrapAgent(Value v) {
     return (h->tag == kHostAgentTag) ? h : nullptr;
 }
 
+inline HostUnit* unwrapUnit(Value v) {
+    void* ptr = ev::handleData(v);
+    if (!ptr) return nullptr;
+    auto* h = static_cast<HostUnit*>(ptr);
+    return (h->tag == kHostUnitTag) ? h : nullptr;
+}
+
 inline HostHexNav* unwrapHexNav(Value v) {
     void* ptr = ev::handleData(v);
     if (!ptr) return nullptr;
@@ -142,13 +162,6 @@ inline Value makeVec2Value(float x, float z) {
     return b.get();
 }
 
-inline Value makeVec3Value(float x, float y, float z) {
-    ObjectBuilder b;
-    b.set("x", ev::fromDouble(x));
-    b.set("y", ev::fromDouble(y));
-    b.set("z", ev::fromDouble(z));
-    return b.get();
-}
 
 inline Value makePathArray(const std::vector<bromath::Vec3>& pts) {
     return hostArrayOf(pts.size(), [&](size_t i) {
@@ -169,6 +182,14 @@ inline double getDoubleProperty(Value obj, const char* key, double def = 0.0) {
     if (ev::isUndefined(v) || ev::isNull(v) || ev::isObject(v)) return def;
     double d = ev::toDouble(v);
     return std::isnan(d) ? def : d;
+}
+
+inline uint64_t getU64Property(Value obj, const char* key, uint64_t def = 0) {
+    if (!ev::isObject(obj)) return def;
+    ev::Persistent root(obj);
+    Value v = ev::getProperty(root.get(), key);
+    if (ev::isUndefined(v) || ev::isNull(v)) return def;
+    return ev::toUint64(v);
 }
 
 inline bool getBoolProperty(Value obj, const char* key, bool def = false) {
@@ -229,18 +250,6 @@ inline brogameagent::AABB parseAABB(Value v) {
     if (!ev::isObject(v)) return box;
     ev::Persistent root(v);
 
-    Value cxV = ev::getProperty(root.get(), "cx");
-    Value czV = ev::getProperty(root.get(), "cz");
-    Value hwV = ev::getProperty(root.get(), "hw");
-    Value hdV = ev::getProperty(root.get(), "hd");
-    if (!ev::isUndefined(cxV) && !ev::isUndefined(czV) && !ev::isUndefined(hwV) && !ev::isUndefined(hdV)) {
-        box.cx = static_cast<float>(ev::toDouble(cxV));
-        box.cz = static_cast<float>(ev::toDouble(czV));
-        box.hw = static_cast<float>(ev::toDouble(hwV));
-        box.hd = static_cast<float>(ev::toDouble(hdV));
-        return box;
-    }
-
     Value minXV = ev::getProperty(root.get(), "minX");
     Value minZV = ev::getProperty(root.get(), "minZ");
     Value maxXV = ev::getProperty(root.get(), "maxX");
@@ -257,17 +266,30 @@ inline brogameagent::AABB parseAABB(Value v) {
         return box;
     }
 
+    Value hwV = ev::getProperty(root.get(), "hw");
+    Value hdV = ev::getProperty(root.get(), "hd");
+    Value cxV = ev::getProperty(root.get(), "cx");
+    Value czV = ev::getProperty(root.get(), "cz");
     Value xV = ev::getProperty(root.get(), "x");
     Value zV = ev::getProperty(root.get(), "z");
     Value wV = ev::getProperty(root.get(), "width");
     Value dV = ev::getProperty(root.get(), "depth");
+
+    if (!ev::isUndefined(hwV) || !ev::isUndefined(hdV)) {
+        box.hw = !ev::isUndefined(hwV) ? static_cast<float>(ev::toDouble(hwV)) : 0.5f;
+        box.hd = !ev::isUndefined(hdV) ? static_cast<float>(ev::toDouble(hdV)) : 0.5f;
+        box.cx = !ev::isUndefined(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (!ev::isUndefined(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f);
+        box.cz = !ev::isUndefined(czV) ? static_cast<float>(ev::toDouble(czV)) : (!ev::isUndefined(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f);
+        return box;
+    }
+
     if (!ev::isUndefined(wV) && !ev::isUndefined(dV)) {
-        float x = !ev::isUndefined(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f;
-        float z = !ev::isUndefined(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f;
         float w = static_cast<float>(ev::toDouble(wV));
         float d = static_cast<float>(ev::toDouble(dV));
-        box.cx = x + 0.5f * w;
-        box.cz = z + 0.5f * d;
+        float x = !ev::isUndefined(xV) ? static_cast<float>(ev::toDouble(xV)) : 0.0f;
+        float z = !ev::isUndefined(zV) ? static_cast<float>(ev::toDouble(zV)) : 0.0f;
+        box.cx = !ev::isUndefined(cxV) ? static_cast<float>(ev::toDouble(cxV)) : (x + 0.5f * w);
+        box.cz = !ev::isUndefined(czV) ? static_cast<float>(ev::toDouble(czV)) : (z + 0.5f * d);
         box.hw = 0.5f * w;
         box.hd = 0.5f * d;
         return box;
@@ -293,6 +315,35 @@ inline std::vector<brogameagent::AABB> parseAABBArray(Value v) {
     return result;
 }
 
+inline brogameagent::DamageKind parseDamageKind(const char* str) {
+    if (str && strcmp(str, "magical") == 0) return brogameagent::DamageKind::Magical;
+    if (str && strcmp(str, "true") == 0) return brogameagent::DamageKind::True;
+    return brogameagent::DamageKind::Physical;
+}
+
+inline const char* damageKindStr(brogameagent::DamageKind k) {
+    switch (k) {
+        case brogameagent::DamageKind::Magical: return "magical";
+        case brogameagent::DamageKind::True: return "true";
+        default: return "physical";
+    }
+}
+
+
+inline brogameagent::AgentAction parseAgentAction(Value obj) {
+    brogameagent::AgentAction a;
+    if (!ev::isObject(obj)) return a;
+    ev::Persistent root(obj);
+    a.moveX = static_cast<float>(getDoubleProperty(root.get(), "moveX", 0.0));
+    a.moveZ = static_cast<float>(getDoubleProperty(root.get(), "moveZ", 0.0));
+    a.aimYaw = static_cast<float>(getDoubleProperty(root.get(), "aimYaw", 0.0));
+    a.aimPitch = static_cast<float>(getDoubleProperty(root.get(), "aimPitch", 0.0));
+    a.attackTargetId = static_cast<int>(getDoubleProperty(root.get(), "attackTargetId", -1.0));
+    a.useAbilityId = static_cast<int>(getDoubleProperty(root.get(), "useAbilityId",
+                     getDoubleProperty(root.get(), "abilitySlot", -1.0)));
+    return a;
+}
+
 // ---------------------------------------------------------------------------
 // Prototypes & Factory Declarations
 // ---------------------------------------------------------------------------
@@ -310,16 +361,16 @@ inline Value makeNavMeshValue(std::shared_ptr<brogameagent::NavMesh> mesh) { ret
 Value aiBakeNavMesh(Value, std::span<const Value> a);
 Value aiLoadNavMesh(Value, std::span<const Value> a);
 
+// Unit (host_ai_unit.cpp)
+void decorateUnitProto(ObjectBuilder& b);
+Value makeUnitHandle(HostAgent* h, Value agentVal = ev::undefined());
+void ensureAIClassesInstalled();
+
 // Agent (host_ai_agent.cpp)
 void decorateAgentProto(ObjectBuilder& b);
 Value makeAgentHandle(HostAgent* h);
 inline Value makeAgentValue(HostAgent* h) { return makeAgentHandle(h); }
 Value aiCreateAgent(Value, std::span<const Value> a);
-
-// `true | false | { enabled?, radius?, maxSpeed?, neighborDist?, maxNeighbors?,
-// timeHorizon?, timeHorizonObst?, height?, priority?, layers?, mask? }` onto an
-// agent's ORCA parameters — the shape docs/ai-game-api.js gives for
-// createAgent's `avoidance` and for agent.setAvoidance. Anything else is ignored.
 void applyAgentAvoidance(Value opts, brogameagent::Agent& agent);
 
 // HexNav + World + the bro.ai.game object (host_ai_game.cpp)
@@ -330,6 +381,11 @@ Value aiCreateWorld(Value, std::span<const Value> a);
 Value aiCanSee(Value, std::span<const Value> a);
 Value aiComputeLeadAim(Value, std::span<const Value> a);
 Value makeAiGameValue();
+
+// Extras & MCTS (host_ai_extras.cpp, host_ai_mcts.cpp)
+void installAIExtras(ObjectBuilder& b);
+void installAIMcts(ObjectBuilder& b);
+void installRegisterCapability(ObjectBuilder& b);
 
 // Core (host_ai_core.cpp)
 Value aiHasLineOfSight(Value, std::span<const Value> a);

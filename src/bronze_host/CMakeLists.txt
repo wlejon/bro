@@ -94,6 +94,7 @@ set(BRO_BRONZE_HOST_SOURCES
     gl_textures.cpp
     gl_framebuffers.cpp
     gl_queries.cpp
+    gl_transform_feedback.cpp
     gl_context.cpp
     gl_profile.cpp
     app_module.cpp
@@ -165,6 +166,9 @@ if(BRO_WITH_GAMEAI)
         host_ai_navgrid.cpp
         host_ai_navmesh.cpp
         host_ai_agent.cpp
+        host_ai_unit.cpp
+        host_ai_extras.cpp
+        host_ai_mcts.cpp
         host_ai_game.cpp
     )
 else()
@@ -186,6 +190,8 @@ if(BRO_WITH_3D)
         host_scene_lights.cpp
         host_scene_fx.cpp
         host_scene_2d.cpp
+        host_scene_agent.cpp
+        host_scene_terrain.cpp
     )
 endif()
 

@@ -113,16 +113,22 @@ Value makeAIObject() {
 // Installation
 // ---------------------------------------------------------------------------
 
-void installAIGlobals() {
-    Value aiVal = makeAIObject();
-    ev::registerGlobal("AI", aiVal);
+void ensureAIClassesInstalled() {
+    static bool installed = false;
+    if (installed) return;
+    installed = true;
     g_navGridClass.install("AINavGrid", 0, nullptr, decorateNavGridProto);
     g_navMeshClass.install("AINavMesh", 0, nullptr, decorateNavMeshProto);
     g_agentClass.install("AIAgent", 0, nullptr, decorateAgentProto);
-    // The two classes only bro.ai.game hands out (host_ai_game.cpp).
-    // Registered so instances answer instanceof correctly.
+    g_unitClass.install("AIUnit", 0, nullptr, decorateUnitProto);
     g_hexNavClass.install("AIHexNav", 0, nullptr, decorateHexNavProto);
     g_worldClass.install("AIWorld", 0, nullptr, decorateWorldProto);
+}
+
+void installAIGlobals() {
+    Value aiVal = makeAIObject();
+    ev::registerGlobal("AI", aiVal);
+    ensureAIClassesInstalled();
 }
 
 }  // namespace bro::bronze_host
