@@ -23,6 +23,9 @@
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 #include "engine/sub_document.h"
+#if BRO_WITH_BRONZE
+#include "bronze_host/host_window_open.h"
+#endif
 
 #include "dom/document.h"
 #include "dom/event.h"
@@ -78,6 +81,22 @@ bool Engine::anyWindowHostFocused() const {
     return false;
 }
 
+WindowHost* Engine::windowHostForDocument(const dom::Document* doc) {
+    if (!doc) return nullptr;
+    for (auto& h : windowHosts_) {
+        if (h && h->document.get() == doc) return h.get();
+    }
+    return nullptr;
+}
+
+bool Engine::isWindowHostDocument(const dom::Document* doc) const {
+    if (!doc) return false;
+    for (auto& h : windowHosts_) {
+        if (h && h->document.get() == doc) return true;
+    }
+    return false;
+}
+
 uint64_t Engine::openWindowHost(const WindowHostOptions& opts) {
     // No primary window (Server mode, or --no-gpu headless where SDL video
     // was never initialized) — there is nothing to share a swap chain with.
@@ -116,6 +135,9 @@ void Engine::processPendingWindowHosts() {
         h->fboTexture = 0;
         h->window.reset();  // destroys the SDL window (no GL context to touch)
         windowHosts_.erase(windowHosts_.begin() + static_cast<ptrdiff_t>(i));
+#if BRO_WITH_BRONZE
+        bro::bronze_host::windowHostNotifyClosed(id);
+#endif
     }
 
     // Creates. A create that fails closes the handle the same way an OS
@@ -194,6 +216,9 @@ void Engine::processPendingWindowHosts() {
                 teardownWindowHostDoc(*windowHosts_[i]);
                 queueIframeSurfaceFree(std::move(windowHosts_[i]->surface));
                 windowHosts_.erase(windowHosts_.begin() + static_cast<ptrdiff_t>(i));
+#if BRO_WITH_BRONZE
+                bro::bronze_host::windowHostNotifyClosed(id);
+#endif
                 break;
             }
         }
@@ -273,10 +298,14 @@ void Engine::compositeWindowHosts() {
 void Engine::destroyAllWindowHosts() {
     if (windowHosts_.empty()) return;
     for (auto& h : windowHosts_) {
+        uint64_t id = h->id;
         teardownWindowHostDoc(*h);
         queueIframeSurfaceFree(std::move(h->surface));
         h->surfW = h->surfH = 0;
         h->fboTexture = 0;
+#if BRO_WITH_BRONZE
+        bro::bronze_host::windowHostNotifyClosed(id);
+#endif
     }
     windowHosts_.clear();  // destroys the SDL windows
     focusedHostId_ = 0;
@@ -417,6 +446,8 @@ void Engine::createWindowHostDoc(WindowHost& h, SubDocSource& source) {
     SubDocRef ref = windowHostSubDoc(h);
     buildSubDocDocument(ref, source, effectiveColorScheme());
 
+    runSubDocScripts(ref, source, this, /*isChild=*/true);
+
     finishSubDocLoad(ref, source, renderer_.get(), audioEngine_.get(), *textMetrics_);
     warnNestedIframes(ref, "bro.window");
 
@@ -425,6 +456,9 @@ void Engine::createWindowHostDoc(WindowHost& h, SubDocSource& source) {
              static_cast<unsigned long long>(h.id));
 
     h.loadFired = true;
+#if BRO_WITH_BRONZE
+    bro::bronze_host::windowHostNotifyLoaded(h.id);
+#endif
 }
 
 void Engine::teardownWindowHostDoc(WindowHost& h) {
@@ -440,6 +474,9 @@ void Engine::syncWindowHostBox(WindowHost& h) {
     if (w == h.boxW && ht == h.boxH) return;
     h.boxW = w;
     h.boxH = ht;
+#if BRO_WITH_BRONZE
+    bro::bronze_host::windowHostNotifyResized(h.id, w, ht);
+#endif
     if (h.document) {
         h.document->setMediaViewport(static_cast<float>(w), static_cast<float>(ht));
         h.document->markDirty();

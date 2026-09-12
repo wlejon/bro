@@ -22,6 +22,8 @@
 
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_touch.h"
 
 #include "engine/engine.h"
@@ -545,7 +547,31 @@ bool readEventSpec(Value descV, const char* what, EventSpec& out) {
 // ---------------------------------------------------------------------------
 
 void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
-                        dom::Event& evt, const char* origin) {
+                        dom::Event& evt, const char* origin,
+                        dom::Document* docOverride) {
+    dom::Document* targetDoc = docOverride;
+    if (!targetDoc) {
+        if (evt.target()) targetDoc = evt.target()->document();
+        else if (evt.currentTarget()) targetDoc = evt.currentTarget()->document();
+    }
+
+    dom::Document* prevDoc = currentHostDocument();
+    bool swapDoc = (targetDoc && targetDoc != prevDoc);
+
+    ev::GlobalValue docG = ev::globalValue("document");
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    Value prevDocVal = docG.found ? docG.value : ev::null();
+
+    if (swapDoc) {
+        enterRealmScope(scopeIdForDocument(targetDoc));
+        setCurrentHostDocument(targetDoc);
+        Value subDocVal = hostDocumentValue(targetDoc);
+        ev::registerGlobal("document", subDocVal);
+        if (gt.found && ev::isObject(gt.value)) {
+            ev::setProperty(gt.value, "document", subDocVal);
+        }
+    }
+
     auto live = std::make_shared<LiveEvent>();
     live->ev = &evt;
     // The event object is rooted for the call: buildEventValue's own
@@ -557,6 +583,18 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
     // dom::Event may be destroyed at any point and the object must not reach
     // it. A listener that stashed the object gets the named refusal instead.
     live->ev = nullptr;
+
+    if (swapDoc) {
+        if (!ev::isNull(prevDocVal)) {
+            ev::registerGlobal("document", prevDocVal);
+            if (gt.found && ev::isObject(gt.value)) {
+                ev::setProperty(gt.value, "document", prevDocVal);
+            }
+        }
+        setCurrentHostDocument(prevDoc);
+        exitRealmScope();
+    }
+
     // Report and keep going — one broken listener must not silence the ones
     // registered after it, which is what the rAF and window paths do too.
     if (r.thrown) reportBronzeError(origin, r.value);

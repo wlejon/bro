@@ -13,6 +13,7 @@
 
 #include "canvas/canvas_scene.h"
 #include "layout/form_control.h"
+#include "util/log.h"
 
 #include <cctype>
 #include <sstream>
@@ -59,13 +60,40 @@ void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clon
     }
 }
 
+static dom::Document* s_activeDocOverride = nullptr;
+
 namespace {
 
 dom::Document* documentFor(dom::Document* fixed) {
-    dom::Document* doc = fixed ? fixed : (hostEngine() ? hostEngine()->document() : nullptr);
+    if (fixed) {
+        fixed->setElementClonedCallback(&fireElementCloned);
+        return fixed;
+    }
+    if (s_activeDocOverride) {
+        s_activeDocOverride->setElementClonedCallback(&fireElementCloned);
+        return s_activeDocOverride;
+    }
+    dom::Document* doc = hostEngine() ? hostEngine()->document() : nullptr;
     if (doc) doc->setElementClonedCallback(&fireElementCloned);
     return doc;
 }
+
+}  // namespace
+
+dom::Document* currentHostDocument() {
+    if (s_activeDocOverride) return s_activeDocOverride;
+    return hostEngine() ? hostEngine()->document() : nullptr;
+}
+
+void setCurrentHostDocument(dom::Document* doc) {
+    if (!doc || (hostEngine() && doc == hostEngine()->document())) {
+        s_activeDocOverride = nullptr;
+    } else {
+        s_activeDocOverride = doc;
+    }
+}
+
+namespace {
 
 Value wrapElement(dom::Element* el) {
     return hostElementValue(el);
@@ -447,6 +475,18 @@ Value makeDocumentValue(dom::Document* fixed) {
                    return el ? hostElementValue(el) : ev::null();
                },
                nullptr);
+    b.accessor("title",
+               [fixed](Value, std::span<const Value>) -> Value {
+                   dom::Document* doc = documentFor(fixed);
+                   return doc ? ev::fromUtf8(doc->title()) : ev::fromUtf8("");
+               },
+               [fixed](Value, std::span<const Value> a) -> Value {
+                   dom::Document* doc = documentFor(fixed);
+                   if (doc && !a.empty()) {
+                       doc->setTitle(ev::toUtf8(a[0]));
+                   }
+                   return ev::undefined();
+               });
     b.accessor("readyState",
                [](Value, std::span<const Value>) {
                    auto* e = hostEngine();
@@ -538,6 +578,14 @@ Value hostDocumentValue(dom::Document* doc) {
     Value v = makeDocumentValue(doc);
     s_docWrappers[doc].set(v);
     return v;
+}
+
+void clearHostDocument(dom::Document* doc) {
+    if (!doc) return;
+    s_docWrappers.erase(doc);
+    if (s_activeDocOverride == doc) {
+        s_activeDocOverride = nullptr;
+    }
 }
 
 }  // namespace bro::bronze_host

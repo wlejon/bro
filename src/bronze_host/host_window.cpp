@@ -1,6 +1,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_window_open.h"
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
 
@@ -239,7 +240,9 @@ Value makeBroWindowValue() {
         return ev::fromBool(w->moveToDisplay(id));
     });
 
-    return win.get();
+    Value winVal = win.get();
+    installBroWindowOpen(winVal);
+    return winVal;
 }
 
 } // namespace bro::bronze_host

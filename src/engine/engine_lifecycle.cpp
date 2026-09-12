@@ -4,6 +4,10 @@
 #include "engine/scene_audio_sync.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
 
+#if BRO_WITH_BRONZE
+#include "bronze_host/bronze_host.h"
+#endif
+
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -261,6 +265,16 @@ void Engine::applyColorScheme() {
 }
 
 void Engine::deliverMediaQueryChangesAllRealms() {
+    if (document_ && document_->mediaRestylePending()) document_->resolveStyles();
+    for (auto& d : iframeDocs_) {
+        if (d && d->document && d->document->mediaRestylePending()) d->document->resolveStyles();
+    }
+    for (auto& h : windowHosts_) {
+        if (h && h->document && h->document->mediaRestylePending()) h->document->resolveStyles();
+    }
+#if BRO_WITH_BRONZE
+    bro::bronze_host::deliverHostMediaQueryChanges();
+#endif
 }
 
 } // namespace bro::engine

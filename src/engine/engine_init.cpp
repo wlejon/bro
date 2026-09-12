@@ -496,6 +496,27 @@ canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
     canvas->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
     canvasScene->init(nullptr);
     canvasSceneRegistry_[canvasScene->sceneId()] = csPtr;
+    dom::Document* doc = canvas->document();
+    if (doc) {
+        for (auto& h : windowHosts_) {
+            if (h && h->document.get() == doc) {
+                h->canvasScenes.push_back(std::move(canvasScene));
+                return csPtr;
+            }
+        }
+        for (auto& d : iframeDocs_) {
+            if (d && d->document.get() == doc) {
+                d->canvasScenes.push_back(std::move(canvasScene));
+                return csPtr;
+            }
+        }
+        for (auto& s : systemDocs_) {
+            if (s.document.get() == doc) {
+                s.canvasScenes.push_back(std::move(canvasScene));
+                return csPtr;
+            }
+        }
+    }
     canvasScenes_.push_back(std::move(canvasScene));
     return csPtr;
 }

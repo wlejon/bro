@@ -298,7 +298,8 @@ dom::ListenerOptions readOptions(Value optV);
 // crosses; every field is copied. A throw out of the listener is reported
 // through reportBronzeError under `origin` and dispatch continues.
 void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
-                        dom::Event& evt, const char* origin);
+                        dom::Event& evt, const char* origin,
+                        dom::Document* docOverride = nullptr);
 
 // `dispatchEvent(desc)` from compiled code, where `desc` is a plain
 // `{type, bubbles, cancelable, detail}` object rather than a `new

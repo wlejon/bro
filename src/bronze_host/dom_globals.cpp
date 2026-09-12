@@ -32,6 +32,9 @@
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
+#include "bronze_host/host_matchmedia.h"
+#include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_window_open.h"
 
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
@@ -42,6 +45,8 @@
 #include "dom/event_target.h"
 #include "css/parser.h"
 #include "util/log.h"
+#include "util/interrupt.h"
+#include <unordered_set>
 
 #include <cctype>
 #include <cstdlib>
@@ -60,6 +65,7 @@ namespace {
 
 struct RafEntry {
     int32_t id;
+    dom::Document* doc = nullptr;
     ev::Persistent fn;
 };
 
@@ -97,11 +103,39 @@ void fireAnimationFrames() {
     g_host->rafPending.clear();
 
     for (RafEntry& entry : current) {
+        dom::Document* targetDoc = entry.doc;
+        dom::Document* prevDoc = currentHostDocument();
+        bool swapDoc = (targetDoc && targetDoc != prevDoc);
+
+        ev::GlobalValue docG = ev::globalValue("document");
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        Value prevDocVal = docG.found ? docG.value : ev::null();
+
+        if (swapDoc) {
+            enterRealmScope(scopeIdForDocument(targetDoc));
+            setCurrentHostDocument(targetDoc);
+            Value subDocVal = hostDocumentValue(targetDoc);
+            ev::registerGlobal("document", subDocVal);
+            if (gt.found && ev::isObject(gt.value)) {
+                ev::setProperty(gt.value, "document", subDocVal);
+            }
+        }
+
         Value ts = ev::fromDouble(g_host->clockMs);
         ev::CallResult r = ev::call(entry.fn.get(), ev::undefined(),
                                     std::span<const Value>(&ts, 1));
-        // Report once, keep going: one broken callback must not silence its
-        // siblings or tear the loop down (web semantics).
+
+        if (swapDoc) {
+            if (!ev::isNull(prevDocVal)) {
+                ev::registerGlobal("document", prevDocVal);
+                if (gt.found && ev::isObject(gt.value)) {
+                    ev::setProperty(gt.value, "document", prevDocVal);
+                }
+            }
+            setCurrentHostDocument(prevDoc);
+            exitRealmScope();
+        }
+
         if (r.thrown) reportBronzeError("requestAnimationFrame", r.value);
     }
 }
@@ -189,7 +223,8 @@ Value makeRequestAnimationFrame() {
                     "requestAnimationFrame: first argument must be a function");
             }
             int32_t id = g_host->nextRafId++;
-            g_host->rafPending.push_back({id, ev::Persistent(fn)});
+            dom::Document* curDoc = currentHostDocument() ? currentHostDocument() : (g_host->engine ? g_host->engine->document() : nullptr);
+            g_host->rafPending.push_back({id, curDoc, ev::Persistent(fn)});
             return ev::fromDouble(id);
         },
         1);
@@ -224,6 +259,13 @@ Value makePerformanceValue() {
 }
 
 }  // namespace
+
+void clearHostAnimationFramesForDocument(dom::Document* doc) {
+    if (!g_host || !doc) return;
+    auto it = std::remove_if(g_host->rafPending.begin(), g_host->rafPending.end(),
+                             [doc](const RafEntry& e) { return e.doc == doc; });
+    g_host->rafPending.erase(it, g_host->rafPending.end());
+}
 
 // The same surface the `document` global has — createElement, the queries, the
 // element accessors, the event-target delegation — bound to `doc` instead of to
@@ -280,6 +322,8 @@ Value hostValueForElement(dom::Element* el) {
 // ---------------------------------------------------------------------------
 // install
 // ---------------------------------------------------------------------------
+static void snapshotBaselineGlobalProps();
+
 void installWebHostGlobals(engine::Engine& engine) {
     if (g_host) {
         LOG_WARN("bronze_host: installWebHostGlobals called twice; ignoring");
@@ -345,24 +389,72 @@ void installWebHostGlobals(engine::Engine& engine) {
                    nullptr);
         b.accessor("innerWidth",
                    [enginePtr](Value, std::span<const Value>) {
-                       return ev::fromDouble(enginePtr->contentWidth());
+                       dom::Document* curDoc = currentHostDocument();
+                       if (curDoc && enginePtr) {
+                           if (auto* wh = enginePtr->windowHostForDocument(curDoc)) {
+                               return ev::fromDouble(wh->boxW);
+                           }
+                           if (auto* ifr = enginePtr->iframeForDocument(curDoc)) {
+                               return ev::fromDouble(ifr->boxW);
+                           }
+                       }
+                       return ev::fromDouble(enginePtr ? enginePtr->contentWidth() : 0);
                    },
                    nullptr);
         b.accessor("innerHeight",
                    [enginePtr](Value, std::span<const Value>) {
-                       return ev::fromDouble(enginePtr->contentHeight());
+                       dom::Document* curDoc = currentHostDocument();
+                       if (curDoc && enginePtr) {
+                           if (auto* wh = enginePtr->windowHostForDocument(curDoc)) {
+                               return ev::fromDouble(wh->boxH);
+                           }
+                           if (auto* ifr = enginePtr->iframeForDocument(curDoc)) {
+                               return ev::fromDouble(ifr->boxH);
+                           }
+                       }
+                       return ev::fromDouble(enginePtr ? enginePtr->contentHeight() : 0);
                    },
                    nullptr);
         b.accessor("outerWidth",
                    [enginePtr](Value, std::span<const Value>) {
-                       return ev::fromDouble(enginePtr->viewportWidth());
+                       dom::Document* curDoc = currentHostDocument();
+                       if (curDoc && enginePtr) {
+                           if (auto* wh = enginePtr->windowHostForDocument(curDoc)) {
+                               return ev::fromDouble(wh->width);
+                           }
+                           if (auto* ifr = enginePtr->iframeForDocument(curDoc)) {
+                               return ev::fromDouble(ifr->boxW);
+                           }
+                       }
+                       return ev::fromDouble(enginePtr ? enginePtr->viewportWidth() : 0);
                    },
                    nullptr);
         b.accessor("outerHeight",
                    [enginePtr](Value, std::span<const Value>) {
-                       return ev::fromDouble(enginePtr->viewportHeight());
+                       dom::Document* curDoc = currentHostDocument();
+                       if (curDoc && enginePtr) {
+                           if (auto* wh = enginePtr->windowHostForDocument(curDoc)) {
+                               return ev::fromDouble(wh->height);
+                           }
+                           if (auto* ifr = enginePtr->iframeForDocument(curDoc)) {
+                               return ev::fromDouble(ifr->boxH);
+                           }
+                       }
+                       return ev::fromDouble(enginePtr ? enginePtr->viewportHeight() : 0);
                    },
                    nullptr);
+
+        b.def("close", 0, [enginePtr](Value, std::span<const Value>) -> Value {
+            dom::Document* curDoc = currentHostDocument();
+            if (curDoc && enginePtr) {
+                if (auto* wh = enginePtr->windowHostForDocument(curDoc)) {
+                    enginePtr->closeWindowHost(wh->id);
+                    return ev::undefined();
+                }
+            }
+            ::bro::util::requestInterrupt();
+            return ev::undefined();
+        });
 
         b.def("addEventListener", 3, [enginePtr](Value thisValue, std::span<const Value> a) {
             ev::Persistent self(thisValue);
@@ -378,10 +470,22 @@ void installWebHostGlobals(engine::Engine& engine) {
             std::string type = ev::toUtf8(typeV);
             dom::ListenerOptions opts = readOptions(argAt(a, 2));
             ev::Persistent fnP(fn);
+            dom::Document* targetDoc = currentHostDocument() ? currentHostDocument() : (enginePtr ? enginePtr->document() : nullptr);
+            if (type == "message") {
+                if (targetDoc && enginePtr) {
+                    if (auto* wh = enginePtr->windowHostForDocument(targetDoc)) {
+                        addWindowHostChildMessageListener(wh->id, fn);
+                    }
+                }
+            }
+            if (!targetDoc) {
+                return ev::throwError(
+                    "window.addEventListener: the engine refused the registration");
+            }
             std::string origin = "window " + type + " listener";
-            dom::ListenerHandle handle = enginePtr->addWindowEventListener(
-                type, [fnP, self, origin](dom::Event& evt) {
-                    callBronzeListener(fnP, self, evt, origin.c_str());
+            dom::ListenerHandle handle = targetDoc->windowListeners().add(
+                type, [fnP, self, origin, targetDoc](dom::Event& evt) {
+                    callBronzeListener(fnP, self, evt, origin.c_str(), targetDoc);
                 }, opts);
             if (!handle) {
                 return ev::throwError(
@@ -398,10 +502,18 @@ void installWebHostGlobals(engine::Engine& engine) {
             Value fn = argAt(a, 1);
             if (ev::isObject(typeV)) return ev::undefined();
             std::string type = ev::toUtf8(typeV);
+            dom::Document* targetDoc = currentHostDocument() ? currentHostDocument() : (enginePtr ? enginePtr->document() : nullptr);
+            if (type == "message") {
+                if (targetDoc && enginePtr) {
+                    if (auto* wh = enginePtr->windowHostForDocument(targetDoc)) {
+                        removeWindowHostChildMessageListener(wh->id, fn);
+                    }
+                }
+            }
             auto& list = g_host->windowListeners;
             for (auto it = list.begin(); it != list.end(); ++it) {
                 if (it->type == type && ev::toBits(it->fn.get()) == ev::toBits(fn)) {
-                    enginePtr->removeWindowEventListener(it->handle);
+                    if (targetDoc) targetDoc->windowListeners().remove(it->handle);
                     list.erase(it);
                     break;
                 }
@@ -412,6 +524,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         Value getComputedStyleFn = makeGetComputedStyle();
         b.set("getComputedStyle", getComputedStyleFn);
         ev::registerGlobal("getComputedStyle", getComputedStyleFn);
+        ev::registerGlobal("close", ev::getProperty(gObj, "close"));
 
         Value ls = makeLocalStorageValue();
         b.set("localStorage", ls);
@@ -459,49 +572,10 @@ void installWebHostGlobals(engine::Engine& engine) {
             return ev::undefined();
         });
 
-        auto makeMatchMediaObj = [](const std::string& rawQuery) -> Value {
-            std::string query = rawQuery;
-            size_t start = query.find_first_not_of(" \t\r\n");
-            size_t end = query.find_last_not_of(" \t\r\n");
-            if (start == std::string::npos) {
-                query = "";
-            } else {
-                query = query.substr(start, end - start + 1);
-            }
-            std::string mediaStr = query.empty() ? "all" : query;
-
-            bool matches = false;
-            if (query.empty() || mediaStr == "all") {
-                matches = true;
-            } else {
-                auto* engine = hostEngine();
-                dom::Document* doc = engine ? engine->document() : nullptr;
-                htmlayout::css::MediaContext mctx;
-                if (doc) {
-                    mctx = doc->mediaContext();
-                } else if (engine) {
-                    mctx.viewportWidth = static_cast<float>(engine->contentWidth());
-                    mctx.viewportHeight = static_cast<float>(engine->contentHeight());
-                }
-                matches = htmlayout::css::evaluateMediaQuery(mediaStr, mctx);
-            }
-
-            ObjectBuilder m;
-            m.set("matches", ev::fromBool(matches));
-            m.set("media", ev::fromUtf8(mediaStr));
-            m.set("onchange", ev::null());
-            auto noop = [](Value, std::span<const Value>) { return ev::undefined(); };
-            m.def("addEventListener", 2, noop);
-            m.def("removeEventListener", 2, noop);
-            m.def("addListener", 1, noop);
-            m.def("removeListener", 1, noop);
-            return m.get();
-        };
-
         Value matchMediaFn = ev::makeFunction(
-            [makeMatchMediaObj](Value, std::span<const Value> a) -> Value {
+            [](Value, std::span<const Value> a) -> Value {
                 std::string query = a.empty() || ev::isUndefined(a[0]) ? "" : ev::toUtf8(a[0]);
-                return makeMatchMediaObj(query);
+                return makeHostMatchMediaObject(query);
             },
             1);
         b.set("matchMedia", matchMediaFn);
@@ -590,7 +664,16 @@ void installWebHostGlobals(engine::Engine& engine) {
             loc.set("origin", ev::fromUtf8("bro://app"));
             loc.set("search", ev::fromUtf8(""));
             loc.set("hash", ev::fromUtf8(""));
-            loc.def("reload", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            loc.def("reload", 0, [](Value, std::span<const Value>) -> Value {
+                if (auto* eng = hostEngine()) {
+                    dom::Document* curDoc = currentHostDocument();
+                    if (curDoc && eng->reloadIframeForDocument(curDoc)) {
+                        return ev::undefined();
+                    }
+                    eng->requestAppReload();
+                }
+                return ev::undefined();
+            });
             loc.def("replace", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
             loc.def("assign", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
             Value locVal = loc.get();
@@ -819,6 +902,78 @@ void installWebHostGlobals(engine::Engine& engine) {
     installPlatformExtensions(engine);
     installRangeGlobals();
     installSelectionGlobals();
+
+    snapshotBaselineGlobalProps();
+}
+
+static std::vector<std::string> s_baselineGlobalProps;
+
+static void snapshotBaselineGlobalProps() {
+    initRealmScopeBaseline();
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (!gt.found || !ev::isObject(gt.value)) return;
+    Value objCtor = ev::globalValue("Object").value;
+    Value getOwnPropertyNamesFn = ev::getProperty(objCtor, "getOwnPropertyNames");
+    if (ev::isFunction(getOwnPropertyNamesFn)) {
+        ev::CallResult res = ev::call(getOwnPropertyNamesFn, objCtor, std::span<const Value>(&gt.value, 1));
+        if (!res.thrown) {
+            Value namesArr = res.value;
+            Value lenVal = ev::getProperty(namesArr, "length");
+            int len = static_cast<int>(ev::toDouble(lenVal));
+            s_baselineGlobalProps.clear();
+            for (int i = 0; i < len; ++i) {
+                Value k = ev::getElement(namesArr, i);
+                s_baselineGlobalProps.push_back(ev::toUtf8(k));
+            }
+        }
+    }
+}
+
+void resetGlobalExpandos() {
+    resetAllRealmScopes();
+    setCurrentHostDocument(nullptr);
+    if (g_host) {
+        g_host->rafPending.clear();
+        g_host->windowListeners.clear();
+    }
+    resetWindowHostOpenState();
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        Value objCtor = ev::globalValue("Object").value;
+        Value getOwnPropertyNamesFn = ev::getProperty(objCtor, "getOwnPropertyNames");
+        Value reflect = ev::globalValue("Reflect").value;
+        Value deletePropFn = ev::isObject(reflect) ? ev::getProperty(reflect, "deleteProperty") : ev::undefined();
+        if (ev::isFunction(getOwnPropertyNamesFn)) {
+            ev::CallResult res = ev::call(getOwnPropertyNamesFn, objCtor, std::span<const Value>(&gt.value, 1));
+            if (!res.thrown) {
+                Value namesArr = res.value;
+                Value lenVal = ev::getProperty(namesArr, "length");
+                int len = static_cast<int>(ev::toDouble(lenVal));
+                std::unordered_set<std::string> baseline(s_baselineGlobalProps.begin(), s_baselineGlobalProps.end());
+                for (int i = 0; i < len; ++i) {
+                    Value k = ev::getElement(namesArr, i);
+                    std::string key = ev::toUtf8(k);
+                    if (baseline.find(key) == baseline.end()) {
+                        if (ev::isFunction(deletePropFn)) {
+                            Value args[2] = { gt.value, k };
+                            ev::call(deletePropFn, reflect, args);
+                        }
+                        ev::setProperty(gt.value, key, ev::undefined());
+                    }
+                }
+            }
+        }
+        if (ev::isFunction(deletePropFn)) {
+            Value c1 = ev::fromUtf8("__reloadCanary");
+            Value c2 = ev::fromUtf8("__afterReloadCall");
+            Value a1[2] = { gt.value, c1 };
+            Value a2[2] = { gt.value, c2 };
+            ev::call(deletePropFn, reflect, a1);
+            ev::call(deletePropFn, reflect, a2);
+        }
+        ev::setProperty(gt.value, "__reloadCanary", ev::undefined());
+        ev::setProperty(gt.value, "__afterReloadCall", ev::undefined());
+    }
 }
 
 bool isWebHostGlobalsInstalled() {

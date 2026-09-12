@@ -19,6 +19,8 @@
 // behaviour change, not a leak fix. The warning below is the diagnostic.
 
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_realm_scope.h"
 #include "bronze_host/gl_internal.h"  // argAt / numAt / i32At
 
 #include "util/log.h"
@@ -47,6 +49,7 @@ struct TimerEntry {
     double dueMs = 0.0;
     double intervalMs = 0.0;
     bool repeating = false;
+    dom::Document* doc = nullptr;
 };
 
 // Process-lived and never freed, the same convention HostState follows
@@ -96,6 +99,7 @@ Value addTimer(std::span<const Value> a, bool repeating) {
     entry.dueMs = hostClockMs() + delay;
     entry.intervalMs = delay;
     entry.repeating = repeating;
+    entry.doc = currentHostDocument();
 
     auto& list = timers();
     list.push_back(std::move(entry));
@@ -196,6 +200,7 @@ void fireHostTimers(double nowMs) {
         std::function<void()> native = it->native;
         ev::Persistent fn = it->fn;
         std::vector<ev::Persistent> args = it->args;
+        dom::Document* entryDoc = it->doc;
         if (it->repeating) {
             // Advance from the DEADLINE, so a long frame does not stretch the
             // interval — but skip whole missed periods instead of firing a
@@ -217,6 +222,20 @@ void fireHostTimers(double nowMs) {
             continue;
         }
 
+        dom::Document* prevDoc = currentHostDocument();
+        ev::GlobalValue docG = ev::globalValue("document");
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        Value prevDocVal = docG.found ? docG.value : ev::null();
+        if (entryDoc) {
+            enterRealmScope(scopeIdForDocument(entryDoc));
+            setCurrentHostDocument(entryDoc);
+            Value subDocVal = hostDocumentValue(entryDoc);
+            ev::registerGlobal("document", subDocVal);
+            if (gt.found && ev::isObject(gt.value)) {
+                ev::setProperty(gt.value, "document", subDocVal);
+            }
+        }
+
         std::vector<Value> argv;
         argv.reserve(args.size());
         for (ev::Persistent& arg : args) argv.push_back(arg.get());
@@ -225,6 +244,17 @@ void fireHostTimers(double nowMs) {
         ev::CallResult r = ev::call(fn.get(), ev::undefined(),
                                     std::span<const Value>(argv.data(), argv.size()));
         if (r.thrown) reportBronzeError("timer", r.value);
+
+        if (entryDoc) {
+            if (!ev::isNull(prevDocVal)) {
+                ev::registerGlobal("document", prevDocVal);
+                if (gt.found && ev::isObject(gt.value)) {
+                    ev::setProperty(gt.value, "document", prevDocVal);
+                }
+            }
+            setCurrentHostDocument(prevDoc);
+            exitRealmScope();
+        }
     }
 }
 
@@ -261,6 +291,18 @@ void installTimerGlobals() {
         ev::registerGlobal("clearInterval", fn);
         if (hasGt) ev::setProperty(gt.value, "clearInterval", fn);
     }
+}
+
+void clearHostTimers() {
+    if (g_timers) g_timers->clear();
+    if (g_tasks) g_tasks->clear();
+}
+
+void clearHostTimersForDocument(dom::Document* doc) {
+    if (!g_timers || !doc) return;
+    auto it = std::remove_if(g_timers->begin(), g_timers->end(),
+                             [doc](const TimerEntry& t) { return t.doc == doc; });
+    g_timers->erase(it, g_timers->end());
 }
 
 }  // namespace bro::bronze_host

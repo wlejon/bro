@@ -54,6 +54,11 @@ Document::~Document() {
     if (nodeDestroyingCb_) {
         forEachLiveElement([this](Element* el) { nodeDestroyingCb_(this, el); });
     }
+    for (auto& [n, _] : ownedNodes_) {
+        if (n) {
+            for (NodeObserver obs : nodeFreedObservers_) obs(this, n);
+        }
+    }
     // The CSS transition/animation managers outlive individual documents (they
     // are Engine members), and index by raw Element*. Same bypass as above:
     // ownedNodes_ is destroyed without freeNode(), so drop this document's

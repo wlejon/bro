@@ -8,6 +8,7 @@
 #endif
 #if BRO_WITH_BRONZE
 #include "bronze_host/eval.h"
+#include "bronze_host/host_window_open.h"
 #endif
 #include "audio_inference/audio_inference.h"
 
@@ -69,6 +70,7 @@ void Engine::flush() {
     if (document_ && (document_->isDirty() || !document_->layoutRoot())) {
         if (document_->isStructureDirty()) {
             ensureReplacedElements(document_->documentElement());
+            iframeSyncNeeded_ = true;
         }
 
         dom::Element* previousHover = hoveredElement_.get();
@@ -99,6 +101,9 @@ void Engine::flush() {
 
     processPendingIframeReloads();
     processPendingWindowHosts();
+#if BRO_WITH_BRONZE
+    bro::bronze_host::drainHostWindowMessages();
+#endif
 
     if (iframeSyncNeeded_) {
         syncIframes();

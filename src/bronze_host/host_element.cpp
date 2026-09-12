@@ -8,6 +8,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_window_open.h"
 
 #include "dom/document.h"
 #include "dom/document_fragment.h"
@@ -70,15 +71,8 @@ static dom::Element* s_fullscreenElement = nullptr;
 // allowed to make embed calls. What is NOT done is freeing the entry: a
 // wrapper the program still holds is a handle pointing at it, and that pointer
 // has to stay valid. What it points at is now inert.
-void onNodeFreed(dom::Document*, dom::Node* node) {
-    if (s_fullscreenElement == node) {
-        s_fullscreenElement = nullptr;
-    }
-    Registry& r = registry();
-    auto it = r.live.find(node);
-    if (it == r.live.end()) return;
-    HostNodeState* st = it->second;
-    r.live.erase(it);
+static void clearNodeState(HostNodeState* st) {
+    if (!st) return;
     st->node = nullptr;
     st->el = nullptr;
     st->jsObj.set(ev::undefined());
@@ -93,6 +87,36 @@ void onNodeFreed(dom::Document*, dom::Node* node) {
     st->hasComputed = false;
     st->hasDataset = false;
 }
+
+void onNodeFreed(dom::Document*, dom::Node* node) {
+    if (s_fullscreenElement == node) {
+        s_fullscreenElement = nullptr;
+    }
+    Registry& r = registry();
+    auto it = r.live.find(node);
+    if (it == r.live.end()) return;
+    clearNodeState(it->second);
+    r.live.erase(it);
+}
+
+}  // namespace
+
+void clearHostElementsForDocument(dom::Document* doc) {
+    if (!doc) return;
+    Registry& r = registry();
+    r.observed.erase(doc);
+    for (auto it = r.live.begin(); it != r.live.end(); ) {
+        HostNodeState* st = it->second;
+        if (st && st->node && st->node->document() == doc) {
+            clearNodeState(st);
+            it = r.live.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+namespace {
 
 // Takes a Node rather than an Element so text nodes, comments and fragments
 // land in the SAME map as elements. One registry is what keeps identity a
@@ -870,12 +894,14 @@ void decorateElementProto(ObjectBuilder& b) {
     });
 
     // ---- pointer lock -----------------------------------------------------
-    b.def("requestPointerLock", 0, [](Value self_, std::span<const Value>) {
+    b.def("requestPointerLock", 0, [](Value self_, std::span<const Value>) -> Value {
         HostNodeState* st = nodeStateOf(self_);
         if (st && st->el) {
-            if (auto* e = hostEngine()) {
-                e->requestPointerLock(st->el);
+            auto* e = hostEngine();
+            if (isChildRealm() || (e && st->el->document() != e->document())) {
+                return ev::throwTypeError("requestPointerLock is only available in the main window");
             }
+            if (e) e->requestPointerLock(st->el);
         }
         return ev::undefined();
     });

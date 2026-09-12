@@ -1,10 +1,17 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 // Public surface of the bronze host layer (src/bronze_host/README.md): the
 // one call a host executable makes between constructing the Engine and
 // running the compiled program.
 
-namespace bro::engine { class Engine; }
+namespace bro::engine {
+class Engine;
+struct ScriptEntry;
+}
+namespace bro::dom { class Document; }
 
 namespace bro::bronze_host {
 
@@ -30,6 +37,31 @@ void installWebHostGlobals(engine::Engine& engine);
 
 /// Whether installWebHostGlobals has already been called on this process.
 bool isWebHostGlobalsInstalled();
+
+/// Clear active setTimeout and setInterval timers and tasks on reload.
+void clearHostTimers();
+
+/// Reset expandos added to globalThis across an app reload.
+void resetGlobalExpandos();
+
+/// Active host document tracking for sub-documents (iframes, window hosts).
+dom::Document* currentHostDocument();
+void setCurrentHostDocument(dom::Document* doc);
+void clearHostDocument(dom::Document* doc);
+void clearHostElementsForDocument(dom::Document* doc);
+void clearHostTimersForDocument(dom::Document* doc);
+void clearHostAnimationFramesForDocument(dom::Document* doc);
+uint64_t scopeIdForDocument(dom::Document* doc);
+void clearRealmScope(uint64_t scopeId);
+
+/// Deliver media query changes to matchMedia listeners.
+void deliverHostMediaQueryChanges();
+
+/// Run sub-document scripts within its document scope and realm gating.
+void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
+                          const std::vector<engine::ScriptEntry>& scripts,
+                          const std::string& appDir, const std::string& basePath,
+                          bool isChild);
 
 /// Backwards compatibility alias for installWebHostGlobals.
 inline void installThreejsHostGlobals(engine::Engine& engine) {

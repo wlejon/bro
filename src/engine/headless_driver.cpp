@@ -255,6 +255,11 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 
         if (hooks.afterEngine) hooks.afterEngine(*engine);
 
+        auto drainAppReloads = [&]() {
+            for (int i = 0; i < 8 && engine->processPendingAppReload(); ++i) {}
+        };
+        drainAppReloads();
+
 #if BRO_WITH_BRONZE
         if (bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
             exitCode = 1;
@@ -267,6 +272,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 oss << inlineExprs[i];
             }
             std::string err = engine->eval(oss.str());
+            drainAppReloads();
             if (!err.empty() || bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
                 exitCode = 1;
             }
@@ -274,6 +280,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 
         if (!scriptPath.empty()) {
             bool ok = bro::bronze_host::evalScriptFile(*engine, scriptPath);
+            drainAppReloads();
             if (!ok || bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
                 exitCode = 1;
             }

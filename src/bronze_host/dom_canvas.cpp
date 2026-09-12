@@ -3,6 +3,7 @@
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_scene_internal.h"
+#include "bronze_host/host_window_open.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -159,9 +160,12 @@ Value makeCanvasValue(dom::Element* el) {
             return scnVal;
         }
         if (type != "webgl2" && type != "webgl") return ev::null();
-        if (cs->hasGl) return cs->glObj.get();
+        if (isChildRealm()) return ev::null();
         auto* eng = hostEngine();
         if (!eng) return ev::null();
+        dom::Document* curDoc = currentHostDocument();
+        if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
+        if (cs->hasGl) return cs->glObj.get();
         webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el);
         if (!ctx) return ev::null();
         cs->glCtx = ctx;

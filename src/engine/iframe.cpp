@@ -176,6 +176,8 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     iframeDocs_.push_back(std::move(doc));
     el->setIframeDoc(dp);
 
+    runSubDocScripts(ref, source, this, /*isChild=*/true);
+
     finishSubDocLoad(ref, source, renderer_.get(), audioEngine_.get(), *textMetrics_);
 
     LOG_INFO("iframe: loaded sub-document '%s' (%dx%d, id=%llu)",
@@ -203,6 +205,33 @@ void Engine::reloadIframe(dom::Element* el) {
     // Ensure a frame runs and reaches the isRasterIdle block that drains the
     // queue (the host document may otherwise be idle).
     uiDirty_ = true;
+}
+
+bool Engine::reloadIframeForDocument(const dom::Document* doc) {
+    if (!doc) return false;
+    for (auto& d : iframeDocs_) {
+        if (d && d->document.get() == doc) {
+            reloadIframe(d->element);
+            return true;
+        }
+    }
+    return false;
+}
+
+IframeDoc* Engine::iframeForDocument(const dom::Document* doc) {
+    if (!doc) return nullptr;
+    for (auto& d : iframeDocs_) {
+        if (d && d->document.get() == doc) return d.get();
+    }
+    return nullptr;
+}
+
+bool Engine::isIframeDocument(const dom::Document* doc) const {
+    if (!doc) return false;
+    for (auto& d : iframeDocs_) {
+        if (d && d->document.get() == doc) return true;
+    }
+    return false;
 }
 
 // Drain queued iframe reloads: tear each sub-document down and rebuild it from

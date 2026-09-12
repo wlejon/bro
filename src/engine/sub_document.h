@@ -46,6 +46,9 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
 void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
                          const std::string& colorScheme);
 
+/// Execute scripts for a sub-document.
+void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool isChild);
+
 /// Replaced elements + the first style/layout pass at the box size.
 void finishSubDocLoad(SubDocRef d, const SubDocSource& src,
                       render::Renderer* renderer, broaudio::Engine* audio,

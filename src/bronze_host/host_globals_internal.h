@@ -82,8 +82,16 @@ void installPlatformExtensions(engine::Engine& engine);
 Value makeSessionStorageValue();
 
 // ---------------------------------------------------------------------------
-// Element cloning hook
+// Element cloning hook & document tracking
 // ---------------------------------------------------------------------------
 void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clone);
+Value hostDocumentValue(dom::Document* doc);
+void clearHostDocument(dom::Document* doc);
+void clearHostTimersForDocument(dom::Document* doc);
+void clearHostAnimationFramesForDocument(dom::Document* doc);
+void resetWindowHostOpenState();
+dom::Document* currentHostDocument();
+void setCurrentHostDocument(dom::Document* doc);
+void deliverHostMediaQueryChanges();
 
 } // namespace bro::bronze_host

@@ -3,6 +3,10 @@
 
 #include "engine/sub_document.h"
 
+#if BRO_WITH_BRONZE
+#include "bronze_host/bronze_host.h"
+#endif
+
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
 #include "engine/replaced_elements.h"
@@ -54,34 +58,32 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
     SubDocSource out;
     if (srcAttr.empty()) return out;
 
-    std::string resolved = mounts ? mounts->resolve(srcAttr) : srcAttr;
-    if (resolved == srcAttr) {
-        fs::path p = fs::path(basePath) / srcAttr;
-        std::error_code ec;
-        if (fs::exists(p, ec)) {
-            resolved = fs::canonical(p, ec).string();
-        }
-    }
+    out.resolvedSrc = AppLoader::resolvePath(basePath, srcAttr, mounts);
 
     std::error_code ec;
-    if (!fs::exists(resolved, ec)) {
-        LOG_WARN("%s: failed to resolve '%s'", what, srcAttr.c_str());
-        return out;
+    out.appDir = out.resolvedSrc;
+    if (!fs::is_directory(out.resolvedSrc, ec)) {
+        if (!fs::is_regular_file(out.resolvedSrc, ec)) {
+            LOG_WARN("%s: failed to resolve '%s'", what, srcAttr.c_str());
+            return out;
+        }
+        out.appDir = fs::path(out.resolvedSrc).parent_path().string();
     }
 
-    fs::path dir = fs::is_directory(resolved, ec) ? fs::path(resolved)
-                                                  : fs::path(resolved).parent_path();
-    out.appDir = dir.string();
-    out.resolvedSrc = resolved;
     out.manifest = AppLoader::loadApp(out.appDir, mounts);
     out.html = AppLoader::loadFile(out.manifest.htmlPath);
+    if (out.html.empty()) {
+        LOG_WARN("%s: no index.html at '%s' (src='%s')", what,
+                 out.appDir.c_str(), srcAttr.c_str());
+        return out;
+    }
     for (auto& cssPath : out.manifest.stylePaths) {
         std::string css = AppLoader::loadFile(cssPath);
         if (!css.empty()) {
             out.authorStyles += css + "\n";
         }
     }
-    out.ok = !out.html.empty();
+    out.ok = true;
     return out;
 }
 
@@ -91,6 +93,16 @@ void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
     d.document->setBasePath(src.manifest.basePath);
     d.document->setMediaColorScheme(colorScheme);
     d.document->parse(src.html, src.authorStyles, kDefaultStyles);
+}
+
+void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool isChild) {
+#if BRO_WITH_BRONZE
+    if (!engine || !d.document) return;
+    bro::bronze_host::runHostSubDocScripts(*engine, d.document.get(),
+                                           src.manifest.scripts,
+                                           src.appDir, src.manifest.basePath,
+                                           isChild);
+#endif
 }
 
 void finishSubDocLoad(SubDocRef d, const SubDocSource& src,
@@ -238,6 +250,16 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
 }
 
 void teardownSubDoc(SubDocRef d) {
+#if BRO_WITH_BRONZE
+    if (d.document) {
+        dom::Document* doc = d.document.get();
+        bro::bronze_host::clearHostTimersForDocument(doc);
+        bro::bronze_host::clearHostAnimationFramesForDocument(doc);
+        bro::bronze_host::clearHostElementsForDocument(doc);
+        bro::bronze_host::clearRealmScope(bro::bronze_host::scopeIdForDocument(doc));
+        bro::bronze_host::clearHostDocument(doc);
+    }
+#endif
     d.document.reset();
 }
 

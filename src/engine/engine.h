@@ -148,6 +148,10 @@ public:
     void closeWindowHost(uint64_t id);
     WindowHost* windowHostById(uint64_t id);
     WindowHost* windowHostBySdlId(uint32_t sdlId);
+    WindowHost* windowHostForDocument(const dom::Document* doc);
+    bool isWindowHostDocument(const dom::Document* doc) const;
+    IframeDoc* iframeForDocument(const dom::Document* doc);
+    bool isIframeDocument(const dom::Document* doc) const;
     bool anyLiveWindowHosts() const;
     bool anyPresentableWindowHosts() const;
     bool anyWindowHostFocused() const;
@@ -252,6 +256,7 @@ public:
     canvas::CanvasScene* createCanvasContext(dom::Element* canvas);
     void flushLayoutForRead(dom::Document* doc);
     void reloadIframe(dom::Element* el);
+    bool reloadIframeForDocument(const dom::Document* doc);
     void requestAppReload();
     bool processPendingAppReload();
     std::vector<uint8_t> captureIframe(dom::Element* el, int& outW, int& outH);

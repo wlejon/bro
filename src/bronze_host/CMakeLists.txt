@@ -111,6 +111,8 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_forms.cpp
     host_element_image.cpp
     host_html_interfaces.cpp
+    host_iframe.cpp
+    host_matchmedia.cpp
     host_node.cpp
     host_range.cpp
     host_selection.cpp
@@ -159,6 +161,8 @@ set(BRO_BRONZE_HOST_SOURCES
     host_worker_msg.cpp
     host_worker.cpp
     host_window.cpp
+    host_window_open.cpp
+    host_realm_scope.cpp
     host_settings.cpp
     host_math_classes.cpp
     host_math_funcs.cpp

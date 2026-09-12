@@ -1,4 +1,5 @@
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_iframe.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
 
@@ -109,6 +110,7 @@ void installHtmlInterfaces() {
     struct TagClassInit {
         HostClass& cls;
         const char* name;
+        void (*decorator)(ObjectBuilder&) = nullptr;
     };
     TagClassInit htmlTagClasses[] = {
         {g_htmlCanvasElementClass, "HTMLCanvasElement"},
@@ -128,7 +130,7 @@ void installHtmlInterfaces() {
         {g_htmlUListElementClass, "HTMLUListElement"},
         {g_htmlLIElementClass, "HTMLLIElement"},
         {g_htmlFormElementClass, "HTMLFormElement"},
-        {g_htmlIFrameElementClass, "HTMLIFrameElement"},
+        {g_htmlIFrameElementClass, "HTMLIFrameElement", decorateIFrameProto},
         {g_htmlHeadingElementClass, "HTMLHeadingElement"},
         {g_htmlOptionElementClass, "HTMLOptionElement"},
         {g_htmlHtmlElementClass, "HTMLHtmlElement"},
@@ -136,7 +138,7 @@ void installHtmlInterfaces() {
     };
 
     for (auto& item : htmlTagClasses) {
-        item.cls.install(item.name, 0, illegalConstructor, nullptr);
+        item.cls.install(item.name, 0, illegalConstructor, item.decorator);
         item.cls.inherit(g_htmlElementClass);
     }
 
