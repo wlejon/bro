@@ -196,6 +196,7 @@ engine::Engine* hostEngine();
 // compiled listener, and it is identity, not a rebuild: the same Value the
 // program already holds.
 Value hostValueForElement(dom::Element* el);
+Value describeTarget(dom::Element* el);
 
 // Milliseconds of SCALED engine time since installWebHostGlobals: the
 // accumulated Engine::onFrame deltas. This is the clock rAF timestamps and
@@ -785,6 +786,12 @@ Value makeBroNetValue();
 
 Value makeBroMeshValue();
 Value makeBroImageValue();
+
+Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
+Value makeGpuValue();
+Value makeBroValue();
+void installBroGlobals(engine::Engine& engine);
+void installTouchGlobals();
 
 // ---------------------------------------------------------------------------
 // Vendor globals (host_vendor_globals.cpp)

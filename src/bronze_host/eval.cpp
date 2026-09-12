@@ -48,6 +48,8 @@ constexpr const char* kModuleExt = ".dylib";
 constexpr const char* kModuleExt = ".so";
 #endif
 
+} // namespace
+
 std::filesystem::path getExecutableDirectory() {
 #ifdef _WIN32
     char buf[MAX_PATH];
@@ -71,6 +73,8 @@ std::filesystem::path getExecutableDirectory() {
 #endif
     return std::filesystem::current_path();
 }
+
+namespace {
 
 // Module roots for a compile that runs against `engine`'s app. Every engine
 // mount (`/app`, `/lib`, `/system`, `/std`) becomes a root, so the compiler

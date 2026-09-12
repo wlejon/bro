@@ -132,7 +132,6 @@ bool Engine::dispatchTouchPointerEvent(const char* type, const TouchContact& c,
 // W3C Touch Events (touchstart / touchmove / touchend / touchcancel)
 // ---------------------------------------------------------------------------
 
-// Wrap a JS array of Touch objects in a polyfill TouchList. Consumes `arr`.
 bool Engine::dispatchTouchEvent(const char* type, const TouchContact& changed,
                                 bool cancelable) {
     if (!document_) return false;
@@ -142,8 +141,41 @@ bool Engine::dispatchTouchEvent(const char* type, const TouchContact& changed,
     dom::Element* target = changed.startTarget.get();
     if (!target) return false;
 
-    dom::Event evt(type, /*bubbles=*/true, cancelable);
+    dom::TouchEvent evt(type, /*bubbles=*/true, cancelable);
     evt.setIsTrusted(true);
+
+    const float ct = static_cast<float>(contentTop());
+    const float scroll = scrollY_;
+
+    auto makePoint = [&](const TouchContact& c, dom::Element* touchTarget) -> dom::TouchPoint {
+        dom::TouchPoint tp;
+        tp.identifier = c.pointerId;
+        tp.target = touchTarget;
+        tp.clientX = static_cast<double>(c.x);
+        tp.clientY = static_cast<double>(c.y - ct);
+        tp.pageX = static_cast<double>(c.x);
+        tp.pageY = static_cast<double>(c.y - ct + scroll);
+        tp.screenX = static_cast<double>(c.x);
+        tp.screenY = static_cast<double>(c.y);
+        tp.force = static_cast<double>(c.pressure);
+        return tp;
+    };
+
+    for (const auto& c : touchContacts_) {
+        dom::Element* cTarget = c.startTarget.get();
+        evt.addTouch(makePoint(c, cTarget));
+        if (cTarget == target) {
+            evt.addTargetTouch(makePoint(c, cTarget));
+        }
+    }
+    evt.addChangedTouch(makePoint(changed, target));
+
+    int mod = currentModState();
+    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+
     dom::dispatchDomEvent(target, evt);
     return evt.defaultPrevented();
 }
@@ -230,8 +262,12 @@ void Engine::dispatchGestureEvent(const char* type) {
     dom::Element* target = gesture_.target.get();
     if (!target) return;
 
-    dom::Event evt(type, /*bubbles=*/true, /*cancelable=*/true);
+    dom::GestureEvent evt(type, /*bubbles=*/true, /*cancelable=*/true);
     evt.setIsTrusted(true);
+    evt.setScale(static_cast<double>(gesture_.scale));
+    evt.setRotation(static_cast<double>(gesture_.rotation));
+    evt.setClientX(static_cast<double>(gesture_.cx));
+    evt.setClientY(static_cast<double>(gesture_.cy - static_cast<float>(contentTop())));
     dom::dispatchDomEvent(target, evt);
 }
 

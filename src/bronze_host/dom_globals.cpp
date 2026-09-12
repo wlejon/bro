@@ -192,6 +192,16 @@ Value makeWindowValue() {
                    return ev::fromDouble(engine->contentHeight());
                },
                nullptr);
+    b.accessor("outerWidth",
+               [engine](Value, std::span<const Value>) {
+                   return ev::fromDouble(engine->viewportWidth());
+               },
+               nullptr);
+    b.accessor("outerHeight",
+               [engine](Value, std::span<const Value>) {
+                   return ev::fromDouble(engine->viewportHeight());
+               },
+               nullptr);
 
     // Real listeners, through the same dispatch the engine's JS window
     // listeners ride (Engine::addWindowEventListener) — a compiled app's
@@ -502,122 +512,6 @@ Value hostValueForElement(dom::Element* el) {
     return hostElementValue(el);
 }
 
-Value makeUnavailableNamespace(const std::string& name, const std::string& flag) {
-    ObjectBuilder base;
-    base.set("available", ev::fromBool(false));
-
-    HostProxyTraps traps;
-    traps.methods = base.get();
-    traps.get = [name, flag](const std::string& key, Value& out) -> bool {
-        std::string err = "bro." + name + " is unavailable: this build was compiled without " + flag;
-        out = ev::makeFunction([err](Value, std::span<const Value>) -> Value {
-            return ev::throwError(err.c_str());
-        }, 0);
-        return true;
-    };
-    traps.has = [](const std::string& key) -> bool {
-        return key == "available";
-    };
-    traps.ownKeys = []() -> std::vector<std::string> {
-        return { "available" };
-    };
-    return makeHostProxy(std::move(traps));
-}
-
-Value makeGpuValue() {
-    ObjectBuilder gpu;
-    gpu.set("available", ev::fromBool(false));
-    gpu.set("backend", ev::fromUtf8("cpu"));
-    gpu.set("devices", hostArrayOf(1, [](size_t) { return ev::fromUtf8("cpu"); }));
-    gpu.set("compiledBackends", hostArrayOf(1, [](size_t) { return ev::fromUtf8("cpu"); }));
-    gpu.def("deviceName", 0, [](Value, std::span<const Value>) { return ev::null(); });
-    gpu.def("deviceCount", 1, [](Value, std::span<const Value> a) {
-        if (a.empty() || ev::toUtf8(a[0]) == "cpu") return ev::fromDouble(1);
-        return ev::fromDouble(0);
-    });
-    gpu.def("memoryInfo", 0, [](Value, std::span<const Value>) { return ev::null(); });
-    gpu.def("trim", 0, [](Value, std::span<const Value>) { return ev::fromBool(false); });
-    return gpu.get();
-}
-
-Value makeBroValue() {
-    ObjectBuilder b;
-    {
-        ObjectBuilder menu;
-        menu.def("show", 0, [](Value, std::span<const Value>) {
-            if (auto* eng = hostEngine()) {
-                eng->menuBar().visible = true;
-                eng->menuBar().dirty = true;
-                eng->onMenuChanged();
-            }
-            return ev::undefined();
-        });
-        menu.def("hide", 0, [](Value, std::span<const Value>) {
-            if (auto* eng = hostEngine()) {
-                eng->menuBar().visible = false;
-                eng->menuBar().dirty = true;
-                eng->onMenuChanged();
-            }
-            return ev::undefined();
-        });
-        menu.accessor("visible",
-            [](Value, std::span<const Value>) {
-                auto* eng = hostEngine();
-                return ev::fromBool(eng ? eng->menuBar().visible : false);
-            },
-            nullptr);
-        menu.def("set", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-        menu.def("addItem", 3, [](Value, std::span<const Value>) { return ev::fromBool(true); });
-        menu.def("updateItem", 2, [](Value, std::span<const Value>) { return ev::fromBool(true); });
-        menu.def("removeItem", 1, [](Value, std::span<const Value> a) {
-            auto* eng = hostEngine();
-            if (!eng || a.empty()) return ev::fromBool(false);
-            std::string id = ev::toUtf8(a[0]);
-            bool ok = eng->menuBar().removeItem(id);
-            if (ok) eng->onMenuChanged();
-            return ev::fromBool(ok);
-        });
-        menu.def("on", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-        b.set("menu", menu.get());
-    }
-    {
-        ObjectBuilder time;
-        time.def("now", 0, [](Value, std::span<const Value>) { return ev::fromDouble(hostClockMs()); });
-        b.set("time", time.get());
-    }
-    b.set("net", makeBroNetValue());
-    b.set("mesh", makeBroMeshValue());
-    b.set("image", makeBroImageValue());
-    // bro.ai.game (host_ai_game.cpp): after installAIGlobals, which installs
-    // the classes its factories birth instances on.
-    b.set("ai", makeBroAiValue());
-
-    // Feature-gated stubs (GATED list from tests/_smoke_app/minimal_smoke.js)
-    b.set("media", makeUnavailableNamespace("media", "BRO_WITH_VIDEO"));
-    b.set("flora", makeUnavailableNamespace("flora", "BRO_WITH_FLORA"));
-    b.set("gizmo", makeUnavailableNamespace("gizmo", "BRO_WITH_3D"));
-    b.set("impostor", makeUnavailableNamespace("impostor", "BRO_WITH_3D"));
-    b.set("lm", makeUnavailableNamespace("lm", "BRO_WITH_LM"));
-    b.set("stt", makeUnavailableNamespace("stt", "BRO_WITH_SOUNDML"));
-    b.set("tts", makeUnavailableNamespace("tts", "BRO_WITH_SOUNDML"));
-    b.set("diar", makeUnavailableNamespace("diar", "BRO_WITH_SOUNDML"));
-    b.set("rave", makeUnavailableNamespace("rave", "BRO_WITH_SOUNDML"));
-    b.set("wake", makeUnavailableNamespace("wake", "BRO_WITH_SOUNDML"));
-    b.set("kws", makeUnavailableNamespace("kws", "BRO_WITH_SOUNDML"));
-    b.set("sense", makeUnavailableNamespace("sense", "BRO_WITH_SOUNDML"));
-    b.set("gesture", makeUnavailableNamespace("gesture", "BRO_WITH_SOUNDML"));
-    b.set("listen", makeUnavailableNamespace("listen", "BRO_WITH_SOUNDML"));
-    b.set("mic", makeUnavailableNamespace("mic", "BRO_WITH_SOUNDML"));
-    b.set("vision", makeUnavailableNamespace("vision", "BRO_WITH_VISION"));
-    b.set("diffusion", makeUnavailableNamespace("diffusion", "BRO_WITH_DIFFUSION"));
-    b.set("tensor", makeUnavailableNamespace("tensor", "BRO_WITH_TENSOR"));
-    b.set("gpu", makeGpuValue());
-    b.set("triposplat", makeUnavailableNamespace("triposplat", "BRO_WITH_TRIPOSPLAT"));
-    b.set("motion", makeUnavailableNamespace("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM"));
-
-    return b.get();
-}
-
 // ---------------------------------------------------------------------------
 // install
 // ---------------------------------------------------------------------------
@@ -738,6 +632,26 @@ void installWebHostGlobals(engine::Engine& engine) {
                            ev::getProperty(win.get(), "scrollBy"));
         ev::registerGlobal("scroll",
                            ev::getProperty(win.get(), "scroll"));
+
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found) {
+            ObjectBuilder bgt(gt.value);
+            bgt.accessor("innerWidth", [&engine](Value, std::span<const Value>) {
+                return ev::fromDouble(engine.contentWidth());
+            }, nullptr);
+            bgt.accessor("innerHeight", [&engine](Value, std::span<const Value>) {
+                return ev::fromDouble(engine.contentHeight());
+            }, nullptr);
+            bgt.accessor("outerWidth", [&engine](Value, std::span<const Value>) {
+                return ev::fromDouble(engine.viewportWidth());
+            }, nullptr);
+            bgt.accessor("outerHeight", [&engine](Value, std::span<const Value>) {
+                return ev::fromDouble(engine.viewportHeight());
+            }, nullptr);
+            bgt.accessor("devicePixelRatio", [&engine](Value, std::span<const Value>) {
+                return ev::fromDouble(engine.displayScale());
+            }, nullptr);
+        }
     }
     {
         Value raf = makeRequestAnimationFrame();
@@ -898,10 +812,8 @@ void installWebHostGlobals(engine::Engine& engine) {
         Value customEvent = makeEventConstructor("CustomEvent");
         ev::registerGlobal("CustomEvent", customEvent);
     }
-    {
-        Value broVal = makeBroValue();
-        ev::registerGlobal("bro", broVal);
-    }
+    installBroGlobals(engine);
+    installTouchGlobals();
     installNetGlobals();
     installVendorGlobals();
     installNodeCoreGlobals(engine);

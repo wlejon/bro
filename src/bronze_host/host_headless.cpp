@@ -1,14 +1,13 @@
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_headless_internal.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"
 
 #include "engine/engine.h"
-#include "engine/gamepad.h"
 #include "platform/dialogs.h"
 #include "util/log.h"
 
-#include <SDL3/SDL.h>
 #include <chrono>
 #include <thread>
 #include <string>
@@ -21,15 +20,6 @@ namespace {
 
 static bool s_hasTestFailure = false;
 static std::vector<std::string> s_scriptArgs;
-
-static int domToSdlButton(int domButton) {
-    switch (domButton) {
-        case 0: return 1;
-        case 1: return 2;
-        case 2: return 3;
-        default: return domButton + 1;
-    }
-}
 
 static Value makeScriptArgsValue() {
     ev::CallResult parsed = ev::parseJson("[]");
@@ -63,6 +53,9 @@ void setScriptArgs(const std::vector<std::string>& args) {
 }
 
 void installHeadlessGlobals(engine::Engine& engine) {
+    installHeadlessInput(engine);
+    installHeadlessFrame(engine);
+
     // 1. advanceTime(double ms)
     ev::registerGlobal("advanceTime", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
@@ -89,7 +82,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
             return ev::undefined();
         }, 1, "sleep"));
 
-    // 3b. wallSleep(double ms)
+    // 4. wallSleep(double ms)
     ev::registerGlobal("wallSleep", ev::makeFunction(
         [](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
@@ -99,15 +92,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
             return ev::undefined();
         }, 1, "wallSleep"));
 
-    // 4. screenshot(const std::string& path)
-    ev::registerGlobal("screenshot", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            std::string path = a.empty() ? "" : ev::toUtf8(a[0]);
-            bool ok = engine.screenshot(path);
-            return ev::fromBool(ok);
-        }, 1, "screenshot"));
-
-    // 5. assert(bool condition, const std::string& message)
+    // 5. assert(bool condition [, const std::string& message])
     ev::registerGlobal("assert", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             bool cond = !a.empty() && ev::toBool(a[0]);
@@ -121,118 +106,25 @@ void installHeadlessGlobals(engine::Engine& engine) {
             return ev::fromBool(true);
         }, 2, "assert"));
 
-    // 6. click(float x, float y)
-    ev::registerGlobal("click", ev::makeFunction(
+    // 6. resize(int w, int h)
+    ev::registerGlobal("resize", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            int btn = a.size() > 2 ? static_cast<int>(ev::toDouble(a[2])) : 0;
-            int sdlBtn = domToSdlButton(btn);
-            engine.handleMouseDown(x, y, sdlBtn);
-            engine.handleMouseUp(x, y, sdlBtn);
+            if (a.size() < 2) return ev::throwTypeError("resize(w, h) requires width and height");
+            int w = static_cast<int>(ev::toDouble(a[0]));
+            int h = static_cast<int>(ev::toDouble(a[1]));
+            engine.handleResize(w, h);
             engine.flush();
             return ev::undefined();
-        }, 2, "click"));
+        }, 2, "resize"));
 
-    // 7. mouseDown(float x, float y, int btn=0)
-    ev::registerGlobal("mouseDown", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            int btn = a.size() > 2 ? static_cast<int>(ev::toDouble(a[2])) : 0;
-            engine.handleMouseDown(x, y, domToSdlButton(btn));
-            engine.flush();
-            return ev::undefined();
-        }, 2, "mouseDown"));
-
-    // 8. mouseUp(float x, float y, int btn=0)
-    ev::registerGlobal("mouseUp", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            int btn = a.size() > 2 ? static_cast<int>(ev::toDouble(a[2])) : 0;
-            engine.handleMouseUp(x, y, domToSdlButton(btn));
-            engine.flush();
-            return ev::undefined();
-        }, 2, "mouseUp"));
-
-    // 9. mouseMove(float x, float y)
-    ev::registerGlobal("mouseMove", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            engine.handleMouseMove(x, y, x - engine.getLastMouseX(), y - engine.getLastMouseY());
-            engine.flush();
-            return ev::undefined();
-        }, 2, "mouseMove"));
-
-    // 10. wheel(float x, float y, float dy, float dx=0)
-    ev::registerGlobal("wheel", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            float dy = a.size() > 2 ? static_cast<float>(ev::toDouble(a[2])) : 0.0f;
-            float dx = a.size() > 3 ? static_cast<float>(ev::toDouble(a[3])) : 0.0f;
-            engine.handleWheel(x, y, -dx, -dy);
-            engine.flush();
-            return ev::undefined();
-        }, 3, "wheel"));
-
-    // 11. keyDown(int key, int scancode, int mod)
-    ev::registerGlobal("keyDown", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            int key = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
-            int scancode = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
-            int mod = a.size() > 2 ? static_cast<int>(ev::toDouble(a[2])) : 0;
-            if (scancode == 0 && key != 0) {
-                scancode = static_cast<int>(SDL_GetScancodeFromKey(static_cast<SDL_Keycode>(key), nullptr));
-            }
-            engine.handleKeyDown(key, scancode, mod, false);
-            engine.flush();
-            return ev::undefined();
-        }, 1, "keyDown"));
-
-    // 12. keyUp(int key, int scancode, int mod)
-    ev::registerGlobal("keyUp", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            int key = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
-            int scancode = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
-            int mod = a.size() > 2 ? static_cast<int>(ev::toDouble(a[2])) : 0;
-            if (scancode == 0 && key != 0) {
-                scancode = static_cast<int>(SDL_GetScancodeFromKey(static_cast<SDL_Keycode>(key), nullptr));
-            }
-            engine.handleKeyUp(key, scancode, mod, false);
-            engine.flush();
-            return ev::undefined();
-        }, 1, "keyUp"));
-
-    // 13. textInput(const std::string& text)
-    ev::registerGlobal("textInput", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            std::string text = a.size() > 0 ? ev::toUtf8(a[0]) : "";
-            engine.handleTextInput(text);
-            engine.flush();
-            return ev::undefined();
-        }, 1, "textInput"));
-
-    // 14. scriptArgs
-    ev::registerGlobal("scriptArgs", makeScriptArgsValue());
-
-    // 15. gamepadConnect(id)
-    // setDialogAnswer(accept) — what alert/confirm/prompt do with no user to
-    // ask. `true` (the default) means confirm() returns true and prompt() its
-    // default value, so a script walks through an app's confirmations instead
-    // of stopping at the first one; `false` takes the cancel branch.
+    // 7. setDialogAnswer(accept)
     ev::registerGlobal("setDialogAnswer", ev::makeFunction(
         [](Value, std::span<const Value> a) {
             platform::Dialogs::setAutoDialogAnswer(a.empty() ? true : ev::toBool(a[0]));
             return ev::undefined();
-        }, 1));
+        }, 1, "setDialogAnswer"));
 
-    // setPickedFiles(paths) — what the next file dialog or <input type=file>
-    // click picks: a path string or an array of them. There is no native
-    // picker to open with no user present, so a script queues the choice and
-    // then opens the dialog exactly as a user would.
+    // 8. setPickedFiles(paths)
     ev::registerGlobal("setPickedFiles", ev::makeFunction(
         [](Value, std::span<const Value> a) {
             std::vector<std::string> paths;
@@ -249,59 +141,10 @@ void installHeadlessGlobals(engine::Engine& engine) {
             }
             platform::Dialogs::setPickedFiles(std::move(paths));
             return ev::undefined();
-        }, 1));
+        }, 1, "setPickedFiles"));
 
-    ev::registerGlobal("gamepadConnect", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            std::string id = a.size() > 0 ? ev::toUtf8(a[0]) : "Virtual Gamepad";
-            int idx = engine.gamepadConnectVirtual(id);
-            return ev::fromDouble(idx);
-        }, 1, "gamepadConnect"));
-
-    // 16. gamepadDisconnect(index)
-    ev::registerGlobal("gamepadDisconnect", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            int idx = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
-            bool ok = engine.gamepadDisconnectVirtual(idx);
-            return ev::fromBool(ok);
-        }, 1, "gamepadDisconnect"));
-
-    // 17. gamepadButton(index, button, pressed, value)
-    ev::registerGlobal("gamepadButton", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            int idx = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
-            int buttonIdx = 0;
-            if (a.size() > 1) {
-                if (ev::isNumber(a[1])) {
-                    buttonIdx = static_cast<int>(ev::toDouble(a[1]));
-                } else {
-                    std::string bname = ev::toUtf8(a[1]);
-                    buttonIdx = engine::gamepadButtonIndex(bname);
-                }
-            }
-            bool pressed = a.size() > 2 ? ev::toBool(a[2]) : false;
-            float val = a.size() > 3 ? static_cast<float>(ev::toDouble(a[3])) : (pressed ? 1.0f : 0.0f);
-            bool ok = engine.gamepadSetVirtualButton(idx, buttonIdx, pressed, val);
-            return ev::fromBool(ok);
-        }, 4, "gamepadButton"));
-
-    // 18. gamepadAxis(index, axis, value)
-    ev::registerGlobal("gamepadAxis", ev::makeFunction(
-        [&engine](Value, std::span<const Value> a) -> Value {
-            int idx = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
-            int axisIdx = 0;
-            if (a.size() > 1) {
-                if (ev::isNumber(a[1])) {
-                    axisIdx = static_cast<int>(ev::toDouble(a[1]));
-                } else {
-                    std::string aname = ev::toUtf8(a[1]);
-                    axisIdx = engine::gamepadAxisIndex(aname);
-                }
-            }
-            float val = a.size() > 2 ? static_cast<float>(ev::toDouble(a[2])) : 0.0f;
-            bool ok = engine.gamepadSetVirtualAxis(idx, axisIdx, val);
-            return ev::fromBool(ok);
-        }, 3, "gamepadAxis"));
+    // 9. scriptArgs
+    ev::registerGlobal("scriptArgs", makeScriptArgsValue());
 }
 
 } // namespace bro::bronze_host

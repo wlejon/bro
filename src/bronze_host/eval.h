@@ -9,6 +9,9 @@ class Engine;
 
 namespace bro::bronze_host {
 
+/// Path to directory containing the running executable.
+std::filesystem::path getExecutableDirectory();
+
 /// Temporary directory for compiled eval/worker DLLs.
 std::filesystem::path getEvalTempDir();
 

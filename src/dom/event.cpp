@@ -114,4 +114,14 @@ SubmitEvent::SubmitEvent(const std::string& type, bool bubbles, bool cancelable)
 {
 }
 
+TouchEvent::TouchEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
+GestureEvent::GestureEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
 } // namespace bro::dom

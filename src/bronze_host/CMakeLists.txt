@@ -142,6 +142,10 @@ set(BRO_BRONZE_HOST_SOURCES
     host_vendor_globals.cpp
     host_node_core.cpp
     host_headless.cpp
+    host_headless_input.cpp
+    host_headless_frame.cpp
+    host_touch.cpp
+    dom_bro.cpp
     eval.cpp
     host_buffer.cpp
     host_structured_clone.cpp

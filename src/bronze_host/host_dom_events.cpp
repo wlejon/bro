@@ -22,6 +22,7 @@
 
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_touch.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -38,6 +39,17 @@
 #include <vector>
 
 namespace bro::bronze_host {
+
+// ---------------------------------------------------------------------------
+// Target identity
+// ---------------------------------------------------------------------------
+
+Value describeTarget(dom::Element* el) {
+    if (!el) return ev::null();
+    Value host = hostValueForElement(el);
+    if (!ev::isUndefined(host)) return host;
+    return hostElementValue(el);
+}
 
 namespace {
 
@@ -59,23 +71,6 @@ Value staleEventThrow(const char* method) {
         std::string("event.") + method +
         ": the event is no longer being dispatched. The event object handed to a "
         "listener is only live for the duration of that listener call.");
-}
-
-// ---------------------------------------------------------------------------
-// Target identity
-// ---------------------------------------------------------------------------
-
-// The value a compiled listener sees for `target` / `currentTarget`. A canvas
-// this layer created answers as itself, which is what an identity compare in
-// the program is for. Anything else — the <html> element a document listener's
-// currentTarget is, an element the page built — answers a small descriptor,
-// because there is no host object to be identical to and inventing one would
-// make two values for one element. ALLOCATES.
-Value describeTarget(dom::Element* el) {
-    if (!el) return ev::null();
-    Value host = hostValueForElement(el);
-    if (!ev::isUndefined(host)) return host;
-    return hostElementValue(el);
 }
 
 int legacyKeyCodeFor(const std::string& code, const std::string& key) {
@@ -121,7 +116,13 @@ int legacyKeyCodeFor(const std::string& code, const std::string& key) {
 // copy. Order of registration is fixed source order, so the object's shape is
 // the same every run — bronze's inline caches key off it. ALLOCATES heavily.
 Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
-    ObjectBuilder b;
+    Value baseObj = ev::undefined();
+    if (dynamic_cast<dom::TouchEvent*>(&e)) {
+        baseObj = g_touchEventClass.make(nullptr, [](void*) {});
+    } else if (dynamic_cast<dom::GestureEvent*>(&e)) {
+        baseObj = g_gestureEventClass.make(nullptr, [](void*) {});
+    }
+    ObjectBuilder b(ev::isUndefined(baseObj) ? ev::createObject() : baseObj);
 
     {
         Value type = ev::fromUtf8(e.type());
@@ -196,6 +197,15 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
             Value ptype = ev::fromUtf8(m->pointerType());
             b.set("pointerType", ptype);
             b.set("isPrimary", ev::fromBool(m->isPrimaryPointer()));
+            b.set("width", ev::fromDouble(1.0));
+            b.set("height", ev::fromDouble(1.0));
+            double pressure = m->pressure();
+            if (pressure < 0.0) pressure = m->buttons() != 0 ? 0.5 : 0.0;
+            b.set("pressure", ev::fromDouble(pressure));
+            b.set("tangentialPressure", ev::fromDouble(0.0));
+            b.set("tiltX", ev::fromDouble(0.0));
+            b.set("tiltY", ev::fromDouble(0.0));
+            b.set("twist", ev::fromDouble(0.0));
         }
         if (auto* w = dynamic_cast<dom::WheelEvent*>(&e)) {
             b.set("deltaX", ev::fromDouble(w->deltaX()));
@@ -320,6 +330,23 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("keyCode", ev::fromDouble(kc));
         b.set("which", ev::fromDouble(kc));
         b.set("charCode", ev::fromDouble(0.0));
+    }
+
+    if (auto* te = dynamic_cast<dom::TouchEvent*>(&e)) {
+        b.set("touches", makeTouchListValue(te->touches()));
+        b.set("targetTouches", makeTouchListValue(te->targetTouches()));
+        b.set("changedTouches", makeTouchListValue(te->changedTouches()));
+        b.set("ctrlKey", ev::fromBool(te->ctrlKey()));
+        b.set("shiftKey", ev::fromBool(te->shiftKey()));
+        b.set("altKey", ev::fromBool(te->altKey()));
+        b.set("metaKey", ev::fromBool(te->metaKey()));
+    }
+
+    if (auto* ge = dynamic_cast<dom::GestureEvent*>(&e)) {
+        b.set("scale", ev::fromDouble(ge->scale()));
+        b.set("rotation", ev::fromDouble(ge->rotation()));
+        b.set("clientX", ev::fromDouble(ge->clientX()));
+        b.set("clientY", ev::fromDouble(ge->clientY()));
     }
 
     // The three write-throughs. `live` is captured by value: the closures

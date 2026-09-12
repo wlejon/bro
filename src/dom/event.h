@@ -363,4 +363,71 @@ private:
     bool sessionDrag_ = false;
 };
 
+struct TouchPoint {
+    int identifier = 0;
+    Element* target = nullptr;
+    double clientX = 0.0;
+    double clientY = 0.0;
+    double pageX = 0.0;
+    double pageY = 0.0;
+    double screenX = 0.0;
+    double screenY = 0.0;
+    double force = 0.0;
+};
+
+class TouchEvent : public Event {
+public:
+    TouchEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
+    ~TouchEvent() override = default;
+
+    const std::vector<TouchPoint>& touches() const { return touches_; }
+    const std::vector<TouchPoint>& targetTouches() const { return targetTouches_; }
+    const std::vector<TouchPoint>& changedTouches() const { return changedTouches_; }
+
+    void addTouch(TouchPoint tp) { touches_.push_back(std::move(tp)); }
+    void addTargetTouch(TouchPoint tp) { targetTouches_.push_back(std::move(tp)); }
+    void addChangedTouch(TouchPoint tp) { changedTouches_.push_back(std::move(tp)); }
+
+    bool ctrlKey() const { return ctrlKey_; }
+    bool shiftKey() const { return shiftKey_; }
+    bool altKey() const { return altKey_; }
+    bool metaKey() const { return metaKey_; }
+
+    void setCtrlKey(bool v) { ctrlKey_ = v; }
+    void setShiftKey(bool v) { shiftKey_ = v; }
+    void setAltKey(bool v) { altKey_ = v; }
+    void setMetaKey(bool v) { metaKey_ = v; }
+
+private:
+    std::vector<TouchPoint> touches_;
+    std::vector<TouchPoint> targetTouches_;
+    std::vector<TouchPoint> changedTouches_;
+    bool ctrlKey_ = false;
+    bool shiftKey_ = false;
+    bool altKey_ = false;
+    bool metaKey_ = false;
+};
+
+class GestureEvent : public Event {
+public:
+    GestureEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
+    ~GestureEvent() override = default;
+
+    double scale() const { return scale_; }
+    double rotation() const { return rotation_; }
+    double clientX() const { return clientX_; }
+    double clientY() const { return clientY_; }
+
+    void setScale(double v) { scale_ = v; }
+    void setRotation(double v) { rotation_ = v; }
+    void setClientX(double v) { clientX_ = v; }
+    void setClientY(double v) { clientY_ = v; }
+
+private:
+    double scale_ = 1.0;
+    double rotation_ = 0.0;
+    double clientX_ = 0.0;
+    double clientY_ = 0.0;
+};
+
 } // namespace bro::dom

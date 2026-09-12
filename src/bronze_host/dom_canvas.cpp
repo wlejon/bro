@@ -7,6 +7,7 @@
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "broimage/encode.h"
@@ -101,24 +102,17 @@ Value makeCanvasValue(dom::Element* el) {
                nullptr);
 
     b.def("getBoundingClientRect", 0, [cs](Value, std::span<const Value>) {
-        if (auto* eng = hostEngine()) {
-            eng->flushLayoutForRead(cs->el->document());
-        }
-        auto& box = cs->el->layoutBox();
-        double w = box.contentRect.width > 0 ? box.contentRect.width : canvasWidthOf(cs);
-        double h = box.contentRect.height > 0 ? box.contentRect.height : canvasHeightOf(cs);
-        double x = box.contentRect.x;
-        double y = box.contentRect.y;
-        ObjectBuilder r;
-        r.set("left", ev::fromDouble(x));
-        r.set("top", ev::fromDouble(y));
-        r.set("right", ev::fromDouble(x + w));
-        r.set("bottom", ev::fromDouble(y + h));
-        r.set("width", ev::fromDouble(w));
-        r.set("height", ev::fromDouble(h));
-        r.set("x", ev::fromDouble(x));
-        r.set("y", ev::fromDouble(y));
-        return r.get();
+        dom::AbsoluteRect r = borderBoxOf(cs->el);
+        ObjectBuilder bRect;
+        bRect.set("left", ev::fromDouble(r.x));
+        bRect.set("top", ev::fromDouble(r.y));
+        bRect.set("right", ev::fromDouble(r.x + r.width));
+        bRect.set("bottom", ev::fromDouble(r.y + r.height));
+        bRect.set("width", ev::fromDouble(r.width));
+        bRect.set("height", ev::fromDouble(r.height));
+        bRect.set("x", ev::fromDouble(r.x));
+        bRect.set("y", ev::fromDouble(r.y));
+        return bRect.get();
     });
     b.def("setAttribute", 2, [cs](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
