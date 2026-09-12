@@ -156,6 +156,11 @@ Value makeNavigatorValue() {
             return buildGamepadSnapshot(pads[i]);
         });
     });
+    b.def("getBattery", 0, [](Value, std::span<const Value>) {
+        Value p = ev::createPromise();
+        ev::resolvePromise(p, makeBatterySnapshotValue());
+        return p;
+    });
     return b.get();
 }
 

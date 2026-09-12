@@ -153,6 +153,7 @@ void hostFrame(double dtMs) {
     drainHostTasks();                                    // 3
     drainNetEvents();                                    // 3b
     drainWorkerMessages();                               // 3c
+    drainSteamEvents();                                  // 3d
     fireHostTimers(g_host->clockMs);                     // 4
     drainPhysicsContactEvents();                         // 4b
     fireAnimationFrames();                               // 5
@@ -261,6 +262,30 @@ Value makeWindowValue() {
 
     b.set("getComputedStyle", makeGetComputedStyle());
     b.set("localStorage", makeLocalStorageValue());
+    b.set("screen", makeScreenValue());
+
+    b.def("open", 1, [](Value, std::span<const Value> a) {
+        if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) return ev::null();
+        std::string url = ev::toUtf8(a[0]);
+        if (!url.empty()) {
+            auto* e = hostEngine();
+            if (e && e->displayMode() == engine::DisplayMode::Headless) {
+                LOG_INFO("window.open('%s'): suppressed in headless mode", url.c_str());
+            }
+        }
+        return ev::null();
+    });
+
+    b.def("focus", 0, [](Value, std::span<const Value>) {
+        if (auto* e = hostEngine()) {
+            if (e->displayMode() != engine::DisplayMode::Headless && e->window()) e->window()->raise();
+        }
+        return ev::undefined();
+    });
+
+    b.def("blur", 0, [](Value, std::span<const Value>) {
+        return ev::undefined();
+    });
 
     auto makeMatchMediaObj = [](const std::string& rawQuery) -> Value {
         std::string query = rawQuery;
@@ -812,6 +837,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         Value customEvent = makeEventConstructor("CustomEvent");
         ev::registerGlobal("CustomEvent", customEvent);
     }
+    installMathGlobals();
     installBroGlobals(engine);
     installTouchGlobals();
     installNetGlobals();

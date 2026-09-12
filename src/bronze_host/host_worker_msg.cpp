@@ -548,8 +548,11 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out)
     return writeValue(val, w, transfers, out.transferredBuffers, out.transferredImages, 0);
 }
 
-Value deserializeMessage(const Message& msg) {
-    Reader r(msg.data.data(), msg.data.size());
+Value deserializeMessage(const Message& msg, size_t offset) {
+    if (offset > msg.data.size()) {
+        return ev::throwTypeError("deserializeMessage: offset out of range");
+    }
+    Reader r(msg.data.data() + offset, msg.data.size() - offset);
     return readValue(r, msg, 0);
 }
 

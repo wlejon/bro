@@ -19,6 +19,8 @@
 #include "util/object_url.h"
 #include "util/remote_asset.h"
 
+#include "bronze_host/host_worker_msg.h"
+
 #ifdef BRO_HAVE_CURL
 #include <curl/curl.h>
 #endif
@@ -55,9 +57,12 @@ struct NetGlobalState {
     int connectsPending = 0;
     std::unordered_map<uint32_t, bool> connections;
     ev::Persistent netObj;
+    ev::Persistent onConnect;
+    ev::Persistent onDisconnect;
+    ev::Persistent onMessage;
 };
 
-static NetGlobalState g_netState;
+static thread_local NetGlobalState g_netState;
 
 // ---------------------------------------------------------------------------
 // WebSocket State & Types
@@ -186,14 +191,16 @@ static void dispatchNetConnect(uint32_t conn) {
     Value connVal = ev::fromDouble(conn);
     ev::Persistent connP(connVal);
 
-    for (const char* prop : {"onConnect", "onconnect"}) {
-        Value fn = ev::getProperty(g_netState.netObj.get(), prop);
-        if (ev::isFunction(fn)) {
-            ev::Persistent fnP(fn);
-            Value arg = connP.get();
-            ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), std::span<const Value>(&arg, 1));
-            if (r.thrown) reportBronzeError("bro.net.onConnect", r.value);
-        }
+    Value fn = g_netState.onConnect.get();
+    if (!ev::isFunction(fn)) {
+        fn = ev::getProperty(g_netState.netObj.get(), "onconnect");
+        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj.get(), "onConnect");
+    }
+    if (ev::isFunction(fn)) {
+        ev::Persistent fnP(fn);
+        Value arg = connP.get();
+        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), std::span<const Value>(&arg, 1));
+        if (r.thrown) reportBronzeError("bro.net.onConnect", r.value);
     }
 
     for (ev::Persistent& handler : hostListSnapshot(g_netState.netObj, "__bronzeHostListeners_connect")) {
@@ -212,14 +219,16 @@ static void dispatchNetDisconnect(uint32_t conn, int reason) {
     ev::Persistent connP(connVal);
     ev::Persistent reasonP(reasonVal);
 
-    for (const char* prop : {"onDisconnect", "ondisconnect"}) {
-        Value fn = ev::getProperty(g_netState.netObj.get(), prop);
-        if (ev::isFunction(fn)) {
-            ev::Persistent fnP(fn);
-            Value args[2] = { connP.get(), reasonP.get() };
-            ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), args);
-            if (r.thrown) reportBronzeError("bro.net.onDisconnect", r.value);
-        }
+    Value fn = g_netState.onDisconnect.get();
+    if (!ev::isFunction(fn)) {
+        fn = ev::getProperty(g_netState.netObj.get(), "ondisconnect");
+        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj.get(), "onDisconnect");
+    }
+    if (ev::isFunction(fn)) {
+        ev::Persistent fnP(fn);
+        Value args[2] = { connP.get(), reasonP.get() };
+        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), args);
+        if (r.thrown) reportBronzeError("bro.net.onDisconnect", r.value);
     }
 
     for (ev::Persistent& handler : hostListSnapshot(g_netState.netObj, "__bronzeHostListeners_disconnect")) {
@@ -239,33 +248,41 @@ static void dispatchNetMessage(net::NetworkMessage&& msg) {
         return;
     }
     const uint8_t frameType = msg.data[1];
-    if (frameType != kWireRaw) {
+    Value payload;
+    if (frameType == kWireRaw) {
+        payload = ev::createArrayBuffer(std::span<const uint8_t>(
+            msg.data.data() + kWireHeaderSize,
+            msg.data.size() - kWireHeaderSize
+        ));
+    } else if (frameType == kWireClone) {
+        Message m;
+        m.data = std::move(msg.data);
+        payload = deserializeMessage(m, kWireHeaderSize);
+    } else {
         LOG_WARN("[bronze_host:net] conn %u: dropping frame with unsupported type %u",
                  msg.connection, frameType);
         return;
     }
 
-    Value ab = ev::createArrayBuffer(std::span<const uint8_t>(
-        msg.data.data() + kWireHeaderSize,
-        msg.data.size() - kWireHeaderSize
-    ));
-    ev::Persistent abP(ab);
+    ev::Persistent payloadP(payload);
     ev::Persistent connP(ev::fromDouble(msg.connection));
     ev::Persistent chanP(ev::fromDouble(msg.channel));
 
-    for (const char* prop : {"onMessage", "onmessage"}) {
-        Value fn = ev::getProperty(g_netState.netObj.get(), prop);
-        if (ev::isFunction(fn)) {
-            ev::Persistent fnP(fn);
-            Value args[3] = { connP.get(), abP.get(), chanP.get() };
-            ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), args);
-            if (r.thrown) reportBronzeError("bro.net.onMessage", r.value);
-        }
+    Value fn = g_netState.onMessage.get();
+    if (!ev::isFunction(fn)) {
+        fn = ev::getProperty(g_netState.netObj.get(), "onmessage");
+        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj.get(), "onMessage");
+    }
+    if (ev::isFunction(fn)) {
+        ev::Persistent fnP(fn);
+        Value args[3] = { connP.get(), payloadP.get(), chanP.get() };
+        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), args);
+        if (r.thrown) reportBronzeError("bro.net.onMessage", r.value);
     }
 
     for (ev::Persistent& handler : hostListSnapshot(g_netState.netObj, "__bronzeHostListeners_message")) {
         if (ev::isFunction(handler.get())) {
-            Value args[3] = { connP.get(), abP.get(), chanP.get() };
+            Value args[3] = { connP.get(), payloadP.get(), chanP.get() };
             ev::CallResult r = ev::call(handler.get(), g_netState.netObj.get(), args);
             if (r.thrown) reportBronzeError("bro.net message listener", r.value);
         }
@@ -391,6 +408,60 @@ static Value js_net_broadcast(Value, std::span<const Value> a) {
     return ev::undefined();
 }
 
+static bool buildCloneFrame(Value val, std::vector<uint8_t>& framed) {
+    Message msg;
+    if (!serializeMessage(val, {}, msg)) return false;
+    if (!msg.transferredBuffers.empty() || !msg.transferredImages.empty()) {
+        ev::throwTypeError("sendClone: cannot transfer buffers or images across network");
+        return false;
+    }
+    framed.reserve(kWireHeaderSize + msg.data.size());
+    framed.push_back(kWireMagic);
+    framed.push_back(kWireClone);
+    framed.insert(framed.end(), msg.data.begin(), msg.data.end());
+    return true;
+}
+
+static Value js_net_sendClone(Value, std::span<const Value> a) {
+    if (a.size() < 2) return ev::throwTypeError("sendClone requires (connId, value)");
+    uint32_t conn = static_cast<uint32_t>(i32At(a, 0));
+    net::SendOptions opts;
+    if (!parseSendOptions(a, 2, opts)) return ev::fromBool(false);
+    std::vector<uint8_t> framed;
+    if (!buildCloneFrame(a[1], framed)) return ev::fromBool(false);
+    if (auto* sub = getNetSubscriber()) {
+        sub->send(conn, std::move(framed), opts);
+        return ev::fromBool(true);
+    }
+    return ev::fromBool(false);
+}
+
+static Value js_net_broadcastClone(Value, std::span<const Value> a) {
+    if (a.empty()) return ev::throwTypeError("broadcastClone requires a value");
+    net::SendOptions opts;
+    if (!parseSendOptions(a, 1, opts)) return ev::undefined();
+    std::vector<uint8_t> framed;
+    if (!buildCloneFrame(a[0], framed)) return ev::undefined();
+    if (auto* sub = getNetSubscriber()) {
+        sub->broadcast(std::move(framed), opts);
+    }
+    return ev::undefined();
+}
+
+static Value js_net_sendUnframed(Value, std::span<const Value> a) {
+    if (a.size() < 2) return ev::fromBool(false);
+    uint32_t conn = static_cast<uint32_t>(i32At(a, 0));
+    net::SendOptions opts;
+    if (!parseSendOptions(a, 2, opts)) return ev::fromBool(false);
+    std::vector<uint8_t> bytes;
+    if (!appendPayloadBytes(a[1], bytes)) return ev::fromBool(false);
+    if (auto* sub = getNetSubscriber()) {
+        sub->send(conn, std::move(bytes), opts);
+        return ev::fromBool(true);
+    }
+    return ev::fromBool(false);
+}
+
 static Value js_net_close(Value, std::span<const Value>) {
     if (auto* sub = getNetSubscriber()) {
         sub->closeHost();
@@ -454,9 +525,8 @@ static Value js_net_removeEventListener(Value, std::span<const Value> a) {
 // ---------------------------------------------------------------------------
 static void dispatchWsOpen(ev::Persistent& target) {
     ev::Persistent evt(ev::createObject());
-    evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("open")));
-    evt.set(ev::setProperty(evt.get(), "target", target.get()));
-    evt.set(ev::setProperty(evt.get(), "currentTarget", target.get()));
+    for (auto [k, v] : {std::pair{"type", ev::fromUtf8("open")}, {"target", target.get()}, {"currentTarget", target.get()}})
+        evt.set(ev::setProperty(evt.get(), k, v));
 
     Value on = ev::getProperty(target.get(), "onopen");
     if (ev::isFunction(on)) {
@@ -477,10 +547,8 @@ static void dispatchWsOpen(ev::Persistent& target) {
 static void dispatchWsMessage(ev::Persistent& target, const std::vector<uint8_t>& data, bool binary,
                               const std::string& url, const std::string& binaryType) {
     ev::Persistent evt(ev::createObject());
-    evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("message")));
-    evt.set(ev::setProperty(evt.get(), "target", target.get()));
-    evt.set(ev::setProperty(evt.get(), "currentTarget", target.get()));
-    evt.set(ev::setProperty(evt.get(), "origin", ev::fromUtf8(url)));
+    for (auto [k, v] : {std::pair{"type", ev::fromUtf8("message")}, {"target", target.get()}, {"currentTarget", target.get()}, {"origin", ev::fromUtf8(url)}})
+        evt.set(ev::setProperty(evt.get(), k, v));
 
     if (binary) {
         if (binaryType == "arraybuffer") {
@@ -513,10 +581,8 @@ static void dispatchWsMessage(ev::Persistent& target, const std::vector<uint8_t>
 
 static void dispatchWsError(ev::Persistent& target, const std::string& msg) {
     ev::Persistent evt(ev::createObject());
-    evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("error")));
-    evt.set(ev::setProperty(evt.get(), "target", target.get()));
-    evt.set(ev::setProperty(evt.get(), "currentTarget", target.get()));
-    evt.set(ev::setProperty(evt.get(), "message", ev::fromUtf8(msg)));
+    for (auto [k, v] : {std::pair{"type", ev::fromUtf8("error")}, {"target", target.get()}, {"currentTarget", target.get()}, {"message", ev::fromUtf8(msg)}})
+        evt.set(ev::setProperty(evt.get(), k, v));
 
     Value on = ev::getProperty(target.get(), "onerror");
     if (ev::isFunction(on)) {
@@ -536,12 +602,8 @@ static void dispatchWsError(ev::Persistent& target, const std::string& msg) {
 
 static void dispatchWsClose(ev::Persistent& target, int code, const std::string& reason, bool wasClean) {
     ev::Persistent evt(ev::createObject());
-    evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("close")));
-    evt.set(ev::setProperty(evt.get(), "target", target.get()));
-    evt.set(ev::setProperty(evt.get(), "currentTarget", target.get()));
-    evt.set(ev::setProperty(evt.get(), "code", ev::fromDouble(code)));
-    evt.set(ev::setProperty(evt.get(), "reason", ev::fromUtf8(reason)));
-    evt.set(ev::setProperty(evt.get(), "wasClean", ev::fromBool(wasClean)));
+    for (auto [k, v] : {std::pair{"type", ev::fromUtf8("close")}, {"target", target.get()}, {"currentTarget", target.get()}, {"code", ev::fromDouble(code)}, {"reason", ev::fromUtf8(reason)}, {"wasClean", ev::fromBool(wasClean)}})
+        evt.set(ev::setProperty(evt.get(), k, v));
 
     Value on = ev::getProperty(target.get(), "onclose");
     if (ev::isFunction(on)) {
@@ -882,6 +944,9 @@ Value makeBroNetValue() {
     b.def("disconnect", 2, js_net_disconnect);
     b.def("send", 3, js_net_send);
     b.def("broadcast", 2, js_net_broadcast);
+    b.def("sendClone", 2, js_net_sendClone);
+    b.def("broadcastClone", 1, js_net_broadcastClone);
+    b.def("sendUnframed", 2, js_net_sendUnframed);
     b.def("close", 0, js_net_close);
     b.def("closeHost", 0, js_net_close);
     b.def("isHosting", 0, js_net_isHosting);
@@ -890,9 +955,23 @@ Value makeBroNetValue() {
     b.def("addEventListener", 2, js_net_addEventListener);
     b.def("removeEventListener", 2, js_net_removeEventListener);
 
-    for (const char* name : {"onConnect", "onconnect", "onDisconnect", "ondisconnect", "onMessage", "onmessage"}) {
-        b.set(name, ev::null());
-    }
+    auto netCbGet = [](ev::Persistent& slot) -> Value {
+        Value v = slot.get();
+        return ev::isFunction(v) ? v : ev::null();
+    };
+    auto netCbSet = [](ev::Persistent& slot, std::span<const Value> a) -> Value {
+        slot.set(!a.empty() && !ev::isNull(a[0]) && !ev::isUndefined(a[0]) ? a[0] : ev::null());
+        return ev::undefined();
+    };
+    for (const char* name : {"onconnect", "onConnect"})
+        b.accessor(name, [=](Value, std::span<const Value>) -> Value { return netCbGet(g_netState.onConnect); },
+                         [=](Value, std::span<const Value> a) -> Value { return netCbSet(g_netState.onConnect, a); });
+    for (const char* name : {"ondisconnect", "onDisconnect"})
+        b.accessor(name, [=](Value, std::span<const Value>) -> Value { return netCbGet(g_netState.onDisconnect); },
+                         [=](Value, std::span<const Value> a) -> Value { return netCbSet(g_netState.onDisconnect, a); });
+    for (const char* name : {"onmessage", "onMessage"})
+        b.accessor(name, [=](Value, std::span<const Value>) -> Value { return netCbGet(g_netState.onMessage); },
+                         [=](Value, std::span<const Value> a) -> Value { return netCbSet(g_netState.onMessage, a); });
 
     Value val = b.get();
     g_netState.netObj.set(val);
@@ -901,20 +980,14 @@ Value makeBroNetValue() {
 
 void installNetGlobals() {
     g_webSocketClass.install("WebSocket", 1, webSocketCtor, decorateWebSocketProto);
-    // The readyState constants on the constructor as well as the prototype,
-    // which is where the web has them both.
-    g_webSocketClass.setStatic("CONNECTING", ev::fromDouble(0));
-    g_webSocketClass.setStatic("OPEN", ev::fromDouble(1));
-    g_webSocketClass.setStatic("CLOSING", ev::fromDouble(2));
-    g_webSocketClass.setStatic("CLOSED", ev::fromDouble(3));
+    for (auto [name, v] : {std::pair{"CONNECTING", 0.0}, {"OPEN", 1.0}, {"CLOSING", 2.0}, {"CLOSED", 3.0}})
+        g_webSocketClass.setStatic(name, ev::fromDouble(v));
     ev::registerGlobal("CloseEvent", makeBrandConstructor("CloseEvent"));
     ev::registerGlobal("MessageEvent", makeBrandConstructor("MessageEvent"));
 }
 
 void drainNetEvents() {
-    if (auto* sub = getNetSubscriber()) {
-        sub->poll();
-    }
+    if (auto* sub = getNetSubscriber()) sub->poll();
     pumpWebSockets();
 }
 

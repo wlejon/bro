@@ -94,21 +94,48 @@ static const char* mouseButtonBindingName(int domButton) {
     }
 }
 
+static std::string escapeJson(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default: out += c; break;
+        }
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Shared "action" event dispatch
 // ---------------------------------------------------------------------------
 
 void Engine::dispatchActionEventForKey(const std::string& key, const char* phase,
                                        float strength, int gamepadIndex) {
-    (void)phase;
-    (void)strength;
-    (void)gamepadIndex;
     if (!settings_ || !document_ || !document_->body()) return;
     std::string action = settings_->getActionForKey(key);
     if (action.empty()) return;
 
     dom::CustomEvent evt("action", /*bubbles=*/true, /*cancelable=*/true);
     evt.setIsTrusted(true);
+
+    std::string detail = "{";
+    detail += "\"action\":\"" + escapeJson(action) + "\"";
+    detail += ",\"phase\":\"" + escapeJson(phase ? phase : "") + "\"";
+    detail += ",\"key\":\"" + escapeJson(key) + "\"";
+    detail += ",\"strength\":" + std::to_string(strength);
+    if (gamepadIndex >= 0) {
+        detail += ",\"gamepad\":" + std::to_string(gamepadIndex);
+    }
+    detail += "}";
+    evt.setDetail(detail);
+
     dom::dispatchDomEvent(document_->body(), evt);
 }
 

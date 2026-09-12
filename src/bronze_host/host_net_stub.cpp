@@ -14,4 +14,7 @@ void installNetGlobals() {
 void drainNetEvents() {
 }
 
+void installNetSync(engine::Engine*) {
+}
+
 }  // namespace bro::bronze_host

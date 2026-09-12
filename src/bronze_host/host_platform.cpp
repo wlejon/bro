@@ -236,6 +236,8 @@ void screenDims(bool avail, double& w, double& h) {
     h = e->contentHeight();
 }
 
+} // namespace
+
 Value makeScreenValue() {
     ObjectBuilder b;
     auto dim = [](bool wantWidth, bool avail) {
@@ -254,6 +256,8 @@ Value makeScreenValue() {
     b.set("pixelDepth", ev::fromDouble(24.0));
     return b.get();
 }
+
+namespace {
 
 // ---------------------------------------------------------------------------
 // Modal dialogs

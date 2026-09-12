@@ -33,12 +33,8 @@ void installNodeCoreGlobals(engine::Engine& engine) {
     bk::installPath();
     bk::installFS();
     bk::installChildProcess();
-    // Last: require() resolves against whatever is registered when it is called,
-    // but brokit documents the order and there is no reason to differ from it.
     bk::installRequire();
 
-    // fs resolution follows the engine's mounts, and a relative path is taken
-    // from the app directory — the same two rules the asset loader applies.
     for (const auto& [prefix, target] : engine.assetMounts().mounts()) {
         bk::addFsPrefixMount(prefix, target);
     }

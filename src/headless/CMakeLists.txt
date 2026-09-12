@@ -9,7 +9,7 @@ target_include_directories(bro-headless PRIVATE ${bro_SOURCE_DIR}/src)
 
 # Set stack size to 8 MB.
 if(MSVC)
-    target_link_options(bro-headless PRIVATE /STACK:8388608)
+    target_link_options(bro-headless PRIVATE /STACK:8388608 /FORCE:MULTIPLE)
 endif()
 
 if(WIN32)

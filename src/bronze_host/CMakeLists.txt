@@ -155,6 +155,13 @@ set(BRO_BRONZE_HOST_SOURCES
     host_imagebitmap.cpp
     host_worker_msg.cpp
     host_worker.cpp
+    host_window.cpp
+    host_settings.cpp
+    host_math_classes.cpp
+    host_math_funcs.cpp
+    host_text.cpp
+    host_menu.cpp
+    host_steam.cpp
 )
 
 if(BRO_WITH_PHYSICS)
@@ -188,7 +195,7 @@ else()
 endif()
 
 if(BRO_WITH_NET)
-    list(APPEND BRO_BRONZE_HOST_SOURCES host_net.cpp)
+    list(APPEND BRO_BRONZE_HOST_SOURCES host_net.cpp host_net_sync.cpp)
 else()
     list(APPEND BRO_BRONZE_HOST_SOURCES host_net_stub.cpp)
 endif()

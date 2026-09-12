@@ -42,6 +42,9 @@ void clearTestFailure() {
 }
 
 void setTestFailure(bool failed) {
+    if (failed) {
+        LOG_INFO("DEBUG: bronze_host::setTestFailure(true)");
+    }
     s_hasTestFailure = failed;
 }
 

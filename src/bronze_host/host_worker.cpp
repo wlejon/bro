@@ -2,6 +2,7 @@
 #include "bronze_host/app_module.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_internal.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
@@ -161,6 +162,14 @@ void WorkerInstance::threadFunc() {
         return ev::undefined();
     });
 
+    auto* eng = hostEngine();
+    if (eng) {
+        Value broVal = makeBroValue();
+        ev::registerGlobal("bro", broVal);
+        ev::setProperty(globalThis, "bro", broVal);
+        installNetSync(eng);
+    }
+
     std::filesystem::path resolvedPath = scriptPath_;
     if (!resolvedPath.is_absolute() && !basePath_.empty()) {
         resolvedPath = std::filesystem::path(basePath_) / scriptPath_;
@@ -284,6 +293,7 @@ void WorkerInstance::threadFunc() {
         if (ev::isFunction(wsTick)) {
             ev::call(wsTick, ev::undefined(), {});
         }
+        drainNetEvents();
         if (ev::microtasksPending()) {
             ev::drainMicrotasks();
         }

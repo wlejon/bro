@@ -21,6 +21,6 @@ struct Message {
 };
 
 bool serializeMessage(Value val, std::span<const Value> transfers, Message& out);
-Value deserializeMessage(const Message& msg);
+Value deserializeMessage(const Message& msg, size_t offset = 0);
 
 } // namespace bro::bronze_host

@@ -188,6 +188,25 @@ std::string getWebHostGlobalsPath() {
     return "src/bronze_host/web_host.globals";
 }
 
+#ifdef _WIN32
+static bool safeRunEntry(void (*entry)()) {
+    __try {
+        bronze::embed::runEntry(entry);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DWORD code = GetExceptionCode();
+        printf("CRASH in runEntry! SEH exception code: 0x%08X\n", (unsigned int)code);
+        fflush(stdout);
+        return false;
+    }
+}
+#else
+static bool safeRunEntry(void (*entry)()) {
+    bronze::embed::runEntry(entry);
+    return true;
+}
+#endif
+
 bool evalScript(engine::Engine& engine, const std::string& code,
                 const std::string& filename) {
     ensureSharedRuntimeEnv();
@@ -284,7 +303,12 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         installWebHostGlobals(engine);
     }
 
-    bronze::embed::runEntry(entry);
+    bool entryOk = safeRunEntry(entry);
+    if (!entryOk) {
+        setTestFailure(true);
+        engine.setTestFailure(true);
+        return false;
+    }
     if (ev::microtasksPending()) {
         ev::drainMicrotasks();
     }
@@ -416,7 +440,11 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         installWebHostGlobals(engine);
     }
 
-    bronze::embed::runEntry(entry);
+    if (!safeRunEntry(entry)) {
+        setTestFailure(true);
+        engine.setTestFailure(true);
+        return false;
+    }
     if (ev::microtasksPending()) {
         ev::drainMicrotasks();
     }

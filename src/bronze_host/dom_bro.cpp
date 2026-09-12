@@ -84,44 +84,12 @@ static std::string getImageGpuJsPath() {
 
 Value makeBroValue() {
     ObjectBuilder b;
-    {
-        ObjectBuilder menu;
-        menu.def("show", 0, [](Value, std::span<const Value>) {
-            if (auto* eng = hostEngine()) {
-                eng->menuBar().visible = true;
-                eng->menuBar().dirty = true;
-                eng->onMenuChanged();
-            }
-            return ev::undefined();
-        });
-        menu.def("hide", 0, [](Value, std::span<const Value>) {
-            if (auto* eng = hostEngine()) {
-                eng->menuBar().visible = false;
-                eng->menuBar().dirty = true;
-                eng->onMenuChanged();
-            }
-            return ev::undefined();
-        });
-        menu.accessor("visible",
-            [](Value, std::span<const Value>) {
-                auto* eng = hostEngine();
-                return ev::fromBool(eng ? eng->menuBar().visible : false);
-            },
-            nullptr);
-        menu.def("set", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-        menu.def("addItem", 3, [](Value, std::span<const Value>) { return ev::fromBool(true); });
-        menu.def("updateItem", 2, [](Value, std::span<const Value>) { return ev::fromBool(true); });
-        menu.def("removeItem", 1, [](Value, std::span<const Value> a) {
-            auto* eng = hostEngine();
-            if (!eng || a.empty()) return ev::fromBool(false);
-            std::string id = ev::toUtf8(a[0]);
-            bool ok = eng->menuBar().removeItem(id);
-            if (ok) eng->onMenuChanged();
-            return ev::fromBool(ok);
-        });
-        menu.def("on", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-        b.set("menu", menu.get());
-    }
+    b.set("menu", makeBroMenuValue());
+    b.set("window", makeBroWindowValue());
+    b.set("settings", makeBroSettingsValue());
+    b.set("math", makeBroMathValue());
+    b.set("text", makeBroTextValue());
+    b.set("steam", makeBroSteamValue());
     {
         ObjectBuilder time;
         time.accessor("scale",
@@ -224,6 +192,12 @@ Value makeBroValue() {
 void installBroGlobals(engine::Engine& engine) {
     Value broVal = makeBroValue();
     ev::registerGlobal("bro", broVal);
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        ev::setProperty(gt.value, "bro", broVal);
+    }
+
+    installNetSync(&engine);
 
     // Install bro.image kernels via brokit
     brokit::api::installImage();

@@ -19,6 +19,7 @@
 
 #include "embed/embed.h"
 #include "runtime/bigint.h"
+#include "runtime/heap.h"
 #include "dom/event_target.h"
 
 #include <cstdint>
@@ -383,6 +384,7 @@ void primeImageFromMarkup(dom::Element* el);
 // Storage & Gamepad (dom_storage.cpp / dom_gamepad.cpp)
 // ---------------------------------------------------------------------------
 Value makeLocalStorageValue();
+Value makeScreenValue();
 Value makeNavigatorValue();
 Value buildGamepadSnapshot(const engine::GamepadState& gp);
 
@@ -787,6 +789,21 @@ Value makeBroNetValue();
 Value makeBroMeshValue();
 Value makeBroImageValue();
 
+Value makeBroWindowValue();
+Value makeBatterySnapshotValue();
+Value makeBroSettingsValue();
+Value makeBroMathValue();
+void installMathGlobals();
+Value getSpatialHashConstructor();
+Value getRngConstructor();
+Value getSmootherConstructor();
+Value makeBroTextValue();
+Value makeBroMenuValue();
+Value makeBroSteamValue();
+void drainSteamEvents();
+void cleanupSteamBindings();
+void installNetSync(engine::Engine* eng);
+
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
 Value makeGpuValue();
 Value makeBroValue();
@@ -851,6 +868,10 @@ inline Value makeUint8Array(const std::vector<uint8_t>& vec) {
 
 inline Value makeEmptyArray() {
     return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+}
+
+inline bool hostIsArray(Value v) {
+    return v.isObject() && v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::Array;
 }
 
 inline Value makeInt32Array(const int32_t* data, size_t count) {
