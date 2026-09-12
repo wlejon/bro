@@ -132,6 +132,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_audio_spatial.cpp
     host_audio_dsp.cpp
     host_vendor_globals.cpp
+    host_node_core.cpp
     host_headless.cpp
     eval.cpp
 )
@@ -214,9 +215,46 @@ endfunction()
 # would be an address in a semispace bro's collector is free to reuse. embed is
 # INSIDE the shared image — the host↔runtime boundary is a C++ one no export
 # list could carry — so this one target supplies both halves.
+# `brass_gc_write_barrier` is defined twice in a process that both compiles
+# and runs bronze code: by brass's runtime (brass.lib, whose GC object the
+# compiler backend always pulls — its exception path references the GC
+# assembly stubs) and by bronze's shared runtime (a no-op export for the
+# modules it loads). Nothing static referenced the name until brokit_api
+# joined the link: its bronze-compiled polyfills call it the way a module
+# would. MSVC then resolves that reference against the first library it
+# reaches AFTER the referencing object, finds the DLL's import thunk, and
+# later loads brass's object for other symbols — LNK2005 on the pair.
+#
+# Two things make the resolution deterministic instead. The executables
+# name brass.lib as their FIRST direct dependency (src/headless, src/app,
+# src/server, via BRO_BRASS_LIB — naming it on this target is not enough,
+# CMake orders a link line by dependency and brass.lib is also an interface
+# dependency of the backend, so from here it lands after the runtime), and
+# /INCLUDE names a symbol only brass's GC object defines, so the linker loads
+# that object from position one before any static reference to the barrier
+# exists. The DLL's member is never pulled and the two never meet. Both
+# copies do nothing in bro (brass's generational GC is never active here),
+# so which one static code calls does not matter; only that it is one.
+# ELF and Mach-O are not affected: a definition in the executable simply
+# interposes the shared one.
+get_target_property(_codegen_brass_libs bronze_codegen_brass INTERFACE_LINK_LIBRARIES)
+set(BRO_BRASS_LIB "" CACHE INTERNAL "brass static library, linked first by bronze-hosting executables")
+foreach(_lib IN LISTS _codegen_brass_libs)
+    if(_lib MATCHES "brass\\.(lib|a)$")
+        set(BRO_BRASS_LIB "${_lib}" CACHE INTERNAL "brass static library, linked first by bronze-hosting executables")
+    endif()
+endforeach()
+if(MSVC)
+    target_link_options(bro_bronze_host INTERFACE "/INCLUDE:brass_gc_card_table_base")
+endif()
+
 target_link_libraries(bro_bronze_host
     PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli
 )
+
+# brokit_api supplies require(), fs, path, os, child_process and process
+# (host_node_core.cpp). Only its Node half is installed; see that file.
+target_link_libraries(bro_bronze_host PUBLIC brokit_api)
 
 if(BRO_WITH_NET)
     target_link_libraries(bro_bronze_host PUBLIC bro_net)

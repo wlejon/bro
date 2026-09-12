@@ -1,5 +1,6 @@
 add_executable(bro-server main.cpp)
-target_link_libraries(bro-server PRIVATE bro_engine bro_bronze_host)
+# BRO_BRASS_LIB first: see the note above bro_bronze_host's link line.
+target_link_libraries(bro-server PRIVATE ${BRO_BRASS_LIB} bro_engine bro_bronze_host)
 if(BRO_WITH_GAMEAI)
     target_link_libraries(bro-server PRIVATE brogameagent)
 endif()

@@ -5,7 +5,9 @@
 
 #include "cli/driver.h"
 #include "embed/embed.h"
+#include "modules/modules.h"
 #include "engine/engine.h"
+#include "util/asset_mounts.h"
 #include "engine/engine_init_cabi.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
 #include "util/log.h"
@@ -68,6 +70,36 @@ std::filesystem::path getExecutableDirectory() {
     }
 #endif
     return std::filesystem::current_path();
+}
+
+// Module roots for a compile that runs against `engine`'s app. Every engine
+// mount (`/app`, `/lib`, `/system`, `/std`) becomes a root, so the compiler
+// resolves `import "/lib/x.js"` exactly as the asset loader resolves
+// `<script src="/lib/x.js">`. Relative specifiers are not roots: a root
+// applies to every module in the graph, and `./b.js` inside `lib/a.js` means
+// `lib/b.js`, not a file beside the document. The one module whose relative
+// imports should NOT resolve from where the file sits is the temp-file entry;
+// `entryResolvesAs` below handles that one.
+std::vector<bronze::modules::ModuleRoot> moduleRootsFor(const engine::Engine& engine) {
+    std::vector<bronze::modules::ModuleRoot> roots;
+    for (const auto& [prefix, target] : engine.assetMounts().mounts()) {
+        roots.push_back({prefix, std::filesystem::path(target)});
+    }
+    return roots;
+}
+
+// Where script text handed to evalScript lives, as far as its own `./x.js`
+// imports are concerned: the document it came from, or for `-e` text with no
+// document, a file in the app dir. A browser resolves an inline script's
+// imports against the document URL, and the temp file the text is compiled
+// from is not that document.
+std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& filename) {
+    std::error_code ec;
+    if (!filename.empty()) return std::filesystem::absolute(filename, ec).string();
+    if (!engine.appDir().empty()) {
+        return (std::filesystem::absolute(engine.appDir(), ec) / "eval.js").string();
+    }
+    return {};
 }
 
 std::filesystem::path getEvalTempDir() {
@@ -154,7 +186,6 @@ std::string getWebHostGlobalsPath() {
 
 bool evalScript(engine::Engine& engine, const std::string& code,
                 const std::string& filename) {
-    (void)filename;
     ensureSharedRuntimeEnv();
 
     const auto tempDir = getEvalTempDir();
@@ -177,16 +208,19 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     }
 
     const std::string globalsPath = getWebHostGlobalsPath();
+    const auto roots = moduleRootsFor(engine);
+    const std::string resolvesAs = entryResolvesAsFor(engine, filename);
     std::string err;
     int status = bronze::cli::runBuild(
         tempJs.string(), outDll.string(), &err,
         /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
         /*hostGlobals=*/globalsPath, /*inferStats=*/false,
-        /*statsOut=*/nullptr, /*moduleRoots=*/{}, /*entrySymbol=*/{},
+        /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/{}, /*censusOutPath=*/{},
-        /*pinsAllowObserved=*/false);
+        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/{},
+        /*nativeLibPath=*/{}, /*entryResolvesAs=*/resolvesAs);
 
     std::error_code ec;
     std::filesystem::remove(tempJs, ec);
@@ -250,12 +284,13 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     const auto outDll = tempDir / (stem + kModuleExt);
 
     const std::string globalsPath = getWebHostGlobalsPath();
+    const auto roots = moduleRootsFor(engine);
     std::string err;
     int status = bronze::cli::runBuild(
         absSource.string(), outDll.string(), &err,
         /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
         /*hostGlobals=*/globalsPath, /*inferStats=*/false,
-        /*statsOut=*/nullptr, /*moduleRoots=*/{}, /*entrySymbol=*/{},
+        /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/{}, /*censusOutPath=*/{},

@@ -792,6 +792,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     }
     installNetGlobals();
     installVendorGlobals();
+    installNodeCoreGlobals(engine);
     installHeadlessGlobals(engine);
 }
 

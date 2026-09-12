@@ -743,4 +743,11 @@ Value makeBroImageValue();
 
 void installVendorGlobals();
 
+// ---------------------------------------------------------------------------
+// Node core from brokit: require, fs, path, os, child_process, process
+// (host_node_core.cpp)
+// ---------------------------------------------------------------------------
+
+void installNodeCoreGlobals(engine::Engine& engine);
+
 }  // namespace bro::bronze_host

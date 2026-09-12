@@ -341,6 +341,10 @@ public:
     /// (bronze_host/app_module.h) — is handed the Engine, not the config that
     /// built it.
     const std::string& appDir() const { return appDir_; }
+    /// Engine-supplied virtual path prefixes (`/app`, `/lib`, `/system`, ...),
+    /// so a compile of the app's scripts resolves the same `import "/lib/x.js"`
+    /// the asset loader does.
+    const util::AssetMounts& assetMounts() const { return assetMounts_; }
 
     int viewportWidth() const { return viewportWidth_; }
     int viewportHeight() const { return viewportHeight_; }

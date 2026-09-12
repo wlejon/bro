@@ -142,3 +142,5 @@ gamepadConnect
 gamepadDisconnect
 gamepadButton
 gamepadAxis
+require
+process
