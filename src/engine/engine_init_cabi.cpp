@@ -12,6 +12,9 @@
 #include <filesystem>
 #include <string>
 #include <cstring>
+#include <optional>
+#include <vector>
+#include "util/log.h"
 
 #if BRO_WITH_TEXT_SHAPING
 #include "render/bidi.h"
@@ -101,23 +104,45 @@ void bro_engine_register_cabi_bridges(Engine* eng) {
             s_ans = *res;
             return s_ans.c_str();
         },
+        // The C ABI hands back one path and cannot throw, so a refused filter
+        // is logged by the dialog layer and reads as a cancel here.
         .showSaveFileDialog = [](const char* filter, const char* defaultName) -> const char* {
-            (void)filter;
             thread_local std::string s_path;
-            s_path = defaultName ? defaultName : "untitled";
+            std::optional<std::string> saved;
+            std::string refusal;
+            if (!platform::Dialogs::showSaveFileDialog(filter ? filter : "",
+                                                       defaultName ? defaultName : "",
+                                                       saved, refusal)) {
+                LOG_WARN("%s", refusal.c_str());
+                return "";
+            }
+            s_path = saved.value_or("");
             return s_path.c_str();
         },
         .showOpenFileDialog = [](const char* filter, bool allowMultiple) -> const char* {
             thread_local std::string s_path;
-            auto picks = platform::Dialogs::pickFiles(filter ? filter : "", allowMultiple);
+            std::vector<std::string> picks;
+            std::string refusal;
+            if (!platform::Dialogs::showOpenFileDialog(filter ? filter : "", allowMultiple,
+                                                       picks, refusal)) {
+                LOG_WARN("%s", refusal.c_str());
+                return "";
+            }
             if (picks.empty()) return "";
             s_path = picks[0];
             return s_path.c_str();
         },
         .showOpenFolderDialog = [](const char* defaultLocation, bool allowMultiple) -> const char* {
-            (void)allowMultiple;
             thread_local std::string s_path;
-            s_path = defaultLocation ? defaultLocation : "";
+            std::vector<std::string> picks;
+            std::string refusal;
+            if (!platform::Dialogs::showOpenFolderDialog(defaultLocation ? defaultLocation : "",
+                                                         allowMultiple, picks, refusal)) {
+                LOG_WARN("%s", refusal.c_str());
+                return "";
+            }
+            if (picks.empty()) return "";
+            s_path = picks[0];
             return s_path.c_str();
         }
     };

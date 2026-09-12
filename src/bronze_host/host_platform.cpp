@@ -35,6 +35,7 @@
 #include "util/log.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -268,6 +269,72 @@ Value makePrompt() {
         2);
 }
 
+// The file dialogs (docs/dialogs-api.js). A refused filter is thrown, not
+// returned: the return is an empty list either way, and the caller wrote the
+// filter SDL is objecting to.
+Value stringArray(const std::vector<std::string>& items) {
+    ev::CallResult parsed = ev::parseJson("[]");
+    ev::Persistent arr{parsed.value};
+    for (uint32_t i = 0; i < items.size(); ++i) {
+        ev::Persistent s{ev::fromUtf8(items[i])};
+        arr.set(ev::setElement(arr.get(), i, s.get()));
+    }
+    return arr.get();
+}
+
+std::string stringArg(std::span<const Value> a, size_t i) {
+    Value v = argAt(a, i);
+    if (!ev::isString(v)) return std::string();
+    return ev::toUtf8(v);
+}
+
+bool boolArg(std::span<const Value> a, size_t i) {
+    return i < a.size() && ev::toBool(a[i]);
+}
+
+Value makeShowOpenFileDialog() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            std::vector<std::string> picked;
+            std::string refusal;
+            if (!platform::Dialogs::showOpenFileDialog(stringArg(a, 0), boolArg(a, 1),
+                                                       picked, refusal)) {
+                return ev::throwTypeError(refusal);
+            }
+            return stringArray(picked);
+        },
+        2);
+}
+
+Value makeShowOpenFolderDialog() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            std::vector<std::string> picked;
+            std::string refusal;
+            if (!platform::Dialogs::showOpenFolderDialog(stringArg(a, 0), boolArg(a, 1),
+                                                         picked, refusal)) {
+                return ev::throwTypeError(refusal);
+            }
+            return stringArray(picked);
+        },
+        2);
+}
+
+Value makeShowSaveFileDialog() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            std::optional<std::string> saved;
+            std::string refusal;
+            if (!platform::Dialogs::showSaveFileDialog(stringArg(a, 0), stringArg(a, 1),
+                                                       saved, refusal)) {
+                return ev::throwTypeError(refusal);
+            }
+            if (!saved) return ev::null();
+            return ev::fromUtf8(*saved);
+        },
+        2);
+}
+
 // ---------------------------------------------------------------------------
 // Interface names
 // ---------------------------------------------------------------------------
@@ -407,6 +474,9 @@ void installPlatformGlobals() {
     ev::registerGlobal("alert", makeAlert());
     ev::registerGlobal("confirm", makeConfirm());
     ev::registerGlobal("prompt", makePrompt());
+    ev::registerGlobal("showOpenFileDialog", makeShowOpenFileDialog());
+    ev::registerGlobal("showOpenFolderDialog", makeShowOpenFolderDialog());
+    ev::registerGlobal("showSaveFileDialog", makeShowSaveFileDialog());
     ev::registerGlobal("Node", makeNodeInterface());
     // The rest, in the manifest's order. Each is a name a real library tests
     // for before deciding what kind of environment it is in.

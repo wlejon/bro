@@ -20,6 +20,7 @@
 #include <fstream>
 
 #include "platform/sdl_window.h"
+#include "platform/dialogs.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
@@ -286,6 +287,15 @@ Engine::Engine(const EngineConfig& config)
     if (displayMode_ == DisplayMode::Windowed) {
         eventLoop_ = std::make_unique<platform::EventLoop>();
     }
+
+    // Native dialogs parent on the window and tick timers while they are up.
+    // Only a windowed run has someone to answer them; headless and server
+    // answer themselves (see platform::Dialogs) instead of blocking on a
+    // window nobody sees. Set before any script runs: the first alert() an
+    // app's boot script reaches must already know there is no one to ask.
+    platform::Dialogs::setWindow(window_ ? window_->getSDLWindow() : nullptr);
+    platform::Dialogs::setInteractive(displayMode_ == DisplayMode::Windowed);
+    platform::Dialogs::setTickCallback([this]() { tickTimersOnly(); });
 
     initAppRealm();
 

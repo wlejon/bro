@@ -26,6 +26,7 @@
 #endif
 #include "steam/steam_service.h"
 #include "webgl/webgl2_context.h"
+#include "platform/dialogs.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "render/renderer.h"
@@ -92,6 +93,9 @@ void Engine::shutdown() {
 }
 
 Engine::~Engine() {
+    // The dialog tick callback captures this engine.
+    platform::Dialogs::setTickCallback(nullptr);
+    platform::Dialogs::setWindow(nullptr);
     bro_set_time_bridge(nullptr);
     bro_set_paths_bridge(nullptr);
     bro_set_dialogs_bridge(nullptr);

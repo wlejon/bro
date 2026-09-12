@@ -144,3 +144,8 @@ gamepadButton
 gamepadAxis
 require
 process
+showOpenFileDialog
+showOpenFolderDialog
+showSaveFileDialog
+setDialogAnswer
+setPickedFiles

@@ -5,6 +5,7 @@
 
 #include "engine/engine.h"
 #include "engine/gamepad.h"
+#include "platform/dialogs.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -203,6 +204,38 @@ void installHeadlessGlobals(engine::Engine& engine) {
     ev::registerGlobal("scriptArgs", makeScriptArgsValue());
 
     // 15. gamepadConnect(id)
+    // setDialogAnswer(accept) — what alert/confirm/prompt do with no user to
+    // ask. `true` (the default) means confirm() returns true and prompt() its
+    // default value, so a script walks through an app's confirmations instead
+    // of stopping at the first one; `false` takes the cancel branch.
+    ev::registerGlobal("setDialogAnswer", ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            platform::Dialogs::setAutoDialogAnswer(a.empty() ? true : ev::toBool(a[0]));
+            return ev::undefined();
+        }, 1));
+
+    // setPickedFiles(paths) — what the next file dialog or <input type=file>
+    // click picks: a path string or an array of them. There is no native
+    // picker to open with no user present, so a script queues the choice and
+    // then opens the dialog exactly as a user would.
+    ev::registerGlobal("setPickedFiles", ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            std::vector<std::string> paths;
+            if (!a.empty()) {
+                Value v = a[0];
+                if (ev::isString(v)) {
+                    paths.push_back(ev::toUtf8(v));
+                } else if (ev::isObject(v)) {
+                    const uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(v, "length")));
+                    for (uint32_t i = 0; i < n; ++i) {
+                        paths.push_back(ev::toUtf8(ev::getElement(v, i)));
+                    }
+                }
+            }
+            platform::Dialogs::setPickedFiles(std::move(paths));
+            return ev::undefined();
+        }, 1));
+
     ev::registerGlobal("gamepadConnect", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             std::string id = a.size() > 0 ? ev::toUtf8(a[0]) : "Virtual Gamepad";
