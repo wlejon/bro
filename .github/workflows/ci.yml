@@ -116,6 +116,8 @@ jobs:
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
           cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
           cmake --build third_party/brass/build --config Release --target brass --parallel 4
@@ -278,6 +280,8 @@ jobs:
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
           cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
           cmake --build third_party/brass/build --config Release --target brass --parallel 4

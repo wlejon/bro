@@ -86,7 +86,7 @@ if(TARGET bronze AND NOT TARGET bronze-cli)
 endif()
 
 # --- The binding library ---
-add_library(bro_bronze_host STATIC
+set(BRO_BRONZE_HOST_SOURCES
     gl_constants.cpp
     gl_state.cpp
     gl_buffers.cpp
@@ -131,21 +131,42 @@ add_library(bro_bronze_host STATIC
     host_audio_nodes.cpp
     host_audio_spatial.cpp
     host_audio_dsp.cpp
-    host_physics_core.cpp
-    host_physics_constraints.cpp
-    host_physics_character.cpp
-    host_physics_softbody.cpp
-    host_physics_queries.cpp
-    host_ai_core.cpp
-    host_ai_navgrid.cpp
-    host_ai_navmesh.cpp
-    host_ai_agent.cpp
-    host_ai_game.cpp
-    host_net.cpp
     host_vendor_globals.cpp
     host_headless.cpp
     eval.cpp
 )
+
+if(BRO_WITH_PHYSICS)
+    list(APPEND BRO_BRONZE_HOST_SOURCES
+        host_physics_core.cpp
+        host_physics_constraints.cpp
+        host_physics_character.cpp
+        host_physics_softbody.cpp
+        host_physics_queries.cpp
+    )
+else()
+    list(APPEND BRO_BRONZE_HOST_SOURCES host_physics_stub.cpp)
+endif()
+
+if(BRO_WITH_GAMEAI)
+    list(APPEND BRO_BRONZE_HOST_SOURCES
+        host_ai_core.cpp
+        host_ai_navgrid.cpp
+        host_ai_navmesh.cpp
+        host_ai_agent.cpp
+        host_ai_game.cpp
+    )
+else()
+    list(APPEND BRO_BRONZE_HOST_SOURCES host_ai_stub.cpp)
+endif()
+
+if(BRO_WITH_NET)
+    list(APPEND BRO_BRONZE_HOST_SOURCES host_net.cpp)
+else()
+    list(APPEND BRO_BRONZE_HOST_SOURCES host_net_stub.cpp)
+endif()
+
+add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # The runtime is a DLL now, and bronze builds it into its own output directory
@@ -194,8 +215,18 @@ endfunction()
 # INSIDE the shared image — the host↔runtime boundary is a C++ one no export
 # list could carry — so this one target supplies both halves.
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_net bro_webgl glad broimage::broimage brogameagent bronze::runtime_shared bronze::cli
+    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli
 )
+
+if(BRO_WITH_NET)
+    target_link_libraries(bro_bronze_host PUBLIC bro_net)
+endif()
+
+if(BRO_WITH_GAMEAI)
+    target_link_libraries(bro_bronze_host PUBLIC brogameagent)
+endif()
+
+bro_apply_feature_defs(bro_bronze_host)
 
 # bromesh backs bro.mesh.decodeDraco/encodeDraco in the compiled realm
 # (host_codecs.cpp); it is 3D-optional, so guard rather than assume.

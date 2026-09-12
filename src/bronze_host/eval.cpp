@@ -19,6 +19,10 @@
 #include <vector>
 
 namespace bro::bronze_host {
+
+namespace ev = bronze::embed;
+using Value = bronze::Value;
+
 namespace {
 
 static std::atomic<uint64_t> s_evalCounter{0};
