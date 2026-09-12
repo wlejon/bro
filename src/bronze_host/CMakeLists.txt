@@ -240,6 +240,8 @@ function(bro_bronze_stage_runtime target)
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:bronze_runtime_shared> $<TARGET_FILE_DIR:${target}>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_LINKER_FILE:bronze_runtime_shared> $<TARGET_FILE_DIR:${target}>
         COMMENT "Staging bronze's shared runtime beside ${target}"
         VERBATIM)
     # ELF and Mach-O need to be TOLD that "beside the executable" is a place to
