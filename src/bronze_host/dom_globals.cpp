@@ -30,9 +30,12 @@
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_range.h"
+#include "bronze_host/host_selection.h"
 
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
+#include "platform/clipboard.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -296,6 +299,9 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Never freed — see the lifetime note at the top of this file.
     g_host = new HostState();
     g_host->engine = &engine;
+    if (engine.document()) {
+        engine.document()->setElementClonedCallback(&fireElementCloned);
+    }
 
     // Install dynamic evaluation and function hooks (eval, new Function)
     // into bronze before anything the compiled program can run.
@@ -418,6 +424,17 @@ void installWebHostGlobals(engine::Engine& engine) {
         Value screenVal = makeScreenValue();
         b.set("screen", screenVal);
         ev::registerGlobal("screen", screenVal);
+
+        Value getSelectionFn = ev::makeFunction([](Value, std::span<const Value>) {
+            auto* e = hostEngine();
+            if (!e || !e->document()) return ev::null();
+            return wrapSelection(e->document()->selection());
+        }, 0, "getSelection");
+        b.set("getSelection", getSelectionFn);
+        {
+            ev::GlobalValue gt = ev::globalValue("globalThis");
+            if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "getSelection", getSelectionFn);
+        }
 
         b.def("open", 1, [](Value, std::span<const Value> a) {
             if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) return ev::null();
@@ -646,6 +663,36 @@ void installWebHostGlobals(engine::Engine& engine) {
 
     {
         Value nav = makeNavigatorValue();
+        ObjectBuilder bNav(nav);
+        ObjectBuilder clip;
+        clip.def("__read", 0, [](Value, std::span<const Value>) {
+            return ev::fromUtf8(bro::platform::getClipboardText());
+        });
+        clip.def("__write", 1, [](Value, std::span<const Value> a) {
+            Value textV = argAt(a, 0);
+            std::string text = (!ev::isObject(textV) && !ev::isUndefined(textV)) ? ev::toUtf8(textV) : "";
+            bool ok = bro::platform::setClipboardText(text);
+            return ev::fromBool(ok);
+        });
+        clip.def("readText", 0, [](Value, std::span<const Value>) {
+            Value p = ev::createPromise();
+            ev::resolvePromise(p, ev::fromUtf8(bro::platform::getClipboardText()));
+            return p;
+        });
+        clip.def("writeText", 1, [](Value, std::span<const Value> a) {
+            Value textV = argAt(a, 0);
+            std::string text = (!ev::isObject(textV) && !ev::isUndefined(textV)) ? ev::toUtf8(textV) : "";
+            bool ok = bro::platform::setClipboardText(text);
+            Value p = ev::createPromise();
+            if (ok) {
+                ev::resolvePromise(p, ev::undefined());
+            } else {
+                ev::rejectPromise(p, hostMakeDomError("Error", "clipboard write failed"));
+            }
+            return p;
+        });
+        bNav.set("clipboard", clip.get());
+
         ev::registerGlobal("navigator", nav);
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "navigator", nav);
@@ -770,6 +817,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     installNodeCoreGlobals(engine);
     installHeadlessGlobals(engine);
     installPlatformExtensions(engine);
+    installRangeGlobals();
+    installSelectionGlobals();
 }
 
 bool isWebHostGlobalsInstalled() {

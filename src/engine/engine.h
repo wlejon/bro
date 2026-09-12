@@ -206,6 +206,8 @@ public:
                      const std::string& value);
     bool queryCommandSupported(const std::string& name) const;
     bool queryCommandEnabled(const std::string& name);
+    bool queryCommandState(const std::string& name) const;
+    std::string queryCommandValue(const std::string& name) const;
 
     float getLastMouseX() const { return lastMouseX_; }
     float getLastMouseY() const { return lastMouseY_; }

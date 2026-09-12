@@ -176,6 +176,7 @@ void pruneAndMerge(bro::dom::Element* host,
     lt->appendData(rt->data());
     caretNode->removeChild(rt);
     caretNode = lt;
+    caretOff = join;
 }
 
 constexpr char kNbspUtf8[] = "\xc2\xa0";
@@ -519,6 +520,14 @@ bool Engine::queryCommandEnabled(const std::string& name) {
     }
     if (cmd == "copy" || cmd == "cut") return !c.sel->isCollapsed();
     return true;
+}
+
+bool Engine::queryCommandState(const std::string& /*name*/) const {
+    return false;
+}
+
+std::string Engine::queryCommandValue(const std::string& /*name*/) const {
+    return "";
 }
 
 bool Engine::execCommand(const std::string& name, bool /*showUI*/,

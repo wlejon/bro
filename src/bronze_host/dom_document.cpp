@@ -3,11 +3,16 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_range.h"
+#include "bronze_host/host_selection.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "platform/sdl_window.h"
+
+#include "canvas/canvas_scene.h"
+#include "layout/form_control.h"
 
 #include <cctype>
 #include <sstream>
@@ -19,12 +24,47 @@
 
 namespace bro::bronze_host {
 
+void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clone) {
+    if (!doc || !src || !clone) return;
+
+    if (src->tagName() == "SELECT" || src->tagName() == "select") {
+        int want = layout::selectedIndex(src);
+        if (want >= 0) {
+            int idx = 0;
+            for (auto* opt : clone->children()) {
+                const std::string& t = opt->tagName();
+                if (t != "OPTION" && t != "option") continue;
+                if (idx == want) opt->setAttribute("selected", "");
+                else if (opt->hasAttribute("selected")) opt->removeAttribute("selected");
+                ++idx;
+            }
+            clone->setPendingSelectedIndex(want);
+        }
+    }
+
+    auto* srcScene = static_cast<canvas::CanvasScene*>(src->canvasScene());
+    if (srcScene) {
+        int w = srcScene->width(), h = srcScene->height();
+        if (w > 0 && h > 0) {
+            auto pixels = srcScene->getImageData(0, 0, w, h);
+            if (!pixels.empty()) {
+                if (auto* eng = hostEngine()) {
+                    auto* dstScene = eng->createCanvasContext(clone);
+                    if (dstScene) {
+                        dstScene->putImageData(pixels.data(), w, h, 0, 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
 namespace {
 
 dom::Document* documentFor(dom::Document* fixed) {
-    if (fixed) return fixed;
-    auto* e = hostEngine();
-    return e ? e->document() : nullptr;
+    dom::Document* doc = fixed ? fixed : (hostEngine() ? hostEngine()->document() : nullptr);
+    if (doc) doc->setElementClonedCallback(&fireElementCloned);
+    return doc;
 }
 
 Value wrapElement(dom::Element* el) {
@@ -234,6 +274,46 @@ Value makeDocumentValue(dom::Document* fixed) {
         dom::Document* doc = documentFor(fixed);
         if (!doc) return ev::throwError("bronze host: engine has no document");
         return hostNodeValue(doc->createDocumentFragment());
+    });
+    b.def("createRange", 0, [fixed](Value, std::span<const Value>) {
+        dom::Document* doc = documentFor(fixed);
+        auto* r = new bro::dom::Range();
+        if (doc) r->setDocument(doc);
+        return wrapOwnedRange(r);
+    });
+    b.def("getSelection", 0, [fixed](Value, std::span<const Value>) {
+        dom::Document* doc = documentFor(fixed);
+        if (!doc) return ev::null();
+        return wrapSelection(doc->selection());
+    });
+    b.def("execCommand", 3, [](Value, std::span<const Value> a) {
+        auto* e = hostEngine();
+        if (!e || a.empty()) return ev::fromBool(false);
+        std::string name = ev::toUtf8(a[0]);
+        bool showUI = a.size() > 1 && ev::toBool(a[1]);
+        std::string val = (a.size() > 2 && !ev::isObject(a[2]) && !ev::isUndefined(a[2]) && !ev::isNull(a[2]))
+                              ? ev::toUtf8(a[2]) : "";
+        return ev::fromBool(e->execCommand(name, showUI, val));
+    });
+    b.def("queryCommandEnabled", 1, [](Value, std::span<const Value> a) {
+        auto* e = hostEngine();
+        if (!e || a.empty()) return ev::fromBool(false);
+        return ev::fromBool(e->queryCommandEnabled(ev::toUtf8(a[0])));
+    });
+    b.def("queryCommandSupported", 1, [](Value, std::span<const Value> a) {
+        auto* e = hostEngine();
+        if (!e || a.empty()) return ev::fromBool(false);
+        return ev::fromBool(e->queryCommandSupported(ev::toUtf8(a[0])));
+    });
+    b.def("queryCommandState", 1, [](Value, std::span<const Value> a) {
+        auto* e = hostEngine();
+        if (!e || a.empty()) return ev::fromBool(false);
+        return ev::fromBool(e->queryCommandState(ev::toUtf8(a[0])));
+    });
+    b.def("queryCommandValue", 1, [](Value, std::span<const Value> a) {
+        auto* e = hostEngine();
+        if (!e || a.empty()) return ev::fromUtf8("");
+        return ev::fromUtf8(e->queryCommandValue(ev::toUtf8(a[0])));
     });
     b.def("getElementById", 1, [fixed](Value, std::span<const Value> a) {
         Value idV = argAt(a, 0);

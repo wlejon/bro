@@ -81,4 +81,9 @@ void installPlatformExtensions(engine::Engine& engine);
 // ---------------------------------------------------------------------------
 Value makeSessionStorageValue();
 
+// ---------------------------------------------------------------------------
+// Element cloning hook
+// ---------------------------------------------------------------------------
+void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clone);
+
 } // namespace bro::bronze_host

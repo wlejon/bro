@@ -13,6 +13,8 @@
 #include "dom/document_fragment.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
+#include "dom/event.h"
+#include "dom/event_dispatch.h"
 #include "dom/event_target.h"
 #include "dom/node.h"
 #include "engine/engine.h"
@@ -468,6 +470,46 @@ void decorateElementProto(ObjectBuilder& b) {
                    return ev::undefined();
                });
 
+    b.accessor("contentEditable",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->el) return ev::fromUtf8("inherit");
+                   if (!st->el->hasAttribute("contenteditable"))
+                       return ev::fromUtf8("inherit");
+                   std::string val = st->el->getAttribute("contenteditable");
+                   if (val.empty() || val == "true")
+                       return ev::fromUtf8("true");
+                   return ev::fromUtf8(val);
+               },
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->el) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v)) {
+                       std::string val = ev::isUndefined(v) ? "" : ev::toUtf8(v);
+                       st->el->setAttribute("contenteditable", val);
+                   }
+                   return ev::undefined();
+               });
+
+    b.accessor("isContentEditable",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->el) return ev::fromBool(false);
+                   for (dom::Node* n = st->el; n; n = n->parentNode()) {
+                       if (n->nodeType() == dom::NodeType::Element) {
+                           auto* el = static_cast<dom::Element*>(n);
+                           if (el->hasAttribute("contenteditable")) {
+                               std::string val = el->getAttribute("contenteditable");
+                               if (val == "false") return ev::fromBool(false);
+                               return ev::fromBool(true);
+                           }
+                       }
+                   }
+                   return ev::fromBool(false);
+               },
+               nullptr);
+
     // ---- style, classList, dataset proxies --------------------------------
     decorateElementStyle(b);
     decorateElementDataset(b);
@@ -859,15 +901,54 @@ void decorateElementProto(ObjectBuilder& b) {
     // ---- focus ------------------------------------------------------------
     b.def("focus", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = nodeStateOf(self_);
-        if (st && st->el)
-            if (dom::Document* doc = st->el->document()) doc->setActiveElement(st->el);
+        if (!st || !st->el) return ev::undefined();
+        dom::Document* doc = st->el->document();
+        if (!doc) return ev::undefined();
+        dom::Element* prev = doc->activeElement();
+        if (prev == st->el) return ev::undefined();
+        if (auto* eng = hostEngine()) eng->handleProgrammaticFocus(doc, prev, st->el);
+        doc->setActiveElement(st->el);
+
+        if (prev) {
+            dom::FocusEvent blurEvt("blur", false, false);
+            blurEvt.setRelatedTarget(st->el);
+            dom::dispatchDomEvent(prev, blurEvt);
+        }
+        {
+            dom::FocusEvent focusEvt("focus", false, false);
+            focusEvt.setRelatedTarget(prev);
+            dom::dispatchDomEvent(st->el, focusEvt);
+        }
+        if (prev) {
+            dom::FocusEvent focusoutEvt("focusout", true, false);
+            focusoutEvt.setRelatedTarget(st->el);
+            dom::dispatchDomEvent(prev, focusoutEvt);
+        }
+        {
+            dom::FocusEvent focusinEvt("focusin", true, false);
+            focusinEvt.setRelatedTarget(prev);
+            dom::dispatchDomEvent(st->el, focusinEvt);
+        }
         return ev::undefined();
     });
     b.def("blur", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = nodeStateOf(self_);
-        if (st && st->el)
-            if (dom::Document* doc = st->el->document())
-                if (doc->activeElement() == st->el) doc->setActiveElement(nullptr);
+        if (!st || !st->el) return ev::undefined();
+        dom::Document* doc = st->el->document();
+        if (!doc || doc->activeElement() != st->el) return ev::undefined();
+        if (auto* eng = hostEngine()) eng->handleProgrammaticFocus(doc, st->el, nullptr);
+        doc->setActiveElement(nullptr);
+
+        {
+            dom::FocusEvent blurEvt("blur", false, false);
+            blurEvt.setRelatedTarget(nullptr);
+            dom::dispatchDomEvent(st->el, blurEvt);
+        }
+        {
+            dom::FocusEvent focusoutEvt("focusout", true, false);
+            focusoutEvt.setRelatedTarget(nullptr);
+            dom::dispatchDomEvent(st->el, focusoutEvt);
+        }
         return ev::undefined();
     });
 

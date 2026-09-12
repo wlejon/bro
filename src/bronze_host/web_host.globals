@@ -247,3 +247,5 @@ scroll
 open
 focus
 blur
+Range
+Selection

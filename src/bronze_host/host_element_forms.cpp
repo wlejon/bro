@@ -11,6 +11,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/form_control.h"
+#include "dom/text_offsets.h"
 
 #include <string>
 #include <vector>
@@ -20,6 +21,16 @@ namespace bro::bronze_host {
 namespace {
 // Where a non-reflecting element's `value` actually lives.
 constexpr const char* kValueExpando = "__broValue";
+
+static std::string selectionValueOf(dom::Element* el) {
+    if (!el) return std::string();
+    const std::string& tag = el->tagName();
+    if (tag == "TEXTAREA" || tag == "textarea") {
+        if (el->hasAttribute("value")) return el->getAttribute("value");
+        return el->textContent();
+    }
+    return el->getAttribute("value");
+}
 } // namespace
 
 void decorateElementForms(ObjectBuilder& b) {
@@ -203,8 +214,11 @@ void decorateElementForms(ObjectBuilder& b) {
         if (!st || !st->el || a.size() < 2) return ev::undefined();
         int start = static_cast<int>(ev::toDouble(a[0]));
         int end = static_cast<int>(ev::toDouble(a[1]));
-        if (auto* inp = st->el->inputControl()) inp->setSelectionRange(start, end);
-        else if (auto* ta = st->el->textareaControl()) ta->setSelectionRange(start, end);
+        const std::string val = selectionValueOf(st->el);
+        const int bs = dom::utf16ToUtf8Byte(val, start);
+        const int be = dom::utf16ToUtf8Byte(val, end);
+        if (auto* inp = st->el->inputControl()) inp->setSelectionRange(bs, be);
+        else if (auto* ta = st->el->textareaControl()) ta->setSelectionRange(bs, be);
         return ev::undefined();
     });
 
@@ -212,18 +226,23 @@ void decorateElementForms(ObjectBuilder& b) {
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el) return ev::null();
-                   if (auto* inp = st->el->inputControl()) return ev::fromDouble(inp->selectionStart());
-                   if (auto* ta = st->el->textareaControl()) return ev::fromDouble(ta->selectionStart());
+                   const std::string val = selectionValueOf(st->el);
+                   if (auto* inp = st->el->inputControl())
+                       return ev::fromDouble(dom::utf8ByteToUtf16(val, inp->selectionStart()));
+                   if (auto* ta = st->el->textareaControl())
+                       return ev::fromDouble(dom::utf8ByteToUtf16(val, ta->selectionStart()));
                    return ev::null();
                },
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el || a.empty()) return ev::undefined();
                    int start = static_cast<int>(ev::toDouble(a[0]));
+                   const std::string val = selectionValueOf(st->el);
+                   const int b = dom::utf16ToUtf8Byte(val, start);
                    if (auto* inp = st->el->inputControl())
-                       inp->setSelectionRange(start, std::max(start, inp->selectionEnd()));
+                       inp->setSelectionRange(b, inp->selectionEnd() < b ? b : inp->selectionEnd());
                    else if (auto* ta = st->el->textareaControl())
-                       ta->setSelectionRange(start, std::max(start, ta->selectionEnd()));
+                       ta->setSelectionRange(b, ta->selectionEnd() < b ? b : ta->selectionEnd());
                    return ev::undefined();
                });
 
@@ -231,18 +250,23 @@ void decorateElementForms(ObjectBuilder& b) {
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el) return ev::null();
-                   if (auto* inp = st->el->inputControl()) return ev::fromDouble(inp->selectionEnd());
-                   if (auto* ta = st->el->textareaControl()) return ev::fromDouble(ta->selectionEnd());
+                   const std::string val = selectionValueOf(st->el);
+                   if (auto* inp = st->el->inputControl())
+                       return ev::fromDouble(dom::utf8ByteToUtf16(val, inp->selectionEnd()));
+                   if (auto* ta = st->el->textareaControl())
+                       return ev::fromDouble(dom::utf8ByteToUtf16(val, ta->selectionEnd()));
                    return ev::null();
                },
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el || a.empty()) return ev::undefined();
                    int end = static_cast<int>(ev::toDouble(a[0]));
+                   const std::string val = selectionValueOf(st->el);
+                   const int b = dom::utf16ToUtf8Byte(val, end);
                    if (auto* inp = st->el->inputControl())
-                       inp->setSelectionRange(std::min(end, inp->selectionStart()), end);
+                       inp->setSelectionRange(inp->selectionStart(), b);
                    else if (auto* ta = st->el->textareaControl())
-                       ta->setSelectionRange(std::min(end, ta->selectionStart()), end);
+                       ta->setSelectionRange(ta->selectionStart(), b);
                    return ev::undefined();
                });
 

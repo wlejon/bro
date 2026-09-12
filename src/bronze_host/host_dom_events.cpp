@@ -349,6 +349,56 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("clientY", ev::fromDouble(ge->clientY()));
     }
 
+    if (auto* inp = dynamic_cast<dom::InputEvent*>(&e)) {
+        if (inp->data().empty()) {
+            b.set("data", ev::null());
+        } else {
+            b.set("data", ev::fromUtf8(inp->data()));
+        }
+        b.set("inputType", ev::fromUtf8(inp->inputType()));
+        b.set("isComposing", ev::fromBool(inp->isComposing()));
+    }
+
+    if (auto* comp = dynamic_cast<dom::CompositionEvent*>(&e)) {
+        b.set("data", ev::fromUtf8(comp->data()));
+    }
+
+    if (auto* clip = dynamic_cast<dom::ClipboardEvent*>(&e)) {
+        auto textHolder = std::make_shared<std::string>(clip->clipboardText());
+        ObjectBuilder dt;
+        dt.def("getData", 1, [textHolder](Value, std::span<const Value> a) {
+            Value fV = argAt(a, 0);
+            if (ev::isObject(fV) || ev::isUndefined(fV)) return ev::fromUtf8("");
+            std::string fmt = ev::toUtf8(fV);
+            for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (fmt == "text" || fmt == "text/plain") return ev::fromUtf8(*textHolder);
+            return ev::fromUtf8("");
+        });
+        dt.def("setData", 2, [textHolder](Value, std::span<const Value> a) {
+            if (a.size() >= 2) {
+                Value fV = argAt(a, 0);
+                std::string fmt = (!ev::isObject(fV) && !ev::isUndefined(fV)) ? ev::toUtf8(fV) : "";
+                for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (fmt == "text" || fmt == "text/plain") {
+                    Value dataV = argAt(a, 1);
+                    *textHolder = (!ev::isObject(dataV) && !ev::isUndefined(dataV)) ? ev::toUtf8(dataV) : "";
+                }
+            }
+            return ev::undefined();
+        });
+        dt.def("clearData", 1, [textHolder](Value, std::span<const Value>) {
+            textHolder->clear();
+            return ev::undefined();
+        });
+        std::vector<std::string> typeList;
+        if (!textHolder->empty()) typeList.push_back("text/plain");
+        Value typesArr = hostArrayOf(typeList.size(), [&typeList](size_t i) {
+            return ev::fromUtf8(typeList[i]);
+        });
+        dt.set("types", typesArr);
+        b.set("clipboardData", dt.get());
+    }
+
     // The three write-throughs. `live` is captured by value: the closures
     // outlive this function (they live on the event object), and the box is
     // what tells them whether the event still exists.
