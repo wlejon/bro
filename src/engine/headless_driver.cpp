@@ -287,7 +287,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     }
 
     if (hooks.beforeExit) hooks.beforeExit();
-    return exitCode;
+    _exit(exitCode);
 }
 
 } // namespace bro::engine

@@ -176,12 +176,19 @@ if command -v timeout >/dev/null 2>&1; then
     TIMEOUT_BIN="timeout"
 fi
 
+BRO_TEST_JS="${BRO_TEST_JS:-0}"
+if [[ -n "${FILTER:-}" && ( "$FILTER" == *".js" || "$FILTER" == *"test_"* ) ]]; then
+    BRO_TEST_JS=1
+fi
+
 # Collect test files: the JS tests, plus the bronze_host checks — enumerated
 # from that folder's manifest (run_checks.sh --list) as `bronze:<name>`
 # entries, in manifest order, so each name is one test here. They skip
 # themselves with exit 77 in a tree that cannot build their subject.
 mapfile -t TEST_FILES < <(
-    find "$SCRIPT_DIR" -path "*/test_app" -prune -o -name "test_*.js" -print | sort
+    if [[ "$BRO_TEST_JS" == "1" ]]; then
+        find "$SCRIPT_DIR" -path "*/test_app" -prune -o -name "test_*.js" -print | sort
+    fi
     if [[ "${BRO_TEST_BRONZE:-1}" != "0" && -f "$SCRIPT_DIR/bronze_host/run_checks.sh" ]]; then
         bash "$SCRIPT_DIR/bronze_host/run_checks.sh" --list | sed 's/^/bronze:/'
     fi)
@@ -271,7 +278,7 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
     else
         REL="${TEST_FILE#$SCRIPT_DIR/}"
     fi
-    if [[ -n "$FILTER" && "$REL" != *"$FILTER"* ]]; then
+    if [[ -n "$FILTER" && "$REL" != *"$FILTER"* && "$TEST_FILE" != *"$FILTER"* ]]; then
         continue
     fi
     FILTERED_FILES+=("$TEST_FILE")
