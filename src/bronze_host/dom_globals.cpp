@@ -28,6 +28,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_gc.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_range.h"
@@ -197,6 +198,7 @@ void hostFrame(double dtMs) {
     fireAnimationFrames();                               // 5
     deliverHostObservers();                              // 5b
     ev::drainMicrotasks();                               // 6
+    hostNotifyIdleFrame(dtMs);                           // 7
 }
 
 // `window.getComputedStyle(el)` — and three.js's editor uses the bare one
@@ -978,6 +980,10 @@ void resetGlobalExpandos() {
 
 bool isWebHostGlobalsInstalled() {
     return g_host != nullptr;
+}
+
+bool hasPendingAnimationFrames() {
+    return g_host && !g_host->rafPending.empty();
 }
 
 }  // namespace bro::bronze_host

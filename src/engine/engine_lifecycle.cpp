@@ -5,6 +5,8 @@
 #include "bro/c_abi/bro_engine_c_abi.h"
 
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/app_module.h"
+#include "bronze_host/host_gc.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
@@ -188,6 +190,12 @@ Engine::~Engine() {
     document_.reset();
     audioEngine_.reset();
     renderer_.reset();
+
+    if (activeAppModuleHandle_ != 0) {
+        bro::bronze_host::unloadAppModule(activeAppModuleHandle_);
+        activeAppModuleHandle_ = 0;
+    }
+    bro::bronze_host::hostCollectGarbage();
 }
 
 void Engine::handleResize(int w, int h) {

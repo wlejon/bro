@@ -78,6 +78,7 @@ Value hostDocumentValue(dom::Document* doc);
 void clearHostDocument(dom::Document* doc);
 void clearHostTimersForDocument(dom::Document* doc);
 void clearHostAnimationFramesForDocument(dom::Document* doc);
+bool hasPendingAnimationFrames();
 void resetWindowHostOpenState();
 dom::Document* currentHostDocument();
 void setCurrentHostDocument(dom::Document* doc);

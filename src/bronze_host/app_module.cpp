@@ -9,6 +9,7 @@
 
 #include "embed/embed.h"
 
+#include "engine/engine.h"
 #include "engine/engine_init_cabi.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
 
@@ -136,7 +137,7 @@ std::string describeGlobals(ModuleHandle handle) {
 // caller cannot describe the same failure two different ways.
 AppModuleResult refuse(AppModuleStatus status, std::string detail) {
     LOG_ERROR("compiled app: %s", detail.c_str());
-    return AppModuleResult{status, std::move(detail)};
+    return AppModuleResult{status, std::move(detail), 0};
 }
 
 }  // namespace
@@ -224,12 +225,21 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
     // sequence does not link at all. The ABI check that opens runMain has
     // already happened above, against the module's exported stamp instead of a
     // linked constant.
+    const bronze::embed::ModuleHandle bronzeHandle = bronze::embed::beginModuleLoad();
     bronze::embed::runEntry(entry);
     std::fflush(stdout);
 
+    engine.setActiveAppModuleHandle(bronzeHandle);
+
     LOG_INFO("compiled app: %s (bronze ABI %08x, host globals: %s)", modulePath.c_str(),
              kRuntimeAbi, globals.c_str());
-    return AppModuleResult{AppModuleStatus::Ran, {}};
+    return AppModuleResult{AppModuleStatus::Ran, {}, bronzeHandle};
+}
+
+void unloadAppModule(bronze::embed::ModuleHandle handle) {
+    if (handle != 0) {
+        bronze::embed::unloadModule(handle);
+    }
 }
 
 }  // namespace bro::bronze_host

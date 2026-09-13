@@ -99,6 +99,7 @@ set(BRO_BRONZE_HOST_SOURCES
     gl_profile.cpp
     app_module.cpp
     dom_globals.cpp
+    host_gc.cpp
     dom_canvas.cpp
     dom_document.cpp
     host_canvas2d.cpp

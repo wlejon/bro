@@ -13,6 +13,8 @@
 #include "util/log.h"
 
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/app_module.h"
+#include "bronze_host/host_gc.h"
 #include <exception>
 
 namespace bro::engine {
@@ -101,8 +103,19 @@ void Engine::performAppReload() {
     bro::bronze_host::clearHostTimers();
     bro::bronze_host::resetGlobalExpandos();
 
+    if (activeAppModuleHandle_ != 0) {
+        bro::bronze_host::unloadAppModule(activeAppModuleHandle_);
+        activeAppModuleHandle_ = 0;
+        bro::bronze_host::hostCollectGarbage();
+    }
+
     try {
         initAppRealm();
+        if (hostProvidesCompiledApp_) {
+            if (auto modulePath = bro::bronze_host::findAppModule(appDir_)) {
+                bro::bronze_host::runAppModule(*this, *modulePath);
+            }
+        }
     } catch (const std::exception& e) {
         LOG_ERROR("App reload failed: %s", e.what());
     }

@@ -260,15 +260,15 @@ bh_run_check() {
     # the timestamp is stripped — it is the one part that differs every run.
     local clean_out clean_err app_lines js_lines actual
     clean_out="$(printf '%s\n' "$raw" | tr -d '\r')"
-    app_lines="$(printf '%s\n' "$clean_out" | grep '^APP ' || true)"
+    app_lines="$(printf '%s\n' "$clean_out" | sed -n 's/^\(.*\[INFO\]  \)*\(APP .*\)$/\2/p' || true)"
     if [[ $split -eq 1 ]]; then
         clean_err="$(printf '%s\n' "$err_raw" | tr -d '\r')"
         js_lines="$(printf '%s\n%s\n' "$clean_out" "$clean_err" \
-            | sed -n 's/^\(.*\[console\] \)*\(\(PAGE\|DRV\) .*\)$/\2/p' || true)"
+            | sed -n 's/^\(.*\[\(console\|INFO\)\][ ]*\)*\(\(PAGE\|DRV\) .*\)$/\3/p' || true)"
         actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
     elif [[ $twoblock -eq 1 ]]; then
         js_lines="$(printf '%s\n' "$clean_out" \
-            | sed -n 's/^\(.*\[console\] \)*\(\(PAGE\|DRV\) .*\)$/\2/p' || true)"
+            | sed -n 's/^\(.*\[\(console\|INFO\)\][ ]*\)*\(\(PAGE\|DRV\) .*\)$/\3/p' || true)"
         actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
     else
         actual="$app_lines"

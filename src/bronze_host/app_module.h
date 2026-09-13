@@ -37,8 +37,13 @@
 // a host with nothing to run (engine_init.cpp). `runAppModule` needs the
 // Engine, because the host globals it installs are backed by it.
 
+#include <cstdint>
 #include <optional>
 #include <string>
+
+namespace bronze::embed {
+using ModuleHandle = uint64_t;
+}
 
 namespace bro::engine {
 class Engine;
@@ -77,6 +82,8 @@ struct AppModuleResult {
     /// a user will see — bro.exe's log is a file, and a compiled app that
     /// refuses to start must not look like a hang.
     std::string detail;
+    /// The Bronze GC module handle for this app module (0 if not loaded/ran).
+    bronze::embed::ModuleHandle moduleHandle{0};
 };
 
 /// Load `modulePath`, verify it, install the web host globals on `engine`,
@@ -88,12 +95,15 @@ struct AppModuleResult {
 /// the host globals as it runs and ends by scheduling work (typically a
 /// requestAnimationFrame) that the frame loop then drives.
 ///
-/// The module is never unloaded. Function objects in bronze's heap hold code
-/// pointers into it for the life of the process, and there is no point at
-/// which they are known to be dead — the heap outlives the Engine and is torn
-/// down at process exit without running finalizers (embed.h's contract). A
-/// dlclose would turn every one of those into a dangling call.
+/// Module roots are bracketed via `bronze::embed::beginModuleLoad()` and can
+/// be detached on app reload via `unloadAppModule()`. The underlying OS
+/// shared library image is never dlclosed/FreeLibrary-freed because surviving
+/// heap function objects may hold code pointers into its .text.
 AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePath);
+
+/// Unload a bronze module handle previously returned from beginModuleLoad().
+/// Removes the module's root spans from Bronze GC tracking.
+void unloadAppModule(bronze::embed::ModuleHandle handle);
 
 /// Whether `status` means the app is running. Anything else left the page
 /// scripts-only, with `detail` saying why.
