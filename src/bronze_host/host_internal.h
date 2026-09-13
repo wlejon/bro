@@ -40,8 +40,12 @@ class Element;
 class Event;
 class Node;
 class DocumentFragment;
+class ShadowRoot;
 struct AbsoluteRect;
 }  // namespace bro::dom
+namespace bronze::embed {
+Value setPrototype(Value obj, Value proto);
+}  // namespace bronze::embed
 namespace bro::physics {
 class PhysicsWorld;
 }  // namespace bro::physics
@@ -341,6 +345,7 @@ struct HostNodeState {
     uint32_t tag = kHostElementTag;  // must be first — see the tag note above
     dom::Node* node = nullptr;
     dom::Element* el = nullptr;
+    dom::ShadowRoot* shadowRoot = nullptr;
     ev::Persistent jsObj;
     ev::Persistent styleObj;
     ev::Persistent classListObj;

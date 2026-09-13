@@ -8,6 +8,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_window_open.h"
 
 #include "dom/document.h"
@@ -18,6 +19,7 @@
 #include "dom/event_dispatch.h"
 #include "dom/event_target.h"
 #include "dom/node.h"
+#include "dom/shadow_root.h"
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
@@ -75,6 +77,7 @@ static void clearNodeState(HostNodeState* st) {
     if (!st) return;
     st->node = nullptr;
     st->el = nullptr;
+    st->shadowRoot = nullptr;
     st->jsObj.set(ev::undefined());
     st->styleObj.set(ev::undefined());
     st->classListObj.set(ev::undefined());
@@ -137,6 +140,9 @@ HostNodeState* stateFor(dom::Node* node) {
     st->node = node;
     st->el = node->nodeType() == dom::NodeType::Element
                  ? static_cast<dom::Element*>(node) : nullptr;
+    if (node->nodeName() == "#shadow-root") {
+        st->shadowRoot = static_cast<dom::ShadowRoot*>(node);
+    }
     r.entries.push_back(std::move(owned));
     r.live.emplace(node, st);
     return st;
@@ -181,7 +187,6 @@ dom::Element* siblingOf(dom::Element* el, int direction) {
     return nullptr;
 }
 
-// The state behind a receiver.
 // The state behind a receiver. Every member below reads this rather than
 // closing over the pointer: one copy of each method lives on the prototype and
 // serves every element, so the only way to know WHICH element is to ask the
@@ -312,6 +317,9 @@ Value hostNodeValue(dom::Node* node) {
     if (!node) return ev::null();
     if (node->nodeType() == dom::NodeType::Element)
         return hostElementValue(static_cast<dom::Element*>(node));
+
+    if (node->nodeName() == "#shadow-root")
+        return hostShadowRootValue(static_cast<dom::ShadowRoot*>(node));
 
     HostNodeState* st = stateFor(node);
     Value existing = st->jsObj.get();
@@ -980,8 +988,9 @@ void decorateElementProto(ObjectBuilder& b) {
         return ev::undefined();
     });
 
-    // ---- form controls ----------------------------------------------------
+    // ---- form controls & shadow DOM --------------------------------------
     decorateElementForms(b);
+    decorateElementShadow(b);
 }
 
 }  // namespace bro::bronze_host

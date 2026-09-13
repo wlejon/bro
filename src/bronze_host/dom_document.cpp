@@ -548,16 +548,7 @@ Value makeDocumentValue(dom::Document* fixed) {
         return doc ? doc->documentElement() : nullptr;
     }, "document");
     Value docVal = b.get();
-    ev::GlobalValue objectCtor = ev::globalValue("Object");
-    if (objectCtor.found) {
-        ev::Persistent objectNs(objectCtor.value);
-        ev::Persistent setProto(ev::getProperty(objectNs.get(), "setPrototypeOf"));
-        if (ev::isFunction(setProto.get())) {
-            Value nodeProto = nodeHostClass().prototype();
-            const Value args[2] = {docVal, nodeProto};
-            ev::call(setProto.get(), ev::undefined(), std::span<const Value>(args, 2));
-        }
-    }
+    ev::setPrototype(docVal, documentHostClass().prototype());
     return docVal;
 }
 

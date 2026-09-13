@@ -90,26 +90,28 @@ void HostClass::alias(const char* name) const {
     }
 }
 
+}  // namespace bro::bronze_host
+
+namespace bronze::embed {
+
+Value setPrototype(Value obj, Value proto) {
+    GlobalValue objectCtor = globalValue("Object");
+    if (!objectCtor.found || !isObject(objectCtor.value)) return obj;
+    Persistent objectNs(objectCtor.value);
+    Persistent setProto(getProperty(objectNs.get(), "setPrototypeOf"));
+    if (!isFunction(setProto.get())) return obj;
+    const Value args[2] = {obj, proto};
+    call(setProto.get(), undefined(), std::span<const Value>(args, 2));
+    return obj;
+}
+
+}  // namespace bronze::embed
+
+namespace bro::bronze_host {
+
 void HostClass::inherit(const HostClass& base) const {
     if (!proto_ || !base.proto_) return;
-    // Reached through the program's own Object.setPrototypeOf, the way
-    // host_proxy.cpp reaches Proxy: embed has no prototype-chaining call, and
-    // `Object` resolves off the builtin ladder, which a program cannot shadow.
-    // Both operands are PLAIN objects here — a class prototype, never an
-    // instance — so none of the handle-cell caveats apply.
-    ev::GlobalValue objectCtor = ev::globalValue("Object");
-    if (!objectCtor.found) return;
-    ev::Persistent objectNs(objectCtor.value);
-    ev::Persistent setProto(ev::getProperty(objectNs.get(), "setPrototypeOf"));
-    if (!ev::isFunction(setProto.get())) return;
-    const Value args[2] = {proto_->get(), base.proto_->get()};
-    ev::CallResult r = ev::call(setProto.get(), ev::undefined(),
-                                std::span<const Value>(args, 2));
-    // A throw here would mean the chain is not what the caller declared, which
-    // is worth naming rather than leaving to a mystifying `instanceof` false.
-    if (r.thrown) {
-        LOG_WARN("bronze_host: HostClass::inherit failed to chain a prototype");
-    }
+    ev::setPrototype(proto_->get(), base.proto_->get());
 }
 
 Value HostClass::make(void* data, ev::HandleDestructor dtor, ev::Finalize when) const {

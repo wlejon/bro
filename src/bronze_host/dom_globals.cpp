@@ -367,9 +367,11 @@ void installWebHostGlobals(engine::Engine& engine) {
         // naming one. documentFor() above has the reason.
         Value doc = makeDocumentValue(nullptr);
         ev::registerGlobal("document", doc);
+        ev::registerGlobal("Document", documentHostClass().constructor());
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && ev::isObject(gt.value)) {
             ev::setProperty(gt.value, "document", doc);
+            ev::setProperty(gt.value, "Document", documentHostClass().constructor());
         }
     }
     {

@@ -6,6 +6,7 @@
 namespace bro::bronze_host {
 
 const HostClass& nodeHostClass();
+const HostClass& documentHostClass();
 const HostClass& elementHostClass();
 const HostClass& htmlElementHostClass();
 const HostClass& htmlMediaElementHostClass();

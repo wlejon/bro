@@ -1,4 +1,5 @@
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_iframe.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
@@ -15,6 +16,7 @@ Value constructCustomElementBase();
 namespace {
 
 HostClass g_nodeClass;
+HostClass g_documentClass;
 HostClass g_elementClass;
 HostClass g_htmlElementClass;
 HostClass g_htmlMediaElementClass;
@@ -75,6 +77,7 @@ void decorateNodeProto(ObjectBuilder& b) {
 }  // namespace
 
 const HostClass& nodeHostClass() { return g_nodeClass; }
+const HostClass& documentHostClass() { return g_documentClass; }
 const HostClass& elementHostClass() { return g_elementClass; }
 const HostClass& htmlElementHostClass() { return g_htmlElementClass; }
 const HostClass& htmlMediaElementHostClass() { return g_htmlMediaElementClass; }
@@ -89,6 +92,20 @@ void installHtmlInterfaces() {
     for (const auto& c : kNodeConstants) {
         g_nodeClass.setStatic(c.name, ev::fromDouble(c.val));
     }
+
+    // Document
+    g_documentClass.install("Document", 0, illegalConstructor, nullptr);
+    g_documentClass.inherit(g_nodeClass);
+    ev::registerGlobal("Document", g_documentClass.constructor());
+    {
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
+            ev::setProperty(gt.value, "Document", g_documentClass.constructor());
+        }
+    }
+
+    // ShadowRoot
+    installShadowRootClass();
 
     // 2. Element
     g_elementClass.install("Element", 0, [](Value, std::span<const Value>) -> Value {

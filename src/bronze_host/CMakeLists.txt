@@ -117,6 +117,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_iframe.cpp
     host_matchmedia.cpp
     host_node.cpp
+    host_shadow_dom.cpp
     host_range.cpp
     host_selection.cpp
     host_events.cpp

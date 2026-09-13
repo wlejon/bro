@@ -187,6 +187,7 @@ Engine::~Engine() {
 #endif
     audioInference_.reset();
     SceneAudioSync::shutdown();
+    bro::bronze_host::hostCollectGarbage();
     document_.reset();
     audioEngine_.reset();
     renderer_.reset();
