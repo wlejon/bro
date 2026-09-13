@@ -5,6 +5,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_pins.h"
 
 #include "cli/driver.h"
 #include "embed/embed.h"
@@ -283,6 +284,8 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     const std::string resolvesAs = entryResolvesAsFor(engine, filename);
     const std::string manifestPath = getNativeManifestDir();
     const std::string libPath = getNativeLibPath();
+    const std::string pinsPath = discoverPinsPath(engine, filename);
+    const std::string censusOutPath = discoverCensusOutPath(engine, filename);
     std::string err;
     int status = bronze::cli::runBuild(
         tempJs.string(), outDll.string(), &err,
@@ -291,7 +294,7 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
-        /*pinsPath=*/{}, /*censusOutPath=*/{},
+        /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
         /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
         /*nativeLibPath=*/libPath, /*entryResolvesAs=*/resolvesAs);
 
@@ -316,7 +319,7 @@ bool evalScript(engine::Engine& engine, const std::string& code,
             /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
-            /*pinsPath=*/{}, /*censusOutPath=*/{},
+            /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
             /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
             /*nativeLibPath=*/libPath, /*entryResolvesAs=*/resolvesAs);
         std::filesystem::remove(tempJsWrap, ec);
@@ -398,6 +401,8 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     const auto roots = moduleRootsFor(engine);
     const std::string manifestPath = getNativeManifestDir();
     const std::string libPath = getNativeLibPath();
+    const std::string pinsPath = discoverPinsPath(engine, absSource);
+    const std::string censusOutPath = discoverCensusOutPath(engine, absSource);
     std::string err;
 
     std::ifstream ifs(absSource, std::ios::binary);
@@ -440,7 +445,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
-        /*pinsPath=*/{}, /*censusOutPath=*/{},
+        /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
         /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
         /*nativeLibPath=*/libPath);
 
@@ -463,7 +468,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
             /*statsOut=*/nullptr, /*moduleRoots=*/roots, /*entrySymbol=*/{},
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
-            /*pinsPath=*/{}, /*censusOutPath=*/{},
+            /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
             /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
             /*nativeLibPath=*/libPath);
         std::filesystem::remove(wrappedFile, ec);

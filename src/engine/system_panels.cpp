@@ -2,6 +2,7 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
+#include "bronze_host/host_telemetry.h"
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
 #include "layout/box.h"
@@ -379,9 +380,16 @@ void Engine::tickSystemPanels(double nowMs) {
 // Perf data update
 // ---------------------------------------------------------------------------
 
-void Engine::updateSystemPerf(double /*fps*/, double /*frameTime*/, double /*js*/, double /*layout*/,
-                              double /*raster*/, double /*gpu*/, double /*draw*/,
-                              int /*vpW*/, int /*vpH*/) {
+void Engine::updateSystemPerf(double fps, double frameTime, double js, double layout,
+                              double raster, double gpu, double draw,
+                              int vpW, int vpH) {
+    auto tel = bronze_host::getHostTelemetry();
+    for (auto& doc : systemDocs_) {
+        if (doc.group == "perf" && doc.document) {
+            bronze_host::updatePerfDocument(doc.document.get(), tel, fps, frameTime, js, layout,
+                                            raster, gpu, draw, vpW, vpH);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -190,6 +190,19 @@ bh_ensure_module() {
         native_args+=(--native-manifest "$(bh_to_win_path "$c_abi_manifest")" --native-lib "$(bh_to_win_path "$c_abi_lib")")
     fi
 
+    local -a pin_args=()
+    if [[ "${BRO_CENSUS:-}" == "1" ]]; then
+        pin_args+=(--census "$(bh_to_win_path "$appdir/app.pins")")
+    elif [[ -n "${BRO_CENSUS:-}" ]]; then
+        pin_args+=(--census "$(bh_to_win_path "$BRO_CENSUS")")
+    fi
+
+    if [[ -n "${BRO_PINS:-}" ]]; then
+        pin_args+=(--pins "$(bh_to_win_path "$BRO_PINS")")
+    elif [[ -f "$appdir/app.pins" ]]; then
+        pin_args+=(--pins "$(bh_to_win_path "$appdir/app.pins")")
+    fi
+
     export BRONZE_SHARED_RT_LIB="$(bh_to_win_path "$rtlib")"
     export WSLENV="${WSLENV:-}${WSLENV:+:}BRONZE_SHARED_RT_LIB"
     local log
@@ -197,7 +210,8 @@ bh_ensure_module() {
                 -o "$(bh_to_win_path "$module")" \
                 --emit-shared \
                 --host-globals "$(bh_to_win_path "$project_dir/src/bronze_host/web_host.globals")" \
-                ${native_args[@]+"${native_args[@]}"} 2>&1)" || {
+                ${native_args[@]+"${native_args[@]}"} \
+                ${pin_args[@]+"${pin_args[@]}"} 2>&1)" || {
         echo "COMPILE FAILED" >&2
         printf '%s\n' "$log" | tail -20 >&2
         return 1

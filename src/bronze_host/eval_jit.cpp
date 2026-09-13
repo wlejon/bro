@@ -3,6 +3,9 @@
 #include "bronze_host/host_gc.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_headless.h"
+#include "bronze_host/host_callee_namer.h"
+#include "bronze_host/host_pins.h"
+#include "bronze_host/native_manifest_helper.h"
 #include "engine/engine.h"
 #include "engine/engine_init_cabi.h"
 #include "util/asset_mounts.h"
@@ -105,12 +108,16 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
     }
     bro::engine::bro_engine_register_cabi_bridges(&engine);
 
+    initHostCalleeNamer();
+
     bronze::eval::EvalOptions opts;
     opts.filename = filename.empty() ? "<eval>" : filename;
     opts.hostGlobals = getCachedWebHostGlobals();
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = entryResolvesAsFor(engine, filename);
     opts.retainSource = true;
+    opts.pinsPath = discoverPinsPath(engine, filename);
+    opts.censusOutPath = discoverCensusOutPath(engine, filename);
 
     std::string execCode = code;
     if (hasAwaitStmt(execCode)) {
@@ -167,12 +174,16 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
         }
     }
 
+    initHostCalleeNamer();
+
     bronze::eval::EvalOptions opts;
     opts.filename = absPath.string();
     opts.hostGlobals = getCachedWebHostGlobals();
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = absPath;
     opts.retainSource = true;
+    opts.pinsPath = discoverPinsPath(engine, absPath);
+    opts.censusOutPath = discoverCensusOutPath(engine, absPath);
 
     bronze::embed::CallResult res;
     if (hasAwaitStmt(content)) {

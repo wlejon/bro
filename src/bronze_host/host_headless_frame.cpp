@@ -1,6 +1,7 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_telemetry.h"
 #include "engine/engine.h"
 #include "engine/capture_path.h"
 #include "canvas/canvas_scene.h"
@@ -597,6 +598,19 @@ void installHeadlessFrame(engine::Engine& engine) {
                 o.set(ev::setProperty(o.get(), "scene", sc.get()));
             }
 #endif
+            {
+                auto tel = getHostTelemetry();
+                ev::Persistent bz(ev::createObject());
+                auto bnum = [&](const char* k, double v) {
+                    bz.set(ev::setProperty(bz.get(), k, ev::fromDouble(v)));
+                };
+                bnum("heapUsedBytes", static_cast<double>(tel.heapUsedBytes));
+                bnum("heapCommittedBytes", static_cast<double>(tel.heapCommittedBytes));
+                bnum("gcCollections", static_cast<double>(tel.gcCollections));
+                bnum("gcPauseNs", static_cast<double>(tel.gcPauseNs));
+                bnum("shapeTransitions", static_cast<double>(tel.shapeTransitions));
+                o.set(ev::setProperty(o.get(), "bronze", bz.get()));
+            }
             return o.get();
         }, 0, "stats")));
     perf.set(ev::setProperty(perf.get(), "gpuFrameMs", ev::makeFunction(

@@ -97,6 +97,8 @@ set(BRO_BRONZE_HOST_SOURCES
     gl_transform_feedback.cpp
     gl_context.cpp
     gl_profile.cpp
+    host_callee_namer.cpp
+    host_telemetry.cpp
     app_module.cpp
     dom_globals.cpp
     host_gc.cpp

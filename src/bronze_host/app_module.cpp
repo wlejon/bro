@@ -4,6 +4,7 @@
 #include "bronze_host/app_module.h"
 
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/host_callee_namer.h"
 
 #include "util/log.h"
 
@@ -215,6 +216,7 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
 
     // Globals BEFORE the program: its top level reads them as it runs.
     installWebHostGlobals(engine);
+    initHostCalleeNamer();
 
     // The root frame around the top level and the microtask checkpoint after
     // it, which a program whose top level queued a job needs before it can be

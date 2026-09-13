@@ -904,6 +904,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installPlatformExtensions(engine);
     installRangeGlobals();
     installSelectionGlobals();
+    initHostCalleeNamer();
 
     snapshotBaselineGlobalProps();
 }

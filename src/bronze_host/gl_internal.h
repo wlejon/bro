@@ -14,6 +14,7 @@
 // allocate, and never stores it.
 
 #include "bronze_host/gl_profile.h"
+#include "bronze_host/host_callee_namer.h"
 
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_objects.h"
@@ -351,6 +352,7 @@ struct ObjectBuilder {
         // this builder, DOM included, for the same reason hostProfileWrap's
         // comment gives: they all funnel through one place.
         Value f = ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity, name);
+        registerHostCalleeName(f, name);
         obj.set(ev::setProperty(obj.get(), name, f));
     }
 
@@ -365,8 +367,12 @@ struct ObjectBuilder {
         const std::string setName = "set " + std::string(name);
         ev::Persistent g(
             ev::makeFunction(hostProfileWrap(name, std::move(getter)), 0, getName));
+        registerHostCalleeName(g.get(), getName);
         Value s = setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1, setName)
                          : ev::undefined();
+        if (setter) {
+            registerHostCalleeName(s, setName);
+        }
         obj.set(ev::defineAccessor(obj.get(), name, g.get(), s, /*enumerable=*/true));
     }
 

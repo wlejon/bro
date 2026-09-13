@@ -133,6 +133,15 @@ td.value {
         <span id="ms-draw" class="bar-ms">0ms</span>
     </div>
 
+    <div class="divider"></div>
+    <div class="chart-title">Bronze Runtime</div>
+    <table>
+        <tr><td class="label">Heap</td><td id="gc-heap-value" class="value">0 MB</td></tr>
+        <tr><td class="label">GC Count</td><td id="gc-count-value" class="value">0</td></tr>
+        <tr><td class="label">GC Pause</td><td id="gc-pause-value" class="value">0.0ms</td></tr>
+        <tr><td class="label">Shapes</td><td id="shape-count-value" class="value">0</td></tr>
+    </table>
+
     <div id="windows-section" style="display: none;">
         <div class="divider"></div>
         <div class="chart-title">Secondary windows</div>
@@ -171,6 +180,11 @@ td.value {
     var msGpu = document.getElementById('ms-gpu');
     var msDraw = document.getElementById('ms-draw');
 
+    var gcHeapEl = document.getElementById('gc-heap-value');
+    var gcCountEl = document.getElementById('gc-count-value');
+    var gcPauseEl = document.getElementById('gc-pause-value');
+    var shapeCountEl = document.getElementById('shape-count-value');
+
     function update() {
         var p = __bro.perf;
         var v = __bro.viewport;
@@ -196,6 +210,24 @@ td.value {
             var px = Math.max(1, Math.round(pct * 1.8));
             if (bar) bar.style.setProperty('width', px + 'px');
             if (label) label.textContent = ms.toFixed(2) + 'ms';
+        }
+
+        var b = (p && p.bronze) || (__bro && __bro.bronze);
+        if (b) {
+            if (gcHeapEl && b.heapUsedBytes !== undefined) {
+                var mb = (b.heapUsedBytes / (1024 * 1024)).toFixed(1);
+                gcHeapEl.textContent = mb + ' MB';
+            }
+            if (gcCountEl && b.gcCollections !== undefined) {
+                gcCountEl.textContent = b.gcCollections.toString();
+            }
+            if (gcPauseEl && b.gcPauseNs !== undefined) {
+                var pauseMs = (b.gcPauseNs / 1000000.0).toFixed(2);
+                gcPauseEl.textContent = pauseMs + 'ms';
+            }
+            if (shapeCountEl && b.shapeTransitions !== undefined) {
+                shapeCountEl.textContent = b.shapeTransitions.toString();
+            }
         }
 
         // Secondary windows (bro.window.open). One row per live host: each is
