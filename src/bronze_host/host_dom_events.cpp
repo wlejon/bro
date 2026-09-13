@@ -737,9 +737,9 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
     dom::Event plain(spec.type, spec.bubbles, spec.cancelable);
     dom::Event& evt = spec.hasDetail ? static_cast<dom::Event&>(custom) : plain;
     if (spec.hasDetail) custom.setDetail(spec.detail);
-    // Runs interpreted listeners and compiled ones both, re-entering this
-    // layer for the compiled ones. Single-threaded and re-entrant by
-    // construction: nothing here holds a bare Value across the call.
+    // Runs DOM listeners, re-entering this layer for compiled listeners.
+    // Single-threaded and re-entrant by construction: nothing here holds a bare
+    // Value across the call.
     engine->dispatchElementEvent(el, evt);
     return ev::fromBool(!evt.defaultPrevented());
 }

@@ -841,8 +841,7 @@ void decorateElementProto(ObjectBuilder& b) {
                    return ev::undefined();
                });
     // bro's DOM tracks vertical scrolling only (dom::Element::scrollTop_), so
-    // the horizontal half answers 0 and swallows a write it cannot honour —
-    // the same answer the interpreted side gives, rather than a second story.
+    // the horizontal half answers 0 and swallows a write it cannot honour.
     b.accessor("scrollLeft",
                [](Value, std::span<const Value>) { return ev::fromDouble(0.0); },
                [](Value, std::span<const Value>) { return ev::undefined(); });

@@ -166,7 +166,6 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
                           std::regex_constants::icase);
         auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
         auto end = std::sregex_iterator();
-        bool haveImportMap = false;
         for (auto it = begin; it != end; ++it) {
             std::string attrs = (*it)[1].str();
             std::string body = (*it)[2].str();
@@ -178,24 +177,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
             }
 
             if (type == "importmap") {
-                // One map per document (HTML ignores any later one), and it
-                // only means anything inline — a src'd import map is invalid.
-                if (haveImportMap) {
-                    LOG_WARN("AppLoader: ignoring a second <script type=\"importmap\"> in "
-                             "'%s' — a document has exactly one import map, and it is the "
-                             "first.", manifest.htmlPath.c_str());
-                    continue;
-                }
-                haveImportMap = true;
-                if (!manifest.importMap.parse(body, appDir)) {
-                    LOG_ERROR("AppLoader: <script type=\"importmap\"> in '%s' is not valid "
-                              "JSON — no bare import specifier will resolve.",
-                              manifest.htmlPath.c_str());
-                } else {
-                    LOG_INFO("AppLoader: import map with %zu entr%s",
-                             manifest.importMap.size(),
-                             manifest.importMap.size() == 1 ? "y" : "ies");
-                }
+                LOG_INFO("AppLoader: skipping <script type=\"importmap\"> (handled by runtime)");
                 continue;
             }
 

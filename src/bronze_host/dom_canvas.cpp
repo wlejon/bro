@@ -2,7 +2,9 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
+#if BRO_WITH_3D
 #include "bronze_host/host_scene_internal.h"
+#endif
 #include "bronze_host/host_window_open.h"
 
 #include "engine/engine.h"
@@ -162,6 +164,7 @@ Value makeCanvasValue(dom::Element* el) {
             return ctx2d;
         }
         if (type == "scene") {
+#if BRO_WITH_3D
             if (ev::isObject(cs->sceneObj.get())) {
                 if (sceneGraphOf(cs->sceneObj.get()) != nullptr) {
                     return cs->sceneObj.get();
@@ -174,6 +177,9 @@ Value makeCanvasValue(dom::Element* el) {
             Value scnVal = createSceneGraphValue(sg, cs->el);
             cs->sceneObj.set(scnVal);
             return scnVal;
+#else
+            return ev::null();
+#endif
         }
         if (type != "webgl2" && type != "webgl") return ev::null();
         if (isChildRealm()) return ev::null();

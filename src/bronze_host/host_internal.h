@@ -277,8 +277,8 @@ void dispatchHostEvent(ev::Persistent target, const std::string& type);
 // whose real identity is a dom::Element, wired to the ENGINE's listener
 // registry (dom::Element::addEventListener) rather than to a list of this
 // layer's own. That is the whole point: the engine already runs one dispatch
-// walk that merges native and interpreted listeners in registration order
-// (js/event_dispatch.cpp), so a compiled listener registered here fires from
+// walk that dispatches listeners in registration order
+// (dom/event_dispatch.cpp), so a compiled listener registered here fires from
 // a real click, in the right phase, beside the page's own listeners — instead
 // of from a second dispatch system that nothing would ever call.
 //

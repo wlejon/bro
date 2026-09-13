@@ -153,8 +153,6 @@ set(BRO_BRONZE_HOST_SOURCES
     host_touch.cpp
     dom_bro.cpp
     eval.cpp
-    host_buffer.cpp
-    host_structured_clone.cpp
     host_noise.cpp
     host_custom_elements.cpp
     host_imagebitmap.cpp

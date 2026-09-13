@@ -16,7 +16,7 @@ struct HeadlessHooks {
     ///
     /// This is the seam a host whose "app" is NATIVE code needs. bro-bronze-host
     /// registers its host globals and runs the compiled top level here, which
-    /// puts that top level exactly where an interpreted app's own JS already
+    /// puts that top level exactly where a script-based app's own JS already
     /// is by this point: finished, with its first frame scheduled. The driver
     /// script that follows then steps a running app rather than starting one.
     std::function<void(Engine&)> afterEngine;
@@ -29,7 +29,7 @@ struct HeadlessHooks {
     /// answer.
     ///
     /// A predicate rather than a bool because the answer is a property of the
-    /// FOLDER, not of the binary: one bro-headless opens an interpreted app
+    /// FOLDER, not of the binary: one bro-headless opens a script-based app
     /// and a compiled one, and which it got depends on whether that directory
     /// carries a module (bronze_host/app_module.h). A host with an app linked
     /// in answers yes unconditionally; a host that loads one answers by

@@ -33,9 +33,7 @@
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
-#if BRO_WITH_BRONZE
 #include "bronze_host/eval.h"
-#endif
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
@@ -401,7 +399,6 @@ void Engine::initAppRealm() {
         syncIframes();
     }
 
-#if BRO_WITH_BRONZE
     if (!manifest_.scripts.empty()) {
         std::string combinedScripts;
         for (const auto& script : manifest_.scripts) {
@@ -422,7 +419,6 @@ void Engine::initAppRealm() {
             }
         }
     }
-#endif
 
     documentReadyState_ = "interactive";
     if (auto* root = document_ ? document_->documentElement() : nullptr) {

@@ -429,8 +429,19 @@ void installWorkerGlobals(engine::Engine& engine) {
 }
 
 void installPlatformExtensions(engine::Engine& engine) {
-    installBufferGlobals();
-    installStructuredCloneGlobals();
+    brokit::api::installBuffer();
+    auto gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        Value buf = ev::getProperty(gt.value, "Buffer");
+        if (!ev::isUndefined(buf)) ev::registerGlobal("Buffer", buf);
+    }
+
+    brokit::api::installStructuredClone();
+    if (gt.found && ev::isObject(gt.value)) {
+        Value sc = ev::getProperty(gt.value, "structuredClone");
+        if (!ev::isUndefined(sc)) ev::registerGlobal("structuredClone", sc);
+    }
+
     installNoiseGlobals();
     installImageBitmapGlobals();
     installCustomElementsGlobals();

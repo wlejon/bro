@@ -9,9 +9,7 @@
 // THERE IS NO `VideoFrame` HERE because there is none in bro. The name comes
 // from WebCodecs, whose model is a frame OBJECT you construct, hand to an
 // encoder and then close; bro's encoders take pixels directly — a typed array,
-// a 2D canvas, or the composited viewport — and own the copy. Adding a frame
-// object to the compiled side alone would invent a surface the interpreted
-// side does not have, which is the opposite of what this layer is for.
+// a 2D canvas, or the composited viewport — and own the copy.
 //
 // WHY A COMPILED APP WANTS THIS AT ALL: capture is the one thing an app cannot
 // do for itself. Everything else in this layer has a pure-JS fallback of some
@@ -178,8 +176,7 @@ Value throwRefusal(Refusal kind, const std::string& message) {
 // canvas hosting a scene graph or a WebGL context ALSO carries an auxiliary
 // CanvasScene for overlay compositing (draw_traversal.cpp), so `canvasScene()`
 // is non-null for it and reading that surface would silently encode a blank
-// overlay instead of the picture. On the interpreted side that is a trap an app
-// might never hit; a compiled app draws with WebGL as a matter of course, so
+// overlay instead of the picture. An app draws with WebGL as a matter of course, so
 // this is the path it reaches for FIRST — and the message has to name the one
 // that works rather than merely refuse.
 std::vector<uint8_t> canvasPixels(Value elValue, int wantW, int wantH,
@@ -629,9 +626,7 @@ void installVideoGlobals() {
 // Registered undefined is explicitly not a miss (runtime/host_globals.h says
 // so), so the lookup succeeds and answers undefined — which makes
 // `typeof VideoEncoder === 'undefined'` true, exactly the feature detection
-// bro's own docs tell an app to write (docs/video-api.js), and exactly what an
-// app sees on the interpreted side of a video-less build, where the classes are
-// simply absent.
+// bro's own docs tell an app to write (docs/video-api.js) when video is absent.
 void installVideoGlobals() {
     ev::registerGlobal("VideoEncoder", ev::undefined());
     ev::registerGlobal("GifEncoder", ev::undefined());

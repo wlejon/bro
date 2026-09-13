@@ -4,9 +4,7 @@
 #include "engine/scene_audio_sync.h"
 #include "bro/c_abi/bro_engine_c_abi.h"
 
-#if BRO_WITH_BRONZE
 #include "bronze_host/bronze_host.h"
-#endif
 
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
@@ -54,9 +52,7 @@
 namespace bro::engine {
 
 void Engine::stopBackgroundServices() {
-#if BRO_WITH_BRONZE
     bro::bronze_host::terminateAllWorkers();
-#endif
 #if BRO_WITH_NET
     netService_.reset();
 #endif
@@ -275,9 +271,7 @@ void Engine::deliverMediaQueryChangesAllRealms() {
     for (auto& h : windowHosts_) {
         if (h && h->document && h->document->mediaRestylePending()) h->document->resolveStyles();
     }
-#if BRO_WITH_BRONZE
     bro::bronze_host::deliverHostMediaQueryChanges();
-#endif
 }
 
 } // namespace bro::engine

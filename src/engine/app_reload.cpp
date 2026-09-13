@@ -12,9 +12,7 @@
 #include "webgl/webgl2_context.h"
 #include "util/log.h"
 
-#if BRO_WITH_BRONZE
 #include "bronze_host/bronze_host.h"
-#endif
 #include <exception>
 
 namespace bro::engine {
@@ -100,10 +98,8 @@ void Engine::performAppReload() {
     selectionDragging_ = false;
     selectionPastThreshold_ = false;
 
-#if BRO_WITH_BRONZE
     bro::bronze_host::clearHostTimers();
     bro::bronze_host::resetGlobalExpandos();
-#endif
 
     try {
         initAppRealm();

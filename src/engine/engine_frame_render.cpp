@@ -9,9 +9,7 @@
 #include "webgl/webgl2_context.h"
 #include "platform/sdl_window.h"
 #include "util/time.h"
-#if BRO_WITH_BRONZE
 #include "bronze_host/host_window_open.h"
-#endif
 
 #include <glad/gl.h>
 #include <algorithm>
@@ -148,9 +146,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
             processPendingIframeReloads();
             processPendingWindowHosts();
-#if BRO_WITH_BRONZE
             bro::bronze_host::drainHostWindowMessages();
-#endif
 
             if (iframeSyncNeeded_) {
                 syncIframes();

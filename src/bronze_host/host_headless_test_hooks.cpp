@@ -1,7 +1,10 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#if BRO_WITH_3D
 #include "bronze_host/host_scene_internal.h"
+#endif
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"

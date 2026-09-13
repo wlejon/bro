@@ -85,9 +85,8 @@ void loadHostImage(HostImage& image, const std::string& src) {
         // with a message about a missing file that was never meant to exist.
         //
         // The table is util::object_url.h's, which is the process's ONE table:
-        // a URL minted by an interpreted script on the page resolves here, and
-        // one minted by URL.createObjectURL in compiled code resolves in the
-        // page's markup (host_file.cpp says why).
+        // a URL minted anywhere on the page resolves here, including
+        // one minted by URL.createObjectURL (host_file.cpp says why).
         broimage::Image decoded;
         if (broimage::decode_memory(inline_.data(), inline_.size(), decoded, &err)) {
             img->width = decoded.width;

@@ -42,18 +42,7 @@ Document::Document() {
 Document::~Document() {
     liveDocuments().erase(this);
     // Sever anything still pointing into this document's node storage before
-    // that storage goes away. Destroying ownedNodes_/pendingFrees_ below runs
-    // ~Element on every node without going through freeNode(), so the per-node
-    // NodeFreedCallback never fires for them — a JS wrapper that outlives the
-    // document would keep a raw Element* to freed memory and dereference it
-    // when it is finally collected.
-    //
-    // This is not hypothetical: teardown order for sub-documents, system panels
-    // and app reload is cleanup(ctx) -> document.reset() -> JS_FreeContext(ctx),
-    // so the wrappers are ALWAYS finalized after their Elements are gone.
-    if (nodeDestroyingCb_) {
-        forEachLiveElement([this](Element* el) { nodeDestroyingCb_(this, el); });
-    }
+    // that storage goes away.
     for (auto& [n, _] : ownedNodes_) {
         if (n) {
             for (NodeObserver obs : nodeFreedObservers_) obs(this, n);
@@ -134,7 +123,6 @@ void Document::notifyChildInserted(Node* parent, int index) {
 }
 
 void Document::fireSelectionChange() {
-    if (selectionChangeCb_) selectionChangeCb_(this);
 }
 
 // ---------------------------------------------------------------------------
@@ -1428,7 +1416,6 @@ void Document::adoptOne(Node* node, Document* src) {
         elem->markDirty();
         elem->markStructureDirty();
     }
-    if (nodeAdoptedCb_) nodeAdoptedCb_(this, src, node);
 }
 
 Node* Document::adoptNode(Node* node) {
@@ -1499,8 +1486,6 @@ void Document::freeNode(Node* node) {
     // don't call invalidateWrapper (innerHTML/textContent replacement, range
     // extraction, the orphan-fragment sweep) outlive drainPendingFrees() and
     // dangle — a later property access or sweepOrphanedWrappers() then reads
-    // the freed Element and faults.
-    if (nodeFreedCb_) nodeFreedCb_(this, node);
     for (NodeObserver obs : nodeFreedObservers_) obs(this, node);
 
     // Move the owning unique_ptr into pendingFrees_ rather than destroying
@@ -1550,20 +1535,6 @@ void Document::removeNodeFreedObserver(NodeObserver cb) {
 }
 
 void Document::drainPendingFrees() {
-    // Last chance to sever anything still pointing into this storage, while it
-    // is unambiguously valid. freeNode() already fired nodeFreedCb_ for every
-    // one of these nodes, so this normally finds nothing left to do; it catches
-    // references taken during the window BETWEEN freeNode() and here — notably
-    // a JS wrapper handed out for an already-doomed node by an event dispatch
-    // still unwinding its propagation path.
-    if (nodeDestroyingCb_) {
-        std::function<void(Node*)> walk = [&](Node* n) {
-            if (!n) return;
-            for (Node* child : n->childNodes()) walk(child);
-            nodeDestroyingCb_(this, n);
-        };
-        for (auto& root : pendingFrees_) walk(root.get());
-    }
     pendingFrees_.clear();
     pendingSet_.clear();
 }

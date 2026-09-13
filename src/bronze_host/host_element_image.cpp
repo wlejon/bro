@@ -86,7 +86,7 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     // this event is a queued task, never synchronous with the assignment, and
     // firing it from inside the setter re-enters compiled code with the
     // caller's own load() still on the stack. Dispatched AT THE ELEMENT
-    // through the engine, so an interpreted listener on the same node hears it
+    // through the engine, so any listener on the same node hears it
     // as well — which is the whole point of the image being a node.
     dom::Element* target = st->el;
     const bool loaded = img.ok;

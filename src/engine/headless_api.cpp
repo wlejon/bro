@@ -6,10 +6,8 @@
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
-#if BRO_WITH_BRONZE
 #include "bronze_host/eval.h"
 #include "bronze_host/host_window_open.h"
-#endif
 #include "audio_inference/audio_inference.h"
 
 #include "render/renderer.h"
@@ -101,9 +99,7 @@ void Engine::flush() {
 
     processPendingIframeReloads();
     processPendingWindowHosts();
-#if BRO_WITH_BRONZE
     bro::bronze_host::drainHostWindowMessages();
-#endif
 
     if (iframeSyncNeeded_) {
         syncIframes();
@@ -280,7 +276,6 @@ void Engine::advanceTime(double ms) {
 }
 
 std::string Engine::eval(const std::string& code) {
-#if BRO_WITH_BRONZE
     bool ok = bro::bronze_host::evalScript(*this, code);
     flush();
     if (!ok) {
@@ -288,11 +283,6 @@ std::string Engine::eval(const std::string& code) {
         return "error";
     }
     return "";
-#else
-    (void)code;
-    flush();
-    return "";
-#endif
 }
 
 std::vector<uint8_t> Engine::renderUnifiedToPixels() {

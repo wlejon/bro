@@ -195,8 +195,8 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
         // Refused rather than fatal: bronze's own guard calls fatal() because
         // a LINKED object's mismatch means the process itself is malformed.
         // A LOADED module is data the folder supplied, and a bad app must not
-        // take the runtime down with it — the page stays up, interpreted, and
-        // says why.
+        // take the runtime down with it — the page stays up, running its scripts,
+        // and says why.
         return refuse(AppModuleStatus::AbiMismatch, buf);
     }
 

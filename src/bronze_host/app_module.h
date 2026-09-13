@@ -6,7 +6,7 @@
 // ahead of time, a shared module beside it — `app.dll` / `app.so` /
 // `app.dylib`. This is how bro finds that module, decides whether it is safe
 // to run, and runs its top level. `bro <folder>` is the caller: the same
-// binary opens an interpreted app and a compiled one, and which it got is a
+// binary opens a script-based app and an AOT compiled one, and which it got is a
 // property of the FOLDER rather than of the executable.
 //
 // That is the whole reason this file exists. The earlier arrangement linked
@@ -96,7 +96,7 @@ struct AppModuleResult {
 AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePath);
 
 /// Whether `status` means the app is running. Anything else left the page
-/// interpreted-only, with `detail` saying why.
+/// scripts-only, with `detail` saying why.
 inline bool ran(AppModuleStatus status) { return status == AppModuleStatus::Ran; }
 
 }  // namespace bro::bronze_host

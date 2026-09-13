@@ -529,20 +529,9 @@ and `body`/`documentElement` all answer from the parsed tree.
 Two things about it are policy rather than plumbing.
 
 **Parsed documents are never freed.** They are owned by a process-lived vector.
-port. `~Document` severs wrappers through `nodeDestroyingCb_`, a single callback
-slot the JS realm owns, and it visits elements only; the freed-node observer
-LIST this layer's registry depends on is not fired from `~Document` at all, so a
-finalizer would leave a live registry entry pointing into released storage for
-every node of that document this layer had wrapped. And even with that fixed, a
-node wrapper routinely outlives the document wrapper it came from
-(`parser.parseFromString(s).body.firstChild` drops the document on the same
-line) where the web keeps the document alive through the node — and since
-registry entries are themselves never freed, rooting the document from a node
-would pin it forever anyway. The cost is a `Document` husk per parse, which is
-real for an app that parses every frame. Two things would make the finalizer
-safe: `~Document` firing the freed-node observer list (a small bro fix — the
-list exists in `dom/document.h` for exactly this kind of wrapper layer, and
-nothing fires it, so every registry entry for one of that document's nodes
+`~Document` severs wrappers through `nodeFreedObservers_`. Node wrappers routinely
+outlive the document wrapper they came from (`parser.parseFromString(s).body.firstChild`
+drops the document on the same line).
 would be left pointing into released storage), and a registry entry that can be
 released at all, which wants a finalizer able to make embed calls.
 

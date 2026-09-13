@@ -3,10 +3,8 @@
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 
-#if BRO_WITH_BRONZE
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
-#endif
 
 using bro::engine::parseConfig;
 using bro::engine::findAncestorProjectRoot;
@@ -155,10 +153,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         }
     }
 
-#if BRO_WITH_BRONZE
     bro::bronze_host::setScriptArgs(scriptArgs);
     bro::bronze_host::clearTestFailure();
-#endif
 
     int exitCode = 0;
 
@@ -260,7 +256,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         };
         drainAppReloads();
 
-#if BRO_WITH_BRONZE
         if (bro::bronze_host::hasTestFailure() || engine->hasTestFailure()) {
             exitCode = 1;
         }
@@ -285,7 +280,6 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 exitCode = 1;
             }
         }
-#endif
 
         delete engine;
     } catch (const std::exception& e) {

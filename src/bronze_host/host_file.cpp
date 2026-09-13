@@ -435,8 +435,7 @@ Value makeFileFromPath(const std::string& path) {
     b.set("lastModified", ev::fromDouble(blob->lastModified));
     b.set("webkitRelativePath", ev::fromUtf8(""));
     // Where it came from. Not a web property, and deliberately kept: a drop is
-    // the one moment a page is handed a real filesystem path (docs/paths-api.js),
-    // and the interpreted realm hands one over too.
+    // the one moment a page is handed a real filesystem path (docs/paths-api.js).
     b.set("path", ev::fromUtf8(path));
     return b.get();
 }

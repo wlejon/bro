@@ -377,35 +377,11 @@ public:
     // Call AFTER a child is inserted at `index` under `parent`.
     void notifyChildInserted(Node* parent, int index);
 
-    // JS runtime hooks: set by the JS engine when DomBindings::install runs.
-    using SelectionChangeCallback = void(*)(Document*);
-    void setSelectionChangeCallback(SelectionChangeCallback cb) { selectionChangeCb_ = cb; }
     void fireSelectionChange();
 
-    // Fired from freeNode() for every node being queued for destruction (the
-    // whole freed subtree, deepest first). Lets the JS layer drop the wrapper's
-    // raw Element* and its __bro_elem_map entry the instant the node is doomed —
-    // before drainPendingFrees() actually deletes the memory — so no dangling
-    // wrapper survives to be dereferenced by a later access or orphan sweep.
-    using NodeFreedCallback = void(*)(Document*, Node*);
-    void setNodeFreedCallback(NodeFreedCallback cb) { nodeFreedCb_ = cb; }
-
-    // Fired from drainPendingFrees() for every node in a doomed subtree, at the
-    // last instant its storage is still valid. NodeFreedCallback above already
-    // ran for these nodes when freeNode() queued them, so this is normally a
-    // no-op — it exists for wrappers created AFTER the node was doomed, which
-    // that earlier hook cannot possibly have known about. Deepest-first, same
-    // order as freeNode().
-    using NodeDestroyingCallback = void(*)(Document*, Node*);
-    void setNodeDestroyingCallback(NodeDestroyingCallback cb) {
-        nodeDestroyingCb_ = cb;
-    }
-
-    // The same two notices, for external host layers that wrap elements (e.g.
-    // the bronze host holds a compiled-side object per element, keyed by raw
-    // Element*). Observers receive node destruction notices in registration order.
-    //
-    // Fired after the corresponding single callback, in registration order.
+    // External host layers that wrap elements (e.g. the Bronze host holds a
+    // compiled-side object per element, keyed by raw Element*). Observers receive
+    // node destruction notices in registration order.
     // An observer must not mutate the DOM from inside: it is called mid-tear.
     using NodeObserver = void(*)(Document*, Node*);
     void addNodeFreedObserver(NodeObserver cb);
@@ -471,13 +447,6 @@ public:
     // reach into directly. Set by the JS layer alongside the other hooks.
     using ElementClonedCallback = void(*)(Document*, Element* src, Element* clone);
     void setElementClonedCallback(ElementClonedCallback cb) { elementClonedCb_ = cb; }
-
-    // Fired from adoptNode() for every node whose owner document changed
-    // (the whole adopted subtree). Cached JS wrappers hold generation-checked
-    // handles that name the OLD document, so they must be re-pointed or they
-    // would resolve to null on a node that is very much alive.
-    using NodeAdoptedCallback = void(*)(Document* newDoc, Document* oldDoc, Node*);
-    void setNodeAdoptedCallback(NodeAdoptedCallback cb) { nodeAdoptedCb_ = cb; }
 
 private:
     // Push this frame's invalidation into the layout tree, right before layout
@@ -634,13 +603,9 @@ private:
     // Selection + live ranges (registered via Range::setDocument()).
     std::unique_ptr<Selection> selection_;
     std::unordered_set<Range*> liveRanges_;
-    SelectionChangeCallback selectionChangeCb_ = nullptr;
-    NodeFreedCallback nodeFreedCb_ = nullptr;
-    NodeDestroyingCallback nodeDestroyingCb_ = nullptr;
     std::vector<NodeObserver> nodeFreedObservers_;
     std::vector<MutationObserverFn> mutationObservers_;
     ElementClonedCallback elementClonedCb_ = nullptr;
-    NodeAdoptedCallback nodeAdoptedCb_ = nullptr;
 };
 
 } // namespace bro::dom

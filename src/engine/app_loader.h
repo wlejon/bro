@@ -1,7 +1,5 @@
 #pragma once
 
-#include "util/import_map.h"
-
 #include <string>
 #include <vector>
 
@@ -21,11 +19,6 @@ struct AppManifest {
     std::string basePath;
     std::vector<ScriptEntry> scripts;    // in document order (external + inline)
     std::vector<std::string> stylePaths;
-
-    /// The page's `<script type="importmap">`, parsed against basePath. Empty
-    /// when the page declares none — which is every app that only ever writes
-    /// relative import specifiers.
-    util::ImportMap importMap;
 };
 
 class AppLoader {

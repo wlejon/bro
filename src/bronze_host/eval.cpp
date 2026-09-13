@@ -79,11 +79,7 @@ namespace {
 // Module roots for a compile that runs against `engine`'s app. Every engine
 // mount (`/app`, `/lib`, `/system`, `/std`) becomes a root, so the compiler
 // resolves `import "/lib/x.js"` exactly as the asset loader resolves
-// `<script src="/lib/x.js">`. Relative specifiers are not roots: a root
-// applies to every module in the graph, and `./b.js` inside `lib/a.js` means
-// `lib/b.js`, not a file beside the document. The one module whose relative
-// imports should NOT resolve from where the file sits is the temp-file entry;
-// `entryResolvesAs` below handles that one.
+// `<script src="/lib/x.js">`.
 std::vector<bronze::modules::ModuleRoot> moduleRootsFor(const engine::Engine& engine) {
     std::vector<bronze::modules::ModuleRoot> roots;
     for (const auto& [prefix, target] : engine.assetMounts().mounts()) {
@@ -94,9 +90,7 @@ std::vector<bronze::modules::ModuleRoot> moduleRootsFor(const engine::Engine& en
 
 // Where script text handed to evalScript lives, as far as its own `./x.js`
 // imports are concerned: the document it came from, or for `-e` text with no
-// document, a file in the app dir. A browser resolves an inline script's
-// imports against the document URL, and the temp file the text is compiled
-// from is not that document.
+// document, a file in the app dir.
 std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& filename) {
     std::error_code ec;
     if (!filename.empty()) return std::filesystem::absolute(filename, ec).string();
@@ -374,13 +368,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     ensureSharedRuntimeEnv();
 
     std::error_code ec;
-    std::filesystem::path resolvedPath = filePath;
-    if (!std::filesystem::exists(resolvedPath, ec) && !engine.appDir().empty()) {
-        std::filesystem::path candidate = std::filesystem::path(engine.appDir()) / filePath;
-        if (std::filesystem::exists(candidate, ec)) {
-            resolvedPath = candidate;
-        }
-    }
+    const std::filesystem::path resolvedPath = filePath;
     if (!std::filesystem::exists(resolvedPath, ec)) {
         LOG_ERROR("evalScriptFile: file does not exist: %s", filePath.c_str());
         setTestFailure(true);

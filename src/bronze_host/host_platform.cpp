@@ -264,9 +264,8 @@ namespace {
 // ---------------------------------------------------------------------------
 
 // Straight to DialogBindings, which is where headless's auto-answer lives —
-// so a compiled app under a driver script walks through its confirmations
-// instead of blocking on a window nobody is looking at, exactly as an
-// interpreted one does.
+// so an app under a driver script walks through its confirmations
+// instead of blocking on a window nobody is looking at.
 std::string messageArg(std::span<const Value> a, size_t i) {
     Value v = argAt(a, i);
     if (ev::isObject(v) || ev::isUndefined(v)) return std::string();

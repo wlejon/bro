@@ -3,9 +3,7 @@
 
 #include "engine/sub_document.h"
 
-#if BRO_WITH_BRONZE
 #include "bronze_host/bronze_host.h"
-#endif
 
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
@@ -96,13 +94,11 @@ void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
 }
 
 void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool isChild) {
-#if BRO_WITH_BRONZE
     if (!engine || !d.document) return;
     bro::bronze_host::runHostSubDocScripts(*engine, d.document.get(),
                                            src.manifest.scripts,
                                            src.appDir, src.manifest.basePath,
                                            isChild);
-#endif
 }
 
 void finishSubDocLoad(SubDocRef d, const SubDocSource& src,
@@ -250,7 +246,6 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
 }
 
 void teardownSubDoc(SubDocRef d) {
-#if BRO_WITH_BRONZE
     if (d.document) {
         dom::Document* doc = d.document.get();
         bro::bronze_host::clearHostTimersForDocument(doc);
@@ -259,7 +254,6 @@ void teardownSubDoc(SubDocRef d) {
         bro::bronze_host::clearRealmScope(bro::bronze_host::scopeIdForDocument(doc));
         bro::bronze_host::clearHostDocument(doc);
     }
-#endif
     d.document.reset();
 }
 
