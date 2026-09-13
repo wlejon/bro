@@ -1,13 +1,14 @@
 #include "bronze_host/host_worker_msg.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/eval.h"
+#include "bronze_host/eval_jit.h"
 #include "bronze_host/native_manifest_helper.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
-#include "cli/driver.h"
+#include "eval/eval.h"
 #include <api/api.h>
 
 #include <atomic>
@@ -32,8 +33,6 @@ namespace {
 class WorkerInstance;
 static std::mutex s_workersMutex;
 static std::vector<WorkerInstance*> s_activeWorkers;
-static std::mutex s_buildMutex;
-static std::unordered_map<std::string, std::string> s_buildCache;
 static std::atomic<uint64_t> s_workerIdSeq{1};
 
 class WorkerInstance {
@@ -54,13 +53,15 @@ public:
     }
 
     void terminate() {
-        if (terminated_.exchange(true)) return;
+        terminated_.store(true, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(toWorkerMutex_);
             toWorkerCv_.notify_all();
         }
         if (workerThread_.joinable()) {
-            workerThread_.join();
+            if (std::this_thread::get_id() != workerThread_.get_id()) {
+                workerThread_.join();
+            }
         }
         alive_.store(false, std::memory_order_release);
     }
@@ -124,20 +125,8 @@ private:
 void WorkerInstance::threadFunc() {
     ensureSharedRuntimeEnv();
 
-    brokit::api::installAll();
     installImageBitmapGlobals();
     installNoiseGlobals();
-
-    if (!basePath_.empty()) {
-        brokit::api::addFetchBasePath(basePath_);
-        brokit::api::addFsBasePath(basePath_);
-    }
-    if (mounts_) {
-        for (const auto& [prefix, target] : mounts_->mounts()) {
-            brokit::api::addFsPrefixMount(prefix, target);
-            brokit::api::addFetchPrefixMount(prefix, target);
-        }
-    }
 
     ev::Persistent workerOnmessage;
 
@@ -163,12 +152,19 @@ void WorkerInstance::threadFunc() {
         return ev::undefined();
     });
 
+    brokit::api::installAll();
     auto* eng = hostEngine();
     if (eng) {
         Value broVal = makeBroValue();
         ev::registerGlobal("bro", broVal);
         ev::setProperty(globalThis, "bro", broVal);
         installNetSync(eng);
+        for (const auto& [prefix, target] : eng->assetMounts().mounts()) {
+            brokit::api::addFsPrefixMount(prefix, target);
+        }
+        if (!eng->appDir().empty()) {
+            brokit::api::addFsBasePath(eng->appDir());
+        }
     }
 
     std::filesystem::path resolvedPath = scriptPath_;
@@ -178,85 +174,79 @@ void WorkerInstance::threadFunc() {
     std::error_code ec;
     resolvedPath = std::filesystem::weakly_canonical(resolvedPath, ec);
 
-    std::string cachedDll;
+    std::string scriptCode;
     {
-        std::lock_guard<std::mutex> lk(s_buildMutex);
-        auto it = s_buildCache.find(resolvedPath.string());
-        if (it != s_buildCache.end() && std::filesystem::exists(it->second, ec)) {
-            cachedDll = it->second;
-        } else {
-            std::filesystem::path tempDir = getEvalTempDir();
-            std::string stem = "worker_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-#ifdef _WIN32
-            std::string outDll = (tempDir / (stem + ".dll")).string();
-#elif defined(__APPLE__)
-            std::string outDll = (tempDir / (stem + ".dylib")).string();
-#else
-            std::string outDll = (tempDir / (stem + ".so")).string();
-#endif
-            std::string compilePath = resolvedPath.string();
-            std::filesystem::path tempSrc;
-            {
-                std::ifstream ifs(resolvedPath, std::ios::binary);
-                if (ifs.is_open()) {
-                    std::string code((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-                    std::regex re(R"((^|[^\w$.])onmessage\s*=)");
-                    if (std::regex_search(code, re)) {
-                        std::string fixed = std::regex_replace(code, re, "$1self.onmessage = ");
-                        tempSrc = tempDir / (stem + "_src.js");
-                        std::ofstream ofs(tempSrc, std::ios::binary);
-                        ofs.write(fixed.data(), fixed.size());
-                        ofs.close();
-                        compilePath = tempSrc.string();
-                    }
-                }
-            }
-            std::string err;
-            std::string globalsPath = getWebHostGlobalsPath();
-            const std::string manifestPath = getNativeManifestDir();
-            const std::string libPath = getNativeLibPath();
-            int status = bronze::cli::runBuild(
-                compilePath, outDll, &err,
-                /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
-                /*hostGlobals=*/globalsPath, /*inferStats=*/false,
-                /*statsOut=*/nullptr, /*moduleRoots=*/{}, /*entrySymbol=*/{},
-                /*emitShared=*/true, /*retainFnSource=*/true,
-                /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
-                /*pinsPath=*/{}, /*censusOutPath=*/{},
-                /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
-                /*nativeLibPath=*/libPath);
-            if (!tempSrc.empty()) {
-                std::filesystem::remove(tempSrc, ec);
-            }
-            if (status == 0) {
-                s_buildCache[resolvedPath.string()] = outDll;
-                cachedDll = outDll;
-            } else {
-                LOG_ERROR("worker compile failed: %s", err.c_str());
-            }
+        std::ifstream ifs(resolvedPath, std::ios::binary);
+        if (ifs.is_open()) {
+            scriptCode.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
         }
     }
 
-    if (!cachedDll.empty()) {
-        std::filesystem::path tempDir = getEvalTempDir();
-        std::string instDllName = "worker_inst_" + std::to_string(workerId_) + "_" +
-                                  std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-#ifdef _WIN32
-        std::filesystem::path instDll = tempDir / (instDllName + ".dll");
-#elif defined(__APPLE__)
-        std::filesystem::path instDll = tempDir / (instDllName + ".dylib");
-#else
-        std::filesystem::path instDll = tempDir / (instDllName + ".so");
-#endif
-        std::filesystem::copy_file(cachedDll, instDll, std::filesystem::copy_options::overwrite_existing, ec);
+    if (scriptCode.empty()) {
+        LOG_ERROR("worker: empty or missing script: %s", resolvedPath.string().c_str());
+    } else {
+        std::regex re(R"((^|[^\w$.])onmessage\s*=)");
+        if (std::regex_search(scriptCode, re)) {
+            scriptCode = std::regex_replace(scriptCode, re, "$1self.onmessage = ");
+        }
 
-        std::string loadErr;
-        ModuleHandle mod = openModule(instDll.string(), loadErr);
-        if (mod) {
-            auto entry = reinterpret_cast<void (*)()>(moduleSymbol(mod, "bronze_main"));
-            if (entry) {
-                bronze::embed::runEntry(entry);
+        bronze::eval::EvalOptions opts;
+        opts.filename = resolvedPath.string();
+        opts.entryResolvesAs = resolvedPath;
+        opts.hostGlobals = getCachedWebHostGlobals();
+        if (mounts_) {
+            for (const auto& [prefix, target] : mounts_->mounts()) {
+                opts.moduleRoots.push_back({prefix, std::filesystem::path(target)});
             }
+        }
+        opts.retainSource = true;
+
+        auto hasAwaitStmt = [](const std::string& code) {
+            size_t i = 0;
+            while (i < code.size()) {
+                while (i < code.size() && (code[i] == ' ' || code[i] == '\t')) i++;
+                if (i + 5 <= code.size() && code.compare(i, 5, "await") == 0) {
+                    char next = (i + 5 < code.size()) ? code[i + 5] : '\0';
+                    if (next == ' ' || next == '\t' || next == '(') return true;
+                }
+                while (i < code.size() && code[i] != '\n') i++;
+                if (i < code.size() && code[i] == '\n') i++;
+            }
+            return false;
+        };
+
+        if (hasAwaitStmt(scriptCode)) {
+            scriptCode = "(async () => {\n" + scriptCode +
+                         "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); });\n";
+        }
+
+        auto res = bronze::eval::evalScript(scriptCode, opts);
+        if (res.thrown) {
+            std::string errStr = ev::toUtf8(res.value);
+            if (errStr.find("await") != std::string::npos) {
+                std::string wrapped = "(async () => {\n" + scriptCode +
+                                      "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); });\n";
+                res = bronze::eval::evalScript(wrapped, opts);
+            }
+        }
+
+        if (res.thrown) {
+            std::string errStr;
+            if (res.value.isObject()) {
+                Value st = ev::getProperty(res.value, "stack");
+                if (!ev::isUndefined(st) && !ev::isNull(st)) {
+                    errStr = ev::toUtf8(st);
+                } else {
+                    Value msg = ev::getProperty(res.value, "message");
+                    if (!ev::isUndefined(msg) && !ev::isNull(msg)) {
+                        errStr = ev::toUtf8(msg);
+                    }
+                }
+            }
+            if (errStr.empty()) {
+                errStr = ev::toUtf8(res.value);
+            }
+            LOG_ERROR("worker script execution failed for %s: %s", resolvedPath.string().c_str(), errStr.c_str());
         }
     }
 

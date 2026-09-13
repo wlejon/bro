@@ -1,4 +1,6 @@
 #include "bronze_host/eval.h"
+#include "bronze_host/eval_jit.h"
+#include "bronze_host/host_gc.h"
 #include "bronze_host/native_manifest_helper.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
@@ -75,8 +77,6 @@ std::filesystem::path getExecutableDirectory() {
     return std::filesystem::current_path();
 }
 
-namespace {
-
 // Module roots for a compile that runs against `engine`'s app. Every engine
 // mount (`/app`, `/lib`, `/system`, `/std`) becomes a root, so the compiler
 // resolves `import "/lib/x.js"` exactly as the asset loader resolves
@@ -100,8 +100,6 @@ std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& 
     }
     return {};
 }
-
-} // namespace
 
 std::filesystem::path getEvalTempDir() {
     std::filesystem::path p = std::filesystem::temp_directory_path() / "bro_eval";
@@ -254,6 +252,11 @@ static bool safeRunEntry(void (*entry)()) {
 
 bool evalScript(engine::Engine& engine, const std::string& code,
                 const std::string& filename) {
+    HostEvalScope evalScope;
+    if (!isJitDisabled()) {
+        return evalScriptJit(engine, code, filename);
+    }
+
     ensureSharedRuntimeEnv();
 
     const auto tempDir = getEvalTempDir();
@@ -368,6 +371,11 @@ bool evalScript(engine::Engine& engine, const std::string& code,
 }
 
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
+    HostEvalScope evalScope;
+    if (!isJitDisabled()) {
+        return evalScriptFileJit(engine, filePath);
+    }
+
     ensureSharedRuntimeEnv();
 
     std::error_code ec;

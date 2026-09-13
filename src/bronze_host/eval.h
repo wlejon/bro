@@ -2,6 +2,11 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
+
+namespace bronze::modules {
+struct ModuleRoot;
+}
 
 namespace bro::engine {
 class Engine;
@@ -17,6 +22,12 @@ std::filesystem::path getEvalTempDir();
 
 /// Ensure BRONZE_SHARED_RT_LIB is populated for runtime compilation.
 void ensureSharedRuntimeEnv();
+
+/// Module roots for a compile that runs against `engine`'s app.
+std::vector<bronze::modules::ModuleRoot> moduleRootsFor(const engine::Engine& engine);
+
+/// Where script text handed to evalScript lives for imports.
+std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& filename);
 
 /// Compile JS code in-process using bronze CLI and run it on `engine`.
 /// `filename` is the document the code came from (an app's index.html for its

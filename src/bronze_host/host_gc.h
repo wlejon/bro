@@ -9,12 +9,24 @@ namespace bro::bronze_host {
 void hostCollectGarbage();
 
 /// Notify the Bronze host layer of an advancing frame.
-/// When the host environment is quiescent (no pending microtasks, no pending rAF callbacks)
-/// and sufficient idle time has elapsed (e.g. 1 second of quiescence or every 10 seconds of
-/// sustained idle), schedules/triggers a garbage collection cycle.
+/// When the host environment is quiescent (no pending microtasks, no pending rAF callbacks,
+/// and no active JavaScript eval/stack execution) and sufficient idle time has elapsed,
+/// triggers a garbage collection cycle.
 void hostNotifyIdleFrame(double dtMs);
 
 /// Reset idle GC timers (e.g. across app reload or major scene teardown).
 void hostResetIdleGCTimer();
+
+/// Track active eval scopes so idle GC does not fire while test scripts or evals are executing.
+void hostEnterEval();
+void hostLeaveEval();
+bool isHostEvaluating();
+
+struct HostEvalScope {
+    HostEvalScope() { hostEnterEval(); }
+    ~HostEvalScope() { hostLeaveEval(); }
+    HostEvalScope(const HostEvalScope&) = delete;
+    HostEvalScope& operator=(const HostEvalScope&) = delete;
+};
 
 }  // namespace bro::bronze_host
