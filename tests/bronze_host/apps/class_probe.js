@@ -35,7 +35,7 @@ say('ctor.protoIsObject', typeof Image.prototype === 'object' && Image.prototype
 // extends Element, and an img is a NODE — one you can append, which is the
 // whole reason it is not a standalone host object here. So its prototype
 // chains onto Element's...
-say('ctor.protoChainsToElement', Object.getPrototypeOf(Image.prototype) === Element.prototype);
+say('ctor.protoChainsToElement', Element.prototype.isPrototypeOf(Image.prototype));
 // ...and Object.prototype is still reached THROUGH it, which is what keeps
 // `img.hasOwnProperty(...)` resolving. Walked rather than asserted one link at
 // a time, so that adding a link to the chain does not break this.
@@ -179,14 +179,14 @@ say('ws.protoConstants', WebSocket.prototype.OPEN === 1);
 const div = document.createElement('div');
 const div2 = document.createElement('div');
 
-pinClass('div', div, HTMLElement);
+pinClass('div', div, HTMLDivElement);
 say('div.isElement', div instanceof Element);
-say('div.ElementIsHTMLElement', Element === HTMLElement);
+say('div.ElementIsHTMLElement', Element.prototype.isPrototypeOf(HTMLElement.prototype));
 
 // The whole surface is shared between two elements...
 say('div.methodShared', div.setAttribute === div2.setAttribute);
 say('div.accessorShared',
-    Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'id') !== undefined);
+    Object.getOwnPropertyDescriptor(Element.prototype, 'id') !== undefined);
 say('div.methodNotOwn', !Object.prototype.hasOwnProperty.call(div, 'setAttribute'));
 
 // ...and the only own properties left are identity plus the event-target trio.
