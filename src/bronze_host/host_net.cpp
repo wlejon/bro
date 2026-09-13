@@ -963,15 +963,13 @@ Value makeBroNetValue() {
         slot.set(!a.empty() && !ev::isNull(a[0]) && !ev::isUndefined(a[0]) ? a[0] : ev::null());
         return ev::undefined();
     };
-    for (const char* name : {"onconnect", "onConnect"})
-        b.accessor(name, [=](Value, std::span<const Value>) -> Value { return netCbGet(g_netState.onConnect); },
-                         [=](Value, std::span<const Value> a) -> Value { return netCbSet(g_netState.onConnect, a); });
-    for (const char* name : {"ondisconnect", "onDisconnect"})
-        b.accessor(name, [=](Value, std::span<const Value>) -> Value { return netCbGet(g_netState.onDisconnect); },
-                         [=](Value, std::span<const Value> a) -> Value { return netCbSet(g_netState.onDisconnect, a); });
-    for (const char* name : {"onmessage", "onMessage"})
-        b.accessor(name, [=](Value, std::span<const Value>) -> Value { return netCbGet(g_netState.onMessage); },
-                         [=](Value, std::span<const Value> a) -> Value { return netCbSet(g_netState.onMessage, a); });
+    for (auto& [n1, n2, slot] : {std::tuple{"onconnect", "onConnect", &g_netState.onConnect},
+                                 std::tuple{"ondisconnect", "onDisconnect", &g_netState.onDisconnect},
+                                 std::tuple{"onmessage", "onMessage", &g_netState.onMessage}}) {
+        for (const char* name : {n1, n2})
+            b.accessor(name, [=](Value, std::span<const Value>) { return netCbGet(*slot); },
+                             [=](Value, std::span<const Value> a) { return netCbSet(*slot, a); });
+    }
 
     Value val = b.get();
     g_netState.netObj.set(val);
@@ -990,6 +988,8 @@ void installNetGlobals() {
 }
 
 void drainNetEvents() {
+    auto* eng = hostEngine();
+    if (!eng || !eng->netService()) { g_netState.subscriber = nullptr; return; }
     if (auto* sub = getNetSubscriber()) sub->poll();
     pumpWebSockets();
 }

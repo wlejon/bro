@@ -350,6 +350,19 @@ void drainWorkerMessages() {
     }
 }
 
+void terminateAllWorkers() {
+    std::vector<WorkerInstance*> workers;
+    {
+        std::lock_guard<std::mutex> lock(s_workersMutex);
+        workers = s_activeWorkers;
+    }
+    for (auto* w : workers) {
+        if (w) {
+            w->terminate();
+        }
+    }
+}
+
 void installWorkerGlobals(engine::Engine& engine) {
     g_workerClass.install("Worker", 1,
         [&engine](Value, std::span<const Value> a) -> Value {

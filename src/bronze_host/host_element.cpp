@@ -940,16 +940,19 @@ void decorateElementProto(ObjectBuilder& b) {
             blurEvt.setRelatedTarget(st->el);
             dom::dispatchDomEvent(prev, blurEvt);
         }
+        if (!st->el) return ev::undefined();
         {
             dom::FocusEvent focusEvt("focus", false, false);
             focusEvt.setRelatedTarget(prev);
             dom::dispatchDomEvent(st->el, focusEvt);
         }
+        if (!st->el) return ev::undefined();
         if (prev) {
             dom::FocusEvent focusoutEvt("focusout", true, false);
             focusoutEvt.setRelatedTarget(st->el);
             dom::dispatchDomEvent(prev, focusoutEvt);
         }
+        if (!st->el) return ev::undefined();
         {
             dom::FocusEvent focusinEvt("focusin", true, false);
             focusinEvt.setRelatedTarget(prev);

@@ -57,6 +57,9 @@ void clearRealmScope(uint64_t scopeId);
 /// Deliver media query changes to matchMedia listeners.
 void deliverHostMediaQueryChanges();
 
+/// Terminate and join all active worker threads on shutdown.
+void terminateAllWorkers();
+
 /// Run sub-document scripts within its document scope and realm gating.
 void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                           const std::vector<engine::ScriptEntry>& scripts,

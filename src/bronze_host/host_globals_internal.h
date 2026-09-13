@@ -69,6 +69,7 @@ void installBufferGlobals();
 
 void installWorkerGlobals(engine::Engine& engine);
 void drainWorkerMessages();
+void terminateAllWorkers();
 
 // ---------------------------------------------------------------------------
 // Combined extensions installer

@@ -308,7 +308,7 @@ public:
     void advanceTime(double ms);
     std::string eval(const std::string& code);
     bool hasTestFailure() const { return testFailure_; }
-    void setTestFailure(bool f = true) { if (f) { printf("DEBUG: Engine::setTestFailure(true)\n"); fflush(stdout); } testFailure_ = f; }
+    void setTestFailure(bool f = true) { testFailure_ = f; }
     void clearTestFailure() { testFailure_ = false; }
     bool screenshot(const std::string& path);
     bool screenshot(const std::string& path, int x, int y, int w, int h);

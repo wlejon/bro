@@ -54,6 +54,9 @@
 namespace bro::engine {
 
 void Engine::stopBackgroundServices() {
+#if BRO_WITH_BRONZE
+    bro::bronze_host::terminateAllWorkers();
+#endif
 #if BRO_WITH_NET
     netService_.reset();
 #endif

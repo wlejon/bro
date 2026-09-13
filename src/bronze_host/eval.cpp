@@ -189,14 +189,64 @@ std::string getWebHostGlobalsPath() {
 }
 
 #ifdef _WIN32
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
 static bool safeRunEntry(void (*entry)()) {
     __try {
         bronze::embed::runEntry(entry);
         return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        DWORD code = GetExceptionCode();
-        printf("CRASH in runEntry! SEH exception code: 0x%08X\n", (unsigned int)code);
-        fflush(stdout);
+    } __except (
+        [](LPEXCEPTION_POINTERS ep) -> int {
+            DWORD code = ep->ExceptionRecord->ExceptionCode;
+            void* addr = ep->ExceptionRecord->ExceptionAddress;
+            printf("CRASH in runEntry! code: 0x%08X at %p\n", (unsigned int)code, addr);
+            if (code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2) {
+                printf("Access violation %s address %p\n",
+                    ep->ExceptionRecord->ExceptionInformation[0] == 0 ? "reading" : "writing",
+                    (void*)ep->ExceptionRecord->ExceptionInformation[1]);
+            }
+            HANDLE proc = GetCurrentProcess();
+            SymSetOptions(SymGetOptions() | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+            std::string exeDir = getExecutableDirectory().string();
+            SymInitialize(proc, exeDir.c_str(), TRUE);
+            void* frames[62];
+            USHORT n = CaptureStackBackTrace(0, 62, frames, nullptr);
+            char symBuf[sizeof(SYMBOL_INFO) + 512];
+            printf("Backtrace (%u frames):\n", (unsigned)n);
+            for (USHORT i = 0; i < n; ++i) {
+                DWORD64 frameAddr = reinterpret_cast<DWORD64>(frames[i]);
+                auto* sym = reinterpret_cast<SYMBOL_INFO*>(symBuf);
+                sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+                sym->MaxNameLen = 511;
+                DWORD64 disp = 0;
+                const char* name = "?";
+                if (SymFromAddr(proc, frameAddr, &disp, sym)) name = sym->Name;
+                char modName[MAX_PATH] = "?";
+                HMODULE mod = nullptr;
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCSTR>(frameAddr), &mod) && mod) {
+                    GetModuleFileNameA(mod, modName, MAX_PATH);
+                    const char* base = strrchr(modName, '\\');
+                    if (base) memmove(modName, base + 1, strlen(base));
+                }
+                DWORD64 rva = mod ? (frameAddr - reinterpret_cast<DWORD64>(mod)) : 0;
+                IMAGEHLP_LINE64 line;
+                ZeroMemory(&line, sizeof(line));
+                line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+                DWORD lineDisp = 0;
+                if (SymGetLineFromAddr64(proc, frameAddr, &lineDisp, &line)) {
+                    printf("  #%02u %p %s!%s+0x%llx (%s:%lu)\n", (unsigned)i, frames[i], modName,
+                           name, (unsigned long long)disp, line.FileName, (unsigned long)line.LineNumber);
+                } else {
+                    printf("  #%02u %p %s (rva 0x%llx)!%s+0x%llx\n", (unsigned)i, frames[i], modName,
+                           (unsigned long long)rva, name, (unsigned long long)disp);
+                }
+            }
+            fflush(stdout);
+            return EXCEPTION_EXECUTE_HANDLER;
+        }(GetExceptionInformation())
+    ) {
         return false;
     }
 }
@@ -324,14 +374,21 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     ensureSharedRuntimeEnv();
 
     std::error_code ec;
-    if (!std::filesystem::exists(filePath, ec)) {
+    std::filesystem::path resolvedPath = filePath;
+    if (!std::filesystem::exists(resolvedPath, ec) && !engine.appDir().empty()) {
+        std::filesystem::path candidate = std::filesystem::path(engine.appDir()) / filePath;
+        if (std::filesystem::exists(candidate, ec)) {
+            resolvedPath = candidate;
+        }
+    }
+    if (!std::filesystem::exists(resolvedPath, ec)) {
         LOG_ERROR("evalScriptFile: file does not exist: %s", filePath.c_str());
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
     }
 
-    const auto absSource = std::filesystem::absolute(filePath, ec);
+    const auto absSource = std::filesystem::absolute(resolvedPath, ec);
     const auto tempDir = getEvalTempDir();
     const uint64_t id = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
     const auto ts = std::chrono::steady_clock::now().time_since_epoch().count();

@@ -350,17 +350,21 @@ void decorateElementForms(ObjectBuilder& b) {
     b.def("click", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
+        bool isInput = (st->el->tagName() == "INPUT" || st->el->tagName() == "input");
         dom::MouseEvent ev("click");
         dom::dispatchDomEvent(st->el, ev);
-        if (!ev.defaultPrevented() && (st->el->tagName() == "INPUT" || st->el->tagName() == "input")) {
+        if (!st->el) return ev::undefined();
+        if (!ev.defaultPrevented() && isInput) {
             std::string t = st->el->getAttribute("type");
             for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             if (t == "radio") {
                 if (!st->el->hasAttribute("checked")) {
                     layout::clearRadioGroup(st->el);
+                    if (!st->el) return ev::undefined();
                     st->el->setAttribute("checked", "");
                     dom::Event inputEvt("input");
                     dom::dispatchDomEvent(st->el, inputEvt);
+                    if (!st->el) return ev::undefined();
                     dom::Event changeEvt("change");
                     dom::dispatchDomEvent(st->el, changeEvt);
                 }
@@ -369,6 +373,7 @@ void decorateElementForms(ObjectBuilder& b) {
                 else st->el->setAttribute("checked", "");
                 dom::Event inputEvt("input");
                 dom::dispatchDomEvent(st->el, inputEvt);
+                if (!st->el) return ev::undefined();
                 dom::Event changeEvt("change");
                 dom::dispatchDomEvent(st->el, changeEvt);
             }

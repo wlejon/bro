@@ -64,12 +64,16 @@ Value makeCanvasValue(dom::Element* el) {
                [cs](Value, std::span<const Value>) {
                    return ev::fromDouble(canvasWidthOf(cs));
                },
-               [cs](Value, std::span<const Value> a) {
-                   int w = i32At(a, 0);
-                   cs->el->setAttribute("width", std::to_string(w));
-                   if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
-                   return ev::undefined();
-               });
+                [cs](Value, std::span<const Value> a) {
+                    int w = i32At(a, 0);
+                    cs->el->setAttribute("width", std::to_string(w));
+                    if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
+                        cScene->setIntrinsicWidth(w);
+                        cScene->reset();
+                    }
+                    if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
+                    return ev::undefined();
+                });
     b.accessor("height",
                [cs](Value, std::span<const Value>) {
                    return ev::fromDouble(canvasHeightOf(cs));
@@ -77,6 +81,10 @@ Value makeCanvasValue(dom::Element* el) {
                [cs](Value, std::span<const Value> a) {
                    int h = i32At(a, 0);
                    cs->el->setAttribute("height", std::to_string(h));
+                   if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
+                        cScene->setIntrinsicHeight(h);
+                        cScene->reset();
+                    }
                    if (cs->glCtx) cs->glCtx->resize(cs->glCtx->canvasWidth(), h);
                    return ev::undefined();
                });
@@ -124,9 +132,17 @@ Value makeCanvasValue(dom::Element* el) {
             cs->el->setAttribute(name, val);
             if (name == "width") {
                 int w = std::atoi(val.c_str());
+                if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
+                    cScene->setIntrinsicWidth(w);
+                    cScene->reset();
+                }
                 if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
             } else if (name == "height") {
                 int h = std::atoi(val.c_str());
+                if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
+                    cScene->setIntrinsicHeight(h);
+                    cScene->reset();
+                }
                 if (cs->glCtx) cs->glCtx->resize(cs->glCtx->canvasWidth(), h);
             }
         }
