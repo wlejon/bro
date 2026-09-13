@@ -719,7 +719,11 @@ Value makeAiGameValue() {
     b.def("createHexNav", 1, aiCreateHexNav);
     b.def("bakeNavMesh", 1, aiBakeNavMesh);
     b.def("loadNavMesh", 1, aiLoadNavMesh);
+#if BROGAMEAGENT_HAS_NAVMESH
     b.set("navMeshAvailable", ev::fromBool(true));
+#else
+    b.set("navMeshAvailable", ev::fromBool(false));
+#endif
     b.def("createAgent", 1, aiCreateAgent);
     b.def("createWorld", 0, aiCreateWorld);
     b.def("hasLineOfSight", 5, aiHasLineOfSight);

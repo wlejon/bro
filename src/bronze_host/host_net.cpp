@@ -955,10 +955,7 @@ Value makeBroNetValue() {
     b.def("addEventListener", 2, js_net_addEventListener);
     b.def("removeEventListener", 2, js_net_removeEventListener);
 
-    auto netCbGet = [](ev::Persistent& slot) -> Value {
-        Value v = slot.get();
-        return ev::isFunction(v) ? v : ev::null();
-    };
+    auto netCbGet = [](ev::Persistent& slot) -> Value { Value v = slot.get(); return ev::isFunction(v) ? v : ev::null(); };
     auto netCbSet = [](ev::Persistent& slot, std::span<const Value> a) -> Value {
         slot.set(!a.empty() && !ev::isNull(a[0]) && !ev::isUndefined(a[0]) ? a[0] : ev::null());
         return ev::undefined();
@@ -971,23 +968,25 @@ Value makeBroNetValue() {
                              [=](Value, std::span<const Value> a) { return netCbSet(*slot, a); });
     }
 
-    Value val = b.get();
-    g_netState.netObj.set(val);
-    return val;
+    Value val = b.get(); g_netState.netObj.set(val); return val;
 }
 
 void installNetGlobals() {
     g_webSocketClass.install("WebSocket", 1, webSocketCtor, decorateWebSocketProto);
-    for (auto [name, v] : {std::pair{"CONNECTING", 0.0}, {"OPEN", 1.0}, {"CLOSING", 2.0}, {"CLOSED", 3.0}})
+    for (auto [name, v] : {std::pair{"CONNECTING", 0.0}, {"OPEN", 1.0}, {"CLOSING", 2.0}, {"CLOSED", 3.0}}) {
         g_webSocketClass.setStatic(name, ev::fromDouble(v));
+        ev::setProperty(g_webSocketClass.prototype(), name, ev::fromDouble(v));
+    }
     ev::registerGlobal("CloseEvent", makeBrandConstructor("CloseEvent"));
     Value meCtor = makeEventConstructor("MessageEvent");
     ev::registerGlobal("MessageEvent", meCtor);
-    auto g = ev::globalValue("globalThis");
-    if (g.found && ev::isObject(g.value)) ev::setProperty(g.value, "MessageEvent", meCtor);
+    if (auto g = ev::globalValue("globalThis"); g.found && ev::isObject(g.value))
+        ev::setProperty(g.value, "MessageEvent", meCtor);
 }
 
 void drainNetEvents() {
+    auto netTick = ev::globalValue("__brokit_net_tick");
+    if (netTick.found && ev::isFunction(netTick.value)) ev::call(netTick.value, ev::undefined(), {});
     auto* eng = hostEngine();
     if (!eng || !eng->netService()) { g_netState.subscriber = nullptr; return; }
     if (auto* sub = getNetSubscriber()) sub->poll();

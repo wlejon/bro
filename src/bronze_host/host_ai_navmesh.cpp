@@ -11,6 +11,8 @@
 
 namespace bro::bronze_host {
 
+#if BROGAMEAGENT_HAS_NAVMESH
+
 void decorateNavMeshProto(ObjectBuilder& b) {
     b.accessor("valid", [](Value self_, std::span<const Value>) {
         HostNavMesh* h = unwrapNavMesh(self_);
@@ -472,5 +474,23 @@ Value aiLoadNavMesh(Value, std::span<const Value> a) {
 
     return makeNavMeshHandle(std::move(mesh));
 }
+
+#else
+
+void decorateNavMeshProto(ObjectBuilder&) {}
+
+Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh>) {
+    return ev::null();
+}
+
+Value aiBakeNavMesh(Value, std::span<const Value>) {
+    return ev::throwError("NavMesh is disabled in this build (recastnavigation not found)");
+}
+
+Value aiLoadNavMesh(Value, std::span<const Value>) {
+    return ev::throwError("NavMesh is disabled in this build (recastnavigation not found)");
+}
+
+#endif
 
 }  // namespace bro::bronze_host

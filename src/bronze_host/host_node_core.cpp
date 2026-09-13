@@ -33,8 +33,13 @@ void installNodeCoreGlobals(engine::Engine& engine) {
     bk::installPath();
     bk::installFS();
     bk::installChildProcess();
-    bk::installRequire();
+    bk::installEvents();
+    bk::installUtil();
     bk::installBuffer();
+    bk::installNet();
+    bk::installNetJS();
+    bk::installWebSocketServerJS();
+    bk::installRequire();
 
     bk::installConsole();
     bk::installCrypto();

@@ -414,6 +414,22 @@ Value makeTextDecoder() {
                     }
                     return ev::fromUtf8("");
                 }
+                if (ev::isObject(v)) {
+                    Value buf = ev::getProperty(v, "buffer");
+                    if (ev::isArrayBuffer(buf)) {
+                        ev::ArrayBufferInfo info = ev::arrayBufferInfo(buf);
+                        if (info && info.data) {
+                            Value offV = ev::getProperty(v, "byteOffset");
+                            Value lenV = ev::getProperty(v, "byteLength");
+                            uint32_t off = ev::isNumber(offV) ? static_cast<uint32_t>(ev::toDouble(offV)) : 0;
+                            uint32_t len = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : (info.byteLength - off);
+                            if (off <= info.byteLength && off + len <= info.byteLength && len > 0) {
+                                return ev::fromUtf8(std::string_view(
+                                    reinterpret_cast<const char*>(info.data + off), len));
+                            }
+                        }
+                    }
+                }
                 return ev::fromUtf8("");
             });
             return b.get();

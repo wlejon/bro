@@ -39,6 +39,7 @@
 #include "util/log.h"
 
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -125,6 +126,15 @@ Value headersAppend(Value thisValue, std::span<const Value> a) {
     return ev::undefined();
 }
 
+Value headersDelete(Value thisValue, std::span<const Value> a) {
+    HostHeaders* h = headersOf(thisValue);
+    if (!h) return ev::throwTypeError("Headers.delete: receiver is not a Headers");
+    if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) return ev::undefined();
+    std::string key = toLowerAscii(ev::toUtf8(a[0]));
+    h->entries.erase(key);
+    return ev::undefined();
+}
+
 // The three classes this file installs. Each carries STATE on the instance and
 // BEHAVIOUR on the prototype — one copy of each method for the whole class
 // rather than a fresh set for every response a program fetches.
@@ -137,6 +147,7 @@ void decorateHeadersProto(ObjectBuilder& b) {
     b.def("set", 2, headersSet);
     b.def("has", 1, headersHas);
     b.def("append", 2, headersAppend);
+    b.def("delete", 1, headersDelete);
 }
 
 Value makeHeadersValue(HostHeaders* h) {
@@ -274,12 +285,17 @@ Value requestCtor(Value, std::span<const Value> a) {
 
 struct HostResponse {
     uint32_t tag = kHostFetchTag;
-    int status = 0;
-    bool ok = false;
+    int status = 200;
+    bool ok = true;
+    bool hasBody = false;
+    bool bodyUsed = false;
     std::string url;
-    std::string statusText;
+    std::string statusText = "OK";
     std::string contentType;   // from a data:/blob: URL that carried one
     std::vector<uint8_t> body;
+    ev::Persistent stream;
+    ev::Persistent cachedBodyStream;
+    HostHeaders headers;
 };
 
 void hostResponseDtor(void* p) { delete static_cast<HostResponse*>(p); }
@@ -290,10 +306,118 @@ HostResponse* responseOf(Value v) {
     return resp;
 }
 
+static void drainStreamToBytes(Value stream, std::function<void(std::vector<uint8_t>, bool)> onComplete) {
+    Value getReader = ev::getProperty(stream, "getReader");
+    if (!ev::isFunction(getReader)) {
+        onComplete({}, false);
+        return;
+    }
+    auto rRes = ev::call(getReader, stream, {});
+    if (rRes.thrown || !ev::isObject(rRes.value)) {
+        onComplete({}, false);
+        return;
+    }
+
+    struct DrainState {
+        ev::Persistent reader;
+        ev::Persistent pumpFn;
+        std::vector<std::vector<uint8_t>> chunks;
+        std::function<void(std::vector<uint8_t>, bool)> onComplete;
+    };
+
+    auto* state = new DrainState();
+    state->reader.set(rRes.value);
+    state->onComplete = std::move(onComplete);
+
+    state->pumpFn.set(ev::makeFunction([state](Value, std::span<const Value> a) -> Value {
+        if (!a.empty() && ev::isObject(a[0])) {
+            Value doneVal = ev::getProperty(a[0], "done");
+            if (ev::toBool(doneVal)) {
+                size_t total = 0;
+                for (const auto& c : state->chunks) total += c.size();
+                std::vector<uint8_t> out(total);
+                size_t off = 0;
+                for (const auto& c : state->chunks) {
+                    std::memcpy(out.data() + off, c.data(), c.size());
+                    off += c.size();
+                }
+                auto cb = std::move(state->onComplete);
+                delete state;
+                cb(std::move(out), true);
+                return ev::undefined();
+            }
+            Value val = ev::getProperty(a[0], "value");
+            if (ev::isTypedArray(val)) {
+                auto info = ev::typedArrayInfo(val);
+                if (info.data && info.byteLength > 0) {
+                    state->chunks.emplace_back(info.data, info.data + info.byteLength);
+                }
+            } else if (ev::isArrayBuffer(val)) {
+                auto info = ev::arrayBufferInfo(val);
+                if (info.data && info.byteLength > 0) {
+                    state->chunks.emplace_back(info.data, info.data + info.byteLength);
+                }
+            }
+        }
+
+        Value readFn = ev::getProperty(state->reader.get(), "read");
+        if (!ev::isFunction(readFn)) {
+            auto cb = std::move(state->onComplete);
+            delete state;
+            cb({}, false);
+            return ev::undefined();
+        }
+
+        auto readRes = ev::call(readFn, state->reader.get(), {});
+        if (readRes.thrown || !ev::isObject(readRes.value)) {
+            auto cb = std::move(state->onComplete);
+            delete state;
+            cb({}, false);
+            return ev::undefined();
+        }
+
+        Value thenFn = ev::getProperty(readRes.value, "then");
+        if (ev::isFunction(thenFn)) {
+            Value catchFn = ev::makeFunction([state](Value, std::span<const Value>) -> Value {
+                auto cb = std::move(state->onComplete);
+                delete state;
+                cb({}, false);
+                return ev::undefined();
+            }, 1);
+            Value args[2] = {state->pumpFn.get(), catchFn};
+            ev::call(thenFn, readRes.value, std::span<const Value>(args, 2));
+        } else {
+            auto cb = std::move(state->onComplete);
+            delete state;
+            cb({}, false);
+        }
+        return ev::undefined();
+    }, 1));
+
+    ev::call(state->pumpFn.get(), ev::undefined(), {});
+}
+
 Value responseText(Value thisValue, std::span<const Value>) {
     HostResponse* r = responseOf(thisValue);
     if (!r) return ev::throwTypeError("Response.text: receiver is not a Response");
+    if (r->bodyUsed) return ev::throwTypeError("Response.text: Body already consumed");
+    r->bodyUsed = true;
     ev::Persistent p{ev::createPromise()};
+    if (!ev::isUndefined(r->stream.get())) {
+        ev::Persistent targetPromise(p.get());
+        drainStreamToBytes(r->stream.get(), [r, targetPromise](std::vector<uint8_t> bytes, bool ok) {
+            ev::Persistent p(targetPromise);
+            if (ok) {
+                r->body = bytes;
+                r->stream.set(ev::undefined());
+                std::string str(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                ev::resolvePromise(p.get(), ev::fromUtf8(str));
+            } else {
+                ev::rejectPromise(p.get(), ev::throwError("Failed to drain stream"));
+            }
+        });
+        return p.get();
+    }
     std::string str(reinterpret_cast<const char*>(r->body.data()), r->body.size());
     ev::resolvePromise(p.get(), ev::fromUtf8(str));
     return p.get();
@@ -302,7 +426,26 @@ Value responseText(Value thisValue, std::span<const Value>) {
 Value responseJson(Value thisValue, std::span<const Value>) {
     HostResponse* r = responseOf(thisValue);
     if (!r) return ev::throwTypeError("Response.json: receiver is not a Response");
+    if (r->bodyUsed) return ev::throwTypeError("Response.json: Body already consumed");
+    r->bodyUsed = true;
     ev::Persistent p{ev::createPromise()};
+    if (!ev::isUndefined(r->stream.get())) {
+        ev::Persistent targetPromise(p.get());
+        drainStreamToBytes(r->stream.get(), [r, targetPromise](std::vector<uint8_t> bytes, bool ok) {
+            ev::Persistent p(targetPromise);
+            if (ok) {
+                r->body = bytes;
+                r->stream.set(ev::undefined());
+                std::string_view jsonStr(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                ev::CallResult parsed = ev::parseJson(jsonStr);
+                if (parsed.thrown) ev::rejectPromise(p.get(), parsed.value);
+                else ev::resolvePromise(p.get(), parsed.value);
+            } else {
+                ev::rejectPromise(p.get(), ev::throwError("Failed to drain stream"));
+            }
+        });
+        return p.get();
+    }
     std::string_view jsonStr(reinterpret_cast<const char*>(r->body.data()), r->body.size());
     ev::CallResult parsed = ev::parseJson(jsonStr);
     if (parsed.thrown) {
@@ -316,19 +459,90 @@ Value responseJson(Value thisValue, std::span<const Value>) {
 Value responseArrayBuffer(Value thisValue, std::span<const Value>) {
     HostResponse* r = responseOf(thisValue);
     if (!r) return ev::throwTypeError("Response.arrayBuffer: receiver is not a Response");
+    if (r->bodyUsed) return ev::throwTypeError("Response.arrayBuffer: Body already consumed");
+    r->bodyUsed = true;
     ev::Persistent p{ev::createPromise()};
+    if (!ev::isUndefined(r->stream.get())) {
+        ev::Persistent targetPromise(p.get());
+        drainStreamToBytes(r->stream.get(), [r, targetPromise](std::vector<uint8_t> bytes, bool ok) {
+            ev::Persistent p(targetPromise);
+            if (ok) {
+                r->body = bytes;
+                r->stream.set(ev::undefined());
+                Value ab = ev::createArrayBuffer(std::span<const uint8_t>(bytes));
+                ev::resolvePromise(p.get(), ab);
+            } else {
+                ev::rejectPromise(p.get(), ev::throwError("Failed to drain stream"));
+            }
+        });
+        return p.get();
+    }
     Value ab = ev::createArrayBuffer(std::span<const uint8_t>(r->body));
     ev::resolvePromise(p.get(), ab);
     return p.get();
+}
+
+Value makeResponseValue(HostResponse* resp);
+
+Value responseCtor(Value, std::span<const Value> a) {
+    auto* resp = new HostResponse();
+    resp->status = 200;
+    resp->statusText = "OK";
+    resp->ok = true;
+
+    if (!a.empty() && !ev::isUndefined(a[0]) && !ev::isNull(a[0])) {
+        resp->hasBody = true;
+        Value bVal = a[0];
+        if (ev::isString(bVal)) {
+            std::string s = ev::toUtf8(bVal);
+            resp->body.assign(s.begin(), s.end());
+        } else if (ev::isTypedArray(bVal)) {
+            auto info = ev::typedArrayInfo(bVal);
+            if (info.data && info.byteLength > 0) {
+                resp->body.assign(info.data, info.data + info.byteLength);
+            }
+        } else if (ev::isArrayBuffer(bVal)) {
+            auto info = ev::arrayBufferInfo(bVal);
+            if (info.data && info.byteLength > 0) {
+                resp->body.assign(info.data, info.data + info.byteLength);
+            }
+        } else if (ev::isObject(bVal)) {
+            Value getReader = ev::getProperty(bVal, "getReader");
+            if (ev::isFunction(getReader)) {
+                resp->stream.set(bVal);
+            } else {
+                std::string s = ev::toUtf8(bVal);
+                resp->body.assign(s.begin(), s.end());
+            }
+        }
+    }
+
+    if (a.size() > 1 && ev::isObject(a[1])) {
+        Value initV = a[1];
+        Value statusV = ev::getProperty(initV, "status");
+        if (!ev::isUndefined(statusV) && !ev::isNull(statusV)) {
+            resp->status = static_cast<int>(ev::toDouble(statusV));
+        }
+        Value statusTextV = ev::getProperty(initV, "statusText");
+        if (!ev::isUndefined(statusTextV) && !ev::isNull(statusTextV)) {
+            resp->statusText = ev::toUtf8(statusTextV);
+        } else if (resp->status != 200) {
+            resp->statusText = "";
+        }
+        Value headersV = ev::getProperty(initV, "headers");
+        if (!ev::isUndefined(headersV) && !ev::isNull(headersV)) {
+            initHeadersFromValue(&resp->headers, headersV);
+        }
+    }
+    resp->ok = (resp->status >= 200 && resp->status < 300);
+
+    return makeResponseValue(resp);
 }
 
 void decorateResponseProto(ObjectBuilder& b) {
     b.def("text", 0, responseText);
     b.def("json", 0, responseJson);
     b.def("arrayBuffer", 0, responseArrayBuffer);
-    // blob(), so a fetched resource can be handed straight back to
-    // URL.createObjectURL — which is the round trip an app makes when it loads
-    // a texture over one API and shows it through another.
     b.def("blob", 0, [](Value thisValue, std::span<const Value>) {
         HostResponse* r = responseOf(thisValue);
         if (!r) return ev::throwTypeError("Response.blob: receiver is not a Response");
@@ -337,6 +551,48 @@ void decorateResponseProto(ObjectBuilder& b) {
         ev::resolvePromise(p.get(), blob);
         return p.get();
     });
+    b.accessor("body", [](Value thisValue, std::span<const Value>) -> Value {
+        HostResponse* r = responseOf(thisValue);
+        if (!r || !r->hasBody) return ev::null();
+        if (!ev::isUndefined(r->stream.get())) return r->stream.get();
+        if (!ev::isUndefined(r->cachedBodyStream.get())) return r->cachedBodyStream.get();
+
+        auto streamG = ev::globalValue("ReadableStream");
+        Value streamCtor = streamG.found ? streamG.value : ev::undefined();
+        if (!ev::isFunction(streamCtor)) return ev::null();
+
+        Value pullFn = ev::makeFunction([bytes = r->body, pulled = false](Value, std::span<const Value> a) mutable -> Value {
+            if (a.empty()) return ev::undefined();
+            Value controller = a[0];
+            if (pulled) {
+                Value closeFn = ev::getProperty(controller, "close");
+                if (ev::isFunction(closeFn)) ev::call(closeFn, controller, {});
+                return ev::undefined();
+            }
+            pulled = true;
+            Value enqueueFn = ev::getProperty(controller, "enqueue");
+            if (ev::isFunction(enqueueFn)) {
+                Value u8 = ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(bytes.size()));
+                ev::fillTypedArray(u8, bytes);
+                ev::call(enqueueFn, controller, std::span<const Value>(&u8, 1));
+            }
+            return ev::undefined();
+        }, 1);
+
+        Value sourceObj = ev::createObject();
+        ev::setProperty(sourceObj, "pull", pullFn);
+
+        ev::CallResult cr = ev::construct(streamCtor, std::span<const Value>(&sourceObj, 1));
+        if (!cr.thrown && ev::isObject(cr.value)) {
+            r->cachedBodyStream.set(cr.value);
+            return cr.value;
+        }
+        return ev::null();
+    }, nullptr);
+    b.accessor("bodyUsed", [](Value thisValue, std::span<const Value>) -> Value {
+        HostResponse* r = responseOf(thisValue);
+        return ev::fromBool(r ? r->bodyUsed : false);
+    }, nullptr);
 }
 
 Value makeResponseValue(HostResponse* resp) {
@@ -347,11 +603,7 @@ Value makeResponseValue(HostResponse* resp) {
     b.set("statusText", ev::fromUtf8(resp->statusText));
     b.set("url", ev::fromUtf8(resp->url));
 
-    auto* h = new HostHeaders();
-    // A file read off disk has no headers to report, so the map is normally
-    // empty. An inline URL is the exception: a data: URL states its MIME type
-    // and a blob: URL carries the Blob's, and `resp.headers.get('content-type')`
-    // is how a caller decides whether to parse what it got.
+    auto* h = new HostHeaders(resp->headers);
     if (!resp->contentType.empty()) h->entries["content-type"] = resp->contentType;
     b.set("headers", makeHeadersValue(h));
 
@@ -444,10 +696,11 @@ Value fetchCall(Value, std::span<const Value> a) {
                 resp->status = 200;
                 resp->statusText = "OK";
                 resp->ok = true;
+                resp->hasBody = true;
             } else {
-                resp->status = 404;
-                resp->statusText = "Not Found";
-                resp->ok = false;
+                delete resp;
+                ev::rejectPromise(p.get(), ev::throwTypeError("Failed to fetch"));
+                return;
             }
         } else if (util::inlineURLBytes(url, resp->body, &resp->contentType)) {
             // A `blob:` or `data:` URL carries its own bytes: no path to
@@ -460,6 +713,7 @@ Value fetchCall(Value, std::span<const Value> a) {
             resp->status = 200;
             resp->statusText = "OK";
             resp->ok = true;
+            resp->hasBody = true;
         } else {
             const std::string path = util::resolveAssetPath(url);
             std::ifstream in(path, std::ios::binary);
@@ -474,10 +728,12 @@ Value fetchCall(Value, std::span<const Value> a) {
                 resp->status = 200;
                 resp->statusText = "OK";
                 resp->ok = true;
+                resp->hasBody = true;
             } else {
                 resp->status = 404;
                 resp->statusText = "Not Found";
                 resp->ok = false;
+                resp->hasBody = false;
                 LOG_WARN("bronze_host: fetch could not read %s", path.c_str());
             }
         }
@@ -509,15 +765,7 @@ void installFetchGlobal() {
     // A Request carries state and no methods of its own.
     g_requestClass.install("Request", 1, requestCtor, nullptr);
 
-    g_responseClass.install("Response", 0,
-                            [](Value, std::span<const Value>) {
-                                auto* resp = new HostResponse();
-                                resp->status = 200;
-                                resp->statusText = "OK";
-                                resp->ok = true;
-                                return makeResponseValue(resp);
-                            },
-                            decorateResponseProto);
+    g_responseClass.install("Response", 0, responseCtor, decorateResponseProto);
 }
 
 }  // namespace bro::bronze_host

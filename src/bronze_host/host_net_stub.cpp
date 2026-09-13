@@ -2,31 +2,38 @@
 #include "bronze_host/host_internal.h"
 #include "embed/embed.h"
 
-namespace bro::bronze_host {
+#include <api/api.h>
 
-namespace {
-HostClass g_wsStubClass;
-}
+namespace bro::bronze_host {
 
 Value makeBroNetValue() {
     return makeUnavailableNamespace("net", "BRO_WITH_NET");
 }
 
 void installNetGlobals() {
-    g_wsStubClass.install("WebSocket", 1, [](Value, std::span<const Value>) -> Value {
-        return ev::throwError("WebSocket is unavailable: compiled without BRO_WITH_NET");
-    }, [](ObjectBuilder& b) {
-        b.set("CONNECTING", ev::fromDouble(0));
-        b.set("OPEN", ev::fromDouble(1));
-        b.set("CLOSING", ev::fromDouble(2));
-        b.set("CLOSED", ev::fromDouble(3));
-    });
-    for (auto [name, v] : {std::pair{"CONNECTING", 0.0}, {"OPEN", 1.0}, {"CLOSING", 2.0}, {"CLOSED", 3.0}}) {
-        g_wsStubClass.setStatic(name, ev::fromDouble(v));
+    brokit::api::installWebSocket();
+    brokit::api::installWebSocketJS();
+    auto wsVal = ev::globalValue("WebSocket");
+    if (wsVal.found && ev::isObject(wsVal.value)) {
+        auto proto = ev::getProperty(wsVal.value, "prototype");
+        if (ev::isObject(proto)) {
+            for (auto [name, v] : {std::pair{"CONNECTING", 0.0}, {"OPEN", 1.0}, {"CLOSING", 2.0}, {"CLOSED", 3.0}}) {
+                ev::setProperty(proto, name, ev::fromDouble(v));
+                ev::setProperty(wsVal.value, name, ev::fromDouble(v));
+            }
+        }
     }
 }
 
 void drainNetEvents() {
+    auto netTick = ev::globalValue("__brokit_net_tick");
+    if (netTick.found && ev::isFunction(netTick.value)) {
+        ev::call(netTick.value, ev::undefined(), {});
+    }
+    auto wsTick = ev::globalValue("__brokit_ws_tick");
+    if (wsTick.found && ev::isFunction(wsTick.value)) {
+        ev::call(wsTick.value, ev::undefined(), {});
+    }
 }
 
 void installNetSync(engine::Engine*) {

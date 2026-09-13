@@ -204,6 +204,7 @@ void decorateAgentProto(ObjectBuilder& b) {
             target = parseVec3(a[0]);
         }
 
+#if BROGAMEAGENT_HAS_NAVMESH
         if (h->navMesh) {
             float startY = h->navActive ? h->navY : h->agent.elevation();
             bromath::Vec3 start{h->agent.x(), startY, h->agent.z()};
@@ -220,7 +221,9 @@ void decorateAgentProto(ObjectBuilder& b) {
                 h->navPath.clear();
                 h->agent.clearTarget();
             }
-        } else {
+        } else
+#endif
+        {
             h->navActive = false;
             h->navPath.clear();
             h->agent.setTarget(target.x, target.z);

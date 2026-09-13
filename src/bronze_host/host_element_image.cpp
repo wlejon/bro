@@ -83,9 +83,19 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     if (img.ok) st->el->setImageNaturalSize(src, img.width, img.height);
 
     dom::Element* target = st->el;
-    dom::Event evt(img.ok ? "load" : "error", false, false);
-    if (auto* eng = hostEngine()) {
-        eng->dispatchElementEvent(target, evt);
+    const bool loaded = img.ok;
+    if (st->fromImageConstructor) {
+        dom::Event evt(loaded ? "load" : "error", false, false);
+        if (auto* eng = hostEngine()) {
+            eng->dispatchElementEvent(target, evt);
+        }
+    } else {
+        postHostTask([target, loaded]() {
+            engine::Engine* engine = hostEngine();
+            if (!engine) return;
+            dom::Event evt(loaded ? "load" : "error", false, false);
+            engine->dispatchElementEvent(target, evt);
+        });
     }
     return ev::undefined();
 }
@@ -146,6 +156,8 @@ Value imageConstructor(Value, std::span<const Value>) {
     if (!doc) return ev::throwError("new Image(): the engine has no document");
     dom::Element* el = doc->createElement("img");
     if (!el) return ev::throwError("new Image(): the document refused an <img>");
+    HostNodeState* st = hostNodeStateFor(el);
+    if (st) st->fromImageConstructor = true;
     return hostElementValue(el);
 }
 

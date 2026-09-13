@@ -357,6 +357,7 @@ struct HostNodeState {
     bool hasClassList = false;
     bool hasComputed = false;
     bool hasDataset = false;
+    bool fromImageConstructor = false;
     // Non-null only for an <img>: its src, its size and its RGBA. Owned here
     // so it dies with the node's entry, which is what the registry's
     // unique_ptr already guarantees.

@@ -561,6 +561,7 @@ void decorateMeshOptimize(ObjectBuilder& b, HostClass& cls) {
 
     // ── Save formats ────────────────────────────────────────────────────────────
     b.def("saveGLTF", 2, [](Value self_, std::span<const Value> a) {
+#if BROMESH_HAS_GLTF
         auto* m = hostMeshDataOf(self_);
         if (!m || a.empty()) return ev::fromBool(false);
         std::string path = resolveMeshWritePath(ev::toUtf8(a[0]));
@@ -590,6 +591,10 @@ void decorateMeshOptimize(ObjectBuilder& b, HostClass& cls) {
             }
         }
         return ev::fromBool(bromesh::saveGLTF(*m, skinPtr, skelPtr, anims, path));
+#else
+        (void)self_; (void)a;
+        return ev::throwError("glTF support is disabled in this build (tinygltf not found)");
+#endif
     });
 
     b.def("saveOBJ", 1, [](Value self_, std::span<const Value> a) {
@@ -649,6 +654,7 @@ void decorateMeshOptimize(ObjectBuilder& b, HostClass& cls) {
     }, 2));
 
     cls.setStatic("loadGLTF", ev::makeFunction([](Value, std::span<const Value> a) -> Value {
+#if BROMESH_HAS_GLTF
         if (a.empty()) return ev::undefined();
         std::string path = bro::util::resolveAssetPath(ev::toUtf8(a[0]));
         auto scene = bromesh::loadGLTF(path);
@@ -674,6 +680,10 @@ void decorateMeshOptimize(ObjectBuilder& b, HostClass& cls) {
         }));
 
         return obj.get();
+#else
+        (void)a;
+        return ev::throwError("glTF support is disabled in this build (tinygltf not found)");
+#endif
     }, 1));
 
     cls.setStatic("loadOBJ", ev::makeFunction([](Value, std::span<const Value> a) -> Value {
