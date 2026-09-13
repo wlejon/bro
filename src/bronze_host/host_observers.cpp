@@ -40,6 +40,7 @@
 // reports null rather than a pointer into released storage.
 
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_web_animations.h"
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 
 #include "dom/document.h"
@@ -633,9 +634,11 @@ void deliverHostObservers() {
     // up rather than the one it had mid-edit.
     deliverMutationRecords();
     checkResizeObservers();
+    deliverWebAnimationFinishEvents();
 }
 
 void installObserverGlobals() {
+    installWebAnimationGlobals();
     g_mutationObserverClass.install(
         "MutationObserver", 1,
         [](Value, std::span<const Value> a) {

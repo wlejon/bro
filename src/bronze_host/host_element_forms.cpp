@@ -3,6 +3,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_anchor_download.h"
 
 #include "dom/element.h"
 #include "dom/event.h"
@@ -49,9 +50,13 @@ static void performElementClick(dom::Element* el) {
     }
 
     bool isInput = (tag == "INPUT" || tag == "input");
+    bool isAnchor = (tag == "A" || tag == "a");
     dom::MouseEvent ev("click");
     dom::dispatchDomEvent(el, ev);
     if (!el) return;
+    if (!ev.defaultPrevented() && isAnchor) {
+        runAnchorDownload(el);
+    }
     if (!ev.defaultPrevented() && isInput) {
         std::string t = el->getAttribute("type");
         for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

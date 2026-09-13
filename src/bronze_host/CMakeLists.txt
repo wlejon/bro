@@ -118,6 +118,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_html_interfaces.cpp
     host_iframe.cpp
     host_template.cpp
+    host_anchor_download.cpp
     host_matchmedia.cpp
     host_node.cpp
     host_shadow_dom.cpp
@@ -176,6 +177,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_text.cpp
     host_menu.cpp
     host_steam.cpp
+    host_web_animations.cpp
 )
 
 if(BRO_WITH_PHYSICS)

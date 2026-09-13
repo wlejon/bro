@@ -70,6 +70,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
     ev::registerGlobal("flush", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             engine.flush();
+            deliverHostObservers();
             if (ev::microtasksPending()) ev::drainMicrotasks();
             return ev::undefined();
         }, 0, "flush"));

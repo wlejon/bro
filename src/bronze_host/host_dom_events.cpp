@@ -23,6 +23,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_touch.h"
 
@@ -487,6 +488,8 @@ struct ElementListener {
     std::string type;
     ev::Persistent fn;
     dom::ListenerHandle handle;
+    bool capture = false;
+    bool once = false;
 };
 
 std::vector<ElementListener>& registrations() {
@@ -710,19 +713,31 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                   ".addEventListener: the element does not exist yet");
         }
 
-        // A repeat (type, listener) pair is a no-op on the web; the engine's
+        // A repeat (type, listener, capture) triple is a no-op on the web; the engine's
         // native list has no such rule of its own, so it is applied here.
         for (const ElementListener& r : registrations()) {
-            if (r.el == el && r.type == type &&
+            if (r.el == el && r.type == type && r.capture == opts.capture &&
                 ev::toBits(r.fn.get()) == ev::toBits(fnP.get())) {
                 return ev::undefined();
             }
         }
 
         std::string origin = who + " " + type + " listener";
+        bool isOnce = opts.once;
         dom::ListenerHandle handle = el->addEventListener(
             type,
-            [fnP, self, origin](dom::Event& evt) {
+            [fnP, self, origin, el, type, isOnce](dom::Event& evt) {
+                if (isOnce) {
+                    if (el) el->removeJsListener(type);
+                    auto& list = registrations();
+                    for (auto it = list.begin(); it != list.end(); ++it) {
+                        if (it->el == el && it->type == type &&
+                            ev::toBits(it->fn.get()) == ev::toBits(fnP.get())) {
+                            list.erase(it);
+                            break;
+                        }
+                    }
+                }
                 callBronzeListener(fnP, self, evt, origin.c_str());
             },
             opts);
@@ -730,7 +745,8 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
             return ev::throwError(who + ".addEventListener: the engine refused the "
                                         "registration");
         }
-        registrations().push_back({el, std::move(type), fnP, handle});
+        el->addJsListener(type);
+        registrations().push_back({el, std::move(type), fnP, handle, opts.capture, opts.once});
         return ev::undefined();
     });
 
@@ -744,14 +760,19 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                       ".removeEventListener: type must be a string");
         }
         std::string type = ev::toUtf8(typeV);
+        dom::ListenerOptions opts = readOptions(argAt(a, 2));
         auto& list = registrations();
         for (auto it = list.begin(); it != list.end(); ++it) {
             // Identity by a compare of two CURRENT addresses with no
             // allocation between them — the one moment raw bits are a valid
             // identity for heap values.
             if (it->el != el || it->type != type) continue;
+            if (it->capture != opts.capture) continue;
             if (ev::toBits(it->fn.get()) != ev::toBits(fn)) continue;
-            if (el) el->removeEventListener(it->handle);
+            if (el) {
+                el->removeEventListener(it->handle);
+                el->removeJsListener(type);
+            }
             list.erase(it);
             break;
         }
@@ -790,6 +811,9 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
     // Single-threaded and re-entrant by construction: nothing here holds a bare
     // Value across the call.
     engine->dispatchElementEvent(el, evt);
+    if (spec.type == "click" && !evt.defaultPrevented()) {
+        runAnchorDownload(el);
+    }
     return ev::fromBool(!evt.defaultPrevented());
 }
 

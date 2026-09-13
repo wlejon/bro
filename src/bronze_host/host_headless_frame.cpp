@@ -1,5 +1,6 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_anchor_download.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_telemetry.h"
 #include "engine/engine.h"
@@ -29,8 +30,6 @@
 namespace bro::bronze_host {
 
 namespace {
-
-static std::string s_lastDownloadPath;
 
 std::string fmtF(float v) {
     if (v == 0.0f) return "0";
@@ -218,14 +217,6 @@ void buildTreeString(std::ostringstream& out, bro::dom::Element* el,
 }
 
 } // namespace
-
-const std::string& lastDownloadPath() {
-    return s_lastDownloadPath;
-}
-
-void setLastDownloadPath(std::string p) {
-    s_lastDownloadPath = std::move(p);
-}
 
 void installHeadlessFrame(engine::Engine& engine) {
     // getPixel(x, y)

@@ -248,6 +248,11 @@ void Engine::handleMouseDown(float x, float y, int button) {
         updateTextInputArea();
         markAppBaseDirty();
 
+        target = appMouseState_.mouseDownTarget.get();
+        if (target && document_ && !document_->isNodeLive(target)) {
+            target = nullptr;
+        }
+
         if (button == 0 && document_ && textMetrics_) {
             bool isEditableControl = false;
             if (target) {

@@ -2,6 +2,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_realm_scope.h"
+#include "bronze_host/host_web_animations.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
@@ -13,6 +14,8 @@
 namespace bro::bronze_host {
 
 void decorateElementInteraction(ObjectBuilder& b) {
+    decorateElementWebAnimations(b);
+
     // ---- pointer lock -----------------------------------------------------
     b.def("requestPointerLock", 0, [](Value self_, std::span<const Value>) -> Value {
         HostNodeState* st = hostNodeStateOfValue(self_);

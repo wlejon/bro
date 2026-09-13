@@ -594,6 +594,28 @@ Value makeCharacterDataValue(dom::Node* node) {
             }
             return hostNodeValue(fresh);
         });
+        b.accessor("wholeText", [](Value self_, std::span<const Value>) {
+            HostNodeState* st = hostNodeStateOfValue(self_);
+            if (!st || !st->node || st->node->nodeType() != dom::NodeType::Text) {
+                return ev::fromUtf8("");
+            }
+            auto* text = static_cast<dom::TextNode*>(st->node);
+            dom::Node* parent = text->parentNode();
+            if (!parent) return ev::fromUtf8(text->data());
+            const auto& kids = parent->childNodes();
+            size_t myIdx = 0;
+            for (size_t i = 0; i < kids.size(); ++i) {
+                if (kids[i] == text) { myIdx = i; break; }
+            }
+            size_t start = myIdx;
+            while (start > 0 && kids[start - 1]->nodeType() == dom::NodeType::Text) --start;
+            std::string result;
+            for (size_t i = start; i < kids.size(); ++i) {
+                if (kids[i]->nodeType() != dom::NodeType::Text) break;
+                result += static_cast<dom::TextNode*>(kids[i])->data();
+            }
+            return ev::fromUtf8(result);
+        }, nullptr);
     }
 
     installNodeTree(b);
