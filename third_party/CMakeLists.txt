@@ -363,6 +363,7 @@ endif()  # BRO_WITH_PHYSICS
 # Gated: this is one of only two vcpkg dependencies, so a minimal (net-off)
 # build needs no vcpkg for it.
 if(BRO_WITH_NET)
+    find_package(Protobuf CONFIG REQUIRED)
     find_package(GameNetworkingSockets CONFIG REQUIRED)
 endif()
 

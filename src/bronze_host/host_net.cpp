@@ -20,6 +20,7 @@
 #include "util/remote_asset.h"
 
 #include "bronze_host/host_worker_msg.h"
+#include "runtime/heap.h"
 
 #ifdef BRO_HAVE_CURL
 #include <curl/curl.h>
@@ -162,10 +163,10 @@ static bool parseSendOptions(std::span<const Value> a, size_t optIndex, net::Sen
     }
     Value v = a[optIndex];
     if (ev::isObject(v)) {
+        const auto* hdr = v.asObject<bronze::HeapObjectHeader>();
+        if (hdr && hdr->flags == bronze::HeapKind::Array) return false;
         Value relV = ev::getProperty(v, "reliable");
-        if (!ev::isUndefined(relV) && !ev::isNull(relV)) {
-            out.reliable = ev::toBool(relV);
-        }
+        if (!ev::isUndefined(relV) && !ev::isNull(relV)) out.reliable = ev::toBool(relV);
         Value chanV = ev::getProperty(v, "channel");
         if (!ev::isUndefined(chanV) && !ev::isNull(chanV)) {
             int ch = static_cast<int>(ev::toDouble(chanV));
@@ -174,9 +175,7 @@ static bool parseSendOptions(std::span<const Value> a, size_t optIndex, net::Sen
             out.channel = ch;
         }
         Value noDelayV = ev::getProperty(v, "nodelay");
-        if (!ev::isUndefined(noDelayV) && !ev::isNull(noDelayV)) {
-            out.nodelay = ev::toBool(noDelayV);
-        }
+        if (!ev::isUndefined(noDelayV) && !ev::isNull(noDelayV)) out.nodelay = ev::toBool(noDelayV);
         return true;
     }
     out.reliable = ev::toBool(v);
@@ -426,9 +425,9 @@ static Value js_net_sendClone(Value, std::span<const Value> a) {
     if (a.size() < 2) return ev::throwTypeError("sendClone requires (connId, value)");
     uint32_t conn = static_cast<uint32_t>(i32At(a, 0));
     net::SendOptions opts;
-    if (!parseSendOptions(a, 2, opts)) return ev::fromBool(false);
+    if (!parseSendOptions(a, 2, opts)) return ev::throwTypeError("sendClone: transfer-list options are not supported");
     std::vector<uint8_t> framed;
-    if (!buildCloneFrame(a[1], framed)) return ev::fromBool(false);
+    if (!buildCloneFrame(a[1], framed)) return ev::throwTypeError("sendClone: value is not cloneable");
     if (auto* sub = getNetSubscriber()) {
         sub->send(conn, std::move(framed), opts);
         return ev::fromBool(true);
@@ -439,9 +438,9 @@ static Value js_net_sendClone(Value, std::span<const Value> a) {
 static Value js_net_broadcastClone(Value, std::span<const Value> a) {
     if (a.empty()) return ev::throwTypeError("broadcastClone requires a value");
     net::SendOptions opts;
-    if (!parseSendOptions(a, 1, opts)) return ev::undefined();
+    if (!parseSendOptions(a, 1, opts)) return ev::throwTypeError("broadcastClone: transfer-list options are not supported");
     std::vector<uint8_t> framed;
-    if (!buildCloneFrame(a[0], framed)) return ev::undefined();
+    if (!buildCloneFrame(a[0], framed)) return ev::throwTypeError("broadcastClone: value is not cloneable");
     if (auto* sub = getNetSubscriber()) {
         sub->broadcast(std::move(framed), opts);
     }
