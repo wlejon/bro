@@ -2,6 +2,7 @@
 #include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
+#include "bronze_host/host_element_video.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
 
@@ -122,7 +123,7 @@ void installHtmlInterfaces() {
     g_htmlElementClass.inherit(g_elementClass);
 
     // 4. HTMLMediaElement
-    g_htmlMediaElementClass.install("HTMLMediaElement", 0, illegalConstructor, nullptr);
+    g_htmlMediaElementClass.install("HTMLMediaElement", 0, illegalConstructor, decorateMediaProto);
     g_htmlMediaElementClass.inherit(g_htmlElementClass);
 
     // 5. Per-tag interfaces extending HTMLElement
@@ -164,11 +165,11 @@ void installHtmlInterfaces() {
 
     // 7. Per-tag interfaces extending HTMLMediaElement
     TagClassInit mediaTagClasses[] = {
-        {g_htmlVideoElementClass, "HTMLVideoElement"},
+        {g_htmlVideoElementClass, "HTMLVideoElement", decorateVideoProto},
         {g_htmlAudioElementClass, "HTMLAudioElement"},
     };
     for (auto& item : mediaTagClasses) {
-        item.cls.install(item.name, 0, illegalConstructor, nullptr);
+        item.cls.install(item.name, 0, illegalConstructor, item.decorator);
         item.cls.inherit(g_htmlMediaElementClass);
     }
 }

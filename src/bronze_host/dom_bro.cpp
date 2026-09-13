@@ -1,5 +1,6 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_media.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/eval.h"
 #include "engine/engine.h"
@@ -160,7 +161,7 @@ Value makeBroValue() {
     b.set("ai", makeBroAiValue());
 
     // Feature-gated stubs (GATED list from tests/_smoke_app/minimal_smoke.js)
-    b.set("media", makeUnavailableNamespace("media", "BRO_WITH_VIDEO"));
+    b.set("media", makeBroMediaValue());
     b.set("flora", makeUnavailableNamespace("flora", "BRO_WITH_FLORA"));
 #if BRO_WITH_3D
     b.set("gizmo", makeBroGizmoValue());
