@@ -415,6 +415,13 @@ void installNodeTree(ObjectBuilder& b) {
                },
                nullptr);
 
+    b.accessor("parentElement", [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node) return ev::null();
+        dom::Element* p = st->node->parentElement();
+        return p ? hostElementValue(p) : ev::null();
+    }, nullptr);
+
     b.accessor("ownerDocument",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);

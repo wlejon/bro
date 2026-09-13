@@ -376,6 +376,7 @@ void decorateElementDataset(ObjectBuilder& b);
 
 void decorateElementForms(ObjectBuilder& b);
 void decorateElementMutate(ObjectBuilder& b);
+void decorateElementInteraction(ObjectBuilder& b);
 dom::AbsoluteRect borderBoxOf(dom::Element* el);
 Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::string selector);
 

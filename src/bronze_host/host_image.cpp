@@ -38,6 +38,10 @@
 
 #include "broimage/decode.h"
 
+#if BRO_WITH_WEBP
+#include "render/webp_image.h"
+#endif
+
 #include <string>
 #include <utility>
 
@@ -87,37 +91,65 @@ void loadHostImage(HostImage& image, const std::string& src) {
         // The table is util::object_url.h's, which is the process's ONE table:
         // a URL minted anywhere on the page resolves here, including
         // one minted by URL.createObjectURL (host_file.cpp says why).
-        broimage::Image decoded;
-        if (broimage::decode_memory(inline_.data(), inline_.size(), decoded, &err)) {
-            img->width = decoded.width;
-            img->height = decoded.height;
-            img->rgba = std::move(decoded.pixels);
+#if BRO_WITH_WEBP
+        int ww = 0, hh = 0;
+        std::vector<uint8_t> rgba;
+        if (render::decodeWebP(inline_.data(), inline_.size(), ww, hh, rgba)) {
+            img->width = ww;
+            img->height = hh;
+            img->rgba = std::move(rgba);
             img->ok = true;
             LOG_INFO("bronze_host: Image loaded from an inline URL (%dx%d)",
                      img->width, img->height);
-        } else {
-            LOG_WARN("bronze_host: Image inline-URL decode failed (%s)", err.c_str());
+        } else
+#endif
+        {
+            broimage::Image decoded;
+            if (broimage::decode_memory(inline_.data(), inline_.size(), decoded, &err)) {
+                img->width = decoded.width;
+                img->height = decoded.height;
+                img->rgba = std::move(decoded.pixels);
+                img->ok = true;
+                LOG_INFO("bronze_host: Image loaded from an inline URL (%dx%d)",
+                         img->width, img->height);
+            } else {
+                LOG_WARN("bronze_host: Image inline-URL decode failed (%s)", err.c_str());
+            }
         }
     } else {
         // The shared app-path rules every bro binding uses (util/asset_path.h):
         // drive-qualified passes through, a leading slash resolves against the
         // engine mounts, anything else is relative to the app directory.
         const std::string path = util::resolveAssetPath(src);
-        broimage::Image decoded;
-        if (broimage::decode_file(path, decoded, &err)) {
-            img->width = decoded.width;
-            img->height = decoded.height;
-            img->rgba = std::move(decoded.pixels);
+#if BRO_WITH_WEBP
+        int ww = 0, hh = 0;
+        std::vector<uint8_t> rgba;
+        if (render::decodeWebPFile(path, ww, hh, rgba)) {
+            img->width = ww;
+            img->height = hh;
+            img->rgba = std::move(rgba);
             img->ok = true;
             LOG_INFO("bronze_host: Image loaded %s (%dx%d)", src.c_str(), img->width,
                      img->height);
-        } else {
-            // A failed decode is a BROKEN image, not a 1x1 white one: broimage
-            // hands back a white fallback pixel and adopting it would make a
-            // missing texture indistinguishable from a real one. Per HTML a
-            // broken image has zero natural dimensions and no pixels, so the
-            // texture upload path sees an empty buffer and no-ops.
-            LOG_WARN("bronze_host: Image load failed %s (%s)", path.c_str(), err.c_str());
+        } else
+#endif
+        {
+            broimage::Image decoded;
+            if (broimage::decode_file(path, decoded, &err)) {
+                img->width = decoded.width;
+                img->height = decoded.height;
+                img->rgba = std::move(decoded.pixels);
+                img->ok = true;
+                LOG_INFO("bronze_host: Image loaded %s (%dx%d)", src.c_str(), img->width,
+                         img->height);
+            } else {
+                // A failed decode is a BROKEN image, not a 1x1 white one: broimage
+                // hands back a white fallback pixel and adopting it would make a
+                // missing texture indistinguishable from a real one. Per HTML a
+                // broken image has zero natural dimensions and no pixels, so the
+                // texture upload path sees an empty buffer and no-ops.
+                LOG_WARN("bronze_host: Image load failed %s (%s)", path.c_str(), err.c_str());
+            }
         }
     }
 

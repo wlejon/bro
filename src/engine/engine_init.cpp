@@ -430,6 +430,10 @@ void Engine::initAppRealm() {
         bro::dom::Event loadDom("load", /*bubbles=*/false, /*cancelable=*/false);
         dom::dispatchDomEvent(root, loadDom);
     }
+    if (document_) {
+        bro::dom::Event loadWin("load", /*bubbles=*/false, /*cancelable=*/false);
+        dispatchWindowEvent(loadWin);
+    }
 
     mediaEventsArmed_ = true;
 }

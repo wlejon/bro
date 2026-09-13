@@ -114,6 +114,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_dataset.cpp
     host_element_forms.cpp
     host_element_image.cpp
+    host_element_interaction.cpp
     host_html_interfaces.cpp
     host_iframe.cpp
     host_template.cpp
@@ -333,6 +334,10 @@ target_link_libraries(bro_bronze_host
 # brokit_api supplies require(), fs, path, os, child_process and process
 # (host_node_core.cpp). Only its Node half is installed; see that file.
 target_link_libraries(bro_bronze_host PUBLIC brokit_api)
+
+if(BRO_WITH_WEBP)
+    target_link_libraries(bro_bronze_host PUBLIC bro_webp)
+endif()
 
 if(BRO_WITH_NET)
     target_link_libraries(bro_bronze_host PUBLIC bro_net)

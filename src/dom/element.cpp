@@ -826,11 +826,15 @@ std::vector<Element*> Element::children() const {
     return result;
 }
 
-Element* Element::parentElement() const {
+Element* Node::parentElement() const {
     if (parent_ && parent_->nodeType() == NodeType::Element) {
         return static_cast<Element*>(parent_);
     }
     return nullptr;
+}
+
+Element* Element::parentElement() const {
+    return Node::parentElement();
 }
 
 std::vector<Node*> Element::composedChildNodes() const {

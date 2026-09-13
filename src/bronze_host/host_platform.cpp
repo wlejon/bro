@@ -495,16 +495,53 @@ Value makeEventConstructor(const char* name) {
 }
 
 void installPlatformGlobals() {
-    ev::registerGlobal("btoa", makeBtoa());
-    ev::registerGlobal("atob", makeAtob());
-    ev::registerGlobal("queueMicrotask", makeQueueMicrotask());
-    ev::registerGlobal("screen", makeScreenValue());
-    ev::registerGlobal("alert", makeAlert());
-    ev::registerGlobal("confirm", makeConfirm());
-    ev::registerGlobal("prompt", makePrompt());
-    ev::registerGlobal("showOpenFileDialog", makeShowOpenFileDialog());
-    ev::registerGlobal("showOpenFolderDialog", makeShowOpenFolderDialog());
-    ev::registerGlobal("showSaveFileDialog", makeShowSaveFileDialog());
+    Value btoaVal = makeBtoa();
+    Value atobVal = makeAtob();
+    Value queueMicrotaskVal = makeQueueMicrotask();
+    Value screenVal = makeScreenValue();
+    ev::registerGlobal("btoa", btoaVal);
+    ev::registerGlobal("atob", atobVal);
+    ev::registerGlobal("queueMicrotask", queueMicrotaskVal);
+    ev::registerGlobal("screen", screenVal);
+    Value alertVal = makeAlert();
+    Value confirmVal = makeConfirm();
+    Value promptVal = makePrompt();
+    Value openFileVal = makeShowOpenFileDialog();
+    Value openFolderVal = makeShowOpenFolderDialog();
+    Value saveFileVal = makeShowSaveFileDialog();
+    ev::registerGlobal("alert", alertVal);
+    ev::registerGlobal("confirm", confirmVal);
+    ev::registerGlobal("prompt", promptVal);
+    ev::registerGlobal("showOpenFileDialog", openFileVal);
+    ev::registerGlobal("showOpenFolderDialog", openFolderVal);
+    ev::registerGlobal("showSaveFileDialog", saveFileVal);
+
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        ev::setProperty(gt.value, "btoa", btoaVal);
+        ev::setProperty(gt.value, "atob", atobVal);
+        ev::setProperty(gt.value, "queueMicrotask", queueMicrotaskVal);
+        ev::setProperty(gt.value, "screen", screenVal);
+        ev::setProperty(gt.value, "alert", alertVal);
+        ev::setProperty(gt.value, "confirm", confirmVal);
+        ev::setProperty(gt.value, "prompt", promptVal);
+        ev::setProperty(gt.value, "showOpenFileDialog", openFileVal);
+        ev::setProperty(gt.value, "showOpenFolderDialog", openFolderVal);
+        ev::setProperty(gt.value, "showSaveFileDialog", saveFileVal);
+    }
+    ev::GlobalValue win = ev::globalValue("window");
+    if (win.found && ev::isObject(win.value) && win.value != gt.value) {
+        ev::setProperty(win.value, "btoa", btoaVal);
+        ev::setProperty(win.value, "atob", atobVal);
+        ev::setProperty(win.value, "queueMicrotask", queueMicrotaskVal);
+        ev::setProperty(win.value, "screen", screenVal);
+        ev::setProperty(win.value, "alert", alertVal);
+        ev::setProperty(win.value, "confirm", confirmVal);
+        ev::setProperty(win.value, "prompt", promptVal);
+        ev::setProperty(win.value, "showOpenFileDialog", openFileVal);
+        ev::setProperty(win.value, "showOpenFolderDialog", openFolderVal);
+        ev::setProperty(win.value, "showSaveFileDialog", saveFileVal);
+    }
     // The rest, in the manifest's order. Each is a name a real library tests
     // for before deciding what kind of environment it is in.
     for (const char* name : {

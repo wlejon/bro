@@ -82,20 +82,11 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     st->el->setAttribute("src", src);
     if (img.ok) st->el->setImageNaturalSize(src, img.width, img.height);
 
-    // Deferred, and for the reason the load path has always given: on the web
-    // this event is a queued task, never synchronous with the assignment, and
-    // firing it from inside the setter re-enters compiled code with the
-    // caller's own load() still on the stack. Dispatched AT THE ELEMENT
-    // through the engine, so any listener on the same node hears it
-    // as well — which is the whole point of the image being a node.
     dom::Element* target = st->el;
-    const bool loaded = img.ok;
-    postHostTask([target, loaded]() {
-        engine::Engine* engine = hostEngine();
-        if (!engine) return;
-        dom::Event evt(loaded ? "load" : "error", false, false);
-        engine->dispatchElementEvent(target, evt);
-    });
+    dom::Event evt(img.ok ? "load" : "error", false, false);
+    if (auto* eng = hostEngine()) {
+        eng->dispatchElementEvent(target, evt);
+    }
     return ev::undefined();
 }
 

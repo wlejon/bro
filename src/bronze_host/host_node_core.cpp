@@ -34,6 +34,7 @@ void installNodeCoreGlobals(engine::Engine& engine) {
     bk::installFS();
     bk::installChildProcess();
     bk::installRequire();
+    bk::installBuffer();
 
     bk::installConsole();
     bk::installCrypto();

@@ -82,6 +82,8 @@ struct MoTarget {
     bool characterData = false;
     bool attributeOldValue = false;
     bool characterDataOldValue = false;
+    bool hasAttributeFilter = false;
+    std::vector<std::string> attributeFilter;
 };
 
 struct MoEntry {
@@ -132,6 +134,9 @@ bool optionOn(Value options, const char* name) {
     return ev::toBool(ev::getProperty(options, name));
 }
 
+static bool g_moMicrotaskScheduled = false;
+static void deliverMutationRecords();
+
 // ---------------------------------------------------------------------------
 // The notice hook
 // ---------------------------------------------------------------------------
@@ -156,6 +161,18 @@ void onDomMutation(dom::Document*, const dom::Document::MutationNotice& notice) 
                     break;
                 case Kind::Attributes:
                     wanted = t.attributes;
+                    if (wanted && t.hasAttributeFilter) {
+                        bool matched = false;
+                        if (notice.attributeName) {
+                            for (const auto& filterAttr : t.attributeFilter) {
+                                if (filterAttr == *notice.attributeName) {
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!matched) wanted = false;
+                    }
                     withOldValue = t.attributeOldValue;
                     break;
                 case Kind::CharacterData:
@@ -185,6 +202,28 @@ void onDomMutation(dom::Document*, const dom::Document::MutationNotice& notice) 
             // targets matched — two overlapping observe() calls on the same
             // observer are one registration in the web's model too.
             break;
+        }
+    }
+
+    if (!g_moMicrotaskScheduled) {
+        bool hasQueue = false;
+        for (const auto& entry : observers()) {
+            if (!entry->queue.empty()) {
+                hasQueue = true;
+                break;
+            }
+        }
+        if (hasQueue) {
+            ev::GlobalValue qm = ev::globalValue("queueMicrotask");
+            if (qm.found && ev::isFunction(qm.value)) {
+                g_moMicrotaskScheduled = true;
+                Value cb = ev::makeFunction([](Value, std::span<const Value>) {
+                    g_moMicrotaskScheduled = false;
+                    deliverMutationRecords();
+                    return ev::undefined();
+                }, 0);
+                ev::call(qm.value, ev::undefined(), std::span<const Value>(&cb, 1));
+            }
         }
     }
 }
@@ -279,9 +318,22 @@ Value observerObserve(Value thisValue, std::span<const Value> a) {
     t.characterData = optionOn(options.get(), "characterData");
     t.attributeOldValue = optionOn(options.get(), "attributeOldValue");
     t.characterDataOldValue = optionOn(options.get(), "characterDataOldValue");
+
+    Value afVal = ev::getProperty(options.get(), "attributeFilter");
+    if (ev::isObject(afVal)) {
+        t.hasAttributeFilter = true;
+        uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(afVal, "length")));
+        for (uint32_t i = 0; i < len; ++i) {
+            Value item = ev::getElement(afVal, i);
+            if (ev::isString(item)) {
+                t.attributeFilter.push_back(ev::toUtf8(item));
+            }
+        }
+    }
+
     // The web's shorthand: asking for old values, or for an attribute filter,
     // turns the corresponding kind on without naming it.
-    if (t.attributeOldValue) t.attributes = true;
+    if (t.attributeOldValue || t.hasAttributeFilter) t.attributes = true;
     if (t.characterDataOldValue) t.characterData = true;
     if (!t.childList && !t.attributes && !t.characterData) {
         return ev::throwTypeError(
@@ -310,6 +362,21 @@ Value observerDisconnect(Value thisValue, std::span<const Value>) {
     // The web drops the record queue too: a disconnected observer's pending
     // records are gone, not merely undelivered.
     entry->queue.clear();
+    return ev::undefined();
+}
+
+Value observerUnobserve(Value thisValue, std::span<const Value> a) {
+    MoEntry* entry = observerOf(thisValue);
+    if (!entry) return ev::undefined();
+    dom::Node* node = hostNodeOf(argAt(a, 0));
+    if (!node) return ev::undefined();
+    HostNodeState* st = hostNodeStateFor(node);
+    for (auto it = entry->targets.begin(); it != entry->targets.end(); ++it) {
+        if (it->node == st) {
+            entry->targets.erase(it);
+            break;
+        }
+    }
     return ev::undefined();
 }
 
@@ -519,6 +586,7 @@ void checkResizeObservers() {
 }
 
 void deliverMutationRecords() {
+    g_moMicrotaskScheduled = false;
     if (!g_observers || g_observers->empty()) return;
     // Re-entrancy is not merely guarded, it is the design: a callback that
     // mutates what it observes queues records that are delivered NEXT frame.
@@ -580,6 +648,7 @@ void installObserverGlobals() {
         },
         [](ObjectBuilder& b) {
             b.def("observe", 2, observerObserve);
+            b.def("unobserve", 1, observerUnobserve);
             b.def("disconnect", 0, observerDisconnect);
             b.def("takeRecords", 0, observerTakeRecords);
         });

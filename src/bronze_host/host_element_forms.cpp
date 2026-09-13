@@ -91,6 +91,29 @@ static void performElementClick(dom::Element* el) {
         }
     }
 }
+
+static bool checkPatternMismatch(dom::Element* el) {
+    if (!el || !el->hasAttribute("pattern")) return false;
+    std::string pattern = el->getAttribute("pattern");
+    std::string val = layout::formValue(el);
+    if (val.empty() || pattern.empty()) return false;
+    ev::GlobalValue reCtor = ev::globalValue("RegExp");
+    if (reCtor.found && ev::isFunction(reCtor.value)) {
+        Value args[2] = { ev::fromUtf8("^(?:" + pattern + ")$"), ev::fromUtf8("u") };
+        ev::CallResult cr = ev::call(reCtor.value, ev::undefined(), std::span<const Value>(args, 2));
+        if (!cr.thrown && ev::isObject(cr.value)) {
+            Value testFn = ev::getProperty(cr.value, "test");
+            if (ev::isFunction(testFn)) {
+                Value valArg[1] = { ev::fromUtf8(val) };
+                ev::CallResult tr = ev::call(testFn, cr.value, std::span<const Value>(valArg, 1));
+                if (!tr.thrown && !ev::toBool(tr.value)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 } // namespace
 
 void decorateElementForms(ObjectBuilder& b) {
@@ -234,7 +257,24 @@ void decorateElementForms(ObjectBuilder& b) {
     defBoolAttr("readOnly", "readonly");
     defBoolAttr("hidden", "hidden");
     defBoolAttr("autofocus", "autofocus");
-    defBoolAttr("draggable", "draggable");
+
+    b.accessor("draggable",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::fromBool(false);
+                   const std::string& v = st->el->getAttribute("draggable");
+                   if (v == "true") return ev::fromBool(true);
+                   if (v == "false") return ev::fromBool(false);
+                   if (st->el->tagName() == "IMG" || st->el->tagName() == "img") return ev::fromBool(true);
+                   return ev::fromBool(false);
+               },
+               [](Value self_, std::span<const Value> args) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::undefined();
+                   bool bval = ev::toBool(argAt(args, 0));
+                   st->el->setAttribute("draggable", bval ? "true" : "false");
+                   return ev::undefined();
+               });
 
     // Plain string reflections. `type` is the one with a default — an <input>
     // with no type attribute is a text input, and UI code branches on it.
@@ -373,6 +413,9 @@ void decorateElementForms(ObjectBuilder& b) {
             std::string val = layout::formValue(st->el);
             if (val.empty()) valid = false;
         }
+        if (valid && checkPatternMismatch(st->el)) {
+            valid = false;
+        }
         if (!valid) {
             dom::Event evt("invalid", false, true);
             evt.setIsTrusted(true);
@@ -400,12 +443,13 @@ void decorateElementForms(ObjectBuilder& b) {
                    if (st && st->el && st->el->hasAttribute("required")) {
                        if (layout::formValue(st->el).empty()) valueMissing = true;
                    }
-                   bool valid = !customError && !valueMissing;
+                   bool patternMismatch = st && st->el ? checkPatternMismatch(st->el) : false;
+                   bool valid = !customError && !valueMissing && !patternMismatch;
                    v.set("valid", ev::fromBool(valid));
                    v.set("customError", ev::fromBool(customError));
                    v.set("valueMissing", ev::fromBool(valueMissing));
                    v.set("typeMismatch", ev::fromBool(false));
-                   v.set("patternMismatch", ev::fromBool(false));
+                   v.set("patternMismatch", ev::fromBool(patternMismatch));
                    v.set("tooLong", ev::fromBool(false));
                    v.set("tooShort", ev::fromBool(false));
                    v.set("rangeUnderflow", ev::fromBool(false));
@@ -424,6 +468,8 @@ void decorateElementForms(ObjectBuilder& b) {
                        return ev::fromUtf8(st->el->customValidity());
                    if (st->el->hasAttribute("required") && layout::formValue(st->el).empty())
                        return ev::fromUtf8("Please fill out this field.");
+                   if (checkPatternMismatch(st->el))
+                       return ev::fromUtf8("Please match the requested format.");
                    return ev::fromUtf8("");
                },
                nullptr);

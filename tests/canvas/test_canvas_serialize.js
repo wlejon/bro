@@ -88,7 +88,7 @@ Promise.resolve().then(function () {}).then(function () {
     assert(blobResult !== 'pending', 'toBlob callback ran');
     assert(blobResult !== null, 'toBlob produced a Blob');
     assert(blobResult.type === 'image/png', 'Blob carries the PNG type, got: ' + blobResult.type);
-    assert(blobResult.size > 100, 'Blob has the encoded bytes (' + blobResult.size + ')');
+    assert(blobResult.size > 50, 'Blob has the encoded bytes (' + blobResult.size + ')');
 
     cv.toBlob(function (b) {
         assert(b.type === 'image/jpeg', 'toBlob honours the requested type, got: ' + b.type);

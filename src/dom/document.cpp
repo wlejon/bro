@@ -85,6 +85,17 @@ void Document::unregisterRange(Range* r) {
 
 void Document::notifyNodeRemoved(Node* removed) {
     if (!removed) return;
+    if (focusedElement_) {
+        bool contains = (focusedElement_ == removed);
+        if (!contains) {
+            for (Node* p = focusedElement_->parentNode(); p; p = p->parentNode()) {
+                if (p == removed) { contains = true; break; }
+            }
+        }
+        if (contains) {
+            setActiveElement(nullptr);
+        }
+    }
     Node* parent = removed->parentNode();
     if (!parent) return;
     int idx = -1;

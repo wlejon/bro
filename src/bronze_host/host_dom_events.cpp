@@ -37,10 +37,18 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace bro::bronze_host {
+
+struct DragSessionState {
+    std::unordered_map<std::string, std::string> data;
+    std::string effectAllowed = "all";
+    std::string dropEffect = "none";
+};
+static DragSessionState g_dragSession;
 
 // ---------------------------------------------------------------------------
 // Target identity
@@ -218,17 +226,52 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
     }
 
     if (auto* drag = dynamic_cast<dom::DragEvent*>(&e)) {
-        ObjectBuilder dt;
-        dt.set("dropEffect", ev::fromUtf8("none"));
-        dt.set("effectAllowed", ev::fromUtf8("all"));
+        if (drag->type() == "dragstart") {
+            g_dragSession.data.clear();
+            g_dragSession.effectAllowed = "all";
+            g_dragSession.dropEffect = "none";
+        }
 
-        std::vector<std::string> typeList;
-        if (!drag->files().empty()) typeList.push_back("Files");
-        if (!drag->dataText().empty()) typeList.push_back("text/plain");
-        Value typesArr = hostArrayOf(typeList.size(), [&typeList](size_t i) {
-            return ev::fromUtf8(typeList[i]);
-        });
-        dt.set("types", typesArr);
+        ObjectBuilder dt;
+
+        dt.accessor(
+            "effectAllowed",
+            [](Value, std::span<const Value>) {
+                return ev::fromUtf8(g_dragSession.effectAllowed);
+            },
+            [](Value, std::span<const Value> a) {
+                if (!a.empty()) g_dragSession.effectAllowed = ev::toUtf8(a[0]);
+                return ev::undefined();
+            });
+
+        dt.accessor(
+            "dropEffect",
+            [](Value, std::span<const Value>) {
+                return ev::fromUtf8(g_dragSession.dropEffect);
+            },
+            [](Value, std::span<const Value> a) {
+                if (!a.empty()) g_dragSession.dropEffect = ev::toUtf8(a[0]);
+                return ev::undefined();
+            });
+
+        dt.accessor(
+            "types",
+            [drag](Value, std::span<const Value>) {
+                std::vector<std::string> typeList;
+                if (!drag->files().empty()) typeList.push_back("Files");
+                for (const auto& [k, v] : g_dragSession.data) {
+                    if (std::find(typeList.begin(), typeList.end(), k) == typeList.end()) {
+                        typeList.push_back(k);
+                    }
+                }
+                if (typeList.empty() && !drag->dataText().empty()) {
+                    typeList.push_back("text/plain");
+                }
+                return hostArrayOf(typeList.size(), [&typeList](size_t i) {
+                    return ev::fromUtf8(typeList[i]);
+                });
+            },
+            nullptr);
 
         std::string dtText = drag->dataText();
         dt.def("getData", 1, [dtText](Value, std::span<const Value> a) {
@@ -236,20 +279,36 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
             if (ev::isObject(fV) || ev::isUndefined(fV)) return ev::fromUtf8("");
             std::string fmt = ev::toUtf8(fV);
             for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (fmt == "text" || fmt == "text/plain") return ev::fromUtf8(dtText);
+            if (fmt == "text") fmt = "text/plain";
+            auto it = g_dragSession.data.find(fmt);
+            if (it != g_dragSession.data.end()) return ev::fromUtf8(it->second);
+            if (fmt == "text/plain" && !dtText.empty()) return ev::fromUtf8(dtText);
             return ev::fromUtf8("");
         });
-        dt.def("setData", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-        dt.def("clearData", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
 
-        // A dropped file is a REAL File — bytes and all. It used to be a
-        // descriptor with `size: 0` and no content, which every shape check a
-        // page makes passes and every read fails: FileReader answered the empty
-        // string, `URL.createObjectURL` handed back an empty resource, and a
-        // three.js editor asked to import an .obj built an empty mesh without
-        // saying why. `makeFileFromPath` reads the file; anything unreadable
-        // still arrives as the name/path descriptor, so a drop of a directory
-        // does not fail the whole gesture.
+        dt.def("setData", 2, [](Value, std::span<const Value> a) {
+            if (a.size() < 2) return ev::undefined();
+            std::string fmt = ev::toUtf8(a[0]);
+            for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (fmt == "text") fmt = "text/plain";
+            std::string val = ev::toUtf8(a[1]);
+            g_dragSession.data[fmt] = val;
+            return ev::undefined();
+        });
+
+        dt.def("clearData", 1, [](Value, std::span<const Value> a) {
+            if (a.empty() || ev::isUndefined(a[0])) {
+                g_dragSession.data.clear();
+            } else {
+                std::string fmt = ev::toUtf8(a[0]);
+                for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (fmt == "text") fmt = "text/plain";
+                g_dragSession.data.erase(fmt);
+            }
+            return ev::undefined();
+        });
+
+        // A dropped file is a REAL File — bytes and all.
         const auto& files = drag->files();
         auto fileForPath = [](const std::string& path) {
             Value f = makeFileFromPath(path);
@@ -264,13 +323,6 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         });
         dt.set("files", filesArr);
 
-        // `items` is the DataTransferItemList, and a page that has it PREFERS
-        // it: the three.js editor branches on `dataTransfer.items` and reaches
-        // its files through `webkitGetAsEntry().file(cb)` because that path
-        // also carries dropped folders. So the entries have to answer with the
-        // same real Files `dt.files` holds, or having the list at all is worse
-        // than not having it — it steers the page onto a route that yields
-        // nothing.
         Value itemsArr = hostArrayOf(files.size(), [&files, &fileForPath](size_t i) {
             const std::string& path = files[i];
             const std::string name = std::filesystem::path(path).filename().string();
@@ -287,15 +339,6 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
                 entry.set("isDirectory", ev::fromBool(false));
                 entry.set("name", ev::fromUtf8(name));
                 entry.set("fullPath", ev::fromUtf8("/" + name));
-                // DEFERRED, and that is not a detail. FileSystemFileEntry.file()
-                // is asynchronous on the web, and code written against it
-                // counts on the callback landing after the loop that queued it:
-                // the three.js editor's getFilesFromItemList increments its
-                // "handled" counter in the callback and its "total" on the line
-                // AFTER the entry.file() call, so a synchronous callback
-                // compares 1 === 0, decides the batch is not finished, and
-                // silently drops every dropped file. The engine's own frame
-                // seam is the queue.
                 entry.def("file", 1, [path](Value, std::span<const Value> a) {
                     Value cb = argAt(a, 0);
                     if (!ev::isFunction(cb)) return ev::undefined();
@@ -315,6 +358,12 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         dt.set("items", itemsArr);
 
         b.set("dataTransfer", dt.get());
+
+        if (drag->type() == "dragend") {
+            g_dragSession.data.clear();
+            g_dragSession.effectAllowed = "all";
+            g_dragSession.dropEffect = "none";
+        }
     }
 
     if (auto* k = dynamic_cast<dom::KeyboardEvent*>(&e)) {

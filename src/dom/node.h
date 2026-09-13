@@ -29,6 +29,7 @@ public:
     Document* document() const { return document_; }
 
     Node* parentNode() const { return parent_; }
+    Element* parentElement() const;
     void setParent(Node* p) { parent_ = p; }
 
     std::vector<Node*>& childNodes() { return children_; }
