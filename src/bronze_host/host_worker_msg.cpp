@@ -160,22 +160,22 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             ev::throwTypeError("postMessage: ImageBitmap is closed");
             return false;
         }
-        if (!isTransferred(val, transfers)) {
-            ev::throwTypeError("postMessage: ImageBitmap is not cloneable without transfer");
-            return false;
-        }
+        bool transferred = isTransferred(val, transfers);
         uint32_t idx = static_cast<uint32_t>(transferImgs.size());
         SerializedImage simg;
         simg.width = bmp->width;
         simg.height = bmp->height;
-        simg.pixels = bmp->pixels;
+        if (transferred) {
+            simg.pixels = std::move(bmp->pixels);
+            bmp->closed = true;
+            bmp->width = 0;
+            bmp->height = 0;
+            bmp->image = nullptr;
+        } else {
+            simg.pixels = bmp->pixels;
+        }
         transferImgs.push_back(std::move(simg));
 
-        bmp->closed = true;
-        bmp->width = 0;
-        bmp->height = 0;
-        bmp->image = nullptr;
-        bmp->pixels.clear();
         w.u8(kTransferImageBitmap);
         w.u32(idx);
         return true;

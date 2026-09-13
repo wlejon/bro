@@ -550,12 +550,12 @@ static void dispatchWsMessage(ev::Persistent& target, const std::vector<uint8_t>
         evt.set(ev::setProperty(evt.get(), k, v));
 
     if (binary) {
+        Value ab = ev::createArrayBuffer(std::span<const uint8_t>(data.data(), data.size()));
         if (binaryType == "arraybuffer") {
-            Value ab = ev::createArrayBuffer(std::span<const uint8_t>(data.data(), data.size()));
             evt.set(ev::setProperty(evt.get(), "data", ab));
         } else {
-            Value blob = makeBlobValue(data, "");
-            evt.set(ev::setProperty(evt.get(), "data", blob));
+            Value u8 = ev::createTypedArrayView(ev::elements::Uint8, ab, 0, static_cast<uint32_t>(data.size()));
+            evt.set(ev::setProperty(evt.get(), "data", u8));
         }
     } else {
         std::string text(reinterpret_cast<const char*>(data.data()), data.size());
@@ -784,13 +784,7 @@ static Value webSocketCtor(Value, std::span<const Value> a) {
 #ifdef BRO_HAVE_CURL
         ws->easy = curl_easy_init();
         if (ws->easy) {
-            std::string curlUrl = ws->url;
-            if (curlUrl.rfind("ws://", 0) == 0) {
-                curlUrl = "http://" + curlUrl.substr(5);
-            } else if (curlUrl.rfind("wss://", 0) == 0) {
-                curlUrl = "https://" + curlUrl.substr(6);
-            }
-            curl_easy_setopt(ws->easy, CURLOPT_URL, curlUrl.c_str());
+            curl_easy_setopt(ws->easy, CURLOPT_URL, ws->url.c_str());
             curl_easy_setopt(ws->easy, CURLOPT_CONNECT_ONLY, 2L);
             curl_easy_setopt(ws->easy, CURLOPT_WRITEFUNCTION, wsDummyWrite);
             curl_easy_setopt(ws->easy, CURLOPT_FOLLOWLOCATION, 1L);

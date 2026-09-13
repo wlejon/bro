@@ -24,6 +24,11 @@ function runNavMeshTests() {
 
     // Horizontal quad (CCW from above) at height y covering [x0,x1]x[z0,z1].
     function pushQuad(verts, idx, x0, z0, x1, z1, y) {
+        if (Array.isArray(x0)) {
+            y = z0;
+            const b0 = x0;
+            x0 = b0[0]; z0 = b0[1]; x1 = b0[2]; z1 = b0[3];
+        }
         const b = verts.length / 3;
         verts.push(x0, y, z0,  x0, y, z1,  x1, y, z0,  x1, y, z1);
         idx.push(b, b + 1, b + 2,  b + 2, b + 1, b + 3);
@@ -31,6 +36,11 @@ function runNavMeshTests() {
 
     // Sloped quad from (x0, y0) to (x1, y1) along X, covering [z0,z1].
     function pushRamp(verts, idx, x0, y0, x1, y1, z0, z1) {
+        if (Array.isArray(x0)) {
+            const b0 = x0;
+            z0 = y0; z1 = x1;
+            x0 = b0[0]; y0 = b0[1]; x1 = b0[2]; y1 = b0[3];
+        }
         const b = verts.length / 3;
         verts.push(x0, y0, z0,  x0, y0, z1,  x1, y1, z0,  x1, y1, z1);
         idx.push(b, b + 1, b + 2,  b + 2, b + 1, b + 3);
@@ -38,6 +48,11 @@ function runNavMeshTests() {
 
     // Closed axis-aligned box (12 tris, CCW from outside).
     function pushBox(verts, idx, cx, cy, cz, hx, hy, hz) {
+        if (Array.isArray(cx)) {
+            const b0 = cx, b1 = cy;
+            cx = b0[0]; cy = b0[1]; cz = b0[2];
+            hx = b1[0]; hy = b1[1]; hz = b1[2];
+        }
         const b = verts.length / 3;
         const x0 = cx - hx, x1 = cx + hx, y0 = cy - hy, y1 = cy + hy, z0 = cz - hz, z1 = cz + hz;
         verts.push(
@@ -66,9 +81,9 @@ function runNavMeshTests() {
     // =========================================================================
     {
         const verts = [], idx = [];
-        pushQuad(verts, idx, -12, -12, 12, 12, 0);        // floor
-        pushBox(verts, idx, 0, 1, 0, 2, 1, 2);            // obstacle astride the midline
-        pushQuad(verts, idx, 30, -3, 36, 3, 0);           // disconnected island
+        pushQuad(verts, idx, [-12, -12, 12, 12], 0);        // floor
+        pushBox(verts, idx, [0, 1, 0], [2, 1, 2]);            // obstacle astride the midline
+        pushQuad(verts, idx, [30, -3, 36, 3], 0);           // disconnected island
 
         const mesh = G.bakeNavMesh({
             positions: new Float32Array(verts),
@@ -167,7 +182,7 @@ function runNavMeshTests() {
         });
         // Mesh-shape obstacle: a real triangle box astride the route.
         const mv = [], mi = [];
-        pushBox(mv, mi, 0, 1, 0, 1.5, 1, 1.5);
+        pushBox(mv, mi, [0, 1, 0], [1.5, 1, 1.5]);
         Physics.createBody({
             shape: 'mesh', positions: mv, indices: mi,
             position: { x: 0, y: 0, z: 0 }, static: true,
@@ -212,10 +227,10 @@ function runNavMeshTests() {
     // =========================================================================
     const twoLevel = (() => {
         const verts = [], idx = [];
-        pushQuad(verts, idx, -12, -12, 12, 12, 0);       // ground floor
-        pushQuad(verts, idx, 4, -4, 12, 4, 3);           // platform at y=3 (over the floor)
-        pushRamp(verts, idx, -4, 0, 4, 3, -2, 2);        // ramp up (~20.6 deg)
-        pushQuad(verts, idx, 30, -3, 36, 3, 0);          // disconnected island
+        pushQuad(verts, idx, [-12, -12, 12, 12], 0);       // ground floor
+        pushQuad(verts, idx, [4, -4, 12, 4], 3);           // platform at y=3 (over the floor)
+        pushRamp(verts, idx, [-4, 0, 4, 3], -2, 2);        // ramp up (~20.6 deg)
+        pushQuad(verts, idx, [30, -3, 36, 3], 0);          // disconnected island
         return G.bakeNavMesh({
             positions: new Float32Array(verts),
             indices: new Uint32Array(idx),
@@ -361,8 +376,8 @@ function runNavMeshTests() {
     {
         // Two floors with a 2 m gap the agent cannot walk across.
         const verts = [], idx = [];
-        pushQuad(verts, idx, -10, -4, -1, 4, 0);   // west floor
-        pushQuad(verts, idx, 1, -4, 10, 4, 0);     // east floor
+        pushQuad(verts, idx, [-10, -4, -1, 4], 0);   // west floor
+        pushQuad(verts, idx, [1, -4, 10, 4], 0);     // east floor
         const bake = (links) => G.bakeNavMesh({
             positions: new Float32Array(verts), indices: new Uint32Array(idx),
             agentRadius: 0.5, offMeshLinks: links,
