@@ -332,7 +332,7 @@ Value hostNodeValue(dom::Node* node) {
             v = makeCharacterDataValue(node);
             break;
         case dom::NodeType::DocumentFragment:
-            v = makeFragmentValue(static_cast<dom::DocumentFragment*>(node));
+            v = makeFragmentValue(node);
             break;
         default:
             return ev::null();

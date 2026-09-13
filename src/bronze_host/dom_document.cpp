@@ -5,6 +5,7 @@
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
+#include "bronze_host/host_matchmedia.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -577,6 +578,7 @@ void clearHostDocument(dom::Document* doc) {
     if (s_activeDocOverride == doc) {
         s_activeDocOverride = nullptr;
     }
+    removeHostMediaQueriesForDocument(doc);
 }
 
 }  // namespace bro::bronze_host

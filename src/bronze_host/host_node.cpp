@@ -593,7 +593,7 @@ Value makeCharacterDataValue(dom::Node* node) {
     return b.get();
 }
 
-Value makeFragmentValue(dom::DocumentFragment* frag) {
+Value makeFragmentValue(dom::Node* frag) {
     if (!frag) return ev::null();
     HostNodeState* st = hostNodeStateFor(frag);
     ObjectBuilder b(makeNodeHandleObject(frag));
@@ -636,16 +636,83 @@ Value makeFragmentValue(dom::DocumentFragment* frag) {
 
     b.accessor("textContent",
                [](Value self_, std::span<const Value>) {
-        HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st) return ev::undefined();
                    std::string out;
-                   if (st->node)
-                       for (dom::Node* n : st->node->childNodes())
-                           if (n->nodeType() == dom::NodeType::Text)
-                               out += static_cast<dom::TextNode*>(n)->data();
+                   if (st->node) {
+                       std::function<void(dom::Node*)> collect = [&](dom::Node* n) {
+                           for (dom::Node* kid : n->childNodes()) {
+                               if (kid->nodeType() == dom::NodeType::Text) {
+                                   out += static_cast<dom::TextNode*>(kid)->data();
+                               } else if (kid->nodeType() == dom::NodeType::Element) {
+                                   collect(kid);
+                               }
+                           }
+                       };
+                       collect(st->node);
+                   }
                    return ev::fromUtf8(out);
                },
                nullptr);
+
+    b.def("querySelector", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node || a.empty()) return ev::null();
+        Value selV = a[0];
+        if (ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
+        std::string sel = ev::toUtf8(selV);
+        if (auto* el = dynamic_cast<dom::Element*>(st->node)) {
+            return hostElementValue(el->querySelector(sel));
+        }
+        for (dom::Node* child : st->node->childNodes()) {
+            if (auto* cel = dynamic_cast<dom::Element*>(child)) {
+                if (cel->matches(sel)) return hostElementValue(cel);
+                if (dom::Element* found = cel->querySelector(sel)) return hostElementValue(found);
+            }
+        }
+        return ev::null();
+    });
+
+    b.def("querySelectorAll", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node || a.empty()) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        Value selV = a[0];
+        if (ev::isObject(selV) || ev::isUndefined(selV))
+            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        std::string sel = ev::toUtf8(selV);
+        std::vector<dom::Element*> out;
+        if (auto* el = dynamic_cast<dom::Element*>(st->node)) {
+            out = el->querySelectorAll(sel);
+        } else {
+            for (dom::Node* child : st->node->childNodes()) {
+                if (auto* cel = dynamic_cast<dom::Element*>(child)) {
+                    if (cel->matches(sel)) out.push_back(cel);
+                    cel->querySelectorAllSimple(sel, out);
+                }
+            }
+        }
+        return hostArrayOf(out.size(), [&out](size_t i) {
+            return hostElementValue(out[i]);
+        });
+    });
+
+    b.def("getElementById", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node || a.empty()) return ev::null();
+        Value idV = a[0];
+        if (ev::isObject(idV) || ev::isUndefined(idV)) return ev::null();
+        std::string id = ev::toUtf8(idV);
+        std::function<dom::Element*(dom::Node*)> find = [&](dom::Node* n) -> dom::Element* {
+            for (dom::Node* kid : n->childNodes()) {
+                if (auto* el = dynamic_cast<dom::Element*>(kid)) {
+                    if (el->id() == id) return el;
+                    if (auto* sub = find(el)) return sub;
+                }
+            }
+            return nullptr;
+        };
+        return hostElementValue(find(st->node));
+    });
 
     installNodeTree(b);
     return b.get();

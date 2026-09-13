@@ -423,7 +423,7 @@ Value makeCharacterDataValue(dom::Node* node);
 
 // A DocumentFragment: a parent that holds children and vanishes into the tree
 // when inserted. Nothing but the node surface, which is all a fragment has.
-Value makeFragmentValue(dom::DocumentFragment* frag);
+Value makeFragmentValue(dom::Node* frag);
 
 // The NODE half of the tree surface — parentNode, childNodes, the child edges
 // and siblings, the four mutators, contains, cloneNode, remove. Installed on

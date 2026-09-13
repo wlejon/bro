@@ -1,5 +1,6 @@
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_shadow_dom.h"
+#include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
@@ -41,6 +42,7 @@ HostClass g_htmlFormElementClass;
 HostClass g_htmlIFrameElementClass;
 HostClass g_htmlHeadingElementClass;
 HostClass g_htmlOptionElementClass;
+HostClass g_htmlTemplateElementClass;
 HostClass g_htmlHtmlElementClass;
 HostClass g_htmlBodyElementClass;
 
@@ -150,6 +152,7 @@ void installHtmlInterfaces() {
         {g_htmlIFrameElementClass, "HTMLIFrameElement", decorateIFrameProto},
         {g_htmlHeadingElementClass, "HTMLHeadingElement"},
         {g_htmlOptionElementClass, "HTMLOptionElement"},
+        {g_htmlTemplateElementClass, "HTMLTemplateElement", decorateTemplateProto},
         {g_htmlHtmlElementClass, "HTMLHtmlElement"},
         {g_htmlBodyElementClass, "HTMLBodyElement"},
     };
@@ -198,6 +201,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
         return g_htmlHeadingElementClass.prototype();
     }
     if (tag == "option") return g_htmlOptionElementClass.prototype();
+    if (tag == "template") return g_htmlTemplateElementClass.prototype();
     if (tag == "html") return g_htmlHtmlElementClass.prototype();
     if (tag == "body") return g_htmlBodyElementClass.prototype();
     if (tag == "video") return g_htmlVideoElementClass.prototype();

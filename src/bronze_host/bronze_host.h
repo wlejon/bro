@@ -57,6 +57,7 @@ void clearRealmScope(uint64_t scopeId);
 
 /// Deliver media query changes to matchMedia listeners.
 void deliverHostMediaQueryChanges();
+void clearHostMediaQueries();
 
 /// Terminate and join all active worker threads on shutdown.
 void terminateAllWorkers();

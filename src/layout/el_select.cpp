@@ -23,7 +23,7 @@ std::vector<ElSelect::Option> ElSelect::getOptions() const {
 
     // Walk DOM children looking for <option> elements
     for (auto* child : elem_->children()) {
-        if (child->tagName() != "OPTION") continue;
+        if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
 
         Option opt;
         opt.value = child->getAttribute("value");
@@ -68,7 +68,7 @@ void ElSelect::initSelectedIndex() {
     }
     int idx = 0;
     for (auto* child : elem_->children()) {
-        if (child->tagName() != "OPTION") continue;
+        if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
         if (child->hasAttribute("selected")) {
             selectedIndex_ = idx;
             return;

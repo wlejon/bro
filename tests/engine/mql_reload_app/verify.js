@@ -17,10 +17,11 @@ assert(matchMedia(`(width: ${W}px)`).matches === true,
 // pre-reload realm would be walked with a dead context here.
 let fires = 0;
 const narrow = matchMedia('(max-width: 500px)');
-narrow.addEventListener('change', (ev) => { fires++; assert(ev.matches === true, 'new state'); });
+narrow.addEventListener('change', (ev) => { fires++; assert(ev.matches === (fires === 1), 'new state'); });
 resize(400, 300);
 assert(fires === 1, 'change fired after reload-swapped realm resize, got ' + fires);
 resize(W, 600);
+assert(fires === 2, 'change fired on resize back, got ' + fires);
 
 // GC sweep with the run-2 pinned, reference-free lists still registered.
 advanceTime(1200);

@@ -74,4 +74,18 @@ void clearRadioGroup(dom::Element* el);
 // Return the currently checked same-named radio input in the group, or nullptr.
 dom::Element* checkedRadioInGroup(dom::Element* el);
 
+// Check if an element is labelable (button, input [except hidden],
+// meter, output, progress, select, textarea).
+bool isLabelable(const dom::Element* el);
+
+// Find the labeled control for a <label> element:
+// 1. If [for] is present, the element with that ID if labelable, else nullptr.
+// 2. Otherwise, the first labelable descendant element.
+dom::Element* findLabeledControl(const dom::Element* label);
+
+// Check if an element is interactive content that blocks label activation
+// when clicked inside a label (button, select, textarea, details, embed, iframe,
+// a[href], input [except hidden]).
+bool isInteractiveContent(const dom::Element* el);
+
 }  // namespace bro::layout

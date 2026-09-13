@@ -12,7 +12,9 @@
 #include "layout/el_textarea.h"
 #include "layout/form_control.h"
 #include "dom/text_offsets.h"
+#include "platform/dialogs.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -30,6 +32,64 @@ static std::string selectionValueOf(dom::Element* el) {
         return el->textContent();
     }
     return el->getAttribute("value");
+}
+
+static void performElementClick(dom::Element* el) {
+    if (!el || el->hasAttribute("disabled")) return;
+    const std::string& tag = el->tagName();
+    if (tag == "LABEL" || tag == "label") {
+        dom::MouseEvent ev("click");
+        dom::dispatchDomEvent(el, ev);
+        if (ev.defaultPrevented()) return;
+        dom::Element* control = layout::findLabeledControl(el);
+        if (control && !control->hasAttribute("disabled")) {
+            performElementClick(control);
+        }
+        return;
+    }
+
+    bool isInput = (tag == "INPUT" || tag == "input");
+    dom::MouseEvent ev("click");
+    dom::dispatchDomEvent(el, ev);
+    if (!el) return;
+    if (!ev.defaultPrevented() && isInput) {
+        std::string t = el->getAttribute("type");
+        for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (t == "radio") {
+            if (!el->hasAttribute("checked")) {
+                layout::clearRadioGroup(el);
+                if (!el) return;
+                el->setAttribute("checked", "");
+                dom::Event inputEvt("input");
+                dom::dispatchDomEvent(el, inputEvt);
+                if (!el) return;
+                dom::Event changeEvt("change");
+                dom::dispatchDomEvent(el, changeEvt);
+            }
+        } else if (t == "checkbox") {
+            if (el->hasAttribute("checked")) el->removeAttribute("checked");
+            else el->setAttribute("checked", "");
+            dom::Event inputEvt("input");
+            dom::dispatchDomEvent(el, inputEvt);
+            if (!el) return;
+            dom::Event changeEvt("change");
+            dom::dispatchDomEvent(el, changeEvt);
+        } else if (t == "file") {
+            bool allowMultiple = el->hasAttribute("multiple");
+            std::string accept = el->getAttribute("accept");
+            std::vector<std::string> picked = platform::Dialogs::pickFiles(accept, allowMultiple);
+            if (!picked.empty()) {
+                el->setSelectedFiles(picked);
+                std::string filename = std::filesystem::path(picked[0]).filename().string();
+                el->setAttribute("value", "C:\\fakepath\\" + filename);
+                dom::Event inputEvt("input");
+                dom::dispatchDomEvent(el, inputEvt);
+                if (!el) return;
+                dom::Event changeEvt("change");
+                dom::dispatchDomEvent(el, changeEvt);
+            }
+        }
+    }
 }
 } // namespace
 
@@ -65,11 +125,40 @@ void decorateElementForms(ObjectBuilder& b) {
                        ev::setProperty(self_, kValueExpando, v);
                        return ev::undefined();
                    }
-                   if (!ev::isObject(v))
-                       layout::setFormValue(st->el,
-                                            ev::isUndefined(v) ? "" : ev::toUtf8(v));
-                   return ev::undefined();
-               });
+                    if (!ev::isObject(v)) {
+                        std::string s = ev::isUndefined(v) ? "" : ev::toUtf8(v);
+                        layout::setFormValue(st->el, s);
+                        if (s.empty() && (st->el->tagName() == "INPUT" || st->el->tagName() == "input")) {
+                            std::string t = st->el->getAttribute("type");
+                            for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                            if (t == "file") {
+                                st->el->setSelectedFiles({});
+                            }
+                        }
+                    }
+                    return ev::undefined();
+                });
+
+    b.accessor("files",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::null();
+                   const std::string& tag = st->el->tagName();
+                   if (tag != "INPUT" && tag != "input") return ev::null();
+                   std::string type = st->el->getAttribute("type");
+                   for (char& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                   if (type != "file") return ev::null();
+                   const auto& files = st->el->selectedFiles();
+                   return hostArrayOf(files.size(), [&files](size_t i) {
+                       Value f = makeFileFromPath(files[i]);
+                       if (!ev::isUndefined(f)) return f;
+                       ObjectBuilder d;
+                       d.set("name", ev::fromUtf8(std::filesystem::path(files[i]).filename().string()));
+                       d.set("path", ev::fromUtf8(files[i]));
+                       return d.get();
+                   });
+               },
+               nullptr);
 
     b.accessor("selectedIndex",
                [](Value self_, std::span<const Value>) {
@@ -350,34 +439,7 @@ void decorateElementForms(ObjectBuilder& b) {
     b.def("click", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
-        bool isInput = (st->el->tagName() == "INPUT" || st->el->tagName() == "input");
-        dom::MouseEvent ev("click");
-        dom::dispatchDomEvent(st->el, ev);
-        if (!st->el) return ev::undefined();
-        if (!ev.defaultPrevented() && isInput) {
-            std::string t = st->el->getAttribute("type");
-            for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (t == "radio") {
-                if (!st->el->hasAttribute("checked")) {
-                    layout::clearRadioGroup(st->el);
-                    if (!st->el) return ev::undefined();
-                    st->el->setAttribute("checked", "");
-                    dom::Event inputEvt("input");
-                    dom::dispatchDomEvent(st->el, inputEvt);
-                    if (!st->el) return ev::undefined();
-                    dom::Event changeEvt("change");
-                    dom::dispatchDomEvent(st->el, changeEvt);
-                }
-            } else if (t == "checkbox") {
-                if (st->el->hasAttribute("checked")) st->el->removeAttribute("checked");
-                else st->el->setAttribute("checked", "");
-                dom::Event inputEvt("input");
-                dom::dispatchDomEvent(st->el, inputEvt);
-                if (!st->el) return ev::undefined();
-                dom::Event changeEvt("change");
-                dom::dispatchDomEvent(st->el, changeEvt);
-            }
-        }
+        performElementClick(st->el);
         return ev::undefined();
     });
 }

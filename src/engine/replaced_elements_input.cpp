@@ -1,4 +1,4 @@
-﻿// Shared replaced-element control input handling.
+// Shared replaced-element control input handling.
 // Used by the Engine for both the app document and system panels.
 
 #include "engine/replaced_elements.h"
@@ -16,6 +16,7 @@
 #include "layout/el_textarea.h"
 #include "layout/form_control.h"
 #include "layout/value_change.h"
+#include "platform/dialogs.h"
 #include "platform/sdl_window.h"
 #include "util/string_utils.h"
 
@@ -24,6 +25,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -744,6 +746,91 @@ void dispatchDocMouseRelease(
                         dom::Event resetEvt("reset", true, true);
                         resetEvt.setIsTrusted(true);
                         dom::dispatchDomEvent(owner, resetEvt);
+                    }
+                }
+            }
+        }
+
+        // <label> activation forwarding: clicking a label (or non-interactive
+        // content inside it, e.g. text or spans) forwards activation to the
+        // labeled control. If the click landed on interactive content (a button,
+        // an input, etc.), it must NOT forward so direct control clicks do not
+        // double-toggle.
+        if (!clickEvt.defaultPrevented() && target) {
+            dom::Element* label = nullptr;
+            for (auto* el = target; el; el = el->parentElement()) {
+                if (el->tagName() == "LABEL" || el->tagName() == "label") {
+                    label = el;
+                    break;
+                }
+                if (layout::isInteractiveContent(el)) {
+                    break;
+                }
+            }
+            if (label) {
+                dom::Element* control = layout::findLabeledControl(label);
+                if (control && control != target && !control->hasAttribute("disabled")) {
+                    bool isInput = (control->tagName() == "INPUT" || control->tagName() == "input");
+                    if (isInput) {
+                        std::string t = control->getAttribute("type");
+                        for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (t == "checkbox") {
+                            dom::MouseEvent fwdClick("click");
+                            populate(fwdClick);
+                            dom::dispatchDomEvent(control, fwdClick);
+                            if (!fwdClick.defaultPrevented()) {
+                                if (control->hasAttribute("checked")) {
+                                    control->removeAttribute("checked");
+                                } else {
+                                    control->setAttribute("checked", "");
+                                }
+                                dom::Event changeEvt("change");
+                                dispatchControlEvent(ctx, control, changeEvt);
+                                dispatchInputEvent(ctx, control);
+                                if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+                            }
+                        } else if (t == "radio") {
+                            dom::MouseEvent fwdClick("click");
+                            populate(fwdClick);
+                            dom::dispatchDomEvent(control, fwdClick);
+                            if (!fwdClick.defaultPrevented()) {
+                                if (!control->hasAttribute("checked")) {
+                                    layout::clearRadioGroup(control);
+                                    control->setAttribute("checked", "");
+                                    dom::Event changeEvt("change");
+                                    dispatchControlEvent(ctx, control, changeEvt);
+                                    dispatchInputEvent(ctx, control);
+                                    if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+                                }
+                            }
+                        } else if (t == "file") {
+                            dom::MouseEvent fwdClick("click");
+                            populate(fwdClick);
+                            dom::dispatchDomEvent(control, fwdClick);
+                            if (!fwdClick.defaultPrevented()) {
+                                bool allowMultiple = control->hasAttribute("multiple");
+                                std::string accept = control->getAttribute("accept");
+                                std::vector<std::string> picked = platform::Dialogs::pickFiles(accept, allowMultiple);
+                                if (!picked.empty()) {
+                                    control->setSelectedFiles(picked);
+                                    std::string filename = std::filesystem::path(picked[0]).filename().string();
+                                    control->setAttribute("value", "C:\\fakepath\\" + filename);
+                                    dom::Event inputEvt("input");
+                                    dom::dispatchDomEvent(control, inputEvt);
+                                    dom::Event changeEvt("change");
+                                    dom::dispatchDomEvent(control, changeEvt);
+                                    if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+                                }
+                            }
+                        } else {
+                            dom::MouseEvent fwdClick("click");
+                            populate(fwdClick);
+                            dom::dispatchDomEvent(control, fwdClick);
+                        }
+                    } else {
+                        dom::MouseEvent fwdClick("click");
+                        populate(fwdClick);
+                        dom::dispatchDomEvent(control, fwdClick);
                     }
                 }
             }

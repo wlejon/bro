@@ -102,6 +102,7 @@ void Engine::performAppReload() {
 
     bro::bronze_host::clearHostTimers();
     bro::bronze_host::resetGlobalExpandos();
+    bro::bronze_host::clearHostMediaQueries();
 
     if (activeAppModuleHandle_ != 0) {
         bro::bronze_host::unloadAppModule(activeAppModuleHandle_);

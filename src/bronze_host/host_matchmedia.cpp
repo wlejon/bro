@@ -1,6 +1,7 @@
 #include "bronze_host/host_matchmedia.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_internal.h"
 #include "dom/document.h"
 #include "engine/engine.h"
 #include "css/parser.h"
@@ -15,12 +16,21 @@ namespace bro::bronze_host {
 
 namespace {
 
+struct MqlListener {
+    ev::Persistent fn;
+    bool once = false;
+    bool capture = false;
+    bool hasSignal = false;
+    ev::Persistent signal;
+    ev::Persistent abortCb;
+};
+
 struct MqlState {
     uint64_t id = 0;
     dom::Document* doc = nullptr;
     std::string media;
     bool lastMatches = false;
-    std::vector<ev::Persistent> listeners;
+    std::vector<MqlListener> listeners;
     ev::Persistent onchange;
     ev::Persistent mqlObj;
 };
@@ -34,11 +44,29 @@ void removeHostMediaQueriesForDocument(dom::Document* doc) {
     if (!doc) return;
     for (auto it = s_mqlStates.begin(); it != s_mqlStates.end();) {
         if (it->second->doc == doc) {
+            for (auto& lit : it->second->listeners) {
+                if (lit.hasSignal && !ev::isUndefined(lit.signal.get())) {
+                    removeHostListener(lit.signal, "abort", lit.abortCb.get());
+                }
+            }
             it = s_mqlStates.erase(it);
         } else {
             ++it;
         }
     }
+}
+
+void clearHostMediaQueries() {
+    for (auto& [id, st] : s_mqlStates) {
+        if (st) {
+            for (auto& lit : st->listeners) {
+                if (lit.hasSignal && !ev::isUndefined(lit.signal.get())) {
+                    removeHostListener(lit.signal, "abort", lit.abortCb.get());
+                }
+            }
+        }
+    }
+    s_mqlStates.clear();
 }
 
 Value makeHostMatchMediaObject(const std::string& rawQuery) {
@@ -109,31 +137,107 @@ Value makeHostMatchMediaObject(const std::string& rawQuery) {
             return ev::undefined();
         });
 
-    m.def("addEventListener", 2, [id](Value, std::span<const Value> a) -> Value {
+    m.def("addEventListener", 3, [id](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2 || !ev::isFunction(a[1])) return ev::undefined();
         std::string type = ev::toUtf8(a[0]);
-        if (type == "change") {
-            auto it = s_mqlStates.find(id);
-            if (it != s_mqlStates.end()) {
-                it->second->listeners.emplace_back(a[1]);
+        if (type != "change") return ev::undefined();
+
+        auto it = s_mqlStates.find(id);
+        if (it == s_mqlStates.end()) return ev::undefined();
+
+        Value fn = a[1];
+        Value optV = argAt(a, 2);
+        bool capture = false;
+        bool once = false;
+        bool hasSignal = false;
+        Value signalV = ev::undefined();
+
+        if (ev::isObject(optV)) {
+            Value capV = ev::getProperty(optV, "capture");
+            capture = ev::toBool(capV);
+            Value onceV = ev::getProperty(optV, "once");
+            once = ev::toBool(onceV);
+            Value sigV = ev::getProperty(optV, "signal");
+            if (ev::isObject(sigV)) {
+                hasSignal = true;
+                signalV = sigV;
+            }
+        } else if (!ev::isUndefined(optV)) {
+            capture = ev::toBool(optV);
+        }
+
+        if (hasSignal) {
+            Value ab = ev::getProperty(signalV, "aborted");
+            if (ev::toBool(ab)) return ev::undefined();
+        }
+
+        uint64_t fnBits = ev::toBits(fn);
+        for (const auto& existing : it->second->listeners) {
+            if (ev::toBits(existing.fn.get()) == fnBits && existing.capture == capture) {
+                return ev::undefined();
             }
         }
+
+        MqlListener lit;
+        lit.fn.set(fn);
+        lit.once = once;
+        lit.capture = capture;
+        lit.hasSignal = hasSignal;
+
+        if (hasSignal) {
+            lit.signal.set(signalV);
+            ev::Persistent sigP(signalV);
+            ev::Persistent abortCb(ev::makeFunction([id, fnBits, capture](Value, std::span<const Value>) {
+                auto sit = s_mqlStates.find(id);
+                if (sit != s_mqlStates.end()) {
+                    auto& list = sit->second->listeners;
+                    for (auto litIt = list.begin(); litIt != list.end(); ++litIt) {
+                        if (ev::toBits(litIt->fn.get()) == fnBits && litIt->capture == capture) {
+                            if (litIt->hasSignal && !ev::isUndefined(litIt->signal.get())) {
+                                removeHostListener(litIt->signal, "abort", litIt->abortCb.get());
+                            }
+                            list.erase(litIt);
+                            break;
+                        }
+                    }
+                }
+                return ev::undefined();
+            }, 0));
+            lit.abortCb.set(abortCb.get());
+            addHostListener(sigP, "abort", abortCb.get());
+        }
+
+        it->second->listeners.push_back(std::move(lit));
         return ev::undefined();
     });
 
-    m.def("removeEventListener", 2, [id](Value, std::span<const Value> a) -> Value {
+    m.def("removeEventListener", 3, [id](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::undefined();
         std::string type = ev::toUtf8(a[0]);
-        if (type == "change") {
-            auto it = s_mqlStates.find(id);
-            if (it != s_mqlStates.end()) {
-                auto& list = it->second->listeners;
-                for (auto lit = list.begin(); lit != list.end(); ++lit) {
-                    if (lit->get() == a[1]) {
-                        list.erase(lit);
-                        break;
-                    }
+        if (type != "change") return ev::undefined();
+
+        auto it = s_mqlStates.find(id);
+        if (it == s_mqlStates.end()) return ev::undefined();
+
+        Value fn = a[1];
+        Value optV = argAt(a, 2);
+        bool capture = false;
+        if (ev::isObject(optV)) {
+            Value capV = ev::getProperty(optV, "capture");
+            capture = ev::toBool(capV);
+        } else if (!ev::isUndefined(optV)) {
+            capture = ev::toBool(optV);
+        }
+
+        uint64_t fnBits = ev::toBits(fn);
+        auto& list = it->second->listeners;
+        for (auto litIt = list.begin(); litIt != list.end(); ++litIt) {
+            if (ev::toBits(litIt->fn.get()) == fnBits && litIt->capture == capture) {
+                if (litIt->hasSignal && !ev::isUndefined(litIt->signal.get())) {
+                    removeHostListener(litIt->signal, "abort", litIt->abortCb.get());
                 }
+                list.erase(litIt);
+                break;
             }
         }
         return ev::undefined();
@@ -142,22 +246,40 @@ Value makeHostMatchMediaObject(const std::string& rawQuery) {
     m.def("addListener", 1, [id](Value, std::span<const Value> a) -> Value {
         if (a.empty() || !ev::isFunction(a[0])) return ev::undefined();
         auto it = s_mqlStates.find(id);
-        if (it != s_mqlStates.end()) {
-            it->second->listeners.emplace_back(a[0]);
+        if (it == s_mqlStates.end()) return ev::undefined();
+
+        Value fn = a[0];
+        uint64_t fnBits = ev::toBits(fn);
+        for (const auto& existing : it->second->listeners) {
+            if (ev::toBits(existing.fn.get()) == fnBits && !existing.capture) {
+                return ev::undefined();
+            }
         }
+
+        MqlListener lit;
+        lit.fn.set(fn);
+        lit.once = false;
+        lit.capture = false;
+        lit.hasSignal = false;
+        it->second->listeners.push_back(std::move(lit));
         return ev::undefined();
     });
 
     m.def("removeListener", 1, [id](Value, std::span<const Value> a) -> Value {
         if (a.empty()) return ev::undefined();
         auto it = s_mqlStates.find(id);
-        if (it != s_mqlStates.end()) {
-            auto& list = it->second->listeners;
-            for (auto lit = list.begin(); lit != list.end(); ++lit) {
-                if (lit->get() == a[0]) {
-                    list.erase(lit);
-                    break;
+        if (it == s_mqlStates.end()) return ev::undefined();
+
+        Value fn = a[0];
+        uint64_t fnBits = ev::toBits(fn);
+        auto& list = it->second->listeners;
+        for (auto litIt = list.begin(); litIt != list.end(); ++litIt) {
+            if (ev::toBits(litIt->fn.get()) == fnBits && !litIt->capture) {
+                if (litIt->hasSignal && !ev::isUndefined(litIt->signal.get())) {
+                    removeHostListener(litIt->signal, "abort", litIt->abortCb.get());
                 }
+                list.erase(litIt);
+                break;
             }
         }
         return ev::undefined();
@@ -171,14 +293,29 @@ Value makeHostMatchMediaObject(const std::string& rawQuery) {
 void deliverHostMediaQueryChanges() {
     if (s_mqlStates.empty()) return;
 
+    for (auto it = s_mqlStates.begin(); it != s_mqlStates.end();) {
+        if (!it->second || !it->second->doc || !dom::Document::isLiveDocument(it->second->doc)) {
+            if (it->second) {
+                for (auto& lit : it->second->listeners) {
+                    if (lit.hasSignal && !ev::isUndefined(lit.signal.get())) {
+                        removeHostListener(lit.signal, "abort", lit.abortCb.get());
+                    }
+                }
+            }
+            it = s_mqlStates.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     std::vector<std::shared_ptr<MqlState>> states;
     states.reserve(s_mqlStates.size());
     for (auto& [id, st] : s_mqlStates) {
-        if (st && st->doc) states.push_back(st);
+        if (st && st->doc && dom::Document::isLiveDocument(st->doc)) states.push_back(st);
     }
 
     for (auto& st : states) {
-        if (!st->doc) continue;
+        if (!st->doc || !dom::Document::isLiveDocument(st->doc)) continue;
         if (st->doc->mediaRestylePending()) {
             st->doc->resolveStyles();
         }
@@ -208,10 +345,31 @@ void deliverHostMediaQueryChanges() {
                 }
             }
 
-            auto listenersCopy = st->listeners;
-            for (auto& fn : listenersCopy) {
-                if (ev::isFunction(fn.get())) {
-                    ev::CallResult r = ev::call(fn.get(), st->mqlObj.get(),
+            std::vector<MqlListener> toInvoke;
+            toInvoke.reserve(st->listeners.size());
+            for (auto it = st->listeners.begin(); it != st->listeners.end();) {
+                if (it->hasSignal && !ev::isUndefined(it->signal.get())) {
+                    Value ab = ev::getProperty(it->signal.get(), "aborted");
+                    if (ev::toBool(ab)) {
+                        removeHostListener(it->signal, "abort", it->abortCb.get());
+                        it = st->listeners.erase(it);
+                        continue;
+                    }
+                }
+                toInvoke.push_back(*it);
+                if (it->once) {
+                    if (it->hasSignal && !ev::isUndefined(it->signal.get())) {
+                        removeHostListener(it->signal, "abort", it->abortCb.get());
+                    }
+                    it = st->listeners.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+
+            for (auto& lit : toInvoke) {
+                if (ev::isFunction(lit.fn.get())) {
+                    ev::CallResult r = ev::call(lit.fn.get(), st->mqlObj.get(),
                                                 std::span<const Value>(&evVal, 1));
                     if (r.thrown) reportBronzeError("matchMedia listener", r.value);
                 }
@@ -223,7 +381,7 @@ void deliverHostMediaQueryChanges() {
                 if (r.thrown) reportBronzeError("matchMedia onchange", r.value);
             }
 
-            if (st->doc) {
+            if (st->doc && dom::Document::isLiveDocument(st->doc)) {
                 if (!ev::isNull(prevDocVal)) {
                     ev::registerGlobal("document", prevDocVal);
                     if (gt.found && ev::isObject(gt.value)) {
@@ -231,9 +389,8 @@ void deliverHostMediaQueryChanges() {
                     }
                 }
                 setCurrentHostDocument(prevDoc);
+                st->doc->markDirty();
             }
-
-            st->doc->markDirty();
         }
     }
 }

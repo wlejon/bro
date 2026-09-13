@@ -88,6 +88,9 @@ std::string formValue(dom::Element* el) {
         if (el->hasAttribute("value")) return el->getAttribute("value");
         return el->textContent();
     }
+    if (tagIs(el, "option", "OPTION")) {
+        return optionValue(el);
+    }
     return el->getAttribute("value");
 }
 
@@ -266,6 +269,68 @@ dom::Element* checkedRadioInGroup(dom::Element* el) {
         if (other->hasAttribute("checked")) return other;
     }
     return nullptr;
+}
+
+bool isLabelable(const dom::Element* el) {
+    if (!el) return false;
+    if (tagIs(el, "button", "BUTTON") ||
+        tagIs(el, "select", "SELECT") ||
+        tagIs(el, "textarea", "TEXTAREA") ||
+        tagIs(el, "progress", "PROGRESS") ||
+        tagIs(el, "meter", "METER") ||
+        tagIs(el, "output", "OUTPUT")) {
+        return true;
+    }
+    if (tagIs(el, "input", "INPUT")) {
+        std::string t = el->getAttribute("type");
+        for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return t != "hidden";
+    }
+    return false;
+}
+
+bool isInteractiveContent(const dom::Element* el) {
+    if (!el) return false;
+    if (tagIs(el, "button", "BUTTON") ||
+        tagIs(el, "select", "SELECT") ||
+        tagIs(el, "textarea", "TEXTAREA") ||
+        tagIs(el, "details", "DETAILS") ||
+        tagIs(el, "embed", "EMBED") ||
+        tagIs(el, "iframe", "IFRAME")) {
+        return true;
+    }
+    if (tagIs(el, "a", "A")) {
+        return el->hasAttribute("href");
+    }
+    if (tagIs(el, "input", "INPUT")) {
+        std::string t = el->getAttribute("type");
+        for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return t != "hidden";
+    }
+    return false;
+}
+
+dom::Element* findLabeledControl(const dom::Element* label) {
+    if (!label || !tagIs(label, "label", "LABEL")) return nullptr;
+
+    if (label->hasAttribute("for")) {
+        const std::string& forId = label->getAttribute("for");
+        if (forId.empty()) return nullptr;
+        if (auto* doc = label->document()) {
+            dom::Element* target = doc->getElementById(forId);
+            if (target && isLabelable(target)) return target;
+        }
+        return nullptr;
+    }
+
+    auto findFirstLabelable = [](auto& self, const dom::Element* el) -> dom::Element* {
+        for (auto* child : el->children()) {
+            if (isLabelable(child)) return child;
+            if (auto* found = self(self, child)) return found;
+        }
+        return nullptr;
+    };
+    return findFirstLabelable(findFirstLabelable, label);
 }
 
 }  // namespace bro::layout

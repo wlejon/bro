@@ -115,6 +115,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_image.cpp
     host_html_interfaces.cpp
     host_iframe.cpp
+    host_template.cpp
     host_matchmedia.cpp
     host_node.cpp
     host_shadow_dom.cpp

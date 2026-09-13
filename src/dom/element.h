@@ -61,8 +61,14 @@ public:
     explicit Element(const std::string& tag);
     ~Element() override;
 
-    NodeType nodeType() const override { return NodeType::Element; }
-    std::string nodeName() const override { return tag_; }
+    NodeType nodeType() const override {
+        if (tag_ == "#DOCUMENT-FRAGMENT" || isTemplateContent_) return NodeType::DocumentFragment;
+        return NodeType::Element;
+    }
+    std::string nodeName() const override {
+        if (tag_ == "#DOCUMENT-FRAGMENT" || isTemplateContent_) return "#document-fragment";
+        return tag_;
+    }
 
     // Tag and identity
     const std::string& tagName() const { return tag_; }
@@ -460,6 +466,7 @@ public:
     // <template> with no children owns exactly such a fragment, and it must
     // survive because the template still points at it.
     bool isTemplateContent() const { return isTemplateContent_; }
+    void setIsTemplateContent(bool val) { isTemplateContent_ = val; }
 
     // Debug: detect use-after-free
     //

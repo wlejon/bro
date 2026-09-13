@@ -1350,6 +1350,24 @@ Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
             return createTextNode(static_cast<TextNode*>(src)->data());
         case NodeType::Comment:
             return createComment(static_cast<CommentNode*>(src)->data());
+        case NodeType::DocumentFragment: {
+            Node* clone = nullptr;
+            if (auto* el = dynamic_cast<Element*>(src)) {
+                clone = createElement(el->tagName());
+                if (auto* cel = dynamic_cast<Element*>(clone)) {
+                    cel->setIsTemplateContent(el->isTemplateContent());
+                }
+            } else {
+                clone = createDocumentFragment();
+            }
+            if (deep && clone) {
+                for (auto* child : src->childNodes()) {
+                    if (Node* childClone = cloneNode(child, true, preserveId))
+                        clone->appendChild(childClone);
+                }
+            }
+            return clone;
+        }
         case NodeType::Element:
             break;
         default:
@@ -1374,6 +1392,13 @@ Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
         for (auto* child : srcEl->childNodes()) {
             if (Node* childClone = cloneNode(child, true, preserveId))
                 clone->appendChild(childClone);
+        }
+        if (srcEl->templateContent()) {
+            if (Node* fragClone = cloneNode(srcEl->templateContent(), true, preserveId)) {
+                if (auto* fEl = dynamic_cast<Element*>(fragClone)) {
+                    clone->setTemplateContent(fEl);
+                }
+            }
         }
     }
 

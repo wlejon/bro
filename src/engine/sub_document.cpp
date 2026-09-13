@@ -90,6 +90,7 @@ void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
     d.document = std::make_unique<dom::Document>();
     d.document->setBasePath(src.manifest.basePath);
     d.document->setMediaColorScheme(colorScheme);
+    d.document->setMediaViewport(static_cast<float>(d.boxW), static_cast<float>(d.boxH));
     d.document->parse(src.html, src.authorStyles, kDefaultStyles);
 }
 
