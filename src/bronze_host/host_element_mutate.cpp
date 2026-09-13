@@ -115,15 +115,25 @@ void decorateElementMutate(ObjectBuilder& b) {
     b.def("replaceChildren", 0, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
+        dom::Document* doc = st->el->document();
+        std::vector<dom::Node*> oldKids = st->el->childNodes();
         while (!st->el->childNodes().empty()) {
             st->el->removeChild(st->el->childNodes().front());
         }
         for (const Value& v : a) {
             if (dom::Node* child = hostNodeOf(v)) {
+                oldKids.erase(std::remove(oldKids.begin(), oldKids.end(), child), oldKids.end());
                 hostInsertNode(st->el, child, nullptr);
             } else if (!ev::isObject(v) && !ev::isUndefined(v)) {
-                if (dom::Document* doc = st->el->document())
+                if (doc)
                     st->el->appendChild(doc->createTextNode(ev::toUtf8(v)));
+            }
+        }
+        if (doc) {
+            for (auto* old : oldKids) {
+                if (old->nodeType() != dom::NodeType::Element) {
+                    doc->freeNode(old);
+                }
             }
         }
         return ev::undefined();

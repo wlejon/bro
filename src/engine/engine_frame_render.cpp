@@ -80,8 +80,6 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
                 dispatchEvent(ev.element, aevt);
             }
 
-            (void)webAnimationManager_.takeFinishedEvents();
-
             syncAllIframeBoxes();
             deliverMediaQueryChangesAllRealms();
 

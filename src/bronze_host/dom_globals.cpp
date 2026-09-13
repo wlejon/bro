@@ -33,6 +33,7 @@
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
+#include "bronze_host/host_intl.h"
 #include "bronze_host/host_matchmedia.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_window_open.h"
@@ -787,108 +788,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     // HTMLCanvasElement and HTMLImageElement are installed as real classes
     // via installHtmlInterfaces() / installImageGlobal().
     ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
-    {
-        Value pluralRules = ev::makeFunction(
-            [](Value, std::span<const Value> /*args*/) -> Value {
-                ObjectBuilder b;
-                b.def("select", 1, [](Value, std::span<const Value> a) -> Value {
-                    double n = a.empty() ? 0.0 : ev::toDouble(a[0]);
-                    if (n == 1.0) {
-                        return ev::fromUtf8("one");
-                    }
-                    return ev::fromUtf8("other");
-                });
-                b.def("resolvedOptions", 0, [](Value, std::span<const Value>) -> Value {
-                    ObjectBuilder opts;
-                    opts.set("locale", ev::fromUtf8("en-US"));
-                    opts.set("type", ev::fromUtf8("cardinal"));
-                    return opts.get();
-                });
-                return b.get();
-            },
-            0);
-
-        Value numberFormat = ev::makeFunction(
-            [](Value, std::span<const Value> /*args*/) -> Value {
-                ObjectBuilder b;
-                b.def("format", 1, [](Value, std::span<const Value> a) -> Value {
-                    if (a.empty()) return ev::fromUtf8("NaN");
-                    double n = ev::toDouble(a[0]);
-                    char buf[64];
-                    if (std::floor(n) == n) {
-                        snprintf(buf, sizeof(buf), "%.0f", n);
-                    } else {
-                        snprintf(buf, sizeof(buf), "%g", n);
-                    }
-                    return ev::fromUtf8(buf);
-                });
-                b.def("resolvedOptions", 0, [](Value, std::span<const Value>) -> Value {
-                    ObjectBuilder opts;
-                    opts.set("locale", ev::fromUtf8("en-US"));
-                    return opts.get();
-                });
-                return b.get();
-            },
-            0);
-
-        Value dateTimeFormat = ev::makeFunction(
-            [](Value, std::span<const Value> /*args*/) -> Value {
-                ObjectBuilder b;
-                b.def("format", 1, [](Value, std::span<const Value> a) -> Value {
-                    return ev::fromUtf8("");
-                });
-                b.def("resolvedOptions", 0, [](Value, std::span<const Value>) -> Value {
-                    ObjectBuilder opts;
-                    opts.set("locale", ev::fromUtf8("en-US"));
-                    return opts.get();
-                });
-                return b.get();
-            },
-            0);
-
-        Value collator = ev::makeFunction(
-            [](Value, std::span<const Value> /*args*/) -> Value {
-                ObjectBuilder b;
-                b.def("compare", 2, [](Value, std::span<const Value> a) -> Value {
-                    std::string s1 = a.size() > 0 ? ev::toUtf8(a[0]) : "";
-                    std::string s2 = a.size() > 1 ? ev::toUtf8(a[1]) : "";
-                    if (s1 < s2) return ev::fromDouble(-1);
-                    if (s1 > s2) return ev::fromDouble(1);
-                    return ev::fromDouble(0);
-                });
-                return b.get();
-            },
-            0);
-
-        Value displayNames = ev::makeFunction(
-            [](Value, std::span<const Value> /*args*/) -> Value {
-                ObjectBuilder b;
-                b.def("of", 1, [](Value, std::span<const Value> a) -> Value {
-                    if (a.empty()) return ev::fromUtf8("");
-                    std::string code = ev::toUtf8(a[0]);
-                    if (code == "en") return ev::fromUtf8("English");
-                    if (code == "fr") return ev::fromUtf8("Français");
-                    if (code == "zh") return ev::fromUtf8("中文");
-                    if (code == "ja") return ev::fromUtf8("日本語");
-                    if (code == "ko") return ev::fromUtf8("한국어");
-                    if (code == "fa") return ev::fromUtf8("فارسی");
-                    return a[0];
-                });
-                return b.get();
-            },
-            2);
-
-        ObjectBuilder intl;
-        intl.set("PluralRules", pluralRules);
-        intl.set("NumberFormat", numberFormat);
-        intl.set("DateTimeFormat", dateTimeFormat);
-        intl.set("Collator", collator);
-        intl.set("DisplayNames", displayNames);
-        Value intlVal = intl.get();
-        ev::registerGlobal("Intl", intlVal);
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "Intl", intlVal);
-    }
+    installIntlGlobals();
     installAudioGlobals();
     {
         Value customEvent = makeEventConstructor("CustomEvent");

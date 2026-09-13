@@ -182,6 +182,20 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("detail", detail);
     }
 
+    if (e.type() == "gamepadconnected" || e.type() == "gamepaddisconnected") {
+        auto* custom = dynamic_cast<dom::CustomEvent*>(&e);
+        int idx = -1;
+        if (custom && !custom->detail().empty()) {
+            try { idx = std::stoi(custom->detail()); } catch (...) {}
+        }
+        auto* eng = hostEngine();
+        if (eng && idx >= 0 && idx < static_cast<int>(eng->gamepads().size())) {
+            b.set("gamepad", buildGamepadSnapshot(eng->gamepads()[idx]));
+        } else {
+            b.set("gamepad", ev::null());
+        }
+    }
+
     if (auto* m = dynamic_cast<dom::MouseEvent*>(&e)) {
         b.set("clientX", ev::fromDouble(m->clientX()));
         b.set("clientY", ev::fromDouble(m->clientY()));

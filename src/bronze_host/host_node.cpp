@@ -492,13 +492,13 @@ Value makeCharacterDataValue(dom::Node* node) {
     auto defData = [&b, st](const char* name) {
         b.accessor(name,
                    [](Value self_, std::span<const Value>) {
-        HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
+                       HostNodeState* st = hostNodeStateOfValue(self_);
+                       if (!st || !st->node) return ev::null();
                        return ev::fromUtf8(charsData(st->node));
                    },
                    [](Value self_, std::span<const Value> a) {
-        HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
+                       HostNodeState* st = hostNodeStateOfValue(self_);
+                       if (!st) return ev::undefined();
                        Value v = argAt(a, 0);
                        if (st->node && !ev::isObject(v))
                            charsSetData(st->node,
@@ -512,8 +512,8 @@ Value makeCharacterDataValue(dom::Node* node) {
 
     b.accessor("length",
                [](Value self_, std::span<const Value>) {
-        HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->node) return ev::fromDouble(0.0);
                    return ev::fromDouble(dom::utf16Length(charsData(st->node)));
                },
                nullptr);
@@ -553,8 +553,7 @@ Value makeCharacterDataValue(dom::Node* node) {
     });
     b.def("substringData", 2, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
-        if (!st) return ev::undefined();
-        if (!st->node) return ev::fromUtf8("");
+        if (!st || !st->node) return ev::fromUtf8("");
         ByteRange r = byteRangeOf(charsData(st->node), ev::toDouble(argAt(a, 0)),
                                   ev::toDouble(argAt(a, 1)));
         return ev::fromUtf8(charsSubstring(st->node, r.offset, r.count));

@@ -62,6 +62,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             engine.advanceTime(ms);
+            deliverHostObservers();
             if (ev::microtasksPending()) ev::drainMicrotasks();
             return ev::undefined();
         }, 1, "advanceTime"));

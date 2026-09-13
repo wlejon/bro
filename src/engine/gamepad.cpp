@@ -132,9 +132,10 @@ GamepadState& Engine::allocateGamepadSlot() {
 // Connection events + action dispatch
 // ---------------------------------------------------------------------------
 
-void Engine::dispatchGamepadConnectionEvent(const GamepadState&, bool connected) {
+void Engine::dispatchGamepadConnectionEvent(const GamepadState& gp, bool connected) {
     const char* type = connected ? "gamepadconnected" : "gamepaddisconnected";
-    dom::Event evt(type);
+    dom::CustomEvent evt(type);
+    evt.setDetail(std::to_string(gp.index));
     evt.setIsTrusted(true);
     dispatchWindowEvent(evt);
 }

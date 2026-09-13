@@ -398,6 +398,9 @@ void installWebAnimationGlobals() {
             if (!eng) return ev::undefined();
             engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
             if (!rec) return ev::undefined();
+            if (rec->playbackRate == 0 || (rec->playbackRate > 0 && !std::isfinite(rec->endTimeMs()))) {
+                return ev::throwValue(hostMakeDomError("InvalidStateError", "Animation cannot be finished if playbackRate is 0 or end time is infinite"));
+            }
             eng->webAnimationManager().finishOp(*rec);
             if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
             settleFinish(st, self_);

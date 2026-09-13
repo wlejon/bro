@@ -138,6 +138,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_observers.cpp
     host_parser.cpp
     host_proxy.cpp
+    host_intl.cpp
     host_class.cpp
     host_video.cpp
     host_audio_core.cpp

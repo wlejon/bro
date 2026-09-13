@@ -296,7 +296,6 @@ void Engine::run() {
                 aevt.setIsTrusted(true);
                 dispatchEvent(ev.element, aevt);
             }
-            (void)webAnimationManager_.takeFinishedEvents();
         }
 
         if (pendingAppReload_ && framePresenter_->isRasterIdle()) {

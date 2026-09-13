@@ -123,7 +123,6 @@ void Engine::flush() {
         aevt.setIsTrusted(true);
         dispatchEvent(ev.element, aevt);
     }
-    (void)webAnimationManager_.takeFinishedEvents();
 
     if (document_ && !document_->isStructureDirty()) {
         document_->drainPendingFrees();
