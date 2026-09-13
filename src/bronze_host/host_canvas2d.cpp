@@ -1,4 +1,5 @@
 #include "bronze_host/host_canvas2d.h"
+#include "bronze_host/host_canvas_gradient.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
@@ -9,16 +10,23 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace bro::bronze_host {
+
+namespace {
+
+std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%g)", r, g, b, a == 255 ? 1.0 : a / 255.0);
+    return buf;
+}
+
+}  // namespace
 
 Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     ObjectBuilder b;
     b.set("canvas", canvasVal);
-    b.set("font", ev::fromUtf8("10px sans-serif"));
-    b.set("textAlign", ev::fromUtf8("start"));
-    b.set("textBaseline", ev::fromUtf8("alphabetic"));
-    b.set("globalCompositeOperation", ev::fromUtf8("source-over"));
 
     b.accessor("fillStyle",
         [el](Value, std::span<const Value>) -> Value {
@@ -26,15 +34,19 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 uint8_t r, g, b, a;
                 cs->getFillColor(r, g, b, a);
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", r, g, b);
-                return ev::fromUtf8(buf);
+                return ev::fromUtf8(colorToRGBA(r, g, b, a));
             }
-            return ev::fromUtf8("#000000");
+            return ev::fromUtf8("rgba(0,0,0,1)");
         },
         [el](Value, std::span<const Value> a) -> Value {
             if (el && el->canvasScene() && !a.empty()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                if (ev::isObject(a[0])) {
+                    if (auto* grad = hostCanvasGradientOf(a[0])) {
+                        cs->setFillShader(grad->buildShader());
+                        return ev::undefined();
+                    }
+                }
                 std::string str = ev::toUtf8(a[0]);
                 uint8_t r, g, b, a_col;
                 if (canvas::parseCSSColor(str, r, g, b, a_col)) {
@@ -50,15 +62,19 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 uint8_t r, g, b, a;
                 cs->getStrokeColor(r, g, b, a);
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", r, g, b);
-                return ev::fromUtf8(buf);
+                return ev::fromUtf8(colorToRGBA(r, g, b, a));
             }
-            return ev::fromUtf8("#000000");
+            return ev::fromUtf8("rgba(0,0,0,1)");
         },
         [el](Value, std::span<const Value> a) -> Value {
             if (el && el->canvasScene() && !a.empty()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                if (ev::isObject(a[0])) {
+                    if (auto* grad = hostCanvasGradientOf(a[0])) {
+                        cs->setStrokeShader(grad->buildShader());
+                        return ev::undefined();
+                    }
+                }
                 std::string str = ev::toUtf8(a[0]);
                 uint8_t r, g, b, a_col;
                 if (canvas::parseCSSColor(str, r, g, b, a_col)) {
@@ -84,6 +100,62 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             return ev::undefined();
         });
 
+    b.accessor("lineCap",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                int v = cs->lineCap();
+                return ev::fromUtf8(v == 1 ? "round" : (v == 2 ? "square" : "butt"));
+            }
+            return ev::fromUtf8("butt");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                std::string s = ev::toUtf8(a[0]);
+                if (s == "round") cs->setLineCap(1);
+                else if (s == "square") cs->setLineCap(2);
+                else cs->setLineCap(0);
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("lineJoin",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                int v = cs->lineJoin();
+                return ev::fromUtf8(v == 1 ? "round" : (v == 2 ? "bevel" : "miter"));
+            }
+            return ev::fromUtf8("miter");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                std::string s = ev::toUtf8(a[0]);
+                if (s == "round") cs->setLineJoin(1);
+                else if (s == "bevel") cs->setLineJoin(2);
+                else cs->setLineJoin(0);
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("miterLimit",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromDouble(cs->miterLimit());
+            }
+            return ev::fromDouble(10.0);
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                cs->setMiterLimit(static_cast<float>(ev::toDouble(a[0])));
+            }
+            return ev::undefined();
+        });
+
     b.accessor("globalAlpha",
         [el](Value, std::span<const Value>) -> Value {
             if (el && el->canvasScene()) {
@@ -100,7 +172,247 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             return ev::undefined();
         });
 
-    auto noop = [](Value, std::span<const Value>) -> Value { return ev::undefined(); };
+    b.accessor("globalCompositeOperation",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                static const char* names[] = {
+                    "source-over", "source-in", "source-out", "source-atop",
+                    "destination-over", "destination-in", "destination-out", "destination-atop",
+                    "lighter", "darken", "xor", "lighter",
+                    "multiply", "screen", "overlay",
+                    "color-dodge", "color-burn", "hard-light", "soft-light",
+                    "difference", "exclusion"
+                };
+                int v = cs->globalCompositeOperation();
+                return ev::fromUtf8((v >= 0 && v < 21) ? names[v] : "source-over");
+            }
+            return ev::fromUtf8("source-over");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                std::string s = ev::toUtf8(a[0]);
+                static const char* names[] = {
+                    "source-over", "source-in", "source-out", "source-atop",
+                    "destination-over", "destination-in", "destination-out", "destination-atop",
+                    "lighten", "darken", "xor", "lighter",
+                    "multiply", "screen", "overlay",
+                    "color-dodge", "color-burn", "hard-light", "soft-light",
+                    "difference", "exclusion"
+                };
+                for (int i = 0; i < 21; ++i) {
+                    if (s == names[i]) {
+                        cs->setGlobalCompositeOperation(i);
+                        break;
+                    }
+                }
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("textAlign",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                static const char* names[] = {"start", "center", "right", "end", "left"};
+                int v = cs->textAlign();
+                return ev::fromUtf8((v >= 0 && v <= 4) ? names[v] : "start");
+            }
+            return ev::fromUtf8("start");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                std::string s = ev::toUtf8(a[0]);
+                if (s == "start") cs->setTextAlign(0);
+                else if (s == "center") cs->setTextAlign(1);
+                else if (s == "right") cs->setTextAlign(2);
+                else if (s == "end") cs->setTextAlign(3);
+                else if (s == "left") cs->setTextAlign(4);
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("textBaseline",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                static const char* names[] = {"alphabetic", "top", "middle", "bottom", "hanging", "ideographic"};
+                int v = cs->textBaseline();
+                return ev::fromUtf8((v >= 0 && v <= 5) ? names[v] : "alphabetic");
+            }
+            return ev::fromUtf8("alphabetic");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                std::string s = ev::toUtf8(a[0]);
+                if (s == "alphabetic") cs->setTextBaseline(0);
+                else if (s == "top") cs->setTextBaseline(1);
+                else if (s == "middle") cs->setTextBaseline(2);
+                else if (s == "bottom") cs->setTextBaseline(3);
+                else if (s == "hanging") cs->setTextBaseline(4);
+                else if (s == "ideographic") cs->setTextBaseline(5);
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("direction",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                int v = cs->direction();
+                return ev::fromUtf8(v == 1 ? "rtl" : (v == 2 ? "inherit" : "ltr"));
+            }
+            return ev::fromUtf8("ltr");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                std::string s = ev::toUtf8(a[0]);
+                if (s == "ltr") cs->setDirection(0);
+                else if (s == "rtl") cs->setDirection(1);
+                else if (s == "inherit") cs->setDirection(2);
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("font",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromUtf8(cs->fontString());
+            }
+            return ev::fromUtf8("10px sans-serif");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                cs->setFont(ev::toUtf8(a[0]));
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("shadowBlur",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromDouble(cs->shadowBlur());
+            }
+            return ev::fromDouble(0.0);
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                cs->setShadowBlur(static_cast<float>(ev::toDouble(a[0])));
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("shadowOffsetX",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromDouble(cs->shadowOffsetX());
+            }
+            return ev::fromDouble(0.0);
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                cs->setShadowOffsetX(static_cast<float>(ev::toDouble(a[0])));
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("shadowOffsetY",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromDouble(cs->shadowOffsetY());
+            }
+            return ev::fromDouble(0.0);
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                cs->setShadowOffsetY(static_cast<float>(ev::toDouble(a[0])));
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("shadowColor",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                uint8_t r, g, b, a;
+                cs->getShadowColor(r, g, b, a);
+                return ev::fromUtf8(colorToRGBA(r, g, b, a));
+            }
+            return ev::fromUtf8("rgba(0,0,0,0)");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                std::string s = ev::toUtf8(a[0]);
+                uint8_t r, g, b, a;
+                if (canvas::parseCSSColor(s, r, g, b, a)) {
+                    cs->setShadowColor(r, g, b, a);
+                }
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("imageSmoothingEnabled",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromBool(cs->imageSmoothingEnabled());
+            }
+            return ev::fromBool(true);
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                cs->setImageSmoothingEnabled(ev::toBool(a[0]));
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("lineDashOffset",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromDouble(cs->lineDashOffset());
+            }
+            return ev::fromDouble(0.0);
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                cs->setLineDashOffset(static_cast<float>(ev::toDouble(a[0])));
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("canvasWidth",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromDouble(cs->width());
+            }
+            return ev::fromDouble(0);
+        }, nullptr);
+
+    b.accessor("canvasHeight",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                return ev::fromDouble(cs->height());
+            }
+            return ev::fromDouble(0);
+        }, nullptr);
 
     b.def("beginPath", 0, [el](Value, std::span<const Value>) -> Value {
         if (el && el->canvasScene()) {
@@ -109,6 +421,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("closePath", 0, [el](Value, std::span<const Value>) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -116,15 +429,15 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
-    b.def("arc", 6, noop);
-    b.def("arcTo", 5, noop);
-    b.def("fill", 0, [el](Value, std::span<const Value>) -> Value {
+
+    b.def("fill", 1, [el](Value, std::span<const Value>) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
             cs->fill();
         }
         return ev::undefined();
     });
+
     b.def("stroke", 0, [el](Value, std::span<const Value>) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -132,20 +445,23 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
-    b.def("fillText", 4, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 3) {
+
+    b.def("clip", 0, [el](Value, std::span<const Value>) -> Value {
+        if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->fillText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])));
+            cs->clip();
         }
         return ev::undefined();
     });
-    b.def("strokeText", 4, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 3) {
+
+    b.def("reset", 0, [el](Value, std::span<const Value>) -> Value {
+        if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->strokeText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])));
+            cs->reset();
         }
         return ev::undefined();
     });
+
     b.def("fillRect", 4, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -157,6 +473,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("strokeRect", 4, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -168,6 +485,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("clearRect", 4, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -179,6 +497,46 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
+    b.def("fillText", 4, [el](Value, std::span<const Value> a) -> Value {
+        if (el && el->canvasScene() && a.size() >= 3) {
+            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+            cs->fillText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])));
+        }
+        return ev::undefined();
+    });
+
+    b.def("strokeText", 4, [el](Value, std::span<const Value> a) -> Value {
+        if (el && el->canvasScene() && a.size() >= 3) {
+            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+            cs->strokeText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])));
+        }
+        return ev::undefined();
+    });
+
+    b.def("measureText", 1, [el](Value, std::span<const Value> a) -> Value {
+        std::string s = a.empty() ? "" : ev::toUtf8(a[0]);
+        canvas::CanvasTextMetrics m;
+        if (el && el->canvasScene()) {
+            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+            m = cs->measureText(s);
+        }
+        ObjectBuilder obj;
+        obj.set("width", ev::fromDouble(m.width));
+        obj.set("actualBoundingBoxLeft", ev::fromDouble(m.actualLeft));
+        obj.set("actualBoundingBoxRight", ev::fromDouble(m.actualRight));
+        obj.set("actualBoundingBoxAscent", ev::fromDouble(m.actualAscent));
+        obj.set("actualBoundingBoxDescent", ev::fromDouble(m.actualDescent));
+        obj.set("fontBoundingBoxAscent", ev::fromDouble(m.fontAscent));
+        obj.set("fontBoundingBoxDescent", ev::fromDouble(m.fontDescent));
+        obj.set("emHeightAscent", ev::fromDouble(m.emAscent));
+        obj.set("emHeightDescent", ev::fromDouble(m.emDescent));
+        obj.set("hangingBaseline", ev::fromDouble(m.hangingBaseline));
+        obj.set("alphabeticBaseline", ev::fromDouble(m.alphabeticBaseline));
+        obj.set("ideographicBaseline", ev::fromDouble(m.ideographicBaseline));
+        return obj.get();
+    });
+
     b.def("moveTo", 2, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 2) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -186,6 +544,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("lineTo", 2, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 2) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -193,6 +552,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("rect", 4, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 4) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -201,6 +561,126 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
+    b.def("arc", 6, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.size() < 5) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        float cx = static_cast<float>(ev::toDouble(a[0]));
+        float cy = static_cast<float>(ev::toDouble(a[1]));
+        float r  = static_cast<float>(ev::toDouble(a[2]));
+        float sa = static_cast<float>(ev::toDouble(a[3]));
+        float ea = static_cast<float>(ev::toDouble(a[4]));
+        bool acw = a.size() >= 6 ? ev::toBool(a[5]) : false;
+        cs->arc(cx, cy, r, sa, ea, acw);
+        return ev::undefined();
+    });
+
+    b.def("arcTo", 5, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.size() < 5) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        cs->arcTo(static_cast<float>(ev::toDouble(a[0])),
+                  static_cast<float>(ev::toDouble(a[1])),
+                  static_cast<float>(ev::toDouble(a[2])),
+                  static_cast<float>(ev::toDouble(a[3])),
+                  static_cast<float>(ev::toDouble(a[4])));
+        return ev::undefined();
+    });
+
+    b.def("bezierCurveTo", 6, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.size() < 6) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        cs->bezierCurveTo(static_cast<float>(ev::toDouble(a[0])),
+                          static_cast<float>(ev::toDouble(a[1])),
+                          static_cast<float>(ev::toDouble(a[2])),
+                          static_cast<float>(ev::toDouble(a[3])),
+                          static_cast<float>(ev::toDouble(a[4])),
+                          static_cast<float>(ev::toDouble(a[5])));
+        return ev::undefined();
+    });
+
+    b.def("quadraticCurveTo", 4, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.size() < 4) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        cs->quadraticCurveTo(static_cast<float>(ev::toDouble(a[0])),
+                             static_cast<float>(ev::toDouble(a[1])),
+                             static_cast<float>(ev::toDouble(a[2])),
+                             static_cast<float>(ev::toDouble(a[3])));
+        return ev::undefined();
+    });
+
+    b.def("ellipse", 8, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.size() < 7) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        float cx  = static_cast<float>(ev::toDouble(a[0]));
+        float cy  = static_cast<float>(ev::toDouble(a[1]));
+        float rx  = static_cast<float>(ev::toDouble(a[2]));
+        float ry  = static_cast<float>(ev::toDouble(a[3]));
+        float rot = static_cast<float>(ev::toDouble(a[4]));
+        float sa  = static_cast<float>(ev::toDouble(a[5]));
+        float ea  = static_cast<float>(ev::toDouble(a[6]));
+        bool acw  = a.size() >= 8 ? ev::toBool(a[7]) : false;
+        cs->ellipse(cx, cy, rx, ry, rot, sa, ea, acw);
+        return ev::undefined();
+    });
+
+    b.def("isPointInPath", 2, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.size() < 2) return ev::fromBool(false);
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        bool in = cs->isPointInPath(static_cast<float>(ev::toDouble(a[0])),
+                                   static_cast<float>(ev::toDouble(a[1])));
+        return ev::fromBool(in);
+    });
+
+    b.def("polyline", 1, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        Value arg = a[0];
+        auto tinfo = ev::typedArrayInfo(arg);
+        if (tinfo.data && tinfo.byteLength >= sizeof(float) * 2) {
+            int numPoints = static_cast<int>(tinfo.byteLength / (sizeof(float) * 2));
+            cs->polyline(reinterpret_cast<const float*>(tinfo.data), numPoints);
+            return ev::undefined();
+        }
+        if (ev::isObject(arg)) {
+            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(arg, "length")));
+            if (len >= 2) {
+                std::vector<float> pts;
+                pts.reserve(len);
+                for (uint32_t i = 0; i < len; ++i) {
+                    pts.push_back(static_cast<float>(ev::toDouble(ev::getElement(arg, i))));
+                }
+                cs->polyline(pts.data(), static_cast<int>(pts.size() / 2));
+            }
+        }
+        return ev::undefined();
+    });
+
+    b.def("setLineDash", 1, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        std::vector<float> segs;
+        if (ev::isObject(a[0])) {
+            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(a[0], "length")));
+            segs.reserve(len);
+            for (uint32_t i = 0; i < len; ++i) {
+                segs.push_back(static_cast<float>(ev::toDouble(ev::getElement(a[0], i))));
+            }
+        }
+        if (segs.size() % 2 == 1) {
+            size_t n = segs.size();
+            for (size_t i = 0; i < n; ++i) segs.push_back(segs[i]);
+        }
+        cs->setLineDash(segs);
+        return ev::undefined();
+    });
+
+    b.def("getLineDash", 0, [el](Value, std::span<const Value>) -> Value {
+        if (!el || !el->canvasScene()) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        const auto& d = cs->lineDash();
+        return hostArrayOf(d.size(), [&d](size_t i) { return ev::fromDouble(d[i]); });
+    });
+
     b.def("save", 0, [el](Value, std::span<const Value>) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -208,6 +688,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("restore", 0, [el](Value, std::span<const Value>) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -215,6 +696,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("translate", 2, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 2) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -222,6 +704,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("scale", 2, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 2) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -229,6 +712,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
+
     b.def("rotate", 1, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 1) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -236,11 +720,74 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         return ev::undefined();
     });
-    b.def("setTransform", 6, noop);
-    b.def("resetTransform", 0, noop);
-    b.def("clip", 0, noop);
-    b.def("bezierCurveTo", 6, noop);
-    b.def("quadraticCurveTo", 4, noop);
+
+    b.def("setTransform", 6, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene()) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        if (a.size() >= 6) {
+            cs->setTransform(static_cast<float>(ev::toDouble(a[0])),
+                             static_cast<float>(ev::toDouble(a[1])),
+                             static_cast<float>(ev::toDouble(a[2])),
+                             static_cast<float>(ev::toDouble(a[3])),
+                             static_cast<float>(ev::toDouble(a[4])),
+                             static_cast<float>(ev::toDouble(a[5])));
+        } else {
+            cs->resetTransform();
+        }
+        return ev::undefined();
+    });
+
+    b.def("resetTransform", 0, [el](Value, std::span<const Value>) -> Value {
+        if (el && el->canvasScene()) {
+            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+            cs->resetTransform();
+        }
+        return ev::undefined();
+    });
+
+    b.def("transform", 6, [el](Value, std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.size() < 6) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        cs->transform(static_cast<float>(ev::toDouble(a[0])),
+                      static_cast<float>(ev::toDouble(a[1])),
+                      static_cast<float>(ev::toDouble(a[2])),
+                      static_cast<float>(ev::toDouble(a[3])),
+                      static_cast<float>(ev::toDouble(a[4])),
+                      static_cast<float>(ev::toDouble(a[5])));
+        return ev::undefined();
+    });
+
+    b.def("getTransform", 0, [](Value, std::span<const Value>) -> Value {
+        ObjectBuilder m;
+        m.set("a", ev::fromDouble(1.0));
+        m.set("b", ev::fromDouble(0.0));
+        m.set("c", ev::fromDouble(0.0));
+        m.set("d", ev::fromDouble(1.0));
+        m.set("e", ev::fromDouble(0.0));
+        m.set("f", ev::fromDouble(0.0));
+        return m.get();
+    });
+
+    b.def("createLinearGradient", 4, [](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 4) return ev::undefined();
+        float x0 = static_cast<float>(ev::toDouble(a[0]));
+        float y0 = static_cast<float>(ev::toDouble(a[1]));
+        float x1 = static_cast<float>(ev::toDouble(a[2]));
+        float y1 = static_cast<float>(ev::toDouble(a[3]));
+        return makeLinearGradientValue(x0, y0, x1, y1);
+    });
+
+    b.def("createRadialGradient", 6, [](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 6) return ev::undefined();
+        float x0 = static_cast<float>(ev::toDouble(a[0]));
+        float y0 = static_cast<float>(ev::toDouble(a[1]));
+        float r0 = static_cast<float>(ev::toDouble(a[2]));
+        float x1 = static_cast<float>(ev::toDouble(a[3]));
+        float y1 = static_cast<float>(ev::toDouble(a[4]));
+        float r1 = static_cast<float>(ev::toDouble(a[5]));
+        return makeRadialGradientValue(x0, y0, r0, x1, y1, r1);
+    });
+
     b.def("drawImage", 9, [el](Value, std::span<const Value> a) -> Value {
         if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
         auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -307,13 +854,6 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             cs->drawImage(rgba, imgW, imgH, sx, sy, sw, sh, dx, dy, dw, dh);
         }
         return ev::undefined();
-    });
-
-    b.def("measureText", 1, [](Value, std::span<const Value> a) -> Value {
-        std::string s = a.empty() ? "" : ev::toUtf8(a[0]);
-        ObjectBuilder m;
-        m.set("width", ev::fromDouble(static_cast<double>(s.size() * 10)));
-        return m.get();
     });
 
     b.def("getImageData", 4, [el](Value, std::span<const Value> a) -> Value {

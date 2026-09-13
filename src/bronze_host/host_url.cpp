@@ -60,7 +60,7 @@ Value makeRevokeObjectURL() {
 // given and is reported as-is when it is not, which is where three.js's
 // LoaderUtils and every "is this absolute" test land.
 struct ParsedURL {
-    std::string href, protocol, hostname, port, pathname, search, hash;
+    std::string href, protocol, username, password, hostname, port, pathname, search, hash;
 };
 
 inline constexpr uint32_t kHostUrlTag = 0x55524C20u;  // 'URL '
@@ -104,7 +104,17 @@ bool splitAbsolute(const std::string& in, ParsedURL& out) {
         std::string authority = cut == std::string::npos ? rest : rest.substr(0, cut);
         rest = cut == std::string::npos ? std::string() : rest.substr(cut);
         const size_t at = authority.rfind('@');
-        if (at != std::string::npos) authority = authority.substr(at + 1);
+        if (at != std::string::npos) {
+            std::string userinfo = authority.substr(0, at);
+            authority = authority.substr(at + 1);
+            size_t colon = userinfo.find(':');
+            if (colon != std::string::npos) {
+                out.username = userinfo.substr(0, colon);
+                out.password = userinfo.substr(colon + 1);
+            } else {
+                out.username = userinfo;
+            }
+        }
         const size_t portColon = authority.rfind(':');
         if (portColon != std::string::npos &&
             authority.find_first_not_of("0123456789", portColon + 1) ==
@@ -162,8 +172,16 @@ std::string normalizePath(const std::string& path) {
 
 void rebuildUrlHref(ParsedURL& u) {
     u.href = u.protocol;
-    if (!u.hostname.empty()) {
-        u.href += "//" + u.hostname;
+    if (!u.hostname.empty() || !u.username.empty()) {
+        u.href += "//";
+        if (!u.username.empty() || !u.password.empty()) {
+            u.href += u.username;
+            if (!u.password.empty()) {
+                u.href += ":" + u.password;
+            }
+            u.href += "@";
+        }
+        u.href += u.hostname;
         if (!u.port.empty()) u.href += ":" + u.port;
     }
     u.href += u.pathname + u.search + u.hash;
@@ -178,6 +196,8 @@ bool parseURL(const std::string& input, const std::string& base, ParsedURL& out)
             return false;
         }
         out.protocol = b.protocol;
+        out.username = b.username;
+        out.password = b.password;
         out.hostname = b.hostname;
         out.port = b.port;
         std::string rest = input;
@@ -307,42 +327,67 @@ std::string serializeQueryParams(const std::vector<std::pair<std::string, std::s
     return out;
 }
 
-HostClass g_urlClass;
+inline constexpr uint32_t kHostSearchParamsTag = 0x53504152u;  // 'SPAR'
 
-// Bound to the PARSE, not to the URL object. `url.searchParams` is reachable
-// on its own — a program may keep it and drop the URL — and the closures below
-// would then be reading a HostUrl the finalizer has freed. Holding the
-// shared_ptr keeps that case coherent: the detached view still reads and writes
-// the same query it was made from.
-Value makeSearchParamsObject(const std::shared_ptr<ParsedURL>& parsed) {
-    ObjectBuilder sp;
-    sp.def("get", 1, [parsed](Value, std::span<const Value> a) {
+struct HostSearchParams {
+    uint32_t tag = kHostSearchParamsTag;
+    std::shared_ptr<ParsedURL> parsed;
+};
+
+void hostSearchParamsDtor(void* p) { delete static_cast<HostSearchParams*>(p); }
+
+HostSearchParams* searchParamsOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* sp = static_cast<HostSearchParams*>(ev::handleData(v));
+    if (!sp || sp->tag != kHostSearchParamsTag) return nullptr;
+    return sp;
+}
+
+HostClass g_urlSearchParamsClass;
+
+Value makeSearchParamsValue(const std::shared_ptr<ParsedURL>& parsed) {
+    auto* sp = new HostSearchParams();
+    sp->parsed = parsed;
+    return g_urlSearchParamsClass.make(sp, hostSearchParamsDtor);
+}
+
+void decorateSearchParamsProto(ObjectBuilder& b) {
+    b.def("get", 1, [](Value self, std::span<const Value> a) {
+        HostSearchParams* sp = searchParamsOf(self);
+        if (!sp || !sp->parsed) return ev::null();
         std::string key = ev::toUtf8(argAt(a, 0));
-        auto pairs = parseQueryParams(parsed->search);
+        auto pairs = parseQueryParams(sp->parsed->search);
         for (const auto& kv : pairs)
             if (kv.first == key) return ev::fromUtf8(kv.second);
         return ev::null();
     });
-    sp.def("has", 1, [parsed](Value, std::span<const Value> a) {
+    b.def("has", 1, [](Value self, std::span<const Value> a) {
+        HostSearchParams* sp = searchParamsOf(self);
+        if (!sp || !sp->parsed) return ev::fromBool(false);
         std::string key = ev::toUtf8(argAt(a, 0));
-        auto pairs = parseQueryParams(parsed->search);
+        auto pairs = parseQueryParams(sp->parsed->search);
         for (const auto& kv : pairs)
             if (kv.first == key) return ev::fromBool(true);
         return ev::fromBool(false);
     });
-    sp.def("getAll", 1, [parsed](Value, std::span<const Value> a) {
+    b.def("getAll", 1, [](Value self, std::span<const Value> a) {
+        HostSearchParams* sp = searchParamsOf(self);
+        if (!sp || !sp->parsed)
+            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         std::string key = ev::toUtf8(argAt(a, 0));
-        auto pairs = parseQueryParams(parsed->search);
+        auto pairs = parseQueryParams(sp->parsed->search);
         std::vector<std::string> hits;
         for (const auto& kv : pairs)
             if (kv.first == key) hits.push_back(kv.second);
         return hostArrayOf(hits.size(),
                            [&hits](size_t i) { return ev::fromUtf8(hits[i]); });
     });
-    sp.def("set", 2, [parsed](Value, std::span<const Value> a) {
+    b.def("set", 2, [](Value self, std::span<const Value> a) {
+        HostSearchParams* sp = searchParamsOf(self);
+        if (!sp || !sp->parsed) return ev::undefined();
         std::string key = ev::toUtf8(argAt(a, 0));
         std::string val = ev::toUtf8(argAt(a, 1));
-        auto pairs = parseQueryParams(parsed->search);
+        auto pairs = parseQueryParams(sp->parsed->search);
         bool found = false;
         std::vector<std::pair<std::string, std::string>> next;
         for (auto& kv : pairs) {
@@ -357,38 +402,45 @@ Value makeSearchParamsObject(const std::shared_ptr<ParsedURL>& parsed) {
         }
         if (!found) next.emplace_back(key, val);
         std::string q = serializeQueryParams(next);
-        parsed->search = q.empty() ? "" : "?" + q;
-        rebuildUrlHref(*parsed);
+        sp->parsed->search = q.empty() ? "" : "?" + q;
+        rebuildUrlHref(*sp->parsed);
         return ev::undefined();
     });
-    sp.def("append", 2, [parsed](Value, std::span<const Value> a) {
+    b.def("append", 2, [](Value self, std::span<const Value> a) {
+        HostSearchParams* sp = searchParamsOf(self);
+        if (!sp || !sp->parsed) return ev::undefined();
         std::string key = ev::toUtf8(argAt(a, 0));
         std::string val = ev::toUtf8(argAt(a, 1));
-        auto pairs = parseQueryParams(parsed->search);
+        auto pairs = parseQueryParams(sp->parsed->search);
         pairs.emplace_back(key, val);
         std::string q = serializeQueryParams(pairs);
-        parsed->search = q.empty() ? "" : "?" + q;
-        rebuildUrlHref(*parsed);
+        sp->parsed->search = q.empty() ? "" : "?" + q;
+        rebuildUrlHref(*sp->parsed);
         return ev::undefined();
     });
-    sp.def("delete", 1, [parsed](Value, std::span<const Value> a) {
+    b.def("delete", 1, [](Value self, std::span<const Value> a) {
+        HostSearchParams* sp = searchParamsOf(self);
+        if (!sp || !sp->parsed) return ev::undefined();
         std::string key = ev::toUtf8(argAt(a, 0));
-        auto pairs = parseQueryParams(parsed->search);
+        auto pairs = parseQueryParams(sp->parsed->search);
         std::vector<std::pair<std::string, std::string>> next;
         for (const auto& kv : pairs) {
             if (kv.first != key) next.push_back(kv);
         }
         std::string q = serializeQueryParams(next);
-        parsed->search = q.empty() ? "" : "?" + q;
-        rebuildUrlHref(*parsed);
+        sp->parsed->search = q.empty() ? "" : "?" + q;
+        rebuildUrlHref(*sp->parsed);
         return ev::undefined();
     });
-    sp.def("toString", 0, [parsed](Value, std::span<const Value>) {
-        auto pairs = parseQueryParams(parsed->search);
+    b.def("toString", 0, [](Value self, std::span<const Value>) {
+        HostSearchParams* sp = searchParamsOf(self);
+        if (!sp || !sp->parsed) return ev::fromUtf8("");
+        auto pairs = parseQueryParams(sp->parsed->search);
         return ev::fromUtf8(serializeQueryParams(pairs));
     });
-    return sp.get();
 }
+
+HostClass g_urlClass;
 
 Value makeURLValue(const ParsedURL& u) {
     auto* url = new HostUrl();
@@ -438,6 +490,36 @@ void decorateUrlProto(ObjectBuilder& b) {
                            u->parsed->protocol = s;
                            rebuildUrlHref(*u->parsed);
                        }
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("username",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed->username : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       u->parsed->username = ev::toUtf8(v);
+                       rebuildUrlHref(*u->parsed);
+                   }
+                   return ev::undefined();
+               });
+    b.accessor("password",
+               [](Value self, std::span<const Value>) {
+                   HostUrl* u = urlOf(self);
+                   return ev::fromUtf8(u ? u->parsed->password : "");
+               },
+               [](Value self, std::span<const Value> a) {
+                   HostUrl* u = urlOf(self);
+                   if (!u) return ev::undefined();
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                       u->parsed->password = ev::toUtf8(v);
+                       rebuildUrlHref(*u->parsed);
                    }
                    return ev::undefined();
                });
@@ -560,7 +642,7 @@ void decorateUrlProto(ObjectBuilder& b) {
                    Value cached = ev::getProperty(self, "_searchParams");
                    if (ev::isObject(cached)) return cached;
                    ev::Persistent owner(self);
-                   ev::Persistent made(makeSearchParamsObject(u->parsed));
+                   ev::Persistent made(makeSearchParamsValue(u->parsed));
                    ev::setProperty(owner.get(), "_searchParams", made.get());
                    return made.get();
                },
@@ -626,6 +708,24 @@ void installUrlGlobals() {
         if (!parseURL(ev::toUtf8(hrefV), base, p)) return ev::null();
         return makeURLValue(p);
     }, 2));
+
+    g_urlSearchParamsClass.install(
+        "URLSearchParams", 1,
+        [](Value, std::span<const Value> a) {
+            auto parsed = std::make_shared<ParsedURL>();
+            if (!a.empty()) {
+                Value initV = a[0];
+                if (HostSearchParams* other = searchParamsOf(initV)) {
+                    if (other->parsed) parsed->search = other->parsed->search;
+                } else if (!ev::isUndefined(initV) && !ev::isNull(initV)) {
+                    std::string s = ev::toUtf8(initV);
+                    if (!s.empty() && s[0] != '?') s = "?" + s;
+                    parsed->search = s;
+                }
+            }
+            return makeSearchParamsValue(parsed);
+        },
+        decorateSearchParamsProto);
 }
 
 }  // namespace bro::bronze_host
