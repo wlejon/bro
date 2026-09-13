@@ -1,6 +1,7 @@
 #include "bronze_host/host_worker_msg.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/eval.h"
+#include "bronze_host/native_manifest_helper.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "engine/engine.h"
@@ -212,12 +213,18 @@ void WorkerInstance::threadFunc() {
             }
             std::string err;
             std::string globalsPath = getWebHostGlobalsPath();
+            const std::string manifestPath = getNativeManifestDir();
+            const std::string libPath = getNativeLibPath();
             int status = bronze::cli::runBuild(
                 compilePath, outDll, &err,
                 /*infer=*/true, /*timings=*/false, /*emitObj=*/false,
                 /*hostGlobals=*/globalsPath, /*inferStats=*/false,
                 /*statsOut=*/nullptr, /*moduleRoots=*/{}, /*entrySymbol=*/{},
-                /*emitShared=*/true, /*retainFnSource=*/true);
+                /*emitShared=*/true, /*retainFnSource=*/true,
+                /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
+                /*pinsPath=*/{}, /*censusOutPath=*/{},
+                /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
+                /*nativeLibPath=*/libPath);
             if (!tempSrc.empty()) {
                 std::filesystem::remove(tempSrc, ec);
             }

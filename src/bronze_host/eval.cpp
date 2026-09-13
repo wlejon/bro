@@ -1,4 +1,5 @@
 #include "bronze_host/eval.h"
+#include "bronze_host/native_manifest_helper.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_headless.h"
@@ -277,6 +278,8 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     const std::string globalsPath = getWebHostGlobalsPath();
     const auto roots = moduleRootsFor(engine);
     const std::string resolvesAs = entryResolvesAsFor(engine, filename);
+    const std::string manifestPath = getNativeManifestDir();
+    const std::string libPath = getNativeLibPath();
     std::string err;
     int status = bronze::cli::runBuild(
         tempJs.string(), outDll.string(), &err,
@@ -286,8 +289,8 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/{}, /*censusOutPath=*/{},
-        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/{},
-        /*nativeLibPath=*/{}, /*entryResolvesAs=*/resolvesAs);
+        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
+        /*nativeLibPath=*/libPath, /*entryResolvesAs=*/resolvesAs);
 
     std::error_code ec;
     std::filesystem::remove(tempJs, ec);
@@ -311,8 +314,8 @@ bool evalScript(engine::Engine& engine, const std::string& code,
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
             /*pinsPath=*/{}, /*censusOutPath=*/{},
-            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/{},
-            /*nativeLibPath=*/{}, /*entryResolvesAs=*/resolvesAs);
+            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
+            /*nativeLibPath=*/libPath, /*entryResolvesAs=*/resolvesAs);
         std::filesystem::remove(tempJsWrap, ec);
     }
 
@@ -385,6 +388,8 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
 
     const std::string globalsPath = getWebHostGlobalsPath();
     const auto roots = moduleRootsFor(engine);
+    const std::string manifestPath = getNativeManifestDir();
+    const std::string libPath = getNativeLibPath();
     std::string err;
 
     std::ifstream ifs(absSource, std::ios::binary);
@@ -428,7 +433,8 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/{}, /*censusOutPath=*/{},
-        /*pinsAllowObserved=*/false);
+        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
+        /*nativeLibPath=*/libPath);
 
     if (!wrapFile.empty()) {
         std::filesystem::remove(wrapFile, ec);
@@ -450,7 +456,8 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
             /*pinsPath=*/{}, /*censusOutPath=*/{},
-            /*pinsAllowObserved=*/false);
+            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
+            /*nativeLibPath=*/libPath);
         std::filesystem::remove(wrappedFile, ec);
     }
 
