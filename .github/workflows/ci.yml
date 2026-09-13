@@ -50,7 +50,7 @@ jobs:
           # layer (uses brass backend).
           - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true,  bronze_compiler: true }
           - { name: windows, os: windows-2022, triplet: x64-windows, test: false, bronze_compiler: false }
-          - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: false, bronze_compiler: false }
+          - { name: macos,   os: macos-14,     triplet: x64-osx,     test: false, bronze_compiler: false }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -115,6 +115,8 @@ jobs:
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
           fi
           cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
           cmake --build third_party/brass/build --config Release --target brass --parallel 4
@@ -164,6 +166,8 @@ jobs:
             # launcher is actually honored. Embedded debug info (/Z7) instead
             # of a separate PDB (/Zi) is what lets sccache cache MSVC objects.
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
           fi
           BRASS_ARGS=""
           if [ -n "${BRASS_ROOT:-}" ]; then
@@ -277,6 +281,8 @@ jobs:
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
           fi
           cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
           cmake --build third_party/brass/build --config Release --target brass --parallel 4
@@ -288,6 +294,8 @@ jobs:
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DVCPKG_MANIFEST_MODE=OFF"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
           fi
           cmake -B build \
             -DBRO_PROFILE=minimal \
