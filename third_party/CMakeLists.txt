@@ -104,6 +104,19 @@ if(NOT TARGET bromath)
     endif()
 endif()
 
+# --- brass (JIT compiler and intermediate representation) ---
+if(NOT TARGET brass)
+    bro_default_sibling_dir(brass _brass_default)
+    set(BRASS_DIR "${_brass_default}" CACHE PATH "Path to standalone brass repo")
+    if(EXISTS "${BRASS_DIR}/CMakeLists.txt")
+        message(STATUS "brass: using standalone repo at ${BRASS_DIR}")
+        add_subdirectory("${BRASS_DIR}" "${CMAKE_BINARY_DIR}/brass-build" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brass: using submodule at third_party/brass")
+        add_subdirectory(brass "${CMAKE_BINARY_DIR}/brass-build" EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- brotensor (tensor + ops — the AI-tower base) ---
 # bro is the FIRST loader of brotensor so that every sibling's own
 # `if(NOT TARGET brotensor)` guard (broimage, brogameagent, brolm, brodiffusion,
