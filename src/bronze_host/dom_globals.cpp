@@ -324,15 +324,13 @@ void installWebHostGlobals(engine::Engine& engine) {
         LOG_WARN("bronze_host: installWebHostGlobals called twice; ignoring");
         return;
     }
-    // Registration order is the manifest's order (web_host.globals):
-    // document, window, self, addEventListener, removeEventListener,
-    // dispatchEvent, requestAnimationFrame, cancelAnimationFrame,
-    // performance, WebGL2RenderingContext, setTimeout, clearTimeout,
-    // setInterval, clearInterval, Image, navigator, HTMLCanvasElement,
-    // HTMLImageElement, WebGLRenderingContext, localStorage. registerGlobal
-    // roots each value for the life of the process, and a manifest name with
-    // no registerGlobal behind it is a fatal() at startup, not a catchable
-    // miss — so the two lists move together.
+    // Every registerGlobal below, and in the install* calls at the foot, is
+    // the whole contract: registeredHostGlobals() reads the names back off
+    // bronze's registry after this returns, and that is the list every
+    // compile is given (eval_jit.cpp, host_worker.cpp, and `bro-headless
+    // --print-host-globals` for an ahead-of-time `bronze build`). There is
+    // no manifest to keep in step. registerGlobal roots each value for the
+    // life of the process.
     //
     // Never freed — see the lifetime note at the top of this file.
     g_host = new HostState();
@@ -856,6 +854,10 @@ void resetGlobalExpandos() {
 
 bool isWebHostGlobalsInstalled() {
     return g_host != nullptr;
+}
+
+std::vector<std::string> registeredHostGlobals() {
+    return ev::hostGlobalNames();
 }
 
 bool hasPendingAnimationFrames() {

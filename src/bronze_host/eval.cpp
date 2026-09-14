@@ -152,32 +152,23 @@ void ensureSharedRuntimeEnv() {
     }
 }
 
-std::string getWebHostGlobalsPath() {
-    std::error_code ec;
-    if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
-        auto p = std::filesystem::path(env) / "src/bronze_host/web_host.globals";
-        if (std::filesystem::exists(p, ec)) return std::filesystem::absolute(p, ec).string();
-    }
-    const auto exeDir = getExecutableDirectory();
-    for (const auto& base : {
-        exeDir,
-        exeDir.parent_path(),
-        exeDir.parent_path().parent_path(),
-        std::filesystem::current_path(),
-        std::filesystem::current_path().parent_path(),
-    }) {
-        for (const auto& rel : {
-            "src/bronze_host/web_host.globals",
-            "web_host.globals",
-            "bronze/web_host.globals",
-        }) {
-            auto p = base / rel;
-            if (std::filesystem::exists(p, ec)) return std::filesystem::absolute(p, ec).string();
-        }
-    }
+namespace {
 
-    return "src/bronze_host/web_host.globals";
+// The `--host-globals` manifest an in-process `bronze build` compiles
+// against: the registry, written out. runBuild takes the manifest as a PATH
+// (cli/driver.h says why), so the enumeration goes through a file in the
+// eval temp dir beside the script it compiles, and is removed with it. The
+// caller has installed the host globals before asking, or the list is empty
+// and every free read of `document` compiles to a runtime miss.
+std::filesystem::path writeHostGlobalsManifest(const std::filesystem::path& dir,
+                                               const std::string& stem) {
+    const auto path = dir / (stem + ".globals");
+    std::ofstream ofs(path, std::ios::binary);
+    for (const auto& name : registeredHostGlobals()) ofs << name << '\n';
+    return path;
 }
+
+} // namespace
 
 #ifdef _WIN32
 #include <dbghelp.h>
@@ -276,7 +267,13 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         ofs.write(code.data(), code.size());
     }
 
-    const std::string globalsPath = getWebHostGlobalsPath();
+    // Globals BEFORE the compile, not just before the run: the manifest the
+    // compile admits is read off the registry, so the registry must be full.
+    if (!isWebHostGlobalsInstalled()) {
+        installWebHostGlobals(engine);
+    }
+    const auto manifest = writeHostGlobalsManifest(tempDir, stem);
+    const std::string globalsPath = manifest.string();
     const auto roots = moduleRootsFor(engine);
     const std::string resolvesAs = entryResolvesAsFor(engine, filename);
     const std::string pinsPath = discoverPinsPath(engine, filename);
@@ -319,6 +316,7 @@ bool evalScript(engine::Engine& engine, const std::string& code,
             /*entryResolvesAs=*/resolvesAs);
         std::filesystem::remove(tempJsWrap, ec);
     }
+    std::filesystem::remove(manifest, ec);
 
     if (status != 0) {
         LOG_ERROR("eval compilation failed:\n%s", err.c_str());
@@ -342,10 +340,6 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
-    }
-
-    if (!isWebHostGlobalsInstalled()) {
-        installWebHostGlobals(engine);
     }
 
     bool entryOk = safeRunEntry(entry);
@@ -389,7 +383,11 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     const std::string stem = "script_" + std::to_string(ts) + "_" + std::to_string(id);
     const auto outDll = tempDir / (stem + kModuleExt);
 
-    const std::string globalsPath = getWebHostGlobalsPath();
+    if (!isWebHostGlobalsInstalled()) {
+        installWebHostGlobals(engine);
+    }
+    const auto manifest = writeHostGlobalsManifest(tempDir, stem);
+    const std::string globalsPath = manifest.string();
     const auto roots = moduleRootsFor(engine);
     const std::string pinsPath = discoverPinsPath(engine, absSource);
     const std::string censusOutPath = discoverCensusOutPath(engine, absSource);
@@ -461,6 +459,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
             /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {});
         std::filesystem::remove(wrappedFile, ec);
     }
+    std::filesystem::remove(manifest, ec);
 
     if (status != 0) {
         LOG_ERROR("evalScriptFile compilation failed for %s:\n%s", filePath.c_str(), err.c_str());
@@ -484,10 +483,6 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
-    }
-
-    if (!isWebHostGlobalsInstalled()) {
-        installWebHostGlobals(engine);
     }
 
     if (!safeRunEntry(entry)) {

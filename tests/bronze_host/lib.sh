@@ -137,6 +137,27 @@ bh_ensure_module() {
         return 77
     }
 
+    # The --host-globals manifest comes off the binary that will RUN the
+    # module, not off a file in the tree: bro-headless installs its host
+    # globals and prints the registry. There is no other copy of that list
+    # anywhere, which is what keeps "compiled against" and "registered" from
+    # drifting. The app dir is only what the Engine needs to exist; the
+    # module it may already carry is neither loaded nor run for this.
+    local bin manifest
+    bin="$(bh_find_bro_headless "$project_dir")" || {
+        [[ -f "$module" ]] && { echo "$module"; return 0; }
+        return 77
+    }
+    manifest="${TMPDIR:-/tmp}/bh_host_globals.$$"
+    if ! "$bin" "$(bh_to_win_path "$appdir")" --print-host-globals \
+            > "$manifest" 2> "$manifest.err"; then
+        echo "HOST GLOBALS FAILED ($bin --print-host-globals)" >&2
+        tail -20 "$manifest.err" >&2
+        rm -f "$manifest" "$manifest.err"
+        return 1
+    fi
+    rm -f "$manifest.err"
+
     local -a pin_args=()
     if [[ "${BRO_CENSUS:-}" == "1" ]]; then
         pin_args+=(--census "$(bh_to_win_path "$appdir/app.pins")")
@@ -152,16 +173,18 @@ bh_ensure_module() {
 
     export BRONZE_SHARED_RT_LIB="$(bh_to_win_path "$rtlib")"
     export WSLENV="${WSLENV:-}${WSLENV:+:}BRONZE_SHARED_RT_LIB"
-    local log
+    local log status=0
     log="$("$bronze" build "$(bh_to_win_path "$probe")" \
                 -o "$(bh_to_win_path "$module")" \
                 --emit-shared \
-                --host-globals "$(bh_to_win_path "$project_dir/src/bronze_host/web_host.globals")" \
-                ${pin_args[@]+"${pin_args[@]}"} 2>&1)" || {
+                --host-globals "$(bh_to_win_path "$manifest")" \
+                ${pin_args[@]+"${pin_args[@]}"} 2>&1)" || status=$?
+    rm -f "$manifest"
+    if [[ $status -ne 0 ]]; then
         echo "COMPILE FAILED" >&2
         printf '%s\n' "$log" | tail -20 >&2
         return 1
-    }
+    fi
     echo "$module"
 }
 

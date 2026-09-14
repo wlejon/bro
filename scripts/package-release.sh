@@ -270,10 +270,9 @@ if [[ -x "$BRONZE_EXE" ]]; then
     done
     shopt -u nullglob
 
-    # The host-globals manifest: `bronze build` needs it to know which globals
-    # bro supplies, so an app compiled for bro cannot be built without this
-    # file. It is bro's, not bronze's — it describes THIS host.
-    cp src/bronze_host/web_host.globals "$BZ_DIR/"
+    # No host-globals manifest is staged: the shipped bro-headless prints its
+    # own (`bro-headless <app> --print-host-globals`), which is the registry
+    # of THIS host and cannot disagree with it. README.txt below says so.
 
     # The embed API, for a C++ host of its own that loads compiled modules
     # (embed.h pulls exactly one header, runtime/value.h, so the pair is the
@@ -303,13 +302,16 @@ bronze — the AOT JavaScript compiler for bro ${VERSION}
 
 Compile an app's JavaScript to a native module the stock bro binaries load:
 
+  ../bro-headless${EXE} myapp --print-host-globals > web_host.globals
   bronze${EXE} build app.js -o myapp/app${MODULE_EXT} --emit-shared --host-globals web_host.globals
 
   bro${EXE} myapp
 
 The app directory is index.html + app${MODULE_EXT}; nothing else has to change.
-web_host.globals beside this file is the manifest of the globals bro supplies
-(DOM, WebGL2, audio, physics, AI); pass it on every build for bro.
+The first line writes the manifest of the globals bro supplies (DOM, WebGL2,
+audio, physics, AI): bro-headless installs them exactly as a run would and
+prints the list, so it always matches the binaries beside it. Pass it on every
+build for bro.
 
 bronze also compiles standalone programs — 'bronze${EXE} build prog.js -o prog${EXE}'
 links the static runtime archives here into a native executable.

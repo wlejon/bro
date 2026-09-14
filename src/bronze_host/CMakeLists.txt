@@ -269,6 +269,7 @@ bro_apply_feature_defs(bro_bronze_host)
 # configure.
 #
 # Building an app is `bronze build <entry>.js -o <appdir>/app.dll --emit-shared
-# --host-globals src/bronze_host/web_host.globals`, and this tree can produce
-# the compiler that does it. src/bronze_host/README.md
-# has the sequence.
+# --host-globals <manifest>`, where the manifest is what `bro-headless <appdir>
+# --print-host-globals` prints — the registry of the binary that will run the
+# module, not a file kept in this tree — and this tree can produce the
+# compiler that does it. src/bronze_host/README.md has the sequence.

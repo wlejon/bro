@@ -3,6 +3,7 @@
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
 
@@ -89,6 +90,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::string scriptPath;
     std::vector<std::string> inlineExprs;
     std::vector<std::string> scriptArgs;
+    bool printHostGlobals = false;
 
     bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
@@ -107,7 +109,11 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "  --audio         Enable real audio output\n"
                 "  --splash        Show splash screen during load\n"
                 "  --no-splash     Skip splash screen\n"
-                "  -e <expr>       Evaluate JavaScript expression\n",
+                "  -e <expr>       Evaluate JavaScript expression\n"
+                "  --print-host-globals\n"
+                "                  Print the host globals this binary registers, one per\n"
+                "                  line, and exit: the --host-globals manifest for\n"
+                "                  `bronze build` of an app that will run on it\n",
                 hooks.programName.c_str(), hooks.tagline.c_str(), hooks.programName.c_str());
             return 0;
         } else if (strcmp(argv[i], "--") == 0) {
@@ -126,6 +132,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             cliSplash = 0;
         } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
             inlineExprs.push_back(argv[++i]);
+        } else if (strcmp(argv[i], "--print-host-globals") == 0) {
+            printHostGlobals = true;
         } else if (appDir.empty()) {
             appDir = argv[i];
         } else if (scriptPath.empty() && argv[i][0] != '-') {
@@ -248,6 +256,27 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 
         auto* engine = new bro::engine::Engine(config);
         engine->run();
+
+        // The compile-time half of the host-globals contract, read off the
+        // run-time half: install exactly what an app would find registered
+        // and print the registry. Before afterEngine, so a module already in
+        // the app dir is neither loaded nor run — the list is a property of
+        // this BINARY, and the app dir is only what the Engine needs to
+        // exist. The engine log is on stderr, so stdout is the manifest and
+        // nothing else.
+        if (printHostGlobals) {
+            if (!bro::bronze_host::isWebHostGlobalsInstalled()) {
+                bro::bronze_host::installWebHostGlobals(*engine);
+            }
+            for (const auto& name : bro::bronze_host::registeredHostGlobals()) {
+                fputs(name.c_str(), stdout);
+                fputc('\n', stdout);
+            }
+            fflush(stdout);
+            delete engine;
+            if (hooks.beforeExit) hooks.beforeExit();
+            _exit(0);
+        }
 
         if (hooks.afterEngine) hooks.afterEngine(*engine);
 

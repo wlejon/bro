@@ -25,9 +25,13 @@ namespace bro::bronze_host {
 /// microtask checkpoint the compiled program's promises need; without it a
 /// promise queued after the top level would never run.
 ///
-/// The registered names match src/bronze_host/web_host.globals line for
-/// line; the app must have been compiled with that manifest
-/// (`--host-globals`) for its reads to reach the registry at all.
+/// There is no hand-kept list of what this registers: registeredHostGlobals()
+/// below reads the names back off bronze's registry, and that enumeration is
+/// what every compile — in-process (`EvalOptions::hostGlobals`) or ahead of
+/// time (`bro-headless <app> --print-host-globals`, piped to `bronze build
+/// --host-globals`) — is given. A name a compiled program reads must be in
+/// that list AND registered, and with one source for both it cannot be one
+/// without the other.
 ///
 /// Call AFTER the Engine exists and BEFORE bronze::embed::runMain(): the
 /// program's top level runs inside runMain, and a global it reads must
@@ -38,6 +42,14 @@ void installWebHostGlobals(engine::Engine& engine);
 
 /// Whether installWebHostGlobals has already been called on this process.
 bool isWebHostGlobalsInstalled();
+
+/// Every host global registered on the CALLING thread, in registration
+/// order — bronze's registry is per-thread, so on the main thread this is
+/// what installWebHostGlobals (and anything registered after it) put in, and
+/// on a worker thread it is that worker's own realm. This is the compile-time
+/// half of the host-globals contract, taken from the run-time half rather
+/// than typed beside it.
+std::vector<std::string> registeredHostGlobals();
 
 /// Clear active setTimeout and setInterval timers and tasks on reload.
 void clearHostTimers();

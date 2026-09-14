@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 namespace bro::engine {
 class Engine;
@@ -20,8 +19,5 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
 /// Evaluates a JavaScript file in-memory using the Brass JIT engine without disk files.
 /// Returns true on success, false on failure (and logs error / sets test failure).
 bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath);
-
-/// Cached list of host globals loaded from web_host.globals manifest.
-const std::vector<std::string>& getCachedWebHostGlobals();
 
 } // namespace bro::bronze_host

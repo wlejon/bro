@@ -1,5 +1,6 @@
 #include "bronze_host/host_worker_msg.h"
 #include "bronze_host/app_module.h"
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
 #include "bronze_host/gl_internal.h"
@@ -188,7 +189,11 @@ void WorkerInstance::threadFunc() {
         bronze::eval::EvalOptions opts;
         opts.filename = resolvedPath.string();
         opts.entryResolvesAs = resolvedPath;
-        opts.hostGlobals = getCachedWebHostGlobals();
+        // This thread's own registry: bronze's is per-thread, so this is
+        // exactly the set the installs above put in for this worker —
+        // self, postMessage, close, onmessage, brokit, the image and noise
+        // globals — and nothing the main realm has that a worker does not.
+        opts.hostGlobals = registeredHostGlobals();
         if (mounts_) {
             for (const auto& [prefix, target] : mounts_->mounts()) {
                 opts.moduleRoots.push_back({prefix, std::filesystem::path(target)});

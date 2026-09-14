@@ -11,12 +11,13 @@ namespace bro::bronze_host {
 
 namespace {
 
-// Registration order is web_host.globals' order, and the manifest is why the
-// list is spelled out rather than discovered: every name a module was compiled
-// against must be registered before the module runs, or the first READ of it
-// is a fatal() inside bronze rather than a catchable miss. So a name goes in
-// whether or not the page defined it — as the page's value when there is one,
-// and as `undefined` when there is not.
+// The list is spelled out rather than discovered from the page because a
+// compile admits exactly what is REGISTERED (registeredHostGlobals), and a
+// module compiled on one page must still run on another: every name a module
+// was compiled against must be registered before the module runs, or the
+// first READ of it is a fatal() inside bronze rather than a catchable miss.
+// So a name goes in whether or not the page defined it — as the page's value
+// when there is one, and as `undefined` when there is not.
 constexpr const char* kVendorGlobals[] = {
     "signals", "CodeMirror", "acorn", "tern", "esprima", "jsonlint", "draco_encoder",
 };

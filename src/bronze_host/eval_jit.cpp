@@ -30,25 +30,6 @@ bool isJitDisabled() {
     return disabled;
 }
 
-const std::vector<std::string>& getCachedWebHostGlobals() {
-    static std::vector<std::string> s_globals = [] {
-        std::vector<std::string> globals;
-        const std::string path = getWebHostGlobalsPath();
-        std::ifstream ifs(path);
-        if (!ifs.is_open()) return globals;
-        std::string line;
-        while (std::getline(ifs, line)) {
-            if (auto hash = line.find('#'); hash != std::string::npos) line.erase(hash);
-            const auto first = line.find_first_not_of(" \t\r\n");
-            if (first == std::string::npos) continue;
-            const auto last = line.find_last_not_of(" \t\r\n");
-            globals.push_back(line.substr(first, last - first + 1));
-        }
-        return globals;
-    }();
-    return s_globals;
-}
-
 namespace {
 
 bool reportCallResult(engine::Engine& engine, const bronze::embed::CallResult& res, const char* context) {
@@ -125,7 +106,9 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
 
     bronze::eval::EvalOptions opts;
     opts.filename = filename.empty() ? "<eval>" : filename;
-    opts.hostGlobals = getCachedWebHostGlobals();
+    // Read off the registry the install above filled, not from a list kept
+    // beside it: what is registered is exactly what the compile admits.
+    opts.hostGlobals = registeredHostGlobals();
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = entryResolvesAsFor(engine, filename);
     opts.retainSource = true;
@@ -190,7 +173,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
 
     bronze::eval::EvalOptions opts;
     opts.filename = absPath.string();
-    opts.hostGlobals = getCachedWebHostGlobals();
+    opts.hostGlobals = registeredHostGlobals();
     opts.moduleRoots = moduleRootsFor(engine);
     opts.entryResolvesAs = absPath;
     opts.retainSource = true;

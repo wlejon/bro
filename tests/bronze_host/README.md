@@ -94,9 +94,9 @@ requires every seam in the layer to be right at once:
 
 - the compiled program's reads of `document`, `window`, `requestAnimationFrame`,
   `performance`, `setTimeout` and `WebGL2RenderingContext` reach the host
-  registry — which they only do if the app was compiled against
-  `web_host.globals` and that file still matches what
-  `installWebHostGlobals` registers;
+  registry — which they only do if the app was compiled against the list
+  `installWebHostGlobals` registers, which `lib.sh` takes from
+  `bro-headless <appdir> --print-host-globals` at build time;
 - `document.createElement('canvas')` builds a real `dom::Element`,
   `body.appendChild` puts it in the engine's document, and
   `canvas.getContext('webgl2')` reaches `Engine::createWebGL2Context`;
@@ -164,8 +164,13 @@ the context answered at all.
 compiles its own subject should not be the only description of how.
 
 ```bash
-BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib ./build/Release/bronze.exe build tests/bronze_host/apps/dom_probe.js     -o tests/bronze_host/appdir_dom/app.dll     --emit-shared --host-globals src/bronze_host/web_host.globals
+./build/Release/bro-headless.exe tests/bronze_host/appdir_dom --print-host-globals > host.globals
+BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib ./build/Release/bronze.exe build tests/bronze_host/apps/dom_probe.js     -o tests/bronze_host/appdir_dom/app.dll     --emit-shared --host-globals host.globals
 ```
+
+The manifest is printed by the binary that will run the module — it is
+bronze's host-global registry after `installWebHostGlobals`, not a file in
+the tree — so it is regenerated for every build rather than kept.
 
 `BRONZE_SHARED_RT_LIB` is needed under a multi-config generator: bronze searches
 `shared/` beside and above the CLI, and MSBuild writes the import library one

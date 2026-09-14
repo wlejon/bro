@@ -32,7 +32,6 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `eval.cpp`, `eval.h` | in-process JS compilation via Bronze CLI, dynamic evaluation (`eval()`, `new Function()`) and script execution |
 | `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
-| `web_host.globals` | the manifest of global names bronze admits; every one must be registered ? an unregistered name is `fatal()`, not a miss |
 
 ## How a compiled app gets in
 
@@ -266,10 +265,13 @@ root when bro's configure didn't set one).
 ## Compile and run an app
 
 ```bash
-# 1. compile the app to a MODULE, into the app directory that will carry it
-bronze build src/bronze_host/fixtures/main_scenegraph.js     -o src/bronze_host/fixtures/appdir/app.dll     --emit-shared     --host-globals src/bronze_host/web_host.globals
+# 1. the host-globals manifest: the registry of the binary that will run the app
+./build/Release/bro-headless src/bronze_host/fixtures/appdir --print-host-globals > host.globals
 
-# 2. there is no step 2 — the stock binaries load it
+# 2. compile the app to a MODULE, into the app directory that will carry it
+bronze build src/bronze_host/fixtures/main_scenegraph.js     -o src/bronze_host/fixtures/appdir/app.dll     --emit-shared     --host-globals host.globals
+
+# 3. there is no step 3 — the stock binaries load it
 ./build/Release/bro          src/bronze_host/fixtures/appdir
 ./build/Release/bro-headless src/bronze_host/fixtures/appdir -e "advanceTime(128)"
 ./build/Release/bro-headless src/bronze_host/fixtures/appdir drive.js
@@ -304,8 +306,13 @@ app in, which bro no longer does.
 `--emit-obj` is what makes step 1 stop before linking: the object is destined
 for **bro's** toolchain, and linking belongs to whoever owns the final binary.
 `--host-globals` is what makes the app's reads of `document` and friends resolve
-to the host registry instead of throwing `ReferenceError` — the manifest and
-`installWebHostGlobals` are two halves of one list and must stay identical.
+to the host registry instead of throwing `ReferenceError`. The manifest is not
+a file kept in this tree: `bro-headless <appdir> --print-host-globals` installs
+the host globals exactly as a run would and prints bronze's registry
+(`registeredHostGlobals()`, over `bronze::embed::hostGlobalNames()`), and the
+in-process compiles (`eval_jit.cpp`, `host_worker.cpp`) read the same registry
+straight into `EvalOptions::hostGlobals`. One source, so "compiled against" and
+"registered" cannot drift.
 
 The app object must export `bronze_main` (bronze's entry convention);
 `installWebHostGlobals` runs before `bronze::embed::runMain()`, and the frame
@@ -571,11 +578,13 @@ without it "record this to a GIF" had no answer at all for a WebGL app.
 write final trailers from `finish()`. An encoder dropped without calling
 `finish()` will keep whatever was flushed prior.
 
-### A name in `web_host.globals` must be registered in EVERY build
+### A host global must be registered in EVERY build
 
 Compiled out is not the same as absent, and this is where the first
-conditionally-compiled feature found the rule. Lowering admits every manifest
-name as a global read. At run time `bronze_global_get` asks the builtins, then
+conditionally-compiled feature found the rule. The manifest a module is
+compiled against is the registry of whichever build printed it, and a module
+compiled on a full build must still run on a lean one. Lowering admits every
+manifest name as a global read. At run time `bronze_global_get` asks the builtins, then
 the host registry, then `globalThis`, and then calls `fatal()`
 (`runtime/rt_state.cpp`) — a miss is not a `ReferenceError` a program can catch
 and not an `undefined` it can test, it aborts the process. So in a

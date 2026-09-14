@@ -291,9 +291,10 @@ jobs:
       # and nowhere else: compile a tiny app with the SHIPPED compiler,
       # resolving the runtime libraries beside it, then load the module it
       # emitted with the SHIPPED bro-headless. This is the check that catches
-      # an ABI-fingerprint mismatch between compiler and host, a package
-      # missing web_host.globals, and (on Linux/macOS) a shared runtime the
-      # binaries cannot find once the tree has moved off the build machine.
+      # an ABI-fingerprint mismatch between compiler and host, a bro-headless
+      # that cannot print its own host-globals manifest, and (on Linux/macOS)
+      # a shared runtime the binaries cannot find once the tree has moved off
+      # the build machine.
       # It runs before signing so a bad package is never signed.
       - name: Smoke test (packaged bronze compiler + host)
         shell: bash
@@ -311,8 +312,16 @@ jobs:
           document.body.appendChild(c);
           console.log("APP ok=" + (c.width * c.height));
           JS
-          # From the package directory, the way a user would.
+          # From the package directory, the way a user would: the manifest
+          # comes off the shipped bro-headless, then the shipped compiler
+          # builds against it.
           cd "$PKG"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a ./bro-headless smokeapp --print-host-globals > bronze/web_host.globals
+          else
+            ./bro-headless smokeapp --print-host-globals > bronze/web_host.globals
+          fi
+          grep -qx document bronze/web_host.globals
           ./bronze/bronze$EXE build smokeapp/main.js -o "smokeapp/app$MOD" \
             --emit-shared --host-globals bronze/web_host.globals
           [ -f "smokeapp/app$MOD" ]
@@ -454,7 +463,7 @@ jobs:
 
           Single self-contained binary per platform — uses your NVIDIA GPU when present, falls back to CPU otherwise (macOS uses Metal). bro is pre-alpha; nightly is the current release channel.
 
-          Each zip also carries \`bronze/\`, the AOT JavaScript compiler, and the binaries here are built to load what it emits: \`bronze build app.js -o myapp/app.dll --emit-shared --host-globals bronze/web_host.globals\` turns an app's JavaScript into a native module that \`bro myapp\` runs with no flag and no separate runtime. Compiler and host come from the same bronze commit, which is what lets them load each other. A system linker is required for compiling (Windows: MSVC's \`link.exe\`; Linux/macOS: \`clang++\` or \`g++\`)."
+          Each zip also carries \`bronze/\`, the AOT JavaScript compiler, and the binaries here are built to load what it emits: \`bro-headless myapp --print-host-globals > web_host.globals\` writes the manifest of globals bro supplies, and \`bronze build app.js -o myapp/app.dll --emit-shared --host-globals web_host.globals\` turns an app's JavaScript into a native module that \`bro myapp\` runs with no flag and no separate runtime. Compiler and host come from the same bronze commit, which is what lets them load each other. A system linker is required for compiling (Windows: MSVC's \`link.exe\`; Linux/macOS: \`clang++\` or \`g++\`)."
           gh release create nightly \
             --target "$GITHUB_SHA" \
             --title "Nightly ($(date -u +%Y-%m-%d))" \
