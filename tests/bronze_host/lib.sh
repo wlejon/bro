@@ -143,17 +143,24 @@ bh_ensure_module() {
     # anywhere, which is what keeps "compiled against" and "registered" from
     # drifting. The app dir is only what the Engine needs to exist; the
     # module it may already carry is neither loaded nor run for this.
-    local bin manifest
+    #
+    # The --native-manifest comes off the same run: the `__bro_native.*`
+    # entry points the same install registered, written to a file beside the
+    # globals list. It is what turns the probe's `bro.time.scale` into the
+    # direct call bro's own bro_core.js makes.
+    local bin manifest natives
     bin="$(bh_find_bro_headless "$project_dir")" || {
         [[ -f "$module" ]] && { echo "$module"; return 0; }
         return 77
     }
     manifest="${TMPDIR:-/tmp}/bh_host_globals.$$"
+    natives="$manifest.natives.json"
     if ! "$bin" "$(bh_to_win_path "$appdir")" --print-host-globals \
+            --print-native-manifest "$(bh_to_win_path "$natives")" \
             > "$manifest" 2> "$manifest.err"; then
-        echo "HOST GLOBALS FAILED ($bin --print-host-globals)" >&2
+        echo "HOST GLOBALS FAILED ($bin --print-host-globals --print-native-manifest)" >&2
         tail -20 "$manifest.err" >&2
-        rm -f "$manifest" "$manifest.err"
+        rm -f "$manifest" "$manifest.err" "$natives"
         return 1
     fi
     rm -f "$manifest.err"
@@ -178,8 +185,9 @@ bh_ensure_module() {
                 -o "$(bh_to_win_path "$module")" \
                 --emit-shared \
                 --host-globals "$(bh_to_win_path "$manifest")" \
+                --native-manifest "$(bh_to_win_path "$natives")" \
                 ${pin_args[@]+"${pin_args[@]}"} 2>&1)" || status=$?
-    rm -f "$manifest"
+    rm -f "$manifest" "$natives"
     if [[ $status -ne 0 ]]; then
         echo "COMPILE FAILED" >&2
         printf '%s\n' "$log" | tail -20 >&2

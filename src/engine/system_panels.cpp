@@ -3,7 +3,6 @@
 
 #include "engine/engine.h"
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/host_headless.h"
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
 #include "layout/box.h"
@@ -21,6 +20,8 @@
 #include "render/gl_context.h"
 #include <glad/gl.h>
 #include <cmath>
+#include <cstdio>
+#include <functional>
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
@@ -256,16 +257,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         }
 
         if (!scripts.empty()) {
-            // These scripts are the engine's own chrome, not the app under
-            // test. A throw out of one is logged like any other, but it must
-            // not decide the app's headless verdict: the flags are restored to
-            // whatever the app had already set.
-            const bool hostFailed = bro::bronze_host::hasTestFailure();
-            const bool engineFailed = hasTestFailure();
             bro::bronze_host::runHostSubDocScripts(*this, liveDoc.document.get(),
                                                    scripts, dirPath, savedBasePath, false);
-            bro::bronze_host::setTestFailure(hostFailed);
-            setTestFailure(engineFailed);
             bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
                                                 renderer_.get(),
                                                 audioEngine_.get());
@@ -871,7 +864,111 @@ bool elementInTree(dom::Element* el, dom::Element* root) {
     return false;
 }
 
+void appendJsonString(const std::string& s, std::string& out) {
+    out += '"';
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    out += '"';
+}
+
+// One inspector node, minus its children: the shape system/inspector.html
+// walks. `id` is the per-fetch number inspectorSelectById resolves.
+void appendInspectorNode(int id, dom::Element* el, bool hasChildren, std::string& out) {
+    out += "{\"id\":" + std::to_string(id);
+    out += ",\"tag\":"; appendJsonString(el->tagName(), out);
+    out += ",\"idAttr\":"; appendJsonString(el->getAttribute("id"), out);
+    out += ",\"classes\":"; appendJsonString(el->getAttribute("class"), out);
+    out += ",\"hasChildren\":"; out += hasChildren ? "true" : "false";
+}
+
 } // namespace
+
+std::string Engine::inspectorAppTreeJson(int maxDepth) {
+    inspectorNodeMap_.clear();
+    inspectorNextId_ = 0;
+    auto* root = document_ ? document_->documentElement() : nullptr;
+    if (!root) return "null";
+
+    // Each visited element gets a fresh integer id mapped to its pointer so
+    // a later inspectorSelectById can resolve back to it.
+    std::string out;
+    std::function<void(dom::Element*, int)> walk;
+    walk = [&](dom::Element* el, int depth) {
+        const int id = inspectorNextId_++;
+        inspectorNodeMap_[id] = el;
+        auto kids = el->children();
+        appendInspectorNode(id, el, !kids.empty(), out);
+        const bool emitChildren = (maxDepth < 0 || depth < maxDepth);
+        if (emitChildren && !kids.empty()) {
+            out += ",\"children\":[";
+            bool first = true;
+            for (auto* k : kids) {
+                if (!k) continue;
+                if (!first) out += ',';
+                first = false;
+                walk(k, depth + 1);
+            }
+            out += ']';
+        }
+        out += '}';
+    };
+    walk(root, 0);
+    return out;
+}
+
+std::string Engine::inspectorChildrenJson(int parentId) {
+    auto it = inspectorNodeMap_.find(parentId);
+    if (it == inspectorNodeMap_.end() || !it->second) return "[]";
+    auto* root = document_ ? document_->documentElement() : nullptr;
+    if (!root || !elementInTree(it->second, root)) return "[]";
+    std::string out = "[";
+    bool first = true;
+    for (auto* k : it->second->children()) {
+        if (!k) continue;
+        const int id = inspectorNextId_++;
+        inspectorNodeMap_[id] = k;
+        if (!first) out += ',';
+        first = false;
+        appendInspectorNode(id, k, !k->children().empty(), out);
+        out += '}';
+    }
+    out += ']';
+    return out;
+}
+
+std::string Engine::inspectorSelectedJson() {
+    auto* el = inspector_.selected;
+    auto* root = document_ ? document_->documentElement() : nullptr;
+    if (!el || !root || !elementInTree(el, root)) {
+        inspector_.selected = nullptr;
+        return "null";
+    }
+    // The id the last fetch gave this element, if any, so the panel can keep
+    // its tree row highlighted across re-fetches.
+    int id = -1;
+    for (auto& [k, v] : inspectorNodeMap_) {
+        if (v == el) { id = k; break; }
+    }
+    std::string out;
+    appendInspectorNode(id, el, !el->children().empty(), out);
+    out += '}';
+    return out;
+}
 
 void Engine::inspectorSelectById(int id) {
     auto it = inspectorNodeMap_.find(id);

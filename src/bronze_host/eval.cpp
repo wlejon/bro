@@ -168,6 +168,24 @@ std::filesystem::path writeHostGlobalsManifest(const std::filesystem::path& dir,
     return path;
 }
 
+// The `--native-manifest` the same compile takes: this thread's native
+// registry (the `__bro_native.*` entry points host_bro_root.cpp registered),
+// written by embed::writeNativeManifest — the same text bro-native-manifest
+// prints at build time for js/bro_core.js, read here off the live registry
+// so an app's `bro.time.scale` and bro's own compile to the same calls. The
+// JIT path (eval_jit.cpp) reads the registry directly and needs no file.
+// Empty when nothing is registered: there is then nothing to lower.
+std::string writeNativeManifestFile(const std::filesystem::path& dir, const std::string& stem) {
+    if (bronze::embed::hostNativeNames().empty()) return {};
+    const auto path = dir / (stem + ".natives.json");
+    std::string err;
+    if (!bronze::embed::writeNativeManifest(path.string(), &err)) {
+        LOG_ERROR("eval: native manifest not written: %s", err.c_str());
+        return {};
+    }
+    return path.string();
+}
+
 } // namespace
 
 #ifdef _WIN32
@@ -274,6 +292,7 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     }
     const auto manifest = writeHostGlobalsManifest(tempDir, stem);
     const std::string globalsPath = manifest.string();
+    const std::string nativesPath = writeNativeManifestFile(tempDir, stem);
     const auto roots = moduleRootsFor(engine);
     const std::string resolvesAs = entryResolvesAsFor(engine, filename);
     const std::string pinsPath = discoverPinsPath(engine, filename);
@@ -287,7 +306,7 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-        /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {},
+        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
         /*entryResolvesAs=*/resolvesAs);
 
     std::error_code ec;
@@ -312,11 +331,12 @@ bool evalScript(engine::Engine& engine, const std::string& code,
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
             /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-            /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {},
+            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{},
             /*entryResolvesAs=*/resolvesAs);
         std::filesystem::remove(tempJsWrap, ec);
     }
     std::filesystem::remove(manifest, ec);
+    if (!nativesPath.empty()) std::filesystem::remove(nativesPath, ec);
 
     if (status != 0) {
         LOG_ERROR("eval compilation failed:\n%s", err.c_str());
@@ -388,6 +408,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     }
     const auto manifest = writeHostGlobalsManifest(tempDir, stem);
     const std::string globalsPath = manifest.string();
+    const std::string nativesPath = writeNativeManifestFile(tempDir, stem);
     const auto roots = moduleRootsFor(engine);
     const std::string pinsPath = discoverPinsPath(engine, absSource);
     const std::string censusOutPath = discoverCensusOutPath(engine, absSource);
@@ -434,7 +455,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-        /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {});
+        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
 
     if (!wrapFile.empty()) {
         std::filesystem::remove(wrapFile, ec);
@@ -456,10 +477,11 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
             /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-            /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {});
+            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/nativesPath, /*nativeLibPath=*/{});
         std::filesystem::remove(wrappedFile, ec);
     }
     std::filesystem::remove(manifest, ec);
+    if (!nativesPath.empty()) std::filesystem::remove(nativesPath, ec);
 
     if (status != 0) {
         LOG_ERROR("evalScriptFile compilation failed for %s:\n%s", filePath.c_str(), err.c_str());

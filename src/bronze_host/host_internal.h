@@ -635,5 +635,10 @@ void fireHostObserverFrame();
 void installObserversModule();
 void installNetSyncModule();
 void installImageGpuModule();
+// js/bro_core.js: the public bro.time / bro.window / bro.settings /
+// bro.appDir surface and the panels' __bro.*, assembled over the natives
+// under __bro_native. Entered by installBroRoots (host_bro_root.cpp) after
+// the roots and natives are registered; lifts nothing.
+void installBroCoreModule();
 
 }  // namespace bro::bronze_host

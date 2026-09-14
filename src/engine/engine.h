@@ -397,6 +397,43 @@ public:
     void inspectorSetPickerMode(bool on);
     void inspectorPickElement(dom::Element* el);
     void inspectorSelectById(int id);
+    /// The app document's element tree for the inspector panel, as JSON:
+    /// `{id, tag, idAttr, classes, hasChildren, children?}` per node, the
+    /// whole tree (maxDepth < 0) or that many levels deep. Resets the
+    /// per-fetch id map inspectorSelectById resolves against. "null" with no
+    /// document. The text form is the seam to the panel's JavaScript: a
+    /// tree is not a scalar, and this is the engine's own serializer rather
+    /// than one written per binding.
+    std::string inspectorAppTreeJson(int maxDepth);
+    /// One level of children of a node the last fetch numbered, as a JSON
+    /// array; "[]" for an id it does not know or a node no longer in the tree.
+    std::string inspectorChildrenJson(int parentId);
+    /// The selected node as one JSON node object (its id is -1 when the last
+    /// fetch did not number it), or "null" with nothing selected.
+    std::string inspectorSelectedJson();
+
+    /// The 500 ms rolling frame statistics the perf HUD shows: frames per
+    /// second, mean wall time per frame, and the mean per-phase times. Read
+    /// by `__bro.perf`; the engine writes no panel DOM itself.
+    double perfFps() const { return statsFps_; }
+    double perfFrameTimeMs() const { return statsFrameTimeMs_; }
+    double perfJsMs() const { return phaseJsMs_; }
+    double perfLayoutMs() const { return phaseLayoutMs_; }
+    double perfRasterMs() const { return phaseRasterMs_; }
+    double perfGpuMs() const { return phaseGpuMs_; }
+    double perfDrawMs() const { return phaseDrawMs_; }
+
+    /// Every secondary window (bro.window.open), live or pending, in
+    /// creation order. The perf HUD lists them.
+    const std::vector<std::unique_ptr<WindowHost>>& windowHosts() const { return windowHosts_; }
+
+    /// Observe settings changes AFTER the engine has applied them: called
+    /// with the category and field of every setUser / reset, "*" standing for
+    /// all, on the same synchronous path the engine's own reaction runs.
+    /// One observer; a later call replaces the earlier one. bro.settings.
+    /// onChange is the JS face of it.
+    using SettingsObserver = std::function<void(const std::string& category, const std::string& key)>;
+    void setSettingsObserver(SettingsObserver observer) { settingsObserver_ = std::move(observer); }
 
     double virtualTime() const { return virtualTime_; }
 
@@ -657,6 +694,7 @@ private:
     InspectorState inspector_;
     std::unordered_map<int, dom::Element*> inspectorNodeMap_;
     int inspectorNextId_ = 0;
+    SettingsObserver settingsObserver_;
 #if BRO_WITH_3D
     std::unique_ptr<GizmoManager> gizmo_;
 #endif

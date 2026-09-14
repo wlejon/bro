@@ -91,6 +91,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
     std::vector<std::string> inlineExprs;
     std::vector<std::string> scriptArgs;
     bool printHostGlobals = false;
+    std::string nativeManifestOut;
 
     bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
@@ -113,7 +114,12 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
                 "  --print-host-globals\n"
                 "                  Print the host globals this binary registers, one per\n"
                 "                  line, and exit: the --host-globals manifest for\n"
-                "                  `bronze build` of an app that will run on it\n",
+                "                  `bronze build` of an app that will run on it\n"
+                "  --print-native-manifest <path>\n"
+                "                  Write the native manifest this binary registers (the\n"
+                "                  __bro_native.* entry points and signatures) to <path>\n"
+                "                  and exit: the --native-manifest for the same build.\n"
+                "                  Combines with --print-host-globals in one run\n",
                 hooks.programName.c_str(), hooks.tagline.c_str(), hooks.programName.c_str());
             return 0;
         } else if (strcmp(argv[i], "--") == 0) {
@@ -134,6 +140,8 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
             inlineExprs.push_back(argv[++i]);
         } else if (strcmp(argv[i], "--print-host-globals") == 0) {
             printHostGlobals = true;
+        } else if (strcmp(argv[i], "--print-native-manifest") == 0 && i + 1 < argc) {
+            nativeManifestOut = argv[++i];
         } else if (appDir.empty()) {
             appDir = argv[i];
         } else if (scriptPath.empty() && argv[i][0] != '-') {
@@ -264,18 +272,33 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         // this BINARY, and the app dir is only what the Engine needs to
         // exist. The engine log is on stderr, so stdout is the manifest and
         // nothing else.
-        if (printHostGlobals) {
+        //
+        // The native manifest is the other half of the same contract — the
+        // `__bro_native.*` entry points registered by the same install —
+        // written to a file rather than stdout (it is JSON, and the two
+        // manifests are asked for together by tests/bronze_host/lib.sh).
+        if (printHostGlobals || !nativeManifestOut.empty()) {
             if (!bro::bronze_host::isWebHostGlobalsInstalled()) {
                 bro::bronze_host::installWebHostGlobals(*engine);
             }
-            for (const auto& name : bro::bronze_host::registeredHostGlobals()) {
-                fputs(name.c_str(), stdout);
-                fputc('\n', stdout);
+            int status = 0;
+            if (!nativeManifestOut.empty()) {
+                std::string err;
+                if (!bro::bronze_host::writeNativeManifest(nativeManifestOut, &err)) {
+                    fprintf(stderr, "--print-native-manifest: %s\n", err.c_str());
+                    status = 1;
+                }
             }
-            fflush(stdout);
+            if (printHostGlobals) {
+                for (const auto& name : bro::bronze_host::registeredHostGlobals()) {
+                    fputs(name.c_str(), stdout);
+                    fputc('\n', stdout);
+                }
+                fflush(stdout);
+            }
             delete engine;
             if (hooks.beforeExit) hooks.beforeExit();
-            _exit(0);
+            _exit(status);
         }
 
         if (hooks.afterEngine) hooks.afterEngine(*engine);

@@ -156,6 +156,18 @@ check_proxy() {
         --expr "advanceTime(64);"
 }
 
+# `bro` and `__bro` on bronze's native mechanism: bro.time, the paths,
+# bro.window, bro.settings (a custom category, actions, the change callback
+# delivered from the frame seam) and the panels' __bro.*. One frame after the
+# top level, for the callback; the spare frames must print nothing.
+check_bro_core() {
+    bh_run_check bronze_host_bro_core \
+        "$SCRIPT_DIR/appdir_bro_core" \
+        "$SCRIPT_DIR/apps/bro_core_probe.js" \
+        "$SCRIPT_DIR/expected/bro_core_probe.expected" \
+        --expr "advanceTime(64);"
+}
+
 # Dynamic code evaluation and the value bridge that makes the result usable.
 check_interp() {
     bh_run_check bronze_host_interp \
@@ -337,7 +349,7 @@ check_pixi() {
 
 # ---------------------------------------------------------------------------
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
-        parser proxy class codecs input video audio physics ai
+        parser proxy bro_core class codecs input video audio physics ai
         aigame net wild instanced pixi)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before

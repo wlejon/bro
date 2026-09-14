@@ -35,6 +35,7 @@ four synthetic C modules to hit every refusal branch.
 | `resize` | ResizeObserver: the initial report, and the quiet frames |
 | `parser` | DOMParser: a second document, and adoption out of it |
 | `proxy` | the four proxy-backed live views: style, computed, dataset, localStorage |
+| `bro_core` | `bro` / `__bro` on the native mechanism: bro.time, the paths, bro.window, bro.settings (custom category, actions, onChange), the panels' `__bro.*` |
 | `class` | host classes, via Image: born-on-prototype, shared methods, instanceof |
 | `codecs` | binary codecs: base64, typed arrays |
 | `input` | pointer lock, fullscreen, Gamepad |
@@ -164,13 +165,16 @@ the context answered at all.
 compiles its own subject should not be the only description of how.
 
 ```bash
-./build/Release/bro-headless.exe tests/bronze_host/appdir_dom --print-host-globals > host.globals
-BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib ./build/Release/bronze.exe build tests/bronze_host/apps/dom_probe.js     -o tests/bronze_host/appdir_dom/app.dll     --emit-shared --host-globals host.globals
+./build/Release/bro-headless.exe tests/bronze_host/appdir_dom --print-host-globals --print-native-manifest natives.json > host.globals
+BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib ./build/Release/bronze.exe build tests/bronze_host/apps/dom_probe.js     -o tests/bronze_host/appdir_dom/app.dll     --emit-shared --host-globals host.globals --native-manifest natives.json
 ```
 
-The manifest is printed by the binary that will run the module — it is
-bronze's host-global registry after `installWebHostGlobals`, not a file in
-the tree — so it is regenerated for every build rather than kept.
+Both manifests are printed by the binary that will run the module — the
+host-global registry after `installWebHostGlobals` on stdout, and the native
+registry (the `__bro_native.*` entry points behind `bro.time`, `bro.settings`
+and the rest, see `src/bronze_host/host_natives.h`) as a JSON file — not
+files in the tree, so they are regenerated for every build rather than kept.
+`lib.sh` asks for both in one run and passes both to the compile.
 
 `BRONZE_SHARED_RT_LIB` is needed under a multi-config generator: bronze searches
 `shared/` beside and above the CLI, and MSBuild writes the import library one

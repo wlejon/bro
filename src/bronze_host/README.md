@@ -30,6 +30,10 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
 | `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, and `localStorage` |
 | `eval.cpp`, `eval.h` | in-process JS compilation via Bronze CLI, dynamic evaluation (`eval()`, `new Function()`) and script execution |
+| `host_natives.h`, `host_bro_root.cpp` | the `bro` / `__bro` roots, the `__bro_native` root, and **the native convention** every `native_*.cpp` follows |
+| `native_time.cpp`, `native_paths.cpp`, `native_window.cpp`, `native_settings.cpp`, `native_dunder_bro.cpp` | the C entry points behind `bro.time`, `bro.appDir`/`userDataDir`/`resolvePath`, `bro.window`, `bro.settings`, and the panels' `__bro.*`, registered through `embed::registerNative` |
+| `js/bro_core.js` | the public shapes of those namespaces, JavaScript assembled over the natives |
+| `native_manifest_tool.cpp`, `js_entry_stubs.cpp` | `bro-native-manifest`, the build-time tool that prints the manifest `bro_core.js` is compiled against, and the no-op entries it (and arm64 macOS) links |
 | `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 
@@ -265,11 +269,12 @@ root when bro's configure didn't set one).
 ## Compile and run an app
 
 ```bash
-# 1. the host-globals manifest: the registry of the binary that will run the app
-./build/Release/bro-headless src/bronze_host/fixtures/appdir --print-host-globals > host.globals
+# 1. the two manifests: the registry of the binary that will run the app —
+#    its host globals (stdout) and its natives (a JSON file), from one run
+./build/Release/bro-headless src/bronze_host/fixtures/appdir --print-host-globals --print-native-manifest natives.json > host.globals
 
 # 2. compile the app to a MODULE, into the app directory that will carry it
-bronze build src/bronze_host/fixtures/main_scenegraph.js     -o src/bronze_host/fixtures/appdir/app.dll     --emit-shared     --host-globals host.globals
+bronze build src/bronze_host/fixtures/main_scenegraph.js     -o src/bronze_host/fixtures/appdir/app.dll     --emit-shared     --host-globals host.globals     --native-manifest natives.json
 
 # 3. there is no step 3 — the stock binaries load it
 ./build/Release/bro          src/bronze_host/fixtures/appdir
@@ -314,9 +319,81 @@ in-process compiles (`eval_jit.cpp`, `host_worker.cpp`) read the same registry
 straight into `EvalOptions::hostGlobals`. One source, so "compiled against" and
 "registered" cannot drift.
 
+`--native-manifest` is the same contract for the natives. An app's
+`bro.time.scale` compiles to a direct call of the C function behind it only
+when the compiler knows that function's path and signature, and that list is
+printed the same way the globals list is: `bro-headless <appdir>
+--print-native-manifest <path>` writes `bronze::embed::writeNativeManifest`
+over the live registry (`bro::bronze_host::writeNativeManifest`), and the
+in-process ahead-of-time compile in `eval.cpp` writes the same file into its
+temp dir beside the globals list and passes both to `runBuild`. The JIT path
+reads the registry directly. Without the manifest the app still runs — a
+`bro.time.scale` is then an ordinary property read of the accessor
+`js/bro_core.js` defined — it is only slower.
+
 The app object must export `bronze_main` (bronze's entry convention);
 `installWebHostGlobals` runs before `bronze::embed::runMain()`, and the frame
 loop then drives everything the app scheduled.
+
+## The `bro` / `__bro` roots and the native convention
+
+`bro`, `__bro` and every namespace under them (`bro.time`, `bro.settings`,
+`__bro.perf`, ...) are PLAIN OBJECTS registered as host globals by
+`host_bro_root.cpp`. Nothing on them is native. The public surface is
+JavaScript, `js/bro_core.js`, compiled at build time like the other modules
+under `js/` and entered by `installBroRoots` after the roots are registered.
+So `const t = bro.time; t.scale`, `Object.keys(bro.settings)`,
+`typeof __bro.perf.fps` all behave as a program expects — they are ordinary
+accessors and functions on ordinary objects.
+
+The natives all live under ONE internal root, `__bro_native`, one sub-object
+per namespace: `__bro_native.time.scale` is a getter/setter pair,
+`__bro_native.settings.get` a function, `__bro_native.perf.fps` a getter over
+the engine's own 500 ms frame statistics. `bro_core.js` names each by its
+FULL dotted path at the point of use, which is the spelling the compiler
+lowers to a direct call; an alias (`const N = __bro_native`) would be an
+ordinary property read that finds nothing, because the natives are not
+properties of the object. `host_natives.h` states the whole convention:
+
+- **scalars cross as scalars** (`f64`, `i32`, `bool`, `str`); a `str` result
+  comes back through `natives::strResult`, a per-thread scratch the runtime
+  copies out of during the call;
+- **a fixed compound shape crosses as its pieces** and is assembled in the
+  wrapper — a display is fourteen natives over a snapshot
+  (`__bro_native.window.displaySnapshot()` then `displayName(i)`, ...), a
+  window position is two;
+- **a dynamic value crosses as JSON text** the wrapper parses: the menu tree,
+  the inspector's node trees, a settings category, the action list;
+- **a list of strings going in** crosses as one newline-joined `str` (an
+  action's binding strings never contain a newline);
+- **a callback is a `dynamic`** the C side keeps in a `Persistent` and calls
+  through `embed::call` from a point the host owns — `bro.settings.onChange`
+  is posted to the host task queue by the engine's settings observer and
+  delivered at the top of the next frame seam, never from inside the `set()`
+  that made the change.
+
+Why the natives are not registered at the public paths: a native registered
+as `bro.time.scale` is reached only by a compiled `bro.time.scale` spelled in
+full; every other access lands on the plain `bro.time` object, which would
+then need a second, hand-marshalled copy of the same member to answer. One
+internal root and one JavaScript wrapper is one definition per member.
+
+The manifest `bro_core.js` is compiled against is printed at BUILD time by
+`bro-native-manifest` (`native_manifest_tool.cpp`), a tool that links this
+library and calls the same `registerBroNatives` bro calls at run time — so
+the two cannot drift. That is also why the compiled objects live in their
+own static library, `bro_bronze_js`, linked by the executables after
+`bro_bronze_host`: a library that both contained `bro_core.o` and was linked
+by the tool that produces `bro_core.o`'s input would be a cycle.
+`CMakeLists.txt` writes `generated/natives.json` through
+`copy_if_different`, so `bro_core.o` is recompiled when a native moved and
+not every time the tool relinked.
+
+The settings store types nothing on the way across: a value is text in the
+file, the engine types the keys it owns while applying them, and
+`bro.settings.get` types the text by content (`true`/`false`, a number, JSON
+for an object the wrapper stored, else a string). The one consequence worth
+knowing is that a custom string that reads as a number comes back as one.
 
 ## Driving a compiled app from a script
 

@@ -21,6 +21,7 @@
 extern "C" void bro_observers_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
+extern "C" void bro_core_main();
 
 namespace bro::bronze_host {
 
@@ -57,6 +58,15 @@ void installNetSyncModule() {
 void installImageGpuModule() {
     bronze::embed::runEntry(bro_image_gpu_main);
     adoptGlobalProperty("__bro_image_gpu");
+}
+
+// Nothing to lift: bro_core.js defines members ON the three roots
+// host_bro_root.cpp registered before this runs, and adds no global of its
+// own. It is compiled against the native manifest (--native-manifest) as
+// well as js/module.globals, so its `__bro_native.x.y` spellings are direct
+// native calls.
+void installBroCoreModule() {
+    bronze::embed::runEntry(bro_core_main);
 }
 
 }  // namespace bro::bronze_host

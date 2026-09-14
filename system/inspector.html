@@ -166,6 +166,10 @@ html, body {
 
     function render() {
         rootNode = __bro.inspector.getAppTree();
+        // null until the app document exists: the panel's own load runs
+        // before the app's, and the next __onInspectorChanged / __onResize
+        // renders the tree.
+        if (!rootNode) { treeEl.innerHTML = ''; return; }
         var sel = __bro.inspector.getSelected();
         selectedId = sel ? sel.id : -1;
 

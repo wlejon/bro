@@ -34,6 +34,7 @@
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_matchmedia.h"
+#include "bronze_host/host_natives.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_window_open.h"
 
@@ -785,6 +786,11 @@ void installWebHostGlobals(engine::Engine& engine) {
     installTouchGlobals();
     installVendorGlobals();
     installBrokitGlobals(engine);
+    // The `bro` / `__bro` roots, the natives under `__bro_native`, and
+    // js/bro_core.js over them (host_bro_root.cpp). Nothing before this
+    // point registers `bro`; a later `bro.*` namespace mounts onto the
+    // object this creates.
+    installBroRoots(engine);
     // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use, and every name a module lists in

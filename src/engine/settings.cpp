@@ -282,6 +282,8 @@ std::string Settings::getString(const std::string& key) const {
 
     if (key == "appearance.colorScheme") return resolved_.appearance.colorScheme;
 
+    if (auto it = resolved_.custom.find(key); it != resolved_.custom.end()) return it->second;
+
     return "";
 }
 
@@ -310,6 +312,7 @@ void Settings::resetCategory(const std::string& category) {
         userOverrides_.input = InputSettings{};
         userOverrides_.input.actionBindings = std::move(bindings);
     }
+    for (auto& key : toRemove) userOverrides_.custom.erase(key);
 
     resolve();
     save();
@@ -440,7 +443,15 @@ void Settings::resolve() {
     resolveAudio();
     resolveInput();
     resolveAppearance();
+    resolveCustom();
     rebuildKeyToAction();
+}
+
+void Settings::resolveCustom() {
+    auto& r = resolved_.custom;
+    r = defaults_.custom;
+    for (const auto& [k, v] : appOverrides_.custom) r[k] = v;
+    for (const auto& [k, v] : userOverrides_.custom) r[k] = v;
 }
 
 void Settings::resolveAppearance() {
@@ -608,9 +619,10 @@ void Settings::applyToLayer(SettingsData& data, std::set<std::string>& presence,
         return;
     }
 
-    // Unknown key — remove from presence since we didn't apply it
-    presence.erase(key);
-    LOG_WARN("Unknown settings key: %s", key.c_str());
+    // Anything else is the app's own key. It has no typed field, so the
+    // text is kept as given and resolves through the same three layers.
+    // Presence stays set: that is what save() enumerates.
+    data.custom[key] = value;
 }
 
 } // namespace bro::engine

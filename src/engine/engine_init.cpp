@@ -257,6 +257,8 @@ Engine::Engine(const EngineConfig& config)
         if (category == "appearance" || category == "*") {
             applyColorScheme();
         }
+        // Last, so an observer reads the engine's post-change state.
+        if (settingsObserver_) settingsObserver_(category, key);
     });
 
     resetMenuBarDefaults();

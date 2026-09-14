@@ -53,6 +53,18 @@ bro.settings.reset("audio");    // audio reverts to defaults
 bro.settings.reset();           // everything reverts to defaults
 ```
 
+### Observing changes
+
+| Function | Description |
+|----------|-------------|
+| `bro.settings.onChange(listener)` | Register one listener called with `(category, key)` after the engine has applied a user-layer change: a `set` (from code or from the settings panels), a `reset(category)` (key `"*"`), or a `reset()` (`"*"`, `"*"`). App defaults and action rebinds do not fire it. Delivered from the frame seam (the next frame), never from inside the call that made the change. A non-function is a `TypeError`; a later call replaces the listener. |
+
+```js
+bro.settings.onChange((category, key) => {
+    if (category === "audio") applyVolume(bro.settings.get(`audio.${key}`));
+});
+```
+
 ### Display modes
 
 | Function | Description |

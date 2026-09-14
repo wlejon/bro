@@ -51,6 +51,16 @@ bool isWebHostGlobalsInstalled();
 /// than typed beside it.
 std::vector<std::string> registeredHostGlobals();
 
+/// The other half of the same contract: the natives registered on the
+/// CALLING thread (the `__bro_native.*` entry points host_bro_root.cpp
+/// registers inside installWebHostGlobals), written as the JSON manifest
+/// `bronze build --native-manifest` reads — bronze::embed::writeNativeManifest
+/// over the live registry. `bro-headless <app> --print-native-manifest
+/// <path>` is this, for an ahead-of-time compile; the in-process compiles
+/// write it themselves (eval.cpp). False with `*error` set if the file
+/// cannot be written.
+bool writeNativeManifest(const std::string& path, std::string* error);
+
 /// Clear active setTimeout and setInterval timers and tasks on reload.
 void clearHostTimers();
 

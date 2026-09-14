@@ -76,13 +76,15 @@ Before this helper existed, every settings-panel file hand-copied `CARD_W`/`CARD
 
 ## `__bro` reference
 
-`__bro` is the engine-to-panel bridge, installed per-panel by `Engine::installBroObject` (`src/engine/system_panels.cpp`). It's grouped by concern:
+`__bro` is the engine-to-panel bridge: a host global holding plain objects, registered by `src/bronze_host/host_bro_root.cpp` and filled by `src/bronze_host/js/bro_core.js` over the natives in `native_dunder_bro.cpp` (`__bro_native.*`, see `src/bronze_host/host_natives.h`). Panel scripts run in the same realm as the app's own host globals, so they read the same `__bro` the app could. It's grouped by concern:
 
-### `__bro.perf` / `__bro.viewport`
+### `__bro.perf` / `__bro.viewport` / `__bro.bronze`
 
-Plain data objects (not namespaced further): `perf.{fps, frameTime, js, layout, raster, gpu, draw}`, `viewport.{width, height}`, refreshed by the engine each frame.
+Accessors, read on demand: `perf.{fps, frameTime, js, layout, raster, gpu, draw}` are getters over the engine's own 500 ms rolling frame statistics (`Engine::perfFps()` and siblings), `viewport.{width, height}` over the current viewport. The engine writes no panel DOM; `perf.html` polls these on its own timer and renders them.
 
-`perf.windows` rides along in the same refresh: an array with one entry per live secondary window (`bro.window.open`, see [window-api.js](window-api.js)), `{id, title, width, height, focused, minimized}`, empty when the app has opened none. `perf.html` renders it as its "Secondary windows" table.
+`perf.windows` is a getter that builds an array with one entry per live secondary window (`bro.window.open`, see [window-api.js](window-api.js)), `{id, title, width, height, focused, minimized}`, empty when the app has opened none. `perf.html` renders it as its "Secondary windows" table. `perf.scene` (only in a build with the scene graph, `BRO_WITH_3D`) is the 3D cull counters, `{meshDrawn, meshCulled, instancedDrawn, ..., shadowTilesCached}`.
+
+`__bro.bronze.{heapUsedBytes, heapCommittedBytes, heapReservedBytes, gcCollections, gcPauseNs, shapeTransitions}` is the JavaScript runtime's own telemetry (`getHostTelemetry()`), which `perf.html` shows beside the frame numbers.
 
 ### `__bro.menu`
 

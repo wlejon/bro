@@ -64,6 +64,11 @@ struct SettingsData {
     AudioSettings audio;
     InputSettings input;
     AppearanceSettings appearance;
+    // Keys the engine has no typed field for — an app's own
+    // `game.difficulty` — kept as the text they were set with, per layer, so
+    // they resolve and persist exactly like the typed ones (settings.md
+    // promises that). The JS side types them by content on the way out.
+    std::map<std::string, std::string> custom;
 };
 
 // ---------------------------------------------------------------------------
@@ -143,6 +148,7 @@ private:
     void resolveAudio();
     void resolveInput();
     void resolveAppearance();
+    void resolveCustom();
     void rebuildKeyToAction();
 
     // Apply a key=value into a SettingsData + mark presence
