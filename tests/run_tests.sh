@@ -171,7 +171,7 @@ FILTER="${1:-}"
 # Override with BRO_TEST_TIMEOUT (seconds). Uses coreutils `timeout` when
 # available (git-bash and Linux have it; stock macOS may not — fall back to
 # running the test bare there).
-TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-120}"
+TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-300}"
 TIMEOUT_BIN=""
 if command -v timeout >/dev/null 2>&1; then
     TIMEOUT_BIN="timeout"

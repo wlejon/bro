@@ -13,6 +13,13 @@
 #include <mutex>
 #include <string>
 
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
+#include <unistd.h>
+#endif
+
 namespace bro::bronze_host {
 
 namespace {
@@ -75,7 +82,8 @@ void installNetSync(engine::Engine* eng) {
             }
 
             std::filesystem::path tempDir = getEvalTempDir();
-            std::string outDll = (tempDir / ("net_sync_cached" + std::string(kModuleExt))).string();
+            std::string pidStr = std::to_string(getpid());
+            std::string outDll = (tempDir / ("net_sync_cached_" + pidStr + std::string(kModuleExt))).string();
             std::string globalsPath = getWebHostGlobalsPath();
             std::string err;
 
@@ -100,7 +108,7 @@ void installNetSync(engine::Engine* eng) {
         std::filesystem::path tempDir = getEvalTempDir();
         uint64_t instId = s_netSyncInstSeq.fetch_add(1, std::memory_order_relaxed);
         auto ts = std::chrono::steady_clock::now().time_since_epoch().count();
-        std::string instName = "net_sync_inst_" + std::to_string(instId) + "_" + std::to_string(ts) + kModuleExt;
+        std::string instName = "net_sync_inst_" + std::to_string(getpid()) + "_" + std::to_string(instId) + "_" + std::to_string(ts) + kModuleExt;
         std::filesystem::path instDll = tempDir / instName;
         std::filesystem::copy_file(cachedDll, instDll, std::filesystem::copy_options::overwrite_existing, ec);
 
