@@ -2,7 +2,6 @@
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/scene_audio_sync.h"
-#include "bro/c_abi/bro_engine_c_abi.h"
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
@@ -101,19 +100,6 @@ Engine::~Engine() {
     // The dialog tick callback captures this engine.
     platform::Dialogs::setTickCallback(nullptr);
     platform::Dialogs::setWindow(nullptr);
-    bro_set_time_bridge(nullptr);
-    bro_set_paths_bridge(nullptr);
-    bro_set_dialogs_bridge(nullptr);
-    bro_set_window_bridge(nullptr);
-    bro_set_settings_bridge(nullptr);
-    bro_set_menu_bridge(nullptr);
-    bro_set_mic_bridge(nullptr);
-    bro_set_gamepad_bridge(nullptr);
-    bro_set_steam_bridge(nullptr);
-    bro_set_server_bridge(nullptr);
-    bro_set_net_bridge(nullptr);
-    bro_set_text_bridge(nullptr);
-    bro_set_active_engine(nullptr);
 
     shutdown();
 

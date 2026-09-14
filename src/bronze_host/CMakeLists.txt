@@ -168,7 +168,6 @@ set(BRO_BRONZE_HOST_SOURCES
     dom_bro.cpp
     eval.cpp
     eval_jit.cpp
-    native_manifest_helper.cpp
     host_noise.cpp
     host_custom_elements.cpp
     host_imagebitmap.cpp

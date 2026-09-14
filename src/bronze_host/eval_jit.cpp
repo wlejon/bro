@@ -5,9 +5,7 @@
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_callee_namer.h"
 #include "bronze_host/host_pins.h"
-#include "bronze_host/native_manifest_helper.h"
 #include "engine/engine.h"
-#include "engine/engine_init_cabi.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
 
@@ -122,7 +120,6 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
-    bro::engine::bro_engine_register_cabi_bridges(&engine);
 
     initHostCalleeNamer();
 
@@ -178,7 +175,6 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
     }
-    bro::engine::bro_engine_register_cabi_bridges(&engine);
 
     auto absPath = std::filesystem::absolute(p, ec);
 

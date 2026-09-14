@@ -86,51 +86,6 @@ bh_find_shared_rt_lib() {
     return 1
 }
 
-# The native manifest directory (third_party/brosurface/out/c_abi/manifest).
-bh_find_c_abi_manifest() {
-    if [[ -n "${BRO_NATIVE_MANIFEST:-}" && -d "$BRO_NATIVE_MANIFEST" ]]; then
-        echo "$BRO_NATIVE_MANIFEST"; return 0
-    fi
-    if [[ -n "${BRONZE_NATIVE_MANIFEST:-}" && -d "$BRONZE_NATIVE_MANIFEST" ]]; then
-        echo "$BRONZE_NATIVE_MANIFEST"; return 0
-    fi
-    local project_dir="$1" candidate
-    for candidate in \
-        "$project_dir/third_party/brosurface/out/c_abi/manifest" \
-        "$project_dir/../brosurface/out/c_abi/manifest"
-    do
-        [[ -d "$candidate" ]] && { echo "$candidate"; return 0; }
-    done
-    return 1
-}
-
-# The native C-ABI library (libbro_c_abi.so / bro_c_abi.dll / libbro_c_abi.dylib).
-bh_find_c_abi_lib() {
-    if [[ -n "${BRO_NATIVE_LIB:-}" && -f "$BRO_NATIVE_LIB" ]]; then
-        echo "$BRO_NATIVE_LIB"; return 0
-    fi
-    if [[ -n "${BRONZE_NATIVE_LIB:-}" && -f "$BRONZE_NATIVE_LIB" ]]; then
-        echo "$BRONZE_NATIVE_LIB"; return 0
-    fi
-    local project_dir="$1" candidate
-    for candidate in \
-        "$project_dir/build/Release/bro_c_abi.dll" \
-        "$project_dir/build/Debug/bro_c_abi.dll" \
-        "$project_dir/build/bro_c_abi.dll" \
-        "$project_dir/build/Release/libbro_c_abi.so" \
-        "$project_dir/build/Debug/libbro_c_abi.so" \
-        "$project_dir/build/libbro_c_abi.so" \
-        "$project_dir/build-release/libbro_c_abi.so" \
-        "$project_dir/build/Release/libbro_c_abi.dylib" \
-        "$project_dir/build/Debug/libbro_c_abi.dylib" \
-        "$project_dir/build/libbro_c_abi.dylib" \
-        "$project_dir/build-release/libbro_c_abi.dylib"
-    do
-        [[ -f "$candidate" ]] && { echo "$candidate"; return 0; }
-    done
-    return 1
-}
-
 # The module name bro looks for inside an app directory (src/bronze_host/
 # app_module.cpp picks the platform's own extension, so a folder can carry one
 # per platform side by side).
@@ -182,14 +137,6 @@ bh_ensure_module() {
         return 77
     }
 
-    local c_abi_manifest c_abi_lib
-    c_abi_manifest="$(bh_find_c_abi_manifest "$project_dir")" || c_abi_manifest=""
-    c_abi_lib="$(bh_find_c_abi_lib "$project_dir")" || c_abi_lib=""
-    local -a native_args=()
-    if [[ -n "$c_abi_manifest" && -n "$c_abi_lib" ]]; then
-        native_args+=(--native-manifest "$(bh_to_win_path "$c_abi_manifest")" --native-lib "$(bh_to_win_path "$c_abi_lib")")
-    fi
-
     local -a pin_args=()
     if [[ "${BRO_CENSUS:-}" == "1" ]]; then
         pin_args+=(--census "$(bh_to_win_path "$appdir/app.pins")")
@@ -210,7 +157,6 @@ bh_ensure_module() {
                 -o "$(bh_to_win_path "$module")" \
                 --emit-shared \
                 --host-globals "$(bh_to_win_path "$project_dir/src/bronze_host/web_host.globals")" \
-                ${native_args[@]+"${native_args[@]}"} \
                 ${pin_args[@]+"${pin_args[@]}"} 2>&1)" || {
         echo "COMPILE FAILED" >&2
         printf '%s\n' "$log" | tail -20 >&2

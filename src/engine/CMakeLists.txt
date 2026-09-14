@@ -5,9 +5,6 @@ add_library(bro_engine STATIC
     audio_subsystem.cpp
     engine_compositor.cpp
     engine_init.cpp
-    engine_init_cabi.cpp
-    engine_init_cabi_sensors.cpp
-    engine_init_cabi_dom.cpp
     engine_lifecycle.cpp
     engine_threads.cpp
     engine_frame.cpp
@@ -57,7 +54,7 @@ if(BRO_WITH_3D)
     target_sources(bro_engine PRIVATE gizmo.cpp gizmo_mesh.cpp gizmo_routing.cpp)
 endif()
 target_include_directories(bro_engine PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util bro_c_abi glad)
+target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util glad)
 # <img> intrinsic sizing probes WebP headers too, so the engine needs the same
 # decoder the two image paths use (render/webp_image.h).
 if(BRO_WITH_WEBP)

@@ -1,7 +1,6 @@
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
 #include "bronze_host/host_gc.h"
-#include "bronze_host/native_manifest_helper.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_headless.h"
@@ -12,8 +11,6 @@
 #include "modules/modules.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
-#include "engine/engine_init_cabi.h"
-#include "bro/c_abi/bro_engine_c_abi.h"
 #include "util/log.h"
 
 #include <atomic>
@@ -282,8 +279,6 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     const std::string globalsPath = getWebHostGlobalsPath();
     const auto roots = moduleRootsFor(engine);
     const std::string resolvesAs = entryResolvesAsFor(engine, filename);
-    const std::string manifestPath = getNativeManifestDir();
-    const std::string libPath = getNativeLibPath();
     const std::string pinsPath = discoverPinsPath(engine, filename);
     const std::string censusOutPath = discoverCensusOutPath(engine, filename);
     std::string err;
@@ -295,8 +290,8 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
-        /*nativeLibPath=*/libPath, /*entryResolvesAs=*/resolvesAs);
+        /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {},
+        /*entryResolvesAs=*/resolvesAs);
 
     std::error_code ec;
     std::filesystem::remove(tempJs, ec);
@@ -320,8 +315,8 @@ bool evalScript(engine::Engine& engine, const std::string& code,
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
             /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
-            /*nativeLibPath=*/libPath, /*entryResolvesAs=*/resolvesAs);
+            /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {},
+            /*entryResolvesAs=*/resolvesAs);
         std::filesystem::remove(tempJsWrap, ec);
     }
 
@@ -340,9 +335,6 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         engine.setTestFailure(true);
         return false;
     }
-
-    bro::engine::bro_engine_register_cabi_bridges(&engine);
-    bro_c_abi_sync_bridges_to_module(handle);
 
     auto entry = reinterpret_cast<void (*)()>(moduleSymbol(handle, "bronze_main"));
     if (!entry) {
@@ -399,8 +391,6 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
 
     const std::string globalsPath = getWebHostGlobalsPath();
     const auto roots = moduleRootsFor(engine);
-    const std::string manifestPath = getNativeManifestDir();
-    const std::string libPath = getNativeLibPath();
     const std::string pinsPath = discoverPinsPath(engine, absSource);
     const std::string censusOutPath = discoverCensusOutPath(engine, absSource);
     std::string err;
@@ -446,8 +436,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         /*emitShared=*/true, /*retainFnSource=*/true,
         /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
         /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-        /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
-        /*nativeLibPath=*/libPath);
+        /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {});
 
     if (!wrapFile.empty()) {
         std::filesystem::remove(wrapFile, ec);
@@ -469,8 +458,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
             /*emitShared=*/true, /*retainFnSource=*/true,
             /*importMapPath=*/{}, /*assumeNoBigInt=*/false,
             /*pinsPath=*/pinsPath, /*censusOutPath=*/censusOutPath,
-            /*pinsAllowObserved=*/false, /*nativeManifestPath=*/manifestPath,
-            /*nativeLibPath=*/libPath);
+            /*pinsAllowObserved=*/false, /*no native FFI:*/{}, {});
         std::filesystem::remove(wrappedFile, ec);
     }
 
@@ -489,9 +477,6 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
         engine.setTestFailure(true);
         return false;
     }
-
-    bro::engine::bro_engine_register_cabi_bridges(&engine);
-    bro_c_abi_sync_bridges_to_module(handle);
 
     auto entry = reinterpret_cast<void (*)()>(moduleSymbol(handle, "bronze_main"));
     if (!entry) {

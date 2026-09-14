@@ -2,7 +2,6 @@
 #include "bronze_host/app_module.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
-#include "bronze_host/native_manifest_helper.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "engine/engine.h"

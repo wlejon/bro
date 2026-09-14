@@ -1,5 +1,4 @@
 #include "engine/engine.h"
-#include "engine/engine_init_cabi.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/inspector_highlight.h"
@@ -28,7 +27,6 @@
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "render/bidi.h"
-#include "bro/c_abi/bro_engine_c_abi.h"
 
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
@@ -76,8 +74,6 @@ Engine::Engine(const EngineConfig& config)
     hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     appDir_ = config.appDir;
     titleOverride_ = config.title;
-
-    bro_engine_register_cabi_bridges(this);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     {

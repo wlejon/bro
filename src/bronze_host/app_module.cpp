@@ -11,8 +11,6 @@
 #include "embed/embed.h"
 
 #include "engine/engine.h"
-#include "engine/engine_init_cabi.h"
-#include "bro/c_abi/bro_engine_c_abi.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -163,10 +161,6 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
                           "). It is usually a missing sidecar library or a "
                           "module built for a different architecture.");
     }
-
-    // Ensure C-ABI active engine and bridges are initialized and synced to module
-    bro::engine::bro_engine_register_cabi_bridges(&engine);
-    bro_c_abi_sync_bridges_to_module(handle);
 
     // The stamp FIRST, before the entry point is even looked up: the whole
     // point is that nothing from a module of unknown vintage runs, and a
