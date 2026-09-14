@@ -212,6 +212,7 @@ void Engine::advanceTime(double ms) {
         for (auto& pump : framePumps_) pump();
 
         tickSystemPanels(virtualTime_);
+        stageSystemPanelCanvases();
 
         if (!timePaused_) tickIframes(engineNowMs_);
         if (!timePaused_) tickWindowHosts(engineNowMs_);
@@ -317,7 +318,10 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
             [](auto& cs) { return cs->isDetached(); }),
         canvasScenes_.end());
 
-    if (isSystemVisible()) tickSystemPanels(virtualTime_);
+    if (isSystemVisible()) {
+        tickSystemPanels(virtualTime_);
+        stageSystemPanelCanvases();
+    }
 
     std::vector<UILayer> appLayers, systemLayers;
     render::CommandBuffer appCmds, sysCmds;
@@ -430,6 +434,7 @@ bool Engine::screenshot(const std::string& path) {
 
     if (isSystemVisible()) {
         tickSystemPanels(virtualTime_);
+        stageSystemPanelCanvases();
         layoutSystemPanels(*textMetrics_);
         drawSystemPanels(renderer_.get(), *drawTraversal_);
     }
@@ -488,6 +493,7 @@ std::vector<uint8_t> Engine::capturePixels() {
 
     if (isSystemVisible()) {
         tickSystemPanels(virtualTime_);
+        stageSystemPanelCanvases();
         layoutSystemPanels(*textMetrics_);
         drawSystemPanels(renderer_.get(), *drawTraversal_);
     }

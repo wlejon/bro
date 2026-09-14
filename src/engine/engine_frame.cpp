@@ -140,6 +140,7 @@ void Engine::run() {
     }
 
     running_ = true;
+    if (splashVisible_) splashStartMs_ = util::currentTimeMs();
 
     const uint32_t mainWinId = window_->windowId();
     auto mainWin = [mainWinId](uint32_t id) { return id == mainWinId || id == 0; };

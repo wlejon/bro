@@ -132,4 +132,32 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     exitRealmScope();
 }
 
+void triggerPanelsReady(dom::Document* doc) {
+    if (!doc) return;
+    uint64_t scopeId = scopeIdForDocument(doc);
+    enterRealmScope(scopeId);
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        Value fn = ev::getProperty(gt.value, "__onPanelsReady");
+        if (ev::isFunction(fn)) {
+            ev::call(fn, gt.value, {});
+        }
+    }
+    exitRealmScope();
+}
+
+void triggerSplashDismiss(dom::Document* doc) {
+    if (!doc) return;
+    uint64_t scopeId = scopeIdForDocument(doc);
+    enterRealmScope(scopeId);
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        Value fn = ev::getProperty(gt.value, "__onDismiss");
+        if (ev::isFunction(fn)) {
+            ev::call(fn, gt.value, {});
+        }
+    }
+    exitRealmScope();
+}
+
 } // namespace bro::bronze_host

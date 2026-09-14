@@ -295,12 +295,14 @@ Engine::Engine(const EngineConfig& config)
     platform::Dialogs::setInteractive(displayMode_ == DisplayMode::Windowed);
     platform::Dialogs::setTickCallback([this]() { tickTimersOnly(); });
 
-    initAppRealm();
-
     if (gl_) {
         glGenVertexArrays(1, &uiQuadVAO_);
         glGenBuffers(1, &uiQuadVBO_);
     }
+
+    manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
+    util::setAssetPathContext(manifest_.basePath, &assetMounts_);
+    drawTraversal_->setViewport(viewportWidth_, viewportHeight_, 0);
 
     initSystemPanels();
 
@@ -315,6 +317,15 @@ Engine::Engine(const EngineConfig& config)
             }
         }
     }
+
+    if (displayMode_ == DisplayMode::Windowed && splashVisible_ && window_ && renderer_) {
+        fireFrameCallbacks(0.0);
+        tickSystemPanels(splashStartMs_);
+        stageSystemPanelCanvases();
+        renderSplashImmediate();
+    }
+
+    initAppRealm();
 
     if (displayMode_ == DisplayMode::Headless) {
         flush();

@@ -285,6 +285,19 @@ public:
         return nullptr;
 #endif
     }
+    void dismissSplash() {
+        if (splashVisible_) {
+            splashVisible_ = false;
+            systemDirty_ = true;
+        }
+    }
+    bool splashVisible() const { return splashVisible_; }
+    const std::vector<SystemDocument>& systemDocs() const { return systemDocs_; }
+    std::vector<SystemDocument>& systemDocs() { return systemDocs_; }
+    const std::string& systemActivePanel() const { return systemActivePanel_; }
+    void toggleSystemPerf();
+    void toggleSystemSettings();
+    void showSystemPanel(const std::string& name);
     net::NetService* netService() {
 #if BRO_WITH_NET
         return netService_.get();
@@ -514,9 +527,6 @@ private:
     void loadSystemPanels(const std::string& systemDir);
     void scanSystemPanelDir(const std::string& baseDir, const std::string& relPath);
     bool isSystemDocVisible(const SystemDocument& doc) const;
-    void toggleSystemPerf();
-    void toggleSystemSettings();
-    void showSystemPanel(const std::string& name);
     void tickSystemPanels(double nowMs);
     void updateSystemPerf(double fps, double frameTime, double js, double layout,
                           double raster, double gpu, double draw, int vpW, int vpH);
@@ -529,6 +539,7 @@ private:
                             int vpW, int vpH);
     void stageSystemPanelCanvases();
     void resizeSystemPanels(int w, int h);
+    void renderSplashImmediate();
     dom::Element* systemHitTest(SystemDocument& doc, float x, float y);
     bool systemHandleMouseDown(float x, float y, int button);
     bool systemHandleMouseUp(float x, float y, int button);

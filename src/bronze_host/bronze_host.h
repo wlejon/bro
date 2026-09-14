@@ -68,6 +68,12 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
                           const std::string& appDir, const std::string& basePath,
                           bool isChild);
 
+/// Notify document that all system panels are ready.
+void triggerPanelsReady(dom::Document* doc);
+
+/// Notify splash document to begin dismiss animation.
+void triggerSplashDismiss(dom::Document* doc);
+
 /// Backwards compatibility alias for installWebHostGlobals.
 inline void installThreejsHostGlobals(engine::Engine& engine) {
     installWebHostGlobals(engine);

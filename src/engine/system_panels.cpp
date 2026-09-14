@@ -3,6 +3,7 @@
 
 #include "engine/engine.h"
 #include "bronze_host/host_telemetry.h"
+#include "bronze_host/bronze_host.h"
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
 #include "layout/box.h"
@@ -18,6 +19,8 @@
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
+#include <glad/gl.h>
+#include <cmath>
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
@@ -104,6 +107,15 @@ void Engine::loadSystemPanels(const std::string& systemDir) {
     }
 
     LOG_INFO("System panels: loaded %zu panel(s)", systemDocs_.size());
+
+    // All panels are in systemDocs_ — fire __onPanelsReady on each so scripts
+    // that query the panel list (e.g. the preferences nav building tabs) see
+    // the full set rather than only the panels loaded before them.
+    for (auto& doc : systemDocs_) {
+        if (doc.document) {
+            bronze_host::triggerPanelsReady(doc.document.get());
+        }
+    }
 }
 
 void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& relPath) {
@@ -208,14 +220,54 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
                                             renderer_.get(),
                                             audioEngine_.get());
 
-        // Re-layout after replaced elements attach
+        // Stash base path on the document so drawSystemPanels and script resolution
+        // can use it.
+        liveDoc.document->setBasePath(savedBasePath);
+
+        // Extract and execute scripts, external (src=) and inline, in document order.
+        std::vector<engine::ScriptEntry> scripts;
+        {
+            std::regex scriptRe(R"(<script([^>]*)>([\s\S]*?)</script>)",
+                                std::regex_constants::icase);
+            std::regex srcRe(R"(src\s*=\s*["']([^"']+)["'])",
+                             std::regex_constants::icase);
+            std::regex moduleRe(R"(type\s*=\s*["']module["'])",
+                                std::regex_constants::icase);
+            auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
+            auto end = std::sregex_iterator();
+            for (auto it = begin; it != end; ++it) {
+                std::string attrs = (*it)[1].str();
+                std::string body = (*it)[2].str();
+                if (std::regex_search(attrs, moduleRe)) {
+                    LOG_WARN("System panel '%s': <script type=module> not supported, skipping",
+                             liveDoc.name.c_str());
+                    continue;
+                }
+
+                std::smatch srcMatch;
+                if (std::regex_search(attrs, srcMatch, srcRe)) {
+                    std::string resolved = AppLoader::resolvePath(dirPath, srcMatch[1].str(),
+                                                                   &assetMounts_);
+                    scripts.push_back({resolved, {}, false});
+                } else if (!body.empty()) {
+                    scripts.push_back({{}, body, false});
+                }
+            }
+        }
+
+        if (!scripts.empty()) {
+            bro::bronze_host::runHostSubDocScripts(*this, liveDoc.document.get(),
+                                                   scripts, dirPath, savedBasePath, false);
+            bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
+                                                renderer_.get(),
+                                                audioEngine_.get());
+        }
+
+        // Re-layout after replaced elements attach and scripts run
         liveDoc.document->resolveStyles();
         liveDoc.document->performLayout(static_cast<float>(viewportWidth_),
                                         static_cast<float>(viewportHeight_),
                                         *textMetrics_);
-        // Stash base path on the document so drawSystemPanels can forward it
-        // to the shared DrawTraversal (for image URL resolution).
-        liveDoc.document->setBasePath(savedBasePath);
     }
 }
 
@@ -355,12 +407,49 @@ void Engine::showSystemPanel(const std::string& name) {
 // Tick
 // ---------------------------------------------------------------------------
 
+void Engine::renderSplashImmediate() {
+    if (!renderer_ || !gl_ || !window_) return;
+    auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+    if (!skia) return;
+
+    render::CommandBuffer sysCmds;
+    recordSystemPanelLayers(sysCmds, viewportWidth_, viewportHeight_);
+
+    skia->beginFrame(viewportWidth_, viewportHeight_);
+    std::vector<UILayer> systemLayers;
+    replaySystemPanelLayers(skia, sysCmds,
+                            screenshotSystemPool_, screenshotSystemPoolW_,
+                            screenshotSystemPoolH_,
+                            viewportWidth_, viewportHeight_,
+                            systemLayers);
+    skia->endFrame();
+
+    glViewport(0, 0, viewportWidth_, viewportHeight_);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    compositeLayers(systemLayers);
+
+    window_->swapWindow();
+    SDL_PumpEvents();
+}
+
 void Engine::tickSystemPanels(double nowMs) {
     if (splashVisible_) {
         constexpr double kMinDisplayMs = 1800.0;
+        constexpr double kHardTimeoutMs = 3500.0;
         double elapsed = nowMs - splashStartMs_;
-        if (!splashDismissTriggered_ && elapsed >= kMinDisplayMs) {
+        if (elapsed >= kMinDisplayMs && !splashDismissTriggered_) {
             splashDismissTriggered_ = true;
+            for (auto& doc : systemDocs_) {
+                if (doc.group == "splash" && doc.document) {
+                    bronze_host::triggerSplashDismiss(doc.document.get());
+                    break;
+                }
+            }
+        }
+        if (elapsed >= kHardTimeoutMs) {
             splashVisible_ = false;
             systemDirty_ = true;
         }
