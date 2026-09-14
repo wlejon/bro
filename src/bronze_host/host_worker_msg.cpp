@@ -28,7 +28,6 @@ enum Tag : uint8_t {
     kArrayBuffer     = 0x09,
     kTransferIndex   = 0x0A,
     kTypedArray      = 0x0B,
-    kTransferMesh    = 0x0C,
     kBigInt          = 0x0D,
     kTransferImageBitmap = 0x0E,
     kDate            = 0x0F,
@@ -240,10 +239,6 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
 
         if (isInstanceOf(val, "Promise")) {
             ev::throwTypeError("postMessage: Promises are not cloneable");
-            return false;
-        }
-        if (isInstanceOf(val, "Mesh")) {
-            ev::throwTypeError("postMessage: Mesh is not cloneable");
             return false;
         }
         if (isInstanceOf(val, "Node")) {

@@ -2,9 +2,6 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
-#if BRO_WITH_3D
-#include "bronze_host/host_scene_internal.h"
-#endif
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -122,22 +119,6 @@ void installHeadlessTestHooks(engine::Engine& engine) {
 
         parent->appendChild(canvas);
         return hostElementValue(canvas);
-    });
-
-    host.def("sceneContext", 1, [](Value, std::span<const Value> a) {
-        auto* eng = hostEngine();
-        if (!eng) return ev::throwError("__host: no Engine for this realm");
-        if (a.empty()) return ev::throwTypeError("__host.sceneContext(canvas)");
-        auto* el = hostElementOf(a[0]);
-        if (!el) return ev::throwTypeError("__host.sceneContext: not an Element");
-
-        auto* graph = eng->createSceneContext(el);
-        if (!graph) return ev::null();
-#if BRO_WITH_3D
-        return createSceneGraphValue(graph, el);
-#else
-        return ev::null();
-#endif
     });
 
     host.def("sceneContextCount", 0, [](Value, std::span<const Value>) {

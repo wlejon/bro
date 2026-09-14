@@ -2,8 +2,8 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
-#include "bronze_host/host_telemetry.h"
 #include "bronze_host/bronze_host.h"
+#include "bronze_host/host_headless.h"
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
 #include "layout/box.h"
@@ -256,8 +256,16 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         }
 
         if (!scripts.empty()) {
+            // These scripts are the engine's own chrome, not the app under
+            // test. A throw out of one is logged like any other, but it must
+            // not decide the app's headless verdict: the flags are restored to
+            // whatever the app had already set.
+            const bool hostFailed = bro::bronze_host::hasTestFailure();
+            const bool engineFailed = hasTestFailure();
             bro::bronze_host::runHostSubDocScripts(*this, liveDoc.document.get(),
                                                    scripts, dirPath, savedBasePath, false);
+            bro::bronze_host::setTestFailure(hostFailed);
+            setTestFailure(engineFailed);
             bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
                                                 renderer_.get(),
                                                 audioEngine_.get());
@@ -461,22 +469,6 @@ void Engine::tickSystemPanels(double nowMs) {
         if (isSystemDocVisible(doc) && doc.document && doc.document->isDirty()) {
             systemDirty_ = true;
             break;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Perf data update
-// ---------------------------------------------------------------------------
-
-void Engine::updateSystemPerf(double fps, double frameTime, double js, double layout,
-                              double raster, double gpu, double draw,
-                              int vpW, int vpH) {
-    auto tel = bronze_host::getHostTelemetry();
-    for (auto& doc : systemDocs_) {
-        if (doc.group == "perf" && doc.document) {
-            bronze_host::updatePerfDocument(doc.document.get(), tel, fps, frameTime, js, layout,
-                                            raster, gpu, draw, vpW, vpH);
         }
     }
 }

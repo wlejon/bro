@@ -1,6 +1,5 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/host_internal.h"
-#include "bronze_host/host_anchor_download.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_telemetry.h"
 #include "engine/engine.h"
@@ -382,13 +381,6 @@ void installHeadlessFrame(engine::Engine& engine) {
             }
             return ev::fromDouble(static_cast<double>(len));
         }, 2, "writeFile"));
-
-    // lastDownload()
-    ev::registerGlobal("lastDownload", ev::makeFunction(
-        [](Value, std::span<const Value>) -> Value {
-            const std::string& p = lastDownloadPath();
-            return p.empty() ? ev::null() : ev::fromUtf8(p);
-        }, 0, "lastDownload"));
 
     // inspect(selector [, verbose])
     ev::registerGlobal("inspect", ev::makeFunction(

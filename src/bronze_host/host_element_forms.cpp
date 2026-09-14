@@ -3,7 +3,6 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
-#include "bronze_host/host_anchor_download.h"
 
 #include "dom/element.h"
 #include "dom/event.h"
@@ -50,13 +49,9 @@ static void performElementClick(dom::Element* el) {
     }
 
     bool isInput = (tag == "INPUT" || tag == "input");
-    bool isAnchor = (tag == "A" || tag == "a");
     dom::MouseEvent ev("click");
     dom::dispatchDomEvent(el, ev);
     if (!el) return;
-    if (!ev.defaultPrevented() && isAnchor) {
-        runAnchorDownload(el);
-    }
     if (!ev.defaultPrevented() && isInput) {
         std::string t = el->getAttribute("type");
         for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -166,27 +161,6 @@ void decorateElementForms(ObjectBuilder& b) {
                     }
                     return ev::undefined();
                 });
-
-    b.accessor("files",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = hostNodeStateOfValue(self_);
-                   if (!st || !st->el) return ev::null();
-                   const std::string& tag = st->el->tagName();
-                   if (tag != "INPUT" && tag != "input") return ev::null();
-                   std::string type = st->el->getAttribute("type");
-                   for (char& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                   if (type != "file") return ev::null();
-                   const auto& files = st->el->selectedFiles();
-                   return hostArrayOf(files.size(), [&files](size_t i) {
-                       Value f = makeFileFromPath(files[i]);
-                       if (!ev::isUndefined(f)) return f;
-                       ObjectBuilder d;
-                       d.set("name", ev::fromUtf8(std::filesystem::path(files[i]).filename().string()));
-                       d.set("path", ev::fromUtf8(files[i]));
-                       return d.get();
-                   });
-               },
-               nullptr);
 
     b.accessor("selectedIndex",
                [](Value self_, std::span<const Value>) {

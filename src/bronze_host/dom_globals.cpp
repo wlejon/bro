@@ -33,7 +33,6 @@
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
-#include "bronze_host/host_intl.h"
 #include "bronze_host/host_matchmedia.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_window_open.h"
@@ -165,19 +164,13 @@ void fireAnimationFrames() {
 //  2. The clock. Advanced before anything reads it, so a timer deadline, an
 //     rAF timestamp and performance.now() inside one frame all agree.
 //
-//  3. Host tasks — image loads, XHR completions. Before rAF, because that is
-//     where the web runs a load event relative to the rendering steps, and
-//     because it lets a texture that finished decoding be uploaded by the very
-//     frame that learns about it rather than the next one.
+//  3. Host tasks — image loads. Before rAF, because that is where the web
+//     runs a load event relative to the rendering steps, and because it lets
+//     a texture that finished decoding be uploaded by the very frame that
+//     learns about it rather than the next one.
 //
 //  4. Timers, then 5. rAF. The order bro's own loop uses (timers_->tick at
 //     step 2, fireAnimationFrames at step 3a).
-//
-//  5b. Mutation records. After rAF because an rAF callback is where a compiled
-//     app does most of its DOM work, and an observer told about it in the same
-//     frame is an observer that can still act before the frame is drawn.
-//     Before the checkpoint for the same reason step 6 is where it is: whatever
-//     the callback starts should settle with the rest of this frame's jobs.
 //
 //  6. The microtask checkpoint. AFTER rAF, not before: an rAF callback is the
 //     main producer of promise jobs in a render loop — three.js's own
@@ -191,13 +184,9 @@ void hostFrame(double dtMs) {
     if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
     g_host->clockMs += dtMs;                             // 2
     drainHostTasks();                                    // 3
-    drainNetEvents();                                    // 3b
     drainWorkerMessages();                               // 3c
-    drainSteamEvents();                                  // 3d
     fireHostTimers(g_host->clockMs);                     // 4
-    drainPhysicsContactEvents();                         // 4b
     fireAnimationFrames();                               // 5
-    deliverHostObservers();                              // 5b
     ev::drainMicrotasks();                               // 6
     hostNotifyIdleFrame(dtMs);                           // 7
 }
@@ -336,12 +325,11 @@ void installWebHostGlobals(engine::Engine& engine) {
     // document, window, self, addEventListener, removeEventListener,
     // dispatchEvent, requestAnimationFrame, cancelAnimationFrame,
     // performance, WebGL2RenderingContext, setTimeout, clearTimeout,
-    // setInterval, clearInterval, Image, XMLHttpRequest, fetch, Request,
-    // Headers, Response, navigator, HTMLCanvasElement, HTMLImageElement,
-    // WebGLRenderingContext, Intl, localStorage, AudioContext, CustomEvent,
-    // bro. registerGlobal roots each value for the life of the process, and a
-    // manifest name with no registerGlobal behind it is a fatal() at startup,
-    // not a catchable miss — so the two lists move together.
+    // setInterval, clearInterval, Image, navigator, HTMLCanvasElement,
+    // HTMLImageElement, WebGLRenderingContext, localStorage. registerGlobal
+    // roots each value for the life of the process, and a manifest name with
+    // no registerGlobal behind it is a fatal() at startup, not a catchable
+    // miss — so the two lists move together.
     //
     // Never freed — see the lifetime note at the top of this file.
     g_host = new HostState();
@@ -732,22 +720,12 @@ void installWebHostGlobals(engine::Engine& engine) {
     // The families that own their own files, each registering the names
     // the manifest lists for it, in the manifest's order.
     installTimerGlobals();
-    installXhrGlobal();
-    installFetchGlobal();
     installPlatformGlobals();
     // AFTER installPlatformGlobals, which is where installElementGlobals runs:
     // `Image` is an element class and chains its prototype onto Element's, so
     // Element's has to exist first (host_element_image.cpp).
     installImageGlobal();
-    installFileGlobals();
-    installAbortGlobals();
-    installObserverGlobals();
     installParserGlobal();
-    installVideoGlobals();
-    installPhysicsGlobals();
-    installAIGlobals();
-    installMeshGlobals();
-    installRiggingGlobals();
 
     {
         Value nav = makeNavigatorValue();
@@ -775,7 +753,10 @@ void installWebHostGlobals(engine::Engine& engine) {
             if (ok) {
                 ev::resolvePromise(p, ev::undefined());
             } else {
-                ev::rejectPromise(p, hostMakeDomError("Error", "clipboard write failed"));
+                Value msg = ev::fromUtf8("clipboard write failed");
+                ev::CallResult err = ev::construct(ev::globalValue("Error").value,
+                                                   std::span<const Value>(&msg, 1));
+                ev::rejectPromise(p, err.value);
             }
             return p;
         });
@@ -788,18 +769,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     // HTMLCanvasElement and HTMLImageElement are installed as real classes
     // via installHtmlInterfaces() / installImageGlobal().
     ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
-    installIntlGlobals();
-    installAudioGlobals();
-    {
-        Value customEvent = makeEventConstructor("CustomEvent");
-        ev::registerGlobal("CustomEvent", customEvent);
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "CustomEvent", customEvent);
-    }
-    installMathGlobals();
-    installBroGlobals(engine);
     installTouchGlobals();
-    installNetGlobals();
     installVendorGlobals();
     installNodeCoreGlobals(engine);
     installHeadlessGlobals(engine);

@@ -121,7 +121,6 @@ set(BRO_BRONZE_HOST_SOURCES
     host_html_interfaces.cpp
     host_iframe.cpp
     host_template.cpp
-    host_anchor_download.cpp
     host_matchmedia.cpp
     host_node.cpp
     host_shadow_dom.cpp
@@ -131,33 +130,10 @@ set(BRO_BRONZE_HOST_SOURCES
     host_dom_events.cpp
     host_timers.cpp
     host_image.cpp
-    host_codecs.cpp
     host_platform.cpp
-    host_xhr.cpp
-    host_fetch.cpp
-    host_file.cpp
-    host_url.cpp
-    host_abort.cpp
-    host_observers.cpp
     host_parser.cpp
     host_proxy.cpp
-    host_intl.cpp
     host_class.cpp
-    host_video.cpp
-    host_element_video.cpp
-    host_media.cpp
-    host_audio_core.cpp
-    host_audio_context.cpp
-    host_audio_clips.cpp
-    host_audio_voice.cpp
-    host_audio_buses.cpp
-    host_audio_synth.cpp
-    host_audio_sequencer.cpp
-    host_audio_param.cpp
-    host_audio_buffer.cpp
-    host_audio_nodes.cpp
-    host_audio_spatial.cpp
-    host_audio_dsp.cpp
     host_vendor_globals.cpp
     host_node_core.cpp
     host_headless.cpp
@@ -165,7 +141,6 @@ set(BRO_BRONZE_HOST_SOURCES
     host_headless_frame.cpp
     host_headless_test_hooks.cpp
     host_touch.cpp
-    dom_bro.cpp
     eval.cpp
     eval_jit.cpp
     host_noise.cpp
@@ -173,83 +148,9 @@ set(BRO_BRONZE_HOST_SOURCES
     host_imagebitmap.cpp
     host_worker_msg.cpp
     host_worker.cpp
-    host_window.cpp
     host_window_open.cpp
     host_realm_scope.cpp
-    host_settings.cpp
-    host_math_classes.cpp
-    host_math_funcs.cpp
-    host_text.cpp
-    host_menu.cpp
-    host_steam.cpp
-    host_web_animations.cpp
 )
-
-if(BRO_WITH_PHYSICS)
-    list(APPEND BRO_BRONZE_HOST_SOURCES
-        host_physics_core.cpp
-        host_physics_world.cpp
-        host_physics_constraints.cpp
-        host_physics_character.cpp
-        host_physics_softbody.cpp
-        host_physics_vehicle.cpp
-        host_physics_ragdoll.cpp
-        host_physics_queries.cpp
-    )
-else()
-    list(APPEND BRO_BRONZE_HOST_SOURCES host_physics_stub.cpp)
-endif()
-
-if(BRO_WITH_GAMEAI)
-    list(APPEND BRO_BRONZE_HOST_SOURCES
-        host_ai_core.cpp
-        host_ai_navgrid.cpp
-        host_ai_navmesh.cpp
-        host_ai_agent.cpp
-        host_ai_unit.cpp
-        host_ai_extras.cpp
-        host_ai_mcts.cpp
-        host_ai_game.cpp
-    )
-else()
-    list(APPEND BRO_BRONZE_HOST_SOURCES host_ai_stub.cpp)
-endif()
-
-if(BRO_WITH_NET)
-    list(APPEND BRO_BRONZE_HOST_SOURCES host_net.cpp host_net_sync.cpp)
-else()
-    list(APPEND BRO_BRONZE_HOST_SOURCES host_net_stub.cpp)
-endif()
-
-if(BRO_WITH_3D)
-    list(APPEND BRO_BRONZE_HOST_SOURCES
-        host_scene_core.cpp
-        host_scene_env.cpp
-        host_scene_nodes.cpp
-        host_scene_mesh.cpp
-        host_scene_lights.cpp
-        host_scene_fx.cpp
-        host_scene_2d.cpp
-        host_scene_agent.cpp
-        host_scene_terrain.cpp
-        host_mesh_core.cpp
-        host_mesh_primitives.cpp
-        host_mesh_manipulate.cpp
-        host_mesh_analysis.cpp
-        host_mesh_optimize.cpp
-        host_rigging.cpp
-        host_rigging_anim.cpp
-        host_scene_tween.cpp
-        host_scene_clip.cpp
-        host_scene_anim.cpp
-        host_scene_particles.cpp
-        host_scene_shader.cpp
-        host_scene_tile.cpp
-        host_scene_tile_extra.cpp
-        host_scene_clipmap.cpp
-        host_scene_gizmo.cpp
-    )
-endif()
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -350,30 +251,7 @@ if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()
 
-if(BRO_WITH_NET)
-    target_link_libraries(bro_bronze_host PUBLIC bro_net)
-endif()
-
-if(BRO_WITH_GAMEAI)
-    target_link_libraries(bro_bronze_host PUBLIC brogameagent)
-endif()
-
-if(BRO_WITH_3D)
-    target_link_libraries(bro_bronze_host PUBLIC bro_scene)
-endif()
-
 bro_apply_feature_defs(bro_bronze_host)
-
-# bromesh backs bro.mesh.decodeDraco/encodeDraco in the compiled realm
-# (host_codecs.cpp); it is 3D-optional, so guard rather than assume.
-if(TARGET bromesh)
-    target_link_libraries(bro_bronze_host PUBLIC bromesh)
-endif()
-
-if(TARGET libcurl_static)
-    target_link_libraries(bro_bronze_host PRIVATE libcurl_static)
-    target_compile_definitions(bro_bronze_host PRIVATE BRO_HAVE_CURL)
-endif()
 
 # --- No app targets here, deliberately ---
 # What used to live below this line was the link-time app binding:

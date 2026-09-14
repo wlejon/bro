@@ -255,12 +255,6 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         statsMinFrameMs_ = 999.0;
         statsMaxFrameMs_ = 0.0;
         uiDirty_ = true;
-
-        updateSystemPerf(statsFps_, statsFrameTimeMs_,
-                         phaseJsMs_, phaseLayoutMs_,
-                         phaseRasterMs_, phaseGpuMs_,
-                         phaseDrawMs_,
-                         viewportWidth_, viewportHeight_);
     }
 }
 

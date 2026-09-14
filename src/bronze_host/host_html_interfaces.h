@@ -9,7 +9,6 @@ const HostClass& nodeHostClass();
 const HostClass& documentHostClass();
 const HostClass& elementHostClass();
 const HostClass& htmlElementHostClass();
-const HostClass& htmlMediaElementHostClass();
 const HostClass& htmlImageElementClass();
 
 Value htmlInterfaceProto(const std::string& tagName);

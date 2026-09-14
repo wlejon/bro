@@ -26,21 +26,11 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `host_timers.cpp` | `setTimeout`/`setInterval` and the main-thread task queue |
 | `host_image.cpp` | the image DECODE behind `.src`, and the lookup that finds a decoded image behind a value |
 | `host_element_image.cpp` | `Image` / `HTMLImageElement` as an element CLASS: `new Image()` and `createElement('img')` are one `<img>` node, born on a prototype that chains to `Element`'s |
-| `host_xhr.cpp` | `XMLHttpRequest` over the app asset path and http(s); `''`/`text`/`arraybuffer`/`blob`/`json` (see its header) |
-| `host_file.cpp` | `Blob`, `File`, `FileReader`, and `URL` — bytes an app holds, and the object URLs that name them |
-| `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
-| `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices; `ResizeObserver`, over a per-frame poll of the layout box |
 | `host_parser.cpp` | `DOMParser`: HTML text into a second `dom::Document`, and the lifetime policy for it |
-| `host_video.cpp` | `VideoEncoder` / `GifEncoder`: RGBA frames, a 2D canvas or the composited viewport in; a `.webm` or `.gif` file out |
-| `host_fetch.cpp` | `fetch()` over the engine's asset mounts, into a real bronze Promise |
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
 | `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, and `localStorage` |
 | `eval.cpp`, `eval.h` | in-process JS compilation via Bronze CLI, dynamic evaluation (`eval()`, `new Function()`) and script execution |
 | `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |
-| `host_audio_*.cpp`, `host_audio_internal.h` | the Web Audio surface over broaudio. `_core` context + globals, `_param` AudioParam, `_buffer` AudioBuffer + decode, `_nodes` oscillator/filter/analyser/source, `_spatial` Panner + StereoPanner, `_dsp` Delay/Compressor/WaveShaper/Convolver/Splitter/Merger |
-| `host_physics_*.cpp`, `host_physics_internal.h` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt. `_core` bodies + globals, `_constraints` joints/motors/limits, `_character`, `_softbody`, `_queries` raycast/overlap |
-| `host_ai_*.cpp`, `host_ai_internal.h` | the `AI` namespace and `bro.ai.game`, over brogameagent. `_core` globals + aim math, `_navgrid`, `_navmesh`, `_agent`, `_game`: `createHexNav`, `createWorld` (the ORCA world), perception |
-| `host_net.cpp` | `bro.net` over GameNetworkingSockets, and the `WebSocket` client |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `web_host.globals` | the manifest of global names bronze admits; every one must be registered ? an unregistered name is `fatal()`, not a miss |
 

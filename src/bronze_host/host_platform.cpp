@@ -1,5 +1,5 @@
-// The small, stateless half of the web platform: base64, the microtask hop,
-// the screen, the modal dialogs, and the DOM interface names apps test against.
+// The small, stateless half of the web platform: the microtask hop, the
+// screen, the modal dialogs, and the DOM interface names apps test against.
 //
 // Nothing here owns state or touches the frame seam. It exists as its own file
 // because dom_globals.cpp is about the DOM and the loop, and a grab-bag of
@@ -42,122 +42,6 @@
 namespace bro::bronze_host {
 
 namespace {
-
-// ---------------------------------------------------------------------------
-// base64
-// ---------------------------------------------------------------------------
-
-// btoa/atob are BYTE-string codecs, not text codecs: each JS char is one octet
-// and a char above 0xFF is an error on the web (InvalidCharacterError). This
-// throws a TypeError instead — the embed API has no DOMException, and every
-// caller that checks checks for "it threw", not for the name.
-const char kB64[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-int b64Index(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-}
-
-Value makeBtoa() {
-    return ev::makeFunction(
-        [](Value, std::span<const Value> a) -> Value {
-            Value v = argAt(a, 0);
-            if (ev::isObject(v) || ev::isUndefined(v))
-                return ev::throwTypeError("btoa: expected a string");
-            std::string s = ev::toUtf8(v);
-            std::vector<uint8_t> latin1;
-            latin1.reserve(s.size());
-            const uint8_t* u = reinterpret_cast<const uint8_t*>(s.data());
-            size_t len = s.size();
-            for (size_t k = 0; k < len;) {
-                uint8_t b0 = u[k];
-                if (b0 < 0x80) {
-                    latin1.push_back(b0);
-                    k++;
-                } else if ((b0 & 0xE0) == 0xC0 && k + 1 < len) {
-                    uint32_t cp = ((b0 & 0x1F) << 6) | (u[k + 1] & 0x3F);
-                    if (cp > 255) return ev::throwTypeError("btoa: character out of range");
-                    latin1.push_back(static_cast<uint8_t>(cp));
-                    k += 2;
-                } else {
-                    return ev::throwTypeError("btoa: character out of range");
-                }
-            }
-
-            std::string out;
-            out.reserve((latin1.size() + 2) / 3 * 4);
-            size_t i = 0;
-            for (; i + 2 < latin1.size(); i += 3) {
-                uint32_t n = (latin1[i] << 16) |
-                             (latin1[i + 1] << 8) |
-                             latin1[i + 2];
-                out += kB64[(n >> 18) & 63];
-                out += kB64[(n >> 12) & 63];
-                out += kB64[(n >> 6) & 63];
-                out += kB64[n & 63];
-            }
-            if (i < latin1.size()) {
-                uint32_t n = latin1[i] << 16;
-                bool two = (i + 1 < latin1.size());
-                if (two) n |= latin1[i + 1] << 8;
-                out += kB64[(n >> 18) & 63];
-                out += kB64[(n >> 12) & 63];
-                out += two ? kB64[(n >> 6) & 63] : '=';
-                out += '=';
-            }
-            return ev::fromUtf8(out);
-        },
-        1);
-}
-
-Value makeAtob() {
-    return ev::makeFunction(
-        [](Value, std::span<const Value> a) -> Value {
-            Value v = argAt(a, 0);
-            if (ev::isObject(v) || ev::isUndefined(v))
-                return ev::throwTypeError("atob: expected a string");
-            std::string s = ev::toUtf8(v);
-            std::vector<uint8_t> decoded;
-            int bits = 0;
-            uint32_t acc = 0;
-            for (char c : s) {
-                if (c == '=') break;
-                // Whitespace is skipped rather than rejected: the web's atob
-                // does that, and base64 pasted out of a file is full of it.
-                if (c == '\n' || c == '\r' || c == '\t' || c == ' ' || c == '\f')
-                    continue;
-                int idx = b64Index(c);
-                if (idx < 0)
-                    return ev::throwTypeError("atob: not base64");
-                acc = (acc << 6) | static_cast<uint32_t>(idx);
-                bits += 6;
-                if (bits >= 8) {
-                    bits -= 8;
-                    decoded.push_back(static_cast<uint8_t>((acc >> bits) & 0xFF));
-                }
-            }
-            // In WHATWG DOM spec, atob() returns a binary string where each
-            // character's code point is 0..255. In UTF-8, code points 128..255
-            // are 2-byte sequences: 0xC2/0xC3 followed by 0x80..0xBF.
-            std::string utf8_out;
-            utf8_out.reserve(decoded.size() * 2);
-            for (uint8_t b : decoded) {
-                if (b < 0x80) {
-                    utf8_out += static_cast<char>(b);
-                } else {
-                    utf8_out += static_cast<char>(0xC0 | (b >> 6));
-                    utf8_out += static_cast<char>(0x80 | (b & 0x3F));
-                }
-            }
-            return ev::fromUtf8(utf8_out);
-        },
-        1);
-}
 
 // ---------------------------------------------------------------------------
 // queueMicrotask
@@ -384,139 +268,11 @@ Value makeInterfaceValue(const char* name) {
     return b.get();
 }
 
-
-
-// ---------------------------------------------------------------------------
-// TextDecoder / TextEncoder
-// ---------------------------------------------------------------------------
-
-Value makeTextDecoder() {
-    return ev::makeFunction(
-        [](Value, std::span<const Value> /*a*/) -> Value {
-            ObjectBuilder b;
-            b.set("encoding", ev::fromUtf8("utf-8"));
-            b.def("decode", 1, [](Value, std::span<const Value> a) -> Value {
-                if (a.empty()) return ev::fromUtf8("");
-                Value v = a[0];
-                if (ev::isTypedArray(v)) {
-                    ev::TypedArrayInfo info = ev::typedArrayInfo(v);
-                    if (info && info.byteLength > 0) {
-                        return ev::fromUtf8(std::string_view(
-                            reinterpret_cast<const char*>(info.data), info.byteLength));
-                    }
-                    return ev::fromUtf8("");
-                }
-                if (ev::isArrayBuffer(v)) {
-                    ev::ArrayBufferInfo info = ev::arrayBufferInfo(v);
-                    if (info && info.byteLength > 0) {
-                        return ev::fromUtf8(std::string_view(
-                            reinterpret_cast<const char*>(info.data), info.byteLength));
-                    }
-                    return ev::fromUtf8("");
-                }
-                if (ev::isObject(v)) {
-                    Value buf = ev::getProperty(v, "buffer");
-                    if (ev::isArrayBuffer(buf)) {
-                        ev::ArrayBufferInfo info = ev::arrayBufferInfo(buf);
-                        if (info && info.data) {
-                            Value offV = ev::getProperty(v, "byteOffset");
-                            Value lenV = ev::getProperty(v, "byteLength");
-                            uint32_t off = ev::isNumber(offV) ? static_cast<uint32_t>(ev::toDouble(offV)) : 0;
-                            uint32_t len = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : (info.byteLength - off);
-                            if (off <= info.byteLength && off + len <= info.byteLength && len > 0) {
-                                return ev::fromUtf8(std::string_view(
-                                    reinterpret_cast<const char*>(info.data + off), len));
-                            }
-                        }
-                    }
-                }
-                return ev::fromUtf8("");
-            });
-            return b.get();
-        },
-        0);
-}
-
-Value makeTextEncoder() {
-    return ev::makeFunction(
-        [](Value, std::span<const Value> /*a*/) -> Value {
-            ObjectBuilder b;
-            b.set("encoding", ev::fromUtf8("utf-8"));
-            b.def("encode", 1, [](Value, std::span<const Value> a) -> Value {
-                std::string s;
-                if (!a.empty() && !ev::isUndefined(a[0]) && !ev::isNull(a[0])) {
-                    s = ev::toUtf8(a[0]);
-                }
-                Value arr = ev::createTypedArray(bronze::embed::elements::Uint8, static_cast<uint32_t>(s.size()));
-                if (!s.empty()) {
-                    ev::fillTypedArray(arr, std::span<const uint8_t>(
-                                                reinterpret_cast<const uint8_t*>(s.data()), s.size()));
-                }
-                return arr;
-            });
-            return b.get();
-        },
-        0);
-}
-
 }  // namespace
 
-Value makeEventConstructor(const char* name) {
-    std::string eventName = name;
-    Value fn = ev::makeFunction(
-        [eventName](Value, std::span<const Value> a) -> Value {
-            ObjectBuilder b;
-            Value typeV = a.empty() ? ev::fromUtf8("") : a[0];
-            b.set("type", typeV);
-            bool bubbles = false;
-            bool cancelable = false;
-            bool composed = false;
-            Value detail = ev::null();
-            if (a.size() > 1 && ev::isObject(a[1])) {
-                Value bProp = ev::getProperty(a[1], "bubbles");
-                if (!ev::isUndefined(bProp)) bubbles = ev::toBool(bProp);
-                Value cProp = ev::getProperty(a[1], "cancelable");
-                if (!ev::isUndefined(cProp)) cancelable = ev::toBool(cProp);
-                Value compProp = ev::getProperty(a[1], "composed");
-                if (!ev::isUndefined(compProp)) composed = ev::toBool(compProp);
-                Value dProp = ev::getProperty(a[1], "detail");
-                if (!ev::isUndefined(dProp)) detail = dProp;
-                Value dataProp = ev::getProperty(a[1], "data");
-                if (!ev::isUndefined(dataProp)) b.set("data", dataProp);
-                Value originProp = ev::getProperty(a[1], "origin");
-                if (!ev::isUndefined(originProp)) b.set("origin", originProp);
-                Value lastEventIdProp = ev::getProperty(a[1], "lastEventId");
-                if (!ev::isUndefined(lastEventIdProp)) b.set("lastEventId", lastEventIdProp);
-                Value portsProp = ev::getProperty(a[1], "ports");
-                if (!ev::isUndefined(portsProp)) b.set("ports", portsProp);
-            }
-            b.set("bubbles", ev::fromBool(bubbles));
-            b.set("cancelable", ev::fromBool(cancelable));
-            b.set("composed", ev::fromBool(composed));
-            b.set("target", ev::null());
-            b.set("currentTarget", ev::null());
-            b.set("timeStamp", ev::fromDouble(0.0));
-            b.set("detail", detail);
-            b.set("defaultPrevented", ev::fromBool(false));
-            b.def("preventDefault", 0, [](Value self_, std::span<const Value>) {
-                ev::setProperty(self_, "defaultPrevented", ev::fromBool(true));
-                return ev::undefined();
-            });
-            b.def("stopPropagation", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            b.def("stopImmediatePropagation", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            return b.get();
-        },
-        2);
-    return fn;
-}
-
 void installPlatformGlobals() {
-    Value btoaVal = makeBtoa();
-    Value atobVal = makeAtob();
     Value queueMicrotaskVal = makeQueueMicrotask();
     Value screenVal = makeScreenValue();
-    ev::registerGlobal("btoa", btoaVal);
-    ev::registerGlobal("atob", atobVal);
     ev::registerGlobal("queueMicrotask", queueMicrotaskVal);
     ev::registerGlobal("screen", screenVal);
     Value alertVal = makeAlert();
@@ -534,8 +290,6 @@ void installPlatformGlobals() {
 
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "btoa", btoaVal);
-        ev::setProperty(gt.value, "atob", atobVal);
         ev::setProperty(gt.value, "queueMicrotask", queueMicrotaskVal);
         ev::setProperty(gt.value, "screen", screenVal);
         ev::setProperty(gt.value, "alert", alertVal);
@@ -547,8 +301,6 @@ void installPlatformGlobals() {
     }
     ev::GlobalValue win = ev::globalValue("window");
     if (win.found && ev::isObject(win.value) && win.value != gt.value) {
-        ev::setProperty(win.value, "btoa", btoaVal);
-        ev::setProperty(win.value, "atob", atobVal);
         ev::setProperty(win.value, "queueMicrotask", queueMicrotaskVal);
         ev::setProperty(win.value, "screen", screenVal);
         ev::setProperty(win.value, "alert", alertVal);
@@ -561,20 +313,12 @@ void installPlatformGlobals() {
     // The rest, in the manifest's order. Each is a name a real library tests
     // for before deciding what kind of environment it is in.
     for (const char* name : {
-             "Event", "UIEvent", "MouseEvent", "PointerEvent", "KeyboardEvent",
-             "WheelEvent", "InputEvent", "FocusEvent", "ProgressEvent",
-         }) {
-        ev::registerGlobal(name, makeEventConstructor(name));
-    }
-    for (const char* name : {
              "Text", "CharacterData",
              "Comment", "DocumentFragment", "Gamepad", "GamepadButton",
              "GamepadEvent",
          }) {
         ev::registerGlobal(name, makeInterfaceValue(name));
     }
-    ev::registerGlobal("TextDecoder", makeTextDecoder());
-    ev::registerGlobal("TextEncoder", makeTextEncoder());
 }
 
 }  // namespace bro::bronze_host

@@ -46,19 +46,11 @@ struct AbsoluteRect;
 namespace bronze::embed {
 Value setPrototype(Value obj, Value proto);
 }  // namespace bronze::embed
-namespace bro::physics {
-class PhysicsWorld;
-}  // namespace bro::physics
 
 namespace bro::bronze_host {
 
 namespace ev = bronze::embed;
 using Value = bronze::Value;
-
-#if BRO_WITH_PHYSICS
-physics::PhysicsWorld* unwrapPhysicsWorld(Value v);
-physics::PhysicsWorld* getPhysicsWorld();
-#endif
 
 // gl_internal.h owns it; a file that only registers properties does not need
 // the GL headers to say so.
@@ -99,13 +91,13 @@ public:
         return make(raw, [](void* p) { delete static_cast<T*>(p); }, when);
     }
 
-    // Register a second name for the same constructor (AudioContext and
-    // webkitAudioContext; Image and HTMLImageElement).
+    // Register a second name for the same constructor (Image and
+    // HTMLImageElement).
     void alias(const char* name) const;
 
     // `class This extends Base`: chain this prototype onto the base's, so an
-    // instance inherits both surfaces and answers `instanceof` for both (a
-    // File IS a Blob; a GainNode IS an AudioNode). Call AFTER both installs.
+    // instance inherits both surfaces and answers `instanceof` for both (an
+    // HTMLDivElement IS an HTMLElement). Call AFTER both installs.
     // Prototypes are plain objects, not handle cells, so re-parenting one
     // costs nothing an instance pays for.
     void inherit(const HostClass& base) const;
@@ -116,7 +108,7 @@ public:
                ev::Finalize when = ev::Finalize::InSweep) const;
 
     // A property on the CONSTRUCTOR, where a class `static` member lands
-    // (FileReader.DONE, Node.TEXT_NODE). `name`, `length` and `prototype` are
+    // (Node.TEXT_NODE). `name`, `length` and `prototype` are
     // refused by bronze and must not be passed.
     void setStatic(const char* name, Value v) const;
 
@@ -146,40 +138,6 @@ private:
 // bug that reads a Shape* as a Value.
 inline constexpr uint32_t kHostElementTag = 0x454C454Du;  // 'ELEM'
 inline constexpr uint32_t kHostImageTag = 0x494D4147u;    // 'IMAG'
-inline constexpr uint32_t kHostXhrTag = 0x58485220u;      // 'XHR '
-inline constexpr uint32_t kHostFetchTag = 0x52455350u;    // 'RESP'
-inline constexpr uint32_t kHostHeadersTag = 0x48454144u;  // 'HEAD'
-inline constexpr uint32_t kHostRequestTag = 0x52455155u;  // 'REQU'
-inline constexpr uint32_t kHostBlobTag = 0x424C4F42u;     // 'BLOB'
-inline constexpr uint32_t kHostReaderTag = 0x46524452u;   // 'FRDR'
-inline constexpr uint32_t kHostSignalTag = 0x53474E4Cu;   // 'SGNL'
-inline constexpr uint32_t kHostMutationObserverTag = 0x4D555442u;  // 'MUTB'
-inline constexpr uint32_t kHostResizeObserverTag = 0x52535A42u;    // 'RSZB'
-inline constexpr uint32_t kHostVideoEncoderTag = 0x56454E43u;      // 'VENC'
-inline constexpr uint32_t kHostGifEncoderTag = 0x47454E43u;        // 'GENC'
-inline constexpr uint32_t kHostAudioContextTag = 0x41435458u;      // 'ACTX'
-inline constexpr uint32_t kHostAudioNodeTag = 0x414E4F44u;         // 'ANOD'
-inline constexpr uint32_t kHostAudioParamTag = 0x41504152u;        // 'APAR'
-inline constexpr uint32_t kHostAudioBufferTag = 0x41425546u;       // 'ABUF'
-inline constexpr uint32_t kHostPhysicsCharacterTag = 0x50434852u;  // 'PCHR'
-inline constexpr uint32_t kHostPhysicsSoftBodyTag = 0x50534259u;   // 'PSBY'
-inline constexpr uint32_t kHostPhysicsWorldTag     = 0x50574C44u;  // 'PWLD'
-inline constexpr uint32_t kHostPhysicsVehicleTag   = 0x50564548u;  // 'PVEH'
-inline constexpr uint32_t kHostPhysicsRagdollTag   = 0x50524744u;  // 'PRGD'
-inline constexpr uint32_t kHostNavGridTag = 0x4E564744u;  // 'NVGD'
-inline constexpr uint32_t kHostNavMeshTag = 0x4E564D53u;  // 'NVMS'
-inline constexpr uint32_t kHostAgentTag   = 0x41474E54u;  // 'AGNT'
-inline constexpr uint32_t kHostHexNavTag  = 0x48584E56u;  // 'HXNV'
-inline constexpr uint32_t kHostWorldTag   = 0x41574C44u;  // 'AWLD'
-inline constexpr uint32_t kHostUnitTag    = 0x4149554Eu;  // 'AIUN'
-inline constexpr uint32_t kHostAgentSnapshotTag = 0x41534E50u;  // 'ASNP'
-inline constexpr uint32_t kHostWorldSnapshotTag = 0x57534E50u;  // 'WSNP'
-inline constexpr uint32_t kHostVecSimTag  = 0x5653494Du;  // 'VSIM'
-inline constexpr uint32_t kHostRewardTrackerTag = 0x52575452u;  // 'RWTR'
-inline constexpr uint32_t kHostGenericMctsTag   = 0x474D4354u;  // 'GMCT'
-inline constexpr uint32_t kHostOptionTag        = 0x4F50544Eu;  // 'OPTN'
-inline constexpr uint32_t kHostOptionMctsTag    = 0x4F4D4354u;  // 'OMCT'
-inline constexpr uint32_t kHostWebSocketTag = 0x57534F43u; // 'WSOC'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -216,7 +174,7 @@ double hostClockMs();
 // ---------------------------------------------------------------------------
 
 // Where a host binding puts work that must not run inside the call that
-// produced it: an image's load event, an XHR's completion. Drained once per
+// produced it: an image's load event. Drained once per
 // frame at the top of the bronze frame seam, BEFORE requestAnimationFrame —
 // which is where the web runs a load event relative to the rendering steps, and
 // what lets a texture that finished decoding be uploaded by the same frame that
@@ -494,10 +452,6 @@ struct HostProxyTraps {
 // the target must stay empty for the 10.5 invariants to stay vacuous.
 Value makeHostProxy(HostProxyTraps traps);
 
-// Stubs for unavailable / compiled-out subsystems and backend probes
-Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
-Value makeGpuValue();
-
 // THE element wrapper for `el` — built on first ask, the same value every time
 // after that, because identity is what a UI tests (`event.target === this.dom`).
 // Answers null for nullptr, so it can be handed a parent/sibling lookup result
@@ -609,100 +563,10 @@ void loadHostImage(HostImage& img, const std::string& src);
 // Platform odds and ends (host_platform.cpp)
 // ---------------------------------------------------------------------------
 
-// btoa/atob, queueMicrotask, screen, alert/confirm/prompt, and the DOM
-// interface NAMES libraries test for (`typeof Node !== "undefined"`,
+// queueMicrotask, screen, alert/confirm/prompt, and the DOM interface NAMES
+// libraries test for (`typeof Node !== "undefined"`,
 // `x instanceof HTMLInputElement`). No state, no frame seam.
 void installPlatformGlobals();
-
-// ---------------------------------------------------------------------------
-// Blob / File / FileReader / URL (host_file.cpp, host_url.cpp)
-// ---------------------------------------------------------------------------
-
-void installFileGlobals();
-void installUrlGlobals();
-
-// The bytes behind a Blob or File value, or nullptr for anything else. HOST
-// memory (a std::vector owned by the value's handle cell), not heap bytes — so
-// unlike embed::typedArrayInfo's pointer this one survives a bronze allocation
-// and stays valid until the value is collected. hostImageOf has the same
-// contract and for the same reason.
-struct HostBlob {
-    uint32_t tag = kHostBlobTag;  // must be first — see the tag note above
-    std::vector<uint8_t> bytes;
-    std::string type;           // the MIME type; may be empty
-    bool isFile = false;        // a File is a Blob with a name
-    std::string name;
-    double lastModified = 0;    // ms since the epoch, as the web reports it
-};
-const HostBlob* hostBlobOf(Value v);
-
-// A Blob value over `bytes`. The bytes are MOVED IN: a Blob is immutable on
-// the web, so there is never a second owner to keep in step.
-Value makeBlobValue(std::vector<uint8_t> bytes, std::string type);
-
-// A real `File` over the bytes at `path`, or `undefined` when it cannot be
-// read — a dropped directory, a permission error, a file that vanished between
-// the drop and the dispatch. The caller falls back to a `{ name, path }`
-// descriptor so a drop never fails outright.
-Value makeFileFromPath(const std::string& path);
-
-// ---------------------------------------------------------------------------
-// AbortController / AbortSignal (host_abort.cpp)
-// ---------------------------------------------------------------------------
-
-void installAbortGlobals();
-
-// The payload behind an AbortSignal. `aborted` is duplicated as a JS property
-// so the program can read `signal.aborted`; this copy is what host code checks,
-// because a fetch deciding whether to reject must not depend on a property the
-// app is free to overwrite.
-struct HostAbortSignal {
-    uint32_t tag = kHostSignalTag;  // must be first — see the tag note above
-    bool aborted = false;
-};
-
-// The signal behind a value, or nullptr for anything that is not one. This is
-// how `init.signal` is recognised: an arbitrary object with an `aborted`
-// property is NOT a signal, and treating one as if it were would make a typo
-// look like a working abort.
-const HostAbortSignal* hostAbortSignalOf(Value v);
-
-// A fresh signal, not yet aborted.
-Value makeAbortSignalValue();
-
-// Abort `signal` with `reason` — the whole algorithm, in one place because
-// three callers need it: controller.abort(), AbortSignal.timeout's deadline,
-// and a source signal propagating into an AbortSignal.any() composite. Setting
-// `reason` to undefined means "the default", an AbortError. Idempotent: a
-// signal already aborted keeps its first reason and fires nothing, which is
-// what makes abort() safe to call from a cleanup path that may run twice.
-void hostAbortSignal(Value signal, Value reason);
-
-// `{name, message}` — what this layer rejects and throws with where the web
-// throws a DOMException. A real DOMException class is buildable now (see
-// host_image.cpp for the shape) and is not written; `e.name === 'AbortError'`
-// is the check real code writes and it answers correctly either way.
-Value hostMakeDomError(const char* name, const std::string& message);
-
-// ---------------------------------------------------------------------------
-// MutationObserver / ResizeObserver (host_observers.cpp)
-// ---------------------------------------------------------------------------
-
-void installObserverGlobals();
-
-// Hand every observer what it has accumulated: for a MutationObserver the
-// records queued since the last delivery, for a ResizeObserver the targets
-// whose box has changed since it last looked. One call per observer with all
-// of them, because an observer that rebuilds a view from its entries needs
-// them together.
-//
-// Called once per frame from the bronze frame seam, AFTER requestAnimationFrame
-// — so a mutation or a resize caused by a frame callback is reported in the
-// frame that caused it — and before the closing microtask drain, so the promise
-// jobs an observer starts run in the same checkpoint as everything else's.
-// Anything queued from inside a callback waits for the next frame, which is
-// what stops an observer that changes what it observes from re-entering itself.
-void deliverHostObservers();
 
 // ---------------------------------------------------------------------------
 // DOMParser (host_parser.cpp)
@@ -718,104 +582,10 @@ Value makeDocumentValue(dom::Document* fixed);
 Value hostDocumentValue(dom::Document* doc);
 
 // ---------------------------------------------------------------------------
-// VideoEncoder / GifEncoder (host_video.cpp)
+// Brand constructors (dom_globals.cpp) and touch (host_touch.cpp)
 // ---------------------------------------------------------------------------
 
-// Registers both names in EVERY build. Without video compiled in they are
-// registered as `undefined` rather than left out, because a manifest name the
-// host never registers is a process abort and not a catchable miss — the file
-// carries the rule and where it comes from.
-void installVideoGlobals();
-
-// ---------------------------------------------------------------------------
-// XMLHttpRequest (host_xhr.cpp)
-// ---------------------------------------------------------------------------
-
-void installXhrGlobal();
-
-// ---------------------------------------------------------------------------
-// fetch (host_fetch.cpp)
-// ---------------------------------------------------------------------------
-
-void installFetchGlobal();
-
-// ---------------------------------------------------------------------------
-// Audio (host_audio.cpp)
-// ---------------------------------------------------------------------------
-
-void installAudioGlobals();
 Value makeBrandConstructor(const char* name);
-Value makeEventConstructor(const char* name);
-
-// ---------------------------------------------------------------------------
-// Physics (host_physics.cpp)
-// ---------------------------------------------------------------------------
-
-void installPhysicsGlobals();
-void drainPhysicsContactEvents();
-
-// ---------------------------------------------------------------------------
-// AI & Navigation (host_ai.cpp)
-// ---------------------------------------------------------------------------
-
-void installAIGlobals();
-
-// ---------------------------------------------------------------------------
-// 3D Mesh & Rigging (host_mesh_core.cpp / host_rigging.cpp)
-// ---------------------------------------------------------------------------
-
-#if BRO_WITH_3D
-void installMeshGlobals();
-void installRiggingGlobals();
-#else
-inline void installMeshGlobals() {}
-inline void installRiggingGlobals() {}
-#endif
-
-// `bro.ai` for the compiled realm: `{ game }`, documented in
-// docs/ai-game-api.js — the ORCA World, the HexNav navigator, the agent and
-// grid factories and the perception helpers — over the same brogameagent
-// objects the `AI` global wraps. Built by host_ai_game.cpp; hung on the `bro`
-// value by dom_globals.cpp. Must run AFTER installAIGlobals, which installs
-// the classes the factories birth instances on.
-Value makeBroAiValue();
-
-// ---------------------------------------------------------------------------
-// Networking & Remote Transport (host_net.cpp)
-// ---------------------------------------------------------------------------
-
-void installNetGlobals();
-void drainNetEvents();
-Value makeBroNetValue();
-
-// ---------------------------------------------------------------------------
-// Native codecs (host_codecs.cpp): bro.mesh Draco decode/encode and
-// bro.image KTX2 transcode for the compiled realm. Empty objects when the
-// build compiled the codec out (no bromesh draco / no basis transcoder).
-// ---------------------------------------------------------------------------
-
-Value makeBroMeshValue();
-Value makeBroImageValue();
-
-Value makeBroWindowValue();
-Value makeBatterySnapshotValue();
-Value makeBroSettingsValue();
-Value makeBroMathValue();
-void installMathGlobals();
-Value getSpatialHashConstructor();
-Value getRngConstructor();
-Value getSmootherConstructor();
-Value makeBroTextValue();
-Value makeBroMenuValue();
-Value makeBroSteamValue();
-void drainSteamEvents();
-void cleanupSteamBindings();
-void installNetSync(engine::Engine* eng);
-
-Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
-Value makeGpuValue();
-Value makeBroValue();
-void installBroGlobals(engine::Engine& engine);
 void installTouchGlobals();
 
 // ---------------------------------------------------------------------------
@@ -830,153 +600,5 @@ void installVendorGlobals();
 // ---------------------------------------------------------------------------
 
 void installNodeCoreGlobals(engine::Engine& engine);
-
-// ---------------------------------------------------------------------------
-// Shared TypedArray and Vector Helpers
-// ---------------------------------------------------------------------------
-
-inline Value makeFloat32Array(const float* data, size_t count) {
-    Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(count));
-    if (data && count > 0) {
-        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(float));
-        ev::fillTypedArray(arr, bytes);
-    }
-    return arr;
-}
-
-inline Value makeFloat32Array(const std::vector<float>& vec) {
-    return makeFloat32Array(vec.data(), vec.size());
-}
-
-inline Value makeUint32Array(const uint32_t* data, size_t count) {
-    Value arr = ev::createTypedArray(ev::elements::Uint32, static_cast<uint32_t>(count));
-    if (data && count > 0) {
-        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(uint32_t));
-        ev::fillTypedArray(arr, bytes);
-    }
-    return arr;
-}
-
-inline Value makeUint32Array(const std::vector<uint32_t>& vec) {
-    return makeUint32Array(vec.data(), vec.size());
-}
-
-inline Value makeUint8Array(const uint8_t* data, size_t count) {
-    Value arr = ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(count));
-    if (data && count > 0) {
-        std::span<const uint8_t> bytes(data, count);
-        ev::fillTypedArray(arr, bytes);
-    }
-    return arr;
-}
-
-inline Value makeUint8Array(const std::vector<uint8_t>& vec) {
-    return makeUint8Array(vec.data(), vec.size());
-}
-
-inline Value makeEmptyArray() {
-    return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-}
-
-inline bool hostIsArray(Value v) {
-    return v.isObject() && v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::Array;
-}
-
-inline Value makeInt32Array(const int32_t* data, size_t count) {
-    Value arr = ev::createTypedArray(ev::elements::Int32, static_cast<uint32_t>(count));
-    if (data && count > 0) {
-        std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(data), count * sizeof(int32_t));
-        ev::fillTypedArray(arr, bytes);
-    }
-    return arr;
-}
-
-inline Value makeVec3Value(float x, float y, float z) {
-    Value obj = ev::createObject();
-    ev::Persistent p(obj);
-    p.set(ev::setProperty(p.get(), "x", ev::fromDouble(x)));
-    p.set(ev::setProperty(p.get(), "y", ev::fromDouble(y)));
-    p.set(ev::setProperty(p.get(), "z", ev::fromDouble(z)));
-    return p.get();
-}
-
-inline bool readFloatVector(Value v, std::vector<float>& out) {
-    if (ev::isUndefined(v) || ev::isNull(v)) return false;
-    if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && (info.bytesPerElement == sizeof(float) || info.bytesPerElement == 0)) {
-            const float* fp = reinterpret_cast<const float*>(info.data);
-            out.assign(fp, fp + info.elementCount);
-            return true;
-        }
-    }
-    if (!ev::isObject(v)) return false;
-    ev::Persistent root(v);
-    Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.clear();
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        Value e = ev::getElement(root.get(), i);
-        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
-        out.push_back(static_cast<float>(d));
-    }
-    return true;
-}
-
-inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
-    if (ev::isUndefined(v) || ev::isNull(v)) return false;
-    if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && (info.bytesPerElement == sizeof(uint32_t) || info.bytesPerElement == 0)) {
-            const uint32_t* up = reinterpret_cast<const uint32_t*>(info.data);
-            out.assign(up, up + info.elementCount);
-            return true;
-        }
-        if (info.data && info.bytesPerElement == sizeof(uint16_t)) {
-            const uint16_t* up = reinterpret_cast<const uint16_t*>(info.data);
-            out.clear();
-            out.reserve(info.elementCount);
-            for (uint32_t i = 0; i < info.elementCount; ++i) out.push_back(up[i]);
-            return true;
-        }
-    }
-    if (!ev::isObject(v)) return false;
-    ev::Persistent root(v);
-    Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.clear();
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        Value e = ev::getElement(root.get(), i);
-        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
-        out.push_back(static_cast<uint32_t>(d));
-    }
-    return true;
-}
-
-inline bool readU8Vector(Value v, std::vector<uint8_t>& out) {
-    if (ev::isUndefined(v) || ev::isNull(v)) return false;
-    if (auto info = ev::typedArrayInfo(v)) {
-        if (info.data && (info.bytesPerElement == sizeof(uint8_t) || info.bytesPerElement == 0)) {
-            const uint8_t* up = reinterpret_cast<const uint8_t*>(info.data);
-            out.assign(up, up + info.elementCount);
-            return true;
-        }
-    }
-    if (!ev::isObject(v)) return false;
-    ev::Persistent root(v);
-    Value lenV = ev::getProperty(root.get(), "length");
-    if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.clear();
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        Value e = ev::getElement(root.get(), i);
-        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
-        out.push_back(static_cast<uint8_t>(d));
-    }
-    return true;
-}
 
 }  // namespace bro::bronze_host

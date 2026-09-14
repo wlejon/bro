@@ -528,8 +528,6 @@ private:
     void scanSystemPanelDir(const std::string& baseDir, const std::string& relPath);
     bool isSystemDocVisible(const SystemDocument& doc) const;
     void tickSystemPanels(double nowMs);
-    void updateSystemPerf(double fps, double frameTime, double js, double layout,
-                          double raster, double gpu, double draw, int vpW, int vpH);
     void layoutSystemPanels(layout::SkiaTextMetrics& metrics);
     void drawSystemPanels(render::Renderer* renderer,
                           layout::DrawTraversal& traversal);

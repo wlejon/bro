@@ -3,10 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace bro::dom {
-class Document;
-}
-
 namespace bro::bronze_host {
 
 struct HostTelemetry {
@@ -19,10 +15,5 @@ struct HostTelemetry {
 };
 
 HostTelemetry getHostTelemetry();
-
-void updatePerfDocument(dom::Document* doc, const HostTelemetry& tel,
-                        double fps, double frameMs, double jsMs, double layoutMs,
-                        double rasterMs, double gpuMs, double drawMs,
-                        int vpW, int vpH);
 
 }  // namespace bro::bronze_host

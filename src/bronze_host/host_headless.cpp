@@ -62,7 +62,6 @@ void installHeadlessGlobals(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             engine.advanceTime(ms);
-            deliverHostObservers();
             if (ev::microtasksPending()) ev::drainMicrotasks();
             return ev::undefined();
         }, 1, "advanceTime"));
@@ -71,8 +70,6 @@ void installHeadlessGlobals(engine::Engine& engine) {
     ev::registerGlobal("flush", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             engine.flush();
-            drainNetEvents();
-            deliverHostObservers();
             if (ev::microtasksPending()) ev::drainMicrotasks();
             return ev::undefined();
         }, 0, "flush"));

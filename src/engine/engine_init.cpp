@@ -10,7 +10,6 @@
 #include "engine/replaced_elements.h"
 #include "engine/default_styles.h"
 #include "engine/scene_audio_sync.h"
-#include "engine/audio_subsystem.h"
 #include "dom/event_dispatch.h"
 #include "util/asset_path.h"
 #include "util/user_dirs.h"
@@ -216,14 +215,6 @@ Engine::Engine(const EngineConfig& config)
     audioInference_ = std::make_unique<AudioInference>();
     if (displayMode_ != DisplayMode::Headless)
         audioInference_->startThread();
-
-#if BRO_WITH_SOUNDML
-    framePumps_.push_back([] {
-        tickAudioInferenceSubsystem();
-    });
-#endif
-
-    framePumps_.push_back([] { tickMicSubsystem(); });
 
     {
         auto& audio = settings_->audio();

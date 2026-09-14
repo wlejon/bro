@@ -23,7 +23,6 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
-#include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_touch.h"
 
@@ -35,7 +34,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -322,55 +320,6 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
             }
             return ev::undefined();
         });
-
-        // A dropped file is a REAL File — bytes and all.
-        const auto& files = drag->files();
-        auto fileForPath = [](const std::string& path) {
-            Value f = makeFileFromPath(path);
-            if (!ev::isUndefined(f)) return f;
-            ObjectBuilder d;
-            d.set("name", ev::fromUtf8(std::filesystem::path(path).filename().string()));
-            d.set("path", ev::fromUtf8(path));
-            return d.get();
-        };
-        Value filesArr = hostArrayOf(files.size(), [&files, &fileForPath](size_t i) {
-            return fileForPath(files[i]);
-        });
-        dt.set("files", filesArr);
-
-        Value itemsArr = hostArrayOf(files.size(), [&files, &fileForPath](size_t i) {
-            const std::string& path = files[i];
-            const std::string name = std::filesystem::path(path).filename().string();
-            ObjectBuilder item;
-            item.set("kind", ev::fromUtf8("file"));
-            item.set("type", ev::fromUtf8(""));
-            item.def("getAsFile", 0, [path](Value, std::span<const Value>) {
-                Value f = makeFileFromPath(path);
-                return ev::isUndefined(f) ? ev::null() : f;
-            });
-            item.def("webkitGetAsEntry", 0, [name, path](Value, std::span<const Value>) {
-                ObjectBuilder entry;
-                entry.set("isFile", ev::fromBool(true));
-                entry.set("isDirectory", ev::fromBool(false));
-                entry.set("name", ev::fromUtf8(name));
-                entry.set("fullPath", ev::fromUtf8("/" + name));
-                entry.def("file", 1, [path](Value, std::span<const Value> a) {
-                    Value cb = argAt(a, 0);
-                    if (!ev::isFunction(cb)) return ev::undefined();
-                    auto held = std::make_shared<ev::Persistent>(cb);
-                    postHostTask([held, path]() {
-                        Value fileVal = makeFileFromPath(path);
-                        if (ev::isUndefined(fileVal)) return;
-                        ev::call(held->get(), ev::undefined(),
-                                 std::span<const Value>(&fileVal, 1));
-                    });
-                    return ev::undefined();
-                });
-                return entry.get();
-            });
-            return item.get();
-        });
-        dt.set("items", itemsArr);
 
         b.set("dataTransfer", dt.get());
 
@@ -825,9 +774,6 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
     // Single-threaded and re-entrant by construction: nothing here holds a bare
     // Value across the call.
     engine->dispatchElementEvent(el, evt);
-    if (spec.type == "click" && !evt.defaultPrevented()) {
-        runAnchorDownload(el);
-    }
     return ev::fromBool(!evt.defaultPrevented());
 }
 

@@ -19,7 +19,7 @@ namespace bro::bronze_host {
 /// Register the browser-shaped host globals a bronze-compiled app
 /// reads — document, window, self, requestAnimationFrame,
 /// cancelAnimationFrame, performance, WebGL2RenderingContext, the four timer
-/// functions, Image, XMLHttpRequest, fetch, Request, Headers, Response — and hook the frame seam into
+/// functions, Image — and hook the frame seam into
 /// `engine`'s frame loop (Engine::onFrame). That seam is what advances the
 /// clock, delivers host completions, fires timers and rAF, and performs the
 /// microtask checkpoint the compiled program's promises need; without it a
@@ -73,10 +73,5 @@ void triggerPanelsReady(dom::Document* doc);
 
 /// Notify splash document to begin dismiss animation.
 void triggerSplashDismiss(dom::Document* doc);
-
-/// Backwards compatibility alias for installWebHostGlobals.
-inline void installThreejsHostGlobals(engine::Engine& engine) {
-    installWebHostGlobals(engine);
-}
 
 }  // namespace bro::bronze_host

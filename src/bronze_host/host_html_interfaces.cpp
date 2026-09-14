@@ -2,7 +2,6 @@
 #include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
-#include "bronze_host/host_element_video.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
 
@@ -21,7 +20,6 @@ HostClass g_nodeClass;
 HostClass g_documentClass;
 HostClass g_elementClass;
 HostClass g_htmlElementClass;
-HostClass g_htmlMediaElementClass;
 
 HostClass g_htmlCanvasElementClass;
 HostClass g_htmlDivElementClass;
@@ -46,9 +44,6 @@ HostClass g_htmlOptionElementClass;
 HostClass g_htmlTemplateElementClass;
 HostClass g_htmlHtmlElementClass;
 HostClass g_htmlBodyElementClass;
-
-HostClass g_htmlVideoElementClass;
-HostClass g_htmlAudioElementClass;
 
 Value illegalConstructor(Value, std::span<const Value>) {
     return ev::throwTypeError("Illegal constructor");
@@ -83,7 +78,6 @@ const HostClass& nodeHostClass() { return g_nodeClass; }
 const HostClass& documentHostClass() { return g_documentClass; }
 const HostClass& elementHostClass() { return g_elementClass; }
 const HostClass& htmlElementHostClass() { return g_htmlElementClass; }
-const HostClass& htmlMediaElementHostClass() { return g_htmlMediaElementClass; }
 
 void installHtmlInterfaces() {
     static bool s_installed = false;
@@ -122,11 +116,7 @@ void installHtmlInterfaces() {
     }, nullptr);
     g_htmlElementClass.inherit(g_elementClass);
 
-    // 4. HTMLMediaElement
-    g_htmlMediaElementClass.install("HTMLMediaElement", 0, illegalConstructor, decorateMediaProto);
-    g_htmlMediaElementClass.inherit(g_htmlElementClass);
-
-    // 5. Per-tag interfaces extending HTMLElement
+    // 4. Per-tag interfaces extending HTMLElement
     struct TagClassInit {
         HostClass& cls;
         const char* name;
@@ -162,16 +152,6 @@ void installHtmlInterfaces() {
         item.cls.install(item.name, 0, illegalConstructor, item.decorator);
         item.cls.inherit(g_htmlElementClass);
     }
-
-    // 7. Per-tag interfaces extending HTMLMediaElement
-    TagClassInit mediaTagClasses[] = {
-        {g_htmlVideoElementClass, "HTMLVideoElement", decorateVideoProto},
-        {g_htmlAudioElementClass, "HTMLAudioElement"},
-    };
-    for (auto& item : mediaTagClasses) {
-        item.cls.install(item.name, 0, illegalConstructor, item.decorator);
-        item.cls.inherit(g_htmlMediaElementClass);
-    }
 }
 
 Value htmlInterfaceProto(const std::string& tagName) {
@@ -205,8 +185,6 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "template") return g_htmlTemplateElementClass.prototype();
     if (tag == "html") return g_htmlHtmlElementClass.prototype();
     if (tag == "body") return g_htmlBodyElementClass.prototype();
-    if (tag == "video") return g_htmlVideoElementClass.prototype();
-    if (tag == "audio") return g_htmlAudioElementClass.prototype();
 
     return g_htmlElementClass.prototype();
 }

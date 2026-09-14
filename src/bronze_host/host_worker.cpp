@@ -154,10 +154,6 @@ void WorkerInstance::threadFunc() {
     brokit::api::installAll();
     auto* eng = hostEngine();
     if (eng) {
-        Value broVal = makeBroValue();
-        ev::registerGlobal("bro", broVal);
-        ev::setProperty(globalThis, "bro", broVal);
-        installNetSync(eng);
         for (const auto& [prefix, target] : eng->assetMounts().mounts()) {
             brokit::api::addFsPrefixMount(prefix, target);
         }
@@ -289,7 +285,6 @@ void WorkerInstance::threadFunc() {
         if (ev::isFunction(wsTick)) {
             ev::call(wsTick, ev::undefined(), {});
         }
-        drainNetEvents();
         if (ev::microtasksPending()) {
             ev::drainMicrotasks();
         }
