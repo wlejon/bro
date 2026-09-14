@@ -131,6 +131,7 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installFormData();
     bk::installFetchClasses();
     adoptGlobalProperty("fetch");
+    bk::installXMLHttpRequest();
     bk::installCompression();
     bk::installBase64();
     bk::installEventTarget();

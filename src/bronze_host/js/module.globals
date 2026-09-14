@@ -1,0 +1,17 @@
+# The --host-globals manifest for bro's OWN bronze-compiled modules
+# (bro_compile_js in ../CMakeLists.txt): observers.js, net_sync.js,
+# image_gpu.js.
+#
+# This is NOT the app manifest. An app is compiled against what
+# `bro-headless <appdir> --print-host-globals` prints — the registry of the
+# binary that will run it — and that list cannot exist at build time, because
+# bro-headless is the thing being built. So these modules are written to read
+# what they need off `globalThis` at install time (`globalThis.document`,
+# `globalThis.queueMicrotask`, ...) and name only three things as bare
+# identifiers: the two every bronze program has, and the one host hook object
+# C++ registers before the module runs. Keep it that way: a name added here
+# must be registered by C++ BEFORE the module's entry runs, or the read is a
+# fatal at first use.
+globalThis
+console
+__bro_observers

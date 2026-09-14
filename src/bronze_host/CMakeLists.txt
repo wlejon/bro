@@ -88,6 +88,57 @@ if(TARGET bronze AND NOT TARGET bronze-cli)
     add_dependencies(bronze-cli bronze)
 endif()
 
+# --- bro's own JavaScript, compiled by bronze at build time ---
+# Each js/<name>.js is compiled to an object with its own entry symbol and
+# linked into the binding library, the way brokit ships its polyfills
+# (../brokit/src/api/CMakeLists.txt); host_js_modules.cpp enters each one
+# through bronze::embed::runEntry while the host globals are installed.
+#
+# THE MANIFEST is js/module.globals, a checked-in list of the three bare
+# identifiers these modules are allowed to read (globalThis, console, and the
+# host hook object C++ registers for them). It is NOT the app manifest: an app
+# compiles against what `bro-headless <appdir> --print-host-globals` prints —
+# the registry of the binary that will run it — and no such list exists while
+# that binary is being built. So bro's modules read everything else off
+# `globalThis` at the point of use, and the manifest stays tiny.
+#
+# On Apple Silicon the compiled objects cannot be linked (bronze's code
+# generator emits x86_64, a cputype mismatch for an arm64 Mach-O) and native
+# no-op entry points stand in, exactly as brokit's do; no bronze-compiled JS
+# runs there at all.
+if(APPLE AND (CMAKE_OSX_ARCHITECTURES MATCHES "arm64" OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")))
+    set(BRO_COMPILED_JS_OBJECTS "${CMAKE_CURRENT_SOURCE_DIR}/js_entry_stubs_arm64.cpp")
+else()
+    set(BRO_JS_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    file(MAKE_DIRECTORY "${BRO_JS_GEN_DIR}")
+    set(BRO_JS_MODULE_GLOBALS "${CMAKE_CURRENT_SOURCE_DIR}/js/module.globals")
+    set(BRO_COMPILED_JS_OBJECTS "")
+
+    # bro_compile_js(<name> <entry_symbol>): js/<name>.js -> generated/<name>.o,
+    # entered through <entry_symbol>. The object depends on the compiler, the
+    # source and the manifest, so a change to any of the three recompiles it.
+    function(bro_compile_js JS_FILE ENTRY_SYMBOL)
+        set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/js/${JS_FILE}.js")
+        set(OUTPUT "${BRO_JS_GEN_DIR}/${JS_FILE}.o")
+        add_custom_command(
+            OUTPUT  "${OUTPUT}"
+            COMMAND $<TARGET_FILE:bronze> build "${INPUT}" --emit-obj
+                    --host-globals "${BRO_JS_MODULE_GLOBALS}"
+                    --entry-symbol=${ENTRY_SYMBOL} -o "${OUTPUT}"
+            DEPENDS bronze "${INPUT}" "${BRO_JS_MODULE_GLOBALS}"
+            COMMENT "bronze compile js/${JS_FILE}.js -> ${JS_FILE}.o (${ENTRY_SYMBOL})"
+            VERBATIM
+        )
+        set_source_files_properties("${OUTPUT}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+        list(APPEND BRO_COMPILED_JS_OBJECTS "${OUTPUT}")
+        set(BRO_COMPILED_JS_OBJECTS "${BRO_COMPILED_JS_OBJECTS}" PARENT_SCOPE)
+    endfunction()
+
+    bro_compile_js(observers  bro_observers_main)
+    bro_compile_js(net_sync   bro_net_sync_main)
+    bro_compile_js(image_gpu  bro_image_gpu_main)
+endif()
+
 # --- The binding library ---
 set(BRO_BRONZE_HOST_SOURCES
     gl_constants.cpp
@@ -150,9 +201,11 @@ set(BRO_BRONZE_HOST_SOURCES
     host_worker.cpp
     host_window_open.cpp
     host_realm_scope.cpp
+    host_observer_hooks.cpp
+    host_js_modules.cpp
 )
 
-add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
+add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES} ${BRO_COMPILED_JS_OBJECTS})
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # The runtime is a DLL now, and bronze builds it into its own output directory

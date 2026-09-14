@@ -612,4 +612,28 @@ void pumpBrokitTicks();
 // not idle while it does (host_gc.cpp).
 bool brokitHasPendingWork();
 
+// ---------------------------------------------------------------------------
+// bro's own bronze-compiled JavaScript (host_js_modules.cpp), and the host
+// hooks the observer module runs over (host_observer_hooks.cpp)
+// ---------------------------------------------------------------------------
+
+// `__bro_observers`: the mutation-record take and the frame tick that
+// js/observers.js builds MutationObserver, ResizeObserver and
+// IntersectionObserver on. Registered by installObserversModule before the
+// module's entry runs.
+void installObserverHooks();
+
+// The observer module's per-frame pass (resize, then intersection), fired
+// from the frame seam after requestAnimationFrame and its microtask
+// checkpoint. A no-op until the module has registered its callback.
+void fireHostObserverFrame();
+
+// Enter each compiled module and lift what it defined on globalThis into the
+// host-global registry: MutationObserver/ResizeObserver/IntersectionObserver
+// and their entry classes; `__bro_net_sync` (a factory over the bro.net
+// primitives); `__bro_image_gpu` (colormap, fbm2D).
+void installObserversModule();
+void installNetSyncModule();
+void installImageGpuModule();
+
 }  // namespace bro::bronze_host

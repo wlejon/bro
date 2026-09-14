@@ -1,9 +1,23 @@
 // bro.net.sync — Godot-style high-level multiplayer over the bro.net
 // primitives: spawn/despawn replication, per-object authority, snapshot+delta
 // state sync with periodic keyframes, and named RPCs. Pure JS, layered on
-// bro.net.sendClone/broadcastClone; evaluated by NetBindings::install in every
-// context that gets a real bro.net (main document and workers), so a worker
-// can host or join exactly like the main thread. See docs/net-sync-api.js.
+// bro.net.sendClone/broadcastClone. See docs/net-sync-api.js.
+//
+// HOW IT IS SHIPPED. Compiled by bronze at build time (bro_compile_js in
+// ../CMakeLists.txt, against js/module.globals) and entered from
+// installNetSyncModule() (host_js_modules.cpp) while the host globals are
+// being installed. The module is a FACTORY: `globalThis.__bro_net_sync(net)`
+// takes the object carrying the net primitives (init, host, connect,
+// connections, sendClone, broadcastClone, and the onmessage/onconnect/
+// ondisconnect slots) and answers the `sync` object bound to them. It used to
+// bind itself to `bro.net` at load and mount as `bro.net.sync`; the `bro`
+// namespace is not registered in this realm today, so that mount waits for
+// it — whoever restores `bro.net` calls the factory and hangs the result off
+// it. Nothing else about the module changed.
+//
+// It names no host global as a bare identifier (module.globals lists only
+// globalThis, console and the observer hook): the timers it needs are read
+// off globalThis at the call.
 //
 // Topology is a star: one host, N clients. The host owns object identity
 // (spawn/despawn/authority), relays client-authority state to the other
@@ -24,9 +38,14 @@
 (function () {
     'use strict';
 
-    const broNs = globalThis.bro;
-    if (!broNs || !broNs.net || broNs.net.available === false) return;
-    const net = broNs.net;
+    const g = globalThis;
+
+    function createNetSync(net) {
+    if (net === null || typeof net !== 'object' ||
+        typeof net.sendClone !== 'function' || typeof net.connections !== 'function') {
+        throw new TypeError('__bro_net_sync: expected the bro.net primitives ' +
+                            '(sendClone, broadcastClone, connections, ...)');
+    }
 
     const PROTOCOL = 1;          // bumped on incompatible sync-protocol changes
     const TAG = '__sync';        // reserved key marking sync clone values
@@ -160,7 +179,7 @@
     function setInterpTarget(rec, prop, to) {
         if (!rec.interp) rec.interp = {};
         rec.interp[prop] = { from: rec.obj[prop], to, p: 0 };
-        if (interpTimer === null) interpTimer = setInterval(stepInterp, INTERP_STEP_MS);
+        if (interpTimer === null) interpTimer = g.setInterval(stepInterp, INTERP_STEP_MS);
     }
 
     function stepInterp() {
@@ -181,7 +200,7 @@
             if (rec.interp && Object.keys(rec.interp).length === 0) rec.interp = null;
         }
         if (!any && interpTimer !== null) {
-            clearInterval(interpTimer);
+            g.clearInterval(interpTimer);
             interpTimer = null;
         }
     }
@@ -551,7 +570,7 @@
 
     function activate() {
         wrapNetHandlers();
-        tickTimer = setInterval(tick, tickMs);
+        tickTimer = g.setInterval(tick, tickMs);
         active = true;
     }
 
@@ -738,5 +757,8 @@
     // Debug/test counters (also handy for a net HUD): message + prop counts.
     sync._stats = () => ({ ...stats, objects: records.size });
 
-    net.sync = sync;
+    return sync;
+    }
+
+    g.__bro_net_sync = createNetSync;
 })();

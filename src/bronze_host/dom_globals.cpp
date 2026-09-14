@@ -182,6 +182,16 @@ void fireAnimationFrames() {
 //     run the PREVIOUS frame's continuations against this frame's state, and a
 //     rejection thrown in the last rAF before shutdown would never be reported
 //     at all, because quiescence would never be reached again.
+//
+//  6b. The observer pass — ResizeObserver, then IntersectionObserver
+//     (js/observers.js, over host_observer_hooks.cpp). After the checkpoint,
+//     which is where the web's "update the rendering" puts them: a mutation
+//     made in an rAF callback has been reported (MutationObserver delivers
+//     from a microtask) before the box it changed is measured, so a resize
+//     entry describes the box as it ended up rather than mid-edit. The pass
+//     reads geometry, and a geometry read lays the document out first, so
+//     "after layout" is what it measures. Its own callbacks' promise jobs
+//     drain at 6c.
 void hostFrame(double dtMs) {
     if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
     g_host->clockMs += dtMs;                             // 2
@@ -191,6 +201,8 @@ void hostFrame(double dtMs) {
     fireHostTimers(g_host->clockMs);                     // 4
     fireAnimationFrames();                               // 5
     ev::drainMicrotasks();                               // 6
+    fireHostObserverFrame();                             // 6b
+    ev::drainMicrotasks();                               // 6c
     hostNotifyIdleFrame(dtMs);                           // 7
 }
 
@@ -773,6 +785,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     installTouchGlobals();
     installVendorGlobals();
     installBrokitGlobals(engine);
+    // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
+    // observers.js reads queueMicrotask, performance and getComputedStyle
+    // off globalThis at the point of use, and every name a module lists in
+    // js/module.globals must already be registered when its entry runs.
+    installObserversModule();
+    installNetSyncModule();
+    installImageGpuModule();
     installHeadlessGlobals(engine);
     installPlatformExtensions(engine);
     installRangeGlobals();

@@ -1,8 +1,10 @@
 # embed_js.cmake — Embed any text file into a C++ header as a null-terminated
 # byte array. Generic despite the name: driven by INPUT / OUTPUT / VAR_NAME and
-# used for scripts (src/engine) and GLSL shaders (src/scene). The
-# brokit sibling also resolves this file via ${CMAKE_SOURCE_DIR} when built in
-# tree, so keep the filename stable.
+# used for the GLSL shaders in src/scene. No JavaScript goes through it any
+# more — bro's own JS is compiled by bronze into objects instead
+# (src/bronze_host/CMakeLists.txt, bro_compile_js). The brokit sibling also
+# resolves this file via ${CMAKE_SOURCE_DIR} when built in tree, so keep the
+# filename stable.
 #
 # Usage (from add_custom_command):
 #   cmake -DINPUT=mesh.vert -DOUTPUT=mesh.vert.h -DVAR_NAME=kMeshVertSrc -P embed_js.cmake

@@ -29,14 +29,19 @@
 // All per-canvas resources (programs, VAO, textures, framebuffers, reduction
 // chain) live in a WeakMap keyed by the canvas. The reduction chain is
 // (re)built when srcW/srcH changes; the EMA state is reset along with it.
+//
+// HOW IT IS SHIPPED. Compiled by bronze at build time (bro_compile_js in
+// ../CMakeLists.txt, against js/module.globals) and entered from
+// installImageGpuModule() (host_js_modules.cpp) while the host globals are
+// being installed. The module assigns its surface — `colormap` and `fbm2D` —
+// onto `globalThis.__bro_image_gpu`. It used to mount itself as
+// `bro.image.gpu`; the `bro` namespace is not registered in this realm today,
+// so that mount waits for it — whoever restores `bro.image` points
+// `bro.image.gpu` at this object. The functions themselves are unchanged and
+// take everything they touch (the canvas, the field, the LUT) as arguments.
 
 (function () {
-    if (typeof bro !== "object" || bro === null) {
-        globalThis.bro = globalThis.bro || {};
-    }
-    if (!bro.image) bro.image = {};
-    if (bro.image.gpu) return;  // already installed
-    bro.image.gpu = {};
+    const gpu = {};
 
     // ----- Shader sources ----------------------------------------------------
 
@@ -537,7 +542,7 @@ void main() {
      * Colormap a 1-channel float field through a 1D RGBA8 LUT, rendering
      * directly to `canvas` via WebGL2.
      */
-    bro.image.gpu.colormap = function colormap(canvas, src, lut, params) {
+    gpu.colormap = function colormap(canvas, src, lut, params) {
         if (!canvas || canvas.nodeType !== 1)
             throw new TypeError("bro.image.gpu.colormap: canvas required");
         if (!(lut instanceof Uint8Array) && !(lut instanceof Uint8ClampedArray))
@@ -705,7 +710,7 @@ void main() {
      * @param {number}  [params.lo] / [params.hi]
      * @param {number}  [params.srcW] / [params.srcH]
      */
-    bro.image.gpu.fbm2D = function fbm2D(canvas, lut, params) {
+    gpu.fbm2D = function fbm2D(canvas, lut, params) {
         if (!canvas || canvas.nodeType !== 1)
             throw new TypeError("bro.image.gpu.fbm2D: canvas required");
         if (!(lut instanceof Uint8Array) && !(lut instanceof Uint8ClampedArray))
@@ -784,4 +789,6 @@ void main() {
 
         applyColormapToCanvas(st, canvas, params, sizeChanged);
     };
+
+    globalThis.__bro_image_gpu = gpu;
 })();
