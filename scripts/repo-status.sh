@@ -47,15 +47,15 @@ for arg in "$@"; do
 done
 
 # Sibling libraries: <name> => standalone at ../<name>, submodule at third_party/<name>.
-# bronze is in this list on the same terms as the rest even though it is a
-# compiler rather than a library bro links: bro resolves ../bronze first and
-# third_party/bronze second (src/bronze_host/CMakeLists.txt), so the standalone
-# tree being ahead of the recorded pointer means exactly what it means for the
-# others — CI and the nightly package are building an older bronze than you are.
+# bronze and brass are in this list on the same terms as the rest even though they are
+# compilers / backends rather than libraries bro directly links: bro resolves ../bronze
+# and ../brass first and third_party/ second (src/bronze_host/CMakeLists.txt), so the
+# standalone tree being ahead of the recorded pointer means exactly what it means for the
+# others — CI and the nightly package are building an older bronze/brass than you are.
 SIBLINGS=(
     bromath brokit htmlayout broaudio bromesh broflora
     brotensor brogameagent brolm brodiffusion broimage brosoundml brovisionml
-    bronze brosurface
+    brass bronze brosurface
 )
 
 # ANSI colors (disabled when not a tty).

@@ -60,6 +60,7 @@ D:/projects/
 ├── broimage/                     # standalone repo (preferred for dev)
 ├── brosoundml/                   # standalone repo (preferred for dev)
 ├── brovisionml/                  # standalone repo (preferred for dev)
+├── brass/                        # standalone repo (the backend JIT/AOT compiler)
 ├── bronze/                       # standalone repo (the AOT compiler)
 ├── brosurface/                   # standalone repo (IDL code generation toolchain)
 └── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
@@ -180,7 +181,7 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, and `bronze`.
+Same shape for `bromath`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, `brass`, `bronze`, and `brosurface`.
 
 ## Status, pull, sync across all sixteen repos
 
@@ -229,6 +230,7 @@ cmake -B build \
     -DBROIMAGE_DIR=/path/to/broimage \
     -DBROSOUNDML_DIR=/path/to/brosoundml \
     -DBROVISIONML_DIR=/path/to/brovisionml \
+    -DBRASS_ROOT=/path/to/brass \
     -DBRONZE_DIR=/path/to/bronze
 ```
 
@@ -239,7 +241,7 @@ cmake -B build -DBROMATH_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
                -DBROFLORA_DIR=none -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none \
                -DBROLM_DIR=none -DBRODIFFUSION_DIR=none -DBROIMAGE_DIR=none \
-               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none -DBRONZE_DIR=none
+               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none -DBRASS_ROOT=none -DBRONZE_DIR=none
 ```
 
 ## Apps tree
