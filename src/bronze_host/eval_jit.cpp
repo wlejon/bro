@@ -94,6 +94,22 @@ bool hasAwaitStmt(const std::string& code) {
     return false;
 }
 
+bool hasImportStmt(const std::string& code) {
+    size_t i = 0;
+    while (i < code.size()) {
+        while (i < code.size() && (code[i] == ' ' || code[i] == '\t')) i++;
+        if (i + 6 <= code.size() && code.compare(i, 6, "import") == 0) {
+            char next = (i + 6 < code.size()) ? code[i + 6] : '\0';
+            if (next == ' ' || next == '\t' || next == '{' || next == '*' || next == '"' || next == '\'') {
+                return true;
+            }
+        }
+        while (i < code.size() && code[i] != '\n') i++;
+        if (i < code.size() && code[i] == '\n') i++;
+    }
+    return false;
+}
+
 std::string wrapAsyncIife(const std::string& code) {
     return "(async () => {\n" + code +
            "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
@@ -120,13 +136,13 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
     opts.censusOutPath = discoverCensusOutPath(engine, filename);
 
     std::string execCode = code;
-    if (hasAwaitStmt(execCode)) {
+    if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
         execCode = wrapAsyncIife(execCode);
     }
 
     auto res = bronze::eval::evalScript(execCode, opts);
 
-    if (res.thrown && execCode == code) {
+    if (res.thrown && execCode == code && !hasImportStmt(code)) {
         std::string errStr = bronze::embed::toUtf8(res.value);
         if (errStr.find("await") != std::string::npos) {
             res = bronze::eval::evalScript(wrapAsyncIife(code), opts);
@@ -186,13 +202,13 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     opts.censusOutPath = discoverCensusOutPath(engine, absPath);
 
     bronze::embed::CallResult res;
-    if (hasAwaitStmt(content)) {
+    if (hasAwaitStmt(content) && !hasImportStmt(content)) {
         res = bronze::eval::evalScript(wrapAsyncIife(content), opts);
     } else {
         res = bronze::eval::evalFile(absPath.string(), opts);
         if (res.thrown) {
             std::string errStr = bronze::embed::toUtf8(res.value);
-            if (errStr.find("await") != std::string::npos) {
+            if (errStr.find("await") != std::string::npos && !hasImportStmt(content)) {
                 res = bronze::eval::evalScript(wrapAsyncIife(content), opts);
             }
         }
