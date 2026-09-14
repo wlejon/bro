@@ -57,13 +57,13 @@ struct NetGlobalState {
     bool hostPending = false;
     int connectsPending = 0;
     std::unordered_map<uint32_t, bool> connections;
-    ev::Persistent netObj;
-    ev::Persistent onConnect;
-    ev::Persistent onDisconnect;
-    ev::Persistent onMessage;
+    ev::Persistent* netObj = nullptr;
+    ev::Persistent* onConnect = nullptr;
+    ev::Persistent* onDisconnect = nullptr;
+    ev::Persistent* onMessage = nullptr;
 };
 
-static thread_local NetGlobalState g_netState;
+static NetGlobalState g_netState;
 
 // ---------------------------------------------------------------------------
 // WebSocket State & Types
@@ -186,61 +186,61 @@ static bool parseSendOptions(std::span<const Value> a, size_t optIndex, net::Sen
 // NetSubscriber Event Dispatches
 // ---------------------------------------------------------------------------
 static void dispatchNetConnect(uint32_t conn) {
-    if (!ev::isObject(g_netState.netObj.get())) return;
+    if (!g_netState.netObj || !ev::isObject(g_netState.netObj->get())) return;
     Value connVal = ev::fromDouble(conn);
     ev::Persistent connP(connVal);
 
-    Value fn = g_netState.onConnect.get();
+    Value fn = g_netState.onConnect ? g_netState.onConnect->get() : ev::undefined();
     if (!ev::isFunction(fn)) {
-        fn = ev::getProperty(g_netState.netObj.get(), "onconnect");
-        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj.get(), "onConnect");
+        fn = ev::getProperty(g_netState.netObj->get(), "onconnect");
+        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj->get(), "onConnect");
     }
     if (ev::isFunction(fn)) {
         ev::Persistent fnP(fn);
         Value arg = connP.get();
-        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), std::span<const Value>(&arg, 1));
+        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj->get(), std::span<const Value>(&arg, 1));
         if (r.thrown) reportBronzeError("bro.net.onConnect", r.value);
     }
 
-    for (ev::Persistent& handler : hostListSnapshot(g_netState.netObj, "__bronzeHostListeners_connect")) {
+    for (ev::Persistent& handler : hostListSnapshot(*g_netState.netObj, "__bronzeHostListeners_connect")) {
         if (ev::isFunction(handler.get())) {
             Value arg = connP.get();
-            ev::CallResult r = ev::call(handler.get(), g_netState.netObj.get(), std::span<const Value>(&arg, 1));
+            ev::CallResult r = ev::call(handler.get(), g_netState.netObj->get(), std::span<const Value>(&arg, 1));
             if (r.thrown) reportBronzeError("bro.net connect listener", r.value);
         }
     }
 }
 
 static void dispatchNetDisconnect(uint32_t conn, int reason) {
-    if (!ev::isObject(g_netState.netObj.get())) return;
+    if (!g_netState.netObj || !ev::isObject(g_netState.netObj->get())) return;
     Value connVal = ev::fromDouble(conn);
     Value reasonVal = ev::fromDouble(reason);
     ev::Persistent connP(connVal);
     ev::Persistent reasonP(reasonVal);
 
-    Value fn = g_netState.onDisconnect.get();
+    Value fn = g_netState.onDisconnect ? g_netState.onDisconnect->get() : ev::undefined();
     if (!ev::isFunction(fn)) {
-        fn = ev::getProperty(g_netState.netObj.get(), "ondisconnect");
-        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj.get(), "onDisconnect");
+        fn = ev::getProperty(g_netState.netObj->get(), "ondisconnect");
+        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj->get(), "onDisconnect");
     }
     if (ev::isFunction(fn)) {
         ev::Persistent fnP(fn);
         Value args[2] = { connP.get(), reasonP.get() };
-        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), args);
+        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj->get(), args);
         if (r.thrown) reportBronzeError("bro.net.onDisconnect", r.value);
     }
 
-    for (ev::Persistent& handler : hostListSnapshot(g_netState.netObj, "__bronzeHostListeners_disconnect")) {
+    for (ev::Persistent& handler : hostListSnapshot(*g_netState.netObj, "__bronzeHostListeners_disconnect")) {
         if (ev::isFunction(handler.get())) {
             Value args[2] = { connP.get(), reasonP.get() };
-            ev::CallResult r = ev::call(handler.get(), g_netState.netObj.get(), args);
+            ev::CallResult r = ev::call(handler.get(), g_netState.netObj->get(), args);
             if (r.thrown) reportBronzeError("bro.net disconnect listener", r.value);
         }
     }
 }
 
 static void dispatchNetMessage(net::NetworkMessage&& msg) {
-    if (!ev::isObject(g_netState.netObj.get())) return;
+    if (!g_netState.netObj || !ev::isObject(g_netState.netObj->get())) return;
     if (msg.data.size() < kWireHeaderSize || msg.data[0] != kWireMagic) {
         LOG_WARN("[bronze_host:net] conn %u: dropping message with unrecognized wire framing (%zu bytes)",
                  msg.connection, msg.data.size());
@@ -267,22 +267,22 @@ static void dispatchNetMessage(net::NetworkMessage&& msg) {
     ev::Persistent connP(ev::fromDouble(msg.connection));
     ev::Persistent chanP(ev::fromDouble(msg.channel));
 
-    Value fn = g_netState.onMessage.get();
+    Value fn = g_netState.onMessage ? g_netState.onMessage->get() : ev::undefined();
     if (!ev::isFunction(fn)) {
-        fn = ev::getProperty(g_netState.netObj.get(), "onmessage");
-        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj.get(), "onMessage");
+        fn = ev::getProperty(g_netState.netObj->get(), "onmessage");
+        if (!ev::isFunction(fn)) fn = ev::getProperty(g_netState.netObj->get(), "onMessage");
     }
     if (ev::isFunction(fn)) {
         ev::Persistent fnP(fn);
         Value args[3] = { connP.get(), payloadP.get(), chanP.get() };
-        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj.get(), args);
+        ev::CallResult r = ev::call(fnP.get(), g_netState.netObj->get(), args);
         if (r.thrown) reportBronzeError("bro.net.onMessage", r.value);
     }
 
-    for (ev::Persistent& handler : hostListSnapshot(g_netState.netObj, "__bronzeHostListeners_message")) {
+    for (ev::Persistent& handler : hostListSnapshot(*g_netState.netObj, "__bronzeHostListeners_message")) {
         if (ev::isFunction(handler.get())) {
             Value args[3] = { connP.get(), payloadP.get(), chanP.get() };
-            ev::CallResult r = ev::call(handler.get(), g_netState.netObj.get(), args);
+            ev::CallResult r = ev::call(handler.get(), g_netState.netObj->get(), args);
             if (r.thrown) reportBronzeError("bro.net message listener", r.value);
         }
     }
@@ -507,7 +507,7 @@ static Value js_net_addEventListener(Value, std::span<const Value> a) {
     if (a.size() < 2) return ev::undefined();
     std::string type = ev::toUtf8(a[0]);
     if (type.rfind("on", 0) == 0) type = type.substr(2);
-    addHostListener(g_netState.netObj, type, a[1]);
+    if (g_netState.netObj) addHostListener(*g_netState.netObj, type, a[1]);
     return ev::undefined();
 }
 
@@ -515,7 +515,7 @@ static Value js_net_removeEventListener(Value, std::span<const Value> a) {
     if (a.size() < 2) return ev::undefined();
     std::string type = ev::toUtf8(a[0]);
     if (type.rfind("on", 0) == 0) type = type.substr(2);
-    removeHostListener(g_netState.netObj, type, a[1]);
+    if (g_netState.netObj) removeHostListener(*g_netState.netObj, type, a[1]);
     return ev::undefined();
 }
 
@@ -948,9 +948,14 @@ Value makeBroNetValue() {
     b.def("addEventListener", 2, js_net_addEventListener);
     b.def("removeEventListener", 2, js_net_removeEventListener);
 
-    auto netCbGet = [](ev::Persistent& slot) -> Value { Value v = slot.get(); return ev::isFunction(v) ? v : ev::null(); };
-    auto netCbSet = [](ev::Persistent& slot, std::span<const Value> a) -> Value {
-        slot.set(!a.empty() && !ev::isNull(a[0]) && !ev::isUndefined(a[0]) ? a[0] : ev::null());
+    auto netCbGet = [](ev::Persistent* slot) -> Value {
+        if (!slot) return ev::null();
+        Value v = slot->get();
+        return ev::isFunction(v) ? v : ev::null();
+    };
+    auto netCbSet = [](ev::Persistent*& slot, std::span<const Value> a) -> Value {
+        if (!slot) slot = new ev::Persistent();
+        slot->set(!a.empty() && !ev::isNull(a[0]) && !ev::isUndefined(a[0]) ? a[0] : ev::null());
         return ev::undefined();
     };
     for (auto& [n1, n2, slot] : {std::tuple{"onconnect", "onConnect", &g_netState.onConnect},
@@ -961,7 +966,10 @@ Value makeBroNetValue() {
                              [=](Value, std::span<const Value> a) { return netCbSet(*slot, a); });
     }
 
-    Value val = b.get(); g_netState.netObj.set(val); return val;
+    Value val = b.get();
+    if (!g_netState.netObj) g_netState.netObj = new ev::Persistent();
+    g_netState.netObj->set(val);
+    return val;
 }
 
 void installNetGlobals() {
