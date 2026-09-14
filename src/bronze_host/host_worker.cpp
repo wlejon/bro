@@ -419,20 +419,10 @@ void installWorkerGlobals(engine::Engine& engine) {
     ev::registerGlobal("close", ev::makeFunction([](Value, std::span<const Value>) { return ev::undefined(); }, 0, "close"));
 }
 
+// Buffer and structuredClone used to be installed here; they come with the
+// rest of brokit now (installBrokitGlobals, host_brokit.cpp), which runs
+// before this.
 void installPlatformExtensions(engine::Engine& engine) {
-    brokit::api::installBuffer();
-    auto gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        Value buf = ev::getProperty(gt.value, "Buffer");
-        if (!ev::isUndefined(buf)) ev::registerGlobal("Buffer", buf);
-    }
-
-    brokit::api::installStructuredClone();
-    if (gt.found && ev::isObject(gt.value)) {
-        Value sc = ev::getProperty(gt.value, "structuredClone");
-        if (!ev::isUndefined(sc)) ev::registerGlobal("structuredClone", sc);
-    }
-
     installNoiseGlobals();
     installImageBitmapGlobals();
     installCustomElementsGlobals();

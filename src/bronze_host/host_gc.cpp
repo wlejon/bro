@@ -68,7 +68,8 @@ void hostNotifyIdleFrame(double dtMs) {
 
     const bool microtasks = bronze::embed::microtasksPending();
     const bool rafs = hasPendingAnimationFrames();
-    const bool isQuiescent = (!microtasks && !rafs);
+    const bool brokit = brokitHasPendingWork();
+    const bool isQuiescent = (!microtasks && !rafs && !brokit);
 
     if (isQuiescent) {
         s_idleAccumulatorMs += delta;

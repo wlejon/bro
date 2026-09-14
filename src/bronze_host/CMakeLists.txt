@@ -135,7 +135,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_proxy.cpp
     host_class.cpp
     host_vendor_globals.cpp
-    host_node_core.cpp
+    host_brokit.cpp
     host_headless.cpp
     host_headless_input.cpp
     host_headless_frame.cpp
@@ -243,8 +243,10 @@ target_link_libraries(bro_bronze_host
     PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli
 )
 
-# brokit_api supplies require(), fs, path, os, child_process and process
-# (host_node_core.cpp). Only its Node half is installed; see that file.
+# brokit_api supplies the Node half (require(), fs, path, os, child_process,
+# process) and the web half (fetch, URL, Blob, encoding, AbortController,
+# WebSocket, streams, crypto, indexedDB, ...) of the realm; host_brokit.cpp
+# installs both and says which installers it skips in favour of bro's own.
 target_link_libraries(bro_bronze_host PUBLIC brokit_api)
 
 if(BRO_WITH_WEBP)

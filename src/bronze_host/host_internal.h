@@ -595,10 +595,21 @@ void installTouchGlobals();
 void installVendorGlobals();
 
 // ---------------------------------------------------------------------------
-// Node core from brokit: require, fs, path, os, child_process, process
-// (host_node_core.cpp)
+// brokit (host_brokit.cpp): the Node half — require, fs, path, os,
+// child_process, process — and the web half — fetch, URL, Blob, encoding,
+// base64, AbortController, WebSocket, streams, crypto, indexedDB, TreeWalker,
+// EventTarget, MessageChannel. What it skips, and why, is at its top.
 // ---------------------------------------------------------------------------
 
-void installNodeCoreGlobals(engine::Engine& engine);
+void installBrokitGlobals(engine::Engine& engine);
+
+// One pass over brokit's polled completions (`__brokit_fetch_tick` and its
+// siblings). hostFrame runs it as a host-task step; headless advanceTime and
+// flush run it so a pending fetch resolves inside the call a test makes.
+void pumpBrokitTicks();
+
+// Whether brokit still has a fetch, socket or watcher in flight — the realm is
+// not idle while it does (host_gc.cpp).
+bool brokitHasPendingWork();
 
 }  // namespace bro::bronze_host

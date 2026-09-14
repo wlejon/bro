@@ -167,7 +167,9 @@ void fireAnimationFrames() {
 //  3. Host tasks — image loads. Before rAF, because that is where the web
 //     runs a load event relative to the rendering steps, and because it lets
 //     a texture that finished decoding be uploaded by the very frame that
-//     learns about it rather than the next one.
+//     learns about it rather than the next one. brokit's polled completions
+//     (fetch, WebSocket, sockets, fs.watch; host_brokit.cpp) are host tasks
+//     of the same kind and are pumped in the same position.
 //
 //  4. Timers, then 5. rAF. The order bro's own loop uses (timers_->tick at
 //     step 2, fireAnimationFrames at step 3a).
@@ -184,6 +186,7 @@ void hostFrame(double dtMs) {
     if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
     g_host->clockMs += dtMs;                             // 2
     drainHostTasks();                                    // 3
+    pumpBrokitTicks();                                   // 3b
     drainWorkerMessages();                               // 3c
     fireHostTimers(g_host->clockMs);                     // 4
     fireAnimationFrames();                               // 5
@@ -771,7 +774,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
     installTouchGlobals();
     installVendorGlobals();
-    installNodeCoreGlobals(engine);
+    installBrokitGlobals(engine);
     installHeadlessGlobals(engine);
     installPlatformExtensions(engine);
     installRangeGlobals();
