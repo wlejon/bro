@@ -694,6 +694,9 @@ void installVisionModule();
 void installDiarModule();
 void installSttModule();
 void installTtsModule();
+void installFloraModule();
+void installTensorModule();
+void installImpostorModule();
 
 void installAudioGlobals();
 void installAIGlobals();

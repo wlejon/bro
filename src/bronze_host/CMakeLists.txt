@@ -231,6 +231,10 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/stt/native_stt_register.cpp
     native_tts.cpp
     natives/tts/native_tts_register.cpp
+    native_flora.cpp
+    natives/flora/native_flora_register.cpp
+    native_tensor.cpp
+    natives/tensor/native_tensor_register.cpp
     host_audio_core.cpp
     host_audio_context.cpp
     host_audio_clips.cpp
@@ -289,6 +293,8 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/diar
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/stt
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/tts
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/flora
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/tensor
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory
@@ -514,6 +520,9 @@ else()
     bro_compile_js(diar       bro_diar_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(stt        bro_stt_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(tts        bro_tts_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(flora      bro_flora_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(tensor     bro_tensor_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(impostor   bro_impostor_main)
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.

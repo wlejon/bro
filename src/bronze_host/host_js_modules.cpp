@@ -48,6 +48,9 @@ extern "C" void bro_vision_main();
 extern "C" void bro_diar_main();
 extern "C" void bro_stt_main();
 extern "C" void bro_tts_main();
+extern "C" void bro_flora_main();
+extern "C" void bro_tensor_main();
+extern "C" void bro_impostor_main();
 
 namespace bro::bronze_host {
 
@@ -245,6 +248,20 @@ void installSttModule() {
 
 void installTtsModule() {
     bronze::embed::runEntry(bro_tts_main);
+}
+
+void installFloraModule() {
+    bronze::embed::runEntry(bro_flora_main);
+    adoptGlobalProperty("FloraWorld");
+}
+
+void installTensorModule() {
+    bronze::embed::runEntry(bro_tensor_main);
+    adoptGlobalProperty("GpuTensor");
+}
+
+void installImpostorModule() {
+    bronze::embed::runEntry(bro_impostor_main);
 }
 
 }  // namespace bro::bronze_host

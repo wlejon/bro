@@ -114,6 +114,8 @@ bool registerVisionNatives(std::string* error);
 bool registerDiarNatives(std::string* error);
 bool registerSttNatives(std::string* error);
 bool registerTtsNatives(std::string* error);
+bool registerFloraNatives(std::string* error);
+bool registerTensorNatives(std::string* error);
 void pollNet();
 
 // After registration: the prototypes of the mesh classes as properties of

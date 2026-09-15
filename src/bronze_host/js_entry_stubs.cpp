@@ -46,4 +46,7 @@ void bro_vision_main() {}
 void bro_diar_main() {}
 void bro_stt_main() {}
 void bro_tts_main() {}
+void bro_flora_main() {}
+void bro_tensor_main() {}
+void bro_impostor_main() {}
 }
