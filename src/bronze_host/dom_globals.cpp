@@ -206,6 +206,8 @@ void hostFrame(double dtMs) {
     pumpBrokitTicks();                                   // 3b
     drainWorkerMessages();                               // 3c
     pollNet();                                           // 3d
+    drainSteamEvents();                                  // 3e
+    drainHostWindowMessages();                           // 3f
     fireHostTimers(g_host->clockMs);                     // 4
     fireAnimationFrames();                               // 5
     ev::drainMicrotasks();                               // 6
@@ -391,8 +393,12 @@ void installWebHostGlobals(engine::Engine& engine) {
 
         ev::registerGlobal("window", gObj);
         ev::registerGlobal("self", gObj);
+        ev::registerGlobal("top", gObj);
+        ev::registerGlobal("parent", gObj);
         ev::setProperty(gObj, "window", gObj);
         ev::setProperty(gObj, "self", gObj);
+        ev::setProperty(gObj, "top", gObj);
+        ev::setProperty(gObj, "parent", gObj);
 
         ObjectBuilder b(gObj);
         engine::Engine* enginePtr = g_host->engine;
@@ -829,6 +835,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     installWebAnimationGlobals();
     installAudioGlobals();
     installAIGlobals();
+    installMathGlobals();
+    installVideoGlobals();
     initHostCalleeNamer();
 
     snapshotBaselineGlobalProps();
@@ -865,6 +873,7 @@ void resetGlobalExpandos() {
         g_host->windowListeners.clear();
     }
     resetWindowHostOpenState();
+    cleanupSteamBindings();
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
         Value objCtor = ev::globalValue("Object").value;

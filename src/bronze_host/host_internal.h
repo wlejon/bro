@@ -141,6 +141,8 @@ private:
 // bug that reads a Shape* as a Value.
 inline constexpr uint32_t kHostElementTag = 0x454C454Du;  // 'ELEM'
 inline constexpr uint32_t kHostImageTag = 0x494D4147u;    // 'IMAG'
+inline constexpr uint32_t kHostVideoEncoderTag = 0x56454E43u;  // 'VENC'
+inline constexpr uint32_t kHostGifEncoderTag   = 0x47454E43u;  // 'GENC'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -721,6 +723,23 @@ inline Value makeInt32Array(const std::vector<int32_t>& vec) {
     return makeInt32Array(vec.data(), vec.size());
 }
 
+inline Value makeUint8Array(const uint8_t* data, size_t count) {
+    Value arr = ev::createTypedArray(ev::elements::Uint8, static_cast<uint32_t>(count));
+    if (data && count > 0) {
+        std::span<const uint8_t> bytes(data, count);
+        ev::fillTypedArray(arr, bytes);
+    }
+    return arr;
+}
+
+inline Value makeUint8Array(const std::vector<uint8_t>& vec) {
+    return makeUint8Array(vec.data(), vec.size());
+}
+
+inline bool hostIsArray(Value v) {
+    return v.isObject() && v.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::Array;
+}
+
 inline bool readFloatVector(Value v, std::vector<float>& out) {
     if (ev::isUndefined(v) || ev::isNull(v)) return false;
     if (auto info = ev::typedArrayInfo(v)) {
@@ -777,6 +796,27 @@ inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
 }
 
 physics::PhysicsWorld* unwrapPhysicsWorld(Value v);
+
+// VideoEncoder / GifEncoder (host_video.cpp)
+void installVideoGlobals();
+
+// Math (host_math_classes.cpp / host_math_funcs.cpp)
+Value makeBroMathValue();
+void installMathGlobals();
+
+// Text (host_text.cpp)
+Value makeBroTextValue();
+
+// Menu (host_menu.cpp)
+Value makeBroMenuValue();
+
+// Steam (host_steam.cpp)
+Value makeBroSteamValue();
+void drainSteamEvents();
+void cleanupSteamBindings();
+
+// Media (host_media.cpp)
+Value makeBroMediaValue();
 
 }  // namespace bro::bronze_host
 

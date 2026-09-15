@@ -20,6 +20,7 @@
 
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_window_open.h"
 #include "util/log.h"
 
 #include <string>
@@ -149,6 +150,33 @@ void installBroRoots(engine::Engine& engine) {
     {
         ev::Persistent ai(makeBroAiValue());
         ev::setProperty(bro->get(), "ai", ai.get());
+    }
+    {
+        ev::Persistent math(makeBroMathValue());
+        ev::setProperty(bro->get(), "math", math.get());
+    }
+    {
+        ev::Persistent text(makeBroTextValue());
+        ev::setProperty(bro->get(), "text", text.get());
+    }
+    {
+        ev::Persistent steam(makeBroSteamValue());
+        ev::setProperty(bro->get(), "steam", steam.get());
+    }
+    {
+        ev::Persistent menu(makeBroMenuValue());
+        ev::setProperty(bro->get(), "menu", menu.get());
+    }
+    {
+        ev::Persistent media(makeBroMediaValue());
+        ev::setProperty(bro->get(), "media", media.get());
+    }
+    {
+        Value broWin = ev::getProperty(bro->get(), "window");
+        if (ev::isObject(broWin)) {
+            installBroWindowOpen(broWin);
+            installBroWindowParent(broWin);
+        }
     }
 
     std::string err;

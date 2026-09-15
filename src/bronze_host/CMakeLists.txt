@@ -221,6 +221,13 @@ set(BRO_BRONZE_HOST_SOURCES
     host_ai_mcts.cpp
     host_ai_game.cpp
     host_scene_agent.cpp
+    host_math_classes.cpp
+    host_math_funcs.cpp
+    host_text.cpp
+    host_steam.cpp
+    host_menu.cpp
+    host_video.cpp
+    host_media.cpp
 )
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
