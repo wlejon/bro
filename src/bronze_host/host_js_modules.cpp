@@ -33,6 +33,7 @@ extern "C" void bro_lighting_main();
 extern "C" void bro_gizmo_main();
 extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
+extern "C" void bro_lm_main();
 
 namespace bro::bronze_host {
 
@@ -43,6 +44,18 @@ void adoptGlobalProperty(const char* name) {
     if (!gt.found || !ev::isObject(gt.value)) return;
     Value v = ev::getProperty(gt.value, name);
     if (!ev::isUndefined(v)) ev::registerGlobal(name, v);
+}
+
+void mountImageGpu() {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (!gt.found || !ev::isObject(gt.value)) return;
+    Value broVal = ev::getProperty(gt.value, "bro");
+    if (!ev::isObject(broVal)) return;
+    Value imgVal = ev::getProperty(broVal, "image");
+    Value gpuVal = ev::getProperty(gt.value, "__bro_image_gpu");
+    if (ev::isObject(imgVal) && !ev::isUndefined(gpuVal)) {
+        ev::setProperty(imgVal, "gpu", gpuVal);
+    }
 }
 
 }  // namespace
@@ -69,6 +82,7 @@ void installNetSyncModule() {
 void installImageGpuModule() {
     bronze::embed::runEntry(bro_image_gpu_main);
     adoptGlobalProperty("__bro_image_gpu");
+    mountImageGpu();
 }
 
 // Nothing to lift: bro_core.js defines members ON the three roots
@@ -147,6 +161,20 @@ void installSceneModule() {
     bronze::embed::runEntry(bro_scene_main);
     adoptGlobalProperty("SceneNode");
     adoptGlobalProperty("SceneGraph");
+}
+
+void installLmModule() {
+    bronze::embed::runEntry(bro_lm_main);
+    adoptGlobalProperty("AsyncHandle");
+    adoptGlobalProperty("QwenTokenizer");
+    adoptGlobalProperty("MistralTokenizer");
+    adoptGlobalProperty("GemmaTokenizer");
+    adoptGlobalProperty("LMModel");
+    adoptGlobalProperty("Qwen35Model");
+    adoptGlobalProperty("Qwen3VLModel");
+    adoptGlobalProperty("NllbModel");
+    adoptGlobalProperty("ClipModel");
+    adoptGlobalProperty("T5Model");
 }
 
 }  // namespace bro::bronze_host

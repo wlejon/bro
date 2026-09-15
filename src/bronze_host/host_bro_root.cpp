@@ -81,7 +81,8 @@ bool registerBroNatives(std::string* error) {
               registerMeshNatives(error) &&
               registerNetNatives(error) &&
               registerRiggingNatives(error) &&
-              registerPhysicsNatives(error);
+              registerPhysicsNatives(error) &&
+              registerLmNatives(error);
 #if BRO_WITH_3D
     ok = ok &&
          registerAnimationNatives(error) &&
@@ -127,13 +128,13 @@ void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
     // the life of the process (host_internal.h, HostClass).
     auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh", "net", "rigging", "gizmo",
-                                             "scene", "terrain", "clipmap", "tile_world", "lighting", "animation"}));
+                                             "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
         makeRoot({"time", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
                   "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
-                  "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene"}));
+                  "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm"}));
     auto* physicsRoot = new ev::Persistent(ev::createObject());
 #if BRO_WITH_3D
     {
@@ -170,6 +171,23 @@ void installBroRoots(engine::Engine& engine) {
     {
         ev::Persistent media(makeBroMediaValue());
         ev::setProperty(bro->get(), "media", media.get());
+    }
+    {
+        Value broImg = ev::getProperty(bro->get(), "image");
+        if (!ev::isObject(broImg)) {
+            ev::Persistent img(ev::createObject());
+            ev::setProperty(bro->get(), "image", img.get());
+            broImg = img.get();
+        }
+        Value codecImg = makeBroImageValue();
+        for (const char* prop : {"transcodeKTX2", "encodePngFile", "encodePng", "encodeJpegFile", "encodeJpeg"}) {
+            Value fn = ev::getProperty(codecImg, prop);
+            if (!ev::isUndefined(fn)) ev::setProperty(broImg, prop, fn);
+        }
+        Value gpu = ev::globalValue("__bro_image_gpu").value;
+        if (ev::isObject(gpu)) {
+            ev::setProperty(broImg, "gpu", gpu);
+        }
     }
     {
         Value broWin = ev::getProperty(bro->get(), "window");

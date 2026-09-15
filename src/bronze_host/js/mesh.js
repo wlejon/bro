@@ -174,7 +174,7 @@
             const bytes = __bro_native.mesh.dracoEncode(m, int(o.positionBits, 14), int(o.normalBits, 10),
                                                          int(o.uvBits, 12), int(o.colorBits, 8),
                                                          int(o.compressionLevel, 7));
-            return bytes.buffer;
+            return bytes;
         }
 
         // ---- in-place operations (chainable) ------------------------------------

@@ -31,4 +31,5 @@ void bro_lighting_main() {}
 void bro_gizmo_main() {}
 void bro_animation_main() {}
 void bro_scene_main() {}
+void bro_lm_main() {}
 }

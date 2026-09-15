@@ -679,6 +679,7 @@ void installLightingModule();
 void installGizmoModule();
 void installAnimationModule();
 void installSceneModule();
+void installLmModule();
 
 void installAudioGlobals();
 void installAIGlobals();
@@ -817,6 +818,9 @@ void cleanupSteamBindings();
 
 // Media (host_media.cpp)
 Value makeBroMediaValue();
+
+// Codecs (host_codecs.cpp)
+Value makeBroImageValue();
 
 }  // namespace bro::bronze_host
 

@@ -163,6 +163,7 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installNetJS();
     bk::installWebSocketServerJS();
     bk::installRequire();
+    bk::installImage();
 
     // Where bro's virtual paths (`/app`, `/lib`, `/system`, ...) point, so
     // `fs.readFileSync('/app/data.json')` and `fetch('/app/data.json')` read

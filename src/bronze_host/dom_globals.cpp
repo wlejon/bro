@@ -820,6 +820,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installSceneModule();
 #endif
     installNetModule();
+    installLmModule();
     // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use, and every name a module lists in

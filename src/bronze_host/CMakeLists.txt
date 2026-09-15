@@ -200,6 +200,9 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/window/native_window_register.cpp
     natives/settings/native_settings_register.cpp
     natives/dunder_bro/native_dunder_bro_register.cpp
+    native_lm_classes.cpp
+    native_lm_ops.cpp
+    natives/lm/native_lm_register.cpp
     host_audio_core.cpp
     host_audio_context.cpp
     host_audio_clips.cpp
@@ -228,6 +231,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_menu.cpp
     host_video.cpp
     host_media.cpp
+    host_codecs.cpp
 )
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
@@ -250,6 +254,7 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/lighting
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/animation
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/gizmo
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/lm
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory
@@ -460,6 +465,7 @@ else()
     bro_compile_js(gizmo      bro_gizmo_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(animation  bro_animation_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(lm         bro_lm_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.
