@@ -196,3 +196,56 @@ class GamepadEvent {
 
 }
 
+// ── Namespaces ───────────────────────────────────────────────────────────────
+
+/**
+ * Direct native gamepad querying and haptic actuation namespace.
+ */
+/**
+ *  Checks if a gamepad is connected at the specified slot index.
+ *
+ * @param {number} index
+ * @returns {boolean}
+ */
+bro.gamepad.isConnected = function(index) {};
+
+/**
+ *  Queries an axis value [-1.0 to 1.0] for the specified gamepad and axis index.
+ *
+ * @param {number} index
+ * @param {number} axis
+ * @returns {number}
+ */
+bro.gamepad.getAxis = function(index, axis) {};
+
+/**
+ *  Queries a button value [0.0 to 1.0] for the specified gamepad and button index.
+ *
+ * @param {number} index
+ * @param {number} button
+ * @returns {number}
+ */
+bro.gamepad.getButton = function(index, button) {};
+
+/**
+ *  Actuates dual-motor rumble haptics.
+ *
+ * @param {number} index
+ * @param {number} strong
+ * @param {number} weak
+ * @param {number} duration
+ * @returns {boolean}
+ */
+bro.gamepad.rumble = function(index, strong, weak, duration) {};
+
+/**
+ *  Actuates trigger rumble haptics.
+ *
+ * @param {number} index
+ * @param {number} left
+ * @param {number} right
+ * @param {number} duration
+ * @returns {boolean}
+ */
+bro.gamepad.rumbleTriggers = function(index, left, right, duration) {};
+

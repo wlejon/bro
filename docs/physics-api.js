@@ -377,6 +377,11 @@ Physics.setAreaOverride = function(tag, config) {};
 Physics.setTimeStep = function(dt) {};
 
 /**
+ * @param {number} dt
+ */
+Physics.step = function(dt) {};
+
+/**
  * @param {boolean} enabled
  */
 Physics.setInterpolation = function(enabled) {};

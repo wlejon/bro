@@ -2370,9 +2370,17 @@ interface WakeStats {
 }
 
 /**
- * Desktop coordinates and dimensions of a rectangle bounds.
+ * Display device descriptor.
  */
-interface DisplayBounds {
+interface DisplayInfo {
+  /**
+   *  Stable SDL display identifier.
+   */
+  id?: number;
+  /**
+   *  Display device name.
+   */
+  name?: string;
   /**
    *  X coordinate in desktop pixels.
    */
@@ -2389,28 +2397,22 @@ interface DisplayBounds {
    *  Height in desktop pixels.
    */
   height?: number;
-}
-
-/**
- * Display device descriptor.
- */
-interface DisplayInfo {
   /**
-   *  Stable SDL display identifier.
+   *  Usable work area X in desktop pixels.
    */
-  id?: number;
+  workX?: number;
   /**
-   *  Display device name.
+   *  Usable work area Y in desktop pixels.
    */
-  name?: string;
+  workY?: number;
   /**
-   *  Full display bounds.
+   *  Usable work area width in desktop pixels.
    */
-  bounds?: DisplayBounds;
+  workWidth?: number;
   /**
-   *  Usable work area bounds minus taskbars and docks.
+   *  Usable work area height in desktop pixels.
    */
-  workArea?: DisplayBounds;
+  workHeight?: number;
   /**
    *  Refresh rate in Hz.
    */
@@ -2903,51 +2905,6 @@ declare class HTMLElement {
    * Creates a new HTMLElement instance.
    */
   constructor();
-}
-
-/**
- * Native modal dialogs and file system pickers interface.
- */
-declare class Dialogs {
-  /**
-   * Displays a modal alert dialog with an optional message.
-   * @param message Text to display
-   */
-  static alert(message?: any): void;
-  /**
-   * Displays a modal confirmation dialog with OK and Cancel buttons.
-   * @param message Prompt message to display
-   * @returns True if OK was clicked, false if cancelled
-   */
-  static confirm(message?: any): boolean;
-  /**
-   * Displays a modal dialog with a text prompt and default value.
-   * @param message Prompt message to display
-   * @param defaultText Default input value
-   * @returns String response or null if cancelled
-   */
-  static prompt(message?: any, defaultText?: string): string | null;
-  /**
-   * Opens a native modal file picker dialog.
-   * @param filter Name and pattern, alternating, for one filter or several (e.g. "Images|png;jpg" or "Images|png;jpg|All files|*"). A pattern is `[a-zA-Z0-9_.-]` extensions separated by `;`, or a bare `*`; anything else is refused and throws.
-   * @param allowMultiple Whether to allow multiple file selection
-   * @returns Array of selected absolute file paths
-   */
-  static showOpenFileDialog(filter?: string, allowMultiple?: boolean): string[];
-  /**
-   * Opens a native modal directory picker dialog.
-   * @param defaultLocation Starting directory path
-   * @param allowMultiple Whether to allow multiple folder selection
-   * @returns Array of selected absolute folder paths
-   */
-  static showOpenFolderDialog(defaultLocation?: string, allowMultiple?: boolean): string[];
-  /**
-   * Opens a native modal file save dialog.
-   * @param filter Name and pattern, alternating, for one filter or several (e.g. "JSON|json" or "JSON|json|All files|*"). Refused patterns throw.
-   * @param defaultName Default location or file path
-   * @returns Selected file path string or null if cancelled
-   */
-  static showSaveFileDialog(filter?: string, defaultName?: string): string | null;
 }
 
 declare class Sortformer {
@@ -4507,7 +4464,7 @@ declare class SpatialHash3D {
   /**
    * Find nearest point ID within maxDist.
    */
-  nearest(x: number, y: number, z: number, maxDist: number): object | null;
+  nearest(x: number, y: number, z: number, maxDist: number): number;
   /**
    * Clear all index buckets.
    */
@@ -5205,6 +5162,8 @@ declare class SceneNode {
   readonly children: SceneNode[];
   add(child: SceneNode): SceneNode;
   remove(child: SceneNode): void;
+  addChild(child: SceneNode): SceneNode;
+  removeChild(child: SceneNode): void;
   destroy(): void;
   setPosition(x: number, y: number, z: number): SceneNode;
   setRotation(x: number, y: number, z: number, w?: number): SceneNode;
@@ -5299,6 +5258,7 @@ declare class SceneGraph {
   setEnvironment(opts?: EnvironmentConfig): void;
   setFrustumCulling(enabled: boolean): void;
   cullStats(): SceneCullStats;
+  clear(): void;
   syncPhysics(): void;
   raycast(origin: number[], direction: number[]): SceneRaycastResult | null;
   unprojectLocal(node: SceneNode, screenPoint: number[]): number[];
@@ -5442,6 +5402,7 @@ declare class Terrain {
    *  World-space origin offset [x, y, z] of this terrain manager.
    */
   readonly origin: number[] | null;
+  readonly layers: number;
   /**
    * Stream and generate terrain chunks around camera position (x, y, z) in world space.
    *
@@ -5504,6 +5465,10 @@ declare class Terrain {
    * @param fn Height source callback or null to restore procedural generator
    */
   setHeightSource(fn: Function | null): void;
+  heightAt(x: number, z: number): number;
+  normalAt(x: number, z: number): number[];
+  elevation(x: number, z: number): number;
+  splat(x: number, z: number, radius: number, layer: number): void;
   /**
    * Release all terrain meshes, destroy chunk structures, and detach from scene graph.
    */
@@ -5515,8 +5480,11 @@ declare class TileWorld {
   readonly width: number;
   readonly height: number;
   readonly chunkCount: number;
+  readonly chunks: number;
+  paging: boolean;
   readonly vertexCount: number;
   readonly triangleCount: number;
+  update(camX?: number, camY?: number, camZ?: number): number;
   setTile(layer: number, x: number, y: number, tileId: number): void;
   getTile(layer: number, x: number, y: number): number;
   fillRect(layer: number, x: number, y: number, w: number, h: number, tileId: number): void;
@@ -5700,6 +5668,40 @@ declare class WakeStreamView {
 
 /**
  * =============================================================================
+ * Web Animations API
+ * =============================================================================
+ *
+ * Implements the W3C Web Animations API for DOM elements.
+ * Provides element.animate(), element.getAnimations(), and Animation object controls.
+ *
+ * @example
+ *   const anim = element.animate([
+ *     { transform: 'translateY(0px)', opacity: 1 },
+ *     { transform: 'translateY(100px)', opacity: 0 }
+ *   ], { duration: 1000, iterations: Infinity });
+ *   anim.pause();
+ */
+declare class Animation {
+  currentTime: number;
+  playbackRate: number;
+  readonly playState: string;
+  readonly pending: boolean;
+  readonly finished: Promise<Animation>;
+  readonly ready: Promise<Animation>;
+  onfinish: ((event: any) => any) | null;
+  oncancel: ((event: any) => any) | null;
+  play(): void;
+  pause(): void;
+  finish(): void;
+  cancel(): void;
+  reverse(): void;
+}
+
+declare class WebAnimations {
+}
+
+/**
+ * =============================================================================
  * WebGL2RenderingContext — WebGL 2.0 Graphics Rendering Pipeline
  * =============================================================================
  *
@@ -5785,40 +5787,6 @@ declare class WebGL2RenderingContext {
 
 /**
  * =============================================================================
- * Web Animations API
- * =============================================================================
- *
- * Implements the W3C Web Animations API for DOM elements.
- * Provides element.animate(), element.getAnimations(), and Animation object controls.
- *
- * @example
- *   const anim = element.animate([
- *     { transform: 'translateY(0px)', opacity: 1 },
- *     { transform: 'translateY(100px)', opacity: 0 }
- *   ], { duration: 1000, iterations: Infinity });
- *   anim.pause();
- */
-declare class Animation {
-  currentTime: number;
-  playbackRate: number;
-  readonly playState: string;
-  readonly pending: boolean;
-  readonly finished: Promise<Animation>;
-  readonly ready: Promise<Animation>;
-  onfinish: ((event: any) => any) | null;
-  oncancel: ((event: any) => any) | null;
-  play(): void;
-  pause(): void;
-  finish(): void;
-  cancel(): void;
-  reverse(): void;
-}
-
-declare class WebAnimations {
-}
-
-/**
- * =============================================================================
  * Worker — Web Workers Dedicated Background Execution
  * =============================================================================
  *
@@ -5883,6 +5851,7 @@ declare namespace Physics {
   function getBodyProperties(tag: number): object | null;
   function setAreaOverride(tag: number, config: object): void;
   function setTimeStep(dt: number): void;
+  function step(dt: number): void;
   function setInterpolation(enabled: boolean): void;
   function getInterpolation(): boolean;
   function isActive(tag: number): boolean;
@@ -5905,16 +5874,96 @@ declare namespace Physics {
 // ── Global 'bro' Namespace ───────────────────────────────────────────────────
 
 declare namespace bro {
+  function dismiss(): void;
+
+  const width: number;
+  const height: number;
+
+  const fps: number;
+  const frameTime: number;
+  const js: number;
+  const layout: number;
+  const raster: number;
+  const gpu: number;
+  const draw: number;
+  function windowCount(): number;
+  function windowId(index: number): number;
+  function windowTitle(index: number): string;
+  function windowWidth(index: number): number;
+  function windowHeight(index: number): number;
+  function windowFocused(index: number): boolean;
+  function windowMinimized(index: number): boolean;
+
+  const meshDrawn: number;
+  const meshCulled: number;
+  const instancedDrawn: number;
+  const instancedCulled: number;
+  const splatDrawn: number;
+  const splatCulled: number;
+  const particlesDrawn: number;
+  const particlesCulled: number;
+  const billboardsDrawn: number;
+  const billboardsCulled: number;
+  const decalsDrawn: number;
+  const decalsCulled: number;
+  const shadowDrawn: number;
+  const shadowCulled: number;
+  const shadowTilesTotal: number;
+  const shadowTilesRendered: number;
+  const shadowTilesCached: number;
+
+  const heapUsedBytes: number;
+  const heapCommittedBytes: number;
+  const heapReservedBytes: number;
+  const gcCollections: number;
+  const gcPauseNs: number;
+  const shapeTransitions: number;
+
+  function height(): number;
+  function treeJson(): string;
+  function click(id: string): void;
+
+  function show(name: string): void;
+  function panelsJson(): string;
+  function activePanel(): string;
+  function toggle(): void;
+  function isVisible(): boolean;
+  function contentTop(): number;
+
+  const visible: boolean;
+  const dock: string;
+  const width: number;
+  const height: number;
+  const pickerMode: boolean;
+  function appTreeJson(maxDepth: number): string;
+  function childrenJson(parentId: number): string;
+  function selectedJson(): string;
+  function select(id: number): void;
+  function setDock(dock: string): void;
+  function setSize(px: number): void;
+  function setPickerMode(on: boolean): void;
+  function toggle(): void;
+
   /**
    * Absolute native filesystem path of the running application's root directory.
    */
   const appDir: string;
+  /**
+   * Absolute native filesystem path for user data / save directory.
+   */
+  const userDataDir: string;
   /**
    * Resolves a virtual mount path or relative application path to an absolute native filesystem path.
    * @param path Input path string
    * @returns Resolved absolute filesystem path
    */
   function resolvePath(path: string): string;
+  /**
+   * Resolves a path for writing.
+   * @param path Input path string
+   * @returns Resolved absolute filesystem path for write target
+   */
+  function resolveWritePath(path: string): string;
 
   namespace game {
     function createAgent(world: AIWorld, opts?: object): AIAgent;
@@ -5926,6 +5975,18 @@ declare namespace bro {
     function createFormation(opts?: object): Formation;
     function createVecSim(opts?: object): VecSim;
     function registerCapability(name: string, definition: object): void;
+  }
+
+  /**
+   * Native modal dialogs and file system pickers interface.
+   */
+  namespace dialogs {
+    function alert(message?: string): void;
+    function confirm(message?: string): boolean;
+    function prompt(message?: string, defaultText?: string): string;
+    function showSaveFileDialog(filter?: string, defaultName?: string): string;
+    function showOpenFileDialog(filter?: string, allowMultiple?: boolean): string;
+    function showOpenFolderDialog(defaultLocation?: string, allowMultiple?: boolean): string;
   }
 
   /**
@@ -6012,9 +6073,46 @@ declare namespace bro {
      * @return Mesh instance containing generated leaf vertices and indices.
      */
     function leafCluster(phyllotaxy: any, opts?: object): object;
+    function setWind(strength: number, dirX?: number, dirY?: number): void;
+    function wind(strength: number, dirX?: number, dirY?: number): void;
+    function setDensity(density: number): void;
+    function density(density: number): void;
+    function update(dt: number): void;
+    function clear(): void;
+    function placement(config: object): void;
+    function addPlacement(config: object): void;
+    function batches(): object;
+    function getBatches(): object;
+  }
+
+  /**
+   * Direct native gamepad querying and haptic actuation namespace.
+   */
+  namespace gamepad {
+    /**
+     *  Checks if a gamepad is connected at the specified slot index.
+     */
+    function isConnected(index: number): boolean;
+    /**
+     *  Queries an axis value [-1.0 to 1.0] for the specified gamepad and axis index.
+     */
+    function getAxis(index: number, axis: number): number;
+    /**
+     *  Queries a button value [0.0 to 1.0] for the specified gamepad and button index.
+     */
+    function getButton(index: number, button: number): number;
+    /**
+     *  Actuates dual-motor rumble haptics.
+     */
+    function rumble(index: number, strong: number, weak: number, duration: number): boolean;
+    /**
+     *  Actuates trigger rumble haptics.
+     */
+    function rumbleTriggers(index: number, left: number, right: number, duration: number): boolean;
   }
 
   namespace gesture {
+    function init(): void;
     function enrollFromAudio(name: string, samples: Float32Array, policy?: GesturePolicyOptions): number;
     function remove(name: string): boolean;
     function clear(): void;
@@ -6482,6 +6580,7 @@ declare namespace bro {
   }
 
   namespace kws {
+    function init(): void;
     function load(opts: KwsPolicyOptions): void;
     function unload(): void;
     function enroll(name: string, phonemeIds: Int32Array | number[], policy?: KwsPolicyOptions): number;
@@ -6857,6 +6956,7 @@ declare namespace bro {
   }
 
   namespace sense {
+    function init(): void;
     function start(opts?: SenseStartOptions): void;
     function stop(): void;
     function isActive(): boolean;
@@ -6891,8 +6991,28 @@ declare namespace bro {
    * =============================================================================
    */
   namespace settings {
-    function load(): void;
-    function save(): void;
+    function get(key: string): string;
+    function getAllJson(category: string): string;
+    function getDefaultsJson(category: string): string;
+    function setString(key: string, value: string): void;
+    function setNumber(key: string, value: number): void;
+    function setBool(key: string, value: boolean): void;
+    function setDefaultString(key: string, value: string): void;
+    function setDefaultNumber(key: string, value: number): void;
+    function setDefaultBool(key: string, value: boolean): void;
+    function reset(category: string): void;
+    function defineAction(action: string, keysJoined: string, deadzone: number): void;
+    function rebindAction(action: string, keysJoined: string): void;
+    function resetAction(action: string): void;
+    function resetAllActions(): void;
+    function actionKeysJson(action: string): string;
+    function keyAction(key: string): string;
+    function actionStrength(action: string): number;
+    function isActionPressed(action: string): boolean;
+    function actionsJson(): string;
+    function appActionsJson(): string;
+    function displayModesJson(): string;
+    function onChange(listener: Function): void;
   }
 
   /**
@@ -7243,6 +7363,7 @@ declare namespace bro {
   }
 
   namespace wake {
+    function init(): void;
     function load(opts: WakeLoadOptions): void;
     function unload(): void;
     function listen(opts: WakeListenOptions): void;
@@ -7290,41 +7411,12 @@ declare namespace bro {
      * Retrieves current desktop coordinate position of the window.
      */
     function getPosition(): WindowPosition;
-    /**
-     * Sets desktop coordinate position of the window.
-     * @param x Desktop X coordinate
-     * @param y Desktop Y coordinate
-     */
     function setPosition(x: number, y: number): void;
-    /**
-     * Retrieves minimum window resize bounds in pixels.
-     */
     function getMinSize(): WindowSize;
-    /**
-     * Sets minimum window resize bounds.
-     * @param width Minimum width in pixels (0 for unconstrained)
-     * @param height Minimum height in pixels (0 for unconstrained)
-     */
     function setMinSize(width: number, height: number): void;
-    /**
-     * Retrieves maximum window resize bounds in pixels.
-     */
     function getMaxSize(): WindowSize;
-    /**
-     * Sets maximum window resize bounds.
-     * @param width Maximum width in pixels (0 for unconstrained)
-     * @param height Maximum height in pixels (0 for unconstrained)
-     */
     function setMaxSize(width: number, height: number): void;
-    /**
-     * Enumerates all attached monitor displays.
-     */
     function getDisplays(): DisplayInfo[];
-    /**
-     * Moves and centers the window on a specific display.
-     * @param id Target display identifier
-     * @returns True if window was moved, false otherwise
-     */
     function moveToDisplay(id: number): boolean;
   }
 
@@ -7338,6 +7430,101 @@ declare namespace bro {
      */
     const gpu: typeof image_gpu;
   }
+}
+
+// ── Global '__bro' Namespace ────────────────────────────────────────────────
+
+declare namespace __bro {
+  /**
+   * =============================================================================
+   * __bro — Internal System Panels & Runtime Telemetry Interface
+   * =============================================================================
+   */
+  namespace splash {
+    function dismiss(): void;
+  }
+
+  namespace viewport {
+    const width: number;
+    const height: number;
+  }
+
+  namespace perf {
+    const fps: number;
+    const frameTime: number;
+    const js: number;
+    const layout: number;
+    const raster: number;
+    const gpu: number;
+    const draw: number;
+    function windowCount(): number;
+    function windowId(index: number): number;
+    function windowTitle(index: number): string;
+    function windowWidth(index: number): number;
+    function windowHeight(index: number): number;
+    function windowFocused(index: number): boolean;
+    function windowMinimized(index: number): boolean;
+    namespace scene {
+      const meshDrawn: number;
+      const meshCulled: number;
+      const instancedDrawn: number;
+      const instancedCulled: number;
+      const splatDrawn: number;
+      const splatCulled: number;
+      const particlesDrawn: number;
+      const particlesCulled: number;
+      const billboardsDrawn: number;
+      const billboardsCulled: number;
+      const decalsDrawn: number;
+      const decalsCulled: number;
+      const shadowDrawn: number;
+      const shadowCulled: number;
+      const shadowTilesTotal: number;
+      const shadowTilesRendered: number;
+      const shadowTilesCached: number;
+    }
+  }
+
+  namespace bronze {
+    const heapUsedBytes: number;
+    const heapCommittedBytes: number;
+    const heapReservedBytes: number;
+    const gcCollections: number;
+    const gcPauseNs: number;
+    const shapeTransitions: number;
+  }
+
+  namespace menu {
+    function height(): number;
+    function treeJson(): string;
+    function click(id: string): void;
+  }
+
+  namespace settingsUI {
+    function show(name: string): void;
+    function panelsJson(): string;
+    function activePanel(): string;
+    function toggle(): void;
+    function isVisible(): boolean;
+    function contentTop(): number;
+  }
+
+  namespace inspector {
+    const visible: boolean;
+    const dock: string;
+    const width: number;
+    const height: number;
+    const pickerMode: boolean;
+    function appTreeJson(maxDepth: number): string;
+    function childrenJson(parentId: number): string;
+    function selectedJson(): string;
+    function select(id: number): void;
+    function setDock(dock: string): void;
+    function setSize(px: number): void;
+    function setPickerMode(on: boolean): void;
+    function toggle(): void;
+  }
+
 }
 /**
  * Custom element registry for registering and querying custom element definitions.

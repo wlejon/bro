@@ -70,7 +70,7 @@ class SpatialHash3D {
    * @param {number} y
    * @param {number} z
    * @param {number} maxDist
-   * @returns {Object|null}
+   * @returns {number}
    */
   nearest(x, y, z, maxDist) {}
 

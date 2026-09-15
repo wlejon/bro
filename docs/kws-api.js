@@ -215,6 +215,8 @@ class KwsStreamView {
 
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
+bro.kws.init = function() {};
+
 /**
  * @param {KwsPolicyOptions} opts
  */

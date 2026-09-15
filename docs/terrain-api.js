@@ -148,6 +148,12 @@ class Terrain {
   origin;
 
   /**
+   * @readonly
+   * @type {number}
+   */
+  layers;
+
+  /**
    * Stream and generate terrain chunks around camera position (x, y, z) in world space.
    *
    * @param {number} x - Camera world X coordinate
@@ -216,6 +222,35 @@ class Terrain {
    * @param {Function|null} fn - Height source callback or null to restore procedural generator
    */
   setHeightSource(fn) {}
+
+  /**
+   * @param {number} x
+   * @param {number} z
+   * @returns {number}
+   */
+  heightAt(x, z) {}
+
+  /**
+   * @param {number} x
+   * @param {number} z
+   * @returns {Array<number>}
+   */
+  normalAt(x, z) {}
+
+  /**
+   * @param {number} x
+   * @param {number} z
+   * @returns {number}
+   */
+  elevation(x, z) {}
+
+  /**
+   * @param {number} x
+   * @param {number} z
+   * @param {number} radius
+   * @param {number} layer
+   */
+  splat(x, z, radius, layer) {}
 
   /**
    * Release all terrain meshes, destroy chunk structures, and detach from scene graph.

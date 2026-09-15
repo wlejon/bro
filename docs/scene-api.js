@@ -7,26 +7,6 @@
  *
  * 3D Scene Graph containing hierarchically nested nodes (MeshNode, SkinnedMeshNode,
  * InstancedMeshNode, LightNode, CameraNode, ParticleNode, HtmlNode, ShapeNode, SpriteNode).
- *
- * ── Lifetime: the graph dies with its canvas ─────────────────────────────────
- *
- * A scene belongs to the <canvas> it was asked for. The engine reclaims the
- * whole graph — every node, every TileWorld/Terrain/Clipmap it owns — the frame
- * after that canvas leaves the document, however it leaves: remove(),
- * removeChild(), or a parent's innerHTML being replaced.
- *
- * Handles you are still holding stay SAFE to hold and safe to call. Every
- * wrapper re-resolves through the graph on each call, so once the graph is gone
- * a node accessor reads null and a method that would author geometry no-ops.
- * Data that lives outside the graph survives: a TileWorld still answers
- * getTile() after its canvas is gone, it just has nothing to mesh into.
- *
- * What does NOT happen is resurrection — re-attaching the canvas does not bring
- * the graph back. Ask the re-attached canvas for getContext('scene') again and
- * rebuild. So a view that tears down and re-creates its canvas should drop its
- * old scene handles at the same time; keeping them is harmless, but they will
- * never do anything again.
- *
  * @typedef {Object} SceneNodeOptions
  * @property {string} [name]
  * @property {Array<number>} [position]
@@ -51,10 +31,6 @@
  * @property {Array<number>} [point]
  * @property {Array<number>} [normal]
  * @property {number} [distance]
- * @property {number} [instance] - which copy was struck, for a hit on an
- *   instanced node. Absent on plain-mesh and light hits. Use it to map a hit
- *   back to whatever you placed (a cell, an entity id): instance indices match
- *   the order they were written in setInstances().
  */
 
 /**
@@ -216,43 +192,9 @@ class SceneNode {
   position;
 
   /**
-   * Rotation about Z in radians — the 2D rotation. Same axis as `rotationZ`,
-   * but writing it zeroes X and Y.
-   * @type {number}
-   */
-  rotation;
-
-  /**
-   * Per-axis Euler rotation in radians (XYZ order). Exact and composable: the
-   * node keeps the triple you wrote, so a write to one axis leaves the other
-   * two exactly as they were and reads back the value you set — including
-   * angles past ±90°, where decomposing the quaternion would fold a yaw of
-   * 2.0 into (π, π − 2.0, π) and mirror the node on the next write. Set
-   * `quaternion` for an orientation no Euler triple names; the next per-axis
-   * read decomposes it.
-   * @type {number}
-   */
-  rotationX;
-
-  /**
-   * @type {number}
-   */
-  rotationY;
-
-  /**
-   * @type {number}
-   */
-  rotationZ;
-
-  /**
-   * Orientation as [x, y, z, w], normalized on write. The atomic alternative
-   * to `rotationX`/`rotationY`/`rotationZ`: one write sets the whole
-   * orientation, which is what an arbitrary rotation (port-to-port mating, a
-   * slerp result) needs. It replaces the stored Euler triple, so the next
-   * per-axis read is a decomposition of this quaternion.
    * @type {Array<number>}
    */
-  quaternion;
+  rotation;
 
   /**
    * @type {Array<number>}
@@ -293,6 +235,17 @@ class SceneNode {
    * @param {SceneNode} child
    */
   remove(child) {}
+
+  /**
+   * @param {SceneNode} child
+   * @returns {SceneNode}
+   */
+  addChild(child) {}
+
+  /**
+   * @param {SceneNode} child
+   */
+  removeChild(child) {}
 
   destroy() {}
 
@@ -809,34 +762,16 @@ class SceneGraph {
    */
   cullStats() {}
 
+  clear() {}
+
   syncPhysics() {}
 
   /**
-   * Cast a world-space ray at the scene and return the nearest hit.
-   *
-   * Covers mesh nodes AND instanced nodes (createInstancedMesh, and every
-   * TileWorld object kind — props and buildings are one InstancedMeshNode per
-   * kind), plus light marker icons when showLightIcons is on. Instanced hits
-   * carry an `instance` index saying which copy was struck; all node types share
-   * one nearest-hit comparison, so a plain mesh in front of an instance wins.
-   *
-   * Note this is the geometry pick. For a TileWorld, `raycastCell` remains the
-   * right call when you want the *cell* under the ray — but be aware it tests
-   * the tile height field only, so it looks straight through anything standing
-   * on the tiles and answers with the ground behind. Pick geometry with this;
-   * pick terrain cells with raycastCell; don't use one for the other's job.
-   *
-   * Not covered: scatter-mode instanced nodes (setScatterSegments / the
-   * `scatter` option), whose copies are generated on the GPU and have no
-   * CPU-side records to intersect. Those return no hit rather than a wrong one.
-   * staticBatch nodes do pick — the per-instance records survive the bake.
-   *
    * @param {Array<number>} origin
    * @param {Array<number>} direction
-   * @param {number} [maxDist]
    * @returns {SceneRaycastResult|null}
    */
-  raycast(origin, direction, maxDist) {}
+  raycast(origin, direction) {}
 
   /**
    * @param {SceneNode} node

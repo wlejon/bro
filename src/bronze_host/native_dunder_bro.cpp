@@ -20,6 +20,7 @@
 #if BRO_WITH_3D
 #include "scene/scene_renderer.h"
 #endif
+#include "natives/dunder_bro/native_dunder_bro_decl.h"
 
 #include <cstdio>
 #include <string>
@@ -199,76 +200,92 @@ void inspToggle() { if (auto* eng = hostEngine()) eng->toggleInspector(); }
 
 }  // namespace
 
-bool registerDunderBroNatives(std::string* error) {
-    using namespace natives;
-    auto p = [](auto f) { return reinterpret_cast<void*>(f); };
-    bool ok =
-        fn("__bro_native.splash.dismiss", p(&splashDismiss), "void", {}, error) &&
-        getter("__bro_native.viewport.width", p(&viewportWidth), "f64", error) &&
-        getter("__bro_native.viewport.height", p(&viewportHeight), "f64", error) &&
-        getter("__bro_native.perf.fps", p(&perfFps), "f64", error) &&
-        getter("__bro_native.perf.frameTime", p(&perfFrameTime), "f64", error) &&
-        getter("__bro_native.perf.js", p(&perfJs), "f64", error) &&
-        getter("__bro_native.perf.layout", p(&perfLayout), "f64", error) &&
-        getter("__bro_native.perf.raster", p(&perfRaster), "f64", error) &&
-        getter("__bro_native.perf.gpu", p(&perfGpu), "f64", error) &&
-        getter("__bro_native.perf.draw", p(&perfDraw), "f64", error) &&
-        fn("__bro_native.perf.windowCount", p(&windowCount), "i32", {}, error) &&
-        fn("__bro_native.perf.windowId", p(&windowId), "f64", {"i32"}, error) &&
-        fn("__bro_native.perf.windowTitle", p(&windowTitle), "str", {"i32"}, error) &&
-        fn("__bro_native.perf.windowWidth", p(&windowWidth), "f64", {"i32"}, error) &&
-        fn("__bro_native.perf.windowHeight", p(&windowHeight), "f64", {"i32"}, error) &&
-        fn("__bro_native.perf.windowFocused", p(&windowFocused), "bool", {"i32"}, error) &&
-        fn("__bro_native.perf.windowMinimized", p(&windowMinimized), "bool", {"i32"}, error) &&
-        getter("__bro_native.bronze.heapUsedBytes", p(&heapUsedBytes), "f64", error) &&
-        getter("__bro_native.bronze.heapCommittedBytes", p(&heapCommittedBytes), "f64", error) &&
-        getter("__bro_native.bronze.heapReservedBytes", p(&heapReservedBytes), "f64", error) &&
-        getter("__bro_native.bronze.gcCollections", p(&gcCollections), "f64", error) &&
-        getter("__bro_native.bronze.gcPauseNs", p(&gcPauseNs), "f64", error) &&
-        getter("__bro_native.bronze.shapeTransitions", p(&shapeTransitions), "f64", error) &&
-        fn("__bro_native.menu.height", p(&menuHeight), "f64", {}, error) &&
-        fn("__bro_native.menu.treeJson", p(&menuTreeJson), "str", {}, error) &&
-        fn("__bro_native.menu.click", p(&menuClick), "void", {"str"}, error) &&
-        fn("__bro_native.settingsUI.show", p(&settingsShow), "void", {"str"}, error) &&
-        fn("__bro_native.settingsUI.panelsJson", p(&panelsJson), "str", {}, error) &&
-        fn("__bro_native.settingsUI.activePanel", p(&activePanel), "str", {}, error) &&
-        fn("__bro_native.settingsUI.toggle", p(&settingsToggle), "void", {}, error) &&
-        fn("__bro_native.settingsUI.isVisible", p(&settingsIsVisible), "bool", {}, error) &&
-        fn("__bro_native.settingsUI.contentTop", p(&contentTop), "f64", {}, error) &&
-        getter("__bro_native.inspector.visible", p(&inspVisible), "bool", error) &&
-        getter("__bro_native.inspector.dock", p(&inspDock), "str", error) &&
-        getter("__bro_native.inspector.width", p(&inspWidth), "f64", error) &&
-        getter("__bro_native.inspector.height", p(&inspHeight), "f64", error) &&
-        getter("__bro_native.inspector.pickerMode", p(&inspPickerMode), "bool", error) &&
-        fn("__bro_native.inspector.appTreeJson", p(&inspAppTreeJson), "str", {"i32"}, error) &&
-        fn("__bro_native.inspector.childrenJson", p(&inspChildrenJson), "str", {"i32"}, error) &&
-        fn("__bro_native.inspector.selectedJson", p(&inspSelectedJson), "str", {}, error) &&
-        fn("__bro_native.inspector.select", p(&inspSelect), "void", {"i32"}, error) &&
-        fn("__bro_native.inspector.setDock", p(&inspSetDock), "void", {"str"}, error) &&
-        fn("__bro_native.inspector.setSize", p(&inspSetSize), "void", {"f64"}, error) &&
-        fn("__bro_native.inspector.setPickerMode", p(&inspSetPickerMode), "void", {"bool"}, error) &&
-        fn("__bro_native.inspector.toggle", p(&inspToggle), "void", {}, error);
+}  // namespace bro::bronze_host
+
+extern "C" {
+
+using namespace bro::bronze_host;
+
+void bro_dunder_bro_splash_dismiss(void) { splashDismiss(); }
+
+double bro_dunder_bro_viewport_width_get(void) { return viewportWidth(); }
+double bro_dunder_bro_viewport_height_get(void) { return viewportHeight(); }
+
+double bro_dunder_bro_perf_fps_get(void) { return perfFps(); }
+double bro_dunder_bro_perf_frameTime_get(void) { return perfFrameTime(); }
+double bro_dunder_bro_perf_js_get(void) { return perfJs(); }
+double bro_dunder_bro_perf_layout_get(void) { return perfLayout(); }
+double bro_dunder_bro_perf_raster_get(void) { return perfRaster(); }
+double bro_dunder_bro_perf_gpu_get(void) { return perfGpu(); }
+double bro_dunder_bro_perf_draw_get(void) { return perfDraw(); }
+int32_t bro_dunder_bro_perf_windowCount(void) { return windowCount(); }
+double bro_dunder_bro_perf_windowId(int32_t index) { return windowId(index); }
+const char* bro_dunder_bro_perf_windowTitle(int32_t index) { return windowTitle(index); }
+double bro_dunder_bro_perf_windowWidth(int32_t index) { return windowWidth(index); }
+double bro_dunder_bro_perf_windowHeight(int32_t index) { return windowHeight(index); }
+bool bro_dunder_bro_perf_windowFocused(int32_t index) { return windowFocused(index); }
+bool bro_dunder_bro_perf_windowMinimized(int32_t index) { return windowMinimized(index); }
+
 #if BRO_WITH_3D
-    ok = ok &&
-        getter("__bro_native.perf.scene.meshDrawn", p(&sceneMeshDrawn), "f64", error) &&
-        getter("__bro_native.perf.scene.meshCulled", p(&sceneMeshCulled), "f64", error) &&
-        getter("__bro_native.perf.scene.instancedDrawn", p(&sceneInstancedDrawn), "f64", error) &&
-        getter("__bro_native.perf.scene.instancedCulled", p(&sceneInstancedCulled), "f64", error) &&
-        getter("__bro_native.perf.scene.splatDrawn", p(&sceneSplatDrawn), "f64", error) &&
-        getter("__bro_native.perf.scene.splatCulled", p(&sceneSplatCulled), "f64", error) &&
-        getter("__bro_native.perf.scene.particlesDrawn", p(&sceneParticlesDrawn), "f64", error) &&
-        getter("__bro_native.perf.scene.particlesCulled", p(&sceneParticlesCulled), "f64", error) &&
-        getter("__bro_native.perf.scene.billboardsDrawn", p(&sceneBillboardsDrawn), "f64", error) &&
-        getter("__bro_native.perf.scene.billboardsCulled", p(&sceneBillboardsCulled), "f64", error) &&
-        getter("__bro_native.perf.scene.decalsDrawn", p(&sceneDecalsDrawn), "f64", error) &&
-        getter("__bro_native.perf.scene.decalsCulled", p(&sceneDecalsCulled), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowDrawn", p(&sceneShadowDrawn), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowCulled", p(&sceneShadowCulled), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowTilesTotal", p(&sceneShadowTilesTotal), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowTilesRendered", p(&sceneShadowTilesRendered), "f64", error) &&
-        getter("__bro_native.perf.scene.shadowTilesCached", p(&sceneShadowTilesCached), "f64", error);
+double bro_dunder_bro_scene_meshDrawn_get(void) { return sceneMeshDrawn(); }
+double bro_dunder_bro_scene_meshCulled_get(void) { return sceneMeshCulled(); }
+double bro_dunder_bro_scene_instancedDrawn_get(void) { return sceneInstancedDrawn(); }
+double bro_dunder_bro_scene_instancedCulled_get(void) { return sceneInstancedCulled(); }
+double bro_dunder_bro_scene_splatDrawn_get(void) { return sceneSplatDrawn(); }
+double bro_dunder_bro_scene_splatCulled_get(void) { return sceneSplatCulled(); }
+double bro_dunder_bro_scene_particlesDrawn_get(void) { return sceneParticlesDrawn(); }
+double bro_dunder_bro_scene_particlesCulled_get(void) { return sceneParticlesCulled(); }
+double bro_dunder_bro_scene_billboardsDrawn_get(void) { return sceneBillboardsDrawn(); }
+double bro_dunder_bro_scene_billboardsCulled_get(void) { return sceneBillboardsCulled(); }
+double bro_dunder_bro_scene_decalsDrawn_get(void) { return sceneDecalsDrawn(); }
+double bro_dunder_bro_scene_decalsCulled_get(void) { return sceneDecalsCulled(); }
+double bro_dunder_bro_scene_shadowDrawn_get(void) { return sceneShadowDrawn(); }
+double bro_dunder_bro_scene_shadowCulled_get(void) { return sceneShadowCulled(); }
+double bro_dunder_bro_scene_shadowTilesTotal_get(void) { return sceneShadowTilesTotal(); }
+double bro_dunder_bro_scene_shadowTilesRendered_get(void) { return sceneShadowTilesRendered(); }
+double bro_dunder_bro_scene_shadowTilesCached_get(void) { return sceneShadowTilesCached(); }
 #endif
-    return ok;
+
+double bro_dunder_bro_bronze_heapUsedBytes_get(void) { return heapUsedBytes(); }
+double bro_dunder_bro_bronze_heapCommittedBytes_get(void) { return heapCommittedBytes(); }
+double bro_dunder_bro_bronze_heapReservedBytes_get(void) { return heapReservedBytes(); }
+double bro_dunder_bro_bronze_gcCollections_get(void) { return gcCollections(); }
+double bro_dunder_bro_bronze_gcPauseNs_get(void) { return gcPauseNs(); }
+double bro_dunder_bro_bronze_shapeTransitions_get(void) { return shapeTransitions(); }
+
+double bro_dunder_bro_menu_height(void) { return menuHeight(); }
+const char* bro_dunder_bro_menu_treeJson(void) { return menuTreeJson(); }
+void bro_dunder_bro_menu_click(const char* id) { menuClick(id); }
+
+void bro_dunder_bro_settingsUI_show(const char* name) { settingsShow(name); }
+const char* bro_dunder_bro_settingsUI_panelsJson(void) { return panelsJson(); }
+const char* bro_dunder_bro_settingsUI_activePanel(void) { return activePanel(); }
+void bro_dunder_bro_settingsUI_toggle(void) { settingsToggle(); }
+bool bro_dunder_bro_settingsUI_isVisible(void) { return settingsIsVisible(); }
+double bro_dunder_bro_settingsUI_contentTop(void) { return contentTop(); }
+
+bool bro_dunder_bro_inspector_visible_get(void) { return inspVisible(); }
+const char* bro_dunder_bro_inspector_dock_get(void) { return inspDock(); }
+double bro_dunder_bro_inspector_width_get(void) { return inspWidth(); }
+double bro_dunder_bro_inspector_height_get(void) { return inspHeight(); }
+bool bro_dunder_bro_inspector_pickerMode_get(void) { return inspPickerMode(); }
+const char* bro_dunder_bro_inspector_appTreeJson(int32_t maxDepth) { return inspAppTreeJson(maxDepth); }
+const char* bro_dunder_bro_inspector_childrenJson(int32_t parentId) { return inspChildrenJson(parentId); }
+const char* bro_dunder_bro_inspector_selectedJson(void) { return inspSelectedJson(); }
+void bro_dunder_bro_inspector_select(int32_t id) { inspSelect(id); }
+void bro_dunder_bro_inspector_setDock(const char* dock) { inspSetDock(dock); }
+void bro_dunder_bro_inspector_setSize(double px) { inspSetSize(px); }
+void bro_dunder_bro_inspector_setPickerMode(bool on) { inspSetPickerMode(on); }
+void bro_dunder_bro_inspector_toggle(void) { inspToggle(); }
+
+}  // extern "C"
+
+namespace bro::bronze_host {
+
+bool registerNatives_dunder_bro(std::string* error);
+
+bool registerDunderBroNatives(std::string* error) {
+    return registerNatives_dunder_bro(error);
 }
 
 }  // namespace bro::bronze_host

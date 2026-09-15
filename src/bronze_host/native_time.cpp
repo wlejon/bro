@@ -5,45 +5,41 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
+#include "natives/time/native_time_decl.h"
 
-namespace bro::bronze_host {
+extern "C" {
 
-namespace {
-
-double scaleGet() {
-    auto* eng = hostEngine();
+double bro_time_scale_get(void) {
+    auto* eng = bro::bronze_host::hostEngine();
     return eng ? eng->timeScale() : 1.0;
 }
 
-// Engine::setTimeScale clamps to [0, 100] and ignores a non-finite value,
-// which is the documented contract; nothing is repeated here.
-void scaleSet(double v) {
-    if (auto* eng = hostEngine()) eng->setTimeScale(v);
+void bro_time_scale_set(double v) {
+    if (auto* eng = bro::bronze_host::hostEngine()) eng->setTimeScale(v);
 }
 
-bool pausedGet() {
-    auto* eng = hostEngine();
+bool bro_time_paused_get(void) {
+    auto* eng = bro::bronze_host::hostEngine();
     return eng && eng->timePaused();
 }
 
-void pausedSet(bool v) {
-    if (auto* eng = hostEngine()) eng->setTimePaused(v);
+void bro_time_paused_set(bool v) {
+    if (auto* eng = bro::bronze_host::hostEngine()) eng->setTimePaused(v);
 }
 
-double nowGet() {
-    auto* eng = hostEngine();
-    return eng ? eng->timeNowMs() : hostClockMs();
+double bro_time_now_get(void) {
+    auto* eng = bro::bronze_host::hostEngine();
+    return eng ? eng->timeNowMs() : bro::bronze_host::hostClockMs();
 }
 
-}  // namespace
+}  // extern "C"
+
+namespace bro::bronze_host {
+
+bool registerNatives_time(std::string* error);
 
 bool registerTimeNatives(std::string* error) {
-    using namespace natives;
-    return getter("__bro_native.time.scale", reinterpret_cast<void*>(&scaleGet), "f64", error) &&
-           setter("__bro_native.time.scale", reinterpret_cast<void*>(&scaleSet), "f64", error) &&
-           getter("__bro_native.time.paused", reinterpret_cast<void*>(&pausedGet), "bool", error) &&
-           setter("__bro_native.time.paused", reinterpret_cast<void*>(&pausedSet), "bool", error) &&
-           getter("__bro_native.time.now", reinterpret_cast<void*>(&nowGet), "f64", error);
+    return registerNatives_time(error);
 }
 
 }  // namespace bro::bronze_host

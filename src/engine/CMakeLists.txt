@@ -42,6 +42,7 @@ add_library(bro_engine STATIC
     color_picker_overlay.cpp
     menu_bar.cpp
     inspector_highlight.cpp
+    inspector_tree.cpp
 )
 # navmesh_subsystem.cpp needs brogameagent; compile only when BRO_WITH_GAMEAI.
 if(BRO_WITH_GAMEAI)

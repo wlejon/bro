@@ -48,19 +48,22 @@
     fn(bro.window, 'maximize', function maximize() { __bro_native.window.maximize(); });
     fn(bro.window, 'restore', function restore() { __bro_native.window.restore(); });
     fn(bro.window, 'getPosition', function getPosition() {
-        return { x: __bro_native.window.positionX(), y: __bro_native.window.positionY() };
+        __bro_native.window.getPosition();
+        return { x: __bro_native.window.getPosition_x(), y: __bro_native.window.getPosition_y() };
     });
     fn(bro.window, 'setPosition', function setPosition(x, y) {
         __bro_native.window.setPosition(x, y);
     });
     fn(bro.window, 'getMinSize', function getMinSize() {
-        return { width: __bro_native.window.minWidth(), height: __bro_native.window.minHeight() };
+        __bro_native.window.getMinSize();
+        return { width: __bro_native.window.getMinSize_width(), height: __bro_native.window.getMinSize_height() };
     });
     fn(bro.window, 'setMinSize', function setMinSize(width, height) {
         __bro_native.window.setMinSize(width, height);
     });
     fn(bro.window, 'getMaxSize', function getMaxSize() {
-        return { width: __bro_native.window.maxWidth(), height: __bro_native.window.maxHeight() };
+        __bro_native.window.getMaxSize();
+        return { width: __bro_native.window.getMaxSize_width(), height: __bro_native.window.getMaxSize_height() };
     });
     fn(bro.window, 'setMaxSize', function setMaxSize(width, height) {
         __bro_native.window.setMaxSize(width, height);
@@ -68,24 +71,24 @@
     // One snapshot of the display list, then the documented DisplayInfo
     // objects read out of it by index.
     fn(bro.window, 'getDisplays', function getDisplays() {
-        const n = __bro_native.window.displaySnapshot();
+        const n = __bro_native.window.getDisplays();
         const out = [];
         for (let i = 0; i < n; i++) {
             out.push({
-                id: __bro_native.window.displayId(i),
-                name: __bro_native.window.displayName(i),
-                x: __bro_native.window.displayX(i),
-                y: __bro_native.window.displayY(i),
-                width: __bro_native.window.displayWidth(i),
-                height: __bro_native.window.displayHeight(i),
-                workX: __bro_native.window.displayWorkX(i),
-                workY: __bro_native.window.displayWorkY(i),
-                workWidth: __bro_native.window.displayWorkWidth(i),
-                workHeight: __bro_native.window.displayWorkHeight(i),
-                refreshRate: __bro_native.window.displayRefreshRate(i),
-                contentScale: __bro_native.window.displayContentScale(i),
-                isPrimary: __bro_native.window.displayIsPrimary(i),
-                isCurrent: __bro_native.window.displayIsCurrent(i),
+                id: __bro_native.window.getDisplays_id(i),
+                name: __bro_native.window.getDisplays_name(i),
+                x: __bro_native.window.getDisplays_x(i),
+                y: __bro_native.window.getDisplays_y(i),
+                width: __bro_native.window.getDisplays_width(i),
+                height: __bro_native.window.getDisplays_height(i),
+                workX: __bro_native.window.getDisplays_workX(i),
+                workY: __bro_native.window.getDisplays_workY(i),
+                workWidth: __bro_native.window.getDisplays_workWidth(i),
+                workHeight: __bro_native.window.getDisplays_workHeight(i),
+                refreshRate: __bro_native.window.getDisplays_refreshRate(i),
+                contentScale: __bro_native.window.getDisplays_contentScale(i),
+                isPrimary: __bro_native.window.getDisplays_isPrimary(i),
+                isCurrent: __bro_native.window.getDisplays_isCurrent(i),
             });
         }
         return out;

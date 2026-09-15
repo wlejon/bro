@@ -168,3 +168,54 @@ bro.flora.createWorld = function(opts) {};
  */
 bro.flora.leafCluster = function(phyllotaxy, opts) {};
 
+/**
+ * @param {number} strength
+ * @param {number} [dirX=0]
+ * @param {number} [dirY=0]
+ */
+bro.flora.setWind = function(strength, dirX, dirY) {};
+
+/**
+ * @param {number} strength
+ * @param {number} [dirX=0]
+ * @param {number} [dirY=0]
+ */
+bro.flora.wind = function(strength, dirX, dirY) {};
+
+/**
+ * @param {number} density
+ */
+bro.flora.setDensity = function(density) {};
+
+/**
+ * @param {number} density
+ */
+bro.flora.density = function(density) {};
+
+/**
+ * @param {number} dt
+ */
+bro.flora.update = function(dt) {};
+
+bro.flora.clear = function() {};
+
+/**
+ * @param {Object} config
+ */
+bro.flora.placement = function(config) {};
+
+/**
+ * @param {Object} config
+ */
+bro.flora.addPlacement = function(config) {};
+
+/**
+ * @returns {Object}
+ */
+bro.flora.batches = function() {};
+
+/**
+ * @returns {Object}
+ */
+bro.flora.getBatches = function() {};
+

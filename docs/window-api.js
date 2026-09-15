@@ -18,21 +18,18 @@
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
- * Desktop coordinates and dimensions of a rectangle bounds.
- * @typedef {Object} DisplayBounds
- * @property {number} [x] -  X coordinate in desktop pixels.
- * @property {number} [y] -  Y coordinate in desktop pixels.
- * @property {number} [width] -  Width in desktop pixels.
- * @property {number} [height] -  Height in desktop pixels.
- */
-
-/**
  * Display device descriptor.
  * @typedef {Object} DisplayInfo
  * @property {number} [id] -  Stable SDL display identifier.
  * @property {string} [name] -  Display device name.
- * @property {DisplayBounds} [bounds] -  Full display bounds.
- * @property {DisplayBounds} [workArea] -  Usable work area bounds minus taskbars and docks.
+ * @property {number} [x] -  X coordinate in desktop pixels.
+ * @property {number} [y] -  Y coordinate in desktop pixels.
+ * @property {number} [width] -  Width in desktop pixels.
+ * @property {number} [height] -  Height in desktop pixels.
+ * @property {number} [workX] -  Usable work area X in desktop pixels.
+ * @property {number} [workY] -  Usable work area Y in desktop pixels.
+ * @property {number} [workWidth] -  Usable work area width in desktop pixels.
+ * @property {number} [workHeight] -  Usable work area height in desktop pixels.
  * @property {number} [refreshRate] -  Refresh rate in Hz.
  * @property {number} [contentScale] -  OS content scale multiplier (1.0 = 100%).
  * @property {boolean} [isPrimary] -  Whether this is the system primary display.
@@ -99,52 +96,41 @@ bro.window.restore = function() {};
 bro.window.getPosition = function() {};
 
 /**
- * Sets desktop coordinate position of the window.
- *
- * @param {number} x - Desktop X coordinate
- * @param {number} y - Desktop Y coordinate
+ * @param {number} x
+ * @param {number} y
  */
 bro.window.setPosition = function(x, y) {};
 
 /**
- * Retrieves minimum window resize bounds in pixels.
  * @returns {WindowSize}
  */
 bro.window.getMinSize = function() {};
 
 /**
- * Sets minimum window resize bounds.
- *
- * @param {number} width - Minimum width in pixels (0 for unconstrained)
- * @param {number} height - Minimum height in pixels (0 for unconstrained)
+ * @param {number} width
+ * @param {number} height
  */
 bro.window.setMinSize = function(width, height) {};
 
 /**
- * Retrieves maximum window resize bounds in pixels.
  * @returns {WindowSize}
  */
 bro.window.getMaxSize = function() {};
 
 /**
- * Sets maximum window resize bounds.
- *
- * @param {number} width - Maximum width in pixels (0 for unconstrained)
- * @param {number} height - Maximum height in pixels (0 for unconstrained)
+ * @param {number} width
+ * @param {number} height
  */
 bro.window.setMaxSize = function(width, height) {};
 
 /**
- * Enumerates all attached monitor displays.
  * @returns {Array<DisplayInfo>}
  */
 bro.window.getDisplays = function() {};
 
 /**
- * Moves and centers the window on a specific display.
- *
- * @param {number} id - Target display identifier
- * @returns {boolean} True if window was moved, false otherwise
+ * @param {number} id
+ * @returns {boolean}
  */
 bro.window.moveToDisplay = function(id) {};
 

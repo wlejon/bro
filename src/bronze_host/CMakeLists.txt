@@ -162,10 +162,24 @@ set(BRO_BRONZE_HOST_SOURCES
     native_settings.cpp
     native_dunder_bro.cpp
     native_mesh.cpp
+    natives/time/native_time_register.cpp
+    natives/paths/native_paths_register.cpp
+    natives/window/native_window_register.cpp
+    natives/settings/native_settings_register.cpp
+    natives/dunder_bro/native_dunder_bro_register.cpp
 )
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
-target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_include_directories(bro_bronze_host PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/time
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/paths
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/window
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/settings
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/dunder_bro
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/mesh
+)
 
 # The runtime is a DLL now, and bronze builds it into its own output directory
 # (BRONZE_SHARED_RUNTIME_DIR) while bro's executables land in bro's. On Windows

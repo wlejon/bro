@@ -30,15 +30,7 @@
 bro.paths.appDir;
 
 /**
- * Absolute native path of the directory this app's persistent data belongs in —
- * saves, caches, per-user state. `<user data>/bro/apps/<app folder name>`, where
- * `<user data>` is `%APPDATA%` on Windows, `~/Library/Application Support` on
- * macOS and `$XDG_DATA_HOME` (or `~/.local/share`) elsewhere. Created on first
- * read, so an app can write into it directly. Empty when there is no app
- * directory (a bare `bro-headless -e` session).
- *
- * `appDir` is where the app is installed; it may be read-only, shared between
- * users, or a checked-out repository. Write here instead.
+ * Absolute native filesystem path for user data / save directory.
  * @readonly
  * @type {string}
  */
@@ -51,4 +43,12 @@ bro.paths.userDataDir;
  * @returns {string} Resolved absolute filesystem path
  */
 bro.paths.resolvePath = function(path) {};
+
+/**
+ * Resolves a path for writing.
+ *
+ * @param {string} path - Input path string
+ * @returns {string} Resolved absolute filesystem path for write target
+ */
+bro.paths.resolveWritePath = function(path) {};
 

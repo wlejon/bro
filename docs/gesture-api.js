@@ -96,6 +96,8 @@ class GestureStreamView {
 
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
+bro.gesture.init = function() {};
+
 /**
  * @param {string} name
  * @param {Float32Array} samples

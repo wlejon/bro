@@ -116,6 +116,8 @@ class SenseStreamView {
 
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
+bro.sense.init = function() {};
+
 /**
  * @param {SenseStartOptions} [opts]
  */

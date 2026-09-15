@@ -27,6 +27,7 @@
 #include "engine/engine.h"
 #include "engine/settings.h"
 #include "platform/sdl_window.h"
+#include "natives/settings/native_settings_decl.h"
 
 #include <cstdio>
 #include <sstream>
@@ -327,31 +328,43 @@ void installSettingsObserver(engine::Engine& engine) {
     });
 }
 
+}  // namespace bro::bronze_host
+
+extern "C" {
+
+using namespace bro::bronze_host;
+
+const char* bro_settings_get(const char* key) { return get(key); }
+const char* bro_settings_getAllJson(const char* category) { return getAllJson(category); }
+const char* bro_settings_getDefaultsJson(const char* category) { return getDefaultsJson(category); }
+void bro_settings_setString(const char* key, const char* value) { setString(key, value); }
+void bro_settings_setNumber(const char* key, double value) { setNumber(key, value); }
+void bro_settings_setBool(const char* key, bool value) { setBool(key, value); }
+void bro_settings_setDefaultString(const char* key, const char* value) { setDefaultString(key, value); }
+void bro_settings_setDefaultNumber(const char* key, double value) { setDefaultNumber(key, value); }
+void bro_settings_setDefaultBool(const char* key, bool value) { setDefaultBool(key, value); }
+void bro_settings_reset(const char* category) { reset(category); }
+void bro_settings_defineAction(const char* action, const char* keysJoined, double deadzone) { defineAction(action, keysJoined, deadzone); }
+void bro_settings_rebindAction(const char* action, const char* keysJoined) { rebindAction(action, keysJoined); }
+void bro_settings_resetAction(const char* action) { resetAction(action); }
+void bro_settings_resetAllActions(void) { resetAllActions(); }
+const char* bro_settings_actionKeysJson(const char* action) { return actionKeysJson(action); }
+const char* bro_settings_keyAction(const char* key) { return keyAction(key); }
+double bro_settings_actionStrength(const char* action) { return actionStrength(action); }
+bool bro_settings_isActionPressed(const char* action) { return isActionPressed(action); }
+const char* bro_settings_actionsJson(void) { return actionsJson(); }
+const char* bro_settings_appActionsJson(void) { return appActionsJson(); }
+const char* bro_settings_displayModesJson(void) { return displayModesJson(); }
+void bro_settings_onChange(uint64_t listener) { onChange(listener); }
+
+}  // extern "C"
+
+namespace bro::bronze_host {
+
+bool registerNatives_settings(std::string* error);
+
 bool registerSettingsNatives(std::string* error) {
-    using namespace natives;
-    auto p = [](auto f) { return reinterpret_cast<void*>(f); };
-    return fn("__bro_native.settings.get", p(&get), "str", {"str"}, error) &&
-           fn("__bro_native.settings.getAllJson", p(&getAllJson), "str", {"str"}, error) &&
-           fn("__bro_native.settings.getDefaultsJson", p(&getDefaultsJson), "str", {"str"}, error) &&
-           fn("__bro_native.settings.setString", p(&setString), "void", {"str", "str"}, error) &&
-           fn("__bro_native.settings.setNumber", p(&setNumber), "void", {"str", "f64"}, error) &&
-           fn("__bro_native.settings.setBool", p(&setBool), "void", {"str", "bool"}, error) &&
-           fn("__bro_native.settings.setDefaultString", p(&setDefaultString), "void", {"str", "str"}, error) &&
-           fn("__bro_native.settings.setDefaultNumber", p(&setDefaultNumber), "void", {"str", "f64"}, error) &&
-           fn("__bro_native.settings.setDefaultBool", p(&setDefaultBool), "void", {"str", "bool"}, error) &&
-           fn("__bro_native.settings.reset", p(&reset), "void", {"str"}, error) &&
-           fn("__bro_native.settings.defineAction", p(&defineAction), "void", {"str", "str", "f64"}, error) &&
-           fn("__bro_native.settings.rebindAction", p(&rebindAction), "void", {"str", "str"}, error) &&
-           fn("__bro_native.settings.resetAction", p(&resetAction), "void", {"str"}, error) &&
-           fn("__bro_native.settings.resetAllActions", p(&resetAllActions), "void", {}, error) &&
-           fn("__bro_native.settings.actionKeysJson", p(&actionKeysJson), "str", {"str"}, error) &&
-           fn("__bro_native.settings.keyAction", p(&keyAction), "str", {"str"}, error) &&
-           fn("__bro_native.settings.actionStrength", p(&actionStrength), "f64", {"str"}, error) &&
-           fn("__bro_native.settings.isActionPressed", p(&isActionPressed), "bool", {"str"}, error) &&
-           fn("__bro_native.settings.actionsJson", p(&actionsJson), "str", {}, error) &&
-           fn("__bro_native.settings.appActionsJson", p(&appActionsJson), "str", {}, error) &&
-           fn("__bro_native.settings.displayModesJson", p(&displayModesJson), "str", {}, error) &&
-           fn("__bro_native.settings.onChange", p(&onChange), "void", {"dynamic"}, error);
+    return registerNatives_settings(error);
 }
 
 }  // namespace bro::bronze_host

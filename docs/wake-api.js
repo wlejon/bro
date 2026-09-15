@@ -92,6 +92,8 @@ class WakeStreamView {
 
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
+bro.wake.init = function() {};
+
 /**
  * @param {WakeLoadOptions} opts
  */

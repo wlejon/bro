@@ -110,6 +110,17 @@ class TileWorld {
    * @readonly
    * @type {number}
    */
+  chunks;
+
+  /**
+   * @type {boolean}
+   */
+  paging;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
   vertexCount;
 
   /**
@@ -117,6 +128,14 @@ class TileWorld {
    * @type {number}
    */
   triangleCount;
+
+  /**
+   * @param {number} [camX=0]
+   * @param {number} [camY=0]
+   * @param {number} [camZ=0]
+   * @returns {number}
+   */
+  update(camX, camY, camZ) {}
 
   /**
    * @param {number} layer
