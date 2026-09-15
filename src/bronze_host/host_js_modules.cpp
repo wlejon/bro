@@ -34,6 +34,11 @@ extern "C" void bro_gizmo_main();
 extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
 extern "C" void bro_lm_main();
+extern "C" void bro_rave_main();
+extern "C" void bro_motion_main();
+extern "C" void bro_mic_main();
+extern "C" void bro_sense_main();
+extern "C" void bro_gesture_main();
 
 namespace bro::bronze_host {
 
@@ -175,6 +180,26 @@ void installLmModule() {
     adoptGlobalProperty("NllbModel");
     adoptGlobalProperty("ClipModel");
     adoptGlobalProperty("T5Model");
+}
+
+void installRaveModule() {
+    bronze::embed::runEntry(bro_rave_main);
+}
+
+void installMotionModule() {
+    bronze::embed::runEntry(bro_motion_main);
+}
+
+void installMicModule() {
+    bronze::embed::runEntry(bro_mic_main);
+}
+
+void installSenseModule() {
+    bronze::embed::runEntry(bro_sense_main);
+}
+
+void installGestureModule() {
+    bronze::embed::runEntry(bro_gesture_main);
 }
 
 }  // namespace bro::bronze_host

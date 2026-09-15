@@ -203,6 +203,16 @@ set(BRO_BRONZE_HOST_SOURCES
     native_lm_classes.cpp
     native_lm_ops.cpp
     natives/lm/native_lm_register.cpp
+    native_rave.cpp
+    natives/rave/native_rave_register.cpp
+    native_motion.cpp
+    natives/motion/native_motion_register.cpp
+    native_mic.cpp
+    natives/mic/native_mic_register.cpp
+    native_sense.cpp
+    natives/sense/native_sense_register.cpp
+    native_gesture.cpp
+    natives/gesture/native_gesture_register.cpp
     host_audio_core.cpp
     host_audio_context.cpp
     host_audio_clips.cpp
@@ -465,7 +475,12 @@ else()
     bro_compile_js(gizmo      bro_gizmo_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(animation  bro_animation_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(lm         bro_lm_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(lm         bro_lm_main         NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(rave       bro_rave_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(mic        bro_mic_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(sense      bro_sense_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(gesture    bro_gesture_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.

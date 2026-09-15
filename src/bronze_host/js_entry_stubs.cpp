@@ -32,4 +32,9 @@ void bro_gizmo_main() {}
 void bro_animation_main() {}
 void bro_scene_main() {}
 void bro_lm_main() {}
+void bro_rave_main() {}
+void bro_motion_main() {}
+void bro_mic_main() {}
+void bro_gesture_main() {}
+void bro_sense_main() {}
 }

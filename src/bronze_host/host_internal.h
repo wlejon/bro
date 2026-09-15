@@ -680,6 +680,11 @@ void installGizmoModule();
 void installAnimationModule();
 void installSceneModule();
 void installLmModule();
+void installRaveModule();
+void installMotionModule();
+void installMicModule();
+void installSenseModule();
+void installGestureModule();
 
 void installAudioGlobals();
 void installAIGlobals();
