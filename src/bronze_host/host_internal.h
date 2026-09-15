@@ -691,6 +691,9 @@ void installListenModule();
 void installTriposplatModule();
 void installDiffusionModule();
 void installVisionModule();
+void installDiarModule();
+void installSttModule();
+void installTtsModule();
 
 void installAudioGlobals();
 void installAIGlobals();

@@ -45,6 +45,9 @@ extern "C" void bro_listen_main();
 extern "C" void bro_triposplat_main();
 extern "C" void bro_diffusion_main();
 extern "C" void bro_vision_main();
+extern "C" void bro_diar_main();
+extern "C" void bro_stt_main();
+extern "C" void bro_tts_main();
 
 namespace bro::bronze_host {
 
@@ -230,6 +233,18 @@ void installDiffusionModule() {
 
 void installVisionModule() {
     bronze::embed::runEntry(bro_vision_main);
+}
+
+void installDiarModule() {
+    bronze::embed::runEntry(bro_diar_main);
+}
+
+void installSttModule() {
+    bronze::embed::runEntry(bro_stt_main);
+}
+
+void installTtsModule() {
+    bronze::embed::runEntry(bro_tts_main);
 }
 
 }  // namespace bro::bronze_host

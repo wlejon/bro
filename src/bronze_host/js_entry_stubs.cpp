@@ -43,4 +43,7 @@ void bro_listen_main() {}
 void bro_triposplat_main() {}
 void bro_diffusion_main() {}
 void bro_vision_main() {}
+void bro_diar_main() {}
+void bro_stt_main() {}
+void bro_tts_main() {}
 }

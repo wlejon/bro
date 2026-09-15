@@ -225,6 +225,12 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/diffusion/native_diffusion_register.cpp
     native_vision.cpp
     natives/vision/native_vision_register.cpp
+    native_diar.cpp
+    natives/diar/native_diar_register.cpp
+    native_stt.cpp
+    natives/stt/native_stt_register.cpp
+    native_tts.cpp
+    natives/tts/native_tts_register.cpp
     host_audio_core.cpp
     host_audio_context.cpp
     host_audio_clips.cpp
@@ -280,6 +286,9 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/triposplat
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/diffusion
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/vision
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/diar
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/stt
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/tts
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory
@@ -502,6 +511,9 @@ else()
     bro_compile_js(triposplat bro_triposplat_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(diffusion  bro_diffusion_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(vision     bro_vision_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(diar       bro_diar_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(stt        bro_stt_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(tts        bro_tts_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.
