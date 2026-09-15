@@ -40,10 +40,23 @@ void revokeObjectURL(const std::string& url) {
     table().erase(url);
 }
 
-std::shared_ptr<const ObjectURLData> lookupObjectURL(const std::string& url) {
+static ObjectURLResolver g_resolver;
+
+void setObjectURLResolver(ObjectURLResolver resolver) {
     std::lock_guard<std::mutex> lock(tableMutex());
-    auto it = table().find(url);
-    return it == table().end() ? nullptr : it->second;
+    g_resolver = std::move(resolver);
+}
+
+std::shared_ptr<const ObjectURLData> lookupObjectURL(const std::string& url) {
+    {
+        std::lock_guard<std::mutex> lock(tableMutex());
+        auto it = table().find(url);
+        if (it != table().end()) return it->second;
+    }
+    if (g_resolver) {
+        return g_resolver(url);
+    }
+    return nullptr;
 }
 
 namespace {

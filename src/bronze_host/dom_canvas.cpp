@@ -19,7 +19,15 @@
 #include <utility>
 #include <vector>
 
+#if BRO_WITH_3D
+#include "scene/scene_graph.h"
+#endif
+
 namespace bro::bronze_host {
+
+#if BRO_WITH_3D
+Value createSceneGraphValue(scene::SceneGraph* sg, dom::Element* canvas);
+#endif
 
 namespace {
 
@@ -29,6 +37,7 @@ struct CanvasState {
     ev::Persistent jsObj;
     ev::Persistent glObj;
     ev::Persistent ctx2dObj;
+    ev::Persistent sceneObj;
     bool hasGl = false;
 };
 
@@ -158,6 +167,23 @@ Value makeCanvasValue(dom::Element* el) {
             Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get(), cs->el);
             cs->ctx2dObj.set(ctx2d);
             return ctx2d;
+        }
+        if (type == "scene") {
+#if BRO_WITH_3D
+            if (isChildRealm()) return ev::null();
+            auto* eng = hostEngine();
+            if (!eng) return ev::null();
+            dom::Document* curDoc = currentHostDocument();
+            if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
+            if (ev::isObject(cs->sceneObj.get())) return cs->sceneObj.get();
+            scene::SceneGraph* sg = eng->createSceneContext(cs->el);
+            if (!sg) return ev::null();
+            Value scn = createSceneGraphValue(sg, cs->el);
+            cs->sceneObj.set(scn);
+            return scn;
+#else
+            return ev::null();
+#endif
         }
         if (type != "webgl2" && type != "webgl") return ev::null();
         if (isChildRealm()) return ev::null();

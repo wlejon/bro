@@ -657,7 +657,7 @@ class SceneGraph {
   createCamera(opts) {}
 
   /**
-   * @param {SceneNode|null} camera
+   * @param {SceneNode} camera
    */
   setActiveCamera(camera) {}
 
@@ -788,7 +788,7 @@ class SceneGraph {
   /**
    * @param {string} [format]
    * @param {number} [quality]
-   * @returns {ArrayBuffer}
+   * @returns {ImageData}
    */
   captureFrame(format, quality) {}
 

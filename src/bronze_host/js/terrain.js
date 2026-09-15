@@ -1,0 +1,135 @@
+// terrain.js — the public shape of bro.terrain.Terrain, assembled over the
+// natives under __bro_native.terrain.
+(function () {
+    'use strict';
+
+    const accessor = (obj, name, get, set) =>
+        Object.defineProperty(obj, name, { get, set, enumerable: true, configurable: true });
+    const fn = (obj, name, value) =>
+        Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
+    const EMPTY_F32 = new Float32Array(0);
+    const EMPTY_F64 = new Float64Array(0);
+    const EMPTY_I32 = new Int32Array(0);
+    const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
+    const toF32 = (v) => v instanceof Float32Array ? v : Float32Array.from(v);
+    const toF64 = (v) => v instanceof Float64Array ? v : Float64Array.from(v);
+    const toI32 = (v) => v instanceof Int32Array ? v : Int32Array.from(v);
+
+    // ---- bro.terrain.Terrain -------------------------------------------------
+    function Terrain() {
+        throw new TypeError("bro.terrain.Terrain is not constructible: instances come from the natives that return one");
+    }
+    {
+        const proto = __bro_native.terrain.TerrainProto;
+        if (proto === undefined) throw new Error("bro.terrain.Terrain: native class prototype not published (registerNatives_terrain did not run)");
+        Object.setPrototypeOf(proto, Terrain.prototype);
+    }
+    fn(mount(bro, "terrain"), "Terrain", Terrain);
+    globalThis.Terrain = Terrain;
+
+    accessor(Terrain.prototype, "chunkCount",
+        function () {
+            return __bro_native.terrain.Terrain_chunkCount_get(this);
+        },
+        undefined);
+    accessor(Terrain.prototype, "triangleCount",
+        function () {
+            return __bro_native.terrain.Terrain_triangleCount_get(this);
+        },
+        undefined);
+    accessor(Terrain.prototype, "vertexCount",
+        function () {
+            return __bro_native.terrain.Terrain_vertexCount_get(this);
+        },
+        undefined);
+    accessor(Terrain.prototype, "farDistance",
+        function () {
+            return __bro_native.terrain.Terrain_farDistance_get(this);
+        },
+        undefined);
+    accessor(Terrain.prototype, "planetRadius",
+        function () {
+            return __bro_native.terrain.Terrain_planetRadius_get(this);
+        },
+        undefined);
+    accessor(Terrain.prototype, "origin",
+        function () {
+            return Array.from(__bro_native.terrain.Terrain_origin_get(this));
+        },
+        undefined);
+    fn(Terrain.prototype, "update", function update(x, y, z) {
+        if (x === undefined) throw new TypeError("bro.terrain.Terrain.prototype.update: x is required");
+        if (y === undefined) throw new TypeError("bro.terrain.Terrain.prototype.update: y is required");
+        if (z === undefined) throw new TypeError("bro.terrain.Terrain.prototype.update: z is required");
+        return __bro_native.terrain.Terrain_update(this, x, y, z);
+    });
+    fn(Terrain.prototype, "raycast", function raycast(origin, direction, maxDist) {
+        if (origin === undefined) throw new TypeError("bro.terrain.Terrain.prototype.raycast: origin is required");
+        if (direction === undefined) throw new TypeError("bro.terrain.Terrain.prototype.raycast: direction is required");
+        if (!__bro_native.terrain.Terrain_raycast(this, toF64(origin), toF64(direction), maxDist !== undefined, maxDist === undefined ? 0 : maxDist)) return null;
+        return { hit: __bro_native.terrain.Terrain_raycast_hit(), distance: __bro_native.terrain.Terrain_raycast_distance(), position: Array.from(__bro_native.terrain.Terrain_raycast_position()), normal: Array.from(__bro_native.terrain.Terrain_raycast_normal()), chunk: Array.from(__bro_native.terrain.Terrain_raycast_chunk()), voxel: Array.from(__bro_native.terrain.Terrain_raycast_voxel()), material: __bro_native.terrain.Terrain_raycast_material() };
+    });
+    fn(Terrain.prototype, "setVoxel", function setVoxel(wx, wy, wz, material) {
+        if (wx === undefined) throw new TypeError("bro.terrain.Terrain.prototype.setVoxel: wx is required");
+        if (wy === undefined) throw new TypeError("bro.terrain.Terrain.prototype.setVoxel: wy is required");
+        if (wz === undefined) throw new TypeError("bro.terrain.Terrain.prototype.setVoxel: wz is required");
+        if (material === undefined) throw new TypeError("bro.terrain.Terrain.prototype.setVoxel: material is required");
+        return __bro_native.terrain.Terrain_setVoxel(this, wx, wy, wz, material);
+    });
+    fn(Terrain.prototype, "getVoxel", function getVoxel(wx, wy, wz) {
+        if (wx === undefined) throw new TypeError("bro.terrain.Terrain.prototype.getVoxel: wx is required");
+        if (wy === undefined) throw new TypeError("bro.terrain.Terrain.prototype.getVoxel: wy is required");
+        if (wz === undefined) throw new TypeError("bro.terrain.Terrain.prototype.getVoxel: wz is required");
+        return __bro_native.terrain.Terrain_getVoxel(this, wx, wy, wz);
+    });
+    fn(Terrain.prototype, "rebuild", function rebuild() {
+        __bro_native.terrain.Terrain_rebuild(this);
+    });
+    fn(Terrain.prototype, "configure", function configure(config) {
+        if (config === undefined) throw new TypeError("bro.terrain.Terrain.prototype.configure: config is required");
+        const d_config = config;
+        const d_config_noise = d_config.noise === undefined ? {} : d_config.noise;
+        __bro_native.terrain.Terrain_configure(this, d_config.chunkSize === undefined ? EMPTY_I32 : toI32(d_config.chunkSize), d_config.cellSize !== undefined, d_config.cellSize === undefined ? 0 : d_config.cellSize, d_config.loadRadius !== undefined, d_config.loadRadius === undefined ? 0 : d_config.loadRadius, d_config.unloadRadius !== undefined, d_config.unloadRadius === undefined ? 0 : d_config.unloadRadius, d_config.maxLoadsPerUpdate !== undefined, d_config.maxLoadsPerUpdate === undefined ? 0 : d_config.maxLoadsPerUpdate, d_config.seed !== undefined, d_config.seed === undefined ? 0 : d_config.seed, d_config_noise.frequency !== undefined, d_config_noise.frequency === undefined ? 0 : d_config_noise.frequency, d_config_noise.octaves !== undefined, d_config_noise.octaves === undefined ? 0 : d_config_noise.octaves, d_config_noise.gain !== undefined, d_config_noise.gain === undefined ? 0 : d_config_noise.gain, d_config_noise.lacunarity !== undefined, d_config_noise.lacunarity === undefined ? 0 : d_config_noise.lacunarity, d_config.baseHeight !== undefined, d_config.baseHeight === undefined ? 0 : d_config.baseHeight, d_config.heightAmplitude !== undefined, d_config.heightAmplitude === undefined ? 0 : d_config.heightAmplitude, d_config.seaLevel !== undefined, d_config.seaLevel === undefined ? 0 : d_config.seaLevel, d_config.meshMode !== undefined, d_config.meshMode === undefined ? 0 : d_config.meshMode, d_config.terraceStep !== undefined, d_config.terraceStep === undefined ? 0 : d_config.terraceStep, d_config.continentFrequency !== undefined, d_config.continentFrequency === undefined ? 0 : d_config.continentFrequency, d_config.continentMin !== undefined, d_config.continentMin === undefined ? 0 : d_config.continentMin, d_config.continentMax !== undefined, d_config.continentMax === undefined ? 0 : d_config.continentMax, d_config.mountainFrequency !== undefined, d_config.mountainFrequency === undefined ? 0 : d_config.mountainFrequency, d_config.mountainAmplitude !== undefined, d_config.mountainAmplitude === undefined ? 0 : d_config.mountainAmplitude, d_config.mountainOctaves !== undefined, d_config.mountainOctaves === undefined ? 0 : d_config.mountainOctaves, d_config.lodLevels !== undefined, d_config.lodLevels === undefined ? 0 : d_config.lodLevels, d_config.lodScaleFactor !== undefined, d_config.lodScaleFactor === undefined ? 0 : d_config.lodScaleFactor, d_config.planetRadius !== undefined, d_config.planetRadius === undefined ? 0 : d_config.planetRadius, d_config.origin === undefined ? EMPTY_F64 : toF64(d_config.origin), d_config.palette === undefined ? EMPTY_F32 : toF32(d_config.palette));
+    });
+    fn(Terrain.prototype, "invalidateRegion", function invalidateRegion(x0, z0, x1, z1) {
+        if (x0 === undefined) throw new TypeError("bro.terrain.Terrain.prototype.invalidateRegion: x0 is required");
+        if (z0 === undefined) throw new TypeError("bro.terrain.Terrain.prototype.invalidateRegion: z0 is required");
+        if (x1 === undefined) throw new TypeError("bro.terrain.Terrain.prototype.invalidateRegion: x1 is required");
+        if (z1 === undefined) throw new TypeError("bro.terrain.Terrain.prototype.invalidateRegion: z1 is required");
+        __bro_native.terrain.Terrain_invalidateRegion(this, x0, z0, x1, z1);
+    });
+    fn(Terrain.prototype, "setHeightSource", function setHeightSource(fn) {
+        if (fn === undefined) throw new TypeError("bro.terrain.Terrain.prototype.setHeightSource: fn is required");
+        __bro_native.terrain.Terrain_setHeightSource(this, fn);
+    });
+    fn(Terrain.prototype, "heightAt", function heightAt(x, z) {
+        if (x === undefined) throw new TypeError("bro.terrain.Terrain.prototype.heightAt: x is required");
+        if (z === undefined) throw new TypeError("bro.terrain.Terrain.prototype.heightAt: z is required");
+        return __bro_native.terrain.Terrain_heightAt(this, x, z);
+    });
+    fn(Terrain.prototype, "normalAt", function normalAt(x, z) {
+        if (x === undefined) throw new TypeError("bro.terrain.Terrain.prototype.normalAt: x is required");
+        if (z === undefined) throw new TypeError("bro.terrain.Terrain.prototype.normalAt: z is required");
+        return Array.from(__bro_native.terrain.Terrain_normalAt(this, x, z));
+    });
+    fn(Terrain.prototype, "elevation", function elevation(x, z) {
+        if (x === undefined) throw new TypeError("bro.terrain.Terrain.prototype.elevation: x is required");
+        if (z === undefined) throw new TypeError("bro.terrain.Terrain.prototype.elevation: z is required");
+        return __bro_native.terrain.Terrain_elevation(this, x, z);
+    });
+    fn(Terrain.prototype, "splat", function splat(x, z, radius, layer) {
+        if (x === undefined) throw new TypeError("bro.terrain.Terrain.prototype.splat: x is required");
+        if (z === undefined) throw new TypeError("bro.terrain.Terrain.prototype.splat: z is required");
+        if (radius === undefined) throw new TypeError("bro.terrain.Terrain.prototype.splat: radius is required");
+        if (layer === undefined) throw new TypeError("bro.terrain.Terrain.prototype.splat: layer is required");
+        __bro_native.terrain.Terrain_splat(this, x, z, radius, layer);
+    });
+    accessor(Terrain.prototype, "layers",
+        function () {
+            return __bro_native.terrain.Terrain_layers_get(this);
+        },
+        undefined);
+    fn(Terrain.prototype, "destroy", function destroy() {
+        __bro_native.terrain.Terrain_destroy(this);
+    });
+})();

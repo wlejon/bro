@@ -37,6 +37,8 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_window_open.h"
+#include "bronze_host/host_intl.h"
+#include "bronze_host/host_web_animations.h"
 
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
@@ -208,6 +210,7 @@ void hostFrame(double dtMs) {
     fireAnimationFrames();                               // 5
     ev::drainMicrotasks();                               // 6
     fireHostObserverFrame();                             // 6b
+    deliverWebAnimationFinishEvents();
     ev::drainMicrotasks();                               // 6c
     hostNotifyIdleFrame(dtMs);                           // 7
 }
@@ -802,6 +805,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     installMeshModule();
     installRiggingModule();
     installPhysicsModule();
+    installTerrainModule();
+    installClipmapModule();
+    installTileWorldModule();
+    installLightingModule();
+    installGizmoModule();
+    installAnimationModule();
+    installSceneModule();
 #endif
     installNetModule();
     // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
@@ -815,6 +825,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     installPlatformExtensions(engine);
     installRangeGlobals();
     installSelectionGlobals();
+    installIntlGlobals();
+    installWebAnimationGlobals();
     initHostCalleeNamer();
 
     snapshotBaselineGlobalProps();

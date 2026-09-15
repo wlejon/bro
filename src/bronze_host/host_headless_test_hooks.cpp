@@ -10,7 +10,15 @@
 #include <vector>
 #include <string>
 
+#if BRO_WITH_3D
+#include "scene/scene_graph.h"
+#endif
+
 namespace bro::bronze_host {
+
+#if BRO_WITH_3D
+Value createSceneGraphValue(scene::SceneGraph* sg, dom::Element* canvas);
+#endif
 
 namespace {
 
@@ -125,6 +133,21 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         auto* eng = hostEngine();
         if (!eng) return ev::throwError("__host: no Engine for this realm");
         return ev::fromDouble(static_cast<double>(eng->sceneContextCount()));
+    });
+
+    host.def("sceneContext", 1, [](Value, std::span<const Value> a) -> Value {
+        if (a.empty()) return ev::throwTypeError("__host.sceneContext(canvas)");
+        auto* el = hostElementOf(a[0]);
+        if (!el) return ev::throwTypeError("__host.sceneContext: not an Element");
+        auto* eng = hostEngine();
+        if (!eng) return ev::null();
+#if BRO_WITH_3D
+        scene::SceneGraph* sg = eng->createSceneContext(el);
+        if (!sg) return ev::null();
+        return createSceneGraphValue(sg, el);
+#else
+        return ev::null();
+#endif
     });
 
     host.def("sceneLink", 1, [](Value, std::span<const Value> a) {

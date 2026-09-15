@@ -72,15 +72,26 @@ const char* strResult(std::string s) {
 }  // namespace natives
 
 bool registerBroNatives(std::string* error) {
-    return registerTimeNatives(error) &&
-           registerPathsNatives(error) &&
-           registerWindowNatives(error) &&
-           registerSettingsNatives(error) &&
-           registerDunderBroNatives(error) &&
-           registerMeshNatives(error) &&
-           registerNetNatives(error) &&
-           registerRiggingNatives(error) &&
-           registerPhysicsNatives(error);
+    bool ok = registerTimeNatives(error) &&
+              registerPathsNatives(error) &&
+              registerWindowNatives(error) &&
+              registerSettingsNatives(error) &&
+              registerDunderBroNatives(error) &&
+              registerMeshNatives(error) &&
+              registerNetNatives(error) &&
+              registerRiggingNatives(error) &&
+              registerPhysicsNatives(error);
+#if BRO_WITH_3D
+    ok = ok &&
+         registerAnimationNatives(error) &&
+         registerTerrainNatives(error) &&
+         registerSceneNatives(error) &&
+         registerClipmapNatives(error) &&
+         registerTileWorldNatives(error) &&
+         registerGizmoNatives(error) &&
+         registerLightingNatives(error);
+#endif
+    return ok;
 }
 
 // bronze_host.h: the calling thread's registry as the manifest file an
@@ -114,12 +125,14 @@ void publish(const char* name, const ev::Persistent& root) {
 void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
     // the life of the process (host_internal.h, HostClass).
-    auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh", "net", "rigging"}));
+    auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh", "net", "rigging", "gizmo",
+                                             "scene", "terrain", "clipmap", "tile_world", "lighting", "animation"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
         makeRoot({"time", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
-                  "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics"}));
+                  "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
+                  "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene"}));
     auto* physicsRoot = new ev::Persistent(ev::createObject());
 #if BRO_WITH_3D
     {

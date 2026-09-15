@@ -48,6 +48,7 @@
 
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
+#include "util/object_url.h"
 
 #include "api/api.h"
 
@@ -102,6 +103,23 @@ bool askPending(const ev::Persistent& slot) {
 
 void installBrokitGlobals(engine::Engine& engine) {
     namespace bk = brokit::api;
+
+    bk::setHostTaskPoster(postHostTask);
+
+    util::setObjectURLResolver([](const std::string& url) -> std::shared_ptr<const util::ObjectURLData> {
+        bronze::Value blob = ev::undefined();
+        if (!bk::blobByObjectURL(url, &blob)) return nullptr;
+        const uint8_t* data = nullptr;
+        size_t len = 0;
+        std::string type;
+        bk::blobBytes(blob, &data, &len, &type);
+        auto out = std::make_shared<util::ObjectURLData>();
+        if (data && len > 0) {
+            out->bytes.assign(data, data + len);
+        }
+        out->type = std::move(type);
+        return out;
+    });
 
     bk::installModuleRegistry();
     bk::installConsole();

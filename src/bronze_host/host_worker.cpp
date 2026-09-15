@@ -152,7 +152,63 @@ void WorkerInstance::threadFunc() {
         return ev::undefined();
     });
 
-    brokit::api::installAll();
+    namespace bk = brokit::api;
+    bk::installModuleRegistry();
+    bk::installConsole();
+    bk::installTimers();
+    bk::installURL();
+    bk::installCrypto();
+    bk::installSubtleCrypto();
+    bk::installEncoding();
+    bk::installTreeWalker();
+    bk::installAbortController();
+    bk::installStructuredClone();
+    bk::installBlob();
+    bk::installURLObject();
+    bk::installProcess();
+    bk::installOS();
+    bk::installPath();
+    bk::installIndexedDB();
+    bk::installIndexedDBJS();
+    bk::installReadableStream();
+    bk::installFetch();
+    bk::installWritableStream();
+    bk::installFS();
+    bk::installFSWatch();
+    bk::installChildProcess();
+    bk::installWebSocket();
+    bk::installWebSocketJS();
+    bk::installEventSource();
+    bk::installFormData();
+    bk::installFetchClasses();
+    {
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) {
+            Value f = ev::getProperty(gt.value, "fetch");
+            if (!ev::isUndefined(f)) ev::registerGlobal("fetch", f);
+        }
+    }
+    bk::installXMLHttpRequest();
+    bk::installCompression();
+    bk::installBase64();
+    bk::installEventTarget();
+    bk::installMessageChannel();
+    bk::installEvents();
+    bk::installUtil();
+    bk::installBuffer();
+    {
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) {
+            Value buf = ev::getProperty(gt.value, "Buffer");
+            if (!ev::isUndefined(buf)) ev::registerGlobal("Buffer", buf);
+            Value sc = ev::getProperty(gt.value, "structuredClone");
+            if (!ev::isUndefined(sc)) ev::registerGlobal("structuredClone", sc);
+        }
+    }
+    bk::installNet();
+    bk::installNetJS();
+    bk::installWebSocketServerJS();
+    bk::installRequire();
     auto* eng = hostEngine();
     if (eng) {
         for (const auto& [prefix, target] : eng->assetMounts().mounts()) {

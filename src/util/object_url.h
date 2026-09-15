@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -51,5 +52,8 @@ std::shared_ptr<const ObjectURLData> lookupObjectURL(const std::string& url);
 // came to work in the layout walk but not in `new Image()`.
 bool inlineURLBytes(const std::string& url, std::vector<uint8_t>& out,
                     std::string* mime = nullptr);
+
+using ObjectURLResolver = std::function<std::shared_ptr<const ObjectURLData>(const std::string& url)>;
+void setObjectURLResolver(ObjectURLResolver resolver);
 
 } // namespace bro::util

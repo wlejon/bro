@@ -23,6 +23,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_touch.h"
 
@@ -774,6 +775,9 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
     // Single-threaded and re-entrant by construction: nothing here holds a bare
     // Value across the call.
     engine->dispatchElementEvent(el, evt);
+    if (spec.type == "click" && !evt.defaultPrevented()) {
+        runAnchorDownload(el);
+    }
     return ev::fromBool(!evt.defaultPrevented());
 }
 

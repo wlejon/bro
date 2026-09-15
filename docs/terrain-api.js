@@ -143,7 +143,7 @@ class Terrain {
   /**
    *  World-space origin offset [x, y, z] of this terrain manager.
    * @readonly
-   * @type {Array<number>|null}
+   * @type {Array<number>}
    */
   origin;
 
@@ -219,7 +219,7 @@ class Terrain {
   /**
    * Install custom height provider callback function in place of built-in noise.
    *
-   * @param {Function|null} fn - Height source callback or null to restore procedural generator
+   * @param {Function} fn - Height source callback or null to restore procedural generator
    */
   setHeightSource(fn) {}
 

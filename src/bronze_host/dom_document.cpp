@@ -6,6 +6,7 @@
 #include "bronze_host/host_range.h"
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_matchmedia.h"
+#include "bronze_host/host_web_animations.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -548,6 +549,7 @@ Value makeDocumentValue(dom::Document* fixed) {
         dom::Document* doc = documentFor(fixed);
         return doc ? doc->documentElement() : nullptr;
     }, "document");
+    decorateDocumentWebAnimations(b);
     Value docVal = b.get();
     ev::setPrototype(docVal, documentHostClass().prototype());
     return docVal;

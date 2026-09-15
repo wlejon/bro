@@ -18,6 +18,7 @@
 #include "layout/value_change.h"
 #include "platform/dialogs.h"
 #include "platform/sdl_window.h"
+#include "bronze_host/host_anchor_download.h"
 #include "util/string_utils.h"
 
 #include <SDL3/SDL.h>
@@ -703,6 +704,12 @@ void dispatchDocMouseRelease(
                     prev->setAttribute("checked", "");
                 if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
             }
+        }
+
+        // <a download> default action: save the link's bytes rather than
+        // navigating to them. Mirrors the programmatic element.click() path.
+        if (!clickEvt.defaultPrevented() && target) {
+            bro::bronze_host::runAnchorDownload(target);
         }
 
         // Interactive form submission: a click on <button> or

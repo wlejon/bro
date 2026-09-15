@@ -5522,7 +5522,7 @@ declare class SceneGraph {
   destroyNode(node: SceneNode): void;
   setCamera(opts?: SceneCameraOptions): void;
   createCamera(opts?: SceneCameraOptions): SceneNode;
-  setActiveCamera(camera: SceneNode | null): void;
+  setActiveCamera(camera: SceneNode): void;
   setToneMap(opts?: ToneMapConfig): void;
   setAmbient(opts?: AmbientConfig): void;
   setWind(dir: number[], speed: number): void;
@@ -5548,7 +5548,7 @@ declare class SceneGraph {
   raycast(origin: number[], direction: number[]): SceneRaycastResult | null;
   unprojectLocal(node: SceneNode, screenPoint: number[]): number[];
   toImageData(): ImageData;
-  captureFrame(format?: string, quality?: number): ArrayBuffer;
+  captureFrame(format?: string, quality?: number): ImageData;
   asTexture(): object;
   bindAudioListenerToCamera(bind: boolean): void;
   attachAIWorld(aiWorld: object, opts?: object): void;
@@ -5686,7 +5686,7 @@ declare class Terrain {
   /**
    *  World-space origin offset [x, y, z] of this terrain manager.
    */
-  readonly origin: number[] | null;
+  readonly origin: number[];
   readonly layers: number;
   /**
    * Stream and generate terrain chunks around camera position (x, y, z) in world space.
@@ -5749,7 +5749,7 @@ declare class Terrain {
    *
    * @param fn Height source callback or null to restore procedural generator
    */
-  setHeightSource(fn: Function | null): void;
+  setHeightSource(fn: Function): void;
   heightAt(x: number, z: number): number;
   normalAt(x: number, z: number): number[];
   elevation(x: number, z: number): number;

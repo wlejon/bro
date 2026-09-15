@@ -26,6 +26,13 @@ extern "C" void bro_mesh_main();
 extern "C" void bro_net_main();
 extern "C" void bro_rigging_main();
 extern "C" void bro_physics_main();
+extern "C" void bro_terrain_main();
+extern "C" void bro_clipmap_main();
+extern "C" void bro_tile_world_main();
+extern "C" void bro_lighting_main();
+extern "C" void bro_gizmo_main();
+extern "C" void bro_animation_main();
+extern "C" void bro_scene_main();
 
 namespace bro::bronze_host {
 
@@ -105,6 +112,41 @@ void installPhysicsModule() {
     adoptGlobalProperty("PhysicsVehicle");
     adoptGlobalProperty("PhysicsRagdoll");
     adoptGlobalProperty("PhysicsWorldHandle");
+}
+
+void installTerrainModule() {
+    bronze::embed::runEntry(bro_terrain_main);
+    adoptGlobalProperty("Terrain");
+}
+
+void installClipmapModule() {
+    bronze::embed::runEntry(bro_clipmap_main);
+    adoptGlobalProperty("ClipmapTerrain");
+}
+
+void installTileWorldModule() {
+    bronze::embed::runEntry(bro_tile_world_main);
+    adoptGlobalProperty("TileWorld");
+}
+
+void installLightingModule() {
+    bronze::embed::runEntry(bro_lighting_main);
+}
+
+void installGizmoModule() {
+    bronze::embed::runEntry(bro_gizmo_main);
+}
+
+void installAnimationModule() {
+    bronze::embed::runEntry(bro_animation_main);
+    adoptGlobalProperty("Tween");
+    adoptGlobalProperty("AnimationPlayer");
+}
+
+void installSceneModule() {
+    bronze::embed::runEntry(bro_scene_main);
+    adoptGlobalProperty("SceneNode");
+    adoptGlobalProperty("SceneGraph");
 }
 
 }  // namespace bro::bronze_host

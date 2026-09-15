@@ -92,6 +92,13 @@ bool registerMeshNatives(std::string* error);
 bool registerNetNatives(std::string* error);
 bool registerRiggingNatives(std::string* error);
 bool registerPhysicsNatives(std::string* error);
+bool registerAnimationNatives(std::string* error);
+bool registerTerrainNatives(std::string* error);
+bool registerClipmapNatives(std::string* error);
+bool registerTileWorldNatives(std::string* error);
+bool registerLightingNatives(std::string* error);
+bool registerGizmoNatives(std::string* error);
+bool registerSceneNatives(std::string* error);
 void pollNet();
 
 // After registration: the prototypes of the mesh classes as properties of

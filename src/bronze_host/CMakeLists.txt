@@ -138,6 +138,9 @@ set(BRO_BRONZE_HOST_SOURCES
     host_proxy.cpp
     host_class.cpp
     host_vendor_globals.cpp
+    host_anchor_download.cpp
+    host_intl.cpp
+    host_web_animations.cpp
     host_brokit.cpp
     host_headless.cpp
     host_headless_input.cpp
@@ -174,6 +177,24 @@ set(BRO_BRONZE_HOST_SOURCES
     native_physics_vehicle.cpp
     native_physics_ragdoll.cpp
     natives/physics/native_physics_register.cpp
+    native_scene_nodes.cpp
+    native_scene_lights.cpp
+    native_scene_core.cpp
+    native_scene_env.cpp
+    native_scene_terrain.cpp
+    native_scene_clipmap.cpp
+    native_scene_tile.cpp
+    native_scene_lighting.cpp
+    native_scene_anim.cpp
+    native_scene_clip.cpp
+    native_scene_gizmo.cpp
+    natives/scene/native_scene_register.cpp
+    natives/terrain/native_terrain_register.cpp
+    natives/clipmap/native_clipmap_register.cpp
+    natives/tile_world/native_tile_world_register.cpp
+    natives/lighting/native_lighting_register.cpp
+    natives/animation/native_animation_register.cpp
+    natives/gizmo/native_gizmo_register.cpp
     natives/time/native_time_register.cpp
     natives/paths/native_paths_register.cpp
     natives/window/native_window_register.cpp
@@ -194,6 +215,13 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/net
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/rigging
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/physics
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/scene
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/terrain
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/clipmap
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/tile_world
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/lighting
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/animation
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/gizmo
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory
@@ -397,6 +425,13 @@ else()
     bro_compile_js(net        bro_net_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(rigging    bro_rigging_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(physics    bro_physics_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(terrain    bro_terrain_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(clipmap    bro_clipmap_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(tile_world bro_tile_world_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(lighting   bro_lighting_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(gizmo      bro_gizmo_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(animation  bro_animation_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.

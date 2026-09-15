@@ -413,6 +413,26 @@ void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref);
 // std::vector<Value> would be stale from its second element onwards.
 Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make);
 
+inline Value makeEmptyArray() {
+    return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+}
+
+inline Value hostMakeDomError(const char* name, const std::string& message) {
+    auto g = ev::globalValue("Error");
+    Value errObj;
+    Value msgVal = ev::fromUtf8(message);
+    if (g.found) {
+        ev::CallResult res = ev::construct(g.value, std::span<const Value>(&msgVal, 1));
+        errObj = res.thrown ? ev::createObject() : res.value;
+    } else {
+        errObj = ev::createObject();
+    }
+    if (name && *name) {
+        ev::setProperty(errObj, "name", ev::fromUtf8(name));
+    }
+    return errObj;
+}
+
 // ---------------------------------------------------------------------------
 // Property traps (host_proxy.cpp)
 // ---------------------------------------------------------------------------
@@ -647,5 +667,12 @@ void installMeshModule();
 void installNetModule();
 void installRiggingModule();
 void installPhysicsModule();
+void installTerrainModule();
+void installClipmapModule();
+void installTileWorldModule();
+void installLightingModule();
+void installGizmoModule();
+void installAnimationModule();
+void installSceneModule();
 
 }  // namespace bro::bronze_host
