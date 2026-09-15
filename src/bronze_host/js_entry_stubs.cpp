@@ -21,4 +21,7 @@ void bro_net_sync_main() {}
 void bro_image_gpu_main() {}
 void bro_core_main() {}
 void bro_mesh_main() {}
+void bro_net_main() {}
+void bro_rigging_main() {}
+void bro_physics_main() {}
 }

@@ -23,6 +23,9 @@ extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
 extern "C" void bro_core_main();
 extern "C" void bro_mesh_main();
+extern "C" void bro_net_main();
+extern "C" void bro_rigging_main();
+extern "C" void bro_physics_main();
 
 namespace bro::bronze_host {
 
@@ -77,6 +80,31 @@ void installMeshModule() {
     bronze::embed::runEntry(bro_mesh_main);
     adoptGlobalProperty("Mesh");
     adoptGlobalProperty("MeshBVH");
+}
+
+void installNetModule() {
+    bronze::embed::runEntry(bro_net_main);
+}
+
+void installRiggingModule() {
+    bronze::embed::runEntry(bro_rigging_main);
+    adoptGlobalProperty("SkinData");
+    adoptGlobalProperty("Skeleton");
+    adoptGlobalProperty("Pose");
+    adoptGlobalProperty("RigSpec");
+    adoptGlobalProperty("VoxelChunk");
+    adoptGlobalProperty("IK");
+    adoptGlobalProperty("Rig");
+}
+
+void installPhysicsModule() {
+    bronze::embed::runEntry(bro_physics_main);
+    adoptGlobalProperty("Physics");
+    adoptGlobalProperty("PhysicsCharacter");
+    adoptGlobalProperty("PhysicsSoftBody");
+    adoptGlobalProperty("PhysicsVehicle");
+    adoptGlobalProperty("PhysicsRagdoll");
+    adoptGlobalProperty("PhysicsWorldHandle");
 }
 
 }  // namespace bro::bronze_host

@@ -89,6 +89,10 @@ bool registerSettingsNatives(std::string* error);
 bool registerPathsNatives(std::string* error);
 bool registerDunderBroNatives(std::string* error);
 bool registerMeshNatives(std::string* error);
+bool registerNetNatives(std::string* error);
+bool registerRiggingNatives(std::string* error);
+bool registerPhysicsNatives(std::string* error);
+void pollNet();
 
 // After registration: the prototypes of the mesh classes as properties of
 // `__bro_native.mesh` (`MeshPrototype`, `MeshBVHPrototype`), for js/mesh.js

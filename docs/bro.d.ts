@@ -1369,6 +1369,27 @@ interface MotionClip {
 }
 
 /**
+ * =============================================================================
+ * bro.net & bro.net.sync — Game Networking and Replication System
+ * =============================================================================
+ *
+ * Low-level UDP game networking backed by GameNetworkingSockets, with raw
+ * binary packets, structured clone messaging, and multi-channel delivery.
+ * Includes bro.net.sync high-level multiplayer state replication and RPCs.
+ *
+ * @example
+ *   bro.net.onconnect = (peerId) => console.log('Peer connected:', peerId);
+ *   bro.net.onmessage = (peerId, data) => console.log('Received message:', data);
+ *   bro.net.host(7777);
+ */
+interface NetStats {
+  ping?: number;
+  packetLoss?: number;
+  bytesSent?: number;
+  bytesRecv?: number;
+}
+
+/**
  * Metadata record for a FastNoise node type.
  */
 interface FastNoiseTypeInfo {
@@ -1408,6 +1429,276 @@ interface FastNoiseNodeMembers {
   variables?: FastNoiseMemberVariable[];
   nodes?: FastNoiseMemberNode[];
   hybrids?: FastNoiseMemberHybrid[];
+}
+
+/**
+ * =============================================================================
+ * Physics — Jolt Physics 3D Simulation & Collision System
+ * =============================================================================
+ *
+ * Complete 3D physics engine binding backed by Jolt Physics.
+ * Includes rigid body dynamics, collision queries (raycast, shape cast, overlap),
+ * character virtual controllers, vehicles, ragdolls, soft bodies, constraints,
+ * and sandbox worlds.
+ *
+ * @example
+ *   Physics.setGravity(0, -9.81, 0);
+ *   const body = Physics.createBody({
+ *     shape: { type: 'box', halfExtents: [1, 1, 1] },
+ *     position: [0, 10, 0],
+ *     motionType: 'dynamic'
+ *   });
+ *   Physics.addImpulse(body, 0, 5, 0);
+ */
+interface PhysicsVec3 {
+  x?: number;
+  y?: number;
+  z?: number;
+}
+
+interface PhysicsQuat {
+  x?: number;
+  y?: number;
+  z?: number;
+  w?: number;
+}
+
+interface PhysicsTransform {
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+  userData?: number;
+}
+
+interface PhysicsVelocity {
+  linear?: PhysicsVec3;
+  angular?: PhysicsVec3;
+}
+
+interface PhysicsAreaOverride {
+  gravityMode?: string;
+  gravity?: PhysicsVec3;
+  gravityPoint?: boolean;
+  gravityStrength?: number;
+  falloffDistance?: number;
+  gravityScale?: number;
+  linearDamping?: number;
+  angularDamping?: number;
+  priority?: number;
+}
+
+interface PhysicsCompoundPart {
+  shape?: string;
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+  localPosition?: PhysicsVec3;
+  localRotation?: PhysicsQuat;
+  halfExtents?: PhysicsVec3;
+  radius?: number;
+  halfHeight?: number;
+  density?: number;
+  friction?: number;
+  restitution?: number;
+}
+
+interface PhysicsBodyOptions {
+  shape?: string;
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+  localPosition?: PhysicsVec3;
+  localRotation?: PhysicsQuat;
+  halfExtents?: PhysicsVec3;
+  radius?: number;
+  halfHeight?: number;
+  static?: boolean;
+  isStatic?: boolean;
+  sensor?: boolean;
+  isSensor?: boolean;
+  ccd?: boolean;
+  friction?: number;
+  restitution?: number;
+  frictionCombine?: string;
+  restitutionCombine?: string;
+  density?: number;
+  mass?: number;
+  gravityFactor?: number;
+  linearDamping?: number;
+  angularDamping?: number;
+  maxLinearVelocity?: number;
+  maxAngularVelocity?: number;
+  userData?: number;
+  dofs?: string;
+  layer?: number;
+  points?: number[];
+  positions?: number[];
+  indices?: number[];
+  parts?: PhysicsCompoundPart[];
+  area?: PhysicsAreaOverride;
+}
+
+interface PhysicsLayersConfig {
+  names?: string[];
+  matrix?: boolean[];
+}
+
+interface PhysicsRayHit {
+  body?: number;
+  bodyId?: number;
+  fraction?: number;
+  userData?: number;
+  position?: PhysicsVec3;
+  normal?: PhysicsVec3;
+}
+
+interface PhysicsShapeCastHit {
+  body?: number;
+  bodyId?: number;
+  fraction?: number;
+  userData?: number;
+  position?: PhysicsVec3;
+  normal?: PhysicsVec3;
+}
+
+interface PhysicsShapeCastOptions {
+  shape?: string;
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+  halfExtents?: PhysicsVec3;
+  radius?: number;
+  halfHeight?: number;
+  direction?: PhysicsVec3;
+  maxDistance?: number;
+  ignoreBody?: number;
+  ignoreBodies?: number[];
+  layers?: string[];
+}
+
+interface PhysicsOverlapShapeOptions {
+  shape?: string;
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+  halfExtents?: PhysicsVec3;
+  radius?: number;
+  halfHeight?: number;
+  ignoreBody?: number;
+  ignoreBodies?: number[];
+  layers?: string[];
+}
+
+interface PhysicsContactPoint {
+  x?: number;
+  y?: number;
+  z?: number;
+}
+
+interface PhysicsContact {
+  type?: string;
+  body1?: number;
+  body2?: number;
+  sensor?: boolean;
+  normal?: PhysicsVec3;
+  penetration?: number;
+  impulse?: number;
+  points?: PhysicsContactPoint[];
+}
+
+interface PhysicsBodyProperties {
+  mass?: number;
+  friction?: number;
+  restitution?: number;
+  linearDamping?: number;
+  angularDamping?: number;
+  gravityFactor?: number;
+  motionType?: string;
+  layer?: number;
+  isSensor?: boolean;
+  userData?: number;
+}
+
+interface PhysicsWorldOptions {
+  gravity?: PhysicsVec3;
+  maxBodies?: number;
+}
+
+interface PhysicsCharacterOptions {
+  position?: PhysicsVec3;
+  radius?: number;
+  halfHeight?: number;
+  mass?: number;
+  maxSlopeAngle?: number;
+  maxStrength?: number;
+  shapeOffset?: PhysicsVec3;
+  layer?: string;
+}
+
+interface PhysicsCharacterState {
+  groundState?: string;
+  groundPosition?: PhysicsVec3;
+  groundNormal?: PhysicsVec3;
+  groundVelocity?: PhysicsVec3;
+}
+
+interface PhysicsVehicleOptions {
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+}
+
+interface PhysicsRagdollOptions {
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+}
+
+interface PhysicsClothOptions {
+  gridX?: number;
+  gridZ?: number;
+  spacing?: number;
+  mass?: number;
+  pinned?: string;
+}
+
+interface PhysicsSoftBodyOptions {
+  cloth?: PhysicsClothOptions;
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+}
+
+interface PhysicsSoftBodyTopology {
+  gridX?: number;
+  gridZ?: number;
+}
+
+interface PhysicsBounds {
+  min?: PhysicsVec3;
+  max?: PhysicsVec3;
+}
+
+interface PhysicsPose {
+  data?: number[];
+}
+
+interface PhysicsConstraintOptions {
+  type?: string;
+  body1?: number;
+  body2?: number;
+  point1?: PhysicsVec3;
+  point2?: PhysicsVec3;
+  minDistance?: number;
+  maxDistance?: number;
+  axis1?: PhysicsVec3;
+  axis2?: PhysicsVec3;
+  minAngle?: number;
+  maxAngle?: number;
+  minLimit?: number;
+  maxLimit?: number;
+}
+
+interface PhysicsConstraintMotorOptions {
+  type?: string;
+  target?: number;
+  maxForce?: number;
+  maxTorque?: number;
+  frequency?: number;
+  damping?: number;
+  axis?: string;
 }
 
 /**
@@ -4997,25 +5288,6 @@ declare class FastNoise {
   genTileable2D(xSize: number, ySize: number, frequency: number, seed: number): Float32Array;
 }
 
-/**
- * =============================================================================
- * Physics — Jolt Physics 3D Simulation & Collision System
- * =============================================================================
- *
- * Complete 3D physics engine binding backed by Jolt Physics.
- * Includes rigid body dynamics, collision queries (raycast, shape cast, overlap),
- * character virtual controllers, vehicles, ragdolls, soft bodies, constraints,
- * and sandbox worlds.
- *
- * @example
- *   Physics.setGravity(0, -9.81, 0);
- *   const body = Physics.createBody({
- *     shape: { type: 'box', halfExtents: [1, 1, 1] },
- *     position: [0, 10, 0],
- *     motionType: 'dynamic'
- *   });
- *   Physics.addImpulse(body, 0, 5, 0);
- */
 declare class PhysicsWorldHandle {
   destroy(): void;
   step(dt: number): void;
@@ -5023,24 +5295,37 @@ declare class PhysicsWorldHandle {
 
 declare class PhysicsCharacter {
   setPosition(x: number, y: number, z: number): void;
+  setVelocity(x: number, y: number, z: number): void;
   setLinearVelocity(x: number, y: number, z: number): void;
-  getPosition(): object;
-  getLinearVelocity(): object;
+  getPosition(): PhysicsVec3;
+  getVelocity(): PhysicsVec3;
+  getLinearVelocity(): PhysicsVec3;
+  getState(): PhysicsCharacterState;
   update(dt: number): void;
+  destroy(): void;
 }
 
 declare class PhysicsVehicle {
   setDriverInput(forward: number, steer: number, brake: number, handBrake: number): void;
-  getTransform(): object;
+  getTransform(): PhysicsTransform;
+  destroy(): void;
 }
 
 declare class PhysicsRagdoll {
-  driveToPose(pose: object, dt: number): void;
-  getPose(): object;
+  driveToPose(pose: PhysicsPose, dt: number): void;
+  getPose(): PhysicsPose;
+  destroy(): void;
 }
 
 declare class PhysicsSoftBody {
-  getBounds(): object;
+  readonly vertexCount: number;
+  topology(): PhysicsSoftBodyTopology;
+  vertices(): Float32Array;
+  pin(index: number, pinned?: boolean): boolean;
+  setVertex(index: number, x: number, y: number, z: number): boolean;
+  setVertexVelocity(index: number, x: number, y: number, z: number): boolean;
+  getBounds(): PhysicsBounds;
+  destroy(): void;
 }
 
 /**
@@ -5810,16 +6095,16 @@ declare class Worker {
 // ── Global 'Physics' Namespace ──────────────────────────────────────────
 
 declare namespace Physics {
-  function createWorldHandle(opts?: object): PhysicsWorldHandle;
-  function createWorld(opts?: object): void;
+  function createWorldHandle(opts?: PhysicsWorldOptions): PhysicsWorldHandle;
+  function createWorld(opts?: PhysicsWorldOptions): void;
   function setGravity(x: number, y: number, z: number): void;
-  function getGravity(): number[];
-  function setLayers(config: object): void;
-  function createBody(config: object): number;
+  function getGravity(): PhysicsVec3;
+  function setLayers(config: PhysicsLayersConfig): boolean;
+  function createBody(config: PhysicsBodyOptions): number;
   function destroyBody(tag: number): void;
   function destroyAll(): void;
-  function getTransform(tag: number): object;
-  function getVelocity(tag: number): object;
+  function getTransform(tag: number): PhysicsTransform;
+  function getVelocity(tag: number): PhysicsVelocity;
   function setPosition(tag: number, x: number, y: number, z: number): void;
   function setRotation(tag: number, x: number, y: number, z: number, w: number): void;
   function setLinearVelocity(tag: number, x: number, y: number, z: number): void;
@@ -5827,29 +6112,43 @@ declare namespace Physics {
   function addForce(tag: number, x: number, y: number, z: number): void;
   function addImpulse(tag: number, x: number, y: number, z: number): void;
   function addTorque(tag: number, x: number, y: number, z: number): void;
-  function setUserData(tag: number, data: any): void;
-  function getUserData(tag: number): any;
+  function setUserData(tag: number, data: number): void;
+  function getUserData(tag: number): number;
   function setLayer(tag: number, layer: number): void;
   function setKinematic(tag: number): void;
-  function setMotionType(tag: number, type: string | number): void;
+  function setMotionType(tag: number, type: any): void;
   function moveKinematic(tag: number, x: number, y: number, z: number, dt: number): void;
-  function raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
-  function raycastClosest(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist?: number, mask?: number): object | null;
-  function castShape(config: object): object[];
-  function castShapeClosest(config: object): object | null;
-  function overlapShape(config: object): number[];
-  function overlapPoint(x: number, y: number, z: number, mask?: number): number[];
-  function getContacts(): object[];
+  function raycast(): void;
+  function raycastClosest(): void;
+  function castShape(): void;
+  function castShapeClosest(): void;
+  function overlapShape(): void;
+  function overlapSphere(): void;
+  function overlapBox(): void;
+  function overlapPoint(): void;
+  function onContact(): void;
+  function addEventListener(): void;
+  function removeEventListener(): void;
+  function raycastClosestRaw(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, mask?: number): PhysicsRayHit;
+  function raycastRaw(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, mask?: number): PhysicsRayHit[];
+  function castShapeRaw(config: PhysicsShapeCastOptions): PhysicsShapeCastHit[];
+  function castShapeClosestRaw(config: PhysicsShapeCastOptions): PhysicsShapeCastHit;
+  function overlapShapeRaw(config: PhysicsOverlapShapeOptions): number[];
+  function overlapSphereRaw(x: number, y: number, z: number, radius: number): number[];
+  function overlapBoxRaw(cx: number, cy: number, cz: number, hx: number, hy: number, hz: number): number[];
+  function overlapPointRaw(x: number, y: number, z: number, mask?: number): number[];
+  function getContacts(): PhysicsContact[];
   function setFrictionCombine(tag: number, mode: string): void;
   function setRestitutionCombine(tag: number, mode: string): void;
+  function getMass(tag: number): number;
   function setMass(tag: number, mass: number): void;
   function setLinearDamping(tag: number, damping: number): void;
   function setAngularDamping(tag: number, damping: number): void;
   function setGravityFactor(tag: number, factor: number): void;
   function setFriction(tag: number, friction: number): void;
   function setRestitution(tag: number, restitution: number): void;
-  function getBodyProperties(tag: number): object | null;
-  function setAreaOverride(tag: number, config: object): void;
+  function getBodyProperties(tag: number): PhysicsBodyProperties;
+  function setAreaOverride(tag: number, config: PhysicsAreaOverride): void;
   function setTimeStep(dt: number): void;
   function step(dt: number): void;
   function setInterpolation(enabled: boolean): void;
@@ -5857,15 +6156,16 @@ declare namespace Physics {
   function isActive(tag: number): boolean;
   function activate(tag: number): void;
   function getAllTransforms(worldHandle?: number): Float32Array;
-  function createCharacter(config: object): PhysicsCharacter;
-  function createVehicle(config: object): PhysicsVehicle;
-  function createRagdoll(config: object): PhysicsRagdoll;
-  function createSoftBody(config: object): PhysicsSoftBody;
-  function createConstraint(config: object): number;
+  function createCharacter(config: PhysicsCharacterOptions): PhysicsCharacter;
+  function createVehicle(config: PhysicsVehicleOptions): PhysicsVehicle;
+  function createRagdoll(config: PhysicsRagdollOptions): PhysicsRagdoll;
+  function createSoftBody(config: PhysicsSoftBodyOptions): PhysicsSoftBody;
+  function createConstraint(config: PhysicsConstraintOptions): number;
   function destroyConstraint(tag: number): void;
   function setConstraintEnabled(tag: number, enabled: boolean): void;
+  function isConstraintEnabled(tag: number): boolean;
   function setWheelMotor(vehicleTag: number, wheelIndex: number, motorTorque: number, brakeTorque: number): void;
-  function setConstraintMotor(tag: number, config: object): void;
+  function setConstraintMotor(tag: number, config: PhysicsConstraintMotorOptions): void;
   function setConstraintBreakingImpulse(tag: number, impulse: number): void;
   function getConstraintBreakingImpulse(tag: number): number;
   function getBrokenConstraints(): number[];
@@ -6904,20 +7204,6 @@ declare namespace bro {
     function load(opts: MotionLoadOptions): ArdyMotionPipeline;
   }
 
-  /**
-   * =============================================================================
-   * bro.net & bro.net.sync — Game Networking and Replication System
-   * =============================================================================
-   *
-   * Low-level UDP game networking backed by GameNetworkingSockets, with raw
-   * binary packets, structured clone messaging, and multi-channel delivery.
-   * Includes bro.net.sync high-level multiplayer state replication and RPCs.
-   *
-   * @example
-   *   bro.net.onconnect = (peerId) => console.log('Peer connected:', peerId);
-   *   bro.net.onmessage = (peerId, data) => console.log('Received message:', data);
-   *   bro.net.host(7777);
-   */
   namespace net {
     let onconnect: ((event: any) => any) | null;
     let ondisconnect: ((event: any) => any) | null;
@@ -6932,9 +7218,9 @@ declare namespace bro {
     function sendClone(peerId: number, value: any, channel?: number): void;
     function broadcastClone(value: any, channel?: number): void;
     function peers(): number[];
-    function getPeerAddress(peerId: number): string | null;
-    function stats(): object;
-    function getPeerStats(peerId: number): object | null;
+    function getPeerAddress(peerId: number): string;
+    function stats(): NetStats;
+    function getPeerStats(peerId: number): NetStats;
     function setPeerSimulatedLoss(peerId: number, chance: number, latencyMin: number, latencyMax: number): void;
   }
 

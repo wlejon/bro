@@ -162,6 +162,18 @@ set(BRO_BRONZE_HOST_SOURCES
     native_settings.cpp
     native_dunder_bro.cpp
     native_mesh.cpp
+    native_net.cpp
+    natives/net/native_net_register.cpp
+    native_rigging.cpp
+    natives/rigging/native_rigging_register.cpp
+    native_physics_core.cpp
+    native_physics_queries.cpp
+    native_physics_character.cpp
+    native_physics_softbody.cpp
+    native_physics_constraints.cpp
+    native_physics_vehicle.cpp
+    native_physics_ragdoll.cpp
+    natives/physics/native_physics_register.cpp
     natives/time/native_time_register.cpp
     natives/paths/native_paths_register.cpp
     natives/window/native_window_register.cpp
@@ -179,6 +191,9 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/settings
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/dunder_bro
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/mesh
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/net
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/rigging
+    ${CMAKE_CURRENT_SOURCE_DIR}/natives/physics
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory
@@ -379,6 +394,9 @@ else()
     bro_compile_js(image_gpu  bro_image_gpu_main)
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(mesh       bro_mesh_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(net        bro_net_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(rigging    bro_rigging_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(physics    bro_physics_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.

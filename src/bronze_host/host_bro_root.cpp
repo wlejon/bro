@@ -77,7 +77,10 @@ bool registerBroNatives(std::string* error) {
            registerWindowNatives(error) &&
            registerSettingsNatives(error) &&
            registerDunderBroNatives(error) &&
-           registerMeshNatives(error);
+           registerMeshNatives(error) &&
+           registerNetNatives(error) &&
+           registerRiggingNatives(error) &&
+           registerPhysicsNatives(error);
 }
 
 // bronze_host.h: the calling thread's registry as the manifest file an
@@ -111,12 +114,13 @@ void publish(const char* name, const ev::Persistent& root) {
 void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
     // the life of the process (host_internal.h, HostClass).
-    auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh"}));
+    auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh", "net", "rigging"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
         makeRoot({"time", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
-                  "menu", "settingsUI", "inspector", "mesh"}));
+                  "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics"}));
+    auto* physicsRoot = new ev::Persistent(ev::createObject());
 #if BRO_WITH_3D
     {
         ev::Persistent scene(ev::createObject());
@@ -127,6 +131,7 @@ void installBroRoots(engine::Engine& engine) {
     publish("bro", *bro);
     publish("__bro", *dunder);
     publish("__bro_native", *native);
+    publish("Physics", *physicsRoot);
 
     std::string err;
     if (!registerBroNatives(&err)) {

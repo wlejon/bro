@@ -644,5 +644,8 @@ void installBroCoreModule();
 // natives under __bro_native.mesh (native_mesh.cpp). Entered after
 // installBroRoots; lifts `Mesh` and `MeshBVH` into the host-global registry.
 void installMeshModule();
+void installNetModule();
+void installRiggingModule();
+void installPhysicsModule();
 
 }  // namespace bro::bronze_host

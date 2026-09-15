@@ -1,4 +1,4 @@
-// ── Namespaces ───────────────────────────────────────────────────────────────
+// ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
  * =============================================================================
@@ -8,11 +8,15 @@
  * Low-level UDP game networking backed by GameNetworkingSockets, with raw
  * binary packets, structured clone messaging, and multi-channel delivery.
  * Includes bro.net.sync high-level multiplayer state replication and RPCs.
- * @example
- * bro.net.onconnect = (peerId) => console.log('Peer connected:', peerId);
- *   bro.net.onmessage = (peerId, data) => console.log('Received message:', data);
- *   bro.net.host(7777);
+ * @typedef {Object} NetStats
+ * @property {number} [ping]
+ * @property {number} [packetLoss]
+ * @property {number} [bytesSent]
+ * @property {number} [bytesRecv]
  */
+
+// ── Namespaces ───────────────────────────────────────────────────────────────
+
 /**
  * @type {EventHandler}
  */
@@ -84,18 +88,18 @@ bro.net.peers = function() {};
 
 /**
  * @param {number} peerId
- * @returns {string|null}
+ * @returns {string}
  */
 bro.net.getPeerAddress = function(peerId) {};
 
 /**
- * @returns {Object}
+ * @returns {NetStats}
  */
 bro.net.stats = function() {};
 
 /**
  * @param {number} peerId
- * @returns {Object|null}
+ * @returns {NetStats}
  */
 bro.net.getPeerStats = function(peerId) {};
 

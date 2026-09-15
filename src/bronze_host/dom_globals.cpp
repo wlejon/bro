@@ -203,6 +203,7 @@ void hostFrame(double dtMs) {
     drainHostTasks();                                    // 3
     pumpBrokitTicks();                                   // 3b
     drainWorkerMessages();                               // 3c
+    pollNet();                                           // 3d
     fireHostTimers(g_host->clockMs);                     // 4
     fireAnimationFrames();                               // 5
     ev::drainMicrotasks();                               // 6
@@ -799,7 +800,10 @@ void installWebHostGlobals(engine::Engine& engine) {
     // bro.mesh, Mesh and MeshBVH (js/mesh.js over native_mesh.cpp): after
     // the roots, whose `bro.mesh` and `__bro_native.mesh` it fills.
     installMeshModule();
+    installRiggingModule();
+    installPhysicsModule();
 #endif
+    installNetModule();
     // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use, and every name a module lists in
