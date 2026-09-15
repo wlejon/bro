@@ -39,6 +39,9 @@ extern "C" void bro_motion_main();
 extern "C" void bro_mic_main();
 extern "C" void bro_sense_main();
 extern "C" void bro_gesture_main();
+extern "C" void bro_wake_main();
+extern "C" void bro_kws_main();
+extern "C" void bro_listen_main();
 
 namespace bro::bronze_host {
 
@@ -200,6 +203,18 @@ void installSenseModule() {
 
 void installGestureModule() {
     bronze::embed::runEntry(bro_gesture_main);
+}
+
+void installWakeModule() {
+    bronze::embed::runEntry(bro_wake_main);
+}
+
+void installKwsModule() {
+    bronze::embed::runEntry(bro_kws_main);
+}
+
+void installListenModule() {
+    bronze::embed::runEntry(bro_listen_main);
 }
 
 }  // namespace bro::bronze_host

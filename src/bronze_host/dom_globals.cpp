@@ -826,6 +826,9 @@ void installWebHostGlobals(engine::Engine& engine) {
     installMicModule();
     installSenseModule();
     installGestureModule();
+    installWakeModule();
+    installKwsModule();
+    installListenModule();
     // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use, and every name a module lists in

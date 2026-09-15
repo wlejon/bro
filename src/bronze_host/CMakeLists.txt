@@ -213,6 +213,12 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/sense/native_sense_register.cpp
     native_gesture.cpp
     natives/gesture/native_gesture_register.cpp
+    native_wake.cpp
+    natives/wake/native_wake_register.cpp
+    native_kws.cpp
+    natives/kws/native_kws_register.cpp
+    native_listen.cpp
+    natives/listen/native_listen_register.cpp
     host_audio_core.cpp
     host_audio_context.cpp
     host_audio_clips.cpp
@@ -481,6 +487,9 @@ else()
     bro_compile_js(mic        bro_mic_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(sense      bro_sense_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(gesture    bro_gesture_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(wake       bro_wake_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(kws        bro_kws_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(listen     bro_listen_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.

@@ -685,6 +685,9 @@ void installMotionModule();
 void installMicModule();
 void installSenseModule();
 void installGestureModule();
+void installWakeModule();
+void installKwsModule();
+void installListenModule();
 
 void installAudioGlobals();
 void installAIGlobals();

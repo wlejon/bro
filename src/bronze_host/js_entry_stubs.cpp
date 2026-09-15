@@ -37,4 +37,7 @@ void bro_motion_main() {}
 void bro_mic_main() {}
 void bro_gesture_main() {}
 void bro_sense_main() {}
+void bro_wake_main() {}
+void bro_kws_main() {}
+void bro_listen_main() {}
 }
