@@ -221,11 +221,16 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
     // sequence does not link at all. The ABI check that opens runMain has
     // already happened above, against the module's exported stamp instead of a
     // linked constant.
+    // Closed right after the entry: left current, the handle would tag every
+    // span a LATER program registers on this thread — a headless driver
+    // script's, say — and reloading the app would unroot that program while it
+    // is still on the stack driving the reload.
     const bronze::embed::ModuleHandle bronzeHandle = bronze::embed::beginModuleLoad();
     bronze::embed::runEntry(entry);
+    bronze::embed::endModuleLoad(bronzeHandle);
     std::fflush(stdout);
 
-    engine.setActiveAppModuleHandle(bronzeHandle);
+    engine.addAppModuleHandle(bronzeHandle);
 
     LOG_INFO("compiled app: %s (bronze ABI %08x, host globals: %s)", modulePath.c_str(),
              kRuntimeAbi, globals.c_str());

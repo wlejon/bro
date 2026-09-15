@@ -257,11 +257,15 @@ static bool safeRunEntry(void (*entry)()) {
 }
 #endif
 
-bool evalScript(engine::Engine& engine, const std::string& code,
-                const std::string& filename) {
+namespace {
+
+// evalScript and evalAppScript are one function: the latter brackets the run
+// as a module load and hands the handle back through `moduleHandleOut`.
+bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::string& filename,
+                    ev::ModuleHandle* moduleHandleOut) {
     HostEvalScope evalScope;
     if (!isJitDisabled()) {
-        return evalScriptJit(engine, code, filename);
+        return evalScriptJit(engine, code, filename, moduleHandleOut);
     }
 
     ensureSharedRuntimeEnv();
@@ -362,8 +366,11 @@ bool evalScript(engine::Engine& engine, const std::string& code,
         return false;
     }
 
+    const ev::ModuleHandle bronzeHandle = moduleHandleOut ? ev::beginModuleLoad() : 0;
+    if (moduleHandleOut) *moduleHandleOut = bronzeHandle;
     bool entryOk = safeRunEntry(entry);
     if (!entryOk) {
+        ev::endModuleLoad(bronzeHandle);
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
@@ -371,12 +378,28 @@ bool evalScript(engine::Engine& engine, const std::string& code,
     if (ev::microtasksPending()) {
         ev::drainMicrotasks();
     }
+    ev::endModuleLoad(bronzeHandle);
     std::fflush(stdout);
 
     if (hasTestFailure() || engine.hasTestFailure()) {
         return false;
     }
     return true;
+}
+
+} // namespace
+
+bool evalScript(engine::Engine& engine, const std::string& code, const std::string& filename) {
+    return evalScriptImpl(engine, code, filename, nullptr);
+}
+
+bool evalAppScript(engine::Engine& engine, const std::string& code, const std::string& filename) {
+    ev::ModuleHandle handle = 0;
+    const bool ok = evalScriptImpl(engine, code, filename, &handle);
+    // Recorded on failure too: a top level that threw halfway still
+    // registered its spans, and they are still the reload's to retire.
+    engine.addAppModuleHandle(handle);
+    return ok;
 }
 
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
@@ -576,17 +599,36 @@ bronze::Value dynamicEval(bronze::Value source) {
         return ev::throwError("eval: no active engine available");
     }
     const std::string code = ev::toUtf8(source);
+
+    // One compile of the text as written. bronze's evaluator already answers
+    // the completion value — a trailing expression statement becomes the
+    // result — so there is no expression-first probe to make, and none is
+    // wanted: a probe that fails to parse `var x = 1` as an expression used to
+    // go through the reporting path, whose failure latch then failed the
+    // statement retry that had in fact succeeded. What the script threw is
+    // rethrown as the value it was, for the caller's catch.
+    if (!isJitDisabled()) {
+        auto res = evalScriptJitResult(*s_activeEngine, code, "<eval>");
+        if (res.thrown) return ev::throwValue(res.value);
+        return res.value;
+    }
+
+    // The ahead-of-time fallback (BRO_DISABLE_JIT) runs a module whose result
+    // it can only read back through a global; it keeps the two-shape approach,
+    // with the probe's failure UNLATCHED before the statement form is tried.
     const uint64_t evalId = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
     const std::string resName = "__bro_eval_res_" + std::to_string(evalId);
+    const bool hostFailedBefore = hasTestFailure();
+    const bool engineFailedBefore = s_activeEngine->hasTestFailure();
 
-    // First try evaluating as an expression assigning to global:
     std::string exprCode = "globalThis." + resName + " = (" + code + ");";
     if (evalScript(*s_activeEngine, exprCode, "<eval>")) {
         ev::GlobalValue g = ev::globalValue(resName);
         if (g.found) return g.value;
     }
+    setTestFailure(hostFailedBefore);
+    s_activeEngine->setTestFailure(engineFailedBefore);
 
-    // Fallback: evaluate as statements:
     std::string stmtCode = "globalThis." + resName + " = undefined;\n" + code + ";";
     if (evalScript(*s_activeEngine, stmtCode, "<eval>")) {
         ev::GlobalValue g = ev::globalValue(resName);

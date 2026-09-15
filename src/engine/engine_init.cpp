@@ -414,7 +414,7 @@ void Engine::initAppRealm() {
             }
         }
         if (!combinedScripts.empty()) {
-            if (!bro::bronze_host::evalScript(*this, combinedScripts, manifest_.htmlPath)) {
+            if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
                 setTestFailure(true);
             }
         }

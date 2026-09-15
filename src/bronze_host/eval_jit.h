@@ -1,5 +1,7 @@
 #pragma once
 
+#include "embed/embed.h"
+
 #include <string>
 
 namespace bro::engine {
@@ -12,9 +14,21 @@ namespace bro::bronze_host {
 /// (e.g. BRO_DISABLE_JIT=1, BRO_EVAL_AOT=1, BRO_NO_JIT=1).
 bool isJitDisabled();
 
+/// The compile-and-run behind evalScriptJit: what the program produced — its
+/// completion value, or what it threw — with nothing logged and no failure
+/// latched. This is what a caller that has its own use for the outcome wants:
+/// the `eval()` hook returns the value or rethrows, and must not fail the run
+/// on a throw the script is about to catch. `moduleHandleOut`, when set,
+/// brackets the run as a module load the host can later unload (bronze
+/// EvalOptions::moduleHandleOut).
+bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
+                                              const std::string& filename = {},
+                                              bronze::embed::ModuleHandle* moduleHandleOut = nullptr);
+
 /// Evaluates JavaScript code in-memory using the Brass JIT engine without disk files.
 /// Returns true on success, false on failure (and logs error / sets test failure).
-bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename = {});
+bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename = {},
+                   bronze::embed::ModuleHandle* moduleHandleOut = nullptr);
 
 /// Evaluates a JavaScript file in-memory using the Brass JIT engine without disk files.
 /// Returns true on success, false on failure (and logs error / sets test failure).

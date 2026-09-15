@@ -152,9 +152,9 @@ cd D:/projects/broaudio && cmake --build build --config Debug
 cd D:/projects/bromesh && cmake --build build --config Release
 ./build/tests/Release/bromesh_test.exe
 
-# bronze (Release dev preset; LLVM backend for oracle/tests)
+# bronze (Release dev preset; brass is the only backend, found via ../brass)
 cd D:/projects/bronze
-.\dev.cmd cmake --preset dev -DBRONZE_WITH_LLVM=ON
+.\dev.cmd cmake --preset dev
 .\dev.cmd cmake --build --preset dev
 .\dev.cmd ctest --preset dev -LE "threejs|pixi"
 ```

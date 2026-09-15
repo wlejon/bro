@@ -19,6 +19,11 @@
 
 namespace bro::engine {
 
+void Engine::unloadAppModules() {
+    for (uint64_t handle : appModuleHandles_) bro::bronze_host::unloadAppModule(handle);
+    appModuleHandles_.clear();
+}
+
 void Engine::requestAppReload() {
     if (displayMode_ == DisplayMode::Server) return;
     pendingAppReload_ = true;
@@ -104,9 +109,8 @@ void Engine::performAppReload() {
     bro::bronze_host::resetGlobalExpandos();
     bro::bronze_host::clearHostMediaQueries();
 
-    if (activeAppModuleHandle_ != 0) {
-        bro::bronze_host::unloadAppModule(activeAppModuleHandle_);
-        activeAppModuleHandle_ = 0;
+    if (!appModuleHandles_.empty()) {
+        unloadAppModules();
         bro::bronze_host::hostCollectGarbage();
     }
 

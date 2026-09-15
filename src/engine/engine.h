@@ -351,8 +351,13 @@ public:
 
     DisplayMode displayMode() const { return displayMode_; }
 
-    uint64_t activeAppModuleHandle() const { return activeAppModuleHandle_; }
-    void setActiveAppModuleHandle(uint64_t handle) { activeAppModuleHandle_ = handle; }
+    /// The bronze module handles of the running app: its compiled `app.dll`
+    /// and/or the program its `<script>` tags were compiled into. Both are
+    /// bracketed loads (bronze embed.h), so a reload can retire their GC roots
+    /// and let the old realm's heap die instead of leaking it per reload.
+    const std::vector<uint64_t>& appModuleHandles() const { return appModuleHandles_; }
+    void addAppModuleHandle(uint64_t handle) { if (handle) appModuleHandles_.push_back(handle); }
+    void unloadAppModules();
 
     /// The platform window, or nullptr in Server mode (Headless still has one
     /// — a hidden SDL window, which is what keeps the GPU path real).
@@ -781,7 +786,7 @@ private:
     bool splashEnabled_ = true;
     bool compiledApp_ = false;
     bool hostProvidesCompiledApp_ = false;
-    uint64_t activeAppModuleHandle_{0};
+    std::vector<uint64_t> appModuleHandles_;
     bool splashDismissTriggered_ = false;
     double splashStartMs_ = 0.0;
     double lastSystemRafMs_ = 0.0;

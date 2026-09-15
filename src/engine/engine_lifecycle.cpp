@@ -178,10 +178,7 @@ Engine::~Engine() {
     audioEngine_.reset();
     renderer_.reset();
 
-    if (activeAppModuleHandle_ != 0) {
-        bro::bronze_host::unloadAppModule(activeAppModuleHandle_);
-        activeAppModuleHandle_ = 0;
-    }
+    unloadAppModules();
     bro::bronze_host::hostCollectGarbage();
 }
 

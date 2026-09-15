@@ -96,7 +96,9 @@ std::string wrapAsyncIife(const std::string& code) {
 
 } // namespace
 
-bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename) {
+bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
+                                              const std::string& filename,
+                                              bronze::embed::ModuleHandle* moduleHandleOut) {
     HostEvalScope evalScope;
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
@@ -114,6 +116,7 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
     opts.retainSource = true;
     opts.pinsPath = discoverPinsPath(engine, filename);
     opts.censusOutPath = discoverCensusOutPath(engine, filename);
+    opts.moduleHandleOut = moduleHandleOut;
 
     std::string execCode = code;
     if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
@@ -125,10 +128,19 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
     if (res.thrown && execCode == code && !hasImportStmt(code)) {
         std::string errStr = bronze::embed::toUtf8(res.value);
         if (errStr.find("await") != std::string::npos) {
+            // The failed attempt is off the stack and superseded: its handle
+            // is retired here so the one written below is the run's only one.
+            if (moduleHandleOut && *moduleHandleOut) bronze::embed::unloadModule(*moduleHandleOut);
             res = bronze::eval::evalScript(wrapAsyncIife(code), opts);
         }
     }
+    return res;
+}
 
+bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename,
+                   bronze::embed::ModuleHandle* moduleHandleOut) {
+    HostEvalScope evalScope;
+    auto res = evalScriptJitResult(engine, code, filename, moduleHandleOut);
     if (!reportCallResult(engine, res, "evalScriptJit")) {
         return false;
     }

@@ -36,6 +36,16 @@ std::string entryResolvesAsFor(const engine::Engine& engine, const std::string& 
 bool evalScript(engine::Engine& engine, const std::string& code,
                 const std::string& filename = {});
 
+/// evalScript for the app's OWN scripts — the `<script>` text of its
+/// index.html. The run is bracketed as a module load and the handle recorded
+/// on `engine` (Engine::addAppModuleHandle), so a reload can unload it: the
+/// roots the program registered stop being roots and the old realm's heap
+/// dies with it, instead of every reload leaking the previous app's globals,
+/// closures and environments for the life of the process. A driver script or
+/// an `eval()` goes through evalScript and is nobody's to unload.
+bool evalAppScript(engine::Engine& engine, const std::string& code,
+                   const std::string& filename);
+
 /// Compile a JS file in-process using bronze CLI and run it on `engine`.
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath);
 
