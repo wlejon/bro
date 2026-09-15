@@ -35,7 +35,38 @@
     });
     fn(ns_Physics, "createBody", function createBody(config) {
         if (config === undefined) throw new TypeError("Physics.createBody: config is required");
-        return __bro_native.physics.createBody(JSON.stringify(config));
+        if (config && config.area && !config.sensor) {
+            throw new Error("Physics.createBody: area requires sensor: true");
+        }
+        let cfg = config;
+        if (config && typeof config === "object") {
+            const toArr = (v) => {
+                if (!v) return v;
+                if (Array.isArray(v)) return v;
+                if (typeof v.length === 'number') {
+                    const a = new Array(v.length);
+                    for (let i = 0; i < v.length; i++) a[i] = v[i];
+                    return a;
+                }
+                return v;
+            };
+            if (config.heights && typeof config.heights.length === 'number' && !Array.isArray(config.heights)) {
+                cfg = Object.assign({}, cfg, { heights: toArr(config.heights) });
+            }
+            if (config.positions && typeof config.positions.length === 'number' && !Array.isArray(config.positions)) {
+                cfg = Object.assign({}, cfg, { positions: toArr(config.positions) });
+            }
+            if (config.points && typeof config.points.length === 'number' && !Array.isArray(config.points)) {
+                cfg = Object.assign({}, cfg, { points: toArr(config.points) });
+            }
+            if (config.vertices && typeof config.vertices.length === 'number' && !Array.isArray(config.vertices)) {
+                cfg = Object.assign({}, cfg, { vertices: toArr(config.vertices) });
+            }
+            if (config.indices && typeof config.indices.length === 'number' && !Array.isArray(config.indices)) {
+                cfg = Object.assign({}, cfg, { indices: toArr(config.indices) });
+            }
+        }
+        return __bro_native.physics.createBody(JSON.stringify(cfg));
     });
     fn(ns_Physics, "destroyBody", function destroyBody(tag) {
         if (tag === undefined) throw new TypeError("Physics.destroyBody: tag is required");
@@ -44,13 +75,18 @@
     fn(ns_Physics, "destroyAll", function destroyAll() {
         __bro_native.physics.destroyAll();
     });
-    fn(ns_Physics, "getTransform", function getTransform(tag) {
+    fn(ns_Physics, "getTransform", function getTransform(tag, opts) {
         if (tag === undefined) throw new TypeError("Physics.getTransform: tag is required");
-        return JSON.parse(__bro_native.physics.getTransform(tag));
+        const interpolated = !!(opts && opts.interpolated);
+        const raw = __bro_native.physics.getTransform(tag, interpolated);
+        if (!raw || raw === "null") return undefined;
+        return JSON.parse(raw);
     });
     fn(ns_Physics, "getVelocity", function getVelocity(tag) {
         if (tag === undefined) throw new TypeError("Physics.getVelocity: tag is required");
-        return JSON.parse(__bro_native.physics.getVelocity(tag));
+        const raw = __bro_native.physics.getVelocity(tag);
+        if (!raw || raw === "null") return undefined;
+        return JSON.parse(raw);
     });
     fn(ns_Physics, "setPosition", function setPosition(tag, x, y, z) {
         if (tag === undefined) throw new TypeError("Physics.setPosition: tag is required");
@@ -114,7 +150,7 @@
     fn(ns_Physics, "setLayer", function setLayer(tag, layer) {
         if (tag === undefined) throw new TypeError("Physics.setLayer: tag is required");
         if (layer === undefined) throw new TypeError("Physics.setLayer: layer is required");
-        __bro_native.physics.setLayer(tag, layer);
+        return __bro_native.physics.setLayer(tag, String(layer));
     });
     fn(ns_Physics, "setKinematic", function setKinematic(tag) {
         if (tag === undefined) throw new TypeError("Physics.setKinematic: tag is required");
@@ -129,17 +165,22 @@
         __bro_native.physics.moveKinematic(tag, x, y, z, dt);
     });
     fn(ns_Physics, "getContacts", function getContacts() {
-        return JSON.parse(__bro_native.physics.getContacts());
+        const raw = JSON.parse(__bro_native.physics.getContacts());
+        const arr = (raw && Array.isArray(raw.events)) ? raw.events : [];
+        arr.overflow = Boolean(raw && raw.overflow);
+        return arr;
     });
     fn(ns_Physics, "setFrictionCombine", function setFrictionCombine(tag, mode) {
         if (tag === undefined) throw new TypeError("Physics.setFrictionCombine: tag is required");
         if (mode === undefined) throw new TypeError("Physics.setFrictionCombine: mode is required");
         __bro_native.physics.setFrictionCombine(tag, mode);
+        return true;
     });
     fn(ns_Physics, "setRestitutionCombine", function setRestitutionCombine(tag, mode) {
         if (tag === undefined) throw new TypeError("Physics.setRestitutionCombine: tag is required");
         if (mode === undefined) throw new TypeError("Physics.setRestitutionCombine: mode is required");
         __bro_native.physics.setRestitutionCombine(tag, mode);
+        return true;
     });
     fn(ns_Physics, "getMass", function getMass(tag) {
         if (tag === undefined) throw new TypeError("Physics.getMass: tag is required");
@@ -182,15 +223,19 @@
     fn(ns_Physics, "setAreaOverride", function setAreaOverride(tag, config) {
         if (tag === undefined) throw new TypeError("Physics.setAreaOverride: tag is required");
         if (config === undefined) throw new TypeError("Physics.setAreaOverride: config is required");
-        __bro_native.physics.setAreaOverride(tag, JSON.stringify(config));
+        const ok = __bro_native.physics.setAreaOverride(tag, JSON.stringify(config));
+        if (!ok) throw new Error("Physics.setAreaOverride: target body is not a sensor or invalid");
+        return true;
     });
     fn(ns_Physics, "setTimeStep", function setTimeStep(dt) {
         if (dt === undefined) throw new TypeError("Physics.setTimeStep: dt is required");
         __bro_native.physics.setTimeStep(dt);
     });
+    fn(ns_Physics, "getTimeStep", function getTimeStep() {
+        return __bro_native.physics.getTimeStep();
+    });
     fn(ns_Physics, "step", function step(dt) {
-        if (dt === undefined) throw new TypeError("Physics.step: dt is required");
-        __bro_native.physics.step(dt);
+        __bro_native.physics.step(dt === undefined ? 0 : dt);
     });
     fn(ns_Physics, "setInterpolation", function setInterpolation(enabled) {
         if (enabled === undefined) throw new TypeError("Physics.setInterpolation: enabled is required");
@@ -207,8 +252,12 @@
         if (tag === undefined) throw new TypeError("Physics.activate: tag is required");
         __bro_native.physics.activate(tag);
     });
-    fn(ns_Physics, "getAllTransforms", function getAllTransforms(worldHandle) {
-        return __bro_native.physics.getAllTransforms(worldHandle !== undefined, worldHandle === undefined ? 0 : worldHandle);
+    fn(ns_Physics, "getAllTransforms", function getAllTransforms(opts) {
+        let interpolated = false;
+        if (opts && typeof opts === 'object') {
+            interpolated = !!opts.interpolated;
+        }
+        return __bro_native.physics.getAllTransforms(interpolated);
     });
     fn(ns_Physics, "createCharacter", function createCharacter(config) {
         if (config === undefined) throw new TypeError("Physics.createCharacter: config is required");
@@ -216,15 +265,79 @@
     });
     fn(ns_Physics, "createVehicle", function createVehicle(config) {
         if (config === undefined) throw new TypeError("Physics.createVehicle: config is required");
-        return __bro_native.physics.createVehicle(JSON.stringify(config));
+        const res = __bro_native.physics.createVehicle(JSON.stringify(config));
+        if (!res) throw new Error("Physics.createVehicle: failed to create vehicle");
+        return res;
     });
     fn(ns_Physics, "createRagdoll", function createRagdoll(config) {
         if (config === undefined) throw new TypeError("Physics.createRagdoll: config is required");
-        return __bro_native.physics.createRagdoll(JSON.stringify(config));
+        if (!config || !Array.isArray(config.parts) || config.parts.length === 0) {
+            throw new Error("Physics.createRagdoll: parts must be a non-empty array");
+        }
+        const res = __bro_native.physics.createRagdoll(JSON.stringify(config));
+        if (!res) throw new Error("Physics.createRagdoll: failed to create ragdoll (invalid parts or hierarchy)");
+        return res;
     });
     fn(ns_Physics, "createSoftBody", function createSoftBody(config) {
         if (config === undefined) throw new TypeError("Physics.createSoftBody: config is required");
-        return __bro_native.physics.createSoftBody(JSON.stringify(config));
+        if (!config || typeof config !== "object") {
+            throw new Error("Physics.createSoftBody: config must be an object");
+        }
+        if (!config.cloth && !config.mesh) {
+            throw new Error("Physics.createSoftBody: cloth or mesh definition is required");
+        }
+        if (config.cloth) {
+            if (config.cloth.gridX !== undefined && config.cloth.gridX < 2) {
+                throw new Error("Physics.createSoftBody: cloth gridX must be >= 2");
+            }
+            if (config.cloth.gridZ !== undefined && config.cloth.gridZ < 2) {
+                throw new Error("Physics.createSoftBody: cloth gridZ must be >= 2");
+            }
+        }
+        if (config.mesh) {
+            const ind = config.mesh.indices;
+            if (!ind || ind.length === 0) {
+                throw new Error("Physics.createSoftBody: mesh indices are required");
+            }
+            const verts = config.mesh.vertices !== undefined ? config.mesh.vertices : config.mesh.positions;
+            if (!verts || verts.length === 0) {
+                throw new Error("Physics.createSoftBody: mesh vertices are required");
+            }
+        }
+
+        const toArr = (v) => {
+            if (!v) return v;
+            if (Array.isArray(v)) return v;
+            if (typeof v.length === 'number') {
+                const arr = new Array(v.length);
+                for (let i = 0; i < v.length; i++) arr[i] = v[i];
+                return arr;
+            }
+            return v;
+        };
+
+        let cfg = config;
+        if (config.mesh) {
+            cfg = Object.assign({}, config, {
+                mesh: Object.assign({}, config.mesh, {
+                    vertices: toArr(config.mesh.vertices),
+                    positions: toArr(config.mesh.positions),
+                    indices: toArr(config.mesh.indices),
+                    pinned: toArr(config.mesh.pinned)
+                })
+            });
+        }
+        if (config.cloth && config.cloth.pinned && typeof config.cloth.pinned !== "string") {
+            cfg = Object.assign({}, cfg, {
+                cloth: Object.assign({}, config.cloth, {
+                    pinned: toArr(config.cloth.pinned)
+                })
+            });
+        }
+
+        const res = __bro_native.physics.createSoftBody(JSON.stringify(cfg));
+        if (!res) throw new Error("Physics.createSoftBody: failed to create soft body");
+        return res;
     });
     fn(ns_Physics, "createConstraint", function createConstraint(config) {
         if (config === undefined) throw new TypeError("Physics.createConstraint: config is required");
@@ -243,17 +356,17 @@
         if (tag === undefined) throw new TypeError("Physics.isConstraintEnabled: tag is required");
         return __bro_native.physics.isConstraintEnabled(tag);
     });
-    fn(ns_Physics, "setWheelMotor", function setWheelMotor(vehicleTag, wheelIndex, motorTorque, brakeTorque) {
-        if (vehicleTag === undefined) throw new TypeError("Physics.setWheelMotor: vehicleTag is required");
-        if (wheelIndex === undefined) throw new TypeError("Physics.setWheelMotor: wheelIndex is required");
-        if (motorTorque === undefined) throw new TypeError("Physics.setWheelMotor: motorTorque is required");
-        if (brakeTorque === undefined) throw new TypeError("Physics.setWheelMotor: brakeTorque is required");
-        __bro_native.physics.setWheelMotor(vehicleTag, wheelIndex, motorTorque, brakeTorque);
+    fn(ns_Physics, "setWheelMotor", function setWheelMotor(handle, enabled, speed, maxTorque) {
+        if (handle === undefined) throw new TypeError("Physics.setWheelMotor: handle is required");
+        if (enabled === undefined) throw new TypeError("Physics.setWheelMotor: enabled is required");
+        if (speed === undefined) throw new TypeError("Physics.setWheelMotor: speed is required");
+        if (maxTorque === undefined) throw new TypeError("Physics.setWheelMotor: maxTorque is required");
+        __bro_native.physics.setWheelMotor(handle, enabled ? 1 : 0, speed, maxTorque);
     });
     fn(ns_Physics, "setConstraintMotor", function setConstraintMotor(tag, config) {
         if (tag === undefined) throw new TypeError("Physics.setConstraintMotor: tag is required");
         if (config === undefined) throw new TypeError("Physics.setConstraintMotor: config is required");
-        __bro_native.physics.setConstraintMotor(tag, JSON.stringify(config));
+        return __bro_native.physics.setConstraintMotor(tag, JSON.stringify(config));
     });
     fn(ns_Physics, "setConstraintBreakingImpulse", function setConstraintBreakingImpulse(tag, impulse) {
         if (tag === undefined) throw new TypeError("Physics.setConstraintBreakingImpulse: tag is required");
@@ -269,52 +382,85 @@
     });
 
     // ---- Manual query helpers ------------------------------------------------
-    fn(ns_Physics, "raycastClosest", function raycastClosest(p1, p2, mask) {
-        if (typeof p1 === 'number') {
-            const ox = arguments[0], oy = arguments[1], oz = arguments[2];
-            const dx = arguments[3], dy = arguments[4], dz = arguments[5];
-            const maxDist = arguments[6] === undefined ? 1000 : arguments[6];
-            const m = (arguments[7] !== undefined && typeof arguments[7] === 'number') ? arguments[7] : 0;
-            const res = __bro_native.physics.raycastClosestRaw(ox, oy, oz, dx, dy, dz, maxDist, m);
-            return JSON.parse(res);
-        }
-        if (!p1 || !p2) return null;
-        let ox = p1.x, oy = p1.y, oz = p1.z;
-        let tx = p2.x, ty = p2.y, tz = p2.z;
-        let dx = tx - ox, dy = ty - oy, dz = tz - oz;
-        let len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        let maxDist = len > 0 ? len : 1000;
-        if (len > 1e-6) {
-            dx /= len; dy /= len; dz /= len;
+    function normalizeRayArgs(args) {
+        let ox, oy, oz, dx, dy, dz, maxDist = 1000, opts = null;
+        if (typeof args[0] === 'number') {
+            ox = args[0]; oy = args[1]; oz = args[2];
+            dx = args[3]; dy = args[4]; dz = args[5];
+            if (args.length > 6) {
+                if (typeof args[6] === 'number') {
+                    maxDist = args[6];
+                    if (args.length > 7) opts = args[7];
+                } else if (typeof args[6] === 'object') {
+                    opts = args[6];
+                }
+            }
         } else {
-            dx = 0; dy = 0; dz = 0;
+            const p1 = args[0], p2 = args[1];
+            ox = p1.x; oy = p1.y; oz = p1.z;
+            dx = p2.x - ox; dy = p2.y - oy; dz = p2.z - oz;
+            const len = Math.hypot(dx, dy, dz);
+            maxDist = len > 0 ? len : 1000;
+            if (len > 1e-6) { dx /= len; dy /= len; dz /= len; }
+            if (args.length > 2) opts = args[2];
         }
-        const res = __bro_native.physics.raycastClosestRaw(ox, oy, oz, dx, dy, dz, maxDist, (mask !== undefined && typeof mask === 'number') ? mask : 0);
-        return JSON.parse(res);
+        const filterStr = (opts !== undefined && opts !== null) ? (typeof opts === 'number' ? JSON.stringify({ layerMask: opts }) : JSON.stringify(opts)) : '';
+        return { ox, oy, oz, dx, dy, dz, maxDist, filterStr };
+    }
+
+    fn(ns_Physics, "raycastClosest", function raycastClosest(...args) {
+        const { ox, oy, oz, dx, dy, dz, maxDist, filterStr } = normalizeRayArgs(args);
+        const raw = JSON.parse(__bro_native.physics.raycastClosestJsonRaw(ox, oy, oz, dx, dy, dz, maxDist, filterStr));
+        if (!raw || typeof raw !== 'object' || raw.bodyId === undefined) return null;
+        if (raw.userData !== undefined) raw.userData = BigInt(raw.userData);
+        return raw;
     });
 
-    fn(ns_Physics, "raycast", function raycast(p1, p2, mask) {
-        if (typeof p1 === 'number') {
-            const ox = arguments[0], oy = arguments[1], oz = arguments[2];
-            const dx = arguments[3], dy = arguments[4], dz = arguments[5];
-            const maxDist = arguments[6] === undefined ? 1000 : arguments[6];
-            const m = (arguments[7] !== undefined && typeof arguments[7] === 'number') ? arguments[7] : 0;
-            const res = __bro_native.physics.raycastRaw(ox, oy, oz, dx, dy, dz, maxDist, m);
-            return JSON.parse(res);
+    fn(ns_Physics, "raycast", function raycast(...args) {
+        const { ox, oy, oz, dx, dy, dz, maxDist, filterStr } = normalizeRayArgs(args);
+        const raw = JSON.parse(__bro_native.physics.raycastJsonRaw(ox, oy, oz, dx, dy, dz, maxDist, filterStr));
+        if (!Array.isArray(raw)) return [];
+        for (const h of raw) {
+            if (h.userData !== undefined) h.userData = BigInt(h.userData);
         }
-        if (!p1 || !p2) return [];
-        let ox = p1.x, oy = p1.y, oz = p1.z;
-        let tx = p2.x, ty = p2.y, tz = p2.z;
-        let dx = tx - ox, dy = ty - oy, dz = tz - oz;
-        let len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        let maxDist = len > 0 ? len : 1000;
-        if (len > 1e-6) {
-            dx /= len; dy /= len; dz /= len;
-        } else {
-            dx = 0; dy = 0; dz = 0;
+        return raw;
+    });
+
+    fn(ns_Physics, "castShape", function castShape(config) {
+        if (!config || typeof config !== 'object') throw new TypeError("Physics.castShape: config object is required");
+        if (!config.direction || (config.direction.x === 0 && config.direction.y === 0 && config.direction.z === 0)) {
+            throw new Error("Physics.castShape: direction must be non-zero");
         }
-        const res = __bro_native.physics.raycastRaw(ox, oy, oz, dx, dy, dz, maxDist, (mask !== undefined && typeof mask === 'number') ? mask : 0);
-        return JSON.parse(res);
+        const raw = JSON.parse(__bro_native.physics.castShapeRaw(JSON.stringify(config)));
+        if (raw && raw.error) throw new Error(raw.error);
+        if (!Array.isArray(raw)) return [];
+        for (const h of raw) {
+            if (h.userData !== undefined) h.userData = BigInt(h.userData);
+        }
+        return raw;
+    });
+
+    fn(ns_Physics, "castShapeClosest", function castShapeClosest(config) {
+        if (!config || typeof config !== 'object') throw new TypeError("Physics.castShapeClosest: config object is required");
+        if (!config.direction || (config.direction.x === 0 && config.direction.y === 0 && config.direction.z === 0)) {
+            throw new Error("Physics.castShapeClosest: direction must be non-zero");
+        }
+        const raw = JSON.parse(__bro_native.physics.castShapeClosestRaw(JSON.stringify(config)));
+        if (raw && raw.error) throw new Error(raw.error);
+        if (!raw || typeof raw !== 'object' || raw.bodyId === undefined) return null;
+        if (raw.userData !== undefined) raw.userData = BigInt(raw.userData);
+        return raw;
+    });
+
+    fn(ns_Physics, "overlapShape", function overlapShape(config) {
+        if (!config || typeof config !== 'object') throw new TypeError("Physics.overlapShape: config object is required");
+        const raw = JSON.parse(__bro_native.physics.overlapShapeJsonRaw(JSON.stringify(config)));
+        if (raw && raw.error) throw new Error(raw.error);
+        if (!Array.isArray(raw)) return [];
+        for (const h of raw) {
+            if (h.userData !== undefined) h.userData = BigInt(h.userData);
+        }
+        return raw;
     });
 
     fn(ns_Physics, "overlapSphere", function overlapSphere(center, radius) {
@@ -327,18 +473,37 @@
         return Array.from(__bro_native.physics.overlapBoxRaw(center.x, center.y, center.z, halfExtents.x, halfExtents.y, halfExtents.z));
     });
 
-    fn(ns_Physics, "overlapPoint", function overlapPoint(x, y, z, mask) {
-        if (typeof x === 'object') {
-            mask = y;
+    fn(ns_Physics, "overlapPoint", function overlapPoint(x, y, z, options) {
+        let opts = options;
+        if (typeof x === 'object' && x !== null) {
+            opts = y;
             z = x.z;
             y = x.y;
             x = x.x;
         }
-        return Array.from(__bro_native.physics.overlapPointRaw(x, y, z, mask === undefined ? 0 : mask));
+        const filterStr = (opts !== undefined && opts !== null) ? (typeof opts === 'number' ? JSON.stringify({ layerMask: opts }) : JSON.stringify(opts)) : '';
+        const raw = JSON.parse(__bro_native.physics.overlapPointJsonRaw(x, y, z, filterStr));
+        if (!Array.isArray(raw)) return [];
+        for (const h of raw) {
+            if (h.userData !== undefined) h.userData = BigInt(h.userData);
+        }
+        raw.includes = function (val) {
+            return Array.prototype.includes.call(this, val) || this.some(h => h && (h.bodyId === val || h === val));
+        };
+        return raw;
     });
 
     fn(ns_Physics, "setMotionType", function setMotionType(tag, type) {
-        if (type === 'kinematic') __bro_native.physics.setKinematic(tag);
+        if (tag === undefined) throw new TypeError("Physics.setMotionType: tag is required");
+        if (typeof type === 'boolean') {
+            __bro_native.physics.setMotionType(tag, type);
+        } else if (type === 'kinematic') {
+            __bro_native.physics.setKinematic(tag);
+        } else if (type === 'static') {
+            __bro_native.physics.setMotionType(tag, true);
+        } else if (type === 'dynamic') {
+            __bro_native.physics.setMotionType(tag, false);
+        }
     });
 
     const contactListeners = new Set();
@@ -356,7 +521,7 @@
 
     // ---- PhysicsWorldHandle --------------------------------------------------
     function PhysicsWorldHandle() {
-        throw new TypeError("PhysicsWorldHandle is not constructible");
+        throw new TypeError("PhysicsWorldHandle is not constructible: use Physics.createWorldHandle()");
     }
     {
         const proto = __bro_native.physics.PhysicsWorldHandleProto;
@@ -367,9 +532,24 @@
         __bro_native.physics.PhysicsWorldHandle_destroy(this);
     });
     fn(PhysicsWorldHandle.prototype, "step", function step(dt) {
-        if (dt === undefined) throw new TypeError("PhysicsWorldHandle.prototype.step: dt is required");
-        __bro_native.physics.PhysicsWorldHandle_step(this, dt);
+        __bro_native.physics.PhysicsWorldHandle_step(this, dt === undefined ? 0 : dt);
     });
+
+    // Forward all Physics methods through this sandbox world handle
+    for (const key of Object.getOwnPropertyNames(ns_Physics)) {
+        if (key === 'createWorldHandle') continue;
+        const val = ns_Physics[key];
+        if (typeof val === 'function') {
+            fn(PhysicsWorldHandle.prototype, key, function (...args) {
+                __bro_native.physics.PhysicsWorldHandle_enter(this);
+                try {
+                    return val.apply(ns_Physics, args);
+                } finally {
+                    __bro_native.physics.PhysicsWorldHandle_exit(this);
+                }
+            });
+        }
+    }
 
     // ---- PhysicsCharacter ----------------------------------------------------
     function PhysicsCharacter() {
@@ -410,6 +590,13 @@
     fn(PhysicsCharacter.prototype, "getState", function getState() {
         return JSON.parse(__bro_native.physics.PhysicsCharacter_getState(this));
     });
+    accessor(PhysicsCharacter.prototype, "innerBody", function () {
+        return __bro_native.physics.PhysicsCharacter_innerBody_get(this);
+    }, undefined);
+    fn(PhysicsCharacter.prototype, "setShape", function setShape(shape) {
+        if (!shape || typeof shape !== 'object') throw new TypeError("PhysicsCharacter.prototype.setShape: shape is required");
+        return __bro_native.physics.PhysicsCharacter_setShape(this, JSON.stringify(shape));
+    });
     fn(PhysicsCharacter.prototype, "update", function update(dt) {
         if (dt === undefined) throw new TypeError("PhysicsCharacter.prototype.update: dt is required");
         __bro_native.physics.PhysicsCharacter_update(this, dt);
@@ -427,9 +614,43 @@
         if (proto !== undefined) Object.setPrototypeOf(proto, PhysicsVehicle.prototype);
     }
     globalThis.PhysicsVehicle = PhysicsVehicle;
+    fn(PhysicsVehicle.prototype, "setInput", function setInput(input) {
+        __bro_native.physics.PhysicsVehicle_setInput(this, input ? JSON.stringify(input) : "{}");
+    });
     fn(PhysicsVehicle.prototype, "setDriverInput", function setDriverInput(forward, steer, brake, handBrake) {
         __bro_native.physics.PhysicsVehicle_setDriverInput(this, forward, steer, brake, handBrake);
     });
+    fn(PhysicsVehicle.prototype, "setLeanController", function setLeanController(enabled) {
+        __bro_native.physics.PhysicsVehicle_setLeanController(this, Boolean(enabled));
+    });
+    fn(PhysicsVehicle.prototype, "setGear", function setGear(gear, clutch) {
+        __bro_native.physics.PhysicsVehicle_setGear(this, gear, clutch === undefined ? 1.0 : clutch);
+    });
+    fn(PhysicsVehicle.prototype, "wheelState", function wheelState(index) {
+        if (index === undefined) throw new TypeError("PhysicsVehicle.prototype.wheelState: index is required");
+        return JSON.parse(__bro_native.physics.PhysicsVehicle_wheelState(this, index));
+    });
+    fn(PhysicsVehicle.prototype, "getState", function getState() {
+        return JSON.parse(__bro_native.physics.PhysicsVehicle_getState(this));
+    });
+    accessor(PhysicsVehicle.prototype, "wheelCount", function () {
+        return __bro_native.physics.PhysicsVehicle_wheelCount_get(this);
+    }, undefined);
+    accessor(PhysicsVehicle.prototype, "chassisBody", function () {
+        return __bro_native.physics.PhysicsVehicle_chassisBody_get(this);
+    }, undefined);
+    accessor(PhysicsVehicle.prototype, "type", function () {
+        return __bro_native.physics.PhysicsVehicle_type_get(this);
+    }, undefined);
+    accessor(PhysicsVehicle.prototype, "speed", function () {
+        return __bro_native.physics.PhysicsVehicle_speed_get(this);
+    }, undefined);
+    accessor(PhysicsVehicle.prototype, "rpm", function () {
+        return __bro_native.physics.PhysicsVehicle_rpm_get(this);
+    }, undefined);
+    accessor(PhysicsVehicle.prototype, "gear", function () {
+        return __bro_native.physics.PhysicsVehicle_gear_get(this);
+    }, undefined);
     fn(PhysicsVehicle.prototype, "getTransform", function getTransform() {
         return JSON.parse(__bro_native.physics.PhysicsVehicle_getTransform(this));
     });
@@ -446,11 +667,54 @@
         if (proto !== undefined) Object.setPrototypeOf(proto, PhysicsRagdoll.prototype);
     }
     globalThis.PhysicsRagdoll = PhysicsRagdoll;
-    fn(PhysicsRagdoll.prototype, "driveToPose", function driveToPose(pose, dt) {
-        __bro_native.physics.PhysicsRagdoll_driveToPose(this, JSON.stringify(pose), dt);
+    fn(PhysicsRagdoll.prototype, "pose", function pose() {
+        const raw = __bro_native.physics.PhysicsRagdoll_pose(this);
+        if (!raw || raw.length === 0) return null;
+        return new Float32Array(raw);
     });
-    fn(PhysicsRagdoll.prototype, "getPose", function getPose() {
-        return JSON.parse(__bro_native.physics.PhysicsRagdoll_getPose(this));
+    fn(PhysicsRagdoll.prototype, "localPose", function localPose() {
+        const raw = __bro_native.physics.PhysicsRagdoll_localPose(this);
+        if (!raw || raw.length === 0) return null;
+        return new Float32Array(raw);
+    });
+    fn(PhysicsRagdoll.prototype, "setPose", function setPose(pose) {
+        if (!pose) return false;
+        return __bro_native.physics.PhysicsRagdoll_setPose(this, JSON.stringify(Array.from(pose)));
+    });
+    fn(PhysicsRagdoll.prototype, "driveToPose", function driveToPose(pose, motorOpts) {
+        if (!pose) return false;
+        return __bro_native.physics.PhysicsRagdoll_driveToPose(this, JSON.stringify(Array.from(pose)), motorOpts ? JSON.stringify(motorOpts) : "");
+    });
+    fn(PhysicsRagdoll.prototype, "driveToPoseKinematic", function driveToPoseKinematic(pose, dt) {
+        if (!pose) return false;
+        return __bro_native.physics.PhysicsRagdoll_driveToPoseKinematic(this, JSON.stringify(Array.from(pose)), dt);
+    });
+    fn(PhysicsRagdoll.prototype, "stopDrive", function stopDrive() {
+        __bro_native.physics.PhysicsRagdoll_stopDrive(this);
+    });
+    fn(PhysicsRagdoll.prototype, "addImpulse", function addImpulse(x, y, z) {
+        __bro_native.physics.PhysicsRagdoll_addImpulse(this, x, y, z);
+    });
+    fn(PhysicsRagdoll.prototype, "activate", function activate() {
+        __bro_native.physics.PhysicsRagdoll_activate(this);
+    });
+    fn(PhysicsRagdoll.prototype, "deactivate", function deactivate() {
+        __bro_native.physics.PhysicsRagdoll_deactivate(this);
+    });
+    accessor(PhysicsRagdoll.prototype, "isActive", function () {
+        return __bro_native.physics.PhysicsRagdoll_isActive(this);
+    }, undefined);
+    accessor(PhysicsRagdoll.prototype, "partCount", function () {
+        return __bro_native.physics.PhysicsRagdoll_partCount_get(this);
+    }, undefined);
+    fn(PhysicsRagdoll.prototype, "partBody", function partBody(index) {
+        return __bro_native.physics.PhysicsRagdoll_partBody(this, index);
+    });
+    fn(PhysicsRagdoll.prototype, "partParent", function partParent(index) {
+        return __bro_native.physics.PhysicsRagdoll_partParent(this, index);
+    });
+    fn(PhysicsRagdoll.prototype, "partIndex", function partIndex(name) {
+        return __bro_native.physics.PhysicsRagdoll_partIndex(this, name);
     });
     fn(PhysicsRagdoll.prototype, "destroy", function destroy() {
         __bro_native.physics.PhysicsRagdoll_destroy(this);
@@ -470,11 +734,25 @@
             return __bro_native.physics.PhysicsSoftBody_vertexCount_get(this);
         },
         undefined);
+    accessor(PhysicsSoftBody.prototype, "body",
+        function () {
+            return __bro_native.physics.PhysicsSoftBody_body_get(this);
+        },
+        undefined);
     fn(PhysicsSoftBody.prototype, "topology", function topology() {
-        return JSON.parse(__bro_native.physics.PhysicsSoftBody_topology(this));
+        const raw = JSON.parse(__bro_native.physics.PhysicsSoftBody_topology(this));
+        if (!raw) return raw;
+        return {
+            gridX: raw.gridX || 0,
+            gridZ: raw.gridZ || 0,
+            positions: new Float32Array(raw.positions || []),
+            indices: new Uint32Array(raw.indices || []),
+        };
     });
     fn(PhysicsSoftBody.prototype, "vertices", function vertices() {
-        return __bro_native.physics.PhysicsSoftBody_vertices(this);
+        const buf = __bro_native.physics.PhysicsSoftBody_vertices(this);
+        if (!buf || buf.length === 0) return null;
+        return buf;
     });
     fn(PhysicsSoftBody.prototype, "pin", function pin(index, pinned) {
         if (index === undefined) throw new TypeError("PhysicsSoftBody.prototype.pin: index is required");

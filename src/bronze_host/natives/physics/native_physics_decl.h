@@ -116,6 +116,14 @@ void bro_physics_PhysicsCharacter_update(void* self, double dt);
 //   registered at __bro_native.physics.PhysicsCharacter_destroy
 void bro_physics_PhysicsCharacter_destroy(void* self);
 
+// PhysicsCharacter.prototype.setShape
+//   registered at __bro_native.physics.PhysicsCharacter_setShape
+bool bro_physics_PhysicsCharacter_setShape(void* self, const char* shapeJson);
+
+// PhysicsCharacter.prototype.innerBody
+//   registered at __bro_native.physics.PhysicsCharacter_innerBody_get
+int32_t bro_physics_PhysicsCharacter_innerBody_get(void* self);
+
 // PhysicsVehicle.prototype.setDriverInput
 //   registered at __bro_native.physics.PhysicsVehicle_setDriverInput
 void bro_physics_PhysicsVehicle_setDriverInput(void* self, double forward, double steer, double brake, double handBrake);
@@ -128,16 +136,6 @@ const char* bro_physics_PhysicsVehicle_getTransform(void* self);
 // PhysicsVehicle.prototype.destroy
 //   registered at __bro_native.physics.PhysicsVehicle_destroy
 void bro_physics_PhysicsVehicle_destroy(void* self);
-
-// PhysicsRagdoll.prototype.driveToPose
-//   registered at __bro_native.physics.PhysicsRagdoll_driveToPose
-//   pose: JSON of PhysicsPose
-void bro_physics_PhysicsRagdoll_driveToPose(void* self, const char* pose, double dt);
-
-// PhysicsRagdoll.prototype.getPose
-//   registered at __bro_native.physics.PhysicsRagdoll_getPose
-//   result: JSON of PhysicsPose
-const char* bro_physics_PhysicsRagdoll_getPose(void* self);
 
 // PhysicsRagdoll.prototype.destroy
 //   registered at __bro_native.physics.PhysicsRagdoll_destroy
@@ -218,7 +216,7 @@ void bro_physics_destroyAll(void);
 // Physics.getTransform
 //   registered at __bro_native.physics.getTransform
 //   result: JSON of PhysicsTransform
-const char* bro_physics_getTransform(int32_t tag);
+const char* bro_physics_getTransform(int32_t tag, bool interpolated);
 
 // Physics.getVelocity
 //   registered at __bro_native.physics.getVelocity
@@ -263,11 +261,15 @@ double bro_physics_getUserData(int32_t tag);
 
 // Physics.setLayer
 //   registered at __bro_native.physics.setLayer
-void bro_physics_setLayer(int32_t tag, int32_t layer);
+bool bro_physics_setLayer(int32_t tag, const char* layer);
 
 // Physics.setKinematic
 //   registered at __bro_native.physics.setKinematic
 void bro_physics_setKinematic(int32_t tag);
+
+// Physics.setMotionType
+//   registered at __bro_native.physics.setMotionType
+void bro_physics_setMotionType(int32_t tag, bool isStatic);
 
 // Physics.moveKinematic
 //   registered at __bro_native.physics.moveKinematic
@@ -365,7 +367,7 @@ const char* bro_physics_getBodyProperties(int32_t tag);
 // Physics.setAreaOverride
 //   registered at __bro_native.physics.setAreaOverride
 //   config: JSON of PhysicsAreaOverride
-void bro_physics_setAreaOverride(int32_t tag, const char* config);
+bool bro_physics_setAreaOverride(int32_t tag, const char* config);
 
 // Physics.setTimeStep
 //   registered at __bro_native.physics.setTimeStep
@@ -395,7 +397,7 @@ void bro_physics_activate(int32_t tag);
 //   registered at __bro_native.physics.getAllTransforms
 //   result: f32[] in *out; out->release == NULL, the runtime copies
 //   worldHandle_given: false when the value was not passed (no declared default)
-void bro_physics_getAllTransforms(bool worldHandle_given, int32_t worldHandle, bronze_native_buffer* out);
+void bro_physics_getAllTransforms(bool interpolated, bronze_native_buffer* out);
 
 // Physics.createCharacter
 //   registered at __bro_native.physics.createCharacter
@@ -436,12 +438,12 @@ bool bro_physics_isConstraintEnabled(int32_t tag);
 
 // Physics.setWheelMotor
 //   registered at __bro_native.physics.setWheelMotor
-void bro_physics_setWheelMotor(int32_t vehicleTag, int32_t wheelIndex, double motorTorque, double brakeTorque);
+void bro_physics_setWheelMotor(int32_t handle, int32_t enabled, double speed, double maxTorque);
 
 // Physics.setConstraintMotor
 //   registered at __bro_native.physics.setConstraintMotor
 //   config: JSON of PhysicsConstraintMotorOptions
-void bro_physics_setConstraintMotor(int32_t tag, const char* config);
+bool bro_physics_setConstraintMotor(int32_t tag, const char* config);
 
 // Physics.setConstraintBreakingImpulse
 //   registered at __bro_native.physics.setConstraintBreakingImpulse
@@ -455,6 +457,49 @@ double bro_physics_getConstraintBreakingImpulse(int32_t tag);
 //   registered at __bro_native.physics.getBrokenConstraints
 //   result: i32[] in *out; out->release == NULL, the runtime copies
 void bro_physics_getBrokenConstraints(bronze_native_buffer* out);
+
+// PhysicsWorldHandle methods
+void bro_physics_PhysicsWorldHandle_enter(void* self);
+void bro_physics_PhysicsWorldHandle_exit(void* self);
+double bro_physics_getTimeStep(void);
+
+// PhysicsVehicle methods
+void bro_physics_PhysicsVehicle_setInput(void* self, const char* config);
+void bro_physics_PhysicsVehicle_setLeanController(void* self, bool enabled);
+void bro_physics_PhysicsVehicle_setGear(void* self, int32_t gear, double clutch);
+const char* bro_physics_PhysicsVehicle_wheelState(void* self, int32_t index);
+const char* bro_physics_PhysicsVehicle_getState(void* self);
+int32_t bro_physics_PhysicsVehicle_wheelCount_get(void* self);
+int32_t bro_physics_PhysicsVehicle_chassisBody_get(void* self);
+const char* bro_physics_PhysicsVehicle_type_get(void* self);
+double bro_physics_PhysicsVehicle_speed_get(void* self);
+double bro_physics_PhysicsVehicle_rpm_get(void* self);
+int32_t bro_physics_PhysicsVehicle_gear_get(void* self);
+
+// PhysicsRagdoll methods
+void bro_physics_PhysicsRagdoll_pose(void* self, bronze_native_buffer* out);
+void bro_physics_PhysicsRagdoll_localPose(void* self, bronze_native_buffer* out);
+bool bro_physics_PhysicsRagdoll_setPose(void* self, const char* poseJson);
+bool bro_physics_PhysicsRagdoll_driveToPose(void* self, const char* poseJson, const char* motorJson);
+bool bro_physics_PhysicsRagdoll_driveToPoseKinematic(void* self, const char* poseJson, double dt);
+void bro_physics_PhysicsRagdoll_stopDrive(void* self);
+void bro_physics_PhysicsRagdoll_addImpulse(void* self, double x, double y, double z);
+void bro_physics_PhysicsRagdoll_activate(void* self);
+void bro_physics_PhysicsRagdoll_deactivate(void* self);
+bool bro_physics_PhysicsRagdoll_isActive(void* self);
+int32_t bro_physics_PhysicsRagdoll_partCount_get(void* self);
+int32_t bro_physics_PhysicsRagdoll_partBody(void* self, int32_t index);
+int32_t bro_physics_PhysicsRagdoll_partParent(void* self, int32_t index);
+int32_t bro_physics_PhysicsRagdoll_partIndex(void* self, const char* name);
+
+// PhysicsSoftBody methods
+int32_t bro_physics_PhysicsSoftBody_body_get(void* self);
+
+// Query JSON helpers
+const char* bro_physics_raycastClosestJsonRaw(double ox, double oy, double oz, double dx, double dy, double dz, double maxDist, const char* filterConfig);
+const char* bro_physics_raycastJsonRaw(double ox, double oy, double oz, double dx, double dy, double dz, double maxDist, const char* filterConfig);
+const char* bro_physics_overlapShapeJsonRaw(const char* config);
+const char* bro_physics_overlapPointJsonRaw(double x, double y, double z, const char* filterConfig);
 
 #ifdef __cplusplus
 }  // extern "C"

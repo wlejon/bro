@@ -81,11 +81,11 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.PhysicsCharacter_getState", p(&bro_physics_PhysicsCharacter_getState), "str", {"__bro_native.physics.PhysicsCharacter"}, error) &&
         fn("__bro_native.physics.PhysicsCharacter_update", p(&bro_physics_PhysicsCharacter_update), "void", {"__bro_native.physics.PhysicsCharacter", "f64"}, error) &&
         fn("__bro_native.physics.PhysicsCharacter_destroy", p(&bro_physics_PhysicsCharacter_destroy), "void", {"__bro_native.physics.PhysicsCharacter"}, error) &&
+        fn("__bro_native.physics.PhysicsCharacter_setShape", p(&bro_physics_PhysicsCharacter_setShape), "bool", {"__bro_native.physics.PhysicsCharacter", "str"}, error) &&
+        fn("__bro_native.physics.PhysicsCharacter_innerBody_get", p(&bro_physics_PhysicsCharacter_innerBody_get), "i32", {"__bro_native.physics.PhysicsCharacter"}, error) &&
         fn("__bro_native.physics.PhysicsVehicle_setDriverInput", p(&bro_physics_PhysicsVehicle_setDriverInput), "void", {"__bro_native.physics.PhysicsVehicle", "f64", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.PhysicsVehicle_getTransform", p(&bro_physics_PhysicsVehicle_getTransform), "str", {"__bro_native.physics.PhysicsVehicle"}, error) &&
         fn("__bro_native.physics.PhysicsVehicle_destroy", p(&bro_physics_PhysicsVehicle_destroy), "void", {"__bro_native.physics.PhysicsVehicle"}, error) &&
-        fn("__bro_native.physics.PhysicsRagdoll_driveToPose", p(&bro_physics_PhysicsRagdoll_driveToPose), "void", {"__bro_native.physics.PhysicsRagdoll", "str", "f64"}, error) &&
-        fn("__bro_native.physics.PhysicsRagdoll_getPose", p(&bro_physics_PhysicsRagdoll_getPose), "str", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
         fn("__bro_native.physics.PhysicsRagdoll_destroy", p(&bro_physics_PhysicsRagdoll_destroy), "void", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
         fn("__bro_native.physics.PhysicsSoftBody_vertexCount_get", p(&bro_physics_PhysicsSoftBody_vertexCount_get), "i32", {"__bro_native.physics.PhysicsSoftBody"}, error) &&
         fn("__bro_native.physics.PhysicsSoftBody_topology", p(&bro_physics_PhysicsSoftBody_topology), "str", {"__bro_native.physics.PhysicsSoftBody"}, error) &&
@@ -103,7 +103,7 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.createBody", p(&bro_physics_createBody), "i32", {"str"}, error) &&
         fn("__bro_native.physics.destroyBody", p(&bro_physics_destroyBody), "void", {"i32"}, error) &&
         fn("__bro_native.physics.destroyAll", p(&bro_physics_destroyAll), "void", {}, error) &&
-        fn("__bro_native.physics.getTransform", p(&bro_physics_getTransform), "str", {"i32"}, error) &&
+        fn("__bro_native.physics.getTransform", p(&bro_physics_getTransform), "str", {"i32", "bool"}, error) &&
         fn("__bro_native.physics.getVelocity", p(&bro_physics_getVelocity), "str", {"i32"}, error) &&
         fn("__bro_native.physics.setPosition", p(&bro_physics_setPosition), "void", {"i32", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.setRotation", p(&bro_physics_setRotation), "void", {"i32", "f64", "f64", "f64", "f64"}, error) &&
@@ -114,8 +114,9 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.addTorque", p(&bro_physics_addTorque), "void", {"i32", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.setUserData", p(&bro_physics_setUserData), "void", {"i32", "f64"}, error) &&
         fn("__bro_native.physics.getUserData", p(&bro_physics_getUserData), "f64", {"i32"}, error) &&
-        fn("__bro_native.physics.setLayer", p(&bro_physics_setLayer), "void", {"i32", "i32"}, error) &&
+        fn("__bro_native.physics.setLayer", p(&bro_physics_setLayer), "bool", {"i32", "str"}, error) &&
         fn("__bro_native.physics.setKinematic", p(&bro_physics_setKinematic), "void", {"i32"}, error) &&
+        fn("__bro_native.physics.setMotionType", p(&bro_physics_setMotionType), "void", {"i32", "bool"}, error) &&
         fn("__bro_native.physics.moveKinematic", p(&bro_physics_moveKinematic), "void", {"i32", "f64", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.raycastClosestRaw", p(&bro_physics_raycastClosestRaw), "str", {"f64", "f64", "f64", "f64", "f64", "f64", "f64", "i32"}, error) &&
         fn("__bro_native.physics.raycastRaw", p(&bro_physics_raycastRaw), "str", {"f64", "f64", "f64", "f64", "f64", "f64", "f64", "i32"}, error) &&
@@ -136,14 +137,14 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.setFriction", p(&bro_physics_setFriction), "void", {"i32", "f64"}, error) &&
         fn("__bro_native.physics.setRestitution", p(&bro_physics_setRestitution), "void", {"i32", "f64"}, error) &&
         fn("__bro_native.physics.getBodyProperties", p(&bro_physics_getBodyProperties), "str", {"i32"}, error) &&
-        fn("__bro_native.physics.setAreaOverride", p(&bro_physics_setAreaOverride), "void", {"i32", "str"}, error) &&
+        fn("__bro_native.physics.setAreaOverride", p(&bro_physics_setAreaOverride), "bool", {"i32", "str"}, error) &&
         fn("__bro_native.physics.setTimeStep", p(&bro_physics_setTimeStep), "void", {"f64"}, error) &&
         fn("__bro_native.physics.step", p(&bro_physics_step), "void", {"f64"}, error) &&
         fn("__bro_native.physics.setInterpolation", p(&bro_physics_setInterpolation), "void", {"bool"}, error) &&
         fn("__bro_native.physics.getInterpolation", p(&bro_physics_getInterpolation), "bool", {}, error) &&
         fn("__bro_native.physics.isActive", p(&bro_physics_isActive), "bool", {"i32"}, error) &&
         fn("__bro_native.physics.activate", p(&bro_physics_activate), "void", {"i32"}, error) &&
-        fn("__bro_native.physics.getAllTransforms", p(&bro_physics_getAllTransforms), "f32[]", {"bool", "i32"}, error) &&
+        fn("__bro_native.physics.getAllTransforms", p(&bro_physics_getAllTransforms), "f32[]", {"bool"}, error) &&
         fn("__bro_native.physics.createCharacter", p(&bro_physics_createCharacter), "__bro_native.physics.PhysicsCharacter", {"str"}, error) &&
         fn("__bro_native.physics.createVehicle", p(&bro_physics_createVehicle), "__bro_native.physics.PhysicsVehicle", {"str"}, error) &&
         fn("__bro_native.physics.createRagdoll", p(&bro_physics_createRagdoll), "__bro_native.physics.PhysicsRagdoll", {"str"}, error) &&
@@ -153,10 +154,43 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.setConstraintEnabled", p(&bro_physics_setConstraintEnabled), "void", {"i32", "bool"}, error) &&
         fn("__bro_native.physics.isConstraintEnabled", p(&bro_physics_isConstraintEnabled), "bool", {"i32"}, error) &&
         fn("__bro_native.physics.setWheelMotor", p(&bro_physics_setWheelMotor), "void", {"i32", "i32", "f64", "f64"}, error) &&
-        fn("__bro_native.physics.setConstraintMotor", p(&bro_physics_setConstraintMotor), "void", {"i32", "str"}, error) &&
+        fn("__bro_native.physics.setConstraintMotor", p(&bro_physics_setConstraintMotor), "bool", {"i32", "str"}, error) &&
         fn("__bro_native.physics.setConstraintBreakingImpulse", p(&bro_physics_setConstraintBreakingImpulse), "void", {"i32", "f64"}, error) &&
         fn("__bro_native.physics.getConstraintBreakingImpulse", p(&bro_physics_getConstraintBreakingImpulse), "f64", {"i32"}, error) &&
-        fn("__bro_native.physics.getBrokenConstraints", p(&bro_physics_getBrokenConstraints), "i32[]", {}, error);
+        fn("__bro_native.physics.getBrokenConstraints", p(&bro_physics_getBrokenConstraints), "i32[]", {}, error) &&
+        fn("__bro_native.physics.PhysicsWorldHandle_enter", p(&bro_physics_PhysicsWorldHandle_enter), "void", {"__bro_native.physics.PhysicsWorldHandle"}, error) &&
+        fn("__bro_native.physics.PhysicsWorldHandle_exit", p(&bro_physics_PhysicsWorldHandle_exit), "void", {"__bro_native.physics.PhysicsWorldHandle"}, error) &&
+        fn("__bro_native.physics.getTimeStep", p(&bro_physics_getTimeStep), "f64", {}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_setInput", p(&bro_physics_PhysicsVehicle_setInput), "void", {"__bro_native.physics.PhysicsVehicle", "str"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_setLeanController", p(&bro_physics_PhysicsVehicle_setLeanController), "void", {"__bro_native.physics.PhysicsVehicle", "bool"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_setGear", p(&bro_physics_PhysicsVehicle_setGear), "void", {"__bro_native.physics.PhysicsVehicle", "i32", "f64"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_wheelState", p(&bro_physics_PhysicsVehicle_wheelState), "str", {"__bro_native.physics.PhysicsVehicle", "i32"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_getState", p(&bro_physics_PhysicsVehicle_getState), "str", {"__bro_native.physics.PhysicsVehicle"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_wheelCount_get", p(&bro_physics_PhysicsVehicle_wheelCount_get), "i32", {"__bro_native.physics.PhysicsVehicle"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_chassisBody_get", p(&bro_physics_PhysicsVehicle_chassisBody_get), "i32", {"__bro_native.physics.PhysicsVehicle"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_type_get", p(&bro_physics_PhysicsVehicle_type_get), "str", {"__bro_native.physics.PhysicsVehicle"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_speed_get", p(&bro_physics_PhysicsVehicle_speed_get), "f64", {"__bro_native.physics.PhysicsVehicle"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_rpm_get", p(&bro_physics_PhysicsVehicle_rpm_get), "f64", {"__bro_native.physics.PhysicsVehicle"}, error) &&
+        fn("__bro_native.physics.PhysicsVehicle_gear_get", p(&bro_physics_PhysicsVehicle_gear_get), "i32", {"__bro_native.physics.PhysicsVehicle"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_pose", p(&bro_physics_PhysicsRagdoll_pose), "f32[]", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_localPose", p(&bro_physics_PhysicsRagdoll_localPose), "f32[]", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_setPose", p(&bro_physics_PhysicsRagdoll_setPose), "bool", {"__bro_native.physics.PhysicsRagdoll", "str"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_driveToPose", p(&bro_physics_PhysicsRagdoll_driveToPose), "bool", {"__bro_native.physics.PhysicsRagdoll", "str", "str"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_driveToPoseKinematic", p(&bro_physics_PhysicsRagdoll_driveToPoseKinematic), "bool", {"__bro_native.physics.PhysicsRagdoll", "str", "f64"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_stopDrive", p(&bro_physics_PhysicsRagdoll_stopDrive), "void", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_addImpulse", p(&bro_physics_PhysicsRagdoll_addImpulse), "void", {"__bro_native.physics.PhysicsRagdoll", "f64", "f64", "f64"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_activate", p(&bro_physics_PhysicsRagdoll_activate), "void", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_deactivate", p(&bro_physics_PhysicsRagdoll_deactivate), "void", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_isActive", p(&bro_physics_PhysicsRagdoll_isActive), "bool", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_partCount_get", p(&bro_physics_PhysicsRagdoll_partCount_get), "i32", {"__bro_native.physics.PhysicsRagdoll"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_partBody", p(&bro_physics_PhysicsRagdoll_partBody), "i32", {"__bro_native.physics.PhysicsRagdoll", "i32"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_partParent", p(&bro_physics_PhysicsRagdoll_partParent), "i32", {"__bro_native.physics.PhysicsRagdoll", "i32"}, error) &&
+        fn("__bro_native.physics.PhysicsRagdoll_partIndex", p(&bro_physics_PhysicsRagdoll_partIndex), "i32", {"__bro_native.physics.PhysicsRagdoll", "str"}, error) &&
+        fn("__bro_native.physics.PhysicsSoftBody_body_get", p(&bro_physics_PhysicsSoftBody_body_get), "i32", {"__bro_native.physics.PhysicsSoftBody"}, error) &&
+        fn("__bro_native.physics.raycastClosestJsonRaw", p(&bro_physics_raycastClosestJsonRaw), "str", {"f64", "f64", "f64", "f64", "f64", "f64", "f64", "str"}, error) &&
+        fn("__bro_native.physics.raycastJsonRaw", p(&bro_physics_raycastJsonRaw), "str", {"f64", "f64", "f64", "f64", "f64", "f64", "f64", "str"}, error) &&
+        fn("__bro_native.physics.overlapShapeJsonRaw", p(&bro_physics_overlapShapeJsonRaw), "str", {"str"}, error) &&
+        fn("__bro_native.physics.overlapPointJsonRaw", p(&bro_physics_overlapPointJsonRaw), "str", {"f64", "f64", "f64", "str"}, error);
     if (!ok) return false;
     publishPrototype("physics", "__bro_native.physics.PhysicsWorldHandle", "PhysicsWorldHandleProto");
     publishPrototype("physics", "__bro_native.physics.PhysicsCharacter", "PhysicsCharacterProto");

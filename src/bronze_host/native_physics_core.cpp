@@ -7,6 +7,19 @@
 namespace bro::bronze_host {
 
 HostPhysicsWorld g_defaultWorld;
+static thread_local std::vector<HostPhysicsWorld*> tl_activeWorlds;
+
+HostPhysicsWorld* getActiveWorld() {
+    return tl_activeWorlds.empty() ? &g_defaultWorld : tl_activeWorlds.back();
+}
+
+void pushActiveWorld(HostPhysicsWorld* w) {
+    if (w) tl_activeWorlds.push_back(w);
+}
+
+void popActiveWorld() {
+    if (!tl_activeWorlds.empty()) tl_activeWorlds.pop_back();
+}
 
 bool registerNatives_physics(std::string* error);
 
@@ -28,7 +41,6 @@ physics::PhysicsWorld* unwrapPhysicsWorld(Value v) {
 
 }  // namespace bro::bronze_host
 
-
 extern "C" {
 
 using namespace bro;
@@ -38,7 +50,9 @@ using namespace bro::bronze_host;
 
 void bro_physics_PhysicsWorldHandle_dtor(void* self) {
     auto* pw = static_cast<HostPhysicsWorld*>(self);
-    if (pw && pw != &g_defaultWorld) delete pw;
+    if (pw && pw != &g_defaultWorld) {
+        delete pw;
+    }
 }
 
 void* bro_physics_PhysicsWorldHandle_ctor(void) {
@@ -58,52 +72,106 @@ void bro_physics_PhysicsWorldHandle_destroy(void* self) {
 void bro_physics_PhysicsWorldHandle_step(void* self, double dt) {
     auto* pw = static_cast<HostPhysicsWorld*>(self);
     if (pw && pw->getWorld()) {
+        pushActiveWorld(pw);
         if (dt > 0.0) pw->getWorld()->setTimeStep(static_cast<float>(dt));
         pw->getWorld()->stepInline();
+        popActiveWorld();
     }
 }
 
-void* bro_physics_createWorldHandle(const char* /*opts*/) {
+void bro_physics_PhysicsWorldHandle_enter(void* self) {
+    auto* pw = static_cast<HostPhysicsWorld*>(self);
+    pushActiveWorld(pw);
+}
+
+void bro_physics_PhysicsWorldHandle_exit(void* /*self*/) {
+    popActiveWorld();
+}
+
+void* bro_physics_createWorldHandle(const char* opts) {
     auto* pw = new HostPhysicsWorld();
     pw->world = new physics::PhysicsWorld();
     pw->ownsWorld = true;
+
+    uint32_t maxBodies = 10240;
+    uint32_t contactBufferSize = 4096;
+    JPH::Vec3 gravity(0, -9.81f, 0);
+
+    if (opts && *opts) {
+        auto res = ev::parseJson(opts);
+        if (!res.thrown && ev::isObject(res.value)) {
+            maxBodies = static_cast<uint32_t>(getPropNumber(res.value, "maxBodies", 10240));
+            contactBufferSize = static_cast<uint32_t>(getPropNumber(res.value, "contactBufferSize", 4096));
+            Value gv = ev::getProperty(res.value, "gravity");
+            if (!ev::isUndefined(gv) && !ev::isNull(gv)) {
+                gravity = readVec3(gv, gravity);
+            }
+        }
+    }
+
+    pw->world->init(maxBodies, contactBufferSize);
+    pw->world->setGravity(gravity.GetX(), gravity.GetY(), gravity.GetZ());
     return pw;
 }
 
-void bro_physics_createWorld(const char* /*opts*/) {
-    g_defaultWorld.clear();
-    if (auto* w = g_defaultWorld.getWorld()) w->destroyAll();
+void bro_physics_createWorld(const char* opts) {
+    auto* pw = getActiveWorld();
+    pw->clear();
+    if (auto* w = pw->getWorld()) {
+        w->destroyAll();
+        if (opts && *opts) {
+            auto res = ev::parseJson(opts);
+            if (!res.thrown && ev::isObject(res.value)) {
+                Value gv = ev::getProperty(res.value, "gravity");
+                if (!ev::isUndefined(gv) && !ev::isNull(gv)) {
+                    JPH::Vec3 g = readVec3(gv, JPH::Vec3(0, -9.81f, 0));
+                    w->setGravity(g.GetX(), g.GetY(), g.GetZ());
+                }
+            }
+        }
+    }
 }
 
 // --- Simulation Timing & Gravity --------------------------------------------
 
 void bro_physics_setTimeStep(double dt) {
-    if (auto* w = g_defaultWorld.getWorld()) w->setTimeStep(static_cast<float>(dt));
+    auto* pw = getActiveWorld();
+    if (auto* w = pw ? pw->getWorld() : nullptr) w->setTimeStep(static_cast<float>(dt));
+}
+
+double bro_physics_getTimeStep(void) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
+    return w ? w->timeStep() : (1.0 / 60.0);
 }
 
 void bro_physics_step(double dt) {
-    if (auto* w = g_defaultWorld.getWorld()) {
+    auto* pw = getActiveWorld();
+    if (auto* w = pw ? pw->getWorld() : nullptr) {
         if (dt > 0.0) w->setTimeStep(static_cast<float>(dt));
         w->stepInline();
-        g_defaultWorld.lastContactEvents = w->drainContactEvents(&g_defaultWorld.lastContactOverflow);
     }
 }
 
 void bro_physics_setInterpolation(bool enabled) {
-    if (auto* w = g_defaultWorld.getWorld()) w->setInterpolation(enabled);
+    auto* pw = getActiveWorld();
+    if (auto* w = pw ? pw->getWorld() : nullptr) w->setInterpolation(enabled);
 }
 
 bool bro_physics_getInterpolation(void) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     return w ? w->interpolation() : false;
 }
 
 void bro_physics_setGravity(double x, double y, double z) {
-    if (auto* w = g_defaultWorld.getWorld()) w->setGravity((float)x, (float)y, (float)z);
+    auto* pw = getActiveWorld();
+    if (auto* w = pw ? pw->getWorld() : nullptr) w->setGravity((float)x, (float)y, (float)z);
 }
 
 const char* bro_physics_getGravity(void) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     JPH::Vec3 g = w ? w->gravity() : JPH::Vec3(0, -9.81f, 0);
     std::string s = "{\"x\":" + std::to_string(g.GetX()) +
                     ",\"y\":" + std::to_string(g.GetY()) +
@@ -112,7 +180,8 @@ const char* bro_physics_getGravity(void) {
 }
 
 bool bro_physics_setLayers(const char* config) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w || !config || !*config) return false;
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return false;
@@ -146,7 +215,8 @@ bool bro_physics_setLayers(const char* config) {
 // --- Body Lifecycle ---------------------------------------------------------
 
 int32_t bro_physics_createBody(const char* config) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w || !config || !*config) return -1;
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return -1;
@@ -157,36 +227,51 @@ int32_t bro_physics_createBody(const char* config) {
 
     JPH::BodyID id = w->createBody(opts);
     if (id.IsInvalid()) return -1;
-    return g_defaultWorld.registerBody(id);
+    return pw->registerBody(id);
 }
 
 void bro_physics_destroyBody(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (id.IsInvalid()) return;
-    w->destroyBody(id, [](JPH::BodyID bid) { g_defaultWorld.unregisterBodyId(bid); });
-    g_defaultWorld.unregisterBody(tag);
+    bool destroyed = false;
+    w->destroyBody(id, [pw, &destroyed](JPH::BodyID bid) {
+        pw->unregisterBodyId(bid);
+        destroyed = true;
+    });
+    if (destroyed) {
+        pw->unregisterBody(tag);
+    }
 }
 
 void bro_physics_destroyAll(void) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (w) {
         w->destroyAll();
-        g_defaultWorld.clear();
+        pw->clear();
     }
 }
 
 // --- Transforms & Properties ------------------------------------------------
 
-const char* bro_physics_getTransform(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+const char* bro_physics_getTransform(int32_t tag, bool interpolated) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return natives::strResult("null");
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (id.IsInvalid() || !w->bodyExists(id)) return natives::strResult("null");
 
-    JPH::RVec3 pos = w->getPosition(id);
-    JPH::Quat rot = w->getRotation(id);
+    JPH::RVec3 pos;
+    JPH::Quat rot;
+    if (interpolated) {
+        w->getRenderTransform(id, pos, rot);
+    } else {
+        pos = w->getPosition(id);
+        rot = w->getRotation(id);
+    }
     uint64_t udata = w->getUserData(id);
 
     std::string s = "{\"position\":{\"x\":" + std::to_string(pos.GetX()) +
@@ -201,9 +286,10 @@ const char* bro_physics_getTransform(int32_t tag) {
 }
 
 const char* bro_physics_getVelocity(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return natives::strResult("null");
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (id.IsInvalid() || !w->bodyExists(id)) return natives::strResult("null");
 
     JPH::Vec3 lin = w->getLinearVelocity(id);
@@ -219,86 +305,116 @@ const char* bro_physics_getVelocity(int32_t tag) {
 }
 
 void bro_physics_setPosition(int32_t tag, double x, double y, double z) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setPosition(id, JPH::RVec3(x, y, z));
 }
 
 void bro_physics_setRotation(int32_t tag, double x, double y, double z, double w) {
-    auto* world = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* world = pw ? pw->getWorld() : nullptr;
     if (!world) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) world->setRotation(id, JPH::Quat((float)x, (float)y, (float)z, (float)w));
 }
 
 void bro_physics_setLinearVelocity(int32_t tag, double x, double y, double z) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setLinearVelocity(id, JPH::Vec3((float)x, (float)y, (float)z));
 }
 
 void bro_physics_setAngularVelocity(int32_t tag, double x, double y, double z) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setAngularVelocity(id, JPH::Vec3((float)x, (float)y, (float)z));
 }
 
 void bro_physics_addForce(int32_t tag, double x, double y, double z) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->addForce(id, JPH::Vec3((float)x, (float)y, (float)z));
 }
 
 void bro_physics_addImpulse(int32_t tag, double x, double y, double z) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->addImpulse(id, JPH::Vec3((float)x, (float)y, (float)z));
 }
 
 void bro_physics_addTorque(int32_t tag, double x, double y, double z) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->addTorque(id, JPH::Vec3((float)x, (float)y, (float)z));
 }
 
 void bro_physics_setUserData(int32_t tag, double data) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setUserData(id, static_cast<uint64_t>(data));
 }
 
 double bro_physics_getUserData(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return 0.0;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     return id.IsInvalid() ? 0.0 : static_cast<double>(w->getUserData(id));
 }
 
-void bro_physics_setLayer(int32_t tag, int32_t layer) {
-    auto* w = g_defaultWorld.getWorld();
-    if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
-    if (!id.IsInvalid()) w->setLayer(id, layer);
+bool bro_physics_setLayer(int32_t tag, const char* layer) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
+    if (!w || !layer) return false;
+    JPH::BodyID id = pw->bodyIdForTag(tag);
+    if (id.IsInvalid()) return false;
+    int idx = 0;
+    if (parseDecimalIndex(layer, idx)) {
+        if (idx < 0 || idx >= w->numLayers()) return false;
+        w->setLayer(id, idx);
+        return true;
+    }
+    idx = w->layerIndex(layer);
+    if (idx < 0) return false;
+    w->setLayer(id, idx);
+    return true;
 }
 
 void bro_physics_setKinematic(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setKinematic(id);
 }
 
-void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double dt) {
-    auto* w = g_defaultWorld.getWorld();
+void bro_physics_setMotionType(int32_t tag, bool isStatic) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
+    if (!id.IsInvalid()) w->setMotionType(id, isStatic);
+}
+
+void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double dt) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
+    if (!w) return;
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) {
         JPH::Quat rot = w->getRotation(id);
         w->moveKinematic(id, JPH::RVec3(x, y, z), rot, (float)dt);
@@ -306,116 +422,144 @@ void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double
 }
 
 void bro_physics_setFrictionCombine(int32_t tag, const char* mode) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w || !mode) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     physics::CombineMode cm;
     if (!id.IsInvalid() && parseCombineMode(mode, cm)) w->setFrictionCombine(id, cm);
 }
 
 void bro_physics_setRestitutionCombine(int32_t tag, const char* mode) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w || !mode) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     physics::CombineMode cm;
     if (!id.IsInvalid() && parseCombineMode(mode, cm)) w->setRestitutionCombine(id, cm);
 }
 
 double bro_physics_getMass(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return 0.0;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     return id.IsInvalid() ? 0.0 : (double)w->getMass(id);
 }
 
 void bro_physics_setMass(int32_t tag, double mass) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setMass(id, (float)mass);
 }
 
 void bro_physics_setLinearDamping(int32_t tag, double damping) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setLinearDamping(id, (float)damping);
 }
 
 void bro_physics_setAngularDamping(int32_t tag, double damping) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setAngularDamping(id, (float)damping);
 }
 
 void bro_physics_setGravityFactor(int32_t tag, double factor) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setGravityFactor(id, (float)factor);
 }
 
 void bro_physics_setFriction(int32_t tag, double friction) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setFriction(id, (float)friction);
 }
 
 void bro_physics_setRestitution(int32_t tag, double restitution) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->setRestitution(id, (float)restitution);
 }
 
 const char* bro_physics_getBodyProperties(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return natives::strResult("null");
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (id.IsInvalid() || !w->bodyExists(id)) return natives::strResult("null");
 
     float mass = w->getMass(id);
     float friction = w->getFriction(id);
     float restitution = w->getRestitution(id);
+    float linearDamping = w->getLinearDamping(id);
+    float angularDamping = w->getAngularDamping(id);
+    float gravityFactor = w->getGravityFactor(id);
 
-    std::string s = "{\"mass\":" + std::to_string(mass) +
-                    ",\"friction\":" + std::to_string(friction) +
-                    ",\"restitution\":" + std::to_string(restitution) + "}";
-    return natives::strResult(s);
+    std::ostringstream ss;
+    ss << "{\"mass\":" << mass
+       << ",\"friction\":" << friction
+       << ",\"restitution\":" << restitution
+       << ",\"linearDamping\":" << linearDamping
+       << ",\"angularDamping\":" << angularDamping
+       << ",\"gravityFactor\":" << gravityFactor << "}";
+    return natives::strResult(ss.str());
 }
 
-void bro_physics_setAreaOverride(int32_t tag, const char* config) {
-    auto* w = g_defaultWorld.getWorld();
-    if (!w || !config || !*config) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
-    if (id.IsInvalid()) return;
+bool bro_physics_setAreaOverride(int32_t tag, const char* config) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
+    if (!w) return false;
+    JPH::BodyID id = pw->bodyIdForTag(tag);
+    if (id.IsInvalid() || !w->bodyExists(id)) return false;
+    if (!config || !*config || std::string(config) == "null") {
+        w->clearAreaOverride(id);
+        return true;
+    }
+    if (!w->isSensor(id)) return false;
     auto res = ev::parseJson(config);
-    if (res.thrown || !ev::isObject(res.value)) return;
+    if (res.thrown || !ev::isObject(res.value)) return false;
 
     physics::AreaOverride a;
     std::string err;
-    if (readAreaOverride(res.value, a, err)) w->setAreaOverride(id, a);
+    if (!readAreaOverride(res.value, a, err)) return false;
+    w->setAreaOverride(id, a);
+    return true;
 }
 
 bool bro_physics_isActive(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return false;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     return id.IsInvalid() ? false : w->isActive(id);
 }
 
 void bro_physics_activate(int32_t tag) {
-    auto* w = g_defaultWorld.getWorld();
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
     if (!w) return;
-    JPH::BodyID id = g_defaultWorld.bodyIdForTag(tag);
+    JPH::BodyID id = pw->bodyIdForTag(tag);
     if (!id.IsInvalid()) w->activate(id);
 }
 
-void bro_physics_getAllTransforms(bool worldHandle_given, int32_t worldHandle, bronze_native_buffer* out) {
-    auto* w = g_defaultWorld.getWorld();
-    if (!w || g_defaultWorld.bodyTags.empty()) {
+void bro_physics_getAllTransforms(bool interpolated, bronze_native_buffer* out) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
+    if (!w || pw->bodyTags.empty()) {
         out->data = nullptr;
         out->length = 0;
         out->release = nullptr;
@@ -423,15 +567,20 @@ void bro_physics_getAllTransforms(bool worldHandle_given, int32_t worldHandle, b
     }
 
     constexpr size_t stride = 8;
-    size_t count = g_defaultWorld.bodyTags.size();
+    size_t count = pw->bodyTags.size();
     tl_allTransformsBuf.resize(count * stride);
 
     size_t idx = 0;
-    auto& bi = w->getBodyInterface();
-    for (auto& [key, tag] : g_defaultWorld.bodyTags) {
+    for (auto& [key, tag] : pw->bodyTags) {
         JPH::BodyID id(key);
-        JPH::RVec3 pos = bi.GetPosition(id);
-        JPH::Quat rot = bi.GetRotation(id);
+        JPH::RVec3 pos;
+        JPH::Quat rot;
+        if (interpolated) {
+            w->getRenderTransform(id, pos, rot);
+        } else {
+            pos = w->getPosition(id);
+            rot = w->getRotation(id);
+        }
         float* p = tl_allTransformsBuf.data() + idx * stride;
         p[0] = static_cast<float>(tag);
         p[1] = static_cast<float>(pos.GetX());

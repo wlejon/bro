@@ -115,15 +115,13 @@ struct HostPhysicsWorld {
         return eng ? eng->physicsWorld() : nullptr;
     }
 
-    ~HostPhysicsWorld() {
-        if (ownsWorld && world) {
-            delete world;
-            world = nullptr;
-        }
-    }
+    ~HostPhysicsWorld();
 };
 
 extern HostPhysicsWorld g_defaultWorld;
+HostPhysicsWorld* getActiveWorld();
+void pushActiveWorld(HostPhysicsWorld* w);
+void popActiveWorld();
 
 struct HostPhysicsCharacter {
     uint32_t tag = kHostPhysicsCharacterTag;
@@ -158,6 +156,30 @@ struct HostPhysicsRagdoll {
     std::vector<int32_t> parents;
     std::vector<std::string> names;
 };
+
+inline HostPhysicsWorld::~HostPhysicsWorld() {
+    for (auto* c : liveCharacters) {
+        if (c) { c->world = nullptr; c->handle = 0; }
+    }
+    liveCharacters.clear();
+    for (auto* v : liveVehicles) {
+        if (v) { v->world = nullptr; v->handle = 0; }
+    }
+    liveVehicles.clear();
+    for (auto* r : liveRagdolls) {
+        if (r) { r->world = nullptr; r->handle = 0; }
+    }
+    liveRagdolls.clear();
+    for (auto* s : liveSoftBodies) {
+        if (s) { s->world = nullptr; s->handle = 0; }
+    }
+    liveSoftBodies.clear();
+    if (ownsWorld && world) {
+        world->shutdown();
+        delete world;
+        world = nullptr;
+    }
+}
 
 // Value parsing helpers
 inline double getPropNumber(Value obj, const char* name, double def) {
@@ -283,7 +305,15 @@ inline bool readAreaOverride(Value v, physics::AreaOverride& a, std::string& err
     Value fo = ev::getProperty(v, "falloffDistance");
     if (!ev::isUndefined(fo)) a.falloffDistance = static_cast<float>(ev::toDouble(fo));
     Value gsc = ev::getProperty(v, "gravityScale");
-    if (!ev::isUndefined(gsc)) a.gravityScale = static_cast<float>(ev::toDouble(gsc));
+    if (!ev::isUndefined(gsc)) {
+        a.gravityScale = static_cast<float>(ev::toDouble(gsc));
+        if (mode.empty()) a.gravityMode = physics::AreaOverride::GravityScale;
+    }
+    if (mode.empty() && a.gravityMode == physics::AreaOverride::GravityNone) {
+        if (!ev::isUndefined(gp) || !ev::isUndefined(gs)) {
+            a.gravityMode = physics::AreaOverride::GravityReplace;
+        }
+    }
 
     Value ld = ev::getProperty(v, "linearDamping");
     if (!ev::isUndefined(ld) && !ev::isNull(ld)) a.linearDamping = static_cast<float>(ev::toDouble(ld));
@@ -377,8 +407,197 @@ inline bool readBodyOptions(Value v, physics::BodyOptions& out, std::string& err
             }
         }
     }
+    Value layerVal = ev::getProperty(v, "layer");
+    if (!ev::isUndefined(layerVal) && !ev::isNull(layerVal)) {
+        if (!ev::isObject(layerVal)) {
+            std::string s = ev::toUtf8(layerVal);
+            int idx = 0;
+            if (parseDecimalIndex(s, idx)) {
+                out.layer = idx;
+            } else if (world) {
+                out.layer = world->layerIndex(s);
+            }
+        }
+    }
+
+    if (out.shape == physics::BodyOptions::ShapeHeightField) {
+        out.isStatic = true;
+        Value hVal = ev::getProperty(v, "heights");
+        if (ev::isUndefined(hVal) || ev::isNull(hVal)) {
+            hVal = ev::getProperty(v, "heightSamples");
+        }
+        readFloatVector(hVal, out.heightSamples);
+        if (out.heightSamples.empty() && ev::isObject(hVal)) {
+            for (uint32_t i = 0; ; ++i) {
+                std::string key = std::to_string(i);
+                Value elem = ev::getProperty(hVal, key.c_str());
+                if (ev::isUndefined(elem)) break;
+                out.heightSamples.push_back(static_cast<float>(ev::toDouble(elem)));
+            }
+        }
+        double sc = getPropNumber(v, "sampleCount", 0.0);
+        if (sc <= 0.0) sc = getPropNumber(v, "heightSampleCount", 0.0);
+        out.heightSampleCount = static_cast<uint32_t>(sc);
+
+        Value scaleVal = ev::getProperty(v, "scale");
+        if (ev::isObject(scaleVal)) {
+            out.heightScale = readVec3(scaleVal, JPH::Vec3::sReplicate(1.0f));
+        } else {
+            Value hs = ev::getProperty(v, "heightScale");
+            if (ev::isObject(hs)) out.heightScale = readVec3(hs, JPH::Vec3::sReplicate(1.0f));
+        }
+
+        Value offVal = ev::getProperty(v, "offset");
+        if (ev::isObject(offVal)) {
+            out.heightOffset = readVec3(offVal, JPH::Vec3::sZero());
+        } else {
+            Value ho = ev::getProperty(v, "heightOffset");
+            if (ev::isObject(ho)) out.heightOffset = readVec3(ho, JPH::Vec3::sZero());
+        }
+    }
+
+    if (out.shape == physics::BodyOptions::ShapeMesh) {
+        out.isStatic = true;
+        Value posVal = ev::getProperty(v, "positions");
+        if (ev::isUndefined(posVal) || ev::isNull(posVal)) {
+            posVal = ev::getProperty(v, "vertices");
+        }
+        std::vector<float> flat;
+        if (readFloatVector(posVal, flat) && flat.size() >= 9 && (flat.size() % 3) == 0) {
+            for (size_t i = 0; i + 2 < flat.size(); i += 3) {
+                out.meshVertices.emplace_back(flat[i], flat[i+1], flat[i+2]);
+            }
+        }
+        readU32Vector(ev::getProperty(v, "indices"), out.meshIndices);
+    }
 
     return true;
+}
+
+static const char* const kSixDofAxisNames[6] = {
+    "translationX", "translationY", "translationZ",
+    "rotationX", "rotationY", "rotationZ",
+};
+
+inline int motorAxisIndex(const std::string& name) {
+    for (int i = 0; i < 6; i++) {
+        if (name == kSixDofAxisNames[i]) return i;
+    }
+    if (name == "tx") return 0;
+    if (name == "ty") return 1;
+    if (name == "tz") return 2;
+    if (name == "rx") return 3;
+    if (name == "ry") return 4;
+    if (name == "rz") return 5;
+    return -1;
+}
+
+inline bool readMotorOptions(Value oVal, physics::MotorOptions& m, std::string& err) {
+    if (!ev::isObject(oVal)) { err = "motor options must be an object"; return false; }
+    std::string type = getPropString(oVal, "type");
+    if (type == "velocity")      m.state = physics::MotorOptions::Velocity;
+    else if (type == "position") m.state = physics::MotorOptions::Position;
+    else if (type == "off" || type.empty()) m.state = physics::MotorOptions::Off;
+    else { err = "motor type must be 'velocity' | 'position' | 'off'"; return false; }
+
+    m.target    = static_cast<float>(getPropNumber(oVal, "target", m.target));
+    m.maxForce  = static_cast<float>(getPropNumber(oVal, "maxForce", m.maxForce));
+    m.maxTorque = static_cast<float>(getPropNumber(oVal, "maxTorque", m.maxTorque));
+    m.frequency = static_cast<float>(getPropNumber(oVal, "frequency", m.frequency));
+    m.damping   = static_cast<float>(getPropNumber(oVal, "damping", m.damping));
+
+    Value av = ev::getProperty(oVal, "axis");
+    if (!ev::isUndefined(av) && !ev::isNull(av) && !ev::isObject(av)) {
+        std::string s = ev::toUtf8(av);
+        int idx = motorAxisIndex(s);
+        int numeric = 0;
+        if (idx >= 0) {
+            m.axis = idx;
+        } else if (parseDecimalIndex(s, numeric)) {
+            m.axis = numeric;
+        } else {
+            err = "motor axis must be translationX..Z / rotationX..Z";
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool readSixDofAxis(Value v, physics::SixDofAxis& a, std::string& err) {
+    if (!ev::isObject(v)) {
+        std::string mode = ev::toUtf8(v);
+        if (mode == "locked")    a.mode = physics::SixDofAxis::Locked;
+        else if (mode == "free") a.mode = physics::SixDofAxis::Free;
+        else { err = "axis mode must be 'locked' | 'free' | {min,max,...}"; return false; }
+        return true;
+    }
+    Value minV = ev::getProperty(v, "min");
+    Value maxV = ev::getProperty(v, "max");
+    if (!ev::isUndefined(minV) && !ev::isObject(minV) && !ev::isUndefined(maxV) && !ev::isObject(maxV)) {
+        a.mode = physics::SixDofAxis::Limited;
+        a.min = static_cast<float>(ev::toDouble(minV));
+        a.max = static_cast<float>(ev::toDouble(maxV));
+    } else {
+        a.mode = physics::SixDofAxis::Free;
+    }
+    a.springFrequency = static_cast<float>(getPropNumber(v, "frequency", a.springFrequency));
+    a.springDamping   = static_cast<float>(getPropNumber(v, "damping", a.springDamping));
+    a.maxFriction     = static_cast<float>(getPropNumber(v, "friction", a.maxFriction));
+    return true;
+}
+
+inline void readQueryFilter(Value v, physics::QueryFilter& filter, HostPhysicsWorld* pw) {
+    if (!ev::isObject(v)) return;
+    Value ign = ev::getProperty(v, "ignoreBody");
+    if (!ev::isUndefined(ign) && !ev::isNull(ign) && !ev::isObject(ign)) {
+        int32_t t = static_cast<int32_t>(ev::toDouble(ign));
+        filter.ignoreBody = pw->bodyIdForTag(t);
+    }
+    Value igns = ev::getProperty(v, "ignoreBodies");
+    if (ev::isObject(igns)) {
+        Value lenV = ev::getProperty(igns, "length");
+        uint32_t len = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        for (uint32_t i = 0; i < len; ++i) {
+            Value it = ev::getElement(igns, i);
+            if (ev::isNumber(it)) {
+                int32_t t = static_cast<int32_t>(ev::toDouble(it));
+                JPH::BodyID bid = pw->bodyIdForTag(t);
+                if (!bid.IsInvalid()) filter.ignoreBodies.push_back(bid);
+            }
+        }
+    }
+    Value layers = ev::getProperty(v, "layers");
+    if (ev::isObject(layers)) {
+        auto* world = pw->getWorld();
+        if (world) {
+            filter.layerMask = 0;
+            Value lenV = ev::getProperty(layers, "length");
+            uint32_t len = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+            for (uint32_t i = 0; i < len; ++i) {
+                Value it = ev::getElement(layers, i);
+                if (!ev::isUndefined(it) && !ev::isObject(it)) {
+                    std::string s = ev::toUtf8(it);
+                    int idx = world->layerIndex(s);
+                    if (idx >= 0 && idx < 32) filter.layerMask |= (1u << idx);
+                }
+            }
+        }
+    }
+}
+
+inline bool readQueryShape(Value optsVal, physics::BodyOptions& shape, std::string& err, HostPhysicsWorld* pw) {
+    if (!readBodyOptions(optsVal, shape, err, pw ? pw->getWorld() : nullptr)) return false;
+    switch (shape.shape) {
+        case physics::BodyOptions::ShapeBox:
+        case physics::BodyOptions::ShapeSphere:
+        case physics::BodyOptions::ShapeCapsule:
+        case physics::BodyOptions::ShapeCylinder:
+        case physics::BodyOptions::ShapeConvexHull:
+            return true;
+        default:
+            err = "query shape must be convex (box|sphere|capsule|cylinder|convexHull)";
+            return false;
+    }
 }
 
 }  // namespace bro::bronze_host
