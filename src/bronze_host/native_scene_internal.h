@@ -234,10 +234,15 @@ inline void* wrapNode(scene::SceneNode* node, scene::SceneGraph* graph) {
     return new HostSceneNodeCell{kHostSceneNodeTag, tok, node->id()};
 }
 
-inline scene::SceneGraph* sceneGraphOf(Value v) {
+inline HostSceneGraphCell* sceneGraphCellOf(Value v) {
     if (!ev::isObject(v)) return nullptr;
-    auto* c = static_cast<HostSceneGraphCell*>(ev::handleData(v));
-    return (c && c->tag == kHostSceneGraphTag) ? c->graph() : nullptr;
+    auto* h = static_cast<HostSceneGraphCell*>(ev::handleData(v));
+    return (h && h->tag == kHostSceneGraphTag) ? h : nullptr;
+}
+
+inline scene::SceneGraph* sceneGraphOf(Value v) {
+    auto* c = sceneGraphCellOf(v);
+    return c ? c->graph() : nullptr;
 }
 
 Value createSceneGraphValue(scene::SceneGraph* sg, dom::Element* canvas);
@@ -306,6 +311,40 @@ inline bool parseColorValue(Value v, float& r, float& g, float& b, float& a) {
     }
     return false;
 }
+
+
+
+inline HostSceneNodeCell* sceneNodeCellOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* h = static_cast<HostSceneNodeCell*>(ev::handleData(v));
+    return (h && h->tag == kHostSceneNodeTag) ? h : nullptr;
+}
+
+inline scene::SceneNode* sceneNodeOf(Value v) {
+    auto* c = sceneNodeCellOf(v);
+    return c ? c->node() : nullptr;
+}
+
+inline HostTerrainCell* terrainCellOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* h = static_cast<HostTerrainCell*>(ev::handleData(v));
+    return (h && h->tag == kHostTerrainTag) ? h : nullptr;
+}
+
+inline bool terrainSampleHeight(HostTerrainCell* cell, float x, float z,
+                                float rayStartY, float rayLength, float& outY) {
+    if (!cell || !cell->mgr()) return false;
+    const bromath::Vec3 origin{x, rayStartY, z};
+    const bromath::Vec3 dir{0.0f, -1.0f, 0.0f};
+    auto hit = cell->mgr()->raycast(origin, dir, rayLength);
+    if (!hit.hit) return false;
+    outY = hit.worldPos[1];
+    return true;
+}
+
+void installSceneGraphAgent(ObjectBuilder& b);
+void installSceneNodeAgent(ObjectBuilder& b);
+void installRegisterCapability(ObjectBuilder& b);
 
 }  // namespace bro::bronze_host
 

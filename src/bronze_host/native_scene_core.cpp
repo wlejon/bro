@@ -762,6 +762,24 @@ namespace bro::bronze_host {
 bool registerSceneNatives(std::string* error) {
     if (!registerNatives_scene(error)) return false;
 
+    ev::GlobalValue root = ev::globalValue("__bro_native");
+    if (root.found && ev::isObject(root.value)) {
+        ev::Persistent rootSlot(root.value);
+        ev::Persistent sceneSlot(ev::getProperty(rootSlot.get(), "scene"));
+        if (ev::isObject(sceneSlot.get())) {
+            Value sgProto = ev::getProperty(sceneSlot.get(), "SceneGraphProto");
+            if (ev::isObject(sgProto)) {
+                ObjectBuilder b(sgProto);
+                installSceneGraphAgent(b);
+            }
+            Value snProto = ev::getProperty(sceneSlot.get(), "SceneNodeProto");
+            if (ev::isObject(snProto)) {
+                ObjectBuilder b(snProto);
+                installSceneNodeAgent(b);
+            }
+        }
+    }
+
     using namespace natives;
     return fn("__bro_native.scene.SceneGraph_render", (void*)&bro_scene_SceneGraph_render, "void", {"__bro_native.scene.SceneGraph"}, error) &&
            fn("__bro_native.scene.SceneGraph_canvasWidth", (void*)&bro_scene_SceneGraph_canvasWidth, "f64", {"__bro_native.scene.SceneGraph"}, error) &&

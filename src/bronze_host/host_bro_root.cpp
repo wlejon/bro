@@ -146,6 +146,11 @@ void installBroRoots(engine::Engine& engine) {
     publish("__bro_native", *native);
     publish("Physics", *physicsRoot);
 
+    {
+        ev::Persistent ai(makeBroAiValue());
+        ev::setProperty(bro->get(), "ai", ai.get());
+    }
+
     std::string err;
     if (!registerBroNatives(&err)) {
         LOG_ERROR("bronze_host: native registration failed: %s", err.c_str());

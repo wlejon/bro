@@ -16,7 +16,18 @@ bool registerPhysicsNatives(std::string* error) {
 
 static thread_local std::vector<float> tl_allTransformsBuf;
 
+physics::PhysicsWorld* unwrapPhysicsWorld(Value v) {
+    if (ev::isObject(v)) {
+        if (auto* w = static_cast<HostPhysicsWorld*>(ev::handleData(v))) {
+            if (w->tag == kHostPhysicsWorldTag) return w->getWorld();
+        }
+    }
+    auto* e = hostEngine();
+    return e ? e->physicsWorld() : nullptr;
+}
+
 }  // namespace bro::bronze_host
+
 
 extern "C" {
 

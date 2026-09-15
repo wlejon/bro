@@ -184,33 +184,6 @@ inline uint64_t getPropU64(Value obj, const char* name, uint64_t def) {
     return (!ev::isUndefined(v) && !ev::isNull(v) && !ev::isObject(v)) ? static_cast<uint64_t>(ev::toDouble(v)) : def;
 }
 
-inline bool readFloatVector(Value v, std::vector<float>& out) {
-    out.clear();
-    if (!ev::isObject(v)) return false;
-    Value lenV = ev::getProperty(v, "length");
-    if (!ev::isNumber(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        Value el = ev::getElement(v, i);
-        out.push_back(static_cast<float>(ev::toDouble(el)));
-    }
-    return true;
-}
-
-inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
-    out.clear();
-    if (!ev::isObject(v)) return false;
-    Value lenV = ev::getProperty(v, "length");
-    if (!ev::isNumber(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        Value el = ev::getElement(v, i);
-        out.push_back(static_cast<uint32_t>(ev::toDouble(el)));
-    }
-    return true;
-}
 
 inline JPH::Vec3 readVec3(Value v, JPH::Vec3 def = JPH::Vec3::sZero()) {
     if (!ev::isObject(v)) return def;

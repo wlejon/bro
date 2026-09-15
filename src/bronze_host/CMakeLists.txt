@@ -200,6 +200,27 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/window/native_window_register.cpp
     natives/settings/native_settings_register.cpp
     natives/dunder_bro/native_dunder_bro_register.cpp
+    host_audio_core.cpp
+    host_audio_context.cpp
+    host_audio_clips.cpp
+    host_audio_voice.cpp
+    host_audio_buses.cpp
+    host_audio_synth.cpp
+    host_audio_sequencer.cpp
+    host_audio_param.cpp
+    host_audio_buffer.cpp
+    host_audio_nodes.cpp
+    host_audio_spatial.cpp
+    host_audio_dsp.cpp
+    host_ai_core.cpp
+    host_ai_navgrid.cpp
+    host_ai_navmesh.cpp
+    host_ai_agent.cpp
+    host_ai_unit.cpp
+    host_ai_extras.cpp
+    host_ai_mcts.cpp
+    host_ai_game.cpp
+    host_scene_agent.cpp
 )
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
@@ -309,7 +330,7 @@ if(MSVC)
 endif()
 
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli
+    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli brogameagent
 )
 
 # brokit_api supplies the Node half (require(), fs, path, os, child_process,

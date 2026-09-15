@@ -827,6 +827,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     installSelectionGlobals();
     installIntlGlobals();
     installWebAnimationGlobals();
+    installAudioGlobals();
+    installAIGlobals();
     initHostCalleeNamer();
 
     snapshotBaselineGlobalProps();
