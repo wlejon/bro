@@ -27,7 +27,16 @@
     // [manual] bro.listen.open: operation (source) — no native is generated; hand-written JS
     // installs it on ns_listen after this module has run.
     fn(ns_listen, "open", function open(source) {
-        return new __bro_native.listen.ListenStream();
+        const stream = new __bro_native.listen.ListenStream();
+        // The tenant views are minted per read by the natives (each handle
+        // owns its view outright — native_listen.cpp says why); reading
+        // them once here and pinning them as own properties is what makes
+        // `stream.kws === stream.kws` hold for the life of the stream.
+        for (const name of ["wake", "kws", "sense", "gesture"]) {
+            Object.defineProperty(stream, name, {
+                value: stream[name], writable: false, enumerable: true, configurable: true });
+        }
+        return stream;
     });
     fn(ns_listen, "supported", function supported() {
         return __bro_native.listen.supported();

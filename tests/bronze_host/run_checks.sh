@@ -362,14 +362,15 @@ check_pixi() {
 }
 
 # ---------------------------------------------------------------------------
+# The core host checks. Heavy library mega-compiles (wild three.js, instanced
+# mesh load, pixi.js v8) belong in bronze's oracle test suite; JIT and the
+# host bindings checks below are sufficient in bro.
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
         parser proxy bro_core mesh class codecs input video audio physics ai
-        aigame net wild instanced pixi)
+        aigame net)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before
-# they are ever listed, so the runner does not even see them. CI uses it for
-# `pixi`, whose module takes longer to compile than any timeout the suite is
-# willing to give a single check.
+# they are ever listed, so the runner does not even see them.
 if [[ -n "${BRO_TEST_BRONZE_SKIP:-}" ]]; then
     read -r -a BH_SKIP <<< "${BRO_TEST_BRONZE_SKIP//,/ }"
     KEPT=()

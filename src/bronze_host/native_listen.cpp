@@ -20,29 +20,20 @@ struct ListenRetentionData {
     double heldSeconds = 0.0;
 };
 
+// OWNERSHIP OF THE TENANT VIEWS. A native whose return type is a class hands
+// the runtime a void* that the resulting handle OWNS — the class destructor
+// runs on it when that handle is collected. So the stream must not keep a
+// pointer of its own to what `wake_get` and friends return: the first
+// version of this file did, and freed each view a second time from
+// ~BroListenStreamImpl, which the finalizer sweep at engine teardown
+// reported as STATUS_HEAP_CORRUPTION. Each getter now mints a view the
+// handle alone owns; js/listen.js's open() reads the four once and pins
+// them on the instance, which is what keeps `stream.kws === stream.kws`.
 struct BroListenStreamImpl {
     uint32_t id = 1;
     std::string kind = "mic";
     bool valid = true;
     ListenRetentionData retention;
-    void* wake = nullptr;
-    void* kws = nullptr;
-    void* sense = nullptr;
-    void* gesture = nullptr;
-
-    BroListenStreamImpl() {
-        wake = bro_wake_WakeStreamView_ctor();
-        kws = bro_kws_KwsStreamView_ctor();
-        sense = bro_sense_SenseStreamView_ctor();
-        gesture = bro_gesture_GestureStreamView_ctor();
-    }
-
-    ~BroListenStreamImpl() {
-        if (wake) bro_wake_WakeStreamView_dtor(wake);
-        if (kws) bro_kws_KwsStreamView_dtor(kws);
-        if (sense) bro_sense_SenseStreamView_dtor(sense);
-        if (gesture) bro_gesture_GestureStreamView_dtor(gesture);
-    }
 };
 
 static uint32_t s_nextStreamId = 1;
@@ -83,23 +74,19 @@ bool bro_listen_ListenStream_valid_get(void* self) {
 }
 
 void* bro_listen_ListenStream_wake_get(void* self) {
-    auto* s = static_cast<BroListenStreamImpl*>(self);
-    return s ? s->wake : nullptr;
+    return self ? bro_wake_WakeStreamView_ctor() : nullptr;
 }
 
 void* bro_listen_ListenStream_kws_get(void* self) {
-    auto* s = static_cast<BroListenStreamImpl*>(self);
-    return s ? s->kws : nullptr;
+    return self ? bro_kws_KwsStreamView_ctor() : nullptr;
 }
 
 void* bro_listen_ListenStream_sense_get(void* self) {
-    auto* s = static_cast<BroListenStreamImpl*>(self);
-    return s ? s->sense : nullptr;
+    return self ? bro_sense_SenseStreamView_ctor() : nullptr;
 }
 
 void* bro_listen_ListenStream_gesture_get(void* self) {
-    auto* s = static_cast<BroListenStreamImpl*>(self);
-    return s ? s->gesture : nullptr;
+    return self ? bro_gesture_GestureStreamView_ctor() : nullptr;
 }
 
 void bro_listen_ListenStream_retain(void* self, int32_t seconds) {

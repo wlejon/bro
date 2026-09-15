@@ -15,9 +15,8 @@
 # tree without the bronze CLI (-DBRONZE_WITH_LLVM=OFF) uses so that "this tree
 # cannot build the subject" never reads as "the subject is broken".
 # BRO_TEST_BRONZE=0 leaves them out entirely, BRO_TEST_BRONZE_SKIP=<names>
-# leaves out the ones it names (CI skips `pixi`); their per-check timeout is
-# BRO_TEST_SH_TIMEOUT (default 900 s — a first run compiles its module, and
-# two of the probes take minutes).
+# leaves out the ones it names; their per-check timeout is
+# BRO_TEST_SH_TIMEOUT (default 120 s — a first run compiles its module).
 #
 # Runs on the GPU path (headless's default) so the
 # tests exercise the same renderer, WebGL, and layer compositing that ship —
@@ -216,7 +215,7 @@ run_one_test() {
     # run compiles its module with the bronze CLI, and two of the probes take
     # minutes.
     if [[ "$1" == bronze:* ]]; then
-        local SH_TIMEOUT="${BRO_TEST_SH_TIMEOUT:-900}"
+        local SH_TIMEOUT="${BRO_TEST_SH_TIMEOUT:-120}"
         local CHECK="$SCRIPT_DIR/bronze_host/run_checks.sh" NAME="${1#bronze:}"
         if [[ -n "$TIMEOUT_BIN" ]]; then
             OUTPUT=$(BRO_HEADLESS="$BRO" "$TIMEOUT_BIN" -k 10 "$SH_TIMEOUT" bash "$CHECK" "$NAME" 2>&1)

@@ -94,15 +94,22 @@ void HostClass::alias(const char* name) const {
 
 namespace bronze::embed {
 
+// Same return contract as setProperty: the receiver's POST-call address.
+// Object.setPrototypeOf converts the receiver to dictionary mode, which
+// allocates, and the getProperty that finds it allocates before that — so
+// both arguments are rooted first and the caller must use what comes back,
+// not what it passed in.
 Value setPrototype(Value obj, Value proto) {
+    Persistent objP(obj);
+    Persistent protoP(proto);
     GlobalValue objectCtor = globalValue("Object");
-    if (!objectCtor.found || !isObject(objectCtor.value)) return obj;
+    if (!objectCtor.found || !isObject(objectCtor.value)) return objP.get();
     Persistent objectNs(objectCtor.value);
     Persistent setProto(getProperty(objectNs.get(), "setPrototypeOf"));
-    if (!isFunction(setProto.get())) return obj;
-    const Value args[2] = {obj, proto};
+    if (!isFunction(setProto.get())) return objP.get();
+    const Value args[2] = {objP.get(), protoP.get()};
     call(setProto.get(), undefined(), std::span<const Value>(args, 2));
-    return obj;
+    return objP.get();
 }
 
 }  // namespace bronze::embed

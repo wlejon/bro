@@ -550,9 +550,9 @@ Value makeDocumentValue(dom::Document* fixed) {
         return doc ? doc->documentElement() : nullptr;
     }, "document");
     decorateDocumentWebAnimations(b);
-    Value docVal = b.get();
-    ev::setPrototype(docVal, documentHostClass().prototype());
-    return docVal;
+    // setPrototype allocates (the receiver goes to dictionary mode); the
+    // value handed back is the post-call address, the one we return.
+    return ev::setPrototype(b.get(), documentHostClass().prototype());
 }
 
 namespace {
