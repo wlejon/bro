@@ -42,6 +42,9 @@ extern "C" void bro_gesture_main();
 extern "C" void bro_wake_main();
 extern "C" void bro_kws_main();
 extern "C" void bro_listen_main();
+extern "C" void bro_triposplat_main();
+extern "C" void bro_diffusion_main();
+extern "C" void bro_vision_main();
 
 namespace bro::bronze_host {
 
@@ -215,6 +218,18 @@ void installKwsModule() {
 
 void installListenModule() {
     bronze::embed::runEntry(bro_listen_main);
+}
+
+void installTriposplatModule() {
+    bronze::embed::runEntry(bro_triposplat_main);
+}
+
+void installDiffusionModule() {
+    bronze::embed::runEntry(bro_diffusion_main);
+}
+
+void installVisionModule() {
+    bronze::embed::runEntry(bro_vision_main);
 }
 
 }  // namespace bro::bronze_host

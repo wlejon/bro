@@ -688,6 +688,9 @@ void installGestureModule();
 void installWakeModule();
 void installKwsModule();
 void installListenModule();
+void installTriposplatModule();
+void installDiffusionModule();
+void installVisionModule();
 
 void installAudioGlobals();
 void installAIGlobals();

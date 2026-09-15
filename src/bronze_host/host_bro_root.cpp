@@ -90,7 +90,10 @@ bool registerBroNatives(std::string* error) {
               registerGestureNatives(error) &&
               registerWakeNatives(error) &&
               registerKwsNatives(error) &&
-              registerListenNatives(error);
+              registerListenNatives(error) &&
+              registerTriposplatNatives(error) &&
+              registerDiffusionNatives(error) &&
+              registerVisionNatives(error);
 #if BRO_WITH_3D
     ok = ok &&
          registerAnimationNatives(error) &&
@@ -137,14 +140,16 @@ void installBroRoots(engine::Engine& engine) {
     // the life of the process (host_internal.h, HostClass).
     auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh", "net", "rigging", "gizmo",
                                              "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
-                                             "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen"}));
+                                             "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
+                                             "triposplat", "diffusion", "vision"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
         makeRoot({"time", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
                   "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
                   "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm",
-                  "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen"}));
+                  "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
+                  "triposplat", "diffusion", "vision"}));
     auto* physicsRoot = new ev::Persistent(ev::createObject());
 #if BRO_WITH_3D
     {

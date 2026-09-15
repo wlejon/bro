@@ -40,4 +40,7 @@ void bro_sense_main() {}
 void bro_wake_main() {}
 void bro_kws_main() {}
 void bro_listen_main() {}
+void bro_triposplat_main() {}
+void bro_diffusion_main() {}
+void bro_vision_main() {}
 }

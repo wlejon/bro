@@ -108,6 +108,9 @@ bool registerGestureNatives(std::string* error);
 bool registerWakeNatives(std::string* error);
 bool registerKwsNatives(std::string* error);
 bool registerListenNatives(std::string* error);
+bool registerTriposplatNatives(std::string* error);
+bool registerDiffusionNatives(std::string* error);
+bool registerVisionNatives(std::string* error);
 void pollNet();
 
 // After registration: the prototypes of the mesh classes as properties of
