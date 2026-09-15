@@ -167,7 +167,9 @@ set(BRO_BRONZE_HOST_SOURCES
     native_window.cpp
     native_settings.cpp
     native_dunder_bro.cpp
-    native_mesh.cpp
+    native_mesh_core.cpp
+    native_mesh_ops.cpp
+    native_mesh_analysis.cpp
     native_net.cpp
     natives/net/native_net_register.cpp
     native_rigging.cpp
