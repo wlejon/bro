@@ -40,6 +40,47 @@ struct GizmoCallbacks {
 
 static GizmoCallbacks s_cbs;
 
+// Named functions rather than lambdas at the assignment sites: MSVC refuses a
+// captureless lambda that returns a C++ class type when it is defined inside
+// an extern "C" function (C2526 on the generated invoker).
+static bromath::Vec3 callPositionHandler() {
+    Value fn = s_cbs.cbPosition.get();
+    if (ev::isFunction(fn)) {
+        auto r = ev::call(fn, ev::undefined(), {});
+        if (!r.thrown && ev::isObject(r.value)) {
+            Value e0 = ev::getElement(r.value, 0);
+            Value e1 = ev::getElement(r.value, 1);
+            Value e2 = ev::getElement(r.value, 2);
+            if (ev::isNumber(e0) && ev::isNumber(e1) && ev::isNumber(e2)) {
+                return {static_cast<float>(ev::toDouble(e0)),
+                        static_cast<float>(ev::toDouble(e1)),
+                        static_cast<float>(ev::toDouble(e2))};
+            }
+        }
+    }
+    return {0, 0, 0};
+}
+
+static bromath::Quat callOrientationHandler() {
+    Value fn = s_cbs.cbOrientation.get();
+    if (ev::isFunction(fn)) {
+        auto r = ev::call(fn, ev::undefined(), {});
+        if (!r.thrown && ev::isObject(r.value)) {
+            Value e0 = ev::getElement(r.value, 0);
+            Value e1 = ev::getElement(r.value, 1);
+            Value e2 = ev::getElement(r.value, 2);
+            Value e3 = ev::getElement(r.value, 3);
+            if (ev::isNumber(e0) && ev::isNumber(e1) && ev::isNumber(e2) && ev::isNumber(e3)) {
+                return {static_cast<float>(ev::toDouble(e0)),
+                        static_cast<float>(ev::toDouble(e1)),
+                        static_cast<float>(ev::toDouble(e2)),
+                        static_cast<float>(ev::toDouble(e3))};
+            }
+        }
+    }
+    return {0, 0, 0, 1};
+}
+
 static void parseHexColor(std::string_view s, float (&out)[4]) {
     if (s.empty() || s[0] != '#') return;
     unsigned long val = std::strtoul(s.data() + 1, nullptr, 16);
@@ -152,47 +193,13 @@ void bro_gizmo_attach(uint64_t handlers_position, uint64_t handlers_orientation,
     Value pos = ev::fromBits(handlers_position);
     if (ev::isFunction(pos)) {
         s_cbs.cbPosition.set(pos);
-        e->gizmo().onGetPosition = []() -> bromath::Vec3 {
-            Value fn = s_cbs.cbPosition.get();
-            if (ev::isFunction(fn)) {
-                auto r = ev::call(fn, ev::undefined(), {});
-                if (!r.thrown && ev::isObject(r.value)) {
-                    Value e0 = ev::getElement(r.value, 0);
-                    Value e1 = ev::getElement(r.value, 1);
-                    Value e2 = ev::getElement(r.value, 2);
-                    if (ev::isNumber(e0) && ev::isNumber(e1) && ev::isNumber(e2)) {
-                        return {static_cast<float>(ev::toDouble(e0)),
-                                static_cast<float>(ev::toDouble(e1)),
-                                static_cast<float>(ev::toDouble(e2))};
-                    }
-                }
-            }
-            return {0, 0, 0};
-        };
+        e->gizmo().onGetPosition = &callPositionHandler;
     }
 
     Value orient = ev::fromBits(handlers_orientation);
     if (ev::isFunction(orient)) {
         s_cbs.cbOrientation.set(orient);
-        e->gizmo().onGetOrientation = []() -> bromath::Quat {
-            Value fn = s_cbs.cbOrientation.get();
-            if (ev::isFunction(fn)) {
-                auto r = ev::call(fn, ev::undefined(), {});
-                if (!r.thrown && ev::isObject(r.value)) {
-                    Value e0 = ev::getElement(r.value, 0);
-                    Value e1 = ev::getElement(r.value, 1);
-                    Value e2 = ev::getElement(r.value, 2);
-                    Value e3 = ev::getElement(r.value, 3);
-                    if (ev::isNumber(e0) && ev::isNumber(e1) && ev::isNumber(e2) && ev::isNumber(e3)) {
-                        return {static_cast<float>(ev::toDouble(e0)),
-                                static_cast<float>(ev::toDouble(e1)),
-                                static_cast<float>(ev::toDouble(e2)),
-                                static_cast<float>(ev::toDouble(e3))};
-                    }
-                }
-            }
-            return {0, 0, 0, 1};
-        };
+        e->gizmo().onGetOrientation = &callOrientationHandler;
     }
 
     Value bDrag = ev::fromBits(handlers_beginDrag);

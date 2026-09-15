@@ -38,12 +38,6 @@
 #include <cmath>
 #include <algorithm>
 
-namespace bro {
-namespace scene = bro::scene;
-namespace engine = bro::engine;
-namespace tile = bro::tile;
-}
-
 namespace bro::bronze_host {
 namespace scene = bro::scene;
 namespace engine = bro::engine;
