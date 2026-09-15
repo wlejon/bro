@@ -32,6 +32,7 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `eval.cpp`, `eval.h` | in-process JS compilation via Bronze CLI, dynamic evaluation (`eval()`, `new Function()`) and script execution |
 | `host_natives.h`, `host_bro_root.cpp` | the `bro` / `__bro` roots, the `__bro_native` root, and **the native convention** every `native_*.cpp` follows |
 | `native_time.cpp`, `native_paths.cpp`, `native_window.cpp`, `native_settings.cpp`, `native_dunder_bro.cpp` | the C entry points behind `bro.time`, `bro.appDir`/`userDataDir`/`resolvePath`, `bro.window`, `bro.settings`, and the panels' `__bro.*`, registered through `embed::registerNative` |
+| `native_mesh.cpp`, `js/mesh.js` | `bro.mesh`, `Mesh` and `MeshBVH`: two native classes over bromesh, the attribute reads as copy-mode typed-array returns and the fresh results (`triangleAreas`, meshlets, Draco bytes) as transfer-mode ones, with the public classes chained over the native prototypes |
 | `js/bro_core.js` | the public shapes of those namespaces, JavaScript assembled over the natives |
 | `native_manifest_tool.cpp`, `js_entry_stubs.cpp` | `bro-native-manifest`, the build-time tool that prints the manifest `bro_core.js` is compiled against, and the no-op entries it (and arm64 macOS) links |
 | `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |

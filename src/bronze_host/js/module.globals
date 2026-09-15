@@ -1,6 +1,6 @@
 # The --host-globals manifest for bro's OWN bronze-compiled modules
 # (bro_compile_js in ../CMakeLists.txt): observers.js, net_sync.js,
-# image_gpu.js, bro_core.js.
+# image_gpu.js, bro_core.js, mesh.js.
 #
 # This is NOT the app manifest. An app is compiled against what
 # `bro-headless <appdir> --print-host-globals` prints — the registry of the

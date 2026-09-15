@@ -110,16 +110,19 @@ void fireAnimationFrames() {
         bool swapDoc = (targetDoc && targetDoc != prevDoc);
 
         ev::GlobalValue docG = ev::globalValue("document");
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        Value prevDocVal = docG.found ? docG.value : ev::null();
+        // A Persistent, not a raw Value: the callback may allocate enough to
+        // move the heap, and the restore must name the document's CURRENT
+        // address; `globalThis` is re-read after the call for the same reason.
+        ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
 
         if (swapDoc) {
             enterRealmScope(scopeIdForDocument(targetDoc));
             setCurrentHostDocument(targetDoc);
-            Value subDocVal = hostDocumentValue(targetDoc);
-            ev::registerGlobal("document", subDocVal);
+            ev::Persistent subDocVal(hostDocumentValue(targetDoc));
+            ev::registerGlobal("document", subDocVal.get());
+            ev::GlobalValue gt = ev::globalValue("globalThis");
             if (gt.found && ev::isObject(gt.value)) {
-                ev::setProperty(gt.value, "document", subDocVal);
+                ev::setProperty(gt.value, "document", subDocVal.get());
             }
         }
 
@@ -128,10 +131,11 @@ void fireAnimationFrames() {
                                     std::span<const Value>(&ts, 1));
 
         if (swapDoc) {
-            if (!ev::isNull(prevDocVal)) {
-                ev::registerGlobal("document", prevDocVal);
+            if (!ev::isNull(prevDocVal.get())) {
+                ev::registerGlobal("document", prevDocVal.get());
+                ev::GlobalValue gt = ev::globalValue("globalThis");
                 if (gt.found && ev::isObject(gt.value)) {
-                    ev::setProperty(gt.value, "document", prevDocVal);
+                    ev::setProperty(gt.value, "document", prevDocVal.get());
                 }
             }
             setCurrentHostDocument(prevDoc);
@@ -791,6 +795,11 @@ void installWebHostGlobals(engine::Engine& engine) {
     // point registers `bro`; a later `bro.*` namespace mounts onto the
     // object this creates.
     installBroRoots(engine);
+#if BRO_WITH_3D
+    // bro.mesh, Mesh and MeshBVH (js/mesh.js over native_mesh.cpp): after
+    // the roots, whose `bro.mesh` and `__bro_native.mesh` it fills.
+    installMeshModule();
+#endif
     // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use, and every name a module lists in

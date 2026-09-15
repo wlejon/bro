@@ -32,6 +32,30 @@
 //   * A callback is a `dynamic` parameter the C side keeps in a Persistent
 //     and invokes through embed::call from the engine's own hook point.
 //
+//   * A NATIVE CLASS (`__bro_native.mesh.Mesh`, native_mesh.cpp) is a
+//     registered constructor whose handle owns the C++ object, and its
+//     members are namespace FUNCTIONS taking the handle as a class-typed
+//     first parameter rather than native methods: the compiler lowers a
+//     method to a direct call only where it can see the receiver's class,
+//     and inside a wrapper's accessor the receiver is `this`, which it
+//     cannot. The PUBLIC class (js/mesh.js's `Mesh`) is a JavaScript class
+//     whose constructor returns the native handle (`return new
+//     __bro_native.mesh.Mesh(...)`), with the native prototype — published
+//     by C++ as `__bro_native.mesh.MeshPrototype` from
+//     embed::nativeClassPrototype — chained under the public prototype by
+//     Object.setPrototypeOf. So every handle IS an instance (`instanceof
+//     Mesh`, prototype methods, getters) and there is one object, not a
+//     wrapper around a handle. Exposing the native constructor directly was
+//     not an option: a native is not a property of `__bro_native.mesh`, so
+//     a dynamic `bro.mesh.Mesh` would read undefined.
+//
+//   * A typed-array RESULT (`f32[]`, `u32[]`, `u8[]`) fills the trailing
+//     bronze_native_buffer in one of two modes: COPY (release null) for
+//     storage the C++ side keeps — a mesh's attribute vectors, a per-thread
+//     scratch — and TRANSFER (release set) for a fresh result nobody else
+//     holds, which the program's array views in place until it is
+//     collected. native_mesh.cpp says which each of its natives uses and why.
+//
 // WHY THE NATIVES ARE NOT AT THE PUBLIC PATHS. A native registered as
 // `bro.time.scale` is reached only by a compiled `bro.time.scale` spelled in
 // full; every other access lands on the plain `bro.time` object, which would
@@ -45,6 +69,8 @@
 
 #include <initializer_list>
 #include <string>
+
+#include "runtime/value.h"
 
 namespace bro::engine { class Engine; }
 
@@ -62,6 +88,13 @@ bool registerWindowNatives(std::string* error);
 bool registerSettingsNatives(std::string* error);
 bool registerPathsNatives(std::string* error);
 bool registerDunderBroNatives(std::string* error);
+bool registerMeshNatives(std::string* error);
+
+// After registration: the prototypes of the mesh classes as properties of
+// `__bro_native.mesh` (`MeshPrototype`, `MeshBVHPrototype`), for js/mesh.js
+// to chain under its public classes. `nativeRoot` is the `__bro_native`
+// object. A no-op without BRO_WITH_3D.
+void publishMeshPrototypes(bronze::Value nativeRoot);
 
 // Register the roots (`bro`, `__bro`, `__bro_native` with their namespace
 // objects), the natives, the engine-side hooks the callbacks ride on, and
@@ -82,6 +115,11 @@ bool fn(const char* path, void* f, const char* ret,
 bool getter(const char* path, void* f, const char* ret, std::string* error);
 // A namespace property's write half: `path = <type>`.
 bool setter(const char* path, void* f, const char* type, std::string* error);
+// A class: `new path(params)` calls `f`, which answers the void* the handle
+// owns; `dtor` (may be null) runs on that pointer when the handle dies.
+// Registers the class, so any native naming `path` as a type comes after.
+bool ctor(const char* path, void* f, void (*dtor)(void*),
+          std::initializer_list<const char*> params, std::string* error);
 
 // A `str` result must outlive the return: the runtime copies it during the
 // call. This hands back a per-thread scratch the next str-returning native

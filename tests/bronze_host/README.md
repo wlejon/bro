@@ -36,6 +36,7 @@ four synthetic C modules to hit every refusal branch.
 | `parser` | DOMParser: a second document, and adoption out of it |
 | `proxy` | the four proxy-backed live views: style, computed, dataset, localStorage |
 | `bro_core` | `bro` / `__bro` on the native mechanism: bro.time, the paths, bro.window, bro.settings (custom category, actions, onChange), the panels' `__bro.*` |
+| `mesh` | `bro.mesh` / `Mesh` / `MeshBVH` on the native mechanism: native classes, copy- and transfer-mode typed-array returns across a forced collection, BVH hit/miss, the call-site TypeErrors |
 | `class` | host classes, via Image: born-on-prototype, shared methods, instanceof |
 | `codecs` | binary codecs: base64, typed arrays |
 | `input` | pointer lock, fullscreen, Gamepad |

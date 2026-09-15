@@ -161,6 +161,7 @@ set(BRO_BRONZE_HOST_SOURCES
     native_window.cpp
     native_settings.cpp
     native_dunder_bro.cpp
+    native_mesh.cpp
 )
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
@@ -363,6 +364,7 @@ else()
     bro_compile_js(net_sync   bro_net_sync_main)
     bro_compile_js(image_gpu  bro_image_gpu_main)
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(mesh       bro_mesh_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
     # Nothing in it is C++; the archiver still has to be told which one to be.

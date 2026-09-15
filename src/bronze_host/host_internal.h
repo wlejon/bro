@@ -640,5 +640,9 @@ void installImageGpuModule();
 // under __bro_native. Entered by installBroRoots (host_bro_root.cpp) after
 // the roots and natives are registered; lifts nothing.
 void installBroCoreModule();
+// js/mesh.js: the public Mesh / MeshBVH classes and bro.mesh.* over the
+// natives under __bro_native.mesh (native_mesh.cpp). Entered after
+// installBroRoots; lifts `Mesh` and `MeshBVH` into the host-global registry.
+void installMeshModule();
 
 }  // namespace bro::bronze_host

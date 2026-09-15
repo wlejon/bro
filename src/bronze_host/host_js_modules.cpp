@@ -22,6 +22,7 @@ extern "C" void bro_observers_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
 extern "C" void bro_core_main();
+extern "C" void bro_mesh_main();
 
 namespace bro::bronze_host {
 
@@ -67,6 +68,15 @@ void installImageGpuModule() {
 // native calls.
 void installBroCoreModule() {
     bronze::embed::runEntry(bro_core_main);
+}
+
+// mesh.js defines `Mesh` and `MeshBVH` on globalThis (and on bro.mesh); the
+// two classes are lifted so a compiled app's bare `Mesh` is a host global.
+// Compiled against the native manifest like bro_core.js.
+void installMeshModule() {
+    bronze::embed::runEntry(bro_mesh_main);
+    adoptGlobalProperty("Mesh");
+    adoptGlobalProperty("MeshBVH");
 }
 
 }  // namespace bro::bronze_host

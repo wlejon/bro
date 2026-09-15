@@ -224,15 +224,19 @@ void fireHostTimers(double nowMs) {
 
         dom::Document* prevDoc = currentHostDocument();
         ev::GlobalValue docG = ev::globalValue("document");
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        Value prevDocVal = docG.found ? docG.value : ev::null();
+        // Held in a Persistent, not a raw Value: the callback below may
+        // allocate enough to move the heap, and the restore after it must
+        // name the document's CURRENT address. `globalThis` is re-read after
+        // the call for the same reason.
+        ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
         if (entryDoc) {
             enterRealmScope(scopeIdForDocument(entryDoc));
             setCurrentHostDocument(entryDoc);
-            Value subDocVal = hostDocumentValue(entryDoc);
-            ev::registerGlobal("document", subDocVal);
+            ev::Persistent subDocVal(hostDocumentValue(entryDoc));
+            ev::registerGlobal("document", subDocVal.get());
+            ev::GlobalValue gt = ev::globalValue("globalThis");
             if (gt.found && ev::isObject(gt.value)) {
-                ev::setProperty(gt.value, "document", subDocVal);
+                ev::setProperty(gt.value, "document", subDocVal.get());
             }
         }
 
@@ -246,10 +250,11 @@ void fireHostTimers(double nowMs) {
         if (r.thrown) reportBronzeError("timer", r.value);
 
         if (entryDoc) {
-            if (!ev::isNull(prevDocVal)) {
-                ev::registerGlobal("document", prevDocVal);
+            if (!ev::isNull(prevDocVal.get())) {
+                ev::registerGlobal("document", prevDocVal.get());
+                ev::GlobalValue gt = ev::globalValue("globalThis");
                 if (gt.found && ev::isObject(gt.value)) {
-                    ev::setProperty(gt.value, "document", prevDocVal);
+                    ev::setProperty(gt.value, "document", prevDocVal.get());
                 }
             }
             setCurrentHostDocument(prevDoc);

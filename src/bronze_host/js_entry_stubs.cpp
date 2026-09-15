@@ -20,4 +20,5 @@ void bro_observers_main() {}
 void bro_net_sync_main() {}
 void bro_image_gpu_main() {}
 void bro_core_main() {}
+void bro_mesh_main() {}
 }

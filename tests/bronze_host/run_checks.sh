@@ -168,6 +168,20 @@ check_bro_core() {
         --expr "advanceTime(64);"
 }
 
+# bro.mesh, Mesh and MeshBVH: native classes, typed-array parameters and
+# both typed-array return modes, from compiled code. The probe forces the
+# collection its transfer-mode results must survive by allocation pressure
+# (the idle collector never runs under a live script frame) from a microtask
+# job, since a WeakRef's target is kept for the job that made it; the frames
+# are spare and must print nothing.
+check_mesh() {
+    bh_run_check bronze_host_mesh \
+        "$SCRIPT_DIR/appdir_mesh" \
+        "$SCRIPT_DIR/apps/mesh_probe.js" \
+        "$SCRIPT_DIR/expected/mesh_probe.expected" \
+        --expr "advanceTime(64);"
+}
+
 # Dynamic code evaluation and the value bridge that makes the result usable.
 check_interp() {
     bh_run_check bronze_host_interp \
@@ -349,7 +363,7 @@ check_pixi() {
 
 # ---------------------------------------------------------------------------
 CHECKS=(loader scenegraph events fetch dom node file abort observer resize
-        parser proxy bro_core class codecs input video audio physics ai
+        parser proxy bro_core mesh class codecs input video audio physics ai
         aigame net wild instanced pixi)
 
 # BRO_TEST_BRONZE_SKIP drops checks by name (space- or comma-separated) before

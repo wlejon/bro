@@ -55,6 +55,14 @@ bool setter(const char* path, void* f, const char* type, std::string* error) {
     return ev::registerNative(path, f, sig("void", {type}, ev::NativeKind::Setter), error);
 }
 
+bool ctor(const char* path, void* f, void (*dtor)(void*),
+          std::initializer_list<const char*> params, std::string* error) {
+    ev::NativeSignature s = sig(path, params, ev::NativeKind::Constructor);
+    s.className = path;
+    s.destructor = dtor;
+    return ev::registerNative(path, f, s, error);
+}
+
 const char* strResult(std::string s) {
     thread_local std::string scratch;
     scratch = std::move(s);
@@ -68,7 +76,8 @@ bool registerBroNatives(std::string* error) {
            registerPathsNatives(error) &&
            registerWindowNatives(error) &&
            registerSettingsNatives(error) &&
-           registerDunderBroNatives(error);
+           registerDunderBroNatives(error) &&
+           registerMeshNatives(error);
 }
 
 // bronze_host.h: the calling thread's registry as the manifest file an
@@ -102,12 +111,12 @@ void publish(const char* name, const ev::Persistent& root) {
 void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
     // the life of the process (host_internal.h, HostClass).
-    auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings"}));
+    auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
         makeRoot({"time", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
-                  "menu", "settingsUI", "inspector"}));
+                  "menu", "settingsUI", "inspector", "mesh"}));
 #if BRO_WITH_3D
     {
         ev::Persistent scene(ev::createObject());
@@ -123,6 +132,9 @@ void installBroRoots(engine::Engine& engine) {
     if (!registerBroNatives(&err)) {
         LOG_ERROR("bronze_host: native registration failed: %s", err.c_str());
     }
+    // The mesh classes' prototypes onto `__bro_native.mesh`, now that the
+    // constructors are registered (js/mesh.js chains them; host_natives.h).
+    publishMeshPrototypes(native->get());
     installSettingsObserver(engine);
     installBroCoreModule();
 }
