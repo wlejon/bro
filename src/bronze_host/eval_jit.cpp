@@ -4,6 +4,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_callee_namer.h"
+#include "bronze_host/host_internal.h"
 #include "bronze_host/host_pins.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
@@ -32,24 +33,18 @@ bool isJitDisabled() {
 
 namespace {
 
-bool reportCallResult(engine::Engine& engine, const bronze::embed::CallResult& res, const char* context) {
+// A throw out of a script's top level, reported with the script it came out
+// of. The value's own text is `thrownValueText`'s: a `stack` when one was set,
+// else `Name: message`. bronze records no source position on an Error — no
+// line, no stack (runtime/exception.h) — so the script name is the location
+// the report can give; `throw new Error(...)` sites in a test are what carry
+// the rest.
+bool reportCallResult(engine::Engine& engine, const bronze::embed::CallResult& res,
+                      const char* context, const std::string& filename) {
     if (res.thrown) {
-        std::string errMsg;
-        if (res.value.isObject()) {
-            bronze::Value stack = bronze::embed::getProperty(res.value, "stack");
-            if (!bronze::embed::isUndefined(stack) && !bronze::embed::isNull(stack)) {
-                errMsg = bronze::embed::toUtf8(stack);
-            } else {
-                bronze::Value msg = bronze::embed::getProperty(res.value, "message");
-                if (!bronze::embed::isUndefined(msg) && !bronze::embed::isNull(msg)) {
-                    errMsg = bronze::embed::toUtf8(msg);
-                }
-            }
-        }
-        if (errMsg.empty()) {
-            errMsg = bronze::embed::toUtf8(res.value);
-        }
-        LOG_ERROR("%s error: %s", context, errMsg.c_str());
+        std::string errMsg = thrownValueText(res.value);
+        LOG_ERROR("%s: uncaught %s (in %s)", context, errMsg.c_str(),
+                  filename.empty() ? "<eval>" : filename.c_str());
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
@@ -89,12 +84,26 @@ bool hasImportStmt(const std::string& code) {
     return false;
 }
 
-std::string wrapAsyncIife(const std::string& code) {
-    return "(async () => {\n" + code +
-           "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
-}
-
 } // namespace
+
+std::string wrapAsyncIife(const std::string& code, const std::string& filename) {
+    // The filename as a JS string literal: backslashes (Windows paths) and
+    // quotes escaped, nothing else can appear in a path the OS opened.
+    std::string where;
+    for (char c : filename) {
+        if (c == '\\' || c == '\'') where += '\\';
+        where += c;
+    }
+    return "(async () => {\n" + code +
+           "\n})().catch(err => {"
+           " const text = err && typeof err.stack === 'string' && err.stack ? err.stack"
+           " : err && typeof err.message === 'string' ? ((err.name || 'Error') + ': ' + err.message)"
+           " : String(err);"
+           " const where = '" + where + "';"
+           " const report = 'Unhandled error: ' + text + (where ? ' (in ' + where + ')' : '');"
+           " if (typeof assert === 'function') assert(false, report);"
+           " else console.error(report); });\n";
+}
 
 bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
                                               const std::string& filename,
@@ -121,7 +130,7 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
 
     std::string execCode = code;
     if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
-        execCode = wrapAsyncIife(execCode);
+        execCode = wrapAsyncIife(execCode, filename);
     }
 
     auto res = bronze::eval::evalScript(execCode, opts);
@@ -132,7 +141,7 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
             // The failed attempt is off the stack and superseded: its handle
             // is retired here so the one written below is the run's only one.
             if (moduleHandleOut && *moduleHandleOut) bronze::embed::unloadModule(*moduleHandleOut);
-            res = bronze::eval::evalScript(wrapAsyncIife(code), opts);
+            res = bronze::eval::evalScript(wrapAsyncIife(code, filename), opts);
         }
     }
     return res;
@@ -142,7 +151,7 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
                    bronze::embed::ModuleHandle* moduleHandleOut) {
     HostEvalScope evalScope;
     auto res = evalScriptJitResult(engine, code, filename, moduleHandleOut);
-    if (!reportCallResult(engine, res, "evalScriptJit")) {
+    if (!reportCallResult(engine, res, "evalScriptJit", filename)) {
         return false;
     }
 
@@ -196,18 +205,18 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
 
     bronze::embed::CallResult res;
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {
-        res = bronze::eval::evalScript(wrapAsyncIife(content), opts);
+        res = bronze::eval::evalScript(wrapAsyncIife(content, absPath.string()), opts);
     } else {
         res = bronze::eval::evalFile(absPath.string(), opts);
         if (res.thrown) {
             std::string errStr = bronze::embed::toUtf8(res.value);
             if (errStr.find("await") != std::string::npos && !hasImportStmt(content)) {
-                res = bronze::eval::evalScript(wrapAsyncIife(content), opts);
+                res = bronze::eval::evalScript(wrapAsyncIife(content, absPath.string()), opts);
             }
         }
     }
 
-    if (!reportCallResult(engine, res, "evalScriptFileJit")) {
+    if (!reportCallResult(engine, res, "evalScriptFileJit", absPath.string())) {
         return false;
     }
 

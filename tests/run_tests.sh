@@ -4,7 +4,10 @@
 #   filter: optional substring to match test file paths (e.g. "dom" or "click")
 #
 # Discovers all tests/*/test_*.js files, runs each via bro-headless, and reports
-# pass/fail with a summary. Also runs the bronze_host checks, enumerated from
+# pass/fail with a summary. The JS tests are the default run; BRO_TEST_JS=0
+# leaves them out (a filter naming a .js file or test_* re-enables them, since
+# a filter that can match nothing else is asking for them). Also runs the
+# bronze_host checks, enumerated from
 # tests/bronze_host/run_checks.sh --list — their subject is a bronze-COMPILED
 # app rather than a script a JS realm could evaluate, so each is a shell check
 # rather than a test_*.js. Each runs the same bro-headless and reports its own
@@ -177,7 +180,10 @@ if command -v timeout >/dev/null 2>&1; then
     TIMEOUT_BIN="timeout"
 fi
 
-BRO_TEST_JS="${BRO_TEST_JS:-0}"
+# The JS tests run by default. BRO_TEST_JS=0 skips them (a bronze_host-only
+# run); a filter that names a .js file or a test_* stem overrides that, because
+# such a filter can match nothing else.
+BRO_TEST_JS="${BRO_TEST_JS:-1}"
 if [[ -n "${FILTER:-}" && ( "$FILTER" == *".js" || "$FILTER" == *"test_"* ) ]]; then
     BRO_TEST_JS=1
 fi

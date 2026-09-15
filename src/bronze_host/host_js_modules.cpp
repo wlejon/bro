@@ -19,6 +19,7 @@
 #include "embed/embed.h"
 
 extern "C" void bro_observers_main();
+extern "C" void bro_events_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
 extern "C" void bro_core_main();
@@ -89,6 +90,17 @@ void installObserversModule() {
     adoptGlobalProperty("ResizeObserverSize");
     adoptGlobalProperty("IntersectionObserver");
     adoptGlobalProperty("IntersectionObserverEntry");
+}
+
+// js/events.js extends brokit's `Event`, so it runs after installBrokitGlobals.
+void installEventsModule() {
+    bronze::embed::runEntry(bro_events_main);
+    for (const char* name : {"UIEvent", "MouseEvent", "KeyboardEvent", "InputEvent", "FocusEvent",
+                             "WheelEvent", "PointerEvent", "DragEvent", "CompositionEvent",
+                             "AnimationEvent", "TransitionEvent", "ClipboardEvent", "SubmitEvent",
+                             "ErrorEvent", "ProgressEvent", "PromiseRejectionEvent"}) {
+        adoptGlobalProperty(name);
+    }
 }
 
 void installNetSyncModule() {

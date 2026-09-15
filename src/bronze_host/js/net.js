@@ -145,8 +145,9 @@
         }
     });
 
-    // Mount net.sync if available
-    if (typeof globalThis.__bro_net_sync === 'function') {
-        ns_net.sync = globalThis.__bro_net_sync(ns_net);
-    }
+    // bro.net.sync: js/net_sync.js is a factory over these primitives, entered
+    // before this module (dom_globals.cpp). Unconditional on purpose — an
+    // install order that ran it after this one is a bug to hear about, not
+    // a `sync` that quietly does not exist.
+    ns_net.sync = globalThis.__bro_net_sync(ns_net);
 })();

@@ -80,6 +80,25 @@ static std::string absolutize(const std::string& path) {
 namespace bro::engine {
 
 int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
+#ifdef _WIN32
+    // Suppress the WER "bro-headless.exe has stopped working" dialog that
+    // Windows shows after an unhandled crash/abort() — headless is driven
+    // by scripts/CI that need the process to just die with a nonzero exit,
+    // not block on a click. (Lived in src/headless/main.cpp until the
+    // QuickJS removal dropped it; the driver is the one entry every
+    // headless host shares, so it belongs here.)
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+#ifdef _DEBUG
+    // Debug CRT's assert() otherwise ALSO pops its own blocking "Debug
+    // Error!" Abort/Retry/Ignore dialog before the abort() above even
+    // fires. Route it to stderr instead so the assertion text still shows
+    // up in the log, just without the modal.
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
+#endif
     bro::util::installSignalHandler();
 
     int width = 1920, height = 1080;

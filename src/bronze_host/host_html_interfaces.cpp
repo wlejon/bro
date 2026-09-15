@@ -44,6 +44,9 @@ HostClass g_htmlOptionElementClass;
 HostClass g_htmlTemplateElementClass;
 HostClass g_htmlHtmlElementClass;
 HostClass g_htmlBodyElementClass;
+HostClass g_htmlMediaElementClass;
+HostClass g_htmlVideoElementClass;
+HostClass g_htmlAudioElementClass;
 
 Value illegalConstructor(Value, std::span<const Value>) {
     return ev::throwTypeError("Illegal constructor");
@@ -152,6 +155,16 @@ void installHtmlInterfaces() {
         item.cls.install(item.name, 0, illegalConstructor, item.decorator);
         item.cls.inherit(g_htmlElementClass);
     }
+
+    // 5. The media family is one level deeper: <video> and <audio> are
+    // HTMLMediaElements, which is the interface a player library tests for
+    // (`el instanceof HTMLMediaElement`) before it reads currentTime.
+    g_htmlMediaElementClass.install("HTMLMediaElement", 0, illegalConstructor, nullptr);
+    g_htmlMediaElementClass.inherit(g_htmlElementClass);
+    g_htmlVideoElementClass.install("HTMLVideoElement", 0, illegalConstructor, nullptr);
+    g_htmlVideoElementClass.inherit(g_htmlMediaElementClass);
+    g_htmlAudioElementClass.install("HTMLAudioElement", 0, illegalConstructor, nullptr);
+    g_htmlAudioElementClass.inherit(g_htmlMediaElementClass);
 }
 
 Value htmlInterfaceProto(const std::string& tagName) {
@@ -185,6 +198,8 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "template") return g_htmlTemplateElementClass.prototype();
     if (tag == "html") return g_htmlHtmlElementClass.prototype();
     if (tag == "body") return g_htmlBodyElementClass.prototype();
+    if (tag == "video") return g_htmlVideoElementClass.prototype();
+    if (tag == "audio") return g_htmlAudioElementClass.prototype();
 
     return g_htmlElementClass.prototype();
 }

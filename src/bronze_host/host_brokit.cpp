@@ -52,6 +52,8 @@
 
 #include "api/api.h"
 
+#include <memory>
+
 namespace bro::bronze_host {
 
 namespace {
@@ -76,6 +78,35 @@ Value globalProperty(const char* name) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (!gt.found || !ev::isObject(gt.value)) return ev::undefined();
     return ev::getProperty(gt.value, name);
+}
+
+// `URL.createObjectURL(x)` for an x that is not a Blob is a TypeError on the
+// web; brokit's url_object.js registers whatever it is handed and mints a URL
+// that every later resolve then fails on. The registry stays brokit's — this
+// wraps the function it installed with the type check in front, deciding
+// Blob-ness the way brokit's own fetch does (blobBytes answers false for
+// anything that is not a Blob or File).
+void guardCreateObjectURL() {
+    ev::GlobalValue url = ev::globalValue("URL");
+    if (!url.found || !ev::isFunction(url.value)) return;
+    ev::Persistent urlRoot(url.value);
+    Value original = ev::getProperty(urlRoot.get(), "createObjectURL");
+    if (!ev::isFunction(original)) return;
+    auto held = std::make_shared<ev::Persistent>(original);
+    Value guarded = ev::makeFunction(
+        [held](Value thisValue, std::span<const Value> a) -> Value {
+            const uint8_t* data = nullptr;
+            size_t len = 0;
+            if (a.empty() || !brokit::api::blobBytes(a[0], &data, &len)) {
+                return ev::throwTypeError(
+                    "URL.createObjectURL: the argument must be a Blob or a File");
+            }
+            ev::CallResult r = ev::call(held->get(), thisValue, a);
+            if (r.thrown) return ev::throwValue(r.value);
+            return r.value;
+        },
+        1, "createObjectURL");
+    ev::setProperty(urlRoot.get(), "createObjectURL", guarded);
 }
 
 // Lift a value brokit's compiled JS assigned onto `globalThis` into the host
@@ -132,6 +163,7 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installStructuredClone();
     bk::installBlob();
     bk::installURLObject();
+    guardCreateObjectURL();
     bk::installProcess();
     bk::installOS();
     bk::installPath();
@@ -163,7 +195,10 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installNetJS();
     bk::installWebSocketServerJS();
     bk::installRequire();
-    bk::installImage();
+    // Not here: bk::installImage(). It mounts onto whatever `bro` is
+    // registered, and at this point none is — installBroRoots runs after
+    // this and would replace the object it made. installBrokitImageKernels
+    // below is called from there instead.
 
     // Where bro's virtual paths (`/app`, `/lib`, `/system`, ...) point, so
     // `fs.readFileSync('/app/data.json')` and `fetch('/app/data.json')` read
@@ -204,6 +239,15 @@ void installBrokitGlobals(engine::Engine& engine) {
     g_pumps->wsHasPending.set(globalProperty("__brokit_ws_has_pending"));
     g_pumps->netHasPending.set(globalProperty("__brokit_net_has_pending"));
     g_pumps->fsWatchHasPending.set(globalProperty("__brokit_fs_watch_has_pending"));
+}
+
+// The bro.image typed-array kernels (reduce/map/combine/lookup/stencil/
+// resample, gradient, alloc — brokit's src/api/image.cpp over broimage).
+// brokit's installer finds the registered `bro` and sets `bro.image` on it,
+// so it runs from installBroRoots once that root exists; the codec and gpu
+// members are then added to the object it made (host_bro_root.cpp).
+void installBrokitImageKernels() {
+    brokit::api::installImage();
 }
 
 void pumpBrokitTicks() {

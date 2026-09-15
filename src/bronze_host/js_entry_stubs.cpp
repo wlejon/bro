@@ -17,6 +17,7 @@
 
 extern "C" {
 void bro_observers_main() {}
+void bro_events_main() {}
 void bro_net_sync_main() {}
 void bro_image_gpu_main() {}
 void bro_core_main() {}

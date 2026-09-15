@@ -24,6 +24,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_anchor_download.h"
+#include "bronze_host/host_event_spec.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_touch.h"
 
@@ -35,6 +36,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -322,6 +324,59 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
             return ev::undefined();
         });
 
+        // A dropped file is a REAL File — bytes and all (host_file_path.cpp);
+        // one the disk cannot supply is the {name, path} descriptor, so the
+        // list is as long as the drop was. `items` carries the same Files
+        // behind `getAsFile`, and its `webkitGetAsEntry().file(cb)` calls
+        // back on the FRAME SEAM rather than synchronously, because that
+        // call is asynchronous on the web and code written against it counts
+        // on it — the three.js editor's `getFilesFromItemList` increments
+        // its "handled" counter in the callback and its "total" on the next
+        // line, so a synchronous callback makes it decide the batch is
+        // unfinished and drop every dropped file.
+        const auto& files = drag->files();
+        Value filesArr = hostArrayOf(files.size(), [&files](size_t i) {
+            return makeFileOrDescriptorFromPath(files[i]);
+        });
+        dt.set("files", filesArr);
+
+        Value itemsArr = hostArrayOf(files.size(), [&files](size_t i) {
+            const std::string& path = files[i];
+            const std::string name = std::filesystem::path(path).filename().string();
+            ObjectBuilder item;
+            item.set("kind", ev::fromUtf8("file"));
+            item.set("type", ev::fromUtf8(""));
+            item.def("getAsFile", 0, [path](Value, std::span<const Value>) {
+                Value f = makeFileFromPath(path);
+                return ev::isUndefined(f) ? ev::null() : f;
+            });
+            item.def("webkitGetAsEntry", 0, [name, path](Value, std::span<const Value>) {
+                ObjectBuilder entry;
+                entry.set("isFile", ev::fromBool(true));
+                entry.set("isDirectory", ev::fromBool(false));
+                entry.set("name", ev::fromUtf8(name));
+                entry.set("fullPath", ev::fromUtf8("/" + name));
+                entry.def("file", 1, [path](Value, std::span<const Value> a) {
+                    Value cb = argAt(a, 0);
+                    if (!ev::isFunction(cb)) {
+                        return ev::throwTypeError("FileSystemFileEntry.file: the argument must be a function");
+                    }
+                    auto held = std::make_shared<ev::Persistent>(cb);
+                    postHostTask([held, path]() {
+                        Value fileVal = makeFileFromPath(path);
+                        if (ev::isUndefined(fileVal)) return;
+                        ev::CallResult r = ev::call(held->get(), ev::undefined(),
+                                                    std::span<const Value>(&fileVal, 1));
+                        if (r.thrown) reportBronzeError("FileSystemFileEntry.file", r.value);
+                    });
+                    return ev::undefined();
+                });
+                return entry.get();
+            });
+            return item.get();
+        });
+        dt.set("items", itemsArr);
+
         b.set("dataTransfer", dt.get());
 
         if (drag->type() == "dragend") {
@@ -479,84 +534,6 @@ dom::ListenerOptions readOptions(Value optV) {
     opts.capture = ev::toBool(optV);
     return opts;
 }
-
-namespace {
-
-// ---------------------------------------------------------------------------
-// Descriptors for a dispatch the program starts
-// ---------------------------------------------------------------------------
-
-struct EventSpec {
-    std::string type;
-    bool bubbles = false;
-    bool cancelable = false;
-    bool hasDetail = false;
-    std::string detail;
-    std::string key;
-    std::string code;
-};
-
-// Reads `{type, bubbles, cancelable, detail, key, code}`. False leaves a pending
-// TypeError naming what was wrong: a dispatch with no type is a program bug,
-// and a silently dropped one would look exactly like a listener that never
-// ran.
-bool readEventSpec(Value descV, const char* what, EventSpec& out) {
-    if (!ev::isObject(descV)) {
-        ev::throwTypeError(std::string(what) +
-                           ".dispatchEvent: expects an event object, e.g. "
-                           "{ type: 'app:ping', detail: 'text' }");
-        return false;
-    }
-    ev::Persistent desc(descV);
-    Value typeV = ev::getProperty(desc.get(), "type");
-    if (ev::isObject(typeV) || ev::isUndefined(typeV) || ev::isNull(typeV)) {
-        ev::throwTypeError(std::string(what) +
-                           ".dispatchEvent: the event object needs a string `type`");
-        return false;
-    }
-    out.type = ev::toUtf8(typeV);
-    if (out.type.empty()) {
-        ev::throwTypeError(std::string(what) +
-                           ".dispatchEvent: `type` must not be empty");
-        return false;
-    }
-
-    Value bubblesV = ev::getProperty(desc.get(), "bubbles");
-    out.bubbles = ev::isUndefined(bubblesV) ? false : ev::toBool(bubblesV);
-    Value cancelableV = ev::getProperty(desc.get(), "cancelable");
-    out.cancelable = ev::isUndefined(cancelableV) ? false : ev::toBool(cancelableV);
-
-    Value detailV = ev::getProperty(desc.get(), "detail");
-    if (!ev::isUndefined(detailV) && !ev::isNull(detailV)) {
-        out.hasDetail = true;
-        if (ev::isObject(detailV)) {
-            ev::GlobalValue g = ev::globalValue("JSON");
-            if (g.found && ev::isObject(g.value)) {
-                Value stringifyFn = ev::getProperty(g.value, "stringify");
-                if (ev::isFunction(stringifyFn)) {
-                    ev::CallResult res = ev::call(stringifyFn, g.value, std::span<const Value>(&detailV, 1));
-                    if (!res.thrown && ev::isString(res.value)) {
-                        out.detail = ev::toUtf8(res.value);
-                    }
-                }
-            }
-        } else {
-            out.detail = ev::toUtf8(detailV);
-        }
-    }
-
-    Value keyV = ev::getProperty(desc.get(), "key");
-    if (!ev::isUndefined(keyV) && !ev::isNull(keyV) && !ev::isObject(keyV)) {
-        out.key = ev::toUtf8(keyV);
-    }
-    Value codeV = ev::getProperty(desc.get(), "code");
-    if (!ev::isUndefined(codeV) && !ev::isNull(codeV) && !ev::isObject(codeV)) {
-        out.code = ev::toUtf8(codeV);
-    }
-    return true;
-}
-
-}  // namespace
 
 // ---------------------------------------------------------------------------
 // The public seam
@@ -760,25 +737,13 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
         return ev::throwError(std::string(what) +
                               ".dispatchEvent: no element to dispatch at");
     }
-    if (spec.type == "keydown" || spec.type == "keyup") {
-        dom::KeyboardEvent k(spec.type, spec.bubbles, spec.cancelable);
-        k.setKey(spec.key);
-        k.setCode(spec.code.empty() ? spec.key : spec.code);
-        engine->dispatchElementEvent(el, k);
-        return ev::fromBool(!k.defaultPrevented());
-    }
-    dom::CustomEvent custom(spec.type, spec.bubbles, spec.cancelable);
-    dom::Event plain(spec.type, spec.bubbles, spec.cancelable);
-    dom::Event& evt = spec.hasDetail ? static_cast<dom::Event&>(custom) : plain;
-    if (spec.hasDetail) custom.setDetail(spec.detail);
-    // Runs DOM listeners, re-entering this layer for compiled listeners.
-    // Single-threaded and re-entrant by construction: nothing here holds a bare
-    // Value across the call.
-    engine->dispatchElementEvent(el, evt);
-    if (spec.type == "click" && !evt.defaultPrevented()) {
+    const bool notPrevented = dispatchEventSpec(spec, [engine, el](dom::Event& evt) {
+        engine->dispatchElementEvent(el, evt);
+    });
+    if (spec.type == "click" && notPrevented) {
         runAnchorDownload(el);
     }
-    return ev::fromBool(!evt.defaultPrevented());
+    return ev::fromBool(notPrevented);
 }
 
 Value hostDispatchToWindow(Value desc) {
@@ -786,19 +751,9 @@ Value hostDispatchToWindow(Value desc) {
     if (!readEventSpec(desc, "window", spec)) return ev::undefined();
     engine::Engine* engine = hostEngine();
     if (!engine) return ev::throwError("window.dispatchEvent: no engine");
-    if (spec.type == "keydown" || spec.type == "keyup") {
-        dom::KeyboardEvent k(spec.type, spec.bubbles, spec.cancelable);
-        k.setKey(spec.key);
-        k.setCode(spec.code.empty() ? spec.key : spec.code);
-        engine->dispatchWindowEvent(k);
-        return ev::fromBool(!k.defaultPrevented());
-    }
-    dom::CustomEvent custom(spec.type, spec.bubbles, spec.cancelable);
-    dom::Event plain(spec.type, spec.bubbles, spec.cancelable);
-    dom::Event& evt = spec.hasDetail ? static_cast<dom::Event&>(custom) : plain;
-    if (spec.hasDetail) custom.setDetail(spec.detail);
-    engine->dispatchWindowEvent(evt);
-    return ev::fromBool(!evt.defaultPrevented());
+    return ev::fromBool(dispatchEventSpec(spec, [engine](dom::Event& evt) {
+        engine->dispatchWindowEvent(evt);
+    }));
 }
 
 }  // namespace bro::bronze_host

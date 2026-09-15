@@ -318,7 +318,7 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
 
     if ((status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) ||
         (err.find("unresolved name 'await'") != std::string::npos)) {
-        std::string wrappedCode = "(async () => {\n" + std::string(code) + "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
+        std::string wrappedCode = wrapAsyncIife(std::string(code), filename);
         std::filesystem::path tempJsWrap = tempDir / (stem + "_wrap.js");
         {
             std::ofstream ofs(tempJsWrap, std::ios::binary);
@@ -462,7 +462,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     std::filesystem::path wrapFile;
     std::string buildSrc = absSource.string();
     if (hasAwaitStmt(content)) {
-        std::string wrapped = "(async () => {\n" + content + "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
+        std::string wrapped = wrapAsyncIife(content, absSource.string());
         wrapFile = tempDir / (stem + "_wrap.js");
         std::ofstream ofs(wrapFile, std::ios::binary);
         ofs.write(wrapped.data(), wrapped.size());
@@ -485,7 +485,7 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     }
 
     if (status != 0 && err.find("unsupported construct: `await` outside an async function body") != std::string::npos) {
-        std::string wrapped = "(async () => {\n" + content + "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); if (typeof assert === 'function') assert(false, 'Unhandled error: ' + (err && err.message ? err.message : err)); });\n";
+        std::string wrapped = wrapAsyncIife(content, absSource.string());
         auto wrappedFile = tempDir / (stem + "_wrap2.js");
         std::ofstream ofs(wrappedFile, std::ios::binary);
         ofs.write(wrapped.data(), wrapped.size());

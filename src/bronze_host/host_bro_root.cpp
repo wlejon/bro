@@ -182,6 +182,12 @@ void installBroRoots(engine::Engine& engine) {
         ev::Persistent text(makeBroTextValue());
         ev::setProperty(bro->get(), "text", text.get());
     }
+#if BRO_WITH_TENSOR
+    {
+        ev::Persistent gpu(makeBroGpuValue());
+        ev::setProperty(bro->get(), "gpu", gpu.get());
+    }
+#endif
     {
         ev::Persistent steam(makeBroSteamValue());
         ev::setProperty(bro->get(), "steam", steam.get());
@@ -195,20 +201,22 @@ void installBroRoots(engine::Engine& engine) {
         ev::setProperty(bro->get(), "media", media.get());
     }
     {
+        // `bro.image` is ONE object with three sources: brokit's kernels
+        // (which create it, now that `bro` is registered), the codecs
+        // (host_codecs.cpp) merged onto it here, and `gpu`, which
+        // installImageGpuModule mounts right after this returns.
+        installBrokitImageKernels();
         Value broImg = ev::getProperty(bro->get(), "image");
         if (!ev::isObject(broImg)) {
             ev::Persistent img(ev::createObject());
             ev::setProperty(bro->get(), "image", img.get());
             broImg = img.get();
         }
-        Value codecImg = makeBroImageValue();
+        ev::Persistent imgRoot(broImg);
+        ev::Persistent codecImg(makeBroImageValue());
         for (const char* prop : {"transcodeKTX2", "encodePngFile", "encodePng", "encodeJpegFile", "encodeJpeg"}) {
-            Value fn = ev::getProperty(codecImg, prop);
-            if (!ev::isUndefined(fn)) ev::setProperty(broImg, prop, fn);
-        }
-        Value gpu = ev::globalValue("__bro_image_gpu").value;
-        if (ev::isObject(gpu)) {
-            ev::setProperty(broImg, "gpu", gpu);
+            Value fn = ev::getProperty(codecImg.get(), prop);
+            if (!ev::isUndefined(fn)) ev::setProperty(imgRoot.get(), prop, fn);
         }
     }
     {

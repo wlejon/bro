@@ -9,11 +9,11 @@
 // being installed. The module is a FACTORY: `globalThis.__bro_net_sync(net)`
 // takes the object carrying the net primitives (init, host, connect,
 // connections, sendClone, broadcastClone, and the onmessage/onconnect/
-// ondisconnect slots) and answers the `sync` object bound to them. It used to
-// bind itself to `bro.net` at load and mount as `bro.net.sync`; the `bro`
-// namespace is not registered in this realm today, so that mount waits for
-// it — whoever restores `bro.net` calls the factory and hangs the result off
-// it. Nothing else about the module changed.
+// ondisconnect slots) and answers the `sync` object bound to them. It does
+// not bind itself: js/net.js calls the factory at ITS load and mounts the
+// result as `bro.net.sync`, which is why this module is entered first
+// (dom_globals.cpp) — a factory that has not run yet is a `bro.net` with no
+// `sync`.
 //
 // It names no host global as a bare identifier (module.globals lists only
 // globalThis, console and the observer hook): the timers it needs are read

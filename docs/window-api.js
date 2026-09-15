@@ -30,6 +30,8 @@
  * @property {number} [workY] -  Usable work area Y in desktop pixels.
  * @property {number} [workWidth] -  Usable work area width in desktop pixels.
  * @property {number} [workHeight] -  Usable work area height in desktop pixels.
+ * @property {{x: number, y: number, width: number, height: number}} [bounds] -  The same rectangle as x/y/width/height, nested.
+ * @property {{x: number, y: number, width: number, height: number}} [workArea] -  The same rectangle as workX/workY/workWidth/workHeight, nested.
  * @property {number} [refreshRate] -  Refresh rate in Hz.
  * @property {number} [contentScale] -  OS content scale multiplier (1.0 = 100%).
  * @property {boolean} [isPrimary] -  Whether this is the system primary display.

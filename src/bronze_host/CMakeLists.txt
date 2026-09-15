@@ -139,6 +139,9 @@ set(BRO_BRONZE_HOST_SOURCES
     host_class.cpp
     host_vendor_globals.cpp
     host_anchor_download.cpp
+    host_file_path.cpp
+    host_event_spec.cpp
+    host_navigator.cpp
     host_intl.cpp
     host_web_animations.cpp
     host_brokit.cpp
@@ -258,6 +261,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_scene_agent.cpp
     host_math_classes.cpp
     host_math_funcs.cpp
+    host_gpu.cpp
     host_text.cpp
     host_steam.cpp
     host_menu.cpp
@@ -395,6 +399,13 @@ if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()
 
+# bro.gpu (host_gpu.cpp) reads brotensor's runtime registry directly. Named
+# here rather than reached through broimage's own optional brotensor link,
+# so the dependency is bro's and not an accident of a sibling's option.
+if(BRO_WITH_TENSOR)
+    target_link_libraries(bro_bronze_host PUBLIC brotensor::brotensor)
+endif()
+
 bro_apply_feature_defs(bro_bronze_host)
 
 # --- bro's own JavaScript, compiled by bronze at build time: bro_bronze_js ---
@@ -491,6 +502,7 @@ else()
     endfunction()
 
     bro_compile_js(observers  bro_observers_main)
+    bro_compile_js(events     bro_events_main)
     bro_compile_js(net_sync   bro_net_sync_main)
     bro_compile_js(image_gpu  bro_image_gpu_main)
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")

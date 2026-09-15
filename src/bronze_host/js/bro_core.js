@@ -69,22 +69,29 @@
         __bro_native.window.setMaxSize(width, height);
     });
     // One snapshot of the display list, then the documented DisplayInfo
-    // objects read out of it by index.
+    // objects read out of it by index. The two rectangles are carried both
+    // flat (x, y, width, height, workX, ...) as the dictionary documents and
+    // nested (`bounds`, `workArea`), the shape bro.window has always
+    // answered and code was written against.
     fn(bro.window, 'getDisplays', function getDisplays() {
         const n = __bro_native.window.getDisplays();
         const out = [];
         for (let i = 0; i < n; i++) {
+            const x = __bro_native.window.getDisplays_x(i);
+            const y = __bro_native.window.getDisplays_y(i);
+            const width = __bro_native.window.getDisplays_width(i);
+            const height = __bro_native.window.getDisplays_height(i);
+            const workX = __bro_native.window.getDisplays_workX(i);
+            const workY = __bro_native.window.getDisplays_workY(i);
+            const workWidth = __bro_native.window.getDisplays_workWidth(i);
+            const workHeight = __bro_native.window.getDisplays_workHeight(i);
             out.push({
                 id: __bro_native.window.getDisplays_id(i),
                 name: __bro_native.window.getDisplays_name(i),
-                x: __bro_native.window.getDisplays_x(i),
-                y: __bro_native.window.getDisplays_y(i),
-                width: __bro_native.window.getDisplays_width(i),
-                height: __bro_native.window.getDisplays_height(i),
-                workX: __bro_native.window.getDisplays_workX(i),
-                workY: __bro_native.window.getDisplays_workY(i),
-                workWidth: __bro_native.window.getDisplays_workWidth(i),
-                workHeight: __bro_native.window.getDisplays_workHeight(i),
+                x, y, width, height,
+                workX, workY, workWidth, workHeight,
+                bounds: { x, y, width, height },
+                workArea: { x: workX, y: workY, width: workWidth, height: workHeight },
                 refreshRate: __bro_native.window.getDisplays_refreshRate(i),
                 contentScale: __bro_native.window.getDisplays_contentScale(i),
                 isPrimary: __bro_native.window.getDisplays_isPrimary(i),

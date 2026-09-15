@@ -34,4 +34,13 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
 /// Returns true on success, false on failure (and logs error / sets test failure).
 bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath);
 
+/// A script with top-level `await`, rewritten as an async IIFE bronze can
+/// compile. Its `.catch` reports the rejection as TEXT — `stack` when set,
+/// else `Name: message` — and fails the run through `assert`: an error
+/// object handed to `console.error` prints as "[object]" and names nothing.
+/// Shared by the JIT and AOT paths so the two report a failure identically.
+/// `filename` names the script in that report; bronze records no source
+/// position on an Error, so the file is the location the report can give.
+std::string wrapAsyncIife(const std::string& code, const std::string& filename = {});
+
 } // namespace bro::bronze_host

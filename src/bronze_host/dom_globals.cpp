@@ -7,8 +7,9 @@
 //
 // What is HERE: the frame seam (hostFrame), document, window, the canvas
 // object, and installWebHostGlobals. What moved out, and where to look for it:
-// localStorage to dom_storage.cpp, the gamepad surface and navigator to
-// dom_gamepad.cpp, the element surface to host_element*.cpp.
+// localStorage to dom_storage.cpp, the gamepad surface and the navigator
+// base object to dom_gamepad.cpp, navigator's clipboard and getBattery to
+// host_navigator.cpp, the element surface to host_element*.cpp.
 //
 // bronze already provides `console` from its own runtime (rt_print.cpp), so
 // no console is registered here — duplicating it would shadow the builtin
@@ -42,7 +43,6 @@
 
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
-#include "platform/clipboard.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -298,23 +298,53 @@ Value makeBrandConstructor(const char* name) {
         [msg](Value, std::span<const Value>) { return ev::throwTypeError(msg); }, 0);
 }
 
-// Where an exception out of compiled code ends up. Reports to the log stream.
-// The Error's own fields are read through embed property reads — the
-// throw was already caught, so running a getter here is safe.
-void reportBronzeError(const char* origin, Value thrown) {
-    if (!ev::isObject(thrown)) {
-        LOG_ERROR("[bronze:%s] uncaught: %s", origin, ev::toUtf8(thrown).c_str());
-        return;
-    }
+// The text a thrown value is reported with. bronze attaches NO `stack` and no
+// source position to an Error it raises (runtime/exception.h: "bronze has no
+// stack to print, which is a deliberate divergence from node"; the JIT's
+// `retainSource` keeps source text for Function.prototype.toString only), so
+// the best a report can carry is what the value itself says:
+//   - `stack`, when a program or a host set one (a non-empty string);
+//   - else `Name: message` for an Error-shaped object (an object with a
+//     string `message`), the shape console.log prints;
+//   - else, for any other object, its JSON — a `{code, reason}` thrown by a
+//     native or a rejected event descriptor reads as itself rather than as
+//     "[object]", which named nothing;
+//   - else ToString of the primitive.
+// The Error's own fields are read through embed property reads — the throw
+// was already caught, so running a getter here is safe — and the value is
+// rooted first, because every one of those reads may allocate.
+std::string thrownValueText(Value thrown) {
+    if (!ev::isObject(thrown)) return ev::toUtf8(thrown);
     ev::Persistent root(thrown);
-    Value nameV = ev::getProperty(root.get(), "name");
+    Value stackV = ev::getProperty(root.get(), "stack");
+    if (ev::isString(stackV)) {
+        std::string stack = ev::toUtf8(stackV);
+        if (!stack.empty()) return stack;
+    }
     Value msgV = ev::getProperty(root.get(), "message");
-    std::string name = ev::isObject(nameV) || ev::isUndefined(nameV)
-                           ? std::string("Error")
-                           : ev::toUtf8(nameV);
-    std::string msg =
-        ev::isObject(msgV) || ev::isUndefined(msgV) ? std::string() : ev::toUtf8(msgV);
-    LOG_ERROR("[bronze:%s] uncaught %s: %s", origin, name.c_str(), msg.c_str());
+    if (ev::isString(msgV)) {
+        Value nameV = ev::getProperty(root.get(), "name");
+        std::string name = ev::isString(nameV) ? ev::toUtf8(nameV) : std::string("Error");
+        std::string msg = ev::toUtf8(msgV);
+        if (name.empty()) return msg;
+        return msg.empty() ? name : name + ": " + msg;
+    }
+    ev::GlobalValue json = ev::globalValue("JSON");
+    if (json.found) {
+        ev::Persistent jsonRoot(json.value);
+        Value stringify = ev::getProperty(jsonRoot.get(), "stringify");
+        if (ev::isFunction(stringify)) {
+            Value arg = root.get();
+            auto r = ev::call(stringify, jsonRoot.get(), std::span<const Value>(&arg, 1));
+            if (!r.thrown && ev::isString(r.value)) return ev::toUtf8(r.value);
+        }
+    }
+    return ev::toUtf8(root.get());
+}
+
+// Where an exception out of compiled code ends up. Reports to the log stream.
+void reportBronzeError(const char* origin, Value thrown) {
+    LOG_ERROR("[bronze:%s] uncaught %s", origin, thrownValueText(thrown).c_str());
 }
 
 // Zero before the first frame, which is what a program's top level sees. It is
@@ -755,56 +785,29 @@ void installWebHostGlobals(engine::Engine& engine) {
     installImageGlobal();
     installParserGlobal();
 
-    {
-        Value nav = makeNavigatorValue();
-        ObjectBuilder bNav(nav);
-        ObjectBuilder clip;
-        clip.def("__read", 0, [](Value, std::span<const Value>) {
-            return ev::fromUtf8(bro::platform::getClipboardText());
-        });
-        clip.def("__write", 1, [](Value, std::span<const Value> a) {
-            Value textV = argAt(a, 0);
-            std::string text = (!ev::isObject(textV) && !ev::isUndefined(textV)) ? ev::toUtf8(textV) : "";
-            bool ok = bro::platform::setClipboardText(text);
-            return ev::fromBool(ok);
-        });
-        clip.def("readText", 0, [](Value, std::span<const Value>) {
-            Value p = ev::createPromise();
-            ev::resolvePromise(p, ev::fromUtf8(bro::platform::getClipboardText()));
-            return p;
-        });
-        clip.def("writeText", 1, [](Value, std::span<const Value> a) {
-            Value textV = argAt(a, 0);
-            std::string text = (!ev::isObject(textV) && !ev::isUndefined(textV)) ? ev::toUtf8(textV) : "";
-            bool ok = bro::platform::setClipboardText(text);
-            Value p = ev::createPromise();
-            if (ok) {
-                ev::resolvePromise(p, ev::undefined());
-            } else {
-                Value msg = ev::fromUtf8("clipboard write failed");
-                ev::CallResult err = ev::construct(ev::globalValue("Error").value,
-                                                   std::span<const Value>(&msg, 1));
-                ev::rejectPromise(p, err.value);
-            }
-            return p;
-        });
-        bNav.set("clipboard", clip.get());
-
-        ev::registerGlobal("navigator", nav);
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "navigator", nav);
-    }
+    installNavigatorGlobal();
     // HTMLCanvasElement and HTMLImageElement are installed as real classes
     // via installHtmlInterfaces() / installImageGlobal().
     ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
     installTouchGlobals();
     installVendorGlobals();
     installBrokitGlobals(engine);
+    // The UI event classes (js/events.js) extend the `Event` brokit just
+    // installed.
+    installEventsModule();
+    // The math classes BEFORE the roots: bro.math aliases the SpatialHash3D /
+    // Rng / Smoother constructors, so they have to exist when the root is
+    // assembled (host_math_funcs.cpp reads them off their HostClass).
+    installMathGlobals();
     // The `bro` / `__bro` roots, the natives under `__bro_native`, and
     // js/bro_core.js over them (host_bro_root.cpp). Nothing before this
     // point registers `bro`; a later `bro.*` namespace mounts onto the
     // object this creates.
     installBroRoots(engine);
+    // bro.image.gpu (js/image_gpu.js) mounts onto the `bro.image` the roots
+    // just built; it reads nothing else at load, so it goes here rather than
+    // with the other compiled modules below.
+    installImageGpuModule();
 #if BRO_WITH_3D
     // bro.mesh, Mesh and MeshBVH (js/mesh.js over native_mesh.cpp): after
     // the roots, whose `bro.mesh` and `__bro_native.mesh` it fills.
@@ -819,6 +822,10 @@ void installWebHostGlobals(engine::Engine& engine) {
     installAnimationModule();
     installSceneModule();
 #endif
+    // The sync factory BEFORE js/net.js, which mounts `bro.net.sync` from
+    // `globalThis.__bro_net_sync` at its own load; the factory reads nothing
+    // at load and binds to the primitives only when called.
+    installNetSyncModule();
     installNetModule();
     installLmModule();
     installRaveModule();
@@ -843,8 +850,6 @@ void installWebHostGlobals(engine::Engine& engine) {
     // off globalThis at the point of use, and every name a module lists in
     // js/module.globals must already be registered when its entry runs.
     installObserversModule();
-    installNetSyncModule();
-    installImageGpuModule();
     installHeadlessGlobals(engine);
     installPlatformExtensions(engine);
     installRangeGlobals();
@@ -853,7 +858,6 @@ void installWebHostGlobals(engine::Engine& engine) {
     installWebAnimationGlobals();
     installAudioGlobals();
     installAIGlobals();
-    installMathGlobals();
     installVideoGlobals();
     initHostCalleeNamer();
 

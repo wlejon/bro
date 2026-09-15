@@ -153,6 +153,14 @@ inline constexpr uint32_t kHostGifEncoderTag   = 0x47454E43u;  // 'GENC'
 // loop down.
 void reportBronzeError(const char* origin, Value thrown);
 
+// The text `reportBronzeError` prints for a thrown value: its `stack` when a
+// program set one, else `Name: message` for an Error, else its JSON for any
+// other object, else ToString of the primitive. bronze itself records no
+// stack and no source position on an Error (runtime/exception.h), so this
+// is the whole of what a report can say about WHAT was thrown; the caller
+// supplies WHERE (the script, the seam). ALLOCATES.
+std::string thrownValueText(Value thrown);
+
 // The Engine this layer was installed on, or nullptr before install. Every
 // file here reaches the engine through it rather than through a second copy
 // of the pointer.
@@ -358,6 +366,10 @@ Value makeLocalStorageValue();
 Value makeScreenValue();
 Value makeNavigatorValue();
 Value buildGamepadSnapshot(const engine::GamepadState& gp);
+
+// `navigator` as a host global (host_navigator.cpp): makeNavigatorValue's
+// object plus `clipboard` and `getBattery()`.
+void installNavigatorGlobal();
 
 // The entry for `node`, created on first ask. Never null for a non-null node.
 HostNodeState* hostNodeStateFor(dom::Node* node);
@@ -628,6 +640,22 @@ void installVendorGlobals();
 
 void installBrokitGlobals(engine::Engine& engine);
 
+// brokit's `bro.image` kernels (gradient, alloc, reduce, map, combine,
+// lookup, stencil, resample), mounted onto the registered `bro` root — so
+// called from installBroRoots, after that root exists and before the codec
+// and gpu members join the same object.
+void installBrokitImageKernels();
+
+// A brokit `File` read off disk (host_file_path.cpp): bytes, the MIME type
+// its extension implies, `lastModified`, and the non-standard `.path` — the
+// object a drop and an <input type=file> pick hand a page. `undefined` for
+// a path that cannot be read. ALLOCATES.
+Value makeFileFromPath(const std::string& path);
+
+// The same, or for an unreadable path a plain `{name, path, size: 0, type}`
+// so a file list never has a hole in it. ALLOCATES.
+Value makeFileOrDescriptorFromPath(const std::string& path);
+
 // One pass over brokit's polled completions (`__brokit_fetch_tick` and its
 // siblings). hostFrame runs it as a host-task step; headless advanceTime and
 // flush run it so a pending fetch resolves inside the call a test makes.
@@ -655,9 +683,11 @@ void fireHostObserverFrame();
 
 // Enter each compiled module and lift what it defined on globalThis into the
 // host-global registry: MutationObserver/ResizeObserver/IntersectionObserver
-// and their entry classes; `__bro_net_sync` (a factory over the bro.net
+// and their entry classes; the UI event classes (MouseEvent, KeyboardEvent,
+// ...) over brokit's Event; `__bro_net_sync` (a factory over the bro.net
 // primitives); `__bro_image_gpu` (colormap, fbm2D).
 void installObserversModule();
+void installEventsModule();
 void installNetSyncModule();
 void installImageGpuModule();
 // js/bro_core.js: the public bro.time / bro.window / bro.settings /
@@ -824,6 +854,12 @@ void installMathGlobals();
 
 // Text (host_text.cpp)
 Value makeBroTextValue();
+
+// bro.gpu (host_gpu.cpp): the runtime backend probe over brotensor. Only
+// declared in a BRO_WITH_TENSOR build; the namespace is absent otherwise.
+#if BRO_WITH_TENSOR
+Value makeBroGpuValue();
+#endif
 
 // Menu (host_menu.cpp)
 Value makeBroMenuValue();

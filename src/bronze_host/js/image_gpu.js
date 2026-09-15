@@ -34,11 +34,11 @@
 // ../CMakeLists.txt, against js/module.globals) and entered from
 // installImageGpuModule() (host_js_modules.cpp) while the host globals are
 // being installed. The module assigns its surface — `colormap` and `fbm2D` —
-// onto `globalThis.__bro_image_gpu`. It used to mount itself as
-// `bro.image.gpu`; the `bro` namespace is not registered in this realm today,
-// so that mount waits for it — whoever restores `bro.image` points
-// `bro.image.gpu` at this object. The functions themselves are unchanged and
-// take everything they touch (the canvas, the field, the LUT) as arguments.
+// onto `globalThis.__bro_image_gpu`, and the installer mounts that object as
+// `bro.image.gpu` — it is entered right after installBroRoots built
+// `bro.image` (brokit's kernels plus the codecs), so the mount lands on the
+// same object every other `bro.image.*` member lives on. The functions take
+// everything they touch (the canvas, the field, the LUT) as arguments.
 
 (function () {
     const gpu = {};

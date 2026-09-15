@@ -23,6 +23,10 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `host_internal.h` | the non-GL shared surface: error funnel, clock, task queue, handle tags |
 | `host_events.cpp` | `on<type>` + `addEventListener` for the objects that fire events |
 | `host_dom_events.cpp` | canvas / document / window listeners, wired to the **engine's** dispatch |
+| `host_event_spec.cpp`, `js/events.js` | the descriptor `dispatchEvent` takes and the engine event built from it; the UI event classes (`MouseEvent`, `KeyboardEvent`, ...) over brokit's `Event` |
+| `host_navigator.cpp` | `navigator` as a host global: `clipboard`, `getBattery()` |
+| `host_file_path.cpp` | a brokit `File` read off disk with `.path` — what a drop and `input.files` hand a page |
+| `host_gpu.cpp` | `bro.gpu`, the runtime backend probe over brotensor |
 | `host_timers.cpp` | `setTimeout`/`setInterval` and the main-thread task queue |
 | `host_image.cpp` | the image DECODE behind `.src`, and the lookup that finds a decoded image behind a value |
 | `host_element_image.cpp` | `Image` / `HTMLImageElement` as an element CLASS: `new Image()` and `createElement('img')` are one `<img>` node, born on a prototype that chains to `Element`'s |
@@ -134,7 +138,14 @@ clock, the same GL context. What crosses the host boundary is a copy:
 ### CustomEvent
 
 `dispatchEvent` from compiled code takes a plain descriptor —
-`{type, bubbles, cancelable, detail}`:
+`{type, bubbles, cancelable, detail}` — or an instance of one of the UI
+event classes `js/events.js` defines (`new MouseEvent('click', {clientX:
+10})`, `new KeyboardEvent('keydown', {key: 'a'})`), which is the same thing
+with the spec's field names. `host_event_spec.cpp` reads the descriptor and
+builds the engine's event for the walk: a `dom::MouseEvent` / `WheelEvent`
+carrying the coordinates, buttons and modifiers for the mouse and pointer
+families, a `dom::KeyboardEvent` for the key family, and a `CustomEvent` or
+plain `Event` for everything else.
 
 ```js
 document.dispatchEvent({ type: 'app:ready', detail: 'v2' });
@@ -500,19 +511,25 @@ uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
 **Loading**: nothing outstanding. `fetch` and `XMLHttpRequest` read the
 engine's asset mounts (`util/asset_path.h`) and take http(s) through
 `util::fetchRemoteCached`, the same remote-asset path so they agree
-about what a URL means and what is cached. `WebSocket` and `bro.net` are in
-`host_net.cpp`, checked by `tests/bronze_host/run_checks.sh net`.
+about what a URL means and what is cached. `WebSocket` is brokit's
+(`host_brokit.cpp` installs it); `bro.net` is `native_net.cpp` under
+`js/net.js`, checked by `tests/bronze_host/run_checks.sh net`.
 
-`Blob`, `File`, `FileReader` and object URLs are DONE — `host_file.cpp`,
-checked by `tests/bronze_host/run_checks.sh file`. `blob:` and `data:` URLs
-resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of the engine's
-object-URL table (`util/object_url.h`), so a URL minted by compiled code
-resolves in the page's markup and vice versa.
+`Blob`, `File`, `FileReader` and object URLs are DONE — brokit's, installed by
+`host_brokit.cpp`, checked by `tests/bronze_host/run_checks.sh file`. `blob:`
+and `data:` URLs resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of
+the engine's object-URL table (`util/object_url.h`), so a URL minted by
+compiled code resolves in the page's markup and vice versa.
+`URL.createObjectURL` is wrapped once by `host_brokit.cpp` so a non-Blob
+argument is the TypeError the web raises rather than a URL nothing resolves.
 
 A DROPPED file is one of those `File`s — bytes read off disk, the MIME type its
-extension implies, and the `.path` attribute (`makeFileFromPath`, used by `host_dom_events.cpp`).
-descriptor with `size: 0` and no content, which passes every shape check a page
-makes and fails every read. `dataTransfer.items` answers with the same Files,
+extension implies, and the `.path` attribute (`makeFileFromPath`,
+`host_file_path.cpp`, used by `host_dom_events.cpp` for a drop and by
+`host_element_forms.cpp` for `input.files`). One the disk cannot supply is a
+plain `{name, path, size: 0}` descriptor with no content, which passes every
+shape check a page makes and fails every read. `dataTransfer.items` answers
+with the same Files,
 and its `webkitGetAsEntry().file(cb)` calls back on the FRAME SEAM rather than
 synchronously, because that call is asynchronous on the web and code written
 against it counts on it — the three.js editor's `getFilesFromItemList`
@@ -538,7 +555,8 @@ view holds the parse, not the URL object, so one kept past its URL
 (`const p = new URL(s).searchParams`) still reads and writes coherently rather
 than dangling. Not present: `sort`, `forEach`, and the iterator protocol.
 
-`AbortController` and `AbortSignal` are DONE — `host_abort.cpp`, checked by
+`AbortController` and `AbortSignal` are DONE — brokit's (`abort.cpp` in
+`../brokit/src/api`, installed by `host_brokit.cpp`), checked by
 `tests/bronze_host/run_checks.sh abort`. `fetch(url, {signal})` rejects with the
 signal's reason instead of reading the file, `AbortSignal.abort`, `.timeout` and
 `.any` are all present, and `throwIfAborted()` throws the reason untouched.
@@ -565,10 +583,13 @@ instead of two.
 not a `dom::Element` — it has no layout box. It IS a real class, though: see
 **Host classes** below.
 
-`MutationObserver` is DONE — `host_observers.cpp`, checked by
-`tests/bronze_host/run_checks.sh observer` — and it is built on a notice fired by
-the DOM layer itself (`Document::notifyMutation`, in `src/dom/document.h`)
-rather than on this layer's own mutators.
+`MutationObserver` is DONE — `js/observers.js` over the hooks in
+`host_observer_hooks.cpp`, checked by `tests/bronze_host/run_checks.sh
+observer` — and it is built on a notice fired by the DOM layer itself
+(`Document::notifyMutation`, in `src/dom/document.h`) rather than on this
+layer's own mutators. It carries one bro extension the web lacks,
+`unobserve(target)`, which drops a single target and disconnects when the
+last one goes.
 
 Records are delivered once per frame from the frame seam, after
 requestAnimationFrame and before the closing microtask drain, rather than at the

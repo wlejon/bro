@@ -265,6 +265,23 @@
             activeMutationObservers.add(this);
         }
 
+        // bro's extension: drop ONE target and keep the rest. Not on the
+        // web (there it is disconnect or nothing), but it was on bro's
+        // MutationObserver before this module and code was written to it.
+        // Dropping the last target is a disconnect, queue included.
+        unobserve(target) {
+            const st = moState.get(this);
+            if (st === undefined) {
+                throw new TypeError('MutationObserver.unobserve: receiver is not an observer');
+            }
+            const opts = st.targets.get(target);
+            if (opts === undefined) return;
+            pumpMutations();
+            hooks.unobserveMutations(target, opts.subtree);
+            st.targets.delete(target);
+            if (st.targets.size === 0) this.disconnect();
+        }
+
         disconnect() {
             const st = moState.get(this);
             if (st === undefined) return;

@@ -466,6 +466,28 @@ void decorateElementForms(ObjectBuilder& b) {
                },
                nullptr);
 
+    // files: the FileList of an <input type=file> — the paths the picker (or
+    // headless's setPickedFiles) returned, as real File objects with the
+    // non-standard `.path` (host_file_path.cpp; docs/file-api.js). Null for
+    // any other element, per spec, and empty until the user picks something,
+    // which is what a page checks first. The same helper the drop path uses,
+    // so a picked file and a dropped one are the same kind of object.
+    b.accessor("files",
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::null();
+                   const std::string& tag = st->el->tagName();
+                   if (tag != "INPUT" && tag != "input") return ev::null();
+                   std::string t = st->el->getAttribute("type");
+                   for (char& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                   if (t != "file") return ev::null();
+                   const std::vector<std::string> paths = st->el->selectedFiles();
+                   return hostArrayOf(paths.size(), [&paths](size_t i) {
+                       return makeFileOrDescriptorFromPath(paths[i]);
+                   });
+               },
+               nullptr);
+
     b.def("click", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();

@@ -197,10 +197,12 @@ jobs:
         if: matrix.bronze_compiler
         run: cmake --build build --config Release --parallel 4 --target bronze-cli
 
-      # run_tests.sh enumerates the bronze_host checks alongside the JS tests
-      # (tests/bronze_host/run_checks.sh --list) and compiles each check's app
-      # module with the compiler built above. They are the only coverage that
-      # layer has, so they run here in full rather than being deferred.
+      # run_tests.sh runs the tests/**/test_*.js suite (its default; there is
+      # no BRO_TEST_JS gate here on purpose) and, alongside it, the
+      # bronze_host checks (tests/bronze_host/run_checks.sh --list), compiling
+      # each check's app module with the compiler built above. Those checks
+      # are the only coverage that layer has, so they run here in full rather
+      # than being deferred.
       - name: Test (headless, GPU path under Xvfb)
         if: matrix.test
         shell: bash
