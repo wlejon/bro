@@ -117,6 +117,7 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     opts.pinsPath = discoverPinsPath(engine, filename);
     opts.censusOutPath = discoverCensusOutPath(engine, filename);
     opts.moduleHandleOut = moduleHandleOut;
+    opts.optimize = engine.jitOptimize();
 
     std::string execCode = code;
     if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
@@ -191,6 +192,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     opts.retainSource = true;
     opts.pinsPath = discoverPinsPath(engine, absPath);
     opts.censusOutPath = discoverCensusOutPath(engine, absPath);
+    opts.optimize = engine.jitOptimize();
 
     bronze::embed::CallResult res;
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {

@@ -120,6 +120,11 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     int compiled = getBool("compiled");
     if (compiled >= 0) config.compiledApp = (compiled == 1);
 
+    // `"watch": false` — this app dir is not to be watched for source changes
+    // (docs/hot-reload.md).
+    int watch = getBool("watch");
+    if (watch >= 0) config.watchSources = (watch == 1);
+
     // Startup window management (runtime control lives in bro.window.*).
     int borderless = getBool("borderless");
     if (borderless >= 0) config.graphics.borderless = (borderless == 1);

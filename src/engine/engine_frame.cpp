@@ -299,7 +299,15 @@ void Engine::run() {
             }
         }
 
-        if (pendingAppReload_ && framePresenter_->isRasterIdle()) {
+        pollAppWatcher(util::currentTimeMs());
+        if (pendingAppReload_) {
+            // The reload tears down what the raster worker reads, so it runs
+            // against a quiescent worker. Waiting for it here, rather than
+            // only reloading on a frame that happens to find it idle, is what
+            // makes the reload land at all under an app that renders every
+            // frame — the worker is back at work before this point comes
+            // round again.
+            framePresenter_->waitUntilIdle();
             processPendingAppReload();
         }
 

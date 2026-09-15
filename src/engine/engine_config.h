@@ -57,6 +57,10 @@ struct EngineConfig {
     bool showSplash = true;
     bool compiledApp = false;
     bool hostProvidesCompiledApp = false;
+    // bro.json `"watch"`: reload the app when a source file under its dir
+    // changes. Only ever active for a windowed app whose scripts compile
+    // in-process (docs/hot-reload.md); BRO_WATCH=0|1 overrides.
+    bool watchSources = true;
     GraphicsConfig graphics;
     InputConfig input;
     Scrollbar::Style viewportScrollbar;

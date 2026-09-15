@@ -31,6 +31,7 @@
 #include "physics/physics_world.h"
 #endif
 #include "bronze_host/eval.h"
+#include "api/fs_watch.h"  // Engine owns unique_ptr<FsWatcher>s; the ctor's unwind deletes them
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
@@ -73,6 +74,7 @@ Engine::Engine(const EngineConfig& config)
     hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     appDir_ = config.appDir;
     titleOverride_ = config.title;
+    initDevLoopConfig(config);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     {
@@ -107,6 +109,7 @@ Engine::Engine(const EngineConfig& config)
     settings_ = std::make_unique<Settings>(config.settingsPath);
     settings_->defineEngineAction("system_toggle_perf", {"F8"});
     settings_->defineEngineAction("system_toggle_settings", {});
+    settings_->defineEngineAction("system_reload_app", {"F5"});
     settings_->applyAppOverrides(config.graphics, config.input);
 
     auto& gfx = settings_->graphics();
@@ -315,6 +318,7 @@ Engine::Engine(const EngineConfig& config)
     }
 
     initAppRealm();
+    initAppWatcher();
 
     if (displayMode_ == DisplayMode::Headless) {
         flush();

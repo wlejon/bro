@@ -65,12 +65,20 @@ namespace bro::canvas { class CanvasScene; class CanvasRasterThread; }
 namespace bro::platform { class Window; class EventLoop; }
 namespace bro::dom { class Document; class Element; class Event; class TextNode; }
 namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }
+namespace brokit::api { class FsWatcher; }
 
 namespace bro::engine {
 
 class LayoutPipeline;
 class AudioInference;
 struct SubDocRef;
+
+/// Why an app reload was asked for. A Navigation reload is the page's own
+/// `location.reload()` and compiles the app the way boot did; a Dev reload
+/// is the edit loop — a source file changed under the app dir, or the
+/// `system_reload_app` action (F5) — and compiles in bronze's baseline tier,
+/// trading run speed for the reload landing in a fraction of a second.
+enum class AppReloadKind { Navigation, Dev };
 
 class Engine {
 public:
@@ -257,8 +265,15 @@ public:
     void flushLayoutForRead(dom::Document* doc);
     void reloadIframe(dom::Element* el);
     bool reloadIframeForDocument(const dom::Document* doc);
-    void requestAppReload();
+    void requestAppReload(AppReloadKind kind = AppReloadKind::Navigation);
     bool processPendingAppReload();
+    /// Whether an in-process compile (the app's `<script>` tags, `eval()`,
+    /// `new Function()`) runs bronze's optimizer. BRO_JIT_TIER=baseline or
+    /// =optimized in the environment pins it for the process; otherwise it is
+    /// on until the first Dev reload and off from then on, so a session that
+    /// has started iterating keeps every later reload fast. See
+    /// docs/hot-reload.md.
+    bool jitOptimize() const;
     std::vector<uint8_t> captureIframe(dom::Element* el, int& outW, int& outH);
 
     void onFrame(std::function<void(double dtMs)> cb) {
@@ -562,6 +577,12 @@ private:
     void initAppRealm();
     void performAppReload();
     void resetMenuBarDefaults();
+    // Source watching (app_reload.cpp): recursive watchers on the app dir and
+    // the project's /lib mount that turn a changed .js/.mjs/.cjs/.html/.htm/
+    // .css into a Dev reload once the edits have been quiet for a moment.
+    void initDevLoopConfig(const EngineConfig& config);
+    void initAppWatcher();
+    void pollAppWatcher(double nowMs);
 
     void initSystemPanels();
     void loadCustomFonts();
@@ -776,6 +797,13 @@ private:
     bool handleGlobalHotkey(int keycode, int mod, bool repeat);
 
     bool pendingAppReload_ = false;
+    AppReloadKind pendingAppReloadKind_ = AppReloadKind::Navigation;
+    bool devReloaded_ = false;
+    int jitTierPin_ = -1;  // BRO_JIT_TIER: 1 optimized, 0 baseline, -1 unpinned
+    bool watchSources_ = true;
+    std::vector<std::unique_ptr<brokit::api::FsWatcher>> appWatchers_;  // app dir, then /lib
+    double appWatchLastChangeMs_ = 0.0;
+    bool appWatchPending_ = false;
     std::vector<dom::Element*> pendingIframeReloads_;
     std::vector<render::SkiaRenderer::GPUSurface> iframeSurfaceFrees_;
     bool iframeSyncNeeded_ = false;

@@ -120,6 +120,10 @@ bool Engine::handleGlobalHotkey(int keycode, int mod, bool repeat) {
         uiDirty_ = true;
         return true;
     }
+    if (action == "system_reload_app") {
+        requestAppReload(AppReloadKind::Dev);
+        return true;
+    }
     return false;
 }
 

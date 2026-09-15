@@ -6,6 +6,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
 #include "bronze_host/host_gc.h"
+#include "api/fs_watch.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
@@ -100,6 +101,8 @@ Engine::~Engine() {
     // The dialog tick callback captures this engine.
     platform::Dialogs::setTickCallback(nullptr);
     platform::Dialogs::setWindow(nullptr);
+
+    appWatchers_.clear();
 
     shutdown();
 
