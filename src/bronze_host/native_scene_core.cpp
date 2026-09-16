@@ -10,6 +10,7 @@
 #include <bromesh/manipulation/normals.h>
 #include <broimage/decode.h>
 #include <glad/gl.h>
+#include "engine/scene_audio_sync.h"
 
 namespace bro::bronze_host {
 
@@ -776,6 +777,22 @@ bool registerSceneNatives(std::string* error) {
             if (ev::isObject(snProto)) {
                 ObjectBuilder b(snProto);
                 installSceneNodeAgent(b);
+                b.def("attachAudioEmitter", 2, [](Value self_, std::span<const Value> a) {
+                    auto* cell = sceneNodeCellOf(self_);
+                    if (!cell || a.empty()) return ev::undefined();
+                    auto* n = cell->node();
+                    if (!n) return ev::undefined();
+                    int handle = static_cast<int>(ev::toDouble(a[0]));
+                    bool isVoice = a.size() >= 2 && ev::toBool(a[1]);
+                    bro::engine::SceneAudioSync::attachAudioEmitter(cell->token, n, handle, isVoice);
+                    return ev::undefined();
+                });
+                b.def("detachAudioEmitter", 0, [](Value self_, std::span<const Value>) {
+                    auto* cell = sceneNodeCellOf(self_);
+                    if (!cell) return ev::undefined();
+                    bro::engine::SceneAudioSync::detachAudioEmitter(cell->id);
+                    return ev::undefined();
+                });
             }
         }
     }

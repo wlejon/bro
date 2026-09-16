@@ -855,11 +855,8 @@ void installMathGlobals();
 // Text (host_text.cpp)
 Value makeBroTextValue();
 
-// bro.gpu (host_gpu.cpp): the runtime backend probe over brotensor. Only
-// declared in a BRO_WITH_TENSOR build; the namespace is absent otherwise.
-#if BRO_WITH_TENSOR
+// bro.gpu (host_gpu.cpp): the runtime backend probe over brotensor/CPU fallback.
 Value makeBroGpuValue();
-#endif
 
 // Menu (host_menu.cpp)
 Value makeBroMenuValue();
@@ -874,6 +871,12 @@ Value makeBroMediaValue();
 
 // Codecs (host_codecs.cpp)
 Value makeBroImageValue();
+
+// Stubs for unavailable / compiled-out subsystems (host_bro_root.cpp)
+Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
+
+// Mic chunk draining (native_mic.cpp)
+void drainMicChunks();
 
 }  // namespace bro::bronze_host
 

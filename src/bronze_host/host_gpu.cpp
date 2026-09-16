@@ -161,6 +161,39 @@ Value makeBroGpuValue() {
     return gpu.get();
 }
 
+#else  // !BRO_WITH_TENSOR
+
+namespace bro::bronze_host {
+
+Value makeBroGpuValue() {
+    ObjectBuilder gpu;
+    gpu.accessor("available", [](Value, std::span<const Value>) {
+        return ev::fromBool(false);
+    }, nullptr);
+    gpu.accessor("backend", [](Value, std::span<const Value>) {
+        return ev::fromUtf8("cpu");
+    }, nullptr);
+    gpu.accessor("devices", [](Value, std::span<const Value>) {
+        return hostArrayOf(1, [](size_t) { return ev::fromUtf8("cpu"); });
+    }, nullptr);
+    gpu.accessor("compiledBackends", [](Value, std::span<const Value>) {
+        return hostArrayOf(1, [](size_t) { return ev::fromUtf8("cpu"); });
+    }, nullptr);
+    gpu.def("deviceCount", 1, [](Value, std::span<const Value>) {
+        return ev::fromDouble(1);
+    });
+    gpu.def("memoryInfo", 1, [](Value, std::span<const Value>) {
+        return ev::null();
+    });
+    gpu.def("deviceName", 1, [](Value, std::span<const Value>) {
+        return ev::null();
+    });
+    gpu.def("trim", 2, [](Value, std::span<const Value>) {
+        return ev::fromBool(false);
+    });
+    return gpu.get();
+}
+
 }  // namespace bro::bronze_host
 
 #endif  // BRO_WITH_TENSOR

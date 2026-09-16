@@ -213,6 +213,7 @@ void hostFrame(double dtMs) {
     ev::drainMicrotasks();                               // 6
     fireHostObserverFrame();                             // 6b
     deliverWebAnimationFinishEvents();
+    drainMicChunks();
     ev::drainMicrotasks();                               // 6c
     hostNotifyIdleFrame(dtMs);                           // 7
 }
@@ -825,26 +826,50 @@ void installWebHostGlobals(engine::Engine& engine) {
     // The sync factory BEFORE js/net.js, which mounts `bro.net.sync` from
     // `globalThis.__bro_net_sync` at its own load; the factory reads nothing
     // at load and binds to the primitives only when called.
+#if BRO_WITH_NET
     installNetSyncModule();
     installNetModule();
+#endif
+#if BRO_WITH_LM
     installLmModule();
+#endif
+#if BRO_WITH_SOUNDML
     installRaveModule();
+#endif
+#if BRO_WITH_DIFFUSION && BRO_WITH_LM
     installMotionModule();
+#endif
     installMicModule();
+#if BRO_WITH_SOUNDML
     installSenseModule();
     installGestureModule();
     installWakeModule();
     installKwsModule();
     installListenModule();
+#endif
+#if BRO_WITH_TRIPOSPLAT
     installTriposplatModule();
+#endif
+#if BRO_WITH_DIFFUSION
     installDiffusionModule();
+#endif
+#if BRO_WITH_VISION
     installVisionModule();
+#endif
+#if BRO_WITH_SOUNDML
     installDiarModule();
     installSttModule();
     installTtsModule();
+#endif
+#if BRO_WITH_FLORA
     installFloraModule();
+#endif
+#if BRO_WITH_TENSOR
     installTensorModule();
+#endif
+#if BRO_WITH_3D
     installImpostorModule();
+#endif
     // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use, and every name a module lists in

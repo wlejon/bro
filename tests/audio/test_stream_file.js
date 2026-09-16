@@ -98,7 +98,7 @@ assert(ctx.saveWav(wavPath, tone, 1, sr), 'wrote streaming fixture WAV');
     // Tiny ring (0.2 s): one 1.5 s virtual gulp must starve the worker.
     const id = ctx.createStreamFromFile(wavPath, { ringFrames: Math.floor(sr / 5) });
     assert(id >= 0, 'underrun stream created');
-    let st = waitForStats(id, s => s.bufferedFrames > 0);
+    let st = waitForStats(id, s => s.bufferedFrames >= Math.floor(sr / 10));
     assert(st, 'underrun stream prebuffered');
 
     sleep(1500);  // 1.5 s of virtual audio in one real instant

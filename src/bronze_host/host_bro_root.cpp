@@ -19,6 +19,7 @@
 // public objects from the natives.
 
 #include "bronze_host/host_internal.h"
+#include "bronze_host/gl_internal.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_window_open.h"
 #include "util/log.h"
@@ -140,6 +141,28 @@ void publish(const char* name, const ev::Persistent& root) {
 
 }  // namespace
 
+Value makeUnavailableNamespace(const std::string& name, const std::string& flag) {
+    ObjectBuilder base;
+    base.set("available", ev::fromBool(false));
+
+    HostProxyTraps traps;
+    traps.methods = base.get();
+    traps.get = [name, flag](const std::string& key, Value& out) -> bool {
+        std::string err = "bro." + name + " is unavailable: this build was compiled without " + flag;
+        out = ev::makeFunction([err](Value, std::span<const Value>) -> Value {
+            return ev::throwError(err.c_str());
+        }, 0);
+        return true;
+    };
+    traps.has = [](const std::string& key) -> bool {
+        return key == "available";
+    };
+    traps.ownKeys = []() -> std::vector<std::string> {
+        return { "available" };
+    };
+    return makeHostProxy(std::move(traps));
+}
+
 void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
     // the life of the process (host_internal.h, HostClass).
@@ -152,11 +175,11 @@ void installBroRoots(engine::Engine& engine) {
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
         makeRoot({"time", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
-                  "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
-                  "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm",
-                  "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
-                  "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                  "flora", "tensor"}));
+                   "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
+                   "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm",
+                   "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
+                   "triposplat", "diffusion", "vision", "diar", "stt", "tts",
+                   "flora", "tensor"}));
     auto* physicsRoot = new ev::Persistent(ev::createObject());
 #if BRO_WITH_3D
     {
@@ -182,12 +205,10 @@ void installBroRoots(engine::Engine& engine) {
         ev::Persistent text(makeBroTextValue());
         ev::setProperty(bro->get(), "text", text.get());
     }
-#if BRO_WITH_TENSOR
     {
         ev::Persistent gpu(makeBroGpuValue());
         ev::setProperty(bro->get(), "gpu", gpu.get());
     }
-#endif
     {
         ev::Persistent steam(makeBroSteamValue());
         ev::setProperty(bro->get(), "steam", steam.get());
@@ -200,6 +221,58 @@ void installBroRoots(engine::Engine& engine) {
         ev::Persistent media(makeBroMediaValue());
         ev::setProperty(bro->get(), "media", media.get());
     }
+
+    // Feature-gated unavailable namespace stubs (Proxy throwing on any call)
+    auto setUnavailable = [&](const char* name, const char* flag) {
+        ev::Persistent stub(makeUnavailableNamespace(name, flag));
+        ev::setProperty(bro->get(), name, stub.get());
+    };
+
+#if !BRO_WITH_VIDEO
+    setUnavailable("media", "BRO_WITH_VIDEO");
+#endif
+#if !BRO_WITH_NET
+    setUnavailable("net", "BRO_WITH_NET");
+#endif
+#if !BRO_WITH_FLORA
+    setUnavailable("flora", "BRO_WITH_FLORA");
+#endif
+#if !BRO_WITH_GAMEAI
+    setUnavailable("ai", "BRO_WITH_GAMEAI");
+#endif
+#if !BRO_WITH_3D
+    setUnavailable("gizmo", "BRO_WITH_3D");
+    setUnavailable("impostor", "BRO_WITH_3D");
+#endif
+#if !BRO_WITH_LM
+    setUnavailable("lm", "BRO_WITH_LM");
+#endif
+#if !BRO_WITH_SOUNDML
+    setUnavailable("stt", "BRO_WITH_SOUNDML");
+    setUnavailable("tts", "BRO_WITH_SOUNDML");
+    setUnavailable("diar", "BRO_WITH_SOUNDML");
+    setUnavailable("rave", "BRO_WITH_SOUNDML");
+    setUnavailable("wake", "BRO_WITH_SOUNDML");
+    setUnavailable("kws", "BRO_WITH_SOUNDML");
+    setUnavailable("sense", "BRO_WITH_SOUNDML");
+    setUnavailable("gesture", "BRO_WITH_SOUNDML");
+    setUnavailable("listen", "BRO_WITH_SOUNDML");
+#endif
+#if !BRO_WITH_VISION
+    setUnavailable("vision", "BRO_WITH_VISION");
+#endif
+#if !BRO_WITH_DIFFUSION
+    setUnavailable("diffusion", "BRO_WITH_DIFFUSION");
+#endif
+#if !BRO_WITH_TENSOR
+    setUnavailable("tensor", "BRO_WITH_TENSOR");
+#endif
+#if !BRO_WITH_TRIPOSPLAT
+    setUnavailable("triposplat", "BRO_WITH_TRIPOSPLAT");
+#endif
+#if !(BRO_WITH_DIFFUSION && BRO_WITH_LM)
+    setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
+#endif
     {
         // `bro.image` is ONE object with three sources: brokit's kernels
         // (which create it, now that `bro` is registered), the codecs
