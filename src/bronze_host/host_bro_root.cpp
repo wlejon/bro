@@ -43,6 +43,9 @@
 #if BRO_WITH_DIFFUSION
 #include <brodiffusion/api.h>
 #endif
+#if BRO_WITH_VISION
+#include <brovisionml/api.h>
+#endif
 
 #include <string>
 #include <vector>
@@ -230,6 +233,9 @@ void installBroRoots(engine::Engine& engine) {
 #endif
 #if BRO_WITH_DIFFUSION
     brodiffusion::api::installDiffusion();
+#endif
+#if BRO_WITH_VISION
+    brovisionml::api::installVision();
 #endif
     {
         ev::Persistent math(makeBroMathValue());

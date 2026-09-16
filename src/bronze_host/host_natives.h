@@ -110,7 +110,7 @@ inline bool registerKwsNatives(std::string*) { return true; }
 inline bool registerListenNatives(std::string*) { return true; }
 inline bool registerTriposplatNatives(std::string*) { return true; }
 inline bool registerDiffusionNatives(std::string*) { return true; }
-bool registerVisionNatives(std::string* error);
+inline bool registerVisionNatives(std::string*) { return true; }
 inline bool registerDiarNatives(std::string*) { return true; }
 inline bool registerSttNatives(std::string*) { return true; }
 inline bool registerTtsNatives(std::string*) { return true; }

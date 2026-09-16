@@ -36,6 +36,9 @@
 #if BRO_WITH_DIFFUSION
 #include <brodiffusion/api.h>
 #endif
+#if BRO_WITH_VISION
+#include <brovisionml/api.h>
+#endif
 
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
@@ -54,7 +57,6 @@ extern "C" void bro_gizmo_main();
 extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
 extern "C" void bro_motion_main();
-extern "C" void bro_vision_main();
 extern "C" void bro_impostor_main();
 
 namespace bro::bronze_host {
@@ -273,7 +275,9 @@ void installDiffusionModule() {
 }
 
 void installVisionModule() {
-    bronze::embed::runEntry(bro_vision_main);
+#if BRO_WITH_VISION
+    brovisionml::api::installVision();
+#endif
 }
 
 void installDiarModule() {

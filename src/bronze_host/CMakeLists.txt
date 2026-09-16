@@ -209,8 +209,6 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/dunder_bro/native_dunder_bro_register.cpp
     native_motion.cpp
     natives/motion/native_motion_register.cpp
-    native_vision.cpp
-    natives/vision/native_vision_register.cpp
     host_scene_agent.cpp
     host_math_classes.cpp
     host_math_funcs.cpp
@@ -369,6 +367,10 @@ if(BRO_WITH_DIFFUSION)
     target_link_libraries(bro_bronze_host PUBLIC brodiffusion_api)
 endif()
 
+if(BRO_WITH_VISION)
+    target_link_libraries(bro_bronze_host PUBLIC brovisionml_api)
+endif()
+
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()
@@ -485,7 +487,6 @@ else()
     bro_compile_js(animation  bro_animation_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(vision     bro_vision_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(impostor   bro_impostor_main)
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})
