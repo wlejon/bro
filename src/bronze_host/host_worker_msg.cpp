@@ -245,6 +245,15 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             ev::throwTypeError("postMessage: DOM Nodes are not cloneable");
             return false;
         }
+        // A native handle (Mesh, SceneNode, GpuTensor, ...) is a pointer into
+        // this realm's engine state. Its own properties are all on the
+        // prototype, so the generic path below would clone it as `{}` and the
+        // receiver would get an empty object where it expected the resource.
+        // (ImageBitmap is a handle too, but it was answered above.)
+        if (ev::handleData(val)) {
+            ev::throwTypeError("postMessage: native objects are not cloneable");
+            return false;
+        }
 
         if (flags == bronze::HeapKind::Map || flags == bronze::HeapKind::Set) {
             bool isMap = (flags == bronze::HeapKind::Map);

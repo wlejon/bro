@@ -9,7 +9,18 @@
     const fn = (obj, name, value) =>
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
-    const toU8 = (v) => v instanceof Uint8Array ? v : Uint8Array.from(v);
+    // A raw payload is bytes: any ArrayBufferView, an ArrayBuffer, or a string
+    // (UTF-8). `Uint8Array.from("text")` would coerce each character to NaN
+    // and send zeros, which is why strings are encoded explicitly.
+    const toU8 = (v) => {
+        if (v instanceof Uint8Array) return v;
+        if (ArrayBuffer.isView(v)) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+        if (v instanceof ArrayBuffer) return new Uint8Array(v);
+        if (typeof v === 'string') return new TextEncoder().encode(v);
+        if (v === null || v === undefined) return new Uint8Array(0);
+        if (typeof v === 'object' && typeof v[Symbol.iterator] === 'function') return Uint8Array.from(v);
+        return new TextEncoder().encode(String(v));
+    };
 
     // ---- bro.net -------------------------------------------------------------
     const ns_net = mount(bro, "net");
@@ -62,15 +73,18 @@
         return Array.from(__bro_native.net.peers());
     });
 
-    fn(ns_net, "send", function send(peerId, data, channel) {
+    // The third argument is `{reliable, channel, nodelay}`, a bare channel
+    // number, or the legacy boolean `reliable`; the native reads all three
+    // spellings (parseSendOptions, native_net.cpp).
+    fn(ns_net, "send", function send(peerId, data, options) {
         if (peerId === undefined) throw new TypeError("bro.net.send: peerId is required");
         if (data === undefined) throw new TypeError("bro.net.send: data is required");
-        __bro_native.net.send(peerId, toU8(data), channel === undefined ? 0 : channel);
+        __bro_native.net.sendRawOpts(peerId, toU8(data), options === undefined ? 0 : options);
     });
 
-    fn(ns_net, "broadcast", function broadcast(data, channel) {
+    fn(ns_net, "broadcast", function broadcast(data, options) {
         if (data === undefined) throw new TypeError("bro.net.broadcast: data is required");
-        __bro_native.net.broadcast(toU8(data), channel === undefined ? 0 : channel);
+        __bro_native.net.broadcastRawOpts(toU8(data), options === undefined ? 0 : options);
     });
 
     fn(ns_net, "sendClone", function sendClone(peerId, value, options) {

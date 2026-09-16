@@ -78,10 +78,13 @@ net::NetSubscriber* getNetSubscriber() {
                     m.data.assign(msg.data.begin() + kWireHeaderSize, msg.data.end());
                     payloadVal = deserializeMessage(m);
                 } else {
+                    // A raw payload arrives as an ArrayBuffer: it is what
+                    // distinguishes it from a clone (`data instanceof
+                    // ArrayBuffer`, net-sync's own test), and TextDecoder,
+                    // DataView and every typed-array constructor take it.
                     const uint8_t* payload = msg.data.data() + kWireHeaderSize;
                     size_t payloadLen = msg.data.size() - kWireHeaderSize;
-                    ev::Persistent ab(ev::createArrayBuffer(std::span<const uint8_t>(payload, payloadLen)));
-                    payloadVal = ev::createTypedArrayView(bronze::ElementKind::Uint8, ab.get(), 0, static_cast<uint32_t>(payloadLen));
+                    payloadVal = ev::createArrayBuffer(std::span<const uint8_t>(payload, payloadLen));
                 }
                 Value args[4] = {
                     ev::fromUtf8("message"),
@@ -125,38 +128,82 @@ bool bro_net_init() {
     return getNetSubscriber() != nullptr;
 }
 
+// The third argument of every send: `{reliable, channel, nodelay}`, a bare
+// channel number, or the legacy boolean `reliable`. Channels clamp to the
+// lane range rather than failing the send (docs/net-api.js). An array is a
+// postMessage transfer list, which nothing on the wire can honour: that is a
+// TypeError (and `false`) rather than an options bag with no fields, so the
+// caller learns the value was NOT sent.
+static bool parseSendOptions(uint64_t optsBits, net::SendOptions& opts, const char* who) {
+    opts = net::SendOptions{};
+    if (optsBits == 0) return true;
+    Value optVal = ev::fromBits(optsBits);
+    auto clampChannel = [](Value v) {
+        int ch = static_cast<int>(ev::toDouble(v));
+        if (ch < 0) ch = 0;
+        if (ch >= net::kNetLaneCount) ch = net::kNetLaneCount - 1;
+        return ch;
+    };
+    if (ev::isObject(optVal)) {
+        const auto* hdr = optVal.asObject<bronze::HeapObjectHeader>();
+        if (hdr && hdr->flags == bronze::HeapKind::Array) {
+            ev::throwTypeError(std::string(who) + ": transfer lists are not supported over the network");
+            return false;
+        }
+        Value relV = ev::getProperty(optVal, "reliable");
+        if (!ev::isUndefined(relV) && !ev::isNull(relV)) opts.reliable = ev::toBool(relV);
+        Value chanV = ev::getProperty(optVal, "channel");
+        if (!ev::isUndefined(chanV) && !ev::isNull(chanV)) opts.channel = clampChannel(chanV);
+        Value noDelayV = ev::getProperty(optVal, "nodelay");
+        if (!ev::isUndefined(noDelayV) && !ev::isNull(noDelayV)) opts.nodelay = ev::toBool(noDelayV);
+    } else if (ev::isNumber(optVal)) {
+        opts.channel = clampChannel(optVal);
+    } else if (ev::isBool(optVal)) {
+        opts.reliable = ev::toBool(optVal);
+    }
+    return true;
+}
+
+// Raw bytes with the full option set; the generated `send` / `broadcast`
+// natives carry only a channel, so js/net.js routes through these.
+bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
+    auto* sub = getNetSubscriber();
+    if (!sub || !data) return false;
+    net::SendOptions opts;
+    if (!parseSendOptions(optsBits, opts, "send")) return false;
+    std::vector<uint8_t> framed;
+    framed.reserve(kWireHeaderSize + data_len);
+    framed.push_back(kWireMagic);
+    framed.push_back(kWireRaw);
+    framed.insert(framed.end(), data, data + data_len);
+    sub->send(static_cast<uint32_t>(peerId), std::move(framed), opts);
+    return true;
+}
+
+void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
+    auto* sub = getNetSubscriber();
+    if (!sub || !data) return;
+    net::SendOptions opts;
+    if (!parseSendOptions(optsBits, opts, "broadcast")) return;
+    std::vector<uint8_t> framed;
+    framed.reserve(kWireHeaderSize + data_len);
+    framed.push_back(kWireMagic);
+    framed.push_back(kWireRaw);
+    framed.insert(framed.end(), data, data + data_len);
+    sub->broadcast(std::move(framed), opts);
+}
+
 bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub) return false;
     Value val = ev::fromBits(valBits);
     net::SendOptions opts;
-    if (optsBits != 0) {
-        Value optVal = ev::fromBits(optsBits);
-        if (ev::isObject(optVal)) {
-            Value relV = ev::getProperty(optVal, "reliable");
-            if (!ev::isUndefined(relV) && !ev::isNull(relV)) opts.reliable = ev::toBool(relV);
-            Value chanV = ev::getProperty(optVal, "channel");
-            if (!ev::isUndefined(chanV) && !ev::isNull(chanV)) {
-                int ch = static_cast<int>(ev::toDouble(chanV));
-                if (ch < 0) ch = 0;
-                if (ch >= net::kNetLaneCount) ch = net::kNetLaneCount - 1;
-                opts.channel = ch;
-            }
-            Value noDelayV = ev::getProperty(optVal, "nodelay");
-            if (!ev::isUndefined(noDelayV) && !ev::isNull(noDelayV)) opts.nodelay = ev::toBool(noDelayV);
-        } else if (ev::isNumber(optVal)) {
-            int ch = static_cast<int>(ev::toDouble(optVal));
-            if (ch < 0) ch = 0;
-            if (ch >= net::kNetLaneCount) ch = net::kNetLaneCount - 1;
-            opts.channel = ch;
-        } else if (ev::isBool(optVal)) {
-            opts.reliable = ev::toBool(optVal);
-        }
-    }
+    if (!parseSendOptions(optsBits, opts, "sendClone")) return false;
     std::vector<uint8_t> framed;
     Message msg;
     if (!serializeMessage(val, {}, msg)) {
-        ev::throwTypeError("sendClone: value is not cloneable");
+        // serializeMessage has already thrown the TypeError naming the
+        // offending value; a second throw would replace it with a vaguer one.
         return false;
     }
     if (!msg.transferredBuffers.empty() || !msg.transferredImages.empty()) {
@@ -176,35 +223,10 @@ void bro_net_broadcastCloneRaw(uint64_t valBits, uint64_t optsBits) {
     if (!sub) return;
     Value val = ev::fromBits(valBits);
     net::SendOptions opts;
-    if (optsBits != 0) {
-        Value optVal = ev::fromBits(optsBits);
-        if (ev::isObject(optVal)) {
-            Value relV = ev::getProperty(optVal, "reliable");
-            if (!ev::isUndefined(relV) && !ev::isNull(relV)) opts.reliable = ev::toBool(relV);
-            Value chanV = ev::getProperty(optVal, "channel");
-            if (!ev::isUndefined(chanV) && !ev::isNull(chanV)) {
-                int ch = static_cast<int>(ev::toDouble(chanV));
-                if (ch < 0) ch = 0;
-                if (ch >= net::kNetLaneCount) ch = net::kNetLaneCount - 1;
-                opts.channel = ch;
-            }
-            Value noDelayV = ev::getProperty(optVal, "nodelay");
-            if (!ev::isUndefined(noDelayV) && !ev::isNull(noDelayV)) opts.nodelay = ev::toBool(noDelayV);
-        } else if (ev::isNumber(optVal)) {
-            int ch = static_cast<int>(ev::toDouble(optVal));
-            if (ch < 0) ch = 0;
-            if (ch >= net::kNetLaneCount) ch = net::kNetLaneCount - 1;
-            opts.channel = ch;
-        } else if (ev::isBool(optVal)) {
-            opts.reliable = ev::toBool(optVal);
-        }
-    }
+    if (!parseSendOptions(optsBits, opts, "broadcastClone")) return;
     std::vector<uint8_t> framed;
     Message msg;
-    if (!serializeMessage(val, {}, msg)) {
-        ev::throwTypeError("broadcastClone: value is not cloneable");
-        return;
-    }
+    if (!serializeMessage(val, {}, msg)) return;  // it threw the TypeError
     if (!msg.transferredBuffers.empty() || !msg.transferredImages.empty()) {
         ev::throwTypeError("broadcastClone: cannot transfer buffers or images across network");
         return;
@@ -235,6 +257,12 @@ bool registerNetNatives(std::string* error) {
     if (!natives::fn("__bro_native.net.broadcastClone",
                        reinterpret_cast<void*>(&bro_net_broadcastCloneRaw),
                        "void", {"dynamic", "dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net.sendRawOpts",
+                       reinterpret_cast<void*>(&bro_net_sendRawOpts),
+                       "bool", {"i32", "u8[]", "dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net.broadcastRawOpts",
+                       reinterpret_cast<void*>(&bro_net_broadcastRawOpts),
+                       "void", {"u8[]", "dynamic"}, error)) return false;
     return true;
 }
 
