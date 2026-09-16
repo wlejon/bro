@@ -234,6 +234,7 @@ void installBroRoots(engine::Engine& engine) {
     // The mesh classes' prototypes onto `__bro_native.mesh`, now that the
     // constructors are registered (js/mesh.js chains them; host_natives.h).
     publishMeshPrototypes(native->get());
+    publishRiggingPrototypes(native->get());
     installSettingsObserver(engine);
     installBroCoreModule();
 }

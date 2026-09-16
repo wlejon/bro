@@ -123,6 +123,7 @@ void pollNet();
 // to chain under its public classes. `nativeRoot` is the `__bro_native`
 // object. A no-op without BRO_WITH_3D.
 void publishMeshPrototypes(bronze::Value nativeRoot);
+void publishRiggingPrototypes(bronze::Value nativeRoot);
 
 // Register the roots (`bro`, `__bro`, `__bro_native` with their namespace
 // objects), the natives, the engine-side hooks the callbacks ride on, and

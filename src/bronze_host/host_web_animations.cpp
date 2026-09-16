@@ -360,7 +360,11 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
 }
 
 void installWebAnimationGlobals() {
+#if BRO_WITH_3D
+    g_animationClass.init("WebAnimation", [](ObjectBuilder& b) {
+#else
     g_animationClass.init("Animation", [](ObjectBuilder& b) {
+#endif
         b.def("play", 0, [](Value self_, std::span<const Value>) {
             auto* st = static_cast<AnimationState*>(ev::handleData(self_));
             if (!st) return ev::undefined();
@@ -559,7 +563,9 @@ void installWebAnimationGlobals() {
             });
     });
 
+#if !BRO_WITH_3D
     ev::registerGlobal("Animation", g_animationClass.constructor());
+#endif
 }
 
 void decorateElementWebAnimations(ObjectBuilder& b) {

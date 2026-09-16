@@ -172,8 +172,8 @@ set(BRO_BRONZE_HOST_SOURCES
     native_mesh_analysis.cpp
     native_net.cpp
     natives/net/native_net_register.cpp
-    native_rigging.cpp
-    natives/rigging/native_rigging_register.cpp
+    native_rigging_core.cpp
+    native_rigging_anim.cpp
     native_physics_core.cpp
     native_physics_queries.cpp
     native_physics_character.cpp
@@ -301,6 +301,7 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/tts
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/flora
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/tensor
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/bromesh/third_party/tinygltf
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory

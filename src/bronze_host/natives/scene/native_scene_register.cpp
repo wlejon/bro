@@ -93,7 +93,7 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneNode_setScale", p(&bro_scene_SceneNode_setScale), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneNode_lookAt", p(&bro_scene_SceneNode_lookAt), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "f64[]", "f64[]"}, error) &&
         fn("__bro_native.scene.SceneNode_setSkeleton", p(&bro_scene_SceneNode_setSkeleton), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "__bro_native.rigging.Skeleton"}, error) &&
-        fn("__bro_native.scene.SceneNode_addClip", p(&bro_scene_SceneNode_addClip), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "str", "__bro_native.rigging.SkeletalAnimation"}, error) &&
+        fn("__bro_native.scene.SceneNode_addClip", p(&bro_scene_SceneNode_addClip), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "str", "__bro_native.rigging.Animation"}, error) &&
         fn("__bro_native.scene.SceneNode_addBlendSpace1D", p(&bro_scene_SceneNode_addBlendSpace1D), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "str", "str"}, error) &&
         fn("__bro_native.scene.SceneNode_addBlendSpace2D", p(&bro_scene_SceneNode_addBlendSpace2D), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "str", "str"}, error) &&
         fn("__bro_native.scene.SceneNode_setBlendPos", p(&bro_scene_SceneNode_setBlendPos), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneNode", "str", "f64", "bool", "f64"}, error) &&

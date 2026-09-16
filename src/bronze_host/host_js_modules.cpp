@@ -141,6 +141,8 @@ void installRiggingModule() {
     adoptGlobalProperty("SkinData");
     adoptGlobalProperty("Skeleton");
     adoptGlobalProperty("Pose");
+    adoptGlobalProperty("Animation");
+    adoptGlobalProperty("SkeletalAnimation");
     adoptGlobalProperty("RigSpec");
     adoptGlobalProperty("VoxelChunk");
     adoptGlobalProperty("IK");
