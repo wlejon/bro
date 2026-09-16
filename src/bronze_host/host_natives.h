@@ -126,6 +126,13 @@ inline void publishRiggingPrototypes(bronze::Value) {}
 // run js/bro_core.js on top. Called once from installWebHostGlobals.
 void installBroRoots(engine::Engine& engine);
 
+// Every sibling library's JS API (broaudio, brogameagent, bromesh,
+// brotensor, brolm, brosoundml, brodiffusion, brovisionml, broflora,
+// broimage), each installed exactly once, onto the roots installBroRoots
+// has just published. The ONLY place in bro that calls a sibling's
+// install*(); none of them survives a second call (host_sibling_apis.cpp).
+void installSiblingApis(engine::Engine& engine);
+
 // The engine hook bro.settings.onChange listens through (native_settings.cpp).
 void installSettingsObserver(engine::Engine& engine);
 

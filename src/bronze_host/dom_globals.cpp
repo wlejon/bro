@@ -32,9 +32,6 @@
 #if BRO_WITH_AUDIO
 #include <broaudio/api.h>
 #endif
-#if BRO_WITH_GAMEAI
-#include <brogameagent/api.h>
-#endif
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_globals_internal.h"
@@ -809,20 +806,23 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Rng / Smoother constructors, so they have to exist when the root is
     // assembled (host_math_funcs.cpp reads them off their HostClass).
     installMathGlobals();
-    // The `bro` / `__bro` roots, the natives under `__bro_native`, and
-    // js/bro_core.js over them (host_bro_root.cpp). Nothing before this
-    // point registers `bro`; a later `bro.*` namespace mounts onto the
-    // object this creates.
+    // The `bro` / `__bro` roots, the natives under `__bro_native`, every
+    // sibling library's API over them (bro.mesh, bro.lm, bro.stt, bro.tensor,
+    // AudioContext, AI, ... — host_sibling_apis.cpp, ONCE each), and
+    // js/bro_core.js on top (host_bro_root.cpp). Nothing before this point
+    // registers `bro`; a later `bro.*` namespace mounts onto the object this
+    // creates, and nothing after this point may call a sibling's install*().
     installBroRoots(engine);
     // bro.image.gpu (js/image_gpu.js) mounts onto the `bro.image` the roots
     // just built; it reads nothing else at load, so it goes here rather than
     // with the other compiled modules below.
     installImageGpuModule();
+    // bro's own compiled JavaScript (host_js_modules.cpp), after the roots
+    // and the siblings: every name a module lists in js/module.globals must
+    // already be registered when its entry runs (the roots, and the classes
+    // an earlier module of this family lifted), and a sibling class such as
+    // `Mesh` is read off globalThis at the point of use, never at load.
 #if BRO_WITH_3D
-    // bro.mesh, Mesh and MeshBVH (js/mesh.js over native_mesh.cpp): after
-    // the roots, whose `bro.mesh` and `__bro_native.mesh` it fills.
-    installMeshModule();
-    installRiggingModule();
     installPhysicsModule();
     installTerrainModule();
     installClipmapModule();
@@ -831,6 +831,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installGizmoModule();
     installAnimationModule();
     installSceneModule();
+    installImpostorModule();
 #endif
     // The sync factory BEFORE js/net.js, which mounts `bro.net.sync` from
     // `globalThis.__bro_net_sync` at its own load; the factory reads nothing
@@ -839,50 +840,11 @@ void installWebHostGlobals(engine::Engine& engine) {
     installNetSyncModule();
     installNetModule();
 #endif
-#if BRO_WITH_LM
-    installLmModule();
-#endif
-#if BRO_WITH_SOUNDML
-    installRaveModule();
-#endif
 #if BRO_WITH_DIFFUSION && BRO_WITH_LM
     installMotionModule();
 #endif
-    installMicModule();
-#if BRO_WITH_SOUNDML
-    installSenseModule();
-    installGestureModule();
-    installWakeModule();
-    installKwsModule();
-    installListenModule();
-#endif
-#if BRO_WITH_TRIPOSPLAT
-    installTriposplatModule();
-#endif
-#if BRO_WITH_DIFFUSION
-    installDiffusionModule();
-#endif
-#if BRO_WITH_VISION
-    installVisionModule();
-#endif
-#if BRO_WITH_SOUNDML
-    installDiarModule();
-    installSttModule();
-    installTtsModule();
-#endif
-#if BRO_WITH_FLORA
-    installFloraModule();
-#endif
-#if BRO_WITH_TENSOR
-    installTensorModule();
-#endif
-#if BRO_WITH_3D
-    installImpostorModule();
-#endif
-    // bro's own compiled JavaScript (host_js_modules.cpp), after brokit:
     // observers.js reads queueMicrotask, performance and getComputedStyle
-    // off globalThis at the point of use, and every name a module lists in
-    // js/module.globals must already be registered when its entry runs.
+    // off globalThis at the point of use.
     installObserversModule();
     installHeadlessGlobals(engine);
     installPlatformExtensions(engine);
@@ -890,13 +852,6 @@ void installWebHostGlobals(engine::Engine& engine) {
     installSelectionGlobals();
     installIntlGlobals();
     installWebAnimationGlobals();
-#if BRO_WITH_AUDIO
-    broaudio::api::installAudio();
-    broaudio::api::installMic();
-#endif
-#if BRO_WITH_GAMEAI
-    brogameagent::api::installGameAi();
-#endif
     installVideoGlobals();
     initHostCalleeNamer();
 

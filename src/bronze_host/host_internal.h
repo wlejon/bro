@@ -681,6 +681,12 @@ void installObserverHooks();
 // checkpoint. A no-op until the module has registered its callback.
 void fireHostObserverFrame();
 
+// Lift a value some compiled JS (or a sibling installer) ASSIGNED onto
+// `globalThis` into bronze's host-global registry, so a compiled read of the
+// bare name answers with the same object. A no-op for a name globalThis
+// lacks.
+void adoptGlobalProperty(const char* name);
+
 // Enter each compiled module and lift what it defined on globalThis into the
 // host-global registry: MutationObserver/ResizeObserver/IntersectionObserver
 // and their entry classes; the UI event classes (MouseEvent, KeyboardEvent,
@@ -695,12 +701,12 @@ void installImageGpuModule();
 // under __bro_native. Entered by installBroRoots (host_bro_root.cpp) after
 // the roots and natives are registered; lifts nothing.
 void installBroCoreModule();
-// js/mesh.js: the public Mesh / MeshBVH classes and bro.mesh.* over the
-// natives under __bro_native.mesh (native_mesh.cpp). Entered after
-// installBroRoots; lifts `Mesh` and `MeshBVH` into the host-global registry.
-void installMeshModule();
+// The 3D family (js/physics.js, terrain, clipmap, tile_world, lighting,
+// gizmo, animation, scene, impostor) and js/net.js / js/motion.js: each
+// enters its module after installBroRoots and lifts the classes it defined.
+// The sibling libraries' own APIs (bro.mesh, bro.lm, bro.stt, ...) are NOT
+// here: installSiblingApis (host_natives.h) installs each exactly once.
 void installNetModule();
-void installRiggingModule();
 void installPhysicsModule();
 void installTerrainModule();
 void installClipmapModule();
@@ -709,23 +715,7 @@ void installLightingModule();
 void installGizmoModule();
 void installAnimationModule();
 void installSceneModule();
-void installLmModule();
-void installRaveModule();
 void installMotionModule();
-void installMicModule();
-void installSenseModule();
-void installGestureModule();
-void installWakeModule();
-void installKwsModule();
-void installListenModule();
-void installTriposplatModule();
-void installDiffusionModule();
-void installVisionModule();
-void installDiarModule();
-void installSttModule();
-void installTtsModule();
-void installFloraModule();
-void installTensorModule();
 void installImpostorModule();
 
 inline Value makeFloat32Array(const float* data, size_t count) {

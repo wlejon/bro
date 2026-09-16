@@ -14,34 +14,15 @@
 //
 // Nothing here probes the filesystem for a .js at run time. The modules are
 // in the binary.
+//
+// The sibling libraries' APIs (bro.mesh, bro.lm, bro.stt, bro.tensor, ...)
+// are not entered from here: host_sibling_apis.cpp installs each of them
+// exactly once from installBroRoots. There is no per-subsystem shell for
+// them any more, because the shells were what called brosoundml's one
+// installer nine times.
 
 #include "bronze_host/host_internal.h"
 #include "embed/embed.h"
-
-#if BRO_WITH_AUDIO
-#include <broaudio/api.h>
-#endif
-#if BRO_WITH_FLORA
-#include <broflora/api/api.h>
-#endif
-#if BRO_WITH_TENSOR
-#include <brotensor/api.h>
-#endif
-#if BRO_WITH_LM
-#include <brolm/api.h>
-#endif
-#if BRO_WITH_SOUNDML
-#include <brosoundml/api.h>
-#endif
-#if BRO_WITH_DIFFUSION
-#include <brodiffusion/api.h>
-#endif
-#if BRO_WITH_VISION
-#include <brovisionml/api.h>
-#endif
-#if BRO_WITH_3D
-#include <bromesh/api.h>
-#endif
 
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
@@ -64,13 +45,6 @@ namespace bro::bronze_host {
 
 namespace {
 
-void adoptGlobalProperty(const char* name) {
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (!gt.found || !ev::isObject(gt.value)) return;
-    Value v = ev::getProperty(gt.value, name);
-    if (!ev::isUndefined(v)) ev::registerGlobal(name, v);
-}
-
 void mountImageGpu() {
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (!gt.found || !ev::isObject(gt.value)) return;
@@ -84,6 +58,13 @@ void mountImageGpu() {
 }
 
 }  // namespace
+
+void adoptGlobalProperty(const char* name) {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (!gt.found || !ev::isObject(gt.value)) return;
+    Value v = ev::getProperty(gt.value, name);
+    if (!ev::isUndefined(v)) ev::registerGlobal(name, v);
+}
 
 void installObserversModule() {
     // The module reads `__bro_observers` at its top level, so the hook object
@@ -130,37 +111,8 @@ void installBroCoreModule() {
     bronze::embed::runEntry(bro_core_main);
 }
 
-// mesh.js defines `Mesh` and `MeshBVH` on globalThis (and on bro.mesh); the
-// two classes are lifted so a compiled app's bare `Mesh` is a host global.
-// Compiled against the native manifest like bro_core.js.
-void installMeshModule() {
-#if BRO_WITH_3D
-    bromesh::api::installMesh();
-    adoptGlobalProperty("Mesh");
-    adoptGlobalProperty("MeshBVH");
-    adoptGlobalProperty("ProgressiveMesh");
-#endif
-}
-
 void installNetModule() {
     bronze::embed::runEntry(bro_net_main);
-}
-
-void installRiggingModule() {
-#if BRO_WITH_3D
-    bromesh::api::installRigging();
-    adoptGlobalProperty("SkinData");
-    adoptGlobalProperty("Skeleton");
-    adoptGlobalProperty("Joint");
-    adoptGlobalProperty("Pose");
-    adoptGlobalProperty("Animation");
-    adoptGlobalProperty("AnimationClip");
-    adoptGlobalProperty("SkeletalAnimation");
-    adoptGlobalProperty("RigSpec");
-    adoptGlobalProperty("VoxelChunk");
-    adoptGlobalProperty("IK");
-    adoptGlobalProperty("Rig");
-#endif
 }
 
 void installPhysicsModule() {
@@ -208,118 +160,12 @@ void installSceneModule() {
     adoptGlobalProperty("SceneGraph");
 }
 
-void installLmModule() {
-#if BRO_WITH_LM
-    brolm::api::installLM();
-    adoptGlobalProperty("AsyncHandle");
-    adoptGlobalProperty("QwenTokenizer");
-    adoptGlobalProperty("MistralTokenizer");
-    adoptGlobalProperty("GemmaTokenizer");
-    adoptGlobalProperty("LMModel");
-    adoptGlobalProperty("Qwen35Model");
-    adoptGlobalProperty("Qwen3VLModel");
-    adoptGlobalProperty("NllbModel");
-    adoptGlobalProperty("ClipModel");
-    adoptGlobalProperty("T5Model");
-#endif
-}
-
-void installRaveModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
 void installMotionModule() {
     bronze::embed::runEntry(bro_motion_main);
 }
 
-void installMicModule() {
-#if BRO_WITH_AUDIO
-    broaudio::api::installMic();
-#endif
-}
-
-void installSenseModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installGestureModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installWakeModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installKwsModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installListenModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installTriposplatModule() {
-#if BRO_WITH_DIFFUSION
-    brodiffusion::api::installDiffusion();
-#endif
-}
-
-void installDiffusionModule() {
-#if BRO_WITH_DIFFUSION
-    brodiffusion::api::installDiffusion();
-#endif
-}
-
-void installVisionModule() {
-#if BRO_WITH_VISION
-    brovisionml::api::installVision();
-#endif
-}
-
-void installDiarModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installSttModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installTtsModule() {
-#if BRO_WITH_SOUNDML
-    brosoundml::api::installSoundML();
-#endif
-}
-
-void installFloraModule() {
-#if BRO_WITH_FLORA
-    broflora::api::installFlora();
-    adoptGlobalProperty("FloraWorld");
-#endif
-}
-
-void installTensorModule() {
-#if BRO_WITH_TENSOR
-    brotensor::api::installTensor();
-    adoptGlobalProperty("GpuTensor");
-#endif
-}
-
+// impostor.js reads `Mesh` (bromesh's, installed with the roots) only when
+// an impostor is built, never at load.
 void installImpostorModule() {
     bronze::embed::runEntry(bro_impostor_main);
 }

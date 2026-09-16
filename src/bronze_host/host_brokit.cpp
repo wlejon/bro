@@ -109,13 +109,6 @@ void guardCreateObjectURL() {
     ev::setProperty(urlRoot.get(), "createObjectURL", guarded);
 }
 
-// Lift a value brokit's compiled JS assigned onto `globalThis` into the host
-// registry, so a compiled read of the bare name answers with the same object.
-void adoptGlobalProperty(const char* name) {
-    Value v = globalProperty(name);
-    if (!ev::isUndefined(v)) ev::registerGlobal(name, v);
-}
-
 void callTick(const ev::Persistent& slot, const char* name) {
     Value fn = slot.get();
     if (!ev::isFunction(fn)) return;
