@@ -106,6 +106,27 @@ bool slabHit(const bromath::AABB3& b, const bromath::Vec3& ro,
     return true;
 }
 
+// A particle colour from JSON: [r,g,b(,a)] or "#rrggbb", white otherwise.
+// A free function rather than a lambda inside createParticles3D because MSVC
+// gives a captureless lambda in an extern "C" function a C-linkage invoker,
+// which may not return a C++ class (C2526).
+bromath::Color particleColorFromJson(const nlohmann::json& v) {
+    if (v.is_array() && v.size() >= 3) {
+        float a = v.size() >= 4 ? v[3].get<float>() : 1.0f;
+        return {v[0].get<float>(), v[1].get<float>(), v[2].get<float>(), a};
+    }
+    if (v.is_string()) {
+        std::string s = v.get<std::string>();
+        if (!s.empty() && s[0] == '#' && s.size() == 7) {
+            int r = std::stoi(s.substr(1, 2), nullptr, 16);
+            int g = std::stoi(s.substr(3, 2), nullptr, 16);
+            int b = std::stoi(s.substr(5, 2), nullptr, 16);
+            return {r / 255.0f, g / 255.0f, b / 255.0f, 1.0f};
+        }
+    }
+    return {1.0f, 1.0f, 1.0f, 1.0f};
+}
+
 }  // namespace
 
 }  // namespace bro::bronze_host
@@ -924,22 +945,7 @@ void* bro_scene_SceneGraph_createParticles3D(void* self, const char* jsonOpts) {
                 if (sh.contains("radius") && sh["radius"].is_number()) node->setShapeRadius(sh["radius"].get<float>());
             }
             if (j.contains("color") && j["color"].is_object()) {
-                auto parseC = [](const nlohmann::json& v) -> bromath::Color {
-                    if (v.is_array() && v.size() >= 3) {
-                        float a = v.size() >= 4 ? v[3].get<float>() : 1.0f;
-                        return {v[0].get<float>(), v[1].get<float>(), v[2].get<float>(), a};
-                    }
-                    if (v.is_string()) {
-                        std::string s = v.get<std::string>();
-                        if (!s.empty() && s[0] == '#' && s.size() == 7) {
-                            int r = std::stoi(s.substr(1, 2), nullptr, 16);
-                            int g = std::stoi(s.substr(3, 2), nullptr, 16);
-                            int b = std::stoi(s.substr(5, 2), nullptr, 16);
-                            return {r / 255.0f, g / 255.0f, b / 255.0f, 1.0f};
-                        }
-                    }
-                    return {1.0f, 1.0f, 1.0f, 1.0f};
-                };
+                const auto& parseC = bro::bronze_host::particleColorFromJson;
                 const auto& c = j["color"];
                 bromath::Color st = c.contains("start") ? parseC(c["start"]) : bromath::Color{1,1,1,1};
                 bromath::Color en = c.contains("end") ? parseC(c["end"]) : st;

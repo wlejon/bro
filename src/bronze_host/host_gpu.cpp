@@ -161,6 +161,8 @@ Value makeBroGpuValue() {
     return gpu.get();
 }
 
+}  // namespace bro::bronze_host
+
 #else  // !BRO_WITH_TENSOR
 
 namespace bro::bronze_host {
