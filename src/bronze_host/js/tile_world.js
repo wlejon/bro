@@ -176,9 +176,12 @@
         if (startY === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.findPath: startY is required");
         if (endX === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.findPath: endX is required");
         if (endY === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.findPath: endY is required");
-        const d_opts = opts === undefined ? {} : opts;
-        __bro_native.tile_world.TileWorld_findPath(this, startX, startY, endX, endY, d_opts.agentRadius !== undefined, d_opts.agentRadius === undefined ? 0 : d_opts.agentRadius, d_opts.allowDiagonal !== undefined, d_opts.allowDiagonal === undefined ? false : d_opts.allowDiagonal, d_opts.maxSlope !== undefined, d_opts.maxSlope === undefined ? 0 : d_opts.maxSlope);
-        return { reachable: __bro_native.tile_world.TileWorld_findPath_reachable(), path: JSON.parse(__bro_native.tile_world.TileWorld_findPath_path()), totalCost: __bro_native.tile_world.TileWorld_findPath_totalCost() };
+        __bro_native.tile_world.TileWorld_findPathJson(this, startX, startY, endX, endY, opts ? JSON.stringify(opts) : "{}");
+        const raw = JSON.parse(__bro_native.tile_world.TileWorld_findPath_path() || "[]");
+        const path = raw.map(p => Array.isArray(p) ? { x: p[0], y: p[1] } : p);
+        path.reachable = __bro_native.tile_world.TileWorld_findPath_reachable();
+        path.totalCost = __bro_native.tile_world.TileWorld_findPath_totalCost();
+        return path;
     });
     fn(TileWorld.prototype, "computeRegions", function computeRegions(layer) {
         if (layer === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.computeRegions: layer is required");
@@ -244,13 +247,70 @@
         return this;
     });
     fn(TileWorld.prototype, "save", function save() {
-        return bufferOf(__bro_native.tile_world.TileWorld_save(this));
+        const buf = bufferOf(__bro_native.tile_world.TileWorld_save(this));
+        return new Uint8Array(buf);
     });
     fn(TileWorld.prototype, "load", function load(data) {
         if (data === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.load: data is required");
         return __bro_native.tile_world.TileWorld_load(this, bytesOf(data));
     });
+    fn(TileWorld.prototype, "setShade", function setShade(x, y, v) {
+        __bro_native.tile_world.TileWorld_setShade(this, x, y, v);
+    });
+    fn(TileWorld.prototype, "fillShade", function fillShade(x0, y0, x1, y1, v) {
+        __bro_native.tile_world.TileWorld_fillShade(this, x0, y0, x1, y1, v);
+    });
+    fn(TileWorld.prototype, "setShadeMap", function setShadeMap(values) {
+        if (!values) return;
+        if (values instanceof Float32Array) {
+            __bro_native.tile_world.TileWorld_setShadeMapFloat(this, values);
+        } else if (values instanceof Uint8Array) {
+            __bro_native.tile_world.TileWorld_setShadeMapBytes(this, values);
+        } else if (Array.isArray(values)) {
+            __bro_native.tile_world.TileWorld_setShadeMapFloat(this, new Float32Array(values));
+        }
+    });
+    fn(TileWorld.prototype, "getShade", function getShade(x, y) {
+        return __bro_native.tile_world.TileWorld_getShade(this, x, y);
+    });
+    fn(TileWorld.prototype, "distanceField", function distanceField(sources, opts) {
+        const srcJson = Array.isArray(sources) ? JSON.stringify(sources) : (sources ? JSON.stringify([sources]) : "[]");
+        const optsJson = opts ? JSON.stringify(opts) : "";
+        const s = __bro_native.tile_world.TileWorld_distanceField(this, srcJson, optsJson);
+        const arr = s ? JSON.parse(s) : [];
+        return (opts && opts.costs) ? Float32Array.from(arr) : Int32Array.from(arr);
+    });
+    fn(TileWorld.prototype, "floodFill", function floodFill(seedX, seedY, opts) {
+        const optsJson = opts ? JSON.stringify(opts) : "";
+        const s = __bro_native.tile_world.TileWorld_floodFill(this, seedX, seedY, optsJson);
+        return s ? JSON.parse(s) : [];
+    });
+    fn(TileWorld.prototype, "components", function components(opts) {
+        const optsJson = opts ? JSON.stringify(opts) : "";
+        const s = __bro_native.tile_world.TileWorld_components(this, optsJson);
+        return s ? JSON.parse(s) : [];
+    });
+    fn(TileWorld.prototype, "cellDistance", function cellDistance(ax, ay, bx, by, conn) {
+        return __bro_native.tile_world.TileWorld_cellDistance(this, ax, ay, bx, by, conn ? String(conn) : "");
+    });
+    fn(TileWorld.prototype, "cellRing", function cellRing(cx, cy, radius, conn) {
+        const s = __bro_native.tile_world.TileWorld_cellRing(this, cx, cy, radius, conn ? String(conn) : "");
+        return s ? JSON.parse(s) : [];
+    });
+    fn(TileWorld.prototype, "cellsInRange", function cellsInRange(cx, cy, radius, conn) {
+        const s = __bro_native.tile_world.TileWorld_cellsInRange(this, cx, cy, radius, conn ? String(conn) : "");
+        return s ? JSON.parse(s) : [];
+    });
+    fn(TileWorld.prototype, "cellLine", function cellLine(ax, ay, bx, by) {
+        const s = __bro_native.tile_world.TileWorld_cellLine(this, ax, ay, bx, by);
+        return s ? JSON.parse(s) : [];
+    });
+    fn(TileWorld.prototype, "cellNeighbors", function cellNeighbors(cx, cy, conn) {
+        const s = __bro_native.tile_world.TileWorld_cellNeighbors(this, cx, cy, conn ? String(conn) : "");
+        return s ? JSON.parse(s) : [];
+    });
     fn(TileWorld.prototype, "destroy", function destroy() {
         __bro_native.tile_world.TileWorld_destroy(this);
     });
 })();
+

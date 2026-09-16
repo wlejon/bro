@@ -13,6 +13,7 @@
     const EMPTY_F32 = new Float32Array(0);
     const EMPTY_U32 = new Uint32Array(0);
     const EMPTY_F64 = new Float64Array(0);
+    const EMPTY_U8 = new Uint8Array(0);
 
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
     const toF32 = (v) => v instanceof Float32Array ? v : Float32Array.from(v);
@@ -175,9 +176,32 @@
         return __bro_native.rigging.Pose_clone(this);
     });
 
-    fn(Pose, "blend", function blend(a, b, weight) {
+    fn(Pose, "blend", function blend(a, b, weight, mask) {
         if (!a || !b) throw new TypeError("Pose.blend: two Pose instances required");
-        __bro_native.rigging.Pose_blend(a, b, weight);
+        const m = (mask instanceof Uint8Array) ? mask : (Array.isArray(mask) ? new Uint8Array(mask) : EMPTY_U8);
+        __bro_native.rigging.Pose_blend(a, b, weight, m);
+        return a;
+    });
+
+    fn(Pose, "blendN", function blendN(poses, weights, mask) {
+        if (!Array.isArray(poses) || poses.length === 0) {
+            throw new TypeError("Pose.blendN: poses array required");
+        }
+        const n = poses.length;
+        const w = (weights instanceof Float32Array) ? weights : new Float32Array(weights);
+        if (w.length !== n) {
+            throw new TypeError("Pose.blendN: weights must match poses length");
+        }
+        const singleLen = (poses[0] && poses[0].data) ? poses[0].data.length : 0;
+        const allData = new Float32Array(n * singleLen);
+        for (let i = 0; i < n; i++) {
+            const p = poses[i];
+            const pData = (p && p.data) ? p.data : EMPTY_F32;
+            allData.set(pData, i * singleLen);
+        }
+        const m = (mask instanceof Uint8Array) ? mask : (Array.isArray(mask) ? new Uint8Array(mask) : EMPTY_U8);
+        const outData = __bro_native.rigging.Pose_blendN(allData, n, w, m);
+        return new Pose(outData);
     });
 
     // ---- bro.rigging.Animation & SkeletalAnimation ---------------------------

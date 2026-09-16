@@ -269,8 +269,34 @@ void* poseClone(void* self) {
     return new bromesh::Pose(P(self));
 }
 
-void poseBlend(void* a, void* b, double weight) {
-    bromesh::blendPoses(P(a), P(b), static_cast<float>(weight));
+void poseBlend(void* a, void* b, double weight, const uint8_t* mask, uint32_t mask_len) {
+    const uint8_t* maskPtr = (mask && mask_len > 0) ? mask : nullptr;
+    bromesh::blendPoses(P(a), P(b), static_cast<float>(weight), maskPtr);
+}
+
+void poseBlendN(const float* allPosesData, uint32_t allPosesLen,
+                int32_t poseCount,
+                const float* weights, uint32_t weightsLen,
+                const uint8_t* mask, uint32_t maskLen,
+                bronze_native_buffer* out) {
+    static thread_local std::vector<float> tl_blendNOut;
+    if (poseCount <= 0 || !allPosesData || allPosesLen == 0 || !weights || weightsLen == 0) {
+        tl_blendNOut.clear();
+        copyOut(tl_blendNOut, out);
+        return;
+    }
+    size_t poseFloats = allPosesLen / static_cast<size_t>(poseCount);
+    std::vector<bromesh::Pose> poses(poseCount);
+    std::vector<const bromesh::Pose*> posePtrs(poseCount);
+    for (int32_t i = 0; i < poseCount; ++i) {
+        poses[i].data.assign(allPosesData + i * poseFloats, allPosesData + (i + 1) * poseFloats);
+        posePtrs[i] = &poses[i];
+    }
+    bromesh::Pose outPose;
+    const uint8_t* maskPtr = (mask && maskLen > 0) ? mask : nullptr;
+    bromesh::blendPosesN(posePtrs.data(), weights, static_cast<size_t>(poseCount), outPose, maskPtr);
+    tl_blendNOut = std::move(outPose.data);
+    copyOut(tl_blendNOut, out);
 }
 
 // --- VoxelChunk -------------------------------------------------------------
@@ -373,7 +399,8 @@ bool registerRiggingCoreNatives(std::string* error) {
         fn("__bro_native.rigging.Pose_computeSkinningMatrices", p(&poseComputeSkinningMatrices), "f32[]", {kPose, kSkeleton}, error) &&
         fn("__bro_native.rigging.Pose_socketWorld", p(&poseSocketWorld), "f32[]", {kPose, kSkeleton, "str"}, error) &&
         fn("__bro_native.rigging.Pose_clone", p(&poseClone), kPose, {kPose}, error) &&
-        fn("__bro_native.rigging.Pose_blend", p(&poseBlend), "void", {kPose, kPose, "f64"}, error) &&
+        fn("__bro_native.rigging.Pose_blend", p(&poseBlend), "void", {kPose, kPose, "f64", "u8[]"}, error) &&
+        fn("__bro_native.rigging.Pose_blendN", p(&poseBlendN), "f32[]", {"f32[]", "i32", "f32[]", "u8[]"}, error) &&
 
         // VoxelChunk methods
         fn("__bro_native.rigging.VoxelChunk_sizeX_get", p(&voxelChunkSizeX), "f64", {kVoxelChunk}, error) &&

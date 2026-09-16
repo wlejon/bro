@@ -579,6 +579,11 @@ void bro_scene_SceneGraph_setActiveCamera(void* self, void* camera) {
     if (g) g->setActiveCamera(cam);
 }
 
+void bro_scene_SceneGraph_clearActiveCamera(void* self) {
+    auto* g = graphOf(self);
+    if (g) g->setActiveCamera(nullptr);
+}
+
 void bro_scene_SceneGraph_setToneMap(void* self, bool opts_mode_given, const char* opts_mode,
                                     bool opts_exposure_given, double opts_exposure,
                                     bool opts_whitePoint_given, double opts_whitePoint) {
@@ -665,7 +670,7 @@ void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* o
     float hFalloff = opts_heightFalloff_given ? static_cast<float>(opts_heightFalloff) : 0.0f;
     float h = opts_height_given ? static_cast<float>(opts_height) : 0.0f;
     g->setFog(start, end, r, gr, b);
-    g->setFogExp(density, hFalloff, h);
+    g->setFogExp(density, hFalloff, start);
 }
 
 void bro_scene_SceneGraph_setAtmosphere(void* self, const double* opts_rayleigh, uint32_t opts_rayleigh_len,
@@ -741,14 +746,35 @@ double bro_scene_SceneGraph_canvasWidth(void* self);
 double bro_scene_SceneGraph_canvasHeight(void* self);
 void bro_scene_SceneGraph_setCanvasSize(void* self, double w, double h);
 void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* out);
-void* bro_scene_SceneGraph_createMesh(void* self, const char* jsonOpts, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createSkinnedMesh(void* self, const char* jsonOpts, uint64_t meshHandle, uint64_t skinDataHandle, uint64_t skeletonHandle);
+void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
+void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createInstancedMesh(void* self, const char* jsonOpts, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createPhysicsNode(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createParticles3D(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createGaussianSplat(void* self, const char* jsonOpts);
+void bro_scene_SceneNode_setSkeleton(void* self, uint64_t skelVal);
+void bro_scene_SceneNode_addClip(void* self, const char* name, uint64_t clipVal);
+void bro_scene_SceneNode_addBlendSpace1D(void* self, const char* name, const char* jsonPoints);
+void bro_scene_SceneNode_addBlendSpace2D(void* self, const char* name, const char* jsonPoints);
+void bro_scene_SceneNode_setBlendPos(void* self, const char* name, double x, bool hasY, double y);
+void bro_scene_SceneNode_playLayer(void* self, int32_t layerIndex, const char* clipName, const char* jsonOpts);
+void bro_scene_SceneNode_stopLayer(void* self, int32_t layerIndex, bool hasFade, double fadeTime);
+void bro_scene_SceneNode_setLayerWeight(void* self, int32_t layerIndex, double weight);
+void bro_scene_SceneNode_addStateMachine(void* self, const char* jsonDef);
+void bro_scene_SceneNode_travel(void* self, const char* targetState);
+void bro_scene_SceneNode_setRootMotion(void* self, const char* jsonOpts);
+const char* bro_scene_SceneNode_consumeRootMotion(void* self);
+void bro_scene_SceneNode_play(void* self, const char* clipName, const char* jsonOpts);
+void bro_scene_SceneNode_stop(void* self, const char* jsonOpts);
+void bro_scene_SceneNode_pause(void* self);
+void bro_scene_SceneNode_resume(void* self);
+int32_t bro_scene_SceneNode_setSkinningMatrices(void* self, uint64_t matsBits);
+uint64_t bro_scene_SceneNode_getBoneWorldMatrix(void* self, uint64_t argBits);
+const char* bro_scene_SceneNode_blendState(void* self);
+void bro_scene_SceneNode_onAnimationFinished_set(void* self, uint64_t cbBits);
+void bro_scene_SceneNode_onStateChanged_set(void* self, uint64_t cbBits);
 const char* bro_scene_SceneNode_type_get(void* self);
 const char* bro_scene_SceneNode_kind_get(void* self);
 int32_t bro_scene_SceneNode_childCount_get(void* self);
@@ -803,8 +829,8 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneGraph_canvasHeight", (void*)&bro_scene_SceneGraph_canvasHeight, "f64", {"__bro_native.scene.SceneGraph"}, error) &&
            fn("__bro_native.scene.SceneGraph_setCanvasSize", (void*)&bro_scene_SceneGraph_setCanvasSize, "void", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
            fn("__bro_native.scene.SceneGraph_readTonemapPixels", (void*)&bro_scene_SceneGraph_readTonemapPixels, "u8[]", {"__bro_native.scene.SceneGraph"}, error) &&
-           fn("__bro_native.scene.SceneGraph_createMesh", (void*)&bro_scene_SceneGraph_createMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str", "dynamic"}, error) &&
-           fn("__bro_native.scene.SceneGraph_createSkinnedMesh", (void*)&bro_scene_SceneGraph_createSkinnedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str", "dynamic", "dynamic", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneGraph_createMesh", (void*)&bro_scene_SceneGraph_createMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneGraph_createSkinnedMesh", (void*)&bro_scene_SceneGraph_createSkinnedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            fn("__bro_native.scene.SceneGraph_createInstancedMesh", (void*)&bro_scene_SceneGraph_createInstancedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str", "dynamic"}, error) &&
            fn("__bro_native.scene.SceneGraph_createShape", (void*)&bro_scene_SceneGraph_createShape, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
            fn("__bro_native.scene.SceneGraph_createSprite", (void*)&bro_scene_SceneGraph_createSprite, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
@@ -843,7 +869,60 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_cascadeCount_get", (void*)&bro_scene_SceneNode_cascadeCount_get, "i32", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_cascadeCount_set", (void*)&bro_scene_SceneNode_cascadeCount_set, "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
            fn("__bro_native.scene.SceneNode_cascadeSplitLambda_get", (void*)&bro_scene_SceneNode_cascadeSplitLambda_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
-           fn("__bro_native.scene.SceneNode_cascadeSplitLambda_set", (void*)&bro_scene_SceneNode_cascadeSplitLambda_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error);
+           fn("__bro_native.scene.SceneNode_cascadeSplitLambda_set", (void*)&bro_scene_SceneNode_cascadeSplitLambda_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_setSkeleton", (void*)&bro_scene_SceneNode_setSkeleton, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneNode_addClip", (void*)&bro_scene_SceneNode_addClip, "void", {"__bro_native.scene.SceneNode", "str", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneNode_addBlendSpace1D", (void*)&bro_scene_SceneNode_addBlendSpace1D, "void", {"__bro_native.scene.SceneNode", "str", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_addBlendSpace2D", (void*)&bro_scene_SceneNode_addBlendSpace2D, "void", {"__bro_native.scene.SceneNode", "str", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_setBlendPos", (void*)&bro_scene_SceneNode_setBlendPos, "void", {"__bro_native.scene.SceneNode", "str", "f64", "bool", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_playLayer", (void*)&bro_scene_SceneNode_playLayer, "void", {"__bro_native.scene.SceneNode", "i32", "str", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_stopLayer", (void*)&bro_scene_SceneNode_stopLayer, "void", {"__bro_native.scene.SceneNode", "i32", "bool", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_setLayerWeight", (void*)&bro_scene_SceneNode_setLayerWeight, "void", {"__bro_native.scene.SceneNode", "i32", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_addStateMachine", (void*)&bro_scene_SceneNode_addStateMachine, "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_travel", (void*)&bro_scene_SceneNode_travel, "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_setRootMotion", (void*)&bro_scene_SceneNode_setRootMotion, "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_consumeRootMotion", (void*)&bro_scene_SceneNode_consumeRootMotion, "str", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_play", (void*)&bro_scene_SceneNode_play, "void", {"__bro_native.scene.SceneNode", "str", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_stop", (void*)&bro_scene_SceneNode_stop, "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_pause", (void*)&bro_scene_SceneNode_pause, "void", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_resume", (void*)&bro_scene_SceneNode_resume, "void", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_setSkinningMatrices", (void*)&bro_scene_SceneNode_setSkinningMatrices, "i32", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneNode_getBoneWorldMatrix", (void*)&bro_scene_SceneNode_getBoneWorldMatrix, "dynamic", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneNode_blendState", (void*)&bro_scene_SceneNode_blendState, "str", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_onAnimationFinished_set", (void*)&bro_scene_SceneNode_onAnimationFinished_set, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneNode_onStateChanged_set", (void*)&bro_scene_SceneNode_onStateChanged_set, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneGraph_clearActiveCamera", (void*)&bro_scene_SceneGraph_clearActiveCamera, "void", {"__bro_native.scene.SceneGraph"}, error) &&
+           fn("__bro_native.scene.SceneNode_hasShader", (void*)&bro_scene_SceneNode_hasShader, "bool", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_setShader", (void*)&bro_scene_SceneNode_setShader, "str", {"__bro_native.scene.SceneNode", "str", "str", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_clearShader", (void*)&bro_scene_SceneNode_clearShader, "void", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_setShaderUniform", (void*)&bro_scene_SceneNode_setShaderUniform, "void", {"__bro_native.scene.SceneNode", "str", "f64[]"}, error) &&
+           fn("__bro_native.scene.SceneNode_setLodMeshes", (void*)&bro_scene_SceneNode_setLodMeshes, "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_lodCount", (void*)&bro_scene_SceneNode_lodCount, "i32", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_lodLevel", (void*)&bro_scene_SceneNode_lodLevel, "i32", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_visibilityRange_set", (void*)&bro_scene_SceneNode_visibilityRange_set, "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_visibilityRange_clear", (void*)&bro_scene_SceneNode_visibilityRange_clear, "void", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_visibilityRange_get", (void*)&bro_scene_SceneNode_visibilityRange_get, "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneGraph_isValid", (void*)&bro_scene_SceneGraph_isValid, "bool", {"__bro_native.scene.SceneGraph"}, error) &&
+           fn("__bro_native.scene.SceneNode_setBaseColorTextureFromScene", (void*)&bro_scene_SceneNode_setBaseColorTextureFromScene, "void", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneGraph"}, error) &&
+           fn("__bro_native.scene.SceneGraph_raycast_instance", (void*)&bro_scene_SceneGraph_raycast_instance, "i32", {}, error) &&
+           fn("__bro_native.scene.SceneGraph_cullStatsJson", (void*)&bro_scene_SceneGraph_cullStatsJson, "str", {"__bro_native.scene.SceneGraph"}, error) &&
+           fn("__bro_native.scene.SceneNode_setInstances", (void*)&bro_scene_SceneNode_setInstances, "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
+           fn("__bro_native.scene.SceneNode_setInstancesFromTransforms", (void*)&bro_scene_SceneNode_setInstancesFromTransforms, "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
+           fn("__bro_native.scene.SceneNode_instanceCount_get", (void*)&bro_scene_SceneNode_instanceCount_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_updateMode_get", (void*)&bro_scene_SceneNode_updateMode_get, "str", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_updateMode_set", (void*)&bro_scene_SceneNode_updateMode_set, "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_resolution_get", (void*)&bro_scene_SceneNode_resolution_get, "i32", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_resolution_set", (void*)&bro_scene_SceneNode_resolution_set, "void", {"__bro_native.scene.SceneNode", "i32"}, error) &&
+           fn("__bro_native.scene.SceneNode_boxProjection_get", (void*)&bro_scene_SceneNode_boxProjection_get, "bool", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_boxProjection_set", (void*)&bro_scene_SceneNode_boxProjection_set, "void", {"__bro_native.scene.SceneNode", "bool"}, error) &&
+           fn("__bro_native.scene.SceneNode_cullMargin_get", (void*)&bro_scene_SceneNode_cullMargin_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_cullMargin_set", (void*)&bro_scene_SceneNode_cullMargin_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_splatCount_get", (void*)&bro_scene_SceneNode_splatCount_get, "i32", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_setCloud", (void*)&bro_scene_SceneNode_setCloud, "void", {"__bro_native.scene.SceneNode", "f32[]", "f32[]", "f32[]", "f32[]", "f32[]", "i32"}, error) &&
+           fn("__bro_native.scene.SceneNode_loadSplatPly", (void*)&bro_scene_SceneNode_loadSplatPly, "bool", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_worldAnchor_get", (void*)&bro_scene_SceneNode_worldAnchor_get, "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
+           fn("__bro_native.scene.SceneNode_worldAnchor_set", (void*)&bro_scene_SceneNode_worldAnchor_set, "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
+           registerSceneShaderNatives(error);
 }
 
 }  // namespace bro::bronze_host

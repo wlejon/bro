@@ -469,6 +469,7 @@ bool registerRiggingAnimNatives(std::string* error) {
     const bool ok =
         // Animation
         ctor(kAnimation, p(&animNew), &animDelete, bronze::runtime::Finalize::InSweep, {"str"}, error) &&
+        ctor("__bro_native.rigging.SkeletalAnimation", p(&animNew), &animDelete, bronze::runtime::Finalize::InSweep, {"str"}, error) &&
         fn("__bro_native.rigging.Animation_name_get", p(&animNameGet), "str", {kAnimation}, error) &&
         fn("__bro_native.rigging.Animation_name_set", p(&animNameSet), "void", {kAnimation, "str"}, error) &&
         fn("__bro_native.rigging.Animation_duration_get", p(&animDurationGet), "f64", {kAnimation}, error) &&

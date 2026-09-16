@@ -238,4 +238,8 @@
     fn(ReflectionProbeNode.prototype, "probeCapture", function probeCapture() {
         __bro_native.lighting.ReflectionProbeNode_probeCapture(this);
     });
+    fn(ReflectionProbeNode.prototype, "capture", function capture() {
+        __bro_native.lighting.ReflectionProbeNode_probeCapture(this);
+    });
 })();
+

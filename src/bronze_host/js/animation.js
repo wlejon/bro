@@ -25,7 +25,8 @@
         if (duration === undefined) throw new TypeError("bro.animation.Tween.prototype.to: duration is required");
         let onUpdate = 0;
         if (opts && typeof opts.onUpdate === 'function') onUpdate = opts.onUpdate;
-        __bro_native.animation.Tween_to(this, target || null, props || {}, +duration, opts || {}, onUpdate);
+        const targetId = (target && typeof target.id === 'number') ? target.id : 0;
+        __bro_native.animation.Tween_to(this, targetId, props || {}, +duration, opts || {}, onUpdate);
         return this;
     });
     fn(Tween.prototype, "parallel", function parallel() {

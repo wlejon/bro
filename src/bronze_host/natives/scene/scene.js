@@ -8,12 +8,28 @@
 // identifiers are listed in module.globals beside it.
 //
 // [manual] members (no native, installed by hand-written JS after this module):
+//   bro.scene.SceneNode.prototype.localToWorld
+//   bro.scene.SceneNode.prototype.worldToLocal
 //   bro.scene.SceneNode.prototype.setMaterial
+//   bro.scene.SceneNode.prototype.setSkeleton
+//   bro.scene.SceneNode.prototype.addClip
 //   bro.scene.SceneNode.prototype.getBoneWorldMatrix
+//   bro.scene.SceneNode.prototype.addBlendSpace1D
+//   bro.scene.SceneNode.prototype.addBlendSpace2D
+//   bro.scene.SceneNode.prototype.setBlendPos
 //   bro.scene.SceneNode.prototype.blendState
+//   bro.scene.SceneNode.prototype.playLayer
+//   bro.scene.SceneNode.prototype.stopLayer
+//   bro.scene.SceneNode.prototype.setLayerWeight
 //   bro.scene.SceneNode.prototype.addStateMachine
+//   bro.scene.SceneNode.prototype.travel
+//   bro.scene.SceneNode.prototype.setRootMotion
 //   bro.scene.SceneNode.prototype.consumeRootMotion
 //   bro.scene.SceneNode.prototype.play
+//   bro.scene.SceneNode.prototype.stop
+//   bro.scene.SceneNode.prototype.pause
+//   bro.scene.SceneNode.prototype.resume
+//   bro.scene.SceneNode.prototype.setSkinningMatrices
 //   bro.scene.SceneGraph.prototype.createShape
 //   bro.scene.SceneGraph.prototype.createSprite
 //   bro.scene.SceneGraph.prototype.createPhysicsNode
@@ -72,6 +88,27 @@
         function (v) {
             __bro_native.scene.SceneNode_visible_set(this, v);
         });
+    accessor(SceneNode.prototype, "x",
+        function () {
+            return __bro_native.scene.SceneNode_x_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_x_set(this, v);
+        });
+    accessor(SceneNode.prototype, "y",
+        function () {
+            return __bro_native.scene.SceneNode_y_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_y_set(this, v);
+        });
+    accessor(SceneNode.prototype, "z",
+        function () {
+            return __bro_native.scene.SceneNode_z_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_z_set(this, v);
+        });
     accessor(SceneNode.prototype, "position",
         function () {
             return Array.from(__bro_native.scene.SceneNode_position_get(this));
@@ -86,12 +123,103 @@
         function (v) {
             __bro_native.scene.SceneNode_rotation_set(this, toF64(v));
         });
+    accessor(SceneNode.prototype, "rotationX",
+        function () {
+            return __bro_native.scene.SceneNode_rotationX_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_rotationX_set(this, v);
+        });
+    accessor(SceneNode.prototype, "rotationY",
+        function () {
+            return __bro_native.scene.SceneNode_rotationY_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_rotationY_set(this, v);
+        });
+    accessor(SceneNode.prototype, "rotationZ",
+        function () {
+            return __bro_native.scene.SceneNode_rotationZ_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_rotationZ_set(this, v);
+        });
     accessor(SceneNode.prototype, "scale",
         function () {
             return Array.from(__bro_native.scene.SceneNode_scale_get(this));
         },
         function (v) {
             __bro_native.scene.SceneNode_scale_set(this, toF64(v));
+        });
+    accessor(SceneNode.prototype, "scaleX",
+        function () {
+            return __bro_native.scene.SceneNode_scaleX_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_scaleX_set(this, v);
+        });
+    accessor(SceneNode.prototype, "scaleY",
+        function () {
+            return __bro_native.scene.SceneNode_scaleY_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_scaleY_set(this, v);
+        });
+    accessor(SceneNode.prototype, "scaleZ",
+        function () {
+            return __bro_native.scene.SceneNode_scaleZ_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_scaleZ_set(this, v);
+        });
+    accessor(SceneNode.prototype, "quaternion",
+        function () {
+            return Array.from(__bro_native.scene.SceneNode_quaternion_get(this));
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_quaternion_set(this, toF64(v));
+        });
+    accessor(SceneNode.prototype, "fov",
+        function () {
+            return __bro_native.scene.SceneNode_fov_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_fov_set(this, v);
+        });
+    accessor(SceneNode.prototype, "near",
+        function () {
+            return __bro_native.scene.SceneNode_near_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_near_set(this, v);
+        });
+    accessor(SceneNode.prototype, "far",
+        function () {
+            return __bro_native.scene.SceneNode_far_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_far_set(this, v);
+        });
+    accessor(SceneNode.prototype, "aspect",
+        function () {
+            return __bro_native.scene.SceneNode_aspect_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_aspect_set(this, v);
+        });
+    accessor(SceneNode.prototype, "orthoHeight",
+        function () {
+            return __bro_native.scene.SceneNode_orthoHeight_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_orthoHeight_set(this, v);
+        });
+    accessor(SceneNode.prototype, "projection",
+        function () {
+            return __bro_native.scene.SceneNode_projection_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_projection_set(this, v);
         });
     accessor(SceneNode.prototype, "worldPosition",
         function () {
@@ -155,74 +283,94 @@
         if (target === undefined) throw new TypeError("bro.scene.SceneNode.prototype.lookAt: target is required");
         return __bro_native.scene.SceneNode_lookAt(this, toF64(target), up === undefined ? EMPTY_F64 : toF64(up));
     });
+    // [manual] bro.scene.SceneNode.prototype.localToWorld: operation (x, y, z) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.worldToLocal: operation (x, y, z) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
     // [manual] bro.scene.SceneNode.prototype.setMaterial: operation (mat) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
-    fn(SceneNode.prototype, "setSkeleton", function setSkeleton(skeleton) {
-        if (skeleton === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setSkeleton: skeleton is required");
-        return __bro_native.scene.SceneNode_setSkeleton(this, skeleton);
-    });
-    fn(SceneNode.prototype, "addClip", function addClip(name, anim) {
-        if (name === undefined) throw new TypeError("bro.scene.SceneNode.prototype.addClip: name is required");
-        if (anim === undefined) throw new TypeError("bro.scene.SceneNode.prototype.addClip: anim is required");
-        return __bro_native.scene.SceneNode_addClip(this, name, anim);
-    });
+    // [manual] bro.scene.SceneNode.prototype.setSkeleton: operation (skeleton) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.addClip: operation (name, anim) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
     // [manual] bro.scene.SceneNode.prototype.getBoneWorldMatrix: operation (nameOrIndex) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
-    fn(SceneNode.prototype, "addBlendSpace1D", function addBlendSpace1D(name, clips) {
-        if (name === undefined) throw new TypeError("bro.scene.SceneNode.prototype.addBlendSpace1D: name is required");
-        if (clips === undefined) throw new TypeError("bro.scene.SceneNode.prototype.addBlendSpace1D: clips is required");
-        return __bro_native.scene.SceneNode_addBlendSpace1D(this, name, JSON.stringify(clips));
-    });
-    fn(SceneNode.prototype, "addBlendSpace2D", function addBlendSpace2D(name, clips) {
-        if (name === undefined) throw new TypeError("bro.scene.SceneNode.prototype.addBlendSpace2D: name is required");
-        if (clips === undefined) throw new TypeError("bro.scene.SceneNode.prototype.addBlendSpace2D: clips is required");
-        return __bro_native.scene.SceneNode_addBlendSpace2D(this, name, JSON.stringify(clips));
-    });
-    fn(SceneNode.prototype, "setBlendPos", function setBlendPos(name, x, y) {
-        if (name === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setBlendPos: name is required");
-        if (x === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setBlendPos: x is required");
-        return __bro_native.scene.SceneNode_setBlendPos(this, name, x, y !== undefined, y === undefined ? 0 : y);
-    });
+    // [manual] bro.scene.SceneNode.prototype.addBlendSpace1D: operation (name, clips) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.addBlendSpace2D: operation (name, clips) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.setBlendPos: operation (name, x, y) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
     // [manual] bro.scene.SceneNode.prototype.blendState: operation (name) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
-    fn(SceneNode.prototype, "playLayer", function playLayer(layer, clipName, weight, fadeTime) {
-        if (layer === undefined) throw new TypeError("bro.scene.SceneNode.prototype.playLayer: layer is required");
-        if (clipName === undefined) throw new TypeError("bro.scene.SceneNode.prototype.playLayer: clipName is required");
-        return __bro_native.scene.SceneNode_playLayer(this, layer, clipName, weight !== undefined, weight === undefined ? 0 : weight, fadeTime !== undefined, fadeTime === undefined ? 0 : fadeTime);
-    });
-    fn(SceneNode.prototype, "stopLayer", function stopLayer(layer, fadeTime) {
-        if (layer === undefined) throw new TypeError("bro.scene.SceneNode.prototype.stopLayer: layer is required");
-        return __bro_native.scene.SceneNode_stopLayer(this, layer, fadeTime !== undefined, fadeTime === undefined ? 0 : fadeTime);
-    });
-    fn(SceneNode.prototype, "setLayerWeight", function setLayerWeight(layer, weight) {
-        if (layer === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setLayerWeight: layer is required");
-        if (weight === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setLayerWeight: weight is required");
-        return __bro_native.scene.SceneNode_setLayerWeight(this, layer, weight);
-    });
-    // [manual] bro.scene.SceneNode.prototype.addStateMachine: operation (name, def) — no native is generated; hand-written JS
+    // [manual] bro.scene.SceneNode.prototype.playLayer: operation (layer, clipName, opts) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
-    fn(SceneNode.prototype, "travel", function travel(name, targetState) {
-        if (name === undefined) throw new TypeError("bro.scene.SceneNode.prototype.travel: name is required");
-        if (targetState === undefined) throw new TypeError("bro.scene.SceneNode.prototype.travel: targetState is required");
-        return __bro_native.scene.SceneNode_travel(this, name, targetState);
-    });
-    fn(SceneNode.prototype, "setRootMotion", function setRootMotion(enabled) {
-        if (enabled === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setRootMotion: enabled is required");
-        return __bro_native.scene.SceneNode_setRootMotion(this, enabled);
-    });
+    // [manual] bro.scene.SceneNode.prototype.stopLayer: operation (layer, fadeTime) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.setLayerWeight: operation (layer, weight) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.addStateMachine: operation (nameOrDef, def) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.travel: operation (name, targetState) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.setRootMotion: operation (enabledOrOpts) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
     // [manual] bro.scene.SceneNode.prototype.consumeRootMotion: operation () — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
     // [manual] bro.scene.SceneNode.prototype.play: operation (clipName, opts) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
-    fn(SceneNode.prototype, "stop", function stop() {
-        return __bro_native.scene.SceneNode_stop(this);
-    });
-    fn(SceneNode.prototype, "pause", function pause() {
-        return __bro_native.scene.SceneNode_pause(this);
-    });
-    fn(SceneNode.prototype, "resume", function resume() {
-        return __bro_native.scene.SceneNode_resume(this);
-    });
+    // [manual] bro.scene.SceneNode.prototype.stop: operation (opts) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.pause: operation () — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.resume: operation () — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.setSkinningMatrices: operation (matrices) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    accessor(SceneNode.prototype, "boneCount",
+        function () {
+            return __bro_native.scene.SceneNode_boneCount_get(this);
+        },
+        undefined);
+    accessor(SceneNode.prototype, "skinReady",
+        function () {
+            return __bro_native.scene.SceneNode_skinReady_get(this);
+        },
+        undefined);
+    accessor(SceneNode.prototype, "isPlaying",
+        function () {
+            return __bro_native.scene.SceneNode_isPlaying_get(this);
+        },
+        undefined);
+    accessor(SceneNode.prototype, "currentAnimation",
+        function () {
+            return __bro_native.scene.SceneNode_currentAnimation_get(this);
+        },
+        undefined);
+    accessor(SceneNode.prototype, "animationDuration",
+        function () {
+            return __bro_native.scene.SceneNode_animationDuration_get(this);
+        },
+        undefined);
+    accessor(SceneNode.prototype, "animationTime",
+        function () {
+            return __bro_native.scene.SceneNode_animationTime_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_animationTime_set(this, v);
+        });
+    accessor(SceneNode.prototype, "animationSpeed",
+        function () {
+            return __bro_native.scene.SceneNode_animationSpeed_get(this);
+        },
+        function (v) {
+            __bro_native.scene.SceneNode_animationSpeed_set(this, v);
+        });
+    accessor(SceneNode.prototype, "state",
+        function () {
+            return __bro_native.scene.SceneNode_state_get(this);
+        },
+        undefined);
     fn(SceneNode.prototype, "setInstanceTransform", function setInstanceTransform(index, matrix) {
         if (index === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setInstanceTransform: index is required");
         if (matrix === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setInstanceTransform: matrix is required");

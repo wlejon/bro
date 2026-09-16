@@ -184,11 +184,13 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/physics/native_physics_register.cpp
     native_scene_nodes.cpp
     native_scene_lights.cpp
+    native_scene_shaders.cpp
     native_scene_core.cpp
     native_scene_env.cpp
     native_scene_terrain.cpp
     native_scene_clipmap.cpp
     native_scene_tile.cpp
+    native_scene_tile_ops.cpp
     native_scene_lighting.cpp
     native_scene_anim.cpp
     native_scene_clip.cpp

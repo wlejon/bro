@@ -187,6 +187,21 @@ class SceneNode {
   visible;
 
   /**
+   * @type {number}
+   */
+  x;
+
+  /**
+   * @type {number}
+   */
+  y;
+
+  /**
+   * @type {number}
+   */
+  z;
+
+  /**
    * @type {Array<number>}
    */
   position;
@@ -197,9 +212,74 @@ class SceneNode {
   rotation;
 
   /**
+   * @type {number}
+   */
+  rotationX;
+
+  /**
+   * @type {number}
+   */
+  rotationY;
+
+  /**
+   * @type {number}
+   */
+  rotationZ;
+
+  /**
    * @type {Array<number>}
    */
   scale;
+
+  /**
+   * @type {number}
+   */
+  scaleX;
+
+  /**
+   * @type {number}
+   */
+  scaleY;
+
+  /**
+   * @type {number}
+   */
+  scaleZ;
+
+  /**
+   * @type {Array<number>}
+   */
+  quaternion;
+
+  /**
+   * @type {number}
+   */
+  fov;
+
+  /**
+   * @type {number}
+   */
+  near;
+
+  /**
+   * @type {number}
+   */
+  far;
+
+  /**
+   * @type {number}
+   */
+  aspect;
+
+  /**
+   * @type {number}
+   */
+  orthoHeight;
+
+  /**
+   * @type {string}
+   */
+  projection;
 
   /**
    * @readonly
@@ -224,6 +304,52 @@ class SceneNode {
    * @type {Array<SceneNode>}
    */
   children;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  boneCount;
+
+  /**
+   * @readonly
+   * @type {boolean}
+   */
+  skinReady;
+
+  /**
+   * @readonly
+   * @type {boolean}
+   */
+  isPlaying;
+
+  /**
+   * @readonly
+   * @type {string}
+   */
+  currentAnimation;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  animationDuration;
+
+  /**
+   * @type {number}
+   */
+  animationTime;
+
+  /**
+   * @type {number}
+   */
+  animationSpeed;
+
+  /**
+   * @readonly
+   * @type {string}
+   */
+  state;
 
   /**
    * @param {SceneNode} child
@@ -282,6 +408,22 @@ class SceneNode {
   lookAt(target, up) {}
 
   /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} [z]
+   * @returns {Object}
+   */
+  localToWorld(x, y, z) {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} [z]
+   * @returns {Object}
+   */
+  worldToLocal(x, y, z) {}
+
+  /**
    * @param {Object} mat
    * @returns {SceneNode}
    */
@@ -295,7 +437,7 @@ class SceneNode {
 
   /**
    * @param {string} name
-   * @param {SkeletalAnimation} anim
+   * @param {*} anim
    * @returns {SceneNode}
    */
   addClip(name, anim) {}
@@ -329,7 +471,7 @@ class SceneNode {
   setBlendPos(name, x, y) {}
 
   /**
-   * @param {string} name
+   * @param {string} [name]
    * @returns {Object|null}
    */
   blendState(name) {}
@@ -337,11 +479,10 @@ class SceneNode {
   /**
    * @param {number} layer
    * @param {string} clipName
-   * @param {number} [weight]
-   * @param {number} [fadeTime]
+   * @param {Object} [opts]
    * @returns {SceneNode}
    */
-  playLayer(layer, clipName, weight, fadeTime) {}
+  playLayer(layer, clipName, opts) {}
 
   /**
    * @param {number} layer
@@ -358,24 +499,24 @@ class SceneNode {
   setLayerWeight(layer, weight) {}
 
   /**
-   * @param {string} name
-   * @param {AnimStateMachineDef} def
+   * @param {*} nameOrDef
+   * @param {AnimStateMachineDef} [def]
    * @returns {SceneNode}
    */
-  addStateMachine(name, def) {}
+  addStateMachine(nameOrDef, def) {}
 
   /**
    * @param {string} name
-   * @param {string} targetState
+   * @param {string} [targetState]
    * @returns {boolean}
    */
   travel(name, targetState) {}
 
   /**
-   * @param {boolean} enabled
+   * @param {*} enabledOrOpts
    * @returns {SceneNode}
    */
-  setRootMotion(enabled) {}
+  setRootMotion(enabledOrOpts) {}
 
   /**
    * @returns {Object}
@@ -390,9 +531,10 @@ class SceneNode {
   play(clipName, opts) {}
 
   /**
+   * @param {Object} [opts]
    * @returns {SceneNode}
    */
-  stop() {}
+  stop(opts) {}
 
   /**
    * @returns {SceneNode}
@@ -403,6 +545,12 @@ class SceneNode {
    * @returns {SceneNode}
    */
   resume() {}
+
+  /**
+   * @param {Float32Array} matrices
+   * @returns {number}
+   */
+  setSkinningMatrices(matrices) {}
 
   /**
    * @param {number} index

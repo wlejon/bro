@@ -99,8 +99,12 @@ static void parseHexColor(std::string_view s, float (&out)[4]) {
 
 }  // namespace
 
+extern "C" const char* bro_gizmo_hovered_get(void);
+
 bool registerGizmoNatives(std::string* error) {
-    return registerNatives_gizmo(error);
+    if (!registerNatives_gizmo(error)) return false;
+    using namespace natives;
+    return getter("__bro_native.gizmo.hovered", (void*)&bro_gizmo_hovered_get, "str", error);
 }
 
 }  // namespace bro::bronze_host
@@ -108,6 +112,22 @@ bool registerGizmoNatives(std::string* error) {
 extern "C" {
 
 using namespace bro::bronze_host;
+
+const char* bro_gizmo_hovered_get(void) {
+    auto* e = hostEngine();
+    if (!e) return "";
+    switch (e->gizmo().hovered()) {
+        case engine::GizmoAxis::X: return "x";
+        case engine::GizmoAxis::Y: return "y";
+        case engine::GizmoAxis::Z: return "z";
+        case engine::GizmoAxis::XY: return "xy";
+        case engine::GizmoAxis::YZ: return "yz";
+        case engine::GizmoAxis::XZ: return "xz";
+        case engine::GizmoAxis::View: return "view";
+        case engine::GizmoAxis::Center: return "center";
+        default: return "";
+    }
+}
 
 bool bro_gizmo_visible_get(void) {
     auto* e = hostEngine();

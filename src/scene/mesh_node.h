@@ -117,6 +117,7 @@ public:
 
     void setColor(float r, float g, float b, float a = 1.0f) {
         color_[0] = r; color_[1] = g; color_[2] = b; color_[3] = a;
+        emissiveColor_[0] = r; emissiveColor_[1] = g; emissiveColor_[2] = b;
     }
     const float* color() const { return color_; }
 

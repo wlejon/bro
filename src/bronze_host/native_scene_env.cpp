@@ -3,6 +3,7 @@
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
 #include "natives/scene/native_scene_decl.h"
+#include "scene/animation_player.h"
 #include "engine/scene_audio_sync.h"
 #include "util/asset_path.h"
 #include <bromesh/analysis/raycast.h>
@@ -10,6 +11,7 @@
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/manipulation/normals.h>
 #include <glad/gl.h>
+#include <json.hpp>
 
 namespace bro::bronze_host {
 
@@ -21,6 +23,7 @@ struct RaycastSlot {
     bromath::Vec3 point{0, 0, 0};
     bromath::Vec3 normal{0, 1, 0};
     double distance = 0.0;
+    int32_t instance = -1;
 };
 static thread_local RaycastSlot tl_raycastSlot;
 
@@ -156,10 +159,10 @@ void bro_scene_SceneGraph_setSSR(void* self, bool opts_maxDistance_given, double
     auto* g = graphOf(self);
     if (!g) return;
     bool enabled = opts_maxDistance_given || opts_thickness_given || opts_stepCount_given || opts_roughnessCutoff_given;
-    float maxDist = opts_maxDistance_given ? static_cast<float>(opts_maxDistance) : 20.0f;
-    int steps = opts_stepCount_given ? opts_stepCount : 32;
-    float thick = opts_thickness_given ? static_cast<float>(opts_thickness) : 0.1f;
-    float edgeFade = opts_roughnessCutoff_given ? static_cast<float>(opts_roughnessCutoff) : 0.1f;
+    float maxDist = opts_maxDistance_given ? static_cast<float>(opts_maxDistance) : 30.0f;
+    int steps = opts_stepCount_given ? opts_stepCount : 48;
+    float thick = opts_thickness_given ? static_cast<float>(opts_thickness) : 0.3f;
+    float edgeFade = opts_roughnessCutoff_given ? static_cast<float>(opts_roughnessCutoff) : 0.05f;
     g->setSSR(enabled, maxDist, steps, thick, 1.0f, edgeFade);
 }
 
@@ -176,16 +179,15 @@ void bro_scene_SceneGraph_setDepthOfField(void* self, bool opts_focusDistance_gi
     g->setDepthOfField(enabled, focus, range, maxBlur);
 }
 
-void bro_scene_SceneGraph_setColorLUT(void* self, bool opts_texture_given, const char* opts_texture,
-                                     bool opts_intensity_given, double opts_intensity) {
+bool bro_scene_SceneGraph_setColorLUT(void* self, const char* path, int32_t size, double amount) {
     auto* g = graphOf(self);
-    if (!g) return;
-    if (opts_texture_given && opts_texture && opts_texture[0] != '\0') {
-        std::string tex = bro::util::resolveAssetPath(opts_texture);
-        float inten = opts_intensity_given ? static_cast<float>(opts_intensity) : 1.0f;
-        g->loadColorLUT(tex, 32, inten);
+    if (!g) return false;
+    if (path && path[0] != '\0') {
+        std::string tex = bro::util::resolveAssetPath(path);
+        return g->loadColorLUT(tex, size, static_cast<float>(amount));
     } else {
         g->clearColorLUT();
+        return true;
     }
 }
 
@@ -256,6 +258,38 @@ int32_t bro_scene_SceneGraph_cullStats_culledNodes(void) {
     return tl_cullStatsSlot.culledNodes;
 }
 
+const char* bro_scene_SceneGraph_cullStatsJson(void* self) {
+    auto* g = graphOf(self);
+    static thread_local std::string tl_cullJson;
+    if (!g) return "{}";
+    const auto& s = g->cullStats();
+    int rendered = s.meshDrawn + s.instancedDrawn + s.splatDrawn + s.particlesDrawn + s.billboardsDrawn + s.decalsDrawn;
+    int culled = s.meshCulled + s.instancedCulled + s.splatCulled + s.particlesCulled + s.billboardsCulled + s.decalsCulled;
+    nlohmann::json j;
+    j["totalNodes"] = rendered + culled;
+    j["renderedNodes"] = rendered;
+    j["culledNodes"] = culled;
+    j["meshDrawn"] = s.meshDrawn;
+    j["meshCulled"] = s.meshCulled;
+    j["instancedDrawn"] = s.instancedDrawn;
+    j["instancedCulled"] = s.instancedCulled;
+    j["splatDrawn"] = s.splatDrawn;
+    j["splatCulled"] = s.splatCulled;
+    j["particlesDrawn"] = s.particlesDrawn;
+    j["particlesCulled"] = s.particlesCulled;
+    j["billboardsDrawn"] = s.billboardsDrawn;
+    j["billboardsCulled"] = s.billboardsCulled;
+    j["decalsDrawn"] = s.decalsDrawn;
+    j["decalsCulled"] = s.decalsCulled;
+    j["shadowDrawn"] = s.shadowDrawn;
+    j["shadowCulled"] = s.shadowCulled;
+    j["shadowTilesTotal"] = s.shadowTilesTotal;
+    j["shadowTilesRendered"] = s.shadowTilesRendered;
+    j["shadowTilesCached"] = s.shadowTilesCached;
+    tl_cullJson = j.dump();
+    return tl_cullJson.c_str();
+}
+
 void bro_scene_SceneGraph_clear(void* self) {
     auto* g = graphOf(self);
     if (!g) return;
@@ -282,7 +316,7 @@ bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t ori
     if (bromath::vlen2(d) < 1e-12f) return false;
 
     float closestDist = 1e30f;
-    scene::MeshNode* closestNode = nullptr;
+    scene::SceneNode* closestNode = nullptr;
     bromath::Vec3 closestWorldPoint;
     bromath::Vec3 closestWorldNormal;
 
@@ -314,16 +348,39 @@ bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t ori
         return true;
     };
 
+    int32_t closestInstance = -1;
     g->root()->traverse([&](scene::SceneNode* node) {
-        if (!node || node->type() != scene::SceneNode::Type::Mesh || !node->visible()) return;
-        auto* mn = static_cast<scene::MeshNode*>(node);
-        const bromesh::MeshData& md = mn->mesh();
-        if (md.positions.empty() || md.indices.empty()) return;
-        auto bvhOf = [&]() -> const bromesh::MeshBVH& { return mn->bvh(); };
-        if (tryMesh(pickFrameOf(node->worldMatrix()), md, mn->localBounds(), bvhOf)) {
-            closestNode = mn;
+        if (!node || !node->visible()) return;
+        if (node->type() == scene::SceneNode::Type::Mesh) {
+            auto* mn = static_cast<scene::MeshNode*>(node);
+            const bromesh::MeshData& md = mn->mesh();
+            if (md.positions.empty() || md.indices.empty()) return;
+            auto bvhOf = [&]() -> const bromesh::MeshBVH& { return mn->bvh(); };
+            if (tryMesh(pickFrameOf(node->worldMatrix()), md, mn->localBounds(), bvhOf)) {
+                closestNode = mn;
+                closestInstance = -1;
+            }
+        } else if (node->type() == scene::SceneNode::Type::InstancedMesh) {
+            auto* im = static_cast<scene::InstancedMeshNode*>(node);
+            const bromesh::MeshData& md = im->mesh();
+            if (md.positions.empty() || md.indices.empty() || im->instanceCount() == 0) return;
+            auto bvhOf = [&]() -> const bromesh::MeshBVH& { return im->bvh(); };
+            for (size_t i = 0; i < im->instanceCount(); ++i) {
+                float rows[12];
+                if (!im->instanceRows(i, rows)) continue;
+                bromath::Mat4 instLocal = bromath::midentity();
+                instLocal.at(0, 0) = rows[0]; instLocal.at(0, 1) = rows[1]; instLocal.at(0, 2) = rows[2]; instLocal.at(0, 3) = rows[3];
+                instLocal.at(1, 0) = rows[4]; instLocal.at(1, 1) = rows[5]; instLocal.at(1, 2) = rows[6]; instLocal.at(1, 3) = rows[7];
+                instLocal.at(2, 0) = rows[8]; instLocal.at(2, 1) = rows[9]; instLocal.at(2, 2) = rows[10]; instLocal.at(2, 3) = rows[11];
+                bromath::Mat4 instWorld = bromath::mmul(node->worldMatrix(), instLocal);
+                if (tryMesh(pickFrameOf(instWorld), md, im->localBounds(), bvhOf)) {
+                    closestNode = im;
+                    closestInstance = static_cast<int32_t>(i);
+                }
+            }
         }
     });
+
 
     if (closestNode) {
         tl_raycastSlot.node = closestNode;
@@ -331,6 +388,7 @@ bool bro_scene_SceneGraph_raycast(void* self, const double* origin, uint32_t ori
         tl_raycastSlot.point = closestWorldPoint;
         tl_raycastSlot.normal = closestWorldNormal;
         tl_raycastSlot.distance = closestDist;
+        tl_raycastSlot.instance = closestInstance;
         return true;
     }
     return false;
@@ -356,6 +414,10 @@ void bro_scene_SceneGraph_raycast_normal(bronze_native_buffer* out) {
 
 double bro_scene_SceneGraph_raycast_distance(void) {
     return tl_raycastSlot.distance;
+}
+
+int32_t bro_scene_SceneGraph_raycast_instance(void) {
+    return tl_raycastSlot.instance;
 }
 
 void bro_scene_SceneGraph_unprojectLocal(void* self, void* node, const double* screenPoint, uint32_t screenPoint_len, bronze_native_buffer* out) {
@@ -432,7 +494,7 @@ void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* ou
     copyBuffer(tl_tonemapPixels.data(), static_cast<uint32_t>(tl_tonemapPixels.size()), out);
 }
 
-void* bro_scene_SceneGraph_createMesh(void* self, const char* jsonOpts, uint64_t meshVal) {
+void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshVal) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
 
@@ -443,69 +505,106 @@ void* bro_scene_SceneGraph_createMesh(void* self, const char* jsonOpts, uint64_t
     bromesh::MeshData meshData;
     void* ptr = bronze::embed::handleData(bronze::Value{meshVal});
     if (ptr) {
-        auto* srcMesh = static_cast<bromesh::MeshData*>(ptr);
-        meshData = *srcMesh;
+        meshData = *static_cast<bromesh::MeshData*>(ptr);
     }
 
-    if (jsonOpts && jsonOpts[0] != '\0') {
-        std::string s = jsonOpts;
-        auto findNum = [&](const char* key, float def) -> float {
-            auto pos = s.find(key);
-            if (pos == std::string::npos) return def;
-            pos += std::strlen(key);
-            return std::strtof(s.c_str() + pos, nullptr);
-        };
-        float radius = findNum("\"radius\":", 0.5f);
-        float hw = findNum("\"halfW\":", 0.5f);
-        float hh = findNum("\"halfH\":", 0.5f);
-        float hd = findNum("\"halfD\":", 0.5f);
-        float height = findNum("\"height\":", 1.0f);
+    Value opts = ev::fromBits(optsBits);
+    if (ev::isObject(opts)) {
+        // 1. Raw positions/indices
+        Value posVal = ev::getProperty(opts, "positions");
+        Value idxVal = ev::getProperty(opts, "indices");
+        bool hasRaw = false;
+        if (!ev::isUndefined(posVal) && !ev::isUndefined(idxVal)) {
+            if (readFloatVector(posVal, meshData.positions) && readU32Vector(idxVal, meshData.indices)) {
+                readFloatVector(ev::getProperty(opts, "normals"), meshData.normals);
+                readFloatVector(ev::getProperty(opts, "colors"), meshData.colors);
+                readFloatVector(ev::getProperty(opts, "uvs"), meshData.uvs);
+                readFloatVector(ev::getProperty(opts, "tangents"), meshData.tangents);
+                hasRaw = true;
+            }
+        }
 
-        if (meshData.positions.empty()) {
-            if (s.find("\"mesh\":\"sphere\"") != std::string::npos) {
-                meshData = bromesh::sphere(radius, 16, 12);
-            } else if (s.find("\"mesh\":\"cylinder\"") != std::string::npos) {
-                meshData = bromesh::cylinder(radius, height, 16);
-            } else if (s.find("\"mesh\":\"capsule\"") != std::string::npos) {
-                meshData = bromesh::capsule(radius, height, 16, 8);
-            } else if (s.find("\"mesh\":\"plane\"") != std::string::npos) {
-                meshData = bromesh::plane(hw, hd, 1, 1);
-            } else if (s.find("\"mesh\":\"torus\"") != std::string::npos) {
-                meshData = bromesh::torus(1.0f, 0.3f, 24, 12);
+        // 2. Mesh object or primitive name
+        Value meshProp = ev::getProperty(opts, "mesh");
+        if (!hasRaw && meshData.positions.empty()) {
+            if (ev::isObject(meshProp)) {
+                void* mptr = bronze::embed::handleData(meshProp);
+                if (mptr) {
+                    meshData = *static_cast<bromesh::MeshData*>(mptr);
+                    hasRaw = true;
+                }
+            }
+        }
+
+        if (!hasRaw && meshData.positions.empty()) {
+            std::string meshType = "box";
+            if (ev::isString(meshProp)) meshType = ev::toUtf8(meshProp);
+            auto getNum = [&](const char* k, float def) -> float {
+                Value v = ev::getProperty(opts, k);
+                return ev::isNumber(v) ? static_cast<float>(ev::toDouble(v)) : def;
+            };
+            if (meshType == "sphere") {
+                float r = getNum("radius", 0.5f);
+                int seg = static_cast<int>(getNum("segments", 16));
+                int rings = static_cast<int>(getNum("rings", 12));
+                meshData = bromesh::sphere(r, seg, rings);
+            } else if (meshType == "cylinder") {
+                float r = getNum("radius", 0.5f);
+                float h = getNum("height", 1.0f);
+                int seg = static_cast<int>(getNum("segments", 16));
+                meshData = bromesh::cylinder(r, h, seg);
+            } else if (meshType == "capsule") {
+                float r = getNum("radius", 0.5f);
+                float h = getNum("height", 1.0f);
+                int seg = static_cast<int>(getNum("segments", 16));
+                int rings = static_cast<int>(getNum("rings", 8));
+                meshData = bromesh::capsule(r, h, seg, rings);
+            } else if (meshType == "plane") {
+                float hw = getNum("halfW", 5.0f);
+                float hd = getNum("halfD", 5.0f);
+                int sx = static_cast<int>(getNum("subdivX", 1));
+                int sz = static_cast<int>(getNum("subdivZ", 1));
+                meshData = bromesh::plane(hw, hd, sx, sz);
+            } else if (meshType == "torus") {
+                float maj = getNum("majorRadius", 1.0f);
+                float min = getNum("minorRadius", 0.3f);
+                int majSeg = static_cast<int>(getNum("majorSegments", 24));
+                int minSeg = static_cast<int>(getNum("minorSegments", 12));
+                meshData = bromesh::torus(maj, min, majSeg, minSeg);
             } else {
+                float hw = getNum("halfW", 0.5f);
+                float hh = getNum("halfH", 0.5f);
+                float hd = getNum("halfD", 0.5f);
                 meshData = bromesh::box(hw, hh, hd);
             }
         }
+
         if (meshData.normals.empty() && !meshData.positions.empty()) {
             bromesh::computeNormals(meshData);
         }
         node->setMesh(std::move(meshData));
 
-        // Quick color checks
-        if (s.find("\"color\":\"red\"") != std::string::npos || s.find("\"color\":\"#ff0000\"") != std::string::npos) {
-            node->setColor(1.0f, 0.0f, 0.0f, 1.0f);
-        } else if (s.find("\"color\":\"green\"") != std::string::npos || s.find("\"color\":\"#00ff00\"") != std::string::npos) {
-            node->setColor(0.0f, 1.0f, 0.0f, 1.0f);
-        } else if (s.find("\"color\":\"blue\"") != std::string::npos || s.find("\"color\":\"#0000ff\"") != std::string::npos) {
-            node->setColor(0.0f, 0.0f, 1.0f, 1.0f);
-        } else if (s.find("\"color\":\"white\"") != std::string::npos || s.find("\"color\":\"#ffffff\"") != std::string::npos) {
-            node->setColor(1.0f, 1.0f, 1.0f, 1.0f);
+        // Color
+        Value colorVal = ev::getProperty(opts, "color");
+        float cr = 1, cg = 1, cb = 1, ca = 1;
+        if (parseColorValue(colorVal, cr, cg, cb, ca)) {
+            node->setColor(cr, cg, cb, ca);
         }
 
-        if (s.find("\"unlit\":true") != std::string::npos) node->setUnlit(true);
-        if (s.find("\"castsShadow\":false") != std::string::npos) node->setCastsShadow(false);
-        if (s.find("\"receivesShadow\":false") != std::string::npos) node->setReceivesShadow(false);
+        // Metallic / Roughness / Emissive
+        Value metVal = ev::getProperty(opts, "metallic");
+        if (ev::isNumber(metVal)) node->setMetallic(static_cast<float>(ev::toDouble(metVal)));
+        Value roughVal = ev::getProperty(opts, "roughness");
+        if (ev::isNumber(roughVal)) node->setRoughness(static_cast<float>(ev::toDouble(roughVal)));
+        Value emissVal = ev::getProperty(opts, "emissive");
+        if (ev::isNumber(emissVal)) node->setEmissive(static_cast<float>(ev::toDouble(emissVal)));
 
-        // Metallic / Roughness
-        float m = findNum("\"metallic\":", -1.0f);
-        if (m >= 0.0f) node->setMetallic(m);
-        float r = findNum("\"roughness\":", -1.0f);
-        if (r >= 0.0f) node->setRoughness(r);
-
-        float px = findNum("\"x\":", 0.0f);
-        float py = findNum("\"y\":", 0.0f);
-        float pz = findNum("\"z\":", 0.0f);
-        if (px != 0.0f || py != 0.0f || pz != 0.0f) node->setPosition(px, py, pz);
+        Value unlitVal = ev::getProperty(opts, "unlit");
+        if (!ev::isUndefined(unlitVal)) node->setUnlit(ev::toBool(unlitVal));
+        Value csVal = ev::getProperty(opts, "castsShadow");
+        if (!ev::isUndefined(csVal)) node->setCastsShadow(ev::toBool(csVal));
+        Value rsVal = ev::getProperty(opts, "receivesShadow");
+        if (!ev::isUndefined(rsVal)) node->setReceivesShadow(ev::toBool(rsVal));
     } else {
         if (meshData.positions.empty()) {
             meshData = bromesh::box(0.5f, 0.5f, 0.5f);
@@ -519,17 +618,144 @@ void* bro_scene_SceneGraph_createMesh(void* self, const char* jsonOpts, uint64_t
     return wrapNode(node, g);
 }
 
-void* bro_scene_SceneGraph_createSkinnedMesh(void* self, const char* jsonOpts, uint64_t meshVal,
-                                            uint64_t /*skinDataVal*/, uint64_t /*skeletonVal*/) {
+void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
+
+    Value opts = ev::fromBits(optsBits);
+    if (!ev::isObject(opts)) {
+        ev::throwTypeError("createSkinnedMesh: options object with 'skin' is required");
+        return nullptr;
+    }
+    Value skinVal = ev::getProperty(opts, "skin");
+    void* sptr = ev::isObject(skinVal) ? bronze::embed::handleData(skinVal) : nullptr;
+    if (!sptr) {
+        ev::throwTypeError("createSkinnedMesh: 'skin' option (SkinData) is required");
+        return nullptr;
+    }
+    auto* sd = static_cast<bromesh::SkinData*>(sptr);
+
+    bromesh::MeshData meshData;
+    void* mptr = bronze::embed::handleData(bronze::Value{meshHandle});
+    if (mptr) {
+        meshData = *static_cast<bromesh::MeshData*>(mptr);
+    }
+
+    // 1. Raw positions/indices
+    Value posVal = ev::getProperty(opts, "positions");
+    Value idxVal = ev::getProperty(opts, "indices");
+    bool hasRaw = false;
+    if (!ev::isUndefined(posVal) && !ev::isUndefined(idxVal)) {
+        if (readFloatVector(posVal, meshData.positions) && readU32Vector(idxVal, meshData.indices)) {
+            readFloatVector(ev::getProperty(opts, "normals"), meshData.normals);
+            readFloatVector(ev::getProperty(opts, "colors"), meshData.colors);
+            readFloatVector(ev::getProperty(opts, "uvs"), meshData.uvs);
+            readFloatVector(ev::getProperty(opts, "tangents"), meshData.tangents);
+            hasRaw = true;
+        }
+    }
+
+    // 2. Mesh object or primitive name
+    Value meshProp = ev::getProperty(opts, "mesh");
+    if (!hasRaw && meshData.positions.empty()) {
+        if (ev::isObject(meshProp)) {
+            void* p = bronze::embed::handleData(meshProp);
+            if (p) {
+                meshData = *static_cast<bromesh::MeshData*>(p);
+                hasRaw = true;
+            }
+        }
+    }
+
+    if (!hasRaw && meshData.positions.empty()) {
+        std::string meshType = "box";
+        if (ev::isString(meshProp)) meshType = ev::toUtf8(meshProp);
+        auto getNum = [&](const char* k, float def) -> float {
+            Value v = ev::getProperty(opts, k);
+            return ev::isNumber(v) ? static_cast<float>(ev::toDouble(v)) : def;
+        };
+        if (meshType == "sphere") {
+            float r = getNum("radius", 0.5f);
+            int seg = static_cast<int>(getNum("segments", 16));
+            int rings = static_cast<int>(getNum("rings", 12));
+            meshData = bromesh::sphere(r, seg, rings);
+        } else if (meshType == "cylinder") {
+            float r = getNum("radius", 0.5f);
+            float h = getNum("height", 1.0f);
+            int seg = static_cast<int>(getNum("segments", 16));
+            meshData = bromesh::cylinder(r, h, seg);
+        } else if (meshType == "capsule") {
+            float r = getNum("radius", 0.5f);
+            float h = getNum("height", 1.0f);
+            int seg = static_cast<int>(getNum("segments", 16));
+            int rings = static_cast<int>(getNum("rings", 8));
+            meshData = bromesh::capsule(r, h, seg, rings);
+        } else if (meshType == "plane") {
+            float hw = getNum("halfW", 5.0f);
+            float hd = getNum("halfD", 5.0f);
+            int sx = static_cast<int>(getNum("subdivX", 1));
+            int sz = static_cast<int>(getNum("subdivZ", 1));
+            meshData = bromesh::plane(hw, hd, sx, sz);
+        } else if (meshType == "torus") {
+            float maj = getNum("majorRadius", 1.0f);
+            float min = getNum("minorRadius", 0.3f);
+            int majSeg = static_cast<int>(getNum("majorSegments", 24));
+            int minSeg = static_cast<int>(getNum("minorSegments", 12));
+            meshData = bromesh::torus(maj, min, majSeg, minSeg);
+        } else {
+            float hw = getNum("halfW", 0.5f);
+            float hh = getNum("halfH", 0.5f);
+            float hd = getNum("halfD", 0.5f);
+            meshData = bromesh::box(hw, hh, hd);
+        }
+    }
+
+    size_t vertCount = meshData.positions.size() / 3;
+    size_t skinVertCount = sd->boneWeights.size() / 4;
+    if (skinVertCount != vertCount) {
+        ev::throwTypeError("createSkinnedMesh: skin vertex count does not match mesh vertex count");
+        return nullptr;
+    }
+
     auto* node = g->createSkinnedMesh();
     g->root()->addChild(node);
-    void* ptr = bronze::embed::handleData(bronze::Value{meshVal});
-    if (ptr) {
-        auto* srcMesh = static_cast<bromesh::MeshData*>(ptr);
-        node->setMesh(*srcMesh);
+
+    if (meshData.normals.empty() && !meshData.positions.empty()) {
+        bromesh::computeNormals(meshData);
     }
+    node->setMesh(std::move(meshData));
+    node->setSkin(*sd);
+
+    Value skelProp = ev::getProperty(opts, "skeleton");
+    if (ev::isObject(skelProp)) {
+        void* skelPtr = bronze::embed::handleData(skelProp);
+        if (skelPtr) {
+            auto* skel = static_cast<bromesh::Skeleton*>(skelPtr);
+            node->ensurePlayer().setSkeleton(std::make_shared<bromesh::Skeleton>(*skel));
+        }
+    }
+
+    // Material properties
+    Value colorVal = ev::getProperty(opts, "color");
+    float cr = 1, cg = 1, cb = 1, ca = 1;
+    if (parseColorValue(colorVal, cr, cg, cb, ca)) {
+        node->setColor(cr, cg, cb, ca);
+    }
+    Value metVal = ev::getProperty(opts, "metallic");
+    if (ev::isNumber(metVal)) node->setMetallic(static_cast<float>(ev::toDouble(metVal)));
+    Value roughVal = ev::getProperty(opts, "roughness");
+    if (ev::isNumber(roughVal)) node->setRoughness(static_cast<float>(ev::toDouble(roughVal)));
+    Value emissVal = ev::getProperty(opts, "emissive");
+    if (ev::isNumber(emissVal)) node->setEmissive(static_cast<float>(ev::toDouble(emissVal)));
+    Value unlitVal = ev::getProperty(opts, "unlit");
+    if (!ev::isUndefined(unlitVal)) node->setUnlit(ev::toBool(unlitVal));
+    Value csVal = ev::getProperty(opts, "castsShadow");
+    if (!ev::isUndefined(csVal)) node->setCastsShadow(ev::toBool(csVal));
+    Value rsVal = ev::getProperty(opts, "receivesShadow");
+    if (!ev::isUndefined(rsVal)) node->setReceivesShadow(ev::toBool(rsVal));
+    Value nameVal = ev::getProperty(opts, "name");
+    if (ev::isString(nameVal)) node->setName(ev::toUtf8(nameVal));
+
     return wrapNode(node, g);
 }
 
@@ -550,6 +776,32 @@ void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
     auto* node = g->createShape();
+    if (jsonOpts && jsonOpts[0]) {
+        try {
+            auto j = nlohmann::json::parse(jsonOpts);
+            if (j.contains("name") && j["name"].is_string()) node->setName(j["name"].get<std::string>());
+            if (j.contains("width") && j.contains("height")) {
+                node->setSize(j["width"].get<float>(), j["height"].get<float>());
+            }
+            if (j.contains("fill") && j["fill"].is_string()) {
+                float r = 1, g = 1, b = 1, a = 1;
+                if (parseHexOrCssColor(j["fill"].get<std::string>(), r, g, b, a)) {
+                    node->setFillColor(bromath::Color{r, g, b, a});
+                }
+            }
+            if (j.contains("worldAnchor")) {
+                const auto& wa = j["worldAnchor"];
+                if (wa.is_array() && wa.size() >= 3) {
+                    node->setWorldAnchor(bromath::Vec3{wa[0].get<float>(), wa[1].get<float>(), wa[2].get<float>()});
+                }
+            }
+            if (j.contains("billboard") && j["billboard"].is_string()) {
+                std::string m = j["billboard"].get<std::string>();
+                if (m == "ylock" || m == "yLock") node->setBillboardMode(scene::SceneNode::BillboardMode::YLock);
+                else node->setBillboardMode(scene::SceneNode::BillboardMode::Full);
+            }
+        } catch (...) {}
+    }
     g->root()->addChild(node);
     return wrapNode(node, g);
 }
@@ -558,6 +810,32 @@ void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
     auto* node = g->createSprite();
+    if (jsonOpts && jsonOpts[0]) {
+        try {
+            auto j = nlohmann::json::parse(jsonOpts);
+            if (j.contains("sheet") && j["sheet"].is_object()) {
+                const auto& s = j["sheet"];
+                node->setSheetGrid(s.value("frameWidth", 0), s.value("frameHeight", 0), s.value("columns", 1), s.value("rows", 1));
+            }
+            if (j.contains("animations") && j["animations"].is_object()) {
+                for (auto it = j["animations"].begin(); it != j["animations"].end(); ++it) {
+                    const auto& specVal = it.value();
+                    if (specVal.is_object()) {
+                        scene::SpriteNode::AnimationSpec spec;
+                        spec.fps = specVal.value("fps", 12.0f);
+                        spec.loop = specVal.value("loop", true);
+                        spec.next = specVal.value("next", "");
+                        if (specVal.contains("frames") && specVal["frames"].is_array()) {
+                            for (const auto& f : specVal["frames"]) if (f.is_number()) spec.frames.push_back(f.template get<int>());
+                        }
+                        node->addAnimation(it.key(), std::move(spec));
+                    }
+                }
+            }
+            if (j.contains("width") && j.contains("height")) node->setSize(j.value("width", 0.0f), j.value("height", 0.0f));
+            if (j.contains("opacity")) node->setOpacity(j.value("opacity", 1.0f));
+        } catch (...) {}
+    }
     g->root()->addChild(node);
     return wrapNode(node, g);
 }
@@ -574,6 +852,105 @@ void* bro_scene_SceneGraph_createParticles3D(void* self, const char* jsonOpts) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
     auto* node = g->createParticles3D();
+    if (jsonOpts && jsonOpts[0]) {
+        try {
+            auto j = nlohmann::json::parse(jsonOpts);
+            if (j.contains("name") && j["name"].is_string()) node->setName(j["name"].get<std::string>());
+            if (j.contains("seed") && j["seed"].is_number()) node->setSeed(j["seed"].get<uint64_t>());
+            if (j.contains("rate") && j["rate"].is_number()) node->setRate(j["rate"].get<float>());
+            if (j.contains("lifetime")) {
+                if (j["lifetime"].is_number()) {
+                    float lt = j["lifetime"].get<float>();
+                    node->setLifetime(lt, lt);
+                } else if (j["lifetime"].is_object()) {
+                    float lo = j["lifetime"].value("min", 0.5f);
+                    float hi = j["lifetime"].value("max", 1.0f);
+                    node->setLifetime(lo, hi);
+                }
+            }
+            if (j.contains("size")) {
+                if (j["size"].is_number()) {
+                    float s = j["size"].get<float>();
+                    node->setSize(s, s);
+                } else if (j["size"].is_object()) {
+                    float st = j["size"].value("start", 0.2f);
+                    float en = j["size"].value("end", 0.2f);
+                    node->setSize(st, en);
+                }
+            }
+            if (j.contains("position")) {
+                const auto& p = j["position"];
+                if (p.is_array() && p.size() >= 3) {
+                    node->setPosition(p[0].get<float>(), p[1].get<float>(), p[2].get<float>());
+                }
+            }
+            if (j.contains("maxParticles") && j["maxParticles"].is_number()) node->setMaxParticles(j["maxParticles"].get<int>());
+            if (j.contains("softness") && j["softness"].is_number()) node->setSoftness(j["softness"].get<float>());
+            if (j.contains("duration") && j["duration"].is_number()) node->setDuration(j["duration"].get<float>(), j.value("loop", false));
+            if (j.contains("blend") && j["blend"].is_string()) {
+                node->setBlend(j["blend"] == "additive" ? scene::Particles3DNode::Blend::Additive : scene::Particles3DNode::Blend::Normal);
+            }
+            if (j.contains("space") && j["space"].is_string()) {
+                node->setSpace(j["space"] == "local" ? scene::Particles3DNode::SimSpace::Local : scene::Particles3DNode::SimSpace::World);
+            }
+            if (j.contains("gravity") && j["gravity"].is_array() && j["gravity"].size() >= 3) {
+                node->setGravity({j["gravity"][0].get<float>(), j["gravity"][1].get<float>(), j["gravity"][2].get<float>()});
+            }
+            if (j.contains("drag") && j["drag"].is_number()) node->setDrag(j["drag"].get<float>());
+            if (j.contains("velocity") && j["velocity"].is_object()) {
+                const auto& vel = j["velocity"];
+                float sp = vel.value("speed", 1.0f);
+                float spSpr = vel.value("speedSpread", 0.0f);
+                node->setSpeed(sp, spSpr);
+                float spr = vel.value("spread", 0.0f);
+                bromath::Vec3 dir{0, 1, 0};
+                if (vel.contains("direction") && vel["direction"].is_array() && vel["direction"].size() >= 3) {
+                    dir = {vel["direction"][0].get<float>(), vel["direction"][1].get<float>(), vel["direction"][2].get<float>()};
+                }
+                node->setDirection(dir, spr);
+            }
+            if (j.contains("rotation") && j["rotation"].is_object()) {
+                const auto& r = j["rotation"];
+                node->setRotation(r.value("start", 0.0f), r.value("spinSpeed", 0.0f), r.value("spinSpread", 0.0f));
+            }
+            if (j.contains("shape") && j["shape"].is_object()) {
+                const auto& sh = j["shape"];
+                std::string type = sh.value("type", "point");
+                if (type == "sphere") node->setShape(scene::Particles3DNode::EmitterShape::Sphere);
+                else if (type == "hemisphere") node->setShape(scene::Particles3DNode::EmitterShape::Hemisphere);
+                else if (type == "box") node->setShape(scene::Particles3DNode::EmitterShape::Box);
+                else if (type == "cone") node->setShape(scene::Particles3DNode::EmitterShape::Cone);
+                else node->setShape(scene::Particles3DNode::EmitterShape::Point);
+                if (sh.contains("radius") && sh["radius"].is_number()) node->setShapeRadius(sh["radius"].get<float>());
+            }
+            if (j.contains("color") && j["color"].is_object()) {
+                auto parseC = [](const nlohmann::json& v) -> bromath::Color {
+                    if (v.is_array() && v.size() >= 3) {
+                        float a = v.size() >= 4 ? v[3].get<float>() : 1.0f;
+                        return {v[0].get<float>(), v[1].get<float>(), v[2].get<float>(), a};
+                    }
+                    if (v.is_string()) {
+                        std::string s = v.get<std::string>();
+                        if (!s.empty() && s[0] == '#' && s.size() == 7) {
+                            int r = std::stoi(s.substr(1, 2), nullptr, 16);
+                            int g = std::stoi(s.substr(3, 2), nullptr, 16);
+                            int b = std::stoi(s.substr(5, 2), nullptr, 16);
+                            return {r / 255.0f, g / 255.0f, b / 255.0f, 1.0f};
+                        }
+                    }
+                    return {1.0f, 1.0f, 1.0f, 1.0f};
+                };
+                const auto& c = j["color"];
+                bromath::Color st = c.contains("start") ? parseC(c["start"]) : bromath::Color{1,1,1,1};
+                bromath::Color en = c.contains("end") ? parseC(c["end"]) : st;
+                node->setColors(st, en);
+            }
+            if (j.contains("burst") && j["burst"].is_number()) {
+                node->burst(j["burst"].get<int>());
+            }
+            if (j.value("autoplay", true)) node->play();
+        } catch (...) {}
+    }
     g->root()->addChild(node);
     return wrapNode(node, g);
 }

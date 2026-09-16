@@ -365,6 +365,57 @@ void* bro_scene_SceneGraph_createTileWorld(void* self, bool opts_chunkSize_given
                                           const char* opts_layers, bool opts_tileAtlas_given, const char* opts_tileAtlas,
                                           bool opts_atlasTileWidth_given, int32_t opts_atlasTileWidth,
                                           bool opts_atlasTileHeight_given, int32_t opts_atlasTileHeight);
+
+void bro_scene_SceneGraph_clearActiveCamera(void* self);
+double bro_scene_SceneNode_fov_get(void* self);
+void bro_scene_SceneNode_fov_set(void* self, double v);
+double bro_scene_SceneNode_near_get(void* self);
+void bro_scene_SceneNode_near_set(void* self, double v);
+double bro_scene_SceneNode_far_get(void* self);
+void bro_scene_SceneNode_far_set(void* self, double v);
+const char* bro_scene_SceneNode_projection_get(void* self);
+void bro_scene_SceneNode_projection_set(void* self, const char* v);
+double bro_scene_SceneNode_aspect_get(void* self);
+void bro_scene_SceneNode_aspect_set(void* self, double v);
+double bro_scene_SceneNode_orthoHeight_get(void* self);
+void bro_scene_SceneNode_play(void* self, const char* clipName, const char* jsonOpts);
+
+bool bro_scene_SceneNode_hasShader(void* self);
+const char* bro_scene_SceneNode_setShader(void* self, const char* vertex, const char* fragment,
+                                          const char* uniformsJson);
+void bro_scene_SceneNode_clearShader(void* self);
+void bro_scene_SceneNode_setShaderUniform(void* self, const char* name, const double* vals, uint32_t count);
+void bro_scene_SceneNode_setLodMeshes(void* self, const char* jsonLods);
+int32_t bro_scene_SceneNode_lodCount(void* self);
+int32_t bro_scene_SceneNode_lodLevel(void* self);
+void bro_scene_SceneNode_visibilityRange_set(void* self, double begin, double end, double margin);
+void bro_scene_SceneNode_visibilityRange_clear(void* self);
+void bro_scene_SceneNode_visibilityRange_get(void* self, bronze_native_buffer* out);
+bool bro_scene_SceneGraph_isValid(void* self);
+void bro_scene_SceneNode_setBaseColorTextureFromScene(void* self, void* sourceScene);
+int32_t bro_scene_SceneGraph_raycast_instance(void);
+const char* bro_scene_SceneGraph_cullStatsJson(void* self);
+void bro_scene_SceneNode_setInstances(void* self, const float* data, uint32_t count);
+void bro_scene_SceneNode_setInstancesFromTransforms(void* self, const float* data, uint32_t count);
+double bro_scene_SceneNode_instanceCount_get(void* self);
+const char* bro_scene_SceneNode_updateMode_get(void* self);
+void bro_scene_SceneNode_updateMode_set(void* self, const char* mode);
+int32_t bro_scene_SceneNode_resolution_get(void* self);
+void bro_scene_SceneNode_resolution_set(void* self, int32_t res);
+bool bro_scene_SceneNode_boxProjection_get(void* self);
+void bro_scene_SceneNode_boxProjection_set(void* self, bool bp);
+double bro_scene_SceneNode_cullMargin_get(void* self);
+void bro_scene_SceneNode_cullMargin_set(void* self, double v);
+int32_t bro_scene_SceneNode_splatCount_get(void* self);
+void bro_scene_SceneNode_setCloud(void* self, const float* pos, uint32_t posCount, const float* scales, uint32_t scaleCount, const float* rots, uint32_t rotCount, const float* opacities, uint32_t opCount, const float* sh, uint32_t shCount, int32_t shDegree);
+bool bro_scene_SceneNode_loadSplatPly(void* self, const char* path);
+bool bro_scene_SceneNode_savePly(void* self, const char* path);
+void bro_scene_SceneNode_worldAnchor_get(void* self, bronze_native_buffer* out);
+void bro_scene_SceneNode_worldAnchor_set(void* self, const double* v, uint32_t len);
+}
+
+namespace bro::bronze_host {
+bool registerSceneShaderNatives(std::string* error);
 }
 
 namespace scene = bro::scene;

@@ -73,6 +73,7 @@ using namespace bro::bronze_host;
 void bro_clipmap_ClipmapTerrain_dtor(void* self) {
     auto* c = clipmapCellOf(self);
     if (c) {
+        c->tag = 0;
         if (c->terrain) {
             c->terrain->destroy();
             c->terrain.reset();
@@ -140,7 +141,7 @@ double bro_clipmap_ClipmapTerrain_planetRadius_get(void* self) {
 void* bro_clipmap_ClipmapTerrain_setSnowLine(void* self, double m) {
     auto* c = clipmapCellOf(self);
     if (c && c->clipmap()) c->clipmap()->setSnowLine(static_cast<float>(m));
-    return self;
+    return nullptr;
 }
 
 void* bro_clipmap_ClipmapTerrain_setDetail(void* self, bool desc_wavelength_given, double desc_wavelength,
@@ -155,7 +156,7 @@ void* bro_clipmap_ClipmapTerrain_setDetail(void* self, bool desc_wavelength_give
         int oct = desc_octaves_given ? desc_octaves : 4;
         c->clipmap()->setDetail(wl, r, g, oct);
     }
-    return self;
+    return nullptr;
 }
 
 void* bro_clipmap_ClipmapTerrain_setMaterials(void* self,
@@ -204,7 +205,7 @@ void* bro_clipmap_ClipmapTerrain_setMaterials(void* self,
         c->clipmap()->setMaterials(rockAlb, rockRough, snowAlb, snowRough,
                                    sandAlb, sandRough, grassAlb, grassRough);
     }
-    return self;
+    return nullptr;
 }
 
 void* bro_clipmap_ClipmapTerrain_setForest(void* self, const double* desc_albedo, uint32_t desc_albedo_len,
@@ -220,7 +221,7 @@ void* bro_clipmap_ClipmapTerrain_setForest(void* self, const double* desc_albedo
         float str = desc_strength_given ? static_cast<float>(desc_strength) : 1.0f;
         c->clipmap()->setForest(alb, str);
     }
-    return self;
+    return nullptr;
 }
 
 void* bro_clipmap_ClipmapTerrain_update(void* self, double camX, double camY, double camZ) {
@@ -228,7 +229,7 @@ void* bro_clipmap_ClipmapTerrain_update(void* self, double camX, double camY, do
     if (c && c->clipmap()) {
         c->clipmap()->update(static_cast<float>(camX), static_cast<float>(camY), static_cast<float>(camZ));
     }
-    return self;
+    return nullptr;
 }
 
 const char* bro_clipmap_ClipmapTerrain_shaderSource(void* self, const char* stage) {
@@ -298,12 +299,12 @@ void bro_clipmap_ClipmapTerrain_setSurfaceLayer(void* self, int32_t index, const
     if (!c || !c->clipmap()) return;
     if (index < 0 || index >= scene::ClipmapTerrain::kMaxLayers) return;
     if (width <= 0 || height <= 0 || !data) {
-        c->clipmap()->setSurfaceLayer(index, nullptr, 0, 0, 0, 0, 1, 4);
+        c->clipmap()->setSurfaceLayer(index, nullptr, 0, 0, 0, 0, 1, 3);
         return;
     }
     c->clipmap()->setSurfaceLayer(index, data, width, height, static_cast<float>(originX),
                                   static_cast<float>(originZ), static_cast<float>(metresPerCell),
-                                  components > 0 ? components : 4);
+                                  (components == 3 || components == 4) ? components : 3);
 }
 
 }  // extern "C"

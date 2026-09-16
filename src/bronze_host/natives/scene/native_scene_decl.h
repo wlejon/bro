@@ -23,7 +23,7 @@
 // result in a per-thread slot, answering nothing (or the list's length), and the
 // <op>_<member> / <op>_at natives read from that slot until the next call.
 //
-// Names classes of: animation, rigging, terrain — register those subsystems first.
+// Names classes of: animation, terrain — register those subsystems first.
 #pragma once
 
 #include <stdbool.h>
@@ -69,6 +69,30 @@ bool bro_scene_SceneNode_visible_get(void* self);
 //   registered at __bro_native.scene.SceneNode_visible_set
 void bro_scene_SceneNode_visible_set(void* self, bool v);
 
+// bro.scene.SceneNode.prototype.x read
+//   registered at __bro_native.scene.SceneNode_x_get
+double bro_scene_SceneNode_x_get(void* self);
+
+// bro.scene.SceneNode.prototype.x write
+//   registered at __bro_native.scene.SceneNode_x_set
+void bro_scene_SceneNode_x_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.y read
+//   registered at __bro_native.scene.SceneNode_y_get
+double bro_scene_SceneNode_y_get(void* self);
+
+// bro.scene.SceneNode.prototype.y write
+//   registered at __bro_native.scene.SceneNode_y_set
+void bro_scene_SceneNode_y_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.z read
+//   registered at __bro_native.scene.SceneNode_z_get
+double bro_scene_SceneNode_z_get(void* self);
+
+// bro.scene.SceneNode.prototype.z write
+//   registered at __bro_native.scene.SceneNode_z_set
+void bro_scene_SceneNode_z_set(void* self, double v);
+
 // bro.scene.SceneNode.prototype.position read
 //   registered at __bro_native.scene.SceneNode_position_get
 //   result: f64[] in *out; out->release == NULL, the runtime copies
@@ -87,6 +111,30 @@ void bro_scene_SceneNode_rotation_get(void* self, bronze_native_buffer* out);
 //   registered at __bro_native.scene.SceneNode_rotation_set
 void bro_scene_SceneNode_rotation_set(void* self, const double* v, uint32_t v_len);
 
+// bro.scene.SceneNode.prototype.rotationX read
+//   registered at __bro_native.scene.SceneNode_rotationX_get
+double bro_scene_SceneNode_rotationX_get(void* self);
+
+// bro.scene.SceneNode.prototype.rotationX write
+//   registered at __bro_native.scene.SceneNode_rotationX_set
+void bro_scene_SceneNode_rotationX_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.rotationY read
+//   registered at __bro_native.scene.SceneNode_rotationY_get
+double bro_scene_SceneNode_rotationY_get(void* self);
+
+// bro.scene.SceneNode.prototype.rotationY write
+//   registered at __bro_native.scene.SceneNode_rotationY_set
+void bro_scene_SceneNode_rotationY_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.rotationZ read
+//   registered at __bro_native.scene.SceneNode_rotationZ_get
+double bro_scene_SceneNode_rotationZ_get(void* self);
+
+// bro.scene.SceneNode.prototype.rotationZ write
+//   registered at __bro_native.scene.SceneNode_rotationZ_set
+void bro_scene_SceneNode_rotationZ_set(void* self, double v);
+
 // bro.scene.SceneNode.prototype.scale read
 //   registered at __bro_native.scene.SceneNode_scale_get
 //   result: f64[] in *out; out->release == NULL, the runtime copies
@@ -95,6 +143,87 @@ void bro_scene_SceneNode_scale_get(void* self, bronze_native_buffer* out);
 // bro.scene.SceneNode.prototype.scale write
 //   registered at __bro_native.scene.SceneNode_scale_set
 void bro_scene_SceneNode_scale_set(void* self, const double* v, uint32_t v_len);
+
+// bro.scene.SceneNode.prototype.scaleX read
+//   registered at __bro_native.scene.SceneNode_scaleX_get
+double bro_scene_SceneNode_scaleX_get(void* self);
+
+// bro.scene.SceneNode.prototype.scaleX write
+//   registered at __bro_native.scene.SceneNode_scaleX_set
+void bro_scene_SceneNode_scaleX_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.scaleY read
+//   registered at __bro_native.scene.SceneNode_scaleY_get
+double bro_scene_SceneNode_scaleY_get(void* self);
+
+// bro.scene.SceneNode.prototype.scaleY write
+//   registered at __bro_native.scene.SceneNode_scaleY_set
+void bro_scene_SceneNode_scaleY_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.scaleZ read
+//   registered at __bro_native.scene.SceneNode_scaleZ_get
+double bro_scene_SceneNode_scaleZ_get(void* self);
+
+// bro.scene.SceneNode.prototype.scaleZ write
+//   registered at __bro_native.scene.SceneNode_scaleZ_set
+void bro_scene_SceneNode_scaleZ_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.quaternion read
+//   registered at __bro_native.scene.SceneNode_quaternion_get
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_scene_SceneNode_quaternion_get(void* self, bronze_native_buffer* out);
+
+// bro.scene.SceneNode.prototype.quaternion write
+//   registered at __bro_native.scene.SceneNode_quaternion_set
+void bro_scene_SceneNode_quaternion_set(void* self, const double* v, uint32_t v_len);
+
+// bro.scene.SceneNode.prototype.fov read
+//   registered at __bro_native.scene.SceneNode_fov_get
+double bro_scene_SceneNode_fov_get(void* self);
+
+// bro.scene.SceneNode.prototype.fov write
+//   registered at __bro_native.scene.SceneNode_fov_set
+void bro_scene_SceneNode_fov_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.near read
+//   registered at __bro_native.scene.SceneNode_near_get
+double bro_scene_SceneNode_near_get(void* self);
+
+// bro.scene.SceneNode.prototype.near write
+//   registered at __bro_native.scene.SceneNode_near_set
+void bro_scene_SceneNode_near_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.far read
+//   registered at __bro_native.scene.SceneNode_far_get
+double bro_scene_SceneNode_far_get(void* self);
+
+// bro.scene.SceneNode.prototype.far write
+//   registered at __bro_native.scene.SceneNode_far_set
+void bro_scene_SceneNode_far_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.aspect read
+//   registered at __bro_native.scene.SceneNode_aspect_get
+double bro_scene_SceneNode_aspect_get(void* self);
+
+// bro.scene.SceneNode.prototype.aspect write
+//   registered at __bro_native.scene.SceneNode_aspect_set
+void bro_scene_SceneNode_aspect_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.orthoHeight read
+//   registered at __bro_native.scene.SceneNode_orthoHeight_get
+double bro_scene_SceneNode_orthoHeight_get(void* self);
+
+// bro.scene.SceneNode.prototype.orthoHeight write
+//   registered at __bro_native.scene.SceneNode_orthoHeight_set
+void bro_scene_SceneNode_orthoHeight_set(void* self, double v);
+
+// bro.scene.SceneNode.prototype.projection read
+//   registered at __bro_native.scene.SceneNode_projection_get
+const char* bro_scene_SceneNode_projection_get(void* self);
+
+// bro.scene.SceneNode.prototype.projection write
+//   registered at __bro_native.scene.SceneNode_projection_set
+void bro_scene_SceneNode_projection_set(void* self, const char* v);
 
 // bro.scene.SceneNode.prototype.worldPosition read
 //   registered at __bro_native.scene.SceneNode_worldPosition_get
@@ -156,62 +285,45 @@ void* bro_scene_SceneNode_setScale(void* self, double x, bool y_given, double y,
 //   registered at __bro_native.scene.SceneNode_lookAt
 void* bro_scene_SceneNode_lookAt(void* self, const double* target, uint32_t target_len, const double* up, uint32_t up_len);
 
-// bro.scene.SceneNode.prototype.setSkeleton
-//   registered at __bro_native.scene.SceneNode_setSkeleton
-void* bro_scene_SceneNode_setSkeleton(void* self, void* skeleton);
+// bro.scene.SceneNode.prototype.boneCount read
+//   registered at __bro_native.scene.SceneNode_boneCount_get
+int32_t bro_scene_SceneNode_boneCount_get(void* self);
 
-// bro.scene.SceneNode.prototype.addClip
-//   registered at __bro_native.scene.SceneNode_addClip
-void* bro_scene_SceneNode_addClip(void* self, const char* name, void* anim);
+// bro.scene.SceneNode.prototype.skinReady read
+//   registered at __bro_native.scene.SceneNode_skinReady_get
+bool bro_scene_SceneNode_skinReady_get(void* self);
 
-// bro.scene.SceneNode.prototype.addBlendSpace1D
-//   registered at __bro_native.scene.SceneNode_addBlendSpace1D
-//   clips: JSON of sequence<BlendSpace1DClip>
-void* bro_scene_SceneNode_addBlendSpace1D(void* self, const char* name, const char* clips);
+// bro.scene.SceneNode.prototype.isPlaying read
+//   registered at __bro_native.scene.SceneNode_isPlaying_get
+bool bro_scene_SceneNode_isPlaying_get(void* self);
 
-// bro.scene.SceneNode.prototype.addBlendSpace2D
-//   registered at __bro_native.scene.SceneNode_addBlendSpace2D
-//   clips: JSON of sequence<BlendSpace2DClip>
-void* bro_scene_SceneNode_addBlendSpace2D(void* self, const char* name, const char* clips);
+// bro.scene.SceneNode.prototype.currentAnimation read
+//   registered at __bro_native.scene.SceneNode_currentAnimation_get
+const char* bro_scene_SceneNode_currentAnimation_get(void* self);
 
-// bro.scene.SceneNode.prototype.setBlendPos
-//   registered at __bro_native.scene.SceneNode_setBlendPos
-//   y_given: false when the value was not passed (no declared default)
-void* bro_scene_SceneNode_setBlendPos(void* self, const char* name, double x, bool y_given, double y);
+// bro.scene.SceneNode.prototype.animationDuration read
+//   registered at __bro_native.scene.SceneNode_animationDuration_get
+double bro_scene_SceneNode_animationDuration_get(void* self);
 
-// bro.scene.SceneNode.prototype.playLayer
-//   registered at __bro_native.scene.SceneNode_playLayer
-//   weight_given, fadeTime_given: false when the value was not passed (no declared default)
-void* bro_scene_SceneNode_playLayer(void* self, int32_t layer, const char* clipName, bool weight_given, double weight, bool fadeTime_given, double fadeTime);
+// bro.scene.SceneNode.prototype.animationTime read
+//   registered at __bro_native.scene.SceneNode_animationTime_get
+double bro_scene_SceneNode_animationTime_get(void* self);
 
-// bro.scene.SceneNode.prototype.stopLayer
-//   registered at __bro_native.scene.SceneNode_stopLayer
-//   fadeTime_given: false when the value was not passed (no declared default)
-void* bro_scene_SceneNode_stopLayer(void* self, int32_t layer, bool fadeTime_given, double fadeTime);
+// bro.scene.SceneNode.prototype.animationTime write
+//   registered at __bro_native.scene.SceneNode_animationTime_set
+void bro_scene_SceneNode_animationTime_set(void* self, double v);
 
-// bro.scene.SceneNode.prototype.setLayerWeight
-//   registered at __bro_native.scene.SceneNode_setLayerWeight
-void* bro_scene_SceneNode_setLayerWeight(void* self, int32_t layer, double weight);
+// bro.scene.SceneNode.prototype.animationSpeed read
+//   registered at __bro_native.scene.SceneNode_animationSpeed_get
+double bro_scene_SceneNode_animationSpeed_get(void* self);
 
-// bro.scene.SceneNode.prototype.travel
-//   registered at __bro_native.scene.SceneNode_travel
-bool bro_scene_SceneNode_travel(void* self, const char* name, const char* targetState);
+// bro.scene.SceneNode.prototype.animationSpeed write
+//   registered at __bro_native.scene.SceneNode_animationSpeed_set
+void bro_scene_SceneNode_animationSpeed_set(void* self, double v);
 
-// bro.scene.SceneNode.prototype.setRootMotion
-//   registered at __bro_native.scene.SceneNode_setRootMotion
-void* bro_scene_SceneNode_setRootMotion(void* self, bool enabled);
-
-// bro.scene.SceneNode.prototype.stop
-//   registered at __bro_native.scene.SceneNode_stop
-void* bro_scene_SceneNode_stop(void* self);
-
-// bro.scene.SceneNode.prototype.pause
-//   registered at __bro_native.scene.SceneNode_pause
-void* bro_scene_SceneNode_pause(void* self);
-
-// bro.scene.SceneNode.prototype.resume
-//   registered at __bro_native.scene.SceneNode_resume
-void* bro_scene_SceneNode_resume(void* self);
+// bro.scene.SceneNode.prototype.state read
+//   registered at __bro_native.scene.SceneNode_state_get
+const char* bro_scene_SceneNode_state_get(void* self);
 
 // bro.scene.SceneNode.prototype.setInstanceTransform
 //   registered at __bro_native.scene.SceneNode_setInstanceTransform
@@ -247,7 +359,7 @@ void bro_scene_SceneNode_probeCapture(void* self);
 
 // bro.scene.SceneNode.prototype.savePly
 //   registered at __bro_native.scene.SceneNode_savePly
-void bro_scene_SceneNode_savePly(void* self, const char* path);
+bool bro_scene_SceneNode_savePly(void* self, const char* path);
 
 // bro.scene.SceneGraph.prototype.root read
 //   registered at __bro_native.scene.SceneGraph_root_get
@@ -475,8 +587,7 @@ void bro_scene_SceneGraph_setDepthOfField(void* self, bool opts_focusDistance_gi
 
 // bro.scene.SceneGraph.prototype.setColorLUT
 //   registered at __bro_native.scene.SceneGraph_setColorLUT
-//   opts_texture_given, opts_intensity_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setColorLUT(void* self, bool opts_texture_given, const char* opts_texture, bool opts_intensity_given, double opts_intensity);
+bool bro_scene_SceneGraph_setColorLUT(void* self, const char* path, int32_t size, double amount);
 
 // bro.scene.SceneGraph.prototype.setFXAA
 //   registered at __bro_native.scene.SceneGraph_setFXAA

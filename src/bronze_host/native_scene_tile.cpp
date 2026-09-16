@@ -11,13 +11,18 @@
 #include "util/asset_path.h"
 #include "broimage/decode.h"
 #include <bromesh/mesh_data.h>
+#include <json.hpp>
 #include <sstream>
 #include <string>
 #include <vector>
 
+extern "C" void bro_tile_world_TileWorld_findPathJson(void* self, int32_t startX, int32_t startY,
+                                                      int32_t endX, int32_t endY, const char* jsonOpts);
+
 namespace bro::bronze_host {
 
 bool registerNatives_tile_world(std::string* error);
+bool registerTileWorldOpsNatives(std::string* error);
 
 namespace {
 
@@ -284,6 +289,8 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
 
 static bool validateTileConfig(const scene::TileWorldConfig& cfg) {
     if (cfg.width < 1 || cfg.height < 1) return false;
+    if (cfg.width > 16384 || cfg.height > 16384) return false;
+    if (static_cast<int64_t>(cfg.width) * static_cast<int64_t>(cfg.height) > 16777216LL) return false;
     if (cfg.chunkSize < 1) return false;
     return true;
 }
@@ -310,7 +317,13 @@ bool bro_tile_world_TileWorld_isWalkable(void* self, int32_t x, int32_t y, doubl
 void bro_tile_world_TileWorld_configure(void* self, const char* configJson);
 int32_t bro_tile_world_TileWorld_addObjectKind(void* self, uint64_t meshVal, const char* styleJson);
 int32_t bro_tile_world_TileWorld_addObjectPlacement(void* self, int32_t kind, int32_t x, int32_t y, double yaw, double scale, double yOffset, double offsetX, double offsetZ, int32_t variant);
+void bro_tile_world_TileWorld_setShade(void* self, int32_t x, int32_t y, double v);
+void bro_tile_world_TileWorld_fillShade(void* self, int32_t x0, int32_t y0, int32_t x1, int32_t y1, double v);
+void bro_tile_world_TileWorld_setShadeMapFloat(void* self, const float* data, uint32_t count);
+void bro_tile_world_TileWorld_setShadeMapBytes(void* self, const uint8_t* data, uint32_t count);
+double bro_tile_world_TileWorld_getShade(void* self, int32_t x, int32_t y);
 }
+
 
 bool registerTileWorldNatives(std::string* error) {
     if (!registerNatives_tile_world(error)) return false;
@@ -325,6 +338,8 @@ bool registerTileWorldNatives(std::string* error) {
 
     if (!reg("__bro_native.tile_world.createTileWorldJson", (void*)&bro_scene_SceneGraph_createTileWorldJson,
              "__bro_native.tile_world.TileWorld", {"__bro_native.scene.SceneGraph", "str"})) return false;
+    if (!reg("__bro_native.tile_world.TileWorld_findPathJson", (void*)&bro_tile_world_TileWorld_findPathJson,
+             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "str"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_fillTile", (void*)&bro_tile_world_TileWorld_fillTile,
              "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "i32", "i32"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_setElevation", (void*)&bro_tile_world_TileWorld_setElevation,
@@ -361,16 +376,26 @@ bool registerTileWorldNatives(std::string* error) {
              "i32", {"__bro_native.tile_world.TileWorld", "dynamic", "str"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_addObjectPlacement", (void*)&bro_tile_world_TileWorld_addObjectPlacement,
              "i32", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "f64", "f64", "f64", "f64", "f64", "i32"})) return false;
+    if (!reg("__bro_native.tile_world.TileWorld_setShade", (void*)&bro_tile_world_TileWorld_setShade,
+             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64"})) return false;
+    if (!reg("__bro_native.tile_world.TileWorld_fillShade", (void*)&bro_tile_world_TileWorld_fillShade,
+             "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "f64"})) return false;
+    if (!reg("__bro_native.tile_world.TileWorld_setShadeMapFloat", (void*)&bro_tile_world_TileWorld_setShadeMapFloat,
+             "void", {"__bro_native.tile_world.TileWorld", "f32[]"})) return false;
+    if (!reg("__bro_native.tile_world.TileWorld_setShadeMapBytes", (void*)&bro_tile_world_TileWorld_setShadeMapBytes,
+             "void", {"__bro_native.tile_world.TileWorld", "u8[]"})) return false;
+    if (!reg("__bro_native.tile_world.TileWorld_getShade", (void*)&bro_tile_world_TileWorld_getShade,
+             "f64", {"__bro_native.tile_world.TileWorld", "i32", "i32"})) return false;
 
     bronze::embed::NativeSignature s;
     s.returnType = "__bro_native.tile_world.TileWorld";
     s.paramTypes = {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "f64", "str", "bool", "str",
                     "bool", "i32", "bool", "i32"};
-    s.kind = bronze::embed::NativeKind::Function;
-    return bronze::embed::registerNative(
+    if (!bronze::embed::registerNative(
         "__bro_native.tile_world.createTileWorld",
         reinterpret_cast<void*>(&bro_scene_SceneGraph_createTileWorld),
-        s, error);
+        s, error)) return false;
+    return registerTileWorldOpsNatives(error);
 }
 
 }  // namespace bro::bronze_host
@@ -513,11 +538,8 @@ void bro_tile_world_TileWorld_pickTile_worldPosition(bronze_native_buffer* out) 
     copyBuffer(tl_pickTile.worldPos, 3, out);
 }
 
-void bro_tile_world_TileWorld_findPath(void* self, int32_t startX, int32_t startY,
-                                      int32_t endX, int32_t endY,
-                                      bool /*opts_agentRadius_given*/, int32_t /*opts_agentRadius*/,
-                                      bool opts_allowDiagonal_given, bool opts_allowDiagonal,
-                                      bool /*opts_maxSlope_given*/, int32_t /*opts_maxSlope*/) {
+void bro_tile_world_TileWorld_findPathJson(void* self, int32_t startX, int32_t startY,
+                                          int32_t endX, int32_t endY, const char* jsonOpts) {
     auto* c = tileWorldCellOf(self);
     if (!c || !c->tileWorld() || !c->tileWorld()->grid()) {
         tl_pathResult.reachable = false;
@@ -528,13 +550,39 @@ void bro_tile_world_TileWorld_findPath(void* self, int32_t startX, int32_t start
     const auto& grid = *c->tileWorld()->grid();
     bro::tile::Cell start{startX, startY};
     bro::tile::Cell goal{endX, endY};
-    bro::tile::Conn conn = (opts_allowDiagonal_given && opts_allowDiagonal) ? bro::tile::Conn::Vertex : bro::tile::Conn::Edge;
+    uint32_t blockMask = 0;
+    bool allowDiag = false;
+    std::vector<float> costs;
+    if (jsonOpts && jsonOpts[0]) {
+        try {
+            auto j = nlohmann::json::parse(jsonOpts);
+            if (j.contains("blockMask") && j["blockMask"].is_number()) blockMask = j["blockMask"].get<uint32_t>();
+            if (j.contains("allowDiagonal") && j["allowDiagonal"].is_boolean()) allowDiag = j["allowDiagonal"].get<bool>();
+            if (j.contains("costs") && j["costs"].is_array()) {
+                for (const auto& item : j["costs"]) {
+                    costs.push_back(item.is_number() ? item.get<float>() : 1.0f);
+                }
+            }
+        } catch (...) {}
+    }
+    bro::tile::Conn conn = allowDiag ? bro::tile::Conn::Vertex : bro::tile::Conn::Edge;
 
-    bro::tile::PassFn pass = [](const bro::tile::TileGrid& g, bro::tile::Cell cell) {
-        return g.tile(0, cell) != 0;
+    bro::tile::PassFn pass = [blockMask](const bro::tile::TileGrid& g, bro::tile::Cell cell) {
+        if (g.tile(0, cell) == 0) return false;
+        if (blockMask != 0 && (g.flags(cell) & blockMask) != 0) return false;
+        return true;
     };
 
-    auto path = bro::tile::aStar(grid, start, goal, pass, nullptr, conn);
+    bro::tile::CostFn costFn = nullptr;
+    if (!costs.empty()) {
+        costFn = [costs](const bro::tile::TileGrid& g, bro::tile::Cell /*from*/, bro::tile::Cell to) -> float {
+            uint32_t tid = g.tile(0, to);
+            if (tid < costs.size()) return std::max(1.0f, costs[tid]);
+            return 1.0f;
+        };
+    }
+
+    auto path = bro::tile::aStar(grid, start, goal, pass, costFn, conn);
     if (path.empty()) {
         tl_pathResult.reachable = false;
         tl_pathResult.pathJson = "[]";
@@ -546,11 +594,20 @@ void bro_tile_world_TileWorld_findPath(void* self, int32_t startX, int32_t start
         ss << "[";
         for (size_t i = 0; i < path.size(); ++i) {
             if (i > 0) ss << ",";
-            ss << "[" << path[i].x << "," << path[i].y << "]";
+            ss << "{\"x\":" << path[i].x << ",\"y\":" << path[i].y << "}";
         }
         ss << "]";
         tl_pathResult.pathJson = ss.str();
     }
+}
+
+void bro_tile_world_TileWorld_findPath(void* self, int32_t startX, int32_t startY,
+                                      int32_t endX, int32_t endY,
+                                      bool /*opts_agentRadius_given*/, int32_t /*opts_agentRadius*/,
+                                      bool opts_allowDiagonal_given, bool opts_allowDiagonal,
+                                      bool /*opts_maxSlope_given*/, int32_t /*opts_maxSlope*/) {
+    std::string opts = (opts_allowDiagonal_given && opts_allowDiagonal) ? "{\"allowDiagonal\":true}" : "{}";
+    bro_tile_world_TileWorld_findPathJson(self, startX, startY, endX, endY, opts.c_str());
 }
 
 bool bro_tile_world_TileWorld_findPath_reachable(void) {
@@ -874,4 +931,30 @@ int32_t bro_tile_world_TileWorld_addObjectPlacement(void* self, int32_t kind, in
     return c->tileWorld()->addObject(kind, x, y, p);
 }
 
+void bro_tile_world_TileWorld_setShade(void* self, int32_t x, int32_t y, double v) {
+    auto* c = tileWorldCellOf(self);
+    if (c && c->tileWorld()) c->tileWorld()->setShade(x, y, static_cast<float>(v));
+}
+
+void bro_tile_world_TileWorld_fillShade(void* self, int32_t x0, int32_t y0, int32_t x1, int32_t y1, double v) {
+    auto* c = tileWorldCellOf(self);
+    if (c && c->tileWorld()) c->tileWorld()->fillShade(x0, y0, x1, y1, static_cast<float>(v));
+}
+
+void bro_tile_world_TileWorld_setShadeMapFloat(void* self, const float* data, uint32_t count) {
+    auto* c = tileWorldCellOf(self);
+    if (c && c->tileWorld() && data) c->tileWorld()->setShadeMap(data, count);
+}
+
+void bro_tile_world_TileWorld_setShadeMapBytes(void* self, const uint8_t* data, uint32_t count) {
+    auto* c = tileWorldCellOf(self);
+    if (c && c->tileWorld() && data) c->tileWorld()->setShadeMap(data, count);
+}
+
+double bro_tile_world_TileWorld_getShade(void* self, int32_t x, int32_t y) {
+    auto* c = tileWorldCellOf(self);
+    return (c && c->tileWorld()) ? static_cast<double>(c->tileWorld()->shadeAt(x, y)) : 1.0;
+}
+
 }  // extern "C"
+

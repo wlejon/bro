@@ -175,7 +175,7 @@ Value makeCanvasValue(dom::Element* el) {
             if (!eng) return ev::null();
             dom::Document* curDoc = currentHostDocument();
             if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
-            if (ev::isObject(cs->sceneObj.get())) return cs->sceneObj.get();
+            if (cs->el->sceneGraph() != nullptr && ev::isObject(cs->sceneObj.get())) return cs->sceneObj.get();
             scene::SceneGraph* sg = eng->createSceneContext(cs->el);
             if (!sg) return ev::null();
             Value scn = createSceneGraphValue(sg, cs->el);

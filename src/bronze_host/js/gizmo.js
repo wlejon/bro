@@ -21,7 +21,10 @@
             return __bro_native.gizmo.dragging;
         },
         undefined);
-    accessor(ns_gizmo, "hovered", () => null, undefined);
+    accessor(ns_gizmo, "hovered", () => {
+        const h = __bro_native.gizmo.hovered;
+        return (h && h.length > 0) ? h : null;
+    }, undefined);
     fn(ns_gizmo, "show", function show() {
         __bro_native.gizmo.show();
     });

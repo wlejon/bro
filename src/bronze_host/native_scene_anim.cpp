@@ -170,7 +170,11 @@ void* bro_animation_Tween_loop(void* self, bool count_given, int32_t count) {
 
 void* bro_animation_Tween_start(void* self) {
     auto* c = tweenCellOf(self);
-    if (c && c->tween()) c->tween()->start();
+    if (!c || !c->tween()) {
+        ev::throwError("start() on a destroyed tween");
+        return nullptr;
+    }
+    c->tween()->start();
     return self;
 }
 
@@ -203,16 +207,15 @@ void bro_animation_Tween_destroy(void* self) {
 // Tween extended methods
 // =============================================================================
 
-void* bro_animation_Tween_to(void* self, void* targetHandle, uint64_t propsBits, double duration, uint64_t optsBits, uint64_t onUpdateBits) {
+void* bro_animation_Tween_to(void* self, int32_t targetId, uint64_t propsBits, double duration, uint64_t optsBits, uint64_t onUpdateBits) {
     auto* c = tweenCellOf(self);
-    if (!c || !c->tween()) return self;
+    if (!c || !c->tween()) {
+        ev::throwError("to() on a destroyed tween");
+        return nullptr;
+    }
     auto* t = c->tween();
 
-    uint32_t nodeId = 0;
-    if (targetHandle) {
-        auto* n = nodeOf(targetHandle);
-        if (n) nodeId = n->id();
-    }
+    uint32_t nodeId = targetId > 0 ? static_cast<uint32_t>(targetId) : 0;
 
     Value props = ev::fromBits(propsBits);
     float dur = static_cast<float>(duration);
@@ -225,7 +228,10 @@ void* bro_animation_Tween_to(void* self, void* targetHandle, uint64_t propsBits,
         Value easingVal = ev::getProperty(opts, "easing");
         if (ev::isString(easingVal)) {
             std::string easingStr = ev::toUtf8(easingVal);
-            scene::Tween::easeFromString(easingStr, ease);
+            if (!scene::Tween::easeFromString(easingStr, ease)) {
+                ev::throwTypeError("to: unknown easing '" + easingStr + "'");
+                return nullptr;
+            }
         }
         Value delayVal = ev::getProperty(opts, "delay");
         if (ev::isNumber(delayVal)) delay = static_cast<float>(ev::toDouble(delayVal));
@@ -309,7 +315,7 @@ bool registerAnimationNatives(std::string* error) {
     if (!registerNatives_animation(error)) return false;
 
     using namespace natives;
-    return fn("__bro_native.animation.Tween_to", (void*)&bro_animation_Tween_to, "void", {"__bro_native.animation.Tween", "dynamic", "dynamic", "f64", "dynamic", "dynamic"}, error) &&
+    return fn("__bro_native.animation.Tween_to", (void*)&bro_animation_Tween_to, "void", {"__bro_native.animation.Tween", "i32", "dynamic", "f64", "dynamic", "dynamic"}, error) &&
            fn("__bro_native.animation.Tween_parallel", (void*)&bro_animation_Tween_parallel, "void", {"__bro_native.animation.Tween"}, error) &&
            fn("__bro_native.animation.Tween_isRunning", (void*)&bro_animation_Tween_isRunning, "bool", {"__bro_native.animation.Tween"}, error) &&
            fn("__bro_native.animation.Tween_isPaused", (void*)&bro_animation_Tween_isPaused, "bool", {"__bro_native.animation.Tween"}, error) &&
