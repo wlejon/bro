@@ -5,6 +5,16 @@
 // (rising perceived pitch), moving away < 1; detach freezes the sync; a
 // destroyed node self-prunes; the camera binding drives listener position.
 
+// The scene context is compile-gated (BRO_WITH_3D); the minimal profile
+// leaves bro.scene as the unavailable stub and getContext('scene') null.
+if (bro.scene && bro.scene.available === false) {
+    console.log('skip: scene context not compiled in (BRO_WITH_3D off)');
+} else {
+    runSceneAudioEmitter();
+}
+
+function runSceneAudioEmitter() {
+
 const ctx = new AudioContext();
 const sr = ctx.sampleRate;
 
@@ -126,3 +136,5 @@ const clip = ctx.createClip(tone, 1);
 }
 
 console.log('test_scene_audio_emitter: all assertions passed');
+
+}  // runSceneAudioEmitter

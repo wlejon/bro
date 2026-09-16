@@ -100,6 +100,16 @@ assert(pausedRafFired, 'unpaused: queued rAF fires on the next frame');
 // =========================================================================
 // Pause freezes a falling physics body; unpause resumes the fall
 // =========================================================================
+// Physics is compile-gated (BRO_WITH_PHYSICS); the minimal profile leaves
+// `Physics` as the unavailable stub, and the clock sections around this one
+// still run there.
+if (Physics.available === false) {
+    console.log('skip: physics section — Physics not compiled in (BRO_WITH_PHYSICS off)');
+} else {
+    runPhysicsClockSection();
+}
+
+function runPhysicsClockSection() {
 Physics.destroyAll();
 Physics.setGravity(0, -9.81, 0);
 Physics.setTimeStep(1 / 60);
@@ -143,6 +153,7 @@ Physics.destroyAll();
 assert(dropAt1 > 0, 'scale 1 drop fell (' + dropAt1 + ')');
 assert(dropAt2 > dropAt1 * 2, 'scale 2 falls >2x as far in the same span: ' +
        dropAt2 + ' vs ' + dropAt1 + ' (gravity is quadratic in sim time)');
+}  // runPhysicsClockSection
 
 // =========================================================================
 // CSS transition obeys the scale
