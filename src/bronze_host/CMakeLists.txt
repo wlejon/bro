@@ -213,6 +213,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_steam.cpp
     host_menu.cpp
     host_video.cpp
+    host_element_video.cpp
     host_media.cpp
 )
 

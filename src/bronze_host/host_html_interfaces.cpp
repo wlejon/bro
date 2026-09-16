@@ -2,6 +2,7 @@
 #include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
+#include "bronze_host/host_element_video.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
 
@@ -159,9 +160,12 @@ void installHtmlInterfaces() {
     // 5. The media family is one level deeper: <video> and <audio> are
     // HTMLMediaElements, which is the interface a player library tests for
     // (`el instanceof HTMLMediaElement`) before it reads currentTime.
-    g_htmlMediaElementClass.install("HTMLMediaElement", 0, illegalConstructor, nullptr);
+    // The playback surface (src, currentTime, play, readyState, ...) is
+    // host_element_video.cpp; the video-only half (videoWidth, stepFrame,
+    // frameRate) sits on HTMLVideoElement.
+    g_htmlMediaElementClass.install("HTMLMediaElement", 0, illegalConstructor, decorateMediaProto);
     g_htmlMediaElementClass.inherit(g_htmlElementClass);
-    g_htmlVideoElementClass.install("HTMLVideoElement", 0, illegalConstructor, nullptr);
+    g_htmlVideoElementClass.install("HTMLVideoElement", 0, illegalConstructor, decorateVideoProto);
     g_htmlVideoElementClass.inherit(g_htmlMediaElementClass);
     g_htmlAudioElementClass.install("HTMLAudioElement", 0, illegalConstructor, nullptr);
     g_htmlAudioElementClass.inherit(g_htmlMediaElementClass);
