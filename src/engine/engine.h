@@ -279,6 +279,20 @@ public:
     void onFrame(std::function<void(double dtMs)> cb) {
         frameCallbacks_.push_back(std::move(cb));
     }
+    /// A per-frame pump that runs on the engine thread every frame — windowed,
+    /// server, and headless advanceTime() alike — and, unlike onFrame(), is
+    /// NOT gated by bro.time pause: a sibling library's async-job registry
+    /// (background loads / inferences delivering their JS callbacks) has to
+    /// drain whether or not app time is running.
+    void addFramePump(std::function<void()> pump) {
+        framePumps_.push_back(std::move(pump));
+    }
+    /// Runs once at the top of shutdown(), before the runtime, brotensor and
+    /// the audio engine go away: where a sibling cancels + joins its
+    /// in-flight jobs and drops the JS values they root.
+    void addShutdownHook(std::function<void()> hook) {
+        shutdownHooks_.push_back(std::move(hook));
+    }
 
     broaudio::Engine* audioEngine() { return audioEngine_.get(); }
     const broaudio::Engine* audioEngine() const { return audioEngine_.get(); }
@@ -730,6 +744,7 @@ private:
     std::unique_ptr<AudioInference> audioInference_;
 
     std::vector<std::function<void()>> framePumps_;
+    std::vector<std::function<void()>> shutdownHooks_;
     std::vector<std::function<void(double)>> frameCallbacks_;
     void fireFrameCallbacks(double dtMs) {
         for (auto& cb : frameCallbacks_) cb(dtMs);

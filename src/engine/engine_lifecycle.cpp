@@ -67,6 +67,12 @@ void Engine::shutdown() {
 
     util::beginShutdown();
 
+    // Sibling async registries first: they join work threads that may still
+    // be driving brotensor and hold rooted JS callbacks.
+    for (auto& hook : shutdownHooks_) hook();
+    shutdownHooks_.clear();
+    framePumps_.clear();
+
 #if BRO_WITH_PHYSICS
     if (physicsWorld_) physicsWorld_->shutdown();
 #endif

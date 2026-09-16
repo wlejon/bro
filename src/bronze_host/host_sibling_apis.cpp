@@ -51,6 +51,8 @@
 #endif
 #if BRO_WITH_SOUNDML
 #include <brosoundml/api.h>
+#include "api/api.h"  // brokit::api::resolveAssetPath
+#include "util/log.h"
 #endif
 #if BRO_WITH_DIFFUSION
 #include <brodiffusion/api.h>
@@ -276,8 +278,22 @@ void installSiblingApis(engine::Engine& engine) {
 #endif
 #if BRO_WITH_SOUNDML
     // One installer covers stt, tts, diar, rave, wake, kws, sense, gesture
-    // and listen.
+    // and listen. Its async jobs (background loads / inferences) deliver
+    // their JS callbacks from the engine's frame pump, and are cancelled +
+    // joined at shutdown before the runtime and brotensor go away. The
+    // engine is one per process, so the hooks register once even though a
+    // reload re-runs the installers for the new realm.
+    brosoundml::api::setPathResolver(&brokit::api::resolveAssetPath);
+    brosoundml::api::setLogHook([](const std::string& line) { LOG_INFO("%s", line.c_str()); });
     brosoundml::api::installSoundML();
+    {
+        static bool soundmlHooksInstalled = false;
+        if (!soundmlHooksInstalled) {
+            soundmlHooksInstalled = true;
+            engine.addFramePump([] { brosoundml::api::tickSoundML(); });
+            engine.addShutdownHook([] { brosoundml::api::shutdownSoundML(); });
+        }
+    }
 #endif
 #if BRO_WITH_DIFFUSION
     // bro.diffusion and bro.triposplat together.
