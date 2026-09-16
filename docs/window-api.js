@@ -18,6 +18,15 @@
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
+ * Desktop coordinates and dimensions of a rectangle.
+ * @typedef {Object} DisplayRect
+ * @property {number} [x] -  X coordinate in desktop pixels.
+ * @property {number} [y] -  Y coordinate in desktop pixels.
+ * @property {number} [width] -  Width in desktop pixels.
+ * @property {number} [height] -  Height in desktop pixels.
+ */
+
+/**
  * Display device descriptor.
  * @typedef {Object} DisplayInfo
  * @property {number} [id] -  Stable SDL display identifier.
@@ -30,12 +39,12 @@
  * @property {number} [workY] -  Usable work area Y in desktop pixels.
  * @property {number} [workWidth] -  Usable work area width in desktop pixels.
  * @property {number} [workHeight] -  Usable work area height in desktop pixels.
- * @property {{x: number, y: number, width: number, height: number}} [bounds] -  The same rectangle as x/y/width/height, nested.
- * @property {{x: number, y: number, width: number, height: number}} [workArea] -  The same rectangle as workX/workY/workWidth/workHeight, nested.
  * @property {number} [refreshRate] -  Refresh rate in Hz.
  * @property {number} [contentScale] -  OS content scale multiplier (1.0 = 100%).
  * @property {boolean} [isPrimary] -  Whether this is the system primary display.
  * @property {boolean} [isCurrent] -  Whether the active window currently sits on this display.
+ * @property {DisplayRect} [bounds] -  The same rectangle as x/y/width/height, nested.
+ * @property {DisplayRect} [workArea] -  The same rectangle as workX/workY/workWidth/workHeight, nested.
  */
 
 /**

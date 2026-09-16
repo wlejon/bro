@@ -322,6 +322,15 @@ void bro_tile_world_TileWorld_fillShade(void* self, int32_t x0, int32_t y0, int3
 void bro_tile_world_TileWorld_setShadeMapFloat(void* self, const float* data, uint32_t count);
 void bro_tile_world_TileWorld_setShadeMapBytes(void* self, const uint8_t* data, uint32_t count);
 double bro_tile_world_TileWorld_getShade(void* self, int32_t x, int32_t y);
+// [manual] in the IDL: bromesh mints `Mesh` as a host class, not a
+// __bro_native.mesh class, so the result has no native class path to
+// register under and is declared `dynamic` here.
+void* bro_tile_world_TileWorld_extractVoxelMesh(void* self,
+                                              bool opts_minX_given, int32_t opts_minX,
+                                              bool opts_minY_given, int32_t opts_minY,
+                                              bool opts_maxX_given, int32_t opts_maxX,
+                                              bool opts_maxY_given, int32_t opts_maxY,
+                                              bool opts_heightScale_given, double opts_heightScale);
 }
 
 
@@ -386,6 +395,8 @@ bool registerTileWorldNatives(std::string* error) {
              "void", {"__bro_native.tile_world.TileWorld", "u8[]"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_getShade", (void*)&bro_tile_world_TileWorld_getShade,
              "f64", {"__bro_native.tile_world.TileWorld", "i32", "i32"})) return false;
+    if (!reg("__bro_native.tile_world.TileWorld_extractVoxelMesh", (void*)&bro_tile_world_TileWorld_extractVoxelMesh,
+             "dynamic", {"__bro_native.tile_world.TileWorld", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64"})) return false;
 
     bronze::embed::NativeSignature s;
     s.returnType = "__bro_native.tile_world.TileWorld";

@@ -695,9 +695,22 @@ interface DepthOfFieldConfig {
   maxBlur?: number;
 }
 
+/**
+ *  Options of `SceneGraph.setColorLUT`.
+ */
 interface ColorLUTConfig {
-  texture?: string;
-  intensity?: number;
+  /**
+   *  Path of the LUT strip image (N*N by N pixels); empty clears the LUT.
+   */
+  path?: string;
+  /**
+   *  Cube size N; 0 infers it from the strip's aspect ratio.
+   */
+  size?: number;
+  /**
+   *  Blend between the ungraded (0) and fully graded (1) image.
+   */
+  amount?: number;
 }
 
 interface FXAAConfig {
@@ -1671,8 +1684,86 @@ interface PhysicsBounds {
   max?: PhysicsVec3;
 }
 
+/**
+ * A ragdoll pose. What crosses is the FLAT ARRAY a `pose()` / `localPose()`
+ * read answers with (7 floats per part: position xyz + quaternion xyzw, or 16
+ * per part for a column-major matrix), serialised as JSON; the wrapper hands
+ * `Array.from(pose)` to the native, so a Float32Array is accepted directly.
+ */
 interface PhysicsPose {
   data?: number[];
+}
+
+/**
+ *  Motor options for `PhysicsRagdoll.driveToPose`.
+ */
+interface PhysicsRagdollMotorOptions {
+  frequency?: number;
+  damping?: number;
+  maxTorque?: number;
+}
+
+/**
+ * `{ interpolated }` option of `Physics.getTransform` / `getAllTransforms`:
+ * read the render-interpolated transform instead of the last stepped one.
+ */
+interface PhysicsTransformOptions {
+  interpolated?: boolean;
+}
+
+/**
+ *  Driver input of `PhysicsVehicle.setInput`; tracked vehicles read leftRatio/rightRatio.
+ */
+interface PhysicsVehicleInput {
+  forward?: number;
+  right?: number;
+  brake?: number;
+  handBrake?: number;
+  leftRatio?: number;
+  rightRatio?: number;
+}
+
+/**
+ *  One wheel's state, from `PhysicsVehicle.wheelState(index)`.
+ */
+interface PhysicsWheelState {
+  suspensionLength?: number;
+  angularVelocity?: number;
+  steerAngle?: number;
+  rotationAngle?: number;
+  contact?: boolean;
+  contactBody?: number;
+  contactNormal?: PhysicsVec3;
+  position?: PhysicsVec3;
+  rotation?: PhysicsQuat;
+}
+
+/**
+ *  Vehicle state, from `PhysicsVehicle.getState()`.
+ */
+interface PhysicsVehicleState {
+  speed?: number;
+  rpm?: number;
+  gear?: number;
+}
+
+/**
+ *  One overlapping body, from the JSON overlap natives.
+ */
+interface PhysicsOverlapHit {
+  bodyId?: number;
+  userData?: number;
+}
+
+/**
+ * Query filter of the raw raycast / overlap natives: a layer mask, named
+ * layers, and bodies to ignore.
+ */
+interface PhysicsQueryFilter {
+  layerMask?: number;
+  layers?: string[];
+  ignoreBody?: number;
+  ignoreBodies?: number[];
 }
 
 interface PhysicsConstraintOptions {
@@ -2674,6 +2765,28 @@ interface WakeStats {
 }
 
 /**
+ * Desktop coordinates and dimensions of a rectangle.
+ */
+interface DisplayRect {
+  /**
+   *  X coordinate in desktop pixels.
+   */
+  x?: number;
+  /**
+   *  Y coordinate in desktop pixels.
+   */
+  y?: number;
+  /**
+   *  Width in desktop pixels.
+   */
+  width?: number;
+  /**
+   *  Height in desktop pixels.
+   */
+  height?: number;
+}
+
+/**
  * Display device descriptor.
  */
 interface DisplayInfo {
@@ -2733,6 +2846,14 @@ interface DisplayInfo {
    *  Whether the active window currently sits on this display.
    */
   isCurrent?: boolean;
+  /**
+   *  The same rectangle as x/y/width/height, nested.
+   */
+  bounds?: DisplayRect;
+  /**
+   *  The same rectangle as workX/workY/workWidth/workHeight, nested.
+   */
+  workArea?: DisplayRect;
 }
 
 /**
@@ -5304,9 +5425,21 @@ declare class FastNoise {
 declare class PhysicsWorldHandle {
   destroy(): void;
   step(dt: number): void;
+  /**
+   *  Makes this world the active one for the `Physics.*` calls that follow (pushes it).
+   */
+  enter(): void;
+  /**
+   *  Undoes `enter()` (pops the active world).
+   */
+  exit(): void;
 }
 
 declare class PhysicsCharacter {
+  /**
+   *  Tag of the inner rigid body other bodies collide with, or -1.
+   */
+  readonly innerBody: number;
   setPosition(x: number, y: number, z: number): void;
   setVelocity(x: number, y: number, z: number): void;
   setLinearVelocity(x: number, y: number, z: number): void;
@@ -5314,23 +5447,99 @@ declare class PhysicsCharacter {
   getVelocity(): PhysicsVec3;
   getLinearVelocity(): PhysicsVec3;
   getState(): PhysicsCharacterState;
+  /**
+   *  Swaps the character's collision shape (crouch / stand); false if it would overlap.
+   */
+  setShape(shape: PhysicsBodyOptions): boolean;
   update(dt: number): void;
   destroy(): void;
 }
 
 declare class PhysicsVehicle {
+  readonly wheelCount: number;
+  /**
+   *  Tag of the chassis rigid body.
+   */
+  readonly chassisBody: number;
+  /**
+   *  'wheeled', 'tracked' or 'motorcycle'.
+   */
+  readonly type: string;
+  readonly speed: number;
+  readonly rpm: number;
+  readonly gear: number;
   setDriverInput(forward: number, steer: number, brake: number, handBrake: number): void;
+  /**
+   *  Driver input as one object; tracked vehicles may give leftRatio/rightRatio.
+   */
+  setInput(input?: PhysicsVehicleInput): void;
+  /**
+   *  Motorcycle lean controller on/off.
+   */
+  setLeanController(enabled: boolean): void;
+  /**
+   *  Selects a gear (-1 reverse, 0 neutral, 1..n) with a clutch fraction.
+   */
+  setGear(gear: number, clutch?: number): void;
+  /**
+   *  The state of wheel `index`, or null.
+   */
+  wheelState(index: number): PhysicsWheelState;
+  /**
+   *  Speed, engine rpm and current gear.
+   */
+  getState(): PhysicsVehicleState;
   getTransform(): PhysicsTransform;
   destroy(): void;
 }
 
 declare class PhysicsRagdoll {
-  driveToPose(pose: PhysicsPose, dt: number): void;
-  getPose(): PhysicsPose;
+  readonly partCount: number;
+  /**
+   *  World-space pose: 7 floats per part (position xyz, quaternion xyzw).
+   */
+  pose(): Float32Array;
+  /**
+   *  Parent-relative pose, same layout as `pose()`.
+   */
+  localPose(): Float32Array;
+  /**
+   *  Teleports every part to `pose`.
+   */
+  setPose(pose: PhysicsPose): boolean;
+  /**
+   *  Drives the parts toward `pose` with motorised joints.
+   */
+  driveToPose(pose: PhysicsPose, motor?: PhysicsRagdollMotorOptions): boolean;
+  /**
+   *  Moves the parts kinematically toward `pose` over `dt` seconds.
+   */
+  driveToPoseKinematic(pose: PhysicsPose, dt: number): boolean;
+  stopDrive(): void;
+  addImpulse(x: number, y: number, z: number): void;
+  activate(): void;
+  deactivate(): void;
+  isActive(): boolean;
+  /**
+   *  Body tag of part `index`, or -1.
+   */
+  partBody(index: number): number;
+  /**
+   *  Parent part index of part `index`, or -1 for the root.
+   */
+  partParent(index: number): number;
+  /**
+   *  Index of the part named `name`, or -1.
+   */
+  partIndex(name: string): number;
   destroy(): void;
 }
 
 declare class PhysicsSoftBody {
+  /**
+   *  Tag of the underlying rigid body.
+   */
+  readonly body: number;
   readonly vertexCount: number;
   topology(): PhysicsSoftBodyTopology;
   vertices(): Float32Array;
@@ -5538,7 +5747,10 @@ declare class SceneNode {
   burst(count: number): void;
   clear(): void;
   probeCapture(): void;
-  savePly(path: string): void;
+  /**
+   *  Writes a Gaussian-splat node's cloud as a PLY file; false when the write fails.
+   */
+  savePly(path: string): boolean;
 }
 
 declare class SceneGraph {
@@ -5593,7 +5805,12 @@ declare class SceneGraph {
   setSSAO(opts?: SSAOConfig): void;
   setSSR(opts?: SSRConfig): void;
   setDepthOfField(opts?: DepthOfFieldConfig): void;
-  setColorLUT(opts?: ColorLUTConfig): void;
+  /**
+   * Loads a colour-grading LUT strip (`path`, `size` inferred from the strip
+   * when 0, `amount` 0..1) and applies it as the last tonemap stage; false
+   * when the strip fails to decode. Call with no options (or null) to clear.
+   */
+  setColorLUT(opts?: ColorLUTConfig): boolean;
   setFXAA(enabled: boolean): void;
   setRenderScale(scale: number): void;
   setMSAA(samples: number): void;
@@ -6160,7 +6377,7 @@ declare namespace Physics {
   function createBody(config: PhysicsBodyOptions): number;
   function destroyBody(tag: number): void;
   function destroyAll(): void;
-  function getTransform(tag: number): PhysicsTransform;
+  function getTransform(tag: number, opts?: PhysicsTransformOptions): PhysicsTransform;
   function getVelocity(tag: number): PhysicsVelocity;
   function setPosition(tag: number, x: number, y: number, z: number): void;
   function setRotation(tag: number, x: number, y: number, z: number, w: number): void;
@@ -6171,8 +6388,15 @@ declare namespace Physics {
   function addTorque(tag: number, x: number, y: number, z: number): void;
   function setUserData(tag: number, data: number): void;
   function getUserData(tag: number): number;
-  function setLayer(tag: number, layer: number): void;
+  /**
+   *  Moves a body to a named collision layer (see `setLayers`); false if unknown.
+   */
+  function setLayer(tag: number, layer: string): boolean;
   function setKinematic(tag: number): void;
+  /**
+   * 'static' | 'dynamic' | 'kinematic', or a boolean (true = static). The
+   * native behind it takes the boolean; the wrapper maps the strings.
+   */
   function setMotionType(tag: number, type: any): void;
   function moveKinematic(tag: number, x: number, y: number, z: number, dt: number): void;
   function raycast(): void;
@@ -6194,6 +6418,10 @@ declare namespace Physics {
   function overlapSphereRaw(x: number, y: number, z: number, radius: number): number[];
   function overlapBoxRaw(cx: number, cy: number, cz: number, hx: number, hy: number, hz: number): number[];
   function overlapPointRaw(x: number, y: number, z: number, mask?: number): number[];
+  function raycastClosestJsonRaw(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, filter?: PhysicsQueryFilter): PhysicsRayHit;
+  function raycastJsonRaw(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number, filter?: PhysicsQueryFilter): PhysicsRayHit[];
+  function overlapShapeJsonRaw(config: PhysicsOverlapShapeOptions): PhysicsOverlapHit[];
+  function overlapPointJsonRaw(x: number, y: number, z: number, filter?: PhysicsQueryFilter): PhysicsOverlapHit[];
   function getContacts(): PhysicsContact[];
   function setFrictionCombine(tag: number, mode: string): void;
   function setRestitutionCombine(tag: number, mode: string): void;
@@ -6205,14 +6433,24 @@ declare namespace Physics {
   function setFriction(tag: number, friction: number): void;
   function setRestitution(tag: number, restitution: number): void;
   function getBodyProperties(tag: number): PhysicsBodyProperties;
-  function setAreaOverride(tag: number, config: PhysicsAreaOverride): void;
+  /**
+   *  False when `tag` is not a sensor body.
+   */
+  function setAreaOverride(tag: number, config: PhysicsAreaOverride): boolean;
   function setTimeStep(dt: number): void;
+  /**
+   *  The fixed step in seconds (1/60 with no world).
+   */
+  function getTimeStep(): number;
   function step(dt: number): void;
   function setInterpolation(enabled: boolean): void;
   function getInterpolation(): boolean;
   function isActive(tag: number): boolean;
   function activate(tag: number): void;
-  function getAllTransforms(worldHandle?: number): Float32Array;
+  /**
+   *  Every body's transform, 8 floats per body (tag, position xyz, quaternion xyzw), in one array.
+   */
+  function getAllTransforms(opts?: PhysicsTransformOptions): Float32Array;
   function createCharacter(config: PhysicsCharacterOptions): PhysicsCharacter;
   function createVehicle(config: PhysicsVehicleOptions): PhysicsVehicle;
   function createRagdoll(config: PhysicsRagdollOptions): PhysicsRagdoll;
@@ -6221,8 +6459,16 @@ declare namespace Physics {
   function destroyConstraint(tag: number): void;
   function setConstraintEnabled(tag: number, enabled: boolean): void;
   function isConstraintEnabled(tag: number): boolean;
-  function setWheelMotor(vehicleTag: number, wheelIndex: number, motorTorque: number, brakeTorque: number): void;
-  function setConstraintMotor(tag: number, config: PhysicsConstraintMotorOptions): void;
+  /**
+   * Adjusts a 'wheel' constraint's motor at run time (no-op for other
+   * constraints): `enabled` as 0/1 (the wrapper maps a boolean), the target
+   * angular `speed` and the `maxTorque` it may apply.
+   */
+  function setWheelMotor(handle: number, enabled: number, speed: number, maxTorque: number): void;
+  /**
+   *  False when `tag` is not a constraint with a motor.
+   */
+  function setConstraintMotor(tag: number, config: PhysicsConstraintMotorOptions): boolean;
   function setConstraintBreakingImpulse(tag: number, impulse: number): void;
   function getConstraintBreakingImpulse(tag: number): number;
   function getBrokenConstraints(): number[];

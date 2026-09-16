@@ -23,8 +23,16 @@ void popActiveWorld() {
 
 bool registerNatives_physics(std::string* error);
 
+// Physics.setMotionType is [manual] in the IDL: the public member takes
+// 'static' | 'dynamic' | 'kinematic' or a boolean, the native takes the
+// boolean, and js/physics.js maps between them. So the native is declared
+// and registered here, not in the generated natives/physics/ pair.
+extern "C" void bro_physics_setMotionType(int32_t tag, bool isStatic);
+
 bool registerPhysicsNatives(std::string* error) {
-    return registerNatives_physics(error);
+    if (!registerNatives_physics(error)) return false;
+    return natives::fn("__bro_native.physics.setMotionType", (void*)&bro_physics_setMotionType,
+                       "void", {"i32", "bool"}, error);
 }
 
 static thread_local std::vector<float> tl_allTransformsBuf;

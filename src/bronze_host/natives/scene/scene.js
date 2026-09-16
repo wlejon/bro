@@ -407,7 +407,7 @@
     });
     fn(SceneNode.prototype, "savePly", function savePly(path) {
         if (path === undefined) throw new TypeError("bro.scene.SceneNode.prototype.savePly: path is required");
-        __bro_native.scene.SceneNode_savePly(this, path);
+        return __bro_native.scene.SceneNode_savePly(this, path);
     });
 
     // ---- bro.scene.SceneGraph ------------------------------------------------
@@ -637,7 +637,7 @@
     });
     fn(SceneGraph.prototype, "setColorLUT", function setColorLUT(opts) {
         const d_opts = opts === undefined ? {} : opts;
-        __bro_native.scene.SceneGraph_setColorLUT(this, d_opts.texture !== undefined, d_opts.texture === undefined ? '' : d_opts.texture, d_opts.intensity !== undefined, d_opts.intensity === undefined ? 0 : d_opts.intensity);
+        return __bro_native.scene.SceneGraph_setColorLUT(this, d_opts.path === undefined ? "" : d_opts.path, d_opts.size === undefined ? 0 : d_opts.size, d_opts.amount === undefined ? 1 : d_opts.amount);
     });
     fn(SceneGraph.prototype, "setFXAA", function setFXAA(enabled) {
         if (enabled === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setFXAA: enabled is required");

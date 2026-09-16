@@ -25,7 +25,7 @@
 //
 // Gate: BRO_WITH_3D (native_tile_world_register.cpp registers nothing when it is off).
 //
-// Names classes of: mesh, scene — register those subsystems first.
+// Names classes of: scene — register those subsystems first.
 #pragma once
 
 #include <stdbool.h>
@@ -164,11 +164,6 @@ int32_t bro_tile_world_TileWorld_computeRegions_area(int32_t index);
 //   registered at __bro_native.tile_world.TileWorld_applyAutotile
 //   rules: JSON of sequence<TileAutotileRule>
 void bro_tile_world_TileWorld_applyAutotile(void* self, int32_t layer, const char* rules);
-
-// bro.tile_world.TileWorld.prototype.extractVoxelMesh
-//   registered at __bro_native.tile_world.TileWorld_extractVoxelMesh
-//   opts_minX_given, opts_minY_given, opts_maxX_given, opts_maxY_given, opts_heightScale_given: false when the value was not passed (no declared default)
-void* bro_tile_world_TileWorld_extractVoxelMesh(void* self, bool opts_minX_given, int32_t opts_minX, bool opts_minY_given, int32_t opts_minY, bool opts_maxX_given, int32_t opts_maxX, bool opts_maxY_given, int32_t opts_maxY, bool opts_heightScale_given, double opts_heightScale);
 
 // bro.tile_world.TileWorld.prototype.setOrigin
 //   registered at __bro_native.tile_world.TileWorld_setOrigin

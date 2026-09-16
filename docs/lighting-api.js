@@ -142,9 +142,11 @@
  */
 
 /**
+ *  Options of `SceneGraph.setColorLUT`.
  * @typedef {Object} ColorLUTConfig
- * @property {string} [texture]
- * @property {number} [intensity]
+ * @property {string} [path=""] -  Path of the LUT strip image (N*N by N pixels); empty clears the LUT.
+ * @property {number} [size=0] -  Cube size N; 0 infers it from the strip's aspect ratio.
+ * @property {number} [amount=1] -  Blend between the ungraded (0) and fully graded (1) image.
  */
 
 /**

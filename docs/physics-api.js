@@ -254,8 +254,77 @@
  */
 
 /**
+ * A ragdoll pose. What crosses is the FLAT ARRAY a `pose()` / `localPose()`
+ * read answers with (7 floats per part: position xyz + quaternion xyzw, or 16
+ * per part for a column-major matrix), serialised as JSON; the wrapper hands
+ * `Array.from(pose)` to the native, so a Float32Array is accepted directly.
  * @typedef {Object} PhysicsPose
  * @property {Array<number>} [data]
+ */
+
+/**
+ *  Motor options for `PhysicsRagdoll.driveToPose`.
+ * @typedef {Object} PhysicsRagdollMotorOptions
+ * @property {number} [frequency]
+ * @property {number} [damping]
+ * @property {number} [maxTorque]
+ */
+
+/**
+ * `{ interpolated }` option of `Physics.getTransform` / `getAllTransforms`:
+ * read the render-interpolated transform instead of the last stepped one.
+ * @typedef {Object} PhysicsTransformOptions
+ * @property {boolean} [interpolated=false]
+ */
+
+/**
+ *  Driver input of `PhysicsVehicle.setInput`; tracked vehicles read leftRatio/rightRatio.
+ * @typedef {Object} PhysicsVehicleInput
+ * @property {number} [forward]
+ * @property {number} [right]
+ * @property {number} [brake]
+ * @property {number} [handBrake]
+ * @property {number} [leftRatio]
+ * @property {number} [rightRatio]
+ */
+
+/**
+ *  One wheel's state, from `PhysicsVehicle.wheelState(index)`.
+ * @typedef {Object} PhysicsWheelState
+ * @property {number} [suspensionLength]
+ * @property {number} [angularVelocity]
+ * @property {number} [steerAngle]
+ * @property {number} [rotationAngle]
+ * @property {boolean} [contact]
+ * @property {number} [contactBody]
+ * @property {PhysicsVec3} [contactNormal]
+ * @property {PhysicsVec3} [position]
+ * @property {PhysicsQuat} [rotation]
+ */
+
+/**
+ *  Vehicle state, from `PhysicsVehicle.getState()`.
+ * @typedef {Object} PhysicsVehicleState
+ * @property {number} [speed]
+ * @property {number} [rpm]
+ * @property {number} [gear]
+ */
+
+/**
+ *  One overlapping body, from the JSON overlap natives.
+ * @typedef {Object} PhysicsOverlapHit
+ * @property {number} [bodyId]
+ * @property {number} [userData]
+ */
+
+/**
+ * Query filter of the raw raycast / overlap natives: a layer mask, named
+ * layers, and bodies to ignore.
+ * @typedef {Object} PhysicsQueryFilter
+ * @property {number} [layerMask]
+ * @property {Array<string>} [layers]
+ * @property {number} [ignoreBody]
+ * @property {Array<number>} [ignoreBodies]
  */
 
 /**
@@ -297,9 +366,26 @@ class PhysicsWorldHandle {
    */
   step(dt) {}
 
+  /**
+   *  Makes this world the active one for the `Physics.*` calls that follow (pushes it).
+   */
+  enter() {}
+
+  /**
+   *  Undoes `enter()` (pops the active world).
+   */
+  exit() {}
+
 }
 
 class PhysicsCharacter {
+
+  /**
+   *  Tag of the inner rigid body other bodies collide with, or -1.
+   * @readonly
+   * @type {number}
+   */
+  innerBody;
 
   /**
    * @param {number} x
@@ -343,6 +429,14 @@ class PhysicsCharacter {
   getState() {}
 
   /**
+   *  Swaps the character's collision shape (crouch / stand); false if it would overlap.
+   *
+   * @param {PhysicsBodyOptions} shape
+   * @returns {boolean}
+   */
+  setShape(shape) {}
+
+  /**
    * @param {number} dt
    */
   update(dt) {}
@@ -354,12 +448,86 @@ class PhysicsCharacter {
 class PhysicsVehicle {
 
   /**
+   * @readonly
+   * @type {number}
+   */
+  wheelCount;
+
+  /**
+   *  Tag of the chassis rigid body.
+   * @readonly
+   * @type {number}
+   */
+  chassisBody;
+
+  /**
+   *  'wheeled', 'tracked' or 'motorcycle'.
+   * @readonly
+   * @type {string}
+   */
+  type;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  speed;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  rpm;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  gear;
+
+  /**
    * @param {number} forward
    * @param {number} steer
    * @param {number} brake
    * @param {number} handBrake
    */
   setDriverInput(forward, steer, brake, handBrake) {}
+
+  /**
+   *  Driver input as one object; tracked vehicles may give leftRatio/rightRatio.
+   *
+   * @param {PhysicsVehicleInput} [input={}]
+   */
+  setInput(input) {}
+
+  /**
+   *  Motorcycle lean controller on/off.
+   *
+   * @param {boolean} enabled
+   */
+  setLeanController(enabled) {}
+
+  /**
+   *  Selects a gear (-1 reverse, 0 neutral, 1..n) with a clutch fraction.
+   *
+   * @param {number} gear
+   * @param {number} [clutch=1]
+   */
+  setGear(gear, clutch) {}
+
+  /**
+   *  The state of wheel `index`, or null.
+   *
+   * @param {number} index
+   * @returns {PhysicsWheelState}
+   */
+  wheelState(index) {}
+
+  /**
+   *  Speed, engine rpm and current gear.
+   * @returns {PhysicsVehicleState}
+   */
+  getState() {}
 
   /**
    * @returns {PhysicsTransform}
@@ -373,21 +541,103 @@ class PhysicsVehicle {
 class PhysicsRagdoll {
 
   /**
-   * @param {PhysicsPose} pose
-   * @param {number} dt
+   * @readonly
+   * @type {number}
    */
-  driveToPose(pose, dt) {}
+  partCount;
 
   /**
-   * @returns {PhysicsPose}
+   *  World-space pose: 7 floats per part (position xyz, quaternion xyzw).
+   * @returns {Float32Array}
    */
-  getPose() {}
+  pose() {}
+
+  /**
+   *  Parent-relative pose, same layout as `pose()`.
+   * @returns {Float32Array}
+   */
+  localPose() {}
+
+  /**
+   *  Teleports every part to `pose`.
+   *
+   * @param {PhysicsPose} pose
+   * @returns {boolean}
+   */
+  setPose(pose) {}
+
+  /**
+   *  Drives the parts toward `pose` with motorised joints.
+   *
+   * @param {PhysicsPose} pose
+   * @param {PhysicsRagdollMotorOptions} [motor]
+   * @returns {boolean}
+   */
+  driveToPose(pose, motor) {}
+
+  /**
+   *  Moves the parts kinematically toward `pose` over `dt` seconds.
+   *
+   * @param {PhysicsPose} pose
+   * @param {number} dt
+   * @returns {boolean}
+   */
+  driveToPoseKinematic(pose, dt) {}
+
+  stopDrive() {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   */
+  addImpulse(x, y, z) {}
+
+  activate() {}
+
+  deactivate() {}
+
+  /**
+   * @returns {boolean}
+   */
+  isActive() {}
+
+  /**
+   *  Body tag of part `index`, or -1.
+   *
+   * @param {number} index
+   * @returns {number}
+   */
+  partBody(index) {}
+
+  /**
+   *  Parent part index of part `index`, or -1 for the root.
+   *
+   * @param {number} index
+   * @returns {number}
+   */
+  partParent(index) {}
+
+  /**
+   *  Index of the part named `name`, or -1.
+   *
+   * @param {string} name
+   * @returns {number}
+   */
+  partIndex(name) {}
 
   destroy() {}
 
 }
 
 class PhysicsSoftBody {
+
+  /**
+   *  Tag of the underlying rigid body.
+   * @readonly
+   * @type {number}
+   */
+  body;
 
   /**
    * @readonly
@@ -485,9 +735,10 @@ Physics.destroyAll = function() {};
 
 /**
  * @param {number} tag
+ * @param {PhysicsTransformOptions} [opts]
  * @returns {PhysicsTransform}
  */
-Physics.getTransform = function(tag) {};
+Physics.getTransform = function(tag, opts) {};
 
 /**
  * @param {number} tag
@@ -565,8 +816,11 @@ Physics.setUserData = function(tag, data) {};
 Physics.getUserData = function(tag) {};
 
 /**
+ *  Moves a body to a named collision layer (see `setLayers`); false if unknown.
+ *
  * @param {number} tag
- * @param {number} layer
+ * @param {string} layer
+ * @returns {boolean}
  */
 Physics.setLayer = function(tag, layer) {};
 
@@ -576,6 +830,9 @@ Physics.setLayer = function(tag, layer) {};
 Physics.setKinematic = function(tag) {};
 
 /**
+ * 'static' | 'dynamic' | 'kinematic', or a boolean (true = static). The
+ * native behind it takes the boolean; the wrapper maps the strings.
+ *
  * @param {number} tag
  * @param {*} type
  */
@@ -686,6 +943,47 @@ Physics.overlapBoxRaw = function(cx, cy, cz, hx, hy, hz) {};
 Physics.overlapPointRaw = function(x, y, z, mask) {};
 
 /**
+ * @param {number} ox
+ * @param {number} oy
+ * @param {number} oz
+ * @param {number} dx
+ * @param {number} dy
+ * @param {number} dz
+ * @param {number} maxDist
+ * @param {PhysicsQueryFilter} [filter]
+ * @returns {PhysicsRayHit}
+ */
+Physics.raycastClosestJsonRaw = function(ox, oy, oz, dx, dy, dz, maxDist, filter) {};
+
+/**
+ * @param {number} ox
+ * @param {number} oy
+ * @param {number} oz
+ * @param {number} dx
+ * @param {number} dy
+ * @param {number} dz
+ * @param {number} maxDist
+ * @param {PhysicsQueryFilter} [filter]
+ * @returns {Array<PhysicsRayHit>}
+ */
+Physics.raycastJsonRaw = function(ox, oy, oz, dx, dy, dz, maxDist, filter) {};
+
+/**
+ * @param {PhysicsOverlapShapeOptions} config
+ * @returns {Array<PhysicsOverlapHit>}
+ */
+Physics.overlapShapeJsonRaw = function(config) {};
+
+/**
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {PhysicsQueryFilter} [filter]
+ * @returns {Array<PhysicsOverlapHit>}
+ */
+Physics.overlapPointJsonRaw = function(x, y, z, filter) {};
+
+/**
  * @returns {Array<PhysicsContact>}
  */
 Physics.getContacts = function() {};
@@ -751,8 +1049,11 @@ Physics.setRestitution = function(tag, restitution) {};
 Physics.getBodyProperties = function(tag) {};
 
 /**
+ *  False when `tag` is not a sensor body.
+ *
  * @param {number} tag
  * @param {PhysicsAreaOverride} config
+ * @returns {boolean}
  */
 Physics.setAreaOverride = function(tag, config) {};
 
@@ -760,6 +1061,12 @@ Physics.setAreaOverride = function(tag, config) {};
  * @param {number} dt
  */
 Physics.setTimeStep = function(dt) {};
+
+/**
+ *  The fixed step in seconds (1/60 with no world).
+ * @returns {number}
+ */
+Physics.getTimeStep = function() {};
 
 /**
  * @param {number} dt
@@ -788,10 +1095,12 @@ Physics.isActive = function(tag) {};
 Physics.activate = function(tag) {};
 
 /**
- * @param {number} [worldHandle]
+ *  Every body's transform, 8 floats per body (tag, position xyz, quaternion xyzw), in one array.
+ *
+ * @param {PhysicsTransformOptions} [opts]
  * @returns {Float32Array}
  */
-Physics.getAllTransforms = function(worldHandle) {};
+Physics.getAllTransforms = function(opts) {};
 
 /**
  * @param {PhysicsCharacterOptions} config
@@ -841,16 +1150,23 @@ Physics.setConstraintEnabled = function(tag, enabled) {};
 Physics.isConstraintEnabled = function(tag) {};
 
 /**
- * @param {number} vehicleTag
- * @param {number} wheelIndex
- * @param {number} motorTorque
- * @param {number} brakeTorque
+ * Adjusts a 'wheel' constraint's motor at run time (no-op for other
+ * constraints): `enabled` as 0/1 (the wrapper maps a boolean), the target
+ * angular `speed` and the `maxTorque` it may apply.
+ *
+ * @param {number} handle
+ * @param {number} enabled
+ * @param {number} speed
+ * @param {number} maxTorque
  */
-Physics.setWheelMotor = function(vehicleTag, wheelIndex, motorTorque, brakeTorque) {};
+Physics.setWheelMotor = function(handle, enabled, speed, maxTorque) {};
 
 /**
+ *  False when `tag` is not a constraint with a motor.
+ *
  * @param {number} tag
  * @param {PhysicsConstraintMotorOptions} config
+ * @returns {boolean}
  */
 Physics.setConstraintMotor = function(tag, config) {};
 

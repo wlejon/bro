@@ -587,7 +587,7 @@ void bro_scene_SceneGraph_setDepthOfField(void* self, bool opts_focusDistance_gi
 
 // bro.scene.SceneGraph.prototype.setColorLUT
 //   registered at __bro_native.scene.SceneGraph_setColorLUT
-bool bro_scene_SceneGraph_setColorLUT(void* self, const char* path, int32_t size, double amount);
+bool bro_scene_SceneGraph_setColorLUT(void* self, const char* opts_path, int32_t opts_size, double opts_amount);
 
 // bro.scene.SceneGraph.prototype.setFXAA
 //   registered at __bro_native.scene.SceneGraph_setFXAA

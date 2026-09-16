@@ -624,7 +624,10 @@ class SceneNode {
   probeCapture() {}
 
   /**
+   *  Writes a Gaussian-splat node's cloud as a PLY file; false when the write fails.
+   *
    * @param {string} path
+   * @returns {boolean}
    */
   savePly(path) {}
 
@@ -913,7 +916,12 @@ class SceneGraph {
   setDepthOfField(opts) {}
 
   /**
+   * Loads a colour-grading LUT strip (`path`, `size` inferred from the strip
+   * when 0, `amount` 0..1) and applies it as the last tonemap stage; false
+   * when the strip fails to decode. Call with no options (or null) to clear.
+   *
    * @param {ColorLUTConfig} [opts]
+   * @returns {boolean}
    */
   setColorLUT(opts) {}
 
