@@ -3,11 +3,14 @@
 The host layer for [bronze](../../../bronze)-compiled (AOT) JavaScript:
 registers a browser-shaped set of host globals (`document`, `window`,
 `requestAnimationFrame`, the timers, `Image`, `XMLHttpRequest`, `fetch`, `Blob`
-and friends, the observers, Web Audio, `Physics`, `AI`, `bro.net`/`WebSocket`)
-backed by the engine, wraps `webgl::WebGL2RenderingContext` as a bronze object covering the
-WebGL2 surface three.js r160's renderer drives, and owns the per-frame seam that
-advances the clock, delivers completions, fires callbacks and performs the
-microtask checkpoint.
+and friends, the observers, `Physics`, `bro.net`/`WebSocket`) backed by the
+engine, wraps `webgl::WebGL2RenderingContext` as a bronze object covering the
+WebGL2 surface three.js r160's renderer drives, mounts each sibling library's
+own JavaScript API (`<name>_api`: Web Audio, `AI`, `bro.mesh`, `bro.lm`,
+`bro.tensor`, ... — see [docs/multi-repo-workflow.md](../../docs/multi-repo-workflow.md))
+onto the roots it registers, and owns the per-frame seam that advances the
+clock, delivers completions, fires callbacks and performs the microtask
+checkpoint.
 
 Enabled by default (`BRO_WITH_BRONZE=ON`).
 
@@ -34,13 +37,22 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
 | `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, and `localStorage` |
 | `eval.cpp`, `eval.h` | in-process JS compilation via Bronze CLI, dynamic evaluation (`eval()`, `new Function()`) and script execution |
-| `host_natives.h`, `host_bro_root.cpp` | the `bro` / `__bro` roots, the `__bro_native` root, and **the native convention** every `native_*.cpp` follows |
-| `native_time.cpp`, `native_paths.cpp`, `native_window.cpp`, `native_settings.cpp`, `native_dunder_bro.cpp` | the C entry points behind `bro.time`, `bro.appDir`/`userDataDir`/`resolvePath`, `bro.window`, `bro.settings`, and the panels' `__bro.*`, registered through `embed::registerNative` |
-| `native_mesh.cpp`, `js/mesh.js` | `bro.mesh`, `Mesh` and `MeshBVH`: two native classes over bromesh, the attribute reads as copy-mode typed-array returns and the fresh results (`triangleAreas`, meshlets, Draco bytes) as transfer-mode ones, with the public classes chained over the native prototypes |
-| `js/bro_core.js` | the public shapes of those namespaces, JavaScript assembled over the natives |
+| `eval_jit.cpp`, `eval_jit.h` | the in-process JIT path for the same scripts (`bronze::eval` over the live native registry; `BRO_DISABLE_JIT=1` falls back to the AOT path) |
+| `host_brokit.cpp` | brokit's web platform (`fetch`, `Blob`, `URL`, `AbortController`, `WebSocket`, streams, crypto, `indexedDB`, `EventTarget`, ...) and Node half installed into the realm through `brokit_api`, and which of its installers are skipped in favour of bro's own |
+| `host_natives.h`, `host_bro_root.cpp` | the `bro` / `__bro` roots, the `__bro_native` root, **the install order** (roots, sibling APIs, natives, `bro_core.js`), the Worker realm's cut-down root, and **the native convention** every `native_*.cpp` follows |
+| `host_sibling_apis.cpp` | `installSiblingApis`: the ONE call site of every sibling library's `install*()` — broaudio, brogameagent, bromesh, brotensor, brolm, brosoundml, brodiffusion, brovisionml, broflora, broimage — each exactly once per realm, in a fixed order, after the roots exist; the gameagent navmesh hooks and brosoundml's frame pump / shutdown hook live with it |
+| `native_time.cpp`, `native_paths.cpp`, `native_window.cpp`, `native_settings.cpp`, `native_dunder_bro.cpp`, `native_net.cpp`, `native_motion.cpp`, `native_physics_*.cpp`, `native_scene_*.cpp` | the hand-written C bodies behind bro's engine-owned namespaces: `bro.time`, `bro.appDir`/`userDataDir`/`resolvePath`, `bro.window`, `bro.settings`, the panels' `__bro.*`, `bro.net`, `bro.motion`, `Physics`, and the 3D families (`bro.scene`, terrain, clipmap, tile_world, lighting, animation, gizmo) |
+| `natives/<sub>/` | brosurface's output per engine-owned namespace (`gen/emit_natives.mjs` in `../brosurface`): `native_<sub>_decl.h`, the prototypes the compiler checks the bodies against; `native_<sub>_register.cpp`, the `embed::registerNative` calls under `__bro_native.<sub>`; `<sub>.js`, the wrapper; `module.globals`. Only the subsystems listed in `CMakeLists.txt` are compiled; `natives/flora` and `natives/mic` are generator output with no register file, since broflora_api and broaudio_api own those namespaces now |
+| `js/*.js`, `host_js_modules.cpp` | bro's own JavaScript, compiled by bronze at build time into `bro_bronze_js` and entered per module by `host_js_modules.cpp`, which then lifts the classes a module assigned onto `globalThis` into the host-global registry (`adoptGlobalProperty`) |
+| `js/bro_core.js` | the public shapes of bro's own namespaces, JavaScript assembled over the natives |
 | `native_manifest_tool.cpp`, `js_entry_stubs.cpp` | `bro-native-manifest`, the build-time tool that prints the manifest `bro_core.js` is compiled against, and the no-op entries it (and arm64 macOS) links |
+| `host_worker.cpp`, `host_worker_msg.cpp` | `Worker`: a thread with its own bronze realm, and the tagged serialization a `postMessage` crosses realms as |
 | `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
+
+Not every file is in the table; the rest are one web interface each and are
+named by what they own (`host_range.cpp`, `host_selection.cpp`,
+`host_matchmedia.cpp`, `host_video.cpp`, ...).
 
 ## How a compiled app gets in
 
@@ -186,10 +198,13 @@ only the compiled ones see no payload.
   `click` event without `applyMouseOffset`, so every listener sees 0, compiled
   and interpreted alike. `mousedown`, `mouseup`, `mousemove` and `wheel` carry
   real offsets.
-- **Listeners on arbitrary elements.** This layer creates `<canvas>` and
-  `<img>` and nothing else, so the reachable targets are a canvas it made, the
-  document (i.e. `documentElement`), and the window. There is no
-  `querySelector`.
+- **Listeners on arbitrary elements** are no longer a gap: `addEventListener`
+  / `removeEventListener` / `dispatchEvent` sit on `Element.prototype`
+  (`installElementEventTarget`, `host_dom_events.cpp`, reading the receiver),
+  `document.createElement` takes any tag, and `querySelector` /
+  `querySelectorAll` exist on both the document and elements
+  (`dom_document.cpp`, `host_element.cpp`). What remains true is the
+  boundary rule above: the element is the engine's, the event is a copy.
 - A registration that cannot be delivered **throws**. A type that is not a
   string, a listener that is not a function, a target element that does not
   exist yet — each is a `TypeError` or an `Error` naming the object, never a
@@ -235,11 +250,15 @@ not reach. `tests/bronze_host/run_checks.sh class` pins it, along with the share
 `HostClass` (`host_class.cpp`) wraps the three calls, and every family in this
 layer has been through it: Image, Element/HTMLElement, Blob/File/FileReader,
 XMLHttpRequest, Headers/Request/Response, AbortController/AbortSignal,
-MutationObserver/ResizeObserver, WebSocket, VideoEncoder/GifEncoder, the nine
-Web Audio interfaces, PhysicsCharacter/PhysicsSoftBody and the three AI
-handles. `HostClass::inherit` chains one prototype onto another through the
-program's own `Object.setPrototypeOf`, which is what makes `file instanceof
-Blob` and `gain instanceof AudioNode` true.
+MutationObserver/ResizeObserver, WebSocket, VideoEncoder/GifEncoder,
+PhysicsCharacter/PhysicsSoftBody. The families that moved out with their
+libraries — the Web Audio interfaces (broaudio), the AI handles
+(brogameagent), `Mesh`/`MeshBVH`/`Skeleton` (bromesh), `LMModel` (brolm)
+and the rest — are built by each sibling's own copy of the same
+`HostClass` (`../<name>/src/api/host_class.cpp`). `HostClass::inherit`
+chains one prototype onto another through the program's own
+`Object.setPrototypeOf`, which is what makes `file instanceof Blob` and
+`gain instanceof AudioNode` true.
 
 Converting forces the members to read their RECEIVER rather than close over the
 payload, which fixed a real hazard on the way past: a detached method holding a
@@ -357,6 +376,61 @@ under `js/` and entered by `installBroRoots` after the roots are registered.
 So `const t = bro.time; t.scale`, `Object.keys(bro.settings)`,
 `typeof __bro.perf.fps` all behave as a program expects — they are ordinary
 accessors and functions on ordinary objects.
+
+### The install order, and the sibling APIs
+
+`installBroRoots` (`host_bro_root.cpp`) runs in one fixed order, and the
+order is load-bearing:
+
+1. **the roots** — `bro`, `__bro`, `__bro_native` (one empty sub-object per
+   namespace, so a dynamic read of `__bro_native.perf` lands on an object),
+   and the `Physics` placeholder — are published as host globals;
+2. **every sibling library's JavaScript API**, once each, through
+   `installSiblingApis` (`host_sibling_apis.cpp`): audio + mic, gameagent,
+   mesh + rigging, tensor, lm, soundml, diffusion (+ triposplat), vision,
+   flora, then brokit's image kernels and broimage's codecs into the one
+   `bro.image` object;
+3. bro's own hand-built namespaces (`bro.math`, `bro.text`, `bro.gpu`,
+   `bro.steam`, `bro.menu`, `bro.media`) and the `available: false` stubs
+   for every namespace the build compiled out;
+4. **the natives** — `registerBroNatives`, per thread, no engine needed;
+5. the settings observer, then **`js/bro_core.js`**, which fills the public
+   objects from the natives.
+
+The siblings go second because each installer wants a root that already
+exists: brotensor's `installTensor` reads `__bro_native` and would create
+its own — shadowing the real root — if it ran first; brolm, brosoundml,
+brodiffusion, brovisionml, brogameagent, bromesh and broimage look up `bro`
+and register their OWN root when none is there; broaudio's `installMic`
+re-sets the `bro` global to whatever it finds; broflora's `flora.js` reads
+`__bro_native.flora`. `bro_core.js` still comes last: it is compiled against
+bro's OWN native manifest only (`bro-native-manifest` calls
+`registerBroNatives`, not the sibling installers), and the sibling
+namespaces it does not define are already on the root by the time it fills
+in the ones it does.
+
+**One call per sibling per realm.** `installSiblingApis` is the only place
+in bro that may call a sibling's `install*()`. None of the installers is
+re-entrant: brotensor's native registration `fatal()`s on a second
+registration of the same path, and the `HostClass`-based ones rebuild every
+class on each call — a new constructor, a new prototype, `Persistent`s never
+freed — so a second install hands out a second `Mesh` or `LMModel` that
+fails `instanceof` against the first. The per-subsystem `install*Module`
+shells that used to wrap them (and called brosoundml's one installer nine
+times) are gone; only bro's own compiled modules (`js/physics.js`,
+`js/scene.js`, `js/net.js`, ...) keep a shell in `host_js_modules.cpp`, and
+those run after the roots (`dom_globals.cpp`). A reload re-runs
+`installSiblingApis` for the new realm; the process-wide hooks it registers
+(brosoundml's frame pump and shutdown hook) are guarded to register once.
+
+`js/module.globals`, the bare identifiers bro's compiled modules may read,
+names none of the sibling classes: `impostor.js` reaches `Mesh` off
+`globalThis` at the point of use, never at load, so the sibling installs
+carry no load-time dependency on bro's modules in either direction beyond
+the three roots. The classes a sibling only ASSIGNED onto `globalThis`
+(`LMModel`, `FloraWorld`, ...) are lifted into the host-global registry by
+`adoptGlobalProperty` right after its installer, so a compiled app can read
+them by their bare names; bromesh registers its own.
 
 The natives all live under ONE internal root, `__bro_native`, one sub-object
 per namespace: `__bro_native.time.scale` is a getter/setter pair,

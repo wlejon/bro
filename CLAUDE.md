@@ -40,7 +40,7 @@ util → platform (SDL3, event loop) → render (Renderer iface) → svg → lay
 ```
 `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
 
-`src/bronze_host/` exposes the engine to the [bronze](../bronze) JavaScript runtime and AOT compiler (backed by [brass](../brass)). An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load; a folder without one has its `<script>` tags compiled in-process by bronze at boot. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and brass resolves as `../brass` / `third_party/brass`. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
+`src/bronze_host/` exposes the engine to the [bronze](../bronze) JavaScript runtime and AOT compiler (backed by [brass](../brass)). An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load; a folder without one has its `<script>` tags compiled in-process by bronze at boot. bronze resolves as `../bronze` first, `third_party/bronze` (submodule) second, and brass resolves as `../brass` / `third_party/brass`. bro's own natives (scene, physics, net, time, window, settings, ...) are brosurface-generated under `natives/<sub>/` with hand-written `native_*.cpp` bodies; every sibling library's JS API is the sibling's own `<name>_api` library, linked per feature flag in `src/bronze_host/CMakeLists.txt` and installed exactly once per realm by `installSiblingApis` (`host_sibling_apis.cpp`) — never call a sibling `install*()` anywhere else. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
 
 Key patterns:
 - **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
@@ -53,7 +53,7 @@ Key patterns:
 
 ## Third-party dependencies (third_party/)
 
-bro-* siblings build from `../<name>` working trees when present, else submodules ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing).
+bro-* siblings build from `../<name>` working trees when present, else submodules ([docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)). ML siblings depend on brotensor (plus broimage for preprocessing). Every bro-* library below except bromath and htmlayout also builds `<name>_api` from its `src/api/` (public header `include/<name>/api.h`; brokit and broflora differ), its bronze JS binding; those siblings depend on bronze + brass with no submodule fallback, so a standalone sibling build needs `../bronze` and `../brass` checked out.
 
 | Library | Target | What |
 |---------|--------|------|

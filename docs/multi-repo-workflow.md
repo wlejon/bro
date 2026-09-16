@@ -4,6 +4,8 @@ bro depends on sixteen sibling repos with submodule fallbacks under `third_party
 
 Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. The configure that resolves bronze and brass reports which trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
 
+Eleven of the thirteen libraries (every one but bromath and htmlayout) also own their JavaScript binding, a `<name>_api` static library under the sibling's `src/api/`, so those siblings depend on bronze — and through it brass — which they did not before 2026-09-13. See [Sibling JavaScript APIs](#sibling-javascript-apis-name_api) below for what that changes.
+
 A seventeenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library / Tool | Standalone repo | Submodule fallback |
@@ -124,6 +126,38 @@ bro also forwards `BROIMAGE_WITH_TENSOR` (from `BRO_WITH_TENSOR`), `BROGAMEAGENT
 
 **brovisionml** (vision-model inference, segmentation, depth, surface normals, background removal, image backbones, the ControlNet conditioning annotators, and generative image models) depends on `bromath` + `brotensor` + `broimage`. By the time its `third_party/CMakeLists.txt` block is added (after brodiffusion) all three are already targets, and brovisionml guards all three with `if(NOT TARGET ...)`. It backs the `bro.vision` subsystem, image in (ImageBitmap / ImageData) → ImageBitmap + typed-array out. Like brodiffusion its CPU path is always built, so with `BRO_WITH_VISION` on the subsystem is real; it ships its own CUDA kernels gated on `BROTENSOR_WITH_CUDA`, so `-DBRO_WITH_TENSOR_CUDA=ON` compiles them automatically.
 
+## Sibling JavaScript APIs: `<name>_api`
+
+Until 2026-09-13 the JavaScript surface of every sibling (`bro.mesh`, `bro.lm`, `AudioContext`, `bro.tensor`, ...) was hand-written in bro's `src/bronze_host/`. It now lives in the sibling that owns the C++ it wraps, so a change to a library and a change to its JS shape are one commit in one repo, and bro's host layer is only the place that mounts them. brokit had this shape first (`brokit_api`, its polyfills and web globals); the other ten followed it.
+
+| Sibling | Target | Install entry points bro calls | Standalone ctest |
+|---|---|---|---|
+| brokit | `brokit_api` | `brokit::api::install*` (see `host_brokit.cpp`) | one ctest per `tests/js/*.js` |
+| broaudio | `broaudio_api` | `broaudio::api::installAudio()`, `installMic()` | `broaudio_test_api` |
+| bromesh | `bromesh_api` | `bromesh::api::installMesh()`, `installRigging()` | `test_mesh_api` |
+| broflora | `broflora_api` | `broflora::api::installFlora()` | `broflora_api_test` |
+| brotensor | `brotensor_api` | `brotensor::api::installTensor()` | `brotensor_test_api` |
+| brogameagent | `brogameagent_api` | `brogameagent::api::installGameAi()` (+ `setNavMeshHooks`) | `brogameagent_test_api` |
+| brolm | `brolm_api` | `brolm::api::installLM()` | `brolm_test_api` |
+| brodiffusion | `brodiffusion_api` | `brodiffusion::api::installDiffusion()` (also `bro.triposplat`) | `brodiffusion_test_api` |
+| broimage | `broimage_api` | `broimage::api::installImage()` | `broimage_test_api` |
+| brosoundml | `brosoundml_api` | `brosoundml::api::installSoundML()` (+ path/log hooks, `tickSoundML`, `shutdownSoundML`) | `brosoundml_test_api` |
+| brovisionml | `brovisionml_api` | `brovisionml::api::installVision()` | `brovisionml_test_api` |
+
+**What a sibling api is.** `src/api/` in the sibling builds a static library, `<name>_api`, that links the sibling's own library plus `bronze_runtime_shared`. It is a bronze *embed* binding: classes built through the sibling's copy of `HostClass` (`src/api/host_class.{h,cpp}`, `object_builder.h`), natives registered under `__bro_native.<ns>` with `bronze::embed::registerNative`, and for brokit, broflora and brotensor a bronze-compiled JS module (`src/api/js/*.js`, compiled at build time by the `bronze` CLI against `src/api/<name>.globals`, with `bronze_js_stubs_arm64.cpp` standing in on Apple Silicon). brotensor additionally runs its own `brotensor-native-manifest` tool at build time so `tensor.js` compiles against a native manifest, the same cycle-breaking bro's `bro-native-manifest` does. Each `install*()` mounts onto the `bro` root it finds on `globalThis` (or, absent one, registers its own — which is why bro's order below matters) and registers the classes it wants as compiled-app globals.
+
+**The public header is a trampoline.** `include/<name>/api.h` is two lines that include `../../src/api/api.h`, guarded by a named `#ifndef <NAME>_API_H` rather than `#pragma once`. The reason is in each header: every sibling ships this same two-line file, and GCC identifies a `#pragma once` header by content and mtime rather than path, so two siblings checked out in the same second make GCC silently skip the second include — and bro includes all of them from one file (`src/bronze_host/host_sibling_apis.cpp`). broflora is the odd one out: its entry is `include/broflora/api/api.h`, a real declaration under `#pragma once`, not a trampoline. brokit has no `include/` header; bro reaches its `api/api.h` through the target's include directories.
+
+**Siblings now depend on bronze and brass, and carry no fallback for either.** Each sibling's top-level `CMakeLists.txt` has an `if(NOT TARGET bronze_runtime_shared)` block that takes `-DBRONZE_DIR`, then `../bronze`, then `third_party/bronze`, and is a `FATAL_ERROR` ("bronze not found") otherwise; it forces `BRONZE_BUILD_SHARED_RUNTIME=ON` and `BRONZE_BUILD_TESTS=OFF` before adding bronze `EXCLUDE_FROM_ALL`. brass is resolved by bronze itself (`bronze/src/codegen-brass/CMakeLists.txt`: `BRASS_ROOT`, then `<bronze>/../brass`, then `<root>/../brass`, then `<root>/third_party/brass`), and brotensor resolves it a second time for its own kernel JIT. **No sibling has a `third_party/bronze` or `third_party/brass` submodule** — the `third_party/` candidates are dead paths there — so a sibling built standalone needs `../bronze` and `../brass` checked out beside it, and so does its CI. The resolution is unconditional in every sibling but broimage (which gates it under `BROIMAGE_ENABLE_API`), so `-D<NAME>_ENABLE_API=OFF` where that option exists does not remove the requirement.
+
+Under bro the first sibling `third_party/CMakeLists.txt` adds resolves bronze from its own `../bronze` — `D:/projects/bronze` for a standalone checkout, `third_party/bronze` for a submodule, the same two trees bro would pick — and every later guard trips, bro's own in `src/bronze_host/CMakeLists.txt` included, which is what prints the `bronze: standalone tree` / `submodule tree` line for the tree actually in use. brass is added by bro's `third_party/CMakeLists.txt` before any sibling, so bronze's and brotensor's brass blocks never run inside bro.
+
+**How bro links and installs them.** `src/bronze_host/CMakeLists.txt` links `brokit_api` and `broimage_api` unconditionally and each other `<name>_api` under its feature flag (`BRO_WITH_AUDIO`, `BRO_WITH_3D` for bromesh, `BRO_WITH_FLORA`, `BRO_WITH_GAMEAI`, `BRO_WITH_TENSOR`, `BRO_WITH_LM`, `BRO_WITH_SOUNDML`, `BRO_WITH_DIFFUSION`, `BRO_WITH_VISION`) — a bare name on the link line for a sibling `third_party/` never configured would be taken for a file. The install side is `installSiblingApis` in `src/bronze_host/host_sibling_apis.cpp`, and that function is the **only** call site of any sibling `install*()` in bro. `installBroRoots` (`host_bro_root.cpp`) calls it right after `bro`, `__bro` and `__bro_native` are published and before bro's own natives and `js/bro_core.js`, in a fixed order: audio (+ mic), gameagent, mesh (+ rigging), tensor, lm, soundml, diffusion, vision, flora, then brokit's image kernels and broimage. The installers are not re-entrant — brotensor's native registration `fatal()`s on a second registration of the same path, and the `HostClass`-based ones rebuild every class on each call, so a second `Mesh` breaks `instanceof` against the first — which is why the rule is one call per sibling per realm and not "install where convenient" (commit `7ce9e63e` has the failure that taught it). A Worker realm gets none of them: `installWorkerBroRoot` gives it `bro.net` / `bro.net.sync` only (the Workers section of `src/bronze_host/README.md`).
+
+**Sibling api tests.** Each sibling has `tests/test_*api*.cpp` registered as a ctest (names in the table; they run standalone only, since the siblings gate `tests/` on being the top-level project) that boots a bronze realm, calls the installer, and checks the mount points and shape. Every one carries the same `if(WIN32)` block: a `POST_BUILD` `copy_if_different` of `$<TARGET_FILE:bronze_runtime_shared>` and its import library beside the test executable, and `PATH` set on the test property, because bronze builds the DLL into `BRONZE_SHARED_RUNTIME_DIR` and the PE loader only looks beside the `.exe` (`0xc0000135` and a modal "dll was not found" otherwise). bro's `bro_bronze_stage_runtime` is the same copy for bro's own executables.
+
+**What `-Sync` now means.** A sibling api is compiled against bronze's `embed` headers and linked to `bronze_runtime_shared`, and the compiled-JS siblings carry bronze's ABI fingerprint in their objects. A bronze change that moves that surface therefore has to land in bronze **and** in every sibling that binds it — ten `<name>_api` repos plus brokit — before bro's pointers can move, and the pointers have to move together: a bro commit that pins a new bronze against old sibling pointers does not configure in CI, where every sibling is its submodule. That is exactly the case `scripts/repo-status.sh --sync` exists for (one commit recording every stale pointer), and one more reason pointer bumps are batched at the end of a session by the repo owner rather than made per commit.
+
 ## Day-to-Day Development
 
 ### 1. Edit a library
@@ -152,6 +186,13 @@ cd D:/projects/broaudio && cmake --build build --config Debug
 cd D:/projects/bromesh && cmake --build build --config Release
 ./build/tests/Release/bromesh_test.exe
 
+# The sibling's JS binding has its own ctest (see the <name>_api section):
+# it needs ../bronze and ../brass beside the sibling, and on Windows the
+# POST_BUILD step stages bronze_runtime_shared.dll beside the test exe.
+cd D:/projects/bromesh && ctest --test-dir build -C Release -R test_mesh_api
+cd D:/projects/brolm   && ctest --test-dir build -C Release -R brolm_test_api
+cd D:/projects/brokit  && ctest --test-dir build -C Release      # one test per tests/js/*.js
+
 # bronze (Release dev preset; brass is the only backend, found via ../brass)
 cd D:/projects/bronze
 .\dev.cmd cmake --preset dev
@@ -167,9 +208,11 @@ git add src/api/new_api.cpp
 git commit -m "Add new API"
 ```
 
-### 4. Sync submodule and commit bro
+### 4. Sync submodule pointers — at the end of the session, not per commit
 
-Update the submodule pointer so CI and fresh clones pick up the change:
+The submodule pointers are what CI and a fresh clone build, so they have to move eventually — but **not with every sibling commit**. Bumping is the repo owner's job, done once at the end of a session before pushing, with `scripts/repo-status.sh --sync` (below), which records every stale pointer in one bro commit. Per-commit bumps produce a bro history of pointer-only commits and, since the [`<name>_api` libraries](#sibling-javascript-apis-name_api) bind bronze, a half-synced set (new bronze, old siblings) that does not configure in CI. `AGENTS.md` at the bro root states the same rule.
+
+The manual shape of a single bump, for reference:
 
 ```bash
 cd D:/projects/bro/third_party/brokit
@@ -243,6 +286,8 @@ cmake -B build -DBROMATH_DIR=none -DBROKIT_DIR=none \
                -DBROLM_DIR=none -DBRODIFFUSION_DIR=none -DBROIMAGE_DIR=none \
                -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none -DBRASS_ROOT=none -DBRONZE_DIR=none
 ```
+
+`-DBRONZE_DIR=none` is the one to treat with suspicion since the `<name>_api` move: the first sibling to resolve bronze (brotensor or broimage, from `third_party/CMakeLists.txt`) honours an explicit `BRONZE_DIR` and errors with "bronze not found" when it does not exist, rather than falling through to `third_party/bronze`. Forcing the bronze submodule means pointing at it: `-DBRONZE_DIR=<abs path>/third_party/bronze`.
 
 ## Apps tree
 
