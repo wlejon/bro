@@ -197,7 +197,10 @@ void bro_physics_PhysicsCharacter_destroy(void* self) {
         if (pc->innerTag >= 0) pw->unregisterBody(pc->innerTag);
         w->destroyCharacter(pc->handle);
     }
+    // Off the live set, so the world's destructor no longer clears this
+    // pointer: drop it here (native_physics_softbody.cpp says why).
     if (pc->world) pc->world->liveCharacters.erase(pc);
+    pc->world = nullptr;
     pc->handle = 0;
     pc->innerTag = -1;
 }

@@ -292,7 +292,11 @@ void bro_physics_PhysicsSoftBody_destroy(void* self) {
         w->destroySoftBody(sb->handle);
         pw->unregisterBody(sb->bodyTag);
     }
+    // Off the world's live set, so the world's destructor no longer clears
+    // this pointer for us: drop it here, or the handle's own destructor at
+    // teardown erases from a world that may already be gone.
     if (sb->world) sb->world->liveSoftBodies.erase(sb);
+    sb->world = nullptr;
     sb->handle = 0;
     sb->bodyTag = -1;
 }

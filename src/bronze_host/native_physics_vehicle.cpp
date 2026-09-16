@@ -56,7 +56,10 @@ void destroyVehicleImpl(HostPhysicsVehicle* v) {
             pw->unregisterBody(v->bodyTag);
         }
     }
+    // Off the live set, so the world's destructor no longer clears this
+    // pointer: drop it here (native_physics_softbody.cpp says why).
     if (v->world) v->world->liveVehicles.erase(v);
+    v->world = nullptr;
     v->handle = 0;
     v->bodyTag = -1;
 }

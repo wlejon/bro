@@ -130,7 +130,10 @@ void destroyRagdollImpl(HostPhysicsRagdoll* r) {
         world->destroyRagdoll(r->handle, [pw](JPH::BodyID bid) { pw->unregisterBodyId(bid); });
         for (int32_t tag : r->partTags) pw->unregisterBody(tag);
     }
+    // Off the live set, so the world's destructor no longer clears this
+    // pointer: drop it here (native_physics_softbody.cpp says why).
     if (r->world) r->world->liveRagdolls.erase(r);
+    r->world = nullptr;
     r->handle = 0;
     r->partTags.clear();
 }
