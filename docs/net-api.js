@@ -82,6 +82,10 @@ bro.net.sendClone = function(peerId, value, channel) {};
 bro.net.broadcastClone = function(value, channel) {};
 
 /**
+ * The live connection ids, the same numbers onconnect / onmessage hand
+ * out. A connection id is a full unsigned 32-bit GameNetworkingSockets
+ * handle: as `sequence<long>` the top-bit ids came back negative and no
+ * longer compared equal to the id an event delivered.
  * @returns {Array<number>}
  */
 bro.net.peers = function() {};

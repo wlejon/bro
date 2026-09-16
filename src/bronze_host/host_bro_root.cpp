@@ -291,4 +291,33 @@ void installBroRoots(engine::Engine& engine) {
     installBroCoreModule();
 }
 
+// The worker realm's roots, the same shape as the main realm's cut down to
+// what a worker owns: `bro` with a `net` namespace, `__bro_native` with a
+// `net` sub-object, the net natives registered on THIS thread (bronze's
+// registry is per thread, and js/net.js binds its import table against the
+// thread that enters it), then js/net_sync.js and js/net.js in the main
+// realm's order. bro_core.js is not entered: it is compiled against every
+// native and would refuse to bind on a thread that registered only net.
+// Without BRO_WITH_NET the worker sees the same `available: false` stub
+// the main realm does.
+void installWorkerBroRoot() {
+    auto* bro = new ev::Persistent(makeRoot({"net"}));
+    auto* native = new ev::Persistent(makeRoot({"net"}));
+    publish("bro", *bro);
+    publish("__bro_native", *native);
+
+#if BRO_WITH_NET
+    std::string err;
+    if (!registerNetNatives(&err)) {
+        LOG_ERROR("bronze_host: worker native registration failed: %s", err.c_str());
+        return;
+    }
+    installNetSyncModule();
+    installNetModule();
+#else
+    ev::Persistent stub(makeUnavailableNamespace("net", "BRO_WITH_NET"));
+    ev::setProperty(bro->get(), "net", stub.get());
+#endif
+}
+
 }  // namespace bro::bronze_host

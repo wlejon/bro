@@ -65,7 +65,7 @@ void bro_net_broadcast(const uint8_t* data, uint32_t data_len, int32_t channel);
 
 // bro.net.peers
 //   registered at __bro_native.net.peers
-//   result: i32[] in *out; out->release == NULL, the runtime copies
+//   result: f64[] in *out; out->release == NULL, the runtime copies
 void bro_net_peers(bronze_native_buffer* out);
 
 // bro.net.getPeerAddress

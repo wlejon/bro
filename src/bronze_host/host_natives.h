@@ -116,7 +116,13 @@ inline bool registerSttNatives(std::string*) { return true; }
 inline bool registerTtsNatives(std::string*) { return true; }
 inline bool registerFloraNatives(std::string*) { return true; }
 inline bool registerTensorNatives(std::string*) { return true; }
+// bro.net's state is per realm (one NetSubscriber and one dispatcher per
+// thread, native_net.cpp): pollNet drains the CALLING thread's subscriber
+// and fires its callbacks there; releaseNetState hands the calling thread's
+// subscriber back to the service and frees the state, which a Worker does
+// as its realm ends. Both are no-ops on a thread that never touched bro.net.
 void pollNet();
+void releaseNetState();
 
 inline void publishMeshPrototypes(bronze::Value) {}
 inline void publishRiggingPrototypes(bronze::Value) {}
@@ -125,6 +131,14 @@ inline void publishRiggingPrototypes(bronze::Value) {}
 // objects), the natives, the engine-side hooks the callbacks ride on, and
 // run js/bro_core.js on top. Called once from installWebHostGlobals.
 void installBroRoots(engine::Engine& engine);
+
+// A Worker realm's `bro`: the root object with `bro.net` (and `bro.net.sync`)
+// over the net natives registered on the worker's thread, and nothing else —
+// the surface docs/net-sync-api.js promises a worker. No engine-bound
+// namespace (window, settings, time, the scene) and no sibling API, since
+// none of those is safe off the main thread. Called by WorkerInstance's
+// thread after brokit is installed and before the worker script runs.
+void installWorkerBroRoot();
 
 // Every sibling library's JS API (broaudio, brogameagent, bromesh,
 // brotensor, brolm, brosoundml, brodiffusion, brovisionml, broflora,

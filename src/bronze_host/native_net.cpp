@@ -31,27 +31,49 @@ enum WireType : uint8_t {
 };
 static constexpr size_t kWireHeaderSize = 2;
 
+// One per JS realm: the main document and each Worker own a NetSubscriber
+// of their own (net_service.h: a subscriber is a per-thread handle whose
+// callbacks fire on the thread that polls it) and the dispatcher their own
+// js/net.js handed over, a Persistent in that thread's slot table.
+//
+// A trivially-destructible thread_local POINTER, never a thread_local
+// object: a NetState with a destructor made the CRT register a dynamic TLS
+// destructor for every thread in the process, and short-lived driver threads
+// (NVIDIA's GL probes) ran ~Persistent after bronze's own TLS was gone
+// (ee8505cf). The state is allocated on first use and released by
+// releaseNetState() on the thread that owns it, or leaked with the main
+// thread at exit, which is what the process teardown wants.
 struct NetState {
     net::NetSubscriber* subscriber = nullptr;
     bool hosting = false;
     std::unordered_map<uint32_t, bool> connections;
     ev::Persistent* dispatcher = nullptr;
+    std::vector<double> peersScratch;
 };
 
-static NetState g_net;
+static thread_local NetState* t_net = nullptr;
+
+static NetState& netState() {
+    if (!t_net) t_net = new NetState();
+    return *t_net;
+}
 
 net::NetSubscriber* getNetSubscriber() {
+    NetState& g_net = netState();
     auto* eng = hostEngine();
     if (!eng || !eng->netService()) {
         g_net.subscriber = nullptr;
         return nullptr;
     }
     if (!g_net.subscriber) {
+        // The callbacks fire from poll() on this same thread, so each reads
+        // the state back through netState() rather than capturing it.
         g_net.subscriber = eng->netService()->createSubscriber();
         g_net.subscriber->onHostResult = [](bool success) {
-            g_net.hosting = success;
+            netState().hosting = success;
         };
         g_net.subscriber->onConnect = [](uint32_t conn) {
+            NetState& g_net = netState();
             g_net.connections[conn] = true;
             if (g_net.dispatcher && ev::isFunction(g_net.dispatcher->get())) {
                 Value args[2] = { ev::fromUtf8("connect"), ev::fromDouble(conn) };
@@ -59,6 +81,7 @@ net::NetSubscriber* getNetSubscriber() {
             }
         };
         g_net.subscriber->onDisconnect = [](uint32_t conn, int reason) {
+            NetState& g_net = netState();
             g_net.connections.erase(conn);
             if (g_net.dispatcher && ev::isFunction(g_net.dispatcher->get())) {
                 Value args[3] = { ev::fromUtf8("disconnect"), ev::fromDouble(conn), ev::fromDouble(reason) };
@@ -71,6 +94,7 @@ net::NetSubscriber* getNetSubscriber() {
                          msg.connection, msg.data.size());
                 return;
             }
+            NetState& g_net = netState();
             if (g_net.dispatcher && ev::isFunction(g_net.dispatcher->get())) {
                 Value payloadVal;
                 if (msg.data[1] == kWireClone) {
@@ -99,29 +123,47 @@ net::NetSubscriber* getNetSubscriber() {
     return g_net.subscriber;
 }
 
-static std::vector<int32_t> s_peersScratch;
-
 }  // namespace
 
+// Polls the subscriber this thread already has; it does not mint one, so a
+// Worker that never touches bro.net never registers with the service. Every
+// command (host, connect, init, ...) mints it on the way in.
 void pollNet() {
+    if (!t_net || !t_net->subscriber) return;
     auto* eng = hostEngine();
     if (!eng || !eng->netService()) {
-        g_net.subscriber = nullptr;
+        t_net->subscriber = nullptr;
         return;
     }
-    if (auto* sub = getNetSubscriber()) {
-        sub->poll();
+    t_net->subscriber->poll();
+}
+
+// A worker's realm is going away: hand the subscriber back to the service
+// (its sockets close, nothing polls it again) and drop the dispatcher while
+// this thread's Persistent slots still exist. Engine::stopBackgroundServices
+// joins every worker before it resets the service, so the service is alive
+// here.
+void releaseNetState() {
+    NetState* st = t_net;
+    if (!st) return;
+    t_net = nullptr;
+    auto* eng = hostEngine();
+    if (st->subscriber && eng && eng->netService()) {
+        eng->netService()->destroySubscriber(st->subscriber);
     }
+    delete st->dispatcher;
+    delete st;
 }
 
 // Internal hook for js/net.js to register its event dispatcher
 void bro_net_setDispatcher(uint64_t fnBits) {
+    NetState& g_net = netState();
     if (!g_net.dispatcher) g_net.dispatcher = new ev::Persistent();
     g_net.dispatcher->set(ev::fromBits(fnBits));
 }
 
 bool bro_net_isHosting() {
-    return g_net.hosting;
+    return netState().hosting;
 }
 
 bool bro_net_init() {
@@ -269,6 +311,7 @@ bool registerNetNatives(std::string* error) {
 #else  // !BRO_WITH_NET
 
 void pollNet() {}
+void releaseNetState() {}
 bool registerNetNatives(std::string*) { return true; }
 
 #endif  // BRO_WITH_NET
@@ -284,7 +327,7 @@ using namespace bro::bronze_host;
 void bro_net_host(int32_t port, uint64_t callback) {
     auto* sub = getNetSubscriber();
     if (!sub) return;
-    g_net.hosting = true;
+    netState().hosting = true;
     sub->host(static_cast<uint16_t>(port));
     if (callback != 0) {
         Value fn = ev::fromBits(callback);
@@ -299,6 +342,7 @@ void bro_net_host(int32_t port, uint64_t callback) {
 void bro_net_unhost(void) {
     auto* sub = getNetSubscriber();
     if (sub) sub->closeHost();
+    NetState& g_net = netState();
     g_net.hosting = false;
     g_net.connections.clear();
 }
@@ -325,11 +369,12 @@ int32_t bro_net_connect(const char* address, int32_t port, uint64_t callback) {
 void bro_net_disconnect(int32_t peerId) {
     auto* sub = getNetSubscriber();
     if (sub) sub->disconnect(static_cast<uint32_t>(peerId), 0);
-    g_net.connections.erase(static_cast<uint32_t>(peerId));
+    netState().connections.erase(static_cast<uint32_t>(peerId));
 }
 
 void bro_net_disconnectAll(void) {
     auto* sub = getNetSubscriber();
+    NetState& g_net = netState();
     if (sub) {
         for (auto& [conn, _] : g_net.connections) {
             sub->disconnect(conn, 0);
@@ -364,14 +409,19 @@ void bro_net_broadcast(const uint8_t* data, uint32_t data_len, int32_t channel) 
     sub->broadcast(std::move(framed), opts);
 }
 
+// f64[], not i32[]: a connection id is the full uint32 GNS handle, and the
+// events hand it out as a number, so a top-bit id read back through an
+// Int32Array would be negative and never `===` the one onconnect gave.
 void bro_net_peers(bronze_native_buffer* out) {
-    s_peersScratch.clear();
-    s_peersScratch.reserve(g_net.connections.size());
+    NetState& g_net = netState();
+    std::vector<double>& scratch = g_net.peersScratch;
+    scratch.clear();
+    scratch.reserve(g_net.connections.size());
     for (auto& [conn, _] : g_net.connections) {
-        s_peersScratch.push_back(static_cast<int32_t>(conn));
+        scratch.push_back(static_cast<double>(conn));
     }
-    out->data = s_peersScratch.empty() ? nullptr : s_peersScratch.data();
-    out->length = static_cast<uint32_t>(s_peersScratch.size());
+    out->data = scratch.empty() ? nullptr : scratch.data();
+    out->length = static_cast<uint32_t>(scratch.size());
     out->release = nullptr;
 }
 

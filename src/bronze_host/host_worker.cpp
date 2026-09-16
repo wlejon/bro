@@ -5,6 +5,7 @@
 #include "bronze_host/eval_jit.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_natives.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
@@ -218,6 +219,9 @@ void WorkerInstance::threadFunc() {
             brokit::api::addFsBasePath(eng->appDir());
         }
     }
+    // `bro` with bro.net / bro.net.sync over this thread's own subscriber
+    // (host_bro_root.cpp); the loop below polls it.
+    installWorkerBroRoot();
 
     std::filesystem::path resolvedPath = scriptPath_;
     if (!resolvedPath.is_absolute() && !basePath_.empty()) {
@@ -248,7 +252,8 @@ void WorkerInstance::threadFunc() {
         // This thread's own registry: bronze's is per-thread, so this is
         // exactly the set the installs above put in for this worker —
         // self, postMessage, close, onmessage, brokit, the image and noise
-        // globals — and nothing the main realm has that a worker does not.
+        // globals, `bro` — and nothing the main realm has that a worker
+        // does not.
         opts.hostGlobals = registeredHostGlobals();
         if (mounts_) {
             for (const auto& [prefix, target] : mounts_->mounts()) {
@@ -346,6 +351,9 @@ void WorkerInstance::threadFunc() {
         if (ev::isFunction(wsTick)) {
             ev::call(wsTick, ev::undefined(), {});
         }
+        // This thread's NetSubscriber: its connect/disconnect/message
+        // callbacks fire here, into the dispatcher js/net.js registered.
+        pollNet();
         if (ev::microtasksPending()) {
             ev::drainMicrotasks();
         }
@@ -367,6 +375,9 @@ void WorkerInstance::threadFunc() {
         }
     }
 
+    // The subscriber goes back to the service (its connections close) and
+    // the dispatcher Persistent is freed while this thread's slots exist.
+    releaseNetState();
     alive_.store(false, std::memory_order_release);
 }
 

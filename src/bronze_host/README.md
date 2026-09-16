@@ -407,6 +407,27 @@ file, the engine types the keys it owns while applying them, and
 for an object the wrapper stored, else a string). The one consequence worth
 knowing is that a custom string that reads as a number comes back as one.
 
+## Workers
+
+A `Worker` (`host_worker.cpp`) is its own thread with its own bronze realm,
+and it gets its own installs: `self`, `postMessage`, `close`, `onmessage`,
+brokit (console, timers, fetch, fs, crypto, streams, IndexedDB, WebSocket,
+...), `ImageBitmap`, `FastNoise`, and a `bro` root carrying exactly one
+namespace, `bro.net` with `bro.net.sync` under it — the surface
+`docs/net-sync-api.js` promises a worker (`installWorkerBroRoot`,
+`host_bro_root.cpp`). The net natives are registered on the worker's thread
+(bronze's registry is per thread, and `js/net.js` binds its import table on
+the thread that enters it), `js/net_sync.js` and `js/net.js` are entered in
+the main realm's order, and the worker's loop polls its own `NetSubscriber`
+(`native_net.cpp` keeps one per thread, released when the worker ends).
+`js/bro_core.js` is not entered — it is compiled against every native, and
+would refuse to bind on a thread that registered only net — so there is no
+`bro.time`, `bro.window`, `bro.settings`, `bro.appDir`, scene, physics or
+sibling API in a worker; those belong to the main thread and its engine.
+The worker script is compiled in-process against the worker thread's own
+registry (`registeredHostGlobals()`), so a read of `document` in a worker
+is an ordinary `ReferenceError`.
+
 ## Driving a compiled app from a script
 
 There is no separate driver and no separate mode: bro-headless

@@ -49,7 +49,7 @@ bool registerNatives_net(std::string* error) {
         fn("__bro_native.net.disconnectAll", p(&bro_net_disconnectAll), "void", {}, error) &&
         fn("__bro_native.net.send", p(&bro_net_send), "void", {"i32", "u8[]", "i32"}, error) &&
         fn("__bro_native.net.broadcast", p(&bro_net_broadcast), "void", {"u8[]", "i32"}, error) &&
-        fn("__bro_native.net.peers", p(&bro_net_peers), "i32[]", {}, error) &&
+        fn("__bro_native.net.peers", p(&bro_net_peers), "f64[]", {}, error) &&
         fn("__bro_native.net.getPeerAddress", p(&bro_net_getPeerAddress), "str", {"i32"}, error) &&
         fn("__bro_native.net.stats", p(&bro_net_stats), "str", {}, error) &&
         fn("__bro_native.net.getPeerStats", p(&bro_net_getPeerStats), "str", {"i32"}, error) &&
