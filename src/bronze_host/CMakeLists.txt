@@ -207,37 +207,10 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/window/native_window_register.cpp
     natives/settings/native_settings_register.cpp
     natives/dunder_bro/native_dunder_bro_register.cpp
-    native_lm_classes.cpp
-    native_lm_ops.cpp
-    natives/lm/native_lm_register.cpp
-    native_rave.cpp
-    natives/rave/native_rave_register.cpp
     native_motion.cpp
     natives/motion/native_motion_register.cpp
-    native_sense.cpp
-    natives/sense/native_sense_register.cpp
-    native_gesture.cpp
-    natives/gesture/native_gesture_register.cpp
-    native_wake.cpp
-    natives/wake/native_wake_register.cpp
-    native_kws.cpp
-    natives/kws/native_kws_register.cpp
-    native_listen.cpp
-    natives/listen/native_listen_register.cpp
-    native_triposplat.cpp
-    natives/triposplat/native_triposplat_register.cpp
-    native_diffusion.cpp
-    natives/diffusion/native_diffusion_register.cpp
     native_vision.cpp
     natives/vision/native_vision_register.cpp
-    native_diar.cpp
-    natives/diar/native_diar_register.cpp
-    native_stt.cpp
-    natives/stt/native_stt_register.cpp
-    native_tts.cpp
-    natives/tts/native_tts_register.cpp
-    native_tensor.cpp
-    natives/tensor/native_tensor_register.cpp
     host_scene_agent.cpp
     host_math_classes.cpp
     host_math_funcs.cpp
@@ -380,15 +353,24 @@ if(BRO_WITH_FLORA)
     target_link_libraries(bro_bronze_host PUBLIC broflora_api)
 endif()
 
-if(BRO_WITH_WEBP)
-    target_link_libraries(bro_bronze_host PUBLIC bro_webp)
+if(BRO_WITH_TENSOR)
+    target_link_libraries(bro_bronze_host PUBLIC brotensor_api)
 endif()
 
-# bro.gpu (host_gpu.cpp) reads brotensor's runtime registry directly. Named
-# here rather than reached through broimage's own optional brotensor link,
-# so the dependency is bro's and not an accident of a sibling's option.
-if(BRO_WITH_TENSOR)
-    target_link_libraries(bro_bronze_host PUBLIC brotensor::brotensor)
+if(BRO_WITH_LM)
+    target_link_libraries(bro_bronze_host PUBLIC brolm_api)
+endif()
+
+if(BRO_WITH_SOUNDML)
+    target_link_libraries(bro_bronze_host PUBLIC brosoundml_api)
+endif()
+
+if(BRO_WITH_DIFFUSION)
+    target_link_libraries(bro_bronze_host PUBLIC brodiffusion_api)
+endif()
+
+if(BRO_WITH_WEBP)
+    target_link_libraries(bro_bronze_host PUBLIC bro_webp)
 endif()
 
 bro_apply_feature_defs(bro_bronze_host)
@@ -502,21 +484,8 @@ else()
     bro_compile_js(gizmo      bro_gizmo_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(animation  bro_animation_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(lm         bro_lm_main         NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(rave       bro_rave_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(sense      bro_sense_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(gesture    bro_gesture_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(wake       bro_wake_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(kws        bro_kws_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(listen     bro_listen_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(triposplat bro_triposplat_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(diffusion  bro_diffusion_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(vision     bro_vision_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(diar       bro_diar_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(stt        bro_stt_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(tts        bro_tts_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(tensor     bro_tensor_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(impostor   bro_impostor_main)
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})

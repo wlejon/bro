@@ -31,6 +31,18 @@
 #if BRO_WITH_GAMEAI
 #include <brogameagent/api.h>
 #endif
+#if BRO_WITH_TENSOR
+#include <brotensor/api.h>
+#endif
+#if BRO_WITH_LM
+#include <brolm/api.h>
+#endif
+#if BRO_WITH_SOUNDML
+#include <brosoundml/api.h>
+#endif
+#if BRO_WITH_DIFFUSION
+#include <brodiffusion/api.h>
+#endif
 
 #include <string>
 #include <vector>
@@ -206,6 +218,18 @@ void installBroRoots(engine::Engine& engine) {
 #endif
 #if BRO_WITH_GAMEAI
     brogameagent::api::installGameAi();
+#endif
+#if BRO_WITH_TENSOR
+    brotensor::api::installTensor();
+#endif
+#if BRO_WITH_LM
+    brolm::api::installLM();
+#endif
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
+#if BRO_WITH_DIFFUSION
+    brodiffusion::api::installDiffusion();
 #endif
     {
         ev::Persistent math(makeBroMathValue());

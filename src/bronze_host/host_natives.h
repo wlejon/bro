@@ -99,23 +99,23 @@ bool registerTileWorldNatives(std::string* error);
 bool registerLightingNatives(std::string* error);
 bool registerGizmoNatives(std::string* error);
 bool registerSceneNatives(std::string* error);
-bool registerLmNatives(std::string* error);
-bool registerRaveNatives(std::string* error);
+inline bool registerLmNatives(std::string*) { return true; }
+inline bool registerRaveNatives(std::string*) { return true; }
 bool registerMotionNatives(std::string* error);
 inline bool registerMicNatives(std::string*) { return true; }
-bool registerSenseNatives(std::string* error);
-bool registerGestureNatives(std::string* error);
-bool registerWakeNatives(std::string* error);
-bool registerKwsNatives(std::string* error);
-bool registerListenNatives(std::string* error);
-bool registerTriposplatNatives(std::string* error);
-bool registerDiffusionNatives(std::string* error);
+inline bool registerSenseNatives(std::string*) { return true; }
+inline bool registerGestureNatives(std::string*) { return true; }
+inline bool registerWakeNatives(std::string*) { return true; }
+inline bool registerKwsNatives(std::string*) { return true; }
+inline bool registerListenNatives(std::string*) { return true; }
+inline bool registerTriposplatNatives(std::string*) { return true; }
+inline bool registerDiffusionNatives(std::string*) { return true; }
 bool registerVisionNatives(std::string* error);
-bool registerDiarNatives(std::string* error);
-bool registerSttNatives(std::string* error);
-bool registerTtsNatives(std::string* error);
+inline bool registerDiarNatives(std::string*) { return true; }
+inline bool registerSttNatives(std::string*) { return true; }
+inline bool registerTtsNatives(std::string*) { return true; }
 inline bool registerFloraNatives(std::string*) { return true; }
-bool registerTensorNatives(std::string* error);
+inline bool registerTensorNatives(std::string*) { return true; }
 void pollNet();
 
 // After registration: the prototypes of the mesh classes as properties of

@@ -24,6 +24,18 @@
 #if BRO_WITH_FLORA
 #include <broflora/api/api.h>
 #endif
+#if BRO_WITH_TENSOR
+#include <brotensor/api.h>
+#endif
+#if BRO_WITH_LM
+#include <brolm/api.h>
+#endif
+#if BRO_WITH_SOUNDML
+#include <brosoundml/api.h>
+#endif
+#if BRO_WITH_DIFFUSION
+#include <brodiffusion/api.h>
+#endif
 
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
@@ -41,21 +53,8 @@ extern "C" void bro_lighting_main();
 extern "C" void bro_gizmo_main();
 extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
-extern "C" void bro_lm_main();
-extern "C" void bro_rave_main();
 extern "C" void bro_motion_main();
-extern "C" void bro_sense_main();
-extern "C" void bro_gesture_main();
-extern "C" void bro_wake_main();
-extern "C" void bro_kws_main();
-extern "C" void bro_listen_main();
-extern "C" void bro_triposplat_main();
-extern "C" void bro_diffusion_main();
 extern "C" void bro_vision_main();
-extern "C" void bro_diar_main();
-extern "C" void bro_stt_main();
-extern "C" void bro_tts_main();
-extern "C" void bro_tensor_main();
 extern "C" void bro_impostor_main();
 
 namespace bro::bronze_host {
@@ -200,7 +199,8 @@ void installSceneModule() {
 }
 
 void installLmModule() {
-    bronze::embed::runEntry(bro_lm_main);
+#if BRO_WITH_LM
+    brolm::api::installLM();
     adoptGlobalProperty("AsyncHandle");
     adoptGlobalProperty("QwenTokenizer");
     adoptGlobalProperty("MistralTokenizer");
@@ -211,10 +211,13 @@ void installLmModule() {
     adoptGlobalProperty("NllbModel");
     adoptGlobalProperty("ClipModel");
     adoptGlobalProperty("T5Model");
+#endif
 }
 
 void installRaveModule() {
-    bronze::embed::runEntry(bro_rave_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installMotionModule() {
@@ -228,31 +231,45 @@ void installMicModule() {
 }
 
 void installSenseModule() {
-    bronze::embed::runEntry(bro_sense_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installGestureModule() {
-    bronze::embed::runEntry(bro_gesture_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installWakeModule() {
-    bronze::embed::runEntry(bro_wake_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installKwsModule() {
-    bronze::embed::runEntry(bro_kws_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installListenModule() {
-    bronze::embed::runEntry(bro_listen_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installTriposplatModule() {
-    bronze::embed::runEntry(bro_triposplat_main);
+#if BRO_WITH_DIFFUSION
+    brodiffusion::api::installDiffusion();
+#endif
 }
 
 void installDiffusionModule() {
-    bronze::embed::runEntry(bro_diffusion_main);
+#if BRO_WITH_DIFFUSION
+    brodiffusion::api::installDiffusion();
+#endif
 }
 
 void installVisionModule() {
@@ -260,15 +277,21 @@ void installVisionModule() {
 }
 
 void installDiarModule() {
-    bronze::embed::runEntry(bro_diar_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installSttModule() {
-    bronze::embed::runEntry(bro_stt_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installTtsModule() {
-    bronze::embed::runEntry(bro_tts_main);
+#if BRO_WITH_SOUNDML
+    brosoundml::api::installSoundML();
+#endif
 }
 
 void installFloraModule() {
@@ -279,8 +302,10 @@ void installFloraModule() {
 }
 
 void installTensorModule() {
-    bronze::embed::runEntry(bro_tensor_main);
+#if BRO_WITH_TENSOR
+    brotensor::api::installTensor();
     adoptGlobalProperty("GpuTensor");
+#endif
 }
 
 void installImpostorModule() {
