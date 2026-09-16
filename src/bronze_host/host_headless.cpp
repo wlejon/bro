@@ -2,6 +2,7 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_natives.h"  // pollNet
 #include "bronze_host/gl_internal.h"
 
 #include "engine/engine.h"
@@ -74,11 +75,18 @@ void installHeadlessGlobals(engine::Engine& engine) {
             return ev::undefined();
         }, 1, "advanceTime"));
 
-    // 2. flush()
+    // 2. flush(): lay out and paint without advancing the clock. Engine::flush
+    // does not run the frame callbacks (hostFrame), so the observer pass that
+    // the frame seam would have run after layout — ResizeObserver over the
+    // boxes flush just measured — is delivered here, as is the net poll; a
+    // test that resizes, flushes and expects the observer to have seen it
+    // relies on exactly that (tests/layout/test_layout_flush.js).
     ev::registerGlobal("flush", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             engine.flush();
             pumpBrokitTicks();
+            pollNet();
+            fireHostObserverFrame();
             if (ev::microtasksPending()) ev::drainMicrotasks();
             return ev::undefined();
         }, 0, "flush"));
