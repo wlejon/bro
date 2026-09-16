@@ -10,6 +10,7 @@
 // [manual] members (no native, installed by hand-written JS after this module):
 //   bro.scene.SceneNode.prototype.localToWorld
 //   bro.scene.SceneNode.prototype.worldToLocal
+//   bro.scene.SceneNode.prototype.updateMesh
 //   bro.scene.SceneNode.prototype.setMaterial
 //   bro.scene.SceneNode.prototype.setSkeleton
 //   bro.scene.SceneNode.prototype.addClip
@@ -286,6 +287,8 @@
     // [manual] bro.scene.SceneNode.prototype.localToWorld: operation (x, y, z) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
     // [manual] bro.scene.SceneNode.prototype.worldToLocal: operation (x, y, z) — no native is generated; hand-written JS
+    // installs it on SceneNode.prototype after this module has run.
+    // [manual] bro.scene.SceneNode.prototype.updateMesh: operation (mesh, opts) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.
     // [manual] bro.scene.SceneNode.prototype.setMaterial: operation (mat) — no native is generated; hand-written JS
     // installs it on SceneNode.prototype after this module has run.

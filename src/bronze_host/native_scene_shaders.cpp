@@ -1,6 +1,7 @@
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
 #include <bromesh/mesh_data.h>
+#include <bromesh/manipulation/normals.h>
 #include "scene/particles3d_node.h"
 #include "scene/decal_node.h"
 #include "scene/sprite_node.h"
@@ -163,6 +164,42 @@ void bro_scene_SceneNode_setLodMeshes(void* self, const char* jsonLods) {
         }
     }
     mn->setLodMeshes(std::move(levels));
+}
+
+// SceneNode.updateMesh (docs/scene-api.js): swap a MeshNode's geometry
+// without touching the node. `mesh` is either a Mesh handle or a
+// {positions, indices, normals?, uvs?, colors?, tangents?} object, which is
+// the shape createMesh reads; normals are computed when absent or when
+// asked for, exactly as createMesh does it.
+void bro_scene_SceneNode_updateMesh(void* self, uint64_t meshBits, bool recomputeNormals) {
+    auto* n = nodeOf(self);
+    if (!n || n->type() != scene::SceneNode::Type::Mesh) {
+        ev::throwTypeError("updateMesh: node is not a MeshNode");
+        return;
+    }
+    Value meshVal = ev::fromBits(meshBits);
+    if (!ev::isObject(meshVal)) {
+        ev::throwTypeError("updateMesh: expected a Mesh or { positions, indices, ... }");
+        return;
+    }
+    bromesh::MeshData meshData;
+    if (void* handle = ev::handleData(meshVal)) {
+        meshData = *static_cast<bromesh::MeshData*>(handle);
+    } else {
+        if (!readFloatVector(ev::getProperty(meshVal, "positions"), meshData.positions) ||
+            !readU32Vector(ev::getProperty(meshVal, "indices"), meshData.indices)) {
+            ev::throwTypeError("updateMesh: positions (Float32Array) and indices (Uint32Array) are required");
+            return;
+        }
+        readFloatVector(ev::getProperty(meshVal, "normals"), meshData.normals);
+        readFloatVector(ev::getProperty(meshVal, "uvs"), meshData.uvs);
+        readFloatVector(ev::getProperty(meshVal, "colors"), meshData.colors);
+        readFloatVector(ev::getProperty(meshVal, "tangents"), meshData.tangents);
+    }
+    if ((recomputeNormals || meshData.normals.empty()) && !meshData.positions.empty()) {
+        bromesh::computeNormals(meshData);
+    }
+    static_cast<scene::MeshNode*>(n)->setMesh(std::move(meshData));
 }
 
 int32_t bro_scene_SceneNode_lodCount(void* self) {

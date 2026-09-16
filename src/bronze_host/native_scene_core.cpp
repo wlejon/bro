@@ -771,6 +771,7 @@ void bro_scene_SceneNode_stop(void* self, const char* jsonOpts);
 void bro_scene_SceneNode_pause(void* self);
 void bro_scene_SceneNode_resume(void* self);
 int32_t bro_scene_SceneNode_setSkinningMatrices(void* self, uint64_t matsBits);
+void bro_scene_SceneNode_updateMesh(void* self, uint64_t meshBits, bool recomputeNormals);
 uint64_t bro_scene_SceneNode_getBoneWorldMatrix(void* self, uint64_t argBits);
 const char* bro_scene_SceneNode_blendState(void* self);
 void bro_scene_SceneNode_onAnimationFinished_set(void* self, uint64_t cbBits);
@@ -897,6 +898,7 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_clearShader", (void*)&bro_scene_SceneNode_clearShader, "void", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_setShaderUniform", (void*)&bro_scene_SceneNode_setShaderUniform, "void", {"__bro_native.scene.SceneNode", "str", "f64[]"}, error) &&
            fn("__bro_native.scene.SceneNode_setLodMeshes", (void*)&bro_scene_SceneNode_setLodMeshes, "void", {"__bro_native.scene.SceneNode", "str"}, error) &&
+           fn("__bro_native.scene.SceneNode_updateMesh", (void*)&bro_scene_SceneNode_updateMesh, "void", {"__bro_native.scene.SceneNode", "dynamic", "bool"}, error) &&
            fn("__bro_native.scene.SceneNode_lodCount", (void*)&bro_scene_SceneNode_lodCount, "i32", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_lodLevel", (void*)&bro_scene_SceneNode_lodLevel, "i32", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_visibilityRange_set", (void*)&bro_scene_SceneNode_visibilityRange_set, "void", {"__bro_native.scene.SceneNode", "f64", "f64", "f64"}, error) &&

@@ -889,6 +889,14 @@
         __bro_native.scene.SceneNode_setLodMeshes(this, json);
         return this;
     });
+    // updateMesh(mesh, opts): a Mesh or { positions, indices, normals?, uvs?,
+    // colors?, tangents? }; the native reads the members and recomputes
+    // normals when opts.recomputeNormals is set or none were given.
+    fn(SceneNode.prototype, "updateMesh", function updateMesh(mesh, opts) {
+        if (mesh === undefined) throw new TypeError("bro.scene.SceneNode.prototype.updateMesh: mesh is required");
+        __bro_native.scene.SceneNode_updateMesh(this, mesh, !!(opts && opts.recomputeNormals));
+        return this;
+    });
     accessor(SceneNode.prototype, "lodCount", function () { return __bro_native.scene.SceneNode_lodCount(this); }, undefined);
     accessor(SceneNode.prototype, "lodLevel", function () { return __bro_native.scene.SceneNode_lodLevel(this); }, undefined);
     fn(SceneNode.prototype, "setVisibilityRange", function setVisibilityRange(begin, end, margin) {

@@ -1940,6 +1940,19 @@ interface MeshNodeOptions {
   visible?: boolean;
 }
 
+interface MeshGeometry {
+  positions?: Float32Array;
+  indices?: Uint32Array;
+  normals?: Float32Array;
+  uvs?: Float32Array;
+  colors?: Float32Array;
+  tangents?: Float32Array;
+}
+
+interface MeshUpdateOptions {
+  recomputeNormals?: boolean;
+}
+
 interface SkinnedMeshNodeOptions {
   mesh?: Mesh;
   skin?: SkinData;
@@ -5480,6 +5493,23 @@ declare class SceneNode {
   lookAt(target: number[], up?: number[]): SceneNode;
   localToWorld(x: number, y: number, z?: number): object;
   worldToLocal(x: number, y: number, z?: number): object;
+  /**
+   * Replace a MeshNode's geometry in place: positions and indices (both
+   * required), with normals, uvs, colors and tangents when given. A Mesh
+   * object works too. The node, its material, transform and children are
+   * untouched, so this is the per-frame path for geometry that deforms —
+   * a soft body's vertices(), a procedural surface, a streamed chunk.
+   * Normals are recomputed when the geometry carries none or when
+   * `opts.recomputeNormals` is true. Throws on a node that is not a
+   * MeshNode. Returns the node.
+   * @example
+   * const topo = cloth.topology();
+   * const node = scene.createMesh({ positions: cloth.vertices(), indices: topo.indices });
+   * // each frame, after Physics.step():
+   * node.updateMesh({ positions: cloth.vertices(), indices: topo.indices },
+   *                 { recomputeNormals: true });
+   */
+  updateMesh(mesh: MeshGeometry | Mesh, opts?: MeshUpdateOptions): SceneNode;
   setMaterial(mat: object): SceneNode;
   setSkeleton(skeleton: Skeleton): SceneNode;
   addClip(name: string, anim: any): SceneNode;
@@ -5980,40 +6010,6 @@ declare class WakeStreamView {
 
 /**
  * =============================================================================
- * Web Animations API
- * =============================================================================
- *
- * Implements the W3C Web Animations API for DOM elements.
- * Provides element.animate(), element.getAnimations(), and Animation object controls.
- *
- * @example
- *   const anim = element.animate([
- *     { transform: 'translateY(0px)', opacity: 1 },
- *     { transform: 'translateY(100px)', opacity: 0 }
- *   ], { duration: 1000, iterations: Infinity });
- *   anim.pause();
- */
-declare class Animation {
-  currentTime: number;
-  playbackRate: number;
-  readonly playState: string;
-  readonly pending: boolean;
-  readonly finished: Promise<Animation>;
-  readonly ready: Promise<Animation>;
-  onfinish: ((event: any) => any) | null;
-  oncancel: ((event: any) => any) | null;
-  play(): void;
-  pause(): void;
-  finish(): void;
-  cancel(): void;
-  reverse(): void;
-}
-
-declare class WebAnimations {
-}
-
-/**
- * =============================================================================
  * WebGL2RenderingContext — WebGL 2.0 Graphics Rendering Pipeline
  * =============================================================================
  *
@@ -6095,6 +6091,40 @@ declare class WebGL2RenderingContext {
   getUniformLocation(program: WebGLProgram | null, name: string): WebGLUniformLocation | null;
   drawArrays(mode: number, first: number, count: number): void;
   drawElements(mode: number, count: number, type: number, offset: number): void;
+}
+
+/**
+ * =============================================================================
+ * Web Animations API
+ * =============================================================================
+ *
+ * Implements the W3C Web Animations API for DOM elements.
+ * Provides element.animate(), element.getAnimations(), and Animation object controls.
+ *
+ * @example
+ *   const anim = element.animate([
+ *     { transform: 'translateY(0px)', opacity: 1 },
+ *     { transform: 'translateY(100px)', opacity: 0 }
+ *   ], { duration: 1000, iterations: Infinity });
+ *   anim.pause();
+ */
+declare class Animation {
+  currentTime: number;
+  playbackRate: number;
+  readonly playState: string;
+  readonly pending: boolean;
+  readonly finished: Promise<Animation>;
+  readonly ready: Promise<Animation>;
+  onfinish: ((event: any) => any) | null;
+  oncancel: ((event: any) => any) | null;
+  play(): void;
+  pause(): void;
+  finish(): void;
+  cancel(): void;
+  reverse(): void;
+}
+
+declare class WebAnimations {
 }
 
 /**
@@ -7244,6 +7274,12 @@ declare namespace bro {
     function broadcast(data: ArrayBuffer | ArrayBufferView, channel?: number): void;
     function sendClone(peerId: number, value: any, channel?: number): void;
     function broadcastClone(value: any, channel?: number): void;
+    /**
+     * The live connection ids, the same numbers onconnect / onmessage hand
+     * out. A connection id is a full unsigned 32-bit GameNetworkingSockets
+     * handle: as `sequence<long>` the top-bit ids came back negative and no
+     * longer compared equal to the id an event delivered.
+     */
     function peers(): number[];
     function getPeerAddress(peerId: number): string;
     function stats(): NetStats;

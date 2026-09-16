@@ -77,6 +77,21 @@
  */
 
 /**
+ * @typedef {Object} MeshGeometry
+ * @property {Float32Array} [positions]
+ * @property {Uint32Array} [indices]
+ * @property {Float32Array} [normals]
+ * @property {Float32Array} [uvs]
+ * @property {Float32Array} [colors]
+ * @property {Float32Array} [tangents]
+ */
+
+/**
+ * @typedef {Object} MeshUpdateOptions
+ * @property {boolean} [recomputeNormals]
+ */
+
+/**
  * @typedef {Object} SkinnedMeshNodeOptions
  * @property {Mesh} [mesh]
  * @property {SkinData} [skin]
@@ -422,6 +437,28 @@ class SceneNode {
    * @returns {Object}
    */
   worldToLocal(x, y, z) {}
+
+  /**
+   * Replace a MeshNode's geometry in place: positions and indices (both
+   * required), with normals, uvs, colors and tangents when given. A Mesh
+   * object works too. The node, its material, transform and children are
+   * untouched, so this is the per-frame path for geometry that deforms —
+   * a soft body's vertices(), a procedural surface, a streamed chunk.
+   * Normals are recomputed when the geometry carries none or when
+   * `opts.recomputeNormals` is true. Throws on a node that is not a
+   * MeshNode. Returns the node.
+   *
+   * @param {(MeshGeometry|Mesh)} mesh
+   * @param {MeshUpdateOptions} [opts]
+   * @returns {SceneNode}
+   * @example
+   * const topo = cloth.topology();
+   * const node = scene.createMesh({ positions: cloth.vertices(), indices: topo.indices });
+   * // each frame, after Physics.step():
+   * node.updateMesh({ positions: cloth.vertices(), indices: topo.indices },
+   *                 { recomputeNormals: true });
+   */
+  updateMesh(mesh, opts) {}
 
   /**
    * @param {Object} mat
