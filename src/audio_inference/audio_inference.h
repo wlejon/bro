@@ -99,6 +99,14 @@ public:
     // queue to the worker, which is the sole owner of the task list).
     TaskId addTask(std::shared_ptr<PcmRing> ring, ProcessFn process);
 
+    // Register a ring-less tenant: `pump` runs on the inference thread every
+    // drain cycle (or once per stepInline), unconditionally, and drains
+    // whatever input it owns itself. This is the seam a sibling library with
+    // its own audio ring (brosoundml's listen host) plugs into, so its
+    // streams share this worker instead of spawning their own. Same handle,
+    // same removeTask barrier, same destroy-on-worker rule as addTask.
+    TaskId addPump(std::function<void()> pump);
+
     // Unregister a tenant. The worker destroys the task (dropping its model ref)
     // on its own thread. Safe to call with an unknown/stale id.
     //
@@ -123,6 +131,8 @@ private:
     void drainCommands();   // worker / inline: apply queued add/remove to tasks_
     void pumpTasks();       // worker / inline: drain each ring, run process()
 
+    // A task drains `ring` into process(samples, n); a pump (null ring)
+    // is called as process(nullptr, 0) every cycle and drains its own input.
     struct Task {
         TaskId                   id = kInvalidTask;
         std::shared_ptr<PcmRing> ring;

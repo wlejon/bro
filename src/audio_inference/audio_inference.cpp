@@ -74,6 +74,10 @@ AudioInference::TaskId AudioInference::addTask(std::shared_ptr<PcmRing> ring,
     return id;
 }
 
+AudioInference::TaskId AudioInference::addPump(std::function<void()> pump) {
+    return addTask(nullptr, [pump = std::move(pump)](const float*, int) { pump(); });
+}
+
 void AudioInference::removeTask(TaskId id) {
     if (id == kInvalidTask) return;
     std::uint64_t target = 0;
@@ -138,11 +142,15 @@ void AudioInference::drainCommands() {
 
 void AudioInference::pumpTasks() {
     for (auto& task : tasks_) {
-        if (!task.ring) continue;
-        const int n = task.ring->read(scratch_);
-        if (n <= 0) continue;
+        const float* samples = nullptr;
+        int n = 0;
+        if (task.ring) {   // a ring task runs only when audio arrived
+            n = task.ring->read(scratch_);
+            if (n <= 0) continue;
+            samples = scratch_.data();
+        }                  // a pump (no ring) runs every cycle
         try {
-            task.process(scratch_.data(), n);
+            task.process(samples, n);
         } catch (const std::exception& e) {
             LOG_ERROR("[audioinfer] task process: %s", e.what());
         } catch (...) {

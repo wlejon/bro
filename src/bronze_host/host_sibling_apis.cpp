@@ -52,6 +52,7 @@
 #if BRO_WITH_SOUNDML
 #include <brosoundml/api.h>
 #include "api/api.h"  // brokit::api::resolveAssetPath
+#include "audio_inference/audio_inference.h"
 #include "util/log.h"
 #endif
 #if BRO_WITH_DIFFUSION
@@ -283,8 +284,29 @@ void installSiblingApis(engine::Engine& engine) {
     // joined at shutdown before the runtime and brotensor go away. The
     // engine is one per process, so the hooks register once even though a
     // reload re-runs the installers for the new realm.
+    //
+    // The listen host (bro.listen and the wake / kws / sense / gesture
+    // tenants) taps the engine's broaudio for its mic streams and runs each
+    // stream's feed as a pump on the engine's AudioInference worker — off
+    // the audio thread and off the main thread windowed, and inline under
+    // the virtual clock headless (stepInline from advanceTime), which is
+    // what keeps a scripted feed() deterministic. removeTask is the barrier
+    // the host relies on to mutate a stream's models after a detach.
     brosoundml::api::setPathResolver(&brokit::api::resolveAssetPath);
     brosoundml::api::setLogHook([](const std::string& line) { LOG_INFO("%s", line.c_str()); });
+    brosoundml::api::setAudioEngine(engine.audioEngine());
+    {
+        engine::AudioInference* inference = engine.audioInference();
+        brosoundml::api::InferenceScheduler sched;
+        if (inference) {
+            sched.addPump = [inference](std::function<void()> pump) {
+                return inference->addPump(std::move(pump));
+            };
+            sched.removePump = [inference](std::uint32_t id) { inference->removeTask(id); };
+            sched.threaded = [inference] { return inference->threaded(); };
+        }
+        brosoundml::api::setInferenceScheduler(std::move(sched));
+    }
     brosoundml::api::installSoundML();
     {
         static bool soundmlHooksInstalled = false;
