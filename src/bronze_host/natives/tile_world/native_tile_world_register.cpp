@@ -97,7 +97,7 @@ bool registerNatives_tile_world(std::string* error) {
         fn("__bro_native.tile_world.TileWorld_computeRegions_tiles", p(&bro_tile_world_TileWorld_computeRegions_tiles), "str", {"i32"}, error) &&
         fn("__bro_native.tile_world.TileWorld_computeRegions_area", p(&bro_tile_world_TileWorld_computeRegions_area), "i32", {"i32"}, error) &&
         fn("__bro_native.tile_world.TileWorld_applyAutotile", p(&bro_tile_world_TileWorld_applyAutotile), "void", {"__bro_native.tile_world.TileWorld", "i32", "str"}, error) &&
-        fn("__bro_native.tile_world.TileWorld_extractVoxelMesh", p(&bro_tile_world_TileWorld_extractVoxelMesh), "__bro_native.mesh.Mesh", {"__bro_native.tile_world.TileWorld", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64"}, error) &&
+        fn("__bro_native.tile_world.TileWorld_extractVoxelMesh", p(&bro_tile_world_TileWorld_extractVoxelMesh), "dynamic", {"__bro_native.tile_world.TileWorld", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64"}, error) &&
         fn("__bro_native.tile_world.TileWorld_setOrigin", p(&bro_tile_world_TileWorld_setOrigin), "void", {"__bro_native.tile_world.TileWorld", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.tile_world.TileWorld_advance", p(&bro_tile_world_TileWorld_advance), "bool", {"__bro_native.tile_world.TileWorld", "f64"}, error) &&
         fn("__bro_native.tile_world.TileWorld_addObject", p(&bro_tile_world_TileWorld_addObject), "void", {"__bro_native.tile_world.TileWorld", "i32", "f64", "f64", "f64"}, error) &&

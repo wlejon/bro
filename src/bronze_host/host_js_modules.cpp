@@ -39,15 +39,16 @@
 #if BRO_WITH_VISION
 #include <brovisionml/api.h>
 #endif
+#if BRO_WITH_3D
+#include <bromesh/api.h>
+#endif
 
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
 extern "C" void bro_net_sync_main();
 extern "C" void bro_image_gpu_main();
 extern "C" void bro_core_main();
-extern "C" void bro_mesh_main();
 extern "C" void bro_net_main();
-extern "C" void bro_rigging_main();
 extern "C" void bro_physics_main();
 extern "C" void bro_terrain_main();
 extern "C" void bro_clipmap_main();
@@ -133,9 +134,12 @@ void installBroCoreModule() {
 // two classes are lifted so a compiled app's bare `Mesh` is a host global.
 // Compiled against the native manifest like bro_core.js.
 void installMeshModule() {
-    bronze::embed::runEntry(bro_mesh_main);
+#if BRO_WITH_3D
+    bromesh::api::installMesh();
     adoptGlobalProperty("Mesh");
     adoptGlobalProperty("MeshBVH");
+    adoptGlobalProperty("ProgressiveMesh");
+#endif
 }
 
 void installNetModule() {
@@ -143,16 +147,20 @@ void installNetModule() {
 }
 
 void installRiggingModule() {
-    bronze::embed::runEntry(bro_rigging_main);
+#if BRO_WITH_3D
+    bromesh::api::installRigging();
     adoptGlobalProperty("SkinData");
     adoptGlobalProperty("Skeleton");
+    adoptGlobalProperty("Joint");
     adoptGlobalProperty("Pose");
     adoptGlobalProperty("Animation");
+    adoptGlobalProperty("AnimationClip");
     adoptGlobalProperty("SkeletalAnimation");
     adoptGlobalProperty("RigSpec");
     adoptGlobalProperty("VoxelChunk");
     adoptGlobalProperty("IK");
     adoptGlobalProperty("Rig");
+#endif
 }
 
 void installPhysicsModule() {

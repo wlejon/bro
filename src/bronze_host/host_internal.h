@@ -865,9 +865,6 @@ void cleanupSteamBindings();
 // Media (host_media.cpp)
 Value makeBroMediaValue();
 
-// Codecs (host_codecs.cpp)
-Value makeBroImageValue();
-
 // Stubs for unavailable / compiled-out subsystems (host_bro_root.cpp)
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
 

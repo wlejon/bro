@@ -1,6 +1,6 @@
-// native_scene_shaders.cpp — Custom shaders, LOD chains, visibility range, and scene-as-texture.
 #include "bronze_host/native_scene_internal.h"
-#include "bronze_host/native_mesh_internal.h"
+#include "bronze_host/host_natives.h"
+#include <bromesh/mesh_data.h>
 #include "scene/particles3d_node.h"
 #include "scene/decal_node.h"
 #include "scene/sprite_node.h"

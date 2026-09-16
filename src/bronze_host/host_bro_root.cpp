@@ -46,6 +46,16 @@
 #if BRO_WITH_VISION
 #include <brovisionml/api.h>
 #endif
+#include <broimage/api.h>
+#if BRO_WITH_PHYSICS
+#include "physics/physics_world.h"
+#endif
+#if BRO_WITH_3D
+#include "bronze_host/native_scene_internal.h"
+#endif
+#if BRO_WITH_GAMEAI
+#include "engine/navmesh_subsystem.h"
+#endif
 
 #include <string>
 #include <vector>
@@ -220,7 +230,176 @@ void installBroRoots(engine::Engine& engine) {
     broaudio::api::setAudioEngine(engine.audioEngine());
 #endif
 #if BRO_WITH_GAMEAI
-    brogameagent::api::installGameAi();
+    {
+        brogameagent::api::NavMeshHooks hooks;
+        hooks.registerNavMeshForPump = [](const std::shared_ptr<brogameagent::NavMesh>& m) {
+            bro::engine::registerNavMeshForPump(m);
+        };
+        hooks.collectGeometry = [](bronze::Value rootVal, std::vector<float>& xyz, std::vector<uint32_t>& indices, std::string& err) -> bool {
+            bronze::Value fromPhys = bronze::embed::getProperty(rootVal, "fromPhysics");
+            if (!bronze::embed::isUndefined(fromPhys) && !bronze::embed::isNull(fromPhys) &&
+                !(bronze::embed::isBool(fromPhys) && !bronze::embed::toBool(fromPhys))) {
+#if BRO_WITH_PHYSICS
+                physics::PhysicsWorld* world = unwrapPhysicsWorld(fromPhys);
+                if (world) {
+                    uint32_t layerMask = 0xffffffffu;
+                    bronze::Value lv = bronze::embed::getProperty(rootVal, "physicsLayers");
+                    if (bronze::embed::isObject(lv)) {
+                        bronze::embed::Persistent lvRoot(lv);
+                        bronze::Value lenV = bronze::embed::getProperty(lvRoot.get(), "length");
+                        if (bronze::embed::isNumber(lenV)) {
+                            uint32_t mask = 0;
+                            uint32_t n = static_cast<uint32_t>(bronze::embed::toDouble(lenV));
+                            for (uint32_t i = 0; i < n; i++) {
+                                bronze::Value el = bronze::embed::getElement(lvRoot.get(), i);
+                                int32_t idx = -1;
+                                if (bronze::embed::isString(el)) {
+                                    std::string s = bronze::embed::toUtf8(el);
+                                    idx = world->layerIndex(s);
+                                } else if (bronze::embed::isNumber(el)) {
+                                    idx = static_cast<int32_t>(bronze::embed::toDouble(el));
+                                }
+                                if (idx >= 0 && idx < 32) mask |= (1u << idx);
+                            }
+                            layerMask = mask;
+                        }
+                    }
+                    world->collectStaticTriangles(xyz, indices, layerMask);
+                }
+#endif
+            }
+
+            bronze::Value fromTerrainV = bronze::embed::getProperty(rootVal, "fromTerrain");
+            if (!bronze::embed::isUndefined(fromTerrainV) && !bronze::embed::isNull(fromTerrainV)) {
+#if BRO_WITH_3D
+                HostTerrainCell* tc = bronze::embed::isObject(fromTerrainV) ? terrainCellOf(fromTerrainV) : nullptr;
+                if (!tc) {
+                    err = "bakeNavMesh: fromTerrain must be a scene.createTerrain() object";
+                    return false;
+                }
+                bronze::Value boundsV = bronze::embed::getProperty(rootVal, "terrainBounds");
+                if (!bronze::embed::isObject(boundsV)) {
+                    err = "bakeNavMesh: fromTerrain requires terrainBounds: {minX, minZ, maxX, maxZ}";
+                    return false;
+                }
+                bronze::embed::Persistent boundsRoot(boundsV);
+                bronze::Value minXV = bronze::embed::getProperty(boundsRoot.get(), "minX");
+                bronze::Value minZV = bronze::embed::getProperty(boundsRoot.get(), "minZ");
+                bronze::Value maxXV = bronze::embed::getProperty(boundsRoot.get(), "maxX");
+                bronze::Value maxZV = bronze::embed::getProperty(boundsRoot.get(), "maxZ");
+                if (bronze::embed::isUndefined(minXV) || bronze::embed::isUndefined(minZV) ||
+                    bronze::embed::isUndefined(maxXV) || bronze::embed::isUndefined(maxZV)) {
+                    err = "bakeNavMesh: terrainBounds requires minX, minZ, maxX, maxZ";
+                    return false;
+                }
+                float minX = static_cast<float>(bronze::embed::toDouble(minXV));
+                float minZ = static_cast<float>(bronze::embed::toDouble(minZV));
+                float maxX = static_cast<float>(bronze::embed::toDouble(maxXV));
+                float maxZ = static_cast<float>(bronze::embed::toDouble(maxZV));
+                float step = 1.0f;
+                bronze::Value stepV = bronze::embed::getProperty(rootVal, "terrainStep");
+                if (bronze::embed::isNumber(stepV)) step = static_cast<float>(bronze::embed::toDouble(stepV));
+                if (step <= 0.0f) step = 1.0f;
+                float rayStart = 100.0f;
+                bronze::Value rsV = bronze::embed::getProperty(rootVal, "terrainRayStart");
+                if (bronze::embed::isNumber(rsV)) rayStart = static_cast<float>(bronze::embed::toDouble(rsV));
+                float rayLength = 200.0f;
+                bronze::Value rlV = bronze::embed::getProperty(rootVal, "terrainRayLength");
+                if (bronze::embed::isNumber(rlV)) rayLength = static_cast<float>(bronze::embed::toDouble(rlV));
+
+                int nx = static_cast<int>(std::floor((maxX - minX) / step)) + 1;
+                int nz = static_cast<int>(std::floor((maxZ - minZ) / step)) + 1;
+                if (nx >= 2 && nz >= 2) {
+                    uint32_t baseIdx = static_cast<uint32_t>(xyz.size() / 3);
+                    for (int ix = 0; ix < nx; ++ix) {
+                        float x = minX + ix * step;
+                        for (int iz = 0; iz < nz; ++iz) {
+                            float z = minZ + iz * step;
+                            float y = 0.0f;
+                            terrainSampleHeight(tc, x, z, rayStart, rayLength, y);
+                            xyz.push_back(x);
+                            xyz.push_back(y);
+                            xyz.push_back(z);
+                        }
+                    }
+                    for (int ix = 0; ix < nx - 1; ++ix) {
+                        for (int iz = 0; iz < nz - 1; ++iz) {
+                            uint32_t v00 = baseIdx + ix * nz + iz;
+                            uint32_t v01 = baseIdx + ix * nz + (iz + 1);
+                            uint32_t v10 = baseIdx + (ix + 1) * nz + iz;
+                            uint32_t v11 = baseIdx + (ix + 1) * nz + (iz + 1);
+                            indices.push_back(v00);
+                            indices.push_back(v01);
+                            indices.push_back(v10);
+                            indices.push_back(v10);
+                            indices.push_back(v01);
+                            indices.push_back(v11);
+                        }
+                    }
+                }
+#else
+                err = "bakeNavMesh: fromTerrain requires a 3D-enabled build";
+                return false;
+#endif
+            }
+            return true;
+        };
+        hooks.collectObstacles = [](bronze::Value rootVal, float minX, float maxX, float minZ, float maxZ,
+                                    std::vector<brogameagent::AABB>& outBoxes, std::string&) -> bool {
+#if BRO_WITH_PHYSICS
+            bronze::Value fromPhys = bronze::embed::getProperty(rootVal, "fromPhysics");
+            physics::PhysicsWorld* world = unwrapPhysicsWorld(fromPhys);
+            if (world) {
+                uint32_t layerMask = 0xffffffffu;
+                bronze::Value lv = bronze::embed::getProperty(rootVal, "physicsLayers");
+                if (bronze::embed::isObject(lv)) {
+                    bronze::embed::Persistent lvRoot(lv);
+                    bronze::Value lenV = bronze::embed::getProperty(lvRoot.get(), "length");
+                    if (bronze::embed::isNumber(lenV)) {
+                        uint32_t mask = 0;
+                        uint32_t n = static_cast<uint32_t>(bronze::embed::toDouble(lenV));
+                        for (uint32_t i = 0; i < n; i++) {
+                            bronze::Value el = bronze::embed::getElement(lvRoot.get(), i);
+                            int32_t idx = -1;
+                            if (bronze::embed::isString(el)) {
+                                std::string s = bronze::embed::toUtf8(el);
+                                idx = world->layerIndex(s);
+                            } else if (bronze::embed::isNumber(el)) {
+                                idx = static_cast<int32_t>(bronze::embed::toDouble(el));
+                            }
+                            if (idx >= 0 && idx < 32) mask |= (1u << idx);
+                        }
+                        layerMask = mask;
+                    }
+                }
+                float bandMinY = -1e9f;
+                float bandMaxY = 1e9f;
+                bronze::Value minyV = bronze::embed::getProperty(rootVal, "physicsMinY");
+                if (bronze::embed::isNumber(minyV)) bandMinY = static_cast<float>(bronze::embed::toDouble(minyV));
+                bronze::Value maxyV = bronze::embed::getProperty(rootVal, "physicsMaxY");
+                if (bronze::embed::isNumber(maxyV)) bandMaxY = static_cast<float>(bronze::embed::toDouble(maxyV));
+
+                for (const auto& b : world->collectStaticBodies()) {
+                    if (b.isSensor) continue;
+                    if (b.layer >= 0 && b.layer < 32 && !(layerMask & (1u << b.layer))) continue;
+                    if (b.max.GetY() < bandMinY || b.min.GetY() > bandMaxY) continue;
+                    if (b.min.GetX() <= minX && b.max.GetX() >= maxX &&
+                        b.min.GetZ() <= minZ && b.max.GetZ() >= maxZ) continue;
+                    brogameagent::AABB box{
+                        0.5f * (b.min.GetX() + b.max.GetX()),
+                        0.5f * (b.min.GetZ() + b.max.GetZ()),
+                        0.5f * (b.max.GetX() - b.min.GetX()),
+                        0.5f * (b.max.GetZ() - b.min.GetZ()),
+                    };
+                    outBoxes.push_back(box);
+                }
+            }
+#endif
+            return true;
+        };
+        brogameagent::api::setNavMeshHooks(hooks);
+        brogameagent::api::installGameAi();
+    }
 #endif
 #if BRO_WITH_TENSOR
     brotensor::api::installTensor();
@@ -316,21 +495,10 @@ void installBroRoots(engine::Engine& engine) {
     {
         // `bro.image` is ONE object with three sources: brokit's kernels
         // (which create it, now that `bro` is registered), the codecs
-        // (host_codecs.cpp) merged onto it here, and `gpu`, which
+        // and ops from broimage_api, and `gpu`, which
         // installImageGpuModule mounts right after this returns.
         installBrokitImageKernels();
-        Value broImg = ev::getProperty(bro->get(), "image");
-        if (!ev::isObject(broImg)) {
-            ev::Persistent img(ev::createObject());
-            ev::setProperty(bro->get(), "image", img.get());
-            broImg = img.get();
-        }
-        ev::Persistent imgRoot(broImg);
-        ev::Persistent codecImg(makeBroImageValue());
-        for (const char* prop : {"transcodeKTX2", "encodePngFile", "encodePng", "encodeJpegFile", "encodeJpeg"}) {
-            Value fn = ev::getProperty(codecImg.get(), prop);
-            if (!ev::isUndefined(fn)) ev::setProperty(imgRoot.get(), prop, fn);
-        }
+        broimage::api::installImage();
     }
     {
         Value broWin = ev::getProperty(bro->get(), "window");
@@ -344,10 +512,6 @@ void installBroRoots(engine::Engine& engine) {
     if (!registerBroNatives(&err)) {
         LOG_ERROR("bronze_host: native registration failed: %s", err.c_str());
     }
-    // The mesh classes' prototypes onto `__bro_native.mesh`, now that the
-    // constructors are registered (js/mesh.js chains them; host_natives.h).
-    publishMeshPrototypes(native->get());
-    publishRiggingPrototypes(native->get());
     installSettingsObserver(engine);
     installBroCoreModule();
 }

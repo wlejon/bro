@@ -88,9 +88,9 @@ bool registerWindowNatives(std::string* error);
 bool registerSettingsNatives(std::string* error);
 bool registerPathsNatives(std::string* error);
 bool registerDunderBroNatives(std::string* error);
-bool registerMeshNatives(std::string* error);
+inline bool registerMeshNatives(std::string*) { return true; }
 bool registerNetNatives(std::string* error);
-bool registerRiggingNatives(std::string* error);
+inline bool registerRiggingNatives(std::string*) { return true; }
 bool registerPhysicsNatives(std::string* error);
 bool registerAnimationNatives(std::string* error);
 bool registerTerrainNatives(std::string* error);
@@ -118,12 +118,8 @@ inline bool registerFloraNatives(std::string*) { return true; }
 inline bool registerTensorNatives(std::string*) { return true; }
 void pollNet();
 
-// After registration: the prototypes of the mesh classes as properties of
-// `__bro_native.mesh` (`MeshPrototype`, `MeshBVHPrototype`), for js/mesh.js
-// to chain under its public classes. `nativeRoot` is the `__bro_native`
-// object. A no-op without BRO_WITH_3D.
-void publishMeshPrototypes(bronze::Value nativeRoot);
-void publishRiggingPrototypes(bronze::Value nativeRoot);
+inline void publishMeshPrototypes(bronze::Value) {}
+inline void publishRiggingPrototypes(bronze::Value) {}
 
 // Register the roots (`bro`, `__bro`, `__bro_native` with their namespace
 // objects), the natives, the engine-side hooks the callbacks ride on, and

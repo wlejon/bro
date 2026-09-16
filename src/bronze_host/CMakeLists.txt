@@ -167,13 +167,8 @@ set(BRO_BRONZE_HOST_SOURCES
     native_window.cpp
     native_settings.cpp
     native_dunder_bro.cpp
-    native_mesh_core.cpp
-    native_mesh_ops.cpp
-    native_mesh_analysis.cpp
     native_net.cpp
     natives/net/native_net_register.cpp
-    native_rigging_core.cpp
-    native_rigging_anim.cpp
     native_physics_core.cpp
     native_physics_queries.cpp
     native_physics_character.cpp
@@ -218,7 +213,6 @@ set(BRO_BRONZE_HOST_SOURCES
     host_menu.cpp
     host_video.cpp
     host_media.cpp
-    host_codecs.cpp
 )
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
@@ -230,9 +224,7 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/window
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/settings
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/dunder_bro
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/mesh
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/net
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/rigging
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/physics
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/scene
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/terrain
@@ -345,7 +337,7 @@ target_link_libraries(bro_bronze_host
 # process) and the web half (fetch, URL, Blob, encoding, AbortController,
 # WebSocket, streams, crypto, indexedDB, ...) of the realm; host_brokit.cpp
 # installs both and says which installers it skips in favour of bro's own.
-target_link_libraries(bro_bronze_host PUBLIC brokit_api broaudio_api brogameagent_api)
+target_link_libraries(bro_bronze_host PUBLIC brokit_api broaudio_api brogameagent_api broimage_api)
 
 if(BRO_WITH_FLORA)
     target_link_libraries(bro_bronze_host PUBLIC broflora_api)
@@ -369,6 +361,10 @@ endif()
 
 if(BRO_WITH_VISION)
     target_link_libraries(bro_bronze_host PUBLIC brovisionml_api)
+endif()
+
+if(BRO_WITH_3D)
+    target_link_libraries(bro_bronze_host PUBLIC bromesh_api)
 endif()
 
 if(BRO_WITH_WEBP)
@@ -475,9 +471,7 @@ else()
     bro_compile_js(net_sync   bro_net_sync_main)
     bro_compile_js(image_gpu  bro_image_gpu_main)
     bro_compile_js(bro_core   bro_core_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(mesh       bro_mesh_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(net        bro_net_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(rigging    bro_rigging_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(physics    bro_physics_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(terrain    bro_terrain_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(clipmap    bro_clipmap_main  NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
