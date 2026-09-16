@@ -18,6 +18,13 @@
 #include "bronze_host/host_internal.h"
 #include "embed/embed.h"
 
+#if BRO_WITH_AUDIO
+#include <broaudio/api.h>
+#endif
+#if BRO_WITH_FLORA
+#include <broflora/api/api.h>
+#endif
+
 extern "C" void bro_observers_main();
 extern "C" void bro_events_main();
 extern "C" void bro_net_sync_main();
@@ -37,7 +44,6 @@ extern "C" void bro_scene_main();
 extern "C" void bro_lm_main();
 extern "C" void bro_rave_main();
 extern "C" void bro_motion_main();
-extern "C" void bro_mic_main();
 extern "C" void bro_sense_main();
 extern "C" void bro_gesture_main();
 extern "C" void bro_wake_main();
@@ -49,7 +55,6 @@ extern "C" void bro_vision_main();
 extern "C" void bro_diar_main();
 extern "C" void bro_stt_main();
 extern "C" void bro_tts_main();
-extern "C" void bro_flora_main();
 extern "C" void bro_tensor_main();
 extern "C" void bro_impostor_main();
 
@@ -217,7 +222,9 @@ void installMotionModule() {
 }
 
 void installMicModule() {
-    bronze::embed::runEntry(bro_mic_main);
+#if BRO_WITH_AUDIO
+    broaudio::api::installMic();
+#endif
 }
 
 void installSenseModule() {
@@ -265,8 +272,10 @@ void installTtsModule() {
 }
 
 void installFloraModule() {
-    bronze::embed::runEntry(bro_flora_main);
+#if BRO_WITH_FLORA
+    broflora::api::installFlora();
     adoptGlobalProperty("FloraWorld");
+#endif
 }
 
 void installTensorModule() {

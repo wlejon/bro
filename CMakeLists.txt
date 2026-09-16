@@ -253,6 +253,13 @@ elseif(BRO_WITH_TENSOR_METAL)
     set(BROGAMEAGENT_WITH_METAL ON CACHE BOOL "" FORCE)
 endif()
 
+# Forward Bronze API library enable flags to sibling libraries
+set(BROAUDIO_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broaudio" FORCE)
+set(BROGAMEAGENT_ENABLE_API ON CACHE BOOL "Build Bronze JavaScript API for brogameagent" FORCE)
+set(BROFLORA_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broflora" FORCE)
+set(BROTENSOR_ENABLE_API    ON CACHE BOOL "Build Bronze JavaScript API for brotensor" FORCE)
+set(BROLM_ENABLE_API        ON CACHE BOOL "Build Bronze JavaScript API for brolm" FORCE)
+
 # Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
 # Applied to the targets that carry feature-gated code (bro_engine, bro_scene,
 # bro_bronze_host). Uses the #if BRO_WITH_X convention.

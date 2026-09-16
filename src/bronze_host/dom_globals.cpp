@@ -28,6 +28,13 @@
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/eval.h"
+
+#if BRO_WITH_AUDIO
+#include <broaudio/api.h>
+#endif
+#if BRO_WITH_GAMEAI
+#include <brogameagent/api.h>
+#endif
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_globals_internal.h"
@@ -213,7 +220,9 @@ void hostFrame(double dtMs) {
     ev::drainMicrotasks();                               // 6
     fireHostObserverFrame();                             // 6b
     deliverWebAnimationFinishEvents();
-    drainMicChunks();
+#if BRO_WITH_AUDIO
+    broaudio::api::drainMicChunks();
+#endif
     ev::drainMicrotasks();                               // 6c
     hostNotifyIdleFrame(dtMs);                           // 7
 }
@@ -881,8 +890,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     installSelectionGlobals();
     installIntlGlobals();
     installWebAnimationGlobals();
-    installAudioGlobals();
-    installAIGlobals();
+#if BRO_WITH_AUDIO
+    broaudio::api::installAudio();
+    broaudio::api::installMic();
+#endif
+#if BRO_WITH_GAMEAI
+    brogameagent::api::installGameAi();
+#endif
     installVideoGlobals();
     initHostCalleeNamer();
 

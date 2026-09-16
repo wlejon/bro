@@ -102,7 +102,7 @@ bool registerSceneNatives(std::string* error);
 bool registerLmNatives(std::string* error);
 bool registerRaveNatives(std::string* error);
 bool registerMotionNatives(std::string* error);
-bool registerMicNatives(std::string* error);
+inline bool registerMicNatives(std::string*) { return true; }
 bool registerSenseNatives(std::string* error);
 bool registerGestureNatives(std::string* error);
 bool registerWakeNatives(std::string* error);
@@ -114,7 +114,7 @@ bool registerVisionNatives(std::string* error);
 bool registerDiarNatives(std::string* error);
 bool registerSttNatives(std::string* error);
 bool registerTtsNatives(std::string* error);
-bool registerFloraNatives(std::string* error);
+inline bool registerFloraNatives(std::string*) { return true; }
 bool registerTensorNatives(std::string* error);
 void pollNet();
 

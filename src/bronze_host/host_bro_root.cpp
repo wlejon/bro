@@ -22,7 +22,15 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_window_open.h"
+#include "engine/engine.h"
 #include "util/log.h"
+
+#if BRO_WITH_AUDIO
+#include <broaudio/api.h>
+#endif
+#if BRO_WITH_GAMEAI
+#include <brogameagent/api.h>
+#endif
 
 #include <string>
 #include <vector>
@@ -193,10 +201,12 @@ void installBroRoots(engine::Engine& engine) {
     publish("__bro_native", *native);
     publish("Physics", *physicsRoot);
 
-    {
-        ev::Persistent ai(makeBroAiValue());
-        ev::setProperty(bro->get(), "ai", ai.get());
-    }
+#if BRO_WITH_AUDIO
+    broaudio::api::setAudioEngine(engine.audioEngine());
+#endif
+#if BRO_WITH_GAMEAI
+    brogameagent::api::installGameAi();
+#endif
     {
         ev::Persistent math(makeBroMathValue());
         ev::setProperty(bro->get(), "math", math.get());

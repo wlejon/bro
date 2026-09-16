@@ -8,6 +8,10 @@
 #include "platform/dialogs.h"
 #include "util/log.h"
 
+#if BRO_WITH_AUDIO
+#include <broaudio/api.h>
+#endif
+
 #include <chrono>
 #include <thread>
 #include <string>
@@ -62,7 +66,9 @@ void installHeadlessGlobals(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             engine.advanceTime(ms);
-            drainMicChunks();
+#if BRO_WITH_AUDIO
+            broaudio::api::drainMicChunks();
+#endif
             pumpBrokitTicks();
             if (ev::microtasksPending()) ev::drainMicrotasks();
             return ev::undefined();
@@ -82,7 +88,9 @@ void installHeadlessGlobals(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             engine.advanceTime(ms);
-            drainMicChunks();
+#if BRO_WITH_AUDIO
+            broaudio::api::drainMicChunks();
+#endif
             pumpBrokitTicks();
             if (ev::microtasksPending()) ev::drainMicrotasks();
             return ev::undefined();

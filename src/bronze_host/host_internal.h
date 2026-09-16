@@ -728,10 +728,6 @@ void installFloraModule();
 void installTensorModule();
 void installImpostorModule();
 
-void installAudioGlobals();
-void installAIGlobals();
-Value makeBroAiValue();
-
 inline Value makeFloat32Array(const float* data, size_t count) {
     Value arr = ev::createTypedArray(ev::elements::Float32, static_cast<uint32_t>(count));
     if (data && count > 0) {
@@ -874,9 +870,6 @@ Value makeBroImageValue();
 
 // Stubs for unavailable / compiled-out subsystems (host_bro_root.cpp)
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
-
-// Mic chunk draining (native_mic.cpp)
-void drainMicChunks();
 
 }  // namespace bro::bronze_host
 

@@ -1,7 +1,7 @@
 #if BRO_WITH_3D
 
 #include "bronze_host/native_scene_internal.h"
-#include "bronze_host/host_ai_internal.h"
+#include "host_ai_internal.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/agent_binding.h"
@@ -18,6 +18,8 @@
 #include <vector>
 
 namespace bro::bronze_host {
+
+using namespace brogameagent::api;
 
 // ---------------------------------------------------------------------------
 // Custom Capability Registry

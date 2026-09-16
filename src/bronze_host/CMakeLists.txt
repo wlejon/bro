@@ -214,8 +214,6 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/rave/native_rave_register.cpp
     native_motion.cpp
     natives/motion/native_motion_register.cpp
-    native_mic.cpp
-    natives/mic/native_mic_register.cpp
     native_sense.cpp
     natives/sense/native_sense_register.cpp
     native_gesture.cpp
@@ -238,30 +236,8 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/stt/native_stt_register.cpp
     native_tts.cpp
     natives/tts/native_tts_register.cpp
-    native_flora.cpp
-    natives/flora/native_flora_register.cpp
     native_tensor.cpp
     natives/tensor/native_tensor_register.cpp
-    host_audio_core.cpp
-    host_audio_context.cpp
-    host_audio_clips.cpp
-    host_audio_voice.cpp
-    host_audio_buses.cpp
-    host_audio_synth.cpp
-    host_audio_sequencer.cpp
-    host_audio_param.cpp
-    host_audio_buffer.cpp
-    host_audio_nodes.cpp
-    host_audio_spatial.cpp
-    host_audio_dsp.cpp
-    host_ai_core.cpp
-    host_ai_navgrid.cpp
-    host_ai_navmesh.cpp
-    host_ai_agent.cpp
-    host_ai_unit.cpp
-    host_ai_extras.cpp
-    host_ai_mcts.cpp
-    host_ai_game.cpp
     host_scene_agent.cpp
     host_math_classes.cpp
     host_math_funcs.cpp
@@ -398,7 +374,11 @@ target_link_libraries(bro_bronze_host
 # process) and the web half (fetch, URL, Blob, encoding, AbortController,
 # WebSocket, streams, crypto, indexedDB, ...) of the realm; host_brokit.cpp
 # installs both and says which installers it skips in favour of bro's own.
-target_link_libraries(bro_bronze_host PUBLIC brokit_api)
+target_link_libraries(bro_bronze_host PUBLIC brokit_api broaudio_api brogameagent_api)
+
+if(BRO_WITH_FLORA)
+    target_link_libraries(bro_bronze_host PUBLIC broflora_api)
+endif()
 
 if(BRO_WITH_WEBP)
     target_link_libraries(bro_bronze_host PUBLIC bro_webp)
@@ -525,7 +505,6 @@ else()
     bro_compile_js(lm         bro_lm_main         NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(rave       bro_rave_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(mic        bro_mic_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(sense      bro_sense_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(gesture    bro_gesture_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(wake       bro_wake_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
@@ -537,7 +516,6 @@ else()
     bro_compile_js(diar       bro_diar_main       NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(stt        bro_stt_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(tts        bro_tts_main        NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
-    bro_compile_js(flora      bro_flora_main      NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(tensor     bro_tensor_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(impostor   bro_impostor_main)
 
