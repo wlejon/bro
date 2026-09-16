@@ -139,6 +139,18 @@ using namespace bro::bronze_host;
 // Tween lifecycle & base methods
 // =============================================================================
 
+// A native declared to return `__bro_native.animation.Tween` hands its
+// pointer to bronze_native_wrap, which mints a NEW handle that OWNS it and
+// runs Tween_dtor on it when that handle dies (runtime/native_handle.h). So
+// a chainable method must not answer `self`: two handles over one cell is a
+// double delete at the sweep, which is exactly the heap corruption every
+// test that called start() died of at exit. Each chained call gets its own
+// cell instead; a cell is a liveness token plus the tween id, so the copy
+// resolves to the same scene::Tween and costs nothing.
+static void* chained(HostTweenCell* c) {
+    return c ? new HostTweenCell(*c) : nullptr;
+}
+
 void bro_animation_Tween_dtor(void* self) {
     delete tweenCellOf(self);
 }
@@ -157,7 +169,7 @@ void* bro_animation_Tween_call(void* self, uint64_t callback) {
             }
         });
     }
-    return self;
+    return chained(c);
 }
 
 void* bro_animation_Tween_loop(void* self, bool count_given, int32_t count) {
@@ -165,7 +177,7 @@ void* bro_animation_Tween_loop(void* self, bool count_given, int32_t count) {
     if (c && c->tween()) {
         c->tween()->setLoops(count_given ? count : -1);
     }
-    return self;
+    return chained(c);
 }
 
 void* bro_animation_Tween_start(void* self) {
@@ -175,25 +187,25 @@ void* bro_animation_Tween_start(void* self) {
         return nullptr;
     }
     c->tween()->start();
-    return self;
+    return chained(c);
 }
 
 void* bro_animation_Tween_stop(void* self) {
     auto* c = tweenCellOf(self);
     if (c && c->tween()) c->tween()->stop();
-    return self;
+    return chained(c);
 }
 
 void* bro_animation_Tween_pause(void* self) {
     auto* c = tweenCellOf(self);
     if (c && c->tween()) c->tween()->pause();
-    return self;
+    return chained(c);
 }
 
 void* bro_animation_Tween_resume(void* self) {
     auto* c = tweenCellOf(self);
     if (c && c->tween()) c->tween()->resume();
-    return self;
+    return chained(c);
 }
 
 void bro_animation_Tween_destroy(void* self) {

@@ -688,7 +688,12 @@ void* bro_scene_SceneNode_setHtml(void* self, const char* html) {
     if (n && n->type() == scene::SceneNode::Type::Html && html) {
         static_cast<scene::HtmlNode*>(n)->setHtml(html);
     }
-    return self;
+    // Declared to return a SceneNode, so bronze mints a new OWNING handle
+    // over the pointer; answering `self` would have two handles delete one
+    // cell (see chained() in native_scene_anim.cpp). A fresh cell resolves
+    // to the same node.
+    auto* c = nodeCellOf(self);
+    return c ? new HostSceneNodeCell(*c) : nullptr;
 }
 
 void bro_scene_SceneNode_markHtmlDirty(void* self) {
