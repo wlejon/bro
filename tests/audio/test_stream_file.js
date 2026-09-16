@@ -3,9 +3,11 @@
 //
 // Pacing: the decode worker is a REAL thread (50 ms wake cadence) while
 // sleep() renders virtual time instantly. Tests interleave small virtual
-// sleeps with real busy-waits so the worker can keep the ring topped up —
-// then deliberately gulp a big virtual chunk to prove the underrun policy
-// (silence + counter, playback recovers, audio thread never blocks).
+// sleeps with real busy-waits so the worker can keep the ring topped up.
+// The underrun policy (silence + counter, playback recovers, audio thread
+// never blocks) is proved with a ring smaller than one render block, not by
+// racing the worker: how much real time a virtual gulp takes depends on
+// machine load, so a race would only starve the ring on a quiet machine.
 
 const fs = require('fs');
 const os = require('os');
@@ -93,29 +95,45 @@ assert(ctx.saveWav(wavPath, tone, 1, sr), 'wrote streaming fixture WAV');
     assert(ctx.getStreamStats(id) === null, 'stats null after closeStream');
 }
 
-// --- underrun: virtual time outruns the worker -> silence + counter ---------
+// --- underrun: a render block larger than the ring -> silence + counter ----
 {
-    // Tiny ring (0.2 s): one 1.5 s virtual gulp must starve the worker.
-    const id = ctx.createStreamFromFile(wavPath, { ringFrames: Math.floor(sr / 5) });
+    // A ring smaller than one headless render block (sleep() renders 16 ms
+    // per step: 706 frames at 44.1k). The mixer snapshots the ring once per
+    // block, so every block of the gulp starves for at least
+    // (block - ring) frames however promptly the worker refills between
+    // blocks — deterministic under the virtual clock.
+    const ring = 256;
+    const id = ctx.createStreamFromFile(wavPath, { ringFrames: ring });
     assert(id >= 0, 'underrun stream created');
-    let st = waitForStats(id, s => s.bufferedFrames >= Math.floor(sr / 10));
+    let st = waitForStats(id, s => s.bufferedFrames >= ring / 2);
     assert(st, 'underrun stream prebuffered');
+    // The worker releases playback once the prebuffer (ring / 2) is decoded;
+    // render single blocks until the mixer is visibly consuming.
+    st = waitForStats(id, s => { if (s.playedFrames > 0) return true; sleep(16); return false; });
+    assert(st, 'underrun stream started playing');
 
-    sleep(1500);  // 1.5 s of virtual audio in one real instant
+    sleep(1500);  // ~94 blocks of 706 frames through a 256-frame ring
     st = ctx.getStreamStats(id);
     assert(st.underrunFrames > 0,
-           'draining faster than the worker refills counts underruns, got ' + st.underrunFrames);
+           'draining faster than the ring can hold counts underruns, got ' + st.underrunFrames);
 
-    // Playback recovers once the worker gets wall time again.
+    // Playback recovers: once the worker has topped the ring up again, a block
+    // smaller than what is buffered plays clean tone with no new starvation.
     const playedBefore = st.playedFrames;
-    st = waitForStats(id, s => s.bufferedFrames >= sr / 20);
-    assert(st, 'ring refilled after the stall');
+    const underrunBefore = st.underrunFrames;
+    const smallBlockFrames = Math.ceil(sr * 2 / 1000);  // sleep(2)
     ctx.startRecording();
-    for (let i = 0; i < 5; i++) { sleep(50); realWait(12); }
+    for (let i = 0; i < 5; i++) {
+        assert(waitForStats(id, s => s.bufferedFrames >= smallBlockFrames),
+               'ring refilled after the stall (iteration ' + i + ')');
+        sleep(2);
+    }
     const rec = ctx.stopRecording();
     st = ctx.getStreamStats(id);
     assert(st.playedFrames > playedBefore, 'stream kept playing after underrun');
-    assert(rms(rec) > 0.03, 'audio resumed after underrun, rms=' + rms(rec));
+    assert(st.underrunFrames === underrunBefore,
+           'no starvation once the ring is topped up, underruns=' + st.underrunFrames);
+    assert(rms(rec) > 0.1, 'audio resumed after underrun, rms=' + rms(rec));
 
     ctx.closeStream(id);
 }
