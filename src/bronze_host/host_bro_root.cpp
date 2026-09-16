@@ -243,8 +243,28 @@ void installBroRoots(engine::Engine& engine) {
     setUnavailable("ai", "BRO_WITH_GAMEAI");
 #endif
 #if !BRO_WITH_3D
+    // Everything the 3D families own: bromesh's namespaces (bromesh_api is
+    // not linked, host_sibling_apis.cpp) and the scene-graph natives (not in
+    // the library, CMakeLists.txt). Without this the makeRoot placeholders
+    // would read as empty objects rather than as the documented stub.
+    setUnavailable("mesh", "BRO_WITH_3D");
+    setUnavailable("rigging", "BRO_WITH_3D");
+    setUnavailable("scene", "BRO_WITH_3D");
+    setUnavailable("terrain", "BRO_WITH_3D");
+    setUnavailable("clipmap", "BRO_WITH_3D");
+    setUnavailable("tile_world", "BRO_WITH_3D");
+    setUnavailable("lighting", "BRO_WITH_3D");
+    setUnavailable("animation", "BRO_WITH_3D");
     setUnavailable("gizmo", "BRO_WITH_3D");
     setUnavailable("impostor", "BRO_WITH_3D");
+#endif
+#if !BRO_WITH_PHYSICS
+    // The `Physics` global js/physics.js would have filled: the same stub
+    // shape, so Physics.available === false and any call names the flag.
+    {
+        ev::Persistent stub(makeUnavailableNamespace("physics", "BRO_WITH_PHYSICS"));
+        publish("Physics", stub);
+    }
 #endif
 #if !BRO_WITH_LM
     setUnavailable("lm", "BRO_WITH_LM");

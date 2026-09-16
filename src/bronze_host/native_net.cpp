@@ -3,7 +3,12 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
+#if BRO_WITH_NET
+// net_service.h pulls in GameNetworkingSockets, which a build without
+// BRO_WITH_NET does not have (src/net is not even configured); the stubs
+// below the gate need none of it.
 #include "net/net_service.h"
+#endif
 #include "util/log.h"
 #include "natives/net/native_net_decl.h"
 #include "embed/embed.h"

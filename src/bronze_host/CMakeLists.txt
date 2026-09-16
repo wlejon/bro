@@ -170,34 +170,6 @@ set(BRO_BRONZE_HOST_SOURCES
     native_dunder_bro.cpp
     native_net.cpp
     natives/net/native_net_register.cpp
-    native_physics_core.cpp
-    native_physics_queries.cpp
-    native_physics_character.cpp
-    native_physics_softbody.cpp
-    native_physics_constraints.cpp
-    native_physics_vehicle.cpp
-    native_physics_ragdoll.cpp
-    natives/physics/native_physics_register.cpp
-    native_scene_nodes.cpp
-    native_scene_lights.cpp
-    native_scene_shaders.cpp
-    native_scene_core.cpp
-    native_scene_env.cpp
-    native_scene_terrain.cpp
-    native_scene_clipmap.cpp
-    native_scene_tile.cpp
-    native_scene_tile_ops.cpp
-    native_scene_lighting.cpp
-    native_scene_anim.cpp
-    native_scene_clip.cpp
-    native_scene_gizmo.cpp
-    natives/scene/native_scene_register.cpp
-    natives/terrain/native_terrain_register.cpp
-    natives/clipmap/native_clipmap_register.cpp
-    natives/tile_world/native_tile_world_register.cpp
-    natives/lighting/native_lighting_register.cpp
-    natives/animation/native_animation_register.cpp
-    natives/gizmo/native_gizmo_register.cpp
     natives/time/native_time_register.cpp
     natives/paths/native_paths_register.cpp
     natives/window/native_window_register.cpp
@@ -216,6 +188,55 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_video.cpp
     host_media.cpp
 )
+
+# The physics and scene natives are bodies over src/physics and src/scene,
+# which a build without BRO_WITH_PHYSICS / BRO_WITH_3D does not configure at
+# all (src/CMakeLists.txt), so their headers — Jolt's, bromesh's — are not on
+# the include path. The generated natives/*/native_*_register.cpp files carry
+# no #if of their own (brosurface emits a gate only where the IDL declares
+# one), so the list is conditioned here, the way host_physics_stub.cpp and
+# host_net_stub.cpp were before the natives moved. Without the flag nothing
+# registers (host_natives.h answers registerPhysicsNatives inline;
+# registerBroNatives skips the 3D families under #if BRO_WITH_3D), js/physics.js
+# and the 3D modules are not entered (dom_globals.cpp), and the namespaces are
+# the unavailable stubs host_bro_root.cpp installs.
+if(BRO_WITH_PHYSICS)
+    list(APPEND BRO_BRONZE_HOST_SOURCES
+        native_physics_core.cpp
+        native_physics_queries.cpp
+        native_physics_character.cpp
+        native_physics_softbody.cpp
+        native_physics_constraints.cpp
+        native_physics_vehicle.cpp
+        native_physics_ragdoll.cpp
+        natives/physics/native_physics_register.cpp
+    )
+endif()
+
+if(BRO_WITH_3D)
+    list(APPEND BRO_BRONZE_HOST_SOURCES
+        native_scene_nodes.cpp
+        native_scene_lights.cpp
+        native_scene_shaders.cpp
+        native_scene_core.cpp
+        native_scene_env.cpp
+        native_scene_terrain.cpp
+        native_scene_clipmap.cpp
+        native_scene_tile.cpp
+        native_scene_tile_ops.cpp
+        native_scene_lighting.cpp
+        native_scene_anim.cpp
+        native_scene_clip.cpp
+        native_scene_gizmo.cpp
+        natives/scene/native_scene_register.cpp
+        natives/terrain/native_terrain_register.cpp
+        natives/clipmap/native_clipmap_register.cpp
+        natives/tile_world/native_tile_world_register.cpp
+        natives/lighting/native_lighting_register.cpp
+        natives/animation/native_animation_register.cpp
+        natives/gizmo/native_gizmo_register.cpp
+    )
+endif()
 
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
 target_include_directories(bro_bronze_host PUBLIC
@@ -332,14 +353,25 @@ if(MSVC)
 endif()
 
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli brogameagent
+    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli
 )
 
 # brokit_api supplies the Node half (require(), fs, path, os, child_process,
 # process) and the web half (fetch, URL, Blob, encoding, AbortController,
 # WebSocket, streams, crypto, indexedDB, ...) of the realm; host_brokit.cpp
 # installs both and says which installers it skips in favour of bro's own.
-target_link_libraries(bro_bronze_host PUBLIC brokit_api broaudio_api brogameagent_api broimage_api)
+target_link_libraries(bro_bronze_host PUBLIC brokit_api broimage_api)
+
+# The gated siblings' api libraries exist only when third_party/ configured
+# the sibling (BRO_WITH_GAMEAI / BRO_WITH_AUDIO); a bare name on a link line
+# would otherwise be taken for a file, brogameagent.lib, that no build makes.
+if(BRO_WITH_GAMEAI)
+    target_link_libraries(bro_bronze_host PUBLIC brogameagent brogameagent_api)
+endif()
+
+if(BRO_WITH_AUDIO)
+    target_link_libraries(bro_bronze_host PUBLIC broaudio_api)
+endif()
 
 if(BRO_WITH_FLORA)
     target_link_libraries(bro_bronze_host PUBLIC broflora_api)

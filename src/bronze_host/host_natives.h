@@ -91,7 +91,14 @@ bool registerDunderBroNatives(std::string* error);
 inline bool registerMeshNatives(std::string*) { return true; }
 bool registerNetNatives(std::string* error);
 inline bool registerRiggingNatives(std::string*) { return true; }
+// The physics natives (native_physics_*.cpp, natives/physics/) are in the
+// library only with BRO_WITH_PHYSICS (CMakeLists.txt); without it there is
+// nothing to register and js/physics.js is not entered.
+#if BRO_WITH_PHYSICS
 bool registerPhysicsNatives(std::string* error);
+#else
+inline bool registerPhysicsNatives(std::string*) { return true; }
+#endif
 bool registerAnimationNatives(std::string* error);
 bool registerTerrainNatives(std::string* error);
 bool registerClipmapNatives(std::string* error);
