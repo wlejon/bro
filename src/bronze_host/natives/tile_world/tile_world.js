@@ -28,11 +28,11 @@
         throw new TypeError("bro.tile_world.TileWorld is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.tile_world.TileWorldProto;
+        const proto = globalThis.__bro_native.tile_world.TileWorldProto;
         if (proto === undefined) throw new Error("bro.tile_world.TileWorld: native class prototype not published (registerNatives_tile_world did not run)");
         Object.setPrototypeOf(proto, TileWorld.prototype);
     }
-    fn(mount(bro, "tile_world"), "TileWorld", TileWorld);
+    fn(mount(globalThis.bro, "tile_world"), "TileWorld", TileWorld);
     accessor(TileWorld.prototype, "node",
         function () {
             return __bro_native.tile_world.TileWorld_node_get(this);

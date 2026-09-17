@@ -25,11 +25,11 @@
         throw new TypeError("bro.lighting.LightNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.LightNodeProto;
+        const proto = globalThis.__bro_native.lighting.LightNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.LightNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, LightNode.prototype);
     }
-    fn(mount(bro, "lighting"), "LightNode", LightNode);
+    fn(mount(globalThis.bro, "lighting"), "LightNode", LightNode);
     accessor(LightNode.prototype, "color",
         function () {
             return Array.from(__bro_native.lighting.LightNode_color_get(this));
@@ -78,11 +78,11 @@
         throw new TypeError("bro.lighting.ShapeNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.ShapeNodeProto;
+        const proto = globalThis.__bro_native.lighting.ShapeNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.ShapeNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, ShapeNode.prototype);
     }
-    fn(mount(bro, "lighting"), "ShapeNode", ShapeNode);
+    fn(mount(globalThis.bro, "lighting"), "ShapeNode", ShapeNode);
     accessor(ShapeNode.prototype, "shapeType",
         function () {
             return __bro_native.lighting.ShapeNode_shapeType_get(this);
@@ -110,11 +110,11 @@
         throw new TypeError("bro.lighting.SpriteNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.SpriteNodeProto;
+        const proto = globalThis.__bro_native.lighting.SpriteNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.SpriteNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, SpriteNode.prototype);
     }
-    fn(mount(bro, "lighting"), "SpriteNode", SpriteNode);
+    fn(mount(globalThis.bro, "lighting"), "SpriteNode", SpriteNode);
     accessor(SpriteNode.prototype, "texture",
         function () {
             return __bro_native.lighting.SpriteNode_texture_get(this);
@@ -144,11 +144,11 @@
         throw new TypeError("bro.lighting.HtmlNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.HtmlNodeProto;
+        const proto = globalThis.__bro_native.lighting.HtmlNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.HtmlNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, HtmlNode.prototype);
     }
-    fn(mount(bro, "lighting"), "HtmlNode", HtmlNode);
+    fn(mount(globalThis.bro, "lighting"), "HtmlNode", HtmlNode);
     fn(HtmlNode.prototype, "setHtml", function setHtml(html) {
         if (html === undefined) throw new TypeError("bro.lighting.HtmlNode.prototype.setHtml: html is required");
         __bro_native.lighting.HtmlNode_setHtml(this, html);
@@ -162,11 +162,11 @@
         throw new TypeError("bro.lighting.ParticleNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.ParticleNodeProto;
+        const proto = globalThis.__bro_native.lighting.ParticleNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.ParticleNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, ParticleNode.prototype);
     }
-    fn(mount(bro, "lighting"), "ParticleNode", ParticleNode);
+    fn(mount(globalThis.bro, "lighting"), "ParticleNode", ParticleNode);
     fn(ParticleNode.prototype, "burst", function burst(count) {
         if (count === undefined) throw new TypeError("bro.lighting.ParticleNode.prototype.burst: count is required");
         __bro_native.lighting.ParticleNode_burst(this, count);
@@ -180,11 +180,11 @@
         throw new TypeError("bro.lighting.Particles3DNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.Particles3DNodeProto;
+        const proto = globalThis.__bro_native.lighting.Particles3DNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.Particles3DNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, Particles3DNode.prototype);
     }
-    fn(mount(bro, "lighting"), "Particles3DNode", Particles3DNode);
+    fn(mount(globalThis.bro, "lighting"), "Particles3DNode", Particles3DNode);
     fn(Particles3DNode.prototype, "burst", function burst(count) {
         if (count === undefined) throw new TypeError("bro.lighting.Particles3DNode.prototype.burst: count is required");
         __bro_native.lighting.Particles3DNode_burst(this, count);
@@ -198,11 +198,11 @@
         throw new TypeError("bro.lighting.GaussianSplatNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.GaussianSplatNodeProto;
+        const proto = globalThis.__bro_native.lighting.GaussianSplatNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.GaussianSplatNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, GaussianSplatNode.prototype);
     }
-    fn(mount(bro, "lighting"), "GaussianSplatNode", GaussianSplatNode);
+    fn(mount(globalThis.bro, "lighting"), "GaussianSplatNode", GaussianSplatNode);
     fn(GaussianSplatNode.prototype, "savePly", function savePly(path) {
         if (path === undefined) throw new TypeError("bro.lighting.GaussianSplatNode.prototype.savePly: path is required");
         __bro_native.lighting.GaussianSplatNode_savePly(this, path);
@@ -213,11 +213,11 @@
         throw new TypeError("bro.lighting.DecalNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.DecalNodeProto;
+        const proto = globalThis.__bro_native.lighting.DecalNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.DecalNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, DecalNode.prototype);
     }
-    fn(mount(bro, "lighting"), "DecalNode", DecalNode);
+    fn(mount(globalThis.bro, "lighting"), "DecalNode", DecalNode);
     accessor(DecalNode.prototype, "texture",
         function () {
             return __bro_native.lighting.DecalNode_texture_get(this);
@@ -238,11 +238,11 @@
         throw new TypeError("bro.lighting.ReflectionProbeNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.lighting.ReflectionProbeNodeProto;
+        const proto = globalThis.__bro_native.lighting.ReflectionProbeNodeProto;
         if (proto === undefined) throw new Error("bro.lighting.ReflectionProbeNode: native class prototype not published (registerNatives_lighting did not run)");
         Object.setPrototypeOf(proto, ReflectionProbeNode.prototype);
     }
-    fn(mount(bro, "lighting"), "ReflectionProbeNode", ReflectionProbeNode);
+    fn(mount(globalThis.bro, "lighting"), "ReflectionProbeNode", ReflectionProbeNode);
     fn(ReflectionProbeNode.prototype, "probeCapture", function probeCapture() {
         __bro_native.lighting.ReflectionProbeNode_probeCapture(this);
     });

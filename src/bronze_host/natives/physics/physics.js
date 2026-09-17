@@ -29,7 +29,7 @@
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
 
     // ---- Physics -------------------------------------------------------------
-    const ns_Physics = Physics;
+    const ns_Physics = globalThis.Physics;
     fn(ns_Physics, "createWorldHandle", function createWorldHandle(opts) {
         return __bro_native.physics.createWorldHandle(opts === undefined ? '' : JSON.stringify(opts));
     });
@@ -402,7 +402,7 @@
         throw new TypeError("PhysicsWorldHandle is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.physics.PhysicsWorldHandleProto;
+        const proto = globalThis.__bro_native.physics.PhysicsWorldHandleProto;
         if (proto === undefined) throw new Error("PhysicsWorldHandle: native class prototype not published (registerNatives_physics did not run)");
         Object.setPrototypeOf(proto, PhysicsWorldHandle.prototype);
     }
@@ -426,7 +426,7 @@
         throw new TypeError("PhysicsCharacter is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.physics.PhysicsCharacterProto;
+        const proto = globalThis.__bro_native.physics.PhysicsCharacterProto;
         if (proto === undefined) throw new Error("PhysicsCharacter: native class prototype not published (registerNatives_physics did not run)");
         Object.setPrototypeOf(proto, PhysicsCharacter.prototype);
     }
@@ -483,7 +483,7 @@
         throw new TypeError("PhysicsVehicle is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.physics.PhysicsVehicleProto;
+        const proto = globalThis.__bro_native.physics.PhysicsVehicleProto;
         if (proto === undefined) throw new Error("PhysicsVehicle: native class prototype not published (registerNatives_physics did not run)");
         Object.setPrototypeOf(proto, PhysicsVehicle.prototype);
     }
@@ -555,7 +555,7 @@
         throw new TypeError("PhysicsRagdoll is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.physics.PhysicsRagdollProto;
+        const proto = globalThis.__bro_native.physics.PhysicsRagdollProto;
         if (proto === undefined) throw new Error("PhysicsRagdoll: native class prototype not published (registerNatives_physics did not run)");
         Object.setPrototypeOf(proto, PhysicsRagdoll.prototype);
     }
@@ -623,7 +623,7 @@
         throw new TypeError("PhysicsSoftBody is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.physics.PhysicsSoftBodyProto;
+        const proto = globalThis.__bro_native.physics.PhysicsSoftBodyProto;
         if (proto === undefined) throw new Error("PhysicsSoftBody: native class prototype not published (registerNatives_physics did not run)");
         Object.setPrototypeOf(proto, PhysicsSoftBody.prototype);
     }

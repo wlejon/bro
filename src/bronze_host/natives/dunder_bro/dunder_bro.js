@@ -16,13 +16,13 @@
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
 
     // ---- __bro.splash --------------------------------------------------------
-    const ns_dunder_splash = mount(__bro, "splash");
+    const ns_dunder_splash = mount(globalThis.__bro, "splash");
     fn(ns_dunder_splash, "dismiss", function dismiss() {
         __bro_native.splash.dismiss();
     });
 
     // ---- __bro.viewport ------------------------------------------------------
-    const ns_dunder_viewport = mount(__bro, "viewport");
+    const ns_dunder_viewport = mount(globalThis.__bro, "viewport");
     accessor(ns_dunder_viewport, "width",
         function () {
             return __bro_native.viewport.width;
@@ -35,7 +35,7 @@
         undefined);
 
     // ---- __bro.perf ----------------------------------------------------------
-    const ns_dunder_perf = mount(__bro, "perf");
+    const ns_dunder_perf = mount(globalThis.__bro, "perf");
     accessor(ns_dunder_perf, "fps",
         function () {
             return __bro_native.perf.fps;
@@ -100,7 +100,7 @@
     });
 
     // ---- __bro.perf.scene ----------------------------------------------------
-    const ns_dunder_scene = mount(mount(__bro, "perf"), "scene");
+    const ns_dunder_scene = mount(mount(globalThis.__bro, "perf"), "scene");
     accessor(ns_dunder_scene, "meshDrawn",
         function () {
             return __bro_native.perf.scene.meshDrawn;
@@ -188,7 +188,7 @@
         undefined);
 
     // ---- __bro.bronze --------------------------------------------------------
-    const ns_dunder_bronze = mount(__bro, "bronze");
+    const ns_dunder_bronze = mount(globalThis.__bro, "bronze");
     accessor(ns_dunder_bronze, "heapUsedBytes",
         function () {
             return __bro_native.bronze.heapUsedBytes;
@@ -221,7 +221,7 @@
         undefined);
 
     // ---- __bro.menu ----------------------------------------------------------
-    const ns_dunder_menu = mount(__bro, "menu");
+    const ns_dunder_menu = mount(globalThis.__bro, "menu");
     fn(ns_dunder_menu, "height", function height() {
         return __bro_native.menu.height();
     });
@@ -234,7 +234,7 @@
     });
 
     // ---- __bro.settingsUI ----------------------------------------------------
-    const ns_dunder_settingsUI = mount(__bro, "settingsUI");
+    const ns_dunder_settingsUI = mount(globalThis.__bro, "settingsUI");
     fn(ns_dunder_settingsUI, "show", function show(name) {
         if (name === undefined) throw new TypeError("__bro.settingsUI.show: name is required");
         __bro_native.settingsUI.show(name);
@@ -256,7 +256,7 @@
     });
 
     // ---- __bro.inspector -----------------------------------------------------
-    const ns_dunder_inspector = mount(__bro, "inspector");
+    const ns_dunder_inspector = mount(globalThis.__bro, "inspector");
     accessor(ns_dunder_inspector, "visible",
         function () {
             return __bro_native.inspector.visible;

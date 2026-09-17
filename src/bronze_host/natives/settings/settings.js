@@ -16,7 +16,7 @@
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
 
     // ---- bro.settings --------------------------------------------------------
-    const ns_settings = mount(bro, "settings");
+    const ns_settings = mount(globalThis.bro, "settings");
     fn(ns_settings, "get", function get(key) {
         if (key === undefined) throw new TypeError("bro.settings.get: key is required");
         return __bro_native.settings.get(key);

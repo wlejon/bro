@@ -25,7 +25,7 @@
     const toU8 = (v) => v instanceof Uint8Array ? v : Uint8Array.from(v);
 
     // ---- bro.net -------------------------------------------------------------
-    const ns_net = mount(bro, "net");
+    const ns_net = mount(globalThis.bro, "net");
     fn(ns_net, "host", function host(port, callback) {
         if (port === undefined) throw new TypeError("bro.net.host: port is required");
         __bro_native.net.host(port, callback);

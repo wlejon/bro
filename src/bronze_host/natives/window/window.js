@@ -16,7 +16,7 @@
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
 
     // ---- bro.window ----------------------------------------------------------
-    const ns_window = mount(bro, "window");
+    const ns_window = mount(globalThis.bro, "window");
     accessor(ns_window, "state",
         function () {
             return __bro_native.window.state;

@@ -23,7 +23,12 @@
     };
 
     // ---- bro.net -------------------------------------------------------------
-    const ns_net = mount(bro, "net");
+    // The root off globalThis, never as a bare `bro`: a bare host-global read
+    // is cached in this module's own data, which is one per compiled object
+    // and not one per thread, and this module is entered on every Worker's
+    // thread as well as the main one (host_worker.cpp). A cell the main realm
+    // filled would hand the worker the main realm's root.
+    const ns_net = mount(globalThis.bro, "net");
 
     fn(ns_net, "init", function init() {
         return __bro_native.net.init();

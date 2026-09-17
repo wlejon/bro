@@ -15,7 +15,7 @@
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
 
     // ---- bro -----------------------------------------------------------------
-    const ns_paths = bro;
+    const ns_paths = globalThis.bro;
     accessor(ns_paths, "appDir",
         function () {
             return __bro_native.paths.appDir;

@@ -16,7 +16,7 @@
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
 
     // ---- bro.time ------------------------------------------------------------
-    const ns_time = mount(bro, "time");
+    const ns_time = mount(globalThis.bro, "time");
     accessor(ns_time, "scale",
         function () {
             return __bro_native.time.scale;

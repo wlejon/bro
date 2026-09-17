@@ -26,11 +26,11 @@
         throw new TypeError("bro.terrain.Terrain is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.terrain.TerrainProto;
+        const proto = globalThis.__bro_native.terrain.TerrainProto;
         if (proto === undefined) throw new Error("bro.terrain.Terrain: native class prototype not published (registerNatives_terrain did not run)");
         Object.setPrototypeOf(proto, Terrain.prototype);
     }
-    fn(mount(bro, "terrain"), "Terrain", Terrain);
+    fn(mount(globalThis.bro, "terrain"), "Terrain", Terrain);
     accessor(Terrain.prototype, "chunkCount",
         function () {
             return __bro_native.terrain.Terrain_chunkCount_get(this);

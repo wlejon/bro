@@ -65,11 +65,11 @@
         throw new TypeError("bro.scene.SceneNode is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.scene.SceneNodeProto;
+        const proto = globalThis.__bro_native.scene.SceneNodeProto;
         if (proto === undefined) throw new Error("bro.scene.SceneNode: native class prototype not published (registerNatives_scene did not run)");
         Object.setPrototypeOf(proto, SceneNode.prototype);
     }
-    fn(mount(bro, "scene"), "SceneNode", SceneNode);
+    fn(mount(globalThis.bro, "scene"), "SceneNode", SceneNode);
     accessor(SceneNode.prototype, "id",
         function () {
             return __bro_native.scene.SceneNode_id_get(this);
@@ -415,11 +415,11 @@
         throw new TypeError("bro.scene.SceneGraph is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.scene.SceneGraphProto;
+        const proto = globalThis.__bro_native.scene.SceneGraphProto;
         if (proto === undefined) throw new Error("bro.scene.SceneGraph: native class prototype not published (registerNatives_scene did not run)");
         Object.setPrototypeOf(proto, SceneGraph.prototype);
     }
-    fn(mount(bro, "scene"), "SceneGraph", SceneGraph);
+    fn(mount(globalThis.bro, "scene"), "SceneGraph", SceneGraph);
     accessor(SceneGraph.prototype, "root",
         function () {
             return __bro_native.scene.SceneGraph_root_get(this);

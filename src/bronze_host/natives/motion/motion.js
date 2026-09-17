@@ -16,7 +16,7 @@
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
 
     // ---- bro.motion ----------------------------------------------------------
-    const ns_motion = mount(bro, "motion");
+    const ns_motion = mount(globalThis.bro, "motion");
     fn(ns_motion, "init", function init() {
         __bro_native.motion.init();
     });
@@ -34,11 +34,11 @@
         throw new TypeError("bro.motion.ArdyMotionPipeline is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.motion.ArdyMotionPipelineProto;
+        const proto = globalThis.__bro_native.motion.ArdyMotionPipelineProto;
         if (proto === undefined) throw new Error("bro.motion.ArdyMotionPipeline: native class prototype not published (registerNatives_motion did not run)");
         Object.setPrototypeOf(proto, ArdyMotionPipeline.prototype);
     }
-    fn(mount(bro, "motion"), "ArdyMotionPipeline", ArdyMotionPipeline);
+    fn(mount(globalThis.bro, "motion"), "ArdyMotionPipeline", ArdyMotionPipeline);
     accessor(ArdyMotionPipeline.prototype, "device",
         function () {
             return __bro_native.motion.ArdyMotionPipeline_device_get(this);

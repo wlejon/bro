@@ -27,11 +27,11 @@
         throw new TypeError("bro.clipmap.ClipmapTerrain is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.clipmap.ClipmapTerrainProto;
+        const proto = globalThis.__bro_native.clipmap.ClipmapTerrainProto;
         if (proto === undefined) throw new Error("bro.clipmap.ClipmapTerrain: native class prototype not published (registerNatives_clipmap did not run)");
         Object.setPrototypeOf(proto, ClipmapTerrain.prototype);
     }
-    fn(mount(bro, "clipmap"), "ClipmapTerrain", ClipmapTerrain);
+    fn(mount(globalThis.bro, "clipmap"), "ClipmapTerrain", ClipmapTerrain);
     accessor(ClipmapTerrain.prototype, "node",
         function () {
             return __bro_native.clipmap.ClipmapTerrain_node_get(this);

@@ -19,7 +19,7 @@
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
 
     // ---- bro.gizmo -----------------------------------------------------------
-    const ns_gizmo = mount(bro, "gizmo");
+    const ns_gizmo = mount(globalThis.bro, "gizmo");
     accessor(ns_gizmo, "visible",
         function () {
             return __bro_native.gizmo.visible;

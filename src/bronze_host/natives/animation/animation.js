@@ -27,11 +27,11 @@
         throw new TypeError("bro.animation.Tween is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.animation.TweenProto;
+        const proto = globalThis.__bro_native.animation.TweenProto;
         if (proto === undefined) throw new Error("bro.animation.Tween: native class prototype not published (registerNatives_animation did not run)");
         Object.setPrototypeOf(proto, Tween.prototype);
     }
-    fn(mount(bro, "animation"), "Tween", Tween);
+    fn(mount(globalThis.bro, "animation"), "Tween", Tween);
     // [manual] bro.animation.Tween.prototype.to: operation (target, props, duration, easing) — no native is generated; hand-written JS
     // installs it on Tween.prototype after this module has run.
     // [manual] bro.animation.Tween.prototype.parallel: operation (tweens) — no native is generated; hand-written JS
@@ -64,11 +64,11 @@
         throw new TypeError("bro.animation.AnimationPlayer is not constructible: instances come from the natives that return one");
     }
     {
-        const proto = __bro_native.animation.AnimationPlayerProto;
+        const proto = globalThis.__bro_native.animation.AnimationPlayerProto;
         if (proto === undefined) throw new Error("bro.animation.AnimationPlayer: native class prototype not published (registerNatives_animation did not run)");
         Object.setPrototypeOf(proto, AnimationPlayer.prototype);
     }
-    fn(mount(bro, "animation"), "AnimationPlayer", AnimationPlayer);
+    fn(mount(globalThis.bro, "animation"), "AnimationPlayer", AnimationPlayer);
     // [manual] bro.animation.AnimationPlayer.prototype.addClip: operation (name, clip) — no native is generated; hand-written JS
     // installs it on AnimationPlayer.prototype after this module has run.
     // [manual] bro.animation.AnimationPlayer.prototype.clipDef: operation (name, def) — no native is generated; hand-written JS
