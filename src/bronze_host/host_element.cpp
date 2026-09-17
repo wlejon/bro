@@ -508,8 +508,10 @@ void decorateElementProto(ObjectBuilder& b) {
                    HostNodeState* st = nodeStateOf(self_);
                    if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
-                   if (st->el && !ev::isObject(v))
+                   if (st->el && !ev::isObject(v)) {
                        st->el->setInnerHTML(ev::isUndefined(v) ? "" : ev::toUtf8(v));
+                       upgradeCustomElementsInSubtree(st->el);
+                   }
                    return ev::undefined();
                });
 

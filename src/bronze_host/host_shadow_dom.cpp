@@ -2,6 +2,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_globals_internal.h"
 #include "dom/shadow_root.h"
 #include "dom/element.h"
 #include "dom/document.h"
@@ -57,6 +58,7 @@ void decorateShadowRootProto(ObjectBuilder& b) {
             if (!doc && st->shadowRoot->host()) doc = st->shadowRoot->host()->document();
             if (!doc) doc = currentHostDocument();
             st->shadowRoot->setInnerHTML(html, doc);
+            upgradeCustomElementsInSubtree(st->shadowRoot);
             return ev::undefined();
         });
 

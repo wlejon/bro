@@ -44,8 +44,15 @@ void installNoiseGlobals();
 // ---------------------------------------------------------------------------
 
 void installCustomElementsGlobals();
+// Connect/disconnect walk the inserted subtree: a registered element is
+// upgraded on the way in (parsed markup carries no constructor call) and
+// every upgraded element in the subtree gets its lifecycle callback.
 void onCustomElementConnected(dom::Element* el);
 void onCustomElementDisconnected(dom::Element* el);
+// Upgrade the registered elements under `root` (root excluded) — the hook
+// for HTML that arrives through a parser (innerHTML) rather than an insert.
+// Elements already in the document also get connectedCallback.
+void upgradeCustomElementsInSubtree(dom::Node* root);
 void onCustomElementAttributeChanged(dom::Element* el, const std::string& name,
                                      const char* oldValue, const char* newValue);
 Value constructCustomElement(dom::Element* el, const std::string& tagName);
