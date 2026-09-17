@@ -211,9 +211,22 @@ Value constructCustomElement(dom::Element* el, const std::string& tagName) {
     return res.value;
 }
 
+// The HTMLElement constructor of an upgrade (HTML §4.13.4, "HTML element
+// constructors"): the element being constructed IS the return value, so the
+// derived constructor continues on the wrapper the app may already hold, and
+// its prototype becomes the class's — NewTarget.prototype in the spec, the
+// registered constructor's here — which is what turns a plain wrapper into
+// an instance of the class without changing which object it is.
 Value constructCustomElementBase() {
     if (s_activeConstructingElement) {
-        return hostElementValue(s_activeConstructingElement);
+        // Rooted across the prototype read, which may allocate the class's
+        // prototype object on first touch.
+        ev::Persistent wrapper(hostElementValue(s_activeConstructingElement));
+        if (ev::isObject(wrapper.get()) && ev::isFunction(s_activeCtor)) {
+            Value proto = ev::getProperty(s_activeCtor, "prototype");
+            if (ev::isObject(proto)) return ev::setPrototype(wrapper.get(), proto);
+        }
+        return wrapper.get();
     }
     return ev::throwTypeError("Illegal constructor");
 }
