@@ -315,10 +315,80 @@
 
 /**
  * @typedef {Object} MeshExtrudeFaceResult
- * @property {Uint32Array} [dupVerts]
- * @property {Uint32Array} [bridgeFaces]
- * @property {Uint32Array} [bridgeAdjGroup]
- * @property {number} [backFace]
+ * @property {Int32Array} [dupVerts]
+ * @property {Int32Array} [bridgeFaces]
+ * @property {Int32Array} [bridgeAdjGroup] -  Per bridge face, the group across its boundary edge (-1 at a mesh boundary).
+ * @property {number} [backFace] -  The back-face copy that closes the slab, or -1 without one.
+ */
+
+/**
+ * @typedef {Object} MeshInsetFaceResult
+ * @property {number} [innerFace] -  The new interior face, or -1 when the inset was refused.
+ * @property {Int32Array} [innerVerts]
+ * @property {Int32Array} [bridgeFaces]
+ */
+
+/**
+ *  PolyMesh.tessellate(): flat-shaded triangles, one normal per face.
+ * @typedef {Object} MeshTessellation
+ * @property {Float32Array} [positions]
+ * @property {Float32Array} [normals]
+ * @property {Uint32Array} [indices]
+ * @property {Int32Array} [triToFace] -  Source face of each triangle.
+ * @property {Int32Array} [triToGroup] -  Group of each triangle's source face.
+ */
+
+/**
+ * @typedef {Object} MeshPolyValidation
+ * @property {boolean} [valid] -  Structurally sound: every face closes, no dangling links.
+ * @property {boolean} [isClosed] -  Every half-edge has a twin.
+ * @property {number} [boundaryHalfEdges]
+ * @property {Array<string>} [errors]
+ */
+
+/**
+ *  A MagicaVoxel grid: 0 = empty, else an index into `palette` (RGBA x 256).
+ * @typedef {Object} MeshVoxData
+ * @property {number} [sizeX]
+ * @property {number} [sizeY]
+ * @property {number} [sizeZ]
+ * @property {Uint8Array} [voxels]
+ * @property {Float32Array} [palette]
+ */
+
+/**
+ * A Gaussian splat cloud: the object `scene.createGaussianSplat({ cloud })`
+ * takes. Per-splat streams, `count` splats: `positions` xyz, `scales` xyz
+ * (linear std-dev), `rotations` xyzw unit quaternion, `opacities` [0,1], `sh`
+ * coefficient-major spherical harmonics with 3 * (shDegree + 1)^2 floats
+ * per splat.
+ * @typedef {Object} MeshSplatCloud
+ * @property {Float32Array} [positions]
+ * @property {Float32Array} [scales]
+ * @property {Float32Array} [rotations]
+ * @property {Float32Array} [opacities]
+ * @property {Float32Array} [sh]
+ * @property {number} [shDegree]
+ * @property {number} [count]
+ */
+
+/**
+ *  Options for `Mesh.reconstruct`.
+ * @typedef {Object} MeshReconstructOptions
+ * @property {number} [gridResolution] -  Voxel grid resolution along the longest axis (default 64).
+ * @property {number} [supportRadius] -  Influence radius per point; 0 (the default) derives it from point density.
+ * @property {number} [isoLevel] -  Threshold for surface extraction (default 0.5).
+ */
+
+/**
+ *  Everything a glTF file holds; `meshSkeleton[i]` / `animationSkeleton[i]` index `skeletons`.
+ * @typedef {Object} MeshGltfScene
+ * @property {Array<Mesh>} [meshes]
+ * @property {Array<SkinData>} [skins]
+ * @property {Array<Skeleton>} [skeletons]
+ * @property {Array<SkeletalAnimation>} [animations]
+ * @property {Array<number>} [meshSkeleton]
+ * @property {Array<number>} [animationSkeleton]
  */
 
 /**
@@ -448,46 +518,102 @@ class Mesh {
   static tube(path, radius, sides, opts) {}
 
   /**
-   * @param {ArrayBuffer} buffer
+   * Read a mesh from a file. A relative path resolves the way `fs.*`
+   * resolves it. A file that cannot be read gives an empty Mesh. An FBX is
+   * a scene, so `loadFBX` gives every mesh in it; a `.vox` is a voxel grid,
+   * not a mesh (`loadVOX` gives the grid, `Mesh.greedyMesh` meshes it);
+   * glTF gives the whole scene: meshes, skins, skeletons, animations.
+   *
+   * @param {string} path
    * @returns {Mesh}
    */
-  static fromGLTF(buffer) {}
+  static loadOBJ(path) {}
 
   /**
-   * @param {string} text
+   * @param {string} path
    * @returns {Mesh}
    */
-  static fromOBJ(text) {}
+  static loadPLY(path) {}
 
   /**
-   * @param {ArrayBuffer} buffer
+   * @param {string} path
    * @returns {Mesh}
    */
-  static fromPLY(buffer) {}
+  static loadSTL(path) {}
 
   /**
-   * @param {ArrayBuffer} buffer
-   * @returns {Mesh}
+   * @param {string} path
+   * @returns {Array<Mesh>}
    */
-  static fromSTL(buffer) {}
+  static loadFBX(path) {}
 
   /**
-   * @param {ArrayBuffer} buffer
-   * @returns {Mesh}
+   * @param {string} path
+   * @returns {MeshVoxData}
    */
-  static fromFBX(buffer) {}
+  static loadVOX(path) {}
 
   /**
-   * @param {ArrayBuffer} buffer
-   * @returns {Mesh}
+   * @param {string} path
+   * @returns {MeshGltfScene}
    */
-  static fromVOX(buffer) {}
+  static loadGLTF(path) {}
+
+  /**
+   *  A Gaussian splat `.ply` is a cloud, not a mesh; an unreadable file gives an empty cloud (`count` 0).
+   *
+   * @param {string} path
+   * @returns {MeshSplatCloud}
+   */
+  static loadSplatPLY(path) {}
+
+  /**
+   *  Write a splat cloud (the `loadSplatPLY` / `bro.triposplat` shape); true when the file was written.
+   *
+   * @param {string} path
+   * @param {MeshSplatCloud} cloud
+   * @returns {boolean}
+   */
+  static saveSplatPLY(path, cloud) {}
 
   /**
    * @param {Array<Mesh>} meshes
    * @returns {Mesh}
    */
   static merge(meshes) {}
+
+  /**
+   * Triangulate a simple 2D polygon (`outer` flat x,y,..., CCW for a +Z
+   * face) with optional `holes` (each flat x,y,..., wound CW) into a mesh
+   * in the plane z = `z`. Degenerate input gives an empty Mesh.
+   *
+   * @param {Array<number>} outer
+   * @param {Array<Array<number>>} [holes]
+   * @param {number} [z]
+   * @returns {Mesh}
+   */
+  static polygon2D(outer, holes, z) {}
+
+  /**
+   * Triangulate a planar 3D polygon (`outer` flat x,y,z,..., lying on the
+   * plane with unit `normal`) with optional `holes`; the mesh reuses the
+   * input positions and fills normals with `normal`.
+   *
+   * @param {Array<number>} outer
+   * @param {Array<Array<number>>} holes
+   * @param {Array<number>} normal
+   * @returns {Mesh}
+   */
+  static polygon3D(outer, holes, normal) {}
+
+  /**
+   *  Implicit-surface reconstruction of an oriented point cloud (a Mesh with positions + normals; indices ignored).
+   *
+   * @param {Mesh} pointCloud
+   * @param {MeshReconstructOptions} [opts]
+   * @returns {Mesh}
+   */
+  static reconstruct(pointCloud, opts) {}
 
   /**
    * @param {Array<number>} values
@@ -968,40 +1094,33 @@ class Mesh {
   convexDecomposition(params) {}
 
   /**
-   * @param {string} [name]
-   * @returns {Uint8Array}
+   * Write the mesh to a file; true when the file was written. A relative
+   * path resolves the way `fs.*` resolves it (against the app directory).
+   * glTF takes `{skin, skeleton, animations}` to write a rigged asset.
+   *
+   * @param {string} path
+   * @returns {boolean}
    */
-  toGLTF(name) {}
+  saveOBJ(path) {}
 
   /**
-   * @returns {string}
+   * @param {string} path
+   * @returns {boolean}
    */
-  toOBJ() {}
+  savePLY(path) {}
 
   /**
-   * @returns {string}
+   * @param {string} path
+   * @returns {boolean}
    */
-  toPLY() {}
+  saveSTL(path) {}
 
   /**
-   * @returns {string}
+   * @param {string} path
+   * @param {Object} [opts]
+   * @returns {boolean}
    */
-  toSTL() {}
-
-  /**
-   * @returns {ArrayBuffer}
-   */
-  toSTLB() {}
-
-  /**
-   * @returns {ArrayBuffer}
-   */
-  toFBX() {}
-
-  /**
-   * @returns {ArrayBuffer}
-   */
-  toVOX() {}
+  saveGLTF(path, opts) {}
 
 }
 
@@ -1052,12 +1171,57 @@ class ProgressiveMesh {
 
 }
 
+/**
+ * Half-edge adjacency over N-gon faces: the edit topology a mesh editor
+ * keeps beside the triangle Mesh it renders, so a face survives whatever
+ * triangulation drew it. Build one from triangles (`fromMeshData` /
+ * `fromMesh`, with an optional per-triangle group so coplanar triangles can
+ * be merged back into one face with `mergeFacesByGroup`), from a planar
+ * polygon, or from N-gon soup; `tessellate()` gives triangles back.
+ * Face and vertex indices are stable until `compact()`.
+ */
 class PolyMesh {
 
   /**
-   * @param {Mesh} [mesh]
+   *  Empty; the static factories build populated ones.
    */
-  constructor(mesh) {}
+  constructor() {}
+
+  /**
+   * @param {Float32Array} positions
+   * @param {Uint32Array} indices
+   * @param {Int32Array} [triToGroup]
+   * @returns {PolyMesh}
+   */
+  static fromMeshData(positions, indices, triToGroup) {}
+
+  /**
+   * @param {Mesh} mesh
+   * @param {Int32Array} [triToGroup]
+   * @returns {PolyMesh}
+   */
+  static fromMesh(mesh, triToGroup) {}
+
+  /**
+   *  One N-gon from a simple CCW polygon (as seen from +normal).
+   *
+   * @param {Float32Array} positionsXYZ
+   * @param {Array<number>} normal
+   * @param {number} [group]
+   * @returns {PolyMesh}
+   */
+  static fromPolygon(positionsXYZ, normal, group) {}
+
+  /**
+   *  N-gon soup: `polyOffsets` (length F+1) delimits each face's run in `polyVerts`.
+   *
+   * @param {Float32Array} positions
+   * @param {Uint32Array} polyVerts
+   * @param {Uint32Array} polyOffsets
+   * @param {Int32Array} [faceGroups]
+   * @returns {PolyMesh}
+   */
+  static fromPolygons(positions, polyVerts, polyOffsets, faceGroups) {}
 
   /**
    * @readonly
@@ -1069,20 +1233,151 @@ class PolyMesh {
    * @readonly
    * @type {number}
    */
-  faceCount;
+  halfEdgeCount;
 
   /**
    * @readonly
    * @type {number}
    */
-  edgeCount;
+  faceCount;
 
   /**
+   * @param {number} faceIdx
+   * @returns {number}
+   */
+  faceVertexCount(faceIdx) {}
+
+  /**
+   * @param {number} faceIdx
+   * @returns {Array<number>}
+   */
+  faceVertices(faceIdx) {}
+
+  /**
+   * @param {number} faceIdx
+   * @returns {Array<number>}
+   */
+  faceHalfEdges(faceIdx) {}
+
+  /**
+   * @param {number} vertexIdx
+   * @returns {Array<number>}
+   */
+  getVertex(vertexIdx) {}
+
+  /**
+   * @param {number} faceIdx
+   * @returns {Array<number>}
+   */
+  computeFaceNormal(faceIdx) {}
+
+  /**
+   *  The face's group tag, or -1.
+   *
+   * @param {number} faceIdx
+   * @returns {number}
+   */
+  faceGroup(faceIdx) {}
+
+  /**
+   * @param {number} faceIdx
+   * @param {number} group
+   */
+  setFaceGroup(faceIdx, group) {}
+
+  /**
+   * @param {number} groupId
+   * @returns {Array<number>}
+   */
+  facesInGroup(groupId) {}
+
+  /**
+   * @param {number} vertexIdx
+   * @returns {boolean}
+   */
+  isBoundaryVertex(vertexIdx) {}
+
+  /**
+   * @param {number} halfEdgeIdx
+   * @returns {boolean}
+   */
+  isBoundaryHalfEdge(halfEdgeIdx) {}
+
+  /**
+   *  Outer + hole loops of vertex indices around one face / one group.
+   *
+   * @param {number} faceIdx
+   * @returns {Array<Array<number>>}
+   */
+  findFaceBoundary(faceIdx) {}
+
+  /**
+   * @param {number} groupId
+   * @returns {Array<Array<number>>}
+   */
+  findGroupBoundary(groupId) {}
+
+  /**
+   * @returns {MeshTessellation}
+   */
+  tessellate() {}
+
+  /**
+   *  `tessellate()` as a Mesh (positions, flat normals, indices).
    * @returns {Mesh}
    */
   toMesh() {}
 
   /**
+   * @returns {MeshPolyValidation}
+   */
+  validate() {}
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   * @returns {number}
+   */
+  addVertex(x, y, z) {}
+
+  /**
+   *  A face from an ordered vertex loop (3+); call `rematchTwins()` after a batch.
+   *
+   * @param {Array<number>} vertices
+   * @param {number} [group]
+   * @returns {number}
+   */
+  addFace(vertices, group) {}
+
+  /**
+   * @param {number} faceIdx
+   */
+  deleteFace(faceIdx) {}
+
+  /**
+   * @param {number} vertexIdx
+   * @param {Array<number>} offset
+   */
+  translateVertex(vertexIdx, offset) {}
+
+  /**
+   * @param {number} faceIdx
+   * @param {Array<number>} offset
+   */
+  translateFace(faceIdx, offset) {}
+
+  /**
+   *  Push/pull on a closed solid: seam-duplicate vertices move with the face.
+   *
+   * @param {number} faceIdx
+   * @param {Array<number>} offset
+   */
+  translateFaceWithRing(faceIdx, offset) {}
+
+  /**
+   *  SketchUp-style extrusion: the face moves by `offset`, a bridge quad per boundary edge, a back face unless `withBack` is false.
+   *
    * @param {number} faceIdx
    * @param {Array<number>} offset
    * @param {boolean} [withBack]
@@ -1092,17 +1387,44 @@ class PolyMesh {
    */
   extrudeFace(faceIdx, offset, withBack, bridgeGroup, backGroup) {}
 
+  /**
+   *  Inset toward the centroid by `amount` (a distance, or a ratio in [0,1) when `asRatio`).
+   *
+   * @param {number} faceIdx
+   * @param {number} amount
+   * @param {boolean} [asRatio]
+   * @param {number} [bridgeGroup]
+   * @returns {MeshInsetFaceResult}
+   */
+  insetFace(faceIdx, amount, asRatio, bridgeGroup) {}
+
+  /**
+   *  Split the edge of half-edge `he` at `position` (default: its midpoint); both faces must be triangles. The new vertex, or -1.
+   *
+   * @param {number} he
+   * @param {Array<number>} [position]
+   * @returns {number}
+   */
+  splitEdge(he, position) {}
+
+  /**
+   * @param {number} he
+   * @returns {boolean}
+   */
+  flipEdge(he) {}
+
+  /**
+   * @param {number} he
+   * @param {Array<number>} [position]
+   * @returns {boolean}
+   */
+  collapseEdge(he, position) {}
+
   rematchTwins() {}
 
   mergeFacesByGroup() {}
 
   compact() {}
-
-  /**
-   * @param {number} groupId
-   * @returns {Array<Array<number>>}
-   */
-  findGroupBoundary(groupId) {}
 
 }
 

@@ -1311,10 +1311,113 @@ interface MeshDracoEncodeOptions {
 }
 
 interface MeshExtrudeFaceResult {
-  dupVerts?: Uint32Array;
-  bridgeFaces?: Uint32Array;
-  bridgeAdjGroup?: Uint32Array;
+  dupVerts?: Int32Array;
+  bridgeFaces?: Int32Array;
+  /**
+   *  Per bridge face, the group across its boundary edge (-1 at a mesh boundary).
+   */
+  bridgeAdjGroup?: Int32Array;
+  /**
+   *  The back-face copy that closes the slab, or -1 without one.
+   */
   backFace?: number;
+}
+
+interface MeshInsetFaceResult {
+  /**
+   *  The new interior face, or -1 when the inset was refused.
+   */
+  innerFace?: number;
+  innerVerts?: Int32Array;
+  bridgeFaces?: Int32Array;
+}
+
+/**
+ *  PolyMesh.tessellate(): flat-shaded triangles, one normal per face.
+ */
+interface MeshTessellation {
+  positions?: Float32Array;
+  normals?: Float32Array;
+  indices?: Uint32Array;
+  /**
+   *  Source face of each triangle.
+   */
+  triToFace?: Int32Array;
+  /**
+   *  Group of each triangle's source face.
+   */
+  triToGroup?: Int32Array;
+}
+
+interface MeshPolyValidation {
+  /**
+   *  Structurally sound: every face closes, no dangling links.
+   */
+  valid?: boolean;
+  /**
+   *  Every half-edge has a twin.
+   */
+  isClosed?: boolean;
+  boundaryHalfEdges?: number;
+  errors?: string[];
+}
+
+/**
+ *  A MagicaVoxel grid: 0 = empty, else an index into `palette` (RGBA x 256).
+ */
+interface MeshVoxData {
+  sizeX?: number;
+  sizeY?: number;
+  sizeZ?: number;
+  voxels?: Uint8Array;
+  palette?: Float32Array;
+}
+
+/**
+ * A Gaussian splat cloud: the object `scene.createGaussianSplat({ cloud })`
+ * takes. Per-splat streams, `count` splats: `positions` xyz, `scales` xyz
+ * (linear std-dev), `rotations` xyzw unit quaternion, `opacities` [0,1], `sh`
+ * coefficient-major spherical harmonics with 3 * (shDegree + 1)^2 floats
+ * per splat.
+ */
+interface MeshSplatCloud {
+  positions?: Float32Array;
+  scales?: Float32Array;
+  rotations?: Float32Array;
+  opacities?: Float32Array;
+  sh?: Float32Array;
+  shDegree?: number;
+  count?: number;
+}
+
+/**
+ *  Options for `Mesh.reconstruct`.
+ */
+interface MeshReconstructOptions {
+  /**
+   *  Voxel grid resolution along the longest axis (default 64).
+   */
+  gridResolution?: number;
+  /**
+   *  Influence radius per point; 0 (the default) derives it from point density.
+   */
+  supportRadius?: number;
+  /**
+   *  Threshold for surface extraction (default 0.5).
+   */
+  isoLevel?: number;
+}
+
+/**
+ *  Everything a glTF file holds; `meshSkeleton[i]` / `animationSkeleton[i]` index `skeletons`.
+ */
+interface MeshGltfScene {
+  meshes?: Mesh[];
+  skins?: SkinData[];
+  skeletons?: Skeleton[];
+  animations?: SkeletalAnimation[];
+  meshSkeleton?: number[];
+  animationSkeleton?: number[];
 }
 
 interface MeshLSystemModule {
@@ -4126,6 +4229,40 @@ declare class FloraWorld {
    * Emit blossom and flowering anchor points.
    */
   emitBloomAnchors(): object[];
+  /**
+   * One merged Mesh of `leafMesh` stamped at the world's foliage samples
+   * (bromesh scatterLeaves over the branch segments). `opts` are the leaf
+   * placement options (density, scale, jitter, ...).
+   */
+  emitFoliageMesh(leafMesh: object, opts?: object): object | null;
+  /**
+   * Foliage mesh for one plant, the per-plant form of emitFoliageMesh.
+   */
+  emitPlantFoliageMesh(plantIdx: number, leafMesh: object, opts?: object): object | null;
+  /**
+   * Blooms as geometry: `[petals, centers]`, one merged Mesh each. A petal
+   * stamp (`petalMesh`, its +Y turned onto the anchor normal, scaled by the
+   * anchor's age) at every flowering anchor, thinned to `opts.bloomCap` of
+   * them (default 500) with anchors dimmer than `opts.bloomLightMin`
+   * (default 0.18) skipped; a `centerMesh` stamp lifted along the normal
+   * when one is given, else an empty centers Mesh.
+   */
+  emitBloomMesh(petalMesh: object, centerMesh?: object | null, opts?: object): object[];
+  /**
+   * The world's branch segments packed for instanced tube rendering:
+   * `{segments: Float32Array, segCount, boundsMin, boundsMax}`, eight
+   * floats per segment (from xyz + from radius, to xyz + to radius);
+   * segments thinner than `opts.minRadius` are left out.
+   */
+  emitBranchTubes(opts?: object): object;
+  /**
+   * The world's branch segments packed for instanced foliage scatter:
+   * `{segments: Float32Array, segCount, instSeg: Uint32Array,
+   * instanceCount, boundsMin, boundsMax}` — the segment pack plus one
+   * segment index per foliage instance, placed by the leaf placement
+   * `opts`.
+   */
+  emitScatterSegments(opts?: object): object;
 }
 
 /**
@@ -5283,13 +5420,44 @@ declare class Mesh {
    * resolution (>= 3, default 8).
    */
   static tube(path: number[][], radius?: any, sides?: number, opts?: MeshTubeOptions): Mesh;
-  static fromGLTF(buffer: ArrayBuffer): Mesh;
-  static fromOBJ(text: string): Mesh;
-  static fromPLY(buffer: ArrayBuffer): Mesh;
-  static fromSTL(buffer: ArrayBuffer): Mesh;
-  static fromFBX(buffer: ArrayBuffer): Mesh;
-  static fromVOX(buffer: ArrayBuffer): Mesh;
+  /**
+   * Read a mesh from a file. A relative path resolves the way `fs.*`
+   * resolves it. A file that cannot be read gives an empty Mesh. An FBX is
+   * a scene, so `loadFBX` gives every mesh in it; a `.vox` is a voxel grid,
+   * not a mesh (`loadVOX` gives the grid, `Mesh.greedyMesh` meshes it);
+   * glTF gives the whole scene: meshes, skins, skeletons, animations.
+   */
+  static loadOBJ(path: string): Mesh;
+  static loadPLY(path: string): Mesh;
+  static loadSTL(path: string): Mesh;
+  static loadFBX(path: string): Mesh[];
+  static loadVOX(path: string): MeshVoxData;
+  static loadGLTF(path: string): MeshGltfScene;
+  /**
+   *  A Gaussian splat `.ply` is a cloud, not a mesh; an unreadable file gives an empty cloud (`count` 0).
+   */
+  static loadSplatPLY(path: string): MeshSplatCloud;
+  /**
+   *  Write a splat cloud (the `loadSplatPLY` / `bro.triposplat` shape); true when the file was written.
+   */
+  static saveSplatPLY(path: string, cloud: MeshSplatCloud): boolean;
   static merge(meshes: Mesh[]): Mesh;
+  /**
+   * Triangulate a simple 2D polygon (`outer` flat x,y,..., CCW for a +Z
+   * face) with optional `holes` (each flat x,y,..., wound CW) into a mesh
+   * in the plane z = `z`. Degenerate input gives an empty Mesh.
+   */
+  static polygon2D(outer: number[], holes?: number[][], z?: number): Mesh;
+  /**
+   * Triangulate a planar 3D polygon (`outer` flat x,y,z,..., lying on the
+   * plane with unit `normal`) with optional `holes`; the mesh reuses the
+   * input positions and fills normals with `normal`.
+   */
+  static polygon3D(outer: number[], holes: number[][], normal: number[]): Mesh;
+  /**
+   *  Implicit-surface reconstruction of an oriented point cloud (a Mesh with positions + normals; indices ignored).
+   */
+  static reconstruct(pointCloud: Mesh, opts?: MeshReconstructOptions): Mesh;
   static marchingCubes(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
   static surfaceNets(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
   static dualContouring(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
@@ -5384,13 +5552,15 @@ declare class Mesh {
   measureUVQuality(): MeshUVQualityResult;
   convexHull(): Mesh;
   convexDecomposition(params?: MeshConvexDecompParams): Mesh[];
-  toGLTF(name?: string): Uint8Array;
-  toOBJ(): string;
-  toPLY(): string;
-  toSTL(): string;
-  toSTLB(): ArrayBuffer;
-  toFBX(): ArrayBuffer;
-  toVOX(): ArrayBuffer;
+  /**
+   * Write the mesh to a file; true when the file was written. A relative
+   * path resolves the way `fs.*` resolves it (against the app directory).
+   * glTF takes `{skin, skeleton, animations}` to write a rigged asset.
+   */
+  saveOBJ(path: string): boolean;
+  savePLY(path: string): boolean;
+  saveSTL(path: string): boolean;
+  saveGLTF(path: string, opts?: object): boolean;
 }
 
 declare class MeshBVH {
@@ -5405,17 +5575,86 @@ declare class ProgressiveMesh {
   getMesh(detail: number): Mesh;
 }
 
+/**
+ * Half-edge adjacency over N-gon faces: the edit topology a mesh editor
+ * keeps beside the triangle Mesh it renders, so a face survives whatever
+ * triangulation drew it. Build one from triangles (`fromMeshData` /
+ * `fromMesh`, with an optional per-triangle group so coplanar triangles can
+ * be merged back into one face with `mergeFacesByGroup`), from a planar
+ * polygon, or from N-gon soup; `tessellate()` gives triangles back.
+ * Face and vertex indices are stable until `compact()`.
+ */
 declare class PolyMesh {
-  constructor(mesh?: Mesh);
+  /**
+   *  Empty; the static factories build populated ones.
+   */
+  constructor();
+  static fromMeshData(positions: Float32Array, indices: Uint32Array, triToGroup?: Int32Array): PolyMesh;
+  static fromMesh(mesh: Mesh, triToGroup?: Int32Array): PolyMesh;
+  /**
+   *  One N-gon from a simple CCW polygon (as seen from +normal).
+   */
+  static fromPolygon(positionsXYZ: Float32Array, normal: number[], group?: number): PolyMesh;
+  /**
+   *  N-gon soup: `polyOffsets` (length F+1) delimits each face's run in `polyVerts`.
+   */
+  static fromPolygons(positions: Float32Array, polyVerts: Uint32Array, polyOffsets: Uint32Array, faceGroups?: Int32Array): PolyMesh;
   readonly vertexCount: number;
+  readonly halfEdgeCount: number;
   readonly faceCount: number;
-  readonly edgeCount: number;
+  faceVertexCount(faceIdx: number): number;
+  faceVertices(faceIdx: number): number[];
+  faceHalfEdges(faceIdx: number): number[];
+  getVertex(vertexIdx: number): number[];
+  computeFaceNormal(faceIdx: number): number[];
+  /**
+   *  The face's group tag, or -1.
+   */
+  faceGroup(faceIdx: number): number;
+  setFaceGroup(faceIdx: number, group: number): void;
+  facesInGroup(groupId: number): number[];
+  isBoundaryVertex(vertexIdx: number): boolean;
+  isBoundaryHalfEdge(halfEdgeIdx: number): boolean;
+  /**
+   *  Outer + hole loops of vertex indices around one face / one group.
+   */
+  findFaceBoundary(faceIdx: number): number[][];
+  findGroupBoundary(groupId: number): number[][];
+  tessellate(): MeshTessellation;
+  /**
+   *  `tessellate()` as a Mesh (positions, flat normals, indices).
+   */
   toMesh(): Mesh;
+  validate(): MeshPolyValidation;
+  addVertex(x: number, y: number, z: number): number;
+  /**
+   *  A face from an ordered vertex loop (3+); call `rematchTwins()` after a batch.
+   */
+  addFace(vertices: number[], group?: number): number;
+  deleteFace(faceIdx: number): void;
+  translateVertex(vertexIdx: number, offset: number[]): void;
+  translateFace(faceIdx: number, offset: number[]): void;
+  /**
+   *  Push/pull on a closed solid: seam-duplicate vertices move with the face.
+   */
+  translateFaceWithRing(faceIdx: number, offset: number[]): void;
+  /**
+   *  SketchUp-style extrusion: the face moves by `offset`, a bridge quad per boundary edge, a back face unless `withBack` is false.
+   */
   extrudeFace(faceIdx: number, offset: number[], withBack?: boolean, bridgeGroup?: number, backGroup?: number): MeshExtrudeFaceResult;
+  /**
+   *  Inset toward the centroid by `amount` (a distance, or a ratio in [0,1) when `asRatio`).
+   */
+  insetFace(faceIdx: number, amount: number, asRatio?: boolean, bridgeGroup?: number): MeshInsetFaceResult;
+  /**
+   *  Split the edge of half-edge `he` at `position` (default: its midpoint); both faces must be triangles. The new vertex, or -1.
+   */
+  splitEdge(he: number, position?: number[]): number;
+  flipEdge(he: number): boolean;
+  collapseEdge(he: number, position?: number[]): boolean;
   rematchTwins(): void;
   mergeFacesByGroup(): void;
   compact(): void;
-  findGroupBoundary(groupId: number): number[][];
 }
 
 /**
