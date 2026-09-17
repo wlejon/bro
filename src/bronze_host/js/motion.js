@@ -23,6 +23,9 @@
     fn(ns_motion, "load", function load(opts) {
         if (opts === undefined) throw new TypeError("bro.motion.load: opts is required");
         const d_opts = opts;
+        if (d_opts.checkpoint !== undefined && typeof d_opts.checkpoint !== 'string') throw new TypeError("bro.motion.load: opts.checkpoint must be a string");
+        if (d_opts.textEncoder !== undefined && typeof d_opts.textEncoder !== 'string') throw new TypeError("bro.motion.load: opts.textEncoder must be a string");
+        if (d_opts.device !== undefined && typeof d_opts.device !== 'string') throw new TypeError("bro.motion.load: opts.device must be a string");
         return __bro_native.motion.load(d_opts.checkpoint !== undefined, d_opts.checkpoint === undefined ? '' : d_opts.checkpoint, d_opts.textEncoder !== undefined, d_opts.textEncoder === undefined ? '' : d_opts.textEncoder, d_opts.device !== undefined, d_opts.device === undefined ? '' : d_opts.device);
     });
 
