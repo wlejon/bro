@@ -60,12 +60,11 @@
  */
 
 /**
+ * Global shadow atlas quality (scene.setShadowQuality). Per-light shadow
+ * settings (cascades, bias, normalBias, maxDistance) live on the LightNode.
  * @typedef {Object} ShadowQualityConfig
- * @property {number} [resolution]
- * @property {number} [cascades]
- * @property {number} [maxDistance]
- * @property {number} [bias]
- * @property {number} [normalBias]
+ * @property {number} [atlasSize] -  Side length in texels of the square shadow depth atlas (default 4096).
+ * @property {number} [pcfTaps] -  PCF filter grid side: 1 (single sample), 3 or 5 (default 3).
  */
 
 /**

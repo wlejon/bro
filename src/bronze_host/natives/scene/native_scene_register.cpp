@@ -177,13 +177,13 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_findById", p(&bro_scene_SceneGraph_findById), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_findByName", p(&bro_scene_SceneGraph_findByName), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
         fn("__bro_native.scene.SceneGraph_destroyNode", p(&bro_scene_SceneGraph_destroyNode), "void", {"__bro_native.scene.SceneGraph", "__bro_native.scene.SceneNode"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setCamera", p(&bro_scene_SceneGraph_setCamera), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "f64[]", "f64[]", "f64[]"}, error) &&
-        fn("__bro_native.scene.SceneGraph_createCamera", p(&bro_scene_SceneGraph_createCamera), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "f64[]", "f64[]", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setCamera", p(&bro_scene_SceneGraph_setCamera), "void", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "f64[]", "f64[]", "f64[]", "bool", "f64", "f64[]", "bool", "str", "bool", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_createCamera", p(&bro_scene_SceneGraph_createCamera), "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "bool", "f64", "bool", "f64", "bool", "f64", "f64[]", "f64[]", "f64[]", "bool", "f64", "f64[]", "bool", "str", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setActiveCamera", p(&bro_scene_SceneGraph_setActiveCamera), "void", {"__bro_native.scene.SceneGraph", "__bro_native.scene.SceneNode"}, error) &&
         fn("__bro_native.scene.SceneGraph_setToneMap", p(&bro_scene_SceneGraph_setToneMap), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAmbient", p(&bro_scene_SceneGraph_setAmbient), "void", {"__bro_native.scene.SceneGraph", "f64[]", "bool", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setWind", p(&bro_scene_SceneGraph_setWind), "void", {"__bro_native.scene.SceneGraph", "f64[]", "f64"}, error) &&
-        fn("__bro_native.scene.SceneGraph_setShadowQuality", p(&bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "i32", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setWind", p(&bro_scene_SceneGraph_setWind), "void", {"__bro_native.scene.SceneGraph", "f64[]", "bool", "f64", "bool", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_setShadowQuality", p(&bro_scene_SceneGraph_setShadowQuality), "void", {"__bro_native.scene.SceneGraph", "bool", "i32", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setShadowCache", p(&bro_scene_SceneGraph_setShadowCache), "void", {"__bro_native.scene.SceneGraph", "bool", "bool", "bool", "i32"}, error) &&
         fn("__bro_native.scene.SceneGraph_setFog", p(&bro_scene_SceneGraph_setFog), "void", {"__bro_native.scene.SceneGraph", "bool", "str", "f64[]", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64", "bool", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_setAtmosphere", p(&bro_scene_SceneGraph_setAtmosphere), "void", {"__bro_native.scene.SceneGraph", "f64[]", "f64[]", "bool", "f64", "f64[]", "bool", "f64"}, error) &&

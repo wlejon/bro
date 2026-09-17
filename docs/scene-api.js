@@ -16,13 +16,37 @@
  */
 
 /**
+ * Camera view for setCamera() (the imperative view) and createCamera() (a
+ * camera node). Three shapes:
+ *
+ *   perspective (default): { fov=60, near=0.1, far=1000, aspect, eye, target, up }
+ *   quaternion:            { fov, near, far, aspect, eye, quaternion: [x,y,z,w] }
+ *     camera local -Z is forward; `quaternion` overrides target/up/mode
+ *   orthographic:          { mode: "orthographic", size=10, near, far, aspect, eye, target, up }
+ *
+ * `position` is accepted as an alias of `eye` and `lookAt` of `target`.
  * @typedef {Object} SceneCameraOptions
- * @property {number} [fov]
- * @property {number} [near]
- * @property {number} [far]
- * @property {Array<number>} [eye]
- * @property {Array<number>} [target]
- * @property {Array<number>} [up]
+ * @property {number} [fov] -  Vertical field of view in degrees (perspective only, default 60).
+ * @property {number} [near] -  Near clipping plane (default 0.1).
+ * @property {number} [far] -  Far clipping plane (default 1000).
+ * @property {Array<number>} [eye] -  Camera position [x,y,z] (default [0,5,-10]). `position` is an alias.
+ * @property {Array<number>} [target] -  Look-at point [x,y,z] (default [0,0,0]). `lookAt` is an alias.
+ * @property {Array<number>} [up] -  Up vector [x,y,z] (default [0,1,0]).
+ * @property {number} [aspect] - width/height. Omit it (or pass <= 0) and the projection is built from
+the current canvas size AND flagged to auto-follow future canvas
+resizes, which is normally what you want; an explicit aspect pins the
+projection. With no canvas size yet the omitted case falls back to 4/3.
+ * @property {Array<number>} [quaternion] - [x,y,z,w] camera orientation, local -Z forward. Set, it overrides
+target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
+ * @property {string} [mode] -  "perspective" (default) or "orthographic" / "ortho".
+ * @property {number} [size] -  Orthographic view height in world units (default 10).
+ */
+
+/**
+ * @typedef {Object} WindConfig
+ * @property {Array<number>} [direction] -  Sway direction [x,y,z] (default [1,0,0]).
+ * @property {number} [strength] -  Displacement amplitude in world units (default 0: no sway).
+ * @property {number} [frequency] -  Oscillation frequency in rad/s (default 1.5).
  */
 
 /**
@@ -834,11 +858,20 @@ class SceneGraph {
   destroyNode(node) {}
 
   /**
+   * Install the imperative view (see SceneCameraOptions). The LAST camera
+   * call wins: setCamera deactivates the active camera node, and
+   * setActiveCamera overrides an imperative view. `activeCamera` is null
+   * while the imperative view is in effect.
+   *
    * @param {SceneCameraOptions} [opts]
    */
   setCamera(opts) {}
 
   /**
+   * Create a camera NODE and add it to the root. The node's WORLD transform
+   * is the view (local -Z forward, +Y up); only projection parameters live
+   * on the node. `name` and `active` (activate it now) are also accepted.
+   *
    * @param {SceneCameraOptions} [opts]
    * @returns {SceneNode}
    */
@@ -860,12 +893,19 @@ class SceneGraph {
   setAmbient(opts) {}
 
   /**
-   * @param {Array<number>} dir
-   * @param {number} speed
+   * Global wind sway for meshes created with `wind` set:
+   * pos += direction * sin(time*frequency + dot(pos.xz, k)) * strength * bend.
+   * The engine advances the wind clock from the per-frame virtual delta so
+   * offline captures stay deterministic.
+   *
+   * @param {WindConfig} [opts]
    */
-  setWind(dir, speed) {}
+  setWind(opts) {}
 
   /**
+   * Shadow atlas size and filter. `setShadowQuality(atlasSize, pcfTaps)`
+   * positional is accepted too.
+   *
    * @param {ShadowQualityConfig} [opts]
    */
   setShadowQuality(opts) {}

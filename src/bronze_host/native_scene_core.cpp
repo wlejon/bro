@@ -11,6 +11,7 @@
 #include <broimage/decode.h>
 #include <glad/gl.h>
 #include "engine/scene_audio_sync.h"
+#include <string_view>
 
 namespace bro::bronze_host {
 
@@ -539,18 +540,36 @@ void bro_scene_SceneGraph_destroyNode(void* self, void* node) {
     if (g && n) g->destroyNode(n);
 }
 
+namespace {
+
+bool isOrthoMode(bool given, const char* mode) {
+    if (!given || !mode) return false;
+    std::string_view m(mode);
+    return m == "orthographic" || m == "ortho";
+}
+
+} // namespace
+
+// setCamera({fov, near, far, aspect, eye|position, target|lookAt, up,
+//            quaternion, mode, size}) — the imperative view. quaternion
+// wins over target/up/mode; mode "ortho[graphic]" uses size (view height)
+// in place of fov.
 void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts_fov,
                                    bool opts_near_given, double opts_near,
                                    bool opts_far_given, double opts_far,
                                    const double* opts_eye, uint32_t opts_eye_len,
                                    const double* opts_target, uint32_t opts_target_len,
-                                   const double* opts_up, uint32_t opts_up_len) {
+                                   const double* opts_up, uint32_t opts_up_len,
+                                   bool opts_aspect_given, double opts_aspect,
+                                   const double* opts_quaternion, uint32_t opts_quaternion_len,
+                                   bool opts_mode_given, const char* opts_mode,
+                                   bool opts_size_given, double opts_size) {
     auto* g = graphOf(self);
     if (!g) return;
     float fov = opts_fov_given ? static_cast<float>(opts_fov * 3.141592653589793 / 180.0) : (60.0f * 3.141592653589793f / 180.0f);
     float nearP = opts_near_given ? static_cast<float>(opts_near) : 0.1f;
     float farP = opts_far_given ? static_cast<float>(opts_far) : 1000.0f;
-    bromath::Vec3 eye{0.0f, 0.0f, 5.0f};
+    bromath::Vec3 eye{0.0f, 5.0f, -10.0f};
     bromath::Vec3 target{0.0f, 0.0f, 0.0f};
     bromath::Vec3 up{0.0f, 1.0f, 0.0f};
     if (opts_eye && opts_eye_len >= 3) {
@@ -562,18 +581,45 @@ void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts
     if (opts_up && opts_up_len >= 3) {
         up = {static_cast<float>(opts_up[0]), static_cast<float>(opts_up[1]), static_cast<float>(opts_up[2])};
     }
-    int cw = g->canvasWidth(), ch = g->canvasHeight();
-    float aspect = (cw > 0 && ch > 0) ? static_cast<float>(cw) / static_cast<float>(ch) : (4.0f / 3.0f);
-    g->setCameraAspectFollowsCanvas(true);
-    g->setCamera(fov, aspect, nearP, farP, eye, target, up);
+
+    // Aspect omitted (or <= 0) → derive from the current canvas and flag the
+    // projection to auto-follow future canvas resizes (setCanvasSize rebuilds
+    // it). An explicit aspect pins the projection and disables the follow.
+    float aspect = opts_aspect_given ? static_cast<float>(opts_aspect) : 0.0f;
+    const bool aspectFollowsCanvas = aspect <= 0.0f;
+    if (aspectFollowsCanvas) {
+        int cw = g->canvasWidth(), ch = g->canvasHeight();
+        aspect = (cw > 0 && ch > 0) ? static_cast<float>(cw) / static_cast<float>(ch) : (4.0f / 3.0f);
+    }
+    g->setCameraAspectFollowsCanvas(aspectFollowsCanvas);
+
+    if (opts_quaternion && opts_quaternion_len >= 4) {
+        bromath::Quat q(static_cast<float>(opts_quaternion[0]), static_cast<float>(opts_quaternion[1]),
+                        static_cast<float>(opts_quaternion[2]), static_cast<float>(opts_quaternion[3]));
+        g->setCameraQuat(fov, aspect, nearP, farP, eye, bromath::qnorm(q));
+    } else if (isOrthoMode(opts_mode_given, opts_mode)) {
+        const float size = opts_size_given ? static_cast<float>(opts_size) : 10.0f;
+        const float halfW = size * aspect * 0.5f;
+        const float halfH = size * 0.5f;
+        g->setCameraOrtho(-halfW, halfW, -halfH, halfH, nearP, farP, eye, target, up);
+    } else {
+        g->setCamera(fov, aspect, nearP, farP, eye, target, up);
+    }
 }
 
+// createCamera({name, fov, near, far, aspect, mode, size, position|eye,
+//               quaternion, lookAt|target, up, active}) → CameraNode. The
+// node's WORLD transform is the view; only projection params live on it.
 void* bro_scene_SceneGraph_createCamera(void* self, bool opts_fov_given, double opts_fov,
                                         bool opts_near_given, double opts_near,
                                         bool opts_far_given, double opts_far,
                                         const double* opts_eye, uint32_t opts_eye_len,
                                         const double* opts_target, uint32_t opts_target_len,
-                                        const double* opts_up, uint32_t opts_up_len) {
+                                        const double* opts_up, uint32_t opts_up_len,
+                                        bool opts_aspect_given, double opts_aspect,
+                                        const double* opts_quaternion, uint32_t opts_quaternion_len,
+                                        bool opts_mode_given, const char* opts_mode,
+                                        bool opts_size_given, double opts_size) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
     auto* cam = g->createCamera();
@@ -581,10 +627,17 @@ void* bro_scene_SceneGraph_createCamera(void* self, bool opts_fov_given, double 
     if (opts_fov_given) cam->setFovY(static_cast<float>(opts_fov * 3.14159265 / 180.0));
     if (opts_near_given) cam->setNearZ(static_cast<float>(opts_near));
     if (opts_far_given) cam->setFarZ(static_cast<float>(opts_far));
+    if (opts_aspect_given) cam->setAspect(static_cast<float>(opts_aspect));
+    if (opts_size_given) cam->setOrthoHeight(static_cast<float>(opts_size));
+    if (opts_mode_given) cam->setPerspective(!isOrthoMode(opts_mode_given, opts_mode));
     if (opts_eye && opts_eye_len >= 3) {
         cam->setPosition(static_cast<float>(opts_eye[0]), static_cast<float>(opts_eye[1]), static_cast<float>(opts_eye[2]));
     }
-    if (opts_target && opts_target_len >= 3) {
+    if (opts_quaternion && opts_quaternion_len >= 4) {
+        bromath::Quat q(static_cast<float>(opts_quaternion[0]), static_cast<float>(opts_quaternion[1]),
+                        static_cast<float>(opts_quaternion[2]), static_cast<float>(opts_quaternion[3]));
+        cam->setRotation(bromath::qnorm(q));
+    } else if (opts_target && opts_target_len >= 3) {
         bromath::Vec3 tgt{static_cast<float>(opts_target[0]), static_cast<float>(opts_target[1]), static_cast<float>(opts_target[2])};
         bromath::Vec3 up{0, 1, 0};
         if (opts_up && opts_up_len >= 3) up = {static_cast<float>(opts_up[0]), static_cast<float>(opts_up[1]), static_cast<float>(opts_up[2])};
@@ -639,28 +692,32 @@ void bro_scene_SceneGraph_setAmbient(void* self, const double* opts_color, uint3
     g->setAmbient(r, gr, b);
 }
 
-void bro_scene_SceneGraph_setWind(void* self, const double* dir, uint32_t dir_len, double speed) {
+// setWind({direction:[x,y,z], strength, frequency}) — global wind sway.
+void bro_scene_SceneGraph_setWind(void* self, const double* opts_direction, uint32_t opts_direction_len,
+                                 bool opts_strength_given, double opts_strength,
+                                 bool opts_frequency_given, double opts_frequency) {
     auto* g = graphOf(self);
     if (!g) return;
     float dx = 1.0f, dy = 0.0f, dz = 0.0f;
-    if (dir && dir_len >= 3) {
-        dx = static_cast<float>(dir[0]);
-        dy = static_cast<float>(dir[1]);
-        dz = static_cast<float>(dir[2]);
+    if (opts_direction && opts_direction_len >= 3) {
+        dx = static_cast<float>(opts_direction[0]);
+        dy = static_cast<float>(opts_direction[1]);
+        dz = static_cast<float>(opts_direction[2]);
     }
-    g->setWind(dx, dy, dz, static_cast<float>(speed), 1.0f);
+    const float strength = opts_strength_given ? static_cast<float>(opts_strength) : 0.0f;
+    const float frequency = opts_frequency_given ? static_cast<float>(opts_frequency) : 1.5f;
+    g->setWind(dx, dy, dz, strength, frequency);
 }
 
-void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_resolution_given, int32_t opts_resolution,
-                                          bool opts_cascades_given, int32_t opts_cascades,
-                                          bool opts_maxDistance_given, double opts_maxDistance,
-                                          bool opts_bias_given, double opts_bias,
-                                          bool opts_normalBias_given, double opts_normalBias) {
+// setShadowQuality({atlasSize, pcfTaps}) — atlas side length and PCF grid
+// side (1, 3 or 5). A non-positive value keeps the default.
+void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_atlasSize_given, int32_t opts_atlasSize,
+                                          bool opts_pcfTaps_given, int32_t opts_pcfTaps) {
     auto* g = graphOf(self);
     if (!g) return;
-    int res = opts_resolution_given ? opts_resolution : 2048;
-    int taps = 3;
-    g->setShadowQuality(res, taps);
+    const int atlasSize = (opts_atlasSize_given && opts_atlasSize > 0) ? opts_atlasSize : 4096;
+    const int pcfTaps = (opts_pcfTaps_given && opts_pcfTaps > 0) ? opts_pcfTaps : 3;
+    g->setShadowQuality(atlasSize, pcfTaps);
 }
 
 void bro_scene_SceneGraph_setShadowCache(void* self, bool opts_enabled_given, bool opts_enabled,

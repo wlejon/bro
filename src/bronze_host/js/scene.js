@@ -598,18 +598,18 @@
         const d_opts = opts === undefined ? {} : opts;
         const eye = d_opts.eye !== undefined ? d_opts.eye : d_opts.position;
         const target = d_opts.target !== undefined ? d_opts.target : d_opts.lookAt;
-        __bro_native.scene.SceneGraph_setCamera(this, d_opts.fov !== undefined, d_opts.fov === undefined ? 0 : d_opts.fov, d_opts.near !== undefined, d_opts.near === undefined ? 0 : d_opts.near, d_opts.far !== undefined, d_opts.far === undefined ? 0 : d_opts.far, eye === undefined ? EMPTY_F64 : toF64(eye), target === undefined ? EMPTY_F64 : toF64(target), d_opts.up === undefined ? EMPTY_F64 : toF64(d_opts.up));
+        __bro_native.scene.SceneGraph_setCamera(this, d_opts.fov !== undefined, d_opts.fov === undefined ? 0 : d_opts.fov, d_opts.near !== undefined, d_opts.near === undefined ? 0 : d_opts.near, d_opts.far !== undefined, d_opts.far === undefined ? 0 : d_opts.far, eye === undefined ? EMPTY_F64 : toF64(eye), target === undefined ? EMPTY_F64 : toF64(target), d_opts.up === undefined ? EMPTY_F64 : toF64(d_opts.up), d_opts.aspect !== undefined, d_opts.aspect === undefined ? 0 : d_opts.aspect, d_opts.quaternion === undefined ? EMPTY_F64 : toF64(d_opts.quaternion), d_opts.mode !== undefined, d_opts.mode === undefined ? '' : d_opts.mode, d_opts.size !== undefined, d_opts.size === undefined ? 0 : d_opts.size);
     });
     fn(SceneGraph.prototype, "createCamera", function createCamera(opts) {
         const d_opts = opts === undefined ? {} : opts;
         const eye = d_opts.eye !== undefined ? d_opts.eye : d_opts.position;
         const target = d_opts.target !== undefined ? d_opts.target : d_opts.lookAt;
-        const cam = __bro_native.scene.SceneGraph_createCamera(this, d_opts.fov !== undefined, d_opts.fov === undefined ? 0 : d_opts.fov, d_opts.near !== undefined, d_opts.near === undefined ? 0 : d_opts.near, d_opts.far !== undefined, d_opts.far === undefined ? 0 : d_opts.far, eye === undefined ? EMPTY_F64 : toF64(eye), target === undefined ? EMPTY_F64 : toF64(target), d_opts.up === undefined ? EMPTY_F64 : toF64(d_opts.up));
+        // `projection` / `orthoHeight` are the node-attribute spellings of
+        // `mode` / `size`; either form reaches the native as mode/size.
+        const mode = d_opts.mode !== undefined ? d_opts.mode : d_opts.projection;
+        const size = d_opts.size !== undefined ? d_opts.size : d_opts.orthoHeight;
+        const cam = __bro_native.scene.SceneGraph_createCamera(this, d_opts.fov !== undefined, d_opts.fov === undefined ? 0 : d_opts.fov, d_opts.near !== undefined, d_opts.near === undefined ? 0 : d_opts.near, d_opts.far !== undefined, d_opts.far === undefined ? 0 : d_opts.far, eye === undefined ? EMPTY_F64 : toF64(eye), target === undefined ? EMPTY_F64 : toF64(target), d_opts.up === undefined ? EMPTY_F64 : toF64(d_opts.up), d_opts.aspect !== undefined, d_opts.aspect === undefined ? 0 : d_opts.aspect, d_opts.quaternion === undefined ? EMPTY_F64 : toF64(d_opts.quaternion), mode !== undefined, mode === undefined ? '' : mode, size !== undefined, size === undefined ? 0 : size);
         if (d_opts.name !== undefined) cam.name = d_opts.name;
-        if (d_opts.projection !== undefined) cam.projection = d_opts.projection;
-        if (d_opts.aspect !== undefined) cam.aspect = d_opts.aspect;
-        if (d_opts.orthoHeight !== undefined) cam.orthoHeight = d_opts.orthoHeight;
-        if (d_opts.size !== undefined) cam.size = d_opts.size;
         if (d_opts.active) this.setActiveCamera(cam);
         return cam;
     });
@@ -637,14 +637,20 @@
         }
         __bro_native.scene.SceneGraph_setAmbient(this, toF64(col), false, 0);
     });
-    fn(SceneGraph.prototype, "setWind", function setWind(dir, speed) {
-        if (dir === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setWind: dir is required");
-        if (speed === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.setWind: speed is required");
-        __bro_native.scene.SceneGraph_setWind(this, toF64(dir), speed);
+    fn(SceneGraph.prototype, "setWind", function setWind(opts, speed) {
+        // setWind({ direction, strength, frequency }); the (dir, strength)
+        // positional spelling the generated docs carried for a while maps
+        // onto the same natives.
+        let d_opts = opts === undefined || opts === null ? {} : opts;
+        if (Array.isArray(opts) || ArrayBuffer.isView(opts)) d_opts = { direction: opts, strength: speed };
+        __bro_native.scene.SceneGraph_setWind(this, d_opts.direction === undefined ? EMPTY_F64 : toF64(d_opts.direction), d_opts.strength !== undefined, d_opts.strength === undefined ? 0 : d_opts.strength, d_opts.frequency !== undefined, d_opts.frequency === undefined ? 0 : d_opts.frequency);
     });
-    fn(SceneGraph.prototype, "setShadowQuality", function setShadowQuality(opts) {
-        const d_opts = opts === undefined ? {} : opts;
-        __bro_native.scene.SceneGraph_setShadowQuality(this, d_opts.resolution !== undefined, d_opts.resolution === undefined ? 0 : d_opts.resolution, d_opts.cascades !== undefined, d_opts.cascades === undefined ? 0 : d_opts.cascades, d_opts.maxDistance !== undefined, d_opts.maxDistance === undefined ? 0 : d_opts.maxDistance, d_opts.bias !== undefined, d_opts.bias === undefined ? 0 : d_opts.bias, d_opts.normalBias !== undefined, d_opts.normalBias === undefined ? 0 : d_opts.normalBias);
+    fn(SceneGraph.prototype, "setShadowQuality", function setShadowQuality(opts, pcfTaps) {
+        // setShadowQuality({ atlasSize, pcfTaps }) or the positional
+        // setShadowQuality(atlasSize, pcfTaps) every workshop app calls.
+        let d_opts = opts === undefined || opts === null ? {} : opts;
+        if (typeof opts === "number") d_opts = { atlasSize: opts, pcfTaps: pcfTaps };
+        __bro_native.scene.SceneGraph_setShadowQuality(this, d_opts.atlasSize !== undefined, d_opts.atlasSize === undefined ? 0 : d_opts.atlasSize, d_opts.pcfTaps !== undefined, d_opts.pcfTaps === undefined ? 0 : d_opts.pcfTaps);
     });
     fn(SceneGraph.prototype, "setShadowCache", function setShadowCache(opts) {
         const d_opts = opts === undefined ? {} : opts;

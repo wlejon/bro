@@ -509,13 +509,13 @@ void bro_scene_SceneGraph_destroyNode(void* self, void* node);
 
 // bro.scene.SceneGraph.prototype.setCamera
 //   registered at __bro_native.scene.SceneGraph_setCamera
-//   opts_fov_given, opts_near_given, opts_far_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts_fov, bool opts_near_given, double opts_near, bool opts_far_given, double opts_far, const double* opts_eye, uint32_t opts_eye_len, const double* opts_target, uint32_t opts_target_len, const double* opts_up, uint32_t opts_up_len);
+//   opts_fov_given, opts_near_given, opts_far_given, opts_aspect_given, opts_mode_given, opts_size_given: false when the value was not passed (no declared default)
+void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts_fov, bool opts_near_given, double opts_near, bool opts_far_given, double opts_far, const double* opts_eye, uint32_t opts_eye_len, const double* opts_target, uint32_t opts_target_len, const double* opts_up, uint32_t opts_up_len, bool opts_aspect_given, double opts_aspect, const double* opts_quaternion, uint32_t opts_quaternion_len, bool opts_mode_given, const char* opts_mode, bool opts_size_given, double opts_size);
 
 // bro.scene.SceneGraph.prototype.createCamera
 //   registered at __bro_native.scene.SceneGraph_createCamera
-//   opts_fov_given, opts_near_given, opts_far_given: false when the value was not passed (no declared default)
-void* bro_scene_SceneGraph_createCamera(void* self, bool opts_fov_given, double opts_fov, bool opts_near_given, double opts_near, bool opts_far_given, double opts_far, const double* opts_eye, uint32_t opts_eye_len, const double* opts_target, uint32_t opts_target_len, const double* opts_up, uint32_t opts_up_len);
+//   opts_fov_given, opts_near_given, opts_far_given, opts_aspect_given, opts_mode_given, opts_size_given: false when the value was not passed (no declared default)
+void* bro_scene_SceneGraph_createCamera(void* self, bool opts_fov_given, double opts_fov, bool opts_near_given, double opts_near, bool opts_far_given, double opts_far, const double* opts_eye, uint32_t opts_eye_len, const double* opts_target, uint32_t opts_target_len, const double* opts_up, uint32_t opts_up_len, bool opts_aspect_given, double opts_aspect, const double* opts_quaternion, uint32_t opts_quaternion_len, bool opts_mode_given, const char* opts_mode, bool opts_size_given, double opts_size);
 
 // bro.scene.SceneGraph.prototype.setActiveCamera
 //   registered at __bro_native.scene.SceneGraph_setActiveCamera
@@ -533,12 +533,13 @@ void bro_scene_SceneGraph_setAmbient(void* self, const double* opts_color, uint3
 
 // bro.scene.SceneGraph.prototype.setWind
 //   registered at __bro_native.scene.SceneGraph_setWind
-void bro_scene_SceneGraph_setWind(void* self, const double* dir, uint32_t dir_len, double speed);
+//   opts_strength_given, opts_frequency_given: false when the value was not passed (no declared default)
+void bro_scene_SceneGraph_setWind(void* self, const double* opts_direction, uint32_t opts_direction_len, bool opts_strength_given, double opts_strength, bool opts_frequency_given, double opts_frequency);
 
 // bro.scene.SceneGraph.prototype.setShadowQuality
 //   registered at __bro_native.scene.SceneGraph_setShadowQuality
-//   opts_resolution_given, opts_cascades_given, opts_maxDistance_given, opts_bias_given, opts_normalBias_given: false when the value was not passed (no declared default)
-void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_resolution_given, int32_t opts_resolution, bool opts_cascades_given, int32_t opts_cascades, bool opts_maxDistance_given, double opts_maxDistance, bool opts_bias_given, double opts_bias, bool opts_normalBias_given, double opts_normalBias);
+//   opts_atlasSize_given, opts_pcfTaps_given: false when the value was not passed (no declared default)
+void bro_scene_SceneGraph_setShadowQuality(void* self, bool opts_atlasSize_given, int32_t opts_atlasSize, bool opts_pcfTaps_given, int32_t opts_pcfTaps);
 
 // bro.scene.SceneGraph.prototype.setShadowCache
 //   registered at __bro_native.scene.SceneGraph_setShadowCache
