@@ -6,7 +6,7 @@
  * =============================================================================
  *
  * The bromesh C++ library is exposed via these classes and namespaces:
- * Mesh, MeshBVH, ProgressiveMesh, PolyMesh, LSystem.
+ * Mesh, MeshBVH, ProgressiveMesh, PolyMesh, CapsuleField, LSystem.
  * @typedef {Object} MeshOptions
  * @property {Float32Array} [positions]
  * @property {Float32Array} [normals]
@@ -78,6 +78,98 @@
  * @property {number} [sides]
  * @property {number} [leafRadius]
  * @property {number} [pipeExp]
+ * @property {number} [seed]
+ * @property {MeshSpaceColonizationOptions} [colonize] -  Space-colonization tuning for the skeleton pass.
+ */
+
+/**
+ *  Result of Mesh.tree(): the thickened skeleton plus its swept branch mesh.
+ * @typedef {Object} MeshTreeResult
+ * @property {Array<MeshBranchSegment>} [segments]
+ * @property {Mesh} [branches]
+ */
+
+/**
+ * @typedef {Object} MeshSweepOptions
+ * @property {boolean} [closeProfile]
+ * @property {boolean} [capStart]
+ * @property {boolean} [capEnd]
+ * @property {boolean} [miterJoints]
+ * @property {*} [profileScale] -  Per-ring profile scale: a number, or one entry per path point.
+ * @property {*} [twist] -  Per-ring twist in radians: a number, or one entry per path point.
+ */
+
+/**
+ * @typedef {Object} MeshTubeOptions
+ * @property {boolean} [capStart]
+ * @property {boolean} [capEnd]
+ * @property {boolean} [miterJoints]
+ */
+
+/**
+ * @typedef {Object} MeshBladeStripOptions
+ * @property {number} [width]
+ * @property {number} [thickness]
+ * @property {boolean} [capStart]
+ * @property {boolean} [capEnd]
+ * @property {boolean} [miterJoints]
+ * @property {*} [profileScale]
+ * @property {*} [twist]
+ */
+
+/**
+ * @typedef {Object} MeshBladePathOptions
+ * @property {Array<number>} [base]
+ * @property {Array<number>} [tipDir]
+ * @property {number} [length]
+ * @property {number} [bend]
+ * @property {number} [lift]
+ * @property {number} [segments]
+ */
+
+/**
+ *  Capsule obstacle for CapsuleField: the segment a→b swept by `radius`.
+ * @typedef {Object} MeshCapsule
+ * @property {Array<number>} [a]
+ * @property {Array<number>} [b]
+ * @property {number} [radius]
+ * @property {number} [tag] -  Optional identity used by the `excludeTag` query parameters.
+ */
+
+/**
+ *  Sphere obstacle / keep-out volume.
+ * @typedef {Object} MeshSphere
+ * @property {Array<number>} [center]
+ * @property {number} [radius]
+ * @property {number} [tag]
+ */
+
+/**
+ * @typedef {Object} MeshCapsuleFieldNearest
+ * @property {Array<number>} [point]
+ * @property {Array<number>} [normal]
+ * @property {number} [distance]
+ * @property {number} [tag]
+ */
+
+/**
+ * @typedef {Object} MeshAnchorPackOptions
+ * @property {number} [minSpacing]
+ * @property {number} [minObstacleDistance]
+ * @property {number} [maxCount]
+ * @property {number} [seed]
+ * @property {*} [avoid] -  CapsuleField the anchors must clear by `minObstacleDistance`.
+ * @property {Array<MeshSphere>} [keepOut]
+ */
+
+/**
+ * @typedef {Object} MeshTurtleOptions
+ * @property {number} [stepLength]
+ * @property {number} [angle] -  Turn angle in radians.
+ * @property {number} [radius]
+ * @property {Array<number>} [position]
+ * @property {Array<number>} [heading]
+ * @property {Array<number>} [up]
  */
 
 /**
@@ -141,13 +233,12 @@
  */
 
 /**
+ *  One segment of a branch skeleton (spaceColonize / lsystemToBranches / tree).
  * @typedef {Object} MeshBranchSegment
- * @property {Array<number>} [p0]
- * @property {Array<number>} [p1]
- * @property {number} [r0]
- * @property {number} [r1]
- * @property {Array<number>} [dir]
- * @property {number} [parent]
+ * @property {number} [parent] -  Index of the parent segment, -1 at a root.
+ * @property {Array<number>} [from]
+ * @property {Array<number>} [to]
+ * @property {number} [radius] -  Radius at `from`; 0 until thickenBranches assigns the pipe model.
  * @property {number} [depth]
  */
 
@@ -343,12 +434,18 @@ class Mesh {
   static disk(radius, segments) {}
 
   /**
-   * @param {Array<number>} points
-   * @param {number} [radius]
-   * @param {number} [segments]
+   * Circular-cross-section sweep along `path` (Float32Array(3N) or
+   * [[x,y,z], ...], at least 2 points). `radius` is a constant number or a
+   * per-point list the same length as `path`; `sides` is the ring
+   * resolution (>= 3, default 8).
+   *
+   * @param {Array<Array<number>>} path
+   * @param {*} [radius]
+   * @param {number} [sides]
+   * @param {MeshTubeOptions} [opts]
    * @returns {Mesh}
    */
-  static tube(points, radius, segments) {}
+  static tube(path, radius, sides, opts) {}
 
   /**
    * @param {ArrayBuffer} buffer
@@ -423,11 +520,15 @@ class Mesh {
   static dualContouring(values, dimX, dimY, dimZ, isoLevel) {}
 
   /**
-   * @param {Array<number>} path
-   * @param {Array<number>} profile
+   * Extrude a closed 2D `profile` (Float32Array(2N) or [[x,y], ...]) along a
+   * 3D `path` (Float32Array(3N) or [[x,y,z], ...]).
+   *
+   * @param {Array<Array<number>>} profile
+   * @param {Array<Array<number>>} path
+   * @param {MeshSweepOptions} [opts]
    * @returns {Mesh}
    */
-  static sweep(path, profile) {}
+  static sweep(profile, path, opts) {}
 
   /**
    * @param {Array<Array<number>>} controlPoints
@@ -449,6 +550,23 @@ class Mesh {
    * @returns {Mesh}
    */
   static flower(opts) {}
+
+  /**
+   *  Sweep a 4-vertex diamond profile along `path`: grass / fern / succulent blades.
+   *
+   * @param {Array<Array<number>>} path
+   * @param {MeshBladeStripOptions} [opts]
+   * @returns {Mesh}
+   */
+  static bladeStrip(path, opts) {}
+
+  /**
+   *  Quadratic-Bézier blade spine as [[x,y,z], ...], consumable by bladeStrip / sweep.
+   *
+   * @param {MeshBladePathOptions} [opts]
+   * @returns {Array<Array<number>>}
+   */
+  static bladePath(opts) {}
 
   /**
    * @param {MeshBlobOptions} [opts]
@@ -496,8 +614,10 @@ class Mesh {
   static scatterLeaves(segments, leaf, opts) {}
 
   /**
+   *  spaceColonize → thickenBranches → meshBranches in one call.
+   *
    * @param {MeshTreeOptions} [opts]
-   * @returns {Object}
+   * @returns {MeshTreeResult}
    */
   static tree(opts) {}
 
@@ -508,32 +628,38 @@ class Mesh {
   static parseLSystem(text) {}
 
   /**
+   *  Greedy spaced-anchor picker; returns the accepted candidate indices in acceptance order.
+   *
    * @param {Array<Array<number>>} candidates
-   * @param {Object} [opts]
+   * @param {MeshAnchorPackOptions} [opts]
    * @returns {Int32Array}
    */
   static packAnchors(candidates, opts) {}
 
   /**
+   *  Turtle-interpret a module stream (or an L-system string) into a branch skeleton.
+   *
    * @param {Array<MeshLSystemModule>} modules
-   * @param {Object} [opts]
+   * @param {MeshTurtleOptions} [opts]
    * @returns {Array<MeshBranchSegment>}
    */
   static lsystemToBranches(modules, opts) {}
 
   /**
-   * @param {Array<Object>} capsules
-   * @param {Array<Object>} [spheres]
+   * @param {Array<MeshCapsule>} [capsules]
+   * @param {Array<MeshSphere>} [spheres]
    * @param {number} [cellSize]
-   * @returns {Object}
+   * @returns {CapsuleField}
    */
   static capsuleField(capsules, spheres, cellSize) {}
 
   /**
+   *  CapsuleField whose capsules carry the segment index as `tag`, so placement can exclude a leaf's own branch.
+   *
    * @param {Array<MeshBranchSegment>} segments
    * @param {number} [radiusScale]
-   * @param {Array<Object>} [extraSpheres]
-   * @returns {Object}
+   * @param {Array<MeshSphere>} [extraSpheres]
+   * @returns {CapsuleField}
    */
   static capsuleFieldFromSegments(segments, radiusScale, extraSpheres) {}
 
@@ -977,6 +1103,87 @@ class PolyMesh {
    * @returns {Array<Array<number>>}
    */
   findGroupBoundary(groupId) {}
+
+}
+
+/**
+ * Capsule + sphere occupancy field: the shared obstacle substrate for
+ * spaceColonize, placeLeavesOnBranches, scatterLeaves and packAnchors.
+ * Queries take a point as [x,y,z] or {x,y,z}; `excludeTag` skips obstacles
+ * carrying that tag (a leaf's own branch).
+ */
+class CapsuleField {
+
+  /**
+   * @param {Array<MeshCapsule>} [capsules]
+   * @param {Array<MeshSphere>} [spheres]
+   * @param {number} [cellSize]
+   */
+  constructor(capsules, spheres, cellSize) {}
+
+  /**
+   * @readonly
+   * @type {boolean}
+   */
+  empty;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  capsuleCount;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  sphereCount;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  cellSize;
+
+  /**
+   * @param {Array<number>} point
+   * @param {number} [excludeTag]
+   * @param {number} [extraClearance]
+   * @returns {boolean}
+   */
+  contains(point, excludeTag, extraClearance) {}
+
+  /**
+   * @param {Array<number>} point
+   * @param {number} clearance
+   * @param {number} [excludeTag]
+   * @returns {boolean}
+   */
+  tooClose(point, clearance, excludeTag) {}
+
+  /**
+   *  Signed distance to the nearest obstacle surface (negative inside).
+   *
+   * @param {Array<number>} point
+   * @param {number} [excludeTag]
+   * @returns {number}
+   */
+  distance(point, excludeTag) {}
+
+  /**
+   * @param {Array<number>} point
+   * @param {number} [excludeTag]
+   * @returns {MeshCapsuleFieldNearest|null}
+   */
+  nearest(point, excludeTag) {}
+
+  /**
+   * @param {Array<number>} center
+   * @param {number} radius
+   * @param {number} [excludeTag]
+   * @returns {boolean}
+   */
+  intersectsSphere(center, radius, excludeTag) {}
 
 }
 

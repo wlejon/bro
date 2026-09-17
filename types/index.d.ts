@@ -623,12 +623,19 @@ interface AmbientConfig {
   intensity?: number;
 }
 
+/**
+ * Global shadow atlas quality (scene.setShadowQuality). Per-light shadow
+ * settings (cascades, bias, normalBias, maxDistance) live on the LightNode.
+ */
 interface ShadowQualityConfig {
-  resolution?: number;
-  cascades?: number;
-  maxDistance?: number;
-  bias?: number;
-  normalBias?: number;
+  /**
+   *  Side length in texels of the square shadow depth atlas (default 4096).
+   */
+  atlasSize?: number;
+  /**
+   *  PCF filter grid side: 1 (single sample), 3 or 5 (default 3).
+   */
+  pcfTaps?: number;
 }
 
 interface ShadowCacheConfig {
@@ -991,7 +998,7 @@ interface MenuItemUpdate {
  * =============================================================================
  *
  * The bromesh C++ library is exposed via these classes and namespaces:
- * Mesh, MeshBVH, ProgressiveMesh, PolyMesh, LSystem.
+ * Mesh, MeshBVH, ProgressiveMesh, PolyMesh, CapsuleField, LSystem.
  */
 interface MeshOptions {
   positions?: Float32Array;
@@ -1057,6 +1064,112 @@ interface MeshTreeOptions {
   sides?: number;
   leafRadius?: number;
   pipeExp?: number;
+  seed?: number;
+  /**
+   *  Space-colonization tuning for the skeleton pass.
+   */
+  colonize?: MeshSpaceColonizationOptions;
+}
+
+/**
+ *  Result of Mesh.tree(): the thickened skeleton plus its swept branch mesh.
+ */
+interface MeshTreeResult {
+  segments?: MeshBranchSegment[];
+  branches?: Mesh;
+}
+
+interface MeshSweepOptions {
+  closeProfile?: boolean;
+  capStart?: boolean;
+  capEnd?: boolean;
+  miterJoints?: boolean;
+  /**
+   *  Per-ring profile scale: a number, or one entry per path point.
+   */
+  profileScale?: any;
+  /**
+   *  Per-ring twist in radians: a number, or one entry per path point.
+   */
+  twist?: any;
+}
+
+interface MeshTubeOptions {
+  capStart?: boolean;
+  capEnd?: boolean;
+  miterJoints?: boolean;
+}
+
+interface MeshBladeStripOptions {
+  width?: number;
+  thickness?: number;
+  capStart?: boolean;
+  capEnd?: boolean;
+  miterJoints?: boolean;
+  profileScale?: any;
+  twist?: any;
+}
+
+interface MeshBladePathOptions {
+  base?: number[];
+  tipDir?: number[];
+  length?: number;
+  bend?: number;
+  lift?: number;
+  segments?: number;
+}
+
+/**
+ *  Capsule obstacle for CapsuleField: the segment a→b swept by `radius`.
+ */
+interface MeshCapsule {
+  a?: number[];
+  b?: number[];
+  radius?: number;
+  /**
+   *  Optional identity used by the `excludeTag` query parameters.
+   */
+  tag?: number;
+}
+
+/**
+ *  Sphere obstacle / keep-out volume.
+ */
+interface MeshSphere {
+  center?: number[];
+  radius?: number;
+  tag?: number;
+}
+
+interface MeshCapsuleFieldNearest {
+  point?: number[];
+  normal?: number[];
+  distance?: number;
+  tag?: number;
+}
+
+interface MeshAnchorPackOptions {
+  minSpacing?: number;
+  minObstacleDistance?: number;
+  maxCount?: number;
+  seed?: number;
+  /**
+   *  CapsuleField the anchors must clear by `minObstacleDistance`.
+   */
+  avoid?: any;
+  keepOut?: MeshSphere[];
+}
+
+interface MeshTurtleOptions {
+  stepLength?: number;
+  /**
+   *  Turn angle in radians.
+   */
+  angle?: number;
+  radius?: number;
+  position?: number[];
+  heading?: number[];
+  up?: number[];
 }
 
 interface MeshLeafCardOptions {
@@ -1115,13 +1228,20 @@ interface MeshSpaceColonizationOptions {
   obstacleSteer?: number;
 }
 
+/**
+ *  One segment of a branch skeleton (spaceColonize / lsystemToBranches / tree).
+ */
 interface MeshBranchSegment {
-  p0?: number[];
-  p1?: number[];
-  r0?: number;
-  r1?: number;
-  dir?: number[];
+  /**
+   *  Index of the parent segment, -1 at a root.
+   */
   parent?: number;
+  from?: number[];
+  to?: number[];
+  /**
+   *  Radius at `from`; 0 until thickenBranches assigns the pipe model.
+   */
+  radius?: number;
   depth?: number;
 }
 
@@ -1977,13 +2097,77 @@ interface SceneNodeOptions {
   visible?: boolean;
 }
 
+/**
+ * Camera view for setCamera() (the imperative view) and createCamera() (a
+ * camera node). Three shapes:
+ *
+ *   perspective (default): { fov=60, near=0.1, far=1000, aspect, eye, target, up }
+ *   quaternion:            { fov, near, far, aspect, eye, quaternion: [x,y,z,w] }
+ *     camera local -Z is forward; `quaternion` overrides target/up/mode
+ *   orthographic:          { mode: "orthographic", size=10, near, far, aspect, eye, target, up }
+ *
+ * `position` is accepted as an alias of `eye` and `lookAt` of `target`.
+ */
 interface SceneCameraOptions {
+  /**
+   *  Vertical field of view in degrees (perspective only, default 60).
+   */
   fov?: number;
+  /**
+   *  Near clipping plane (default 0.1).
+   */
   near?: number;
+  /**
+   *  Far clipping plane (default 1000).
+   */
   far?: number;
+  /**
+   *  Camera position [x,y,z] (default [0,5,-10]). `position` is an alias.
+   */
   eye?: number[];
+  /**
+   *  Look-at point [x,y,z] (default [0,0,0]). `lookAt` is an alias.
+   */
   target?: number[];
+  /**
+   *  Up vector [x,y,z] (default [0,1,0]).
+   */
   up?: number[];
+  /**
+   * width/height. Omit it (or pass <= 0) and the projection is built from
+   * the current canvas size AND flagged to auto-follow future canvas
+   * resizes, which is normally what you want; an explicit aspect pins the
+   * projection. With no canvas size yet the omitted case falls back to 4/3.
+   */
+  aspect?: number;
+  /**
+   * [x,y,z,w] camera orientation, local -Z forward. Set, it overrides
+   * target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
+   */
+  quaternion?: number[];
+  /**
+   *  "perspective" (default) or "orthographic" / "ortho".
+   */
+  mode?: string;
+  /**
+   *  Orthographic view height in world units (default 10).
+   */
+  size?: number;
+}
+
+interface WindConfig {
+  /**
+   *  Sway direction [x,y,z] (default [1,0,0]).
+   */
+  direction?: number[];
+  /**
+   *  Displacement amplitude in world units (default 0: no sway).
+   */
+  strength?: number;
+  /**
+   *  Oscillation frequency in rad/s (default 1.5).
+   */
+  frequency?: number;
 }
 
 interface SceneRaycastResult {
@@ -5092,7 +5276,13 @@ declare class Mesh {
   static octahedron(radius?: number): Mesh;
   static tetrahedron(radius?: number): Mesh;
   static disk(radius?: number, segments?: number): Mesh;
-  static tube(points: number[], radius?: number, segments?: number): Mesh;
+  /**
+   * Circular-cross-section sweep along `path` (Float32Array(3N) or
+   * [[x,y,z], ...], at least 2 points). `radius` is a constant number or a
+   * per-point list the same length as `path`; `sides` is the ring
+   * resolution (>= 3, default 8).
+   */
+  static tube(path: number[][], radius?: any, sides?: number, opts?: MeshTubeOptions): Mesh;
   static fromGLTF(buffer: ArrayBuffer): Mesh;
   static fromOBJ(text: string): Mesh;
   static fromPLY(buffer: ArrayBuffer): Mesh;
@@ -5103,22 +5293,46 @@ declare class Mesh {
   static marchingCubes(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
   static surfaceNets(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
   static dualContouring(values: number[], dimX: number, dimY: number, dimZ: number, isoLevel: number): Mesh;
-  static sweep(path: number[], profile: number[]): Mesh;
+  /**
+   * Extrude a closed 2D `profile` (Float32Array(2N) or [[x,y], ...]) along a
+   * 3D `path` (Float32Array(3N) or [[x,y,z], ...]).
+   */
+  static sweep(profile: number[][], path: number[][], opts?: MeshSweepOptions): Mesh;
   static bezierSweep(controlPoints: number[][], profile: number[][], opts?: MeshBezierSweepOptions): Mesh;
   static leafCard(shape: any, opts?: MeshLeafCardOptions): Mesh;
   static flower(opts?: MeshFlowerOptions): Mesh;
+  /**
+   *  Sweep a 4-vertex diamond profile along `path`: grass / fern / succulent blades.
+   */
+  static bladeStrip(path: number[][], opts?: MeshBladeStripOptions): Mesh;
+  /**
+   *  Quadratic-Bézier blade spine as [[x,y,z], ...], consumable by bladeStrip / sweep.
+   */
+  static bladePath(opts?: MeshBladePathOptions): number[][];
   static blob(opts?: MeshBlobOptions): Mesh;
   static spaceColonize(attractors: number[][], seedPoints: number[][], initialDirection: number[], opts?: MeshSpaceColonizationOptions): MeshBranchSegment[];
   static thickenBranches(segments: MeshBranchSegment[], leafRadius?: number, pipeExp?: number): MeshBranchSegment[];
   static meshBranches(segments: MeshBranchSegment[], sides?: number): Mesh;
   static placeLeavesOnBranches(segments: MeshBranchSegment[], opts?: MeshLeafPlacementOptions): MeshPlacedLeaves;
   static scatterLeaves(segments: MeshBranchSegment[], leaf: Mesh, opts?: MeshLeafPlacementOptions): Mesh;
-  static tree(opts?: MeshTreeOptions): object;
+  /**
+   *  spaceColonize → thickenBranches → meshBranches in one call.
+   */
+  static tree(opts?: MeshTreeOptions): MeshTreeResult;
   static parseLSystem(text: string): MeshLSystemModule[];
-  static packAnchors(candidates: number[][], opts?: object): Int32Array;
-  static lsystemToBranches(modules: MeshLSystemModule[], opts?: object): MeshBranchSegment[];
-  static capsuleField(capsules: object[], spheres?: object[], cellSize?: number): object;
-  static capsuleFieldFromSegments(segments: MeshBranchSegment[], radiusScale?: number, extraSpheres?: object[]): object;
+  /**
+   *  Greedy spaced-anchor picker; returns the accepted candidate indices in acceptance order.
+   */
+  static packAnchors(candidates: number[][], opts?: MeshAnchorPackOptions): Int32Array;
+  /**
+   *  Turtle-interpret a module stream (or an L-system string) into a branch skeleton.
+   */
+  static lsystemToBranches(modules: MeshLSystemModule[], opts?: MeshTurtleOptions): MeshBranchSegment[];
+  static capsuleField(capsules?: MeshCapsule[], spheres?: MeshSphere[], cellSize?: number): CapsuleField;
+  /**
+   *  CapsuleField whose capsules carry the segment index as `tag`, so placement can exclude a leaf's own branch.
+   */
+  static capsuleFieldFromSegments(segments: MeshBranchSegment[], radiusScale?: number, extraSpheres?: MeshSphere[]): CapsuleField;
   static decodeDraco(bytes: ArrayBufferView): MeshDracoDecoded;
   static encodeDraco(meshData: object, opts?: MeshDracoEncodeOptions): ArrayBuffer;
   positions: Float32Array;
@@ -5202,6 +5416,28 @@ declare class PolyMesh {
   mergeFacesByGroup(): void;
   compact(): void;
   findGroupBoundary(groupId: number): number[][];
+}
+
+/**
+ * Capsule + sphere occupancy field: the shared obstacle substrate for
+ * spaceColonize, placeLeavesOnBranches, scatterLeaves and packAnchors.
+ * Queries take a point as [x,y,z] or {x,y,z}; `excludeTag` skips obstacles
+ * carrying that tag (a leaf's own branch).
+ */
+declare class CapsuleField {
+  constructor(capsules?: MeshCapsule[], spheres?: MeshSphere[], cellSize?: number);
+  readonly empty: boolean;
+  readonly capsuleCount: number;
+  readonly sphereCount: number;
+  readonly cellSize: number;
+  contains(point: number[], excludeTag?: number, extraClearance?: number): boolean;
+  tooClose(point: number[], clearance: number, excludeTag?: number): boolean;
+  /**
+   *  Signed distance to the nearest obstacle surface (negative inside).
+   */
+  distance(point: number[], excludeTag?: number): number;
+  nearest(point: number[], excludeTag?: number): MeshCapsuleFieldNearest | null;
+  intersectsSphere(center: number[], radius: number, excludeTag?: number): boolean;
 }
 
 declare class LSystem {
@@ -5789,12 +6025,33 @@ declare class SceneGraph {
   findById(id: number): SceneNode | null;
   findByName(name: string): SceneNode | null;
   destroyNode(node: SceneNode): void;
+  /**
+   * Install the imperative view (see SceneCameraOptions). The LAST camera
+   * call wins: setCamera deactivates the active camera node, and
+   * setActiveCamera overrides an imperative view. `activeCamera` is null
+   * while the imperative view is in effect.
+   */
   setCamera(opts?: SceneCameraOptions): void;
+  /**
+   * Create a camera NODE and add it to the root. The node's WORLD transform
+   * is the view (local -Z forward, +Y up); only projection parameters live
+   * on the node. `name` and `active` (activate it now) are also accepted.
+   */
   createCamera(opts?: SceneCameraOptions): SceneNode;
   setActiveCamera(camera: SceneNode): void;
   setToneMap(opts?: ToneMapConfig): void;
   setAmbient(opts?: AmbientConfig): void;
-  setWind(dir: number[], speed: number): void;
+  /**
+   * Global wind sway for meshes created with `wind` set:
+   * pos += direction * sin(time*frequency + dot(pos.xz, k)) * strength * bend.
+   * The engine advances the wind clock from the per-frame virtual delta so
+   * offline captures stay deterministic.
+   */
+  setWind(opts?: WindConfig): void;
+  /**
+   * Shadow atlas size and filter. `setShadowQuality(atlasSize, pcfTaps)`
+   * positional is accepted too.
+   */
   setShadowQuality(opts?: ShadowQualityConfig): void;
   setShadowCache(opts?: ShadowCacheConfig): void;
   setFog(opts?: FogConfig): void;
