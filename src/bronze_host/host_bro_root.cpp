@@ -77,6 +77,7 @@ const char* strResult(std::string s) {
 
 bool registerBroNatives(std::string* error) {
     bool ok = registerTimeNatives(error) &&
+              registerServerNatives(error) &&
               registerPathsNatives(error) &&
               registerWindowNatives(error) &&
               registerSettingsNatives(error) &&
@@ -168,7 +169,7 @@ Value makeUnavailableNamespace(const std::string& name, const std::string& flag)
 void installBroRoots(engine::Engine& engine) {
     // Heap-allocated and never freed, like every root this layer keeps for
     // the life of the process (host_internal.h, HostClass).
-    auto* bro = new ev::Persistent(makeRoot({"time", "window", "settings", "mesh", "net", "rigging", "gizmo",
+    auto* bro = new ev::Persistent(makeRoot({"time", "server", "window", "settings", "mesh", "net", "rigging", "gizmo",
                                              "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
                                              "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
@@ -176,7 +177,7 @@ void installBroRoots(engine::Engine& engine) {
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
-        makeRoot({"time", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
+        makeRoot({"time", "server", "window", "settings", "paths", "splash", "viewport", "perf", "bronze",
                    "menu", "settingsUI", "inspector", "mesh", "net", "rigging", "physics",
                    "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm",
                    "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
@@ -312,31 +313,96 @@ void installBroRoots(engine::Engine& engine) {
 }
 
 // The worker realm's roots, the same shape as the main realm's cut down to
-// what a worker owns: `bro` with a `net` namespace, `__bro_native` with a
-// `net` sub-object, the net natives registered on THIS thread (bronze's
-// registry is per thread, and js/net.js binds its import table against the
-// thread that enters it), then js/net_sync.js and js/net.js in the main
-// realm's order. bro_core.js is not entered: it is compiled against every
-// native and would refuse to bind on a thread that registered only net.
-// Without BRO_WITH_NET the worker sees the same `available: false` stub
-// the main realm does.
+// what a worker owns: `bro` and `__bro_native` with the namespaces below,
+// the natives a worker carries registered on THIS thread (bronze's registry
+// is per thread, and a wrapper module binds its import table against the
+// thread that enters it), the sibling libraries' compute APIs over them
+// (installWorkerSiblingApis), then the wrapper modules — js/net_sync.js,
+// js/net.js, js/motion.js, js/server.js — in the main realm's order.
+// bro_core.js is not entered: it is compiled against every native and would
+// refuse to bind on a thread that registered only these. A feature this
+// build compiled out gets the same `available: false` stub the main realm
+// shows. The engine-bound namespaces (time, window, settings, the scene,
+// audio) are not here at all.
 void installWorkerBroRoot() {
-    auto* bro = new ev::Persistent(makeRoot({"net"}));
-    auto* native = new ev::Persistent(makeRoot({"net"}));
+    auto* bro = new ev::Persistent(makeRoot({"net", "server", "motion"}));
+    auto* native = new ev::Persistent(makeRoot({"net", "server", "motion"}));
     publish("bro", *bro);
     publish("__bro_native", *native);
 
-#if BRO_WITH_NET
     std::string err;
-    if (!registerNetNatives(&err)) {
+    bool ok = registerServerNatives(&err) && registerMotionNatives(&err);
+#if BRO_WITH_NET
+    ok = ok && registerNetNatives(&err);
+#endif
+    if (!ok) {
         LOG_ERROR("bronze_host: worker native registration failed: %s", err.c_str());
         return;
     }
+
+    installWorkerSiblingApis();
+    {
+        ev::Persistent math(makeBroMathValue());
+        ev::setProperty(bro->get(), "math", math.get());
+    }
+    {
+        ev::Persistent gpu(makeBroGpuValue());
+        ev::setProperty(bro->get(), "gpu", gpu.get());
+    }
+    {
+        ev::Persistent media(makeBroMediaValue());
+        ev::setProperty(bro->get(), "media", media.get());
+    }
+
+    auto setUnavailable = [&](const char* name, const char* flag) {
+        ev::Persistent stub(makeUnavailableNamespace(name, flag));
+        ev::setProperty(bro->get(), name, stub.get());
+    };
+#if BRO_WITH_NET
     installNetSyncModule();
     installNetModule();
 #else
-    ev::Persistent stub(makeUnavailableNamespace("net", "BRO_WITH_NET"));
-    ev::setProperty(bro->get(), "net", stub.get());
+    setUnavailable("net", "BRO_WITH_NET");
+#endif
+#if BRO_WITH_DIFFUSION && BRO_WITH_LM
+    installMotionModule();
+#else
+    setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
+#endif
+    installServerModule();
+#if !BRO_WITH_VIDEO
+    setUnavailable("media", "BRO_WITH_VIDEO");
+#endif
+#if !BRO_WITH_FLORA
+    setUnavailable("flora", "BRO_WITH_FLORA");
+#endif
+#if !BRO_WITH_GAMEAI
+    setUnavailable("ai", "BRO_WITH_GAMEAI");
+#endif
+#if !BRO_WITH_3D
+    setUnavailable("mesh", "BRO_WITH_3D");
+    setUnavailable("rigging", "BRO_WITH_3D");
+#endif
+#if !BRO_WITH_LM
+    setUnavailable("lm", "BRO_WITH_LM");
+#endif
+#if !BRO_WITH_SOUNDML
+    setUnavailable("stt", "BRO_WITH_SOUNDML");
+    setUnavailable("tts", "BRO_WITH_SOUNDML");
+    setUnavailable("diar", "BRO_WITH_SOUNDML");
+    setUnavailable("rave", "BRO_WITH_SOUNDML");
+#endif
+#if !BRO_WITH_VISION
+    setUnavailable("vision", "BRO_WITH_VISION");
+#endif
+#if !BRO_WITH_DIFFUSION
+    setUnavailable("diffusion", "BRO_WITH_DIFFUSION");
+#endif
+#if !BRO_WITH_TENSOR
+    setUnavailable("tensor", "BRO_WITH_TENSOR");
+#endif
+#if !BRO_WITH_TRIPOSPLAT
+    setUnavailable("triposplat", "BRO_WITH_TRIPOSPLAT");
 #endif
 }
 

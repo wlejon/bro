@@ -128,6 +128,65 @@ class FloraWorld {
    */
   emitBloomAnchors() {}
 
+  /**
+   * One merged Mesh of `leafMesh` stamped at the world's foliage samples
+   * (bromesh scatterLeaves over the branch segments). `opts` are the leaf
+   * placement options (density, scale, jitter, ...).
+   *
+   * @param {Object} leafMesh
+   * @param {Object} [opts]
+   * @returns {Object|null}
+   */
+  emitFoliageMesh(leafMesh, opts) {}
+
+  /**
+   * Foliage mesh for one plant, the per-plant form of emitFoliageMesh.
+   *
+   * @param {number} plantIdx
+   * @param {Object} leafMesh
+   * @param {Object} [opts]
+   * @returns {Object|null}
+   */
+  emitPlantFoliageMesh(plantIdx, leafMesh, opts) {}
+
+  /**
+   * Blooms as geometry: `[petals, centers]`, one merged Mesh each. A petal
+   * stamp (`petalMesh`, its +Y turned onto the anchor normal, scaled by the
+   * anchor's age) at every flowering anchor, thinned to `opts.bloomCap` of
+   * them (default 500) with anchors dimmer than `opts.bloomLightMin`
+   * (default 0.18) skipped; a `centerMesh` stamp lifted along the normal
+   * when one is given, else an empty centers Mesh.
+   *
+   * @param {Object} petalMesh
+   * @param {Object|null} [centerMesh]
+   * @param {Object} [opts]
+   * @returns {Array<Object>}
+   */
+  emitBloomMesh(petalMesh, centerMesh, opts) {}
+
+  /**
+   * The world's branch segments packed for instanced tube rendering:
+   * `{segments: Float32Array, segCount, boundsMin, boundsMax}`, eight
+   * floats per segment (from xyz + from radius, to xyz + to radius);
+   * segments thinner than `opts.minRadius` are left out.
+   *
+   * @param {Object} [opts]
+   * @returns {Object}
+   */
+  emitBranchTubes(opts) {}
+
+  /**
+   * The world's branch segments packed for instanced foliage scatter:
+   * `{segments: Float32Array, segCount, instSeg: Uint32Array,
+   * instanceCount, boundsMin, boundsMax}` — the segment pack plus one
+   * segment index per foliage instance, placed by the leaf placement
+   * `opts`.
+   *
+   * @param {Object} [opts]
+   * @returns {Object}
+   */
+  emitScatterSegments(opts) {}
+
 }
 
 // ── Namespaces ───────────────────────────────────────────────────────────────

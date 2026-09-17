@@ -39,6 +39,7 @@ extern "C" void bro_gizmo_main();
 extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
 extern "C" void bro_motion_main();
+extern "C" void bro_server_main();
 extern "C" void bro_impostor_main();
 
 namespace bro::bronze_host {
@@ -162,6 +163,13 @@ void installSceneModule() {
 
 void installMotionModule() {
     bronze::embed::runEntry(bro_motion_main);
+}
+
+// js/server.js mounts bro.server over the server natives; entered by the
+// main realm and by every Worker realm (host_bro_root.cpp), each over its
+// own `bro` root read off globalThis.
+void installServerModule() {
+    bronze::embed::runEntry(bro_server_main);
 }
 
 // impostor.js reads `Mesh` (bromesh's, installed with the roots) only when

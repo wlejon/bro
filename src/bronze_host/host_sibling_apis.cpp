@@ -261,7 +261,9 @@ void installSiblingApis(engine::Engine& engine) {
 #endif
 #if BRO_WITH_3D
     // bro.mesh / bro.rigging and their classes (Mesh, MeshBVH, Skeleton,
-    // ...), which bromesh registers as host globals itself.
+    // ...), which bromesh registers as host globals itself. Its file
+    // loaders and savers take paths the way fs.* does.
+    bromesh::api::setPathResolver(&brokit::api::resolveAssetPath);
     bromesh::api::installMesh();
     bromesh::api::installRigging();
 #endif
@@ -336,6 +338,68 @@ void installSiblingApis(engine::Engine& engine) {
         installBrokitImageKernels();
         broimage::api::installImage();
     }
+}
+
+// The Worker realm's share of the same list (host_natives.h). Every
+// installer below is one whose state is per thread: a sibling's HostClass
+// keeps its constructor and prototype per thread (each sibling's
+// host_class.h), its install guards are thread_local, and bronze's native
+// registry is per thread, so each call here builds the calling worker's own
+// classes over the calling worker's own `bro` root and hands out nothing
+// the main realm made. What is NOT here is everything that reaches the
+// engine: broaudio (AudioContext, bro.mic), the listen tenants of
+// brosoundml (wake / kws / sense / gesture / listen, which tap the engine's
+// audio and inference scheduler) and the nav-mesh hooks (set once by the
+// main realm; the process-global hook slots are already filled when a
+// worker's bakeNavMesh reads them).
+void installWorkerSiblingApis() {
+#if BRO_WITH_GAMEAI
+    brogameagent::api::installGameAi();
+#endif
+#if BRO_WITH_3D
+    bromesh::api::setPathResolver(&brokit::api::resolveAssetPath);
+    bromesh::api::installMesh();
+    bromesh::api::installRigging();
+#endif
+#if BRO_WITH_TENSOR
+    brotensor::api::installTensor();
+    adoptGlobalProperty("GpuTensor");
+#endif
+#if BRO_WITH_LM
+    brolm::api::installLM();
+    for (const char* name : {"AsyncHandle", "QwenTokenizer", "MistralTokenizer", "GemmaTokenizer",
+                             "Llama3Tokenizer", "LMModel", "Qwen35Model", "Qwen3VLModel", "NllbModel",
+                             "ClipModel", "T5Model"}) {
+        adoptGlobalProperty(name);
+    }
+#endif
+#if BRO_WITH_SOUNDML
+    // The path resolver and log hook are process-global and already set by
+    // the main realm's install; the audio engine and scheduler are not
+    // consulted by the compute classes.
+    brosoundml::api::installSoundMLCompute();
+#endif
+#if BRO_WITH_DIFFUSION
+    brodiffusion::api::installDiffusion();
+#endif
+#if BRO_WITH_VISION
+    brovisionml::api::installVision();
+#endif
+#if BRO_WITH_FLORA
+    broflora::api::installFlora();
+    adoptGlobalProperty("FloraWorld");
+#endif
+    installBrokitImageKernels();
+    broimage::api::installImage();
+}
+
+void tickWorkerSiblingApis() {
+#if BRO_WITH_SOUNDML
+    // This thread's async jobs only (a job's callbacks belong to the realm
+    // that launched it). brolm's jobs are ticked by the script itself
+    // (bro.lm.tick / wait), on the same per-thread list.
+    brosoundml::api::tickSoundMLAsync();
+#endif
 }
 
 }  // namespace bro::bronze_host

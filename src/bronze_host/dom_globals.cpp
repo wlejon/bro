@@ -843,6 +843,9 @@ void installWebHostGlobals(engine::Engine& engine) {
 #if BRO_WITH_DIFFUSION && BRO_WITH_LM
     installMotionModule();
 #endif
+    // bro.server in every mode: bro-server's loop, and in a windowed bro the
+    // members a script that also runs as a hosted server reads.
+    installServerModule();
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use.
     installObserversModule();

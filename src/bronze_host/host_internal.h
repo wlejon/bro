@@ -702,11 +702,13 @@ void installImageGpuModule();
 // the roots and natives are registered; lifts nothing.
 void installBroCoreModule();
 // The 3D family (js/physics.js, terrain, clipmap, tile_world, lighting,
-// gizmo, animation, scene, impostor) and js/net.js / js/motion.js: each
-// enters its module after installBroRoots and lifts the classes it defined.
-// The sibling libraries' own APIs (bro.mesh, bro.lm, bro.stt, ...) are NOT
-// here: installSiblingApis (host_natives.h) installs each exactly once.
+// gizmo, animation, scene, impostor) and js/net.js / js/motion.js /
+// js/server.js: each enters its module after installBroRoots and lifts the
+// classes it defined. The sibling libraries' own APIs (bro.mesh, bro.lm,
+// bro.stt, ...) are NOT here: installSiblingApis (host_natives.h) installs
+// each exactly once per realm.
 void installNetModule();
+void installServerModule();
 void installPhysicsModule();
 void installTerrainModule();
 void installClipmapModule();

@@ -12,6 +12,7 @@
 #include "eval/eval.h"
 #include <api/api.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -128,6 +129,28 @@ void WorkerInstance::threadFunc() {
 
     installImageBitmapGlobals();
     installNoiseGlobals();
+    // The bro.math classes BEFORE the roots, as in the main realm: the root
+    // aliases their constructors (host_math_funcs.cpp). Per thread, like
+    // ImageBitmap's.
+    installMathGlobals();
+
+    // bro.server on this thread names THIS loop (native_server.cpp): stop()
+    // ends it the way close() does, and the tick rate is the cadence the
+    // idle wait below runs at. Set before the roots so the natives are wired
+    // when the script reads them.
+    const auto startedAt = std::chrono::steady_clock::now();
+    std::atomic<double> tickRateHz{0.0};  // 0 = the default idle cadence
+    WorkerServerControl serverControl;
+    serverControl.tickRate = [&tickRateHz] {
+        const double hz = tickRateHz.load(std::memory_order_relaxed);
+        return hz > 0.0 ? hz : 60.0;
+    };
+    serverControl.setTickRate = [&tickRateHz](double hz) { tickRateHz.store(hz, std::memory_order_relaxed); };
+    serverControl.uptimeSec = [startedAt] {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt).count();
+    };
+    serverControl.stop = [this] { terminated_.store(true, std::memory_order_release); };
+    setWorkerServerControl(&serverControl);
 
     ev::Persistent workerOnmessage;
 
@@ -138,16 +161,27 @@ void WorkerInstance::threadFunc() {
     auto jsPostMessage = [this](Value, std::span<const Value> args) -> Value {
         if (args.empty()) return ev::undefined();
         Value data = args[0];
-        std::span<const Value> transfers;
+        // The transfer list works in this direction too: ArrayBuffers,
+        // ImageBitmaps and Meshes listed here move to the main realm.
+        std::vector<Value> transfers;
+        if (args.size() > 1 && ev::isObject(args[1])) {
+            Value lenV = ev::getProperty(args[1], "length");
+            if (ev::isNumber(lenV)) {
+                uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+                for (uint32_t i = 0; i < len; ++i) {
+                    transfers.push_back(ev::getElement(args[1], i));
+                }
+            }
+        }
         auto msg = std::make_unique<Message>();
-        if (serializeMessage(data, transfers, *msg)) {
+        if (serializeMessage(data, std::span<const Value>(transfers.data(), transfers.size()), *msg)) {
             postToMain(std::move(msg));
         }
         return ev::undefined();
     };
 
     ev::setGlobalValue("onmessage", ev::undefined());
-    ev::setGlobalFunction("postMessage", 1, jsPostMessage);
+    ev::setGlobalFunction("postMessage", 2, jsPostMessage);
     ev::setGlobalFunction("close", 0, [this](Value, std::span<const Value>) -> Value {
         terminated_.store(true, std::memory_order_release);
         return ev::undefined();
@@ -219,8 +253,9 @@ void WorkerInstance::threadFunc() {
             brokit::api::addFsBasePath(eng->appDir());
         }
     }
-    // `bro` with bro.net / bro.net.sync over this thread's own subscriber
-    // (host_bro_root.cpp); the loop below polls it.
+    // `bro`: bro.net / bro.net.sync over this thread's own subscriber, the
+    // sibling compute APIs over this thread's own classes, bro.server over
+    // the control above (host_bro_root.cpp); the loop below polls them.
     installWorkerBroRoot();
 
     std::filesystem::path resolvedPath = scriptPath_;
@@ -251,9 +286,10 @@ void WorkerInstance::threadFunc() {
         opts.entryResolvesAs = resolvedPath;
         // This thread's own registry: bronze's is per-thread, so this is
         // exactly the set the installs above put in for this worker —
-        // self, postMessage, close, onmessage, brokit, the image and noise
-        // globals, `bro` — and nothing the main realm has that a worker
-        // does not.
+        // self, postMessage, close, onmessage, brokit, the image, noise and
+        // math globals, `bro`, the sibling classes (Mesh, GpuTensor,
+        // FloraWorld, LMModel, ...) — and nothing the main realm has that a
+        // worker does not.
         opts.hostGlobals = registeredHostGlobals();
         if (mounts_) {
             for (const auto& [prefix, target] : mounts_->mounts()) {
@@ -354,6 +390,9 @@ void WorkerInstance::threadFunc() {
         // This thread's NetSubscriber: its connect/disconnect/message
         // callbacks fire here, into the dispatcher js/net.js registered.
         pollNet();
+        // This thread's sibling async jobs (a model load or inference the
+        // script started), delivered to the callbacks it registered.
+        tickWorkerSiblingApis();
         if (ev::microtasksPending()) {
             ev::drainMicrotasks();
         }
@@ -367,17 +406,22 @@ void WorkerInstance::threadFunc() {
         {
             std::unique_lock<std::mutex> lock(toWorkerMutex_);
             if (!toWorkerQueue_.empty()) continue;
-            if (hasPendingWork) {
-                toWorkerCv_.wait_for(lock, std::chrono::milliseconds(5));
-            } else {
-                toWorkerCv_.wait_for(lock, std::chrono::milliseconds(10));
+            // A script that set bro.server.tickrate asked for that cadence;
+            // otherwise the idle wait is short enough for a reply to feel
+            // immediate and long enough not to spin.
+            const double hz = tickRateHz.load(std::memory_order_relaxed);
+            auto wait = std::chrono::milliseconds(hasPendingWork ? 5 : 10);
+            if (hz > 0.0) {
+                wait = std::chrono::milliseconds(static_cast<long long>(std::max(1.0, 1000.0 / hz)));
             }
+            toWorkerCv_.wait_for(lock, wait);
         }
     }
 
     // The subscriber goes back to the service (its connections close) and
     // the dispatcher Persistent is freed while this thread's slots exist.
     releaseNetState();
+    setWorkerServerControl(nullptr);
     alive_.store(false, std::memory_order_release);
 }
 

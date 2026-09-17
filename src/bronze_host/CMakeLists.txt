@@ -177,6 +177,8 @@ set(BRO_BRONZE_HOST_SOURCES
     natives/dunder_bro/native_dunder_bro_register.cpp
     native_motion.cpp
     natives/motion/native_motion_register.cpp
+    native_server.cpp
+    natives/server/native_server_register.cpp
     host_scene_agent.cpp
     host_math_classes.cpp
     host_math_funcs.cpp
@@ -529,6 +531,7 @@ else()
     bro_compile_js(animation  bro_animation_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(server     bro_server_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(impostor   bro_impostor_main)
 
     add_library(bro_bronze_js STATIC ${BRO_COMPILED_JS_OBJECTS})

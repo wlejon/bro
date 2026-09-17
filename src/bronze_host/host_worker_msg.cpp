@@ -2,7 +2,11 @@
 #include "bronze_host/gl_internal.h"
 #include "abi/bronze_abi.h"
 #include "runtime/heap.h"
+#if BRO_WITH_3D
+#include <bromesh/api.h>
+#endif
 #include <cstring>
+#include <memory>
 
 namespace bro::bronze_host {
 
@@ -36,6 +40,7 @@ enum Tag : uint8_t {
     kSet             = 0x12,
     kError           = 0x13,
     kDataView        = 0x14,
+    kTransferMesh    = 0x15,  // index into transferredMeshes (zero-copy Mesh)
 };
 
 class Writer {
@@ -103,9 +108,9 @@ static Value getGlobal(std::string_view name) {
 }
 
 static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
-                       std::vector<std::vector<uint8_t>>& transferBufs,
-                       std::vector<SerializedImage>& transferImgs,
-                       int depth) {
+                       Message& out, int depth) {
+    auto& transferBufs = out.transferredBuffers;
+    auto& transferImgs = out.transferredImages;
     if (depth > 64) {
         ev::throwTypeError("postMessage: object too deeply nested");
         return false;
@@ -245,11 +250,32 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             ev::throwTypeError("postMessage: DOM Nodes are not cloneable");
             return false;
         }
-        // A native handle (Mesh, SceneNode, GpuTensor, ...) is a pointer into
-        // this realm's engine state. Its own properties are all on the
-        // prototype, so the generic path below would clone it as `{}` and the
-        // receiver would get an empty object where it expected the resource.
-        // (ImageBitmap is a handle too, but it was answered above.)
+#if BRO_WITH_3D
+        // A Mesh is TRANSFERABLE and never cloned: its MeshData moves across
+        // by pointer (Message::transferredMeshes) and the sender's handle is
+        // left empty, the way a transferred ArrayBuffer is detached. It must
+        // be in the transfer list — cloning a mesh silently would copy what
+        // is often megabytes of geometry, and a sendClone over the network
+        // (an empty transfer list) has no realm to receive a pointer.
+        if (bromesh::api::isMeshValue(val)) {
+            if (!isTransferred(val, transfers)) {
+                ev::throwTypeError("postMessage: Mesh must be listed in the transferList");
+                return false;
+            }
+            auto data = std::make_unique<bromesh::MeshData>();
+            bromesh::api::takeMeshData(val, *data);
+            uint32_t idx = static_cast<uint32_t>(out.transferredMeshes.size());
+            out.transferredMeshes.push_back(std::move(data));
+            w.u8(kTransferMesh);
+            w.u32(idx);
+            return true;
+        }
+#endif
+        // A native handle (SceneNode, GpuTensor, ...) is a pointer into this
+        // realm's engine state. Its own properties are all on the prototype,
+        // so the generic path below would clone it as `{}` and the receiver
+        // would get an empty object where it expected the resource.
+        // (ImageBitmap and Mesh are handles too, but were answered above.)
         if (ev::handleData(val)) {
             ev::throwTypeError("postMessage: native objects are not cloneable");
             return false;
@@ -268,12 +294,12 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
                 ev::Persistent entry(ev::getElement(flat.get(), i));
                 if (isMap) {
                     Value k = ev::getElement(entry.get(), 0);
-                    if (!writeValue(k, w, transfers, transferBufs, transferImgs, depth + 1)) return false;
+                    if (!writeValue(k, w, transfers, out, depth + 1)) return false;
                     Value v = ev::getElement(entry.get(), 1);
-                    if (!writeValue(v, w, transfers, transferBufs, transferImgs, depth + 1)) return false;
+                    if (!writeValue(v, w, transfers, out, depth + 1)) return false;
                 } else {
                     Value item = entry.get();
-                    if (!writeValue(item, w, transfers, transferBufs, transferImgs, depth + 1)) return false;
+                    if (!writeValue(item, w, transfers, out, depth + 1)) return false;
                 }
             }
             return true;
@@ -339,7 +365,7 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             w.u32(len);
             for (uint32_t i = 0; i < len; ++i) {
                 Value elem = ev::getElement(val, i);
-                if (!writeValue(elem, w, transfers, transferBufs, transferImgs, depth + 1)) return false;
+                if (!writeValue(elem, w, transfers, out, depth + 1)) return false;
             }
             return true;
         }
@@ -355,7 +381,7 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             Value propVal = ev::getElement(entry.get(), 1);
             w.u32(static_cast<uint32_t>(key.size()));
             w.bytes(reinterpret_cast<const uint8_t*>(key.data()), key.size());
-            if (!writeValue(propVal, w, transfers, transferBufs, transferImgs, depth + 1)) return false;
+            if (!writeValue(propVal, w, transfers, out, depth + 1)) return false;
         }
         return true;
     }
@@ -423,6 +449,22 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         if (idx >= msg.transferredImages.size()) return ev::throwTypeError("postMessage: invalid imagebitmap index");
         const auto& simg = msg.transferredImages[idx];
         return wrapHostImageBitmap(simg.pixels.data(), simg.width, simg.height);
+    }
+    case kTransferMesh: {
+        if (!r.ok(4)) return ev::throwTypeError("postMessage: truncated mesh transfer index");
+        uint32_t idx = r.u32();
+#if BRO_WITH_3D
+        if (idx >= msg.transferredMeshes.size() || !msg.transferredMeshes[idx]) {
+            return ev::throwTypeError("postMessage: invalid mesh transfer index");
+        }
+        // One-shot: the slot is emptied so a second deserialize of the same
+        // message cannot hand out the geometry twice.
+        std::unique_ptr<bromesh::MeshData> data = std::move(msg.transferredMeshes[idx]);
+        return bromesh::api::makeMeshValue(std::move(*data));
+#else
+        (void)idx;
+        return ev::throwTypeError("postMessage: Mesh transfer needs BRO_WITH_3D");
+#endif
     }
     case kTypedArray: {
         if (!r.ok(1 + 4 + 4 + 4)) return ev::throwTypeError("postMessage: truncated typed array header");
@@ -558,8 +600,11 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out)
     out.data.clear();
     out.transferredBuffers.clear();
     out.transferredImages.clear();
+#if BRO_WITH_3D
+    out.transferredMeshes.clear();
+#endif
     Writer w(out.data);
-    return writeValue(val, w, transfers, out.transferredBuffers, out.transferredImages, 0);
+    return writeValue(val, w, transfers, out, 0);
 }
 
 Value deserializeMessage(const Message& msg, size_t offset) {

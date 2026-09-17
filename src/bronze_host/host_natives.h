@@ -67,6 +67,7 @@
 // calls registerBroNatives — the same registrations bro makes at run time,
 // so the two cannot drift.
 
+#include <functional>
 #include <initializer_list>
 #include <string>
 
@@ -84,6 +85,19 @@ bool registerBroNatives(std::string* error);
 
 // The per-namespace halves of registerBroNatives, one per native_*.cpp.
 bool registerTimeNatives(std::string* error);
+// bro.server (native_server.cpp): the engine's server loop on the main
+// thread (bro-server's tick rate, uptime and stop), and on a Worker's thread
+// the worker's own loop through the control the worker set with
+// setWorkerServerControl before its script ran.
+bool registerServerNatives(std::string* error);
+struct WorkerServerControl {
+    std::function<double()> tickRate;
+    std::function<void(double)> setTickRate;
+    std::function<double()> uptimeSec;
+    std::function<void()> stop;
+};
+// Per thread; null (the default) means "this thread's realm is the engine's".
+void setWorkerServerControl(const WorkerServerControl* control);
 bool registerWindowNatives(std::string* error);
 bool registerSettingsNatives(std::string* error);
 bool registerPathsNatives(std::string* error);
@@ -140,19 +154,32 @@ inline void publishRiggingPrototypes(bronze::Value) {}
 void installBroRoots(engine::Engine& engine);
 
 // A Worker realm's `bro`: the root object with `bro.net` (and `bro.net.sync`)
-// over the net natives registered on the worker's thread, and nothing else —
-// the surface docs/net-sync-api.js promises a worker. No engine-bound
-// namespace (window, settings, time, the scene) and no sibling API, since
-// none of those is safe off the main thread. Called by WorkerInstance's
-// thread after brokit is installed and before the worker script runs.
+// over the net natives registered on the worker's thread, the compute
+// namespaces a worker is FOR (bro.mesh / bro.rigging and their classes,
+// bro.math, bro.image, bro.flora, bro.ai.game, bro.gpu / bro.tensor, bro.lm,
+// bro.stt / tts / diar / rave, bro.diffusion / triposplat, bro.vision,
+// bro.motion, bro.media) and a worker-scoped bro.server — docs/worker-api.js.
+// No engine-bound namespace (window, settings, time, the scene, audio),
+// since none of those is safe off the main thread. Called by
+// WorkerInstance's thread after brokit is installed and before the worker
+// script runs.
 void installWorkerBroRoot();
 
 // Every sibling library's JS API (broaudio, brogameagent, bromesh,
 // brotensor, brolm, brosoundml, brodiffusion, brovisionml, broflora,
-// broimage), each installed exactly once, onto the roots installBroRoots
-// has just published. The ONLY place in bro that calls a sibling's
-// install*(); none of them survives a second call (host_sibling_apis.cpp).
+// broimage), each installed exactly once PER REALM, onto the roots
+// installBroRoots has just published. host_sibling_apis.cpp is the ONLY
+// place in bro that calls a sibling's install*(); none of them survives a
+// second call on the same thread.
 void installSiblingApis(engine::Engine& engine);
+
+// The Worker realm's share of that list: the siblings whose state is per
+// thread (their HostClass constructors and install guards, bronze's native
+// registry), installed on the calling worker's thread over its own roots.
+// Called from installWorkerBroRoot; tickWorkerSiblingApis pumps the calling
+// thread's async jobs from the worker's loop.
+void installWorkerSiblingApis();
+void tickWorkerSiblingApis();
 
 // The engine hook bro.settings.onChange listens through (native_settings.cpp).
 void installSettingsObserver(engine::Engine& engine);

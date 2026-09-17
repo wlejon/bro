@@ -27,7 +27,10 @@ static HostSpatialHash3D* getSpatialHash(Value v) {
     return static_cast<HostSpatialHash3D*>(ev::handleData(v));
 }
 
-static HostClass g_spatialHashClass;
+// Per thread, like ImageBitmap's (host_imagebitmap.cpp): a Worker realm
+// installs its own bro.math classes, and a class's constructor is a
+// Persistent of the thread that installed it.
+static thread_local HostClass g_spatialHashClass;
 
 static Value spatialHashCtor(Value, std::span<const Value> a) {
     float cs = 1.0f;
@@ -162,7 +165,7 @@ static HostRng* getRng(Value v) {
     return static_cast<HostRng*>(ev::handleData(v));
 }
 
-static HostClass g_rngClass;
+static thread_local HostClass g_rngClass;
 
 static Value rngCtor(Value, std::span<const Value> a) {
     uint64_t seed = 0;
@@ -269,7 +272,7 @@ static HostSmoother* getSmoother(Value v) {
     return static_cast<HostSmoother*>(ev::handleData(v));
 }
 
-static HostClass g_smootherClass;
+static thread_local HostClass g_smootherClass;
 
 static Value smootherCtor(Value, std::span<const Value> a) {
     auto hs = std::make_unique<HostSmoother>();

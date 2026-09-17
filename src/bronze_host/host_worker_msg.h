@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#if BRO_WITH_3D
+#include <bromesh/mesh_data.h>
+#endif
+
 namespace bro::bronze_host {
 
 struct SerializedImage {
@@ -18,6 +22,14 @@ struct Message {
     std::vector<uint8_t> data;
     std::vector<std::vector<uint8_t>> transferredBuffers;
     std::vector<SerializedImage> transferredImages;
+#if BRO_WITH_3D
+    // A Mesh listed in the transfer list crosses by pointer: the sender's
+    // handle is left empty and the receiver's realm mints a Mesh of its own
+    // class over the data (bromesh::api::makeMeshValue). Consumed by
+    // deserializeMessage, which is why the slots are mutable behind a const
+    // message: a transfer is one-shot, like a detached ArrayBuffer.
+    mutable std::vector<std::unique_ptr<bromesh::MeshData>> transferredMeshes;
+#endif
 };
 
 bool serializeMessage(Value val, std::span<const Value> transfers, Message& out);
