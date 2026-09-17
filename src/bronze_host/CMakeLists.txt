@@ -256,15 +256,6 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/lighting
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/animation
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/gizmo
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/lm
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/triposplat
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/diffusion
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/vision
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/diar
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/stt
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/tts
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/flora
-    ${CMAKE_CURRENT_SOURCE_DIR}/natives/tensor
     ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/bromesh/third_party/tinygltf
 )
 
