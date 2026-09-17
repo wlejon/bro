@@ -165,6 +165,8 @@ Value makeBroGpuValue() {
 
 #else  // !BRO_WITH_TENSOR
 
+#include <string>
+
 namespace bro::bronze_host {
 
 Value makeBroGpuValue() {
@@ -181,8 +183,14 @@ Value makeBroGpuValue() {
     gpu.accessor("compiledBackends", [](Value, std::span<const Value>) {
         return hostArrayOf(1, [](size_t) { return ev::fromUtf8("cpu"); });
     }, nullptr);
-    gpu.def("deviceCount", 1, [](Value, std::span<const Value>) {
-        return ev::fromDouble(1);
+    // The one registered device is the CPU: 1 for "cpu" and for the default
+    // (no / non-string argument), 0 for any named GPU backend — the same
+    // answer the real binding gives on a box without one.
+    gpu.def("deviceCount", 1, [](Value, std::span<const Value> a) {
+        if (a.empty() || !ev::isString(a[0])) return ev::fromDouble(1);
+        const std::string spec = ev::toUtf8(a[0]);
+        const bool cpu = spec == "cpu" || spec.rfind("cpu:", 0) == 0;
+        return ev::fromDouble(cpu ? 1 : 0);
     });
     gpu.def("memoryInfo", 1, [](Value, std::span<const Value>) {
         return ev::null();
