@@ -127,6 +127,109 @@ bromath::Color particleColorFromJson(const nlohmann::json& v) {
     return {1.0f, 1.0f, 1.0f, 1.0f};
 }
 
+// The material half of the createMesh / createSkinnedMesh option surface
+// (see SceneGraph.createMesh in docs/scene-api.js). Transform keys (x/y/z,
+// scale, rx/ry/rz, name, visible) are applied by the JS wrapper's
+// applyNodeOpts through the node attributes.
+void applyMeshMaterialOpts(scene::MeshNode* node, Value opts) {
+    Value colorVal = ev::getProperty(opts, "color");
+    float cr = 1, cg = 1, cb = 1, ca = 1;
+    if (parseColorValue(colorVal, cr, cg, cb, ca)) {
+        node->setColor(cr, cg, cb, ca);
+    }
+
+    // PBR params: nested {material:{metallic, roughness}} and the flat
+    // shortcuts, the flat ones winning.
+    auto applyMat = [&](Value obj) {
+        Value metVal = ev::getProperty(obj, "metallic");
+        if (ev::isNumber(metVal)) node->setMetallic(static_cast<float>(ev::toDouble(metVal)));
+        Value roughVal = ev::getProperty(obj, "roughness");
+        if (ev::isNumber(roughVal)) node->setRoughness(static_cast<float>(ev::toDouble(roughVal)));
+    };
+    Value matVal = ev::getProperty(opts, "material");
+    if (ev::isObject(matVal)) applyMat(matVal);
+    applyMat(opts);
+
+    // Emissive intensity, then its tint: an explicit emissiveColor, else
+    // the base colour so `{color:'#ff0', emissive:2}` glows yellow.
+    Value emissVal = ev::getProperty(opts, "emissive");
+    const float emissive = ev::isNumber(emissVal) ? static_cast<float>(ev::toDouble(emissVal)) : 0.0f;
+    if (ev::isNumber(emissVal)) node->setEmissive(emissive);
+    Value emColVal = ev::getProperty(opts, "emissiveColor");
+    float er = 1, eg = 1, eb = 1, ea = 1;
+    if (parseColorValue(emColVal, er, eg, eb, ea)) {
+        node->setEmissiveColor(er, eg, eb);
+    } else if (emissive > 0.0f) {
+        const float* c = node->color();
+        node->setEmissiveColor(c[0], c[1], c[2]);
+    }
+
+    Value unlitVal = ev::getProperty(opts, "unlit");
+    if (!ev::isUndefined(unlitVal)) node->setUnlit(ev::toBool(unlitVal));
+
+    // twoSided (doubleSided is the glTF spelling), subsurface wrap,
+    // alpha test, vertex-colour tint.
+    Value tsVal = ev::getProperty(opts, "twoSided");
+    if (ev::isUndefined(tsVal)) tsVal = ev::getProperty(opts, "doubleSided");
+    if (!ev::isUndefined(tsVal)) node->setTwoSided(ev::toBool(tsVal));
+    Value ssVal = ev::getProperty(opts, "subsurface");
+    if (ev::isNumber(ssVal)) node->setSubsurface(static_cast<float>(ev::toDouble(ssVal)));
+    Value acVal = ev::getProperty(opts, "alphaCutoff");
+    if (ev::isNumber(acVal)) node->setAlphaCutoff(static_cast<float>(ev::toDouble(acVal)));
+    Value vctVal = ev::getProperty(opts, "vertexColorTint");
+    if (!ev::isUndefined(vctVal)) node->setVertexColorTint(ev::toBool(vctVal));
+
+    // Draw mode before castsShadow/unlit so explicit overrides win:
+    // 'lines' flips the node to unlit + non-shadow-casting.
+    Value dmVal = ev::getProperty(opts, "drawMode");
+    if (ev::isString(dmVal)) {
+        const std::string s = ev::toUtf8(dmVal);
+        node->setDrawMode((s == "lines" || s == "line") ? scene::MeshNode::DrawMode::Lines
+                                                        : scene::MeshNode::DrawMode::Triangles);
+    }
+    Value lwVal = ev::getProperty(opts, "lineWidth");
+    if (ev::isNumber(lwVal)) node->setLineWidth(static_cast<float>(ev::toDouble(lwVal)));
+
+    // Wind sway opt-in: true → 1.0, or a [0,1] whole-mesh multiplier.
+    Value wmVal = ev::getProperty(opts, "wind");
+    if (ev::isBool(wmVal)) node->setWindMask(ev::toBool(wmVal) ? 1.0f : 0.0f);
+    else if (ev::isNumber(wmVal)) node->setWindMask(static_cast<float>(ev::toDouble(wmVal)));
+
+    Value csVal = ev::getProperty(opts, "castsShadow");
+    if (!ev::isUndefined(csVal)) node->setCastsShadow(ev::toBool(csVal));
+    Value rsVal = ev::getProperty(opts, "receivesShadow");
+    if (!ev::isUndefined(rsVal)) node->setReceivesShadow(ev::toBool(rsVal));
+
+    // Depth bias: [factor, units] or a bare units value.
+    Value dbVal = ev::getProperty(opts, "depthBias");
+    if (ev::isNumber(dbVal)) {
+        node->setDepthBias(0.0f, static_cast<float>(ev::toDouble(dbVal)));
+    } else if (ev::isObject(dbVal)) {
+        std::vector<float> db;
+        if (readFloatVector(dbVal, db) && db.size() >= 2) node->setDepthBias(db[0], db[1]);
+    }
+
+    // Texture maps, each { width, height, data: Uint8Array(rgba8) }.
+    auto applyTex = [&](const char* key, void (scene::MeshNode::*setter)(int, int, const uint8_t*)) {
+        Value tex = ev::getProperty(opts, key);
+        if (!ev::isObject(tex)) return;
+        Value wV = ev::getProperty(tex, "width");
+        Value hV = ev::getProperty(tex, "height");
+        if (!ev::isNumber(wV) || !ev::isNumber(hV)) return;
+        const int w = static_cast<int>(ev::toDouble(wV));
+        const int h = static_cast<int>(ev::toDouble(hV));
+        auto info = ev::typedArrayInfo(ev::getProperty(tex, "data"));
+        if (info && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
+            (node->*setter)(w, h, info.data);
+        }
+    };
+    applyTex("texture",                  &scene::MeshNode::setBaseColorTexture);
+    applyTex("normalTexture",            &scene::MeshNode::setNormalTexture);
+    applyTex("metallicRoughnessTexture", &scene::MeshNode::setMetallicRoughnessTexture);
+    applyTex("occlusionTexture",         &scene::MeshNode::setOcclusionTexture);
+    applyTex("emissiveTexture",          &scene::MeshNode::setEmissiveTexture);
+}
+
 }  // namespace
 
 }  // namespace bro::bronze_host
@@ -545,14 +648,17 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
             }
         }
 
-        // 2. Mesh object or primitive name
+        // 2. Mesh object (`mesh` or its `data` alias) or primitive name
         Value meshProp = ev::getProperty(opts, "mesh");
         if (!hasRaw && meshData.positions.empty()) {
-            if (ev::isObject(meshProp)) {
-                void* mptr = bronze::embed::handleData(meshProp);
+            Value dataProp = ev::getProperty(opts, "data");
+            for (Value cand : {meshProp, dataProp}) {
+                if (!ev::isObject(cand)) continue;
+                void* mptr = bronze::embed::handleData(cand);
                 if (mptr) {
                     meshData = *static_cast<bromesh::MeshData*>(mptr);
                     hasRaw = true;
+                    break;
                 }
             }
         }
@@ -564,6 +670,15 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
                 Value v = ev::getProperty(opts, k);
                 return ev::isNumber(v) ? static_cast<float>(ev::toDouble(v)) : def;
             };
+            // bromesh::cylinder/capsule take a HALF height; `halfHeight` is
+            // the documented key, `height` the full-extent convenience.
+            auto halfHeight = [&]() -> float {
+                Value hh = ev::getProperty(opts, "halfHeight");
+                if (ev::isNumber(hh)) return static_cast<float>(ev::toDouble(hh));
+                Value h = ev::getProperty(opts, "height");
+                if (ev::isNumber(h)) return static_cast<float>(ev::toDouble(h)) * 0.5f;
+                return 0.5f;
+            };
             if (meshType == "sphere") {
                 float r = getNum("radius", 0.5f);
                 int seg = static_cast<int>(getNum("segments", 16));
@@ -571,15 +686,13 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
                 meshData = bromesh::sphere(r, seg, rings);
             } else if (meshType == "cylinder") {
                 float r = getNum("radius", 0.5f);
-                float h = getNum("height", 1.0f);
                 int seg = static_cast<int>(getNum("segments", 16));
-                meshData = bromesh::cylinder(r, h, seg);
+                meshData = bromesh::cylinder(r, halfHeight(), seg);
             } else if (meshType == "capsule") {
                 float r = getNum("radius", 0.5f);
-                float h = getNum("height", 1.0f);
                 int seg = static_cast<int>(getNum("segments", 16));
                 int rings = static_cast<int>(getNum("rings", 8));
-                meshData = bromesh::capsule(r, h, seg, rings);
+                meshData = bromesh::capsule(r, halfHeight(), seg, rings);
             } else if (meshType == "plane") {
                 float hw = getNum("halfW", 5.0f);
                 float hd = getNum("halfD", 5.0f);
@@ -604,28 +717,7 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
             bromesh::computeNormals(meshData);
         }
         node->setMesh(std::move(meshData));
-
-        // Color
-        Value colorVal = ev::getProperty(opts, "color");
-        float cr = 1, cg = 1, cb = 1, ca = 1;
-        if (parseColorValue(colorVal, cr, cg, cb, ca)) {
-            node->setColor(cr, cg, cb, ca);
-        }
-
-        // Metallic / Roughness / Emissive
-        Value metVal = ev::getProperty(opts, "metallic");
-        if (ev::isNumber(metVal)) node->setMetallic(static_cast<float>(ev::toDouble(metVal)));
-        Value roughVal = ev::getProperty(opts, "roughness");
-        if (ev::isNumber(roughVal)) node->setRoughness(static_cast<float>(ev::toDouble(roughVal)));
-        Value emissVal = ev::getProperty(opts, "emissive");
-        if (ev::isNumber(emissVal)) node->setEmissive(static_cast<float>(ev::toDouble(emissVal)));
-
-        Value unlitVal = ev::getProperty(opts, "unlit");
-        if (!ev::isUndefined(unlitVal)) node->setUnlit(ev::toBool(unlitVal));
-        Value csVal = ev::getProperty(opts, "castsShadow");
-        if (!ev::isUndefined(csVal)) node->setCastsShadow(ev::toBool(csVal));
-        Value rsVal = ev::getProperty(opts, "receivesShadow");
-        if (!ev::isUndefined(rsVal)) node->setReceivesShadow(ev::toBool(rsVal));
+        applyMeshMaterialOpts(node, opts);
     } else {
         if (meshData.positions.empty()) {
             meshData = bromesh::box(0.5f, 0.5f, 0.5f);
@@ -756,24 +848,7 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
         }
     }
 
-    // Material properties
-    Value colorVal = ev::getProperty(opts, "color");
-    float cr = 1, cg = 1, cb = 1, ca = 1;
-    if (parseColorValue(colorVal, cr, cg, cb, ca)) {
-        node->setColor(cr, cg, cb, ca);
-    }
-    Value metVal = ev::getProperty(opts, "metallic");
-    if (ev::isNumber(metVal)) node->setMetallic(static_cast<float>(ev::toDouble(metVal)));
-    Value roughVal = ev::getProperty(opts, "roughness");
-    if (ev::isNumber(roughVal)) node->setRoughness(static_cast<float>(ev::toDouble(roughVal)));
-    Value emissVal = ev::getProperty(opts, "emissive");
-    if (ev::isNumber(emissVal)) node->setEmissive(static_cast<float>(ev::toDouble(emissVal)));
-    Value unlitVal = ev::getProperty(opts, "unlit");
-    if (!ev::isUndefined(unlitVal)) node->setUnlit(ev::toBool(unlitVal));
-    Value csVal = ev::getProperty(opts, "castsShadow");
-    if (!ev::isUndefined(csVal)) node->setCastsShadow(ev::toBool(csVal));
-    Value rsVal = ev::getProperty(opts, "receivesShadow");
-    if (!ev::isUndefined(rsVal)) node->setReceivesShadow(ev::toBool(rsVal));
+    applyMeshMaterialOpts(node, opts);
     Value nameVal = ev::getProperty(opts, "name");
     if (ev::isString(nameVal)) node->setName(ev::toUtf8(nameVal));
 
