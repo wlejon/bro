@@ -272,20 +272,42 @@ target_include_directories(bro_bronze_host PUBLIC
 # (BRONZE_SHARED_RUNTIME_DIR) while bro's executables land in bro's. On Windows
 # that is the difference between a program and one that will not start: the
 # loader looks beside the .exe, not wherever the link-time import library came
-# from. So every executable that links this layer gets the runtime copied next
-# to it as a post-build step.
+# from. So the runtime gets copied next to the executables.
 #
-# A function rather than a property on bro_bronze_host, because the copy has to
-# name a DESTINATION and a static library does not have one — the directory
-# that matters belongs to whichever executable ends up linking it.
+# Copied ONCE, by one custom command every executable depends on — not by a
+# POST_BUILD step on each. bro, bro-server, bro-headless and bro-native-manifest
+# link at the same moment at the end of a parallel build, and four
+# copy_if_different's of the same file into the same directory race: the macOS
+# copy is clonefile() behind an unlink of the destination, so two of them
+# reliably lost the file the third had just put there (ENOENT, and the
+# executables deleted as failed). The destination is the one directory every
+# bro executable lands in; the function checks that rather than assume it.
+set(_bro_bronze_stage_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+if(CMAKE_CONFIGURATION_TYPES)
+    string(APPEND _bro_bronze_stage_dir "/$<CONFIG>")
+endif()
+set(_bro_bronze_stage_stamp "${CMAKE_CURRENT_BINARY_DIR}/bronze_runtime_staged$<CONFIG>.stamp")
+add_custom_command(
+    OUTPUT "${_bro_bronze_stage_stamp}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_LINKER_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
+    COMMAND ${CMAKE_COMMAND} -E touch "${_bro_bronze_stage_stamp}"
+    DEPENDS bronze_runtime_shared
+    COMMENT "Staging bronze's shared runtime beside bro's executables"
+    VERBATIM)
+add_custom_target(bro_bronze_runtime_staged DEPENDS "${_bro_bronze_stage_stamp}")
+
+# A function rather than a property on bro_bronze_host: the dependency and the
+# rpath belong to an executable, and a static library is not one.
 function(bro_bronze_stage_runtime target)
-    add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_FILE:bronze_runtime_shared> $<TARGET_FILE_DIR:${target}>
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_LINKER_FILE:bronze_runtime_shared> $<TARGET_FILE_DIR:${target}>
-        COMMENT "Staging bronze's shared runtime beside ${target}"
-        VERBATIM)
+    get_target_property(_own_dir ${target} RUNTIME_OUTPUT_DIRECTORY)
+    if(_own_dir AND NOT _own_dir STREQUAL CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        message(FATAL_ERROR "${target} lands in ${_own_dir}, not where bronze's "
+            "runtime is staged (${CMAKE_RUNTIME_OUTPUT_DIRECTORY}); it would not start.")
+    endif()
+    add_dependencies(${target} bro_bronze_runtime_staged)
     # ELF and Mach-O need to be TOLD that "beside the executable" is a place to
     # look; only the PE loader searches there by itself. Without this the copy
     # above is enough in the build tree (CMake adds the library's build
