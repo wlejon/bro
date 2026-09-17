@@ -469,14 +469,16 @@ canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
     }
 
     auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
-    int w = 300, h = 150;
+    // Seed the bitmap size only from width/height attributes that were
+    // assigned before getContext() ran. A canvas WITHOUT them stays
+    // layout-driven (intrinsic 0 → CanvasScene::queryLayoutWidth falls
+    // through to the content box), which is what ctx.canvasWidth and the
+    // arcade apps' full-viewport canvases depend on. Pinning 300x150 here
+    // would stretch every attribute-less canvas to its CSS box.
     const std::string wAttr = canvas->getAttribute("width");
     const std::string hAttr = canvas->getAttribute("height");
-    if (!wAttr.empty()) w = std::atoi(wAttr.c_str());
-    if (!hAttr.empty()) h = std::atoi(hAttr.c_str());
-    canvasScene->setIntrinsicWidth(w);
-    canvasScene->setIntrinsicHeight(h);
-    canvasScene->ensureSurface(w, h);
+    if (!wAttr.empty()) canvasScene->setIntrinsicWidth(std::atoi(wAttr.c_str()));
+    if (!hAttr.empty()) canvasScene->setIntrinsicHeight(std::atoi(hAttr.c_str()));
     canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
         auto* elem = static_cast<dom::Element*>(ud);
         if (!elem->parentNode()) {

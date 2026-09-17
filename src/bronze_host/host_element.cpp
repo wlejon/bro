@@ -21,6 +21,7 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include "engine/engine.h"
+#include "layout/svg_geometry.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
 
@@ -155,7 +156,15 @@ HostNodeState* stateFor(dom::Node* node) {
 // ---------------------------------------------------------------------------
 
 dom::AbsoluteRect borderBoxOf(dom::Element* el) {
-    hostEngine()->flushLayoutForRead(el->document());
+    auto* eng = hostEngine();
+    eng->flushLayoutForRead(el->document());
+    // Elements inside an <svg> subtree have no layout boxes (the svg is a
+    // replaced element); their rect comes from the SVG geometry itself —
+    // shape bounds through the transform/viewBox chain, zeros for
+    // non-rendered elements. The renderer supplies font measurement for
+    // <text>/<tspan>. absoluteBorderBox() would answer 0x0 at the svg origin.
+    dom::AbsoluteRect r;
+    if (layout::svgChildBoundingClientRect(el, r, eng->renderer())) return r;
     return dom::absoluteBorderBox(el);
 }
 

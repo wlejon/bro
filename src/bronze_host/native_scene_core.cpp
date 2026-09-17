@@ -426,10 +426,31 @@ void* bro_scene_SceneGraph_createTerrain(void* self, const int32_t* opts_chunkSi
     if (opts_unloadRadius_given) cfg.unloadRadius = opts_unloadRadius;
     if (opts_maxLoadsPerUpdate_given) cfg.maxLoadsPerUpdate = opts_maxLoadsPerUpdate;
     if (opts_seed_given) cfg.seed = opts_seed;
+    if (opts_noise_frequency_given) cfg.noiseFrequency = static_cast<float>(opts_noise_frequency);
+    if (opts_noise_octaves_given) cfg.noiseOctaves = opts_noise_octaves;
+    if (opts_noise_gain_given) cfg.noiseGain = static_cast<float>(opts_noise_gain);
+    if (opts_noise_lacunarity_given) cfg.noiseLacunarity = static_cast<float>(opts_noise_lacunarity);
     if (opts_baseHeight_given) cfg.baseHeight = opts_baseHeight;
     if (opts_heightAmplitude_given) cfg.heightAmplitude = opts_heightAmplitude;
     if (opts_seaLevel_given) cfg.seaLevel = opts_seaLevel;
     if (opts_meshMode_given) cfg.meshMode = opts_meshMode;
+    if (opts_terraceStep_given) cfg.terraceStep = static_cast<float>(opts_terraceStep);
+    if (opts_continentFrequency_given) cfg.continentFrequency = static_cast<float>(opts_continentFrequency);
+    if (opts_continentMin_given) cfg.continentMin = static_cast<float>(opts_continentMin);
+    if (opts_continentMax_given) cfg.continentMax = static_cast<float>(opts_continentMax);
+    if (opts_mountainFrequency_given) cfg.mountainFrequency = static_cast<float>(opts_mountainFrequency);
+    if (opts_mountainAmplitude_given) cfg.mountainAmplitude = static_cast<float>(opts_mountainAmplitude);
+    if (opts_mountainOctaves_given) cfg.mountainOctaves = opts_mountainOctaves;
+    if (opts_lodLevels_given) cfg.lodLevelCount = opts_lodLevels;
+    if (opts_lodScaleFactor_given) cfg.lodScaleFactor = opts_lodScaleFactor;
+    if (opts_planetRadius_given) cfg.planetRadius = static_cast<float>(opts_planetRadius);
+    if (opts_origin && opts_origin_len >= 3) {
+        cfg.origin = {static_cast<float>(opts_origin[0]), static_cast<float>(opts_origin[1]),
+                      static_cast<float>(opts_origin[2])};
+    }
+    if (opts_palette && opts_palette_len > 0) {
+        cfg.palette.assign(opts_palette, opts_palette + opts_palette_len);
+    }
 
     auto* cell = new HostTerrainCell();
     cell->token = g->livenessToken();
