@@ -455,11 +455,12 @@ bro_apply_feature_defs(bro_bronze_host)
 # exists while that binary is being built. So bro's modules read everything
 # else off `globalThis` at the point of use, and the manifest stays tiny.
 #
-# On Apple Silicon the compiled objects cannot be linked (bronze's code
-# generator emits x86_64, a cputype mismatch for an arm64 Mach-O) and the
-# native no-op entry points stand in, exactly as brokit's do; no
-# bronze-compiled JS runs there at all.
-if(APPLE AND (CMAKE_OSX_ARCHITECTURES MATCHES "arm64" OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")))
+# On a target brass has no code generator for (BRASS_HOST_BACKEND, decided in
+# brass's CMakeLists — Apple Silicon today) there are no compiled objects to
+# link, and the native no-op entry points stand in, exactly as brokit's do;
+# no bronze-compiled JS runs there at all.
+if(NOT BRASS_HOST_BACKEND)
+    message(STATUS "bro: bronze_host built with no-op JS entries (brass has no code generator for this target)")
     add_library(bro_bronze_js STATIC js_entry_stubs.cpp)
 else()
     set(BRO_JS_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
