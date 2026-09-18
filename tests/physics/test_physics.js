@@ -254,6 +254,116 @@ const finalY = Physics.getTransform(fallId).position.y;
 assert(typeof finalY === 'number', 'final y is number');
 
 // =========================================================================
+// Decomposed mesh: dynamic & static concave collision
+// =========================================================================
+// Concave L-shape mesh formed by two conjoined boxes
+const lPositions = new Float32Array([
+    // Box 1 (base: x in [-1, 1], y in [0, 1], z in [-1, 1])
+    -1, 0, -1,
+     1, 0, -1,
+     1, 1, -1,
+    -1, 1, -1,
+    -1, 0,  1,
+     1, 0,  1,
+     1, 1,  1,
+    -1, 1,  1,
+    // Box 2 (upright arm: x in [-1, 0], y in [1, 2], z in [-1, 1])
+    -1, 1, -1,
+     0, 1, -1,
+     0, 2, -1,
+    -1, 2, -1,
+    -1, 1,  1,
+     0, 1,  1,
+     0, 2,  1,
+    -1, 2,  1,
+]);
+
+const lIndices = new Uint32Array([
+    // Box 1 (12 triangles)
+    0, 2, 1,  0, 3, 2,
+    4, 5, 6,  4, 6, 7,
+    0, 7, 3,  0, 4, 7,
+    1, 2, 6,  1, 6, 5,
+    0, 1, 5,  0, 5, 4,
+    3, 6, 2,  3, 7, 6,
+    // Box 2 (12 triangles)
+    8, 10, 9,  8, 11, 10,
+    12, 13, 14,  12, 14, 15,
+    8, 15, 11,  8, 12, 15,
+    9, 10, 14,  9, 14, 13,
+    8, 9, 13,  8, 13, 12,
+    11, 14, 10,  11, 15, 14,
+]);
+
+// Test 1: Dynamic decomposed mesh dropping under gravity
+const dynamicDecompId = Physics.createBody({
+    shape: 'decomposedMesh',
+    positions: lPositions,
+    indices: lIndices,
+    position: { x: 0, y: 10, z: 0 },
+    mass: 5,
+    maxHulls: 16,
+    maxVerticesPerHull: 64,
+});
+assert(typeof dynamicDecompId === 'number' && dynamicDecompId > 0, 'dynamic decomposedMesh created');
+
+const dInitXf = Physics.getTransform(dynamicDecompId);
+assert(Math.abs(dInitXf.position.y - 10) < 0.01, 'dynamic decomposedMesh initial Y = 10');
+
+// Step simulation repeatedly: body should fall and hit the static ground
+for (let i = 0; i < 90; i++) {
+    Physics.step(1 / 60);
+}
+
+const dFinalXf = Physics.getTransform(dynamicDecompId);
+assert(dFinalXf.position.y < 10, 'dynamic decomposedMesh moved downward under gravity');
+assert(dFinalXf.position.y >= 0.4, 'dynamic decomposedMesh collides with ground (does not fall through)');
+
+const dVel = Physics.getVelocity(dynamicDecompId);
+assert(typeof dVel === 'object', 'getVelocity returns object');
+assert(typeof dVel.linear.x === 'number' && !isNaN(dVel.linear.x), 'valid linear velocity vx');
+assert(typeof dVel.linear.y === 'number' && !isNaN(dVel.linear.y), 'valid linear velocity vy');
+assert(typeof dVel.angular.y === 'number' && !isNaN(dVel.angular.y), 'valid angular velocity vy');
+
+const dRot = dFinalXf.rotation;
+const dQuatLen = Math.sqrt(dRot.x * dRot.x + dRot.y * dRot.y + dRot.z * dRot.z + dRot.w * dRot.w);
+assert(Math.abs(dQuatLen - 1.0) < 0.05, 'valid normalized orientation quaternion');
+
+// Also verify shape: 'mesh' with decompose: true creates a dynamic decomposed mesh
+const meshDecompId = Physics.createBody({
+    shape: 'mesh',
+    decompose: true,
+    positions: lPositions,
+    indices: lIndices,
+    position: { x: 5, y: 10, z: 0 },
+    mass: 3,
+});
+assert(typeof meshDecompId === 'number' && meshDecompId > 0, 'shape: mesh with decompose: true created');
+Physics.step(1 / 60);
+const mXf = Physics.getTransform(meshDecompId);
+assert(mXf.position.y < 10, 'shape: mesh with decompose: true is dynamic and moves downward');
+
+// Test 2: Static decomposed mesh remains static
+const staticDecompId = Physics.createBody({
+    shape: 'decomposedMesh',
+    positions: lPositions,
+    indices: lIndices,
+    position: { x: -10, y: 15, z: 0 },
+    static: true,
+});
+assert(typeof staticDecompId === 'number' && staticDecompId > 0, 'static decomposedMesh created');
+
+const sInitXf = Physics.getTransform(staticDecompId);
+assert(Math.abs(sInitXf.position.y - 15) < 0.01, 'static decomposedMesh initial Y = 15');
+
+for (let i = 0; i < 30; i++) {
+    Physics.step(1 / 60);
+}
+
+const sFinalXf = Physics.getTransform(staticDecompId);
+assert(Math.abs(sFinalXf.position.y - 15) < 0.01, 'static decomposedMesh remains static');
+
+// =========================================================================
 // Cleanup
 // =========================================================================
 Physics.destroyAll();

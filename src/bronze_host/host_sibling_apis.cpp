@@ -49,6 +49,8 @@
 #if BRO_WITH_LM
 #include <brolm/api.h>
 #endif
+#include "api/api.h"  // brokit::api::resolveAssetPath
+
 #if BRO_WITH_SOUNDML
 #include <brosoundml/api.h>
 #include "audio_inference/audio_inference.h"

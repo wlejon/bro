@@ -331,7 +331,14 @@ inline bool readBodyOptions(Value v, physics::BodyOptions& out, std::string& err
     else if (shape == "capsule")     out.shape = physics::BodyOptions::ShapeCapsule;
     else if (shape == "cylinder")    out.shape = physics::BodyOptions::ShapeCylinder;
     else if (shape == "convexHull")  out.shape = physics::BodyOptions::ShapeConvexHull;
-    else if (shape == "mesh")        out.shape = physics::BodyOptions::ShapeMesh;
+    else if (shape == "mesh") {
+        if (getPropBool(v, "decompose", false)) {
+            out.shape = physics::BodyOptions::ShapeDecomposedMesh;
+        } else {
+            out.shape = physics::BodyOptions::ShapeMesh;
+        }
+    }
+    else if (shape == "decomposedMesh") out.shape = physics::BodyOptions::ShapeDecomposedMesh;
     else if (shape == "compound")    out.shape = physics::BodyOptions::ShapeCompound;
     else if (shape == "chain")       out.shape = physics::BodyOptions::ShapeChain;
     else if (shape == "heightfield") out.shape = physics::BodyOptions::ShapeHeightField;
@@ -458,6 +465,26 @@ inline bool readBodyOptions(Value v, physics::BodyOptions& out, std::string& err
 
     if (out.shape == physics::BodyOptions::ShapeMesh) {
         out.isStatic = true;
+        Value posVal = ev::getProperty(v, "positions");
+        if (ev::isUndefined(posVal) || ev::isNull(posVal)) {
+            posVal = ev::getProperty(v, "vertices");
+        }
+        std::vector<float> flat;
+        if (readFloatVector(posVal, flat) && flat.size() >= 9 && (flat.size() % 3) == 0) {
+            for (size_t i = 0; i + 2 < flat.size(); i += 3) {
+                out.meshVertices.emplace_back(flat[i], flat[i+1], flat[i+2]);
+            }
+        }
+        readU32Vector(ev::getProperty(v, "indices"), out.meshIndices);
+    }
+
+    if (out.shape == physics::BodyOptions::ShapeDecomposedMesh) {
+        out.maxHulls = static_cast<int>(getPropNumber(v, "maxHulls", out.maxHulls));
+        out.maxVerticesPerHull = static_cast<int>(getPropNumber(v, "maxVerticesPerHull", out.maxVerticesPerHull));
+        out.decompResolution = static_cast<float>(getPropNumber(v, "resolution", out.decompResolution));
+        out.decompResolution = static_cast<float>(getPropNumber(v, "decompResolution", out.decompResolution));
+        out.minVolumePerHull = static_cast<float>(getPropNumber(v, "minVolumePerHull", out.minVolumePerHull));
+
         Value posVal = ev::getProperty(v, "positions");
         if (ev::isUndefined(posVal) || ev::isNull(posVal)) {
             posVal = ev::getProperty(v, "vertices");

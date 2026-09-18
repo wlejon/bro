@@ -1,4 +1,5 @@
 #include "physics/physics_world.h"
+#include "physics/physics_decomposition.h"
 
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -753,6 +754,8 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
+        case BodyOptions::ShapeDecomposedMesh:
+            return buildDecomposedMeshShape(opts);
     }
     return RefConst<Shape>();
 }

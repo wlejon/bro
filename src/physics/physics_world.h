@@ -182,6 +182,7 @@ struct BodyOptions {
         ShapeCompound,
         ShapeChain,       // static only — 2D polyline thickened along Z
         ShapeHeightField, // static only — square grid of n*n height samples
+        ShapeDecomposedMesh,
     };
 
     Shape shape = ShapeBox;
@@ -195,9 +196,13 @@ struct BodyOptions {
     float halfHeight = 0.5f;
     // ConvexHull
     std::vector<JPH::Vec3> hullPoints;
-    // Mesh (static only)
+    // Mesh (static only) / DecomposedMesh
     std::vector<JPH::Vec3> meshVertices;
     std::vector<uint32_t>  meshIndices;       // triangle list (multiple of 3)
+    int maxHulls = 16;
+    int maxVerticesPerHull = 64;
+    float decompResolution = 100000.0f;
+    float minVolumePerHull = 0.001f;
     // Chain (static only): a 2D polyline in the XY plane, thickened along Z
     // into a one-sided collision strip via bromesh::sweep + Jolt MeshShape.
     // Triangle winding determines which side is "front"; flipNormal swaps it.
