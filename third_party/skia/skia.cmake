@@ -125,6 +125,9 @@ if(EXISTS "${_skia_release}" AND EXISTS "${_skia_debug}")
     )
 elseif(EXISTS "${_skia_release}")
     set_target_properties(skia PROPERTIES IMPORTED_LOCATION "${_skia_release}")
+    # The prebuilt library is built in Release mode. Propagate SK_RELEASE so consumer
+    # translation units in Debug builds don't assume SK_DEBUG, which causes SkRefCntBase assert mismatches.
+    target_compile_definitions(skia INTERFACE SK_RELEASE)
 else()
     set_target_properties(skia PROPERTIES IMPORTED_LOCATION "${_skia_debug}")
 endif()

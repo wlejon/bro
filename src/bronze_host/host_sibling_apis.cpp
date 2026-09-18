@@ -51,7 +51,6 @@
 #endif
 #if BRO_WITH_SOUNDML
 #include <brosoundml/api.h>
-#include "api/api.h"  // brokit::api::resolveAssetPath
 #include "audio_inference/audio_inference.h"
 #include "util/log.h"
 #endif
@@ -71,6 +70,7 @@
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
+#include "api/api.h"  // brokit::api::resolveAssetPath
 #include <broimage/api.h>
 
 #include <cmath>

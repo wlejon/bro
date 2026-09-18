@@ -11,7 +11,7 @@ namespace bro::util {
 /// Command (⌘ = SDL_KMOD_GUI); everywhere else it is Control.
 inline bool hasPrimaryMod(int mod) {
 #ifdef __APPLE__
-    return (mod & SDL_KMOD_GUI) != 0;
+    return (mod & (SDL_KMOD_GUI | SDL_KMOD_CTRL)) != 0;
 #else
     return (mod & SDL_KMOD_CTRL) != 0;
 #endif

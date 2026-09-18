@@ -78,8 +78,8 @@ static void fireLifecycle(dom::Element* el, const char* name) {
     if (ev::isFunction(cb)) {
         ev::CallResult r = ev::call(cb, elVal, {});
         if (r.thrown) {
-            LOG_WARN("customElements: <{}> {} threw: {}", toLowerStr(el->tagName()), name,
-                     ev::toUtf8(r.value));
+            LOG_WARN("customElements: <%s> %s threw: %s", toLowerStr(el->tagName()).c_str(), name,
+                     ev::toUtf8(r.value).c_str());
         }
     }
 }
@@ -118,8 +118,8 @@ static bool upgradeElement(dom::Element* el, const CustomElementDef& def) {
     // an innerHTML setter or appendChild that has nothing to do with it.
     ev::CallResult res = runCustomElementConstructor(el, def);
     if (res.thrown) {
-        LOG_WARN("customElements: <{}> constructor threw during upgrade: {}", def.tagName,
-                 ev::toUtf8(res.value));
+        LOG_WARN("customElements: <%s> constructor threw during upgrade: %s", def.tagName.c_str(),
+                 ev::toUtf8(res.value).c_str());
         return false;
     }
     // Attributes present at upgrade time are reported the way the spec's
