@@ -235,9 +235,11 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
         const auto* hdr = val.asObject<bronze::HeapObjectHeader>();
         uint16_t flags = hdr ? hdr->flags : 0;
 
-        if (flags == bronze::HeapKind::WeakMap ||
-            flags == bronze::HeapKind::WeakSet ||
-            flags == bronze::HeapKind::WeakRef) {
+        // The collections are ordinary objects with a real prototype (bronze
+        // 24.1.4 and friends), so they are told apart the way Date and Promise
+        // are below: by their constructor, not by a heap kind.
+        if (isInstanceOf(val, "WeakMap") || isInstanceOf(val, "WeakSet") ||
+            isInstanceOf(val, "WeakRef")) {
             ev::throwTypeError("postMessage: weak collections are not cloneable");
             return false;
         }
@@ -281,8 +283,8 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             return false;
         }
 
-        if (flags == bronze::HeapKind::Map || flags == bronze::HeapKind::Set) {
-            bool isMap = (flags == bronze::HeapKind::Map);
+        const bool isMap = isInstanceOf(val, "Map");
+        if (isMap || isInstanceOf(val, "Set")) {
             ev::Persistent self(val);
             Value arrFrom = ev::getProperty(ev::globalValue("Array").value, "from");
             Value collVal = self.get();
