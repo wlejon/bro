@@ -49,6 +49,10 @@ struct TimerEntry {
     double dueMs = 0.0;
     double intervalMs = 0.0;
     bool repeating = false;
+    // requestIdleCallback: the callback takes an IdleDeadline rather than the
+    // app's args, and `timeout` records whether the deadline was the timeout.
+    bool idle = false;
+    double idleTimeoutMs = 0.0;
     dom::Document* doc = nullptr;
 };
 
@@ -111,6 +115,42 @@ Value addTimer(std::span<const Value> a, bool repeating) {
                  list.size());
     }
     return ev::fromDouble(static_cast<double>(list.back().id));
+}
+
+// requestIdleCallback(fn, {timeout}) — an idle period here is the next frame:
+// the engine has no notion of a busy main thread between frames (there is
+// no other task source), so the callback runs on the next tick with a
+// 50 ms budget, which is the spec's cap on an idle period. `didTimeout` is
+// true only when the app gave a timeout and the frame arrived after it.
+Value addIdleCallback(std::span<const Value> a) {
+    Value fn = argAt(a, 0);
+    if (!ev::isFunction(fn)) {
+        return ev::throwTypeError("requestIdleCallback: the first argument must be a function");
+    }
+    TimerEntry entry;
+    entry.id = g_nextTimerId++;
+    entry.fn = ev::Persistent(fn);
+    entry.dueMs = hostClockMs();
+    entry.idle = true;
+    Value opts = argAt(a, 1);
+    if (ev::isObject(opts)) {
+        Value t = ev::getProperty(opts, "timeout");
+        if (ev::isNumber(t) && ev::toDouble(t) > 0.0) entry.idleTimeoutMs = ev::toDouble(t);
+    }
+    entry.doc = currentHostDocument();
+    timers().push_back(std::move(entry));
+    return ev::fromDouble(static_cast<double>(timers().back().id));
+}
+
+Value makeIdleDeadline(bool didTimeout) {
+    const double start = hostClockMs();
+    ObjectBuilder b;
+    b.set("didTimeout", ev::fromBool(didTimeout));
+    b.def("timeRemaining", 0, [start](Value, std::span<const Value>) {
+        double left = 50.0 - (hostClockMs() - start);
+        return ev::fromDouble(left > 0.0 ? left : 0.0);
+    });
+    return b.get();
 }
 
 Value clearTimer(std::span<const Value> a) {
@@ -201,6 +241,12 @@ void fireHostTimers(double nowMs) {
         ev::Persistent fn = it->fn;
         std::vector<ev::Persistent> args = it->args;
         dom::Document* entryDoc = it->doc;
+        if (it->idle) {
+            const bool didTimeout = it->idleTimeoutMs > 0.0 &&
+                                    nowMs - it->dueMs >= it->idleTimeoutMs;
+            args.clear();
+            args.emplace_back(makeIdleDeadline(didTimeout));
+        }
         if (it->repeating) {
             // Advance from the DEADLINE, so a long frame does not stretch the
             // interval — but skip whole missed periods instead of firing a
@@ -295,6 +341,19 @@ void installTimerGlobals() {
             [](Value, std::span<const Value> a) { return clearTimer(a); }, 1);
         ev::registerGlobal("clearInterval", fn);
         if (hasGt) ev::setProperty(gt.value, "clearInterval", fn);
+    }
+    {
+        Value fn = ev::makeFunction(
+            [](Value, std::span<const Value> a) { return addIdleCallback(a); }, 2);
+        ev::registerGlobal("requestIdleCallback", fn);
+        if (hasGt) ev::setProperty(gt.value, "requestIdleCallback", fn);
+    }
+    {
+        // Same table, same ids: cancelIdleCallback(id) is clearTimeout(id).
+        Value fn = ev::makeFunction(
+            [](Value, std::span<const Value> a) { return clearTimer(a); }, 1);
+        ev::registerGlobal("cancelIdleCallback", fn);
+        if (hasGt) ev::setProperty(gt.value, "cancelIdleCallback", fn);
     }
 }
 

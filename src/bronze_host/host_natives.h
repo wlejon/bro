@@ -165,6 +165,12 @@ void installBroRoots(engine::Engine& engine);
 // script runs.
 void installWorkerBroRoot();
 
+// `available: true` on every compiled-in feature namespace under `bro` (and
+// on `Physics`), after all wrapper modules have mounted; the compiled-out
+// stubs already answer false. Called last from installWebHostGlobals and
+// installWorkerBroRoot.
+void markAvailableNamespaces();
+
 // Every sibling library's JS API (broaudio, brogameagent, bromesh,
 // brotensor, brolm, brosoundml, brodiffusion, brovisionml, broflora,
 // broimage), each installed exactly once PER REALM, onto the roots

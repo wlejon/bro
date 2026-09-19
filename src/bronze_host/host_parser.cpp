@@ -18,6 +18,8 @@ namespace {
 
 std::vector<std::unique_ptr<dom::Document>>* g_parsed = nullptr;
 
+}  // namespace
+
 dom::Document* parseIntoNewDocument(const std::string& html) {
     if (!g_parsed) g_parsed = new std::vector<std::unique_ptr<dom::Document>>();
     g_parsed->push_back(std::make_unique<dom::Document>());
@@ -25,6 +27,8 @@ dom::Document* parseIntoNewDocument(const std::string& html) {
     doc->parse(html);
     return doc;
 }
+
+namespace {
 
 Value parserParseFromString(Value, std::span<const Value> a) {
     Value htmlV = argAt(a, 0);

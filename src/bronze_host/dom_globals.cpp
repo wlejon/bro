@@ -271,18 +271,6 @@ Value makeCancelAnimationFrame() {
         1);
 }
 
-Value makePerformanceValue() {
-    ObjectBuilder b;
-    // The rAF clock, so performance.now() and rAF timestamps agree — the
-    // invariant three.js's Clock leans on. Advances only with frames, which
-    // is also what keeps it honest under bro.time pause and headless virtual
-    // time.
-    b.def("now", 0, [](Value, std::span<const Value>) {
-        return ev::fromDouble(g_host->clockMs);
-    });
-    return b.get();
-}
-
 }  // namespace
 
 void clearHostAnimationFramesForDocument(dom::Document* doc) {
@@ -846,6 +834,9 @@ void installWebHostGlobals(engine::Engine& engine) {
     // bro.server in every mode: bro-server's loop, and in a windowed bro the
     // members a script that also runs as a hosted server reads.
     installServerModule();
+    // Every feature namespace is mounted now: stamp `available: true` on the
+    // compiled-in ones (the stubs already say false).
+    markAvailableNamespaces();
     // observers.js reads queueMicrotask, performance and getComputedStyle
     // off globalThis at the point of use.
     installObserversModule();

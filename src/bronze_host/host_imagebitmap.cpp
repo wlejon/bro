@@ -239,10 +239,14 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
         const uint8_t* bytes = nullptr;
         size_t len = 0;
         if (brokit::api::blobBytes(src, &bytes, &len) && bytes && len > 0) {
-            broimage::Image decoded;
+            // The same ladder an <img> src goes through (host_image.cpp):
+            // bitmap codecs, WebP, then SVG — a fetched .webp or .svg blob
+            // is as much an image here as a PNG one.
+            int dw = 0, dh = 0;
+            std::vector<uint8_t> decoded;
             std::string decErr;
-            if (broimage::decode_memory(bytes, len, decoded, &decErr)) {
-                resultImg = buildBitmap(decoded.pixels.data(), decoded.width, decoded.height,
+            if (decodeHostImageBytes(bytes, len, dw, dh, decoded, &decErr)) {
+                resultImg = buildBitmap(decoded.data(), dw, dh,
                                         crop, sx, sy, sw, sh, outPixels, err);
             } else {
                 err = "Blob image decode failed: " + decErr;

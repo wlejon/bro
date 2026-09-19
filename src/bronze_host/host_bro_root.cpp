@@ -312,6 +312,37 @@ void installBroRoots(engine::Engine& engine) {
     installBroCoreModule();
 }
 
+// `bro.<ns>.available` on every feature-gated namespace: the compiled-out
+// stub (makeUnavailableNamespace) answers false, so a compiled-in namespace
+// must answer TRUE rather than undefined — `if (bro.tts.available)` is the
+// documented probe (docs/*-api.js) and a missing flag reads as "no". Runs
+// after every wrapper module has mounted, so it decorates the final objects;
+// a namespace that already carries `available` (a sibling that reports its
+// own runtime probe, e.g. bro.net's transport) is left alone.
+void markAvailableNamespaces() {
+    static const char* const kGated[] = {
+        "tts", "lm", "stt", "diar", "net", "ai", "gesture", "gizmo", "impostor", "kws",
+        "listen", "motion", "rave", "sense", "triposplat", "vision", "wake", "diffusion",
+        "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
+        "tile_world", "lighting", "animation", "mic",
+    };
+    auto decorate = [](Value ns) {
+        if (!ev::isObject(ns)) return;
+        Value cur = ev::getProperty(ns, "available");
+        if (!ev::isUndefined(cur)) return;
+        ev::setProperty(ns, "available", ev::fromBool(true));
+    };
+    ev::GlobalValue broG = ev::globalValue("bro");
+    if (broG.found && ev::isObject(broG.value)) {
+        for (const char* name : kGated) {
+            ev::Persistent root(broG.value);
+            decorate(ev::getProperty(root.get(), name));
+        }
+    }
+    ev::GlobalValue phys = ev::globalValue("Physics");
+    if (phys.found) decorate(phys.value);
+}
+
 // The worker realm's roots, the same shape as the main realm's cut down to
 // what a worker owns: `bro` and `__bro_native` with the namespaces below,
 // the natives a worker carries registered on THIS thread (bronze's registry
@@ -404,6 +435,7 @@ void installWorkerBroRoot() {
 #if !BRO_WITH_TRIPOSPLAT
     setUnavailable("triposplat", "BRO_WITH_TRIPOSPLAT");
 #endif
+    markAvailableNamespaces();
 }
 
 }  // namespace bro::bronze_host

@@ -40,6 +40,11 @@ struct SourcePixels {
     const uint8_t* data = nullptr;
     GLsizei width = 0;
     GLsizei height = 0;
+    // Resolving a <canvas> source snapshots it through Ganesh on the SHARED
+    // GL context, which leaves Skia's viewport, FBO, program and texture
+    // bindings behind. The caller restores the app's WebGL state before the
+    // upload — the texture Skia left bound is not the one the app bound.
+    bool disturbedGlState = false;
     explicit operator bool() const { return data != nullptr; }
 };
 
@@ -73,7 +78,9 @@ SourcePixels resolveSource(Value source, const char* who) {
             if (h <= 0) h = 150;
             const uint8_t* px = scene->snapshotPixels(w, h);
             if (px) {
-                return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h)};
+                // A cache hit touches no GL, a miss ran Ganesh; flagged either
+                // way, because guessing wrong the other way corrupts the frame.
+                return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h), /*disturbed=*/true};
             }
         }
         static const std::vector<uint8_t> s_dummy(4, 255);
@@ -163,6 +170,7 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 // Nothing between resolveSource and here allocates on the
                 // bronze heap, which is what keeps an ImageData-backed pointer
                 // valid; the context copies the bytes into the driver.
+                if (src.disturbedGlState) live(c)->restoreState();
                 live(c)->texImage2D(domTarget, domLevel, domInternalformat, src.width,
                                     src.height, /*border=*/0, domFormat, domType, src.data);
             }
@@ -210,6 +218,7 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             GLenum domType = u32At(a, 5);
             SourcePixels src = resolveSource(argAt(a, 6), "texSubImage2D");
             if (src) {
+                if (src.disturbedGlState) live(c)->restoreState();
                 live(c)->texSubImage2D(domTarget, domLevel, domX, domY, src.width,
                                        src.height, domFormat, domType, src.data);
             }

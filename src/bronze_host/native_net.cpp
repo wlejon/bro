@@ -371,9 +371,9 @@ int32_t bro_net_connect(const char* address, int32_t port, uint64_t callback) {
     return 1;
 }
 
-void bro_net_disconnect(int32_t peerId) {
+void bro_net_disconnect(int32_t peerId, int32_t reason) {
     auto* sub = getNetSubscriber();
-    if (sub) sub->disconnect(static_cast<uint32_t>(peerId), 0);
+    if (sub) sub->disconnect(static_cast<uint32_t>(peerId), reason);
     netState().connections.erase(static_cast<uint32_t>(peerId));
 }
 
@@ -459,7 +459,7 @@ void bro_net_setPeerSimulatedLoss(int32_t /*peerId*/, double /*chance*/, double 
 void bro_net_host(int32_t, uint64_t) {}
 void bro_net_unhost(void) {}
 int32_t bro_net_connect(const char*, int32_t, uint64_t) { return 0; }
-void bro_net_disconnect(int32_t) {}
+void bro_net_disconnect(int32_t, int32_t) {}
 void bro_net_disconnectAll(void) {}
 void bro_net_send(int32_t, const uint8_t*, uint32_t, int32_t) {}
 void bro_net_broadcast(const uint8_t*, uint32_t, int32_t) {}

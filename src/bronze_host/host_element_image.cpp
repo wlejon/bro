@@ -74,7 +74,7 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     if (!st->image) st->image = std::make_unique<HostImage>();
     HostImage& img = *st->image;
 
-    loadHostImage(img, src);
+    loadHostImage(img, src, st->el->document());
 
     // The attribute and the natural size too. This element is in a real
     // document, so if it is ever laid out the painter must find the picture
@@ -187,7 +187,7 @@ void primeImageFromMarkup(dom::Element* el) {
     HostNodeState* st = hostNodeStateFor(el);
     if (!st) return;
     if (!st->image) st->image = std::make_unique<HostImage>();
-    loadHostImage(*st->image, src);
+    loadHostImage(*st->image, src, el->document());
 }
 
 }  // namespace bro::bronze_host

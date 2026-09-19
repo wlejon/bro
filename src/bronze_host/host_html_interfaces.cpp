@@ -8,6 +8,7 @@
 
 #include <cctype>
 #include <string>
+#include <unordered_map>
 
 namespace bro::bronze_host {
 
@@ -48,6 +49,76 @@ HostClass g_htmlBodyElementClass;
 HostClass g_htmlMediaElementClass;
 HostClass g_htmlVideoElementClass;
 HostClass g_htmlAudioElementClass;
+
+// The rest of the per-tag HTML*Element interfaces: undecorated brands one
+// level under HTMLElement, so `el instanceof HTMLLabelElement` and
+// `el.constructor.name` answer what a library sniffing the element kind
+// expects. Each names the tags it wraps, comma-separated.
+struct ExtraTagDef {
+    const char* name;
+    const char* tags;
+};
+constexpr ExtraTagDef kExtraTags[] = {
+    {"HTMLAreaElement", "area"},
+    {"HTMLBRElement", "br"},
+    {"HTMLBaseElement", "base"},
+    {"HTMLDListElement", "dl"},
+    {"HTMLDataElement", "data"},
+    {"HTMLDataListElement", "datalist"},
+    {"HTMLDetailsElement", "details"},
+    {"HTMLDialogElement", "dialog"},
+    {"HTMLEmbedElement", "embed"},
+    {"HTMLFieldSetElement", "fieldset"},
+    {"HTMLHRElement", "hr"},
+    {"HTMLHeadElement", "head"},
+    {"HTMLLabelElement", "label"},
+    {"HTMLLegendElement", "legend"},
+    {"HTMLLinkElement", "link"},
+    {"HTMLMapElement", "map"},
+    {"HTMLMenuElement", "menu"},
+    {"HTMLMetaElement", "meta"},
+    {"HTMLMeterElement", "meter"},
+    {"HTMLModElement", "del,ins"},
+    {"HTMLOListElement", "ol"},
+    {"HTMLObjectElement", "object"},
+    {"HTMLOptGroupElement", "optgroup"},
+    {"HTMLOutputElement", "output"},
+    {"HTMLPictureElement", "picture"},
+    {"HTMLPreElement", "pre"},
+    {"HTMLProgressElement", "progress"},
+    {"HTMLQuoteElement", "blockquote,q"},
+    {"HTMLSlotElement", "slot"},
+    {"HTMLSourceElement", "source"},
+    {"HTMLTableCaptionElement", "caption"},
+    {"HTMLTableColElement", "col,colgroup"},
+    {"HTMLTableSectionElement", "thead,tbody,tfoot"},
+    {"HTMLTimeElement", "time"},
+    {"HTMLTitleElement", "title"},
+    {"HTMLTrackElement", "track"},
+    {"HTMLUnknownElement", ""},
+};
+HostClass g_extraTagClasses[sizeof(kExtraTags) / sizeof(kExtraTags[0])];
+std::unordered_map<std::string, const HostClass*>* g_extraTagByName = nullptr;
+
+// Non-HTML element namespaces: an inline <svg> subtree and <math> are Elements
+// (every method lives on Element's prototype) branded by their namespace.
+HostClass g_svgElementClass;
+HostClass g_mathMLElementClass;
+constexpr const char* kSvgTags[] = {
+    "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+    "text", "tspan", "textpath", "defs", "use", "symbol", "lineargradient",
+    "radialgradient", "stop", "clippath", "mask", "pattern", "image", "foreignobject",
+    "filter", "marker", "view", "switch", "desc", "metadata", "fecolormatrix",
+    "fegaussianblur", "feblend", "feoffset", "femerge", "femergenode", "feflood",
+    "fecomposite", "animate", "animatetransform", "set",
+};
+
+// Platform brands for objects the host builds as plain objects — the 2D
+// context, drag / clipboard dataTransfer, AudioDestinationNode — so
+// `ctx instanceof CanvasRenderingContext2D` holds and the names exist.
+HostClass g_canvas2DContextClass;
+HostClass g_dataTransferClass;
+HostClass g_audioDestinationNodeClass;
 
 Value illegalConstructor(Value, std::span<const Value>) {
     return ev::throwTypeError("Illegal constructor");
@@ -169,7 +240,42 @@ void installHtmlInterfaces() {
     g_htmlVideoElementClass.inherit(g_htmlMediaElementClass);
     g_htmlAudioElementClass.install("HTMLAudioElement", 0, illegalConstructor, nullptr);
     g_htmlAudioElementClass.inherit(g_htmlMediaElementClass);
+
+    // 6. The remaining per-tag brands, and the tag -> class map
+    // htmlInterfaceProto reads.
+    g_extraTagByName = new std::unordered_map<std::string, const HostClass*>();
+    for (size_t i = 0; i < sizeof(kExtraTags) / sizeof(kExtraTags[0]); ++i) {
+        HostClass& cls = g_extraTagClasses[i];
+        cls.install(kExtraTags[i].name, 0, illegalConstructor, nullptr);
+        cls.inherit(g_htmlElementClass);
+        std::string tags = kExtraTags[i].tags;
+        size_t start = 0;
+        while (start < tags.size()) {
+            size_t comma = tags.find(',', start);
+            if (comma == std::string::npos) comma = tags.size();
+            std::string tag = tags.substr(start, comma - start);
+            if (!tag.empty()) (*g_extraTagByName)[tag] = &cls;
+            start = comma + 1;
+        }
+    }
+
+    // 7. Non-HTML namespaces
+    g_svgElementClass.install("SVGElement", 0, illegalConstructor, nullptr);
+    g_svgElementClass.inherit(g_elementClass);
+    g_mathMLElementClass.install("MathMLElement", 0, illegalConstructor, nullptr);
+    g_mathMLElementClass.inherit(g_elementClass);
+    for (const char* tag : kSvgTags) (*g_extraTagByName)[tag] = &g_svgElementClass;
+    (*g_extraTagByName)["math"] = &g_mathMLElementClass;
+
+    // 8. Platform brands
+    g_canvas2DContextClass.install("CanvasRenderingContext2D", 0, illegalConstructor, nullptr);
+    g_dataTransferClass.install("DataTransfer", 0, illegalConstructor, nullptr);
+    g_audioDestinationNodeClass.install("AudioDestinationNode", 0, illegalConstructor, nullptr);
 }
+
+const HostClass& canvasRenderingContext2DHostClass() { return g_canvas2DContextClass; }
+const HostClass& dataTransferHostClass() { return g_dataTransferClass; }
+const HostClass& svgElementHostClass() { return g_svgElementClass; }
 
 Value htmlInterfaceProto(const std::string& tagName) {
     std::string tag = tagName;
@@ -204,6 +310,10 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "body") return g_htmlBodyElementClass.prototype();
     if (tag == "video") return g_htmlVideoElementClass.prototype();
     if (tag == "audio") return g_htmlAudioElementClass.prototype();
+    if (g_extraTagByName) {
+        auto it = g_extraTagByName->find(tag);
+        if (it != g_extraTagByName->end()) return it->second->prototype();
+    }
 
     return g_htmlElementClass.prototype();
 }

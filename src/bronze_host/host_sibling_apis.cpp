@@ -253,6 +253,8 @@ void installSiblingApis(engine::Engine& engine) {
     // AudioContext and the node classes need no root; bro.mic mounts onto
     // the `bro` root and re-sets the global to the object it found.
     broaudio::api::setAudioEngine(engine.audioEngine());
+    // Its file loaders, savers and preset IO take paths the way fs.* does.
+    broaudio::api::setPathResolver(&brokit::api::resolveAssetPath);
     broaudio::api::installAudio();
     broaudio::api::installMic();
 #else
@@ -270,6 +272,7 @@ void installSiblingApis(engine::Engine& engine) {
     bromesh::api::installRigging();
 #endif
 #if BRO_WITH_TENSOR
+    brotensor::api::setPathResolver(&brokit::api::resolveAssetPath);
     brotensor::api::installTensor();
     adoptGlobalProperty("GpuTensor");
 #endif
@@ -364,6 +367,7 @@ void installWorkerSiblingApis() {
     bromesh::api::installRigging();
 #endif
 #if BRO_WITH_TENSOR
+    brotensor::api::setPathResolver(&brokit::api::resolveAssetPath);
     brotensor::api::installTensor();
     adoptGlobalProperty("GpuTensor");
 #endif

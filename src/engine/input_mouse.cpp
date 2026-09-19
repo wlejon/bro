@@ -482,6 +482,11 @@ bool Engine::requestPointerLock(dom::Element* target) {
 }
 
 void Engine::setPageVisibility(bool visible) {
+    // Edge-triggered, as the web's is: focus-lost and minimized both call
+    // this with false, and a page must not see two visibilitychange events
+    // for one transition.
+    if (pageVisible_ == visible) return;
+    pageVisible_ = visible;
     if (document_ && document_->documentElement()) {
         dom::Event evt("visibilitychange", true, false);
         evt.setIsTrusted(true);

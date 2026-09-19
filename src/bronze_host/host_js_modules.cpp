@@ -38,6 +38,7 @@ extern "C" void bro_lighting_main();
 extern "C" void bro_gizmo_main();
 extern "C" void bro_animation_main();
 extern "C" void bro_scene_main();
+extern "C" void bro_scene_extras_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
 extern "C" void bro_impostor_main();
@@ -159,6 +160,10 @@ void installSceneModule() {
     bronze::embed::runEntry(bro_scene_main);
     adoptGlobalProperty("SceneNode");
     adoptGlobalProperty("SceneGraph");
+    // js/scene_extras.js reads SceneNode / SceneGraph off globalThis, which
+    // scene.js has just put there, and adds the per-type accessors and the
+    // instanced-mesh operations over native_scene_extras.cpp.
+    bronze::embed::runEntry(bro_scene_extras_main);
 }
 
 void installMotionModule() {

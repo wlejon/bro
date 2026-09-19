@@ -45,7 +45,7 @@ bool registerNatives_net(std::string* error) {
         fn("__bro_native.net.host", p(&bro_net_host), "void", {"i32", "dynamic"}, error) &&
         fn("__bro_native.net.unhost", p(&bro_net_unhost), "void", {}, error) &&
         fn("__bro_native.net.connect", p(&bro_net_connect), "i32", {"str", "i32", "dynamic"}, error) &&
-        fn("__bro_native.net.disconnect", p(&bro_net_disconnect), "void", {"i32"}, error) &&
+        fn("__bro_native.net.disconnect", p(&bro_net_disconnect), "void", {"i32", "i32"}, error) &&
         fn("__bro_native.net.disconnectAll", p(&bro_net_disconnectAll), "void", {}, error) &&
         fn("__bro_native.net.send", p(&bro_net_send), "void", {"i32", "u8[]", "i32"}, error) &&
         fn("__bro_native.net.broadcast", p(&bro_net_broadcast), "void", {"u8[]", "i32"}, error) &&

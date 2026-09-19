@@ -59,9 +59,17 @@ void decorateIFrameProto(ObjectBuilder& b) {
         },
         nullptr);
 
+    // The sub-document's own `document` value (the one its scripts see), so
+    // the host can reach into a same-app frame the way the web allows for a
+    // same-origin one; null until the frame has loaded.
     b.accessor("contentDocument",
-        [](Value, std::span<const Value>) -> Value {
-            return ev::null();
+        [](Value self, std::span<const Value>) -> Value {
+            dom::Element* el = hostElementOf(self);
+            auto* eng = hostEngine();
+            if (!el || !eng) return ev::null();
+            engine::IframeDoc* d = eng->iframeDocForElement(el);
+            if (!d || !d->document) return ev::null();
+            return hostDocumentValue(d->document.get());
         },
         nullptr);
 

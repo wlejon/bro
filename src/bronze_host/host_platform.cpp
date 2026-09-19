@@ -299,6 +299,36 @@ void installPlatformGlobals() {
         ev::setProperty(gt.value, "showOpenFolderDialog", openFolderVal);
         ev::setProperty(gt.value, "showSaveFileDialog", saveFileVal);
     }
+    // window.screenX / screenY (and the screenLeft / screenTop aliases): the
+    // window's position on the desktop, live like `screen` is; 0 headless,
+    // where there is no desktop to be positioned on.
+    {
+        auto screenPos = [](bool wantX) {
+            return [wantX](Value, std::span<const Value>) {
+                engine::Engine* e = hostEngine();
+                if (e && e->displayMode() != engine::DisplayMode::Headless) {
+                    if (platform::Window* w = e->window()) {
+                        int x = 0, y = 0;
+                        w->getPosition(x, y);
+                        return ev::fromDouble(wantX ? x : y);
+                    }
+                }
+                return ev::fromDouble(0.0);
+            };
+        };
+        auto defineOn = [&](Value target) {
+            if (!ev::isObject(target)) return;
+            ObjectBuilder t(target);
+            t.accessor("screenX", screenPos(true), nullptr);
+            t.accessor("screenY", screenPos(false), nullptr);
+            t.accessor("screenLeft", screenPos(true), nullptr);
+            t.accessor("screenTop", screenPos(false), nullptr);
+        };
+        if (gt.found) defineOn(gt.value);
+        ev::GlobalValue winPos = ev::globalValue("window");
+        gt = ev::globalValue("globalThis");
+        if (winPos.found && ev::isObject(winPos.value) && winPos.value != gt.value) defineOn(winPos.value);
+    }
     ev::GlobalValue win = ev::globalValue("window");
     if (win.found && ev::isObject(win.value) && win.value != gt.value) {
         ev::setProperty(win.value, "queueMicrotask", queueMicrotaskVal);

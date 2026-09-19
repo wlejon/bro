@@ -159,6 +159,9 @@ public:
     WindowHost* windowHostForDocument(const dom::Document* doc);
     bool isWindowHostDocument(const dom::Document* doc) const;
     IframeDoc* iframeForDocument(const dom::Document* doc);
+    // The other direction: the sub-document an <iframe> element hosts, which
+    // is what iframe.contentDocument answers (host_iframe.cpp).
+    IframeDoc* iframeDocForElement(const dom::Element* el);
     bool isIframeDocument(const dom::Document* doc) const;
     bool anyLiveWindowHosts() const;
     bool anyPresentableWindowHosts() const;
@@ -244,7 +247,11 @@ public:
     const std::string& documentReadyState() const { return documentReadyState_; }
     void setDocumentReadyState(const std::string& state);
 
+    // Page visibility, as document.hidden / document.visibilityState read
+    // it: false while the window is minimized or unfocused. Stored so the
+    // getter answers the current state; the change event fires on the edge.
     void setPageVisibility(bool visible);
+    bool pageVisible() const { return pageVisible_; }
     void setFullscreenState(bool fullscreen);
 
     // Headless & DOM API
@@ -629,7 +636,6 @@ private:
     void syncIframeBox(IframeDoc& d);
     void syncAllIframeBoxes();
     IframeDoc* iframeDocById(uint64_t id);
-    IframeDoc* iframeDocForElement(const dom::Element* el);
     void processPendingIframeReloads();
     void recordIframeLayers();
     void replayIframeLayers(render::SkiaRenderer* renderer);
@@ -944,6 +950,7 @@ private:
     double lastUIRenderMs_ = 0.0;
     double frameCapIntervalMs_ = 0.0;
     bool windowFocused_ = true;
+    bool pageVisible_ = true;
     static constexpr double kUnfocusedFps = 30.0;
 
     static constexpr double kGCIntervalMs = 1000.0;

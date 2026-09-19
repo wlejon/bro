@@ -61,9 +61,13 @@
         return __bro_native.net.connect(address, port === undefined ? 0 : port, callback);
     });
 
-    fn(ns_net, "disconnect", function disconnect(peerId) {
+    // `reason` is the application-defined disconnect code the peer's
+    // ondisconnect receives (0 when omitted), the same number GNS carries on
+    // the wire; it was always forwarded and a wrapper that dropped it left
+    // every kick indistinguishable from a network drop.
+    fn(ns_net, "disconnect", function disconnect(peerId, reason) {
         if (peerId === undefined) throw new TypeError("bro.net.disconnect: peerId is required");
-        __bro_native.net.disconnect(peerId);
+        __bro_native.net.disconnect(peerId, reason === undefined ? 0 : (reason | 0));
     });
 
     fn(ns_net, "disconnectAll", function disconnectAll() {

@@ -1002,7 +1002,8 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_loadSplatPly", (void*)&bro_scene_SceneNode_loadSplatPly, "bool", {"__bro_native.scene.SceneNode", "str"}, error) &&
            fn("__bro_native.scene.SceneNode_worldAnchor_get", (void*)&bro_scene_SceneNode_worldAnchor_get, "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_worldAnchor_set", (void*)&bro_scene_SceneNode_worldAnchor_set, "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
-           registerSceneShaderNatives(error);
+           registerSceneShaderNatives(error) &&
+           registerSceneExtraNatives(error);
 }
 
 }  // namespace bro::bronze_host

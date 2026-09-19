@@ -38,9 +38,9 @@
         if (port === undefined) throw new TypeError("bro.net.connect: port is required");
         return __bro_native.net.connect(address, port, callback);
     });
-    fn(ns_net, "disconnect", function disconnect(peerId) {
+    fn(ns_net, "disconnect", function disconnect(peerId, reason) {
         if (peerId === undefined) throw new TypeError("bro.net.disconnect: peerId is required");
-        __bro_native.net.disconnect(peerId);
+        __bro_native.net.disconnect(peerId, reason === undefined ? 0 : reason);
     });
     fn(ns_net, "disconnectAll", function disconnectAll() {
         __bro_native.net.disconnectAll();

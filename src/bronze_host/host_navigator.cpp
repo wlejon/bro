@@ -13,6 +13,7 @@
 
 #include <limits>
 #include <string>
+#include <thread>
 
 namespace bro::bronze_host {
 
@@ -116,6 +117,54 @@ void installNavigatorGlobal() {
     {
         Value clip = makeClipboardValue();
         nav.set("clipboard", clip);
+    }
+    // The identity fields libraries sniff (brokit's navigator polyfill used to
+    // supply them; bro installs its own navigator, so they live here). An
+    // embedded runtime has no cookies and no network-status source: a
+    // constant `onLine: true` matches what a desktop app expects, and the
+    // Gecko-shaped product/productSub/vendor triple is what every browser
+    // reports for compatibility.
+    {
+        unsigned hc = std::thread::hardware_concurrency();
+        nav.set("hardwareConcurrency", ev::fromDouble(hc > 0 ? static_cast<double>(hc) : 1.0));
+        nav.set("languages", hostArrayOf(2, [](size_t i) {
+            return ev::fromUtf8(i == 0 ? "en-US" : "en");
+        }));
+        nav.set("onLine", ev::fromBool(true));
+        nav.set("cookieEnabled", ev::fromBool(false));
+        nav.set("product", ev::fromUtf8("Gecko"));
+        nav.set("productSub", ev::fromUtf8("20030107"));
+        nav.set("vendor", ev::fromUtf8(""));
+        nav.set("vendorSub", ev::fromUtf8(""));
+        nav.set("appCodeName", ev::fromUtf8("Mozilla"));
+        nav.set("appName", ev::fromUtf8("Netscape"));
+        nav.set("doNotTrack", ev::null());
+        nav.set("pdfViewerEnabled", ev::fromBool(false));
+        nav.set("webdriver", ev::fromBool(false));
+        // No capture devices are exposed through the web API (bro.mic /
+        // bro.listen own audio input); `mediaDevices` is present so a feature
+        // probe reads an object, and its enumerators answer empty/rejected.
+        ObjectBuilder md;
+        md.def("enumerateDevices", 0, [](Value, std::span<const Value>) {
+            ev::Persistent p(ev::createPromise());
+            ev::Persistent list(hostArrayOf(0, [](size_t) { return ev::undefined(); }));
+            ev::resolvePromise(p.get(), list.get());
+            return p.get();
+        });
+        md.def("getUserMedia", 1, [](Value, std::span<const Value>) {
+            ev::Persistent p(ev::createPromise());
+            Value msg = ev::fromUtf8("NotSupportedError: getUserMedia is not available; use bro.mic");
+            ev::CallResult err = ev::construct(ev::globalValue("Error").value,
+                                               std::span<const Value>(&msg, 1));
+            ev::rejectPromise(p.get(), err.value);
+            return p.get();
+        });
+        md.def("getSupportedConstraints", 0, [](Value, std::span<const Value>) {
+            return ev::createObject();
+        });
+        md.def("addEventListener", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+        md.def("removeEventListener", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+        nav.set("mediaDevices", md.get());
     }
     nav.def("getBattery", 0, [](Value, std::span<const Value>) {
         ev::Persistent snapshot(batterySnapshot());

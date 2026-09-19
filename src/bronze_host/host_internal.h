@@ -371,6 +371,10 @@ Value buildGamepadSnapshot(const engine::GamepadState& gp);
 // object plus `clipboard` and `getBattery()`.
 void installNavigatorGlobal();
 
+// `performance` (host_performance.cpp): `now()` on hostClockMs, and the User
+// Timing marks and measures on the same clock.
+Value makePerformanceValue();
+
 // The entry for `node`, created on first ask. Never null for a non-null node.
 HostNodeState* hostNodeStateFor(dom::Node* node);
 
@@ -593,8 +597,19 @@ const HostImage* hostImageOf(Value v);
 // Resolve `src` and decode it into `img`, leaving `img.complete` true either
 // way and `img.ok` true only on success. Shared by `new Image()` and by an
 // <img> element, because a texture must not depend on which of the two the
-// page happened to build (host_image.cpp).
-void loadHostImage(HostImage& img, const std::string& src);
+// page happened to build (host_image.cpp). A relative `src` resolves against
+// `doc`'s own base path when one is given — an <img> in a system panel or an
+// <iframe> names a file beside ITS markup, not the app's — and against the
+// app directory otherwise.
+void loadHostImage(HostImage& img, const std::string& src, const dom::Document* doc = nullptr);
+
+// The one decoder every image byte stream in this layer goes through: the
+// bitmap codecs (broimage), then WebP, then SVG rasterized at its intrinsic
+// size. Answers straight-alpha RGBA8, top-down; false with `err` set when no
+// decoder accepted the bytes (host_image.cpp).
+bool decodeHostImageBytes(const uint8_t* bytes, size_t len,
+                          int& outW, int& outH, std::vector<uint8_t>& outRgba,
+                          std::string* err);
 
 // ---------------------------------------------------------------------------
 // Platform odds and ends (host_platform.cpp)
@@ -610,6 +625,11 @@ void installPlatformGlobals();
 // ---------------------------------------------------------------------------
 
 void installParserGlobal();
+
+// A detached document parsed from `html`, owned for the life of the process
+// like every DOMParser result; what document.implementation.createHTMLDocument
+// hands back as well.
+dom::Document* parseIntoNewDocument(const std::string& html);
 
 // A full document surface — the queries, the factories, the element accessors —
 // bound to `doc` rather than to whatever the engine is currently showing. The

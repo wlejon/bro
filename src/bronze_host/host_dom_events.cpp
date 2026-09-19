@@ -23,6 +23,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_event_spec.h"
 #include "bronze_host/host_realm_scope.h"
@@ -377,7 +378,7 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         });
         dt.set("items", itemsArr);
 
-        b.set("dataTransfer", dt.get());
+        b.set("dataTransfer", ev::setPrototype(dt.get(), dataTransferHostClass().prototype()));
 
         if (drag->type() == "dragend") {
             g_dragSession.data.clear();
@@ -467,7 +468,7 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
             return ev::fromUtf8(typeList[i]);
         });
         dt.set("types", typesArr);
-        b.set("clipboardData", dt.get());
+        b.set("clipboardData", ev::setPrototype(dt.get(), dataTransferHostClass().prototype()));
     }
 
     // The three write-throughs. `live` is captured by value: the closures

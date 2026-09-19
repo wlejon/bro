@@ -275,6 +275,91 @@ Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::stri
     return makeHostProxy(std::move(traps));
 }
 
+namespace {
+
+// The legacy event interfaces document.createEvent accepts, lowercased; every
+// one of them yields an uninitialized Event the caller initEvent()s, except
+// "customevent" which yields a CustomEvent so `detail` is there to set.
+bool isCreateEventInterface(const std::string& lower) {
+    static const char* const kNames[] = {
+        "event", "events", "htmlevents", "svgevents", "customevent", "uievent", "uievents",
+        "mouseevent", "mouseevents", "keyboardevent", "keyevents", "touchevent", "focusevent",
+        "inputevent", "wheelevent", "pointerevent", "dragevent", "compositionevent", "messageevent",
+    };
+    for (const char* n : kNames) if (lower == n) return true;
+    return false;
+}
+
+std::string locationHref() {
+    ev::GlobalValue loc = ev::globalValue("location");
+    if (loc.found && ev::isObject(loc.value)) {
+        Value href = ev::getProperty(loc.value, "href");
+        if (ev::isString(href)) return ev::toUtf8(href);
+    }
+    return "bro://app/";
+}
+
+// hidden / visibilityState / location / URL / documentURI / implementation /
+// createEvent / compatMode / characterSet / contentType: the document
+// identity and lifecycle surface. Visibility follows the engine's page
+// visibility (Engine::pageVisible, driven by focus and minimize, headless
+// always visible) for every document the engine hosts, sub-documents
+// included, since they share the window.
+void decorateDocumentExtras(ObjectBuilder& b, dom::Document* fixed) {
+    (void)fixed;
+    b.accessor("hidden", [](Value, std::span<const Value>) {
+        auto* e = hostEngine();
+        return ev::fromBool(e ? !e->pageVisible() : false);
+    }, nullptr);
+    b.accessor("visibilityState", [](Value, std::span<const Value>) {
+        auto* e = hostEngine();
+        return ev::fromUtf8(e && !e->pageVisible() ? "hidden" : "visible");
+    }, nullptr);
+    b.accessor("location", [](Value, std::span<const Value>) {
+        ev::GlobalValue loc = ev::globalValue("location");
+        return loc.found ? loc.value : ev::null();
+    }, nullptr);
+    b.accessor("URL", [](Value, std::span<const Value>) { return ev::fromUtf8(locationHref()); }, nullptr);
+    b.accessor("documentURI", [](Value, std::span<const Value>) { return ev::fromUtf8(locationHref()); }, nullptr);
+    b.set("compatMode", ev::fromUtf8("CSS1Compat"));
+    b.set("characterSet", ev::fromUtf8("UTF-8"));
+    b.set("charset", ev::fromUtf8("UTF-8"));
+    b.set("contentType", ev::fromUtf8("text/html"));
+    {
+        ObjectBuilder impl;
+        impl.def("createHTMLDocument", 1, [](Value, std::span<const Value> a) -> Value {
+            Value tV = argAt(a, 0);
+            std::string title = (ev::isUndefined(tV) || ev::isObject(tV)) ? "" : ev::toUtf8(tV);
+            std::string html = "<!DOCTYPE html><html><head>";
+            if (!title.empty()) html += "<title>" + title + "</title>";
+            html += "</head><body></body></html>";
+            return hostDocumentValue(parseIntoNewDocument(html));
+        });
+        impl.def("hasFeature", 2, [](Value, std::span<const Value>) { return ev::fromBool(true); });
+        impl.def("createDocumentType", 3, [](Value, std::span<const Value>) { return ev::null(); });
+        b.set("implementation", impl.get());
+    }
+    b.def("createEvent", 1, [](Value, std::span<const Value> a) -> Value {
+        Value nV = argAt(a, 0);
+        std::string name = (ev::isUndefined(nV) || ev::isObject(nV)) ? "" : ev::toUtf8(nV);
+        std::string lower = name;
+        for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (!isCreateEventInterface(lower)) {
+            return ev::throwError("NotSupportedError: document.createEvent('" + name +
+                                  "') — no such event interface");
+        }
+        ev::GlobalValue ctor = ev::globalValue(lower == "customevent" ? "CustomEvent" : "Event");
+        if (!ctor.found || !ev::isFunction(ctor.value)) {
+            return ev::throwError("document.createEvent: the Event constructor is not installed");
+        }
+        Value type = ev::fromUtf8("");
+        ev::CallResult r = ev::construct(ctor.value, std::span<const Value>(&type, 1));
+        return r.value;
+    });
+}
+
+}  // namespace
+
 Value makeDocumentValue(dom::Document* fixed) {
     ObjectBuilder b;
     b.set("nodeType", ev::fromDouble(9));
@@ -544,6 +629,8 @@ Value makeDocumentValue(dom::Document* fixed) {
         ev::resolvePromise(p.get(), ev::undefined());
         return p.get();
     });
+
+    decorateDocumentExtras(b, fixed);
 
     installElementEventTarget(b, [fixed]() -> dom::Element* {
         dom::Document* doc = documentFor(fixed);

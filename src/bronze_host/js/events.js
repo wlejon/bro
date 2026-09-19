@@ -32,6 +32,25 @@
                             'brokit\'s installEventTarget must run first');
     }
 
+    // The legacy initializer document.createEvent('Event') pairs with: it
+    // (re)types an event that has not been dispatched yet, and resets the
+    // flags a previous dispatch may have set. Same data slots the brokit
+    // constructor fills, so a listener sees no difference between an event
+    // built either way.
+    if (typeof Event.prototype.initEvent !== 'function') {
+        Object.defineProperty(Event.prototype, 'initEvent', {
+            value: function initEvent(type, bubbles, cancelable) {
+                this.type = String(type);
+                this.bubbles = !!bubbles;
+                this.cancelable = !!cancelable;
+                this.defaultPrevented = false;
+                this._stopPropagation = false;
+                this._stopImmediate = false;
+            },
+            writable: true, enumerable: false, configurable: true,
+        });
+    }
+
     const num = (opts, k, d) => (opts && typeof opts[k] === 'number') ? opts[k] : d;
     const str = (opts, k, d) => (opts && typeof opts[k] === 'string') ? opts[k] : d;
     const flag = (opts, k) => !!(opts && opts[k]);

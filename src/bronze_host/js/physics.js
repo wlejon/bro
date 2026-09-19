@@ -156,13 +156,21 @@
         if (tag === undefined) throw new TypeError("Physics.setKinematic: tag is required");
         __bro_native.physics.setKinematic(tag);
     });
-    fn(ns_Physics, "moveKinematic", function moveKinematic(tag, x, y, z, dt) {
+    // Two forms, as always: (tag, x, y, z, dt) keeps the body's rotation, and
+    // (tag, x, y, z, qx, qy, qz, qw, dt) carries a target rotation too — the
+    // one a kinematic platform or a picked-up prop turns with. The natives
+    // have one arity each, so the form is chosen here by what was passed.
+    fn(ns_Physics, "moveKinematic", function moveKinematic(tag, x, y, z, a4, a5, a6, a7, a8) {
         if (tag === undefined) throw new TypeError("Physics.moveKinematic: tag is required");
         if (x === undefined) throw new TypeError("Physics.moveKinematic: x is required");
         if (y === undefined) throw new TypeError("Physics.moveKinematic: y is required");
         if (z === undefined) throw new TypeError("Physics.moveKinematic: z is required");
-        if (dt === undefined) throw new TypeError("Physics.moveKinematic: dt is required");
-        __bro_native.physics.moveKinematic(tag, x, y, z, dt);
+        if (a8 !== undefined) {
+            __bro_native.physics.moveKinematicRot(tag, x, y, z, +a4, +a5, +a6, +a7, +a8);
+            return;
+        }
+        if (a4 === undefined) throw new TypeError("Physics.moveKinematic: dt is required");
+        __bro_native.physics.moveKinematic(tag, x, y, z, a4);
     });
     fn(ns_Physics, "getContacts", function getContacts() {
         const raw = JSON.parse(__bro_native.physics.getContacts());

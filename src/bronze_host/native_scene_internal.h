@@ -416,6 +416,9 @@ void bro_scene_SceneNode_worldAnchor_set(void* self, const double* v, uint32_t l
 
 namespace bro::bronze_host {
 bool registerSceneShaderNatives(std::string* error);
+// native_scene_extras.cpp: the per-type accessors and instanced-mesh
+// operations js/scene_extras.js wraps.
+bool registerSceneExtraNatives(std::string* error);
 }
 
 namespace scene = bro::scene;

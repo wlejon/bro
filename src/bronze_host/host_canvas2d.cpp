@@ -3,6 +3,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_html_interfaces.h"
 #include "canvas/canvas2d.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
@@ -16,9 +17,12 @@ namespace bro::bronze_host {
 
 namespace {
 
+// The serialization the fillStyle / strokeStyle getters have always answered:
+// `rgba(r,g,b,a)` with the alpha to two decimals (`1.00`, `0.50`), which is
+// what apps that round-trip a style string compare against.
 std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%g)", r, g, b, a == 255 ? 1.0 : a / 255.0);
+    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", r, g, b, a / 255.0f);
     return buf;
 }
 
@@ -36,7 +40,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 cs->getFillColor(r, g, b, a);
                 return ev::fromUtf8(colorToRGBA(r, g, b, a));
             }
-            return ev::fromUtf8("rgba(0,0,0,1)");
+            return ev::fromUtf8("rgba(0,0,0,1.00)");
         },
         [el](Value, std::span<const Value> a) -> Value {
             if (el && el->canvasScene() && !a.empty()) {
@@ -64,7 +68,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 cs->getStrokeColor(r, g, b, a);
                 return ev::fromUtf8(colorToRGBA(r, g, b, a));
             }
-            return ev::fromUtf8("rgba(0,0,0,1)");
+            return ev::fromUtf8("rgba(0,0,0,1.00)");
         },
         [el](Value, std::span<const Value> a) -> Value {
             if (el && el->canvasScene() && !a.empty()) {
@@ -112,10 +116,12 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         [el](Value, std::span<const Value> a) -> Value {
             if (el && el->canvasScene() && !a.empty()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                // An unknown string is ignored and the state keeps its value,
+                // as the HTML spec says for lineCap and as the old binding did.
                 std::string s = ev::toUtf8(a[0]);
-                if (s == "round") cs->setLineCap(1);
+                if (s == "butt") cs->setLineCap(0);
+                else if (s == "round") cs->setLineCap(1);
                 else if (s == "square") cs->setLineCap(2);
-                else cs->setLineCap(0);
             }
             return ev::undefined();
         });
@@ -133,9 +139,9 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             if (el && el->canvasScene() && !a.empty()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 std::string s = ev::toUtf8(a[0]);
-                if (s == "round") cs->setLineJoin(1);
+                if (s == "miter") cs->setLineJoin(0);
+                else if (s == "round") cs->setLineJoin(1);
                 else if (s == "bevel") cs->setLineJoin(2);
-                else cs->setLineJoin(0);
             }
             return ev::undefined();
         });
@@ -666,10 +672,10 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 segs.push_back(static_cast<float>(ev::toDouble(ev::getElement(a[0], i))));
             }
         }
-        if (segs.size() % 2 == 1) {
-            size_t n = segs.size();
-            for (size_t i = 0; i < n; ++i) segs.push_back(segs[i]);
-        }
+        // Stored as given: getLineDash() answers the list the caller set, and
+        // the paint path (CanvasScene::applyStroke) is what doubles an odd
+        // list, so doubling here too would make the getter answer a list four
+        // times as long as the one set.
         cs->setLineDash(segs);
         return ev::undefined();
     });
@@ -902,7 +908,10 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         return ev::undefined();
     });
 
-    return b.get();
+    // Branded: `ctx instanceof CanvasRenderingContext2D` and
+    // `ctx.constructor.name`, which a canvas library sniffs before deciding
+    // it has a 2D context. The value handed back is the post-call address.
+    return ev::setPrototype(b.get(), canvasRenderingContext2DHostClass().prototype());
 }
 
 }  // namespace bro::bronze_host

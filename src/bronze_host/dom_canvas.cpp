@@ -39,7 +39,35 @@ struct CanvasState {
     ev::Persistent ctx2dObj;
     ev::Persistent sceneObj;
     bool hasGl = false;
+    // The context type this canvas was first asked for. A canvas has ONE
+    // context mode for its life (HTML: getContext with a different type on a
+    // canvas already in a mode answers null), and the QuickJS-era cache was
+    // keyed on exactly that rule. Without it `getContext('webgl') ||
+    // getContext('2d')` gives one element both a WebGL drawing buffer and a
+    // CanvasScene, and the compositor draws both.
+    std::string contextType;
 };
+
+// The drawing-buffer resize behind `canvas.width = w` / `canvas.height = h`
+// and the width/height attributes. The bitmap of a 2D canvas follows the
+// intrinsic size (a zero is a real, empty bitmap there); a WebGL drawing
+// buffer keeps its size on a zero, as the old binding guarded, because a 0x0
+// FBO is a GL error every following draw repeats.
+void resizeBacking(CanvasState* cs, int w, int h, bool widthChanged) {
+    if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
+        if (widthChanged) cScene->setIntrinsicWidth(w); else cScene->setIntrinsicHeight(h);
+        cScene->reset();
+    }
+    if (cs->glCtx) {
+        const int curW = cs->glCtx->canvasWidth();
+        const int curH = cs->glCtx->canvasHeight();
+        if (widthChanged) {
+            if (w > 0 && w != curW) cs->glCtx->resize(w, curH);
+        } else {
+            if (h > 0 && h != curH) cs->glCtx->resize(curW, h);
+        }
+    }
+}
 
 std::vector<std::unique_ptr<CanvasState>> s_canvases;
 
@@ -74,11 +102,7 @@ Value makeCanvasValue(dom::Element* el) {
                 [cs](Value, std::span<const Value> a) {
                     int w = i32At(a, 0);
                     cs->el->setAttribute("width", std::to_string(w));
-                    if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
-                        cScene->setIntrinsicWidth(w);
-                        cScene->reset();
-                    }
-                    if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
+                    resizeBacking(cs, w, 0, /*widthChanged=*/true);
                     return ev::undefined();
                 });
     b.accessor("height",
@@ -88,11 +112,7 @@ Value makeCanvasValue(dom::Element* el) {
                [cs](Value, std::span<const Value> a) {
                    int h = i32At(a, 0);
                    cs->el->setAttribute("height", std::to_string(h));
-                   if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
-                        cScene->setIntrinsicHeight(h);
-                        cScene->reset();
-                    }
-                   if (cs->glCtx) cs->glCtx->resize(cs->glCtx->canvasWidth(), h);
+                   resizeBacking(cs, 0, h, /*widthChanged=*/false);
                    return ev::undefined();
                });
 
@@ -138,19 +158,9 @@ Value makeCanvasValue(dom::Element* el) {
             std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
             cs->el->setAttribute(name, val);
             if (name == "width") {
-                int w = std::atoi(val.c_str());
-                if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
-                    cScene->setIntrinsicWidth(w);
-                    cScene->reset();
-                }
-                if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
+                resizeBacking(cs, std::atoi(val.c_str()), 0, /*widthChanged=*/true);
             } else if (name == "height") {
-                int h = std::atoi(val.c_str());
-                if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
-                    cScene->setIntrinsicHeight(h);
-                    cScene->reset();
-                }
-                if (cs->glCtx) cs->glCtx->resize(cs->glCtx->canvasWidth(), h);
+                resizeBacking(cs, 0, std::atoi(val.c_str()), /*widthChanged=*/false);
             }
         }
         return ev::undefined();
@@ -159,6 +169,12 @@ Value makeCanvasValue(dom::Element* el) {
         Value typeV = argAt(a, 0);
         if (ev::isObject(typeV)) return ev::null();
         std::string type = ev::toUtf8(typeV);
+        // One context mode per canvas. The mode is fixed by the first
+        // successful getContext; a later call for another type answers null
+        // (and `webgl` after `webgl2` is another type, as the old cache had
+        // it). The lock is released only if the backing went away with a
+        // destroyed element, which is when the state itself is discarded.
+        if (!cs->contextType.empty() && cs->contextType != type) return ev::null();
         if (type == "2d") {
             if (auto* eng = hostEngine()) {
                 eng->createCanvasContext(cs->el);
@@ -166,6 +182,7 @@ Value makeCanvasValue(dom::Element* el) {
             if (ev::isObject(cs->ctx2dObj.get())) return cs->ctx2dObj.get();
             Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get(), cs->el);
             cs->ctx2dObj.set(ctx2d);
+            cs->contextType = type;
             return ctx2d;
         }
         if (type == "scene") {
@@ -180,6 +197,7 @@ Value makeCanvasValue(dom::Element* el) {
             if (!sg) return ev::null();
             Value scn = createSceneGraphValue(sg, cs->el);
             cs->sceneObj.set(scn);
+            cs->contextType = type;
             return scn;
 #else
             return ev::null();
@@ -198,6 +216,7 @@ Value makeCanvasValue(dom::Element* el) {
         Value glValue = createGlContextValue(ctx, cs->jsObj.get());
         cs->glObj.set(glValue);
         cs->hasGl = true;
+        cs->contextType = type;
         return cs->glObj.get();
     });
 

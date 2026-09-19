@@ -29,10 +29,22 @@ bool registerNatives_physics(std::string* error);
 // and registered here, not in the generated natives/physics/ pair.
 extern "C" void bro_physics_setMotionType(int32_t tag, bool isStatic);
 
+// Physics.moveKinematic's rotating form. The public member has always taken
+// either (tag, x, y, z, dt) or (tag, x, y, z, qx, qy, qz, qw, dt) — the
+// QuickJS binding dispatched on argc — and a native has one arity, so the
+// nine-argument form is its own entry point and js/physics.js picks by the
+// arguments it was given. Declared and registered here beside setMotionType
+// until idl/physics.idl carries it.
+extern "C" void bro_physics_moveKinematicRot(int32_t tag, double x, double y, double z,
+                                             double qx, double qy, double qz, double qw,
+                                             double dt);
+
 bool registerPhysicsNatives(std::string* error) {
     if (!registerNatives_physics(error)) return false;
     return natives::fn("__bro_native.physics.setMotionType", (void*)&bro_physics_setMotionType,
-                       "void", {"i32", "bool"}, error);
+                       "void", {"i32", "bool"}, error) &&
+           natives::fn("__bro_native.physics.moveKinematicRot", (void*)&bro_physics_moveKinematicRot,
+                       "void", {"i32", "f64", "f64", "f64", "f64", "f64", "f64", "f64", "f64"}, error);
 }
 
 static thread_local std::vector<float> tl_allTransformsBuf;
@@ -427,6 +439,19 @@ void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double
         JPH::Quat rot = w->getRotation(id);
         w->moveKinematic(id, JPH::RVec3(x, y, z), rot, (float)dt);
     }
+}
+
+void bro_physics_moveKinematicRot(int32_t tag, double x, double y, double z,
+                                  double qx, double qy, double qz, double qw, double dt) {
+    auto* pw = getActiveWorld();
+    auto* w = pw ? pw->getWorld() : nullptr;
+    if (!w) return;
+    JPH::BodyID id = pw->bodyIdForTag(tag);
+    if (id.IsInvalid()) return;
+    JPH::Quat rot((float)qx, (float)qy, (float)qz, (float)qw);
+    if (rot.LengthSq() > 0.0f) rot = rot.Normalized();
+    else rot = w->getRotation(id);
+    w->moveKinematic(id, JPH::RVec3(x, y, z), rot, (float)dt);
 }
 
 void bro_physics_setFrictionCombine(int32_t tag, const char* mode) {

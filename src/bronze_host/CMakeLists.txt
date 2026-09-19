@@ -142,6 +142,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_file_path.cpp
     host_event_spec.cpp
     host_navigator.cpp
+    host_performance.cpp
     host_intl.cpp
     host_web_animations.cpp
     host_brokit.cpp
@@ -220,6 +221,7 @@ if(BRO_WITH_3D)
         native_scene_nodes.cpp
         native_scene_lights.cpp
         native_scene_shaders.cpp
+        native_scene_extras.cpp
         native_scene_core.cpp
         native_scene_env.cpp
         native_scene_terrain.cpp
@@ -530,6 +532,7 @@ else()
     bro_compile_js(gizmo      bro_gizmo_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(animation  bro_animation_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(scene      bro_scene_main    NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
+    bro_compile_js(scene_extras bro_scene_extras_main NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(motion     bro_motion_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(server     bro_server_main     NATIVE_MANIFEST "${BRO_NATIVE_MANIFEST}")
     bro_compile_js(impostor   bro_impostor_main)

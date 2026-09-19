@@ -49,7 +49,7 @@ int32_t bro_net_connect(const char* address, int32_t port, uint64_t callback);
 
 // bro.net.disconnect
 //   registered at __bro_native.net.disconnect
-void bro_net_disconnect(int32_t peerId);
+void bro_net_disconnect(int32_t peerId, int32_t reason);
 
 // bro.net.disconnectAll
 //   registered at __bro_native.net.disconnectAll
