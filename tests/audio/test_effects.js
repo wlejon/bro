@@ -103,6 +103,7 @@ expectDifferent('eq', () => {
 });
 
 for (const mode of ['softclip', 'hardclip', 'foldback', 'bitcrush']) {
+    const tol = (mode === 'foldback') ? 0.0002 : 0.0005;
     expectDifferent('distortion-' + mode, () => {
         ctx.setBusDistortionEnabled(bus, true);
         ctx.setBusDistortionMode(bus, mode);
@@ -112,5 +113,5 @@ for (const mode of ['softclip', 'hardclip', 'foldback', 'bitcrush']) {
             ctx.setBusDistortionCrushBits(bus, 3);
             ctx.setBusDistortionCrushRate(bus, 0.1);
         }
-    });
+    }, tol);
 }
