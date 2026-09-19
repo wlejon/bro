@@ -536,8 +536,23 @@ void installWorkerGlobals(engine::Engine& engine) {
             });
         });
 
-    ev::registerGlobal("postMessage", ev::makeFunction([](Value, std::span<const Value>) { return ev::undefined(); }, 1, "postMessage"));
-    ev::registerGlobal("close", ev::makeFunction([](Value, std::span<const Value>) { return ev::undefined(); }, 0, "close"));
+    // `postMessage` and `close` are worker-scope names (DedicatedWorkerGlobal
+    // Scope), and the compiler's manifest lists them, so the MAIN realm has to
+    // answer them too or a compiled read of either is a fatal miss. The answer
+    // is a no-op — but only when nothing real holds the name. A host global is
+    // an own property of globalThis, so a stub registered over the window's
+    // `close` replaces `window.close` itself, and a child window that calls it
+    // never closes. This install runs last (installPlatformExtensions is at the
+    // foot of installDomGlobals), so the guard is what keeps the window's own
+    // members from being the ones a stub lands on.
+    if (!ev::globalValue("postMessage").found) {
+        ev::registerGlobal("postMessage", ev::makeFunction(
+            [](Value, std::span<const Value>) { return ev::undefined(); }, 1, "postMessage"));
+    }
+    if (!ev::globalValue("close").found) {
+        ev::registerGlobal("close", ev::makeFunction(
+            [](Value, std::span<const Value>) { return ev::undefined(); }, 0, "close"));
+    }
 }
 
 // Buffer and structuredClone used to be installed here; they come with the

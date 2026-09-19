@@ -127,6 +127,13 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     opts.censusOutPath = discoverCensusOutPath(engine, filename);
     opts.moduleHandleOut = moduleHandleOut;
     opts.optimize = engine.jitOptimize();
+    // One module map per realm. The page is one compilation unit and a headless
+    // driver script is another, so without this a test's `import "/app/lib/x.js"`
+    // compiles the app's module into its OWN unit and evaluates it a second
+    // time — a second instance of state the page already holds. Publishing here
+    // is what makes the page's instances the ones a later unit binds
+    // (bronze: runtime/module_registry.h).
+    opts.moduleRegistry = true;
 
     std::string execCode = code;
     if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
@@ -202,6 +209,11 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     opts.pinsPath = discoverPinsPath(engine, absPath);
     opts.censusOutPath = discoverCensusOutPath(engine, absPath);
     opts.optimize = engine.jitOptimize();
+    // The consuming half of the same seam: a specifier that resolves to a file
+    // the page already evaluated binds that instance instead of compiling a
+    // second copy of it into this unit. The driver's OWN file is the entry and
+    // is never published, so running the same driver twice runs it twice.
+    opts.moduleRegistry = true;
 
     bronze::embed::CallResult res;
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {

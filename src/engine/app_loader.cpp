@@ -109,9 +109,28 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
     manifest.basePath = appDir;
     manifest.htmlPath = resolvePath(appDir, "index.html", mounts);
 
-    std::string html = loadFile(manifest.htmlPath);
+    std::error_code ec;
+    std::string html;
+    if (std::filesystem::exists(manifest.htmlPath, ec)) {
+        html = loadFile(manifest.htmlPath);
+    }
+
     if (html.empty()) {
-        LOG_ERROR("AppLoader::loadApp: no index.html found in '%s'", appDir.c_str());
+        std::string serverJs = resolvePath(appDir, "server.js", mounts);
+        std::string mainJs = resolvePath(appDir, "main.js", mounts);
+        std::string entryJs;
+        if (std::filesystem::exists(serverJs, ec)) {
+            entryJs = serverJs;
+        } else if (std::filesystem::exists(mainJs, ec)) {
+            entryJs = mainJs;
+        }
+        if (!entryJs.empty()) {
+            manifest.scripts.push_back({entryJs, {}, /*isModule=*/true});
+            manifest.htmlPath.clear();
+            LOG_INFO("AppLoader: loaded script entry '%s' for '%s'", entryJs.c_str(), appDir.c_str());
+            return manifest;
+        }
+        LOG_ERROR("AppLoader::loadApp: no index.html or server.js/main.js found in '%s'", appDir.c_str());
         return manifest;
     }
 

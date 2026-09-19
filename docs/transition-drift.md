@@ -30,7 +30,9 @@ where noted.
 
 Status pass of 2026-09-19 (runtime probes against `build/Release/bro-headless.exe`
 built at 16:17, plus source reads in bro and every sibling working tree):
-**64 fixed · 2 kept-new · 3 open**. The three open rows are C1, C3 and C4 (bronze runtime contract).
+**67 fixed · 2 kept-new · 0 open**. C1, C3 and C4 — the last three, all bronze
+runtime contract — closed on 2026-09-19 against `build-app/Release/bro-headless.exe`;
+their rows carry the evidence and C1's coverage limits follow its table.
 
 ## A. Engine glue reimplemented instead of routed
 
@@ -79,10 +81,52 @@ so these were probed against the real runtime, not inferred.
 
 | # | What | Old | New | Effect | Evidence | Status |
 |---|------|-----|-----|--------|----------|--------|
-| C1 | Module identity between the page's `<script type="module">` and a headless driver script | one module map per context: a test's `import "/app/lib/x.js"` got the page's instance | `evalScriptFileJit` compiles the driver as its own unit; `/app/...` modules evaluate a second time | 62 broworkshop tests that import `/app/` observe their own copy, not the app | confirmed (repro: `counter.js` evaluated twice, different ids) | **open** — `eval_jit.cpp:194-217` still hands `bronze::eval::evalFile` its own `EvalOptions`; nothing shares the page's module map |
+| C1 | Module identity between the page's `<script type="module">` and a headless driver script | one module map per context: a test's `import "/app/lib/x.js"` got the page's instance | `evalScriptFileJit` compiles the driver as its own unit; `/app/...` modules evaluate a second time | 62 broworkshop tests that import `/app/` observe their own copy, not the app | confirmed (repro: `counter.js` evaluated twice, different ids); now `counter.js evaluated` once, `same=true` | **fixed** — per-realm module registry (bronze `runtime/module_registry.h`), turned on by `eval_jit.cpp` for both the page and the driver. Scope and the one gap are below the table |
 | C2 | `performance.now()` under headless `advanceTime` | — | virtual; the smokes' "wait 8 s wall" loops return instantly | tests never actually waited for async `onReady` | confirmed | kept-new (virtual time *is* the headless contract — `host_performance.cpp:5-13` puts User Timing on the same clock on purpose, so a `measure` across `advanceTime` answers the virtual span; tests must use `Date.now()`) |
-| C3 | `Object.getPrototypeOf(Atomics)` | `Object.prototype` | `bronze::fatal` in `runtime::objectGetPrototypeOf` (process abort, exit 3) | any reflective walk over globals kills the process | confirmed (backtrace in probe run) | **open** — still aborts, with a new message: `internal: a plain object whose root shape names no prototype` (`builtin_object.cpp:333`). bronze's real-prototype work (`bronze 88b9aa2`, `43e3fa6`, `77475bd`) closed the sibling `unsupported:` branch but not this one |
-| C4 | `Object.getOwnPropertyNames(globalThis)` / builtin prototypes | lists host globals and `String.prototype` methods | host globals and builtin members resolve by name but do not enumerate (`String.prototype` enumerates 1 name) | feature-detection code that enumerates breaks; `globalThis['advanceTime']` is `undefined` while bare `advanceTime` works | confirmed | **open** (partly improved) — `globalThis` now enumerates 580 names including `document` and `bro`, but the headless driver globals still do not (`n.includes('advanceTime')` is `false`, `globalThis['advanceTime']` is `undefined` while bare `advanceTime` is a function) and `String.prototype` still enumerates 1 name |
+| C3 | `Object.getPrototypeOf(Atomics)` | `Object.prototype` | `bronze::fatal` in `runtime::objectGetPrototypeOf` (process abort, exit 3) | any reflective walk over globals kills the process | confirmed (backtrace in probe run); now `Object.getPrototypeOf(Atomics) === Object.prototype` | **fixed** — the four namespace objects were built on a root shape carrying `undefined` rather than %Object.prototype%, so the getter had no answer and took the `internal:` exit; `Reflect` named `null`. Each now names the prototype 21.3.1 / 25.5 / 25.4.2 / 28.1 give it, which also restores `Math.hasOwnProperty` and makes their members non-enumerable. Pinned by `tests/oracle/cases/namespace_object_reflection` in bronze |
+| C4 | `Object.getOwnPropertyNames(globalThis)` / builtin prototypes | lists host globals and `String.prototype` methods | host globals and builtin members resolve by name but do not enumerate (`String.prototype` enumerates 1 name) | feature-detection code that enumerates breaks; `globalThis['advanceTime']` is `undefined` while bare `advanceTime` works | confirmed; now 569 own names including `advanceTime`/`screenshot`, `typeof globalThis['advanceTime'] === 'function'`, `'advanceTime' in globalThis`, `String.prototype` enumerates 37 | **fixed** in bronze, both halves. (a) `Realm::initGlobalObject` copied the host registry ONCE, at realm construction, and `rtRegisterHostGlobal` never touched a realm again — so every name registered after the first look at `globalThis` (which is what creates the default realm) was bare-name-only. Registration now also defines the property on every live realm, skipping a name the builtin ladder answers so the property cannot disagree with the bare name. (b) `String.prototype` IS a String exotic object with `[[StringData]] ""`, and the own-key/`getOwnPropertyDescriptor`/`hasOwn` paths answered from the characters and never looked at its shape; they now union the two the way 10.4.3.3 and 10.4.3.1 step 3 say. Pinned by `tests/embed/embed_global_object_test.cpp` and `tests/oracle/cases/string_exotic_own_keys`. (c) bro's half: once a host global is a real own property of `globalThis`, the LAST registration of a name is the one `window.<name>` reads, and `installWorkerGlobals` registered no-op worker-scope `close`/`postMessage` stubs at the very foot of `installDomGlobals` — so `window.close` became the stub and a child window that called it never closed (`tests/window/test_multiwindow_message.js`). `host_worker.cpp:534` now registers each stub only when nothing already holds the name |
+
+### C1: what the module registry covers, and what it does not
+
+A bronze compilation unit is a whole module graph, flattened: the linker merges
+every file it reached into one program and renames each file's module-level
+bindings into one namespace, so a module has no runtime existence of its own.
+Compiling the same file into a second unit therefore ran its top level a second
+time. The fix gives each **realm** a registry of the module namespace objects a
+unit left behind, keyed by canonical path: a unit publishes one per non-entry
+file it evaluated, and a later unit in the same realm treats a path already
+published as *external* — it parses the file for its export names, emits no
+statements for it, and binds each export from the registry.
+
+Covered:
+
+- the page's `<script type="module">` graph and any later `evalFile`/`evalScript`
+  driver or `-e` expression in the same realm, in either direction;
+- transitive dependencies — a module the page reached is shared even when the
+  driver reaches it through a file the page never loaded;
+- `import * as ns`, `export default`, and object identity across the seam;
+- an app built AOT, *if* it was compiled with `bronze build --module-registry`.
+  Nothing in bro passes that flag today, so a page carrying an `app.dll`
+  publishes nothing and a driver against it still compiles its own copy.
+
+Not covered:
+
+- **live bindings.** An external module's exports are bound once, when the
+  importing unit evaluates: `import { count }` where the exporting module later
+  reassigns `count` reads the value as of the bind. Object identity and
+  mutation are shared (which is what a test importing an app's state needs);
+  a reassigned `let` or `var` export is not. Reading it through
+  `import * as ns` then `ns.count` is live, because a namespace member is a
+  getter over the exporting module's slot.
+- **a file bro inlined rather than imported.** bro concatenates every
+  `<script>` in the document into one entry, so `<script type="module"
+  src="/app/main.js">` makes `main.js` part of the entry rather than a module in
+  the graph. A driver that imports `/app/main.js` compiles its own copy; a
+  driver that imports what `main.js` imports gets the page's instance.
+- **across realms.** An iframe or a worker is a different realm and keeps its
+  own registry, which is what a module map per context means.
+- the ENTRY of a unit is never published, so running the same driver twice runs
+  it twice.
 
 ## E. Web-platform surface gaps (runtime-confirmed on both binaries, 2026-09-19)
 
@@ -263,5 +307,5 @@ and no caller in `src/` or `broworkshop` drives them per frame).
 ## D. Not drift (noted so nobody chases them)
 
 - Old `Element` was one mega-class: every element exposed video/img/form members. New per-tag objects dropping `play()` from a `<div>` is correct.
-- bronze does not enumerate host globals or builtin prototype members via `Object.getOwnPropertyNames`, though `in`/`[]` resolve them; `String.prototype` enumerates 1 name. Enumeration-based diffs are noise; use the name-driven probe. (Partly superseded — see C4: `globalThis` does enumerate now.)
+- ~~bronze does not enumerate host globals or builtin prototype members via `Object.getOwnPropertyNames`, though `in`/`[]` resolve them; `String.prototype` enumerates 1 name. Enumeration-based diffs are noise; use the name-driven probe.~~ Superseded by C4: both enumerate now, so an enumeration diff against the oracle is a real signal again.
 - `nodeName`/`tagName`/`nodeType` became data properties instead of getters.

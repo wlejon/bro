@@ -26,6 +26,14 @@
             };
         });
     </script>
+    <script type="module">
+        // The page's half of tests/headless/test_module_instance_sharing.js:
+        // one module, evaluated here, which a driver script later imports by
+        // the same specifier. The `type="module"` is load-bearing — it is what
+        // puts the file in the page's module graph rather than inlining it.
+        import { bump } from "/app/module_instance.js";
+        bump();
+    </script>
     <script>
         // Hide the menu bar so innerHeight matches the configured viewport.
         // (Mouse coords from getBoundingClientRect work either way thanks

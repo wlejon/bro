@@ -141,14 +141,13 @@ Engine::Engine(const EngineConfig& config)
     steamService_ = std::make_unique<steam::SteamService>();
     serverStartTime_ = util::currentTimeMs();
 
-    // Server mode: lightweight init — no rendering, DOM, or audio
     if (displayMode_ == DisplayMode::Server) {
-        LOG_INFO("Server mode initialized (no rendering, no DOM, no audio)");
-        return;
+        LOG_INFO("Server mode initializing (headless server tick loop)");
     }
 
-    // Windowed / Headless initialization (rendering + DOM)
-    const bool hasGL = (displayMode_ == DisplayMode::Windowed) || config.graphics.useGPU;
+    // Windowed / Headless initialization (rendering + DOM). Server mode never initializes GL or window.
+    const bool hasGL = (displayMode_ == DisplayMode::Windowed) ||
+                       (displayMode_ == DisplayMode::Headless && config.graphics.useGPU);
 
     if (hasGL) {
         bool hidden = (displayMode_ == DisplayMode::Headless);
@@ -217,7 +216,7 @@ Engine::Engine(const EngineConfig& config)
     SceneAudioSync::install(audioEngine_.get());
 
     audioInference_ = std::make_unique<AudioInference>();
-    if (displayMode_ != DisplayMode::Headless)
+    if (displayMode_ == DisplayMode::Windowed)
         audioInference_->startThread();
 
     {
@@ -297,7 +296,9 @@ Engine::Engine(const EngineConfig& config)
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
     drawTraversal_->setViewport(viewportWidth_, viewportHeight_, 0);
 
-    initSystemPanels();
+    if (displayMode_ != DisplayMode::Server) {
+        initSystemPanels();
+    }
 
     if (displayMode_ != DisplayMode::Server && splashEnabled_) {
         for (auto& d : systemDocs_) {
@@ -336,9 +337,16 @@ void Engine::initAppRealm() {
 
     manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
-    std::string html = AppLoader::loadFile(manifest_.htmlPath);
+    std::string html;
+    if (!manifest_.htmlPath.empty()) {
+        html = AppLoader::loadFile(manifest_.htmlPath);
+    }
     if (html.empty()) {
-        throw std::runtime_error("Failed to load index.html from " + appDir_);
+        if (!manifest_.scripts.empty()) {
+            html = "<!DOCTYPE html><html><head><title>Bro</title></head><body></body></html>";
+        } else {
+            throw std::runtime_error("Failed to load index.html from " + appDir_);
+        }
     }
 
     drawTraversal_->setBasePath(manifest_.basePath);

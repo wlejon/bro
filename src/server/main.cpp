@@ -1,35 +1,19 @@
 #include "engine/engine.h"
+#include "engine/launcher.h"
+#include "bronze_host/app_module.h"
+#include "bronze_host/eval.h"
+#include "bronze_host/host_headless.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-
-static std::string exeDir() {
-    std::string path;
-#ifdef _WIN32
-    char buf[260];
-    DWORD len = GetModuleFileNameA(nullptr, buf, 260);
-    if (len > 0 && len < 260) path = std::string(buf, len);
-#else
-    char buf[4096];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len > 0) { buf[len] = '\0'; path = buf; }
-#endif
-    auto slash = path.find_last_of("/\\");
-    if (slash != std::string::npos) return path.substr(0, slash);
-    return ".";
-}
+#include <vector>
 
 int main(int argc, char* argv[]) {
     bro::util::installSignalHandler();
@@ -41,47 +25,94 @@ int main(int argc, char* argv[]) {
             showHelp = true;
     }
 
-    if (argc < 2 || showHelp) {
+    if (showHelp) {
         fprintf(stderr,
-            "bro-server — dedicated game server for bro\n"
+            "bro-server — dedicated game and agent server for bro\n"
             "\n"
-            "Usage: bro-server [options] <app-directory>\n"
+            "Usage: bro-server [options] [app-directory] [script.js] [-- script-args...]\n"
             "\n"
             "Options:\n"
-            "  --tickrate N          Server tick rate in Hz (default: 60)\n");
-        return showHelp ? 0 : 1;
+            "  --tickrate N          Server tick rate in Hz (default: 60)\n"
+            "  -h, --help            Show this help text\n"
+            "\n"
+            "Server JS globals:\n"
+            "  bro.server.tickrate   Get/set tick rate (Hz)\n"
+            "  bro.server.uptime     Seconds since server started\n"
+            "  bro.server.stop()     Request graceful shutdown\n"
+            "\n"
+            "Also available: bro.net.*, brokit.*, setTimeout/setInterval, fetch,\n"
+            "  WebSocket, localStorage, Workers\n");
+        return 0;
     }
 
     double tickrate = 60.0;
-    std::string appDir;
+    std::string target;
+    std::string scriptPath;
+    std::vector<std::string> scriptArgs;
 
+    bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--") == 0) {
-            break;
+        if (passThrough) {
+            scriptArgs.push_back(argv[i]);
+        } else if (strcmp(argv[i], "--") == 0) {
+            passThrough = true;
         } else if (strcmp(argv[i], "--tickrate") == 0 && i + 1 < argc) {
             tickrate = atof(argv[++i]);
             if (tickrate < 1.0) tickrate = 1.0;
             if (tickrate > 1000.0) tickrate = 1000.0;
-        } else if (appDir.empty()) {
-            appDir = argv[i];
+        } else if (target.empty() && argv[i][0] != '-') {
+            target = argv[i];
+        } else if (scriptPath.empty() && argv[i][0] != '-') {
+            scriptPath = argv[i];
+        } else {
+            scriptArgs.push_back(argv[i]);
         }
     }
 
-    if (appDir.empty()) {
-        fprintf(stderr, "Error: no app directory specified\n");
-        return 1;
+    if (target.empty()) {
+        target = ".";
     }
+
+    bro::bronze_host::setScriptArgs(scriptArgs);
 
     int exitCode = 0;
 
     try {
         bro::engine::EngineConfig config;
-        config.appDir = appDir;
-        config.settingsPath = exeDir() + "/.bro_settings.json";
+        config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
         config.displayMode = bro::engine::DisplayMode::Server;
+
+        if (!bro::engine::resolveLaunchTarget(target, config)) {
+            // If target is directly a .js script file:
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(target, ec) && target.size() >= 3 &&
+                target.rfind(".js") == target.size() - 3) {
+                scriptPath = target;
+                config.appDir = bro::engine::executableDir();
+            } else {
+                fprintf(stderr, "Error: no app found at '%s'\n", target.c_str());
+                return 1;
+            }
+        }
+
+        bro::engine::publishLaunchEnv(config);
+
+        std::optional<std::string> appModule = bro::bronze_host::findAppModule(config.appDir);
+        config.hostProvidesCompiledApp = appModule.has_value();
 
         auto engine = std::make_unique<bro::engine::Engine>(config);
         engine->setServerTickRate(tickrate);
+
+        if (appModule) {
+            bro::bronze_host::runAppModule(*engine, *appModule);
+        }
+
+        if (!scriptPath.empty()) {
+            if (!bro::bronze_host::evalScriptFile(*engine, scriptPath)) {
+                fprintf(stderr, "Error: failed to evaluate script '%s'\n", scriptPath.c_str());
+                return 1;
+            }
+        }
 
         engine->run();
         engine.reset();
