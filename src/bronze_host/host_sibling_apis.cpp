@@ -331,6 +331,7 @@ void installSiblingApis(engine::Engine& engine) {
     brodiffusion::api::installDiffusion();
 #endif
 #if BRO_WITH_VISION
+    brovisionml::api::setPathResolver(&brokit::api::resolveAssetPath);
     brovisionml::api::installVision();
     // ...then bro's half: the `image` / `matte` ImageBitmaps a standalone
     // sibling cannot mint, and the worker-thread `onDone` form of every
@@ -349,6 +350,7 @@ void installSiblingApis(engine::Engine& engine) {
         // ops from broimage_api, and `gpu`, which installImageGpuModule
         // mounts right after installBroRoots returns.
         installBrokitImageKernels();
+        broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
         broimage::api::installImage();
     }
 }
@@ -398,6 +400,7 @@ void installWorkerSiblingApis() {
     brodiffusion::api::installDiffusion();
 #endif
 #if BRO_WITH_VISION
+    brovisionml::api::setPathResolver(&brokit::api::resolveAssetPath);
     brovisionml::api::installVision();
     // No engine in a worker realm: the jobs this realm launches are drained
     // by tickWorkerSiblingApis below, not by the frame pump.
@@ -408,6 +411,7 @@ void installWorkerSiblingApis() {
     adoptGlobalProperty("FloraWorld");
 #endif
     installBrokitImageKernels();
+    broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
     broimage::api::installImage();
 }
 
