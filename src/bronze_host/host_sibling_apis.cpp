@@ -326,6 +326,7 @@ void installSiblingApis(engine::Engine& engine) {
 #endif
 #if BRO_WITH_DIFFUSION
     // bro.diffusion and bro.triposplat together.
+    brodiffusion::api::setPathResolver(&brokit::api::resolveAssetPath);
     brodiffusion::api::installDiffusion();
 #endif
 #if BRO_WITH_VISION
@@ -386,6 +387,7 @@ void installWorkerSiblingApis() {
     brosoundml::api::installSoundMLCompute();
 #endif
 #if BRO_WITH_DIFFUSION
+    brodiffusion::api::setPathResolver(&brokit::api::resolveAssetPath);
     brodiffusion::api::installDiffusion();
 #endif
 #if BRO_WITH_VISION
