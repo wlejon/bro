@@ -16,10 +16,10 @@
         if (v instanceof Uint8Array) return v;
         if (ArrayBuffer.isView(v)) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
         if (v instanceof ArrayBuffer) return new Uint8Array(v);
-        if (typeof v === 'string') return new TextEncoder().encode(v);
+        if (typeof v === 'string') return new globalThis.TextEncoder().encode(v);
         if (v === null || v === undefined) return new Uint8Array(0);
         if (typeof v === 'object' && typeof v[Symbol.iterator] === 'function') return Uint8Array.from(v);
-        return new TextEncoder().encode(String(v));
+        return new globalThis.TextEncoder().encode(String(v));
     };
 
     // ---- bro.net -------------------------------------------------------------
