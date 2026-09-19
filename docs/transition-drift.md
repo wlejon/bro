@@ -30,7 +30,7 @@ where noted.
 
 Status pass of 2026-09-19 (runtime probes against `build/Release/bro-headless.exe`
 built at 16:17, plus source reads in bro and every sibling working tree):
-**63 fixed · 2 kept-new · 4 open**. The four open rows are C1, C3, C4 and H4.
+**64 fixed · 2 kept-new · 3 open**. The three open rows are C1, C3 and C4 (bronze runtime contract).
 
 ## A. Engine glue reimplemented instead of routed
 
@@ -185,7 +185,7 @@ verified by reading both bodies.
 | H1 | `bro.tensor.openSafetensors(path)` | opened the file; handle had `get(name, "compute"/"fp16", off, n)`, `names()`, `header()`, `close()` (`tensor_bindings_safetensors.cpp`) | `throw new Error("openSafetensors: cannot open " + path)` unconditionally (`brotensor/src/api/js/tensor.js:82-85`); `randn` likewise a stub | confirmed; safetensors loading from JS is gone | fixed (`brotensor 4f1a05f`) — `js/tensor.js:836-911` opens through the path resolver, with `get`/`names`/`header`/`close` plus a new `saveSafetensors`; `randn` and the RNG family are real |
 | H2 | `GpuTensor#download(dst?)` | optional in-place `dst` Tensor (resized to fit) (`tensor_bindings.cpp:136-150`) | no argument (`tensor.js:795`) | confirmed | fixed (`brotensor 4f1a05f`) — `js/tensor.js:768-780` |
 | H3 | `Physics.moveKinematic(tag,x,y,z,qx,qy,qz,qw,dt)` | 9-arg form carried rotation (`physics_bindings.cpp jsw_moveKinematic`, `argc >= 9`) | 5-arg `(tag,x,y,z,dt)` only (`js/physics.js:159`) | confirmed; kinematic bodies cannot rotate | fixed (`0ec18a85` + uncommitted, this chunk) — `js/physics.js:163` has the 9-arg form; the working tree removes the generated 5-arg override in `natives/physics/physics.js` so the hand-written one wins |
-| H4 | `SceneNode#lookAt(x,y,z)` | scalar form and array form (`scene_bindings.cpp js_node_lookAt`) | `Float64Array.from(target)` — a number yields an empty array (`natives/scene/scene.js:283-285`) | confirmed | **open** — `natives/scene/scene.js:285` still calls `toF64(target)` (`:60`, `Float64Array.from`), and nothing in `js/scene_extras.js` patches `lookAt` |
+| H4 | `SceneNode#lookAt(x,y,z)` | scalar form and array form (`scene_bindings.cpp js_node_lookAt`) | `Float64Array.from(target)` — a number yields an empty array (`natives/scene/scene.js:283-285`) | confirmed | fixed — the compiled wrapper is `js/scene.js` (`:126-131` spreads three numbers into an array before `toF64`); `natives/scene/scene.js` is the brosurface template, which the build never compiles. `tests/scene/test_scene_node_extras.js` asserts the two forms agree. |
 | H5 | `bro.net.disconnect(peer, reason)` | `reason` forwarded (`net_bindings.cpp:315-322`) | `reason` dropped (`js/net.js:64-67`) | confirmed | fixed (`0ec18a85`) — `js/net.js:68-70` forwards `reason` (0 when omitted); `docs/net-api.js` is being updated uncommitted in this chunk |
 | H6 | `bro.window.getDisplays()` | `{bounds:{...}, workArea:{...}}` per display | flat `x/y/width/height/workX/...` (`natives/window/window.js:75-82`) | confirmed shape change; check callers | fixed (`8700efe8`) — `js/bro_core.js:75-99` reinstalls `getDisplays` carrying **both** the flat keys and the nested `bounds`/`workArea`; runtime probe confirms both on the live object |
 | H7 | Names with no new handler, grep-confirmed absent: `document.createEvent`, `Event#initEvent`; SceneNode accessors `alphaCutoff/doubleSided/interior/priority/emissiveColor/fillColor/strokeColor/strokeWidth/billboard/...` + `setInstancedMesh/updateInstance(s)/setAtlasGrid`; `bro.mesh.computeTangents/simplifyWithAttributes/subdivideMidpoint/hasSelfIntersections/findSelfIntersections/intersectsMesh`; `bro.ai` NN class (`forward/backward/toArray/fromArray/copyFrom/sgdStep/adamStep/...`, 65 names), belief/grid/learn classes (~60 names); diffusion `sigmas/config/removeControlNet/clearControlNets/reloadTextEncoder/latent/setLatent` + control-vector and krea2 surfaces (36 names); `bro.vision.removeBackground/invert`; `rigging.addRigifySockets`; `net._sendUnframed` | | confirmed missing (see report for the full list) | fixed per group — `document.createEvent` / `Event#initEvent` (`0ec18a85`: `dom_document.cpp:280`, `js/events.js:40`); SceneNode accessors + instancing (`0ec18a85`: new `js/scene_extras.js`); mesh + `rigging.addRigifySockets` (`bromesh 3f09dfa`: `native_mesh_ops.cpp:51/136/188`, `native_mesh_analysis.cpp:280-300`, `native_rigging_core.cpp:477`); `bro.ai` NN / belief / grid / learn (`brogameagent 8c3dcc3`: `host_ai_nn*.cpp`, `host_ai_belief.cpp`, `host_ai_grid.cpp`, `host_ai_learn*.cpp`); diffusion (`brodiffusion 29f5982`: `native_diffusion_pipeline.cpp:434-435`, `native_diffusion_state.cpp:216-217`, `native_diffusion_control.cpp:141-187`, `native_diffusion_krea2.cpp`); vision (`brovisionml 0bc615e`: `native_vision_generative.cpp:334`). **Exception: `net._sendUnframed` is still absent** (oracle `net_bindings.cpp:298/404`) — no caller in `src/`, so it is the one name in this row left open |
@@ -225,9 +225,20 @@ Four resolve on a read and are **not drift**:
 - `Physics.setLayers` / `setLayer` (`js/physics.js:32`, `:150`) are present.
 - `Terrain#setHeightSource` (`js/terrain.js:101`) is present.
 
-The rest — tile `distanceField`/`save`/`addObjectKind`, mesh
-`convexDecomposition` options, tokenizer `encode(text, addSpecial)`,
-`menu.set` array form — still want a both-bodies read.
+The rest were read body-for-body and are not drift:
+- tile `distanceField(sources, {blockMask, costs, conn})` returns Int32Array,
+  or Float32Array when `costs` is given (`js/tile_world.js:276`), `save()`
+  returns a Uint8Array, `addObjectKind(mesh, style)` — all as in
+  `tile_bindings.cpp`.
+- mesh `convexDecomposition` reads the same four keys (`maxHulls`,
+  `maxVerticesPerHull`, `minVolumePerHull`, `resolution`) in both
+  (`bromesh/src/api/native_mesh_ops.cpp:303`, oracle `mesh_bindings.cpp:2105`).
+- tokenizer `encode(text, addSpecial=false)` is identical
+  (`brolm/src/api/native_lm_tokenizer.cpp:88`, oracle `lm_bindings.cpp:504`).
+- `bro.menu.set(array)` takes the array form (`host_menu.cpp:110`,
+  `tests/engine/test_menu.js`). The one difference: a non-array argument now
+  clears the menu instead of throwing `TypeError`; kept, since no app relies
+  on the throw.
 
 ## I. Engine-side capabilities a standalone sibling cannot provide
 
