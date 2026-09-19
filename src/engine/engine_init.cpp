@@ -74,6 +74,7 @@ Engine::Engine(const EngineConfig& config)
     hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     appDir_ = config.appDir;
     titleOverride_ = config.title;
+    installHostBindings_ = config.installHostBindings;
     initDevLoopConfig(config);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===

@@ -8,6 +8,8 @@
 
 namespace bro::engine {
 
+class Engine;
+
 enum class DisplayMode { Windowed, Headless, Server };
 
 /// Sentinel for "no explicit startup window position requested" (the bro.json
@@ -66,6 +68,7 @@ struct EngineConfig {
     Scrollbar::Style viewportScrollbar;
     Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f,
         {255,255,255,20}, {255,255,255,100}, {255,255,255,150}, {255,255,255,180}};
+    std::function<void(Engine&)> installHostBindings;
 };
 
 } // namespace bro::engine

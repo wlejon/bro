@@ -858,6 +858,10 @@ void installWebHostGlobals(engine::Engine& engine) {
     installVideoGlobals();
     initHostCalleeNamer();
 
+    if (engine.installHostBindings()) {
+        engine.installHostBindings()(engine);
+    }
+
     snapshotBaselineGlobalProps();
 }
 

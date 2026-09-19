@@ -13,13 +13,15 @@ struct HeadlessHooks {
     /// Run once the Engine is up and its first run() has returned — virtual
     /// time rebased, the app's document laid out — and before the headless
     /// globals go in or any script evaluates.
-    ///
     /// This is the seam a host whose "app" is NATIVE code needs. bro-bronze-host
     /// registers its host globals and runs the compiled top level here, which
     /// puts that top level exactly where a script-based app's own JS already
     /// is by this point: finished, with its first frame scheduled. The driver
     /// script that follows then steps a running app rather than starting one.
     std::function<void(Engine&)> afterEngine;
+
+    /// Host bindings to register when bronze web host globals are installed.
+    std::function<void(Engine&)> installHostBindings;
 
     /// Asked once the app directory is resolved and before the Engine is
     /// constructed: is `afterEngine` going to run compiled logic for THIS app?

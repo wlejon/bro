@@ -278,6 +278,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         config.showSplash = (cliSplash == 1);
         config.hostProvidesCompiledApp =
             hooks.providesCompiledApp && hooks.providesCompiledApp(config.appDir);
+        config.installHostBindings = hooks.installHostBindings;
 
         if (hooks.beforeEngine) hooks.beforeEngine();
 

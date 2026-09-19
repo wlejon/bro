@@ -398,6 +398,7 @@ public:
     /// (bronze_host/app_module.h) — is handed the Engine, not the config that
     /// built it.
     const std::string& appDir() const { return appDir_; }
+    const std::function<void(Engine&)>& installHostBindings() const { return installHostBindings_; }
     /// Engine-supplied virtual path prefixes (`/app`, `/lib`, `/system`, ...),
     /// so a compile of the app's scripts resolves the same `import "/lib/x.js"`
     /// the asset loader does.
@@ -698,6 +699,7 @@ private:
     AppManifest manifest_;
     std::string appDir_;
     std::string titleOverride_;
+    std::function<void(Engine&)> installHostBindings_;
     util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenesDetached_;
