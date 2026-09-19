@@ -5,7 +5,20 @@
 // The game AI API provides server-side pathfinding, steering, and perception
 // for building game bots. Backed by the brogameagent C++ library.
 //
-// Available in all modes (windowed, headless, server).
+// Available in all modes (windowed, headless, server), and inside a Worker:
+// each realm installs its own copy of the classes.
+//
+// This file covers navigation. The rest of the namespace lives beside it:
+//   docs/ai-game-planning.js  Agent, World, Unit, steering, perception, bindings
+//   docs/ai-game-learning.js  MCTS family, planners, belief, simulation, replay
+//   docs/ai-nn-api.js         bro.ai.game.nn: circuits, nets, ops, WeightsHandle
+//   docs/ai-learn-api.js      bro.ai.game.learn: buffers, trainers, inference
+//   docs/ai-game-tools.js     bro.ai.game.grid: obs windows, tapes, GridTrainer
+//
+// `globalThis.AI` is an alias for `bro.ai.game`, and every class is also a
+// global constructor for `instanceof` checks: AINavGrid, AIHexNav, AINavMesh,
+// AIAgent, AIWorld, AIUnit, AIAgentBinding, and the search/learn classes.
+// The constructors are not callable; use the create*/bake* factories.
 //
 // Quick start:
 //   const nav = bro.ai.game.createNavGrid({
@@ -38,6 +51,14 @@
  * @param {number} [opts.cellSize=0.5] - Grid cell size (smaller = more precise)
  * @param {Array<{x, z, hw, hd}>} [opts.obstacles] - AABB obstacles to mark as blocked
  * @param {number} [opts.padding=0] - Extra clearance around obstacles (agent radius)
+ *
+ * Cell-count form: pass `width` and `height` in CELLS instead of the four
+ * bounds and the extent is derived as origin + cells * cellSize. When both
+ * are present they win over minX/minZ/maxX/maxZ.
+ * @param {number} [opts.width]    - cells along X (with `height`)
+ * @param {number} [opts.height]   - cells along Z
+ * @param {number} [opts.originX=0] - world X of cell (0,0) in the cell form
+ * @param {number} [opts.originZ=0]
  *
  * Physics bake: derive obstacles from collision geometry so AI and physics
  * can never disagree. Every static, non-sensor body's world-space AABB is
@@ -110,6 +131,51 @@ const path = nav.findPath(-10, 0, 10, 0);
  * @param {number} [padding=0] - Extra clearance
  */
 nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
+
+/**
+ * Clear the cells an AABB (plus padding) covers back to walkable. This is a
+ * blanket un-block, not an undo: it also frees cells that some OTHER
+ * obstacle blocks, because a grid cell records walkability, not who blocked
+ * it. Re-add the neighbours, or rebuild the grid, when boxes overlap.
+ * @param {{x, z, hw, hd}} obstacle
+ * @param {number} [padding=0]
+ */
+nav.removeObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
+
+/**
+ * Per-cell edits, for terrain a box cannot describe. Both accept either
+ * (x, z, value) or ({x, z}, value).
+ * @param {number} x @param {number} z @param {boolean} walkable
+ */
+nav.setWalkable(3, -2, false);
+
+/**
+ * Extra traversal cost multiplier on one cell: A* prefers cheap cells, so a
+ * cost above 1 makes a route avoid it (mud, shallow water, a danger zone)
+ * without making it impassable.
+ * @param {number} x @param {number} z @param {number} cost
+ */
+nav.setCellCost(3, -2, 4.0);
+
+/**
+ * Grid line of sight: is the straight segment free of blocked cells? A 2D
+ * Bresenham walk over the grid, not a physics ray.
+ * @param {number} fromX @param {number} fromZ @param {number} toX @param {number} toZ
+ * @returns {boolean}
+ */
+nav.hasLineOfSight(-8, 0, 8, 0);        // or nav.hasLineOfSight({x,z}, {x,z})
+
+/**
+ * The same test with an object result, for code that also raycasts a navmesh.
+ * @returns {{hit: boolean, clear: boolean}} `hit` is `!clear`; there is no
+ *     hit point or distance, this grid walk does not compute one.
+ */
+nav.raycast(-8, 0, 8, 0);
+
+// Grid geometry (all read-only):
+nav.width; nav.height;                   // cell counts
+nav.cellSize;
+nav.minX; nav.minZ; nav.maxX; nav.maxZ;  // world bounds
 
 
 // -----------------------------------------------------------------------------
@@ -447,6 +513,24 @@ const ray = navMesh.raycast({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 });
  * @returns {{x,y,z}|null} null when the mesh is empty
  */
 navMesh.randomPoint(42);
+
+// Aliases kept so code written against either spelling works:
+navMesh.findRandomPoint(42);                  // === randomPoint
+navMesh.closestPoint({ x: 0, y: 10, z: 0 });  // === nearestPoint
+navMesh.samplePosition({ x: 0, y: 10, z: 0 }); // === nearestPoint
+
+/**
+ * Re-bake this mesh in place from raw triangle soup, discarding whatever it
+ * held. bakeNavMesh() is the usual entry point; this is for re-baking one
+ * handle as a level streams in.
+ * @param {Float32Array|number[]} positions - flat xyz triples
+ * @param {Uint32Array|number[]} indices    - triangle index list
+ * @param {Object} [opts] - only the core six are read here: cellSize,
+ *     cellHeight, agentRadius, agentHeight, agentMaxClimb, agentMaxSlopeDeg
+ * @returns {NavMesh} this mesh
+ * @throws {Error} on a failed bake, with the Recast log in the message
+ */
+navMesh.buildFromMesh(positions, indices, { agentRadius: 0.5 });
 
 /** Whether a bake/load has succeeded (read-only). */
 navMesh.valid;

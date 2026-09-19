@@ -61,6 +61,7 @@
 #endif
 #if BRO_WITH_VISION
 #include <brovisionml/api.h>
+#include "bronze_host/host_vision.h"
 #endif
 #if BRO_WITH_FLORA
 #include <broflora/api/api.h>
@@ -331,6 +332,12 @@ void installSiblingApis(engine::Engine& engine) {
 #endif
 #if BRO_WITH_VISION
     brovisionml::api::installVision();
+    // ...then bro's half: the `image` / `matte` ImageBitmaps a standalone
+    // sibling cannot mint, and the worker-thread `onDone` form of every
+    // heavy op. host_vision.h says why the ops are re-driven here instead of
+    // wrapped. It also registers the per-frame drain and the shutdown hook,
+    // once per process.
+    installVisionHostOps(&engine);
 #endif
 #if BRO_WITH_FLORA
     broflora::api::installFlora();
@@ -392,6 +399,9 @@ void installWorkerSiblingApis() {
 #endif
 #if BRO_WITH_VISION
     brovisionml::api::installVision();
+    // No engine in a worker realm: the jobs this realm launches are drained
+    // by tickWorkerSiblingApis below, not by the frame pump.
+    installVisionHostOps(nullptr);
 #endif
 #if BRO_WITH_FLORA
     broflora::api::installFlora();
@@ -402,6 +412,11 @@ void installWorkerSiblingApis() {
 }
 
 void tickWorkerSiblingApis() {
+#if BRO_WITH_VISION
+    // This thread's vision jobs only — the registry is per thread, because a
+    // job's callbacks belong to the realm that launched it.
+    tickVisionJobs();
+#endif
 #if BRO_WITH_SOUNDML
     // This thread's async jobs only (a job's callbacks belong to the realm
     // that launched it). brolm's jobs are ticked by the script itself

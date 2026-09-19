@@ -389,10 +389,6 @@ bool bro_physics_setLayer(int32_t tag, const char* layer);
 //   registered at __bro_native.physics.setKinematic
 void bro_physics_setKinematic(int32_t tag);
 
-// Physics.moveKinematic
-//   registered at __bro_native.physics.moveKinematic
-void bro_physics_moveKinematic(int32_t tag, double x, double y, double z, double dt);
-
 // Physics.raycastClosestRaw
 //   registered at __bro_native.physics.raycastClosestRaw
 //   result: JSON of PhysicsRayHit

@@ -839,6 +839,16 @@ Physics.setKinematic = function(tag) {};
 Physics.setMotionType = function(tag, type) {};
 
 /**
+ * Moves a kinematic body towards a target over `dt`. Two forms:
+ * `(tag, x, y, z, dt)` keeps the body's current rotation, and
+ * `(tag, x, y, z, qx, qy, qz, qw, dt)` carries a target rotation too — the
+ * one a kinematic platform or a picked-up prop turns with.
+ *
+ * [manual] because a native has one arity: each form is its own entry
+ * point (`bro_physics_moveKinematic` / `bro_physics_moveKinematicRot`,
+ * both declared and registered beside their bodies in bro's
+ * native_physics_core.cpp) and the wrapper picks by what it was passed.
+ *
  * @param {number} tag
  * @param {number} x
  * @param {number} y

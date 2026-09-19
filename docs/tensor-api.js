@@ -1,1226 +1,699 @@
-// ── Classes & Interfaces ─────────────────────────────────────────────────────
+// =============================================================================
+// bro.tensor, GPU tensor + ops (brotensor: CUDA, Metal or CPU)
+// =============================================================================
+//
+// Wraps the brotensor sibling library. brotensor exposes one unified tensor
+// type with a runtime Device tag and device-neutral ops; bro.tensor is the
+// device-resident face of it. The op surface is identical across the CUDA
+// (NVIDIA), Metal (Apple) and CPU backends, so code written against
+// bro.tensor runs unchanged on any of them; a handful of FP16 / INT8 fast
+// paths are GPU-only and say so.
+//
+// This file documents the CORE surface: runtime + dtypes, GpuTensor, the RNG
+// and initialisers, safetensors IO, dense / elementwise / activation ops, the
+// norms, matmul, RoPE, reductions, the batched (B, D) family, embedding,
+// losses, concat/split and the optimisers.
+//
+// The rest of bro.tensor lives in **docs/tensor-nn-api.js**:
+//   attention (single-head, MHA, self/cross, T5 bias, flash, KV-cache decode,
+//   SAM rel-pos, packed varlen, gated delta rule, M-RoPE), conv2d/conv3d and
+//   the whole spatial family, ResBlock, diffusion sampler steps, INT8 (W8A16)
+//   and GGUF k-quant inference, and the audio / codec ops (FFT, STFT, conv1d,
+//   snake/elu, VQ/FSQ, resample, logit sampling).
+//
+// Availability:
+//   bro.tensor.available   // boolean
+//   bro.tensor.backend     // "cpu" | "cuda" | "metal" (lowercased device name,
+//                          //  "cuda:1" on a non-default CUDA device)
+//
+// `available` is true whenever bro was built with BRO_WITH_TENSOR (the `full`
+// profile). When bro is built without it, bro.tensor is the compiled-out stub
+// `{ available: false }` and nothing else is there, so guard every use. With
+// tensor compiled in but no GPU backend, `backend` reads "cpu" and the ops
+// still run, just on the CPU. Gate heavy ML work on `backend !== "cpu"` (or
+// on `bro.gpu.available`), never on `available` alone.
+//
+// Dtypes (bro.tensor.dtype):
+//   fp32 0   fp16 1   int8 2   int32 3   bf16 4   f64 5
+//
+// Tensors carry a dtype tag and ops dispatch on the input's dtype (FP16 / BF16
+// kernels accumulate internally in FP32). INT8 is carried by the weight-only
+// quantised ops, INT32 by index / offset buffers. Everywhere a `dtype`
+// argument is taken you may pass the name ("fp32"/"f32", "fp16"/"f16",
+// "bf16", "int8"/"i8", "int32"/"i32", "f64") or the numeric enum; anything
+// unrecognised falls back to FP32.
+//
+// Synchronisation:
+//   Ops queue on the default stream and are asynchronous on a GPU. Call
+//   bro.tensor.sync() before timing or before reading device memory by any
+//   route other than download()/downloadFp16()/downloadInt8(), which sync
+//   internally.
+//
+// Mask convention:
+//   A `mask|null` slot takes a device-resident FP32 GpuTensor (1 = valid,
+//   0 = masked) or null/undefined for "no mask". Host Float32Arrays are
+//   rejected with a TypeError; the one exception is softmaxXentSegment, which
+//   is a host-buffer op throughout.
+//
+// INT32 index / offset buffers:
+//   `idx`, `headOffsets`, `cuSeq*`, `posT/posH/posW`, pooling `Idx` and the
+//   sampler's `indices` are GpuTensors whose storage is read as INT32. They
+//   stay device-resident between calls, so an index never round-trips to the
+//   host mid-pipeline.
+//
+// Errors:
+//   A native never throws across the bronze ABI: it records a message the JS
+//   wrapper reads back and re-throws as an Error right after the call. So a
+//   failed op surfaces as a normal JS exception at the call site, and an op
+//   that is not implemented on the active backend throws "not implemented".
+//
+// =============================================================================
+
+const gpu = bro.tensor;
+
+
+// -----------------------------------------------------------------------------
+// Runtime
+// -----------------------------------------------------------------------------
 
 /**
- * =============================================================================
- * bro.tensor — GPU tensor + ops (brotensor: CUDA or Metal)
- * =============================================================================
- *
- * Wraps the brotensor sibling library. brotensor exposes one unified tensor
- * type with a runtime Device tag and device-neutral ops; bro.tensor is the
- * GPU-resident face of it. The op surface is identical across CUDA (NVIDIA)
- * and Metal (Apple) backends.
- * @example
- * if (bro.tensor.available) {
- *     bro.tensor.init();
- *     const t = bro.tensor.createTensor(3, 4);
- *     t.zero();
- *     const data = t.download();
- *   }
- */
-class GpuTensor {
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  rows;
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  cols;
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  size;
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  bytes;
-
-  zero() {}
-
-  /**
-   * @param {number} rows
-   * @param {number} cols
-   * @param {(string|number)} [dtype]
-   */
-  resize(rows, cols, dtype) {}
-
-  /**
-   * @returns {string}
-   */
-  dtype() {}
-
-  /**
-   * @returns {GpuTensor}
-   */
-  clone() {}
-
-  /**
-   * @param {(Float32Array|Object)} src
-   */
-  upload(src) {}
-
-  /**
-   * @param {Object} [dst]
-   * @returns {(Float32Array|void)}
-   */
-  download(dst) {}
-
-  /**
-   * @param {Uint16Array} data
-   */
-  uploadFp16(data) {}
-
-  /**
-   * @returns {Uint16Array}
-   */
-  downloadFp16() {}
-
-  /**
-   * @param {Int8Array} data
-   */
-  uploadInt8(data) {}
-
-}
-
-// ── Namespaces ───────────────────────────────────────────────────────────────
-
-/**
- * @readonly
+ * `true` when brotensor is compiled in. Check before touching anything else.
  * @type {boolean}
  */
-bro.tensor.available;
+gpu.available;
+
+/** Active device, lowercased: "cpu" | "cuda" | "metal" | "cuda:<n>". */
+gpu.backend;
 
 /**
- * @readonly
- * @type {string}
+ * Idempotent device init. CUDA: selects device 0 (or BROTENSOR_CUDA_DEVICE).
+ * Metal: opens the default MTLDevice. Ops auto-init, but calling this once at
+ * startup surfaces device errors early. A no-op when `available` is false.
+ *
+ * NOTE (ordering): init() before reading `backend` or probing a device, or a
+ * pre-init probe answers "cpu" and the whole app silently runs on the CPU.
  */
-bro.tensor.backend;
+gpu.init();
 
-bro.tensor.init = function() {};
+/** Block until every queued kernel on the default stream has completed. */
+gpu.sync();
 
-bro.tensor.sync = function() {};
+/** The dtype enum: { fp32:0, fp16:1, int8:2, int32:3, bf16:4, f64:5 }. */
+gpu.dtype;
+
+
+// -----------------------------------------------------------------------------
+// GpuTensor
+// -----------------------------------------------------------------------------
 
 /**
+ * Allocate an owning device tensor, zero-filled. dtype defaults to FP32.
+ * Throws if brotensor is compiled out, or RangeError on negative dims.
+ *
  * @param {number} rows
  * @param {number} [cols=1]
- * @param {(string|number)} [dtype="fp32"]
+ * @param {string|number} [dtype="fp32"]
  * @returns {GpuTensor}
  */
-bro.tensor.createTensor = function(rows, cols, dtype) {};
+const t   = gpu.createTensor(3, 4);
+const t16 = gpu.createTensor(3, 4, "fp16");
+const q8  = gpu.createTensor(8, 16, gpu.dtype.int8);
 
 /**
+ * The class itself, for `x instanceof bro.tensor.GpuTensor`. It is not
+ * constructible: instances only come from createTensor(), clone(),
+ * SafetensorsFile#get() and the other ops that return one.
+ */
+gpu.GpuTensor;
+
+t.rows;          // 3
+t.cols;          // 4
+t.size;          // 12   (rows * cols)
+t.bytes;         // 48   (size * sizeof(dtype))
+t.dtype();       // "fp32" | "fp16" | "bf16" | "int8" | "int32" | "f64"
+
+t.zero();                   // device memset to 0
+t.resize(2, 6);             // reallocates, dtype defaults back to fp32
+t.resize(2, 6, "fp16");     // reallocates AND switches dtype to FP16
+const dup = t.clone();      // owning device-side copy (same shape + dtype)
+
+/**
+ * Upload host -> device as FP32. Accepts a Float32Array or anything
+ * Float32Array.from() takes (a plain array). The destination keeps its
+ * (rows, cols) when their product equals the element count, otherwise it
+ * becomes (n, 1).
+ * @param {Float32Array|number[]} src
+ */
+t.upload(new Float32Array([1, 2, 3, 4, 5, 6]));
+
+/**
+ * Download device -> host as FP32. Syncs, and converts from whatever dtype the
+ * tensor carries.
+ *   download()     -> a fresh Float32Array of `size` elements.
+ *   download(dst)  -> fills `dst` in place and returns it. `dst` must be a
+ *                     Float32Array with dst.length >= size (RangeError
+ *                     otherwise), which is how a render/inference loop reads
+ *                     results back without allocating per frame.
+ * @param {Float32Array} [dst]
+ * @returns {Float32Array}
+ */
+const arr = t.download();
+const reuse = new Float32Array(t.size);
+t.download(reuse);          // same array back, filled
+
+/**
+ * FP16 staging: a Uint16Array of IEEE binary16 bit patterns.
+ *   uploadFp16(data)  — same reshape rule as upload(); dtype becomes FP16.
+ *   downloadFp16()    — fresh Uint16Array, converting from any dtype.
+ */
+t16.uploadFp16(new Uint16Array([0x3c00, 0x4000]));
+const u16 = t16.downloadFp16();
+
+/**
+ * INT8 staging, the only way to get W8A16 weights onto the device. Typically
+ * the `weights` field of quantizeInt8PerRowHost() (see tensor-nn-api.js).
+ *   uploadInt8(data)  — Int8Array (or plain array); same reshape rule.
+ *   downloadInt8()    — the tensor's raw storage bytes as a fresh Int8Array,
+ *                       `bytes` long (not `size` long for a non-INT8 dtype).
+ * Pair the result with an FP32 (out, 1) scales tensor for the Int8wFp16 family.
+ */
+q8.uploadInt8(quant.weights);
+const bytes = q8.downloadInt8();
+
+
+// -----------------------------------------------------------------------------
+// Counter-based RNG (Philox) + initialisers
+// -----------------------------------------------------------------------------
+//
+// Deterministic in (key, counter): the same pair always fills the same values,
+// on every backend. key / counter are Numbers or BigInts, never tensors; Y is
+// an FP32 GpuTensor the caller pre-sized (it is filled, not resized).
+
+gpu.randUniform(key, counter, Y);              // U[0, 1)
+gpu.randn(key, counter, Y);                    // standard normal
+gpu.randBernoulli(p, key, counter, Y);         // 1 with probability p, else 0
+gpu.randnTruncated(lo, hi, key, counter, Y);   // normal truncated to [lo, hi]
+
+/**
+ * Xavier-uniform fill of W, using and advancing a counter-based RNG state.
+ * Returns the advanced state (a Number) — thread it through successive inits
+ * so a whole model initialises from one seed.
  * @param {GpuTensor} W
- * @param {GpuTensor} b
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.linearForward = function(W, b, x, y) {};
-
-/**
- * @param {GpuTensor} W
- * @param {GpuTensor} x
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- * @param {GpuTensor} dW
- * @param {GpuTensor} dB
- */
-bro.tensor.linearBackward = function(W, x, dY, dX, dW, dB) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.reluForward = function(x, y) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.reluBackward = function(x, dY, dX) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.tanhForward = function(x, y) {};
-
-/**
- * @param {GpuTensor} y
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.tanhBackward = function(y, dY, dX) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.sigmoidForward = function(x, y) {};
-
-/**
- * @param {GpuTensor} y
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.sigmoidBackward = function(y, dY, dX) {};
-
-/**
- * @param {GpuTensor} y
- * @param {GpuTensor} x
- */
-bro.tensor.addInplace = function(y, x) {};
-
-/**
- * @param {GpuTensor} y
- * @param {number} s
- */
-bro.tensor.addScalarInplace = function(y, s) {};
-
-/**
- * @param {GpuTensor} y
- * @param {number} s
- */
-bro.tensor.scaleInplace = function(y, s) {};
-
-/**
- * @param {GpuTensor} y
- * @param {GpuTensor} x
- */
-bro.tensor.mulInplace = function(y, x) {};
-
-/**
- * @param {GpuTensor} y
- * @param {number} lo
- * @param {number} hi
- */
-bro.tensor.clamp = function(y, lo, hi) {};
-
-/**
- * @param {GpuTensor} x
- * @param {number} offset
- * @param {number} K
- * @param {number} stride
- * @param {GpuTensor} mask
- */
-bro.tensor.buildSlotMask = function(x, offset, K, stride, mask) {};
-
-/**
- * @param {GpuTensor} src
- * @param {number} srcOff
- * @param {GpuTensor} dst
- * @param {number} dstOff
- * @param {number} n
- */
-bro.tensor.copyD2D = function(src, srcOff, dst, dstOff, n) {};
-
-/**
- * @param {GpuTensor} src
- * @param {GpuTensor} dst
- * @param {(string|number)} outDtype
- */
-bro.tensor.cast = function(src, dst, outDtype) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.siluForward = function(x, y) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.siluBackward = function(x, dY, dX) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.geluForward = function(x, y) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.geluBackward = function(x, dY, dX) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.geluExactForward = function(x, y) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.geluExactBackward = function(x, dY, dX) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} y
- */
-bro.tensor.quickGeluForward = function(x, y) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.quickGeluBackward = function(x, dY, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Y
- */
-bro.tensor.swigluForward = function(X, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.swigluBackward = function(X, dY, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Y
- */
-bro.tensor.gegluForward = function(X, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.gegluBackward = function(X, dY, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Y
- */
-bro.tensor.gegluExactForward = function(X, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} dY
- * @param {GpuTensor} dX
- */
-bro.tensor.gegluExactBackward = function(X, dY, dX) {};
-
-/**
- * @param {GpuTensor} logits
- * @param {GpuTensor} probs
- * @param {GpuTensor|null} [mask]
- */
-bro.tensor.softmaxForward = function(logits, probs, mask) {};
-
-/**
- * @param {GpuTensor} probs
- * @param {GpuTensor} dProbs
- * @param {GpuTensor} dLogits
- */
-bro.tensor.softmaxBackward = function(probs, dProbs, dLogits) {};
-
-/**
- * @param {GpuTensor} x
- * @param {GpuTensor} gamma
- * @param {GpuTensor} beta
- * @param {GpuTensor} y
- * @param {GpuTensor} xhat
- * @param {number} [eps=0.00001]
- * @returns {Object}
- */
-bro.tensor.layernormForward = function(x, gamma, beta, y, xhat, eps) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {GpuTensor} xhat
- * @param {GpuTensor} gamma
- * @param {number} rstd
- * @param {GpuTensor} dX
- * @param {GpuTensor} dGamma
- * @param {GpuTensor} dBeta
- */
-bro.tensor.layernormBackward = function(dY, xhat, gamma, rstd, dX, dGamma, dBeta) {};
-
-/**
- * @param {GpuTensor} X_RD
- * @param {GpuTensor} gamma
- * @param {GpuTensor} beta
- * @param {GpuTensor} Y_RD
- * @param {number} [eps=0.00001]
- */
-bro.tensor.layernormForwardInferenceBatched = function(X_RD, gamma, beta, Y_RD, eps) {};
-
-/**
- * @param {GpuTensor} X_RD
- * @param {GpuTensor} gamma
- * @param {GpuTensor} beta
- * @param {GpuTensor} Y_RD
- * @param {number} [eps=0.00001]
- */
-bro.tensor.layernormForwardInferenceBatchedFp16 = function(X_RD, gamma, beta, Y_RD, eps) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} gamma
- * @param {number} eps
- * @param {GpuTensor} Y
- */
-bro.tensor.rmsNormForward = function(X, gamma, eps, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} gamma
- * @param {GpuTensor} dY
- * @param {number} eps
- * @param {GpuTensor} dX
- * @param {GpuTensor} dGamma
- */
-bro.tensor.rmsNormBackward = function(X, gamma, dY, eps, dX, dGamma) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} gamma
- * @param {GpuTensor} beta
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {number} numGroups
- * @param {number} eps
- * @param {GpuTensor} Y
- */
-bro.tensor.groupNormForward = function(X, gamma, beta, N, C, H, W, numGroups, eps, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} gamma
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {number} numGroups
- * @param {number} eps
- * @param {GpuTensor} dX
- * @param {GpuTensor} dGamma
- * @param {GpuTensor} dBeta
- */
-bro.tensor.groupNormBackward = function(X, gamma, dY, N, C, H, W, numGroups, eps, dX, dGamma, dBeta) {};
-
-/**
- * @param {GpuTensor} A
- * @param {GpuTensor} B
- * @param {GpuTensor} C
- */
-bro.tensor.matmul = function(A, B, C) {};
-
-/**
- * @param {GpuTensor} A
- * @param {GpuTensor} B
- * @param {GpuTensor} dC
- * @param {GpuTensor} dA
- * @param {GpuTensor} dB
- */
-bro.tensor.matmulBackward = function(A, B, dC, dA, dB) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} headDim
- * @param {number} numHeads
- * @param {number} seqOffset
- * @param {number} thetaBase
- * @param {GpuTensor} Y
- */
-bro.tensor.ropeForward = function(X, headDim, numHeads, seqOffset, thetaBase, Y) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {number} headDim
- * @param {number} numHeads
- * @param {number} seqOffset
- * @param {number} thetaBase
- * @param {GpuTensor} dX
- */
-bro.tensor.ropeBackward = function(dY, headDim, numHeads, seqOffset, thetaBase, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} cosTbl
- * @param {GpuTensor} sinTbl
- * @param {number} headDim
- * @param {number} numHeads
- * @param {GpuTensor} Y
- */
-bro.tensor.ropeApply = function(X, cosTbl, sinTbl, headDim, numHeads, Y) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {number} headDim
- * @param {number} numHeads
- * @param {GpuTensor} dX
- */
-bro.tensor.ropeApplyBackward = function(dY, headDim, numHeads, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} scale
- * @param {GpuTensor} shift
- * @param {GpuTensor} Y
- */
-bro.tensor.modulate = function(X, scale, shift, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} v
- * @param {GpuTensor} Y
- */
-bro.tensor.broadcastMul = function(X, v, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Y
- */
-bro.tensor.sumRows = function(X, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Y
- */
-bro.tensor.sumCols = function(X, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Idx
- */
-bro.tensor.argmaxRows = function(X, Idx) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {GpuTensor} Q
- * @param {GpuTensor} K
- * @param {GpuTensor} V
- * @param {GpuTensor} Attn
- * @param {GpuTensor} Y_pre_Wo
- * @param {GpuTensor} O
- */
-bro.tensor.attentionForward = function(X, Wq, Wk, Wv, Wo, mask, Q, K, V, Attn, Y_pre_Wo, O) {};
-
-/**
- * @param {GpuTensor} dO
- * @param {GpuTensor} X
- * @param {GpuTensor} Q
- * @param {GpuTensor} K
- * @param {GpuTensor} V
- * @param {GpuTensor} Attn
- * @param {GpuTensor} Y_pre_Wo
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {GpuTensor} dX
- * @param {GpuTensor} dWq
- * @param {GpuTensor} dWk
- * @param {GpuTensor} dWv
- * @param {GpuTensor} dWo
- */
-bro.tensor.attentionBackward = function(dO, X, Q, K, V, Attn, Y_pre_Wo, Wq, Wk, Wv, Wo, mask, dX, dWq, dWk, dWv, dWo) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} Qh
- * @param {GpuTensor} Kh
- * @param {GpuTensor} Vh
- * @param {GpuTensor} Attnh
- * @param {GpuTensor} Yconcat
- * @param {GpuTensor} O
- */
-bro.tensor.mhaForward = function(X, Wq, Wk, Wv, Wo, mask, numHeads, Qh, Kh, Vh, Attnh, Yconcat, O) {};
-
-/**
- * @param {GpuTensor} dO
- * @param {GpuTensor} X
- * @param {GpuTensor} Qh
- * @param {GpuTensor} Kh
- * @param {GpuTensor} Vh
- * @param {GpuTensor} Attnh
- * @param {GpuTensor} Yconcat
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} dX
- * @param {GpuTensor} dWq
- * @param {GpuTensor} dWk
- * @param {GpuTensor} dWv
- * @param {GpuTensor} dWo
- */
-bro.tensor.mhaBackward = function(dO, X, Qh, Kh, Vh, Attnh, Yconcat, Wq, Wk, Wv, Wo, mask, numHeads, dX, dWq, dWk, dWv, dWo) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} O
- */
-bro.tensor.selfAttentionForward = function(X, Wq, Wk, Wv, Wo, mask, numHeads, O) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} Qh
- * @param {GpuTensor} Kh
- * @param {GpuTensor} Vh
- * @param {GpuTensor} Attnh
- * @param {GpuTensor} Yconcat
- * @param {GpuTensor} O
- */
-bro.tensor.selfAttentionForwardTrain = function(X, Wq, Wk, Wv, Wo, mask, numHeads, Qh, Kh, Vh, Attnh, Yconcat, O) {};
-
-/**
- * @param {GpuTensor} dO
- * @param {GpuTensor} X
- * @param {GpuTensor} Qh
- * @param {GpuTensor} Kh
- * @param {GpuTensor} Vh
- * @param {GpuTensor} Attnh
- * @param {GpuTensor} Yconcat
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} dX
- * @param {GpuTensor} dWq
- * @param {GpuTensor} dWk
- * @param {GpuTensor} dWv
- * @param {GpuTensor} dWo
- */
-bro.tensor.selfAttentionBackward = function(dO, X, Qh, Kh, Vh, Attnh, Yconcat, Wq, Wk, Wv, Wo, mask, numHeads, dX, dWq, dWk, dWv, dWo) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Ctx
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} O
- */
-bro.tensor.crossAttentionForward = function(X, Ctx, Wq, Wk, Wv, Wo, mask, numHeads, O) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Ctx
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {GpuTensor|null} attnLogitBias
- * @param {number} numHeads
- * @param {GpuTensor} O
- * @param {GpuTensor} AttnAvg
- */
-bro.tensor.crossAttentionForwardWithAttn = function(X, Ctx, Wq, Wk, Wv, Wo, mask, attnLogitBias, numHeads, O, AttnAvg) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Ctx
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} Qh
- * @param {GpuTensor} Kh
- * @param {GpuTensor} Vh
- * @param {GpuTensor} Attnh
- * @param {GpuTensor} Yconcat
- * @param {GpuTensor} O
- */
-bro.tensor.crossAttentionForwardTrain = function(X, Ctx, Wq, Wk, Wv, Wo, mask, numHeads, Qh, Kh, Vh, Attnh, Yconcat, O) {};
-
-/**
- * @param {GpuTensor} dO
- * @param {GpuTensor} X
- * @param {GpuTensor} Ctx
- * @param {GpuTensor} Qh
- * @param {GpuTensor} Kh
- * @param {GpuTensor} Vh
- * @param {GpuTensor} Attnh
- * @param {GpuTensor} Yconcat
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {GpuTensor} dX
- * @param {GpuTensor} dCtx
- * @param {GpuTensor} dWq
- * @param {GpuTensor} dWk
- * @param {GpuTensor} dWv
- * @param {GpuTensor} dWo
- */
-bro.tensor.crossAttentionBackward = function(dO, X, Ctx, Qh, Kh, Vh, Attnh, Yconcat, Wq, Wk, Wv, Wo, mask, numHeads, dX, dCtx, dWq, dWk, dWv, dWo) {};
-
-/**
- * @param {GpuTensor} Attn
- * @param {number} h_lat
- * @param {number} w_lat
- * @param {GpuTensor} mass
- * @param {GpuTensor} centroid
- */
-bro.tensor.attentionTokenMoments = function(Attn, h_lat, w_lat, mass, centroid) {};
-
-/**
- * @param {number} L
- * @param {number} q
- * @param {GpuTensor} mask
- */
-bro.tensor.buildCausalMaskRow = function(L, q, mask) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Wq
- * @param {GpuTensor} Wk
- * @param {GpuTensor} Wv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} mask
- * @param {GpuTensor|null} attnBias
- * @param {number} numHeads
- * @param {number} scale
- * @param {GpuTensor} O
- */
-bro.tensor.selfAttentionBiasForward = function(X, Wq, Wk, Wv, Wo, mask, attnBias, numHeads, scale, O) {};
-
-/**
- * @param {GpuTensor} Q
- * @param {GpuTensor} K
- * @param {GpuTensor} V
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {boolean} causal
- * @param {GpuTensor} O
- */
-bro.tensor.flashAttentionForward = function(Q, K, V, mask, numHeads, causal, O) {};
-
-/**
- * @param {GpuTensor} Q
- * @param {GpuTensor} K
- * @param {GpuTensor} V
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {number} window
- * @param {GpuTensor} O
- */
-bro.tensor.flashAttentionWindowedForward = function(Q, K, V, mask, numHeads, window, O) {};
-
-/**
- * @param {GpuTensor} Q
- * @param {GpuTensor} K
- * @param {GpuTensor} V
- * @param {GpuTensor} O
- * @param {GpuTensor} dO
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {boolean} causal
- * @param {GpuTensor} dQ
- * @param {GpuTensor} dK
- * @param {GpuTensor} dV
- */
-bro.tensor.flashAttentionBackward = function(Q, K, V, O, dO, mask, numHeads, causal, dQ, dK, dV) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor|null} Ctx
- * @param {GpuTensor} Wq
- * @param {GpuTensor|null} bq
- * @param {GpuTensor} Wk
- * @param {GpuTensor|null} bk
- * @param {GpuTensor} Wv
- * @param {GpuTensor|null} bv
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} bo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {boolean} causal
- * @param {GpuTensor} O
- */
-bro.tensor.flashAttentionQkvoForward = function(X, Ctx, Wq, bq, Wk, bk, Wv, bv, Wo, bo, mask, numHeads, causal, O) {};
-
-/**
- * @param {Object} opts
- */
-bro.tensor.flashAttentionQkvoBackward = function(opts) {};
-
-/**
- * @param {GpuTensor} ctx
- * @param {GpuTensor} Wk
- * @param {GpuTensor|null} bk
- * @param {GpuTensor} Wv
- * @param {GpuTensor|null} bv
- * @param {GpuTensor} K_out
- * @param {GpuTensor} V_out
- */
-bro.tensor.flashAttentionProjectKv = function(ctx, Wk, bk, Wv, bv, K_out, V_out) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} K
- * @param {GpuTensor} V
- * @param {GpuTensor} Wq
- * @param {GpuTensor|null} bq
- * @param {GpuTensor} Wo
- * @param {GpuTensor|null} bo
- * @param {GpuTensor|null} mask
- * @param {number} numHeads
- * @param {boolean} causal
- * @param {GpuTensor} O
- */
-bro.tensor.flashAttentionQWithKvCachedForward = function(X, K, V, Wq, bq, Wo, bo, mask, numHeads, causal, O) {};
-
-/**
- * @param {GpuTensor} Q
- * @param {GpuTensor} K_cache
- * @param {GpuTensor} V_cache
- * @param {number} validLen
- * @param {number} numHeads
- * @param {GpuTensor} O
- * @param {number} [numKvHeads]
- * @param {number} [attnSoftcap=0]
- * @param {number} [window=0]
- */
-bro.tensor.flashAttentionDecode = function(Q, K_cache, V_cache, validLen, numHeads, O, numKvHeads, attnSoftcap, window) {};
-
-/**
- * @param {GpuTensor} Q
- * @param {GpuTensor} K_cache
- * @param {GpuTensor} V_cache
- * @param {GpuTensor} dMask
- * @param {number} numHeads
- * @param {GpuTensor} O
- * @param {number} [numKvHeads]
- * @param {number} [attnSoftcap=0]
- * @param {number} [window=0]
- */
-bro.tensor.flashAttentionDecodeMasked = function(Q, K_cache, V_cache, dMask, numHeads, O, numKvHeads, attnSoftcap, window) {};
-
-/**
- * @param {GpuTensor} K_new
- * @param {GpuTensor} V_new
- * @param {number} curLen
- * @param {GpuTensor} K_cache
- * @param {GpuTensor} V_cache
- */
-bro.tensor.kvCacheAppend = function(K_new, V_new, curLen, K_cache, V_cache) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Wt
- * @param {GpuTensor|null} bias
- * @param {number} N
- * @param {number} C_in
- * @param {number} H
- * @param {number} W
- * @param {number} C_out
- * @param {number} kH
- * @param {number} kW
- * @param {number} sH
- * @param {number} sW
- * @param {number} pH
- * @param {number} pW
- * @param {number} dH
- * @param {number} dW
- * @param {number} groups
- * @param {GpuTensor} Y
- */
-bro.tensor.conv2dForward = function(X, Wt, bias, N, C_in, H, W, C_out, kH, kW, sH, sW, pH, pW, dH, dW, groups, Y) {};
-
-/**
- * @param {GpuTensor} Wt
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} C_in
- * @param {number} H
- * @param {number} W
- * @param {number} C_out
- * @param {number} kH
- * @param {number} kW
- * @param {number} sH
- * @param {number} sW
- * @param {number} pH
- * @param {number} pW
- * @param {number} dH
- * @param {number} dW
- * @param {number} groups
- * @param {GpuTensor} dX
- */
-bro.tensor.conv2dBackwardInput = function(Wt, dY, N, C_in, H, W, C_out, kH, kW, sH, sW, pH, pW, dH, dW, groups, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} C_in
- * @param {number} H
- * @param {number} W
- * @param {number} C_out
- * @param {number} kH
- * @param {number} kW
- * @param {number} sH
- * @param {number} sW
- * @param {number} pH
- * @param {number} pW
- * @param {number} dH
- * @param {number} dW
- * @param {number} groups
- * @param {GpuTensor} dWt
- */
-bro.tensor.conv2dBackwardWeight = function(X, dY, N, C_in, H, W, C_out, kH, kW, sH, sW, pH, pW, dH, dW, groups, dWt) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} C_out
- * @param {number} H_out
- * @param {number} W_out
- * @param {GpuTensor} dB
- */
-bro.tensor.conv2dBackwardBias = function(dY, N, C_out, H_out, W_out, dB) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} Y
- */
-bro.tensor.upsampleNearest2xForward = function(X, N, C, H, W, Y) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} dX
- */
-bro.tensor.upsampleNearest2xBackward = function(dY, N, C, H, W, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} Y
- */
-bro.tensor.upsampleBilinear2xForward = function(X, N, C, H, W, Y) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} dX
- */
-bro.tensor.upsampleBilinear2xBackward = function(dY, N, C, H, W, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} Y
- */
-bro.tensor.downsampleAvg2xForward = function(X, N, C, H, W, Y) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} dX
- */
-bro.tensor.downsampleAvg2xBackward = function(dY, N, C, H, W, dX) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} Y
- */
-bro.tensor.nchwToSequence = function(X, N, C, H, W, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {GpuTensor} Y
- */
-bro.tensor.sequenceToNchw = function(X, N, C, H, W, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H_in
- * @param {number} W_in
- * @param {number} H_out
- * @param {number} W_out
- * @param {number} mode
- * @param {GpuTensor} Y
- */
-bro.tensor.interp2dForward = function(X, N, C, H_in, W_in, H_out, W_out, mode, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H_in
- * @param {number} W_in
- * @param {number} H_out
- * @param {number} W_out
- * @param {number} mode
- * @param {GpuTensor} Y
- */
-bro.tensor.interp2dAlignCornersForward = function(X, N, C, H_in, W_in, H_out, W_out, mode, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {number} kH
- * @param {number} kW
- * @param {number} sH
- * @param {number} sW
- * @param {number} padT
- * @param {number} padB
- * @param {number} padL
- * @param {number} padR
- * @param {number} mode
- * @param {GpuTensor} Y
- */
-bro.tensor.unfold2dForward = function(X, N, C, H, W, kH, kW, sH, sW, padT, padB, padL, padR, mode, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {number} eps
- * @param {GpuTensor} Y
- */
-bro.tensor.l2NormalizeNchwForward = function(X, N, C, H, W, eps, Y) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor} Mask
- * @param {number} N
- * @param {number} C
- * @param {number} H
- * @param {number} W
- * @param {number} scale
- * @param {GpuTensor} Y
- */
-bro.tensor.convexUpsampleForward = function(X, Mask, N, C, H, W, scale, Y) {};
-
-/**
- * @param {Object} opts
- */
-bro.tensor.resblockForward = function(opts) {};
-
-/**
- * @param {Object} opts
- */
-bro.tensor.resblockBackward = function(opts) {};
-
-/**
- * @param {GpuTensor} X
- * @param {GpuTensor|null} mask
- * @param {GpuTensor} y
- */
-bro.tensor.maskedMeanPoolForward = function(X, mask, y) {};
-
-/**
- * @param {GpuTensor} dY
- * @param {GpuTensor|null} mask
- * @param {number} K
- * @param {GpuTensor} dX
- */
-bro.tensor.maskedMeanPoolBackward = function(dY, mask, K, dX) {};
-
-/**
- * @param {GpuTensor} pred
- * @param {GpuTensor} target
+ * @param {number|bigint} rngState
  * @returns {number}
  */
-bro.tensor.mseVecForward = function(pred, target) {};
+let rngState = 1234;
+rngState = gpu.xavierInit(W1, rngState);
+rngState = gpu.xavierInit(W2, rngState);
+
+
+// -----------------------------------------------------------------------------
+// safetensors, load / save
+// -----------------------------------------------------------------------------
+//
+// The huggingface safetensors container. The reader mmap's the file: opening a
+// multi-GB checkpoint and reading only its header() is cheap, no payload is
+// faulted in until get() uploads a tensor. Paths go through bro's path
+// resolver, so an app-relative path works.
 
 /**
- * @param {GpuTensor} pred
- * @param {GpuTensor} target
- * @param {GpuTensor} dPred
+ * Open a .safetensors file.
+ * @param {string} path
+ * @returns {SafetensorsFile}  throws TypeError if missing or malformed.
  */
-bro.tensor.mseVecBackward = function(pred, target, dPred) {};
+const f = gpu.openSafetensors('weights/model.safetensors');
+
+/** The class, for instanceof. Not constructible; openSafetensors returns one. */
+gpu.SafetensorsFile;
+
+/** Number of tensors in the file. @type {number} */
+f.count;
+
+/** Tensor names in file order. @returns {string[]} */
+f.names();
 
 /**
- * @param {GpuTensor} pred
- * @param {GpuTensor} target
- * @param {GpuTensor} dPred
- * @param {GpuTensor} lossPerSample
+ * Per-tensor metadata, header only, so it stays cheap on huge files.
+ * @returns {Object<string, {dtype: string, shape: number[], nbytes: number}>}
+ *   dtype is the safetensors spelling: "F32" | "F16" | "BF16" | "I8" | ...
  */
-bro.tensor.mseVecPerSample = function(pred, target, dPred, lossPerSample) {};
+const hdr = f.header();
+hdr['model.embed_tokens.weight'].shape;   // e.g. [151936, 1024]
 
 /**
+ * Upload one tensor as a GpuTensor. brotensor tensors are 2D: with rows/cols
+ * omitted an N-D source flattens to (shape[0], numel/shape[0]).
+ *
+ * The dtype string selects how the source is uploaded, and may be passed in
+ * place of, or after, rows/cols:
+ *   "native"  (default) keep the file's dtype (F32/F16/BF16).
+ *   "compute"           the backend's compute dtype: FP16 on a GPU build,
+ *                       FP32 on CPU. BF16 sources are converted. The
+ *                       model-loader path.
+ *   "fp16"              always FP16, converting an F32 source.
+ *
+ * @param {string} name
+ * @param {number|string} [rows]
+ * @param {number} [cols]
+ * @param {string} [dtype="native"]
+ * @returns {GpuTensor}   RangeError on an unknown name, TypeError on a bad read.
+ */
+const W  = f.get('model.layers.0.self_attn.q_proj.weight');            // native
+const Wc = f.get('model.layers.0.self_attn.q_proj.weight', 'compute'); // FP16 on GPU
+const We = f.get('embedding.weight', 1024, 768, 'compute');            // explicit 2D
+
+/** Release the mmap early. GC releases it otherwise; calls after it throw. */
+f.close();
+
+/**
+ * Write GpuTensors to a .safetensors file. FP32 and FP16 values only (anything
+ * else throws); shape is stored as the tensor's (rows, cols).
+ * @param {string} path
+ * @param {Object<string, GpuTensor>} tensors
+ */
+gpu.saveSafetensors('out/checkpoint.safetensors', { weight: W, bias: b });
+
+
+// -----------------------------------------------------------------------------
+// Dense + elementwise
+// -----------------------------------------------------------------------------
+
+gpu.linearForward(W, b, x, y);              // y = W*x + b
+gpu.linearBackward(W, x, dY, dX, dW, dB);   // dW, dB accumulate; dX overwritten
+
+gpu.reluForward(x, y);     gpu.reluBackward(x, dY, dX);      // reads x
+gpu.tanhForward(x, y);     gpu.tanhBackward(y, dY, dX);      // reads cached y
+gpu.sigmoidForward(x, y);  gpu.sigmoidBackward(y, dY, dX);   // reads cached y
+
+gpu.addInplace(y, x);            // y[i] += x[i]
+gpu.addScalarInplace(y, 0.5);    // y[i] += s
+gpu.scaleInplace(y, 2.0);        // y[i] *= s
+gpu.mulInplace(y, x);            // y[i] *= x[i]
+gpu.clamp(y, -1.0, 1.0);         // y[i] = clip(y[i], lo, hi)
+
+/**
+ * Build a slot-validity mask on-device, without a host sync:
+ *   mask[k] = (x[offset + k*stride] > 0.5) ? 1 : 0,  k in [0, K)
+ * Resizes mask to (K, 1).
+ */
+gpu.buildSlotMask(x, offset, K, stride, mask);
+
+/**
+ * Device-to-device chunk copy: `n` flat elements from src[srcOff] into
+ * dst[dstOff]. Both tensors are treated as flat buffers, whatever their shape.
+ */
+gpu.copyD2D(src, srcOff, dst, dstOff, n);
+
+/**
+ * Dtype cast: dst = src converted to outDtype, resized + dtype-set to src's
+ * shape on src's device. FP32 <-> FP16 <-> BF16 plus a same-dtype passthrough
+ * copy; other pairs throw. The mixed-precision primitive (FP16 working copy
+ * against an FP32 master weight).
+ * @param {GpuTensor} src
+ * @param {GpuTensor} dst
+ * @param {string|number} outDtype
+ */
+gpu.cast(src, dst, "fp16");
+
+
+// -----------------------------------------------------------------------------
+// Modern activations (transformer + diffusion stack)
+// -----------------------------------------------------------------------------
+//
+// Forwards take (x, y); backwards take (x, dY, dX) and read the *raw forward
+// input* x, not the cached output. Dispatched on x.dtype.
+
+gpu.siluForward(x, y);        gpu.siluBackward(x, dY, dX);       // x*sigmoid(x)
+gpu.geluForward(x, y);        gpu.geluBackward(x, dY, dX);       // tanh approx
+gpu.geluExactForward(x, y);   gpu.geluExactBackward(x, dY, dX);  // erf-based
+gpu.quickGeluForward(x, y);   gpu.quickGeluBackward(x, dY, dX);  // x*sigmoid(1.702x)
+
+// Gated FFN activations. Input (B, 2*D) splits into halves A and B_half,
+// output is (B, D). swiglu: silu(A)*B_half. geglu: A*gelu(B_half), with an
+// exact-erf variant.
+gpu.swigluForward(X, Y);      gpu.swigluBackward(X, dY, dX);
+gpu.gegluForward(X, Y);       gpu.gegluBackward(X, dY, dX);
+gpu.gegluExactForward(X, Y);  gpu.gegluExactBackward(X, dY, dX);
+
+
+// -----------------------------------------------------------------------------
+// Softmax
+// -----------------------------------------------------------------------------
+
+/**
+ * Row softmax. The third argument is either:
+ *   a GpuTensor / null — a length-N FP32 device key mask (1 valid, 0 masked),
+ *   or a number        — a temperature: the logits are scaled by 1/temp first
+ *                        (temp === 1 or <= 0 is a plain softmax).
  * @param {GpuTensor} logits
- * @param {GpuTensor} target
- * @param {GpuTensor|null} mask
  * @param {GpuTensor} probs
- * @param {GpuTensor} dLogits
- * @returns {number}
+ * @param {GpuTensor|number|null} [maskOrTemp]
  */
-bro.tensor.softmaxXentFused = function(logits, target, mask, probs, dLogits) {};
+gpu.softmaxForward(logits, probs, /*mask|null*/ null);
+gpu.softmaxForward(logits, probs, /*temperature*/ 0.7);
+
+/** Full-Jacobian backward: dLogits = (diag(p) - p p^T) dProbs. */
+gpu.softmaxBackward(probs, dProbs, dLogits);
+
+
+// -----------------------------------------------------------------------------
+// LayerNorm
+// -----------------------------------------------------------------------------
 
 /**
- * @param {GpuTensor} logits_BL
- * @param {GpuTensor} target_BL
- * @param {GpuTensor|null} mask
- * @param {GpuTensor} headOffsets
- * @param {number} n_heads
- * @param {GpuTensor} probs_BL
- * @param {GpuTensor} dLogits_BL
- * @param {GpuTensor} lossPerSample
+ * Single-vector LayerNorm. Returns the two scalar caches the backward wants,
+ * so it never recomputes them.
+ * @returns {{mean: number, rstd: number}}
  */
-bro.tensor.softmaxXentFusedBatched = function(logits_BL, target_BL, mask, headOffsets, n_heads, probs_BL, dLogits_BL, lossPerSample) {};
+const ln = gpu.layernormForward(x, gamma, beta, y, xhat, /*eps*/ 1e-5);
+gpu.layernormBackward(dY, xhat, gamma, ln.rstd, dX, dGamma, dBeta);
 
 /**
- * @param {GpuTensor} table
- * @param {GpuTensor} idxAsInt32
- * @param {number} B
- * @param {GpuTensor} out
+ * Inference-only batched LayerNorm, one block per row, no caches, no sync.
+ *   X_RD: (R, D)   gamma: (D,)   beta: (D,)   Y_RD: (R, D), resized if needed.
  */
-bro.tensor.embeddingLookupForward = function(table, idxAsInt32, B, out) {};
+gpu.layernormForwardInferenceBatched(X_RD, gamma, beta, Y_RD, 1e-5);
+gpu.layernormForwardInferenceBatchedFp16(X_RD, gamma, beta, Y_RD, 1e-5);
 
 /**
- * @param {GpuTensor} dOut
- * @param {GpuTensor} idxAsInt32
- * @param {number} B
- * @param {GpuTensor} dTable
+ * Batched LayerNorm that saves the caches for an exact training backward.
+ *   X (R,D), gamma/beta (D,), Y/Xhat (R,D) resized, Mean/Rstd (R,1) FP32
+ *   whatever X's dtype is.
+ * dX is overwritten; dGamma / dBeta accumulate into (D,) tensors the caller
+ * sized and zeroed (they are not resized).
  */
-bro.tensor.embeddingLookupBackward = function(dOut, idxAsInt32, B, dTable) {};
+gpu.layernormForwardBatchedWithCaches(X, gamma, beta, Y, Xhat, Mean, Rstd, 1e-5);
+gpu.layernormBackwardBatchedWithCaches(dY, Xhat, gamma, Rstd, dX, dGamma, dBeta);
+
+
+// -----------------------------------------------------------------------------
+// RMSNorm / GroupNorm / per-head L2 norm
+// -----------------------------------------------------------------------------
 
 /**
- * @param {Array<GpuTensor>} parts
- * @param {GpuTensor} out
+ * Llama-style RMSNorm, per row:
+ *   rms[b] = sqrt(mean_j x[b,j]^2 + eps);  y[b,j] = x[b,j]*gamma[j]/rms[b]
+ *   X: (B, D)   gamma: (D, 1)   Y: (B, D), resized + dtype-matched.
  */
-bro.tensor.concatRows = function(parts, out) {};
+gpu.rmsNormForward(X, gamma, 1e-5, Y);
+gpu.rmsNormBackward(X, gamma, dY, 1e-5, dX, dGamma);   // dGamma accumulates
 
 /**
- * @param {GpuTensor} in_
- * @param {Array<GpuTensor>} parts
+ * NCHW GroupNorm; numGroups must divide C. Mean/var over each
+ * (C/numGroups, H, W) tile. FP32 / FP16 dispatched on X.dtype.
  */
-bro.tensor.splitRows = function(in_, parts) {};
+gpu.groupNormForward(X, gamma, beta, N, C, H, W, numGroups, 1e-5, Y);
+gpu.groupNormBackward(X, gamma, dY, N, C, H, W, numGroups, 1e-5,
+                      dX, dGamma, dBeta);              // dGamma/dBeta accumulate
 
 /**
- * @param {Array<GpuTensor>} parts
- * @param {GpuTensor} out
+ * Per-head last-dim L2 normalise over an (L, numHeads*headDim) layout, the
+ * QK-norm of gated-deltanet attention: each head's headDim slice is divided by
+ * sqrt(sum of squares + eps). eps defaults to 1e-6.
+ * Distinct from l2NormalizeNchwForward (channel axis of an NCHW tensor), which
+ * lives in tensor-nn-api.js.
  */
-bro.tensor.concatBatchedRows = function(parts, out) {};
+gpu.l2NormForward(X, headDim, numHeads, /*eps*/ 1e-6, Y);
+gpu.l2NormBackward(X, headDim, numHeads, /*eps*/ 1e-6, dY, dX);
+
+
+// -----------------------------------------------------------------------------
+// Matmul
+// -----------------------------------------------------------------------------
+
+/** C(M,N) = A(M,K) @ B(K,N). Dtype dispatched on A.dtype. */
+gpu.matmul(A, B, C);
 
 /**
- * @param {Array<GpuTensor>} parts
- * @param {number} N
- * @param {number} H
- * @param {number} W
- * @param {Array<number>} C_per_part
- * @param {GpuTensor} out
+ * Backward. dA and dB are *accumulated* into (the caller zeros them); dC is
+ * read-only.
+ *   dA += dC @ B^T   ;   dB += A^T @ dC
  */
-bro.tensor.concatNchwChannels = function(parts, N, H, W, C_per_part, out) {};
+gpu.matmulBackward(A, B, dC, dA, dB);
+
+
+// -----------------------------------------------------------------------------
+// RoPE (rotary position embedding)
+// -----------------------------------------------------------------------------
 
 /**
- * @param {GpuTensor} dY
- * @param {number} N
- * @param {number} H
- * @param {number} W
- * @param {Array<number>} C_per_part
- * @param {Array<GpuTensor>} dParts
+ * Per-head pair rotation:
+ *   x_{2i}   <- x_{2i}*cos(t) - x_{2i+1}*sin(t)
+ *   x_{2i+1} <- x_{2i}*sin(t) + x_{2i+1}*cos(t)
+ *   t = pos * thetaBase^(-2i/headDim),  pos = seqOffset + row.
+ *   X / Y / dY / dX: (L, numHeads*headDim).  headDim must be even.
  */
-bro.tensor.concatNchwChannelsBackward = function(dY, N, H, W, C_per_part, dParts) {};
+gpu.ropeForward(X, headDim, numHeads, seqOffset, /*thetaBase*/ 10000.0, Y);
+gpu.ropeBackward(dY, headDim, numHeads, seqOffset, 10000.0, dX);
 
 /**
- * @param {GpuTensor} param
- * @param {GpuTensor} grad
- * @param {GpuTensor} velocity
- * @param {number} lr
- * @param {number} momentum
+ * RoPE against caller-supplied tables: same rotation, but each row reads its
+ * angles from cosTbl / sinTbl instead of deriving them from seqOffset and
+ * thetaBase. Use it when the position schedule is irregular (packed sequences,
+ * 2D/3D RoPE) or shared across calls.
+ *   X / Y: (L, numHeads*headDim).  cosTbl / sinTbl: (L, headDim/2).
+ * The backward takes no tables — the rotation is its own inverse up to sign,
+ * so dX is recovered from dY alone.
  */
-bro.tensor.sgdStep = function(param, grad, velocity, lr, momentum) {};
+gpu.ropeApply(X, cosTbl, sinTbl, headDim, numHeads, Y);
+gpu.ropeApplyBackward(dY, headDim, numHeads, dX);
+
+// The Qwen-VL multimodal variant, ropeApplyMrope, is in tensor-nn-api.js.
+
+
+// -----------------------------------------------------------------------------
+// AdaLN modulation (DiT / SD3 / Flux)
+// -----------------------------------------------------------------------------
 
 /**
- * @param {GpuTensor} param
- * @param {GpuTensor} grad
- * @param {GpuTensor} m
- * @param {GpuTensor} v
- * @param {number} lr
- * @param {number} beta1
- * @param {number} beta2
- * @param {number} eps
- * @param {number} step
+ * Adaptive-LayerNorm modulation: Y = X * (1 + scale) + shift, with the
+ * per-channel scale / shift broadcast across every token row — the affine step
+ * every DiT block applies after norm().
+ *   X, Y: (L, D) token activations.
+ *   scale, shift: length-D vectors ((1,D) or (D,1)), same dtype/device as X.
+ * Y is resized + dtype-set to X.
  */
-bro.tensor.adamStep = function(param, grad, m, v, lr, beta1, beta2, eps, step) {};
+gpu.modulate(X, scale, shift, Y);
 
+/**
+ * Broadcast channel-wise multiply: Y[l,d] = X[l,d] * v[d]. The DiT residual
+ * gate (`x = x + broadcastMul(sublayerOut, gate)`) and any per-channel rescale.
+ */
+gpu.broadcastMul(X, v, Y);
+
+
+// -----------------------------------------------------------------------------
+// Reductions, row gather / scatter / top-k
+// -----------------------------------------------------------------------------
+
+gpu.sumRows(X, Y);       // Y(M,1) = sum_n X[m,n]
+gpu.sumCols(X, Y);       // Y(1,N) = sum_m X[m,n]
+gpu.argmaxRows(X, Idx);  // Idx(M,1) FP32; the integer index stored as a float
+
+/**
+ * Row gather / its adjoint. Idx is an (M,1) index tensor — INT32 as topKRows
+ * writes it, or an FP32 tensor of whole numbers, which the op converts. Out of
+ * range values are the caller's problem: these do not bounds-check.
+ *   gatherRows:    Y[i] = X[Idx[i]]
+ *   scatterRowsAdd: dX is (R, C), zeroed and then scatter-added into. R is the
+ *                   forward X's row count, which dY and Idx alone don't give.
+ */
+gpu.gatherRows(X, Idx, Y);
+gpu.scatterRowsAdd(dY, Idx, R, dX);
+
+/**
+ * Per-row top-k, descending, ties broken toward the smaller column index.
+ *   Vals: (R, k) FP32 and Idx: (R, k) INT32, both resized + dtype-set.
+ */
+gpu.topKRows(X, k, Vals, Idx);
+
+
+// -----------------------------------------------------------------------------
+// Batched dense family (B, D)
+// -----------------------------------------------------------------------------
+//
+// B independent passes in one launch, for trainers and inference loops that
+// share a minibatch. Tensors carrying B rows are (B, D) row-major: W is
+// (out, in), bias (out, 1), X_BD (B, in), Y_BD (B, out) and resized. W may be
+// FP32/FP16/BF16 while the activations stay FP32.
+
+gpu.linearForwardBatched(W, bias, X_BD, Y_BD);
+gpu.reluForwardBatched(X_BD, Y_BD);
+gpu.tanhForwardBatched(X_BD, Y_BD);
+gpu.addInplaceBatched(Y_BD, X_BD);
+
+/**
+ * 16-bit storage throughout (FP16 or BF16 W, bias, X and produced Y).
+ * Inference-only, and GPU-only: the CPU backend registers no slot for it.
+ * `bias` may be null.
+ */
+gpu.linearForwardBatchedFp16(W, /*bias|null*/ null, X_BD, Y_BD);
+
+gpu.linearBackwardBatched(W, X_BD, dY_BD, dX_BD, dW, dB);  // dW/dB accumulate
+gpu.reluBackwardBatched(X_BD, dY_BD, dX_BD);   // reads X:  dX = dY*(X>0)
+gpu.tanhBackwardBatched(Y_BD, dY_BD, dX_BD);   // reads Y:  dX = dY*(1-Y*Y)
+
+
+// -----------------------------------------------------------------------------
+// Embedding
+// -----------------------------------------------------------------------------
+
+/**
+ * Embedding lookup: out[b, :] = table[idx[b], :]. `idxAsInt32` is a GpuTensor
+ * whose storage is read as an INT32 buffer of B entries, so token ids stay
+ * device-resident across the whole decode step.
+ */
+gpu.embeddingLookupForward(table, idxAsInt32, B, out);
+gpu.embeddingLookupBackward(dOut, idxAsInt32, B, dTable);   // dTable accumulates
+
+
+// -----------------------------------------------------------------------------
+// Pooling + losses
+// -----------------------------------------------------------------------------
+
+/**
+ * Masked mean pool over the rows of X (a sequence -> one vector), with an
+ * optional length-N device mask. The backward spreads dY over the K valid
+ * rows; K is the forward's row count.
+ */
+gpu.maskedMeanPoolForward(X, /*mask|null*/ null, y);
+gpu.maskedMeanPoolBackward(dY, /*mask|null*/ null, K, dX);
+
+/** Vector MSE over the whole tensor. @returns {number} the scalar loss. */
+const mseLoss = gpu.mseVecForward(pred, target);
+gpu.mseVecBackward(pred, target, dPred);
+
+/**
+ * Per-sample MSE (loss = 0.5*d^2, dPred = d).
+ *   pred, target, dPred, lossPerSample: (B, 1)
+ */
+gpu.mseVecPerSample(pred, target, dPred, lossPerSample);
+
+/**
+ * Host-scalar MSE, the value-head loss: loss = 0.5*(pred-target)^2 and
+ * dPred = pred-target. Plain numbers, no tensors.
+ * @returns {[number, number]} [loss, dPred]
+ */
+const [vLoss, vGrad] = gpu.mseScalar(pred, target);
+
+/**
+ * Fused softmax + cross-entropy. Writes probs and dLogits = probs - target on
+ * valid entries (0 on masked ones).
+ * @returns {number} the scalar loss.
+ */
+const xentLoss = gpu.softmaxXentFused(logits, target, /*mask|null*/ null,
+                                      probs, dLogits);
+
+/**
+ * Batched fused softmax + cross-entropy across (sample, head) tiles, for
+ * trainers that share one (B, n_act_total) logits buffer across actor heads.
+ *   logits_BL, target_BL, probs_BL, dLogits_BL: (B, n_act_total)
+ *   mask:          (B, n_act_total) device mask or null
+ *   headOffsets:   a GpuTensor read as INT32, n_heads+1 cumulative offsets
+ *   lossPerSample: (B, 1), overwritten with the sum-over-heads loss
+ */
+gpu.softmaxXentFusedBatched(logits_BL, target_BL, /*mask|null*/ null,
+                            headOffsets, n_heads,
+                            probs_BL, dLogits_BL, lossPerSample);
+
+/**
+ * Host-buffer softmax cross-entropy over the first `n` elements of each
+ * Float32Array, so a caller can run xent on a segment of a larger buffer with
+ * no temporary tensors. probs and dLogits are written in place; `mask` is an
+ * optional host Float32Array (null for none).
+ * @returns {number} the scalar loss.
+ */
+const segLoss = gpu.softmaxXentSegment(logits, target, probs, dLogits, n,
+                                       /*mask|null*/ null);
+
+/**
+ * Fused, numerically stable BCE-with-logits over a (B, L) grid. posWeight === 1
+ * is standard unweighted BCE; `mask` is an optional (B, L) device mask.
+ * lossPerSample is (B, 1), summed over L.
+ */
+gpu.bceWithLogitsFusedBatched(logits, target, /*mask|null*/ null, /*posWeight*/ 1.0,
+                              probs, dLogits, lossPerSample);
+
+
+// -----------------------------------------------------------------------------
+// Concat / split
+// -----------------------------------------------------------------------------
+
+/** Concat flat tensors end to end. `parts` is a JS array of GpuTensors. */
+gpu.concatRows([part0, part1, part2], out);
+
+/** The inverse: scatter disjoint segments of `in` back into each parts[i]. */
+gpu.splitRows(in_, [part0, part1, part2]);
+
+/**
+ * Batched column-block concat: parts are each (B, d_i), out becomes
+ * (B, sum d_i) with out[b, off_i + j] = parts[i][b, j].
+ */
+gpu.concatBatchedRows([part0, part1, part2], out);
+
+/**
+ * Channel-axis concat over NCHW tensors. Each parts[i] is (N, C_i*H*W); out
+ * becomes (N, sum_i C_i * H * W), channel blocks regrouped per sample.
+ * C_per_part is a JS array (or Int32Array) of ints, same length as parts.
+ */
+gpu.concatNchwChannels([part0, part1], N, H, W, [C0, C1], out);
+
+/** Its backward: each dParts[i] is overwritten with dY's channel slice. */
+gpu.concatNchwChannelsBackward(dY, N, H, W, [C0, C1], [dPart0, dPart1]);
+
+
+// -----------------------------------------------------------------------------
+// Optimisers
+// -----------------------------------------------------------------------------
+
+/**
+ * SGD with momentum:
+ *   velocity = momentum*velocity + grad
+ *   param   -= lr * velocity
+ */
+gpu.sgdStep(param, grad, velocity, lr, momentum);
+
+/**
+ * Adam, with a 1-based step counter for the bias correction:
+ *   m = beta1*m + (1-beta1)*g
+ *   v = beta2*v + (1-beta2)*g^2
+ *   param -= lr * (m/(1-beta1^step)) / (sqrt(v/(1-beta2^step)) + eps)
+ */
+gpu.adamStep(param, grad, m, v, lr, beta1, beta2, eps, step);
+
+
+// -----------------------------------------------------------------------------
+// Worked example: a tiny training step
+// -----------------------------------------------------------------------------
+//
+//   bro.tensor.init();
+//   if (!bro.tensor.available) throw new Error('built without BRO_WITH_TENSOR');
+//
+//   const B = 32, D_in = 16, D_out = 4;
+//   const W  = bro.tensor.createTensor(D_out, D_in);
+//   const b  = bro.tensor.createTensor(D_out, 1);
+//   const X  = bro.tensor.createTensor(B, D_in);
+//   const Y  = bro.tensor.createTensor(B, D_out);
+//   const T  = bro.tensor.createTensor(B, D_out);
+//   const dY = bro.tensor.createTensor(B, D_out);
+//   const dX = bro.tensor.createTensor(B, D_in);
+//   const dW = bro.tensor.createTensor(D_out, D_in);
+//   const dB = bro.tensor.createTensor(D_out, 1);
+//   const mW = W.clone(), vW = W.clone();   // Adam moments, zeroed below
+//   mW.zero(); vW.zero();
+//
+//   let rng = bro.tensor.xavierInit(W, 7);
+//   bro.tensor.randUniform(rng, 0, X);
+//   bro.tensor.randUniform(rng, 1, T);
+//
+//   for (let step = 1; step <= 100; step++) {
+//       bro.tensor.linearForwardBatched(W, b, X, Y);
+//       const loss = bro.tensor.mseVecForward(Y, T);
+//       bro.tensor.mseVecBackward(Y, T, dY);
+//       dW.zero(); dB.zero();
+//       bro.tensor.linearBackwardBatched(W, X, dY, dX, dW, dB);
+//       bro.tensor.adamStep(W, dW, mW, vW, 1e-3, 0.9, 0.999, 1e-8, step);
+//       if (step % 20 === 0) console.log(step, loss);
+//   }
+//   bro.tensor.sync();
+//   console.log(W.download().slice(0, 4));

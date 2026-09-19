@@ -49,9 +49,15 @@ bro.net.unhost = function() {};
 bro.net.connect = function(address, port, callback) {};
 
 /**
+ * Closes the connection to one peer. `reason` is the application-defined
+ * disconnect code the peer's ondisconnect receives (0 when omitted), the
+ * same number GameNetworkingSockets carries on the wire: a wrapper that
+ * dropped it left every kick indistinguishable from a network drop.
+ *
  * @param {number} peerId
+ * @param {number} [reason=0]
  */
-bro.net.disconnect = function(peerId) {};
+bro.net.disconnect = function(peerId, reason) {};
 
 bro.net.disconnectAll = function() {};
 

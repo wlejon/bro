@@ -9,6 +9,7 @@
 //
 // [manual] members (no native, installed by hand-written JS after this module):
 //   Physics.setMotionType
+//   Physics.moveKinematic
 //   Physics.raycast
 //   Physics.raycastClosest
 //   Physics.castShape
@@ -139,14 +140,8 @@
     });
     // [manual] Physics.setMotionType: operation (tag, type) — no native is generated; hand-written JS
     // installs it on ns_Physics after this module has run.
-    fn(ns_Physics, "moveKinematic", function moveKinematic(tag, x, y, z, dt) {
-        if (tag === undefined) throw new TypeError("Physics.moveKinematic: tag is required");
-        if (x === undefined) throw new TypeError("Physics.moveKinematic: x is required");
-        if (y === undefined) throw new TypeError("Physics.moveKinematic: y is required");
-        if (z === undefined) throw new TypeError("Physics.moveKinematic: z is required");
-        if (dt === undefined) throw new TypeError("Physics.moveKinematic: dt is required");
-        __bro_native.physics.moveKinematic(tag, x, y, z, dt);
-    });
+    // [manual] Physics.moveKinematic: operation (tag, x, y, z, dt) — no native is generated; hand-written JS
+    // installs it on ns_Physics after this module has run.
     // [manual] Physics.raycast: operation () — no native is generated; hand-written JS
     // installs it on ns_Physics after this module has run.
     // [manual] Physics.raycastClosest: operation () — no native is generated; hand-written JS

@@ -1,8 +1,28 @@
 // =============================================================================
-// bro.ai.game: Game AI Tools & Serialization
-// Debug drawing, serialization, multi-agent coordination
-// Main API reference: docs/ai-game-api.js
+// bro.ai.game.grid, 2D grid-world / platformer training kit
+// Observation windows, frame stacks, tapes, BC generation, replay, GridTrainer
 // =============================================================================
+//
+// Built on the env-agnostic primitives (createGenericMcts,
+// nn.createPolicyValueNet, learn.createGenericReplayBuffer,
+// learn.createGenericExItTrainer, nn.createWeightsHandle). Use this when your
+// env is a tilemap plus dynamic entities rather than the bundled combat sim.
+// Each primitive is independently useful; GridTrainer composes them into a
+// complete loop so a new project does not re-author the boilerplate.
+//
+// Companion files (one area each, same library):
+//   docs/ai-game-api.js       NavGrid / HexNav / NavMesh / routing
+//   docs/ai-game-planning.js  Agent, World, Unit, steering, perception, bindings
+//   docs/ai-game-learning.js  MCTS family, planners, belief, simulation, replay
+//   docs/ai-nn-api.js         bro.ai.game.nn: circuits, nets, ops, WeightsHandle
+//   docs/ai-learn-api.js      bro.ai.game.learn: buffers, trainers, inference
+//
+// Available in all modes, windowed, headless and bro-server. The namespace
+// shares the tensor tower's feature gate with nn and learn:
+//
+//   if (bro.ai.game.grid.available === false) return;   // compiled out
+//
+// A compiled-in build does not define `available`; only the stub does.
 
 // -----------------------------------------------------------------------------
 // ObsWindow, egocentric multi-channel rasterizer

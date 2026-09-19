@@ -85,11 +85,15 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | File | Surface |
 |------|---------|
 | `audio-api.js` | `AudioContext`, Web-Audio-style nodes, synth, sequencing, spatial, buses |
-| `mesh-api.js` | `bro.mesh`: primitives, CSG, simplification, UV, import/export |
+| `mesh-api.js` | `bro.mesh`: the `Mesh` container, primitives, CSG, simplify/subdivide/smooth, analysis, `MeshBVH` |
+| `mesh-io-api.js` | `bro.mesh` IO half: loaders/savers, Draco, splat clouds, isosurface + voxel statics, `PolyMesh`, `SDFGraph` |
+| `mesh-plants-api.js` | `bro.mesh` procedural half: sweeps, leaf/flower cards, branch trees, scattering, `CapsuleField`, `LSystem` |
+| `rigging-api.js` | `bro.rigging`: skins, skeletons, poses, clips, IK, `Rig.autoRig`, glTF rigged assets |
 | `flora-api.js` | `bro.flora` ecosystem sim: prototypes, step, mesh/foliage/bloom emit |
 | `math-api.js` | `bro.math`, bromath types in JS (`SpatialHash3D`) |
 | `noise-api.js` | `bro.noise`, FastNoise2 SIMD noise |
-| `image-api.js` | `bro.image` typed-array kernels (CPU, broimage) + `bro.image.gpu.*` WebGL2 renderer (bro-side) |
+| `image-api.js` | `bro.image` typed-array kernels (CPU, broimage): decode/EXIF, encode/KTX2, geometry, color, preproc, presets |
+| `image-gpu-api.js` | `bro.image.gpu.*` WebGL2 renderer (bro-side JS): `colormap`, `fbm2D`, ranging, `viewRect` |
 | `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Blob decode, Worker transfer |
 | `file-api.js` | `Blob`/`File`, `FileReader`, `URL.createObjectURL` (resolves in `<img>` and `fetch`), dropped-file `dataTransfer` |
 | `scene-api.js` | `bro.scene`: 3D scene graph, shapes, sprites, meshes, splats, physics nodes |
@@ -109,11 +113,19 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `gesture-api.js` | `bro.gesture`: non-speech gesture matching (rhythm/tone); needs `bro.sense` |
 | `listen-api.js` | `bro.listen`: N concurrent unmixed streams (mic / system loopback / per-app) with sense/kws/wake/gesture attach |
 | `worker-api.js` | `Worker`, web worker threads |
-| `ai-game-api.js` | `bro.ai.game`: navmesh, pathfinding, steering, perception, AgentBinding |
+| `ai-api.js` | `bro.ai`: index of the game-AI surface — which of the files below covers what |
+| `ai-game-api.js` | `bro.ai.game` navigation: NavGrid, HexNav, NavMesh bake/load, pathfinding |
+| `ai-game-planning.js` | `bro.ai.game`: Agent, World, Unit, steering, perception, AgentBinding |
+| `ai-game-learning.js` | `bro.ai.game`: MCTS family, layered planners, team belief, simulation, replay |
+| `ai-nn-api.js` | `bro.ai.game.nn`: circuits, nets, ops, `WeightsHandle` (forward/backward/sgdStep/adamStep) |
+| `ai-learn-api.js` | `bro.ai.game.learn`: replay buffers, trainers, inference |
+| `ai-game-tools.js` | `bro.ai.game.grid`: observation windows, tapes, `GridTrainer` |
 | `gpu-api.js` | `bro.gpu`: runtime backend probe (`available`/`backend`/`devices`/`compiledBackends`) |
 | `paths-api.js` | `bro.appDir` / `bro.resolvePath`: real filesystem paths, for sidecar binaries and external tools |
-| `tensor-api.js` | `bro.tensor`: GPU tensor + ops (dense/attention/optim, batched) |
-| `diffusion-api.js` | `bro.diffusion`: text-to-image pipelines, step-wise API, attention trace, LoRA |
+| `tensor-api.js` | `bro.tensor` core: `GpuTensor`, RNG, safetensors, dense/elementwise, norms, matmul, RoPE, reductions, optimisers |
+| `tensor-nn-api.js` | `bro.tensor` part 2: the attention family, conv2d/3d + NCHW spatial, diffusion sampler steps, INT8/k-quant, audio/codec ops |
+| `diffusion-api.js` | `bro.diffusion`: `loadModel`, `generate`, the step-wise `PipelineState` API, LoRA, schedulers |
+| `diffusion-control-api.js` | `bro.diffusion` steering: ControlNet, control vectors, Sana identity anchor, krea2 hooks, `VAE`, attention trace |
 | `lm-api.js` | `bro.lm` text generation: Qwen3/Mistral (GGUF), Qwen3.5 (safetensors); streaming `generate` + cancel |
 | `stt-api.js` | `bro.stt` speech-to-text: Whisper, Parakeet-TDT (timestamps), Qwen3-ASR (+streaming encoder) |
 | `diar-api.js` | `bro.diar` diarization: streaming Sortformer (4 speakers) + ClusterDiarizer (similar voices, discovers count) |

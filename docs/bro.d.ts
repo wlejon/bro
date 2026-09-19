@@ -6894,6 +6894,17 @@ declare namespace Physics {
    * native behind it takes the boolean; the wrapper maps the strings.
    */
   function setMotionType(tag: number, type: any): void;
+  /**
+   * Moves a kinematic body towards a target over `dt`. Two forms:
+   * `(tag, x, y, z, dt)` keeps the body's current rotation, and
+   * `(tag, x, y, z, qx, qy, qz, qw, dt)` carries a target rotation too — the
+   * one a kinematic platform or a picked-up prop turns with.
+   *
+   * [manual] because a native has one arity: each form is its own entry
+   * point (`bro_physics_moveKinematic` / `bro_physics_moveKinematicRot`,
+   * both declared and registered beside their bodies in bro's
+   * native_physics_core.cpp) and the wrapper picks by what it was passed.
+   */
   function moveKinematic(tag: number, x: number, y: number, z: number, dt: number): void;
   function raycast(): void;
   function raycastClosest(): void;
@@ -8010,7 +8021,13 @@ declare namespace bro {
     function host(port: number, callback?: Function): void;
     function unhost(): void;
     function connect(address: string, port: number, callback?: Function): number;
-    function disconnect(peerId: number): void;
+    /**
+     * Closes the connection to one peer. `reason` is the application-defined
+     * disconnect code the peer's ondisconnect receives (0 when omitted), the
+     * same number GameNetworkingSockets carries on the wire: a wrapper that
+     * dropped it left every kick indistinguishable from a network drop.
+     */
+    function disconnect(peerId: number, reason?: number): void;
     function disconnectAll(): void;
     function send(peerId: number, data: ArrayBuffer | ArrayBufferView, channel?: number): void;
     function broadcast(data: ArrayBuffer | ArrayBufferView, channel?: number): void;

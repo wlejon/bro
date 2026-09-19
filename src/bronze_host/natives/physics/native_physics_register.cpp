@@ -144,7 +144,6 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.getUserData", p(&bro_physics_getUserData), "f64", {"i32"}, error) &&
         fn("__bro_native.physics.setLayer", p(&bro_physics_setLayer), "bool", {"i32", "str"}, error) &&
         fn("__bro_native.physics.setKinematic", p(&bro_physics_setKinematic), "void", {"i32"}, error) &&
-        fn("__bro_native.physics.moveKinematic", p(&bro_physics_moveKinematic), "void", {"i32", "f64", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.raycastClosestRaw", p(&bro_physics_raycastClosestRaw), "str", {"f64", "f64", "f64", "f64", "f64", "f64", "f64", "i32"}, error) &&
         fn("__bro_native.physics.raycastRaw", p(&bro_physics_raycastRaw), "str", {"f64", "f64", "f64", "f64", "f64", "f64", "f64", "i32"}, error) &&
         fn("__bro_native.physics.castShapeRaw", p(&bro_physics_castShapeRaw), "str", {"str"}, error) &&

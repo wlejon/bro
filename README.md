@@ -167,11 +167,13 @@ Full TypeScript autocompletion and typechecking definitions for the `bro` namesp
 
 Annotated `.js` files in [docs/](docs/) are emitted directly from [`brosurface`](https://github.com/wlejon/brosurface). Load them in your editor for JSDoc on every binding:
 
-**Graphics & world.** `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile_world-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`, `canvas-api.js`, `webgl2-api.js`.
+**Graphics & world.** `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `mesh-io-api.js`, `mesh-plants-api.js`, `rigging-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile_world-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`, `canvas-api.js`, `webgl2-api.js`.
 
-**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web_animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `net-api.js`, `settings-api.js`, `intl-api.js`.
+**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web_animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `image-gpu-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `net-api.js`, `settings-api.js`, `intl-api.js`.
 
-**On-device AI.** `gpu-api.js`, `tensor-api.js`, `lm-api.js`, `diffusion-api.js`, `vision-api.js`, `triposplat-api.js`, `motion-api.js`, `tts-api.js`, `stt-api.js`, `diar-api.js`, `rave-api.js`, `wake-api.js`, `kws-api.js`, `mic-api.js`, `sense-api.js`, `gesture-api.js`, `listen-api.js`, `ai-api.js`.
+**On-device AI.** `gpu-api.js`, `tensor-api.js`, `tensor-nn-api.js`, `lm-api.js`, `diffusion-api.js`, `diffusion-control-api.js`, `vision-api.js`, `triposplat-api.js`, `motion-api.js`, `tts-api.js`, `stt-api.js`, `diar-api.js`, `rave-api.js`, `wake-api.js`, `kws-api.js`, `mic-api.js`, `sense-api.js`, `gesture-api.js`, `listen-api.js`.
+
+**Game AI.** `ai-api.js` (index), `ai-game-api.js` (navigation), `ai-game-planning.js` (agents, world, steering, perception), `ai-game-learning.js` (MCTS, planners, belief, replay), `ai-nn-api.js` (`bro.ai.game.nn`), `ai-learn-api.js` (`bro.ai.game.learn`), `ai-game-tools.js` (`bro.ai.game.grid`).
 
 Plus [settings.md](docs/settings.md) (settings + action binding), [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless), [system-panels.md](docs/system-panels.md) (authoring/overriding engine-level UI panels: menu bar, preferences modal, splash, inspector), [projects.md](docs/projects.md) (the project manager and skeletons), and [build-options.md](docs/build-options.md) (profiles and feature flags).
 

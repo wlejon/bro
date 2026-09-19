@@ -1,8 +1,16 @@
 // =============================================================================
-// bro.ai.game: Game AI Search & Learning
-// MCTS, RAVE, Neural Evaluator, Training, Self-Play, Dataset
-// Main API reference: docs/ai-game-api.js
+// bro.ai.game: Game AI Search & Planning
+// MCTS family, options, commander, belief / IS-MCTS, simulation, replay
 // =============================================================================
+//
+// Companion files (one area each, same library):
+//   docs/ai-game-api.js       NavGrid / HexNav / NavMesh / routing
+//   docs/ai-game-planning.js  Agent, World, Unit, steering, perception, bindings
+//   docs/ai-nn-api.js         bro.ai.game.nn: circuits, nets, ops, WeightsHandle
+//   docs/ai-learn-api.js      bro.ai.game.learn: buffers, trainers, inference
+//   docs/ai-game-tools.js     bro.ai.game.grid: obs windows, tapes, GridTrainer
+//
+// Available in all modes, windowed, headless and bro-server.
 
 // -----------------------------------------------------------------------------
 // MCTS planners
@@ -33,14 +41,19 @@
 //                                    evaluator to decouple depth from cost.
 //   rolloutPolicy : "random" | "aggressive" | "scripted"
 //                 | function(selfView, worldView) => CombatAction
+//                 | a rollout OBJECT (see "MCTS primitives" below)
 //   opponentPolicy: "idle"   | "aggressive" | "scripted"
 //   prior         : "uniform" | "attackBias" | "tacticMatch"
 //                 | function(selfView, worldView, actions[]) => weights[]
+//                 | a prior OBJECT (createUniformPrior / createAttackBiasPrior
+//                   / createTacticPrior / learn.createNeuralPrior / ...)
 //                   (tacticMatch reads `tactic`, `tacticMatchWeight`,
 //                    `tacticOtherWeight`)
 //   evaluator     : "hpDelta"      (hero-scoped)
 //                 | "teamHpDelta" | "teamAdvantage" | "teamPosition"  (team)
 //                 | function(worldView, heroId|teamId) => number in [-1, 1]
+//                 | an evaluator OBJECT (createHpDeltaEvaluator /
+//                   learn.createNeuralEvaluator / ...)
 //
 // JS callbacks receive plain-object views:
 //   selfView/agentView : { id, teamId, x, z, yaw, hp, maxHp, alive, attackRange }
@@ -60,7 +73,11 @@ const mcts = bro.ai.game.createMcts({
 });
 const action = mcts.search(world, hero);
 mcts.advanceRoot(action);
+mcts.resetTree();                  // drop the tree entirely
+mcts.setConfig({ iterations: 1600 });
 console.log(mcts.lastStats); // { iterations, bestVisits, elapsedMs, reusedRoot, ... }
+// lastStats is a PROPERTY on the combat searchers; on GenericMcts (bottom of
+// this file) it is a method, lastStats().
 
 // Decoupled 1v1: both sides searched simultaneously (no opponentPolicy)
 const duel = bro.ai.game.createDecoupledMcts({ iterations: 1500, prior: "attackBias" });
@@ -76,6 +93,15 @@ const team = bro.ai.game.createTeamMcts({
 const perHero = team.search(world, heroes); // [CombatAction, ...]  (length = heroes.length)
 team.advanceRoot(perHero);
 
+// Coarse tactic-only planner: one Tactic for the whole team per window.
+const tac = bro.ai.game.createTacticMcts({
+    iterations: 300, tacticWindowDecisions: 4, evaluator: "teamHpDelta",
+});
+const tactic = tac.search(world, heroes);     // a Tactic
+tac.advanceRoot(tactic);
+tac.resetTree();
+tac.lastStats;
+
 // Hierarchical: tactic every N windows + fine per-hero every call
 const planner = bro.ai.game.createLayeredPlanner({
     tactic: { iterations: 300, budgetMs: 4, tacticWindowDecisions: 4, actionRepeat: 4 },
@@ -85,6 +111,7 @@ const planner = bro.ai.game.createLayeredPlanner({
     evaluator: "teamHpDelta",
 });
 const groupActions = planner.decide(world, heroes); // [CombatAction, ...]
+planner.reset();                                    // forget the committed tactic
 console.log(planner.committedTactic.kind);          // "FocusLowestHp", etc.
 console.log(planner.windowsUntilReplan);
 console.log(planner.lastStats.fineStats.iterations);
@@ -120,6 +147,11 @@ const legalA = bro.ai.game.legalActions(hero, world);     // [CombatAction, ...]
 const legalT = bro.ai.game.legalTactics(world, heroes);   // [Tactic, ...]
 const concrete = bro.ai.game.tacticToAction(              // Tactic → CombatAction
     { kind: bro.ai.game.TACTIC.FocusLowestHp }, hero, world);
+
+/** Apply a CombatAction to the LIVE world (the same path the search applies
+ *  internally during a rollout). Use it to execute what search() chose.
+ *  @param {AIAgent} agent @param {AIWorld} world @param {Object} action */
+bro.ai.game.applyCombatAction(hero, world, action);
 
 
 // ─── Options (temporally-extended macro-actions) ──────────────────────────
@@ -157,6 +189,7 @@ const hold = bro.ai.game.createOption({
     step:            ()     => ({ moveDir: 0, attackSlot: 0, abilitySlot: -1 }),
     shouldTerminate: (_s, _w, ticks) => ticks >= 2,
 });
+peekAndShoot.name;                       // read-only, the authored name
 
 const opt = bro.ai.game.createOptionMcts({
     iterations: 80, rolloutHorizon: 3, optionMaxWindows: 6,
@@ -170,6 +203,7 @@ if (chosen) {
     opt.executeOption(world, hero, chosen);  // advance the live world
     opt.advanceRoot(chosen);                  // reuse tree next call
 }
+opt.resetTree(); opt.setConfig({ iterations: 160 }); opt.lastStats;
 
 // Team variant, callbacks receive heroesView[] and step returns a
 // CombatAction[] (one per hero, in order).
@@ -187,6 +221,8 @@ const teamOpt = bro.ai.game.createTeamOptionMcts({
     opponentPolicy: "scripted",
 });
 const chosenTeam = teamOpt.search(world, heroes);  // option name or null
+if (chosenTeam) teamOpt.executeOption(world, heroes, chosenTeam);
+teamOpt.advanceRoot(chosenTeam); teamOpt.resetTree(); teamOpt.lastStats;
 
 
 // ─── Commander (role-based hierarchical team planner) ────────────────────
@@ -224,10 +260,43 @@ const cmdr = bro.ai.game.createCommander({
 });
 
 const groupActions2 = cmdr.decide(world, heroes); // [CombatAction, ...]
+cmdr.reset();                                     // drop assignments + trees
 console.log(cmdr.currentAssignments);             // [0, 1, 0, ...] role indices
 console.log(cmdr.committedOption(0));             // "peekAndShoot" | null
 console.log(cmdr.windowsUntilReplan);
 console.log(cmdr.roles);                          // [{name, optionCount}, ...]
+
+
+// ─── MCTS primitives as first-class objects ──────────────────────────────
+//
+// The string presets have object equivalents. Pass them as `evaluator`,
+// `prior` or `rolloutPolicy` in any Mcts / TacticMcts / OptionMcts /
+// InfoSetMcts / LayeredPlanner / Commander config. Objects are what
+// rootParallelSearch requires, since a JS function cannot be called from N
+// native threads.
+
+const hpEval    = bro.ai.game.createHpDeltaEvaluator();
+const tHp       = bro.ai.game.createTeamHpDeltaEvaluator();
+const tAdv      = bro.ai.game.createTeamAdvantageEvaluator();
+const tPos      = bro.ai.game.createTeamPositionEvaluator();
+const randRoll  = bro.ai.game.createRandomRollout();
+const aggRoll   = bro.ai.game.createAggressiveRollout();
+const scrRoll   = bro.ai.game.createScriptedRollout();
+const uniformPr = bro.ai.game.createUniformPrior();
+const atkBiasPr = bro.ai.game.createAttackBiasPrior();
+
+/** The tactic-match prior: boosts actions that agree with the committed
+ *  tactic and damps the rest. Only this one carries knobs. */
+const tacticPr = bro.ai.game.createTacticPrior();
+tacticPr.setMatchWeight(8.0);
+tacticPr.setOtherWeight(1.0);
+tacticPr.setTactic({ kind: bro.ai.game.TACTIC.FocusLowestHp });
+
+// String constants mirror the enum values.
+bro.ai.game.PROJECTILE_MODE.Single;      // "single" | "pierce" | "aoe"
+bro.ai.game.DAMAGE_KIND.Magical;         // "physical" | "magical" | "true"
+bro.ai.game.TACTIC.Retreat;              // "Hold"|"FocusLowestHp"|"Scatter"|"Retreat"
+bro.ai.game.MOVE_DIR.NE;                 // integer move directions
 
 
 // -----------------------------------------------------------------------------
@@ -252,6 +321,7 @@ console.log(cmdr.roles);                          // [{name, optionCount}, ...]
  * @param {AIAgent} agent
  * @param {AIWorld} world
  * @returns {Float32Array} length = bro.ai.game.OBS_TOTAL
+ * @throws {TypeError} when either argument is not an agent / world
  */
 const obs = bro.ai.game.buildObservation(focusAgent, world);
 UI.drawObservation(obs);
@@ -274,15 +344,19 @@ UI.drawObservation(obs);
 const am = bro.ai.game.buildActionMask(focusAgent, world);
 const legalAttacks = am.enemyIds.filter((id, k) => id >= 0 && am.mask[k] > 0);
 
+bro.ai.game.OBS_TOTAL;        // observation length
+bro.ai.game.MASK_TOTAL;       // mask length
+bro.ai.game.N_ENEMY_SLOTS;    // enemy slots in the observation/mask (5)
+
 /**
  * Per-agent reward-delta accumulator. Captures the agent's baseline at
  * construction; each `consume()` call returns the delta since the previous
- * call and re-latches. Reads `world.events()`. Do not call
+ * call and re-latches. Reads `world.events`. Do not call
  * `world.clearEvents()` in between consume() calls.
  *
  * @param {AIAgent} agent
  * @param {AIWorld} world
- * @returns {RewardTracker}
+ * @returns {AIRewardTracker}
  */
 const tracker = bro.ai.game.createRewardTracker(agent, world);
 
@@ -308,7 +382,7 @@ tracker.reset(agent, world);
 
 /**
  * @param {AIWorld} world
- * @returns {Simulation}
+ * @returns {AISimulation}
  */
 const sim = bro.ai.game.createSimulation(world);
 
@@ -348,8 +422,11 @@ sim.resetCounters();                // does NOT reset world state
 // damage events + a frame index appended on close() so any frame can be
 // random-accessed. ReplayReader opens a finished file and exposes per-frame
 // snapshots, per-agent trajectories, and a damage summary.
+//
+// For a schema-driven, non-combat replay (your own row/event layout) use
+// bro.ai.game.grid.createGenericRecorder instead — docs/ai-game-tools.js.
 
-/** @returns {Recorder} */
+/** @returns {AIRecorder} */
 const rec = bro.ai.game.createRecorder();
 
 /**
@@ -367,7 +444,7 @@ rec.isOpen;                                       // true
  *  @param {AIWorld} world */
 rec.writeRoster(world);
 
-/** Capture one frame: agents, projectiles, and the slice of world.events()
+/** Capture one frame: agents, projectiles, and the slice of world.events
  *  that arrived since the last recordFrame. Do NOT call world.clearEvents()
  *  between recordFrame calls or that window's events are lost.
  *  @param {number} stepIdx @param {number} elapsed @param {AIWorld} world */
@@ -376,7 +453,7 @@ rec.recordFrame(state.steps, state.elapsed, world);
 rec.frameCount;                                    // frames written so far
 rec.close();                                       // appends index + footer
 
-/** @returns {ReplayReader} */
+/** @returns {AIReplayReader} */
 const rr = bro.ai.game.createReplayReader();
 if (!rr.open(path)) UI.log("open failed: " + rr.errorMessage);
 rr.frameCount;                                     // total frames
@@ -397,300 +474,24 @@ const dmg = rr.damageSummary();
 
 
 // =============================================================================
-// bro.ai.game.nn, Neural network primitives
-// =============================================================================
-//
-// Thin bindings over brogameagent::nn. Intended for training loops and custom
-// value/policy networks. Most users will compose SingleHeroNet and plug it
-// into a NeuralEvaluator / NeuralPrior (see bro.ai.game.learn) rather than
-// hand-wiring circuits.
-//
-// All Tensor arguments are *owned* JS objects; ops mutate them in place.
-//
-//   const t = bro.ai.game.nn.createTensor(rows, cols?);
-//   t.rows, t.cols, t.size                            // read-only shape
-//   t.zero(); t.resize(r, c);                         // fill / reshape
-//   t.get(r, c); t.set(r, c, v);                      // per-element
-//   t.toArray() -> Float32Array                        // copy out
-//   t.fromArray(Float32Array)                          // copy in
-//   t.copyFrom(otherTensor)                            // deep copy
-//
-// Circuit classes expose forward/backward, save/load (Uint8Array blobs),
-// and zeroGrad/sgdStep. Each circuit owns its own cache for backward.
-
-/** @type {Tensor} */
-const W = bro.ai.game.nn.createTensor(4, 3);
-
-/** Linear (dense) layer. W:(out,in), b:(out). */
-const lin = bro.ai.game.nn.createLinear(inDim, outDim, seed);
-lin.forward(x, y);            // y = W·x + b
-lin.backward(dY, dX);         // accumulates dW, dB; produces dX
-lin.zeroGrad(); lin.sgdStep(0.01, 0.9);
-lin.W; lin.b; lin.dW; lin.dB; // Tensor views (copies)
-const blob = lin.save();      // Uint8Array
-lin.load(blob);
-
-const relu = bro.ai.game.nn.createRelu();
-const tanh = bro.ai.game.nn.createTanh();
-
-/** DeepSetsEncoder, permutation-invariant self+enemies+allies encoder. */
-const enc = bro.ai.game.nn.createDeepSetsEncoder({hidden: 32, embedDim: 32}, seed);
-enc.outDim;                    // 3 * embedDim
-enc.forward(obsVec, embed);
-
-/** Value / factored-policy heads. */
-const vHead = bro.ai.game.nn.createValueHead(embedDim, hidden, seed);
-const val = vHead.forward(embed);   // scalar in [-1,1]
-vHead.backward(dValue, dEmbed);
-
-const pHead = bro.ai.game.nn.createFactoredPolicyHead(embedDim, seed);
-pHead.totalLogits;                  // N_MOVE + N_ATTACK + N_ABILITY
-pHead.forward(embed, logits);
-pHead.backward(dLogits, dEmbed);
-
-/** PolicyValueNet, generic small MLP with value head and a single (flat)
- *  policy head, decoupled from the MOBA-shaped observation/action layout
- *  that SingleHeroNet assumes. Use this when your observation is hand-crafted
- *  and your action space is a small flat set of discrete choices (e.g.
- *  platformer buttons, gridworld moves, puzzle-game pieces).
- *
- *  Architecture:
- *    in_dim → hidden[0] → ReLU → ... → hidden[n-1] → { value(tanh), logits }
- *
- *  Forward returns the scalar value; logits are written into the supplied
- *  Tensor. Backward expects (dValue, dLogits) where dLogits is typically
- *  (probs - target) from nn.softmaxXent (with optional legal-action mask).
- *
- *  Wire format magic differs from SingleHeroNet: blobs are not interchangeable.
- */
-const pvnet = bro.ai.game.nn.createPolicyValueNet({
-    inDim: 60,
-    hidden: [64, 64],         // any non-empty list of positive ints
-    valueHidden: 32,
-    numActions: 6,
-    seed: 0xC0DE1234n,
-});
-pvnet.inDim; pvnet.numActions; pvnet.trunkDim; pvnet.numParams;
-const valuePV = pvnet.forward(obsTensor, logitsTensor);     // returns scalar
-pvnet.backward(dValuePV, dLogitsTensor);
-pvnet.zeroGrad(); pvnet.sgdStep(lr, momentum);
-const pvBlob = pvnet.save();   pvnet.load(pvBlob);
-
-// forwardBatched(x, logits, values), B rows in one call (one dispatch
-// instead of B), for interleaving multiple searches' leaf evaluations
-// gathered within a single JS tick. x is (B, inDim); logits/values are
-// pre-sized by the caller as (B, numActions) / (B, 1). Same shape on
-// SingleHeroNetTX below, SingleHeroNet does NOT have this method (it
-// doesn't implement the underlying BatchedNet interface).
-const xB = bro.ai.game.nn.createTensor(8, pvnet.inDim);
-const logitsB = bro.ai.game.nn.createTensor(8, pvnet.numActions);
-const valuesB = bro.ai.game.nn.createTensor(8, 1);
-pvnet.forwardBatched(xB, logitsB, valuesB);
-
-/** SingleHeroNet, encoder → trunk → {value, policy}. */
-const net = bro.ai.game.nn.createSingleHeroNet({
-  enc: { hidden: 32, embedDim: 32 },
-  trunkHidden: 64,
-  valueHidden: 32,
-  seed: 0xC0DEn,
-});
-const v2 = net.forward(x, logits);   // returns scalar value
-net.backward(dValue, dLogits);
-net.zeroGrad(); net.sgdStep(lr, momentum);
-net.embedDim; net.trunkDim; net.policyLogits; net.numParams;
-const blob2 = net.save();            // Uint8Array
-net.load(blob2);
-
-/** WeightsHandle, atomic publish/snapshot of net weights across threads. */
-const handle = bro.ai.game.nn.createWeightsHandle();
-handle.publish(blob2, 1n);           // blob = Uint8Array, version = BigInt
-const snap = handle.snapshot();      // { blob: Uint8Array, version: BigInt } | null
-handle.version();
-
-/** Primitive ops (same signatures as the C++ header). */
-bro.ai.game.nn.linearForward(W, b, x, y);
-bro.ai.game.nn.linearBackward(W, x, dY, dX, dW, dB);
-bro.ai.game.nn.reluForward(x, y);     bro.ai.game.nn.reluBackward(x, dY, dX);
-bro.ai.game.nn.tanhForward(x, y);     bro.ai.game.nn.tanhBackward(y, dY, dX);
-bro.ai.game.nn.softmaxForward(logits, probs, maskOrNull);
-bro.ai.game.nn.softmaxBackward(probs, dProbs, dLogits);
-/** @returns {number} loss */
-const loss = bro.ai.game.nn.softmaxXent(logits, target, probs, dLogits, maskOrNull);
-/** @returns {{loss, dPred}} */
-const mseR = bro.ai.game.nn.mseScalar(pred, target);
-bro.ai.game.nn.addInplace(y, x);  bro.ai.game.nn.addScalarInplace(y, s);
-/** @returns {BigInt} advanced seed state */
-const seed2 = bro.ai.game.nn.xavierInit(W, 0xC0DEn);
-bro.ai.game.nn.factoredSoftmax(logits, probs, atkMaskOrNull, abilMaskOrNull);
-const fLoss = bro.ai.game.nn.factoredXent(
-  logits, targetMove, targetAttack, targetAbility,
-  probs, dLogits, atkMaskOrNull, abilMaskOrNull);
-
-// Constants
-bro.ai.game.nn.N_MOVE;   // 9
-bro.ai.game.nn.N_ATTACK; // N_ENEMY_SLOTS + 1
-bro.ai.game.nn.N_ABILITY;// N_ABILITY_SLOTS + 1
-
-
-// =============================================================================
-// bro.ai.game.learn, Training infrastructure
-// =============================================================================
-
-/** NeuralEvaluator, IEvaluator adapter wrapping a SingleHeroNet. Pass as
- *  the `evaluator` option in any Mcts/InfoSetMcts config. */
-const neuralEval = bro.ai.game.learn.createNeuralEvaluator(net, handle);
-neuralEval.evaluate(world, heroId);    // scalar in [-1,1]
-
-/** NeuralPrior, IPrior adapter. Pass as `prior` in Mcts/InfoSetMcts config. */
-const neuralPrior = bro.ai.game.learn.createNeuralPrior(net, handle);
-neuralPrior.setTemperature(1.0);
-neuralPrior.setUniformMix(0.05);
-
-/** GumbelNoisePrior, wraps an inner prior and adds IID Gumbel noise at the
- *  root for exploration under small MCTS budgets. */
-const gumbel = bro.ai.game.learn.createGumbelNoisePrior(neuralPrior, /*scale*/ 1.0);
-gumbel.reseed(0xA11CEn);
-gumbel.setScale(1.0);
-
-/** Situation, training example as a plain object.
- *  {obs, atkMask, abilMask, targetMove, targetAttack, targetAbility, valueTarget} */
-
-/** ReplayBuffer, fixed-capacity FIFO of situations. */
-const buf = bro.ai.game.learn.createReplayBuffer(/*capacity*/ 4096);
-buf.push(situation);
-buf.size; buf.capacity;
-const batch = buf.sample(32);
-const all = buf.all(); buf.clear();
-
-/** ExItTrainer, mini-batch SGD+momentum against (value, policy) targets. */
-const trainer = bro.ai.game.learn.createExItTrainer();
-trainer.setNet(net);
-trainer.setBuffer(buf);
-trainer.setWeightsHandle(handle);
-trainer.setConfig({
-  lr: 0.01, momentum: 0.9, batch: 32,
-  policyWeight: 1.0, valueWeight: 1.0,
-  publishEvery: 100,
-  rngSeed: 0x1234n,
-});
-const step = trainer.step();         // {lossValue, lossPolicy, lossTotal, samples}
-const stepN = trainer.stepN(100);
-trainer.totalSteps; trainer.totalPublishes;
-
-/** Extract AlphaZero-style training targets from a completed Mcts search.
- *  @returns {{move: Float32Array, attack: Float32Array, ability: Float32Array}}
- *  or null if the tree is empty. */
-const targets = bro.ai.game.learn.targetsFromMcts(mcts);
-
-/** Build a Situation from a completed search. value_target is left at 0,
- *  the caller fills it with the eventual episode return before pushing. */
-const sit = bro.ai.game.learn.makeSituation(mcts, hero, world);
-sit.valueTarget = finalReturn;
-buf.push(sit);
-
-/** Gumbel-improved policy target (Danihelka 2022, simplified). */
-const tgt2 = bro.ai.game.learn.gumbelImprovedPolicy(mcts);
-
-
-// ─── Generic ExIt: arbitrary obs / flat discrete action space ─────────────
-//
-// Pair PolicyValueNet with the generic replay buffer + trainer when your
-// problem doesn't fit the combat-shaped Situation (no enemy slots, no
-// ability cooldowns, no factored heads). Same SGD+momentum loop, same
-// WeightsHandle hot-swap; differs only in the Situation shape and which
-// net it drives.
-
-/** GenericSituation, plain JS object the buffer accepts:
- *    {
- *      obs:          Float32Array(net.inDim),
- *      policyTarget: Float32Array(net.numActions),  // soft distribution, sums to ≈ 1
- *      actionMask?:  Float32Array(net.numActions),  // 1.0 legal, 0.0 illegal; omit ⇒ all legal
- *      valueTarget:  number in [-1, 1]              // typically discounted return, clipped
- *    }
- */
-
-const gbuf = bro.ai.game.learn.createGenericReplayBuffer(/*capacity*/ 4096);
-gbuf.push({ obs: o, policyTarget: pi, actionMask: mask, valueTarget: 0.7 });
-gbuf.size; gbuf.capacity;
-const gbatch = gbuf.sample(32);   // [GenericSituation, ...]
-const gall   = gbuf.all();        gbuf.clear();
-
-const gtrainer = bro.ai.game.learn.createGenericExItTrainer();
-gtrainer.setNet(pvnet);
-gtrainer.setBuffer(gbuf);
-gtrainer.setWeightsHandle(handle);
-gtrainer.setConfig({
-    lr: 0.01, momentum: 0.9, batch: 32,
-    policyWeight: 1.0, valueWeight: 1.0,
-    publishEvery: 100,
-    rngSeed: 0x1234n,
-});
-const gstep   = gtrainer.step();        // {lossValue, lossPolicy, lossTotal, samples}
-const gstepN  = gtrainer.stepN(100);
-gtrainer.totalSteps; gtrainer.totalPublishes;
-
-
-// ─── Batched GPU inference (BatchedInferenceServer / IInferenceBackend) ────
-//
-// Batching only pays off under CONCURRENT callers, a single-threaded JS
-// caller always submits one observation at a time (batch-of-1 through the
-// server). For batching multiple observations gathered within a single JS
-// tick, use net.forwardBatched(x, logits, values) above instead. That's
-// the actual single-threaded-JS win. These bindings exist for completeness
-// and forward-compat with future concurrent callers (e.g. a root-parallel
-// GenericMcts sharing one server), and to power the GenericMcts `backend`
-// fast path below.
-//
-// net must be a PolicyValueNet or SingleHeroNetTX (both implement the
-// underlying BatchedNet interface), SingleHeroNet does not, and is
-// rejected with a TypeError.
-
-const server = bro.ai.game.learn.createInferenceServer(pvnet, {
-    maxBatchSize: 64,       // default 64
-    maxWaitMicros: 500,     // default 500, how long to wait for a batch to fill
-});
-const r1 = server.evaluate(obsF32);              // blocking: { logits: Float32Array, value }
-const rows = server.evaluateBatch([obsF32, obsF32Other]);  // [{ logits, value }, ...]
-server.batchesRun;      // int
-server.shutdown();      // stop the server's worker thread
-
-// Direct (no server/threading, evaluates net inline, same process/thread)
-// or server-backed IInferenceBackend, for plugging into GenericMcts's
-// `backend` option (see below):
-const directBackend = bro.ai.game.learn.createDirectBackend(pvnet);
-const serverBackend = bro.ai.game.learn.createServerBackend(server, pvnet);
-directBackend.numActions; directBackend.inDim;
-
-// GenericMcts native `backend` option, masked-softmax prior + value
-// evaluated entirely in C++, no per-node JS-callback round trip (the env's
-// snapshot/restore/step/legalActions/observe callbacks are still JS, since
-// the env itself is JS-authored; only the prior/value leaf evaluation moves
-// native). An explicit priorFn/valueFn always wins over `backend` if both
-// are given.
-//
-// IMPORTANT: this is NOT a drop-in for the hero-Mcts `evaluator`/`prior`
-// config slot on createMcts/createDecoupledMcts/createTeamMcts/etc. Those
-// take combat-shaped IEvaluator/IPrior. A backend plugs in one layer down,
-// at GenericMcts's own prior_fn/value_fn (this section), over a flat
-// action space matching net.numActions.
-const gm = bro.ai.game.createGenericMcts({
-    env: myGenericEnv,
-    backend: directBackend,   // or serverBackend
-    iterations: 400,
-});
-
-
-// =============================================================================
 // Belief / observability / Information-Set MCTS
 // =============================================================================
+//
+// Planning when the enemy is not fully observed: a per-team particle cloud
+// over hidden enemy state, plus the two searchers that determinize against
+// it every iteration.
 
 /** VisibilityConfig is a plain object:
  *   { fovRadians?: number, maxRange?: number, checkLos?: boolean } */
 
-/** Build a fresh TeamObservation against ground truth. Allies are fully
- *  known; enemies are visible iff any living ally has LOS+FOV+range.
- *  @returns {{teamId, timestamp, allies, enemies}} */
-const teamObs = bro.ai.game.observe(world, teamId, visCfg, /*now*/ simTime);
+/**
+ * Build a fresh TeamObservation against ground truth. Allies are fully
+ * known; enemies are visible iff any living ally has LOS + FOV + range.
+ * @param {AIWorld} world @param {number} teamId
+ * @param {Object} visCfg @param {number} now - sim time
+ * @returns {{teamId, timestamp, allies, enemies}}
+ */
+const teamObs = bro.ai.game.observe(world, teamId, visCfg, simTime);
 
 /** Merge a fresh observation into a prior one, carrying stale enemies
  *  forward with lastSeenElapsed updated. */
@@ -698,142 +499,110 @@ const merged = bro.ai.game.mergeObservations(prior, fresh, now);
 
 /** TeamBelief, per-team particle cloud over hidden enemy state. */
 const tb = bro.ai.game.createTeamBelief({
-  teamId: 0, numParticles: 32, navGrid: nav,
-  motion: { maxSpeed: 6, accelStd: 4, spreadOnLoss: 3 },
-  seed: 0xBE11Fn,
+    teamId: 0, numParticles: 32, navGrid: nav,
+    motion: { maxSpeed: 6, accelStd: 4, spreadOnLoss: 3 },
+    seed: 0xBE11Fn,
 });
-tb.registerEnemy(enemyId, maxHp, /*initialPos*/ {x:0,z:0});
-tb.propagate(world, visCfg, dt);
-tb.update(teamObs);
+tb.registerEnemy(enemyId, maxHp, /*initialPos*/ { x: 0, z: 0 });
+tb.propagate(world, visCfg, dt);      // diffuse particles forward one step
+tb.update(teamObs);                   // reweight + resample against a sighting
 const particles = tb.sample();        // { [enemyId]: {x,z,vx,vz,hp,heading,weight} }
-const means = tb.mean();
-tb.ess;                                // effective sample size
-tb.enemies();                          // per-enemy {enemyId, visible, everSeen, ...}
-tb.teamId; tb.numParticles; tb.clear();
+const means = tb.mean();              // per-enemy weighted mean state
+tb.ess;                               // effective sample size (read-only)
+tb.enemies();                         // per-enemy {enemyId, visible, everSeen, ...}
+tb.teamId; tb.numParticles;           // read-only
+tb.clear();
 
-/** InfoSetMcts, IS-MCTS for single-hero under partial observability. */
+/** InfoSetMcts, IS-MCTS for a single hero under partial observability: each
+ *  iteration samples one determinization from the belief and searches it. */
 const isMcts = bro.ai.game.createInfoSetMcts();
 isMcts.setBelief(tb);
 isMcts.setEvaluator("hpDelta");       // string preset, function, or object
 isMcts.setPrior("attackBias");
-isMcts.setConfig({iterations: 500, rolloutHorizon: 32, simDt: 0.016});
+isMcts.setConfig({ iterations: 500, rolloutHorizon: 32, simDt: 0.016 });
 const act = isMcts.search(world, hero);
 isMcts.advanceRoot(act);
 isMcts.resetTree();
-isMcts.lastStats;                      // {iterations, meanEss, ...}
+isMcts.lastStats;                     // {iterations, meanEss, ...}
 
-/** InfoSetTeamMcts, team analogue. */
+/** InfoSetTeamMcts, the team analogue. It takes the belief and a config but
+ *  no per-call evaluator/prior setters. */
 const isTeam = bro.ai.game.createInfoSetTeamMcts();
 isTeam.setBelief(tb);
-isTeam.setConfig({iterations: 400});
+isTeam.setConfig({ iterations: 400 });
 const joint = isTeam.search(world, [hero1, hero2]);
+isTeam.resetTree();
+isTeam.lastStats;
 
 
 // =============================================================================
-// Snapshots, projectiles, VecSimulation, MCTS primitives
+// Snapshots, projectiles, VecSimulation
 // =============================================================================
 
-/** Snapshot / restore, opaque handles. */
+/** Snapshot / restore as opaque handles. Cheaper and lossless compared with
+ *  world.snapshot()/restore(), which marshal through plain JS objects (see
+ *  docs/ai-game-planning.js). Routes set by node.navigateTo are NOT captured:
+ *  re-issue them after applying a snapshot. */
 const asnap = bro.ai.game.captureAgentSnapshot(agent);
 bro.ai.game.applyAgentSnapshot(agent, asnap);
-asnap.id; asnap.x; asnap.z; asnap.hp; asnap.alive;
+asnap.id; asnap.x; asnap.z; asnap.yaw; asnap.hp; asnap.alive;   // read-only
 
 const wsnap = bro.ai.game.captureWorldSnapshot(world);
 bro.ai.game.applyWorldSnapshot(world, wsnap);
 wsnap.agentCount; wsnap.projectileCount; wsnap.eventCount; wsnap.nextProjectileId;
 const projs = wsnap.projectiles();     // [{id, x, z, mode, ...}, ...]
 
-/** Patch a captured WorldSnapshot with a sampled particle map (IS-MCTS
- *  determinization helper). */
+/** Patch a captured WorldSnapshot with a sampled particle map, the IS-MCTS
+ *  determinization helper. `particles` is what tb.sample() returned. */
 bro.ai.game.patchSnapshotWithParticles(wsnap, particles);
 
-/** Projectiles, plain objects. kind: "physical"|"magical"|"true",
- *  mode: "single"|"pierce"|"aoe" (see bro.ai.game.PROJECTILE_MODE / DAMAGE_KIND). */
+/**
+ * Free projectile helpers. `kind` is "physical" | "magical" | "true";
+ * `mode` is "single" | "pierce" | "aoe". Defaults: speed 20, radius 0.3,
+ * remainingLife 2, damage 0, targetId -1, mode "single".
+ * @returns {number} the new projectile id, or -1
+ */
 const pid = bro.ai.game.spawnProjectile(world, {
-  ownerId: attackerId, teamId: 0, targetId: -1,
-  x: 0, z: 0, vx: 20, vz: 0, speed: 20, radius: 0.3,
-  damage: 25, kind: "physical",
-  remainingLife: 2.0, mode: "single",
+    ownerId: attackerId, teamId: 0, targetId: -1,
+    x: 0, z: 0, vx: 20, vz: 0, speed: 20, radius: 0.3,
+    damage: 25, kind: "physical",
+    remainingLife: 2.0, mode: "single",
+    splashRadius: 0, maxHits: 0,
 });
-const live = bro.ai.game.worldProjectiles(world);
+const live = bro.ai.game.worldProjectiles(world);   // alive projectiles only
 
-/** VecSimulation, batched 1v1 envs for self-play training. */
+/** VecSimulation, N batched 1v1 envs for self-play training. Both spellings
+ *  create the same thing. */
 const vec = bro.ai.game.createVecSimulation({
-  numEnvs: 64, arenaHalfSize: 12, dt: 0.016, maxStepsPerEpisode: 600,
-  hp: 100, damage: 5, attackRange: 2.5, moveSpeed: 6,
-  rewardDamageDealt: 1.0, rewardKill: 100, rewardDeath: -100,
+    numEnvs: 64, arenaHalfSize: 12, dt: 0.016, maxStepsPerEpisode: 600,
+    minSpawnDist: 4, maxSpawnDist: 10,
+    hp: 100, maxMana: 100, manaRegenPerSec: 0,
+    damage: 5, attackRange: 2.5, attacksPerSec: 1,
+    moveSpeed: 6, maxAccel: 30, maxTurnRate: 8, radius: 0.4,
+    rewardDamageDealt: 1.0, rewardDamageTakenMul: 1.0,
+    rewardKill: 100, rewardDeath: -100, rewardStep: 0, rewardTimeout: 0,
 });
-vec.numEnvs;
+vec.numEnvs;                              // read-only
 vec.seedAndReset(0x1234n);
-const heroObs = vec.observe(1);           // Float32Array length N*OBS_TOTAL
-const heroMask = vec.actionMask(1);       // {mask, enemyIds}
-vec.applyActions(1, heroActions);         // array of N AgentAction objects
-vec.applyActions(2, oppActions);
+const heroObs = vec.observe(1);           // Float32Array, N * OBS_TOTAL
+const heroMask = vec.actionMask(1);       // { mask, enemyIds }
+vec.applyActions(1, heroActions);         // side 1 = hero, 2 = opponent
+vec.applyActions(2, oppActions);          // arrays of N AgentAction objects
 vec.step();
-const d = vec.dones();                    // {done: Int32Array, winner: Int32Array}
-const r = vec.rewards();                  // {hero: Float32Array, opponent: Float32Array}
-vec.stepCounts(); vec.episodeCounts(); vec.resetDone(); vec.resetEnv(0);
-
-/** MCTS primitives as first-class objects. Pass them as `evaluator`,
- *  `prior`, or `rolloutPolicy` in any Mcts / InfoSetMcts / LayeredPlanner
- *  / Commander config, in addition to the existing string presets. */
-const hpEval     = bro.ai.game.createHpDeltaEvaluator();
-const tHp        = bro.ai.game.createTeamHpDeltaEvaluator();
-const tAdv       = bro.ai.game.createTeamAdvantageEvaluator();
-const tPos       = bro.ai.game.createTeamPositionEvaluator();
-const randRoll   = bro.ai.game.createRandomRollout();
-const aggRoll    = bro.ai.game.createAggressiveRollout();
-const scrRoll    = bro.ai.game.createScriptedRollout();
-const uniformPr  = bro.ai.game.createUniformPrior();
-const atkBiasPr  = bro.ai.game.createAttackBiasPrior();
-const tacticPr   = bro.ai.game.createTacticPrior();
-tacticPr.setMatchWeight(8.0); tacticPr.setOtherWeight(1.0);
-
-const mctsWithNN = bro.ai.game.createMcts({
-  iterations: 800, priorC: 2.0,
-  evaluator: neuralEval,
-  prior: neuralPrior,
-  rolloutPolicy: scrRoll,
-});
-
-// String constants mirror the enum values.
-bro.ai.game.PROJECTILE_MODE.Single;      // "single"
-bro.ai.game.DAMAGE_KIND.Magical;         // "magical"
-
-
-// =============================================================================
-// Unit buffs / DoT / HoT, extended fields on agent.unit
-// =============================================================================
-//
-// In addition to the base combat fields, every Unit proxy exposes the timed
-// buff and DoT/HoT fields directly. All are read/write so abilities can
-// apply effects by setting magnitude + remaining duration, and Unit.tickCooldowns
-// decays them over time.
-//
-//   unit.armorBonus / armorBonusRemaining
-//   unit.magicResistBonus / magicResistBonusRemaining
-//   unit.damageMul / damageMulRemaining
-//   unit.attacksMul / attacksMulRemaining
-//   unit.moveSpeedMul / moveSpeedMulRemaining
-//   unit.stealthChance / stealthChanceRemaining
-//
-//   unit.dotDps / dotRemaining / dotKind / dotSourceId
-//   unit.hotRate / hotRemaining
-//
-//   unit.attackKind                     // "physical"|"magical"|"true"
-//   unit.attackCooldown                  // read/write
-//   unit.effectiveMagicResist            // armor + armorBonus
-//   unit.effectiveAttacksPerSec          // attacksPerSec * attacksMul
+const done = vec.dones();                 // { done: Int32Array, winner: Int32Array }
+const rew = vec.rewards();                // { hero: Float32Array, opponent: Float32Array }
+vec.stepCounts(); vec.episodeCounts();
+vec.resetDone();                          // reset only the finished envs
+vec.resetEnv(0);
 
 
 // =============================================================================
 // GenericMcts, env-agnostic PUCT search
 // =============================================================================
 //
-// The MCTS classes above (Mcts / DecoupledMcts / TeamMcts / TacticMcts /
-// OptionMcts / Commander) are welded to the bundled World/Agent/CombatAction
-// model, they only plan over brogameagent's combat sim. createGenericMcts
-// is the escape hatch for anything else: a custom JS-side env, a 2D platformer,
+// The MCTS classes above are welded to the bundled World/Agent/CombatAction
+// model, they only plan over brogameagent's combat sim. createGenericMcts is
+// the escape hatch for anything else: a custom JS-side env, a 2D platformer,
 // a board game, a planner test harness. You describe the env with five
 // callbacks and search() runs the same AlphaZero-style PUCT algorithm over it.
 //
@@ -847,8 +616,6 @@ bro.ai.game.DAMAGE_KIND.Magical;         // "magical"
 // Dirichlet root noise matches the AlphaZero exploration scheme.
 
 /**
- * Create an env-agnostic PUCT MCTS searcher.
- *
  * @param {Object} opts
  * @param {Object} opts.env  - Environment description; required.
  * @param {number} opts.env.numActions     - Total action space size (max action index + 1).
@@ -875,7 +642,18 @@ bro.ai.game.DAMAGE_KIND.Magical;         // "magical"
  * @param {function(Float32Array obs):number} [opts.valueFn]
  *        - Optional learned-value function in [-1, 1]. When set, replaces random rollout
  *          for leaf evaluation.
- * @returns {GenericMcts}
+ * @param {Object} [opts.backend]
+ *        - A learn.createDirectBackend/createServerBackend wrapper: masked-softmax
+ *          prior + value evaluated entirely in C++, no per-node JS round trip.
+ *          An explicit priorFn/valueFn wins over it. See docs/ai-learn-api.js.
+ * @returns {AIGenericMcts}
+ * @throws {TypeError} when any of the five callbacks is missing, when
+ *     numActions is not a positive integer, or when `backend` is not a
+ *     DirectBackend/ServerBackend
+ *
+ * Two conveniences: the env may be passed INLINE (the options object itself
+ * carries snapshot/restore/step/legalActions/observe/numActions, no `env`
+ * key), and `legal` is accepted as an alias for `legalActions`.
  */
 const m = bro.ai.game.createGenericMcts({
     env: {
@@ -897,17 +675,20 @@ const m = bro.ai.game.createGenericMcts({
     valueFn(obs)        { return netForwardValue(obs); },
 });
 
+m.numActions;   // read-only, echoed from env.numActions
+
 /**
  * Run a search starting from the env's current state. Returns the most-visited
  * root action, or -1 if the action space is empty. Snapshot/restore is used
  * internally; the env is left in its pre-search state on exit.
  * @returns {number}
  */
-const action = m.search();
+const genericAction = m.search();
 
 /**
  * Normalized root visit distribution over [0, numActions). Sums to 1 over
- * visited actions. Useful as the policy target for ExIt-style training.
+ * visited actions. Useful as the policy target for ExIt-style training
+ * (learn.createGenericReplayBuffer, docs/ai-learn-api.js).
  * @returns {Float32Array}
  */
 const visits = m.rootVisits();
@@ -917,7 +698,7 @@ const visits = m.rootVisits();
  * If `action` was never expanded, the tree is dropped and the next search()
  * rebuilds from scratch.
  */
-m.advanceRoot(action);
+m.advanceRoot(genericAction);
 
 /** Drop the search tree. */
 m.reset();
@@ -934,21 +715,9 @@ m.setValueFn((obs) => netForwardValue(obs));
 m.setPriorFn(null);   // pass null/undefined to fall back to uniform prior
 
 /**
- * Stats from the most recent search() call.
+ * Stats from the most recent search() call. A METHOD here, unlike the
+ * combat searchers' `lastStats` property.
  *   { iterations, treeSize, bestVisits, bestAction }
  * @returns {Object}
  */
 const stats = m.lastStats();
-
-
-// =============================================================================
-// bro.ai.game.grid, 2D grid-world / side-scrolling platformer training kit
-// =============================================================================
-//
-// Built on top of the env-agnostic primitives (createGenericMcts,
-// createPolicyValueNet, createGenericReplayBuffer, createGenericExItTrainer,
-// WeightsHandle). Use this when your env is a tilemap + dynamic entities
-// rather than the bundled MOBA combat sim. Each primitive is independently
-// useful; the GridTrainer harness composes them into a complete loop so new
-// projects don't re-author the boilerplate.
-

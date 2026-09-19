@@ -244,6 +244,21 @@ if(BRO_WITH_3D)
     )
 endif()
 
+# bro's half of `bro.vision` (host_vision.h): the ImageBitmap results and the
+# worker-thread jobs brovisionml cannot provide from a standalone library.
+# Gated with the sibling itself, because these files reach into
+# brovisionml_api's own src/api headers for the model wrappers — the whole
+# point being that the model call and the result shape keep one definition.
+if(BRO_WITH_VISION)
+    list(APPEND BRO_BRONZE_HOST_SOURCES
+        host_vision_jobs.cpp
+        host_vision_ops.cpp
+        host_vision_sam.cpp
+        host_vision_generative.cpp
+        host_vision_annotators.cpp
+    )
+endif()
+
 add_library(bro_bronze_host STATIC ${BRO_BRONZE_HOST_SOURCES})
 target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/..

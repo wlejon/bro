@@ -1,1548 +1,986 @@
+// ── bro.mesh ─────────────────────────────────────────────────────────────────
+//
+// Geometry: the `Mesh` container, its primitive factories, the mutating
+// operators (clean / simplify / subdivide / smooth / CSG / bake), the analysis
+// and query surface, `MeshBVH` and `ProgressiveMesh`.
+//
+// The rest of bromesh lives beside this file:
+//   docs/mesh-io-api.js     loaders/savers, Draco, splat clouds, isosurface +
+//                           voxel statics, `PolyMesh`, `SDFGraph`, `VoxelChunk`
+//   docs/mesh-plants-api.js sweeps, leaf/flower cards, branch trees, leaf
+//                           scattering, `CapsuleField`, `LSystem`
+//   docs/rigging-api.js     `bro.rigging`: skins, skeletons, poses, clips, IK,
+//                           `Rig.autoRig`, glTF rigged assets
+//
+// Two mount points, one implementation. Every class is a real global — `Mesh`,
+// `MeshBVH`, `ProgressiveMesh`, `PolyMesh`, `CapsuleField`, `LSystem`,
+// `SDFGraph` — and `bro.mesh` carries those classes plus a *forwarded subset*
+// of `Mesh`'s statics. The statics that exist only on the global `Mesh` class
+// are `splitByPlane`, `stripify`, `unstripify`, `decode`, `disc`, `dualContour`
+// and the `union` / `subtract` / `intersect` aliases; everything else in this
+// file is reachable both ways.
+//
+//   const m = Mesh.sphere(1, 32, 24);
+//   m.simplify(0.5).computeNormals();
+//   scene.createMesh({ data: m, color: 'red' });
+//
+// Mutation model: most operators mutate in place and return `this`, so they
+// chain. The ones that return a NEW Mesh are called out per method — `clone`,
+// `computeFlatNormals`, `convexHull`, the boolean/CSG trio, `splitByPlane`,
+// `splitComponents`, `generateLODChain`, `sampleSurface` and every static
+// factory. `Mesh.geodesicSphere` and `Mesh.rock` exist only when bromesh was
+// built with par_shapes; `Mesh.decodeDraco` / `Mesh.encodeDraco` only with
+// Draco (see docs/mesh-io-api.js).
+
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
- * =============================================================================
- * bro Mesh API Reference
- * =============================================================================
- *
- * The bromesh C++ library is exposed via these classes and namespaces:
- * Mesh, MeshBVH, ProgressiveMesh, PolyMesh, CapsuleField, LSystem.
  * @typedef {Object} MeshOptions
- * @property {Float32Array} [positions]
- * @property {Float32Array} [normals]
- * @property {Float32Array} [uvs]
- * @property {Float32Array} [colors]
- * @property {Uint32Array} [indices]
+ * @property {Float32Array} [positions] -  xyz, stride 3. Length must be a multiple of 3.
+ * @property {Float32Array} [normals] -  xyz, stride 3; one per vertex.
+ * @property {Float32Array} [uvs] -  uv, stride 2; one per vertex.
+ * @property {Float32Array} [colors] -  rgba, stride 4; one per vertex.
+ * @property {Uint32Array} [indices] -  triangle indices; length must be a multiple of 3.
  */
 
 /**
- * @typedef {Object} MeshBVHIntersectResult
- * @property {boolean} [hit]
+ *  The axis-aligned bounds `mesh.bounds()` / `bvh.bounds()` return. The scalar
+ *  fields and the `min`/`max` arrays describe the same box.
+ * @typedef {Object} MeshBounds
+ * @property {number} [minX]
+ * @property {number} [minY]
+ * @property {number} [minZ]
+ * @property {number} [maxX]
+ * @property {number} [maxY]
+ * @property {number} [maxZ]
+ * @property {number} [centerX]
+ * @property {number} [centerY]
+ * @property {number} [centerZ]
+ * @property {number} [extentX]
+ * @property {number} [extentY]
+ * @property {number} [extentZ]
+ * @property {Array<number>} [min]
+ * @property {Array<number>} [max]
+ */
+
+/**
+ *  A hit from `raycast` / `raycastAll` / `closestPoint`. A miss is `null`, not
+ *  an object with `hit: false`. `triangle` and `triangleIndex` are the same
+ *  number, as are `point` and `position`; `uv` is present only when the mesh
+ *  carries UVs.
+ * @typedef {Object} MeshRayHit
+ * @property {boolean} [hit] -  always true on a returned hit.
  * @property {number} [distance]
  * @property {number} [triangle]
+ * @property {number} [triangleIndex]
  * @property {Array<number>} [point]
+ * @property {Array<number>} [position]
  * @property {Array<number>} [normal]
+ * @property {Array<number>} [barycentric] -  [u, v, w] over the hit triangle's corners.
  * @property {Array<number>} [uv]
- * @property {Array<number>} [barycentric]
  */
 
 /**
- * @typedef {Object} MeshletGroupResult
- * @property {number} [meshletCount]
- * @property {ArrayBuffer} [meshlets]
- * @property {Uint32Array} [vertices]
- * @property {Uint8Array} [triangles]
+ *  One intersecting triangle pair from `findSelfIntersections()`.
+ * @typedef {Object} MeshTrianglePair
+ * @property {number} [triA]
+ * @property {number} [triB]
  */
 
 /**
- * @typedef {Object} MeshUVQualityResult
- * @property {number} [coverage]
- * @property {number} [minAreaRatio]
- * @property {number} [maxAreaRatio]
- * @property {number} [avgStretch]
- * @property {number} [maxStretch]
- * @property {number} [avgAngleError]
- * @property {number} [overlaps]
+ *  `unwrapUVs()`: the xatlas chart/atlas summary. The UVs themselves land on
+ *  `mesh.uvs`.
+ * @typedef {Object} MeshUnwrapResult
+ * @property {number} [chartCount]
+ * @property {number} [atlasWidth]
+ * @property {number} [atlasHeight]
+ * @property {boolean} [success]
  */
 
 /**
- * @typedef {Object} MeshUVDistortionResult
+ *  One entry per triangle from `computeUVDistortion()`.
+ * @typedef {Object} MeshUVDistortion
  * @property {number} [stretch]
  * @property {number} [areaDistortion]
  * @property {number} [angleDistortion]
  */
 
 /**
- * @typedef {Object} MeshRepairStats
- * @property {number} [nonManifoldEdgesFixed]
- * @property {number} [degenerateTrianglesRemoved]
- * @property {number} [selfIntersectionsResolved]
- * @property {number} [holesClosed]
+ *  `measureUVQuality()`: whole-mesh UV statistics.
+ * @typedef {Object} MeshUVQuality
+ * @property {number} [avgStretch]
+ * @property {number} [maxStretch]
+ * @property {number} [avgAreaDistortion]
+ * @property {number} [maxAreaDistortion]
+ * @property {number} [avgAngleDistortion]
+ * @property {number} [maxAngleDistortion]
+ * @property {number} [uvSpaceUsage] -  fraction of the unit square the charts cover.
+ * @property {number} [triangleCount]
  */
 
 /**
- * @typedef {Object} MeshBakeTransferOptions
- * @property {number} [maxDistance]
- * @property {number} [uvScale]
- * @property {Array<number>} [uvOffset]
- * @property {number} [sampleQuality]
- * @property {string} [normalSpace]
+ * @typedef {Object} MeshletParams
+ * @property {number} [maxVertices] -  default 64.
+ * @property {number} [maxTriangles] -  default 124.
+ * @property {number} [coneWeight] -  cluster-cone tightness, default 0.5.
  */
 
 /**
- * @typedef {Object} MeshTreeOptions
- * @property {Array<number>} [base]
- * @property {Array<number>} [canopyCenter]
- * @property {number} [canopyRadius]
- * @property {number} [attractorCount]
- * @property {number} [sides]
- * @property {number} [leafRadius]
- * @property {number} [pipeExp]
- * @property {number} [seed]
- * @property {MeshSpaceColonizationOptions} [colonize] -  Space-colonization tuning for the skeleton pass.
- */
-
-/**
- *  Result of Mesh.tree(): the thickened skeleton plus its swept branch mesh.
- * @typedef {Object} MeshTreeResult
- * @property {Array<MeshBranchSegment>} [segments]
- * @property {Mesh} [branches]
- */
-
-/**
- * @typedef {Object} MeshSweepOptions
- * @property {boolean} [closeProfile]
- * @property {boolean} [capStart]
- * @property {boolean} [capEnd]
- * @property {boolean} [miterJoints]
- * @property {*} [profileScale] -  Per-ring profile scale: a number, or one entry per path point.
- * @property {*} [twist] -  Per-ring twist in radians: a number, or one entry per path point.
- */
-
-/**
- * @typedef {Object} MeshTubeOptions
- * @property {boolean} [capStart]
- * @property {boolean} [capEnd]
- * @property {boolean} [miterJoints]
- */
-
-/**
- * @typedef {Object} MeshBladeStripOptions
- * @property {number} [width]
- * @property {number} [thickness]
- * @property {boolean} [capStart]
- * @property {boolean} [capEnd]
- * @property {boolean} [miterJoints]
- * @property {*} [profileScale]
- * @property {*} [twist]
- */
-
-/**
- * @typedef {Object} MeshBladePathOptions
- * @property {Array<number>} [base]
- * @property {Array<number>} [tipDir]
- * @property {number} [length]
- * @property {number} [bend]
- * @property {number} [lift]
- * @property {number} [segments]
- */
-
-/**
- *  Capsule obstacle for CapsuleField: the segment a→b swept by `radius`.
- * @typedef {Object} MeshCapsule
- * @property {Array<number>} [a]
- * @property {Array<number>} [b]
- * @property {number} [radius]
- * @property {number} [tag] -  Optional identity used by the `excludeTag` query parameters.
- */
-
-/**
- *  Sphere obstacle / keep-out volume.
- * @typedef {Object} MeshSphere
+ *  Per-meshlet cull bounds: a sphere plus a normal cone.
+ * @typedef {Object} MeshletBounds
  * @property {Array<number>} [center]
  * @property {number} [radius]
- * @property {number} [tag]
+ * @property {Array<number>} [coneApex]
+ * @property {Array<number>} [coneAxis]
+ * @property {number} [coneCutoff]
  */
 
 /**
- * @typedef {Object} MeshCapsuleFieldNearest
- * @property {Array<number>} [point]
- * @property {Array<number>} [normal]
- * @property {number} [distance]
- * @property {number} [tag]
+ *  One meshlet. `vertices` indexes the source mesh; `triangles` holds three
+ *  bytes per triangle, each indexing `vertices`.
+ * @typedef {Object} Meshlet
+ * @property {number} [vertexCount]
+ * @property {number} [triangleCount]
+ * @property {Uint32Array} [vertices]
+ * @property {Uint8Array} [triangles]
+ * @property {MeshletBounds} [bounds]
  */
 
 /**
- * @typedef {Object} MeshAnchorPackOptions
- * @property {number} [minSpacing]
- * @property {number} [minObstacleDistance]
- * @property {number} [maxCount]
- * @property {number} [seed]
- * @property {*} [avoid] -  CapsuleField the anchors must clear by `minObstacleDistance`.
- * @property {Array<MeshSphere>} [keepOut]
+ *  What `buildMeshlets` returns: an ARRAY of `Meshlet`, with the flattened GPU
+ *  buffers hung off it as extra properties.
+ * @typedef {Array<Meshlet>} MeshletGroup
+ * @property {number} [meshletCount]
+ * @property {Uint32Array} [vertices] -  every meshlet's vertex list, concatenated.
+ * @property {Uint8Array} [triangles] -  every meshlet's triangle bytes, concatenated.
+ * @property {ArrayBuffer} [meshlets] -  packed 56-byte records: vertexOffset, vertexCount, triangleOffset, triangleCount (u32 x4), center xyz, radius, coneApex xyz, coneAxis xyz, coneCutoff (f32 x11), pad (u32).
  */
 
 /**
- * @typedef {Object} MeshTurtleOptions
- * @property {number} [stepLength]
- * @property {number} [angle] -  Turn angle in radians.
- * @property {number} [radius]
- * @property {Array<number>} [position]
- * @property {Array<number>} [heading]
- * @property {Array<number>} [up]
+ * @typedef {Object} MeshVertexCacheStats
+ * @property {number} [verticesTransformed]
+ * @property {number} [warpsExecuted]
+ * @property {number} [acmr] -  average cache misses per triangle.
+ * @property {number} [atvr] -  average transformed vertices per vertex; 1.0 is perfect.
  */
 
 /**
- * @typedef {Object} MeshLeafCardOptions
+ * @typedef {Object} MeshVertexFetchStats
+ * @property {number} [bytesFetched]
+ * @property {number} [overfetch] -  bytes fetched / bytes needed.
+ */
+
+/**
+ * @typedef {Object} MeshOverdrawStats
+ * @property {number} [pixelsCovered]
+ * @property {number} [pixelsShaded]
+ * @property {number} [overdraw]
+ */
+
+/**
+ *  A baked texture. `pixels` and `data` are the same Float32Array.
+ * @typedef {Object} MeshTextureBuffer
  * @property {number} [width]
- * @property {number} [length]
- * @property {number} [bend]
- * @property {number} [curl]
- * @property {boolean} [stemOffset]
- * @property {number} [cup]
- * @property {number} [widthSegments]
- * @property {number} [lengthSegments]
- * @property {boolean} [fullUV]
- * @property {boolean} [shapedSilhouette]
+ * @property {number} [height]
+ * @property {number} [channels]
+ * @property {Float32Array} [pixels]
+ * @property {Float32Array} [data]
  */
 
 /**
- * @typedef {Object} MeshFlowerOptions
- * @property {number} [petalCount]
- * @property {string} [petalShape]
- * @property {number} [petalLength]
- * @property {number} [petalWidth]
- * @property {number} [petalCurl]
- * @property {number} [petalBend]
- * @property {number} [layers]
- * @property {number} [layerTwist]
- * @property {number} [centerRadius]
- * @property {number} [centerHeight]
- * @property {number} [outerTilt]
- * @property {number} [innerTilt]
- * @property {number} [layerScaleFalloff]
- * @property {number} [outerYLift]
- * @property {number} [innerYLift]
- * @property {number} [petalCup]
- * @property {boolean} [shapedPetals]
- * @property {Array<number>} [centerColor]
- */
-
-/**
- * @typedef {Object} MeshBezierSweepOptions
- * @property {number} [samples]
- * @property {boolean} [capStart]
- * @property {boolean} [capEnd]
- * @property {boolean} [closeProfile]
- * @property {boolean} [miterJoints]
- * @property {*} [profileScale]
- * @property {*} [twist]
- */
-
-/**
- * @typedef {Object} MeshSpaceColonizationOptions
- * @property {number} [attractionRadius]
- * @property {number} [killRadius]
- * @property {number} [segmentLength]
- * @property {number} [maxIterations]
- * @property {number} [tropismWeight]
- * @property {Array<number>} [tropism]
- * @property {*} [obstacles]
- * @property {number} [obstacleClearance]
- * @property {number} [obstacleSteer]
- */
-
-/**
- *  One segment of a branch skeleton (spaceColonize / lsystemToBranches / tree).
- * @typedef {Object} MeshBranchSegment
- * @property {number} [parent] -  Index of the parent segment, -1 at a root.
- * @property {Array<number>} [from]
- * @property {Array<number>} [to]
- * @property {number} [radius] -  Radius at `from`; 0 until thickenBranches assigns the pipe model.
- * @property {number} [depth]
- */
-
-/**
- * @typedef {Object} MeshLeafPlacementOptions
- * @property {number} [maxRadius]
- * @property {number} [minDepth]
- * @property {boolean} [terminalOnly]
- * @property {number} [perUnitLength]
- * @property {number} [densityFalloff]
- * @property {number} [upBias]
- * @property {number} [tiltJitter]
- * @property {number} [rollJitter]
- * @property {number} [baseScale]
- * @property {number} [scaleJitter]
- * @property {number} [scaleByRadius]
- * @property {number} [dedupRadius]
- * @property {number} [seed]
- * @property {Array<number>} [densityWeight]
- * @property {*} [avoid]
- * @property {number} [obstacleClearance]
- * @property {number} [obstaclePushout]
- * @property {Array<Object>} [keepOut]
- */
-
-/**
- * @typedef {Object} MeshPlacedLeaves
- * @property {number} [count]
- * @property {Float32Array} [transforms]
- * @property {Float32Array} [branchRadius]
- * @property {Int32Array} [branchDepth]
- */
-
-/**
- * @typedef {Object} MeshBlobOptions
- * @property {number} [radius]
- * @property {number} [seed]
- * @property {number} [nsub]
- * @property {*} [scale]
- * @property {*} [center]
- */
-
-/**
- * @typedef {Object} MeshDracoDecodedAttribute
- * @property {string} [type]
- * @property {number} [uniqueId]
- * @property {number} [components]
- * @property {number} [count]
- * @property {string} [kind]
- * @property {ArrayBufferView} [data]
- */
-
-/**
- * @typedef {Object} MeshDracoDecoded
- * @property {Float32Array} [positions]
- * @property {Float32Array} [normals]
- * @property {Float32Array} [uvs]
- * @property {Float32Array} [colors]
- * @property {Uint32Array} [indices]
- * @property {Array<MeshDracoDecodedAttribute>} [attributes]
- * @property {Mesh} [mesh]
- */
-
-/**
- * @typedef {Object} MeshDracoEncodeOptions
- * @property {number} [positionBits]
- * @property {number} [normalBits]
- * @property {number} [uvBits]
- * @property {number} [colorBits]
- * @property {number} [genericBits]
- * @property {number} [compressionLevel]
- * @property {boolean} [sequential]
- */
-
-/**
- * @typedef {Object} MeshExtrudeFaceResult
- * @property {Int32Array} [dupVerts]
- * @property {Int32Array} [bridgeFaces]
- * @property {Int32Array} [bridgeAdjGroup] -  Per bridge face, the group across its boundary edge (-1 at a mesh boundary).
- * @property {number} [backFace] -  The back-face copy that closes the slab, or -1 without one.
- */
-
-/**
- * @typedef {Object} MeshInsetFaceResult
- * @property {number} [innerFace] -  The new interior face, or -1 when the inset was refused.
- * @property {Int32Array} [innerVerts]
- * @property {Int32Array} [bridgeFaces]
- */
-
-/**
- *  PolyMesh.tessellate(): flat-shaded triangles, one normal per face.
- * @typedef {Object} MeshTessellation
- * @property {Float32Array} [positions]
- * @property {Float32Array} [normals]
- * @property {Uint32Array} [indices]
- * @property {Int32Array} [triToFace] -  Source face of each triangle.
- * @property {Int32Array} [triToGroup] -  Group of each triangle's source face.
- */
-
-/**
- * @typedef {Object} MeshPolyValidation
- * @property {boolean} [valid] -  Structurally sound: every face closes, no dangling links.
- * @property {boolean} [isClosed] -  Every half-edge has a twin.
- * @property {number} [boundaryHalfEdges]
- * @property {Array<string>} [errors]
- */
-
-/**
- *  A MagicaVoxel grid: 0 = empty, else an index into `palette` (RGBA x 256).
- * @typedef {Object} MeshVoxData
- * @property {number} [sizeX]
- * @property {number} [sizeY]
- * @property {number} [sizeZ]
- * @property {Uint8Array} [voxels]
- * @property {Float32Array} [palette]
- */
-
-/**
- * A Gaussian splat cloud: the object `scene.createGaussianSplat({ cloud })`
- * takes. Per-splat streams, `count` splats: `positions` xyz, `scales` xyz
- * (linear std-dev), `rotations` xyzw unit quaternion, `opacities` [0,1], `sh`
- * coefficient-major spherical harmonics with 3 * (shDegree + 1)^2 floats
- * per splat.
- * @typedef {Object} MeshSplatCloud
- * @property {Float32Array} [positions]
- * @property {Float32Array} [scales]
- * @property {Float32Array} [rotations]
- * @property {Float32Array} [opacities]
- * @property {Float32Array} [sh]
- * @property {number} [shDegree]
- * @property {number} [count]
- */
-
-/**
- *  Options for `Mesh.reconstruct`.
- * @typedef {Object} MeshReconstructOptions
- * @property {number} [gridResolution] -  Voxel grid resolution along the longest axis (default 64).
- * @property {number} [supportRadius] -  Influence radius per point; 0 (the default) derives it from point density.
- * @property {number} [isoLevel] -  Threshold for surface extraction (default 0.5).
- */
-
-/**
- *  Everything a glTF file holds; `meshSkeleton[i]` / `animationSkeleton[i]` index `skeletons`.
- * @typedef {Object} MeshGltfScene
- * @property {Array<Mesh>} [meshes]
- * @property {Array<SkinData>} [skins]
- * @property {Array<Skeleton>} [skeletons]
- * @property {Array<SkeletalAnimation>} [animations]
- * @property {Array<number>} [meshSkeleton]
- * @property {Array<number>} [animationSkeleton]
- */
-
-/**
- * @typedef {Object} MeshLSystemModule
- * @property {string} [symbol]
- * @property {Array<number>} [params]
- */
-
-/**
+ *  V-HACD tuning for `convexDecomposition`. These are the binding's defaults,
+ *  which differ from bromesh's C++ struct defaults.
  * @typedef {Object} MeshConvexDecompParams
- * @property {number} [maxHulls]
- * @property {number} [maxVerticesPerHull]
- * @property {number} [resolution]
- * @property {number} [minVolumePerHull]
+ * @property {number} [maxHulls] -  default 16.
+ * @property {number} [maxVerticesPerHull] -  default 32.
+ * @property {number} [resolution] -  voxel resolution, default 100000.
+ * @property {number} [minVolumePerHull] -  default 0.0001.
  */
 
-// ── Classes & Interfaces ─────────────────────────────────────────────────────
+// ── Mesh ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Triangle geometry: five parallel attribute streams plus an index buffer.
+ * Attribute getters COPY into a fresh typed array, so read once and reuse it
+ * rather than re-reading in a loop; the setters validate stride against the
+ * current vertex count and throw on a mismatch.
+ */
 class Mesh {
 
   /**
+   * Build from raw streams, either as an options object or positionally as
+   * `(positions, normals, uvs, colors, indices)`. No argument gives an empty
+   * mesh.
+   *
    * @param {MeshOptions} [opts]
+   *
+   * @example
+   *   const tri = new Mesh({
+   *     positions: new Float32Array([0,0,0, 1,0,0, 0,1,0]),
+   *     indices: new Uint32Array([0,1,2]),
+   *   });
+   *   tri.computeNormals();
    */
   constructor(opts) {}
 
-  /**
-   * @param {number} [halfW]
-   * @param {number} [halfH]
-   * @param {number} [halfD]
-   * @returns {Mesh}
-   */
-  static box(halfW, halfH, halfD) {}
+  // --- Attribute streams ----------------------------------------------------
 
-  /**
-   * @param {number} [radius]
-   * @param {number} [segments]
-   * @param {number} [rings]
-   * @returns {Mesh}
-   */
-  static sphere(radius, segments, rings) {}
-
-  /**
-   * @param {number} [radius]
-   * @param {number} [halfHeight]
-   * @param {number} [segments]
-   * @returns {Mesh}
-   */
-  static cylinder(radius, halfHeight, segments) {}
-
-  /**
-   * @param {number} [radius]
-   * @param {number} [halfHeight]
-   * @param {number} [segments]
-   * @returns {Mesh}
-   */
-  static capsule(radius, halfHeight, segments) {}
-
-  /**
-   * @param {number} [radius]
-   * @param {number} [height]
-   * @param {number} [segments]
-   * @returns {Mesh}
-   */
-  static cone(radius, height, segments) {}
-
-  /**
-   * @param {number} [halfW]
-   * @param {number} [halfH]
-   * @param {number} [segW]
-   * @param {number} [segH]
-   * @returns {Mesh}
-   */
-  static plane(halfW, halfH, segW, segH) {}
-
-  /**
-   * @param {number} [radius]
-   * @param {number} [tubeRadius]
-   * @param {number} [segments]
-   * @param {number} [tubeSegments]
-   * @returns {Mesh}
-   */
-  static torus(radius, tubeRadius, segments, tubeSegments) {}
-
-  /**
-   * @param {number} [radius]
-   * @returns {Mesh}
-   */
-  static icosahedron(radius) {}
-
-  /**
-   * @param {number} [radius]
-   * @returns {Mesh}
-   */
-  static dodecahedron(radius) {}
-
-  /**
-   * @param {number} [radius]
-   * @returns {Mesh}
-   */
-  static octahedron(radius) {}
-
-  /**
-   * @param {number} [radius]
-   * @returns {Mesh}
-   */
-  static tetrahedron(radius) {}
-
-  /**
-   * @param {number} [radius]
-   * @param {number} [segments]
-   * @returns {Mesh}
-   */
-  static disk(radius, segments) {}
-
-  /**
-   * Circular-cross-section sweep along `path` (Float32Array(3N) or
-   * [[x,y,z], ...], at least 2 points). `radius` is a constant number or a
-   * per-point list the same length as `path`; `sides` is the ring
-   * resolution (>= 3, default 8).
-   *
-   * @param {Array<Array<number>>} path
-   * @param {*} [radius]
-   * @param {number} [sides]
-   * @param {MeshTubeOptions} [opts]
-   * @returns {Mesh}
-   */
-  static tube(path, radius, sides, opts) {}
-
-  /**
-   * Read a mesh from a file. A relative path resolves the way `fs.*`
-   * resolves it. A file that cannot be read gives an empty Mesh. An FBX is
-   * a scene, so `loadFBX` gives every mesh in it; a `.vox` is a voxel grid,
-   * not a mesh (`loadVOX` gives the grid, `Mesh.greedyMesh` meshes it);
-   * glTF gives the whole scene: meshes, skins, skeletons, animations.
-   *
-   * @param {string} path
-   * @returns {Mesh}
-   */
-  static loadOBJ(path) {}
-
-  /**
-   * @param {string} path
-   * @returns {Mesh}
-   */
-  static loadPLY(path) {}
-
-  /**
-   * @param {string} path
-   * @returns {Mesh}
-   */
-  static loadSTL(path) {}
-
-  /**
-   * @param {string} path
-   * @returns {Array<Mesh>}
-   */
-  static loadFBX(path) {}
-
-  /**
-   * @param {string} path
-   * @returns {MeshVoxData}
-   */
-  static loadVOX(path) {}
-
-  /**
-   * @param {string} path
-   * @returns {MeshGltfScene}
-   */
-  static loadGLTF(path) {}
-
-  /**
-   *  A Gaussian splat `.ply` is a cloud, not a mesh; an unreadable file gives an empty cloud (`count` 0).
-   *
-   * @param {string} path
-   * @returns {MeshSplatCloud}
-   */
-  static loadSplatPLY(path) {}
-
-  /**
-   *  Write a splat cloud (the `loadSplatPLY` / `bro.triposplat` shape); true when the file was written.
-   *
-   * @param {string} path
-   * @param {MeshSplatCloud} cloud
-   * @returns {boolean}
-   */
-  static saveSplatPLY(path, cloud) {}
-
-  /**
-   * @param {Array<Mesh>} meshes
-   * @returns {Mesh}
-   */
-  static merge(meshes) {}
-
-  /**
-   * Triangulate a simple 2D polygon (`outer` flat x,y,..., CCW for a +Z
-   * face) with optional `holes` (each flat x,y,..., wound CW) into a mesh
-   * in the plane z = `z`. Degenerate input gives an empty Mesh.
-   *
-   * @param {Array<number>} outer
-   * @param {Array<Array<number>>} [holes]
-   * @param {number} [z]
-   * @returns {Mesh}
-   */
-  static polygon2D(outer, holes, z) {}
-
-  /**
-   * Triangulate a planar 3D polygon (`outer` flat x,y,z,..., lying on the
-   * plane with unit `normal`) with optional `holes`; the mesh reuses the
-   * input positions and fills normals with `normal`.
-   *
-   * @param {Array<number>} outer
-   * @param {Array<Array<number>>} holes
-   * @param {Array<number>} normal
-   * @returns {Mesh}
-   */
-  static polygon3D(outer, holes, normal) {}
-
-  /**
-   *  Implicit-surface reconstruction of an oriented point cloud (a Mesh with positions + normals; indices ignored).
-   *
-   * @param {Mesh} pointCloud
-   * @param {MeshReconstructOptions} [opts]
-   * @returns {Mesh}
-   */
-  static reconstruct(pointCloud, opts) {}
-
-  /**
-   * @param {Array<number>} values
-   * @param {number} dimX
-   * @param {number} dimY
-   * @param {number} dimZ
-   * @param {number} isoLevel
-   * @returns {Mesh}
-   */
-  static marchingCubes(values, dimX, dimY, dimZ, isoLevel) {}
-
-  /**
-   * @param {Array<number>} values
-   * @param {number} dimX
-   * @param {number} dimY
-   * @param {number} dimZ
-   * @param {number} isoLevel
-   * @returns {Mesh}
-   */
-  static surfaceNets(values, dimX, dimY, dimZ, isoLevel) {}
-
-  /**
-   * @param {Array<number>} values
-   * @param {number} dimX
-   * @param {number} dimY
-   * @param {number} dimZ
-   * @param {number} isoLevel
-   * @returns {Mesh}
-   */
-  static dualContouring(values, dimX, dimY, dimZ, isoLevel) {}
-
-  /**
-   * Extrude a closed 2D `profile` (Float32Array(2N) or [[x,y], ...]) along a
-   * 3D `path` (Float32Array(3N) or [[x,y,z], ...]).
-   *
-   * @param {Array<Array<number>>} profile
-   * @param {Array<Array<number>>} path
-   * @param {MeshSweepOptions} [opts]
-   * @returns {Mesh}
-   */
-  static sweep(profile, path, opts) {}
-
-  /**
-   * @param {Array<Array<number>>} controlPoints
-   * @param {Array<Array<number>>} profile
-   * @param {MeshBezierSweepOptions} [opts]
-   * @returns {Mesh}
-   */
-  static bezierSweep(controlPoints, profile, opts) {}
-
-  /**
-   * @param {*} shape
-   * @param {MeshLeafCardOptions} [opts]
-   * @returns {Mesh}
-   */
-  static leafCard(shape, opts) {}
-
-  /**
-   * @param {MeshFlowerOptions} [opts]
-   * @returns {Mesh}
-   */
-  static flower(opts) {}
-
-  /**
-   *  Sweep a 4-vertex diamond profile along `path`: grass / fern / succulent blades.
-   *
-   * @param {Array<Array<number>>} path
-   * @param {MeshBladeStripOptions} [opts]
-   * @returns {Mesh}
-   */
-  static bladeStrip(path, opts) {}
-
-  /**
-   *  Quadratic-Bézier blade spine as [[x,y,z], ...], consumable by bladeStrip / sweep.
-   *
-   * @param {MeshBladePathOptions} [opts]
-   * @returns {Array<Array<number>>}
-   */
-  static bladePath(opts) {}
-
-  /**
-   * @param {MeshBlobOptions} [opts]
-   * @returns {Mesh}
-   */
-  static blob(opts) {}
-
-  /**
-   * @param {Array<Array<number>>} attractors
-   * @param {Array<Array<number>>} seedPoints
-   * @param {Array<number>} initialDirection
-   * @param {MeshSpaceColonizationOptions} [opts]
-   * @returns {Array<MeshBranchSegment>}
-   */
-  static spaceColonize(attractors, seedPoints, initialDirection, opts) {}
-
-  /**
-   * @param {Array<MeshBranchSegment>} segments
-   * @param {number} [leafRadius]
-   * @param {number} [pipeExp]
-   * @returns {Array<MeshBranchSegment>}
-   */
-  static thickenBranches(segments, leafRadius, pipeExp) {}
-
-  /**
-   * @param {Array<MeshBranchSegment>} segments
-   * @param {number} [sides]
-   * @returns {Mesh}
-   */
-  static meshBranches(segments, sides) {}
-
-  /**
-   * @param {Array<MeshBranchSegment>} segments
-   * @param {MeshLeafPlacementOptions} [opts]
-   * @returns {MeshPlacedLeaves}
-   */
-  static placeLeavesOnBranches(segments, opts) {}
-
-  /**
-   * @param {Array<MeshBranchSegment>} segments
-   * @param {Mesh} leaf
-   * @param {MeshLeafPlacementOptions} [opts]
-   * @returns {Mesh}
-   */
-  static scatterLeaves(segments, leaf, opts) {}
-
-  /**
-   *  spaceColonize → thickenBranches → meshBranches in one call.
-   *
-   * @param {MeshTreeOptions} [opts]
-   * @returns {MeshTreeResult}
-   */
-  static tree(opts) {}
-
-  /**
-   * @param {string} text
-   * @returns {Array<MeshLSystemModule>}
-   */
-  static parseLSystem(text) {}
-
-  /**
-   *  Greedy spaced-anchor picker; returns the accepted candidate indices in acceptance order.
-   *
-   * @param {Array<Array<number>>} candidates
-   * @param {MeshAnchorPackOptions} [opts]
-   * @returns {Int32Array}
-   */
-  static packAnchors(candidates, opts) {}
-
-  /**
-   *  Turtle-interpret a module stream (or an L-system string) into a branch skeleton.
-   *
-   * @param {Array<MeshLSystemModule>} modules
-   * @param {MeshTurtleOptions} [opts]
-   * @returns {Array<MeshBranchSegment>}
-   */
-  static lsystemToBranches(modules, opts) {}
-
-  /**
-   * @param {Array<MeshCapsule>} [capsules]
-   * @param {Array<MeshSphere>} [spheres]
-   * @param {number} [cellSize]
-   * @returns {CapsuleField}
-   */
-  static capsuleField(capsules, spheres, cellSize) {}
-
-  /**
-   *  CapsuleField whose capsules carry the segment index as `tag`, so placement can exclude a leaf's own branch.
-   *
-   * @param {Array<MeshBranchSegment>} segments
-   * @param {number} [radiusScale]
-   * @param {Array<MeshSphere>} [extraSpheres]
-   * @returns {CapsuleField}
-   */
-  static capsuleFieldFromSegments(segments, radiusScale, extraSpheres) {}
-
-  /**
-   * @param {ArrayBufferView} bytes
-   * @returns {MeshDracoDecoded}
-   */
-  static decodeDraco(bytes) {}
-
-  /**
-   * @param {Object} meshData
-   * @param {MeshDracoEncodeOptions} [opts]
-   * @returns {ArrayBuffer}
-   */
-  static encodeDraco(meshData, opts) {}
-
-  /**
-   * @type {Float32Array}
-   */
+  /** @type {Float32Array} xyz, stride 3. */
   positions;
 
-  /**
-   * @type {Float32Array}
-   */
+  /** @type {Float32Array} xyz, stride 3; one per vertex. */
   normals;
 
-  /**
-   * @type {Float32Array}
-   */
+  /** @type {Float32Array} uv, stride 2; one per vertex. */
   uvs;
 
-  /**
-   * @type {Float32Array}
-   */
+  /** @type {Float32Array} rgba, stride 4; one per vertex. */
   colors;
 
-  /**
-   * @type {Uint32Array}
-   */
+  /** @type {Uint32Array} triangle indices; setting one out of range throws. */
   indices;
 
-  /**
-   * @readonly
-   * @type {number}
-   */
+  /** @readonly @type {number} */
   vertexCount;
 
-  /**
-   * @readonly
-   * @type {number}
-   */
+  /** @readonly @type {number} */
   triangleCount;
 
-  /**
-   * @readonly
-   * @type {boolean}
-   */
+  /** @readonly @type {boolean} */
   hasNormals;
 
-  /**
-   * @readonly
-   * @type {boolean}
-   */
+  /** @readonly @type {boolean} */
   hasUVs;
 
-  /**
-   * @readonly
-   * @type {boolean}
-   */
+  /** @readonly @type {boolean} */
   hasColors;
 
-  /**
-   * @readonly
-   * @type {boolean}
-   */
+  /** @readonly @type {boolean} */
   empty;
 
+  // --- Copy, bounds, transforms --------------------------------------------
+
   /**
+   *  A deep copy.
    * @returns {Mesh}
    */
   clone() {}
 
   /**
-   * @param {number} dx
-   * @param {number} dy
-   * @param {number} dz
-   * @returns {Mesh}
+   *  Axis-aligned bounds of the current positions. `computeBBox()` is an alias.
+   * @returns {MeshBounds}
    */
+  bounds() {}
+
+  /** @returns {MeshBounds} */
+  computeBBox() {}
+
+  /** Alias of `volume()`. @returns {number} */
+  computeVolume() {}
+
+  /** Alias of `surfaceArea()`. @returns {number} */
+  computeSurfaceArea() {}
+
+  /** @param {number} dx @param {number} dy @param {number} dz @returns {Mesh} this */
   translate(dx, dy, dz) {}
 
   /**
-   * @param {number} sx
-   * @param {number} [sy]
-   * @param {number} [sz]
-   * @returns {Mesh}
+   *  Uniform when only `sx` is given.
+   * @param {number} sx @param {number} [sy] @param {number} [sz] @returns {Mesh} this
    */
   scale(sx, sy, sz) {}
 
   /**
-   * @param {number} ax
-   * @param {number} ay
-   * @param {number} az
-   * @param {number} angle
-   * @returns {Mesh}
+   *  Rotate `angle` radians about the axis (ax, ay, az).
+   * @param {number} ax @param {number} ay @param {number} az @param {number} angle @returns {Mesh} this
    */
   rotate(ax, ay, az, angle) {}
 
-  /**
-   * @returns {Mesh}
-   */
+  /** Recentre on the bounds centre. @returns {Mesh} this */
   center() {}
 
-  /**
-   * @param {number} size
-   * @returns {Mesh}
-   */
+  /** Centre, then scale so the longest axis measures `size`. @param {number} size @returns {Mesh} this */
   fitToBox(size) {}
 
   /**
+   *  Apply a column-major 4x4. Anything but 16 floats throws.
    * @param {Array<number>} matrix
-   * @returns {Mesh}
+   * @returns {Mesh} this
    */
   transform(matrix) {}
 
   /**
-   * @param {SkinData} skin
-   * @param {Array<number>} matrices
-   * @returns {Mesh}
+   *  Mirror across a principal plane. `axis` is 0 (X), 1 (Y) or 2 (Z);
+   *  anything else throws a RangeError.
+   * @param {number} axis
+   * @returns {Mesh} this
    */
-  applySkinning(skin, matrices) {}
+  mirror(axis) {}
+
+  // --- Primitive factories --------------------------------------------------
 
   /**
-   * @param {Mesh} target
-   * @param {number} weight
+   *  Box centred at the origin, given its HALF extents. Passing only `halfW`
+   *  makes a cube.
+   * @param {number} [halfW=0.5] @param {number} [halfH=halfW] @param {number} [halfD=halfW]
    * @returns {Mesh}
    */
-  applyMorphTarget(target, weight) {}
+  static box(halfW, halfH, halfD) {}
 
   /**
-   * @param {number} [creaseAngle]
+   * @param {number} [radius=1] @param {number} [segments=16] @param {number} [rings=12]
    * @returns {Mesh}
    */
-  computeNormals(creaseAngle) {}
+  static sphere(radius, segments, rings) {}
 
   /**
+   *  Y-axis cylinder centred at the origin; `halfHeight` is half the total height.
+   * @param {number} [radius=0.5] @param {number} [halfHeight=1] @param {number} [segments=16]
    * @returns {Mesh}
    */
+  static cylinder(radius, halfHeight, segments) {}
+
+  /**
+   * @param {number} [radius=0.5] @param {number} [halfHeight=1] @param {number} [segments=16] @param {number} [rings=8]
+   * @returns {Mesh}
+   */
+  static capsule(radius, halfHeight, segments, rings) {}
+
+  /**
+   *  Cone along +Y: base disc at y = 0, apex at y = `height`. Unlike bromesh's
+   *  C++ default the base IS capped here unless `capBase` is false.
+   * @param {number} [radius=0.5] @param {number} [height=1] @param {number} [segments=16]
+   * @param {number} [stacks=4] @param {boolean} [capBase=true]
+   * @returns {Mesh}
+   */
+  static cone(radius, height, segments, stacks, capBase) {}
+
+  /**
+   *  Flat grid in the XZ plane, given HALF extents.
+   * @param {number} [halfW=1] @param {number} [halfD=halfW] @param {number} [segW=1] @param {number} [segD=1]
+   * @returns {Mesh}
+   */
+  static plane(halfW, halfD, segW, segD) {}
+
+  /**
+   *  Torus in the XZ plane.
+   * @param {number} [majorRadius=1] @param {number} [minorRadius=0.3]
+   * @param {number} [majorSegments=24] @param {number} [minorSegments=12]
+   * @returns {Mesh}
+   */
+  static torus(majorRadius, minorRadius, majorSegments, minorSegments) {}
+
+  /** Unit platonic solid, scaled by `radius` when given. @param {number} [radius] @returns {Mesh} */
+  static icosahedron(radius) {}
+
+  /** @param {number} [radius] @returns {Mesh} */
+  static dodecahedron(radius) {}
+
+  /** @param {number} [radius] @returns {Mesh} */
+  static octahedron(radius) {}
+
+  /** @param {number} [radius] @returns {Mesh} */
+  static tetrahedron(radius) {}
+
+  /**
+   *  Filled circle in the XZ plane. `Mesh.disc` is the same function under its
+   *  bromesh spelling, but only `disk` is forwarded onto `bro.mesh`.
+   * @param {number} [radius=1] @param {number} [segments=16]
+   * @returns {Mesh}
+   */
+  static disk(radius, segments) {}
+
+  /** @param {number} [radius=1] @param {number} [segments=16] @returns {Mesh} */
+  static disc(radius, segments) {}
+
+  /**
+   *  Subdivided icosahedron: 0 = 20 faces, 1 = 80, 2 = 320. Present only in a
+   *  par_shapes build.
+   * @param {number} [radius=1] @param {number} [subdivisions=2]
+   * @returns {Mesh}
+   */
+  static geodesicSphere(radius, subdivisions) {}
+
+  /**
+   *  Noise-displaced sphere. Present only in a par_shapes build. For a scaled
+   *  and offset variant in one call see `Mesh.blob` (docs/mesh-plants-api.js).
+   * @param {number} [radius=1] @param {number} [seed=1] @param {number} [subdivisions=2]
+   * @returns {Mesh}
+   */
+  static rock(radius, seed, subdivisions) {}
+
+  /**
+   * Mesh a row-major height grid in the XZ plane, one vertex per sample.
+   * With `border > 0`, `heights` is expected to carry `border` extra rows and
+   * columns on every side — full length `(gridW + 2b) * (gridH + 2b)` — used
+   * only to compute central-difference normals, so adjacent terrain chunks
+   * agree along their shared edge. The geometry still covers `gridW x gridH`.
+   *
+   * @param {Float32Array} heights
+   * @param {number} gridW
+   * @param {number} gridH
+   * @param {number} [cellSize=1]
+   * @param {number} [border=0]
+   * @returns {Mesh}
+   */
+  static heightmapGrid(heights, gridW, gridH, cellSize, border) {}
+
+  /**
+   *  Concatenate meshes into one. Takes an array, or the meshes as separate
+   *  arguments.
+   * @param {Array<Mesh>} meshes
+   * @returns {Mesh}
+   */
+  static merge(meshes) {}
+
+  // --- Normals and tangents -------------------------------------------------
+
+  /** Smooth, area-weighted vertex normals. @returns {Mesh} this */
+  computeNormals() {}
+
+  /** Flat per-face normals, splitting shared vertices. @returns {Mesh} a NEW mesh */
+  computeFlatNormals() {}
+
+  /**
+   * Per-vertex tangents for normal-mapped materials: a flat Float32Array of
+   * xyzw per vertex, w carrying the bitangent sign. Needs UVs. This does not
+   * touch the mesh — feed the array to your material or vertex buffer.
+   *
+   * @returns {Float32Array}
+   *
+   * @example
+   *   const m = Mesh.sphere(1, 32, 24);
+   *   m.unwrapUVs();
+   *   const tangents = m.computeTangents();   // 4 floats per vertex
+   */
+  computeTangents() {}
+
+  /**
+   *  Smooth normals within `angle` degrees, hard across sharper creases.
+   * @param {number} [angle=60] -  degrees.
+   * @returns {Mesh} this
+   */
+  computeCreaseNormals(angle) {}
+
+  /** Negate every normal, leaving winding alone. @returns {Mesh} this */
   invertNormals() {}
 
-  /**
-   * @returns {Mesh}
-   */
+  /** Reverse triangle winding, leaving normals alone. @returns {Mesh} this */
   flipFaces() {}
 
+  // --- Clean-up -------------------------------------------------------------
+
   /**
-   * @param {number} [threshold]
-   * @returns {Mesh}
+   *  Merge vertices closer than `threshold`.
+   * @param {number} [threshold=1e-4]
+   * @returns {Mesh} this
    */
   weld(threshold) {}
 
+  /** @param {number} [epsilon=1e-6] @returns {Mesh} this */
+  removeDegenerateTriangles(epsilon) {}
+
+  /** @returns {Mesh} this */
+  removeDuplicateTriangles() {}
+
   /**
-   * @param {number} ratio
-   * @param {number} [targetError]
-   * @returns {Mesh}
+   *  Fan-fill boundary loops of at most `maxEdges` edges.
+   * @param {number} [maxEdges=32]
+   * @returns {Mesh} this
+   */
+  fillHoles(maxEdges) {}
+
+  /** `removeDegenerateTriangles()` then `removeDuplicateTriangles()`. @returns {Mesh} this */
+  repair() {}
+
+  // --- Simplification and LOD -----------------------------------------------
+
+  /**
+   *  Quadric decimation to `ratio` of the current triangles.
+   * @param {number} [ratio=0.5] @param {number} [targetError=1e-3]
+   * @returns {Mesh} this
    */
   simplify(ratio, targetError) {}
 
   /**
-   * @param {number} [iterations]
-   * @returns {Mesh}
+   * Quadric decimation that folds UV and normal error into the metric, so UV
+   * seams and hard edges survive a heavy reduction that plain `simplify()`
+   * would smear. Use it on anything textured.
+   *
+   * @param {number} [ratio=0.5]
+   * @param {number} [targetError=0.01]
+   * @param {number} [uvWeight=1]
+   * @param {number} [normalWeight=0.5]
+   * @returns {Mesh} this
+   *
+   * @example
+   *   const lod1 = mesh.clone().simplifyWithAttributes(0.25, 0.01, 2, 1);
    */
-  subdivideLoop(iterations) {}
+  simplifyWithAttributes(ratio, targetError, uvWeight, normalWeight) {}
+
+  /** @param {number} [count=100] @param {number} [targetError=1e-3] @returns {Mesh} this */
+  simplifyToTriangleCount(count, targetError) {}
 
   /**
-   * @param {number} [iterations]
-   * @returns {Mesh}
+   *  One simplified copy per ratio; the source mesh is untouched.
+   * @param {Float32Array|Array<number>} ratios
+   * @returns {Array<Mesh>}
    */
+  generateLODChain(ratios) {}
+
+  // --- Subdivision, smoothing, remeshing ------------------------------------
+
+  /** Loop subdivision (smooths). @param {number} [iterations=1] @returns {Mesh} this */
+  subdivideLoop(iterations) {}
+
+  /** Catmull-Clark subdivision (smooths). @param {number} [iterations=1] @returns {Mesh} this */
   subdivideCatmullClark(iterations) {}
 
   /**
-   * @param {number} [lambda]
-   * @param {number} [iterations]
-   * @returns {Mesh}
+   * Plain 1-to-4 midpoint split: no smoothing, so the surface is unchanged and
+   * only density rises. This is the subdivision a displacement pass wants —
+   * Loop and Catmull-Clark would move the vertices you are about to displace.
+   *
+   * @param {number} [iterations=1]
+   * @returns {Mesh} this
+   *
+   * @example
+   *   const plate = Mesh.plane(2, 2, 8, 8).subdivideMidpoint(2);
    */
+  subdivideMidpoint(iterations) {}
+
+  /** Laplacian smoothing; `smoothLaplacian` is the same function. @param {number} [lambda=0.5] @param {number} [iterations=1] @returns {Mesh} this */
   smooth(lambda, iterations) {}
 
+  /** @param {number} [lambda=0.5] @param {number} [iterations=1] @returns {Mesh} this */
+  smoothLaplacian(lambda, iterations) {}
+
   /**
-   * @param {number} [targetEdgeLength]
-   * @returns {Mesh}
+   *  Taubin smoothing: alternating lambda/mu passes, so volume survives.
+   * @param {number} [lambda=0.5] @param {number} [mu=-0.53] @param {number} [iterations=1]
+   * @returns {Mesh} this
    */
+  smoothTaubin(lambda, mu, iterations) {}
+
+  /** `remeshIsotropic(targetEdgeLength, 3)`. @param {number} [targetEdgeLength=0.1] @returns {Mesh} this */
   remesh(targetEdgeLength) {}
 
-  /**
-   * @returns {Mesh}
-   */
-  repair() {}
+  /** @param {number} [targetEdgeLength=0.1] @param {number} [iterations=3] @returns {Mesh} this */
+  remeshIsotropic(targetEdgeLength, iterations) {}
 
   /**
-   * @returns {Mesh}
-   */
-  repairSelfIntersections() {}
-
-  /**
+   * Project this mesh's vertices onto `target`. `mode` is `'nearest'` (the
+   * default), `'normal'` / `'projectAlongNormal'` (ray-cast along each
+   * vertex's own normal) or `'axis'` / `'projectAlongAxis'` (ray-cast along
+   * `axis`, default +Y); the numeric enum 0/1/2 also works. `offset` pushes
+   * the landing point along the target's normal — useful to float armour just
+   * above a body and dodge z-fighting. `maxDistance` 0 means unlimited.
+   *
    * @param {Mesh} target
-   * @param {number} [factor]
-   * @param {number} [offset]
-   * @returns {Mesh}
+   * @param {string|number} [mode='nearest']
+   * @param {number} [maxDistance=0]
+   * @param {number} [offset=0]
+   * @param {Array<number>} [axis=[0,1,0]]
+   * @returns {Mesh} this
    */
-  shrinkwrap(target, factor, offset) {}
+  shrinkwrap(target, mode, maxDistance, offset, axis) {}
+
+  // --- Splitting, hulls, booleans -------------------------------------------
 
   /**
+   *  Cut by the plane `n . x = d`; returns `[positiveSide, negativeSide]`.
+   * @param {number} [nx=0] @param {number} [ny=1] @param {number} [nz=0] @param {number} [d=0]
    * @returns {Array<Mesh>}
    */
+  splitByPlane(nx, ny, nz, d) {}
+
+  /** One mesh per connected component. @returns {Array<Mesh>} */
   splitComponents() {}
 
-  /**
-   * @param {Mesh} other
-   * @returns {Mesh}
-   */
-  booleanUnion(other) {}
-
-  /**
-   * @param {Mesh} other
-   * @returns {Mesh}
-   */
-  booleanDifference(other) {}
-
-  /**
-   * @param {Mesh} other
-   * @returns {Mesh}
-   */
-  booleanIntersection(other) {}
-
-  /**
-   * @param {Mesh} other
-   * @returns {Mesh}
-   */
-  csgUnion(other) {}
-
-  /**
-   * @param {Mesh} other
-   * @returns {Mesh}
-   */
-  csgSubtract(other) {}
-
-  /**
-   * @param {Mesh} other
-   * @returns {Mesh}
-   */
-  csgIntersect(other) {}
-
-  /**
-   * @param {string} [method]
-   * @returns {Mesh}
-   */
-  generateUVs(method) {}
-
-  /**
-   * @param {string} [projection]
-   * @param {Array<number>} [plane]
-   * @returns {Mesh}
-   */
-  projectUVs(projection, plane) {}
-
-  /**
-   * @returns {Mesh}
-   */
-  optimize() {}
-
-  /**
-   * @returns {MeshBVH}
-   */
-  buildBVH() {}
-
-  /**
-   * @returns {ProgressiveMesh}
-   */
-  buildProgressiveMesh() {}
-
-  /**
-   * @param {number} [maxVertices]
-   * @param {number} [maxTriangles]
-   * @returns {MeshletGroupResult}
-   */
-  buildMeshlets(maxVertices, maxTriangles) {}
-
-  /**
-   * @returns {Array<MeshUVDistortionResult>}
-   */
-  computeUVDistortion() {}
-
-  /**
-   * @returns {MeshUVQualityResult}
-   */
-  measureUVQuality() {}
-
-  /**
-   * @returns {Mesh}
-   */
+  /** @returns {Mesh} a NEW convex hull */
   convexHull() {}
 
   /**
+   * Approximate convex decomposition (V-HACD) into hulls a physics engine can
+   * use. Pass the options OBJECT; the positional form
+   * `(maxHulls, maxVerticesPerHull, resolution, minVolumePerHull)` is also
+   * accepted for callers that predate the object.
+   *
    * @param {MeshConvexDecompParams} [params]
    * @returns {Array<Mesh>}
+   *
+   * @example
+   *   const hulls = Mesh.loadOBJ('prop.obj')
+   *     .convexDecomposition({ maxHulls: 8, maxVerticesPerHull: 24 });
+   *   for (const h of hulls) physics.createBody({ shape: 'convexHull', mesh: h });
    */
   convexDecomposition(params) {}
 
+  /** @param {Mesh} other @returns {Mesh} a NEW mesh */
+  booleanUnion(other) {}
+
+  /** @param {Mesh} other @returns {Mesh} a NEW mesh */
+  booleanDifference(other) {}
+
+  /** @param {Mesh} other @returns {Mesh} a NEW mesh */
+  booleanIntersection(other) {}
+
+  /** Alias of `booleanUnion`. @param {Mesh} other @returns {Mesh} */
+  union(other) {}
+
+  /** Alias of `booleanDifference`. @param {Mesh} other @returns {Mesh} */
+  subtract(other) {}
+
+  /** Alias of `booleanIntersection`. @param {Mesh} other @returns {Mesh} */
+  intersect(other) {}
+
+  // --- Baking ---------------------------------------------------------------
+  //
+  // The `bake*` methods with no "ToTexture" suffix write into `mesh.colors`;
+  // the `*ToTexture` ones need UVs and return a MeshTextureBuffer instead.
+
+  /** @param {number} [rays=64] @param {number} [maxDistance=0] @returns {Mesh} this */
+  bakeAmbientOcclusion(rays, maxDistance) {}
+
+  /** @param {number} [scale=1] @returns {Mesh} this */
+  bakeCurvature(scale) {}
+
+  /** @param {number} [rays=32] @param {number} [maxDistance=0] @returns {Mesh} this */
+  bakeThickness(rays, maxDistance) {}
+
+  /** @param {number} [width=512] @param {number} [height=512] @param {number} [rays=64] @param {number} [maxDistance=0] @returns {MeshTextureBuffer} */
+  bakeAOToTexture(width, height, rays, maxDistance) {}
+
+  /** @param {number} [width=512] @param {number} [height=512] @param {number} [scale=1] @returns {MeshTextureBuffer} */
+  bakeCurvatureToTexture(width, height, scale) {}
+
+  /** @param {number} [width=512] @param {number} [height=512] @param {number} [rays=32] @param {number} [maxDistance=0] @returns {MeshTextureBuffer} */
+  bakeThicknessToTexture(width, height, rays, maxDistance) {}
+
+  /** @param {number} [width=512] @param {number} [height=512] @returns {MeshTextureBuffer} */
+  bakeNormalsToTexture(width, height) {}
+
+  /** @param {number} [width=512] @param {number} [height=512] @returns {MeshTextureBuffer} */
+  bakePositionToTexture(width, height) {}
+
   /**
-   * Write the mesh to a file; true when the file was written. A relative
-   * path resolves the way `fs.*` resolves it (against the app directory).
-   * glTF takes `{skin, skeleton, animations}` to write a rigged asset.
+   *  High-to-low normal-map bake: `this` is the low-poly receiver, `high` the
+   *  reference.
+   * @param {Mesh} high @param {number} [width=512] @param {number} [height=512] @param {number} [maxDistance=0]
+   * @returns {MeshTextureBuffer}
+   */
+  bakeNormalsFromReference(high, width, height, maxDistance) {}
+
+  /**
+   * @param {Mesh} high @param {number} [width=512] @param {number} [height=512]
+   * @param {number} [rays=64] @param {number} [maxDistance=0]
+   * @returns {MeshTextureBuffer}
+   */
+  bakeAOFromReference(high, width, height, rays, maxDistance) {}
+
+  // --- Measurement and topology --------------------------------------------
+
+  /** @returns {number} */
+  surfaceArea() {}
+
+  /** Signed volume; meaningful only on a closed mesh. @returns {number} */
+  volume() {}
+
+  /** @returns {boolean} */
+  isManifold() {}
+
+  /** Genus from the Euler characteristic, over position-welded vertices. @returns {number} */
+  genus() {}
+
+  /** How many edges are shared by a number of faces other than two. @returns {number} */
+  nonManifoldEdges() {}
+
+  /**
+   *  Per-vertex curvature as an rgba Float32Array (stride 4) — the colours
+   *  `bakeCurvature` would write, without touching the mesh.
+   *  `computeCurvature` is an alias.
+   * @param {number} [scale=1]
+   * @returns {Float32Array}
+   */
+  curvature(scale) {}
+
+  /** @param {number} [scale=1] @returns {Float32Array} */
+  computeCurvature(scale) {}
+
+  /** One area per triangle. @returns {Float32Array} */
+  triangleAreas() {}
+
+  /**
+   *  Area-weighted point cloud over the surface, as a Mesh with positions (and
+   *  normals/UVs when the source has them) and no indices.
+   * @param {number} [count=100] @param {number} [seed=0] -  0 = non-deterministic.
+   * @returns {Mesh}
+   */
+  sampleSurface(count, seed) {}
+
+  // --- Ray and point queries ------------------------------------------------
+  //
+  // Every ray method takes either `(origin, direction, maxDistance?)` with
+  // vectors as [x,y,z] or {x,y,z}, or the six/seven loose numbers
+  // `(ox, oy, oz, dx, dy, dz, maxDistance?)`. `maxDistance` 0 = unlimited.
+  // These walk the triangles directly; build a `MeshBVH` for repeated queries.
+
+  /** @param {Array<number>} origin @param {Array<number>} direction @param {number} [maxDistance=0] @returns {MeshRayHit|null} */
+  raycast(origin, direction, maxDistance) {}
+
+  /** Every hit along the ray, near to far. @param {Array<number>} origin @param {Array<number>} direction @param {number} [maxDistance=0] @returns {Array<MeshRayHit>} */
+  raycastAll(origin, direction, maxDistance) {}
+
+  /** @param {Array<number>} origin @param {Array<number>} direction @param {number} [maxDistance=0] @returns {boolean} */
+  raycastTest(origin, direction, maxDistance) {}
+
+  /** @param {Array<number>} point @returns {MeshRayHit|null} */
+  closestPoint(point) {}
+
+  // --- Self-intersection ----------------------------------------------------
+  //
+  // The three together are how a caller validates a mesh before a boolean or a
+  // physics bake: ask `hasSelfIntersections()` first, and only pay for
+  // `findSelfIntersections()` when you need to show the user where.
+
+  /**
+   * @returns {boolean}
    *
-   * @param {string} path
-   * @returns {boolean}
+   * @example
+   *   if (a.hasSelfIntersections()) a.repair();
+   *   const cut = a.booleanDifference(b);
    */
-  saveOBJ(path) {}
+  hasSelfIntersections() {}
 
   /**
-   * @param {string} path
-   * @returns {boolean}
+   *  Every intersecting triangle pair.
+   * @returns {Array<MeshTrianglePair>}
    */
-  savePLY(path) {}
+  findSelfIntersections() {}
 
   /**
-   * @param {string} path
+   *  Do the two surfaces overlap at all — a cheap broad test before an
+   *  expensive boolean.
+   * @param {Mesh} other
    * @returns {boolean}
    */
-  saveSTL(path) {}
+  intersectsMesh(other) {}
 
   /**
-   * @param {string} path
-   * @param {Object} [opts]
-   * @returns {boolean}
+   *  Build an acceleration structure over a SNAPSHOT of this mesh; later edits
+   *  do not invalidate it because the BVH holds its own copy.
+   * @param {number} [leafSize=8]
+   * @returns {MeshBVH}
    */
-  saveGLTF(path, opts) {}
+  buildBVH(leafSize) {}
+
+  // --- UVs ------------------------------------------------------------------
+
+  /**
+   *  xatlas chart-based unwrap. Writes `mesh.uvs` and returns the atlas summary.
+   * @returns {MeshUnwrapResult}
+   */
+  unwrapUVs() {}
+
+  /**
+   *  Projective UVs. `projection` is `'box'` (default), `'planarXY'`,
+   *  `'planarXZ'`, `'planarYZ'`, `'cylindrical'` or `'spherical'`; an unknown
+   *  name throws. The second argument is a UV SCALE, not a plane.
+   * @param {string} [projection='box'] @param {number} [scale=1]
+   * @returns {Mesh} this
+   */
+  projectUVs(projection, scale) {}
+
+  /**
+   *  `'unwrap'` (the default) and `'xatlas'` run `unwrapUVs()`; any other
+   *  string is handed to `projectUVs(method, 1)`. Returns whatever the chosen
+   *  path returns.
+   * @param {string} [method='unwrap']
+   * @returns {MeshUnwrapResult|Mesh}
+   */
+  generateUVs(method) {}
+
+  /** @returns {Array<MeshUVDistortion>} one entry per triangle */
+  computeUVDistortion() {}
+
+  /** @returns {MeshUVQuality} */
+  measureUVQuality() {}
+
+  // --- GPU-side optimization ------------------------------------------------
+
+  /**
+   * Cluster into meshlets for a GPU cluster-cull pass. The returned value is
+   * an array of `Meshlet` that ALSO carries the flattened `vertices`,
+   * `triangles` and packed `meshlets` buffers as properties, so you can either
+   * iterate it or upload it.
+   *
+   * @param {MeshletParams|number} [opts] -  the options object, or `maxVertices` positionally.
+   * @param {number} [maxTriangles] -  only in the positional form.
+   * @param {number} [coneWeight] -  only in the positional form.
+   * @returns {MeshletGroup}
+   *
+   * @example
+   *   const ms = mesh.buildMeshlets({ maxVertices: 64, maxTriangles: 124 });
+   *   console.log(ms.meshletCount, ms[0].bounds.coneCutoff);
+   */
+  buildMeshlets(opts, maxTriangles, coneWeight) {}
+
+  /** `optimizeVertexCache()` then `optimizeVertexFetch()`. @returns {Mesh} this */
+  optimize() {}
+
+  /** @param {number} [cacheSize=16] @returns {MeshVertexCacheStats} */
+  analyzeVertexCache(cacheSize) {}
+
+  /** @param {number} [vertexSize=32] -  bytes per vertex. @returns {MeshVertexFetchStats} */
+  analyzeVertexFetch(vertexSize) {}
+
+  /** @returns {MeshOverdrawStats} */
+  analyzeOverdraw() {}
+
+  /** @returns {Mesh} this */
+  optimizeVertexCache() {}
+
+  /** @returns {Mesh} this */
+  optimizeVertexFetch() {}
+
+  /**
+   *  Reorder for front-to-back coverage; `threshold` is how much ACMR you will
+   *  trade for it.
+   * @param {number} [threshold=1.05]
+   * @returns {Mesh} this
+   */
+  optimizeOverdraw(threshold) {}
+
+  /** @returns {Mesh} this */
+  spatialSortTriangles() {}
+
+  /** @returns {Mesh} this */
+  spatialSortVertices() {}
+
+  /**
+   *  Position-only index buffer: vertices that share a position collapse, so a
+   *  shadow pass draws fewer of them.
+   * @returns {Uint32Array}
+   */
+  generateShadowIndexBuffer() {}
+
+  // `mesh.encode()` / `Mesh.decode()` / `Mesh.stripify()` / `Mesh.unstripify()`
+  // are documented with the other serialization entry points in
+  // docs/mesh-io-api.js.
+
+  /**
+   *  Free-function form of the instance method; returns `[positive, negative]`.
+   * @param {Mesh} mesh @param {number} [nx=0] @param {number} [ny=1] @param {number} [nz=0] @param {number} [d=0]
+   * @returns {Array<Mesh>}
+   */
+  static splitByPlane(mesh, nx, ny, nz, d) {}
+
+  /** @param {Mesh} a @param {Mesh} b @returns {Mesh} */
+  static booleanUnion(a, b) {}
+
+  /** @param {Mesh} a @param {Mesh} b @returns {Mesh} */
+  static booleanDifference(a, b) {}
+
+  /** @param {Mesh} a @param {Mesh} b @returns {Mesh} */
+  static booleanIntersection(a, b) {}
+
+  /** @param {Mesh} mesh @returns {Mesh} */
+  static convexHull(mesh) {}
+
+  // `mesh.applySkinning()`, `mesh.applyMorphTarget()`, `mesh.saveGLTF()` and
+  // `Mesh.loadGLTF()` are installed by the rigging half of bromesh and are
+  // documented in docs/rigging-api.js.
 
 }
 
+// ── MeshBVH ──────────────────────────────────────────────────────────────────
+
+/**
+ * A bounding-volume hierarchy over a COPY of the mesh it was built from, so
+ * later edits to that mesh leave it valid (and stale — rebuild after an edit
+ * you care about). Build one whenever a mesh takes more than a handful of ray
+ * queries.
+ *
+ * Every query optionally takes a Mesh as its first argument: pass one to run
+ * the traversal against different geometry with the same topology (a posed
+ * copy of the bind mesh, say) instead of the snapshot.
+ *
+ * @example
+ *   const bvh = new MeshBVH(terrain, 8);          // or terrain.buildBVH()
+ *   const hit = bvh.raycast([x, 100, z], [0, -1, 0]);
+ *   if (hit) place(hit.point, hit.normal);
+ */
 class MeshBVH {
 
   /**
-   * @param {Array<number>} origin
-   * @param {Array<number>} direction
-   * @param {number} [maxDist]
-   * @returns {MeshBVHIntersectResult|null}
-   */
-  raycast(origin, direction, maxDist) {}
-
-  /**
-   * @param {Array<number>} min
-   * @param {Array<number>} max
-   * @returns {Array<number>}
-   */
-  queryAABB(min, max) {}
-
-}
-
-class ProgressiveMesh {
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  collapseCount;
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  minVertices;
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  maxVertices;
-
-  /**
-   * @param {number} detail
-   * @returns {Mesh}
-   */
-  getMesh(detail) {}
-
-}
-
-/**
- * Half-edge adjacency over N-gon faces: the edit topology a mesh editor
- * keeps beside the triangle Mesh it renders, so a face survives whatever
- * triangulation drew it. Build one from triangles (`fromMeshData` /
- * `fromMesh`, with an optional per-triangle group so coplanar triangles can
- * be merged back into one face with `mergeFacesByGroup`), from a planar
- * polygon, or from N-gon soup; `tessellate()` gives triangles back.
- * Face and vertex indices are stable until `compact()`.
- */
-class PolyMesh {
-
-  /**
-   *  Empty; the static factories build populated ones.
-   */
-  constructor() {}
-
-  /**
-   * @param {Float32Array} positions
-   * @param {Uint32Array} indices
-   * @param {Int32Array} [triToGroup]
-   * @returns {PolyMesh}
-   */
-  static fromMeshData(positions, indices, triToGroup) {}
-
-  /**
    * @param {Mesh} mesh
-   * @param {Int32Array} [triToGroup]
-   * @returns {PolyMesh}
+   * @param {number} [leafSize=8]
    */
-  static fromMesh(mesh, triToGroup) {}
+  constructor(mesh, leafSize) {}
 
-  /**
-   *  One N-gon from a simple CCW polygon (as seen from +normal).
-   *
-   * @param {Float32Array} positionsXYZ
-   * @param {Array<number>} normal
-   * @param {number} [group]
-   * @returns {PolyMesh}
-   */
-  static fromPolygon(positionsXYZ, normal, group) {}
-
-  /**
-   *  N-gon soup: `polyOffsets` (length F+1) delimits each face's run in `polyVerts`.
-   *
-   * @param {Float32Array} positions
-   * @param {Uint32Array} polyVerts
-   * @param {Uint32Array} polyOffsets
-   * @param {Int32Array} [faceGroups]
-   * @returns {PolyMesh}
-   */
-  static fromPolygons(positions, polyVerts, polyOffsets, faceGroups) {}
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  vertexCount;
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  halfEdgeCount;
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  faceCount;
-
-  /**
-   * @param {number} faceIdx
-   * @returns {number}
-   */
-  faceVertexCount(faceIdx) {}
-
-  /**
-   * @param {number} faceIdx
-   * @returns {Array<number>}
-   */
-  faceVertices(faceIdx) {}
-
-  /**
-   * @param {number} faceIdx
-   * @returns {Array<number>}
-   */
-  faceHalfEdges(faceIdx) {}
-
-  /**
-   * @param {number} vertexIdx
-   * @returns {Array<number>}
-   */
-  getVertex(vertexIdx) {}
-
-  /**
-   * @param {number} faceIdx
-   * @returns {Array<number>}
-   */
-  computeFaceNormal(faceIdx) {}
-
-  /**
-   *  The face's group tag, or -1.
-   *
-   * @param {number} faceIdx
-   * @returns {number}
-   */
-  faceGroup(faceIdx) {}
-
-  /**
-   * @param {number} faceIdx
-   * @param {number} group
-   */
-  setFaceGroup(faceIdx, group) {}
-
-  /**
-   * @param {number} groupId
-   * @returns {Array<number>}
-   */
-  facesInGroup(groupId) {}
-
-  /**
-   * @param {number} vertexIdx
-   * @returns {boolean}
-   */
-  isBoundaryVertex(vertexIdx) {}
-
-  /**
-   * @param {number} halfEdgeIdx
-   * @returns {boolean}
-   */
-  isBoundaryHalfEdge(halfEdgeIdx) {}
-
-  /**
-   *  Outer + hole loops of vertex indices around one face / one group.
-   *
-   * @param {number} faceIdx
-   * @returns {Array<Array<number>>}
-   */
-  findFaceBoundary(faceIdx) {}
-
-  /**
-   * @param {number} groupId
-   * @returns {Array<Array<number>>}
-   */
-  findGroupBoundary(groupId) {}
-
-  /**
-   * @returns {MeshTessellation}
-   */
-  tessellate() {}
-
-  /**
-   *  `tessellate()` as a Mesh (positions, flat normals, indices).
-   * @returns {Mesh}
-   */
-  toMesh() {}
-
-  /**
-   * @returns {MeshPolyValidation}
-   */
-  validate() {}
-
-  /**
-   * @param {number} x
-   * @param {number} y
-   * @param {number} z
-   * @returns {number}
-   */
-  addVertex(x, y, z) {}
-
-  /**
-   *  A face from an ordered vertex loop (3+); call `rematchTwins()` after a batch.
-   *
-   * @param {Array<number>} vertices
-   * @param {number} [group]
-   * @returns {number}
-   */
-  addFace(vertices, group) {}
-
-  /**
-   * @param {number} faceIdx
-   */
-  deleteFace(faceIdx) {}
-
-  /**
-   * @param {number} vertexIdx
-   * @param {Array<number>} offset
-   */
-  translateVertex(vertexIdx, offset) {}
-
-  /**
-   * @param {number} faceIdx
-   * @param {Array<number>} offset
-   */
-  translateFace(faceIdx, offset) {}
-
-  /**
-   *  Push/pull on a closed solid: seam-duplicate vertices move with the face.
-   *
-   * @param {number} faceIdx
-   * @param {Array<number>} offset
-   */
-  translateFaceWithRing(faceIdx, offset) {}
-
-  /**
-   *  SketchUp-style extrusion: the face moves by `offset`, a bridge quad per boundary edge, a back face unless `withBack` is false.
-   *
-   * @param {number} faceIdx
-   * @param {Array<number>} offset
-   * @param {boolean} [withBack]
-   * @param {number} [bridgeGroup]
-   * @param {number} [backGroup]
-   * @returns {MeshExtrudeFaceResult}
-   */
-  extrudeFace(faceIdx, offset, withBack, bridgeGroup, backGroup) {}
-
-  /**
-   *  Inset toward the centroid by `amount` (a distance, or a ratio in [0,1) when `asRatio`).
-   *
-   * @param {number} faceIdx
-   * @param {number} amount
-   * @param {boolean} [asRatio]
-   * @param {number} [bridgeGroup]
-   * @returns {MeshInsetFaceResult}
-   */
-  insetFace(faceIdx, amount, asRatio, bridgeGroup) {}
-
-  /**
-   *  Split the edge of half-edge `he` at `position` (default: its midpoint); both faces must be triangles. The new vertex, or -1.
-   *
-   * @param {number} he
-   * @param {Array<number>} [position]
-   * @returns {number}
-   */
-  splitEdge(he, position) {}
-
-  /**
-   * @param {number} he
-   * @returns {boolean}
-   */
-  flipEdge(he) {}
-
-  /**
-   * @param {number} he
-   * @param {Array<number>} [position]
-   * @returns {boolean}
-   */
-  collapseEdge(he, position) {}
-
-  rematchTwins() {}
-
-  mergeFacesByGroup() {}
-
-  compact() {}
-
-}
-
-/**
- * Capsule + sphere occupancy field: the shared obstacle substrate for
- * spaceColonize, placeLeavesOnBranches, scatterLeaves and packAnchors.
- * Queries take a point as [x,y,z] or {x,y,z}; `excludeTag` skips obstacles
- * carrying that tag (a leaf's own branch).
- */
-class CapsuleField {
-
-  /**
-   * @param {Array<MeshCapsule>} [capsules]
-   * @param {Array<MeshSphere>} [spheres]
-   * @param {number} [cellSize]
-   */
-  constructor(capsules, spheres, cellSize) {}
-
-  /**
-   * @readonly
-   * @type {boolean}
-   */
+  /** @readonly @type {boolean} */
   empty;
 
-  /**
-   * @readonly
-   * @type {number}
-   */
-  capsuleCount;
+  /** @readonly @type {number} */
+  triangleCount;
+
+  /** @readonly @type {number} */
+  nodeCount;
+
+  /** @returns {MeshBounds} */
+  bounds() {}
 
   /**
-   * @readonly
-   * @type {number}
+   * @param {Array<number>} origin @param {Array<number>} direction @param {number} [maxDistance=0]
+   * @returns {MeshRayHit|null}
    */
-  sphereCount;
+  raycast(origin, direction, maxDistance) {}
 
   /**
-   * @readonly
-   * @type {number}
-   */
-  cellSize;
-
-  /**
-   * @param {Array<number>} point
-   * @param {number} [excludeTag]
-   * @param {number} [extraClearance]
+   * @param {Array<number>} origin @param {Array<number>} direction @param {number} [maxDistance=0]
    * @returns {boolean}
    */
-  contains(point, excludeTag, extraClearance) {}
+  raycastTest(origin, direction, maxDistance) {}
 
-  /**
-   * @param {Array<number>} point
-   * @param {number} clearance
-   * @param {number} [excludeTag]
-   * @returns {boolean}
-   */
-  tooClose(point, clearance, excludeTag) {}
-
-  /**
-   *  Signed distance to the nearest obstacle surface (negative inside).
-   *
-   * @param {Array<number>} point
-   * @param {number} [excludeTag]
-   * @returns {number}
-   */
-  distance(point, excludeTag) {}
-
-  /**
-   * @param {Array<number>} point
-   * @param {number} [excludeTag]
-   * @returns {MeshCapsuleFieldNearest|null}
-   */
-  nearest(point, excludeTag) {}
-
-  /**
-   * @param {Array<number>} center
-   * @param {number} radius
-   * @param {number} [excludeTag]
-   * @returns {boolean}
-   */
-  intersectsSphere(center, radius, excludeTag) {}
+  /** @param {Array<number>} point @returns {MeshRayHit|null} */
+  closestPoint(point) {}
 
 }
 
-class LSystem {
+// ── ProgressiveMesh ──────────────────────────────────────────────────────────
 
-  /**
-   * @param {string} [axiom]
-   */
-  constructor(axiom) {}
+/**
+ * A pre-computed edge-collapse sequence: build it once, then pull any level of
+ * detail out of it in constant time. Cheaper than re-running `simplify()` per
+ * LOD, and the levels are nested, so they pop less.
+ *
+ * @example
+ *   const pm = new ProgressiveMesh(hero);
+ *   const near = pm.atRatio(1.0);
+ *   const far  = pm.atTriangleCount(500);
+ *   fs.writeFileSync('hero.pm', pm.serialize());
+ */
+class ProgressiveMesh {
 
-  /**
-   * @param {string} text
-   * @returns {LSystem}
-   */
-  setAxiom(text) {}
+  /** @param {Mesh} mesh */
+  constructor(mesh) {}
 
-  /**
-   * @param {string} predecessor
-   * @param {string} successor
-   * @param {number} [weight]
-   * @returns {LSystem}
-   */
-  addRule(predecessor, successor, weight) {}
+  /** @readonly @type {number} triangles at full detail */
+  maxTriangles;
 
-  /**
-   * @param {number} iterations
-   * @param {number} [seed]
-   * @returns {string}
-   */
-  derive(iterations, seed) {}
+  /** @readonly @type {number} triangles once every collapse is applied */
+  minTriangles;
 
-  /**
-   * @param {number} iterations
-   * @param {number} [seed]
-   * @returns {Array<MeshLSystemModule>}
-   */
-  deriveModules(iterations, seed) {}
+  /** @param {number} ratio -  0..1 of `maxTriangles`. @returns {Mesh} */
+  atRatio(ratio) {}
+
+  /** @param {number} count @returns {Mesh} */
+  atTriangleCount(count) {}
+
+  /** @returns {Uint8Array} */
+  serialize() {}
+
+  /** @param {Uint8Array} bytes @returns {ProgressiveMesh} */
+  static deserialize(bytes) {}
 
 }
-

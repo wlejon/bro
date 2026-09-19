@@ -1,8 +1,20 @@
 // =============================================================================
-// bro.ai.game: Game AI Planning & Decision Making
-// SpatialHash, Perception, BehaviorTree, UtilityAI, HTN, GOAP
-// Main API reference: docs/ai-game-api.js
+// bro.ai.game: Agents, Worlds, Units, steering and perception
 // =============================================================================
+//
+// The simulation half of the namespace: the agent that walks a path, the
+// world that ticks a roster and resolves combat, the unit stat block each
+// agent carries, the stateless steering kernels, and the scene bindings that
+// drive all of it from the engine frame loop.
+//
+// Companion files (one area each, same library):
+//   docs/ai-game-api.js       NavGrid / HexNav / NavMesh / routing
+//   docs/ai-game-learning.js  MCTS family, planners, belief, simulation, replay
+//   docs/ai-nn-api.js         bro.ai.game.nn: circuits, nets, ops, WeightsHandle
+//   docs/ai-learn-api.js      bro.ai.game.learn: buffers, trainers, inference
+//   docs/ai-game-tools.js     bro.ai.game.grid: obs windows, tapes, GridTrainer
+//
+// Available in all modes, windowed, headless and bro-server.
 
 // -----------------------------------------------------------------------------
 // Agent, Pathfinding + steering combined
@@ -13,15 +25,38 @@
  *
  * @param {Object} [opts]
  * @param {NavGrid} [opts.navGrid] - Navigation grid for pathfinding
+ * @param {NavMesh} [opts.navMesh] - Navmesh for 3D routing (setGoal / see
+ *                                  "Agent routing over a navmesh" in
+ *                                  docs/ai-game-api.js)
+ * @param {{x,y,z}|number[]} [opts.position] - initial position; when given it
+ *                                  wins over x / y / z
  * @param {number} [opts.x=0] - Initial X position
+ * @param {number} [opts.y=0] - Initial Y (alias of `elevation`)
  * @param {number} [opts.z=0] - Initial Z position
- * @param {number} [opts.speed=6] - Movement speed (units/second)
+ * @param {number} [opts.speed=6] - Movement speed (units/second). `maxSpeed`
+ *                                  is accepted as a synonym and wins.
  * @param {number} [opts.radius=0.4] - Collision radius
+ * @param {number} [opts.maxAcceleration] - accel cap (`maxAccel` synonym);
+ *                                  omitted leaves the engine default
+ * @param {number} [opts.maxTurnRate] - radians/second turn cap
  * @param {number} [opts.elevation=0] - Vertical position (Y) for the ORCA
  *                                  multi-level elevation filter (see bot.elevation)
  * @param {boolean|Object} [opts.avoidance] - ORCA participation/tuning (see
  *                                  "Local avoidance" below)
- * @returns {Agent}
+ *
+ * Unit stats, all forwarded into agent.unit (see "Unit" below):
+ * @param {number} [opts.id=0]           - Unit::id, what world.findById matches
+ * @param {number} [opts.teamId=0]
+ * @param {number} [opts.hp=100]
+ * @param {number} [opts.maxHp=hp]
+ * @param {number} [opts.mana=0]
+ * @param {number} [opts.maxMana=100]
+ * @param {number} [opts.damage=10]
+ * @param {number} [opts.attackRange=3]
+ * @param {number} [opts.attacksPerSec=1]
+ * @param {number} [opts.armor=0]
+ * @param {number} [opts.magicResist=0]
+ * @returns {AIAgent}
  */
 const bot = bro.ai.game.createAgent({
     navGrid: nav,
@@ -98,6 +133,127 @@ bot.hasTarget;
 
 /** Whether the agent has reached its target (read-only). */
 bot.atTarget;
+
+/**
+ * 3D position, read AND write. Reading gives {x, y, z} where y is the
+ * elevation (or the route height while a navmesh route is active). Writing
+ * takes a {x,y,z} object or [x,y,z] array and teleports.
+ */
+bot.position;
+bot.position = { x: 4, y: 0, z: -2 };
+bot.getPosition();                 // same value as the getter, as a method
+
+/** Current velocity as {x, y, z}; y is always 0 (movement is XZ).
+ *  Read-only as a property; getVelocity() is the method form. */
+bot.velocity; bot.getVelocity();
+
+/** The agent's Unit stat block (see "Unit" below). Read-only handle, but its
+ *  own fields are writable. Created lazily on first access and cached. */
+bot.unit;
+
+/** Speed cap. `maxSpeed` and `speed` are the same accessor, read/write. */
+bot.maxSpeed = 8; bot.speed;
+
+/** Collision radius, read/write. */
+bot.radius = 0.5;
+
+/** Acceleration cap. `maxAccel` and `maxAcceleration` are the same accessor.
+ *  NOTE: the GETTER reads the unit's moveSpeed field, not the steering accel
+ *  cap; treat it as write-mostly and keep your own copy if you need the
+ *  value back. */
+bot.maxAccel = 30;
+
+/** Path following (read-only): the remaining waypoint list and the index of
+ *  the one being walked toward. */
+bot.path;               // [{x, z}, ...]
+bot.currentWaypoint;    // index into path
+
+/** Aim angles, driven by aimAt() (read-only). */
+bot.aimYaw; bot.aimPitch;
+
+/**
+ * Set a 3D goal. With a navmesh bound (createAgent({navMesh}) or setNavMesh)
+ * this plans a route on the mesh and follows it, and update() advances the
+ * waypoints; without one it degrades to setTarget(x, z). Accepts
+ * (x, y, z), (x, z), or a {x,y,z} / [x,y,z] object.
+ */
+bot.setGoal(10, 0, 5);
+
+/** Teleport. Accepts (x, y, z), (x, z), or a {x,y,z} object. Also clears any
+ *  navmesh route height tracking. */
+bot.setPosition(0, 0, 0);
+
+/** Individual setters; each mirrors the accessor of the same name. */
+bot.setSpeed(8);
+bot.setRadius(0.5);
+bot.setMaxAccel(30);
+bot.setMaxTurnRate(8);          // radians/second
+bot.setVelocity(vx, vz);        // XZ, overrides steering until the next update
+bot.setYaw(Math.PI / 2);
+
+/** Rebind navigation at runtime. Passing anything that is not a nav handle
+ *  UNBINDS (the agent then walks straight lines). */
+bot.setNavGrid(otherGrid);
+bot.setNavMesh(otherMesh);
+bot.setNavGrid(null);
+
+/** `stop()` is a synonym for `clearTarget()`: it drops the target, the
+ *  navmesh route, and the path. */
+bot.stop();
+
+/**
+ * Permanently disable the agent: drops its target, route, and nav binding.
+ * A destroyed agent ignores update() and setGoal(); remove it from its world
+ * as well. There is no undo.
+ */
+bot.destroy();
+
+/**
+ * Bind a standalone AgentBinding (the same object node.attachAgent creates
+ * internally), for driving navmesh routes without a scene node.
+ * @param {Object} [opts]
+ * @param {NavMesh} [opts.navMesh] @param {NavGrid} [opts.navGrid]
+ * @param {number} [opts.yOffset=0] @param {number} [opts.repathInterval=0]
+ * @returns {AIAgentBinding} with .agent, .navigateTo(), .stopNavigation(),
+ *     .navigationInfo(), and .step(dt) (alias .update(dt))
+ */
+const binding = bot.bind({ navMesh, yOffset: 0.5, repathInterval: 1.0 });
+binding.navigateTo({ x: 8, y: 0, z: 0 });
+binding.step(1 / 60);
+
+/**
+ * Continuous-control entry point: apply one AgentAction for dt seconds. This
+ * is what a learned policy drives, as opposed to the path-following
+ * update(dt). The action is
+ *   { moveX, moveZ, aimYaw, aimPitch, attackTargetId, abilitySlot, abilityTargetId }
+ * @param {Object} action @param {number} dt
+ * @throws {TypeError} when either argument is missing
+ */
+bot.applyAction({ moveX: 1, moveZ: 0, aimYaw: 0, attackTargetId: -1 }, 1 / 60);
+
+
+// -----------------------------------------------------------------------------
+// Agent-local steering: one-shot velocity overrides
+// -----------------------------------------------------------------------------
+//
+// Unlike bro.ai.game.steer.* (pure functions, below), these WRITE the
+// agent's velocity as a side effect: the computed direction times the
+// agent's speed. Call one per tick in place of update()'s path following,
+// then integrate with update(dt). Each also returns the raw {fx, fz}.
+
+bot.seek(targetX, targetZ);           // or bot.seek({x, z})
+bot.flee(threatX, threatZ);
+bot.arrive(targetX, targetZ, /*slowingRadius*/ 3.0);   // or ({x,z}, slowR)
+
+/** Random walk: a jittered point on a circle `dist` ahead of the facing.
+ *  Defaults radius 2, dist 3, jitter 0.5. Uses a thread-local RNG, so it is
+ *  NOT reproducible across runs — seed your own if you need determinism. */
+bot.wander(2, 3, 0.5);
+
+/** Steer around AABBs in the direction of travel. Returns {fx: 0, fz: 0}
+ *  (and writes a zero velocity) when nothing is on the ray.
+ *  @param {Array<{x,z,hw,hd}>} obstacles @param {number} [lookahead=1] seconds */
+bot.avoid(obstacles, 1.0);
 
 
 // -----------------------------------------------------------------------------
@@ -199,6 +355,188 @@ a1.setTarget(10, 0); a2.setTarget(-10, 0);   // they pass, not overlap
 
 
 // -----------------------------------------------------------------------------
+// World, the roster, the combat resolver, the tick
+// -----------------------------------------------------------------------------
+//
+// A World owns nothing: it holds pointers to agents you created and keeps a
+// roster so queries can hand the JS wrappers back. Remove an agent before
+// destroying it. One tick advances scripted behaviour, the ORCA pass (when
+// enabled), projectiles, and cooldowns.
+
+/** @returns {AIWorld} */
+const world = bro.ai.game.createWorld();
+
+world.addAgent(bot);
+world.removeAgent(bot);
+world.agentCount;                 // read-only
+
+/** Static avoidance walls, independent of any NavGrid. Always respected
+ *  while avoidance is on. @param {{x,z,hw,hd}} box */
+world.addObstacle({ x: 0, z: 0, hw: 2, hd: 2 });
+
+/** Advance the simulation. `step(dt)` is a synonym for `tick(dt)`. */
+world.tick(1 / 60);
+
+/** Find an agent's JS wrapper by its Unit::id.
+ *  @returns {AIAgent|null} */
+const who = world.findById(7);
+
+/** Nearest living enemy of `agent`, or null.
+ *  @param {AIAgent} agent @returns {AIAgent|null} */
+const foe = world.nearestEnemy(bot);
+
+/** All living enemies / allies within `range` of `agent`.
+ *  @returns {AIAgent[]} */
+world.enemiesInRange(bot, 12);
+world.alliesInRange(bot, 12);
+
+/**
+ * Damage events since the last clearEvents(), in order. `events` and
+ * `damageEvents` are two names for the same read-only list.
+ * Each entry: { sourceId, attackerId, targetId, amount, kind, killed }
+ * (`sourceId` and `attackerId` are the same number, kept for both spellings;
+ * `kind` is "physical" | "magical" | "true").
+ */
+for (const e of world.events) if (e.killed) onKill(e.attackerId, e.targetId);
+world.clearEvents();
+// Anything that reads the event window — createRewardTracker.consume(),
+// recorder.recordFrame() — consumes it from the same list, so do not clear
+// between their calls or that window is lost.
+
+/** Resolve one basic attack through the full pipeline: range, cooldown,
+ *  armor/resist, crit roll, events. @returns {boolean} whether it landed */
+world.resolveAttack(bot, targetUnitId);
+
+/** Resolve an ability cast: cooldown + mana + range, then the spec's fn.
+ *  @param {AIAgent} caster @param {number} slot @param {number} targetId
+ *  @returns {boolean} */
+world.resolveAbility(bot, 0, targetUnitId);
+
+/** Apply damage directly, bypassing range and cooldown but not mitigation.
+ *  @param {AIAgent} attacker @param {AIAgent} target @param {number} amount
+ *  @param {"physical"|"magical"|"true"} [kind="physical"]
+ *  @returns {number} the amount actually dealt after mitigation */
+const dealt = world.dealDamage(bot, foe, 25, "magical");
+
+/**
+ * Register a JS-authored ability under an integer id. Bind it to a unit slot
+ * with unit.setAbilitySlot(slot, abilityId), then cast it with
+ * resolveAbility.
+ *
+ * `fn(caster, world, targetId)` runs from the NATIVE cast path — including
+ * inside an MCTS rollout on a cloned World, where `caster` is a clone's agent
+ * with no JS wrapper and so arrives as undefined. Guard for that.
+ *
+ * @param {number} abilityId
+ * @param {Object} spec
+ * @param {number} [spec.cooldown=1]
+ * @param {number} [spec.manaCost=0]
+ * @param {number} [spec.range=0]
+ * @param {function(AIAgent|undefined, AIWorld, number)} [spec.fn]
+ */
+world.registerAbility(3, {
+    cooldown: 6, manaCost: 40, range: 8,
+    fn(caster, w, targetId) {
+        const target = w && w.findById(targetId);
+        if (caster && target) w.dealDamage(caster, target, 60, "magical");
+    },
+});
+
+/** Reseed the world RNG: crit rolls, attack spread, dodge. Set it for a
+ *  reproducible episode. @param {number|bigint} seed */
+world.seed(0xC0DE1234);
+
+/** Spawn a projectile on this world. Same option object as the free
+ *  bro.ai.game.spawnProjectile(world, opts) — see docs/ai-game-learning.js.
+ *  @returns {number} the id, or -1 */
+world.spawnProjectile({ ownerId: bot.unit.id, x: 0, z: 0, vx: 20, vz: 0, damage: 25 });
+
+/** Live projectiles, read-only: [{id, ownerId, teamId, x, z, vx, vz, speed,
+ *  damage, alive, mode}, ...]. Dead ones are filtered out. */
+world.projectiles;
+
+/**
+ * Plain-object snapshot / restore of the roster. Captures per agent:
+ * id, x, z, vx, vz, yaw, aimYaw, aimPitch, speed, radius, hp, maxHp, mana,
+ * teamId, hasTarget, targetX, targetZ — plus nextProjectileId at the top.
+ * NOTE it does NOT carry projectiles or events; for a lossless capture use
+ * bro.ai.game.captureWorldSnapshot (docs/ai-game-learning.js).
+ * @returns {Object}
+ */
+const snap = world.snapshot();
+world.restore(snap);
+
+/** Avoidance: see "Local avoidance" above for setAvoidance and
+ *  avoidanceEnabled. */
+
+
+// -----------------------------------------------------------------------------
+// Unit, the stat block behind every agent
+// -----------------------------------------------------------------------------
+//
+// `agent.unit` is a live view, not a copy: writing a field writes the agent.
+// Every base field is read/write, so an ability can just assign.
+
+const u = bot.unit;
+
+// Identity and base stats (read/write):
+u.id; u.teamId;
+u.hp; u.maxHp; u.mana; u.maxMana; u.manaRegenPerSec;
+u.damage; u.attackRange; u.attacksPerSec;
+u.armor; u.magicResist;
+u.moveSpeed; u.radius;
+u.attackCooldown;                   // seconds until the next basic attack
+u.attackKind = "magical";           // "physical" | "magical" | "true"
+
+// Derived (read-only): base plus the active buff, so read these when
+// resolving, not the base field.
+u.alive;
+u.effectiveArmor;                   // armor + armorBonus
+u.effectiveMagicResist;             // magicResist + magicResistBonus
+u.effectiveDamage;                  // damage * damageMul
+u.effectiveMoveSpeed;               // moveSpeed * moveSpeedMul
+u.effectiveAttacksPerSec;           // attacksPerSec * attacksMul
+
+/** Decay cooldowns, buff timers and DoT/HoT by dt. world.tick() does this
+ *  for rostered agents; call it yourself for an agent you tick by hand. */
+u.tickCooldowns(1 / 60);
+
+/** Ability slots. `abilityId` is what world.registerAbility registered.
+ *  @param {number} slot @param {number} abilityId */
+u.setAbilitySlot(0, 3);
+u.getAbilitySlot(0);                // the bound ability id, or -1
+u.getAbilityCooldown(0);            // seconds remaining
+
+/** Apply damage to this unit with mitigation, no attacker and no event.
+ *  @param {number} amount @param {"physical"|"magical"|"true"} [kind="physical"]
+ *  @returns {number} the amount actually taken */
+u.takeDamage(30, "magical");
+
+// --- Timed buffs, DoT and HoT (all read/write) ---
+//
+// Each effect is a magnitude plus a `...Remaining` duration in seconds.
+// Apply one by setting both; tickCooldowns decays the duration and drops the
+// magnitude back to its default when it hits zero. Multipliers default to 1,
+// additive bonuses to 0.
+//
+//   u.armorBonus        / u.armorBonusRemaining          (default 0)
+//   u.magicResistBonus  / u.magicResistBonusRemaining    (default 0)
+//   u.damageMul         / u.damageMulRemaining           (default 1)
+//   u.attacksMul        / u.attacksMulRemaining          (default 1)
+//   u.moveSpeedMul      / u.moveSpeedMulRemaining        (default 1)
+//   u.stealthChance     / u.stealthChanceRemaining       (default 0)
+//   u.dotDps            / u.dotRemaining                 (damage per second)
+//   u.hotRate           / u.hotRemaining                 (healing per second)
+//
+//   u.dotSourceId       - who gets credit for a DoT kill (-1 for nobody)
+//   u.dotKind           - "physical" | "magical" | "true"
+
+// A 4-second 30% slow plus a 3-second burn credited to the caster:
+u.moveSpeedMul = 0.7; u.moveSpeedMulRemaining = 4;
+u.dotDps = 12; u.dotRemaining = 3; u.dotKind = "magical"; u.dotSourceId = caster.unit.id;
+
+
+// -----------------------------------------------------------------------------
 // Perception, Line of sight, aim computation
 // -----------------------------------------------------------------------------
 
@@ -209,13 +547,16 @@ a1.setTarget(10, 0); a2.setTarget(-10, 0);   // they pass, not overlap
  * @param {number} fromZ
  * @param {number} toX
  * @param {number} toZ
- * @param {Array<{x, z, hw, hd}>} obstacles - AABBs to test against
+ * @param {Array<{x, z, hw, hd}>|NavGrid} obstacles - AABBs to test against,
+ *     OR a createNavGrid() handle, in which case the test walks that grid's
+ *     blocked cells instead (nav.hasLineOfSight with the same result)
  * @returns {boolean} true if line is clear
  */
 const clear = bro.ai.game.hasLineOfSight(
     botX, botZ, enemyX, enemyZ,
     obstacles
 );
+const clearOnGrid = bro.ai.game.hasLineOfSight(botX, botZ, enemyX, enemyZ, nav);
 
 /**
  * 2D field-of-view and line-of-sight check through AABB obstacles.
@@ -245,9 +586,13 @@ const canSee = bro.ai.game.canSee(
  * @param {number} toX
  * @param {number} toY
  * @param {number} toZ
- * @returns {{ yaw: number, pitch: number }}
+ * @returns {{ valid: boolean, yaw: number, pitch: number }} `valid` is always
+ *     true for a successful call; it returns null when given fewer than two
+ *     points
  */
 const aim2 = bro.ai.game.computeAim(0, 1.6, 0, 10, 1.6, -5);
+// Two {x,y,z} objects work as well:
+const aim3 = bro.ai.game.computeAim({ x: 0, y: 1.6, z: 0 }, enemyPos);
 
 /**
  * Lead a moving target with a finite-speed projectile. Solves for the future
@@ -351,6 +696,11 @@ const s5 = bro.ai.game.steer.evade(
  * @param {function} [spec.advance]  - () => boolean (true = done)
  * @param {number}   [spec.id]       - optional explicit id (default: auto-allocated from 100+)
  * @returns {number} capability id
+ *
+ * LIMITATION, current build: the registration allocates and returns an id but
+ * does NOT store `gate` / `start` / `advance` — the callbacks are never
+ * invoked. Treat this as id allocation only, and drive custom behaviour from
+ * the binding's own think() for now.
  */
 bro.ai.game.registerCapability("kite", {
     gate()    { return true; },
