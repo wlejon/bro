@@ -56,7 +56,10 @@ void upgradeCustomElementsInSubtree(dom::Node* root);
 void onCustomElementAttributeChanged(dom::Element* el, const std::string& name,
                                      const char* oldValue, const char* newValue);
 Value constructCustomElement(dom::Element* el, const std::string& tagName);
-Value constructCustomElementBase();
+// The HTMLElement/Element constructor body. `newObject` is the receiver the
+// `new` produced, which is what names the class when this is a direct
+// `new MyElement()` rather than an upgrade.
+Value constructCustomElementBase(Value newObject);
 
 // ---------------------------------------------------------------------------
 // Worker

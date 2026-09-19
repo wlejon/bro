@@ -14,7 +14,7 @@ namespace bro::bronze_host {
 
 void decorateElementProto(ObjectBuilder& b);
 void installNodeTree(ObjectBuilder& b);
-Value constructCustomElementBase();
+Value constructCustomElementBase(Value newObject);
 
 namespace {
 
@@ -180,14 +180,14 @@ void installHtmlInterfaces() {
     installShadowRootClass();
 
     // 2. Element
-    g_elementClass.install("Element", 0, [](Value, std::span<const Value>) -> Value {
-        return constructCustomElementBase();
+    g_elementClass.install("Element", 0, [](Value self_, std::span<const Value>) -> Value {
+        return constructCustomElementBase(self_);
     }, decorateElementProto);
     g_elementClass.inherit(g_nodeClass);
 
     // 3. HTMLElement
-    g_htmlElementClass.install("HTMLElement", 0, [](Value, std::span<const Value>) -> Value {
-        return constructCustomElementBase();
+    g_htmlElementClass.install("HTMLElement", 0, [](Value self_, std::span<const Value>) -> Value {
+        return constructCustomElementBase(self_);
     }, nullptr);
     g_htmlElementClass.inherit(g_elementClass);
 

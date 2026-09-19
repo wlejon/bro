@@ -128,6 +128,63 @@ int legacyKeyCodeFor(const std::string& code, const std::string& key) {
 // uses them: one event hierarchy, and the carrier decides what is there to
 // copy. Order of registration is fixed source order, so the object's shape is
 // the same every run — bronze's inline caches key off it. ALLOCATES heavily.
+// The three write-throughs. `live` is captured by value: the closures outlive
+// the call that installs them (they live on the event object), and the box is
+// what tells them whether the dom::Event still exists.
+void installEventPropagationMethods(ObjectBuilder& b, const LiveEventPtr& live) {
+    b.def("preventDefault", 0, [live](Value self_, std::span<const Value>) {
+        if (!live->ev) return staleEventThrow("preventDefault");
+        live->ev->preventDefault();
+        ev::setProperty(self_, "defaultPrevented", ev::fromBool(true));
+        return ev::undefined();
+    });
+    b.def("stopPropagation", 0, [live](Value, std::span<const Value>) {
+        if (!live->ev) return staleEventThrow("stopPropagation");
+        live->ev->stopPropagation();
+        return ev::undefined();
+    });
+    b.def("stopImmediatePropagation", 0, [live](Value, std::span<const Value>) {
+        if (!live->ev) return staleEventThrow("stopImmediatePropagation");
+        live->ev->stopImmediatePropagation();
+        return ev::undefined();
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The event object a dispatchEvent() caller supplied
+// ---------------------------------------------------------------------------
+//
+// A stack, not a slot: a listener may dispatch another event from inside this
+// one, and each level has its own object. Entries are pushed for the duration
+// of one dom::dispatchDomEvent walk and matched by the dom::Event's address,
+// which is unique for as long as the walk owns it.
+struct ProvidedEvent {
+    dom::Event* ev = nullptr;
+    ev::Persistent obj;
+};
+
+std::vector<ProvidedEvent>& providedEvents() {
+    static auto* list = new std::vector<ProvidedEvent>();
+    return *list;
+}
+
+Value providedEventObjectFor(dom::Event& e) {
+    auto& list = providedEvents();
+    for (auto it = list.rbegin(); it != list.rend(); ++it) {
+        if (it->ev == &e) return it->obj.get();
+    }
+    return ev::undefined();
+}
+
+// Pushes on construction, pops on scope exit — including when a listener
+// throws its way out, which is why this is a guard and not two calls.
+struct ProvidedEventScope {
+    explicit ProvidedEventScope(dom::Event& e, Value obj) {
+        providedEvents().push_back({&e, ev::Persistent(obj)});
+    }
+    ~ProvidedEventScope() { providedEvents().pop_back(); }
+};
+
 Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
     Value baseObj = ev::undefined();
     if (dynamic_cast<dom::TouchEvent*>(&e)) {
@@ -435,6 +492,15 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("data", ev::fromUtf8(comp->data()));
     }
 
+    // SubmitEvent — which control triggered the submit. A form handler routes
+    // on it ("save" vs "save and close" vs "delete"), so an absent `submitter`
+    // is not a cosmetic gap: every such handler takes the wrong branch.
+    if (auto* sub = dynamic_cast<dom::SubmitEvent*>(&e)) {
+        dom::Element* who = sub->submitter();
+        Value v = who ? hostElementValue(who) : ev::null();
+        b.set("submitter", v);
+    }
+
     if (auto* clip = dynamic_cast<dom::ClipboardEvent*>(&e)) {
         auto textHolder = std::make_shared<std::string>(clip->clipboardText());
         ObjectBuilder dt;
@@ -471,26 +537,35 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("clipboardData", ev::setPrototype(dt.get(), dataTransferHostClass().prototype()));
     }
 
-    // The three write-throughs. `live` is captured by value: the closures
-    // outlive this function (they live on the event object), and the box is
-    // what tells them whether the event still exists.
-    b.def("preventDefault", 0, [live](Value self_, std::span<const Value>) {
-        if (!live->ev) return staleEventThrow("preventDefault");
-        live->ev->preventDefault();
-        ev::setProperty(self_, "defaultPrevented", ev::fromBool(true));
-        return ev::undefined();
-    });
-    b.def("stopPropagation", 0, [live](Value, std::span<const Value>) {
-        if (!live->ev) return staleEventThrow("stopPropagation");
-        live->ev->stopPropagation();
-        return ev::undefined();
-    });
-    b.def("stopImmediatePropagation", 0, [live](Value, std::span<const Value>) {
-        if (!live->ev) return staleEventThrow("stopImmediatePropagation");
-        live->ev->stopImmediatePropagation();
-        return ev::undefined();
-    });
+    installEventPropagationMethods(b, live);
 
+    return b.get();
+}
+
+// The object a program handed to dispatchEvent, made usable as THE event.
+//
+// Only the per-dispatch facts are written: which element the event is at now,
+// which phase, whether the default has been prevented, and the three methods
+// that reach the live dom::Event. Everything else — `type`, `bubbles`, and
+// above all `detail` — is left exactly as the program wrote it, which is the
+// whole point. Copying the descriptor into a fresh object (what the port did)
+// loses object identity, and a `detail` that is not a string loses its
+// contents as well: it went out through JSON.stringify and came back as text,
+// so a function, a DOM node or a class instance in a CustomEvent's payload
+// arrived as `[object Object]` or vanished.
+Value decorateProvidedEventValue(Value provided, dom::Event& e, const LiveEventPtr& live) {
+    ObjectBuilder b(provided);
+    {
+        Value target = describeTarget(e.target());
+        b.set("target", target);
+    }
+    {
+        Value cur = describeTarget(e.currentTarget());
+        b.set("currentTarget", cur);
+    }
+    b.set("eventPhase", ev::fromDouble(e.eventPhase()));
+    b.set("defaultPrevented", ev::fromBool(e.defaultPrevented()));
+    installEventPropagationMethods(b, live);
     return b.get();
 }
 
@@ -570,7 +645,14 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
     live->ev = &evt;
     // The event object is rooted for the call: buildEventValue's own
     // allocations are done, but ev::call allocates to root the arguments.
-    ev::Persistent evtObj(buildEventValue(evt, live));
+    //
+    // When this dispatch started from `el.dispatchEvent(obj)`, THAT object is
+    // the event — same identity for every listener on the path, and with the
+    // program's own `detail` untouched.
+    Value provided = providedEventObjectFor(evt);
+    ev::Persistent evtObj(ev::isObject(provided)
+                              ? decorateProvidedEventValue(provided, evt, live)
+                              : buildEventValue(evt, live));
     Value arg = evtObj.get();
     ev::CallResult r = ev::call(fn.get(), thisObj.get(), std::span<const Value>(&arg, 1));
     // Before the report, and before anything else can run: from here on the
@@ -738,7 +820,11 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
         return ev::throwError(std::string(what) +
                               ".dispatchEvent: no element to dispatch at");
     }
-    const bool notPrevented = dispatchEventSpec(spec, [engine, el](dom::Event& evt) {
+    ev::Persistent descRoot(desc);
+    const bool notPrevented = dispatchEventSpec(spec, [engine, el, &descRoot](dom::Event& evt) {
+        // Listeners on the path receive the caller's own object, not a copy of
+        // its fields — see decorateProvidedEventValue.
+        ProvidedEventScope scope(evt, descRoot.get());
         engine->dispatchElementEvent(el, evt);
     });
     if (spec.type == "click" && notPrevented) {
@@ -752,7 +838,9 @@ Value hostDispatchToWindow(Value desc) {
     if (!readEventSpec(desc, "window", spec)) return ev::undefined();
     engine::Engine* engine = hostEngine();
     if (!engine) return ev::throwError("window.dispatchEvent: no engine");
-    return ev::fromBool(dispatchEventSpec(spec, [engine](dom::Event& evt) {
+    ev::Persistent descRoot(desc);
+    return ev::fromBool(dispatchEventSpec(spec, [engine, &descRoot](dom::Event& evt) {
+        ProvidedEventScope scope(evt, descRoot.get());
         engine->dispatchWindowEvent(evt);
     }));
 }

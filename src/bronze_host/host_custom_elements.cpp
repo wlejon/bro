@@ -37,6 +37,13 @@ static std::string toLowerStr(std::string_view s) {
 // only an upgraded wrapper sits on the class prototype that defines them.
 constexpr const char* kUpgradedMarker = "__bro_ce_upgraded__";
 
+// The tag a registered class builds, stamped on that class's PROTOTYPE by
+// customElements.define. It is how the HTMLElement constructor learns which
+// element `new MyElement()` means: bronze's NativeFn boundary carries no
+// new.target, and the receiver's prototype chain is the one thing at hand that
+// names the class — see constructCustomElementBase.
+constexpr const char* kTagMarker = "__bro_ce_tag__";
+
 static const CustomElementDef* definitionFor(dom::Element* el) {
     const std::string& tag = el->tagName();
     if (tag.find('-') == std::string::npos) return nullptr;
@@ -211,13 +218,29 @@ Value constructCustomElement(dom::Element* el, const std::string& tagName) {
     return res.value;
 }
 
-// The HTMLElement constructor of an upgrade (HTML §4.13.4, "HTML element
-// constructors"): the element being constructed IS the return value, so the
-// derived constructor continues on the wrapper the app may already hold, and
-// its prototype becomes the class's — NewTarget.prototype in the spec, the
-// registered constructor's here — which is what turns a plain wrapper into
-// an instance of the class without changing which object it is.
-Value constructCustomElementBase() {
+// The HTMLElement constructor (HTML §4.13.4, "HTML element constructors").
+//
+// TWO CALLERS, and the difference is which object already exists.
+//
+// An UPGRADE starts from an element that is already in the tree: the element
+// being constructed IS the return value, so the derived constructor continues
+// on the wrapper the app may already hold, and its prototype becomes the
+// class's — NewTarget.prototype in the spec, the registered constructor's here
+// — which turns a plain wrapper into an instance of the class without changing
+// which object it is.
+//
+// `new MyElement()` starts from nothing: the spec says to create an element
+// with the tag the registry holds against NewTarget and adopt the object the
+// `new` produced as its wrapper. The port had no answer for this case and
+// threw "Illegal constructor" for every defined element — so a component
+// library's own `new Row()` (the spelling that avoids a createElement +
+// setAttribute round trip) could not build a single instance.
+//
+// The tag comes off the object's prototype chain. customElements.define stamps
+// kTagMarker on each registered class's prototype, so reading it through the
+// receiver resolves to the NEAREST registered class above it — which is the
+// right answer for `class Fancy extends Plain` where both are defined.
+Value constructCustomElementBase(Value newObject) {
     if (s_activeConstructingElement) {
         // Rooted across the prototype read, which may allocate the class's
         // prototype object on first touch.
@@ -228,7 +251,34 @@ Value constructCustomElementBase() {
         }
         return wrapper.get();
     }
-    return ev::throwTypeError("Illegal constructor");
+
+    if (!ev::isObject(newObject)) return ev::throwTypeError("Illegal constructor");
+    ev::Persistent self(newObject);
+    Value tagVal = ev::getProperty(self.get(), kTagMarker);
+    if (!ev::isString(tagVal)) return ev::throwTypeError("Illegal constructor");
+    std::string tag = toLowerStr(ev::toUtf8(tagVal));
+    if (s_registry.find(tag) == s_registry.end())
+        return ev::throwTypeError("Illegal constructor");
+
+    dom::Document* doc = currentHostDocument();
+    if (!doc) return ev::throwError("new <custom element>: the engine has no document");
+    dom::Element* el = doc->createElement(tag);
+    if (!el) return ev::throwError("new <custom element>: the document refused <" + tag + ">");
+
+    // The object `new` produced becomes this element's wrapper, so the two are
+    // one identity from here on: `document.querySelector(tag) === inst` once
+    // it is appended, and every Element member resolves through the node id.
+    HostNodeState* st = hostNodeStateFor(el);
+    noteHostElementValue(el, self.get());
+    if (st) {
+        ev::setProperty(self.get(), "__bro_node_id__",
+                        ev::fromDouble(static_cast<double>(reinterpret_cast<uintptr_t>(st))));
+    }
+    ev::setProperty(self.get(), "nodeType", ev::fromDouble(1));
+    ev::setProperty(self.get(), "tagName", ev::fromUtf8(el->tagName()));
+    ev::setProperty(self.get(), "nodeName", ev::fromUtf8(el->tagName()));
+    ev::setProperty(self.get(), kUpgradedMarker, ev::fromBool(true));
+    return self.get();
 }
 
 void installCustomElementsGlobals() {
@@ -263,6 +313,13 @@ void installCustomElementsGlobals() {
             }
         }
         s_registry[name] = std::move(def);
+
+        // Stamp the tag on the class's prototype so `new MyElement()` can find
+        // it again through the receiver (constructCustomElementBase).
+        Value proto = ev::getProperty(a[1], "prototype");
+        if (ev::isObject(proto)) {
+            ev::setProperty(proto, kTagMarker, ev::fromUtf8(name));
+        }
 
         // Elements already parsed under this name are upgraded now, in
         // document order, and those in the document get connectedCallback:

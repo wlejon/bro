@@ -91,6 +91,10 @@ void installEventsModule() {
                              "ErrorEvent", "ProgressEvent", "PromiseRejectionEvent"}) {
         adoptGlobalProperty(name);
     }
+    // events.js also puts the 25 legacy `*_ERR` codes and `code` on the
+    // DOMException brokit installed; re-registering the (same) object keeps a
+    // compiled bare `DOMException` resolving to it.
+    adoptGlobalProperty("DOMException");
 }
 
 void installNetSyncModule() {

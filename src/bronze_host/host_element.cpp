@@ -168,9 +168,7 @@ dom::AbsoluteRect borderBoxOf(dom::Element* el) {
     return dom::absoluteBorderBox(el);
 }
 
-namespace {
-
-Value makeRectValue(double x, double y, double w, double h) {
+Value makeHostRectValue(double x, double y, double w, double h) {
     ObjectBuilder r;
     r.set("x", ev::fromDouble(x));
     r.set("y", ev::fromDouble(y));
@@ -182,6 +180,15 @@ Value makeRectValue(double x, double y, double w, double h) {
     r.set("height", ev::fromDouble(h));
     return r.get();
 }
+
+// See host_internal.h: `ev::isObject(null)` is false, so this is the only
+// thing standing between a nullable DOMString setter and the word "null".
+std::string hostNullableString(Value v) {
+    if (ev::isUndefined(v) || ev::isNull(v)) return std::string();
+    return ev::toUtf8(v);
+}
+
+namespace {
 
 dom::Element* siblingOf(dom::Element* el, int direction) {
     dom::Element* parent = el->parentElement();
@@ -494,8 +501,11 @@ void decorateElementProto(ObjectBuilder& b) {
                    HostNodeState* st = nodeStateOf(self_);
                    if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
+                   // `textContent` is DOMString? — a NULLABLE string — so both
+                   // null and undefined clear the element rather than writing
+                   // their names into it.
                    if (st->el && !ev::isObject(v))
-                       st->el->setTextContent(ev::isUndefined(v) ? "" : ev::toUtf8(v));
+                       st->el->setTextContent(hostNullableString(v));
                    return ev::undefined();
                });
     b.accessor("innerHTML",
@@ -508,8 +518,9 @@ void decorateElementProto(ObjectBuilder& b) {
                    HostNodeState* st = nodeStateOf(self_);
                    if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
+                   // [LegacyNullToEmptyString], like textContent above.
                    if (st->el && !ev::isObject(v)) {
-                       st->el->setInnerHTML(ev::isUndefined(v) ? "" : ev::toUtf8(v));
+                       st->el->setInnerHTML(hostNullableString(v));
                        upgradeCustomElementsInSubtree(st->el);
                    }
                    return ev::undefined();
@@ -791,105 +802,8 @@ void decorateElementProto(ObjectBuilder& b) {
         return makeLiveHTMLCollection(st->el, st->el->document(), "." + cls);
     });
 
-    // ---- geometry ---------------------------------------------------------
-    b.def("getBoundingClientRect", 0, [](Value self_, std::span<const Value>) {
-        HostNodeState* st = nodeStateOf(self_);
-        if (!st) return ev::undefined();
-        if (!st->el) return makeRectValue(0, 0, 0, 0);
-        dom::AbsoluteRect r = borderBoxOf(st->el);
-        return makeRectValue(r.x, r.y, r.width, r.height);
-    });
-    b.accessor("clientWidth",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   if (!st->el) return ev::fromDouble(0.0);
-                   hostEngine()->flushLayoutForRead(st->el->document());
-                   return ev::fromDouble(st->el->layoutBox().contentRect.width);
-               },
-               nullptr);
-    b.accessor("clientHeight",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   if (!st->el) return ev::fromDouble(0.0);
-                   hostEngine()->flushLayoutForRead(st->el->document());
-                   return ev::fromDouble(st->el->layoutBox().contentRect.height);
-               },
-               nullptr);
-    b.accessor("offsetWidth",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? borderBoxOf(st->el).width : 0.0);
-               },
-               nullptr);
-    b.accessor("offsetHeight",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? borderBoxOf(st->el).height : 0.0);
-               },
-               nullptr);
-    // Document-absolute, not offset-parent-relative: what a UI positioning a
-    // popup against an anchor wants, and what bro's own bindings answer.
-    b.accessor("offsetLeft",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? borderBoxOf(st->el).x : 0.0);
-               },
-               nullptr);
-    b.accessor("offsetTop",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? borderBoxOf(st->el).y : 0.0);
-               },
-               nullptr);
-    b.accessor("scrollTop",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? st->el->scrollTopValue() : 0.0);
-               },
-               [](Value self_, std::span<const Value> a) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   if (st->el)
-                       st->el->setScrollTopValue(
-                           static_cast<float>(ev::toDouble(argAt(a, 0))));
-                   return ev::undefined();
-               });
-    // bro's DOM tracks vertical scrolling only (dom::Element::scrollTop_), so
-    // the horizontal half answers 0 and swallows a write it cannot honour.
-    b.accessor("scrollLeft",
-               [](Value, std::span<const Value>) { return ev::fromDouble(0.0); },
-               [](Value, std::span<const Value>) { return ev::undefined(); });
-    b.accessor("scrollHeight",
-               [](Value self_, std::span<const Value>) {
-                   HostNodeState* st = nodeStateOf(self_);
-                   if (!st) return ev::undefined();
-                   if (!st->el) return ev::fromDouble(0.0);
-                   hostEngine()->flushLayoutForRead(st->el->document());
-                   const auto& box = st->el->layoutBox();
-                   return ev::fromDouble(
-                       std::max(box.naturalHeight, box.contentRect.height));
-               },
-               nullptr);
-    // scrollTo(x, y) and scrollTo({top, left}) are both written by real UI code.
-    b.def("scrollTo", 2, [](Value self_, std::span<const Value> a) {
-        HostNodeState* st = nodeStateOf(self_);
-        if (!st || !st->el) return ev::undefined();
-        if (!a.empty() && ev::isObject(a[0])) {
-            Value top = ev::getProperty(a[0], "top");
-            if (!ev::isUndefined(top))
-                st->el->setScrollTopValue(static_cast<float>(ev::toDouble(top)));
-        } else if (a.size() > 1) {
-            st->el->setScrollTopValue(static_cast<float>(ev::toDouble(a[1])));
-        }
-        return ev::undefined();
-    });
+    // ---- geometry, scrolling & the rendered-tree serializations -----------
+    decorateElementGeometry(b);
 
     // ---- pointer capture --------------------------------------------------
     auto pointerId = [](std::span<const Value> a) {
@@ -916,6 +830,7 @@ void decorateElementProto(ObjectBuilder& b) {
     // ---- interaction, form controls & shadow DOM ------------------------
     decorateElementInteraction(b);
     decorateElementForms(b);
+    decorateElementValidity(b);
     decorateElementShadow(b);
 }
 

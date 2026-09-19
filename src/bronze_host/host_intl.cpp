@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -548,11 +549,55 @@ std::string formatDateTimeDetails(Value dateVal, const DateTimeOptions& opt) {
     return std::to_string(month + 1) + "/" + std::to_string(day) + "/" + std::to_string(year);
 }
 
+// One `{type, value}` part — the shape every Intl formatToParts answers with.
+// A formatter that does not track where its pieces came from reports the whole
+// string as a single `literal`, which is what the spec permits and what the
+// old stack returned for DateTimeFormat, ListFormat and RelativeTimeFormat:
+// a caller that maps over the parts and joins the values gets `format()` back,
+// which is the invariant it actually relies on. Without the method at all,
+// that same caller throws.
+Value singleLiteralPart(const std::string& text) {
+    std::function<Value(size_t)> cb = [&text](size_t) -> Value {
+        ObjectBuilder p;
+        p.set("type", ev::fromUtf8("literal"));
+        p.set("value", ev::fromUtf8(text));
+        return p.get();
+    };
+    return hostArrayOf(1, cb);
+}
+
+// `formatToParts` for a formatter whose `format` is already on the instance:
+// call it with the same arguments and report the result as one literal part.
+// Written against the receiver rather than against a captured closure so the
+// two stay in step — there is no second copy of the formatting rules here.
+void defFormatToPartsViaFormat(ObjectBuilder& b, uint32_t arity) {
+    b.def("formatToParts", arity, [](Value self, std::span<const Value> a) -> Value {
+        // Everything that has to survive the `format` call is rooted first:
+        // `a` is a span of plain Values and `getProperty` may collect.
+        ev::Persistent me(self);
+        std::vector<ev::Persistent> held;
+        held.reserve(a.size());
+        for (const Value& v : a) held.emplace_back(v);
+        ev::Persistent fn(ev::getProperty(me.get(), "format"));
+        if (!ev::isFunction(fn.get())) return singleLiteralPart(std::string());
+        std::vector<Value> argv;
+        argv.reserve(held.size());
+        for (const ev::Persistent& p : held) argv.push_back(p.get());
+        ev::CallResult r = ev::call(fn.get(), me.get(), argv);
+        if (r.thrown) return r.value;
+        return singleLiteralPart(ev::toUtf8(r.value));
+    });
+}
+
 Value makeDateTimeFormatInstance(const DateTimeOptions& opt) {
     ObjectBuilder b;
     b.def("format", 1, [opt](Value, std::span<const Value> a) {
         Value d = a.empty() ? ev::undefined() : a[0];
         return ev::fromUtf8(formatDateTimeDetails(d, opt));
+    });
+    b.def("formatToParts", 1, [opt](Value, std::span<const Value> a) {
+        Value d = a.empty() ? ev::undefined() : a[0];
+        return singleLiteralPart(formatDateTimeDetails(d, opt));
     });
     b.def("resolvedOptions", 0, [opt](Value, std::span<const Value>) {
         ObjectBuilder r;
@@ -597,6 +642,7 @@ Value makeListFormatInstance(std::span<const Value> a) {
         }
         return ev::fromUtf8(res);
     });
+    defFormatToPartsViaFormat(b, 1);
     b.def("resolvedOptions", 0, [loc, type](Value, std::span<const Value>) {
         ObjectBuilder r;
         r.set("locale", ev::fromUtf8(loc));
@@ -630,6 +676,7 @@ Value makeRelativeTimeFormatInstance(std::span<const Value> a) {
         }
         return ev::fromUtf8("in " + std::to_string(count) + " " + pluralUnit);
     });
+    defFormatToPartsViaFormat(b, 2);
     b.def("resolvedOptions", 0, [loc, numeric](Value, std::span<const Value>) {
         ObjectBuilder r;
         r.set("locale", ev::fromUtf8(loc));

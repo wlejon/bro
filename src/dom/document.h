@@ -73,6 +73,24 @@ public:
     // wrapper invalidation.
     void freeNode(Node* node);
 
+    // Empty `parent`'s child list for a wholesale rewrite (textContent=,
+    // innerHTML=), DETACHING the element children instead of destroying them.
+    //
+    // A rewrite is not a statement that the old children are finished with.
+    // The idiom that proves it is jQuery's buildFragment: it parses markup into
+    // a temporary node, takes the children out, and clears the temp with
+    // `textContent = ""` — after which the children it is holding must still be
+    // live nodes it can re-parent. Destroying them here leaves the caller with
+    // wrappers whose node is gone, and the re-append fails with "argument is
+    // not a node".
+    //
+    // Element children therefore become parentless roots — still owned by this
+    // document, still reachable through any wrapper the program holds — with
+    // their ids unregistered so a detached subtree stops answering
+    // getElementById. Everything else (text, comments) has no identity worth
+    // preserving and is freed.
+    void releaseChildrenPreservingElements(Node* parent);
+
     // Destroy any nodes queued by freeNode(). Caller must guarantee no
     // other thread is reading the DOM (layout + raster both idle).
     void drainPendingFrees();

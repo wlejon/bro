@@ -43,6 +43,7 @@
 #include "dom/document_fragment.h"
 #include "dom/element.h"
 #include "dom/node.h"
+#include "dom/shadow_root.h"
 #include "dom/text_node.h"
 #include "dom/text_offsets.h"
 
@@ -390,11 +391,31 @@ void installNodeTree(ObjectBuilder& b) {
         dom::Node* other = hostNodeOf(a[0]);
         return ev::fromDouble(compareDocumentPositionNodes(st->node, other));
     });
-    b.def("getRootNode", 1, [](Value self_, std::span<const Value>) {
+    b.def("getRootNode", 1, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->node) return ev::null();
+        // {composed: true} asks for the root of the COMPOSED tree, which means
+        // the walk steps out of a shadow tree onto its host instead of stopping
+        // at the ShadowRoot. It is how a component finds the document it is
+        // living in, and ignoring the option — which is what the port did —
+        // hands it its own shadow root instead, where none of its
+        // document-level lookups resolve.
+        bool composed = false;
+        if (!a.empty() && ev::isObject(a[0])) {
+            composed = ev::toBool(ev::getProperty(a[0], "composed"));
+        }
         dom::Node* node = st->node;
-        while (node->parentNode()) node = node->parentNode();
+        for (;;) {
+            dom::Node* parent = node->parentNode();
+            if (!parent) {
+                if (!composed) break;
+                auto* sr = dynamic_cast<dom::ShadowRoot*>(node);
+                if (!sr || !sr->host()) break;
+                node = sr->host();
+                continue;
+            }
+            node = parent;
+        }
         dom::Document* doc = st->node->document();
         if (doc && (node == doc->documentElement())) {
             if (hostEngine() && doc == hostEngine()->document()) {
@@ -500,9 +521,10 @@ Value makeCharacterDataValue(dom::Node* node) {
                        HostNodeState* st = hostNodeStateOfValue(self_);
                        if (!st) return ev::undefined();
                        Value v = argAt(a, 0);
+                       // data / nodeValue / textContent are all nullable
+                       // DOMStrings: null clears rather than writing "null".
                        if (st->node && !ev::isObject(v))
-                           charsSetData(st->node,
-                                        ev::isUndefined(v) ? "" : ev::toUtf8(v));
+                           charsSetData(st->node, hostNullableString(v));
                        return ev::undefined();
                    });
     };

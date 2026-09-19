@@ -1867,15 +1867,7 @@ void Document::injectTemplates(const std::vector<TemplateBlock>& templates) {
 void Document::parseInnerHTML(Element* parent, const std::string& html) {
     if (!parent) return;
 
-    // Clear existing children
-    auto oldKids = parent->childNodes();
-    for (auto* child : oldKids) {
-        child->setParent(nullptr);
-    }
-    parent->childNodes().clear();
-    for (auto* child : oldKids) {
-        freeNode(child);
-    }
+    releaseChildrenPreservingElements(parent);
 
     if (html.empty()) {
         parent->markStructureDirty();
@@ -1982,6 +1974,23 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
 // ---------------------------------------------------------------------------
 // Shadow DOM CSS
 // ---------------------------------------------------------------------------
+
+void Document::releaseChildrenPreservingElements(Node* parent) {
+    if (!parent) return;
+    // A copy: the loops below unparent and free, both of which would invalidate
+    // an iterator into the live vector.
+    std::vector<Node*> oldKids = parent->childNodes();
+    for (Node* child : oldKids) child->setParent(nullptr);
+    parent->childNodes().clear();
+    for (Node* child : oldKids) {
+        if (child->nodeType() == NodeType::Element) {
+            auto* el = static_cast<Element*>(child);
+            if (!el->id().empty()) unregisterElementId(el->id(), el);
+            continue;   // detached, not destroyed — see the header
+        }
+        freeNode(child);
+    }
+}
 
 void Document::addShadowStylesheet(ShadowRoot* sr, const std::string& css) {
     if (!sr || css.empty()) return;

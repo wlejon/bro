@@ -88,6 +88,23 @@ void Engine::flush() {
         document_->clearDirty();
         document_->markPaintDirty();
 
+        // Deferred scroll-to-bottom, now that layout is fresh — the same pass
+        // the windowed loop runs after every layout drain
+        // (engine_frame_render.cpp). Script that appended into a log and then
+        // wrote `el.scrollTop = el.scrollHeight` in the same turn registered
+        // the element here, because the append had not been laid out yet and
+        // the clamp would have landed short; this is where it snaps to the
+        // true bottom. Without it a headless test of a transcript view sees
+        // the container frozen at the top.
+        if (!document_->scrollToBottomElements().empty()) {
+            auto pending = document_->scrollToBottomElements();
+            for (auto* elem : pending) {
+                if (overflowClips(getOverflowY(elem->computedStyle())))
+                    elem->setScrollTopValue(maxScrollTop(elem));
+                elem->setScrollToBottom(false);
+            }
+        }
+
         if (document_->documentElement()) {
             std::vector<dom::Element*> reclamped;
             if (clampScrollOffsets(document_->documentElement(), &reclamped)) {

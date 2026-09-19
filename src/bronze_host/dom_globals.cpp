@@ -400,6 +400,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Install HTML interfaces BEFORE document is created:
     installHtmlInterfaces();
 
+    // HTML's `pattern` attribute is an ECMAScript regular expression by
+    // definition, so the constraint layer (src/layout/form_validation.cpp)
+    // asks the host to test one rather than carrying a second, differing
+    // regex engine of its own. This is where it is handed the tester; until
+    // it is, every `pattern` constraint silently matches everything.
+    installHostPatternTester();
+
     {
         // Null: the global follows the engine's current document rather than
         // naming one. documentFor() above has the reason.

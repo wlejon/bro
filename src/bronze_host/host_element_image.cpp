@@ -134,6 +134,30 @@ void decorateImageProto(ObjectBuilder& b) {
         },
         nullptr);
 
+    // decode(): the promise a loader awaits before it uses the pixels.
+    // Decoding here is synchronous — it already happened when `src` was
+    // assigned — so the promise is settled before it is returned, resolving
+    // when there are pixels and rejecting with an EncodingError when there are
+    // not. A loader that awaits it therefore continues on the next microtask
+    // instead of hanging forever on an `undefined` it tried to `.then`.
+    b.def("decode", 0, [](Value self, std::span<const Value>) {
+        HostImage* img = imageStateOf(self);
+        const bool ok = img && img->ok && img->width > 0 && img->height > 0;
+        ev::Persistent p{ev::createPromise()};
+        if (ok) {
+            ev::resolvePromise(p.get(), ev::undefined());
+        } else {
+            Value ctor = ev::globalValue("Error").value;
+            Value reason = ev::fromUtf8("EncodingError: the image could not be decoded");
+            if (ev::isFunction(ctor)) {
+                ev::CallResult made = ev::construct(ctor, std::span<const Value>(&reason, 1));
+                if (!made.thrown) reason = made.value;
+            }
+            ev::rejectPromise(p.get(), reason);
+        }
+        return p.get();
+    });
+
     // Stored and ignored: there is no network here, so there is no origin to be
     // cross. three.js assigns it on every ImageLoader load, and the assignment
     // lands as an own property over this default, which is what the web does

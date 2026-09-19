@@ -27,8 +27,14 @@ void decorateShadowRootProto(ObjectBuilder& b) {
         return ev::fromDouble(11);
     }, nullptr);
 
+    // A ShadowRoot is a DocumentFragment, and every DocumentFragment reports
+    // "#document-fragment" — that is what nodeName means for node type 11 and
+    // what a serializer or a node-kind switch is written against.
+    // "#shadow-root" is bro's own INTERNAL discriminator (dom::ShadowRoot::
+    // nodeName, which the wrapper registry keys on) and was never a web-visible
+    // name.
     b.accessor("nodeName", [](Value, std::span<const Value>) -> Value {
-        return ev::fromUtf8("#shadow-root");
+        return ev::fromUtf8("#document-fragment");
     }, nullptr);
 
     b.accessor("mode", [](Value self_, std::span<const Value>) -> Value {
@@ -268,6 +274,65 @@ void decorateElementShadow(ObjectBuilder& b) {
                    return ev::null();
                },
                nullptr);
+
+    // ---- the slot API ------------------------------------------------------
+    // `slot` is the plain reflection of the content attribute — the thing a
+    // component's own markup writes to choose which <slot> it lands in.
+    b.accessor("slot",
+               [](Value self_, std::span<const Value>) -> Value {
+                   dom::Element* el = hostElementOf(self_);
+                   if (!el) return ev::fromUtf8("");
+                   return ev::fromUtf8(el->getAttribute("slot"));
+               },
+               [](Value self_, std::span<const Value> a) -> Value {
+                   dom::Element* el = hostElementOf(self_);
+                   Value v = argAt(a, 0);
+                   if (el && !ev::isObject(v)) el->setAttribute("slot", ev::toUtf8(v));
+                   return ev::undefined();
+               });
+
+    // The other direction: which <slot> in the PARENT's shadow tree this light
+    // DOM child was distributed into. Null for anything not slotted.
+    b.accessor("assignedSlot",
+               [](Value self_, std::span<const Value>) -> Value {
+                   dom::Element* el = hostElementOf(self_);
+                   if (!el) return ev::null();
+                   dom::Element* parent = el->parentElement();
+                   if (!parent || !parent->hasShadow()) return ev::null();
+                   dom::ShadowRoot* sr = parent->shadowRoot();
+                   if (!sr) return ev::null();
+                   return hostElementValue(sr->assignedSlot(el));
+               },
+               nullptr);
+
+    // And what a <slot> received. `assignedNodes` includes text, which is what
+    // a component checks to find out whether it was given anything at all;
+    // `assignedElements` is the element-only view.
+    auto defAssigned = [&b](const char* name, bool elementsOnly) {
+        b.def(name, 1, [elementsOnly](Value self_, std::span<const Value>) -> Value {
+            dom::Element* el = hostElementOf(self_);
+            auto empty = [] { return hostArrayOf(0, [](size_t) { return ev::undefined(); }); };
+            if (!el) return empty();
+            const std::string& tag = el->tagName();
+            if (tag != "SLOT" && tag != "slot") return empty();
+            dom::ShadowRoot* sr = el->containingShadowRoot();
+            if (!sr) return empty();
+            std::vector<dom::Node*> nodes = sr->assignedNodes(el);
+            if (elementsOnly) {
+                std::vector<dom::Element*> els;
+                for (dom::Node* n : nodes) {
+                    if (n->nodeType() == dom::NodeType::Element)
+                        els.push_back(static_cast<dom::Element*>(n));
+                }
+                return hostArrayOf(els.size(),
+                                   [&els](size_t i) { return hostElementValue(els[i]); });
+            }
+            return hostArrayOf(nodes.size(),
+                               [&nodes](size_t i) { return hostNodeValue(nodes[i]); });
+        });
+    };
+    defAssigned("assignedNodes", false);
+    defAssigned("assignedElements", true);
 }
 
 }  // namespace bro::bronze_host

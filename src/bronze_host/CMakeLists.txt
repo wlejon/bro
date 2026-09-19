@@ -119,6 +119,8 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_style.cpp
     host_element_dataset.cpp
     host_element_forms.cpp
+    host_element_validity.cpp
+    host_element_geometry.cpp
     host_element_image.cpp
     host_element_interaction.cpp
     host_html_interfaces.cpp

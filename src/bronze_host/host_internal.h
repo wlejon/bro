@@ -347,9 +347,30 @@ Value makeClassListObject(HostNodeState* st);
 void decorateElementDataset(ObjectBuilder& b);
 
 void decorateElementForms(ObjectBuilder& b);
+void decorateElementValidity(ObjectBuilder& b);
 void decorateElementMutate(ObjectBuilder& b);
 void decorateElementInteraction(ObjectBuilder& b);
+void decorateElementGeometry(ObjectBuilder& b);
 dom::AbsoluteRect borderBoxOf(dom::Element* el);
+
+// A DOMRect-shaped plain object — x/y/width/height plus the four edges.
+Value makeHostRectValue(double x, double y, double w, double h);
+
+// The WebIDL `DOMString?` / [LegacyNullToEmptyString] conversion, which is
+// what `textContent`, `innerHTML`, `data` and `nodeValue` are declared as:
+// both null and undefined become "".
+//
+// It has to be spelled out because `ev::isObject(null)` is FALSE in bronze, so
+// the `!isObject(v)` guard every setter in this layer uses to reject objects
+// lets null straight through to ev::toUtf8 — which stringifies it, and the
+// page ends up showing the word "null" where a browser shows nothing. The
+// widget spelling that hits it is ordinary:
+//     this.label.textContent = value;   // value optional, often omitted
+std::string hostNullableString(Value v);
+
+// Install the constraint-validation pattern tester (layout::form_validation)
+// on top of this realm's RegExp. Called once, when the host globals go in.
+void installHostPatternTester();
 Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::string selector);
 
 // The <img> half of the element surface (host_element_image.cpp). `Image` is

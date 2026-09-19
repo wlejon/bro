@@ -105,14 +105,13 @@ void ShadowRoot::setInnerHTML(const std::string& html, Document* doc) {
 
     for (auto* child : kids) {
         appendChild(child);
-        // Extract <style> elements for scoped CSS
-        if (child->nodeType() == NodeType::Element) {
-            auto* elem = static_cast<Element*>(child);
-            if (elem->tagName() == "STYLE") {
-                styleSheets_.push_back(elem->textContent());
-            }
-        }
     }
+    // <style> children are registered once, here — appendChild's own notice
+    // (notifyChildListChanged) already called registerStyleElements for each
+    // insertion, and the styleSheetAdded flag makes this last sweep a no-op
+    // unless a <style> arrived with its text after the fact. Collecting the
+    // text a second time here is what used to double every shadow sheet.
+    registerStyleElements(doc);
 
     // Free the temp element
     doc->freeNode(temp);
@@ -124,6 +123,25 @@ void ShadowRoot::setInnerHTML(const std::string& html, Document* doc) {
 
 void ShadowRoot::addStyleSheet(const std::string& cssText) {
     styleSheets_.push_back(cssText);
+}
+
+void ShadowRoot::registerStyleElements(Document* doc) {
+    // Direct children only, matching where a shadow <style> is written and what
+    // the binding this replaces looked at. A <style> nested deeper is still
+    // scoped by the cascade once it is registered, but nothing in this engine
+    // puts one there.
+    for (Node* child : children_) {
+        if (child->nodeType() != NodeType::Element) continue;
+        auto* elem = static_cast<Element*>(child);
+        const std::string& tag = elem->tagName();
+        if (tag != "STYLE" && tag != "style") continue;
+        if (elem->styleSheetAdded()) continue;
+        std::string css = elem->textContent();
+        if (css.empty()) continue;   // not parsed yet; try again next change
+        elem->setStyleSheetAdded(true);
+        styleSheets_.push_back(css);
+        if (doc) doc->addShadowStylesheet(this, css);
+    }
 }
 
 std::string ShadowRoot::scopedCSS() const {

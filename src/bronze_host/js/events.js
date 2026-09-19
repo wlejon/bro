@@ -249,6 +249,69 @@
         }
     }
 
+    // ---- DOMException legacy codes ------------------------------------
+    //
+    // The 25 `*_ERR` constants DOM Level 1 defined and the DOM standard still
+    // requires, plus the `code` a caught exception is checked against. The
+    // old stack got these for free: QuickJS shipped DOMException itself and
+    // carried the whole legacy table. bronze does not, so the DOMException on
+    // globalThis is brokit's two-field stand-in (abort.js), and code that
+    // branches on `e.code === DOMException.NOT_FOUND_ERR` read
+    // `undefined === undefined` — true for every exception, which is worse
+    // than throwing.
+    //
+    // `code` is derived from `name` on the prototype rather than stored per
+    // instance, so it is right for an exception brokit threw, one a sibling
+    // library threw, and one an app constructed itself.
+    const DOMEx = g.DOMException;
+    if (typeof DOMEx === 'function' && DOMEx.INDEX_SIZE_ERR === undefined) {
+        const CODES = [
+            ['INDEX_SIZE_ERR', 1, 'IndexSizeError'],
+            ['DOMSTRING_SIZE_ERR', 2, null],
+            ['HIERARCHY_REQUEST_ERR', 3, 'HierarchyRequestError'],
+            ['WRONG_DOCUMENT_ERR', 4, 'WrongDocumentError'],
+            ['INVALID_CHARACTER_ERR', 5, 'InvalidCharacterError'],
+            ['NO_DATA_ALLOWED_ERR', 6, null],
+            ['NO_MODIFICATION_ALLOWED_ERR', 7, 'NoModificationAllowedError'],
+            ['NOT_FOUND_ERR', 8, 'NotFoundError'],
+            ['NOT_SUPPORTED_ERR', 9, 'NotSupportedError'],
+            ['INUSE_ATTRIBUTE_ERR', 10, 'InUseAttributeError'],
+            ['INVALID_STATE_ERR', 11, 'InvalidStateError'],
+            ['SYNTAX_ERR', 12, 'SyntaxError'],
+            ['INVALID_MODIFICATION_ERR', 13, 'InvalidModificationError'],
+            ['NAMESPACE_ERR', 14, 'NamespaceError'],
+            ['INVALID_ACCESS_ERR', 15, 'InvalidAccessError'],
+            ['VALIDATION_ERR', 16, null],
+            ['TYPE_MISMATCH_ERR', 17, 'TypeMismatchError'],
+            ['SECURITY_ERR', 18, 'SecurityError'],
+            ['NETWORK_ERR', 19, 'NetworkError'],
+            ['ABORT_ERR', 20, 'AbortError'],
+            ['URL_MISMATCH_ERR', 21, 'URLMismatchError'],
+            ['QUOTA_EXCEEDED_ERR', 22, 'QuotaExceededError'],
+            ['TIMEOUT_ERR', 23, 'TimeoutError'],
+            ['INVALID_NODE_TYPE_ERR', 24, 'InvalidNodeTypeError'],
+            ['DATA_CLONE_ERR', 25, 'DataCloneError'],
+        ];
+        const byName = Object.create(null);
+        for (let i = 0; i < CODES.length; i++) {
+            const entry = CODES[i];
+            const desc = { value: entry[1], writable: false, enumerable: false,
+                           configurable: false };
+            Object.defineProperty(DOMEx, entry[0], desc);
+            if (DOMEx.prototype) Object.defineProperty(DOMEx.prototype, entry[0], desc);
+            if (entry[2]) byName[entry[2]] = entry[1];
+        }
+        if (DOMEx.prototype && DOMEx.prototype.code === undefined) {
+            Object.defineProperty(DOMEx.prototype, 'code', {
+                get: function () {
+                    const n = byName[this.name];
+                    return n === undefined ? 0 : n;
+                },
+                enumerable: false, configurable: true,
+            });
+        }
+    }
+
     g.UIEvent = UIEvent;
     g.MouseEvent = MouseEvent;
     g.KeyboardEvent = KeyboardEvent;

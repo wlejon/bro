@@ -336,6 +336,11 @@ public:
     bool needsScrollToBottom() const { return scrollToBottom_; }
     void setScrollToBottom(bool v);
 
+    // Arm the flag above when non-empty text is written into a clipping
+    // container. Called by setTextContent; see the definition for why an empty
+    // string deliberately does not arm it.
+    void stickToBottomOnAppend(const std::string& text);
+
     // For a <style> element: whether its CSS has been added to the document
     // cascade yet. Lets the document add a dynamically-inserted <style>'s rules
     // exactly once. The flag lives on the element so it can't outlive it (no

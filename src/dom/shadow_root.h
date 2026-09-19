@@ -39,6 +39,17 @@ public:
     void addStyleSheet(const std::string& cssText);
     const std::vector<std::string>& styleSheets() const { return styleSheets_; }
 
+    // Put every <style> child that has not been registered yet into this
+    // scope's sheet list AND into the document cascade, keyed on this shadow
+    // root so `Cascade` only matches it against elements in this tree.
+    //
+    // Called from the tree itself (notifyChildListChanged in element.cpp)
+    // rather than from a binding, because a shadow <style> reaches the cascade
+    // exactly when it is inserted — however it was inserted. Element::
+    // styleSheetAdded() is what makes a repeat call free: an element already
+    // registered is skipped, so the walk can run on every child-list change.
+    void registerStyleElements(Document* doc);
+
     // Generate scoped CSS (prefixes all selectors with scope attribute)
     std::string scopedCSS() const;
 
