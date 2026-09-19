@@ -32,12 +32,22 @@ int gamepadResolveIndex(Value arg, int (*fromName)(const std::string&)) {
 } // namespace
 
 void installHeadlessInput(engine::Engine& engine) {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    Value gObj = gt.found && ev::isObject(gt.value) ? gt.value : Value::fromUndefined();
+
+    auto regBoth = [&](const char* name, Value val) {
+        ev::registerGlobal(name, val);
+        if (ev::isObject(gObj)) {
+            ev::setProperty(gObj, name, val);
+        }
+    };
+
     // -----------------------------------------------------------------------
     // Mouse
     // -----------------------------------------------------------------------
 
     // mouseDown(x, y [, button, windowId])
-    ev::registerGlobal("mouseDown", ev::makeFunction(
+    regBoth("mouseDown", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("mouseDown(x, y [, button, windowId]) requires x and y");
             double x = ev::toDouble(a[0]);
@@ -52,7 +62,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 2, "mouseDown"));
 
     // mouseUp(x, y [, button, windowId])
-    ev::registerGlobal("mouseUp", ev::makeFunction(
+    regBoth("mouseUp", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("mouseUp(x, y [, button, windowId]) requires x and y");
             double x = ev::toDouble(a[0]);
@@ -67,7 +77,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 2, "mouseUp"));
 
     // mouseMove(x, y [, windowId])
-    ev::registerGlobal("mouseMove", ev::makeFunction(
+    regBoth("mouseMove", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("mouseMove(x, y [, windowId]) requires x and y");
             double x = ev::toDouble(a[0]);
@@ -87,14 +97,14 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 2, "mouseMove"));
 
     // currentCursor([windowId])
-    ev::registerGlobal("currentCursor", ev::makeFunction(
+    regBoth("currentCursor", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             uint64_t wid = argWindowId(a, 0);
             return ev::fromUtf8(engine.resolvedCursor(wid));
         }, 0, "currentCursor"));
 
     // click(x, y [, button, windowId])
-    ev::registerGlobal("click", ev::makeFunction(
+    regBoth("click", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("click(x, y [, button, windowId]) requires x and y");
             double x = ev::toDouble(a[0]);
@@ -115,7 +125,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 2, "click"));
 
     // wheel(x, y, dy [, dx, windowId])
-    ev::registerGlobal("wheel", ev::makeFunction(
+    regBoth("wheel", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("wheel(x, y, dy [, dx, windowId]) requires x, y, dy");
             double x = ev::toDouble(a[0]);
@@ -137,7 +147,7 @@ void installHeadlessInput(engine::Engine& engine) {
     // -----------------------------------------------------------------------
 
     // touchDown(id, x, y [, pressure])
-    ev::registerGlobal("touchDown", ev::makeFunction(
+    regBoth("touchDown", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchDown(id, x, y [, pressure]) requires id, x, y");
             int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
@@ -151,7 +161,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 3, "touchDown"));
 
     // touchMove(id, x, y [, pressure])
-    ev::registerGlobal("touchMove", ev::makeFunction(
+    regBoth("touchMove", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchMove(id, x, y [, pressure]) requires id, x, y");
             int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
@@ -165,7 +175,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 3, "touchMove"));
 
     // touchUp(id, x, y)
-    ev::registerGlobal("touchUp", ev::makeFunction(
+    regBoth("touchUp", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchUp(id, x, y) requires id, x, y");
             int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
@@ -178,7 +188,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 3, "touchUp"));
 
     // touchCancel(id, x, y)
-    ev::registerGlobal("touchCancel", ev::makeFunction(
+    regBoth("touchCancel", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchCancel(id, x, y) requires id, x, y");
             int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
@@ -195,7 +205,7 @@ void installHeadlessInput(engine::Engine& engine) {
     // -----------------------------------------------------------------------
 
     // keyDown(keycode [, scancode, mod, repeat, windowId])
-    ev::registerGlobal("keyDown", ev::makeFunction(
+    regBoth("keyDown", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("keyDown(keycode [, scancode, mod, repeat, windowId])");
             int keycode = static_cast<int>(ev::toDouble(a[0]));
@@ -212,7 +222,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 1, "keyDown"));
 
     // keyUp(keycode [, scancode, mod, windowId])
-    ev::registerGlobal("keyUp", ev::makeFunction(
+    regBoth("keyUp", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("keyUp(keycode [, scancode, mod, windowId])");
             int keycode = static_cast<int>(ev::toDouble(a[0]));
@@ -228,7 +238,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 1, "keyUp"));
 
     // textInput(text [, windowId])
-    ev::registerGlobal("textInput", ev::makeFunction(
+    regBoth("textInput", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("textInput(text [, windowId]) requires text");
             std::string text = ev::toUtf8(a[0]);
@@ -244,7 +254,7 @@ void installHeadlessInput(engine::Engine& engine) {
     // -----------------------------------------------------------------------
 
     // imeCompose(text [, cursorPos, windowId])
-    ev::registerGlobal("imeCompose", ev::makeFunction(
+    regBoth("imeCompose", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("imeCompose(text [, cursorPos, windowId]) requires text");
             std::string text = ev::toUtf8(a[0]);
@@ -257,7 +267,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 1, "imeCompose"));
 
     // imeCommit(text [, windowId])
-    ev::registerGlobal("imeCommit", ev::makeFunction(
+    regBoth("imeCommit", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("imeCommit(text [, windowId]) requires text");
             std::string text = ev::toUtf8(a[0]);
@@ -269,7 +279,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 1, "imeCommit"));
 
     // imeCancel([windowId])
-    ev::registerGlobal("imeCancel", ev::makeFunction(
+    regBoth("imeCancel", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             const uint64_t wid = argWindowId(a, 0);
             if (wid) engine.hostTextEditing(wid, "", 0, 0);
@@ -283,7 +293,7 @@ void installHeadlessInput(engine::Engine& engine) {
     // -----------------------------------------------------------------------
 
     // paste(text)
-    ev::registerGlobal("paste", ev::makeFunction(
+    regBoth("paste", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("paste(text) requires text");
             std::string text = ev::toUtf8(a[0]);
@@ -293,7 +303,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 1, "paste"));
 
     // copy()
-    ev::registerGlobal("copy", ev::makeFunction(
+    regBoth("copy", ev::makeFunction(
         [&engine](Value, std::span<const Value>) -> Value {
             std::string text = engine.simulateCopy();
             engine.flush();
@@ -301,7 +311,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 0, "copy"));
 
     // cut()
-    ev::registerGlobal("cut", ev::makeFunction(
+    regBoth("cut", ev::makeFunction(
         [&engine](Value, std::span<const Value>) -> Value {
             std::string text = engine.simulateCut();
             engine.flush();
@@ -313,7 +323,7 @@ void installHeadlessInput(engine::Engine& engine) {
     // -----------------------------------------------------------------------
 
     // dropFiles(x, y, paths [, windowId])
-    ev::registerGlobal("dropFiles", ev::makeFunction(
+    regBoth("dropFiles", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("dropFiles(x, y, paths [, windowId]) requires x, y, and paths");
             double x = ev::toDouble(a[0]);
@@ -351,7 +361,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 3, "dropFiles"));
 
     // dropText(x, y, text [, windowId])
-    ev::registerGlobal("dropText", ev::makeFunction(
+    regBoth("dropText", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("dropText(x, y, text [, windowId]) requires x, y, and text");
             double x = ev::toDouble(a[0]);
@@ -378,7 +388,7 @@ void installHeadlessInput(engine::Engine& engine) {
     // -----------------------------------------------------------------------
 
     // gamepadConnect([id])
-    ev::registerGlobal("gamepadConnect", ev::makeFunction(
+    regBoth("gamepadConnect", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             std::string id = a.size() > 0 && !ev::isUndefined(a[0]) ? ev::toUtf8(a[0]) : "Virtual Gamepad";
             int idx = engine.gamepadConnectVirtual(id);
@@ -386,7 +396,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 0, "gamepadConnect"));
 
     // gamepadDisconnect(index)
-    ev::registerGlobal("gamepadDisconnect", ev::makeFunction(
+    regBoth("gamepadDisconnect", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("gamepadDisconnect(index) requires index");
             int idx = static_cast<int>(ev::toDouble(a[0]));
@@ -397,7 +407,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 1, "gamepadDisconnect"));
 
     // gamepadButton(index, button, pressed [, value])
-    ev::registerGlobal("gamepadButton", ev::makeFunction(
+    regBoth("gamepadButton", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("gamepadButton(index, button, pressed [, value])");
             int idx = static_cast<int>(ev::toDouble(a[0]));
@@ -413,7 +423,7 @@ void installHeadlessInput(engine::Engine& engine) {
         }, 3, "gamepadButton"));
 
     // gamepadAxis(index, axis, value)
-    ev::registerGlobal("gamepadAxis", ev::makeFunction(
+    regBoth("gamepadAxis", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("gamepadAxis(index, axis, value)");
             int idx = static_cast<int>(ev::toDouble(a[0]));

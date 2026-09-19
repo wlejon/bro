@@ -53,7 +53,12 @@ void setTestFailure(bool failed) {
 void setScriptArgs(const std::vector<std::string>& args) {
     s_scriptArgs = args;
     if (isWebHostGlobalsInstalled()) {
-        ev::registerGlobal("scriptArgs", makeScriptArgsValue());
+        Value val = makeScriptArgsValue();
+        ev::registerGlobal("scriptArgs", val);
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) {
+            ev::setProperty(gt.value, "scriptArgs", val);
+        }
     }
 }
 
@@ -62,8 +67,18 @@ void installHeadlessGlobals(engine::Engine& engine) {
     installHeadlessFrame(engine);
     installHeadlessTestHooks(engine);
 
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    Value gObj = gt.found && ev::isObject(gt.value) ? gt.value : Value::fromUndefined();
+
+    auto regBoth = [&](const char* name, Value val) {
+        ev::registerGlobal(name, val);
+        if (ev::isObject(gObj)) {
+            ev::setProperty(gObj, name, val);
+        }
+    };
+
     // 1. advanceTime(double ms)
-    ev::registerGlobal("advanceTime", ev::makeFunction(
+    regBoth("advanceTime", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             engine.advanceTime(ms);
@@ -81,7 +96,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
     // boxes flush just measured — is delivered here, as is the net poll; a
     // test that resizes, flushes and expects the observer to have seen it
     // relies on exactly that (tests/layout/test_layout_flush.js).
-    ev::registerGlobal("flush", ev::makeFunction(
+    regBoth("flush", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             engine.flush();
             pumpBrokitTicks();
@@ -92,7 +107,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
         }, 0, "flush"));
 
     // 3. sleep(double ms)
-    ev::registerGlobal("sleep", ev::makeFunction(
+    regBoth("sleep", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             engine.advanceTime(ms);
@@ -105,7 +120,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
         }, 1, "sleep"));
 
     // 4. wallSleep(double ms)
-    ev::registerGlobal("wallSleep", ev::makeFunction(
+    regBoth("wallSleep", ev::makeFunction(
         [](Value, std::span<const Value> a) -> Value {
             double ms = a.empty() ? 0.0 : ev::toDouble(a[0]);
             if (ms > 0.0) {
@@ -115,7 +130,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
         }, 1, "wallSleep"));
 
     // 5. assert(bool condition [, const std::string& message])
-    ev::registerGlobal("assert", ev::makeFunction(
+    regBoth("assert", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             bool cond = !a.empty() && ev::toBool(a[0]);
             std::string msg = a.size() > 1 ? ev::toUtf8(a[1]) : "assertion failed";
@@ -129,7 +144,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
         }, 2, "assert"));
 
     // 6. resize(int w, int h)
-    ev::registerGlobal("resize", ev::makeFunction(
+    regBoth("resize", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("resize(w, h) requires width and height");
             int w = static_cast<int>(ev::toDouble(a[0]));
@@ -140,14 +155,14 @@ void installHeadlessGlobals(engine::Engine& engine) {
         }, 2, "resize"));
 
     // 7. setDialogAnswer(accept)
-    ev::registerGlobal("setDialogAnswer", ev::makeFunction(
+    regBoth("setDialogAnswer", ev::makeFunction(
         [](Value, std::span<const Value> a) {
             platform::Dialogs::setAutoDialogAnswer(a.empty() ? true : ev::toBool(a[0]));
             return ev::undefined();
         }, 1, "setDialogAnswer"));
 
     // 8. setPickedFiles(paths)
-    ev::registerGlobal("setPickedFiles", ev::makeFunction(
+    regBoth("setPickedFiles", ev::makeFunction(
         [](Value, std::span<const Value> a) {
             std::vector<std::string> paths;
             if (!a.empty()) {
@@ -166,7 +181,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
         }, 1, "setPickedFiles"));
 
     // 9. scriptArgs
-    ev::registerGlobal("scriptArgs", makeScriptArgsValue());
+    regBoth("scriptArgs", makeScriptArgsValue());
 }
 
 } // namespace bro::bronze_host

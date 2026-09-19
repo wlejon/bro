@@ -80,20 +80,23 @@ public:
         toMainQueue_.push_back(std::move(msg));
     }
 
-    void drainMessagesToMain(Value onmessageCb) {
+    void drainMessagesToMain() {
         std::deque<std::unique_ptr<Message>> batch;
         {
             std::lock_guard<std::mutex> lock(toMainMutex_);
             batch.swap(toMainQueue_);
         }
-        if (batch.empty() || !ev::isFunction(onmessageCb)) return;
+        if (batch.empty()) return;
 
         for (auto& msg : batch) {
-            Value data = deserializeMessage(*msg);
+            Value cb = onmessage_.get();
+            if (!ev::isFunction(cb)) continue;
+            ev::Persistent cbRoot(cb);
+            ev::Persistent dataRoot(deserializeMessage(*msg));
             ObjectBuilder evObj;
-            evObj.set("data", data);
+            evObj.set("data", dataRoot.get());
             Value event = evObj.get();
-            ev::call(onmessageCb, ev::undefined(), std::span<const Value>(&event, 1));
+            ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
         }
     }
 
@@ -347,13 +350,14 @@ void WorkerInstance::threadFunc() {
         }
     }
 
-    Value fetchTick = ev::globalValue("__brokit_fetch_tick").value;
-    Value wsTick = ev::globalValue("__brokit_ws_tick").value;
-    Value timersTick = ev::globalValue("__brokit_tick_timers").value;
-    Value fetchHasPending = ev::globalValue("__brokit_fetch_has_pending").value;
+    ev::Persistent fetchTick(ev::globalValue("__brokit_fetch_tick").value);
+    ev::Persistent wsTick(ev::globalValue("__brokit_ws_tick").value);
+    ev::Persistent timersTick(ev::globalValue("__brokit_tick_timers").value);
+    ev::Persistent fetchHasPending(ev::globalValue("__brokit_fetch_has_pending").value);
 
     while (!terminated_.load(std::memory_order_relaxed)) {
-        Value curOnmessage = ev::getProperty(globalThis, "onmessage");
+        Value gtVal = ev::globalValue("globalThis").value;
+        Value curOnmessage = ev::isObject(gtVal) ? ev::getProperty(gtVal, "onmessage") : ev::undefined();
         if (ev::isFunction(curOnmessage)) {
             workerOnmessage.set(curOnmessage);
         }
@@ -365,27 +369,28 @@ void WorkerInstance::threadFunc() {
         }
 
         for (auto& msg : batch) {
-            Value data = deserializeMessage(*msg);
+            Value cb = workerOnmessage.get();
+            if (!ev::isFunction(cb)) continue;
+            ev::Persistent cbRoot(cb);
+            ev::Persistent dataRoot(deserializeMessage(*msg));
             ObjectBuilder evObj;
-            evObj.set("data", data);
+            evObj.set("data", dataRoot.get());
             Value event = evObj.get();
-            if (ev::isFunction(workerOnmessage.get())) {
-                ev::call(workerOnmessage.get(), ev::undefined(), std::span<const Value>(&event, 1));
-            }
+            ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
         }
 
         double nowMs = static_cast<double>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
-        if (ev::isFunction(timersTick)) {
+        if (ev::isFunction(timersTick.get())) {
             Value nowVal = ev::fromDouble(nowMs);
-            ev::call(timersTick, ev::undefined(), std::span<const Value>(&nowVal, 1));
+            ev::call(timersTick.get(), ev::undefined(), std::span<const Value>(&nowVal, 1));
         }
-        if (ev::isFunction(fetchTick)) {
-            ev::call(fetchTick, ev::undefined(), {});
+        if (ev::isFunction(fetchTick.get())) {
+            ev::call(fetchTick.get(), ev::undefined(), {});
         }
-        if (ev::isFunction(wsTick)) {
-            ev::call(wsTick, ev::undefined(), {});
+        if (ev::isFunction(wsTick.get())) {
+            ev::call(wsTick.get(), ev::undefined(), {});
         }
         // This thread's NetSubscriber: its connect/disconnect/message
         // callbacks fire here, into the dispatcher js/net.js registered.
@@ -398,8 +403,8 @@ void WorkerInstance::threadFunc() {
         }
 
         bool hasPendingWork = false;
-        if (ev::isFunction(fetchHasPending)) {
-            Value has = ev::call(fetchHasPending, ev::undefined(), {}).value;
+        if (ev::isFunction(fetchHasPending.get())) {
+            Value has = ev::call(fetchHasPending.get(), ev::undefined(), {}).value;
             if (ev::toBool(has)) hasPendingWork = true;
         }
 
@@ -452,7 +457,7 @@ void drainWorkerMessages() {
     }
     for (auto* w : workers) {
         if (w) {
-            w->drainMessagesToMain(w->getOnMessage());
+            w->drainMessagesToMain();
         }
     }
 }
