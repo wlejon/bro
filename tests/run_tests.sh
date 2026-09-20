@@ -24,13 +24,10 @@
 # test whose engine silently fell back to raster is reported as a FAIL for that
 # reason (see run_one_test); BRO_TEST_ALLOW_RASTER=1 permits it.
 #
-# Parallelism: test GROUPS (per-directory) run concurrently, tests WITHIN a
-# group stay serial — that preserves intra-group ordering/resource assumptions
-# (net ports, fixed scratch dirs) while cutting wall time by roughly the job
-# count. Control with BRO_TEST_JOBS (default: min(#groups, nproc/4), floor 2 —
-# each headless instance runs ~4 threads of its own, and on a 32-thread box 8
-# jobs measured faster than 16 or 24). BRO_TEST_JOBS=1 runs the original
-# fully-serial path.
+# Parallelism: tests run serially (1 job at a time) by default to prevent OOM
+# on memory-constrained systems where multiple headless instances with Skia/GL/Audio
+# saturate RAM. Control with BRO_TEST_JOBS (default: 1). Pass BRO_TEST_PARALLEL=1
+# or BRO_TEST_JOBS=auto (min(#groups, nproc/4)) to opt in to parallel group execution.
 #
 # The groups audio/gamepad/settings/style are chained into ONE serial unit:
 # settings, gamepad, and style tests persist user overrides to the shared
@@ -317,21 +314,22 @@ detect_nproc() {
     fi
 }
 
-if [[ -n "${BRO_TEST_JOBS:-}" ]]; then
-    JOBS="$BRO_TEST_JOBS"
-    if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [[ "$JOBS" -lt 1 ]]; then
-        echo "ERROR: BRO_TEST_JOBS must be a positive integer (got '$BRO_TEST_JOBS')"
-        exit 1
-    fi
-else
+if [[ "${BRO_TEST_JOBS:-1}" == "auto" || "${BRO_TEST_PARALLEL:-0}" == "1" ]]; then
     NPROC=$(detect_nproc)
     # Each headless instance is itself multi-threaded (main loop, UI raster,
-    # canvas worker, audio, JS pumps), so nproc/4 processes already saturate
-    # the machine; higher counts measured slower on a 32-thread box.
+    # canvas worker, audio, JS pumps), so nproc/4 processes saturate the machine.
     JOBS=$(( NPROC / 4 ))
     [[ $JOBS -lt 2 ]] && JOBS=2
     [[ $JOBS -gt ${#GROUPS_ORDERED[@]} ]] && JOBS=${#GROUPS_ORDERED[@]}
     [[ $JOBS -lt 1 ]] && JOBS=1
+elif [[ -n "${BRO_TEST_JOBS:-}" ]]; then
+    JOBS="$BRO_TEST_JOBS"
+    if ! [[ "$JOBS" =~ ^[0-9]+$ ]] || [[ "$JOBS" -lt 1 ]]; then
+        echo "ERROR: BRO_TEST_JOBS must be a positive integer or 'auto' (got '$BRO_TEST_JOBS')"
+        exit 1
+    fi
+else
+    JOBS=1
 fi
 
 # The parallel scheduler needs `wait -n` (bash 4.3+). git-bash, brew bash, and

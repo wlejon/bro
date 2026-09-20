@@ -19,3 +19,8 @@
 ## 4. Multi-Repo & Submodule Workflow
 - Standalone sibling repositories (`broaudio`, `broflora`, `brogameagent`, `brotensor`, `brolm`, `brosoundml`, `brodiffusion`, `brovisionml`, `bromesh`, `broimage`, etc.) own their native code and Bronze JavaScript APIs (`<sibling>_api`).
 - **Submodule pinning**: Do NOT update or pin git submodules after every commit. Only update/pin submodules at the end of a full session before pushing.
+
+## 5. System Memory & Execution Defaults
+- **System memory constraint**: This system doesn't have enough RAM (16 GB for 32 threads) to run memory-intensive operations (C++ compilation of heavy units, parallel headless rendering instances) in unbounded parallel without OOM-killing processes.
+- **Test execution defaults**: `tests/run_tests.sh` runs serially (1 test job at a time) by default. Full parallel execution is an opt-in override (`BRO_TEST_JOBS=auto` or `BRO_TEST_PARALLEL=1`), not the default.
+- **Build concurrency defaults**: Ninja compilation is bounded by `BRO_COMPILE_JOBS` (default: 4) and `BRO_LINK_JOBS` (default: 2) in CMake to keep peak compiler memory safely within the physical RAM envelope.
