@@ -12,7 +12,10 @@ namespace bro::engine {
 class Engine;
 struct ScriptEntry;
 }
-namespace bro::dom { class Document; }
+namespace bro::dom {
+class Document;
+class Element;
+}
 
 namespace bro::bronze_host {
 
@@ -76,6 +79,23 @@ void clearHostTimersForDocument(dom::Document* doc);
 void clearHostAnimationFramesForDocument(dom::Document* doc);
 uint64_t scopeIdForDocument(dom::Document* doc);
 void clearRealmScope(uint64_t scopeId);
+void clearParsedDocuments();
+void clearParsedDocumentsForScope(uint64_t scopeId);
+
+/// Canvas cleanup across element destruction and app reload.
+void clearHostCanvases();
+void cleanupCanvasForElement(dom::Element* el);
+
+/// DOM event listener cleanup.
+void clearAllElementListeners();
+void clearElementListeners(dom::Element* el);
+void clearElementListenersForDocument(dom::Document* doc);
+
+/// Custom elements registry reset.
+void resetCustomElementsRegistry();
+
+/// Dynamic module compilation cache and temporary module cleanup.
+void clearDynamicModules();
 
 /// Deliver media query changes to matchMedia listeners.
 void deliverHostMediaQueryChanges();

@@ -387,8 +387,8 @@ struct ObjectBuilder {
 Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make);
 
 // Indexed buffer bindings (WebGLBuffer stash for getIndexedParameter)
-void stashIndexedBinding(uint32_t target, uint32_t index, Value bufVal);
-Value loadIndexedBinding(uint32_t target, uint32_t index);
+void stashIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index, Value bufVal);
+Value loadIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index);
 
 // Each takes the under-construction context object and the wrapped context.
 // gl_context.cpp calls them in one fixed order; the order of def() calls

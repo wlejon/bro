@@ -7,6 +7,7 @@
 #include "canvas/canvas2d.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
+#include "layout/el_video.h"
 
 #include <cmath>
 #include <cstdio>
@@ -826,6 +827,14 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 if (skImg) {
                     imgW = skImg->width();
                     imgH = skImg->height();
+                }
+            } else if (auto* vc = srcEl->videoControl()) {
+                int vw = 0, vh = 0;
+                const uint8_t* px = vc->currentFrameRgba(&vw, &vh);
+                if (px && vw > 0 && vh > 0) {
+                    rgba = px;
+                    imgW = vw;
+                    imgH = vh;
                 }
             }
         }

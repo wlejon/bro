@@ -361,4 +361,13 @@ void installCustomElementsGlobals() {
     }
 }
 
+void resetCustomElementsRegistry() {
+    for (auto& [_, def] : s_registry) {
+        def.ctor.set(ev::undefined());
+    }
+    s_registry.clear();
+    s_activeConstructingElement = nullptr;
+    s_activeCtor = ev::undefined();
+}
+
 } // namespace bro::bronze_host

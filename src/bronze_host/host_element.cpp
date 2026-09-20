@@ -96,6 +96,11 @@ void onNodeFreed(dom::Document*, dom::Node* node) {
     if (s_fullscreenElement == node) {
         s_fullscreenElement = nullptr;
     }
+    if (node && node->nodeType() == dom::NodeType::Element) {
+        auto* el = static_cast<dom::Element*>(node);
+        cleanupCanvasForElement(el);
+        clearElementListeners(el);
+    }
     Registry& r = registry();
     auto it = r.live.find(node);
     if (it == r.live.end()) return;
@@ -107,11 +112,15 @@ void onNodeFreed(dom::Document*, dom::Node* node) {
 
 void clearHostElementsForDocument(dom::Document* doc) {
     if (!doc) return;
+    clearElementListenersForDocument(doc);
     Registry& r = registry();
     r.observed.erase(doc);
     for (auto it = r.live.begin(); it != r.live.end(); ) {
         HostNodeState* st = it->second;
         if (st && st->node && st->node->document() == doc) {
+            if (st->el) {
+                cleanupCanvasForElement(st->el);
+            }
             clearNodeState(st);
             it = r.live.erase(it);
         } else {

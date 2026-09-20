@@ -536,8 +536,19 @@ void installWebHostGlobals(engine::Engine& engine) {
                     "window.addEventListener: the engine refused the registration");
             }
             std::string origin = "window " + type + " listener";
+            bool isOnce = opts.once;
+            std::string lType = type;
             dom::ListenerHandle handle = targetDoc->windowListeners().add(
-                type, [fnP, self, origin, targetDoc](dom::Event& evt) {
+                type, [fnP, self, origin, targetDoc, isOnce, lType](dom::Event& evt) {
+                    if (isOnce && g_host) {
+                        auto& list = g_host->windowListeners;
+                        for (auto it = list.begin(); it != list.end(); ++it) {
+                            if (it->type == lType && ev::toBits(it->fn.get()) == ev::toBits(fnP.get())) {
+                                list.erase(it);
+                                break;
+                            }
+                        }
+                    }
                     callBronzeListener(fnP, self, evt, origin.c_str(), targetDoc);
                 }, opts);
             if (!handle) {

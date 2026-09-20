@@ -62,6 +62,11 @@ WebGL2RenderingContext::~WebGL2RenderingContext() {
     // makeCurrent() on another context would skip restoring its state.
     if (current_ == this) current_ = nullptr;
 
+    for (auto& cb : teardownCallbacks_) {
+        if (cb) cb(this);
+    }
+    teardownCallbacks_.clear();
+
     // Delete all tracked objects
     for (GLuint id : validBuffers_) glDeleteBuffers(1, &id);
     for (GLuint id : validTextures_) glDeleteTextures(1, &id);

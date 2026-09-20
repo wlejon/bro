@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <array>
 #include <cstdint>
+#include <functional>
 
 namespace bro::webgl {
 
@@ -23,6 +24,11 @@ public:
 
     WebGL2RenderingContext(const WebGL2RenderingContext&) = delete;
     WebGL2RenderingContext& operator=(const WebGL2RenderingContext&) = delete;
+
+    using TeardownCallback = std::function<void(WebGL2RenderingContext*)>;
+    void addTeardownCallback(TeardownCallback cb) {
+        teardownCallbacks_.push_back(std::move(cb));
+    }
 
     /// Resize the canvas FBO.
     void resize(int width, int height);
@@ -548,6 +554,8 @@ private:
     bool sScissorTest_ = false;
     bool sStencilTest_ = false;
     bool sRasterizerDiscard_ = false;
+
+    std::vector<TeardownCallback> teardownCallbacks_;
 };
 
 } // namespace bro::webgl

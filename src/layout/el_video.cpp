@@ -730,6 +730,21 @@ void ElVideo::advancePipeline() {
     }
 }
 
+const uint8_t* ElVideo::currentFrameRgba(int* outW, int* outH) {
+    if (pipeline_) {
+        if (!pipeline_->hasFrame() || pipeline_->currentRgba().empty()) {
+            pipeline_->flush();
+            pipeline_->advance();
+        }
+        if (pipeline_->hasFrame() && !pipeline_->currentRgba().empty()) {
+            if (outW) *outW = pipeline_->frameWidth();
+            if (outH) *outH = pipeline_->frameHeight();
+            return pipeline_->currentRgba().data();
+        }
+    }
+    return nullptr;
+}
+
 void ElVideo::pumpEvents() {
     if (!pipeline_) return;
     // Keep the audio ring ahead of the mixer. Deliberately before the jsCtx_
@@ -879,6 +894,7 @@ double ElVideo::frameRate() const { return 0.0; }
 bool   ElVideo::isReady() const { return false; }
 bool   ElVideo::isEnded() const { return false; }
 void   ElVideo::advancePipeline() {}
+const uint8_t* ElVideo::currentFrameRgba(int*, int*) { return nullptr; }
 void   ElVideo::applyAudioVolume() {}
 
 void ElVideo::setVolume(double v) {

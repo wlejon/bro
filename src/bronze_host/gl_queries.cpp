@@ -23,9 +23,17 @@ Value makeNumberList(const T* v, size_t n) {
     });
 }
 
+static std::unordered_map<webgl::WebGL2RenderingContext*, std::unordered_map<GLenum, ev::Persistent>> s_activeQueries;
+
 }  // namespace
 
 void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
+    if (c) {
+        c->addTeardownCallback([](webgl::WebGL2RenderingContext* ctx) {
+            s_activeQueries.erase(ctx);
+        });
+    }
+
     b.def("getParameter", 1, [c](Value, std::span<const Value> a) {
         auto* gl = live(c);
         GLenum pname = u32At(a, 0);
@@ -92,20 +100,82 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x9243:  // UNPACK_COLORSPACE_CONVERSION_WEBGL
                 return ev::fromDouble(gl->unpackColorspaceConversion());
 
-            // Object-binding queries: answers null (unbound).
+            // Object-binding queries:
             case 0x8894:  // ARRAY_BUFFER_BINDING
             case 0x8895:  // ELEMENT_ARRAY_BUFFER_BINDING
-            case 0x8B8D:  // CURRENT_PROGRAM
-            case 0x8CA6:  // FRAMEBUFFER_BINDING
-            case 0x8CA7:  // RENDERBUFFER_BINDING
-            case 0x8069:  // TEXTURE_BINDING_2D
-            case 0x8514:  // TEXTURE_BINDING_CUBE_MAP
-            case 0x85B5:  // VERTEX_ARRAY_BINDING
-            case 0x8919:  // SAMPLER_BINDING
             case 0x88ED:  // PIXEL_PACK_BUFFER_BINDING
             case 0x88EF:  // PIXEL_UNPACK_BUFFER_BINDING
-            case 0x8E25:  // TRANSFORM_FEEDBACK_BINDING
+            case 0x8A28:  // UNIFORM_BUFFER_BINDING
+            case 0x8C8F:  // TRANSFORM_FEEDBACK_BUFFER_BINDING
+            case 0x8F36:  // COPY_READ_BUFFER_BINDING
+            case 0x8F37: { // COPY_WRITE_BUFFER_BINDING
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isBuffer({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::Buffer, static_cast<GLuint>(val));
+                }
                 return ev::null();
+            }
+            case 0x8B8D: {  // CURRENT_PROGRAM
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isProgram({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::Program, static_cast<GLuint>(val));
+                }
+                return ev::null();
+            }
+            case 0x8CA6:  // FRAMEBUFFER_BINDING / DRAW_FRAMEBUFFER_BINDING
+            case 0x8CAA: { // READ_FRAMEBUFFER_BINDING
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isFramebuffer({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::Framebuffer, static_cast<GLuint>(val));
+                }
+                return ev::null();
+            }
+            case 0x8CA7: {  // RENDERBUFFER_BINDING
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isRenderbuffer({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::Renderbuffer, static_cast<GLuint>(val));
+                }
+                return ev::null();
+            }
+            case 0x8069:  // TEXTURE_BINDING_2D
+            case 0x8514:  // TEXTURE_BINDING_CUBE_MAP
+            case 0x806A:  // TEXTURE_BINDING_3D
+            case 0x8C1D: { // TEXTURE_BINDING_2D_ARRAY
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isTexture({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::Texture, static_cast<GLuint>(val));
+                }
+                return ev::null();
+            }
+            case 0x85B5: {  // VERTEX_ARRAY_BINDING
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isVertexArray({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::VertexArray, static_cast<GLuint>(val));
+                }
+                return ev::null();
+            }
+            case 0x8919: {  // SAMPLER_BINDING
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isSampler({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::Sampler, static_cast<GLuint>(val));
+                }
+                return ev::null();
+            }
+            case 0x8E25: {  // TRANSFORM_FEEDBACK_BINDING
+                GLint val = 0;
+                glGetIntegerv(pname, &val);
+                if (val != 0 && gl->isTransformFeedback({static_cast<GLuint>(val)})) {
+                    return wrapGlObj(GlCell::TransformFeedback, static_cast<GLuint>(val));
+                }
+                return ev::null();
+            }
 
             // Compressed formats the driver actually probed at creation.
             case 0x86A3: {  // GL_COMPRESSED_TEXTURE_FORMATS
@@ -191,9 +261,9 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         uint32_t index = u32At(a, 1);
         switch (pname) {
             case 0x8C8F:  // TRANSFORM_FEEDBACK_BUFFER_BINDING
-                return loadIndexedBinding(0x8C8E /* TRANSFORM_FEEDBACK_BUFFER */, index);
+                return loadIndexedBinding(c, 0x8C8E /* TRANSFORM_FEEDBACK_BUFFER */, index);
             case 0x8A28:  // UNIFORM_BUFFER_BINDING
-                return loadIndexedBinding(0x8A11 /* UNIFORM_BUFFER */, index);
+                return loadIndexedBinding(c, 0x8A11 /* UNIFORM_BUFFER */, index);
             case 0x8C84:  // TRANSFORM_FEEDBACK_BUFFER_START
             case 0x8C85:  // TRANSFORM_FEEDBACK_BUFFER_SIZE
             case 0x8A29:  // UNIFORM_BUFFER_START
@@ -268,21 +338,36 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return wrapQuery(live(c)->createQuery());
     });
     b.def("deleteQuery", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteQuery(queryOf(argAt(a, 0)));
+        auto q = queryOf(argAt(a, 0));
+        if (q.id) {
+            auto ctxIt = s_activeQueries.find(c);
+            if (ctxIt != s_activeQueries.end()) {
+                for (auto it = ctxIt->second.begin(); it != ctxIt->second.end(); ) {
+                    if (queryOf(it->second.get()).id == q.id) {
+                        it = ctxIt->second.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            live(c)->deleteQuery(q);
+        }
         return ev::undefined();
     });
-    static std::unordered_map<GLenum, ev::Persistent> s_activeQueries;
 
     b.def("beginQuery", 2, [c](Value, std::span<const Value> a) {
         GLenum target = u32At(a, 0);
         live(c)->beginQuery(target, queryOf(argAt(a, 1)));
-        s_activeQueries.insert_or_assign(target, ev::Persistent(argAt(a, 1)));
+        s_activeQueries[c].insert_or_assign(target, ev::Persistent(argAt(a, 1)));
         return ev::undefined();
     });
     b.def("endQuery", 1, [c](Value, std::span<const Value> a) {
         GLenum target = u32At(a, 0);
         live(c)->endQuery(target);
-        s_activeQueries.erase(target);
+        auto ctxIt = s_activeQueries.find(c);
+        if (ctxIt != s_activeQueries.end()) {
+            ctxIt->second.erase(target);
+        }
         return ev::undefined();
     });
     b.def("getQuery", 2, [c](Value, std::span<const Value> a) {
@@ -290,9 +375,12 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         GLenum target = u32At(a, 0);
         GLenum pname = u32At(a, 1);
         if (pname != 0x8865 /* CURRENT_QUERY */) return ev::null();
-        auto it = s_activeQueries.find(target);
-        if (it != s_activeQueries.end()) {
-            return it->second.get();
+        auto ctxIt = s_activeQueries.find(c);
+        if (ctxIt != s_activeQueries.end()) {
+            auto it = ctxIt->second.find(target);
+            if (it != ctxIt->second.end()) {
+                return it->second.get();
+            }
         }
         return ev::null();
     });
@@ -330,6 +418,129 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         GLint val = 0;
         glad_glGetInternalformativ(target, internalformat, pname, 1, &val);
         return ev::fromDouble(val);
+    });
+
+    // --- WebGL2 parameter queries ---
+    b.def("getTexParameter", 2, [c](Value, std::span<const Value> a) {
+        live(c);
+        GLenum target = u32At(a, 0);
+        GLenum pname = u32At(a, 1);
+        switch (pname) {
+            case 0x813A:  // TEXTURE_MIN_LOD
+            case 0x813B:  // TEXTURE_MAX_LOD
+            case 0x84FE: { // TEXTURE_MAX_ANISOTROPY_EXT
+                GLfloat v = 0;
+                glGetTexParameterfv(target, pname, &v);
+                return ev::fromDouble(v);
+            }
+            case 0x912F: { // TEXTURE_IMMUTABLE_FORMAT
+                GLint v = 0;
+                glGetTexParameteriv(target, pname, &v);
+                return ev::fromBool(v != 0);
+            }
+            default: {
+                GLint v = 0;
+                glGetTexParameteriv(target, pname, &v);
+                return ev::fromDouble(v);
+            }
+        }
+    });
+
+    b.def("getFramebufferAttachmentParameter", 3, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
+        GLenum target = u32At(a, 0);
+        GLenum attachment = u32At(a, 1);
+        GLenum pname = u32At(a, 2);
+        if (pname == 0x8CD1 /* FRAMEBUFFER_ATTACHMENT_OBJECT_NAME */) {
+            GLint type = 0;
+            glGetFramebufferAttachmentParameteriv(target, attachment, 0x8CD0 /* OBJECT_TYPE */, &type);
+            GLint objId = 0;
+            glGetFramebufferAttachmentParameteriv(target, attachment, pname, &objId);
+            if (objId <= 0) return ev::null();
+            if (type == GL_RENDERBUFFER && gl->isRenderbuffer({static_cast<GLuint>(objId)})) {
+                return wrapGlObj(GlCell::Renderbuffer, static_cast<GLuint>(objId));
+            }
+            if (type == GL_TEXTURE && gl->isTexture({static_cast<GLuint>(objId)})) {
+                return wrapGlObj(GlCell::Texture, static_cast<GLuint>(objId));
+            }
+            return ev::null();
+        }
+        GLint v = 0;
+        glGetFramebufferAttachmentParameteriv(target, attachment, pname, &v);
+        return ev::fromDouble(v);
+    });
+
+    b.def("getRenderbufferParameter", 2, [c](Value, std::span<const Value> a) {
+        live(c);
+        GLenum target = u32At(a, 0);
+        GLenum pname = u32At(a, 1);
+        GLint v = 0;
+        glGetRenderbufferParameteriv(target, pname, &v);
+        return ev::fromDouble(v);
+    });
+
+    b.def("getBufferParameter", 2, [c](Value, std::span<const Value> a) {
+        live(c);
+        GLenum target = u32At(a, 0);
+        GLenum pname = u32At(a, 1);
+        switch (pname) {
+            case 0x8764:  // BUFFER_SIZE
+            case 0x9120:  // BUFFER_MAP_LENGTH
+            case 0x9121: { // BUFFER_MAP_OFFSET
+                GLint64 v = 0;
+                glGetBufferParameteri64v(target, pname, &v);
+                return ev::fromDouble(static_cast<double>(v));
+            }
+            default: {
+                GLint v = 0;
+                glGetBufferParameteriv(target, pname, &v);
+                return ev::fromDouble(v);
+            }
+        }
+    });
+
+    b.def("getVertexAttrib", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
+        GLuint index = u32At(a, 0);
+        GLenum pname = u32At(a, 1);
+        switch (pname) {
+            case 0x889F: { // VERTEX_ATTRIB_ARRAY_BUFFER_BINDING
+                GLint bufId = 0;
+                glGetVertexAttribiv(index, pname, &bufId);
+                if (bufId != 0 && gl->isBuffer({static_cast<GLuint>(bufId)})) {
+                    return wrapGlObj(GlCell::Buffer, static_cast<GLuint>(bufId));
+                }
+                return ev::null();
+            }
+            case 0x8622:  // VERTEX_ATTRIB_ARRAY_ENABLED
+            case 0x886A:  // VERTEX_ATTRIB_ARRAY_NORMALIZED
+            case 0x88FD: { // VERTEX_ATTRIB_ARRAY_INTEGER
+                GLint v = 0;
+                glGetVertexAttribiv(index, pname, &v);
+                return ev::fromBool(v != 0);
+            }
+            case 0x8626: { // CURRENT_VERTEX_ATTRIB
+                GLfloat v[4] = {0, 0, 0, 0};
+                glGetVertexAttribfv(index, pname, v);
+                return hostArrayOf(4, [v](size_t i) {
+                    return ev::fromDouble(v[i]);
+                });
+            }
+            default: {
+                GLint v = 0;
+                glGetVertexAttribiv(index, pname, &v);
+                return ev::fromDouble(v);
+            }
+        }
+    });
+
+    b.def("getVertexAttribOffset", 2, [c](Value, std::span<const Value> a) {
+        live(c);
+        GLuint index = u32At(a, 0);
+        GLenum pname = u32At(a, 1);
+        void* ptr = nullptr;
+        glGetVertexAttribPointerv(index, pname, &ptr);
+        return ev::fromDouble(static_cast<double>(reinterpret_cast<uintptr_t>(ptr)));
     });
 
     // --- WebXR ---

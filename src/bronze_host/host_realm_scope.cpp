@@ -149,12 +149,14 @@ bool isChildRealm() {
 
 void clearRealmScope(uint64_t scopeId) {
     s_scopeExpandos.erase(scopeId);
+    clearParsedDocumentsForScope(scopeId);
 }
 
 void resetAllRealmScopes() {
     s_scopeStack.clear();
     s_scopeExpandos.clear();
     s_activeScope = 0;
+    clearParsedDocuments();
 }
 
 uint64_t scopeIdForDocument(dom::Document* doc) {

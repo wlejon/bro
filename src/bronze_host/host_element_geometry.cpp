@@ -114,7 +114,6 @@ std::string outerHtmlOf(dom::Element* el) {
 }
 
 // scrollTo / scrollBy take either (x, y) or a {top, left} options object.
-// Only `top` can be honoured: this DOM tracks vertical scrolling only.
 bool readScrollTopArg(std::span<const Value> a, double& top) {
     if (!a.empty() && ev::isObject(a[0])) {
         Value t = ev::getProperty(a[0], "top");
@@ -127,6 +126,77 @@ bool readScrollTopArg(std::span<const Value> a, double& top) {
         return true;
     }
     return false;
+}
+
+bool readScrollLeftArg(std::span<const Value> a, double& left) {
+    if (!a.empty() && ev::isObject(a[0])) {
+        Value l = ev::getProperty(a[0], "left");
+        if (ev::isUndefined(l)) return false;
+        left = ev::toDouble(l);
+        return true;
+    }
+    if (!a.empty() && !ev::isObject(a[0]) && !ev::isUndefined(a[0])) {
+        left = ev::toDouble(a[0]);
+        return true;
+    }
+    return false;
+}
+
+bool isNodeConnected(dom::Node* node) {
+    if (!node) return false;
+    dom::Document* doc = node->document();
+    if (!doc) return false;
+    dom::Node* docEl = doc->documentElement();
+    if (!docEl) return false;
+    for (dom::Node* n = node; n; ) {
+        if (n == docEl) return true;
+        dom::Node* parent = n->parentNode();
+        if (!parent) {
+            if (auto* sr = dynamic_cast<dom::ShadowRoot*>(n)) {
+                n = sr->host();
+                continue;
+            }
+            return false;
+        }
+        n = parent;
+    }
+    return false;
+}
+
+dom::Element* computeOffsetParent(dom::Element* el) {
+    if (!el || !isNodeConnected(el)) return nullptr;
+    const std::string& tag = el->tagName();
+    if (tag == "BODY" || tag == "HTML" || tag == "body" || tag == "html") return nullptr;
+    if (isInlineDisplay(el)) return nullptr;
+
+    const auto& style = el->computedStyle();
+    auto posIt = style.find("position");
+    if (posIt != style.end() && posIt->second == "fixed") return nullptr;
+
+    dom::Document* doc = el->document();
+    if (!doc) return nullptr;
+    dom::Element* body = doc->body();
+
+    for (dom::Element* p = el->parentElement(); p; p = p->parentElement()) {
+        if (p == body) return p;
+        const std::string& pTag = p->tagName();
+        if (pTag == "BODY" || pTag == "body") return p;
+        if (pTag == "HTML" || pTag == "html") return body ? body : nullptr;
+
+        const auto& pStyle = p->computedStyle();
+        auto dIt = pStyle.find("display");
+        if (dIt != pStyle.end() && dIt->second == "none") return nullptr;
+
+        auto pPosIt = pStyle.find("position");
+        if (pPosIt != pStyle.end() && pPosIt->second != "static" && !pPosIt->second.empty()) {
+            return p;
+        }
+        if (pTag == "TABLE" || pTag == "TH" || pTag == "TD" ||
+            pTag == "table" || pTag == "th" || pTag == "td") {
+            return p;
+        }
+    }
+    return body ? body : nullptr;
 }
 
 }  // namespace
@@ -207,20 +277,38 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    return ev::fromDouble(st->el ? borderBoxOf(st->el).height : 0.0);
                },
                nullptr);
-    // Document-absolute, not offset-parent-relative: what a UI positioning a
-    // popup against an anchor wants, and what bro's own bindings answer.
+    b.accessor("offsetParent",
+               [](Value self_, std::span<const Value>) -> Value {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::null();
+                   dom::Element* op = computeOffsetParent(st->el);
+                   return op ? hostElementValue(op) : ev::null();
+               },
+               nullptr);
     b.accessor("offsetLeft",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? borderBoxOf(st->el).x : 0.0);
+                   if (!st->el) return ev::fromDouble(0.0);
+                   dom::AbsoluteRect r = borderBoxOf(st->el);
+                   dom::Element* op = computeOffsetParent(st->el);
+                   if (!op) return ev::fromDouble(r.x);
+                   dom::AbsoluteRect opRect = borderBoxOf(op);
+                   const auto& opBox = laidOutBox(op);
+                   return ev::fromDouble(r.x - opRect.x - opBox.border.left);
                },
                nullptr);
     b.accessor("offsetTop",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st) return ev::undefined();
-                   return ev::fromDouble(st->el ? borderBoxOf(st->el).y : 0.0);
+                   if (!st->el) return ev::fromDouble(0.0);
+                   dom::AbsoluteRect r = borderBoxOf(st->el);
+                   dom::Element* op = computeOffsetParent(st->el);
+                   if (!op) return ev::fromDouble(r.y);
+                   dom::AbsoluteRect opRect = borderBoxOf(op);
+                   const auto& opBox = laidOutBox(op);
+                   return ev::fromDouble(r.y - opRect.y - opBox.border.top);
                },
                nullptr);
 
@@ -264,17 +352,26 @@ void decorateElementGeometry(ObjectBuilder& b) {
                    dom::setElementScrollTop(st->el, ev::toDouble(argAt(a, 0)));
                    return ev::undefined();
                });
-    // bro's DOM tracks vertical scrolling only (dom::Element::scrollTop_), so
-    // the horizontal half answers 0 and swallows a write it cannot honour.
     b.accessor("scrollLeft",
-               [](Value, std::span<const Value>) { return ev::fromDouble(0.0); },
-               [](Value, std::span<const Value>) { return ev::undefined(); });
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st) return ev::undefined();
+                   return ev::fromDouble(st->el ? st->el->scrollLeftValue() : 0.0);
+               },
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = hostNodeStateOfValue(self_);
+                   if (!st || !st->el) return ev::undefined();
+                   dom::setElementScrollLeft(st->el, ev::toDouble(argAt(a, 0)));
+                   return ev::undefined();
+               });
 
     b.def("scrollTo", 2, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
         double top = 0;
         if (readScrollTopArg(a, top)) dom::setElementScrollTop(st->el, top);
+        double left = 0;
+        if (readScrollLeftArg(a, left)) dom::setElementScrollLeft(st->el, left);
         return ev::undefined();
     });
     b.def("scrollBy", 2, [](Value self_, std::span<const Value> a) {
@@ -282,6 +379,8 @@ void decorateElementGeometry(ObjectBuilder& b) {
         if (!st || !st->el) return ev::undefined();
         double top = 0;
         if (readScrollTopArg(a, top)) dom::scrollElementBy(st->el, top);
+        double left = 0;
+        if (readScrollLeftArg(a, left)) dom::scrollElementLeftBy(st->el, left);
         return ev::undefined();
     });
 
@@ -332,23 +431,7 @@ void decorateElementGeometry(ObjectBuilder& b) {
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->node) return ev::fromBool(false);
-                   dom::Document* doc = st->node->document();
-                   if (!doc) return ev::fromBool(false);
-                   dom::Node* docEl = doc->documentElement();
-                   if (!docEl) return ev::fromBool(false);
-                   for (dom::Node* n = st->node; n; ) {
-                       if (n == docEl) return ev::fromBool(true);
-                       dom::Node* parent = n->parentNode();
-                       if (!parent) {
-                           if (auto* sr = dynamic_cast<dom::ShadowRoot*>(n)) {
-                               n = sr->host();
-                               continue;
-                           }
-                           return ev::fromBool(false);
-                       }
-                       n = parent;
-                   }
-                   return ev::fromBool(false);
+                   return ev::fromBool(isNodeConnected(st->node));
                },
                nullptr);
 }

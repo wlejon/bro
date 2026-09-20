@@ -99,6 +99,9 @@ public:
 
     bro::video::VideoPipeline* pipeline() const { return pipeline_; }
 
+    /// Current decoded frame RGBA pixels and dimensions (or nullptr if unavailable).
+    const uint8_t* currentFrameRgba(int* outW, int* outH);
+
     // Dispatch any pending HTMLMediaElement events on the element's
     // listeners. MUST be called on the main thread. draw() runs on the raster
     // thread, so the engine pumps events from its main loop instead.

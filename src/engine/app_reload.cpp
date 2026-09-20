@@ -224,6 +224,11 @@ void Engine::performAppReload() {
     bro::bronze_host::clearHostTimers();
     bro::bronze_host::resetGlobalExpandos();
     bro::bronze_host::clearHostMediaQueries();
+    bro::bronze_host::clearHostCanvases();
+    bro::bronze_host::clearAllElementListeners();
+    bro::bronze_host::resetCustomElementsRegistry();
+    bro::bronze_host::clearParsedDocuments();
+    bro::bronze_host::clearDynamicModules();
 
     if (!appModuleHandles_.empty()) {
         unloadAppModules();

@@ -34,10 +34,6 @@ namespace {
 struct CanvasState {
     dom::Element* el = nullptr;
     webgl::WebGL2RenderingContext* glCtx = nullptr;
-    ev::Persistent jsObj;
-    ev::Persistent glObj;
-    ev::Persistent ctx2dObj;
-    ev::Persistent sceneObj;
     bool hasGl = false;
     // The context type this canvas was first asked for. A canvas has ONE
     // context mode for its life (HTML: getContext with a different type on a
@@ -54,6 +50,7 @@ struct CanvasState {
 // buffer keeps its size on a zero, as the old binding guarded, because a 0x0
 // FBO is a GL error every following draw repeats.
 void resizeBacking(CanvasState* cs, int w, int h, bool widthChanged) {
+    if (!cs || !cs->el) return;
     if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
         if (widthChanged) cScene->setIntrinsicWidth(w); else cScene->setIntrinsicHeight(h);
         cScene->reset();
@@ -69,47 +66,77 @@ void resizeBacking(CanvasState* cs, int w, int h, bool widthChanged) {
     }
 }
 
-std::vector<std::unique_ptr<CanvasState>> s_canvases;
+std::unordered_map<dom::Element*, std::unique_ptr<CanvasState>> s_canvases;
+
+CanvasState* canvasStateFor(dom::Element* el) {
+    if (!el) return nullptr;
+    auto it = s_canvases.find(el);
+    return it != s_canvases.end() ? it->second.get() : nullptr;
+}
 
 int attributeOr(dom::Element* el, const char* name, int fallback) {
+    if (!el) return fallback;
     const std::string& v = el->getAttribute(name);
     return v.empty() ? fallback : std::atoi(v.c_str());
 }
 
 int canvasWidthOf(CanvasState* cs) {
+    if (!cs || !cs->el) return 300;
     if (cs->glCtx) return cs->glCtx->canvasWidth();
     return attributeOr(cs->el, "width", 300);
 }
 
 int canvasHeightOf(CanvasState* cs) {
+    if (!cs || !cs->el) return 150;
     if (cs->glCtx) return cs->glCtx->canvasHeight();
     return attributeOr(cs->el, "height", 150);
 }
 
+}  // namespace
+
+void cleanupCanvasForElement(dom::Element* el) {
+    if (!el) return;
+    s_canvases.erase(el);
+}
+
+void clearHostCanvases() {
+    s_canvases.clear();
+}
+
+namespace {
+
 Value makeCanvasValue(dom::Element* el) {
-    auto owned = std::make_unique<CanvasState>();
-    CanvasState* cs = owned.get();
-    cs->el = el;
-    s_canvases.push_back(std::move(owned));
+    auto& slot = s_canvases[el];
+    if (!slot) {
+        slot = std::make_unique<CanvasState>();
+        slot->el = el;
+    }
+    CanvasState* cs = slot.get();
 
     ObjectBuilder b(makeElementHandleObject(el));
     installElementCore(b, el);
 
     b.accessor("width",
-               [cs](Value, std::span<const Value>) {
+               [el](Value, std::span<const Value>) {
+                   CanvasState* cs = canvasStateFor(el);
                    return ev::fromDouble(canvasWidthOf(cs));
                },
-                [cs](Value, std::span<const Value> a) {
-                    int w = i32At(a, 0);
-                    cs->el->setAttribute("width", std::to_string(w));
-                    resizeBacking(cs, w, 0, /*widthChanged=*/true);
-                    return ev::undefined();
-                });
+               [el](Value, std::span<const Value> a) {
+                   CanvasState* cs = canvasStateFor(el);
+                   if (!cs || !cs->el) return ev::undefined();
+                   int w = i32At(a, 0);
+                   cs->el->setAttribute("width", std::to_string(w));
+                   resizeBacking(cs, w, 0, /*widthChanged=*/true);
+                   return ev::undefined();
+               });
     b.accessor("height",
-               [cs](Value, std::span<const Value>) {
+               [el](Value, std::span<const Value>) {
+                   CanvasState* cs = canvasStateFor(el);
                    return ev::fromDouble(canvasHeightOf(cs));
                },
-               [cs](Value, std::span<const Value> a) {
+               [el](Value, std::span<const Value> a) {
+                   CanvasState* cs = canvasStateFor(el);
+                   if (!cs || !cs->el) return ev::undefined();
                    int h = i32At(a, 0);
                    cs->el->setAttribute("height", std::to_string(h));
                    resizeBacking(cs, 0, h, /*widthChanged=*/false);
@@ -117,7 +144,9 @@ Value makeCanvasValue(dom::Element* el) {
                });
 
     b.accessor("clientWidth",
-               [cs](Value, std::span<const Value>) {
+               [el](Value, std::span<const Value>) {
+                   CanvasState* cs = canvasStateFor(el);
+                   if (!cs || !cs->el) return ev::fromDouble(0);
                    if (auto* eng = hostEngine()) {
                        eng->flushLayoutForRead(cs->el->document());
                    }
@@ -127,7 +156,9 @@ Value makeCanvasValue(dom::Element* el) {
                },
                nullptr);
     b.accessor("clientHeight",
-               [cs](Value, std::span<const Value>) {
+               [el](Value, std::span<const Value>) {
+                   CanvasState* cs = canvasStateFor(el);
+                   if (!cs || !cs->el) return ev::fromDouble(0);
                    if (auto* eng = hostEngine()) {
                        eng->flushLayoutForRead(cs->el->document());
                    }
@@ -137,7 +168,9 @@ Value makeCanvasValue(dom::Element* el) {
                },
                nullptr);
 
-    b.def("getBoundingClientRect", 0, [cs](Value, std::span<const Value>) {
+    b.def("getBoundingClientRect", 0, [el](Value, std::span<const Value>) {
+        CanvasState* cs = canvasStateFor(el);
+        if (!cs || !cs->el) return makeHostRectValue(0, 0, 0, 0);
         dom::AbsoluteRect r = borderBoxOf(cs->el);
         ObjectBuilder bRect;
         bRect.set("left", ev::fromDouble(r.x));
@@ -150,7 +183,9 @@ Value makeCanvasValue(dom::Element* el) {
         bRect.set("y", ev::fromDouble(r.y));
         return bRect.get();
     });
-    b.def("setAttribute", 2, [cs](Value, std::span<const Value> a) {
+    b.def("setAttribute", 2, [el](Value, std::span<const Value> a) {
+        CanvasState* cs = canvasStateFor(el);
+        if (!cs || !cs->el) return ev::undefined();
         Value nameV = argAt(a, 0);
         Value valV = argAt(a, 1);
         if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
@@ -165,23 +200,22 @@ Value makeCanvasValue(dom::Element* el) {
         }
         return ev::undefined();
     });
-    b.def("getContext", 1, [cs](Value, std::span<const Value> a) {
+    b.def("getContext", 1, [el](Value thisVal, std::span<const Value> a) {
+        CanvasState* cs = canvasStateFor(el);
+        if (!cs || !cs->el) return ev::null();
         Value typeV = argAt(a, 0);
         if (ev::isObject(typeV)) return ev::null();
         std::string type = ev::toUtf8(typeV);
-        // One context mode per canvas. The mode is fixed by the first
-        // successful getContext; a later call for another type answers null
-        // (and `webgl` after `webgl2` is another type, as the old cache had
-        // it). The lock is released only if the backing went away with a
-        // destroyed element, which is when the state itself is discarded.
         if (!cs->contextType.empty() && cs->contextType != type) return ev::null();
+        Value canvasObj = ev::isObject(thisVal) ? thisVal : hostElementValue(cs->el);
         if (type == "2d") {
+            Value existing = ev::getProperty(canvasObj, "__bro_ctx2d__");
+            if (ev::isObject(existing)) return existing;
             if (auto* eng = hostEngine()) {
                 eng->createCanvasContext(cs->el);
             }
-            if (ev::isObject(cs->ctx2dObj.get())) return cs->ctx2dObj.get();
-            Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get(), cs->el);
-            cs->ctx2dObj.set(ctx2d);
+            Value ctx2d = makeCanvas2DContextValue(canvasObj, cs->el);
+            ev::setProperty(canvasObj, "__bro_ctx2d__", ctx2d);
             cs->contextType = type;
             return ctx2d;
         }
@@ -192,11 +226,12 @@ Value makeCanvasValue(dom::Element* el) {
             if (!eng) return ev::null();
             dom::Document* curDoc = currentHostDocument();
             if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
-            if (cs->el->sceneGraph() != nullptr && ev::isObject(cs->sceneObj.get())) return cs->sceneObj.get();
+            Value existing = ev::getProperty(canvasObj, "__bro_scene__");
+            if (cs->el->sceneGraph() != nullptr && ev::isObject(existing)) return existing;
             scene::SceneGraph* sg = eng->createSceneContext(cs->el);
             if (!sg) return ev::null();
             Value scn = createSceneGraphValue(sg, cs->el);
-            cs->sceneObj.set(scn);
+            ev::setProperty(canvasObj, "__bro_scene__", scn);
             cs->contextType = type;
             return scn;
 #else
@@ -209,18 +244,21 @@ Value makeCanvasValue(dom::Element* el) {
         if (!eng) return ev::null();
         dom::Document* curDoc = currentHostDocument();
         if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
-        if (cs->hasGl) return cs->glObj.get();
+        Value existing = ev::getProperty(canvasObj, "__bro_gl__");
+        if (cs->hasGl && ev::isObject(existing)) return existing;
         webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el);
         if (!ctx) return ev::null();
         cs->glCtx = ctx;
-        Value glValue = createGlContextValue(ctx, cs->jsObj.get());
-        cs->glObj.set(glValue);
+        Value glValue = createGlContextValue(ctx, canvasObj);
+        ev::setProperty(canvasObj, "__bro_gl__", glValue);
         cs->hasGl = true;
         cs->contextType = type;
-        return cs->glObj.get();
+        return glValue;
     });
 
-    b.def("toDataURL", 2, [cs](Value, std::span<const Value> a) -> Value {
+    b.def("toDataURL", 2, [el](Value, std::span<const Value> a) -> Value {
+        CanvasState* cs = canvasStateFor(el);
+        if (!cs || !cs->el) return ev::fromUtf8("data:,");
         std::string type = "image/png";
         double quality = -1.0;
         if (!a.empty() && ev::isString(a[0])) {
@@ -277,7 +315,9 @@ Value makeCanvasValue(dom::Element* el) {
         return ev::fromUtf8(url);
     });
 
-    b.def("toBlob", 3, [cs](Value, std::span<const Value> a) -> Value {
+    b.def("toBlob", 3, [el](Value, std::span<const Value> a) -> Value {
+        CanvasState* cs = canvasStateFor(el);
+        if (!cs || !cs->el) return ev::undefined();
         if (a.empty() || !ev::isFunction(a[0])) {
             return ev::throwTypeError("toBlob requires a callback function");
         }
@@ -359,7 +399,6 @@ Value makeCanvasValue(dom::Element* el) {
     });
 
     Value built = b.get();
-    cs->jsObj.set(built);
     noteHostElementValue(el, built);
     return built;
 }

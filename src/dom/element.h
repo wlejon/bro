@@ -331,6 +331,8 @@ public:
     // Element-level scroll offset (for overflow:auto/scroll elements)
     float scrollTopValue() const { return scrollTop_; }
     void setScrollTopValue(float v) { scrollTop_ = v; }
+    float scrollLeftValue() const { return scrollLeft_; }
+    void setScrollLeftValue(float v) { scrollLeft_ = v; }
 
     // Auto-scroll flag: scroll to bottom after next layout
     bool needsScrollToBottom() const { return scrollToBottom_; }
@@ -508,6 +510,7 @@ private:
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;
     float scrollTop_ = 0.0f;
+    float scrollLeft_ = 0.0f;
     uint32_t magic_ = 0xB00E;
     std::vector<std::string> selectedFiles_;   // <input type=file>
 

@@ -60,9 +60,37 @@ void setElementScrollTop(Element* el, double v) {
     }
 }
 
+float maxScrollLeftOf(const Element* el) {
+    if (!el) return 0.0f;
+    return 1e7f;
+}
+
+void setElementScrollLeft(Element* el, double v) {
+    if (!el) return;
+    const float requested = static_cast<float>(v);
+    const float clamped = std::max(0.0f, requested);
+    const float prev = el->scrollLeftValue();
+    el->setScrollLeftValue(clamped);
+
+    if (Document* doc = el->document()) {
+        doc->markDirty();
+    }
+
+    if (clamped != prev) {
+        Event evt("scroll", false, false);
+        evt.setIsTrusted(true);
+        dispatchDomEvent(el, evt);
+    }
+}
+
 void scrollElementBy(Element* el, double delta) {
     if (!el) return;
     setElementScrollTop(el, static_cast<double>(el->scrollTopValue()) + delta);
+}
+
+void scrollElementLeftBy(Element* el, double delta) {
+    if (!el) return;
+    setElementScrollLeft(el, static_cast<double>(el->scrollLeftValue()) + delta);
 }
 
 }  // namespace bro::dom

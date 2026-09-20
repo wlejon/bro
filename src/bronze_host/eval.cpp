@@ -40,6 +40,33 @@ using Value = bronze::Value;
 namespace {
 
 static std::atomic<uint64_t> s_evalCounter{0};
+static std::vector<std::filesystem::path> s_tempModuleFiles;
+static std::vector<ev::ModuleHandle> s_bronzeModules;
+static std::unordered_map<std::string, ev::Persistent> s_dynFnCache;
+
+void trackTempModuleFile(const std::filesystem::path& p) {
+    s_tempModuleFiles.push_back(p);
+}
+
+void trackDynamicBronzeModule(ev::ModuleHandle h) {
+    if (h != 0) s_bronzeModules.push_back(h);
+}
+
+void cleanGlobalProp(const std::string& name) {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        ev::GlobalValue reflect = ev::globalValue("Reflect");
+        if (reflect.found && ev::isObject(reflect.value)) {
+            Value delFn = ev::getProperty(reflect.value, "deleteProperty");
+            if (ev::isFunction(delFn)) {
+                const Value dArgs[2] = { gt.value, ev::fromUtf8(name) };
+                ev::call(delFn, reflect.value, std::span<const Value>(dArgs, 2));
+                return;
+            }
+        }
+        ev::setProperty(gt.value, name, ev::undefined());
+    }
+}
 
 #ifdef _WIN32
 constexpr const char* kModuleExt = ".dll";
@@ -351,12 +378,19 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
 
     std::string loadErr;
     ModuleHandle handle = openModule(outDll.string(), loadErr);
+    trackTempModuleFile(outDll);
     if (!handle) {
         LOG_ERROR("eval module load failed: %s", loadErr.c_str());
+        std::error_code ecRm;
+        std::filesystem::remove(outDll, ecRm);
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
     }
+#ifndef _WIN32
+    std::error_code ecRm;
+    std::filesystem::remove(outDll, ecRm);
+#endif
 
     auto entry = reinterpret_cast<void (*)()>(moduleSymbol(handle, "bronze_main"));
     if (!entry) {
@@ -366,11 +400,15 @@ bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::
         return false;
     }
 
-    const ev::ModuleHandle bronzeHandle = moduleHandleOut ? ev::beginModuleLoad() : 0;
+    const bool ownsBronzeModule = (moduleHandleOut == nullptr);
+    const ev::ModuleHandle bronzeHandle = ev::beginModuleLoad();
     if (moduleHandleOut) *moduleHandleOut = bronzeHandle;
+    else trackDynamicBronzeModule(bronzeHandle);
+
     bool entryOk = safeRunEntry(entry);
     if (!entryOk) {
         ev::endModuleLoad(bronzeHandle);
+        if (ownsBronzeModule) ev::unloadModule(bronzeHandle);
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
@@ -515,12 +553,19 @@ bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
 
     std::string loadErr;
     ModuleHandle handle = openModule(outDll.string(), loadErr);
+    trackTempModuleFile(outDll);
     if (!handle) {
         LOG_ERROR("evalScriptFile module load failed: %s", loadErr.c_str());
+        std::error_code ecRm;
+        std::filesystem::remove(outDll, ecRm);
         setTestFailure(true);
         engine.setTestFailure(true);
         return false;
     }
+#ifndef _WIN32
+    std::error_code ecRm;
+    std::filesystem::remove(outDll, ecRm);
+#endif
 
     auto entry = reinterpret_cast<void (*)()>(moduleSymbol(handle, "bronze_main"));
     if (!entry) {
@@ -578,19 +623,30 @@ bronze::Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const bron
         }
     }
 
+    const std::string cacheKey = std::to_string(static_cast<int>(kind)) + "\n" + params + "\n" + body;
+    auto it = s_dynFnCache.find(cacheKey);
+    if (it != s_dynFnCache.end() && !ev::isUndefined(it->second.get())) {
+        return it->second.get();
+    }
+
     const uint64_t fnId = s_evalCounter.fetch_add(1, std::memory_order_relaxed);
     const std::string globalName = "__bro_dyn_fn_" + std::to_string(fnId);
-    const std::string code = "globalThis." + globalName + " = " + sourcePrefixFor(kind) + params + ") {\n" + body + "\n};";
+    const std::string code = "globalThis." + globalName + " = " + sourcePrefixFor(kind) + params + ") {\n" + body + "\n});";
 
     if (!evalScript(*s_activeEngine, code, "<new Function>")) {
+        cleanGlobalProp(globalName);
         return ev::throwError("new Function: dynamic compilation failed");
     }
 
     ev::GlobalValue g = ev::globalValue(globalName);
     if (!g.found) {
+        cleanGlobalProp(globalName);
         return ev::throwError("new Function: created function was not found");
     }
-    return g.value;
+    Value result = g.value;
+    cleanGlobalProp(globalName);
+    s_dynFnCache[cacheKey].set(result);
+    return result;
 }
 
 bronze::Value dynamicEval(bronze::Value source) {
@@ -624,17 +680,28 @@ bronze::Value dynamicEval(bronze::Value source) {
     std::string exprCode = "globalThis." + resName + " = (" + code + ");";
     if (evalScript(*s_activeEngine, exprCode, "<eval>")) {
         ev::GlobalValue g = ev::globalValue(resName);
-        if (g.found) return g.value;
+        if (g.found) {
+            Value val = g.value;
+            cleanGlobalProp(resName);
+            return val;
+        }
     }
+    cleanGlobalProp(resName);
     setTestFailure(hostFailedBefore);
     s_activeEngine->setTestFailure(engineFailedBefore);
 
     std::string stmtCode = "globalThis." + resName + " = undefined;\n" + code + ";";
     if (evalScript(*s_activeEngine, stmtCode, "<eval>")) {
         ev::GlobalValue g = ev::globalValue(resName);
-        if (g.found) return g.value;
+        if (g.found) {
+            Value val = g.value;
+            cleanGlobalProp(resName);
+            return val;
+        }
+        cleanGlobalProp(resName);
         return ev::undefined();
     }
+    cleanGlobalProp(resName);
     return ev::throwError("eval: evaluation failed");
 }
 
@@ -644,6 +711,19 @@ void installDynamicHooks(engine::Engine& engine) {
     s_activeEngine = &engine;
     ev::setDynamicFunctionHook(dynamicFunction);
     ev::setDynamicEvalHook(dynamicEval);
+}
+
+void clearDynamicModules() {
+    s_dynFnCache.clear();
+    for (ev::ModuleHandle bh : s_bronzeModules) {
+        if (bh != 0) ev::unloadModule(bh);
+    }
+    s_bronzeModules.clear();
+    std::error_code ec;
+    for (const auto& f : s_tempModuleFiles) {
+        std::filesystem::remove(f, ec);
+    }
+    s_tempModuleFiles.clear();
 }
 
 } // namespace bro::bronze_host

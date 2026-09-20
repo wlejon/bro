@@ -20,6 +20,7 @@
 // call returns, and a later call on a stored event object is a named TypeError
 // rather than a write through a dangling pointer or a silent no-op.
 
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
@@ -593,6 +594,40 @@ std::vector<ElementListener>& registrations() {
 }
 
 } // namespace
+
+void clearElementListeners(dom::Element* el) {
+    if (!el) return;
+    auto& list = registrations();
+    for (auto it = list.begin(); it != list.end(); ) {
+        if (it->el == el) {
+            it->fn.set(ev::undefined());
+            it = list.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void clearElementListenersForDocument(dom::Document* doc) {
+    if (!doc) return;
+    auto& list = registrations();
+    for (auto it = list.begin(); it != list.end(); ) {
+        if (it->el && it->el->document() == doc) {
+            it->fn.set(ev::undefined());
+            it = list.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void clearAllElementListeners() {
+    auto& list = registrations();
+    for (auto& r : list) {
+        r.fn.set(ev::undefined());
+    }
+    list.clear();
+}
 
 // addEventListener's third argument: `true` for capture, or an options object.
 // Anything else (absent, false, a number) is the default — the same shape the

@@ -13,32 +13,74 @@
 
 namespace bro::bronze_host {
 
-static std::unordered_map<uint64_t, ev::Persistent> s_indexedBindings;
+struct ContextBufferState {
+    std::unordered_map<uint64_t, ev::Persistent> indexedBindings;
+    std::unordered_map<GLuint, ev::Persistent> mappedBuffers;
+};
+static std::unordered_map<webgl::WebGL2RenderingContext*, ContextBufferState> s_contextBuffers;
 
-void stashIndexedBinding(uint32_t target, uint32_t index, Value bufVal) {
+void stashIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index, Value bufVal) {
+    if (!c) return;
     uint64_t key = (static_cast<uint64_t>(target) << 32) | index;
     if (ev::isNull(bufVal) || ev::isUndefined(bufVal)) {
-        s_indexedBindings.erase(key);
+        auto it = s_contextBuffers.find(c);
+        if (it != s_contextBuffers.end()) {
+            it->second.indexedBindings.erase(key);
+        }
     } else {
-        s_indexedBindings.insert_or_assign(key, ev::Persistent(bufVal));
+        s_contextBuffers[c].indexedBindings.insert_or_assign(key, ev::Persistent(bufVal));
     }
 }
 
-Value loadIndexedBinding(uint32_t target, uint32_t index) {
+Value loadIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index) {
+    if (!c) return ev::null();
     uint64_t key = (static_cast<uint64_t>(target) << 32) | index;
-    auto it = s_indexedBindings.find(key);
-    if (it != s_indexedBindings.end()) {
-        return it->second.get();
+    auto ctxIt = s_contextBuffers.find(c);
+    if (ctxIt != s_contextBuffers.end()) {
+        auto it = ctxIt->second.indexedBindings.find(key);
+        if (it != ctxIt->second.indexedBindings.end()) {
+            return it->second.get();
+        }
     }
     return ev::null();
 }
 
 void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
+    if (c) {
+        c->addTeardownCallback([](webgl::WebGL2RenderingContext* ctx) {
+            auto it = s_contextBuffers.find(ctx);
+            if (it != s_contextBuffers.end()) {
+                for (auto& [bufId, persistent] : it->second.mappedBuffers) {
+                    ev::detachArrayBuffer(persistent.get());
+                }
+                s_contextBuffers.erase(it);
+            }
+        });
+    }
+
     b.def("createBuffer", 0, [c](Value, std::span<const Value>) {
         return wrapGlObj(GlCell::Buffer, live(c)->createBuffer().id);
     });
     b.def("deleteBuffer", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteBuffer({idOf(argAt(a, 0), GlCell::Buffer)});
+        GLuint bufId = idOf(argAt(a, 0), GlCell::Buffer);
+        if (bufId) {
+            auto ctxIt = s_contextBuffers.find(c);
+            if (ctxIt != s_contextBuffers.end()) {
+                auto mIt = ctxIt->second.mappedBuffers.find(bufId);
+                if (mIt != ctxIt->second.mappedBuffers.end()) {
+                    ev::detachArrayBuffer(mIt->second.get());
+                    ctxIt->second.mappedBuffers.erase(mIt);
+                }
+                for (auto it = ctxIt->second.indexedBindings.begin(); it != ctxIt->second.indexedBindings.end(); ) {
+                    if (idOf(it->second.get(), GlCell::Buffer) == bufId) {
+                        it = ctxIt->second.indexedBindings.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            live(c)->deleteBuffer({bufId});
+        }
         return ev::undefined();
     });
     b.def("bindBuffer", 2, [c](Value, std::span<const Value> a) {
@@ -132,8 +174,6 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // --- Buffer mapping (BRO_buffer_map) ---
     // Returns an ArrayBuffer backed directly by driver memory. Detached on unmapBuffer.
-    static std::unordered_map<GLuint, ev::Persistent> s_mappedBuffers;
-
     b.def("mapBufferRange", 4, [c](Value, std::span<const Value> a) {
         GLenum target = u32At(a, 0);
         GLintptr offset = static_cast<GLintptr>(i64At(a, 1));
@@ -145,17 +185,20 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             reinterpret_cast<uint8_t*>(ptr), static_cast<uint32_t>(length),
             [](void*, uint8_t*) {}, nullptr);
         GLuint bufId = live(c)->boundBuffer(target);
-        s_mappedBuffers.insert_or_assign(bufId, ev::Persistent(ab));
+        s_contextBuffers[c].mappedBuffers.insert_or_assign(bufId, ev::Persistent(ab));
         return ab;
     });
 
     b.def("unmapBuffer", 1, [c](Value, std::span<const Value> a) {
         GLenum target = u32At(a, 0);
         GLuint bufId = live(c)->boundBuffer(target);
-        auto it = s_mappedBuffers.find(bufId);
-        if (it != s_mappedBuffers.end()) {
-            ev::detachArrayBuffer(it->second.get());
-            s_mappedBuffers.erase(it);
+        auto ctxIt = s_contextBuffers.find(c);
+        if (ctxIt != s_contextBuffers.end()) {
+            auto it = ctxIt->second.mappedBuffers.find(bufId);
+            if (it != ctxIt->second.mappedBuffers.end()) {
+                ev::detachArrayBuffer(it->second.get());
+                ctxIt->second.mappedBuffers.erase(it);
+            }
         }
         return ev::fromBool(live(c)->unmapBuffer(target));
     });
@@ -172,7 +215,7 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         uint32_t index = u32At(a, 1);
         Value bufVal = argAt(a, 2);
         live(c)->bindBufferBase(target, index, {idOf(bufVal, GlCell::Buffer)});
-        stashIndexedBinding(target, index, bufVal);
+        stashIndexedBinding(c, target, index, bufVal);
         return ev::undefined();
     });
     b.def("bindBufferRange", 5, [c](Value, std::span<const Value> a) {
@@ -182,7 +225,7 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         live(c)->bindBufferRange(target, index, {idOf(bufVal, GlCell::Buffer)},
                                  static_cast<GLintptr>(i64At(a, 3)),
                                  static_cast<GLsizeiptr>(i64At(a, 4)));
-        stashIndexedBinding(target, index, bufVal);
+        stashIndexedBinding(c, target, index, bufVal);
         return ev::undefined();
     });
 

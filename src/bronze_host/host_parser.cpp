@@ -12,20 +12,52 @@
 #include <string>
 #include <vector>
 
+#include "bronze_host/host_realm_scope.h"
+
 namespace bro::bronze_host {
 
 namespace {
 
-std::vector<std::unique_ptr<dom::Document>>* g_parsed = nullptr;
+struct ParsedDocEntry {
+    std::unique_ptr<dom::Document> doc;
+    uint64_t scopeId = 0;
+};
+
+std::vector<ParsedDocEntry> s_parsedDocs;
 
 }  // namespace
 
 dom::Document* parseIntoNewDocument(const std::string& html) {
-    if (!g_parsed) g_parsed = new std::vector<std::unique_ptr<dom::Document>>();
-    g_parsed->push_back(std::make_unique<dom::Document>());
-    dom::Document* doc = g_parsed->back().get();
+    auto doc = std::make_unique<dom::Document>();
+    dom::Document* ptr = doc.get();
     doc->parse(html);
-    return doc;
+    const uint64_t scopeId = currentRealmScope();
+    s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), scopeId});
+    return ptr;
+}
+
+void clearParsedDocuments() {
+    for (auto& entry : s_parsedDocs) {
+        if (entry.doc) {
+            clearHostElementsForDocument(entry.doc.get());
+            clearHostDocument(entry.doc.get());
+        }
+    }
+    s_parsedDocs.clear();
+}
+
+void clearParsedDocumentsForScope(uint64_t scopeId) {
+    for (auto it = s_parsedDocs.begin(); it != s_parsedDocs.end(); ) {
+        if (it->scopeId == scopeId) {
+            if (it->doc) {
+                clearHostElementsForDocument(it->doc.get());
+                clearHostDocument(it->doc.get());
+            }
+            it = s_parsedDocs.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 namespace {

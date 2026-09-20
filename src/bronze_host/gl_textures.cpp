@@ -22,6 +22,7 @@
 
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
+#include "layout/el_video.h"
 #include "util/log.h"
 
 namespace bro::bronze_host {
@@ -81,6 +82,13 @@ SourcePixels resolveSource(Value source, const char* who) {
                 // A cache hit touches no GL, a miss ran Ganesh; flagged either
                 // way, because guessing wrong the other way corrupts the frame.
                 return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h), /*disturbed=*/true};
+            }
+        }
+        if (auto* vc = el->videoControl()) {
+            int vw = 0, vh = 0;
+            const uint8_t* px = vc->currentFrameRgba(&vw, &vh);
+            if (px && vw > 0 && vh > 0) {
+                return {px, static_cast<GLsizei>(vw), static_cast<GLsizei>(vh)};
             }
         }
         static const std::vector<uint8_t> s_dummy(4, 255);

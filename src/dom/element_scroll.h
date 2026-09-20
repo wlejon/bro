@@ -24,6 +24,10 @@ class Element;
 /// height actually shown. 0 for an element that does not overflow.
 float maxScrollTopOf(const Element* el);
 
+/// The largest scrollLeft `el` can hold: its unclamped content width minus the
+/// width actually shown. 0 for an element that does not overflow.
+float maxScrollLeftOf(const Element* el);
+
 /// Is `el` a scroll container at all — does its resolved overflow clip?
 /// `visible` and `initial` spill rather than scroll, so moving them moves
 /// nothing.
@@ -35,7 +39,13 @@ bool elementClipsOverflow(const Element* el);
 /// offset actually moved.
 void setElementScrollTop(Element* el, double v);
 
+/// `el.scrollLeft = v`: clamp, mark document dirty, and fire `scroll` event if moved.
+void setElementScrollLeft(Element* el, double v);
+
 /// `el.scrollBy({top: delta})` — the same operation, relative.
 void scrollElementBy(Element* el, double delta);
+
+/// `el.scrollBy({left: delta})` — the horizontal relative scroll operation.
+void scrollElementLeftBy(Element* el, double delta);
 
 }  // namespace bro::dom

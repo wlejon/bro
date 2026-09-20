@@ -312,8 +312,17 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             std::vector<float> storage;
             const float* p = nullptr;
             size_t n = 0;
-            if (floatData(argAt(a, 1), storage, &p, &n) && n >= static_cast<size_t>(comps)) {
-                (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(n / comps), p);
+            if (floatData(argAt(a, 1), storage, &p, &n)) {
+                size_t srcOffset = hasArg(a, 2) ? static_cast<size_t>(u32At(a, 2)) : 0;
+                if (srcOffset > n) srcOffset = n;
+                size_t count = n - srcOffset;
+                if (hasArg(a, 3)) {
+                    size_t l = static_cast<size_t>(u32At(a, 3));
+                    if (l > 0 && l < count) count = l;
+                }
+                if (count >= static_cast<size_t>(comps)) {
+                    (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps), p + srcOffset);
+                }
             }
             return ev::undefined();
         });
@@ -324,8 +333,17 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             std::vector<int32_t> storage;
             const int32_t* p = nullptr;
             size_t n = 0;
-            if (int32Data(argAt(a, 1), storage, &p, &n) && n >= static_cast<size_t>(comps)) {
-                (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(n / comps), p);
+            if (int32Data(argAt(a, 1), storage, &p, &n)) {
+                size_t srcOffset = hasArg(a, 2) ? static_cast<size_t>(u32At(a, 2)) : 0;
+                if (srcOffset > n) srcOffset = n;
+                size_t count = n - srcOffset;
+                if (hasArg(a, 3)) {
+                    size_t l = static_cast<size_t>(u32At(a, 3));
+                    if (l > 0 && l < count) count = l;
+                }
+                if (count >= static_cast<size_t>(comps)) {
+                    (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps), p + srcOffset);
+                }
             }
             return ev::undefined();
         });
@@ -336,8 +354,17 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             std::vector<uint32_t> storage;
             const uint32_t* p = nullptr;
             size_t n = 0;
-            if (uint32Data(argAt(a, 1), storage, &p, &n) && n >= static_cast<size_t>(comps)) {
-                (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(n / comps), p);
+            if (uint32Data(argAt(a, 1), storage, &p, &n)) {
+                size_t srcOffset = hasArg(a, 2) ? static_cast<size_t>(u32At(a, 2)) : 0;
+                if (srcOffset > n) srcOffset = n;
+                size_t count = n - srcOffset;
+                if (hasArg(a, 3)) {
+                    size_t l = static_cast<size_t>(u32At(a, 3));
+                    if (l > 0 && l < count) count = l;
+                }
+                if (count >= static_cast<size_t>(comps)) {
+                    (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps), p + srcOffset);
+                }
             }
             return ev::undefined();
         });
@@ -365,9 +392,18 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             std::vector<float> storage;
             const float* p = nullptr;
             size_t n = 0;
-            if (floatData(argAt(a, 2), storage, &p, &n) && n >= static_cast<size_t>(comps)) {
-                (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(n / comps),
-                               boolAt(a, 1) ? GL_TRUE : GL_FALSE, p);
+            if (floatData(argAt(a, 2), storage, &p, &n)) {
+                size_t srcOffset = hasArg(a, 3) ? static_cast<size_t>(u32At(a, 3)) : 0;
+                if (srcOffset > n) srcOffset = n;
+                size_t count = n - srcOffset;
+                if (hasArg(a, 4)) {
+                    size_t l = static_cast<size_t>(u32At(a, 4));
+                    if (l > 0 && l < count) count = l;
+                }
+                if (count >= static_cast<size_t>(comps)) {
+                    (live(c)->*fn)(locOf(argAt(a, 0)), static_cast<GLsizei>(count / comps),
+                                   boolAt(a, 1) ? GL_TRUE : GL_FALSE, p + srcOffset);
+                }
             }
             return ev::undefined();
         });
