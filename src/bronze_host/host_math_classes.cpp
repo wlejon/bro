@@ -18,13 +18,18 @@ namespace {
 // ============================================================================
 // SpatialHash3D
 // ============================================================================
+inline constexpr uint32_t kHostSpatialHash3DTag = 0x53505348u; // 'SPSH'
+
 struct HostSpatialHash3D {
+    uint32_t tag = kHostSpatialHash3DTag;
     bromath::SpatialHash3D sh;
     explicit HostSpatialHash3D(float cs) : sh(cs) {}
 };
 
 static HostSpatialHash3D* getSpatialHash(Value v) {
-    return static_cast<HostSpatialHash3D*>(ev::handleData(v));
+    if (!ev::isObject(v)) return nullptr;
+    auto* h = static_cast<HostSpatialHash3D*>(ev::handleData(v));
+    return (h && h->tag == kHostSpatialHash3DTag) ? h : nullptr;
 }
 
 // Per thread, like ImageBitmap's (host_imagebitmap.cpp): a Worker realm
@@ -156,13 +161,18 @@ static void decorateSpatialHashProto(ObjectBuilder& proto) {
 // ============================================================================
 // Rng
 // ============================================================================
+inline constexpr uint32_t kHostRngTag = 0x4D524E47u; // 'MRNG'
+
 struct HostRng {
+    uint32_t tag = kHostRngTag;
     uint64_t state = 0;
     explicit HostRng(uint64_t s) : state(s) {}
 };
 
 static HostRng* getRng(Value v) {
-    return static_cast<HostRng*>(ev::handleData(v));
+    if (!ev::isObject(v)) return nullptr;
+    auto* r = static_cast<HostRng*>(ev::handleData(v));
+    return (r && r->tag == kHostRngTag) ? r : nullptr;
 }
 
 static thread_local HostClass g_rngClass;
@@ -264,12 +274,17 @@ static void decorateRngProto(ObjectBuilder& proto) {
 // ============================================================================
 // Smoother
 // ============================================================================
+inline constexpr uint32_t kHostSmootherTag = 0x534D5448u; // 'SMTH'
+
 struct HostSmoother {
+    uint32_t tag = kHostSmootherTag;
     bromath::Smoother s;
 };
 
 static HostSmoother* getSmoother(Value v) {
-    return static_cast<HostSmoother*>(ev::handleData(v));
+    if (!ev::isObject(v)) return nullptr;
+    auto* sm = static_cast<HostSmoother*>(ev::handleData(v));
+    return (sm && sm->tag == kHostSmootherTag) ? sm : nullptr;
 }
 
 static thread_local HostClass g_smootherClass;

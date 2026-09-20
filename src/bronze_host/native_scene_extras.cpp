@@ -18,6 +18,7 @@
 
 #include <bromesh/mesh_data.h>
 #include <bromesh/manipulation/normals.h>
+#include <bromesh/api.h>
 
 #include <cstdio>
 #include <cstring>
@@ -86,8 +87,8 @@ bool meshDataOf(uint64_t meshBits, bromesh::MeshData& out, const char* who) {
         ev::throwTypeError(std::string(who) + ": expected a Mesh or { positions, indices, ... }");
         return false;
     }
-    if (void* handle = ev::handleData(meshVal)) {
-        out = *static_cast<bromesh::MeshData*>(handle);
+    if (const auto* md = bromesh::api::meshDataOf(meshVal)) {
+        out = *md;
         return true;
     }
     if (!readFloatVector(ev::getProperty(meshVal, "positions"), out.positions) ||

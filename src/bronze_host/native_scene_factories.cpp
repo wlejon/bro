@@ -10,6 +10,7 @@
 
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/manipulation/normals.h>
+#include <bromesh/api.h>
 #include <json.hpp>
 
 namespace bro::bronze_host {
@@ -152,9 +153,8 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
     g->root()->addChild(node);
 
     bromesh::MeshData meshData;
-    void* ptr = bronze::embed::handleData(bronze::Value{meshVal});
-    if (ptr) {
-        meshData = *static_cast<bromesh::MeshData*>(ptr);
+    if (const auto* md = bromesh::api::meshDataOf(bronze::Value{meshVal})) {
+        meshData = *md;
     }
 
     Value opts = ev::fromBits(optsBits);
@@ -179,9 +179,8 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
             Value dataProp = ev::getProperty(opts, "data");
             for (Value cand : {meshProp, dataProp}) {
                 if (!ev::isObject(cand)) continue;
-                void* mptr = bronze::embed::handleData(cand);
-                if (mptr) {
-                    meshData = *static_cast<bromesh::MeshData*>(mptr);
+                if (const auto* md = bromesh::api::meshDataOf(cand)) {
+                    meshData = *md;
                     hasRaw = true;
                     break;
                 }
@@ -266,17 +265,15 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
         return nullptr;
     }
     Value skinVal = ev::getProperty(opts, "skin");
-    void* sptr = ev::isObject(skinVal) ? bronze::embed::handleData(skinVal) : nullptr;
-    if (!sptr) {
+    const auto* sd = ev::isObject(skinVal) ? bromesh::api::skinDataOf(skinVal) : nullptr;
+    if (!sd) {
         ev::throwTypeError("createSkinnedMesh: 'skin' option (SkinData) is required");
         return nullptr;
     }
-    auto* sd = static_cast<bromesh::SkinData*>(sptr);
 
     bromesh::MeshData meshData;
-    void* mptr = bronze::embed::handleData(bronze::Value{meshHandle});
-    if (mptr) {
-        meshData = *static_cast<bromesh::MeshData*>(mptr);
+    if (const auto* md = bromesh::api::meshDataOf(bronze::Value{meshHandle})) {
+        meshData = *md;
     }
 
     // 1. Raw positions/indices
@@ -297,9 +294,8 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
     Value meshProp = ev::getProperty(opts, "mesh");
     if (!hasRaw && meshData.positions.empty()) {
         if (ev::isObject(meshProp)) {
-            void* p = bronze::embed::handleData(meshProp);
-            if (p) {
-                meshData = *static_cast<bromesh::MeshData*>(p);
+            if (const auto* md = bromesh::api::meshDataOf(meshProp)) {
+                meshData = *md;
                 hasRaw = true;
             }
         }
@@ -366,9 +362,7 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
 
     Value skelProp = ev::getProperty(opts, "skeleton");
     if (ev::isObject(skelProp)) {
-        void* skelPtr = bronze::embed::handleData(skelProp);
-        if (skelPtr) {
-            auto* skel = static_cast<bromesh::Skeleton*>(skelPtr);
+        if (const auto* skel = bromesh::api::skeletonOf(skelProp)) {
             node->ensurePlayer().setSkeleton(std::make_shared<bromesh::Skeleton>(*skel));
         }
     }
@@ -385,9 +379,7 @@ void* bro_scene_SceneGraph_createInstancedMesh(void* self, const char* jsonOpts,
     if (!g) return nullptr;
     auto* node = g->createInstancedMesh();
     g->root()->addChild(node);
-    void* ptr = bronze::embed::handleData(bronze::Value{meshVal});
-    if (ptr) {
-        auto* srcMesh = static_cast<bromesh::MeshData*>(ptr);
+    if (const auto* srcMesh = bromesh::api::meshDataOf(bronze::Value{meshVal})) {
         node->setMesh(*srcMesh);
     }
     return wrapNode(node, g);

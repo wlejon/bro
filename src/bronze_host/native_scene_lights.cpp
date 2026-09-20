@@ -11,6 +11,7 @@
 #include <bromesh/animation/pose.h>
 #include <bromesh/rigging/auto_rig.h>
 #include <bromesh/io/splat_ply.h>
+#include <bromesh/api.h>
 #include "util/log.h"
 #include <cstring>
 #include <vector>
@@ -32,10 +33,9 @@ void bro_scene_SceneNode_setSkeleton(void* self, uint64_t skelBits) {
     if (!n || n->type() != scene::SceneNode::Type::Mesh) return;
     auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
     if (!sm) return;
-    void* handle = ev::handleData(ev::fromBits(skelBits));
-    if (!handle) return;
-    auto* sk = static_cast<bromesh::Skeleton*>(handle);
-    sm->ensurePlayer().setSkeleton(std::make_shared<bromesh::Skeleton>(*sk));
+    if (const auto* sk = bromesh::api::skeletonOf(ev::fromBits(skelBits))) {
+        sm->ensurePlayer().setSkeleton(std::make_shared<bromesh::Skeleton>(*sk));
+    }
 }
 
 void bro_scene_SceneNode_addClip(void* self, const char* name, uint64_t animBits) {
@@ -43,10 +43,9 @@ void bro_scene_SceneNode_addClip(void* self, const char* name, uint64_t animBits
     if (!n || n->type() != scene::SceneNode::Type::Mesh) return;
     auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
     if (!sm || !name) return;
-    void* handle = ev::handleData(ev::fromBits(animBits));
-    if (!handle) return;
-    auto* a = static_cast<bromesh::Animation*>(handle);
-    sm->ensurePlayer().addClip(name, std::make_shared<bromesh::Animation>(*a));
+    if (const auto* a = bromesh::api::animationOf(ev::fromBits(animBits))) {
+        sm->ensurePlayer().addClip(name, std::make_shared<bromesh::Animation>(*a));
+    }
 }
 
 void bro_scene_SceneNode_addBlendSpace1D(void* self, const char* name, const char* clipsJson) {

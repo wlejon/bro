@@ -2,6 +2,7 @@
 #include "bronze_host/host_natives.h"
 #include <bromesh/mesh_data.h>
 #include <bromesh/manipulation/normals.h>
+#include <bromesh/api.h>
 #include "scene/particles3d_node.h"
 #include "scene/decal_node.h"
 #include "scene/sprite_node.h"
@@ -183,8 +184,8 @@ void bro_scene_SceneNode_updateMesh(void* self, uint64_t meshBits, bool recomput
         return;
     }
     bromesh::MeshData meshData;
-    if (void* handle = ev::handleData(meshVal)) {
-        meshData = *static_cast<bromesh::MeshData*>(handle);
+    if (const auto* md = bromesh::api::meshDataOf(meshVal)) {
+        meshData = *md;
     } else {
         if (!readFloatVector(ev::getProperty(meshVal, "positions"), meshData.positions) ||
             !readU32Vector(ev::getProperty(meshVal, "indices"), meshData.indices)) {
