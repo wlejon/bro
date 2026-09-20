@@ -485,7 +485,7 @@ else()
     # so its link line is the executables' own: BRO_BRASS_LIB first, for
     # the reason above bro_bronze_host's link line.
     add_executable(bro-native-manifest native_manifest_tool.cpp js_entry_stubs.cpp)
-    target_link_libraries(bro-native-manifest PRIVATE ${BRO_BRASS_LIB} bro_engine bro_bronze_host)
+    target_link_libraries(bro-native-manifest PRIVATE ${BRO_BRASS_LIB} bro_bronze_host)
     if(WIN32)
         target_link_libraries(bro-native-manifest PRIVATE ws2_32)
     endif()

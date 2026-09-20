@@ -293,8 +293,13 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
+          BRASS_ARGS=""
+          if [ -n "${BRASS_ROOT:-}" ]; then
+            BRASS_ARGS="-DBRASS_ROOT=$BRASS_ROOT"
+          fi
           cmake -B build \
             -DBRO_PROFILE=minimal \
+            $BRASS_ARGS \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \

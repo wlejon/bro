@@ -412,27 +412,28 @@ void Engine::initAppRealm() {
         syncIframes();
     }
 
-    if (!hostProvidesCompiledApp_) {
-        if (!manifest_.scripts.empty()) {
-            std::string combinedScripts;
-            for (const auto& script : manifest_.scripts) {
-                std::string code;
-                if (script.isInline()) {
-                    code = script.code;
-                } else {
-                    code = AppLoader::loadFile(script.path);
-                }
-                if (!code.empty()) {
-                    if (!combinedScripts.empty()) combinedScripts += "\n;\n";
-                    combinedScripts += code;
-                }
+    if (!manifest_.scripts.empty()) {
+        std::string combinedScripts;
+        for (const auto& script : manifest_.scripts) {
+            std::string code;
+            if (script.isInline()) {
+                code = script.code;
+            } else {
+                code = AppLoader::loadFile(script.path);
             }
-            if (!combinedScripts.empty()) {
-                if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
-                    setTestFailure(true);
-                }
+            if (!code.empty()) {
+                if (!combinedScripts.empty()) combinedScripts += "\n;\n";
+                combinedScripts += code;
             }
         }
+        if (!combinedScripts.empty()) {
+            if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
+                setTestFailure(true);
+            }
+        }
+    }
+
+    if (!hostProvidesCompiledApp_) {
         dispatchDocumentReadyEvents();
     }
 }

@@ -15,20 +15,48 @@
 #include "embed/embed.h"
 
 #include <cstdio>
+#include <exception>
 #include <string>
+
+namespace {
+struct InitProbe {
+    InitProbe() {
+        std::set_terminate([]() {
+            try {
+                auto e = std::current_exception();
+                if (e) std::rethrow_exception(e);
+            } catch (const std::exception& exc) {
+                std::fprintf(stderr, "bro-native-manifest uncaught exception: %s\n", exc.what());
+            } catch (...) {
+                std::fprintf(stderr, "bro-native-manifest unknown uncaught exception\n");
+            }
+            std::fflush(stderr);
+            std::abort();
+        });
+    }
+} g_probe;
+}  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: bro-native-manifest <out.json>\n");
         return 2;
     }
-    std::string err;
-    if (!bro::bronze_host::registerBroNatives(&err)) {
-        std::fprintf(stderr, "bro-native-manifest: %s\n", err.c_str());
+    try {
+        std::string err;
+        if (!bro::bronze_host::registerBroNatives(&err)) {
+            std::fprintf(stderr, "bro-native-manifest: %s\n", err.c_str());
+            return 1;
+        }
+        if (!bronze::embed::writeNativeManifest(argv[1], &err)) {
+            std::fprintf(stderr, "bro-native-manifest: %s\n", err.c_str());
+            return 1;
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "bro-native-manifest exception: %s\n", e.what());
         return 1;
-    }
-    if (!bronze::embed::writeNativeManifest(argv[1], &err)) {
-        std::fprintf(stderr, "bro-native-manifest: %s\n", err.c_str());
+    } catch (...) {
+        std::fprintf(stderr, "bro-native-manifest unknown exception\n");
         return 1;
     }
     return 0;
