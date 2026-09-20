@@ -6,6 +6,7 @@
 #include "tile/pathfind.h"
 #include "tile/region.h"
 #include "tile/coord.h"
+#include "util/log.h"
 #include <json.hpp>
 #include <sstream>
 #include <string>
@@ -48,7 +49,11 @@ const char* bro_tile_world_TileWorld_distanceField(void* self, const char* sourc
             } else if (sj.is_object() && sj.contains("x") && sj.contains("y")) {
                 sources.push_back({sj["x"].get<int>(), sj["y"].get<int>()});
             }
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            LOG_WARN("TileWorld.distanceField: failed to parse sourcesJson: %s", e.what());
+        } catch (...) {
+            LOG_WARN("TileWorld.distanceField: unknown exception while parsing sourcesJson");
+        }
     }
     if (sources.empty()) sources.push_back({0, 0});
 
@@ -65,7 +70,11 @@ const char* bro_tile_world_TileWorld_distanceField(void* self, const char* sourc
                     costs.push_back(item.is_number() ? item.get<float>() : 1.0f);
                 }
             }
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            LOG_WARN("TileWorld.distanceField: failed to parse jsonOpts: %s", e.what());
+        } catch (...) {
+            LOG_WARN("TileWorld.distanceField: unknown exception while parsing jsonOpts");
+        }
     }
 
     bro::tile::Conn conn = allowDiag ? bro::tile::Conn::Vertex : bro::tile::Conn::Edge;
@@ -123,7 +132,11 @@ const char* bro_tile_world_TileWorld_floodFill(void* self, int32_t seedX, int32_
             } else if (j.contains("id") && j["id"].is_number()) {
                 match = bro::tile::matchTile(layer, j["id"].get<uint16_t>());
             }
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            LOG_WARN("TileWorld.floodFill: failed to parse jsonOpts: %s", e.what());
+        } catch (...) {
+            LOG_WARN("TileWorld.floodFill: unknown exception while parsing jsonOpts");
+        }
     }
     if (!match) {
         uint16_t seedId = grid.inBounds(seed) ? grid.tile(layer, seed) : 0;
@@ -165,7 +178,11 @@ const char* bro_tile_world_TileWorld_components(void* self, const char* jsonOpts
             } else if (j.contains("id") && j["id"].is_number()) {
                 match = bro::tile::matchTile(layer, j["id"].get<uint16_t>());
             }
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            LOG_WARN("TileWorld.components: failed to parse jsonOpts: %s", e.what());
+        } catch (...) {
+            LOG_WARN("TileWorld.components: unknown exception while parsing jsonOpts");
+        }
     }
     if (!match) {
         match = [](const bro::tile::TileGrid& g, bro::tile::Cell cell) {

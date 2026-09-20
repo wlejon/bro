@@ -359,12 +359,39 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
     return obj;
 }
 
+namespace {
+
+static ev::Persistent s_skeletalAnimationCtor;
+
+Value animationConstructor(Value self, std::span<const Value> a) {
+    if (ev::isFunction(s_skeletalAnimationCtor.get()) && !a.empty() && ev::isObject(a[0])) {
+        Value chan = ev::getProperty(a[0], "channels");
+        Value dur = ev::getProperty(a[0], "duration");
+        if (!ev::isUndefined(chan) || !ev::isUndefined(dur)) {
+            ev::CallResult r = ev::construct(s_skeletalAnimationCtor.get(), a);
+            return r.thrown ? ev::undefined() : r.value;
+        }
+    }
+    engine::Engine* eng = hostEngine();
+    uint64_t id = 0;
+    if (eng) {
+        engine::WebAnimation& rec = eng->webAnimationManager().create(nullptr, eng->timeNowMs());
+        id = rec.id;
+    }
+    return wrapAnimation(id);
+}
+
+} // namespace
+
 void installWebAnimationGlobals() {
-#if BRO_WITH_3D
-    g_animationClass.init("WebAnimation", [](ObjectBuilder& b) {
-#else
-    g_animationClass.init("Animation", [](ObjectBuilder& b) {
-#endif
+    ev::GlobalValue existing = ev::globalValue("Animation");
+    if (existing.found && ev::isFunction(existing.value)) {
+        s_skeletalAnimationCtor.set(existing.value);
+    } else {
+        s_skeletalAnimationCtor.set(ev::undefined());
+    }
+
+    g_animationClass.install("Animation", 0, animationConstructor, [](ObjectBuilder& b) {
         b.def("play", 0, [](Value self_, std::span<const Value>) {
             auto* st = static_cast<AnimationState*>(ev::handleData(self_));
             if (!st) return ev::undefined();
@@ -563,9 +590,25 @@ void installWebAnimationGlobals() {
             });
     });
 
-#if !BRO_WITH_3D
+    if (ev::isFunction(s_skeletalAnimationCtor.get())) {
+        Value skelProto = ev::getProperty(s_skeletalAnimationCtor.get(), "prototype");
+        if (ev::isObject(skelProto)) {
+            ev::setPrototype(skelProto, g_animationClass.prototype());
+        }
+    }
+
     ev::registerGlobal("Animation", g_animationClass.constructor());
-#endif
+    ev::registerGlobal("WebAnimation", g_animationClass.constructor());
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        ev::setProperty(gt.value, "Animation", g_animationClass.constructor());
+        ev::setProperty(gt.value, "WebAnimation", g_animationClass.constructor());
+    }
+    ev::GlobalValue win = ev::globalValue("window");
+    if (win.found && ev::isObject(win.value)) {
+        ev::setProperty(win.value, "Animation", g_animationClass.constructor());
+        ev::setProperty(win.value, "WebAnimation", g_animationClass.constructor());
+    }
 }
 
 void decorateElementWebAnimations(ObjectBuilder& b) {

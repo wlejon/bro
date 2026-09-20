@@ -223,7 +223,7 @@ void installHtmlInterfaces() {
     g_documentFragmentClass.inherit(g_nodeClass);
 
     // Document
-    g_documentClass.install("Document", 0, illegalConstructor, nullptr);
+    g_documentClass.install("Document", 0, illegalConstructor, decorateDocumentProto);
     g_documentClass.inherit(g_nodeClass);
     ev::registerGlobal("Document", g_documentClass.constructor());
     {

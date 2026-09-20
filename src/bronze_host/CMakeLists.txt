@@ -228,6 +228,7 @@ if(BRO_WITH_3D)
         native_scene_extras.cpp
         native_scene_core.cpp
         native_scene_env.cpp
+        native_scene_factories.cpp
         native_scene_terrain.cpp
         native_scene_clipmap.cpp
         native_scene_tile.cpp

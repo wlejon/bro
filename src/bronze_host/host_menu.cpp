@@ -195,4 +195,8 @@ Value makeBroMenuValue() {
     return menu.get();
 }
 
+void clearMenuHandlers() {
+    s_menuHandlers.clear();
+}
+
 } // namespace bro::bronze_host

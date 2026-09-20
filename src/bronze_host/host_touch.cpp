@@ -194,6 +194,18 @@ void installTouchGlobals() {
     g_touchEventClass.install("TouchEvent", 1, touchEventConstructor, [](ObjectBuilder&) {});
     g_gestureEventClass.install("GestureEvent", 1, gestureEventConstructor,
                                 [](ObjectBuilder&) {});
+
+    ev::GlobalValue baseClass = ev::globalValue("UIEvent");
+    if (!baseClass.found || !ev::isFunction(baseClass.value)) {
+        baseClass = ev::globalValue("Event");
+    }
+    if (baseClass.found && ev::isFunction(baseClass.value)) {
+        Value baseProto = ev::getProperty(baseClass.value, "prototype");
+        if (ev::isObject(baseProto)) {
+            ev::setPrototype(g_touchEventClass.prototype(), baseProto);
+            ev::setPrototype(g_gestureEventClass.prototype(), baseProto);
+        }
+    }
 }
 
 Value makeTouchValue(const dom::TouchPoint& pt) {

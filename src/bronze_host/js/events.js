@@ -328,4 +328,13 @@
     g.ErrorEvent = ErrorEvent;
     g.ProgressEvent = ProgressEvent;
     g.PromiseRejectionEvent = PromiseRejectionEvent;
+
+    if (typeof g.TouchEvent === 'function' && g.TouchEvent.prototype) {
+        Object.setPrototypeOf(g.TouchEvent.prototype, UIEvent.prototype);
+        Object.setPrototypeOf(g.TouchEvent, UIEvent);
+    }
+    if (typeof g.GestureEvent === 'function' && g.GestureEvent.prototype) {
+        Object.setPrototypeOf(g.GestureEvent.prototype, UIEvent.prototype);
+        Object.setPrototypeOf(g.GestureEvent, UIEvent);
+    }
 })();

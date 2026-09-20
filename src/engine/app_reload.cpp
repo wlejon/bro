@@ -229,6 +229,7 @@ void Engine::performAppReload() {
     bro::bronze_host::resetCustomElementsRegistry();
     bro::bronze_host::clearParsedDocuments();
     bro::bronze_host::clearDynamicModules();
+    bro::bronze_host::clearMenuHandlers();
 
     if (!appModuleHandles_.empty()) {
         unloadAppModules();

@@ -11,6 +11,7 @@
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "platform/sdl_window.h"
 
 #include "canvas/canvas_scene.h"
@@ -99,6 +100,56 @@ namespace {
 
 Value wrapElement(dom::Element* el) {
     return hostElementValue(el);
+}
+
+dom::Element* findDeepestElement(dom::Element* root, float docX, float docY) {
+    if (!root) return nullptr;
+    const auto& children = root->children();
+    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+        dom::Element* child = *it;
+        if (!child) continue;
+        const auto& cs = child->computedStyle();
+        auto dIt = cs.find("display");
+        if (dIt != cs.end() && dIt->second == "none") continue;
+
+        dom::Element* deepest = findDeepestElement(child, docX, docY);
+        if (deepest) return deepest;
+
+        auto vIt = cs.find("visibility");
+        if (vIt != cs.end() && vIt->second == "hidden") continue;
+
+        dom::AbsoluteRect r = dom::absoluteBorderBox(child);
+        if (r.width > 0.0f && r.height > 0.0f &&
+            docX >= r.x && docX <= (r.x + r.width) &&
+            docY >= r.y && docY <= (r.y + r.height)) {
+            return child;
+        }
+    }
+    return nullptr;
+}
+
+dom::Element* hitTestWithFallback(engine::Engine* e, dom::Document* doc, float x, float y) {
+    if (!e) return nullptr;
+    float vw = static_cast<float>(e->contentWidth());
+    float vh = static_cast<float>(e->contentHeight());
+    if (x < 0.0f || y < 0.0f || x >= vw || y >= vh) return nullptr;
+    if (doc) {
+        e->flushLayoutForRead(doc);
+    }
+    float docX = x;
+    float docY = y + e->viewportScrollY();
+    dom::Element* hit = e->hitTest(docX, docY);
+    if (!hit || (doc && hit == doc->documentElement())) {
+        if (doc) {
+            if (dom::Element* fallback = findDeepestElement(doc->documentElement(), docX, docY)) {
+                hit = fallback;
+            }
+        }
+    }
+    if (!hit && doc) {
+        hit = doc->documentElement();
+    }
+    return hit;
 }
 
 Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
@@ -360,6 +411,37 @@ void decorateDocumentExtras(ObjectBuilder& b, dom::Document* fixed) {
 
 }  // namespace
 
+void decorateDocumentProto(ObjectBuilder& b) {
+    b.def("elementFromPoint", 2, [](Value, std::span<const Value> a) -> Value {
+        if (a.size() < 2) return ev::null();
+        float x = static_cast<float>(ev::toDouble(a[0]));
+        float y = static_cast<float>(ev::toDouble(a[1]));
+        auto* e = hostEngine();
+        if (!e) return ev::null();
+        dom::Document* doc = e->document();
+        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
+        return wrapElement(hit);
+    });
+    b.def("elementsFromPoint", 2, [](Value, std::span<const Value> a) -> Value {
+        auto emptyArr = []() { return hostArrayOf(0, [](size_t) { return ev::undefined(); }); };
+        if (a.size() < 2) return emptyArr();
+        float x = static_cast<float>(ev::toDouble(a[0]));
+        float y = static_cast<float>(ev::toDouble(a[1]));
+        auto* e = hostEngine();
+        if (!e) return emptyArr();
+        dom::Document* doc = e->document();
+        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
+        if (!hit) return emptyArr();
+        std::vector<dom::Element*> chain;
+        for (dom::Element* cur = hit; cur; cur = cur->parentElement()) {
+            chain.push_back(cur);
+        }
+        return hostArrayOf(chain.size(), [&chain](size_t i) {
+            return hostElementValue(chain[i]);
+        });
+    });
+}
+
 Value makeDocumentValue(dom::Document* fixed) {
     ObjectBuilder b;
     b.set("nodeType", ev::fromDouble(9));
@@ -498,15 +580,8 @@ Value makeDocumentValue(dom::Document* fixed) {
         float y = static_cast<float>(ev::toDouble(a[1]));
         auto* e = hostEngine();
         if (!e) return ev::null();
-        float vw = static_cast<float>(e->contentWidth());
-        float vh = static_cast<float>(e->contentHeight());
-        if (x < 0.0f || y < 0.0f || x >= vw || y >= vh) return ev::null();
-        if (dom::Document* doc = e->document()) {
-            e->flushLayoutForRead(doc);
-        }
-        float docX = x;
-        float docY = y + e->viewportScrollY();
-        dom::Element* hit = e->hitTest(docX, docY);
+        dom::Document* doc = documentFor(fixed);
+        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
         return wrapElement(hit);
     });
     b.def("elementsFromPoint", 2, [fixed](Value, std::span<const Value> a) {
@@ -517,15 +592,8 @@ Value makeDocumentValue(dom::Document* fixed) {
         float y = static_cast<float>(ev::toDouble(a[1]));
         auto* e = hostEngine();
         if (!e) return emptyArr();
-        float vw = static_cast<float>(e->contentWidth());
-        float vh = static_cast<float>(e->contentHeight());
-        if (x < 0.0f || y < 0.0f || x >= vw || y >= vh) return emptyArr();
-        if (dom::Document* doc = e->document()) {
-            e->flushLayoutForRead(doc);
-        }
-        float docX = x;
-        float docY = y + e->viewportScrollY();
-        dom::Element* hit = e->hitTest(docX, docY);
+        dom::Document* doc = documentFor(fixed);
+        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
         if (!hit) return emptyArr();
         std::vector<dom::Element*> chain;
         for (dom::Element* cur = hit; cur; cur = cur->parentElement()) {

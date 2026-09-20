@@ -101,6 +101,9 @@ void clearDynamicModules();
 void deliverHostMediaQueryChanges();
 void clearHostMediaQueries();
 
+/// Clear persistent menu callbacks on app reload.
+void clearMenuHandlers();
+
 /// Terminate and join all active worker threads on shutdown.
 void terminateAllWorkers();
 

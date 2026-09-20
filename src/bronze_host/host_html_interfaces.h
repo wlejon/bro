@@ -22,6 +22,8 @@ const HostClass& documentFragmentHostClass();
 
 Value htmlInterfaceProto(const std::string& tagName);
 
+void decorateDocumentProto(ObjectBuilder& b);
+
 void installHtmlInterfaces();
 
 }  // namespace bro::bronze_host

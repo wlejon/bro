@@ -22,17 +22,17 @@ HostClass g_gamepad_eventClass;
 void decorateGamepadButtonProto(ObjectBuilder& b) {
     b.accessor("pressed",
                [](Value self, std::span<const Value>) {
-        return ev::fromUtf8("");
+        return ev::fromBool(false);
     },
                nullptr);
     b.accessor("touched",
                [](Value self, std::span<const Value>) {
-        return ev::fromUtf8("");
+        return ev::fromBool(false);
     },
                nullptr);
     b.accessor("value",
                [](Value self, std::span<const Value>) {
-        return ev::fromUtf8("");
+        return ev::fromDouble(0.0);
     },
                nullptr);
 }
@@ -40,7 +40,7 @@ void decorateGamepadButtonProto(ObjectBuilder& b) {
 void decorateGamepadEventProto(ObjectBuilder& b) {
     b.accessor("gamepad",
                [](Value self, std::span<const Value>) {
-        return ev::fromUtf8("");
+        return ev::null();
     },
                nullptr);
 }

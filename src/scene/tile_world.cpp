@@ -221,7 +221,10 @@ void TileWorld::loadGrid(tile::TileGrid&& newGrid) {
     // and every k.node is a pointer the reclaimed graph already freed.
     if (auto* r = rootNode())
         for (auto& k : objectKinds_)
-            if (k.node) r->addChild(k.node);
+            if (k.node) {
+                r->addChild(k.node);
+                attachShadeMap(k.node);
+            }
     rebuildObjects();
 }
 
