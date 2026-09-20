@@ -7,10 +7,10 @@
 //     compiled objects cannot exist yet, because one of them is the output
 //     the tool's manifest is an input to. Nothing in the tool runs an entry.
 //
-//   * Apple Silicon, mirroring brokit's bronze_js_stubs_arm64.cpp: bronze's
-//     code generator (brass) emits x86_64, and an x86_64 object cannot be
-//     linked into an arm64 Mach-O image. There no bronze-compiled JS — an
-//     app's module included — can run at all.
+//   * Unsupported host architectures (BRASS_HOST_BACKEND=OFF), mirroring
+//     brokit's fallback entry stubs: on platforms where brass does not emit
+//     machine code, these no-op stubs satisfy link-time symbols. On supported
+//     architectures (x86_64, AArch64), real compiled JS objects are linked.
 //
 // Everywhere else the executables link bro_bronze_js, the real objects from
 // js/, and this file is not in their link.
