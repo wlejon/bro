@@ -14,9 +14,11 @@
 #include "embed/embed.h"
 #include "modules/modules.h"
 
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -84,6 +86,25 @@ bool hasImportStmt(const std::string& code) {
     return false;
 }
 
+template <typename Fn>
+auto compileWithPumping(engine::Engine& engine, Fn&& compileFn) {
+    if (engine.displayMode() == engine::DisplayMode::Windowed && engine.window()) {
+        engine.setAppCompiling(true);
+        auto future = std::async(std::launch::async, std::forward<Fn>(compileFn));
+        while (future.wait_for(std::chrono::milliseconds(16)) != std::future_status::ready) {
+            if (engine.splashVisible()) {
+                engine.pumpSplashFrame(16.67);
+            } else {
+                engine.pumpEventsOnly();
+            }
+        }
+        engine.setAppCompiling(false);
+        return future.get();
+    } else {
+        return compileFn();
+    }
+}
+
 } // namespace
 
 std::string wrapAsyncIife(const std::string& code, const std::string& filename) {
@@ -140,7 +161,10 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
         execCode = wrapAsyncIife(execCode, filename);
     }
 
-    auto res = bronze::eval::evalScript(execCode, opts);
+    auto compiled = compileWithPumping(engine, [&]() {
+        return bronze::eval::compileScript(execCode, opts);
+    });
+    auto res = bronze::eval::runCompiledScript(std::move(compiled), opts);
 
     if (res.thrown && execCode == code && !hasImportStmt(code)) {
         std::string errStr = bronze::embed::toUtf8(res.value);
@@ -148,7 +172,10 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
             // The failed attempt is off the stack and superseded: its handle
             // is retired here so the one written below is the run's only one.
             if (moduleHandleOut && *moduleHandleOut) bronze::embed::unloadModule(*moduleHandleOut);
-            res = bronze::eval::evalScript(wrapAsyncIife(code, filename), opts);
+            auto retryCompiled = compileWithPumping(engine, [&]() {
+                return bronze::eval::compileScript(wrapAsyncIife(code, filename), opts);
+            });
+            res = bronze::eval::runCompiledScript(std::move(retryCompiled), opts);
         }
     }
     return res;
@@ -217,13 +244,22 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
 
     bronze::embed::CallResult res;
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {
-        res = bronze::eval::evalScript(wrapAsyncIife(content, absPath.string()), opts);
+        auto compiled = compileWithPumping(engine, [&]() {
+            return bronze::eval::compileScript(wrapAsyncIife(content, absPath.string()), opts);
+        });
+        res = bronze::eval::runCompiledScript(std::move(compiled), opts);
     } else {
-        res = bronze::eval::evalFile(absPath.string(), opts);
+        auto compiled = compileWithPumping(engine, [&]() {
+            return bronze::eval::compileFile(absPath.string(), opts);
+        });
+        res = bronze::eval::runCompiledScript(std::move(compiled), opts);
         if (res.thrown) {
             std::string errStr = bronze::embed::toUtf8(res.value);
             if (errStr.find("await") != std::string::npos && !hasImportStmt(content)) {
-                res = bronze::eval::evalScript(wrapAsyncIife(content, absPath.string()), opts);
+                auto retryCompiled = compileWithPumping(engine, [&]() {
+                    return bronze::eval::compileScript(wrapAsyncIife(content, absPath.string()), opts);
+                });
+                res = bronze::eval::runCompiledScript(std::move(retryCompiled), opts);
             }
         }
     }

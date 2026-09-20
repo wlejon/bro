@@ -14,6 +14,8 @@
 #include "util/platform.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include "render/renderer.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
@@ -32,6 +34,7 @@
 #include "dom/event_dispatch.h"
 #include "canvas/canvas_scene.h"
 #include "platform/sdl_window.h"
+#include "platform/event_loop.h"
 #if BRO_WITH_3D
 #include "scene/scene_renderer.h"
 #endif
@@ -63,7 +66,12 @@ void Engine::initSystemPanels() {
     loadSystemPanels(appSystemDir);
 
     // Load global system panels, skipping any already provided by the app
-    loadSystemPanels("system");
+    std::string globalSystemDir = assetMounts_.resolve("/system");
+    if (!globalSystemDir.empty()) {
+        loadSystemPanels(globalSystemDir);
+    } else {
+        loadSystemPanels("system");
+    }
 
     // Move the splash panel to the end so it renders on top of everything
     // (menu bar included) and receives hit-tests first during startup.
@@ -444,13 +452,43 @@ void Engine::renderSplashImmediate() {
     SDL_PumpEvents();
 }
 
+void Engine::pumpSplashFrame(double dtMs) {
+    if (displayMode_ != DisplayMode::Windowed || !window_ || !renderer_ || !gl_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        return;
+    }
+    double now = util::currentTimeMs();
+    if (eventLoop_) {
+        eventLoop_->pollEvents();
+    } else {
+        SDL_PumpEvents();
+    }
+    fireFrameCallbacks(dtMs > 0.0 ? dtMs : 16.67);
+    tickSystemPanels(now);
+    stageSystemPanelCanvases();
+    renderSplashImmediate();
+}
+
+void Engine::pumpEventsOnly() {
+    if (displayMode_ != DisplayMode::Windowed || !window_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        return;
+    }
+    if (eventLoop_) {
+        eventLoop_->pollEvents();
+    } else {
+        SDL_PumpEvents();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+}
+
 void Engine::tickSystemPanels(double nowMs) {
     if (splashVisible_) {
         constexpr double kMinDisplayMs = 1800.0;
-        constexpr double kHardTimeoutMs = 3500.0;
         double elapsed = nowMs - splashStartMs_;
-        if (elapsed >= kMinDisplayMs && !splashDismissTriggered_) {
+        if (!appCompiling_ && elapsed >= kMinDisplayMs && !splashDismissTriggered_) {
             splashDismissTriggered_ = true;
+            splashDismissStartMs_ = nowMs;
             for (auto& doc : systemDocs_) {
                 if (doc.group == "splash" && doc.document) {
                     bronze_host::triggerSplashDismiss(doc.document.get());
@@ -458,9 +496,12 @@ void Engine::tickSystemPanels(double nowMs) {
                 }
             }
         }
-        if (elapsed >= kHardTimeoutMs) {
-            splashVisible_ = false;
-            systemDirty_ = true;
+        if (!appCompiling_ && splashDismissTriggered_) {
+            constexpr double kDismissFadeTimeoutMs = 1500.0;
+            if (nowMs - splashDismissStartMs_ >= kDismissFadeTimeoutMs) {
+                splashVisible_ = false;
+                systemDirty_ = true;
+            }
         }
     }
 

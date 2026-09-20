@@ -134,8 +134,9 @@ std::string describeGlobals(ModuleHandle handle) {
 
 // Every refusal path logs and returns the same sentence, so the log and the
 // caller cannot describe the same failure two different ways.
-AppModuleResult refuse(AppModuleStatus status, std::string detail) {
+AppModuleResult refuse(engine::Engine* engine, AppModuleStatus status, std::string detail) {
     LOG_ERROR("compiled app: %s", detail.c_str());
+    if (engine) engine->dispatchDocumentReadyEvents();
     return AppModuleResult{status, std::move(detail), 0};
 }
 
@@ -156,7 +157,7 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
     std::string error;
     ModuleHandle handle = openModule(modulePath, error);
     if (!handle) {
-        return refuse(AppModuleStatus::Unloadable,
+        return refuse(&engine, AppModuleStatus::Unloadable,
                       modulePath + " could not be loaded (" + error +
                           "). It is usually a missing sidecar library or a "
                           "module built for a different architecture.");
@@ -169,7 +170,7 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
     const auto* moduleAbi =
         static_cast<const uint32_t*>(moduleSymbol(handle, kFingerprintSymbol));
     if (!moduleAbi) {
-        return refuse(AppModuleStatus::Unstamped,
+        return refuse(&engine, AppModuleStatus::Unstamped,
                       modulePath + " exports no " + kFingerprintSymbol +
                           ", so it is not a bronze-compiled app. Build it with "
                           "the bronze CLI.");
@@ -193,12 +194,12 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
         // A LOADED module is data the folder supplied, and a bad app must not
         // take the runtime down with it — the page stays up, running its scripts,
         // and says why.
-        return refuse(AppModuleStatus::AbiMismatch, buf);
+        return refuse(&engine, AppModuleStatus::AbiMismatch, buf);
     }
 
     auto entry = reinterpret_cast<void (*)()>(moduleSymbol(handle, kEntrySymbol));
     if (!entry) {
-        return refuse(AppModuleStatus::NoEntryPoint,
+        return refuse(&engine, AppModuleStatus::NoEntryPoint,
                       modulePath + " carries a bronze ABI stamp but exports no " +
                           kEntrySymbol + ". It was compiled as a library rather "
                           "than as an app entry point.");
@@ -231,6 +232,7 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
     std::fflush(stdout);
 
     engine.addAppModuleHandle(bronzeHandle);
+    engine.dispatchDocumentReadyEvents();
 
     LOG_INFO("compiled app: %s (bronze ABI %08x, host globals: %s)", modulePath.c_str(),
              kRuntimeAbi, globals.c_str());

@@ -669,6 +669,41 @@ Value makeFragmentValue(dom::Node* frag) {
                },
                nullptr);
 
+    b.accessor("firstElementChild", [](Value self_, std::span<const Value>) -> Value {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node) return ev::null();
+        for (dom::Node* n : st->node->childNodes()) {
+            if (n->nodeType() == dom::NodeType::Element) {
+                return hostElementValue(static_cast<dom::Element*>(n));
+            }
+        }
+        return ev::null();
+    }, nullptr);
+
+    b.accessor("lastElementChild", [](Value self_, std::span<const Value>) -> Value {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node) return ev::null();
+        const auto& kids = st->node->childNodes();
+        for (auto it = kids.rbegin(); it != kids.rend(); ++it) {
+            if ((*it)->nodeType() == dom::NodeType::Element) {
+                return hostElementValue(static_cast<dom::Element*>(*it));
+            }
+        }
+        return ev::null();
+    }, nullptr);
+
+    b.accessor("childElementCount", [](Value self_, std::span<const Value>) -> Value {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->node) return ev::fromDouble(0);
+        size_t count = 0;
+        for (dom::Node* n : st->node->childNodes()) {
+            if (n->nodeType() == dom::NodeType::Element) {
+                ++count;
+            }
+        }
+        return ev::fromDouble(static_cast<double>(count));
+    }, nullptr);
+
     b.def("append", 1, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st) return ev::undefined();

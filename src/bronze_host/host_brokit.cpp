@@ -177,6 +177,8 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installXMLHttpRequest();
     bk::installCompression();
     bk::installBase64();
+    adoptGlobalProperty("btoa");
+    adoptGlobalProperty("atob");
     bk::installEventTarget();
     bk::installMessageChannel();
     bk::installEvents();

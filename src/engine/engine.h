@@ -246,6 +246,7 @@ public:
     // Document lifecycle
     const std::string& documentReadyState() const { return documentReadyState_; }
     void setDocumentReadyState(const std::string& state);
+    void dispatchDocumentReadyEvents();
 
     // Page visibility, as document.hidden / document.visibilityState read
     // it: false while the window is minimized or unfocused. Stored so the
@@ -328,6 +329,11 @@ public:
         }
     }
     bool splashVisible() const { return splashVisible_; }
+    void setSplashVisible(bool val) { splashVisible_ = val; }
+    bool appCompiling() const { return appCompiling_; }
+    void setAppCompiling(bool val) { appCompiling_ = val; }
+    void pumpSplashFrame(double dtMs = 16.67);
+    void pumpEventsOnly();
     const std::vector<SystemDocument>& systemDocs() const { return systemDocs_; }
     std::vector<SystemDocument>& systemDocs() { return systemDocs_; }
     const std::string& systemActivePanel() const { return systemActivePanel_; }
@@ -840,6 +846,8 @@ private:
     std::vector<uint64_t> appModuleHandles_;
     bool splashDismissTriggered_ = false;
     double splashStartMs_ = 0.0;
+    double splashDismissStartMs_ = 0.0;
+    bool appCompiling_ = false;
     double lastSystemRafMs_ = 0.0;
     bool systemDirty_ = true;
     bool systemMouseConsumed_ = false;

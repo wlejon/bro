@@ -412,27 +412,33 @@ void Engine::initAppRealm() {
         syncIframes();
     }
 
-    if (!manifest_.scripts.empty()) {
-        std::string combinedScripts;
-        for (const auto& script : manifest_.scripts) {
-            std::string code;
-            if (script.isInline()) {
-                code = script.code;
-            } else {
-                code = AppLoader::loadFile(script.path);
+    if (!hostProvidesCompiledApp_) {
+        if (!manifest_.scripts.empty()) {
+            std::string combinedScripts;
+            for (const auto& script : manifest_.scripts) {
+                std::string code;
+                if (script.isInline()) {
+                    code = script.code;
+                } else {
+                    code = AppLoader::loadFile(script.path);
+                }
+                if (!code.empty()) {
+                    if (!combinedScripts.empty()) combinedScripts += "\n;\n";
+                    combinedScripts += code;
+                }
             }
-            if (!code.empty()) {
-                if (!combinedScripts.empty()) combinedScripts += "\n;\n";
-                combinedScripts += code;
+            if (!combinedScripts.empty()) {
+                if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
+                    setTestFailure(true);
+                }
             }
         }
-        if (!combinedScripts.empty()) {
-            if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
-                setTestFailure(true);
-            }
-        }
+        dispatchDocumentReadyEvents();
     }
+}
 
+void Engine::dispatchDocumentReadyEvents() {
+    if (documentReadyState_ == "complete") return;
     documentReadyState_ = "interactive";
     if (auto* root = document_ ? document_->documentElement() : nullptr) {
         bro::dom::Event dclDom("DOMContentLoaded", /*bubbles=*/true, /*cancelable=*/false);

@@ -11,6 +11,7 @@
 #endif
 #include "webgl/webgl2_context.h"
 #include "util/log.h"
+#include "util/time.h"
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
@@ -84,7 +85,7 @@ bool Engine::processPendingAppReload() {
 
 bool Engine::jitOptimize() const {
     if (jitTierPin_ >= 0) return jitTierPin_ == 1;
-    return !devReloaded_;
+    return false;
 }
 
 void Engine::initDevLoopConfig(const EngineConfig& config) {
@@ -227,6 +228,13 @@ void Engine::performAppReload() {
     if (!appModuleHandles_.empty()) {
         unloadAppModules();
         bro::bronze_host::hostCollectGarbage();
+    }
+
+    if (displayMode_ == DisplayMode::Windowed && splashEnabled_) {
+        splashVisible_ = true;
+        splashDismissTriggered_ = false;
+        splashStartMs_ = util::currentTimeMs();
+        pumpSplashFrame(0.0);
     }
 
     try {
