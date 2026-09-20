@@ -360,7 +360,7 @@ if (!scene) {
     assert(bw.cellNeighbors(3, 3, 'vertex').length === 8, 'square vertex cellNeighbors -> 8');
     assert(bw.cellNeighbors(0, 0).length === 2, 'corner cellNeighbors clips to in-bounds');
 
-    // load() preserves registered object kinds (instances cleared, ids valid).
+    // load() preserves registered object kinds and surviving instance placements.
     const bwCone = Mesh.cone(0.2, 0.4, 6, 1, true);
     const bwKind = bw.addObjectKind(bwCone, { color: [1, 1, 1, 1] });
     assert(bwKind >= 0, 'addObjectKind registers');
@@ -370,10 +370,7 @@ if (!scene) {
     bw.setTile(0, 0, 2);
     assert(bw.load(bwBytes) === true, 'load round-trips');
     assert(bw.getTile(0, 0) === 1, 'load restored the grid');
-    assert(bw.objectCount(bwKind) === 0, 'load cleared instance placements');
-    const rePlaced = bw.addObject(bwKind, 1, 1, {});
-    assert(rePlaced >= 0, 'kind id survives load — addObject works without re-registering');
-    assert(bw.objectCount(bwKind) === 1, 'instance re-placed after load');
+    assert(bw.objectCount(bwKind) === 1, 'load preserves instance placements within bounds');
     bw.rebuildObjects();
     bw.destroy();
 

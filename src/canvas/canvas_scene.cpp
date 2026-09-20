@@ -1121,21 +1121,70 @@ void CanvasScene::stroke() {
     snapshotImageValid_ = false;
 }
 
-void CanvasScene::fill() {
+void CanvasScene::stroke(const SkPath& path) {
     CanvasCmd cmd;
-    cmd.type = CanvasCmd::kFillPath;
-    cmd.paint = makeFillPaint();
-    cmd.path = pathBuilder_.snapshot();
+    cmd.type = CanvasCmd::kStrokePath;
+    cmd.paint = makeStrokePaint();
+    cmd.path = path;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
     snapshotImageValid_ = false;
 }
 
-void CanvasScene::clip() {
+void CanvasScene::fill(const std::string& fillRule) {
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kFillPath;
+    cmd.paint = makeFillPaint();
+    cmd.path = pathBuilder_.snapshot();
+    if (fillRule == "evenodd") {
+        cmd.path.setFillType(SkPathFillType::kEvenOdd);
+    } else {
+        cmd.path.setFillType(SkPathFillType::kWinding);
+    }
+    commands_.push_back(std::move(cmd));
+    dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
+}
+
+void CanvasScene::fill(const SkPath& path, const std::string& fillRule) {
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kFillPath;
+    cmd.paint = makeFillPaint();
+    cmd.path = path;
+    if (fillRule == "evenodd") {
+        cmd.path.setFillType(SkPathFillType::kEvenOdd);
+    } else {
+        cmd.path.setFillType(SkPathFillType::kWinding);
+    }
+    commands_.push_back(std::move(cmd));
+    dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
+}
+
+void CanvasScene::clip(const std::string& fillRule) {
     CanvasCmd cmd;
     cmd.type = CanvasCmd::kClipPath;
     cmd.path = pathBuilder_.snapshot();
+    if (fillRule == "evenodd") {
+        cmd.path.setFillType(SkPathFillType::kEvenOdd);
+    } else {
+        cmd.path.setFillType(SkPathFillType::kWinding);
+    }
+    commands_.push_back(std::move(cmd));
+}
+
+void CanvasScene::clip(const SkPath& path, const std::string& fillRule) {
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kClipPath;
+    cmd.path = path;
+    if (fillRule == "evenodd") {
+        cmd.path.setFillType(SkPathFillType::kEvenOdd);
+    } else {
+        cmd.path.setFillType(SkPathFillType::kWinding);
+    }
     commands_.push_back(std::move(cmd));
 }
 
@@ -1217,6 +1266,16 @@ void CanvasScene::rect(float x, float y, float w, float h) {
 
 bool CanvasScene::isPointInPath(float x, float y, const std::string& fillRule) {
     SkPath p = pathBuilder_.snapshot();
+    if (fillRule == "evenodd") {
+        p.setFillType(SkPathFillType::kEvenOdd);
+    } else {
+        p.setFillType(SkPathFillType::kWinding);
+    }
+    return p.contains(x, y);
+}
+
+bool CanvasScene::isPointInPath(const SkPath& path, float x, float y, const std::string& fillRule) {
+    SkPath p = path;
     if (fillRule == "evenodd") {
         p.setFillType(SkPathFillType::kEvenOdd);
     } else {

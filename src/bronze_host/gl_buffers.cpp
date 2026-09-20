@@ -295,6 +295,56 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         }
         return ev::undefined();
     });
+
+    b.def("vertexAttrib1f", 2, [c](Value, std::span<const Value> a) {
+        live(c);
+        glVertexAttrib1f(u32At(a, 0), static_cast<float>(numAt(a, 1)));
+        return ev::undefined();
+    });
+    b.def("vertexAttrib2f", 3, [c](Value, std::span<const Value> a) {
+        live(c);
+        glVertexAttrib2f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
+        return ev::undefined();
+    });
+    b.def("vertexAttrib3f", 4, [c](Value, std::span<const Value> a) {
+        live(c);
+        glVertexAttrib3f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
+                         static_cast<float>(numAt(a, 3)));
+        return ev::undefined();
+    });
+    b.def("vertexAttrib4f", 5, [c](Value, std::span<const Value> a) {
+        live(c);
+        glVertexAttrib4f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
+                         static_cast<float>(numAt(a, 3)), static_cast<float>(numAt(a, 4)));
+        return ev::undefined();
+    });
+
+    auto defAttribFv = [&](const char* name, size_t comps, void (*fn)(GLuint, const GLfloat*)) {
+        b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
+            std::vector<float> storage;
+            const float* p = nullptr;
+            size_t n = 0;
+            if (floatData(argAt(a, 1), storage, &p, &n)) {
+                size_t srcOffset = hasArg(a, 2) ? static_cast<size_t>(u32At(a, 2)) : 0;
+                if (srcOffset <= n) {
+                    size_t count = n - srcOffset;
+                    if (hasArg(a, 3)) {
+                        size_t l = static_cast<size_t>(u32At(a, 3));
+                        if (l > 0 && l < count) count = l;
+                    }
+                    if (count >= comps) {
+                        live(c);
+                        fn(u32At(a, 0), p + srcOffset);
+                    }
+                }
+            }
+            return ev::undefined();
+        });
+    };
+    defAttribFv("vertexAttrib1fv", 1, glVertexAttrib1fv);
+    defAttribFv("vertexAttrib2fv", 2, glVertexAttrib2fv);
+    defAttribFv("vertexAttrib3fv", 3, glVertexAttrib3fv);
+    defAttribFv("vertexAttrib4fv", 4, glVertexAttrib4fv);
 }
 
 }  // namespace bro::bronze_host

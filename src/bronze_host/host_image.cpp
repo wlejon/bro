@@ -41,8 +41,11 @@
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 
 #include "dom/document.h"
+#include "dom/element.h"
+#include "engine/engine.h"
 #include "util/asset_path.h"
 #include "util/object_url.h"
+#include "util/remote_asset.h"
 #include "util/log.h"
 
 #include "broimage/decode.h"
@@ -53,9 +56,12 @@
 #endif
 
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace bro::bronze_host {
 
@@ -159,7 +165,8 @@ bool readFileBytes(const std::string& path, std::vector<uint8_t>& out) {
 // be appended — and in nothing else: one src is resolved by one set of rules
 // and decoded by one decoder, so a texture cannot depend on which spelling the
 // page used.
-void loadHostImage(HostImage& image, const std::string& src, const dom::Document* doc) {
+void loadHostImage(HostImage& image, const std::string& src, const dom::Document* doc,
+                   dom::Element* target) {
     HostImage* img = &image;
     img->src = src;
     img->width = 0;
@@ -168,13 +175,73 @@ void loadHostImage(HostImage& image, const std::string& src, const dom::Document
     img->complete = false;
     img->ok = false;
 
+    if (util::isHttpUrl(src)) {
+        auto token = std::make_shared<uint64_t>(++img->loadId);
+        img->activeLoadToken = token;
+        uint64_t thisLoadId = *token;
+        std::weak_ptr<uint64_t> weakToken = token;
+
+        std::thread([&image, src, thisLoadId, weakToken, target]() {
+            std::string body = util::fetchRemoteCached(src);
+            int w = 0, h = 0;
+            std::vector<uint8_t> rgba;
+            std::string decErr;
+            bool success = false;
+            if (!body.empty()) {
+                success = decodeHostImageBytes(reinterpret_cast<const uint8_t*>(body.data()),
+                                               body.size(), w, h, rgba, &decErr);
+            }
+
+            postHostTask([&image, src, thisLoadId, weakToken, target, success, w, h,
+                          rgba = std::move(rgba)]() mutable {
+                auto locked = weakToken.lock();
+                if (!locked || *locked != thisLoadId) {
+                    return;
+                }
+
+                image.complete = true;
+                image.ok = success;
+                if (success) {
+                    image.width = w;
+                    image.height = h;
+                    image.rgba = std::move(rgba);
+                    LOG_INFO("bronze_host: Remote image loaded %s (%dx%d)", src.c_str(), w, h);
+                } else {
+                    LOG_WARN("bronze_host: Remote image load failed %s", src.c_str());
+                }
+
+                auto promises = std::move(image.pendingDecodePromises);
+                image.pendingDecodePromises.clear();
+                for (auto& p : promises) {
+                    if (success) {
+                        ev::resolvePromise(p.get(), ev::undefined());
+                    } else {
+                        Value ctor = ev::globalValue("Error").value;
+                        Value reason = ev::fromUtf8("EncodingError: the remote image could not be decoded");
+                        if (ev::isFunction(ctor)) {
+                            ev::CallResult made = ev::construct(ctor, std::span<const Value>(&reason, 1));
+                            if (!made.thrown) reason = made.value;
+                        }
+                        ev::rejectPromise(p.get(), reason);
+                    }
+                }
+
+                if (target) {
+                    if (success) {
+                        target->setImageNaturalSize(src, w, h);
+                    }
+                    dom::Event evt(success ? "load" : "error", false, false);
+                    if (auto* eng = hostEngine()) {
+                        eng->dispatchElementEvent(target, evt);
+                    }
+                }
+            });
+        }).detach();
+        return;
+    }
+
     std::string err;
-    if (src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0) {
-        // Network fetches for remote image URLs are not supported by this path (see host_xhr.cpp).
-        err = "http(s) image URLs are not fetched by the bronze host image path";
-        LOG_ERROR("bronze_host: Image.src = %s needs a network fetch this layer "
-                  "does not provide", src.c_str());
-    } else if (std::vector<uint8_t> inline_; util::inlineURLBytes(src, inline_)) {
+    if (std::vector<uint8_t> inline_; util::inlineURLBytes(src, inline_)) {
         // A `blob:` or `data:` URL carries its own bytes — there is no path to
         // resolve and no disk to touch. Handled here rather than after the
         // path resolution, because resolveAssetPath would turn `blob:bro/7`

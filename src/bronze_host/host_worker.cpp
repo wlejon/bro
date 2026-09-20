@@ -80,6 +80,11 @@ public:
         toMainQueue_.push_back(std::move(msg));
     }
 
+    struct Listener {
+        std::string type;
+        ev::Persistent fn;
+    };
+
     void drainMessagesToMain() {
         std::deque<std::unique_ptr<Message>> batch;
         {
@@ -89,14 +94,54 @@ public:
         if (batch.empty()) return;
 
         for (auto& msg : batch) {
-            Value cb = onmessage_.get();
-            if (!ev::isFunction(cb)) continue;
-            ev::Persistent cbRoot(cb);
-            ev::Persistent dataRoot(deserializeMessage(*msg));
-            ObjectBuilder evObj;
-            evObj.set("data", dataRoot.get());
-            Value event = evObj.get();
-            ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
+            if (msg->isError) {
+                ev::Persistent evt(ev::createObject());
+                evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("error")));
+                evt.set(ev::setProperty(evt.get(), "message", ev::fromUtf8(msg->errorMessage)));
+                evt.set(ev::setProperty(evt.get(), "filename", ev::fromUtf8(msg->errorFilename)));
+                evt.set(ev::setProperty(evt.get(), "lineno", ev::fromDouble(msg->errorLineno)));
+
+                Value cb = onerror_.get();
+                if (ev::isFunction(cb)) {
+                    ev::Persistent cbRoot(cb);
+                    Value event = evt.get();
+                    ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                }
+
+                std::vector<ev::Persistent> errorListeners;
+                for (const auto& entry : listeners_) {
+                    if (entry.type == "error" && ev::isFunction(entry.fn.get())) {
+                        errorListeners.emplace_back(entry.fn.get());
+                    }
+                }
+                for (auto& lfn : errorListeners) {
+                    Value event = evt.get();
+                    ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                }
+            } else {
+                ev::Persistent dataRoot(deserializeMessage(*msg));
+                ev::Persistent evt(ev::createObject());
+                evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("message")));
+                evt.set(ev::setProperty(evt.get(), "data", dataRoot.get()));
+
+                Value cb = onmessage_.get();
+                if (ev::isFunction(cb)) {
+                    ev::Persistent cbRoot(cb);
+                    Value event = evt.get();
+                    ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                }
+
+                std::vector<ev::Persistent> msgListeners;
+                for (const auto& entry : listeners_) {
+                    if (entry.type == "message" && ev::isFunction(entry.fn.get())) {
+                        msgListeners.emplace_back(entry.fn.get());
+                    }
+                }
+                for (auto& lfn : msgListeners) {
+                    Value event = evt.get();
+                    ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                }
+            }
         }
     }
 
@@ -104,6 +149,30 @@ public:
 
     void setOnMessage(Value cb) { onmessage_.set(cb); }
     Value getOnMessage() const { return onmessage_.get(); }
+    void setOnError(Value cb) { onerror_.set(cb); }
+    Value getOnError() const { return onerror_.get(); }
+
+    void addEventListener(const std::string& type, Value fn) {
+        if (!ev::isFunction(fn)) return;
+        ev::Persistent fnP(fn);
+        for (const auto& entry : listeners_) {
+            if (entry.type == type && ev::toBits(entry.fn.get()) == ev::toBits(fnP.get())) {
+                return;
+            }
+        }
+        listeners_.push_back({type, std::move(fnP)});
+    }
+
+    void removeEventListener(const std::string& type, Value fn) {
+        if (!ev::isFunction(fn)) return;
+        ev::Persistent fnP(fn);
+        for (auto it = listeners_.begin(); it != listeners_.end(); ++it) {
+            if (it->type == type && ev::toBits(it->fn.get()) == ev::toBits(fnP.get())) {
+                listeners_.erase(it);
+                return;
+            }
+        }
+    }
 
 private:
     void threadFunc();
@@ -125,6 +194,8 @@ private:
     std::deque<std::unique_ptr<Message>> toMainQueue_;
 
     ev::Persistent onmessage_;
+    ev::Persistent onerror_;
+    std::vector<Listener> listeners_;
 };
 
 void WorkerInstance::threadFunc() {
@@ -156,6 +227,76 @@ void WorkerInstance::threadFunc() {
     setWorkerServerControl(&serverControl);
 
     ev::Persistent workerOnmessage;
+    ev::Persistent workerOnerror;
+
+    struct WorkerListener {
+        std::string type;
+        ev::Persistent fn;
+    };
+    std::vector<WorkerListener> workerListeners;
+
+    auto addWorkerListener = [&workerListeners](const std::string& type, Value fn) {
+        if (!ev::isFunction(fn)) return;
+        ev::Persistent fnP(fn);
+        for (const auto& entry : workerListeners) {
+            if (entry.type == type && ev::toBits(entry.fn.get()) == ev::toBits(fnP.get())) {
+                return;
+            }
+        }
+        workerListeners.push_back({type, std::move(fnP)});
+    };
+
+    auto removeWorkerListener = [&workerListeners](const std::string& type, Value fn) {
+        if (!ev::isFunction(fn)) return;
+        ev::Persistent fnP(fn);
+        for (auto it = workerListeners.begin(); it != workerListeners.end(); ++it) {
+            if (it->type == type && ev::toBits(it->fn.get()) == ev::toBits(fnP.get())) {
+                workerListeners.erase(it);
+                return;
+            }
+        }
+    };
+
+    auto dispatchWorkerError = [&](const std::string& msg, const std::string& fn, int line) {
+        auto errMsg = std::make_unique<Message>();
+        errMsg->isError = true;
+        errMsg->errorMessage = msg;
+        errMsg->errorFilename = fn;
+        errMsg->errorLineno = line;
+        postToMain(std::move(errMsg));
+
+        Value cb = workerOnerror.get();
+        if (!ev::isFunction(cb)) {
+            Value gt = ev::globalValue("globalThis").value;
+            if (ev::isObject(gt)) {
+                Value p = ev::getProperty(gt, "onerror");
+                if (ev::isFunction(p)) cb = p;
+            }
+        }
+
+        ev::Persistent errEvt(ev::createObject());
+        errEvt.set(ev::setProperty(errEvt.get(), "type", ev::fromUtf8("error")));
+        errEvt.set(ev::setProperty(errEvt.get(), "message", ev::fromUtf8(msg)));
+        errEvt.set(ev::setProperty(errEvt.get(), "filename", ev::fromUtf8(fn)));
+        errEvt.set(ev::setProperty(errEvt.get(), "lineno", ev::fromDouble(line)));
+
+        if (ev::isFunction(cb)) {
+            ev::Persistent cbRoot(cb);
+            Value arg = errEvt.get();
+            ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+        }
+
+        std::vector<ev::Persistent> errorListeners;
+        for (const auto& l : workerListeners) {
+            if (l.type == "error" && ev::isFunction(l.fn.get())) {
+                errorListeners.emplace_back(l.fn.get());
+            }
+        }
+        for (auto& lfn : errorListeners) {
+            Value arg = errEvt.get();
+            ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+        }
+    };
 
     Value globalThis = ev::globalValue("globalThis").value;
     ev::registerGlobal("self", globalThis);
@@ -184,11 +325,29 @@ void WorkerInstance::threadFunc() {
     };
 
     ev::setGlobalValue("onmessage", ev::undefined());
+    ev::setGlobalValue("onerror", ev::undefined());
     ev::setGlobalFunction("postMessage", 2, jsPostMessage);
     ev::setGlobalFunction("close", 0, [this](Value, std::span<const Value>) -> Value {
         terminated_.store(true, std::memory_order_release);
         return ev::undefined();
     });
+
+    auto jsAddEventListener = [&addWorkerListener](Value, std::span<const Value> args) -> Value {
+        if (args.size() >= 2 && ev::isString(args[0]) && ev::isFunction(args[1])) {
+            addWorkerListener(ev::toUtf8(args[0]), args[1]);
+        }
+        return ev::undefined();
+    };
+    auto jsRemoveEventListener = [&removeWorkerListener](Value, std::span<const Value> args) -> Value {
+        if (args.size() >= 2 && ev::isString(args[0]) && ev::isFunction(args[1])) {
+            removeWorkerListener(ev::toUtf8(args[0]), args[1]);
+        }
+        return ev::undefined();
+    };
+    ev::setGlobalFunction("addEventListener", 2, jsAddEventListener);
+    ev::setGlobalFunction("removeEventListener", 2, jsRemoveEventListener);
+    ev::setProperty(globalThis, "addEventListener", ev::globalValue("addEventListener").value);
+    ev::setProperty(globalThis, "removeEventListener", ev::globalValue("removeEventListener").value);
 
     namespace bk = brokit::api;
     bk::installModuleRegistry();
@@ -278,10 +437,15 @@ void WorkerInstance::threadFunc() {
 
     if (scriptCode.empty()) {
         LOG_ERROR("worker: empty or missing script: %s", resolvedPath.string().c_str());
+        dispatchWorkerError("worker: empty or missing script: " + resolvedPath.string(), resolvedPath.string(), 0);
     } else {
         std::regex re(R"((^|[^\w$.])onmessage\s*=)");
         if (std::regex_search(scriptCode, re)) {
             scriptCode = std::regex_replace(scriptCode, re, "$1self.onmessage = ");
+        }
+        std::regex reErr(R"((^|[^\w$.])onerror\s*=)");
+        if (std::regex_search(scriptCode, reErr)) {
+            scriptCode = std::regex_replace(scriptCode, reErr, "$1self.onerror = ");
         }
 
         bronze::eval::EvalOptions opts;
@@ -332,6 +496,7 @@ void WorkerInstance::threadFunc() {
 
         if (res.thrown) {
             std::string errStr;
+            int lineno = 0;
             if (res.value.isObject()) {
                 Value st = ev::getProperty(res.value, "stack");
                 if (!ev::isUndefined(st) && !ev::isNull(st)) {
@@ -342,11 +507,14 @@ void WorkerInstance::threadFunc() {
                         errStr = ev::toUtf8(msg);
                     }
                 }
+                Value ln = ev::getProperty(res.value, "lineNumber");
+                if (ev::isNumber(ln)) lineno = static_cast<int>(ev::toDouble(ln));
             }
             if (errStr.empty()) {
                 errStr = ev::toUtf8(res.value);
             }
             LOG_ERROR("worker script execution failed for %s: %s", resolvedPath.string().c_str(), errStr.c_str());
+            dispatchWorkerError(errStr, resolvedPath.string(), lineno);
         }
     }
 
@@ -357,9 +525,15 @@ void WorkerInstance::threadFunc() {
 
     while (!terminated_.load(std::memory_order_relaxed)) {
         Value gtVal = ev::globalValue("globalThis").value;
-        Value curOnmessage = ev::isObject(gtVal) ? ev::getProperty(gtVal, "onmessage") : ev::undefined();
-        if (ev::isFunction(curOnmessage)) {
-            workerOnmessage.set(curOnmessage);
+        if (ev::isObject(gtVal)) {
+            Value curOnmessage = ev::getProperty(gtVal, "onmessage");
+            if (ev::isFunction(curOnmessage)) {
+                workerOnmessage.set(curOnmessage);
+            }
+            Value curOnerror = ev::getProperty(gtVal, "onerror");
+            if (ev::isFunction(curOnerror)) {
+                workerOnerror.set(curOnerror);
+            }
         }
 
         std::deque<std::unique_ptr<Message>> batch;
@@ -369,22 +543,48 @@ void WorkerInstance::threadFunc() {
         }
 
         for (auto& msg : batch) {
-            Value cb = workerOnmessage.get();
-            if (!ev::isFunction(cb)) continue;
-            ev::Persistent cbRoot(cb);
             ev::Persistent dataRoot(deserializeMessage(*msg));
-            ObjectBuilder evObj;
-            evObj.set("data", dataRoot.get());
-            Value event = evObj.get();
-            ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
+            ev::Persistent evObjRoot(ev::createObject());
+            evObjRoot.set(ev::setProperty(evObjRoot.get(), "type", ev::fromUtf8("message")));
+            evObjRoot.set(ev::setProperty(evObjRoot.get(), "data", dataRoot.get()));
+
+            Value cb = workerOnmessage.get();
+            if (ev::isFunction(cb)) {
+                ev::Persistent cbRoot(cb);
+                Value event = evObjRoot.get();
+                ev::CallResult r = ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                if (r.thrown) {
+                    std::string errStr = ev::toUtf8(r.value);
+                    dispatchWorkerError(errStr, scriptPath_, 0);
+                }
+            }
+
+            std::vector<ev::Persistent> msgListeners;
+            for (const auto& l : workerListeners) {
+                if (l.type == "message" && ev::isFunction(l.fn.get())) {
+                    msgListeners.emplace_back(l.fn.get());
+                }
+            }
+            for (auto& lfn : msgListeners) {
+                Value event = evObjRoot.get();
+                ev::CallResult r = ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&event, 1));
+                if (r.thrown) {
+                    std::string errStr = ev::toUtf8(r.value);
+                    dispatchWorkerError(errStr, scriptPath_, 0);
+                }
+            }
         }
 
+        double nextTimerMs = -1.0;
         double nowMs = static_cast<double>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
         if (ev::isFunction(timersTick.get())) {
             Value nowVal = ev::fromDouble(nowMs);
-            ev::call(timersTick.get(), ev::undefined(), std::span<const Value>(&nowVal, 1));
+            ev::CallResult res = ev::call(timersTick.get(), ev::undefined(), std::span<const Value>(&nowVal, 1));
+            if (!res.thrown && ev::isNumber(res.value)) {
+                nextTimerMs = ev::toDouble(res.value);
+            }
         }
         if (ev::isFunction(fetchTick.get())) {
             ev::call(fetchTick.get(), ev::undefined(), {});
@@ -415,9 +615,16 @@ void WorkerInstance::threadFunc() {
             // otherwise the idle wait is short enough for a reply to feel
             // immediate and long enough not to spin.
             const double hz = tickRateHz.load(std::memory_order_relaxed);
-            auto wait = std::chrono::milliseconds(hasPendingWork ? 5 : 10);
+            std::chrono::milliseconds wait;
             if (hz > 0.0) {
                 wait = std::chrono::milliseconds(static_cast<long long>(std::max(1.0, 1000.0 / hz)));
+            } else if (hasPendingWork) {
+                wait = std::chrono::milliseconds(5);
+            } else if (nextTimerMs < 0.0) {
+                wait = std::chrono::milliseconds(500);
+            } else {
+                long long t = static_cast<long long>(std::clamp(nextTimerMs, 1.0, 500.0));
+                wait = std::chrono::milliseconds(t);
             }
             toWorkerCv_.wait_for(lock, wait);
         }
@@ -503,6 +710,32 @@ void installWorkerGlobals(engine::Engine& engine) {
                     }
                     return ev::undefined();
                 });
+
+            proto.accessor("onerror",
+                [](Value thisVal, std::span<const Value>) -> Value {
+                    auto* w = getWorker(thisVal);
+                    return w ? w->getOnError() : ev::undefined();
+                },
+                [](Value thisVal, std::span<const Value> a) -> Value {
+                    if (auto* w = getWorker(thisVal)) {
+                        w->setOnError(a.empty() ? ev::undefined() : a[0]);
+                    }
+                    return ev::undefined();
+                });
+
+            proto.def("addEventListener", 2, [](Value thisVal, std::span<const Value> a) -> Value {
+                auto* w = getWorker(thisVal);
+                if (!w || a.size() < 2 || !ev::isString(a[0])) return ev::undefined();
+                w->addEventListener(ev::toUtf8(a[0]), a[1]);
+                return ev::undefined();
+            });
+
+            proto.def("removeEventListener", 2, [](Value thisVal, std::span<const Value> a) -> Value {
+                auto* w = getWorker(thisVal);
+                if (!w || a.size() < 2 || !ev::isString(a[0])) return ev::undefined();
+                w->removeEventListener(ev::toUtf8(a[0]), a[1]);
+                return ev::undefined();
+            });
 
             proto.def("postMessage", 1, [](Value thisVal, std::span<const Value> a) -> Value {
                 auto* w = getWorker(thisVal);

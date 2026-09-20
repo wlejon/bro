@@ -22,6 +22,10 @@ struct Message {
     std::vector<uint8_t> data;
     std::vector<std::vector<uint8_t>> transferredBuffers;
     std::vector<SerializedImage> transferredImages;
+    bool isError = false;
+    std::string errorMessage;
+    std::string errorFilename;
+    int errorLineno = 0;
 #if BRO_WITH_3D
     // A Mesh listed in the transfer list crosses by pointer: the sender's
     // handle is left empty and the receiver's realm mints a Mesh of its own

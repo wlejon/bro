@@ -1,4 +1,5 @@
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
@@ -55,6 +56,19 @@ HostClass g_htmlBodyElementClass;
 HostClass g_htmlMediaElementClass;
 HostClass g_htmlVideoElementClass;
 HostClass g_htmlAudioElementClass;
+HostClass g_audioClass;
+
+Value audioConstructor(Value, std::span<const Value> a) {
+    auto* eng = hostEngine();
+    if (!eng || !eng->document()) return ev::throwError("new Audio(): the engine has no document");
+    dom::Element* el = eng->document()->createElement("audio");
+    if (!el) return ev::throwError("new Audio(): the document refused an <audio>");
+    if (!a.empty() && !a[0].isUndefined()) {
+        std::string src = ev::toUtf8(a[0]);
+        el->setAttribute("src", src);
+    }
+    return hostElementValue(el);
+}
 
 // The rest of the per-tag HTML*Element interfaces: undecorated brands one
 // level under HTMLElement, so `el instanceof HTMLLabelElement` and
@@ -283,6 +297,8 @@ void installHtmlInterfaces() {
     g_htmlVideoElementClass.inherit(g_htmlMediaElementClass);
     g_htmlAudioElementClass.install("HTMLAudioElement", 0, illegalConstructor, nullptr);
     g_htmlAudioElementClass.inherit(g_htmlMediaElementClass);
+    g_audioClass.install("Audio", 1, audioConstructor, nullptr);
+    g_audioClass.inherit(g_htmlAudioElementClass);
 
     // 6. The remaining per-tag brands, and the tag -> class map
     // htmlInterfaceProto reads.
@@ -314,6 +330,7 @@ void installHtmlInterfaces() {
     g_canvas2DContextClass.install("CanvasRenderingContext2D", 0, illegalConstructor, nullptr);
     g_dataTransferClass.install("DataTransfer", 0, illegalConstructor, nullptr);
     g_audioDestinationNodeClass.install("AudioDestinationNode", 0, illegalConstructor, nullptr);
+    installPath2DClass();
 }
 
 const HostClass& canvasRenderingContext2DHostClass() { return g_canvas2DContextClass; }
@@ -352,7 +369,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
     if (tag == "html") return g_htmlHtmlElementClass.prototype();
     if (tag == "body") return g_htmlBodyElementClass.prototype();
     if (tag == "video") return g_htmlVideoElementClass.prototype();
-    if (tag == "audio") return g_htmlAudioElementClass.prototype();
+    if (tag == "audio") return g_audioClass.prototype();
     if (g_extraTagByName) {
         auto it = g_extraTagByName->find(tag);
         if (it != g_extraTagByName->end()) return it->second->prototype();

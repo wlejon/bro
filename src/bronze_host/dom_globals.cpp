@@ -86,6 +86,7 @@ struct WindowListener {
 struct HostState {
     engine::Engine* engine = nullptr;
     std::vector<RafEntry> rafPending;
+    std::unordered_set<int32_t> rafActiveBatchCancelled;
     int32_t nextRafId = 1;
     // The rAF/performance clock: accumulated scaled-frame deltas, so
     // timestamps here advance exactly as the engine's own rAF timestamps do
@@ -102,15 +103,19 @@ HostState* g_host = nullptr;
 
 // REENTRANCY: the pending list is MOVED OUT before any callback runs,
 // so a callback that registers another rAF appends to the fresh list (fires next frame),
-// and a cancelAnimationFrame from inside a callback affects only not-yet-moved future
-// entries; cancelling a sibling of the currently-firing batch is a no-op.
+// and a cancelAnimationFrame from inside a callback cancels matching entries in both
+// not-yet-moved future entries and the currently executing batch.
 void fireAnimationFrames() {
     if (g_host->rafPending.empty()) return;
 
     std::vector<RafEntry> current = std::move(g_host->rafPending);
     g_host->rafPending.clear();
+    g_host->rafActiveBatchCancelled.clear();
 
     for (RafEntry& entry : current) {
+        if (g_host->rafActiveBatchCancelled.count(entry.id)) {
+            continue;
+        }
         dom::Document* targetDoc = entry.doc;
         dom::Document* prevDoc = currentHostDocument();
         bool swapDoc = (targetDoc && targetDoc != prevDoc);
@@ -150,6 +155,7 @@ void fireAnimationFrames() {
 
         if (r.thrown) reportBronzeError("requestAnimationFrame", r.value);
     }
+    g_host->rafActiveBatchCancelled.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +272,7 @@ Value makeCancelAnimationFrame() {
                     break;
                 }
             }
+            g_host->rafActiveBatchCancelled.insert(id);
             return ev::undefined();
         },
         1);

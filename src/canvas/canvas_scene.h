@@ -290,8 +290,11 @@ public:
     void polyline(const float* coords, int numPoints);  // batch [x0,y0,x1,y1,...]
     void closePath();
     void stroke();
-    void fill();
-    void clip();
+    void stroke(const SkPath& path);
+    void fill(const std::string& fillRule = "nonzero");
+    void fill(const SkPath& path, const std::string& fillRule = "nonzero");
+    void clip(const std::string& fillRule = "nonzero");
+    void clip(const SkPath& path, const std::string& fillRule = "nonzero");
     void arc(float cx, float cy, float radius, float startAngle, float endAngle, bool acw);
     void arcTo(float x1, float y1, float x2, float y2, float radius);
     void bezierCurveTo(float cp1x, float cp1y, float cp2x, float cp2y, float x, float y);
@@ -300,6 +303,7 @@ public:
                  float startAngle, float endAngle, bool acw);
     void rect(float x, float y, float w, float h);
     bool isPointInPath(float x, float y, const std::string& fillRule = "nonzero");
+    bool isPointInPath(const SkPath& path, float x, float y, const std::string& fillRule = "nonzero");
 
     // --- Transform ---
 

@@ -1,4 +1,5 @@
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -20,6 +21,7 @@ struct CustomElementDef {
 };
 
 static std::unordered_map<std::string, CustomElementDef> s_registry;
+static std::unordered_map<std::string, std::vector<ev::Persistent>> s_pendingWhenDefined;
 static thread_local dom::Element* s_activeConstructingElement = nullptr;
 static thread_local Value s_activeCtor = ev::undefined();
 
@@ -314,6 +316,15 @@ void installCustomElementsGlobals() {
         }
         s_registry[name] = std::move(def);
 
+        // Resolve any promises awaiting this element name.
+        auto pendIt = s_pendingWhenDefined.find(name);
+        if (pendIt != s_pendingWhenDefined.end()) {
+            for (auto& p : pendIt->second) {
+                ev::resolvePromise(p.get(), a[1]);
+            }
+            s_pendingWhenDefined.erase(pendIt);
+        }
+
         // Stamp the tag on the class's prototype so `new MyElement()` can find
         // it again through the receiver (constructCustomElementBase).
         Value proto = ev::getProperty(a[1], "prototype");
@@ -340,9 +351,24 @@ void installCustomElementsGlobals() {
         return it != s_registry.end() ? it->second.ctor.get() : ev::undefined();
     });
 
-    ce.def("whenDefined", 1, [](Value, std::span<const Value>) -> Value {
+    ce.def("whenDefined", 1, [](Value, std::span<const Value> a) -> Value {
+        if (a.empty() || !ev::isString(a[0])) {
+            return ev::throwTypeError("customElements.whenDefined requires a name string");
+        }
+        std::string name = toLowerStr(ev::toUtf8(a[0]));
+        if (name.find('-') == std::string::npos) {
+            Value p = ev::createPromise();
+            ev::rejectPromise(p, hostMakeDomError("SyntaxError", "customElements.whenDefined: name must contain a hyphen"));
+            return p;
+        }
+        auto it = s_registry.find(name);
+        if (it != s_registry.end()) {
+            Value p = ev::createPromise();
+            ev::resolvePromise(p, it->second.ctor.get());
+            return p;
+        }
         Value p = ev::createPromise();
-        ev::resolvePromise(p, ev::undefined());
+        s_pendingWhenDefined[name].emplace_back(p);
         return p;
     });
 
@@ -366,6 +392,7 @@ void resetCustomElementsRegistry() {
         def.ctor.set(ev::undefined());
     }
     s_registry.clear();
+    s_pendingWhenDefined.clear();
     s_activeConstructingElement = nullptr;
     s_activeCtor = ev::undefined();
 }

@@ -44,9 +44,15 @@ public:
     const Affine2D& current() const { return current_; }
     Value toDOMMatrixValue() const;
 
+    using Hook = std::function<void()>;
+    void addSaveHook(Hook h) { saveHooks_.push_back(std::move(h)); }
+    void addRestoreHook(Hook h) { restoreHooks_.push_back(std::move(h)); }
+
 private:
     Affine2D current_;
     std::vector<Affine2D> stack_;
+    std::vector<Hook> saveHooks_;
+    std::vector<Hook> restoreHooks_;
 };
 
 void installCanvas2DTransformMethods(ObjectBuilder& b, dom::Element* el, std::shared_ptr<Canvas2DTransformTracker> tracker);

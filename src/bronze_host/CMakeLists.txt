@@ -113,6 +113,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_canvas2d.cpp
     host_canvas2d_matrix.cpp
     host_canvas_gradient.cpp
+    host_canvas_path2d.cpp
     dom_storage.cpp
     dom_gamepad.cpp
     host_element.cpp

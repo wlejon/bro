@@ -614,6 +614,9 @@ struct HostImage {
     std::vector<uint8_t> rgba;  // RGBA8, top-down (row 0 = top); empty if broken
     bool complete = false;      // the load settled, either way
     bool ok = false;            // ... and it settled as a success
+    uint64_t loadId = 0;
+    std::shared_ptr<uint64_t> activeLoadToken;
+    std::vector<ev::Persistent> pendingDecodePromises;
 };
 const HostImage* hostImageOf(Value v);
 
@@ -624,7 +627,8 @@ const HostImage* hostImageOf(Value v);
 // `doc`'s own base path when one is given — an <img> in a system panel or an
 // <iframe> names a file beside ITS markup, not the app's — and against the
 // app directory otherwise.
-void loadHostImage(HostImage& img, const std::string& src, const dom::Document* doc = nullptr);
+void loadHostImage(HostImage& img, const std::string& src, const dom::Document* doc = nullptr,
+                   dom::Element* target = nullptr);
 
 // The one decoder every image byte stream in this layer goes through: the
 // bitmap codecs (broimage), then WebP, then SVG rasterized at its intrinsic

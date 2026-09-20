@@ -111,6 +111,8 @@ add_library(bro_scene STATIC
     terrain_manager.cpp
     clipmap_terrain.cpp
     tile_world.cpp
+    tile_world_mesh.cpp
+    tile_world_objects.cpp
     agent_binding.cpp
     ai_world_ticker.cpp
     ${GENERATED_HEADERS}

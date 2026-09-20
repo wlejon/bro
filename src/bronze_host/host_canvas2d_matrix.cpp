@@ -1,4 +1,5 @@
 #include "bronze_host/host_canvas2d_matrix.h"
+#include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/gl_internal.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
@@ -70,6 +71,7 @@ Canvas2DTransformTracker::Canvas2DTransformTracker() {
 
 void Canvas2DTransformTracker::save() {
     stack_.push_back(current_);
+    for (auto& h : saveHooks_) h();
 }
 
 void Canvas2DTransformTracker::restore() {
@@ -77,6 +79,7 @@ void Canvas2DTransformTracker::restore() {
         current_ = stack_.back();
         stack_.pop_back();
     }
+    for (auto& h : restoreHooks_) h();
 }
 
 void Canvas2DTransformTracker::translate(double tx, double ty) {
@@ -137,21 +140,29 @@ Value Canvas2DTransformTracker::toDOMMatrixValue() const {
 
 void installCanvas2DTransformMethods(ObjectBuilder& b, dom::Element* el, std::shared_ptr<Canvas2DTransformTracker> tracker) {
     b.def("isPointInPath", 2, [el, tracker](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 2) return ev::fromBool(false);
+        if (!el || !el->canvasScene() || a.empty()) return ev::fromBool(false);
         auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        HostCanvasPath2D* path = hostCanvasPath2DOf(a[0]);
+        size_t argIdx = path ? 1 : 0;
+        if (a.size() < argIdx + 2) return ev::fromBool(false);
+        double x = ev::toDouble(a[argIdx]);
+        double y = ev::toDouble(a[argIdx + 1]);
         std::string fillRule = "nonzero";
-        if (a.size() >= 3 && ev::isString(a[2])) {
-            fillRule = ev::toUtf8(a[2]);
+        if (a.size() > argIdx + 2 && ev::isString(a[argIdx + 2])) {
+            fillRule = ev::toUtf8(a[argIdx + 2]);
         }
-        double x = ev::toDouble(a[0]);
-        double y = ev::toDouble(a[1]);
         double localX = x, localY = y;
         if (!tracker->current().invert(x, y, localX, localY)) {
             return ev::fromBool(false);
         }
-        bool in = cs->isPointInPath(static_cast<float>(localX),
-                                   static_cast<float>(localY),
-                                   fillRule);
+        bool in = false;
+        if (path) {
+            in = cs->isPointInPath(path->snapshot(), static_cast<float>(localX),
+                                   static_cast<float>(localY), fillRule);
+        } else {
+            in = cs->isPointInPath(static_cast<float>(localX),
+                                   static_cast<float>(localY), fillRule);
+        }
         return ev::fromBool(in);
     });
 

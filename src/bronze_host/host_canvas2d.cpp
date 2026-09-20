@@ -1,6 +1,7 @@
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_canvas2d_matrix.h"
 #include "bronze_host/host_canvas_gradient.h"
+#include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
@@ -32,11 +33,26 @@ std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 
 Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     auto tracker = std::make_shared<Canvas2DTransformTracker>();
+    auto customFillStyle = std::make_shared<ev::Persistent>();
+    auto fillStyleStack = std::make_shared<std::vector<ev::Persistent>>();
+    tracker->addSaveHook([customFillStyle, fillStyleStack]() {
+        fillStyleStack->emplace_back(customFillStyle->get());
+    });
+    tracker->addRestoreHook([customFillStyle, fillStyleStack]() {
+        if (!fillStyleStack->empty()) {
+            customFillStyle->set(fillStyleStack->back().get());
+            fillStyleStack->pop_back();
+        }
+    });
+
     ObjectBuilder b;
     b.set("canvas", canvasVal);
 
     b.accessor("fillStyle",
-        [el](Value, std::span<const Value>) -> Value {
+        [el, customFillStyle](Value, std::span<const Value>) -> Value {
+            if (!customFillStyle->get().isUndefined()) {
+                return customFillStyle->get();
+            }
             if (el && el->canvasScene()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 uint8_t r, g, b, a;
@@ -45,15 +61,17 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             }
             return ev::fromUtf8("rgba(0,0,0,1.00)");
         },
-        [el](Value, std::span<const Value> a) -> Value {
+        [el, customFillStyle](Value, std::span<const Value> a) -> Value {
             if (el && el->canvasScene() && !a.empty()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 if (ev::isObject(a[0])) {
                     if (auto* grad = hostCanvasGradientOf(a[0])) {
                         cs->setFillShader(grad->buildShader());
-                        return ev::undefined();
                     }
+                    customFillStyle->set(a[0]);
+                    return ev::undefined();
                 }
+                customFillStyle->set(ev::undefined());
                 std::string str = ev::toUtf8(a[0]);
                 uint8_t r, g, b, a_col;
                 if (canvas::parseCSSColor(str, r, g, b, a_col)) {
@@ -439,26 +457,47 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         return ev::undefined();
     });
 
-    b.def("fill", 1, [el](Value, std::span<const Value>) -> Value {
+    b.def("fill", 2, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->fill();
+            HostCanvasPath2D* path = !a.empty() ? hostCanvasPath2DOf(a[0]) : nullptr;
+            std::string fillRule = "nonzero";
+            if (path) {
+                if (a.size() > 1 && ev::isString(a[1])) fillRule = ev::toUtf8(a[1]);
+                cs->fill(path->snapshot(), fillRule);
+            } else {
+                if (!a.empty() && ev::isString(a[0])) fillRule = ev::toUtf8(a[0]);
+                cs->fill(fillRule);
+            }
         }
         return ev::undefined();
     });
 
-    b.def("stroke", 0, [el](Value, std::span<const Value>) -> Value {
+    b.def("stroke", 1, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->stroke();
+            HostCanvasPath2D* path = !a.empty() ? hostCanvasPath2DOf(a[0]) : nullptr;
+            if (path) {
+                cs->stroke(path->snapshot());
+            } else {
+                cs->stroke();
+            }
         }
         return ev::undefined();
     });
 
-    b.def("clip", 0, [el](Value, std::span<const Value>) -> Value {
+    b.def("clip", 2, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->clip();
+            HostCanvasPath2D* path = !a.empty() ? hostCanvasPath2DOf(a[0]) : nullptr;
+            std::string fillRule = "nonzero";
+            if (path) {
+                if (a.size() > 1 && ev::isString(a[1])) fillRule = ev::toUtf8(a[1]);
+                cs->clip(path->snapshot(), fillRule);
+            } else {
+                if (!a.empty() && ev::isString(a[0])) fillRule = ev::toUtf8(a[0]);
+                cs->clip(fillRule);
+            }
         }
         return ev::undefined();
     });

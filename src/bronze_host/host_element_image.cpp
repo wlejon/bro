@@ -74,12 +74,21 @@ Value imageSrcSetter(Value self, std::span<const Value> a) {
     if (!st->image) st->image = std::make_unique<HostImage>();
     HostImage& img = *st->image;
 
-    loadHostImage(img, src, st->el->document());
+    // The attribute on the DOM element
+    st->el->setAttribute("src", src);
+
+    if (src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0) {
+        // Remote images load asynchronously via background thread;
+        // loadHostImage will update natural size and dispatch 'load' or 'error' event on completion.
+        loadHostImage(img, src, st->el->document(), st->el);
+        return ev::undefined();
+    }
+
+    loadHostImage(img, src, st->el->document(), st->el);
 
     // The attribute and the natural size too. This element is in a real
     // document, so if it is ever laid out the painter must find the picture
     // that was just decoded rather than probing the file a second time.
-    st->el->setAttribute("src", src);
     if (img.ok) st->el->setImageNaturalSize(src, img.width, img.height);
 
     dom::Element* target = st->el;
@@ -135,15 +144,20 @@ void decorateImageProto(ObjectBuilder& b) {
         nullptr);
 
     // decode(): the promise a loader awaits before it uses the pixels.
-    // Decoding here is synchronous — it already happened when `src` was
-    // assigned — so the promise is settled before it is returned, resolving
-    // when there are pixels and rejecting with an EncodingError when there are
-    // not. A loader that awaits it therefore continues on the next microtask
-    // instead of hanging forever on an `undefined` it tried to `.then`.
     b.def("decode", 0, [](Value self, std::span<const Value>) {
         HostImage* img = imageStateOf(self);
-        const bool ok = img && img->ok && img->width > 0 && img->height > 0;
         ev::Persistent p{ev::createPromise()};
+        if (!img) {
+            ev::rejectPromise(p.get(), ev::fromUtf8("EncodingError: image state missing"));
+            return p.get();
+        }
+        if (!img->complete && img->activeLoadToken) {
+            // Async load is in progress
+            img->pendingDecodePromises.push_back(p);
+            return p.get();
+        }
+
+        const bool ok = img->ok && img->width > 0 && img->height > 0;
         if (ok) {
             ev::resolvePromise(p.get(), ev::undefined());
         } else {
@@ -211,7 +225,7 @@ void primeImageFromMarkup(dom::Element* el) {
     HostNodeState* st = hostNodeStateFor(el);
     if (!st) return;
     if (!st->image) st->image = std::make_unique<HostImage>();
-    loadHostImage(*st->image, src, el->document());
+    loadHostImage(*st->image, src, el->document(), el);
 }
 
 }  // namespace bro::bronze_host

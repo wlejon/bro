@@ -35,7 +35,8 @@ static dom::Element* getElement(Value self) {
 static layout::ElVideo* getVideoControl(dom::Element* el, bool createIfMissing = false) {
     if (!el) return nullptr;
     if (auto* v = el->videoControl()) return v;
-    if (createIfMissing && (el->tagName() == "VIDEO" || el->tagName() == "video")) {
+    if (createIfMissing && (el->tagName() == "VIDEO" || el->tagName() == "video" ||
+                            el->tagName() == "AUDIO" || el->tagName() == "audio")) {
         if (auto* eng = hostEngine()) {
             auto ctrl = std::make_unique<layout::ElVideo>(eng->renderer());
             ctrl->setElement(el);
