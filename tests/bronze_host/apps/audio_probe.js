@@ -64,7 +64,7 @@ const gain = ctx.createGain();
 say('gain.defaultVal', gain.gain.value);
 gain.gain.value = 0.5;
 say('gain.setVal', gain.gain.value);
-const chain = gain.gain.setValueAtTime(0.8, 1.0);
+const chain = gain.gain.setValueAtTime(0.8, 0.0);
 say('gain.chain', chain === gain.gain);
 say('gain.afterAutomation', Math.round(gain.gain.value * 100) / 100);
 const conn = gain.connect(ctx.destination);
