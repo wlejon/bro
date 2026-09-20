@@ -1,4 +1,5 @@
 #include "bronze_host/host_canvas2d.h"
+#include "bronze_host/host_canvas2d_matrix.h"
 #include "bronze_host/host_canvas_gradient.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
@@ -30,6 +31,7 @@ std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 }  // namespace
 
 Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
+    auto tracker = std::make_shared<Canvas2DTransformTracker>();
     ObjectBuilder b;
     b.set("canvas", canvasVal);
 
@@ -630,13 +632,6 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         return ev::undefined();
     });
 
-    b.def("isPointInPath", 2, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 2) return ev::fromBool(false);
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        bool in = cs->isPointInPath(static_cast<float>(ev::toDouble(a[0])),
-                                   static_cast<float>(ev::toDouble(a[1])));
-        return ev::fromBool(in);
-    });
 
     b.def("polyline", 1, [el](Value, std::span<const Value> a) -> Value {
         if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
@@ -688,92 +683,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         return hostArrayOf(d.size(), [&d](size_t i) { return ev::fromDouble(d[i]); });
     });
 
-    b.def("save", 0, [el](Value, std::span<const Value>) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->save();
-        }
-        return ev::undefined();
-    });
-
-    b.def("restore", 0, [el](Value, std::span<const Value>) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->restore();
-        }
-        return ev::undefined();
-    });
-
-    b.def("translate", 2, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 2) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->translate(static_cast<float>(ev::toDouble(a[0])), static_cast<float>(ev::toDouble(a[1])));
-        }
-        return ev::undefined();
-    });
-
-    b.def("scale", 2, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 2) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->scale(static_cast<float>(ev::toDouble(a[0])), static_cast<float>(ev::toDouble(a[1])));
-        }
-        return ev::undefined();
-    });
-
-    b.def("rotate", 1, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 1) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->rotate(static_cast<float>(ev::toDouble(a[0])));
-        }
-        return ev::undefined();
-    });
-
-    b.def("setTransform", 6, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene()) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        if (a.size() >= 6) {
-            cs->setTransform(static_cast<float>(ev::toDouble(a[0])),
-                             static_cast<float>(ev::toDouble(a[1])),
-                             static_cast<float>(ev::toDouble(a[2])),
-                             static_cast<float>(ev::toDouble(a[3])),
-                             static_cast<float>(ev::toDouble(a[4])),
-                             static_cast<float>(ev::toDouble(a[5])));
-        } else {
-            cs->resetTransform();
-        }
-        return ev::undefined();
-    });
-
-    b.def("resetTransform", 0, [el](Value, std::span<const Value>) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->resetTransform();
-        }
-        return ev::undefined();
-    });
-
-    b.def("transform", 6, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 6) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        cs->transform(static_cast<float>(ev::toDouble(a[0])),
-                      static_cast<float>(ev::toDouble(a[1])),
-                      static_cast<float>(ev::toDouble(a[2])),
-                      static_cast<float>(ev::toDouble(a[3])),
-                      static_cast<float>(ev::toDouble(a[4])),
-                      static_cast<float>(ev::toDouble(a[5])));
-        return ev::undefined();
-    });
-
-    b.def("getTransform", 0, [](Value, std::span<const Value>) -> Value {
-        ObjectBuilder m;
-        m.set("a", ev::fromDouble(1.0));
-        m.set("b", ev::fromDouble(0.0));
-        m.set("c", ev::fromDouble(0.0));
-        m.set("d", ev::fromDouble(1.0));
-        m.set("e", ev::fromDouble(0.0));
-        m.set("f", ev::fromDouble(0.0));
-        return m.get();
-    });
+    installCanvas2DTransformMethods(b, el, tracker);
 
     b.def("createLinearGradient", 4, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 4) return ev::undefined();

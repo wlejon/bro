@@ -58,10 +58,24 @@ static Value buildTimeRanges(double duration, bool present) {
     ObjectBuilder obj;
     int32_t length = present ? 1 : 0;
     obj.set("length", ev::fromDouble(length));
-    obj.def("start", 1, [](Value, std::span<const Value>) -> Value {
+    obj.def("start", 1, [length](Value, std::span<const Value> a) -> Value {
+        if (a.empty() || !ev::isNumber(a[0])) {
+            return ev::throwValue(hostMakeDomError("IndexSizeError", "Index is out of range."));
+        }
+        double idx = ev::toDouble(a[0]);
+        if (idx < 0 || idx >= length || std::isnan(idx)) {
+            return ev::throwValue(hostMakeDomError("IndexSizeError", "Index is out of range."));
+        }
         return ev::fromDouble(0.0);
     });
-    obj.def("end", 1, [duration](Value, std::span<const Value>) -> Value {
+    obj.def("end", 1, [duration, length](Value, std::span<const Value> a) -> Value {
+        if (a.empty() || !ev::isNumber(a[0])) {
+            return ev::throwValue(hostMakeDomError("IndexSizeError", "Index is out of range."));
+        }
+        double idx = ev::toDouble(a[0]);
+        if (idx < 0 || idx >= length || std::isnan(idx)) {
+            return ev::throwValue(hostMakeDomError("IndexSizeError", "Index is out of range."));
+        }
         return ev::fromDouble(duration);
     });
     return obj.get();
@@ -73,14 +87,43 @@ void decorateMediaProto(ObjectBuilder& b) {
     // Methods
     b.def("play", 0, [](Value self, std::span<const Value>) -> Value {
         auto* el = getElement(self);
-        if (el) {
-            if (auto* v = el->videoControl()) {
-                bool wasPaused = !v->isPlaying();
-                v->play();
-                if (wasPaused) fireMediaEvent(el, "play");
+        Value p = ev::createPromise();
+        if (!el) {
+            ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "The element has no supported sources."));
+            return p;
+        }
+        std::string src = el->getAttribute("src");
+        if (src.empty()) {
+            for (auto* kid : el->childNodes()) {
+                if (auto* kel = dynamic_cast<dom::Element*>(kid)) {
+                    if (kel->tagName() == "SOURCE" || kel->tagName() == "source") {
+                        std::string ksrc = kel->getAttribute("src");
+                        if (!ksrc.empty()) {
+                            src = ksrc;
+                            break;
+                        }
+                    }
+                }
             }
         }
-        Value p = ev::createPromise();
+        if (src.empty()) {
+            ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "The element has no supported sources."));
+            return p;
+        }
+        auto* v = getVideoControl(el, true);
+        if (!v) {
+            ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "Failed to create media pipeline."));
+            return p;
+        }
+        if (!v->hasPipeline()) {
+            if (!v->load(src)) {
+                ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "The media resource failed to load."));
+                return p;
+            }
+        }
+        bool wasPaused = !v->isPlaying();
+        v->play();
+        if (wasPaused) fireMediaEvent(el, "play");
         ev::resolvePromise(p, ev::undefined());
         return p;
     });
@@ -199,7 +242,10 @@ void decorateMediaProto(ObjectBuilder& b) {
         }, nullptr);
 
     b.accessor("seeking",
-        [](Value, std::span<const Value>) -> Value {
+        [](Value self, std::span<const Value>) -> Value {
+            auto* el = getElement(self);
+            if (!el) return ev::fromBool(false);
+            if (auto* v = el->videoControl()) return ev::fromBool(v->isSeeking());
             return ev::fromBool(false);
         }, nullptr);
 

@@ -105,6 +105,10 @@ public:
     int displayHeight() const { return quarterTurned() ? frameW_ : frameH_; }
 
     bool hasFrame() const { return cur_.valid || pendingSeekPts_.load(std::memory_order_relaxed) >= 0 || !staged_.empty(); }
+    bool isSeeking() const {
+        return pendingSeekPts_.load(std::memory_order_relaxed) >= 0 ||
+               workerSeeking_.load(std::memory_order_relaxed);
+    }
     TimeNs durationNs() const { return duration_; }
     TimeNs clockNs() const { return clock_ ? clock_->nowNs() : 0; }
     MediaClock* clock() const { return clock_.get(); }

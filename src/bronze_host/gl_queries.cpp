@@ -9,6 +9,7 @@
 // a named approximation, carried in the module README.
 
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_internal.h"
 
 #include <string>
 
@@ -545,10 +546,10 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // --- WebXR ---
     // WebXR is not supported/unavailable in this desktop host, so makeXRCompatible
-    // resolves to false per instructions.
+    // rejects with AbortError per instructions.
     b.def("makeXRCompatible", 0, [](Value, std::span<const Value>) {
         ev::Persistent p{ev::createPromise()};
-        ev::resolvePromise(p.get(), ev::fromBool(false));
+        ev::rejectPromise(p.get(), hostMakeDomError("AbortError", "WebXR is not supported"));
         return p.get();
     });
 }

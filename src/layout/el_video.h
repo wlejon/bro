@@ -61,6 +61,7 @@ public:
     double frameRate() const;
     bool isReady() const;   // have a decoded frame and tracks
     bool isEnded() const;   // pipeline has drained and decoded last frame
+    bool isSeeking() const;
     bool hasPipeline() const { return pipeline_ != nullptr; }
 
     // Resolved URL of the currently-loaded resource. Empty when no resource

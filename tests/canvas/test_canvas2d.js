@@ -103,14 +103,44 @@ ctx.rect(0, 0, 100, 100);
 assert(ctx.isPointInPath(50, 50) === true, 'isPointInPath inside rect');
 assert(ctx.isPointInPath(150, 150) === false, 'isPointInPath outside rect');
 
-// --- Transforms ---
+// --- Transforms & getTransform ---
 ctx.resetTransform();
+var t0 = ctx.getTransform();
+assert(t0.a === 1 && t0.d === 1 && t0.e === 0 && t0.f === 0, 'initial identity transform');
+assert(t0.isIdentity === true, 'initial isIdentity true');
+assert(t0.is2D === true, 'initial is2D true');
+
+ctx.save();
 ctx.translate(10, 20);
-ctx.scale(2, 2);
+ctx.scale(2, 3);
+var t1 = ctx.getTransform();
+assert(t1.a === 2 && t1.d === 3 && t1.e === 10 && t1.f === 20, 'transformed getTransform matches');
+assert(t1.isIdentity === false, 't1 isIdentity false');
+
+// isPointInPath with transform
+ctx.beginPath();
+ctx.rect(0, 0, 10, 10); // in untransformed coords, (0,0)-(10,10). With transform: (10, 20) to (30, 50).
+assert(ctx.isPointInPath(20, 35) === true, 'isPointInPath takes transform into account (inside)');
+assert(ctx.isPointInPath(5, 5) === false, 'isPointInPath takes transform into account (outside)');
+
+ctx.restore();
+var t2 = ctx.getTransform();
+assert(t2.a === 1 && t2.d === 1 && t2.e === 0 && t2.f === 0, 'transform restored after restore');
+
+// fillRule test for isPointInPath (two concentric rects)
+ctx.beginPath();
+ctx.rect(0, 0, 100, 100);
+ctx.rect(20, 20, 60, 60);
+// In nonzero rule, inner rect is inside; in evenodd rule, inner rect is a hole (outside)
+assert(ctx.isPointInPath(50, 50, 'nonzero') === true, 'isPointInPath nonzero inner rect');
+assert(ctx.isPointInPath(50, 50, 'evenodd') === false, 'isPointInPath evenodd inner rect is hole');
+
 ctx.rotate(0.1);
 ctx.setTransform(1, 0, 0, 1, 0, 0); // identity
 ctx.transform(1, 0, 0, 1, 5, 5);     // translate by (5,5)
+assert(ctx.getTransform().e === 5 && ctx.getTransform().f === 5, 'transform() applied');
 ctx.resetTransform();
+assert(ctx.getTransform().isIdentity === true, 'resetTransform resets to identity');
 
 // --- fillText / strokeText (should not throw) ---
 ctx.fillText('hello', 10, 50);

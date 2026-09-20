@@ -541,6 +541,10 @@ bool ElVideo::isEnded() const {
     return pipeline_->currentPts() + frame >= durationNs;
 }
 
+bool ElVideo::isSeeking() const {
+    return pipeline_ && pipeline_->isSeeking();
+}
+
 void ElVideo::setVolume(double v) {
     if (v < 0.0) v = 0.0;
     if (v > 1.0) v = 1.0;
@@ -893,6 +897,7 @@ double ElVideo::duration() const { return 0.0; }
 double ElVideo::frameRate() const { return 0.0; }
 bool   ElVideo::isReady() const { return false; }
 bool   ElVideo::isEnded() const { return false; }
+bool   ElVideo::isSeeking() const { return false; }
 void   ElVideo::advancePipeline() {}
 const uint8_t* ElVideo::currentFrameRgba(int*, int*) { return nullptr; }
 void   ElVideo::applyAudioVolume() {}

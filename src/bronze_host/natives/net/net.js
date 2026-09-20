@@ -54,6 +54,11 @@
         if (data === undefined) throw new TypeError("bro.net.broadcast: data is required");
         __bro_native.net.broadcast(toU8(data), channel === undefined ? 0 : channel);
     });
+    fn(ns_net, "_sendUnframed", function _sendUnframed(peerId, data, options) {
+        if (peerId === undefined) throw new TypeError("bro.net._sendUnframed: peerId is required");
+        if (data === undefined) throw new TypeError("bro.net._sendUnframed: data is required");
+        return __bro_native.net._sendUnframed(peerId, toU8(data), options === undefined ? 0 : options);
+    });
     // [manual] bro.net.sendClone: operation (peerId, value, channel) — no native is generated; hand-written JS
     // installs it on ns_net after this module has run.
     // [manual] bro.net.broadcastClone: operation (value, channel) — no native is generated; hand-written JS

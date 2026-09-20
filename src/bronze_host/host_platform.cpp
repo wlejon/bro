@@ -250,24 +250,6 @@ Value makeShowSaveFileDialog() {
         2);
 }
 
-// ---------------------------------------------------------------------------
-// Interface names
-// ---------------------------------------------------------------------------
-
-// A plain named OBJECT, not a function — see the note at the top of this file
-// for why a name that merely RESOLVES is the whole job.
-//
-// An object rather than a stub constructor. A host function CAN carry
-// properties now (embed::setProperty takes a function receiver), but it still
-// cannot be given a `.prototype` — that one is refused by name — and without a
-// prototype `x instanceof Fn` is a TypeError rather than false. So an object
-// loses nothing that a function would win, and `Node.TEXT_NODE` is gained.
-Value makeInterfaceValue(const char* name) {
-    ObjectBuilder b;
-    b.set("name", ev::fromUtf8(name));
-    return b.get();
-}
-
 }  // namespace
 
 void installPlatformGlobals() {
@@ -340,15 +322,8 @@ void installPlatformGlobals() {
         ev::setProperty(win.value, "showOpenFolderDialog", openFolderVal);
         ev::setProperty(win.value, "showSaveFileDialog", saveFileVal);
     }
-    // The rest, in the manifest's order. Each is a name a real library tests
-    // for before deciding what kind of environment it is in.
-    for (const char* name : {
-             "Text", "CharacterData",
-             "Comment", "DocumentFragment", "Gamepad", "GamepadButton",
-             "GamepadEvent",
-         }) {
-        ev::registerGlobal(name, makeInterfaceValue(name));
-    }
+    // Gamepad, GamepadButton, GamepadEvent globals
+    installGamepadButtonGlobals();
 }
 
 }  // namespace bro::bronze_host

@@ -1215,8 +1215,14 @@ void CanvasScene::rect(float x, float y, float w, float h) {
     pathBuilder_.addRect(SkRect::MakeXYWH(x, y, w, h));
 }
 
-bool CanvasScene::isPointInPath(float x, float y) {
-    return pathBuilder_.snapshot().contains(x, y);
+bool CanvasScene::isPointInPath(float x, float y, const std::string& fillRule) {
+    SkPath p = pathBuilder_.snapshot();
+    if (fillRule == "evenodd") {
+        p.setFillType(SkPathFillType::kEvenOdd);
+    } else {
+        p.setFillType(SkPathFillType::kWinding);
+    }
+    return p.contains(x, y);
 }
 
 // ---------------------------------------------------------------------------

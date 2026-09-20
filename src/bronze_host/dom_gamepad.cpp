@@ -48,7 +48,8 @@ void decorateGamepadEventProto(ObjectBuilder& b) {
 }  // namespace
 
 Value buildGamepadSnapshot(const engine::GamepadState& gp) {
-    ObjectBuilder obj;
+    Value padVal = g_gamepadClass.make(nullptr, [](void*) {});
+    ObjectBuilder obj(padVal);
     obj.set("id", ev::fromUtf8(gp.id));
     obj.set("index", ev::fromDouble(gp.index));
     obj.set("connected", ev::fromBool(gp.connected));
@@ -59,7 +60,8 @@ Value buildGamepadSnapshot(const engine::GamepadState& gp) {
         float value = gp.buttons[i];
         bool pressed = value >= engine::kGamepadTriggerPressThreshold;
         bool touched = pressed || (value > 0.0f);
-        ObjectBuilder b;
+        Value btnVal = g_gamepad_buttonClass.make(nullptr, [](void*) {});
+        ObjectBuilder b(btnVal);
         b.set("pressed", ev::fromBool(pressed));
         b.set("touched", ev::fromBool(touched));
         b.set("value", ev::fromDouble(value));
@@ -181,13 +183,33 @@ void installGamepadButtonGlobals() {
         nullptr);
 
     g_gamepad_eventClass.install(
-        "GamepadEvent", 0,
-        // Not constructible: the IDL declares no constructor, and
-        // HostClass::install turns a null body into the TypeError the
-        // web specifies for `new GamepadEvent()`.
-        nullptr,
+        "GamepadEvent", 1,
+        [](Value, std::span<const Value> a) -> Value {
+            if (a.empty()) return ev::throwTypeError("Failed to construct 'GamepadEvent': 1 argument required");
+            std::string type = ev::toUtf8(a[0]);
+            Value inst = g_gamepad_eventClass.make(nullptr, [](void*) {});
+            ObjectBuilder b(inst);
+            b.set("type", ev::fromUtf8(type));
+            if (a.size() >= 2 && ev::isObject(a[1])) {
+                b.set("gamepad", ev::getProperty(a[1], "gamepad"));
+            } else {
+                b.set("gamepad", ev::null());
+            }
+            return b.get();
+        },
         decorateGamepadEventProto);
 
+    ev::GlobalValue evt = ev::globalValue("Event");
+    if (evt.found && ev::isFunction(evt.value)) {
+        Value evtProto = ev::getProperty(evt.value, "prototype");
+        if (ev::isObject(evtProto)) {
+            ev::setPrototype(g_gamepad_eventClass.prototype(), evtProto);
+        }
+    }
+}
+
+const HostClass& gamepadEventHostClass() {
+    return g_gamepad_eventClass;
 }
 
 }  // namespace bro::bronze_host

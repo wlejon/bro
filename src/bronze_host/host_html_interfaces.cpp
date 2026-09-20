@@ -5,6 +5,8 @@
 #include "bronze_host/host_element_video.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "engine/engine.h"
+#include "dom/document.h"
 
 #include <cctype>
 #include <string>
@@ -22,6 +24,10 @@ HostClass g_nodeClass;
 HostClass g_documentClass;
 HostClass g_elementClass;
 HostClass g_htmlElementClass;
+HostClass g_characterDataClass;
+HostClass g_textClass;
+HostClass g_commentClass;
+HostClass g_documentFragmentClass;
 
 HostClass g_htmlCanvasElementClass;
 HostClass g_htmlDivElementClass;
@@ -153,6 +159,10 @@ const HostClass& nodeHostClass() { return g_nodeClass; }
 const HostClass& documentHostClass() { return g_documentClass; }
 const HostClass& elementHostClass() { return g_elementClass; }
 const HostClass& htmlElementHostClass() { return g_htmlElementClass; }
+const HostClass& characterDataHostClass() { return g_characterDataClass; }
+const HostClass& textHostClass() { return g_textClass; }
+const HostClass& commentHostClass() { return g_commentClass; }
+const HostClass& documentFragmentHostClass() { return g_documentFragmentClass; }
 
 void installHtmlInterfaces() {
     static bool s_installed = false;
@@ -164,6 +174,39 @@ void installHtmlInterfaces() {
     for (const auto& c : kNodeConstants) {
         g_nodeClass.setStatic(c.name, ev::fromDouble(c.val));
     }
+
+    // CharacterData
+    g_characterDataClass.install("CharacterData", 0, illegalConstructor, nullptr);
+    g_characterDataClass.inherit(g_nodeClass);
+
+    // Text
+    g_textClass.install("Text", 1, [](Value, std::span<const Value> a) -> Value {
+        std::string data = a.empty() ? "" : ev::toUtf8(a[0]);
+        auto* eng = hostEngine();
+        if (!eng || !eng->document()) return ev::throwTypeError("No active document");
+        auto* t = eng->document()->createTextNode(data);
+        return hostNodeValue(t);
+    }, nullptr);
+    g_textClass.inherit(g_characterDataClass);
+
+    // Comment
+    g_commentClass.install("Comment", 1, [](Value, std::span<const Value> a) -> Value {
+        std::string data = a.empty() ? "" : ev::toUtf8(a[0]);
+        auto* eng = hostEngine();
+        if (!eng || !eng->document()) return ev::throwTypeError("No active document");
+        auto* c = eng->document()->createComment(data);
+        return hostNodeValue(c);
+    }, nullptr);
+    g_commentClass.inherit(g_characterDataClass);
+
+    // DocumentFragment
+    g_documentFragmentClass.install("DocumentFragment", 0, [](Value, std::span<const Value>) -> Value {
+        auto* eng = hostEngine();
+        if (!eng || !eng->document()) return ev::throwTypeError("No active document");
+        auto* f = eng->document()->createDocumentFragment();
+        return hostNodeValue(f);
+    }, nullptr);
+    g_documentFragmentClass.inherit(g_nodeClass);
 
     // Document
     g_documentClass.install("Document", 0, illegalConstructor, nullptr);

@@ -91,8 +91,8 @@ SourcePixels resolveSource(Value source, const char* who) {
                 return {px, static_cast<GLsizei>(vw), static_cast<GLsizei>(vh)};
             }
         }
-        static const std::vector<uint8_t> s_dummy(4, 255);
-        return {s_dummy.data(), 1, 1};
+        LOG_WARN("bronze_host: %s was given an Element with no available pixels", who);
+        return {};
     }
 
     // ImageData-shaped { width, height, data }: the standard duck type canvas
@@ -181,6 +181,8 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 if (src.disturbedGlState) live(c)->restoreState();
                 live(c)->texImage2D(domTarget, domLevel, domInternalformat, src.width,
                                     src.height, /*border=*/0, domFormat, domType, src.data);
+            } else {
+                live(c)->setSyntheticError(GL_INVALID_VALUE);
             }
             return ev::undefined();
         }
@@ -229,6 +231,8 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 if (src.disturbedGlState) live(c)->restoreState();
                 live(c)->texSubImage2D(domTarget, domLevel, domX, domY, src.width,
                                        src.height, domFormat, domType, src.data);
+            } else {
+                live(c)->setSyntheticError(GL_INVALID_VALUE);
             }
             return ev::undefined();
         }

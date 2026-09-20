@@ -8,10 +8,12 @@
 // BRO_WITH_NET does not have (src/net is not even configured); the stubs
 // below the gate need none of it.
 #include "net/net_service.h"
+#include <steam/isteamnetworkingutils.h>
 #endif
 #include "util/log.h"
 #include "natives/net/native_net_decl.h"
 #include "embed/embed.h"
+#include "abi/bronze_abi.h"
 
 #include "bronze_host/host_worker_msg.h"
 #include "runtime/typed_array.h"
@@ -99,6 +101,11 @@ net::NetSubscriber* getNetSubscriber() {
                          msg.connection, msg.data.size());
                 return;
             }
+            if (msg.data[1] != kWireRaw && msg.data[1] != kWireClone) {
+                LOG_WARN("[net] conn %u: dropping message with unknown wire type 0x%02x (%zu bytes)",
+                         msg.connection, msg.data[1], msg.data.size());
+                return;
+            }
             NetState& g_net = netState();
             if (g_net.dispatcher && ev::isFunction(g_net.dispatcher->get())) {
                 Value payloadVal;
@@ -106,6 +113,12 @@ net::NetSubscriber* getNetSubscriber() {
                     Message m;
                     m.data.assign(msg.data.begin() + kWireHeaderSize, msg.data.end());
                     payloadVal = deserializeMessage(m);
+                    if (bronze_exception_pending()) {
+                        bronze_exception_take();
+                        LOG_WARN("[net] conn %u: dropping malformed clone message (%zu bytes)",
+                                 msg.connection, msg.data.size());
+                        return;
+                    }
                 } else {
                     // A raw payload arrives as an ArrayBuffer: it is what
                     // distinguishes it from a clone (`data instanceof
@@ -227,6 +240,15 @@ bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len,
     return true;
 }
 
+bool bro_net_sendUnframed(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
+    auto* sub = getNetSubscriber();
+    if (!sub || !data) return false;
+    net::SendOptions opts;
+    if (!parseSendOptions(optsBits, opts, "_sendUnframed")) return false;
+    std::vector<uint8_t> payload(data, data + data_len);
+    return sub->send(static_cast<uint32_t>(peerId), std::move(payload), opts);
+}
+
 void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub || !data) return;
@@ -310,6 +332,9 @@ bool registerNetNatives(std::string* error) {
     if (!natives::fn("__bro_native.net.broadcastRawOpts",
                        reinterpret_cast<void*>(&bro_net_broadcastRawOpts),
                        "void", {"u8[]", "dynamic"}, error)) return false;
+    if (!natives::fn("__bro_native.net._sendUnframed",
+                       reinterpret_cast<void*>(&bro_net_sendUnframed),
+                       "bool", {"i32", "u8[]", "dynamic"}, error)) return false;
     return true;
 }
 
@@ -430,12 +455,46 @@ void bro_net_peers(bronze_native_buffer* out) {
     out->release = nullptr;
 }
 
-const char* bro_net_getPeerAddress(int32_t /*peerId*/) {
-    return natives::strResult("");
+const char* bro_net_getPeerAddress(int32_t peerId) {
+    auto* sockets = SteamNetworkingSockets();
+    if (!sockets) return natives::strResult("");
+    SteamNetConnectionInfo_t info;
+    if (!sockets->GetConnectionInfo(static_cast<HSteamNetConnection>(peerId), &info)) {
+        return natives::strResult("");
+    }
+    char buf[128];
+    info.m_addrRemote.ToString(buf, sizeof(buf), true);
+    return natives::strResult(buf);
 }
 
 const char* bro_net_stats(void) {
-    return natives::strResult("{\"ping\":0,\"packetLoss\":0,\"bytesSent\":0,\"bytesRecv\":0}");
+    auto* sub = getNetSubscriber();
+    NetState& g_net = netState();
+    if (!sub || g_net.connections.empty()) {
+        return natives::strResult("{\"ping\":0,\"packetLoss\":0,\"bytesSent\":0,\"bytesRecv\":0}");
+    }
+    float totalPing = 0.0f;
+    float totalLoss = 0.0f;
+    float totalBytesSent = 0.0f;
+    float totalBytesRecv = 0.0f;
+    int count = 0;
+    for (auto& [conn, _] : g_net.connections) {
+        bro::net::ConnectionStats st;
+        if (sub->getConnectionStats(conn, st)) {
+            totalPing += st.ping;
+            totalLoss += st.packetLoss;
+            totalBytesSent += st.bytesPerSecSent;
+            totalBytesRecv += st.bytesPerSecRecv;
+            count++;
+        }
+    }
+    float avgPing = count > 0 ? (totalPing / count) : 0.0f;
+    float avgLoss = count > 0 ? (totalLoss / count) : 0.0f;
+    std::string s = "{\"ping\":" + std::to_string(avgPing) +
+                    ",\"packetLoss\":" + std::to_string(avgLoss) +
+                    ",\"bytesSent\":" + std::to_string(totalBytesSent) +
+                    ",\"bytesRecv\":" + std::to_string(totalBytesRecv) + "}";
+    return natives::strResult(s);
 }
 
 const char* bro_net_getPeerStats(int32_t peerId) {
@@ -451,7 +510,26 @@ const char* bro_net_getPeerStats(int32_t peerId) {
     return natives::strResult(s);
 }
 
-void bro_net_setPeerSimulatedLoss(int32_t /*peerId*/, double /*chance*/, double /*latencyMin*/, double /*latencyMax*/) {
+void bro_net_setPeerSimulatedLoss(int32_t peerId, double chance, double latencyMin, double latencyMax) {
+    auto* utils = SteamNetworkingUtils();
+    if (!utils) return;
+    HSteamNetConnection conn = static_cast<HSteamNetConnection>(peerId);
+    float lossPct = static_cast<float>(chance <= 1.0 && chance > 0.0 ? chance * 100.0 : chance);
+    if (!utils->SetConnectionConfigValueFloat(conn, k_ESteamNetworkingConfig_FakePacketLoss_Send, lossPct)) {
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, lossPct);
+    }
+    if (!utils->SetConnectionConfigValueFloat(conn, k_ESteamNetworkingConfig_FakePacketLoss_Recv, lossPct)) {
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, lossPct);
+    }
+    if (latencyMin > 0.0 || latencyMax > 0.0) {
+        int32_t lagMs = static_cast<int32_t>(latencyMin);
+        if (!utils->SetConnectionConfigValueInt32(conn, k_ESteamNetworkingConfig_FakePacketLag_Send, lagMs)) {
+            utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, lagMs);
+        }
+        if (!utils->SetConnectionConfigValueInt32(conn, k_ESteamNetworkingConfig_FakePacketLag_Recv, lagMs)) {
+            utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, lagMs);
+        }
+    }
 }
 
 #else  // !BRO_WITH_NET

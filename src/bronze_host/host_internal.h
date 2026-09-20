@@ -387,6 +387,8 @@ Value makeLocalStorageValue();
 Value makeScreenValue();
 Value makeNavigatorValue();
 Value buildGamepadSnapshot(const engine::GamepadState& gp);
+void installGamepadButtonGlobals();
+const HostClass& gamepadEventHostClass();
 
 // `navigator` as a host global (host_navigator.cpp): makeNavigatorValue's
 // object plus `clipboard` and `getBattery()`.

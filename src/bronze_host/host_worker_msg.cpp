@@ -520,9 +520,13 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         ev::Persistent coll(ev::construct(ctor, {}).value);
         ev::Persistent adder(ev::getProperty(coll.get(), isMap ? "set" : "add"));
         for (uint32_t i = 0; i < len; ++i) {
-            ev::Persistent a(readValue(r, msg, depth + 1));
+            Value aVal = readValue(r, msg, depth + 1);
+            if (bronze_exception_pending()) return aVal;
+            ev::Persistent a(aVal);
             if (isMap) {
-                ev::Persistent b(readValue(r, msg, depth + 1));
+                Value bVal = readValue(r, msg, depth + 1);
+                if (bronze_exception_pending()) return bVal;
+                ev::Persistent b(bVal);
                 const Value args[2] = { a.get(), b.get() };
                 auto res = ev::call(adder.get(), coll.get(), std::span<const Value>(args, 2));
                 if (!res.thrown && ev::isObject(res.value)) {
@@ -574,7 +578,9 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         Value lenVal = ev::fromDouble(len);
         ev::Persistent arr(ev::construct(arrCtor, std::span<const Value>(&lenVal, 1)).value);
         for (uint32_t i = 0; i < len; ++i) {
-            ev::Persistent elem(readValue(r, msg, depth + 1));
+            Value elemVal = readValue(r, msg, depth + 1);
+            if (bronze_exception_pending()) return elemVal;
+            ev::Persistent elem(elemVal);
             arr.set(ev::setElement(arr.get(), i, elem.get()));
         }
         return arr.get();
@@ -586,7 +592,9 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         for (uint32_t i = 0; i < numProps; ++i) {
             std::string key;
             if (!readStr(r, key)) return ev::throwTypeError("postMessage: truncated key");
-            ev::Persistent propVal(readValue(r, msg, depth + 1));
+            Value propValRaw = readValue(r, msg, depth + 1);
+            if (bronze_exception_pending()) return propValRaw;
+            ev::Persistent propVal(propValRaw);
             obj.set(ev::setProperty(obj.get(), key, propVal.get()));
         }
         return obj.get();

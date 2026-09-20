@@ -36,6 +36,7 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_html_interfaces.h"
 
 #include "engine/engine.h"
 #include "dom/comment_node.h"
@@ -502,7 +503,10 @@ void installNodeTree(ObjectBuilder& b) {
 Value makeCharacterDataValue(dom::Node* node) {
     if (!isCharacterData(node)) return ev::null();
     HostNodeState* st = hostNodeStateFor(node);
-    ObjectBuilder b(makeNodeHandleObject(node));
+    Value handle = (node->nodeType() == dom::NodeType::Text)
+                       ? textHostClass().make(st, [](void*) {})
+                       : commentHostClass().make(st, [](void*) {});
+    ObjectBuilder b(handle);
 
     b.set("nodeType",
           ev::fromDouble(node->nodeType() == dom::NodeType::Text ? 3.0 : 8.0));
@@ -646,7 +650,8 @@ Value makeCharacterDataValue(dom::Node* node) {
 Value makeFragmentValue(dom::Node* frag) {
     if (!frag) return ev::null();
     HostNodeState* st = hostNodeStateFor(frag);
-    ObjectBuilder b(makeNodeHandleObject(frag));
+    Value handle = documentFragmentHostClass().make(st, [](void*) {});
+    ObjectBuilder b(handle);
 
     b.set("nodeType", ev::fromDouble(11));
     b.set("nodeName", ev::fromUtf8("#document-fragment"));

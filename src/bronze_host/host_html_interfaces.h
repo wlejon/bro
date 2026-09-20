@@ -15,6 +15,10 @@ const HostClass& htmlImageElementClass();
 const HostClass& canvasRenderingContext2DHostClass();
 const HostClass& dataTransferHostClass();
 const HostClass& svgElementHostClass();
+const HostClass& characterDataHostClass();
+const HostClass& textHostClass();
+const HostClass& commentHostClass();
+const HostClass& documentFragmentHostClass();
 
 Value htmlInterfaceProto(const std::string& tagName);
 

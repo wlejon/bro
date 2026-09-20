@@ -96,6 +96,12 @@
         __bro_native.net.broadcastRawOpts(toU8(data), options === undefined ? 0 : options);
     });
 
+    fn(ns_net, "_sendUnframed", function _sendUnframed(peerId, data, options) {
+        if (peerId === undefined) throw new TypeError("bro.net._sendUnframed: peerId is required");
+        if (data === undefined) throw new TypeError("bro.net._sendUnframed: data is required");
+        return __bro_native.net._sendUnframed(peerId, toU8(data), options === undefined ? 0 : options);
+    });
+
     fn(ns_net, "sendClone", function sendClone(peerId, value, options) {
         if (peerId === undefined) throw new TypeError("bro.net.sendClone: peerId is required");
         return __bro_native.net.sendClone(peerId, value, options);

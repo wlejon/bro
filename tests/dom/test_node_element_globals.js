@@ -129,4 +129,43 @@ for (let i = 0; i < kids.length; i++) {
            `child ${i} is text or comment, got nodeType ${n.nodeType}`);
 }
 
+// ---------------------------------------------------------------------------
+// CharacterData, Text, Comment, DocumentFragment, Gamepad* classes
+// ---------------------------------------------------------------------------
+
+assert(typeof CharacterData === 'function', 'CharacterData is a constructor');
+assert(typeof Text === 'function', 'Text is a constructor');
+assert(typeof Comment === 'function', 'Comment is a constructor');
+assert(typeof DocumentFragment === 'function', 'DocumentFragment is a constructor');
+assert(typeof Gamepad === 'function', 'Gamepad is a constructor');
+assert(typeof GamepadButton === 'function', 'GamepadButton is a constructor');
+assert(typeof GamepadEvent === 'function', 'GamepadEvent is a constructor');
+
+let cdThrew = false;
+try { new CharacterData(); } catch (e) { cdThrew = true; }
+assert(cdThrew, 'new CharacterData() throws');
+
+const t = new Text('hello world');
+assert(t instanceof Text, 't instanceof Text');
+assert(t instanceof CharacterData, 't instanceof CharacterData');
+assert(t instanceof Node, 't instanceof Node');
+assert(t.data === 'hello world', 't.data');
+assert(t.nodeType === 3, 't.nodeType === 3');
+
+const c = new Comment('a comment');
+assert(c instanceof Comment, 'c instanceof Comment');
+assert(c instanceof CharacterData, 'c instanceof CharacterData');
+assert(c instanceof Node, 'c instanceof Node');
+assert(c.data === 'a comment', 'c.data');
+assert(c.nodeType === 8, 'c.nodeType === 8');
+
+const frag = new DocumentFragment();
+assert(frag instanceof DocumentFragment, 'frag instanceof DocumentFragment');
+assert(frag instanceof Node, 'frag instanceof Node');
+assert(frag.nodeType === 11, 'frag.nodeType === 11');
+
+const gpEvent = new GamepadEvent('gamepadconnected');
+assert(gpEvent instanceof GamepadEvent, 'gpEvent instanceof GamepadEvent');
+assert(gpEvent.type === 'gamepadconnected', 'gpEvent.type');
+
 console.log('OK — Node and Element globals, prototype chain, nodeType constants');

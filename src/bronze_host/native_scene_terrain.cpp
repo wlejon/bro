@@ -244,8 +244,64 @@ void bro_terrain_Terrain_invalidateRegion(void* self, double x0, double z0, doub
     }
 }
 
-void bro_terrain_Terrain_setHeightSource(void* self, uint64_t /*fn*/) {
-    // Height source callback placeholder
+void bro_terrain_Terrain_setHeightSource(void* self, uint64_t fn) {
+    auto* c = terrainCellOf(self);
+    if (!c || !c->mgr()) return;
+
+    Value jsFn = ev::fromBits(fn);
+    if (!ev::isFunction(jsFn)) {
+        c->heightSource.set(ev::undefined());
+        c->hasHeightSource = false;
+        c->mgr()->setHeightSource(nullptr);
+        return;
+    }
+
+    c->heightSource.set(jsFn);
+    c->hasHeightSource = true;
+
+    c->mgr()->setHeightSource([c](int cx, int cz, int lod, float* padded,
+                                  int paddedW, int paddedH, float cellSize,
+                                  float worldX0, float worldZ0) -> bool {
+        if (!c->hasHeightSource) return false;
+        Value callback = c->heightSource.get();
+        if (!ev::isFunction(callback)) return false;
+
+        const size_t totalFloats = static_cast<size_t>(paddedW) * static_cast<size_t>(paddedH);
+        Value paddedView = makeFloat32Array(padded, totalFloats);
+
+        Value args[9] = {
+            ev::fromDouble(cx),
+            ev::fromDouble(cz),
+            ev::fromDouble(lod),
+            paddedView,
+            ev::fromDouble(paddedW),
+            ev::fromDouble(paddedH),
+            ev::fromDouble(cellSize),
+            ev::fromDouble(worldX0),
+            ev::fromDouble(worldZ0)
+        };
+
+        auto r = ev::call(callback, ev::undefined(), args);
+        if (r.thrown) return false;
+        if (ev::isBool(r.value) && !ev::toBool(r.value)) return false;
+
+        if (ev::isTypedArray(r.value)) {
+            auto info = ev::typedArrayInfo(r.value);
+            if (info.data) {
+                size_t count = std::min<size_t>(totalFloats, info.byteLength / sizeof(float));
+                std::memcpy(padded, info.data, count * sizeof(float));
+                return true;
+            }
+        }
+
+        auto info = ev::typedArrayInfo(paddedView);
+        if (info.data) {
+            std::memcpy(padded, info.data, totalFloats * sizeof(float));
+            return true;
+        }
+
+        return false;
+    });
 }
 
 double bro_terrain_Terrain_heightAt(void* self, double x, double z) {
@@ -301,6 +357,8 @@ int32_t bro_terrain_Terrain_layers_get(void* self) {
 void bro_terrain_Terrain_destroy(void* self) {
     auto* c = terrainCellOf(self);
     if (c && c->manager) {
+        c->heightSource.set(ev::undefined());
+        c->hasHeightSource = false;
         c->manager->clear();
         c->manager.reset();
     }

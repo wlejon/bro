@@ -182,6 +182,15 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installEventTarget();
     bk::installMessageChannel();
     bk::installEvents();
+    {
+        ev::GlobalValue evt = ev::globalValue("Event");
+        if (evt.found && ev::isFunction(evt.value)) {
+            Value evtProto = ev::getProperty(evt.value, "prototype");
+            if (ev::isObject(evtProto)) {
+                ev::setPrototype(gamepadEventHostClass().prototype(), evtProto);
+            }
+        }
+    }
     bk::installUtil();
     bk::installBuffer();
     adoptGlobalProperty("Buffer");
