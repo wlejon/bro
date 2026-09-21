@@ -95,6 +95,7 @@ bool readEventSpec(Value descV, const char* what, EventSpec& out) {
 
     out.bubbles = boolAt(desc.get(), "bubbles");
     out.cancelable = boolAt(desc.get(), "cancelable");
+    out.isTrusted = boolAt(desc.get(), "isTrusted");
     out.ctrlKey = boolAt(desc.get(), "ctrlKey");
     out.shiftKey = boolAt(desc.get(), "shiftKey");
     out.altKey = boolAt(desc.get(), "altKey");
@@ -160,6 +161,7 @@ bool dispatchEventSpec(const EventSpec& spec, const std::function<void(dom::Even
     // bare Value across the call.
     if (isKeyType(spec.type)) {
         dom::KeyboardEvent k(spec.type, spec.bubbles, spec.cancelable);
+        k.setIsTrusted(spec.isTrusted);
         k.setKey(spec.key);
         k.setCode(spec.code.empty() ? spec.key : spec.code);
         k.setCtrlKey(spec.ctrlKey);
@@ -172,6 +174,7 @@ bool dispatchEventSpec(const EventSpec& spec, const std::function<void(dom::Even
     }
     if (isWheelType(spec.type)) {
         dom::WheelEvent w(spec.type, spec.bubbles, spec.cancelable);
+        w.setIsTrusted(spec.isTrusted);
         fillMouse(w, spec);
         w.setDeltaX(spec.deltaX);
         w.setDeltaY(spec.deltaY);
@@ -182,17 +185,20 @@ bool dispatchEventSpec(const EventSpec& spec, const std::function<void(dom::Even
     }
     if (isMouseType(spec.type)) {
         dom::MouseEvent m(spec.type, spec.bubbles, spec.cancelable);
+        m.setIsTrusted(spec.isTrusted);
         fillMouse(m, spec);
         dispatch(m);
         return !m.defaultPrevented();
     }
     if (spec.hasDetail) {
         dom::CustomEvent custom(spec.type, spec.bubbles, spec.cancelable);
+        custom.setIsTrusted(spec.isTrusted);
         custom.setDetail(spec.detail);
         dispatch(custom);
         return !custom.defaultPrevented();
     }
     dom::Event plain(spec.type, spec.bubbles, spec.cancelable);
+    plain.setIsTrusted(spec.isTrusted);
     dispatch(plain);
     return !plain.defaultPrevented();
 }

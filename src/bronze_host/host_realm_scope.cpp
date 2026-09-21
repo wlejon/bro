@@ -18,6 +18,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_iframe.h"
 #include "engine/engine.h"
 
 #include <string>
@@ -150,6 +151,7 @@ bool isChildRealm() {
 void clearRealmScope(uint64_t scopeId) {
     s_scopeExpandos.erase(scopeId);
     clearParsedDocumentsForScope(scopeId);
+    clearContentWindowProxy(scopeId);
 }
 
 void resetAllRealmScopes() {
@@ -157,6 +159,7 @@ void resetAllRealmScopes() {
     s_scopeExpandos.clear();
     s_activeScope = 0;
     clearParsedDocuments();
+    clearContentWindowProxy(0);
 }
 
 uint64_t scopeIdForDocument(dom::Document* doc) {

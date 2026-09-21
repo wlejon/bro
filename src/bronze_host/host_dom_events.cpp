@@ -433,6 +433,7 @@ Value decorateProvidedEventValue(Value provided, dom::Event& e, const LiveEventP
     }
     b.set("eventPhase", ev::fromDouble(e.eventPhase()));
     b.set("defaultPrevented", ev::fromBool(e.defaultPrevented()));
+    b.set("isTrusted", ev::fromBool(e.isTrusted()));
     installEventPropagationMethods(b, live);
     return b.get();
 }

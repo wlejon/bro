@@ -624,15 +624,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         }
 
         b.def("open", 1, [](Value, std::span<const Value> a) {
-            if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) return ev::null();
-            std::string url = ev::toUtf8(a[0]);
-            if (!url.empty()) {
-                auto* e = hostEngine();
-                if (e && e->displayMode() == engine::DisplayMode::Headless) {
-                    LOG_INFO("window.open('%s'): suppressed in headless mode", url.c_str());
-                }
-            }
-            return ev::null();
+            return handleWindowOpen(a);
         });
 
         b.def("focus", 0, [](Value, std::span<const Value>) {

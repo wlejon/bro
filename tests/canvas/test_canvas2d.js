@@ -198,6 +198,33 @@ assert(got.width === 5, 'getImageData width');
 assert(got.height === 5, 'getImageData height');
 assert(got.data.length === 100, 'getImageData data length');
 
+// --- fillText / strokeText with maxWidth ---
+ctx.fillText('hello world', 10, 20, 50);
+ctx.strokeText('hello world', 10, 40, 50);
+
+// --- putImageData dirty rect overload ---
+var srcImg = ctx.createImageData(10, 10);
+var p33 = (3 * 10 + 3) * 4;
+srcImg.data[p33 + 0] = 255;
+srcImg.data[p33 + 1] = 0;
+srcImg.data[p33 + 2] = 0;
+srcImg.data[p33 + 3] = 255;
+
+var p88 = (8 * 10 + 8) * 4;
+srcImg.data[p88 + 0] = 0;
+srcImg.data[p88 + 1] = 0;
+srcImg.data[p88 + 2] = 255;
+srcImg.data[p88 + 3] = 255;
+
+// put with dirty rect [2, 2, 4, 4] onto dx=20, dy=20
+// This includes (3, 3) (which lands at 23, 23), but excludes (8, 8)
+ctx.putImageData(srcImg, 20, 20, 2, 2, 4, 4);
+
+var pAt23 = ctx.getImageData(23, 23, 1, 1);
+assert(pAt23.data[0] === 255 && pAt23.data[3] === 255, 'dirty rect pixel copied');
+var pAt28 = ctx.getImageData(28, 28, 1, 1);
+assert(pAt28.data[2] === 0 && pAt28.data[3] === 0, 'pixel outside dirty rect not copied');
+
 // --- shadowColor ---
 ctx.shadowColor = 'rgba(0,0,0,0.5)';
 // Just verify it doesn't throw; getter format may vary

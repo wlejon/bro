@@ -95,3 +95,44 @@ flush();
 assert(JSON.stringify(JSON.parse(fs.readFileSync(storePath, 'utf-8'))) === '{}',
        'clear() writes an empty object');
 
+// ── StorageEvent dispatch ───────────────────────────────────────────────────
+const storageEvents = [];
+window.addEventListener('storage', (e) => {
+  storageEvents.push({
+    type: e.type,
+    key: e.key,
+    oldValue: e.oldValue,
+    newValue: e.newValue,
+    url: e.url,
+    storageArea: e.storageArea,
+    isTrusted: e.isTrusted
+  });
+});
+
+localStorage.setItem('testKey', 'val1');
+assert(storageEvents.length === 1, 'setItem fired StorageEvent');
+assert(storageEvents[0].key === 'testKey', 'event.key is testKey');
+assert(storageEvents[0].oldValue === null, 'event.oldValue is null');
+assert(storageEvents[0].newValue === 'val1', 'event.newValue is val1');
+assert(storageEvents[0].storageArea === localStorage, 'event.storageArea is localStorage');
+assert(storageEvents[0].isTrusted === true, 'event.isTrusted is true');
+
+localStorage.setItem('testKey', 'val2');
+assert(storageEvents.length === 2, 'second setItem fired StorageEvent');
+assert(storageEvents[1].oldValue === 'val1', 'event.oldValue is val1');
+assert(storageEvents[1].newValue === 'val2', 'event.newValue is val2');
+
+localStorage.removeItem('testKey');
+assert(storageEvents.length === 3, 'removeItem fired StorageEvent');
+assert(storageEvents[2].oldValue === 'val2', 'removeItem event.oldValue is val2');
+assert(storageEvents[2].newValue === null, 'removeItem event.newValue is null');
+
+localStorage.setItem('toClear', 'val');
+assert(storageEvents.length === 4, 'setItem toClear fired StorageEvent');
+
+localStorage.clear();
+assert(storageEvents.length === 5, 'clear fired StorageEvent');
+assert(storageEvents[4].key === null, 'clear event.key is null');
+assert(storageEvents[4].oldValue === null, 'clear event.oldValue is null');
+assert(storageEvents[4].newValue === null, 'clear event.newValue is null');
+

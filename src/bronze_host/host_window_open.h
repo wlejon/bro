@@ -1,9 +1,9 @@
 #pragma once
 
 #include "bronze_host/host_realm_scope.h"
+#include "embed/embed.h"
 #include <cstdint>
-
-namespace bronze { struct Value; }
+#include <span>
 namespace bro::engine { class Engine; }
 
 namespace bro::bronze_host {
@@ -22,5 +22,7 @@ void addWindowHostChildMessageListener(uint64_t hostId, bronze::Value fn);
 void removeWindowHostChildMessageListener(uint64_t hostId, bronze::Value fn);
 
 void drainHostWindowMessages();
+
+bronze::Value handleWindowOpen(std::span<const bronze::Value> args);
 
 } // namespace bro::bronze_host

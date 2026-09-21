@@ -14,6 +14,121 @@
 
 namespace bro::bronze_host {
 
+namespace {
+
+static std::unordered_map<uint64_t, ev::Persistent> s_contentWindowProxies;
+
+Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
+    if (!el || !d || !d->document) return ev::null();
+    uint64_t scopeId = scopeIdForDocument(d->document.get());
+    auto it = s_contentWindowProxies.find(scopeId);
+    if (it != s_contentWindowProxies.end()) {
+        return it->second.get();
+    }
+
+    HostProxyTraps traps;
+    dom::Document* docPtr = d->document.get();
+
+    traps.get = [scopeId, docPtr, el](const std::string& key, Value& out) -> bool {
+        if (key == "document") {
+            out = hostDocumentValue(docPtr);
+            return true;
+        }
+        if (key == "frameElement") {
+            out = hostElementValue(el);
+            return true;
+        }
+        if (key == "window" || key == "self") {
+            auto it = s_contentWindowProxies.find(scopeId);
+            if (it != s_contentWindowProxies.end()) {
+                out = it->second.get();
+                return true;
+            }
+        }
+        if (key == "parent" || key == "top") {
+            ev::GlobalValue g = ev::globalValue("window");
+            out = g.found ? g.value : ev::undefined();
+            return true;
+        }
+        enterRealmScope(scopeId);
+        ev::GlobalValue g = ev::globalValue("globalThis");
+        bool found = false;
+        if (g.found && ev::isObject(g.value)) {
+            Value v = ev::getProperty(g.value, key);
+            if (!ev::isUndefined(v)) {
+                out = v;
+                found = true;
+            }
+        }
+        exitRealmScope();
+        return found;
+    };
+
+    traps.set = [scopeId](const std::string& key, Value v) {
+        enterRealmScope(scopeId);
+        ev::GlobalValue g = ev::globalValue("globalThis");
+        if (g.found && ev::isObject(g.value)) {
+            ev::setProperty(g.value, key, v);
+        }
+        exitRealmScope();
+    };
+
+    traps.has = [scopeId](const std::string& key) -> bool {
+        if (key == "document" || key == "frameElement" || key == "window" || key == "self" || key == "parent" || key == "top") {
+            return true;
+        }
+        enterRealmScope(scopeId);
+        ev::GlobalValue g = ev::globalValue("globalThis");
+        bool hasProp = false;
+        if (g.found && ev::isObject(g.value)) {
+            Value v = ev::getProperty(g.value, key);
+            hasProp = !ev::isUndefined(v);
+        }
+        exitRealmScope();
+        return hasProp;
+    };
+
+    traps.ownKeys = [scopeId]() -> std::vector<std::string> {
+        std::vector<std::string> keys = {"document", "frameElement", "window", "self", "parent", "top"};
+        enterRealmScope(scopeId);
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) {
+            ev::GlobalValue objG = ev::globalValue("Object");
+            if (objG.found && ev::isObject(objG.value)) {
+                Value getOwnPropertyNamesFn = ev::getProperty(objG.value, "getOwnPropertyNames");
+                if (ev::isFunction(getOwnPropertyNamesFn)) {
+                    Value arg = gt.value;
+                    ev::CallResult res = ev::call(getOwnPropertyNamesFn, objG.value, std::span<const Value>(&arg, 1));
+                    if (!res.thrown && ev::isObject(res.value)) {
+                        Value lenVal = ev::getProperty(res.value, "length");
+                        int len = static_cast<int>(ev::toDouble(lenVal));
+                        for (int i = 0; i < len; ++i) {
+                            Value k = ev::getElement(res.value, i);
+                            keys.push_back(ev::toUtf8(k));
+                        }
+                    }
+                }
+            }
+        }
+        exitRealmScope();
+        return keys;
+    };
+
+    Value proxy = makeHostProxy(std::move(traps));
+    s_contentWindowProxies[scopeId].set(proxy);
+    return proxy;
+}
+
+} // namespace
+
+void clearContentWindowProxy(uint64_t scopeId) {
+    if (scopeId == 0) {
+        s_contentWindowProxies.clear();
+    } else {
+        s_contentWindowProxies.erase(scopeId);
+    }
+}
+
 void decorateIFrameProto(ObjectBuilder& b) {
     b.accessor("src",
         [](Value self, std::span<const Value>) -> Value {
@@ -26,6 +141,11 @@ void decorateIFrameProto(ObjectBuilder& b) {
             std::string src = ev::toUtf8(argAt(a, 0));
             el->setAttribute("src", src);
             if (engine::Engine* engine = hostEngine()) {
+                if (engine::IframeDoc* d = engine->iframeDocForElement(el)) {
+                    if (d->document) {
+                        clearContentWindowProxy(scopeIdForDocument(d->document.get()));
+                    }
+                }
                 engine->reloadIframe(el);
             }
             return ev::undefined();
@@ -54,8 +174,13 @@ void decorateIFrameProto(ObjectBuilder& b) {
         });
 
     b.accessor("contentWindow",
-        [](Value, std::span<const Value>) -> Value {
-            return ev::null();
+        [](Value self, std::span<const Value>) -> Value {
+            dom::Element* el = hostElementOf(self);
+            auto* eng = hostEngine();
+            if (!el || !eng) return ev::null();
+            engine::IframeDoc* d = eng->iframeDocForElement(el);
+            if (!d || !d->document) return ev::null();
+            return makeContentWindowProxy(el, d);
         },
         nullptr);
 
@@ -77,6 +202,11 @@ void decorateIFrameProto(ObjectBuilder& b) {
         dom::Element* el = hostElementOf(self);
         if (el && (el->tagName() == "IFRAME" || el->tagName() == "iframe")) {
             if (engine::Engine* engine = hostEngine()) {
+                if (engine::IframeDoc* d = engine->iframeDocForElement(el)) {
+                    if (d->document) {
+                        clearContentWindowProxy(scopeIdForDocument(d->document.get()));
+                    }
+                }
                 engine->reloadIframe(el);
             }
         }

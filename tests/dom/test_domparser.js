@@ -69,6 +69,16 @@ assert(frag.body && frag.body.children.length === 1 &&
 const svgDoc = parser.parseFromString('<svg><rect/></svg>', 'image/svg+xml');
 assert(svgDoc && svgDoc.nodeType === 9, 'image/svg+xml returns a document');
 assert(svgDoc.querySelector('svg') !== null, 'svg element reachable');
+assert(doc.contentType === 'text/html', 'html doc has contentType text/html');
+assert(svgDoc.contentType === 'image/svg+xml', 'svg doc has contentType image/svg+xml');
+
+let caughtMime = false;
+try {
+    parser.parseFromString('<div></div>', 'unsupported/type');
+} catch (e) {
+    caughtMime = (e instanceof TypeError);
+}
+assert(caughtMime, 'unsupported mimeType throws TypeError');
 
 // ---- XMLSerializer round-trip still works ---------------------------------
 const ser = new XMLSerializer().serializeToString(frag);

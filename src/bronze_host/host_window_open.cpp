@@ -537,4 +537,88 @@ void resetWindowHostOpenState() {
     s_childMessageListeners.clear();
 }
 
+Value handleWindowOpen(std::span<const Value> a) {
+    if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) return ev::null();
+    std::string url = ev::toUtf8(a[0]);
+    auto* e = hostEngine();
+    if (!e) return ev::null();
+    if (e->displayMode() == engine::DisplayMode::Headless) {
+        if (!url.empty()) {
+            LOG_INFO("window.open('%s'): suppressed in headless mode", url.c_str());
+        }
+        return ev::null();
+    }
+
+    engine::WindowHostOptions opts;
+    opts.src = url;
+    if (a.size() > 1 && ev::isString(a[1])) {
+        opts.title = ev::toUtf8(a[1]);
+    }
+    if (a.size() > 2) {
+        if (ev::isString(a[2])) {
+            std::string feats = ev::toUtf8(a[2]);
+            size_t start = 0;
+            while (start < feats.size()) {
+                size_t comma = feats.find(',', start);
+                if (comma == std::string::npos) comma = feats.size();
+                std::string token = feats.substr(start, comma - start);
+                size_t eq = token.find('=');
+                if (eq != std::string::npos) {
+                    std::string k = token.substr(0, eq);
+                    std::string v = token.substr(eq + 1);
+                    while (!k.empty() && (k.front() == ' ' || k.front() == '\t')) k.erase(0, 1);
+                    while (!k.empty() && (k.back() == ' ' || k.back() == '\t')) k.pop_back();
+                    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.erase(0, 1);
+                    while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
+                    try {
+                        if (k == "width" || k == "innerWidth") {
+                            opts.width = std::stoi(v);
+                            opts.provided.width = true;
+                        } else if (k == "height" || k == "innerHeight") {
+                            opts.height = std::stoi(v);
+                            opts.provided.height = true;
+                        } else if (k == "left" || k == "screenX") {
+                            opts.x = std::stoi(v);
+                        } else if (k == "top" || k == "screenY") {
+                            opts.y = std::stoi(v);
+                        }
+                    } catch (...) {}
+                }
+                start = comma + 1;
+            }
+        } else if (ev::isObject(a[2])) {
+            Value o = a[2];
+            Value w = ev::getProperty(o, "width");
+            if (!ev::isUndefined(w) && !ev::isNull(w)) {
+                opts.width = static_cast<int>(ev::toDouble(w));
+                opts.provided.width = true;
+            }
+            Value h = ev::getProperty(o, "height");
+            if (!ev::isUndefined(h) && !ev::isNull(h)) {
+                opts.height = static_cast<int>(ev::toDouble(h));
+                opts.provided.height = true;
+            }
+        }
+    }
+    if (opts.width < 1) opts.width = 1;
+    if (opts.height < 1) opts.height = 1;
+
+    uint64_t id = e->openWindowHost(opts);
+    if (id == 0) return ev::null();
+
+    auto state = std::make_shared<WindowHandleState>();
+    state->engine = e;
+    state->id = id;
+    state->width = opts.width;
+    state->height = opts.height;
+    state->x = opts.x;
+    state->y = opts.y;
+    state->title = opts.title;
+    s_handleStates[id] = state;
+
+    Value handle = makeWindowHandle(state);
+    s_windowHandles.emplace(id, handle);
+    return handle;
+}
+
 } // namespace bro::bronze_host

@@ -66,9 +66,22 @@ Value parserParseFromString(Value, std::span<const Value> a) {
     Value htmlV = argAt(a, 0);
     if (ev::isObject(htmlV))
         return ev::throwTypeError("parseFromString: markup must be a string");
+    Value mimeV = argAt(a, 1);
+    if (!ev::isString(mimeV))
+        return ev::throwTypeError("parseFromString: mimeType must be a string");
+    std::string mime = ev::toUtf8(mimeV);
+    if (mime != "text/html" &&
+        mime != "text/xml" &&
+        mime != "application/xml" &&
+        mime != "application/xhtml+xml" &&
+        mime != "image/svg+xml") {
+        return ev::throwTypeError("parseFromString: '" + mime + "' is not a supported mimeType");
+    }
     const std::string html = ev::isUndefined(htmlV) ? std::string() : ev::toUtf8(htmlV);
     dom::Document* doc = parseIntoNewDocument(html);
-    return hostDocumentValue(doc);
+    Value docVal = hostDocumentValue(doc);
+    ev::setProperty(docVal, "contentType", ev::fromUtf8(mime));
+    return docVal;
 }
 
 Value makeParserValue() {

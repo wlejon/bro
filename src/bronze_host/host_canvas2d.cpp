@@ -447,7 +447,11 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     b.def("fillText", 4, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 3) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->fillText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])));
+            float maxWidth = -1.0f;
+            if (a.size() >= 4 && !ev::isUndefined(a[3]) && !ev::isNull(a[3])) {
+                maxWidth = static_cast<float>(ev::toDouble(a[3]));
+            }
+            cs->fillText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])), maxWidth);
         }
         return ev::undefined();
     });
@@ -455,7 +459,11 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     b.def("strokeText", 4, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 3) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->strokeText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])));
+            float maxWidth = -1.0f;
+            if (a.size() >= 4 && !ev::isUndefined(a[3]) && !ev::isNull(a[3])) {
+                maxWidth = static_cast<float>(ev::toDouble(a[3]));
+            }
+            cs->strokeText(ev::toUtf8(a[0]), static_cast<float>(ev::toDouble(a[1])), static_cast<float>(ev::toDouble(a[2])), maxWidth);
         }
         return ev::undefined();
     });
@@ -639,7 +647,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         return makeImageDataValue(w, h, nullptr);
     });
 
-    b.def("putImageData", 3, [el](Value, std::span<const Value> a) -> Value {
+    b.def("putImageData", 7, [el](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3 || !el || !el->canvasScene()) return ev::undefined();
         Value imgData = a[0];
         int dx = static_cast<int>(ev::toDouble(a[1]));
@@ -650,7 +658,15 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         auto info = ev::typedArrayInfo(dataVal);
         if (info.data && w > 0 && h > 0) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->putImageData(info.data, w, h, dx, dy);
+            if (a.size() >= 7) {
+                int dirtyX = static_cast<int>(ev::toDouble(a[3]));
+                int dirtyY = static_cast<int>(ev::toDouble(a[4]));
+                int dirtyW = static_cast<int>(ev::toDouble(a[5]));
+                int dirtyH = static_cast<int>(ev::toDouble(a[6]));
+                cs->putImageData(info.data, w, h, dx, dy, dirtyX, dirtyY, dirtyW, dirtyH);
+            } else {
+                cs->putImageData(info.data, w, h, dx, dy);
+            }
         }
         return ev::undefined();
     });

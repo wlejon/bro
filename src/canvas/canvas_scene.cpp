@@ -384,6 +384,7 @@ static bool tryStreamingPutImageDataFastPath(SkSurface* surface,
     int lastPut = -1;
     for (size_t i = 0; i < cmds.size(); ++i) {
         if (cmds[i].type != CanvasCmd::kPutImageData) return false;
+        if (!cmds[i].src.isEmpty()) return false;
         lastPut = static_cast<int>(i);
     }
     if (lastPut < 0) return false;
@@ -398,8 +399,8 @@ static bool tryStreamingPutImageDataFastPath(SkSurface* surface,
     const int sw = surface->width();
     const int sh = surface->height();
     // writePixels will clip silently to the surface, but reject obviously bad
-    // offsets so we don't bypass the spec-compliant replay for unusual cases.
-    if (dx <= -pm.width() || dy <= -pm.height() || dx >= sw || dy >= sh) {
+    // offsets so we do not mask an engine bug with an empty write.
+    if (dx + pm.width() <= 0 || dy + pm.height() <= 0 || dx >= sw || dy >= sh) {
         return false;
     }
     surface->writePixels(pm, dx, dy);
@@ -420,6 +421,8 @@ void CanvasScene::flushStagedCommands() {
     for (auto& cmd : stagedCommands_) {
         switch (cmd.type) {
         case CanvasCmd::kFillRect:
+            c->drawRect(SkRect::MakeXYWH(cmd.p[0], cmd.p[1], cmd.p[2], cmd.p[3]), cmd.paint);
+            break;
         case CanvasCmd::kStrokeRect:
             c->drawRect(SkRect::MakeXYWH(cmd.p[0], cmd.p[1], cmd.p[2], cmd.p[3]), cmd.paint);
             break;
@@ -430,6 +433,8 @@ void CanvasScene::flushStagedCommands() {
             break;
         }
         case CanvasCmd::kStrokePath:
+            c->drawPath(cmd.path, cmd.paint);
+            break;
         case CanvasCmd::kFillPath:
             c->drawPath(cmd.path, cmd.paint);
             break;
@@ -437,12 +442,22 @@ void CanvasScene::flushStagedCommands() {
             c->clipPath(cmd.path, true);
             break;
         case CanvasCmd::kFillText:
-        case CanvasCmd::kStrokeText:
+        case CanvasCmd::kStrokeText: {
+            bool scaled = cmd.p[2] > 0.0f && cmd.p[2] < 1.0f;
+            if (scaled) {
+                c->save();
+                c->translate(cmd.p[3], 0.0f);
+                c->scale(cmd.p[2], 1.0f);
+            }
             // Shaped at record time; this thread only replays glyphs.
             if (cmd.blob) c->drawTextBlob(cmd.blob, cmd.p[0], cmd.p[1], cmd.paint);
             else c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
                                    cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
+            if (scaled) {
+                c->restore();
+            }
             break;
+        }
         case CanvasCmd::kDrawImage:
             c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,
                              SkCanvas::kStrict_SrcRectConstraint);
@@ -450,7 +465,12 @@ void CanvasScene::flushStagedCommands() {
         case CanvasCmd::kPutImageData:
             c->save();
             c->resetMatrix();
-            c->drawImage(cmd.img, cmd.p[0], cmd.p[1], cmd.samp, &cmd.paint);
+            if (!cmd.src.isEmpty()) {
+                c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,
+                                 SkCanvas::kStrict_SrcRectConstraint);
+            } else {
+                c->drawImage(cmd.img, cmd.p[0], cmd.p[1], cmd.samp, &cmd.paint);
+            }
             c->restore();
             break;
         case CanvasCmd::kSave:    c->save(); break;
@@ -997,7 +1017,7 @@ void CanvasScene::clearRect(float x, float y, float w, float h) {
 // here, on the JS thread, and record the resulting blob: the canvas worker then
 // replays glyphs without shaping, and without re-deriving font fallback for
 // every frame the way drawSimpleText did.
-void CanvasScene::recordText(bool stroke, const std::string& text, float x, float y) {
+void CanvasScene::recordText(bool stroke, const std::string& text, float x, float y, float maxWidth) {
     if (text.empty()) return;
     std::string utf8Scratch;
     std::string_view t = render::ensureValidUtf8(text, utf8Scratch);
@@ -1017,8 +1037,17 @@ void CanvasScene::recordText(bool stroke, const std::string& text, float x, floa
         tw = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
     }
 
-    cmd.p[0] = adjustTextX(x, tw);
-    cmd.p[1] = adjustTextY(y);
+    if (maxWidth > 0.0f && tw > maxWidth) {
+        cmd.p[0] = adjustTextX(0.0f, tw);
+        cmd.p[1] = adjustTextY(y);
+        cmd.p[2] = maxWidth / tw;
+        cmd.p[3] = x;
+    } else {
+        cmd.p[0] = adjustTextX(x, tw);
+        cmd.p[1] = adjustTextY(y);
+        cmd.p[2] = 1.0f;
+        cmd.p[3] = 0.0f;
+    }
     cmd.text = std::string(t);
     cmd.font = font_;
     commands_.push_back(std::move(cmd));
@@ -1027,12 +1056,12 @@ void CanvasScene::recordText(bool stroke, const std::string& text, float x, floa
     snapshotImageValid_ = false;
 }
 
-void CanvasScene::fillText(const std::string& text, float x, float y) {
-    recordText(/*stroke=*/false, text, x, y);
+void CanvasScene::fillText(const std::string& text, float x, float y, float maxWidth) {
+    recordText(/*stroke=*/false, text, x, y, maxWidth);
 }
 
-void CanvasScene::strokeText(const std::string& text, float x, float y) {
-    recordText(/*stroke=*/true, text, x, y);
+void CanvasScene::strokeText(const std::string& text, float x, float y, float maxWidth) {
+    recordText(/*stroke=*/true, text, x, y, maxWidth);
 }
 
 CanvasTextMetrics CanvasScene::measureText(const std::string& text) {
@@ -1536,7 +1565,36 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
 }
 
 void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy) {
-    if (!data) return;
+    putImageData(data, w, h, dx, dy, 0, 0, w, h);
+}
+
+void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy,
+                               int dirtyX, int dirtyY, int dirtyWidth, int dirtyHeight) {
+    if (!data || w <= 0 || h <= 0) return;
+
+    if (dirtyWidth < 0) {
+        dirtyX += dirtyWidth;
+        dirtyWidth = -dirtyWidth;
+    }
+    if (dirtyHeight < 0) {
+        dirtyY += dirtyHeight;
+        dirtyHeight = -dirtyHeight;
+    }
+    if (dirtyX < 0) {
+        dirtyWidth += dirtyX;
+        dirtyX = 0;
+    }
+    if (dirtyY < 0) {
+        dirtyHeight += dirtyY;
+        dirtyY = 0;
+    }
+    if (dirtyX + dirtyWidth > w) {
+        dirtyWidth = w - dirtyX;
+    }
+    if (dirtyY + dirtyHeight > h) {
+        dirtyHeight = h - dirtyY;
+    }
+    if (dirtyWidth <= 0 || dirtyHeight <= 0) return;
 
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     sk_sp<SkData> skData = SkData::MakeWithCopy(data, w * h * 4);
@@ -1550,6 +1608,12 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
     cmd.img = std::move(img);
     cmd.p[0] = static_cast<float>(dx);
     cmd.p[1] = static_cast<float>(dy);
+    if (dirtyX != 0 || dirtyY != 0 || dirtyWidth != w || dirtyHeight != h) {
+        cmd.src = SkRect::MakeXYWH(static_cast<float>(dirtyX), static_cast<float>(dirtyY),
+                                  static_cast<float>(dirtyWidth), static_cast<float>(dirtyHeight));
+        cmd.dst = SkRect::MakeXYWH(static_cast<float>(dx + dirtyX), static_cast<float>(dy + dirtyY),
+                                  static_cast<float>(dirtyWidth), static_cast<float>(dirtyHeight));
+    }
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
@@ -1612,12 +1676,22 @@ void CanvasScene::flushCommands() {
             c->clipPath(cmd.path, true);
             break;
         case CanvasCmd::kFillText:
-        case CanvasCmd::kStrokeText:
+        case CanvasCmd::kStrokeText: {
+            bool scaled = cmd.p[2] > 0.0f && cmd.p[2] < 1.0f;
+            if (scaled) {
+                c->save();
+                c->translate(cmd.p[3], 0.0f);
+                c->scale(cmd.p[2], 1.0f);
+            }
             // Shaped at record time; this thread only replays glyphs.
             if (cmd.blob) c->drawTextBlob(cmd.blob, cmd.p[0], cmd.p[1], cmd.paint);
             else c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
                                    cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
+            if (scaled) {
+                c->restore();
+            }
             break;
+        }
         case CanvasCmd::kDrawImage:
             c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,
                              SkCanvas::kStrict_SrcRectConstraint);
@@ -1625,7 +1699,12 @@ void CanvasScene::flushCommands() {
         case CanvasCmd::kPutImageData:
             c->save();
             c->resetMatrix();
-            c->drawImage(cmd.img, cmd.p[0], cmd.p[1], cmd.samp, &cmd.paint);
+            if (!cmd.src.isEmpty()) {
+                c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,
+                                 SkCanvas::kStrict_SrcRectConstraint);
+            } else {
+                c->drawImage(cmd.img, cmd.p[0], cmd.p[1], cmd.samp, &cmd.paint);
+            }
             c->restore();
             break;
         case CanvasCmd::kSave:    c->save(); break;

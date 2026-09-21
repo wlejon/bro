@@ -17,13 +17,6 @@ namespace bro::bronze_host {
 
 bool registerNatives_scene(std::string* error);
 
-namespace {
-
-static thread_local double tl_mat4Buf[16];
-static thread_local double tl_vec3Buf[3];
-
-}  // namespace
-
 Value createSceneGraphValue(scene::SceneGraph* sg, dom::Element* canvas) {
     if (!sg) return ev::null();
     auto* cell = new HostSceneGraphCell();
@@ -71,36 +64,6 @@ void* bro_scene_SceneGraph_ctor(void) {
 void* bro_scene_SceneGraph_root_get(void* self) {
     auto* g = graphOf(self);
     return g ? wrapNode(g->root(), g) : nullptr;
-}
-
-double bro_scene_SceneGraph_cameraX_get(void* self) {
-    auto* g = graphOf(self);
-    return g ? g->cameraX() : 0.0;
-}
-
-void bro_scene_SceneGraph_cameraX_set(void* self, double v) {
-    auto* g = graphOf(self);
-    if (g) g->setCameraPosition(static_cast<float>(v), g->cameraY());
-}
-
-double bro_scene_SceneGraph_cameraY_get(void* self) {
-    auto* g = graphOf(self);
-    return g ? g->cameraY() : 0.0;
-}
-
-void bro_scene_SceneGraph_cameraY_set(void* self, double v) {
-    auto* g = graphOf(self);
-    if (g) g->setCameraPosition(g->cameraX(), static_cast<float>(v));
-}
-
-double bro_scene_SceneGraph_cameraZoom_get(void* self) {
-    auto* g = graphOf(self);
-    return g ? g->cameraZoom() : 1.0;
-}
-
-void bro_scene_SceneGraph_cameraZoom_set(void* self, double v) {
-    auto* g = graphOf(self);
-    if (g) g->setCameraZoom(static_cast<float>(v));
 }
 
 bool bro_scene_SceneGraph_showLightIcons_get(void* self) {
@@ -151,57 +114,6 @@ double bro_scene_SceneGraph_msaa_get(void* self) {
 void bro_scene_SceneGraph_msaa_set(void* self, double v) {
     auto* g = graphOf(self);
     if (g) g->setMSAA(static_cast<int>(v));
-}
-
-void* bro_scene_SceneGraph_activeCamera_get(void* self) {
-    auto* g = graphOf(self);
-    if (!g) return nullptr;
-    auto* cam = g->activeCamera();
-    return cam ? wrapNode(cam, g) : nullptr;
-}
-
-void bro_scene_SceneGraph_activeCamera_set(void* self, void* v) {
-    auto* g = graphOf(self);
-    auto* cam = nodeOf(v);
-    if (g && cam && cam->type() == scene::SceneNode::Type::Camera) {
-        g->setActiveCamera(static_cast<scene::CameraNode*>(cam));
-    } else if (g && !v) {
-        g->setActiveCamera(nullptr);
-    }
-}
-
-void bro_scene_SceneGraph_viewMatrix_get(void* self, bronze_native_buffer* out) {
-    auto* g = graphOf(self);
-    if (!g) { copyBuffer<double>(nullptr, 0, out); return; }
-    const auto& m = g->viewMatrix();
-    for (int col = 0; col < 4; ++col) {
-        for (int row = 0; row < 4; ++row) {
-            tl_mat4Buf[col * 4 + row] = m.at(row, col);
-        }
-    }
-    copyBuffer(tl_mat4Buf, 16, out);
-}
-
-void bro_scene_SceneGraph_projectionMatrix_get(void* self, bronze_native_buffer* out) {
-    auto* g = graphOf(self);
-    if (!g) { copyBuffer<double>(nullptr, 0, out); return; }
-    const auto& m = g->projectionMatrix();
-    for (int col = 0; col < 4; ++col) {
-        for (int row = 0; row < 4; ++row) {
-            tl_mat4Buf[col * 4 + row] = m.at(row, col);
-        }
-    }
-    copyBuffer(tl_mat4Buf, 16, out);
-}
-
-void bro_scene_SceneGraph_cameraEye_get(void* self, bronze_native_buffer* out) {
-    auto* g = graphOf(self);
-    if (!g) { copyBuffer<double>(nullptr, 0, out); return; }
-    const auto& e = g->cameraEye();
-    tl_vec3Buf[0] = e.x;
-    tl_vec3Buf[1] = e.y;
-    tl_vec3Buf[2] = e.z;
-    copyBuffer(tl_vec3Buf, 3, out);
 }
 
 void* bro_scene_SceneGraph_createNode(void* self, bool opts_name_given, const char* opts_name,
@@ -540,124 +452,6 @@ void bro_scene_SceneGraph_destroyNode(void* self, void* node) {
     if (g && n) g->destroyNode(n);
 }
 
-namespace {
-
-bool isOrthoMode(bool given, const char* mode) {
-    if (!given || !mode) return false;
-    std::string_view m(mode);
-    return m == "orthographic" || m == "ortho";
-}
-
-} // namespace
-
-// setCamera({fov, near, far, aspect, eye|position, target|lookAt, up,
-//            quaternion, mode, size}) — the imperative view. quaternion
-// wins over target/up/mode; mode "ortho[graphic]" uses size (view height)
-// in place of fov.
-void bro_scene_SceneGraph_setCamera(void* self, bool opts_fov_given, double opts_fov,
-                                   bool opts_near_given, double opts_near,
-                                   bool opts_far_given, double opts_far,
-                                   const double* opts_eye, uint32_t opts_eye_len,
-                                   const double* opts_target, uint32_t opts_target_len,
-                                   const double* opts_up, uint32_t opts_up_len,
-                                   bool opts_aspect_given, double opts_aspect,
-                                   const double* opts_quaternion, uint32_t opts_quaternion_len,
-                                   bool opts_mode_given, const char* opts_mode,
-                                   bool opts_size_given, double opts_size) {
-    auto* g = graphOf(self);
-    if (!g) return;
-    float fov = opts_fov_given ? static_cast<float>(opts_fov * 3.141592653589793 / 180.0) : (60.0f * 3.141592653589793f / 180.0f);
-    float nearP = opts_near_given ? static_cast<float>(opts_near) : 0.1f;
-    float farP = opts_far_given ? static_cast<float>(opts_far) : 1000.0f;
-    bromath::Vec3 eye{0.0f, 5.0f, -10.0f};
-    bromath::Vec3 target{0.0f, 0.0f, 0.0f};
-    bromath::Vec3 up{0.0f, 1.0f, 0.0f};
-    if (opts_eye && opts_eye_len >= 3) {
-        eye = {static_cast<float>(opts_eye[0]), static_cast<float>(opts_eye[1]), static_cast<float>(opts_eye[2])};
-    }
-    if (opts_target && opts_target_len >= 3) {
-        target = {static_cast<float>(opts_target[0]), static_cast<float>(opts_target[1]), static_cast<float>(opts_target[2])};
-    }
-    if (opts_up && opts_up_len >= 3) {
-        up = {static_cast<float>(opts_up[0]), static_cast<float>(opts_up[1]), static_cast<float>(opts_up[2])};
-    }
-
-    // Aspect omitted (or <= 0) → derive from the current canvas and flag the
-    // projection to auto-follow future canvas resizes (setCanvasSize rebuilds
-    // it). An explicit aspect pins the projection and disables the follow.
-    float aspect = opts_aspect_given ? static_cast<float>(opts_aspect) : 0.0f;
-    const bool aspectFollowsCanvas = aspect <= 0.0f;
-    if (aspectFollowsCanvas) {
-        int cw = g->canvasWidth(), ch = g->canvasHeight();
-        aspect = (cw > 0 && ch > 0) ? static_cast<float>(cw) / static_cast<float>(ch) : (4.0f / 3.0f);
-    }
-    g->setCameraAspectFollowsCanvas(aspectFollowsCanvas);
-
-    if (opts_quaternion && opts_quaternion_len >= 4) {
-        bromath::Quat q(static_cast<float>(opts_quaternion[0]), static_cast<float>(opts_quaternion[1]),
-                        static_cast<float>(opts_quaternion[2]), static_cast<float>(opts_quaternion[3]));
-        g->setCameraQuat(fov, aspect, nearP, farP, eye, bromath::qnorm(q));
-    } else if (isOrthoMode(opts_mode_given, opts_mode)) {
-        const float size = opts_size_given ? static_cast<float>(opts_size) : 10.0f;
-        const float halfW = size * aspect * 0.5f;
-        const float halfH = size * 0.5f;
-        g->setCameraOrtho(-halfW, halfW, -halfH, halfH, nearP, farP, eye, target, up);
-    } else {
-        g->setCamera(fov, aspect, nearP, farP, eye, target, up);
-    }
-}
-
-// createCamera({name, fov, near, far, aspect, mode, size, position|eye,
-//               quaternion, lookAt|target, up, active}) → CameraNode. The
-// node's WORLD transform is the view; only projection params live on it.
-void* bro_scene_SceneGraph_createCamera(void* self, bool opts_fov_given, double opts_fov,
-                                        bool opts_near_given, double opts_near,
-                                        bool opts_far_given, double opts_far,
-                                        const double* opts_eye, uint32_t opts_eye_len,
-                                        const double* opts_target, uint32_t opts_target_len,
-                                        const double* opts_up, uint32_t opts_up_len,
-                                        bool opts_aspect_given, double opts_aspect,
-                                        const double* opts_quaternion, uint32_t opts_quaternion_len,
-                                        bool opts_mode_given, const char* opts_mode,
-                                        bool opts_size_given, double opts_size) {
-    auto* g = graphOf(self);
-    if (!g) return nullptr;
-    auto* cam = g->createCamera();
-    g->root()->addChild(cam);
-    if (opts_fov_given) cam->setFovY(static_cast<float>(opts_fov * 3.14159265 / 180.0));
-    if (opts_near_given) cam->setNearZ(static_cast<float>(opts_near));
-    if (opts_far_given) cam->setFarZ(static_cast<float>(opts_far));
-    if (opts_aspect_given) cam->setAspect(static_cast<float>(opts_aspect));
-    if (opts_size_given) cam->setOrthoHeight(static_cast<float>(opts_size));
-    if (opts_mode_given) cam->setPerspective(!isOrthoMode(opts_mode_given, opts_mode));
-    if (opts_eye && opts_eye_len >= 3) {
-        cam->setPosition(static_cast<float>(opts_eye[0]), static_cast<float>(opts_eye[1]), static_cast<float>(opts_eye[2]));
-    }
-    if (opts_quaternion && opts_quaternion_len >= 4) {
-        bromath::Quat q(static_cast<float>(opts_quaternion[0]), static_cast<float>(opts_quaternion[1]),
-                        static_cast<float>(opts_quaternion[2]), static_cast<float>(opts_quaternion[3]));
-        cam->setRotation(bromath::qnorm(q));
-    } else if (opts_target && opts_target_len >= 3) {
-        bromath::Vec3 tgt{static_cast<float>(opts_target[0]), static_cast<float>(opts_target[1]), static_cast<float>(opts_target[2])};
-        bromath::Vec3 up{0, 1, 0};
-        if (opts_up && opts_up_len >= 3) up = {static_cast<float>(opts_up[0]), static_cast<float>(opts_up[1]), static_cast<float>(opts_up[2])};
-        cam->lookAt(tgt, up);
-    }
-    return wrapNode(cam, g);
-}
-
-void bro_scene_SceneGraph_setActiveCamera(void* self, void* camera) {
-    auto* g = graphOf(self);
-    auto* n = nodeOf(camera);
-    auto* cam = (n && n->type() == scene::SceneNode::Type::Camera) ? static_cast<scene::CameraNode*>(n) : nullptr;
-    if (g) g->setActiveCamera(cam);
-}
-
-void bro_scene_SceneGraph_clearActiveCamera(void* self) {
-    auto* g = graphOf(self);
-    if (g) g->setActiveCamera(nullptr);
-}
-
 void bro_scene_SceneGraph_setToneMap(void* self, bool opts_mode_given, const char* opts_mode,
                                     bool opts_exposure_given, double opts_exposure,
                                     bool opts_whitePoint_given, double opts_whitePoint) {
@@ -784,85 +578,6 @@ void bro_scene_SceneGraph_setStarfield(void* self, bool opts_starCount_given, in
 
 }  // extern "C"
 
-extern "C" {
-const char* bro_scene_SceneNode_type_get(void* self);
-const char* bro_scene_SceneNode_kind_get(void* self);
-int32_t bro_scene_SceneNode_childCount_get(void* self);
-bool bro_scene_SceneNode_castsShadow_get(void* self);
-void bro_scene_SceneNode_castsShadow_set(void* self, bool v);
-bool bro_scene_SceneNode_receivesShadow_get(void* self);
-void bro_scene_SceneNode_receivesShadow_set(void* self, bool v);
-double bro_scene_SceneNode_metallic_get(void* self);
-void bro_scene_SceneNode_metallic_set(void* self, double v);
-double bro_scene_SceneNode_roughness_get(void* self);
-void bro_scene_SceneNode_roughness_set(void* self, double v);
-double bro_scene_SceneNode_emissive_get(void* self);
-void bro_scene_SceneNode_emissive_set(void* self, double v);
-void bro_scene_SceneNode_direction_get(void* self, bronze_native_buffer* out);
-void bro_scene_SceneNode_direction_set(void* self, const double* v, uint32_t len);
-void bro_scene_SceneNode_color_get(void* self, bronze_native_buffer* out);
-void bro_scene_SceneNode_color_set(void* self, const double* v, uint32_t len);
-double bro_scene_SceneNode_intensity_get(void* self);
-void bro_scene_SceneNode_intensity_set(void* self, double v);
-double bro_scene_SceneNode_range_get(void* self);
-void bro_scene_SceneNode_range_set(void* self, double v);
-double bro_scene_SceneNode_innerAngle_get(void* self);
-void bro_scene_SceneNode_innerAngle_set(void* self, double v);
-double bro_scene_SceneNode_outerAngle_get(void* self);
-void bro_scene_SceneNode_outerAngle_set(void* self, double v);
-double bro_scene_SceneNode_shadowBias_get(void* self);
-void bro_scene_SceneNode_shadowBias_set(void* self, double v);
-double bro_scene_SceneNode_shadowNormalBias_get(void* self);
-void bro_scene_SceneNode_shadowNormalBias_set(void* self, double v);
-int32_t bro_scene_SceneNode_cascadeCount_get(void* self);
-void bro_scene_SceneNode_cascadeCount_set(void* self, int32_t v);
-double bro_scene_SceneNode_cascadeSplitLambda_get(void* self);
-void bro_scene_SceneNode_cascadeSplitLambda_set(void* self, double v);
-
-void bro_scene_SceneGraph_render(void* self);
-double bro_scene_SceneGraph_canvasWidth(void* self);
-double bro_scene_SceneGraph_canvasHeight(void* self);
-void bro_scene_SceneGraph_setCanvasSize(void* self, double w, double h);
-void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* out);
-void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createInstancedMesh(void* self, const char* jsonOpts, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createPhysicsNode(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createParticles3D(void* self, const char* jsonOpts);
-void* bro_scene_SceneGraph_createGaussianSplat(void* self, const char* jsonOpts);
-void bro_scene_SceneNode_setSkeleton(void* self, uint64_t skelVal);
-void bro_scene_SceneNode_addClip(void* self, const char* name, uint64_t clipVal);
-void bro_scene_SceneNode_addBlendSpace1D(void* self, const char* name, const char* jsonPoints);
-void bro_scene_SceneNode_addBlendSpace2D(void* self, const char* name, const char* jsonPoints);
-void bro_scene_SceneNode_setBlendPos(void* self, const char* name, double x, bool hasY, double y);
-void bro_scene_SceneNode_playLayer(void* self, int32_t layerIndex, const char* clipName, const char* jsonOpts);
-void bro_scene_SceneNode_stopLayer(void* self, int32_t layerIndex, bool hasFade, double fadeTime);
-void bro_scene_SceneNode_setLayerWeight(void* self, int32_t layerIndex, double weight);
-void bro_scene_SceneNode_addStateMachine(void* self, const char* jsonDef);
-void bro_scene_SceneNode_travel(void* self, const char* targetState);
-void bro_scene_SceneNode_setRootMotion(void* self, const char* jsonOpts);
-const char* bro_scene_SceneNode_consumeRootMotion(void* self);
-void bro_scene_SceneNode_play(void* self, const char* clipName, const char* jsonOpts);
-void bro_scene_SceneNode_stop(void* self, const char* jsonOpts);
-void bro_scene_SceneNode_pause(void* self);
-void bro_scene_SceneNode_resume(void* self);
-int32_t bro_scene_SceneNode_setSkinningMatrices(void* self, uint64_t matsBits);
-void bro_scene_SceneNode_updateMesh(void* self, uint64_t meshBits, bool recomputeNormals);
-uint64_t bro_scene_SceneNode_getBoneWorldMatrix(void* self, uint64_t argBits);
-const char* bro_scene_SceneNode_blendState(void* self);
-void bro_scene_SceneNode_onAnimationFinished_set(void* self, uint64_t cbBits);
-void bro_scene_SceneNode_onStateChanged_set(void* self, uint64_t cbBits);
-const char* bro_scene_SceneNode_type_get(void* self);
-const char* bro_scene_SceneNode_kind_get(void* self);
-int32_t bro_scene_SceneNode_childCount_get(void* self);
-bool bro_scene_SceneNode_castsShadow_get(void* self);
-void bro_scene_SceneNode_castsShadow_set(void* self, bool v);
-bool bro_scene_SceneNode_receivesShadow_get(void* self);
-void bro_scene_SceneNode_receivesShadow_set(void* self, bool v);
-}
-
 namespace bro::bronze_host {
 
 bool registerSceneNatives(std::string* error) {
@@ -970,7 +685,6 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_blendState", (void*)&bro_scene_SceneNode_blendState, "str", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_onAnimationFinished_set", (void*)&bro_scene_SceneNode_onAnimationFinished_set, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
            fn("__bro_native.scene.SceneNode_onStateChanged_set", (void*)&bro_scene_SceneNode_onStateChanged_set, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error) &&
-           fn("__bro_native.scene.SceneGraph_clearActiveCamera", (void*)&bro_scene_SceneGraph_clearActiveCamera, "void", {"__bro_native.scene.SceneGraph"}, error) &&
            fn("__bro_native.scene.SceneNode_hasShader", (void*)&bro_scene_SceneNode_hasShader, "bool", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_setShader", (void*)&bro_scene_SceneNode_setShader, "str", {"__bro_native.scene.SceneNode", "str", "str", "str"}, error) &&
            fn("__bro_native.scene.SceneNode_clearShader", (void*)&bro_scene_SceneNode_clearShader, "void", {"__bro_native.scene.SceneNode"}, error) &&
@@ -984,7 +698,6 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_visibilityRange_get", (void*)&bro_scene_SceneNode_visibilityRange_get, "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneGraph_isValid", (void*)&bro_scene_SceneGraph_isValid, "bool", {"__bro_native.scene.SceneGraph"}, error) &&
            fn("__bro_native.scene.SceneNode_setBaseColorTextureFromScene", (void*)&bro_scene_SceneNode_setBaseColorTextureFromScene, "void", {"__bro_native.scene.SceneNode", "__bro_native.scene.SceneGraph"}, error) &&
-           fn("__bro_native.scene.SceneGraph_raycast_instance", (void*)&bro_scene_SceneGraph_raycast_instance, "i32", {}, error) &&
            fn("__bro_native.scene.SceneGraph_cullStatsJson", (void*)&bro_scene_SceneGraph_cullStatsJson, "str", {"__bro_native.scene.SceneGraph"}, error) &&
            fn("__bro_native.scene.SceneNode_setInstances", (void*)&bro_scene_SceneNode_setInstances, "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
            fn("__bro_native.scene.SceneNode_setInstancesFromTransforms", (void*)&bro_scene_SceneNode_setInstancesFromTransforms, "void", {"__bro_native.scene.SceneNode", "f32[]"}, error) &&
@@ -1003,6 +716,7 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_worldAnchor_get", (void*)&bro_scene_SceneNode_worldAnchor_get, "f64[]", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_worldAnchor_set", (void*)&bro_scene_SceneNode_worldAnchor_set, "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
            registerSceneShaderNatives(error) &&
+           registerSceneCameraNatives(error) &&
            registerSceneExtraNatives(error);
 }
 

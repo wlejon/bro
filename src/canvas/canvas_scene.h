@@ -278,8 +278,8 @@ public:
     void fillRect(float x, float y, float w, float h);
     void strokeRect(float x, float y, float w, float h);
     void clearRect(float x, float y, float w, float h);
-    void fillText(const std::string& text, float x, float y);
-    void strokeText(const std::string& text, float x, float y);
+    void fillText(const std::string& text, float x, float y, float maxWidth = -1.0f);
+    void strokeText(const std::string& text, float x, float y, float maxWidth = -1.0f);
     CanvasTextMetrics measureText(const std::string& text);
 
     // --- Path API ---
@@ -335,6 +335,8 @@ public:
 
     std::vector<uint8_t> getImageData(int x, int y, int w, int h);
     void putImageData(const uint8_t* data, int w, int h, int dx, int dy);
+    void putImageData(const uint8_t* data, int w, int h, int dx, int dy,
+                      int dirtyX, int dirtyY, int dirtyWidth, int dirtyHeight);
 
     /// Cached pixel snapshot of the surface's (0,0,w,h) region, suitable for
     /// drawImage(<canvas>) sources. Returns a pointer into a buffer owned by
@@ -579,7 +581,7 @@ private:
     // Normalized OS/2 typographic ascent/descent — the em box. Returns false
     // when it had to fall back to the hhea ratio.
     bool typoMetrics(float& ascent, float& descent) const;
-    void recordText(bool stroke, const std::string& text, float x, float y);
+    void recordText(bool stroke, const std::string& text, float x, float y, float maxWidth = -1.0f);
 
     // --- Canvas thread state ---
     bool threaded_ = false;

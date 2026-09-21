@@ -312,6 +312,17 @@
         }
     }
 
+    class StorageEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.key = (opts && opts.key !== undefined) ? opts.key : null;
+            this.oldValue = (opts && opts.oldValue !== undefined) ? opts.oldValue : null;
+            this.newValue = (opts && opts.newValue !== undefined) ? opts.newValue : null;
+            this.url = str(opts, 'url', '');
+            this.storageArea = ref(opts, 'storageArea');
+        }
+    }
+
     g.UIEvent = UIEvent;
     g.MouseEvent = MouseEvent;
     g.KeyboardEvent = KeyboardEvent;
@@ -328,6 +339,7 @@
     g.ErrorEvent = ErrorEvent;
     g.ProgressEvent = ProgressEvent;
     g.PromiseRejectionEvent = PromiseRejectionEvent;
+    g.StorageEvent = StorageEvent;
 
     if (typeof g.TouchEvent === 'function' && g.TouchEvent.prototype) {
         Object.setPrototypeOf(g.TouchEvent.prototype, UIEvent.prototype);
