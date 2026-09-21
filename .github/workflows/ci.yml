@@ -116,7 +116,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+            GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
           cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
           cmake --build third_party/brass/build --config Release --target brass --parallel 4
@@ -167,7 +167,7 @@ jobs:
             # of a separate PDB (/Zi) is what lets sccache cache MSVC objects.
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+            GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
           BRASS_ARGS=""
           if [ -n "${BRASS_ROOT:-}" ]; then
@@ -278,7 +278,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+            GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
           cmake -B third_party/brass/build third_party/brass -DCMAKE_BUILD_TYPE=Release $GEN_ARGS
           cmake --build third_party/brass/build --config Release --target brass --parallel 4
@@ -291,7 +291,7 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DVCPKG_MANIFEST_MODE=OFF"
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            GEN_ARGS="-DCMAKE_OSX_ARCHITECTURES=arm64"
+            GEN_ARGS="-G Ninja -DCMAKE_OSX_ARCHITECTURES=arm64"
           fi
           BRASS_ARGS=""
           if [ -n "${BRASS_ROOT:-}" ]; then

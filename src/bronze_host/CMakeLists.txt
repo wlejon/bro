@@ -306,16 +306,27 @@ if(CMAKE_CONFIGURATION_TYPES)
     string(APPEND _bro_bronze_stage_dir "/$<CONFIG>")
 endif()
 set(_bro_bronze_stage_stamp "${CMAKE_CURRENT_BINARY_DIR}/bronze_runtime_staged$<CONFIG>.stamp")
-add_custom_command(
-    OUTPUT "${_bro_bronze_stage_stamp}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_LINKER_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
-    COMMAND ${CMAKE_COMMAND} -E touch "${_bro_bronze_stage_stamp}"
-    DEPENDS bronze_runtime_shared
-    COMMENT "Staging bronze's shared runtime beside bro's executables"
-    VERBATIM)
+if(WIN32)
+    add_custom_command(
+        OUTPUT "${_bro_bronze_stage_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_LINKER_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_bro_bronze_stage_stamp}"
+        DEPENDS bronze_runtime_shared
+        COMMENT "Staging bronze's shared runtime beside bro's executables"
+        VERBATIM)
+else()
+    add_custom_command(
+        OUTPUT "${_bro_bronze_stage_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_bro_bronze_stage_stamp}"
+        DEPENDS bronze_runtime_shared
+        COMMENT "Staging bronze's shared runtime beside bro's executables"
+        VERBATIM)
+endif()
 add_custom_target(bro_bronze_runtime_staged DEPENDS "${_bro_bronze_stage_stamp}")
 
 # A function rather than a property on bro_bronze_host: the dependency and the
@@ -507,7 +518,7 @@ else()
         COMMAND $<TARGET_FILE:bro-native-manifest> "${BRO_NATIVE_MANIFEST}.new"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${BRO_NATIVE_MANIFEST}.new" "${BRO_NATIVE_MANIFEST}"
-        DEPENDS bro-native-manifest
+        DEPENDS bro-native-manifest "${_bro_bronze_stage_stamp}"
         COMMENT "bro-native-manifest -> generated/natives.json"
         VERBATIM
     )

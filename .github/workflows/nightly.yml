@@ -316,11 +316,7 @@ jobs:
           # comes off the shipped bro-headless, then the shipped compiler
           # builds against it.
           cd "$PKG"
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run -a ./bro-headless smokeapp --print-host-globals > bronze/web_host.globals
-          else
-            ./bro-headless smokeapp --print-host-globals > bronze/web_host.globals
-          fi
+          ./bro-headless smokeapp --print-host-globals 2>/dev/null > bronze/web_host.globals
           grep -qx document bronze/web_host.globals
           ./bronze/bronze$EXE build smokeapp/main.js -o "smokeapp/app$MOD" \
             --emit-shared --host-globals bronze/web_host.globals

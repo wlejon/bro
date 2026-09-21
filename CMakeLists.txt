@@ -112,12 +112,11 @@ if(MSVC)
         # Symbols in the OPTIMISED configurations too. RelWithDebInfo carries
         # them by default and Release did not, which meant the one build that
         # long headless runs actually use produced crash traces of module +
-        # rva and nothing else. /Zi changes no codegen — it only emits the
-        # PDB — and /DEBUG below keeps the linker writing one while /OPT:REF
+        # rva and nothing else. /Z7 embeds debug info in .obj (sccache-friendly)
+        # and /DEBUG below keeps the linker writing a PDB while /OPT:REF
         # /OPT:ICF preserve release link behaviour, which /DEBUG otherwise
         # turns off.
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/Zi>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/FS>
+        $<$<AND:$<COMPILE_LANGUAGE:C,CXX>,$<CONFIG:Release>>:/Z7>
     )
     add_link_options(
         $<$<CONFIG:Release>:/DEBUG>

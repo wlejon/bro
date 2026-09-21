@@ -595,6 +595,10 @@ void installWebAnimationGlobals() {
         if (ev::isObject(skelProto)) {
             ev::setPrototype(skelProto, g_animationClass.prototype());
         }
+        Value retarget = ev::getProperty(s_skeletalAnimationCtor.get(), "retarget");
+        if (!ev::isUndefined(retarget)) {
+            ev::setProperty(g_animationClass.constructor(), "retarget", retarget);
+        }
     }
 
     ev::registerGlobal("Animation", g_animationClass.constructor());
