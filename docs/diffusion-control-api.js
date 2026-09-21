@@ -979,6 +979,22 @@ class Pipeline {
    */
   qwenImage21Gates() {}
 
+  /**
+   * The SwiGLU half of the same capture, in the same layout: rows =
+   * qwenImage21NumLayers(), cols = textRows + imgLen, each entry the mean
+   * EFFECTIVE mlp gate that multiplied that row's SwiGLU residual — the
+   * gate2 chunk folded through every covering scale and post-tanh delta,
+   * times the MLP composition of the armed masks.
+   *
+   * It is a second reading and not a copy of qwenImage21Gates(): the two
+   * sublayers carry independent gates, independent multipliers
+   * (qwenImage21SetGateScaleRows' mlpTxt / mlpImg against its attnTxt /
+   * attnImg) and independent mask compositions, so an mlp-only mask moves
+   * this one and leaves the attention strip flat.
+   * @returns {Tensor2D}
+   */
+  qwenImage21GatesMlp() {}
+
   /** @returns {number} the DiT hidden size (4096). */
   qwenImage21HiddenSize() {}
 
@@ -1382,6 +1398,14 @@ class Pipeline {
 
   /** @returns {number} the slot capacity (4). */
   qwenImage21PrefixSlots() {}
+
+  /**
+   * Whether slot `slot` holds a saved prefix — what a slot picker greys out,
+   * and the check to make before blending towards one.
+   * @param {number} slot
+   * @returns {boolean}
+   */
+  qwenImage21PrefixSlotValid(slot) {}
 
   /**
    * Encode RGB pixels into a pipeline-scale latent through the resident 16x
