@@ -109,6 +109,20 @@ if(MSVC)
         $<$<COMPILE_LANGUAGE:CXX>:/MP>
         $<$<COMPILE_LANGUAGE:CXX>:/permissive->
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+        # Symbols in the OPTIMISED configurations too. RelWithDebInfo carries
+        # them by default and Release did not, which meant the one build that
+        # long headless runs actually use produced crash traces of module +
+        # rva and nothing else. /Zi changes no codegen — it only emits the
+        # PDB — and /DEBUG below keeps the linker writing one while /OPT:REF
+        # /OPT:ICF preserve release link behaviour, which /DEBUG otherwise
+        # turns off.
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/Zi>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/FS>
+    )
+    add_link_options(
+        $<$<CONFIG:Release>:/DEBUG>
+        $<$<CONFIG:Release>:/OPT:REF>
+        $<$<CONFIG:Release>:/OPT:ICF>
     )
 else()
     # String literals with UTF-8 bytes > 127 require unsigned char so they

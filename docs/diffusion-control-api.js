@@ -29,7 +29,8 @@
  *   7. Qwen-Image 2.1 hooks— modulation / gate dials over a 32-block stack
  *                            driven by ONE shared modulation vector, the raw
  *                            (n, 4096) Qwen3-VL conditioning, the prefix KV
- *                            cache as a steering surface, a VAE encode/decode
+ *                            cache as a steering surface, a conditioning axis
+ *                            re-aimed per denoise step, a VAE encode/decode
  *                            seam, and a releasable text encoder.
  *
  * Like the rest of the ML namespaces this is CUDA-by-default; gate real model
@@ -547,6 +548,17 @@ class Pipeline {
   //     a setControl() / setControlVector() axis — has to land BEFORE prime().
   //     After that the conditioning has been prepared and the prefix is what
   //     the cache holds; the hooks that still bite are the ones on this page.
+  //
+  //     ...with ONE exception, and it is the important one. The conditioning
+  //     axes carry an order of magnitude more steering authority than anything
+  //     in-network (the best minted text axis moves its readout 25σ; the best
+  //     in-network dial manages 4.4σ), and every modulation-side dial has
+  //     spent 97% of its authority by step 2. qwenImage21SetControlSchedule()
+  //     re-applies an axis with a PER-STEP alpha during the denoise, by
+  //     rebuilding the text rows from the primed conditioning each time the
+  //     alpha moves. It is the one way to aim the strong surface more than
+  //     once, and it costs one re-extract per change of alpha — see the
+  //     schedule block below.
   //
   // A generation with no CFG (the reference default, guidanceScale 1.0) has one
   // branch; at guidanceScale > 1 both branches have their own prompt, their own
@@ -1142,6 +1154,100 @@ class Pipeline {
    * @returns {undefined}
    */
   qwenImage21SetTextRows(rows, uncond) {}
+
+  /**
+   * Re-apply a conditioning control axis with a PER-STEP alpha during the
+   * denoise. Replaces every armed schedule with this one; returns 0.
+   *
+   * At each step `s` the positive text rows fed to the DiT become
+   *
+   *     txt_in( primedEmbeds + Σ_k alpha_k[s] * scale_k * dir_k )
+   *
+   * where `primedEmbeds` is the conditioning prime() built — which already
+   * carries whatever setControl() asked for. So a schedule COMPOSES with the
+   * static desk, and its own contribution does not depend on the desk's
+   * value: a flat schedule at alpha A, with the axis at weight 0 at prime
+   * time, renders the setControl(axis, A) image to the pixel.
+   *
+   * Why this and not one of the in-network hooks: the conditioning axes are
+   * the only surface on 2.1 with real authority (25σ against 4.4σ for the
+   * best dial), and they were the only one that could not be scheduled.
+   * Round 3 of qwen-image-research measured a desk fitted at 8 steps losing
+   * 30-37% of its travel at 40 with nothing in-network able to recover it.
+   *
+   * `nameOrDir` is either an axis name from the loaded control dictionary (or
+   * a runtime axis registered with setControlVector) or a Float32Array
+   * direction of qwenImage21TextHiddenDim() floats — the diff-of-means axes a
+   * lab mints are in no bank, and the trailing `scale` carries their natural
+   * unit. `alphaPerStep` is indexed by the ABSOLUTE step index, not by the
+   * offset from `loStep`, so the curve and the window can be edited
+   * independently; a step past the end of the array contributes nothing.
+   * `[loStep, hiStep)` is half-open like every other range here, and an
+   * omitted `hiStep` runs to the end.
+   *
+   * COST. Rebuilding the rows re-runs txt_in and drops the prefix KV cache,
+   * so a step whose alpha MOVED pays one extra prefill; a step whose alpha sat
+   * still pays nothing, and neither does an unscheduled generation. A flat
+   * schedule therefore costs one re-extract for the whole run and a window
+   * costs two (entering and leaving). Armed prefix edits — gate scales, the
+   * prefix-KV dial — survive the re-extract exactly as they survive any
+   * other, because they are applied where the cache is read.
+   *
+   * Only the POSITIVE branch is steered, matching setControl().
+   *
+   * @param {string|Float32Array} nameOrDir
+   * @param {Float32Array|number[]} alphaPerStep  one coefficient per step
+   * @param {number} [loStep=0]
+   * @param {number} [hiStep=-1]   exclusive; < 0 = to the end
+   * @param {number} [scale=1]     only with a Float32Array direction
+   * @returns {number} the slot index (0)
+   *
+   * @example
+   *   // Let the prompt set the composition, then warm it up over the back
+   *   // half — the axis re-aimed, not a weaker copy of the step-0 one.
+   *   const a = new Float32Array(steps);
+   *   for (let i = steps >> 1; i < steps; i++) a[i] = 3.0;
+   *   pipe.qwenImage21SetControlSchedule('color.warm', a);
+   *   const img = pipe.generate(prompt, { steps });
+   */
+  qwenImage21SetControlSchedule(nameOrDir, alphaPerStep, loStep, hiStep, scale) {}
+
+  /**
+   * The same, appended instead of replacing: every armed slot contributes its
+   * own alpha_k[s] * scale_k * dir_k to the same step, and the sum is held to
+   * setControlBudget() exactly as a prime-time stack is.
+   * @param {string|Float32Array} nameOrDir
+   * @param {Float32Array|number[]} alphaPerStep
+   * @param {number} [loStep=0]
+   * @param {number} [hiStep=-1]
+   * @param {number} [scale=1]
+   * @returns {number} the new slot's index
+   */
+  qwenImage21AddControlSchedule(nameOrDir, alphaPerStep, loStep, hiStep, scale) {}
+
+  /**
+   * Drop every schedule. When one had already moved a live generation's rows,
+   * this puts the PRIMED rows back (and re-extracts), so clearing mid-denoise
+   * means the schedule stops rather than sticking at its last alpha.
+   * @returns {undefined}
+   */
+  qwenImage21ClearControlSchedules() {}
+
+  /**
+   * How many schedules are armed.
+   * @returns {number}
+   */
+  qwenImage21ControlScheduleCount() {}
+
+  /**
+   * Apply the armed schedules for `step` to `state` by hand. stepOnce() does
+   * this itself, so this is only for a caller driving the denoiser out of band
+   * — or for pricing a re-extract, which is what its return value is for.
+   * @param {PipelineState} state
+   * @param {number} [step=state.stepIndex]
+   * @returns {boolean} true when the rows were rebuilt and the cache dropped
+   */
+  qwenImage21ApplyControlStep(state, step) {}
 
   /**
    * Attenuate the prefix KV for layers [layerLo, layerHi): the cached prefix

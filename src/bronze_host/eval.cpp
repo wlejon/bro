@@ -11,6 +11,7 @@
 #include "modules/modules.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
+#include "util/crash_handler.h"
 #include "util/log.h"
 
 #include <atomic>
@@ -442,6 +443,11 @@ bool evalAppScript(engine::Engine& engine, const std::string& code, const std::s
 
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath) {
     HostEvalScope evalScope;
+    // The breadcrumb a crash report prints. The host cannot name the LINE a
+    // faulted native call came from — the script is compiled and running as
+    // machine code by then — but it can always name the file, and on a run
+    // that drives five model surfaces in a loop that is most of the answer.
+    util::setCrashContext("script " + filePath);
     if (!isJitDisabled()) {
         return evalScriptFileJit(engine, filePath);
     }
