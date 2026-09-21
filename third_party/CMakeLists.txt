@@ -318,10 +318,28 @@ if(BRO_WITH_SOUNDML)
     endif()
 endif()
 
+# --- brovisionml ---
+# Prefer the standalone repo at ../brovisionml for local development.
+# Falls back to the git submodule at third_party/brovisionml.
+# Depends on bromath + brotensor + broimage; all three are already targets by
+# this point. MUST be added before brodiffusion (which depends on brovisionml
+# for TripoSplat). Guards with if(NOT TARGET ...) so it reuses those targets.
+if(BRO_WITH_VISION AND NOT TARGET brovisionml)
+    bro_default_sibling_dir(brovisionml _brovisionml_default)
+    set(BROVISIONML_DIR "${_brovisionml_default}" CACHE PATH "Path to standalone brovisionml repo")
+    if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")
+        message(STATUS "brovisionml: using standalone repo at ${BROVISIONML_DIR}")
+        add_subdirectory("${BROVISIONML_DIR}" "${CMAKE_BINARY_DIR}/brovisionml" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brovisionml: using submodule at third_party/brovisionml")
+        add_subdirectory(brovisionml EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- brodiffusion ---
 # Prefer the standalone repo at ../brodiffusion for local development.
 # Falls back to the git submodule at third_party/brodiffusion.
-# MUST be added after brolm (which it depends on). Guards bromath/brotensor
+# MUST be added after brolm and brovisionml (which it depends on). Guards bromath/brotensor/brovisionml
 # with if(NOT TARGET ...) so it reuses those targets and reads the GPU cache
 # vars instead of re-adding or defaulting them.
 if(BRO_WITH_DIFFUSION)
@@ -333,31 +351,6 @@ if(BRO_WITH_DIFFUSION)
     else()
         message(STATUS "brodiffusion: using submodule at third_party/brodiffusion")
         add_subdirectory(brodiffusion EXCLUDE_FROM_ALL)
-    endif()
-endif()
-
-# --- brovisionml ---
-# Prefer the standalone repo at ../brovisionml for local development.
-# Falls back to the git submodule at third_party/brovisionml.
-# Depends on bromath + brotensor + broimage; all three are already targets by
-# this point. Guards all three with if(NOT TARGET ...) so it reuses those
-# targets and reads the GPU cache vars.
-#
-# The NOT TARGET guard on brovisionml ITSELF matters because this is the one
-# sibling added AFTER brodiffusion, which needs brovisionml too (the TripoSplat
-# DINOv3 backbone) and adds it into the same ${CMAKE_BINARY_DIR}/brovisionml.
-# Without the guard the second add_subdirectory fails with "binary directory is
-# already used to build a source directory". Every other sibling here is added
-# before its dependents, so their own guards are enough.
-if(BRO_WITH_VISION AND NOT TARGET brovisionml)
-    bro_default_sibling_dir(brovisionml _brovisionml_default)
-    set(BROVISIONML_DIR "${_brovisionml_default}" CACHE PATH "Path to standalone brovisionml repo")
-    if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")
-        message(STATUS "brovisionml: using standalone repo at ${BROVISIONML_DIR}")
-        add_subdirectory("${BROVISIONML_DIR}" "${CMAKE_BINARY_DIR}/brovisionml" EXCLUDE_FROM_ALL)
-    else()
-        message(STATUS "brovisionml: using submodule at third_party/brovisionml")
-        add_subdirectory(brovisionml EXCLUDE_FROM_ALL)
     endif()
 endif()
 
