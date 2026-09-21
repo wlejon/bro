@@ -58,8 +58,15 @@ let gotBinary = null;
 let clientClose = null;
 ws.onopen = () => { opened = true; };
 ws.onmessage = (ev) => {
-    if (typeof ev.data === 'string') gotText = ev.data;
-    else gotBinary = ev.data;
+    if (typeof ev.data === 'string') {
+        gotText = ev.data;
+    } else if (typeof Blob !== 'undefined' && ev.data instanceof Blob) {
+        ev.data.arrayBuffer().then((ab) => { gotBinary = new Uint8Array(ab); });
+    } else if (ev.data instanceof ArrayBuffer) {
+        gotBinary = new Uint8Array(ev.data);
+    } else {
+        gotBinary = ev.data;
+    }
 };
 ws.onclose = (ev) => { clientClose = ev; };
 
