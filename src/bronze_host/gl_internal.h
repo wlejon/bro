@@ -394,7 +394,10 @@ Value loadIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint
 // gl_context.cpp calls them in one fixed order; the order of def() calls
 // inside each is likewise fixed. `c` outlives the program: the Engine owns it
 // until teardown, and nothing bronze finalizes ever dereferences it.
+class HostClass;
+
 void installGlConstants(ObjectBuilder& b);
+void installGlConstants(const HostClass& cls);
 void installGlState(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
@@ -404,9 +407,12 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
 
 // The whole context object: constants + every family + gl.canvas +
-// drawingBufferWidth/Height + the constructor-name shim three.js sniffs.
+// drawingBufferWidth/Height + prototype branded with WebGL2RenderingContext.
 // `canvasValue` is the host canvas object (dom_globals.cpp) so gl.canvas
 // answers live width/height. ALLOCATES heavily; returns the finished object.
 Value createGlContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue);
+
+const HostClass& webgl2RenderingContextHostClass();
+void installWebGLGlobals();
 
 }  // namespace bro::bronze_host

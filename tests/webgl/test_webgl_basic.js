@@ -16,6 +16,12 @@ if (!gl) {
     // =====================================================================
     // Context info
     // =====================================================================
+    assert(typeof WebGL2RenderingContext === 'function', 'WebGL2RenderingContext is constructor function');
+    assert(gl instanceof WebGL2RenderingContext, 'gl instanceof WebGL2RenderingContext');
+    assert(WebGL2RenderingContext.COLOR_BUFFER_BIT === 0x00004000, 'WebGL2RenderingContext.COLOR_BUFFER_BIT');
+    assert(WebGL2RenderingContext.RGBA === 0x1908, 'WebGL2RenderingContext.RGBA');
+    assert(gl.COLOR_BUFFER_BIT === 0x00004000, 'gl.COLOR_BUFFER_BIT');
+
     assert(gl.drawingBufferWidth === 128, 'drawingBufferWidth');
     assert(gl.drawingBufferHeight === 128, 'drawingBufferHeight');
 

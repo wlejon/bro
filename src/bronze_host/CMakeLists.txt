@@ -107,10 +107,12 @@ set(BRO_BRONZE_HOST_SOURCES
     host_telemetry.cpp
     app_module.cpp
     dom_globals.cpp
+    dom_globals_webgl.cpp
     host_gc.cpp
     dom_canvas.cpp
     dom_document.cpp
     host_canvas2d.cpp
+    host_canvas2d_paths.cpp
     host_canvas2d_matrix.cpp
     host_canvas_gradient.cpp
     host_canvas_path2d.cpp
@@ -135,6 +137,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_selection.cpp
     host_events.cpp
     host_dom_events.cpp
+    host_dom_events_types.cpp
     host_timers.cpp
     host_image.cpp
     host_platform.cpp

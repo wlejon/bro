@@ -4,6 +4,7 @@
 // Registered in deterministic array order.
 
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_internal.h"
 
 namespace bro::bronze_host {
 
@@ -537,6 +538,12 @@ const ConstantEntry kConstants[] = {
 void installGlConstants(ObjectBuilder& b) {
     for (const ConstantEntry& e : kConstants) {
         b.set(e.name, ev::fromDouble(e.value));
+    }
+}
+
+void installGlConstants(const HostClass& cls) {
+    for (const ConstantEntry& e : kConstants) {
+        cls.setStatic(e.name, ev::fromDouble(e.value));
     }
 }
 

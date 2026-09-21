@@ -3,6 +3,7 @@
 #include "bronze_host/host_internal.h"
 #include <include/core/SkPathBuilder.h>
 #include <include/core/SkPath.h>
+#include <include/core/SkRRect.h>
 
 namespace bro::bronze_host {
 
@@ -30,6 +31,7 @@ struct HostCanvasPath2D {
     void ellipse(float cx, float cy, float rx, float ry, float rotation,
                  float startAngle, float endAngle, bool acw);
     void rect(float x, float y, float w, float h);
+    void roundRect(float x, float y, float w, float h, const SkVector radii[4]);
     void addPath(const SkPath& p);
 };
 

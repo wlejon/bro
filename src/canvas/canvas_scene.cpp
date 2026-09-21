@@ -19,6 +19,7 @@
 #include <include/core/SkBlendMode.h>
 #include <include/core/SkBlurTypes.h>
 #include <include/core/SkPathBuilder.h>
+#include <include/core/SkRRect.h>
 #include <include/core/SkPixmap.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
@@ -1262,6 +1263,13 @@ void CanvasScene::ellipse(float cx, float cy, float rx, float ry, float rotation
 
 void CanvasScene::rect(float x, float y, float w, float h) {
     pathBuilder_.addRect(SkRect::MakeXYWH(x, y, w, h));
+}
+
+void CanvasScene::roundRect(float x, float y, float w, float h, const SkVector radii[4]) {
+    SkRRect rrect;
+    SkRect r = SkRect::MakeXYWH(x, y, w, h).makeSorted();
+    rrect.setRectRadii(r, radii);
+    pathBuilder_.addRRect(rrect);
 }
 
 bool CanvasScene::isPointInPath(float x, float y, const std::string& fillRule) {

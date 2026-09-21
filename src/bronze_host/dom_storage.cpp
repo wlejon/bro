@@ -10,6 +10,7 @@
 #include "util/storage_file.h"
 
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,8 @@ struct StorageState {
     std::map<std::string, std::string> items;
     std::string path;
     bool loaded = false;
+    bool dirty = false;
+    bool saveScheduled = false;
 };
 
 static std::map<std::string, StorageState> g_storages;
@@ -74,12 +77,48 @@ static void saveStorage(StorageState& st) {
     util::writeStorageFile(st.path, st.items);
 }
 
+static void scheduleSaveStorage(StorageState& st) {
+    st.dirty = true;
+    static std::once_flag atexitOnce;
+    std::call_once(atexitOnce, []() {
+        std::atexit(flushHostStorage);
+    });
+    if (st.saveScheduled) return;
+    st.saveScheduled = true;
+    std::string path = st.path;
+    postHostTask([path]() {
+        auto it = g_storages.find(path);
+        if (it != g_storages.end()) {
+            it->second.saveScheduled = false;
+            if (it->second.dirty) {
+                it->second.dirty = false;
+                saveStorage(it->second);
+            }
+        }
+    });
+}
+
 }  // namespace
+
+void flushHostStorage() {
+    for (auto& [path, st] : g_storages) {
+        if (st.dirty) {
+            st.dirty = false;
+            st.saveScheduled = false;
+            saveStorage(st);
+        }
+    }
+}
 
 void reloadHostStorage(const std::string& basePath) {
     std::string bp = basePath.empty() ? "." : basePath;
     std::string path = normalizePath(bp) + "/.storage.json";
     auto& st = g_storages[path];
+    if (st.dirty) {
+        st.dirty = false;
+        st.saveScheduled = false;
+        saveStorage(st);
+    }
     st.path = path;
     st.loaded = true;
     st.items.clear();
@@ -89,39 +128,38 @@ void reloadHostStorage(const std::string& basePath) {
 Value makeLocalStorageValue() {
     ObjectBuilder b;
     b.def("getItem", 1, [](Value, std::span<const Value> a) {
-        Value keyV = argAt(a, 0);
-        if (ev::isObject(keyV) || ev::isUndefined(keyV)) return ev::null();
-        std::string key = ev::toUtf8(keyV);
+        if (a.empty()) return ev::null();
+        std::string key = ev::toUtf8(a[0]);
         auto& st = currentStorage();
         auto it = st.items.find(key);
         if (it == st.items.end()) return ev::null();
         return ev::fromUtf8(it->second);
     });
     b.def("setItem", 2, [](Value, std::span<const Value> a) {
-        Value keyV = argAt(a, 0);
-        Value valV = argAt(a, 1);
-        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
-            std::string key = ev::toUtf8(keyV);
-            std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
-            auto& st = currentStorage();
-            st.items[key] = val;
-            saveStorage(st);
-        }
+        std::string key = a.empty() ? "undefined" : ev::toUtf8(a[0]);
+        std::string val = a.size() < 2 ? "undefined" : ev::toUtf8(a[1]);
+        auto& st = currentStorage();
+        st.items[key] = val;
+        scheduleSaveStorage(st);
         return ev::undefined();
     });
     b.def("removeItem", 1, [](Value, std::span<const Value> a) {
-        Value keyV = argAt(a, 0);
-        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
-            auto& st = currentStorage();
-            st.items.erase(ev::toUtf8(keyV));
-            saveStorage(st);
+        if (a.empty()) return ev::undefined();
+        std::string key = ev::toUtf8(a[0]);
+        auto& st = currentStorage();
+        auto it = st.items.find(key);
+        if (it != st.items.end()) {
+            st.items.erase(it);
+            scheduleSaveStorage(st);
         }
         return ev::undefined();
     });
     b.def("clear", 0, [](Value, std::span<const Value>) {
         auto& st = currentStorage();
-        st.items.clear();
-        saveStorage(st);
+        if (!st.items.empty()) {
+            st.items.clear();
+            scheduleSaveStorage(st);
+        }
         return ev::undefined();
     });
     b.def("key", 1, [](Value, std::span<const Value> a) {
@@ -147,10 +185,9 @@ Value makeLocalStorageValue() {
         return true;
     };
     t.set = [](const std::string& key, Value v) {
-        if (ev::isObject(v)) return;
         auto& st = currentStorage();
         st.items[key] = ev::isUndefined(v) ? "undefined" : ev::toUtf8(v);
-        saveStorage(st);
+        scheduleSaveStorage(st);
     };
     t.has = [](const std::string& key) {
         return currentStorage().items.find(key) != currentStorage().items.end();
@@ -165,7 +202,11 @@ Value makeLocalStorageValue() {
     };
     t.remove = [](const std::string& key) {
         auto& st = currentStorage();
-        if (st.items.erase(key)) saveStorage(st);
+        auto it = st.items.find(key);
+        if (it != st.items.end()) {
+            st.items.erase(it);
+            scheduleSaveStorage(st);
+        }
     };
     return makeHostProxy(std::move(t));
 }
@@ -173,29 +214,23 @@ Value makeLocalStorageValue() {
 Value makeSessionStorageValue() {
     ObjectBuilder b;
     b.def("getItem", 1, [](Value, std::span<const Value> a) {
-        Value keyV = argAt(a, 0);
-        if (ev::isObject(keyV) || ev::isUndefined(keyV)) return ev::null();
-        std::string key = ev::toUtf8(keyV);
+        if (a.empty()) return ev::null();
+        std::string key = ev::toUtf8(a[0]);
         auto& st = currentSessionStorage();
         auto it = st.items.find(key);
         if (it == st.items.end()) return ev::null();
         return ev::fromUtf8(it->second);
     });
     b.def("setItem", 2, [](Value, std::span<const Value> a) {
-        Value keyV = argAt(a, 0);
-        Value valV = argAt(a, 1);
-        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
-            std::string key = ev::toUtf8(keyV);
-            std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
-            currentSessionStorage().items[key] = val;
-        }
+        std::string key = a.empty() ? "undefined" : ev::toUtf8(a[0]);
+        std::string val = a.size() < 2 ? "undefined" : ev::toUtf8(a[1]);
+        currentSessionStorage().items[key] = val;
         return ev::undefined();
     });
     b.def("removeItem", 1, [](Value, std::span<const Value> a) {
-        Value keyV = argAt(a, 0);
-        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
-            currentSessionStorage().items.erase(ev::toUtf8(keyV));
-        }
+        if (a.empty()) return ev::undefined();
+        std::string key = ev::toUtf8(a[0]);
+        currentSessionStorage().items.erase(key);
         return ev::undefined();
     });
     b.def("clear", 0, [](Value, std::span<const Value>) {
@@ -224,7 +259,6 @@ Value makeSessionStorageValue() {
         return true;
     };
     t.set = [](const std::string& key, Value v) {
-        if (ev::isObject(v)) return;
         currentSessionStorage().items[key] = ev::isUndefined(v) ? "undefined" : ev::toUtf8(v);
     };
     t.has = [](const std::string& key) {

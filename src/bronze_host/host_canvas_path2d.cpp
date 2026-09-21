@@ -1,4 +1,5 @@
 #include "bronze_host/host_canvas_path2d.h"
+#include "bronze_host/host_canvas2d_paths.h"
 #include "bronze_host/gl_internal.h"
 #include <include/core/SkMatrix.h>
 #include <include/core/SkRect.h>
@@ -78,6 +79,13 @@ void HostCanvasPath2D::ellipse(float cx, float cy, float rx, float ry, float rot
 
 void HostCanvasPath2D::rect(float x, float y, float w, float h) {
     builder.addRect(SkRect::MakeXYWH(x, y, w, h));
+}
+
+void HostCanvasPath2D::roundRect(float x, float y, float w, float h, const SkVector radii[4]) {
+    SkRRect rrect;
+    SkRect r = SkRect::MakeXYWH(x, y, w, h).makeSorted();
+    rrect.setRectRadii(r, radii);
+    builder.addRRect(rrect);
 }
 
 void HostCanvasPath2D::addPath(const SkPath& p) {
@@ -219,6 +227,24 @@ void installPath2DClass() {
                     float w = a.size() > 2 ? static_cast<float>(ev::toDouble(a[2])) : 0.0f;
                     float h = a.size() > 3 ? static_cast<float>(ev::toDouble(a[3])) : 0.0f;
                     p->rect(x, y, w, h);
+                }
+                return ev::undefined();
+            });
+
+            proto.def("roundRect", 4, [](Value self, std::span<const Value> a) -> Value {
+                if (auto* p = hostCanvasPath2DOf(self)) {
+                    if (a.size() < 4) return ev::undefined();
+                    float x = static_cast<float>(ev::toDouble(a[0]));
+                    float y = static_cast<float>(ev::toDouble(a[1]));
+                    float w = static_cast<float>(ev::toDouble(a[2]));
+                    float h = static_cast<float>(ev::toDouble(a[3]));
+                    SkVector radii[4];
+                    std::string err;
+                    Value rVal = a.size() > 4 ? a[4] : ev::undefined();
+                    if (!parseRoundRectRadii(rVal, radii, err)) {
+                        return ev::throwRangeError(err);
+                    }
+                    p->roundRect(x, y, w, h, radii);
                 }
                 return ev::undefined();
             });

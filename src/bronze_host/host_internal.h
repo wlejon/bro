@@ -98,6 +98,9 @@ public:
     // HTMLImageElement).
     void alias(const char* name) const;
 
+    // Bind this HostClass to an existing constructor and its prototype by name.
+    void bind(const char* name);
+
     // `class This extends Base`: chain this prototype onto the base's, so an
     // instance inherits both surfaces and answers `instanceof` for both (an
     // HTMLDivElement IS an HTMLElement). Call AFTER both installs.

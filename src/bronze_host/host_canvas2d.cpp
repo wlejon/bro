@@ -2,6 +2,7 @@
 #include "bronze_host/host_canvas2d_matrix.h"
 #include "bronze_host/host_canvas_gradient.h"
 #include "bronze_host/host_canvas_path2d.h"
+#include "bronze_host/host_canvas2d_paths.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
@@ -206,7 +207,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 static const char* names[] = {
                     "source-over", "source-in", "source-out", "source-atop",
                     "destination-over", "destination-in", "destination-out", "destination-atop",
-                    "lighter", "darken", "xor", "lighter",
+                    "lighten", "darken", "xor", "lighter",
                     "multiply", "screen", "overlay",
                     "color-dodge", "color-burn", "hard-light", "soft-light",
                     "difference", "exclusion"
@@ -441,110 +442,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             return ev::fromDouble(0);
         }, nullptr);
 
-    b.def("beginPath", 0, [el](Value, std::span<const Value>) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->beginPath();
-        }
-        return ev::undefined();
-    });
-
-    b.def("closePath", 0, [el](Value, std::span<const Value>) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->closePath();
-        }
-        return ev::undefined();
-    });
-
-    b.def("fill", 2, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            HostCanvasPath2D* path = !a.empty() ? hostCanvasPath2DOf(a[0]) : nullptr;
-            std::string fillRule = "nonzero";
-            if (path) {
-                if (a.size() > 1 && ev::isString(a[1])) fillRule = ev::toUtf8(a[1]);
-                cs->fill(path->snapshot(), fillRule);
-            } else {
-                if (!a.empty() && ev::isString(a[0])) fillRule = ev::toUtf8(a[0]);
-                cs->fill(fillRule);
-            }
-        }
-        return ev::undefined();
-    });
-
-    b.def("stroke", 1, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            HostCanvasPath2D* path = !a.empty() ? hostCanvasPath2DOf(a[0]) : nullptr;
-            if (path) {
-                cs->stroke(path->snapshot());
-            } else {
-                cs->stroke();
-            }
-        }
-        return ev::undefined();
-    });
-
-    b.def("clip", 2, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            HostCanvasPath2D* path = !a.empty() ? hostCanvasPath2DOf(a[0]) : nullptr;
-            std::string fillRule = "nonzero";
-            if (path) {
-                if (a.size() > 1 && ev::isString(a[1])) fillRule = ev::toUtf8(a[1]);
-                cs->clip(path->snapshot(), fillRule);
-            } else {
-                if (!a.empty() && ev::isString(a[0])) fillRule = ev::toUtf8(a[0]);
-                cs->clip(fillRule);
-            }
-        }
-        return ev::undefined();
-    });
-
-    b.def("reset", 0, [el](Value, std::span<const Value>) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->reset();
-        }
-        return ev::undefined();
-    });
-
-    b.def("fillRect", 4, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            float w = a.size() > 2 ? static_cast<float>(ev::toDouble(a[2])) : 0.0f;
-            float h = a.size() > 3 ? static_cast<float>(ev::toDouble(a[3])) : 0.0f;
-            cs->fillRect(x, y, w, h);
-        }
-        return ev::undefined();
-    });
-
-    b.def("strokeRect", 4, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            float w = a.size() > 2 ? static_cast<float>(ev::toDouble(a[2])) : 0.0f;
-            float h = a.size() > 3 ? static_cast<float>(ev::toDouble(a[3])) : 0.0f;
-            cs->strokeRect(x, y, w, h);
-        }
-        return ev::undefined();
-    });
-
-    b.def("clearRect", 4, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene()) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            float x = a.size() > 0 ? static_cast<float>(ev::toDouble(a[0])) : 0.0f;
-            float y = a.size() > 1 ? static_cast<float>(ev::toDouble(a[1])) : 0.0f;
-            float w = a.size() > 2 ? static_cast<float>(ev::toDouble(a[2])) : 0.0f;
-            float h = a.size() > 3 ? static_cast<float>(ev::toDouble(a[3])) : 0.0f;
-            cs->clearRect(x, y, w, h);
-        }
-        return ev::undefined();
-    });
+    installCanvas2DPaths(b, el);
 
     b.def("fillText", 4, [el](Value, std::span<const Value> a) -> Value {
         if (el && el->canvasScene() && a.size() >= 3) {
@@ -585,116 +483,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         return obj.get();
     });
 
-    b.def("moveTo", 2, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 2) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->moveTo(static_cast<float>(ev::toDouble(a[0])), static_cast<float>(ev::toDouble(a[1])));
-        }
-        return ev::undefined();
-    });
 
-    b.def("lineTo", 2, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 2) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->lineTo(static_cast<float>(ev::toDouble(a[0])), static_cast<float>(ev::toDouble(a[1])));
-        }
-        return ev::undefined();
-    });
-
-    b.def("rect", 4, [el](Value, std::span<const Value> a) -> Value {
-        if (el && el->canvasScene() && a.size() >= 4) {
-            auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            cs->rect(static_cast<float>(ev::toDouble(a[0])), static_cast<float>(ev::toDouble(a[1])),
-                     static_cast<float>(ev::toDouble(a[2])), static_cast<float>(ev::toDouble(a[3])));
-        }
-        return ev::undefined();
-    });
-
-    b.def("arc", 6, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 5) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        float cx = static_cast<float>(ev::toDouble(a[0]));
-        float cy = static_cast<float>(ev::toDouble(a[1]));
-        float r  = static_cast<float>(ev::toDouble(a[2]));
-        float sa = static_cast<float>(ev::toDouble(a[3]));
-        float ea = static_cast<float>(ev::toDouble(a[4]));
-        bool acw = a.size() >= 6 ? ev::toBool(a[5]) : false;
-        cs->arc(cx, cy, r, sa, ea, acw);
-        return ev::undefined();
-    });
-
-    b.def("arcTo", 5, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 5) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        cs->arcTo(static_cast<float>(ev::toDouble(a[0])),
-                  static_cast<float>(ev::toDouble(a[1])),
-                  static_cast<float>(ev::toDouble(a[2])),
-                  static_cast<float>(ev::toDouble(a[3])),
-                  static_cast<float>(ev::toDouble(a[4])));
-        return ev::undefined();
-    });
-
-    b.def("bezierCurveTo", 6, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 6) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        cs->bezierCurveTo(static_cast<float>(ev::toDouble(a[0])),
-                          static_cast<float>(ev::toDouble(a[1])),
-                          static_cast<float>(ev::toDouble(a[2])),
-                          static_cast<float>(ev::toDouble(a[3])),
-                          static_cast<float>(ev::toDouble(a[4])),
-                          static_cast<float>(ev::toDouble(a[5])));
-        return ev::undefined();
-    });
-
-    b.def("quadraticCurveTo", 4, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 4) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        cs->quadraticCurveTo(static_cast<float>(ev::toDouble(a[0])),
-                             static_cast<float>(ev::toDouble(a[1])),
-                             static_cast<float>(ev::toDouble(a[2])),
-                             static_cast<float>(ev::toDouble(a[3])));
-        return ev::undefined();
-    });
-
-    b.def("ellipse", 8, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.size() < 7) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        float cx  = static_cast<float>(ev::toDouble(a[0]));
-        float cy  = static_cast<float>(ev::toDouble(a[1]));
-        float rx  = static_cast<float>(ev::toDouble(a[2]));
-        float ry  = static_cast<float>(ev::toDouble(a[3]));
-        float rot = static_cast<float>(ev::toDouble(a[4]));
-        float sa  = static_cast<float>(ev::toDouble(a[5]));
-        float ea  = static_cast<float>(ev::toDouble(a[6]));
-        bool acw  = a.size() >= 8 ? ev::toBool(a[7]) : false;
-        cs->ellipse(cx, cy, rx, ry, rot, sa, ea, acw);
-        return ev::undefined();
-    });
-
-
-    b.def("polyline", 1, [el](Value, std::span<const Value> a) -> Value {
-        if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
-        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        Value arg = a[0];
-        auto tinfo = ev::typedArrayInfo(arg);
-        if (tinfo.data && tinfo.byteLength >= sizeof(float) * 2) {
-            int numPoints = static_cast<int>(tinfo.byteLength / (sizeof(float) * 2));
-            cs->polyline(reinterpret_cast<const float*>(tinfo.data), numPoints);
-            return ev::undefined();
-        }
-        if (ev::isObject(arg)) {
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(arg, "length")));
-            if (len >= 2) {
-                std::vector<float> pts;
-                pts.reserve(len);
-                for (uint32_t i = 0; i < len; ++i) {
-                    pts.push_back(static_cast<float>(ev::toDouble(ev::getElement(arg, i))));
-                }
-                cs->polyline(pts.data(), static_cast<int>(pts.size() / 2));
-            }
-        }
-        return ev::undefined();
-    });
 
     b.def("setLineDash", 1, [el](Value, std::span<const Value> a) -> Value {
         if (!el || !el->canvasScene() || a.empty()) return ev::undefined();

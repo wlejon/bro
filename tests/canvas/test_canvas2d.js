@@ -34,6 +34,8 @@ assert(Math.abs(ctx.globalAlpha - 0.5) < 0.01, 'globalAlpha getter');
 // --- globalCompositeOperation ---
 ctx.globalCompositeOperation = 'source-over';
 assert(ctx.globalCompositeOperation === 'source-over', 'globalCompositeOperation');
+ctx.globalCompositeOperation = 'lighten';
+assert(ctx.globalCompositeOperation === 'lighten', 'globalCompositeOperation lighten getter');
 
 // --- textAlign / textBaseline ---
 ctx.textAlign = 'center';
@@ -91,6 +93,21 @@ ctx.stroke();
 ctx.beginPath();
 ctx.rect(5, 5, 30, 30);
 ctx.fill();
+
+// --- roundRect ---
+assert(typeof ctx.roundRect === 'function', 'ctx.roundRect is function');
+ctx.beginPath();
+ctx.roundRect(10, 10, 100, 100, 10);
+assert(ctx.isPointInPath(50, 50) === true, 'isPointInPath inside roundRect');
+assert(ctx.isPointInPath(10, 10) === false, 'isPointInPath outside rounded corner');
+ctx.fill();
+
+var p2d = new Path2D();
+assert(typeof p2d.roundRect === 'function', 'Path2D.prototype.roundRect is function');
+p2d.roundRect(0, 0, 80, 80, [5, 10, 15, 20]);
+ctx.beginPath();
+ctx.fill(p2d);
+assert(ctx.isPointInPath(p2d, 40, 40) === true, 'isPointInPath on Path2D roundRect');
 
 // --- ellipse ---
 ctx.beginPath();

@@ -43,6 +43,8 @@
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_window_open.h"
 #include "bronze_host/host_intl.h"
+#include "bronze_host/host_dom_events_types.h"
+#include "bronze_host/host_storage.h"
 #include "bronze_host/host_web_animations.h"
 
 #include "engine/engine.h"
@@ -228,6 +230,7 @@ void hostFrame(double dtMs) {
 #endif
     ev::drainMicrotasks();                               // 6c
     hostNotifyIdleFrame(dtMs);                           // 7
+    flushHostStorage();
 }
 
 // `window.getComputedStyle(el)` — and three.js's editor uses the bare one
@@ -785,15 +788,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "performance", perf);
     }
-    {
-        // `typeof WebGL2RenderingContext !== 'undefined'` must hold, and
-        // gl.constructor.name (gl_context.cpp) carries the instance half of
-        // three.js's sniff. A bare named object is all the sniff reads.
-        ObjectBuilder ctor;
-        Value name = ev::fromUtf8("WebGL2RenderingContext");
-        ctor.set("name", name);
-        ev::registerGlobal("WebGL2RenderingContext", ctor.get());
-    }
+    installWebGLGlobals();
 
     // The families that own their own files, each registering the names
     // the manifest lists for it, in the manifest's order.
@@ -808,13 +803,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     installNavigatorGlobal();
     // HTMLCanvasElement and HTMLImageElement are installed as real classes
     // via installHtmlInterfaces() / installImageGlobal().
-    ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
     installTouchGlobals();
     installVendorGlobals();
     installBrokitGlobals(engine);
     // The UI event classes (js/events.js) extend the `Event` brokit just
     // installed.
     installEventsModule();
+    installDomEventTypes();
     // The math classes BEFORE the roots: bro.math aliases the SpatialHash3D /
     // Rng / Smoother constructors, so they have to exist when the root is
     // assembled (host_math_funcs.cpp reads them off their HostClass).

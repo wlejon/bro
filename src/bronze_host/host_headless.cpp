@@ -2,6 +2,7 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_storage.h"
 #include "bronze_host/host_natives.h"  // pollNet
 #include "bronze_host/gl_internal.h"
 
@@ -98,6 +99,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
     // relies on exactly that (tests/layout/test_layout_flush.js).
     regBoth("flush", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
+            flushHostStorage();
             engine.flush();
             pumpBrokitTicks();
             pollNet();

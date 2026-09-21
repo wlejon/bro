@@ -302,6 +302,7 @@ public:
     void ellipse(float cx, float cy, float rx, float ry, float rotation,
                  float startAngle, float endAngle, bool acw);
     void rect(float x, float y, float w, float h);
+    void roundRect(float x, float y, float w, float h, const SkVector radii[4]);
     bool isPointInPath(float x, float y, const std::string& fillRule = "nonzero");
     bool isPointInPath(const SkPath& path, float x, float y, const std::string& fillRule = "nonzero");
 

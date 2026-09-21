@@ -90,6 +90,27 @@ void HostClass::alias(const char* name) const {
     }
 }
 
+void HostClass::bind(const char* name) {
+    ev::GlobalValue g = ev::globalValue(name);
+    if (!g.found || !ev::isFunction(g.value)) {
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
+            Value c = ev::getProperty(gt.value, name);
+            if (ev::isFunction(c)) {
+                g.found = true;
+                g.value = c;
+            }
+        }
+    }
+    if (g.found && ev::isFunction(g.value)) {
+        ctor_ = new ev::Persistent(g.value);
+        Value proto = ev::getProperty(g.value, "prototype");
+        if (ev::isObject(proto)) {
+            proto_ = new ev::Persistent(proto);
+        }
+    }
+}
+
 }  // namespace bro::bronze_host
 
 namespace bronze::embed {

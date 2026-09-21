@@ -16,6 +16,12 @@ assert(localStorage.getItem('missing') === null, 'missing is null');
 // Coercion: non-strings should be stringified
 localStorage.setItem('num', 42);
 assert(localStorage.getItem('num') === '42', 'num coerced to string: ' + localStorage.getItem('num'));
+localStorage.setItem('obj', { hello: 'world' });
+assert(localStorage.getItem('obj') === '[object Object]', 'object coerced to string: ' + localStorage.getItem('obj'));
+localStorage.propObj = { a: 1 };
+assert(localStorage.propObj === '[object Object]', 'propObj coerced: ' + localStorage.propObj);
+localStorage.removeItem('obj');
+localStorage.removeItem('propObj');
 
 // key(index)
 const keys = new Set();
@@ -72,6 +78,8 @@ for (const [k, v] of Object.entries(awkward)) {
   assert(localStorage.getItem(k) === v, 'in-memory round trip: ' + k);
 }
 
+flush();
+
 assert(fs.existsSync(storePath), '.storage.json exists at ' + storePath);
 assert(!fs.existsSync(storePath + '.tmp'), 'the atomic write leaves no .tmp behind');
 const onDisk = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
@@ -83,6 +91,7 @@ assert(Object.keys(onDisk).length === Object.keys(awkward).length,
        'the file holds exactly the stored keys: ' + Object.keys(onDisk).length);
 
 localStorage.clear();
+flush();
 assert(JSON.stringify(JSON.parse(fs.readFileSync(storePath, 'utf-8'))) === '{}',
        'clear() writes an empty object');
 

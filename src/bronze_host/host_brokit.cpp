@@ -180,6 +180,7 @@ void installBrokitGlobals(engine::Engine& engine) {
     adoptGlobalProperty("btoa");
     adoptGlobalProperty("atob");
     bk::installEventTarget();
+    adoptGlobalProperty("CustomEvent");
     bk::installMessageChannel();
     bk::installEvents();
     {

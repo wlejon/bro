@@ -29,6 +29,7 @@
 #include "bronze_host/host_event_spec.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_touch.h"
+#include "bronze_host/host_dom_events_types.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -85,39 +86,6 @@ Value staleEventThrow(const char* method) {
         std::string("event.") + method +
         ": the event is no longer being dispatched. The event object handed to a "
         "listener is only live for the duration of that listener call.");
-}
-
-int legacyKeyCodeFor(const std::string& code, const std::string& key) {
-    if (key == "Enter") return 13;
-    if (key == "Backspace") return 8;
-    if (key == "Tab") return 9;
-    if (key == "Escape") return 27;
-    if (key == " " || key == "Space") return 32;
-    if (key == "ArrowLeft") return 37;
-    if (key == "ArrowUp") return 38;
-    if (key == "ArrowRight") return 39;
-    if (key == "ArrowDown") return 40;
-    if (key == "Delete") return 46;
-    if (key == "Insert") return 45;
-    if (key == "Home") return 36;
-    if (key == "End") return 35;
-    if (key == "PageUp") return 33;
-    if (key == "PageDown") return 34;
-    if (key.size() == 1) {
-        char c = key[0];
-        if (c >= 'a' && c <= 'z') return c - 'a' + 65;
-        if (c >= 'A' && c <= 'Z') return c;
-        if (c >= '0' && c <= '9') return c;
-    }
-    if (code.rfind("Key", 0) == 0 && code.size() == 4) {
-        char c = code[3];
-        if (c >= 'A' && c <= 'Z') return c;
-    }
-    if (code.rfind("Digit", 0) == 0 && code.size() == 6) {
-        char c = code[5];
-        if (c >= '0' && c <= '9') return c;
-    }
-    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +160,18 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         baseObj = g_touchEventClass.make(nullptr, [](void*) {});
     } else if (dynamic_cast<dom::GestureEvent*>(&e)) {
         baseObj = g_gestureEventClass.make(nullptr, [](void*) {});
+    } else if (dynamic_cast<dom::WheelEvent*>(&e)) {
+        baseObj = wheelEventHostClass().make(nullptr, [](void*) {});
+    } else if (dynamic_cast<dom::MouseEvent*>(&e)) {
+        baseObj = mouseEventHostClass().make(nullptr, [](void*) {});
+    } else if (dynamic_cast<dom::KeyboardEvent*>(&e)) {
+        baseObj = keyboardEventHostClass().make(nullptr, [](void*) {});
+    } else if (e.type() == "focus" || e.type() == "blur" || e.type() == "focusin" || e.type() == "focusout") {
+        baseObj = focusEventHostClass().make(nullptr, [](void*) {});
+    } else if (e.type() == "gamepadconnected" || e.type() == "gamepaddisconnected") {
+        baseObj = gamepadEventHostClass().make(nullptr, [](void*) {});
+    } else if (dynamic_cast<dom::CustomEvent*>(&e)) {
+        baseObj = customEventHostClass().make(nullptr, [](void*) {});
     }
     ObjectBuilder b(ev::isUndefined(baseObj) ? ev::createObject() : baseObj);
 
@@ -256,49 +236,7 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         }
     }
 
-    if (auto* m = dynamic_cast<dom::MouseEvent*>(&e)) {
-        b.set("clientX", ev::fromDouble(m->clientX()));
-        b.set("clientY", ev::fromDouble(m->clientY()));
-        b.set("pageX", ev::fromDouble(m->pageX()));
-        b.set("pageY", ev::fromDouble(m->pageY()));
-        b.set("screenX", ev::fromDouble(m->screenX()));
-        b.set("screenY", ev::fromDouble(m->screenY()));
-        b.set("offsetX", ev::fromDouble(m->offsetX()));
-        b.set("offsetY", ev::fromDouble(m->offsetY()));
-        b.set("movementX", ev::fromDouble(m->movementX()));
-        b.set("movementY", ev::fromDouble(m->movementY()));
-        b.set("button", ev::fromDouble(m->button()));
-        b.set("buttons", ev::fromDouble(m->buttons()));
-        b.set("which", ev::fromDouble(m->button() >= 0 ? m->button() + 1 : 0));
-        b.set("detail", ev::fromDouble(m->detail()));
-        b.set("ctrlKey", ev::fromBool(m->ctrlKey()));
-        b.set("shiftKey", ev::fromBool(m->shiftKey()));
-        b.set("altKey", ev::fromBool(m->altKey()));
-        b.set("metaKey", ev::fromBool(m->metaKey()));
-        // Pointer events ride on MouseEvent in this DOM (dom/event.h), and a
-        // compiled handler duck-types them exactly as a JS one does.
-        if (e.type().rfind("pointer", 0) == 0) {
-            b.set("pointerId", ev::fromDouble(m->pointerId()));
-            Value ptype = ev::fromUtf8(m->pointerType());
-            b.set("pointerType", ptype);
-            b.set("isPrimary", ev::fromBool(m->isPrimaryPointer()));
-            b.set("width", ev::fromDouble(1.0));
-            b.set("height", ev::fromDouble(1.0));
-            double pressure = m->pressure();
-            if (pressure < 0.0) pressure = m->buttons() != 0 ? 0.5 : 0.0;
-            b.set("pressure", ev::fromDouble(pressure));
-            b.set("tangentialPressure", ev::fromDouble(0.0));
-            b.set("tiltX", ev::fromDouble(0.0));
-            b.set("tiltY", ev::fromDouble(0.0));
-            b.set("twist", ev::fromDouble(0.0));
-        }
-        if (auto* w = dynamic_cast<dom::WheelEvent*>(&e)) {
-            b.set("deltaX", ev::fromDouble(w->deltaX()));
-            b.set("deltaY", ev::fromDouble(w->deltaY()));
-            b.set("deltaZ", ev::fromDouble(w->deltaZ()));
-            b.set("deltaMode", ev::fromDouble(w->deltaMode()));
-        }
-    }
+    populateMouseEvent(b, e);
 
     if (auto* drag = dynamic_cast<dom::DragEvent*>(&e)) {
         if (drag->type() == "dragstart") {
@@ -445,22 +383,7 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         }
     }
 
-    if (auto* k = dynamic_cast<dom::KeyboardEvent*>(&e)) {
-        Value key = ev::fromUtf8(k->key());
-        b.set("key", key);
-        Value code = ev::fromUtf8(k->code());
-        b.set("code", code);
-        b.set("repeat", ev::fromBool(k->repeat()));
-        b.set("location", ev::fromDouble(k->location()));
-        b.set("ctrlKey", ev::fromBool(k->ctrlKey()));
-        b.set("shiftKey", ev::fromBool(k->shiftKey()));
-        b.set("altKey", ev::fromBool(k->altKey()));
-        b.set("metaKey", ev::fromBool(k->metaKey()));
-        int kc = legacyKeyCodeFor(k->code(), k->key());
-        b.set("keyCode", ev::fromDouble(kc));
-        b.set("which", ev::fromDouble(kc));
-        b.set("charCode", ev::fromDouble(0.0));
-    }
+    populateKeyboardEvent(b, e);
 
     if (auto* te = dynamic_cast<dom::TouchEvent*>(&e)) {
         b.set("touches", makeTouchListValue(te->touches()));
@@ -479,64 +402,8 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("clientY", ev::fromDouble(ge->clientY()));
     }
 
-    if (auto* inp = dynamic_cast<dom::InputEvent*>(&e)) {
-        if (inp->data().empty()) {
-            b.set("data", ev::null());
-        } else {
-            b.set("data", ev::fromUtf8(inp->data()));
-        }
-        b.set("inputType", ev::fromUtf8(inp->inputType()));
-        b.set("isComposing", ev::fromBool(inp->isComposing()));
-    }
-
-    if (auto* comp = dynamic_cast<dom::CompositionEvent*>(&e)) {
-        b.set("data", ev::fromUtf8(comp->data()));
-    }
-
-    // SubmitEvent — which control triggered the submit. A form handler routes
-    // on it ("save" vs "save and close" vs "delete"), so an absent `submitter`
-    // is not a cosmetic gap: every such handler takes the wrong branch.
-    if (auto* sub = dynamic_cast<dom::SubmitEvent*>(&e)) {
-        dom::Element* who = sub->submitter();
-        Value v = who ? hostElementValue(who) : ev::null();
-        b.set("submitter", v);
-    }
-
-    if (auto* clip = dynamic_cast<dom::ClipboardEvent*>(&e)) {
-        auto textHolder = std::make_shared<std::string>(clip->clipboardText());
-        ObjectBuilder dt;
-        dt.def("getData", 1, [textHolder](Value, std::span<const Value> a) {
-            Value fV = argAt(a, 0);
-            if (ev::isObject(fV) || ev::isUndefined(fV)) return ev::fromUtf8("");
-            std::string fmt = ev::toUtf8(fV);
-            for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (fmt == "text" || fmt == "text/plain") return ev::fromUtf8(*textHolder);
-            return ev::fromUtf8("");
-        });
-        dt.def("setData", 2, [textHolder](Value, std::span<const Value> a) {
-            if (a.size() >= 2) {
-                Value fV = argAt(a, 0);
-                std::string fmt = (!ev::isObject(fV) && !ev::isUndefined(fV)) ? ev::toUtf8(fV) : "";
-                for (char& c : fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                if (fmt == "text" || fmt == "text/plain") {
-                    Value dataV = argAt(a, 1);
-                    *textHolder = (!ev::isObject(dataV) && !ev::isUndefined(dataV)) ? ev::toUtf8(dataV) : "";
-                }
-            }
-            return ev::undefined();
-        });
-        dt.def("clearData", 1, [textHolder](Value, std::span<const Value>) {
-            textHolder->clear();
-            return ev::undefined();
-        });
-        std::vector<std::string> typeList;
-        if (!textHolder->empty()) typeList.push_back("text/plain");
-        Value typesArr = hostArrayOf(typeList.size(), [&typeList](size_t i) {
-            return ev::fromUtf8(typeList[i]);
-        });
-        dt.set("types", typesArr);
-        b.set("clipboardData", ev::setPrototype(dt.get(), dataTransferHostClass().prototype()));
-    }
+    populateInputAndFormEvents(b, e);
+    populateClipboardEvent(b, e);
 
     installEventPropagationMethods(b, live);
 

@@ -7,6 +7,7 @@
 // the object's shape is byte-for-byte reproducible run to run.
 
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_internal.h"
 
 namespace bro::bronze_host {
 
@@ -41,15 +42,10 @@ Value createGlContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue) 
                },
                nullptr);
 
-    // three.js sniffs `gl.constructor.name === "WebGL2RenderingContext"`.
-    {
-        ObjectBuilder ctor;
-        Value name = ev::fromUtf8("WebGL2RenderingContext");
-        ctor.set("name", name);
-        b.set("constructor", ctor.get());
-    }
-
-    return b.get();
+    // Branded with WebGL2RenderingContext prototype:
+    // `gl instanceof WebGL2RenderingContext === true` and
+    // `gl.constructor.name === "WebGL2RenderingContext"`.
+    return ev::setPrototype(b.get(), webgl2RenderingContextHostClass().prototype());
 }
 
 }  // namespace bro::bronze_host

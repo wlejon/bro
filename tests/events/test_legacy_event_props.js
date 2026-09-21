@@ -21,6 +21,8 @@ const pad = document.getElementById('pad');
 // the body — the target is not what this test is about.
 const keys = [];
 document.addEventListener('keydown', function (e) {
+    assert(e instanceof KeyboardEvent, 'e instanceof KeyboardEvent');
+    assert(e instanceof Event, 'e instanceof Event');
     keys.push({ key: e.key, code: e.code, keyCode: e.keyCode, which: e.which,
                 charCode: e.charCode });
 });
@@ -71,6 +73,8 @@ assert(resolved.indexOf('Enter') !== -1 && resolved.indexOf('Left') !== -1,
 // ------------------------------------------------------------------- mouse
 const buttons = [];
 pad.addEventListener('mousedown', function (e) {
+    assert(e instanceof MouseEvent, 'e instanceof MouseEvent');
+    assert(e instanceof Event, 'e instanceof Event');
     buttons.push({ button: e.button, which: e.which });
 });
 

@@ -27,6 +27,8 @@ assert(e2.cancelable === true, 'cancelable option');
 // CustomEvent — detail
 // =========================================================================
 const ce = new CustomEvent('change', { detail: { value: 42, name: 'x' }, bubbles: true });
+assert(ce instanceof CustomEvent, 'CustomEvent is instance of CustomEvent');
+assert(ce instanceof Event, 'CustomEvent is instance of Event');
 assert(ce.type === 'change', 'CustomEvent type');
 assert(ce.bubbles === true, 'CustomEvent bubbles');
 assert(typeof ce.detail === 'object', 'detail object');
