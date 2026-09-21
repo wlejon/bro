@@ -40,6 +40,11 @@ bool getCaretRect(dom::Document* doc, dom::TextNode* textNode, int srcOffset,
                   htmlayout::layout::TextMetrics& metrics,
                   float& x, float& y, float& height);
 
+// Normalize a boundary (Node, offset) to (TextNode, offset). Element
+// boundaries are collapsed to the nearest text descendant.
+void toTextBoundary(dom::Node* node, int off, bool preferLeading,
+                    dom::TextNode*& outNode, int& outOff);
+
 // Per-line highlight rectangles for a (startNode/off → endNode/off) range.
 // Accepts any bro::dom::Node — Element ranges are approximated by walking
 // into the first/last descendant text node. Non-text ranges return empty.

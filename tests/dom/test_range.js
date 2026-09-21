@@ -165,6 +165,41 @@ assert(typeof rect.height === 'number', 'getBoundingClientRect height');
 const rects = r9.getClientRects();
 assert(typeof rects.length === 'number', 'getClientRects returns array-like');
 
+// Collapsed range in text node
+r9.collapse(true);
+const collRect = r9.getBoundingClientRect();
+assert(collRect.width === 0, 'collapsed text getBoundingClientRect width is 0');
+assert(collRect.height > 0, 'collapsed text getBoundingClientRect height > 0');
+const collRects = r9.getClientRects();
+assert(collRects.length === 1, 'collapsed text getClientRects length is 1');
+assert(collRects[0].width === 0, 'collapsed text rects[0] width is 0');
+assert(collRects[0].height > 0, 'collapsed text rects[0] height > 0');
+
+// Collapsed range in element containing text
+const rCollElem = document.createRange();
+rCollElem.setStart(geoP, 0);
+rCollElem.collapse(true);
+const elemCaretRect = rCollElem.getBoundingClientRect();
+assert(elemCaretRect.width === 0, 'element-contained collapsed caret width is 0');
+assert(elemCaretRect.height > 0, 'element-contained collapsed caret height > 0');
+const elemCaretRects = rCollElem.getClientRects();
+assert(elemCaretRects.length === 1, 'element-contained collapsed getClientRects length is 1');
+
+// Collapsed range in empty element
+root.innerHTML += '<div id="empty-box" style="width:100px;height:30px"></div>';
+flush();
+const emptyBox = document.getElementById('empty-box');
+const rEmpty = document.createRange();
+rEmpty.setStart(emptyBox, 0);
+rEmpty.collapse(true);
+const emptyRect = rEmpty.getBoundingClientRect();
+assert(emptyRect.width === 0, 'empty element collapsed caret width is 0');
+assert(emptyRect.height > 0, 'empty element collapsed caret height > 0');
+const emptyRects = rEmpty.getClientRects();
+assert(emptyRects.length === 1, 'empty element collapsed getClientRects length is 1');
+assert(emptyRects[0].width === 0, 'empty element rects[0] width is 0');
+assert(emptyRects[0].height > 0, 'empty element rects[0] height > 0');
+
 // --- Live-mutation tracking ---
 root.innerHTML = '<div id="live"><span>a</span><span>b</span><span>c</span></div>';
 flush();

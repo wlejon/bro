@@ -86,6 +86,8 @@ void elementOffsetToText(dom::Element* el, int off, bool preferLeading,
     }
 }
 
+} // namespace
+
 // Normalize a boundary (Node, offset) to (TextNode, offset). Element
 // boundaries are collapsed to the nearest text descendant.
 void toTextBoundary(dom::Node* node, int off, bool preferLeading,
@@ -104,8 +106,6 @@ void toTextBoundary(dom::Node* node, int off, bool preferLeading,
     outNode = nullptr;
     outOff = 0;
 }
-
-} // namespace
 
 TextHit hitTestText(dom::Document* doc, float x, float y,
                     htmlayout::layout::TextMetrics& metrics,

@@ -94,6 +94,56 @@ Value js_range_ctor(Value, std::span<const Value>) {
     return wrapOwnedRange(r);
 }
 
+bool computeCollapsedCaret(bro::dom::Document* doc,
+                           bro::dom::Range* r,
+                           htmlayout::layout::TextMetrics* metrics,
+                           float offY,
+                           double& outX, double& outY, double& outW, double& outH) {
+    if (!r || !doc) return false;
+
+    // 1. Try text boundary resolution via toTextBoundary / getCaretRect
+    dom::TextNode* tn = nullptr;
+    int tOff = 0;
+    bro::layout::toTextBoundary(r->startContainer(), r->startOffset(), /*preferLeading=*/true, tn, tOff);
+    if (!tn) {
+        bro::layout::toTextBoundary(r->startContainer(), r->startOffset(), /*preferLeading=*/false, tn, tOff);
+    }
+    if (tn && metrics) {
+        float cx = 0.0f, cy = 0.0f, ch = 0.0f;
+        if (bro::layout::getCaretRect(doc, tn, tOff, *metrics, cx, cy, ch)) {
+            auto* el = nearestElementAncestor(tn);
+            auto pr = el ? bro::dom::projectRectThroughAncestors(el, cx, cy, 0.0f, ch)
+                         : bro::dom::AbsoluteRect{cx, cy, 0.0f, ch};
+            outX = pr.x;
+            outY = pr.y + offY;
+            outW = 0.0;
+            outH = pr.height;
+            return true;
+        }
+    }
+
+    // 2. Fall back to nearest element layout box for non-text / empty element containers
+    auto* el = nearestElementAncestor(r->startContainer());
+    if (el) {
+        if (auto* eng = hostEngine()) {
+            eng->flushLayoutForRead(doc);
+        }
+        const auto& box = el->layoutBox();
+        auto bbox = bro::dom::absoluteBorderBox(el);
+        float ch = box.contentRect.height > 0.0f ? box.contentRect.height
+                 : (bbox.height > 0.0f ? bbox.height : 16.0f);
+        float cx = bbox.x + box.border.left + box.padding.left;
+        float cy = bbox.y + box.border.top + box.padding.top;
+        outX = cx;
+        outY = cy + offY;
+        outW = 0.0;
+        outH = ch;
+        return true;
+    }
+
+    return false;
+}
+
 void decorateRangeProto(ObjectBuilder& b) {
     // Spec constants on prototype
     b.set("START_TO_START", ev::fromDouble(0));
@@ -304,9 +354,29 @@ void decorateRangeProto(ObjectBuilder& b) {
             return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         }
 
+        if (r->collapsed()) {
+            double cx = 0, cy = 0, cw = 0, ch = 0;
+            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
+                return hostArrayOf(1, [&](size_t) {
+                    return makeDomRectValue(cx, cy, cw, ch);
+                });
+            }
+            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        }
+
         auto rects = bro::layout::getSelectionRects(
             doc, r->startContainer(), r->startOffset(),
             r->endContainer(), r->endOffset(), *metrics);
+
+        if (rects.empty()) {
+            double cx = 0, cy = 0, cw = 0, ch = 0;
+            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
+                return hostArrayOf(1, [&](size_t) {
+                    return makeDomRectValue(cx, cy, cw, ch);
+                });
+            }
+            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        }
 
         auto* ctxEl = nearestElementAncestor(r->startContainer());
         return hostArrayOf(rects.size(), [&](size_t i) {
@@ -329,22 +399,25 @@ void decorateRangeProto(ObjectBuilder& b) {
             return makeDomRectValue(0, 0, 0, 0);
         }
 
+        if (r->collapsed()) {
+            double cx = 0, cy = 0, cw = 0, ch = 0;
+            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
+                return makeDomRectValue(cx, cy, cw, ch);
+            }
+            return makeDomRectValue(0, 0, 0, 0);
+        }
+
         auto rects = bro::layout::getSelectionRects(
             doc, r->startContainer(), r->startOffset(),
             r->endContainer(), r->endOffset(), *metrics);
 
-        if (rects.empty() && r->collapsed()) {
-            if (auto* tn = dynamic_cast<bro::dom::TextNode*>(r->startContainer())) {
-                float cx = 0.0f, cy = 0.0f, ch = 0.0f;
-                if (bro::layout::getCaretRect(doc, tn, r->startOffset(), *metrics, cx, cy, ch)) {
-                    auto* el = nearestElementAncestor(r->startContainer());
-                    auto pr = el ? bro::dom::projectRectThroughAncestors(el, cx, cy, 0.0f, ch)
-                                 : bro::dom::AbsoluteRect{cx, cy, 0.0f, ch};
-                    return makeDomRectValue(pr.x, pr.y + offY, 0.0f, pr.height);
-                }
+        if (rects.empty()) {
+            double cx = 0, cy = 0, cw = 0, ch = 0;
+            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
+                return makeDomRectValue(cx, cy, cw, ch);
             }
+            return makeDomRectValue(0, 0, 0, 0);
         }
-        if (rects.empty()) return makeDomRectValue(0, 0, 0, 0);
 
         auto* ctxEl = nearestElementAncestor(r->startContainer());
         auto proj = [&](const htmlayout::layout::Rect& rect) {
