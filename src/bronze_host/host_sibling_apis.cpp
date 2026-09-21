@@ -284,6 +284,13 @@ void installSiblingApis(engine::Engine& engine) {
                              "ClipModel", "T5Model"}) {
         adoptGlobalProperty(name);
     }
+    {
+        static bool lmHooksInstalled = false;
+        if (!lmHooksInstalled) {
+            lmHooksInstalled = true;
+            engine.addFramePump([] { brolm::api::tickLMAsync(); });
+        }
+    }
 #endif
 #if BRO_WITH_SOUNDML
     // One installer covers stt, tts, diar, rave, wake, kws, sense, gesture
@@ -421,10 +428,12 @@ void tickWorkerSiblingApis() {
     // job's callbacks belong to the realm that launched it.
     tickVisionJobs();
 #endif
+#if BRO_WITH_LM
+    brolm::api::tickLMAsync();
+#endif
 #if BRO_WITH_SOUNDML
     // This thread's async jobs only (a job's callbacks belong to the realm
-    // that launched it). brolm's jobs are ticked by the script itself
-    // (bro.lm.tick / wait), on the same per-thread list.
+    // that launched it).
     brosoundml::api::tickSoundMLAsync();
 #endif
 }
