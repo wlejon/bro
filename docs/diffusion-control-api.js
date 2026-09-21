@@ -493,7 +493,7 @@ class Pipeline {
   // are HALF-OPEN [blockLo, blockHi) — unlike the krea2* block's inclusive
   // ends, which is worth re-reading before porting a script across.
   //
-  // Two facts about the model shape everything here.
+  // Four facts about the model shape everything here.
   //
   // (a) ONE modulation vector drives all 32 blocks. There is no per-block
   //     modulation parameter to edit, so qwenImage21SetModDelta realises a
@@ -508,15 +508,45 @@ class Pipeline {
   //     t, which is what lets the DiT cache the text half's attention K/V once
   //     and skip it on every later step. So:
   //
-  //       * a 'target' delta (the default) is free to change mid-generation;
-  //       * a 'prefix' delta, a txtScale != 1, a gate mask, or edited text rows
-  //         only apply on the step that EXTRACTS the cache. The binding drops
-  //         the live cache for you when one is armed — and, symmetrically, when
-  //         one is cleared — so the next step re-extracts. That costs one full
-  //         prefill; a pure target-side dial costs nothing.
+  //       * a 'target' delta (the default), and the attnImg / mlpImg gate
+  //         multipliers, are free to change mid-generation;
+  //       * a 'prefix'/'both' delta, the attnTxt / mlpTxt multipliers, ANY gate
+  //         mask, and edited text rows only apply on the step that EXTRACTS the
+  //         cache. The binding drops the live cache for you when one is armed —
+  //         and, symmetrically, when one is cleared — so the next step
+  //         re-extracts. That costs one full prefill, about +13% on the step;
+  //         a pure image-side dial costs nothing.
+  //
+  //     qwenImage21ScalePrefixKv() is the exception in both directions: it is
+  //     free either way and it SURVIVES a re-extract, because it is a dial
+  //     applied where the cache is read rather than a multiply into it. A
+  //     prefix-affecting change re-extracts and then re-applies it.
   //
   //     qwenImage21ResetCache() is the manual version, for conditioning edited
   //     outside these methods.
+  //
+  // (c) A gate mask (and a prefix-KV rowMask) addresses the JOINT SEQUENCE, and
+  //     the joint sequence is text rows first, then the image tokens row-major.
+  //     One image token per 16x16 px, so at 512x512 the grid is 32x32 and the
+  //     token covering pixel (px, py) is
+  //
+  //         textRows + Math.floor(py / 16) * 32 + Math.floor(px / 16)
+  //
+  //     textRows is typically 17-20 for a short prompt — read it from
+  //     qwenImage21TextRows().rows rather than assuming it. Getting this wrong
+  //     used to be silent: a mask written at imgLen instead of
+  //     textRows + imgLen was skipped, and an all-zero one rendered the
+  //     baseline to the pixel, which is how a study concluded the mask surface
+  //     did nothing. A wrong-length mask now throws, naming the joint length
+  //     and its split.
+  //
+  //     A rowMask is the prefix-only analogue: one weight per PREFIX row, so
+  //     its length is the cached prefix length, not the joint length.
+  //
+  // (d) Anything that edits the text ROWS themselves — qwenImage21SetTextRows,
+  //     a setControl() / setControlVector() axis — has to land BEFORE prime().
+  //     After that the conditioning has been prepared and the prefix is what
+  //     the cache holds; the hooks that still bite are the ones on this page.
   //
   // A generation with no CFG (the reference default, guidanceScale 1.0) has one
   // branch; at guidanceScale > 1 both branches have their own prompt, their own
@@ -575,6 +605,11 @@ class Pipeline {
    * A txtScale other than 1 is a prefix-side change and re-extracts the cache;
    * sweeping imgScale alone does not.
    *
+   * This spelling is RANK-1 SUGAR over the four independent multipliers
+   * qwenImage21SetGateScaleRows() sets: it stores attn*txt, attn*img, mlp*txt,
+   * mlp*img, and the two calls are bit-identical. Reach for the rows form
+   * whenever only one side should move — see the note below it.
+   *
    * @param {number} attnScale
    * @param {number} mlpScale
    * @param {number} txtScale
@@ -584,6 +619,43 @@ class Pipeline {
    * @returns {undefined}
    */
   qwenImage21SetGateScale(attnScale, mlpScale, txtScale, imgScale, blockLo, blockHi) {}
+
+  /**
+   * The four post-tanh gate multipliers of blocks [blockLo, blockHi) set
+   * INDEPENDENTLY, one per (sublayer, row set) pair:
+   *
+   *     attnTxt   the attention gate on the t = 0 rows (text / condition images)
+   *     attnImg   the attention gate on the sampled-t rows (the image)
+   *     mlpTxt    the SwiGLU gate on the t = 0 rows
+   *     mlpImg    the SwiGLU gate on the sampled-t rows
+   *
+   * All four at 1, or an empty range, clears.
+   *
+   * A product of an (attn, mlp) pair with a (txt, img) pair cannot say "the
+   * attention gate, on the image rows only" — the most useful dial on the
+   * model. Under qwenImage21SetGateScale() raising attnScale raises the
+   * prefix's factor too, which invalidates the prefix KV cache (+13%/step) and
+   * used to silently discard a live qwenImage21ScalePrefixKv() edit. Only
+   * attnTxt and mlpTxt are prefix-side here, so an attnImg sweep never
+   * re-extracts and cannot disturb the prefix at all.
+   *
+   * @param {number} attnTxt
+   * @param {number} attnImg
+   * @param {number} mlpTxt
+   * @param {number} mlpImg
+   * @param {number} blockLo
+   * @param {number} blockHi
+   * @returns {undefined}
+   *
+   * @example
+   *   // Sweep the attention gate on the image rows across the deep blocks,
+   *   // with the prefix cache untouched — so every value costs one step.
+   *   for (const s of [0.8, 0.9, 1.0, 1.1, 1.2]) {
+   *     pipe.qwenImage21SetGateScaleRows(1.0, s, 1.0, 1.0, 16, 32);
+   *     score(pipe.generate(prompt, { steps: 8, seed: 7n }));
+   *   }
+   */
+  qwenImage21SetGateScaleRows(attnTxt, attnImg, mlpTxt, mlpImg, blockLo, blockHi) {}
 
   // The gate delta, and why it is not the same knob as qwenImage21SetModDelta.
   //
@@ -637,19 +709,49 @@ class Pipeline {
   qwenImage21ClearGateDelta() {}
 
   /**
-   * Per-token gate mask over blocks [blockLo, blockHi): both sublayers' gated
-   * residual for row r is multiplied by mask[r], after the tanh and after any
-   * qwenImage21SetGateScale. Zeroing a row removes that token's residual
-   * updates entirely for the masked blocks — zeroing every row over a block
+   * Per-token gate mask over blocks [blockLo, blockHi): the gated residual of
+   * row r in the sublayer(s) `which` names is multiplied by mask[r], after the
+   * tanh and after every gate scale. Zeroing a row removes that token's
+   * residual updates for the masked blocks — zeroing every row over a block
    * range is exactly "delete these blocks".
+   *
+   * `which` selects the sublayer: 'both' (the default), 'attn' (gate1, the
+   * attention residual) or 'mlp' (gate2, the SwiGLU residual); the numbers
+   * 0 / 1 / 2 are accepted for the same three. 'both' is bit-identical to
+   * arming 'attn' and 'mlp' with the same vector.
+   *
+   * 'both' is the blunt form. The MLP half is what drags a late-step edit's
+   * retention from over 100% of its step-0 effect down to about 30%, so
+   * "restyle this region at step 6" wants 'attn'.
+   *
+   * The mask addresses the WHOLE joint sequence — text rows first, then image
+   * tokens row-major; see note (c) at the top of this section for the
+   * pixel-to-row arithmetic. A mask whose length is not textRows + imgLen
+   * THROWS on the next forward, naming the joint length and its split. It used
+   * to be skipped silently, which is a far worse failure: a mask written at
+   * imgLen just rendered the baseline.
+   *
+   * Every gate mask is prefix-side, so arming or clearing one re-extracts.
    *
    * @param {?Tensor2D} mask  holds (textRows + imgLen) values in joint forward
    *                          order; null/undefined clears
    * @param {number} blockLo
    * @param {number} blockHi
+   * @param {('both'|'attn'|'mlp')} [which='both']  which sublayer's gate
    * @returns {undefined}
+   *
+   * @example
+   *   // Free one 128x128 region of a 512x512 canvas to restyle late, without
+   *   // letting the MLP half claw the edit back.
+   *   const textRows = pipe.qwenImage21TextRows().rows;
+   *   const n = textRows + 32 * 32;
+   *   const m = { rows: 1, cols: n, data: new Float32Array(n).fill(1) };
+   *   for (let py = 128; py < 256; py += 16)
+   *     for (let px = 128; px < 256; px += 16)
+   *       m.data[textRows + (py / 16) * 32 + (px / 16)] = 0;
+   *   pipe.qwenImage21SetGateMask(m, 0, 32, 'attn');
    */
-  qwenImage21SetGateMask(mask, blockLo, blockHi) {}
+  qwenImage21SetGateMask(mask, blockLo, blockHi, which) {}
 
   /**
    * Add `delta` to the final adaptive scale the target rows pass through on
@@ -667,8 +769,9 @@ class Pipeline {
   //
   // For a given block the covering bindings compose the way their semantics
   // imply: mod deltas and gate deltas ADD, gate scales and gate masks
-  // MULTIPLY, prefix-KV scales multiply per layer. Order within the list
-  // therefore does not change the result.
+  // MULTIPLY (masks per sublayer, so an 'attn' mask and an 'mlp' mask over the
+  // same blocks never meet), prefix-KV scales multiply per layer. Order within
+  // the list therefore does not change the result.
   //
   // Composition happens at BIND time, not per token: each distinct coverage
   // pattern over the 32 blocks is reduced to one finished (1, hidden)
@@ -746,7 +849,23 @@ class Pipeline {
   qwenImage21AddGateScale(attnScale, mlpScale, txtScale, imgScale, blockLo, blockHi) {}
 
   /**
-   * Drop every gate-scale binding.
+   * Append a gate-scale binding with the four multipliers set independently —
+   * the list form of qwenImage21SetGateScaleRows(), and the spelling to use
+   * when only the image side should move. Multipliers covering the same block
+   * multiply, per (sublayer, row set) pair.
+   *
+   * @param {number} attnTxt
+   * @param {number} attnImg
+   * @param {number} mlpTxt
+   * @param {number} mlpImg
+   * @param {number} blockLo
+   * @param {number} blockHi
+   * @returns {number} the new binding's index in the list
+   */
+  qwenImage21AddGateScaleRows(attnTxt, attnImg, mlpTxt, mlpImg, blockLo, blockHi) {}
+
+  /**
+   * Drop every gate-scale binding — both spellings share one list.
    * @returns {undefined}
    */
   qwenImage21ClearGateScales() {}
@@ -779,16 +898,23 @@ class Pipeline {
 
   /**
    * Append a per-token gate-mask binding over blocks [blockLo, blockHi). Same
-   * row order as qwenImage21SetGateMask(); masks covering the same block
-   * multiply element-wise, so a token zeroed by any one of them is zeroed.
+   * row order, same `which` selector and same wrong-length throw as
+   * qwenImage21SetGateMask().
+   *
+   * Masks over the same blocks AND the same sublayer multiply element-wise —
+   * an intersection of what they keep, so a token zeroed by any one of them is
+   * zeroed. An 'attn' mask and an 'mlp' mask over the same blocks are
+   * independent of each other.
+   *
    * Prefix-side, so arming or clearing one re-extracts the cache.
    *
    * @param {Tensor2D} mask  (textRows + imgLen) values in joint forward order
    * @param {number} blockLo
    * @param {number} blockHi
+   * @param {('both'|'attn'|'mlp')} [which='both']
    * @returns {number} the new binding's index in the list
    */
-  qwenImage21AddGateMask(mask, blockLo, blockHi) {}
+  qwenImage21AddGateMask(mask, blockLo, blockHi, which) {}
 
   /**
    * Drop every gate-mask binding.
@@ -801,17 +927,18 @@ class Pipeline {
 
   /**
    * Append a prefix-KV scale binding over layers [layerLo, layerHi). Same
-   * dial semantics as qwenImage21ScalePrefixKv() below — idempotent, applied
-   * where the cached K/V are read — and scales covering the same layer
-   * multiply per layer.
+   * dial semantics and same optional per-row `rowMask` as
+   * qwenImage21ScalePrefixKv() below — idempotent, applied where the cached
+   * K/V are read — and scales covering the same layer multiply per layer.
    *
    * @param {number} layerLo
    * @param {number} layerHi
    * @param {number} kScale
    * @param {number} vScale
+   * @param {?Tensor2D} [rowMask]  one weight per PREFIX row; null/omitted = all
    * @returns {number} the new binding's index in the list
    */
-  qwenImage21AddPrefixKvScale(layerLo, layerHi, kScale, vScale) {}
+  qwenImage21AddPrefixKvScale(layerLo, layerHi, kScale, vScale, rowMask) {}
 
   /**
    * Drop every prefix-KV scale binding (i.e. back to 1/1 everywhere).
@@ -1040,10 +1167,29 @@ class Pipeline {
    *
    * 1/1 over the full layer range clears it.
    *
+   * `rowMask`, when given, is a WEIGHT per PREFIX row — not a second
+   * multiplier — saying how much of kScale/vScale that row gets:
+   *
+   *     k_row[r] = 1 + rowMask[r] * (kScale - 1)        (and likewise v)
+   *
+   * so all ones is exactly the broadcast (which is what "omitted = every row"
+   * has to mean), all zeros is the identity, and anything between fades the
+   * scale in. That is per-token prompt weighting — the "(word:1.3)" every
+   * image UI ships — applied to the cached K/V the whole generation actually
+   * attends to, with no re-encode and no re-extract. Its length must be the
+   * CACHED PREFIX length (not the joint length); a mismatch throws on the next
+   * step.
+   *
+   * The gate mask's text half is not a substitute: scaling a text token's
+   * residual updates is not scaling its contribution, because its K/V is
+   * dominated by what txt_in and the early blocks wrote before any gate
+   * applied.
+   *
    * @param {number} layerLo
    * @param {number} layerHi
    * @param {number} kScale
    * @param {number} vScale
+   * @param {?Tensor2D} [rowMask]  one weight per PREFIX row; null/omitted = all
    * @returns {undefined}
    *
    * @example
@@ -1053,8 +1199,16 @@ class Pipeline {
    *     if (i === Math.floor(steps / 2)) pipe.qwenImage21ScalePrefixKv(16, 32, 1.0, 0.5);
    *     st.stepOnce();
    *   }
+   *
+   * @example
+   *   // "(volcano:1.4)" — weight two prompt tokens up, every layer, no
+   *   // re-encode. Rows 0..dropIdx are the template's system prefix.
+   *   const n = pipe.qwenImage21TextRows().rows;
+   *   const w = { rows: 1, cols: n, data: new Float32Array(n) };
+   *   w.data[11] = 1; w.data[12] = 1;          // the token rows to emphasise
+   *   pipe.qwenImage21ScalePrefixKv(0, 32, 1.0, 1.4, w);
    */
-  qwenImage21ScalePrefixKv(layerLo, layerHi, kScale, vScale) {}
+  qwenImage21ScalePrefixKv(layerLo, layerHi, kScale, vScale, rowMask) {}
 
   /**
    * Drop the live prefix KV cache so the next step re-extracts. The hooks above
