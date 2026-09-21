@@ -32,9 +32,11 @@
  *     and the krea2* research hooks. No img2img / inpaint / ControlNet.
  *   - QwenImage21 — Qwen-Image 2.1: Qwen3-VL-8B text encoder + a 7.1B
  *     block-causal single-stream DiT (one joint [text ; image] sequence, a
- *     prefix KV cache over the text half) + a 16x RGBA autoencoder. txt2img
- *     and the qwenImage21* research hooks, including a VAE encode/decode seam
- *     and a releasable text encoder. INT8 for both the DiT and the encoder is
+ *     prefix KV cache over the text half) + a 16x RGBA autoencoder. txt2img,
+ *     image-conditioned ("edit") generation from one or more condition images
+ *     (GenerateOptions.conditionImages), and the qwenImage21* research hooks,
+ *     including a VAE encode/decode seam and a releasable text encoder.
+ *     INT8 for both the DiT and the encoder is
  *     the default and the only configuration that fits 1024x1024 on a 24 GB
  *     card. No img2img / inpaint / ControlNet / LoRA.
  *
@@ -145,6 +147,23 @@
  *           units, NCHW flat, length C_lat*(height/8)*(width/8). Overrides noiseSource;
  *           the scheduler's init_noise_sigma is still applied on top. Cannot be combined
  *           with initImagePath.
+ *
+ * @property {Array<string|{path?: string, pixels?: Float32Array, width?: number, height?: number, channels?: number}>} [conditionImages]
+ *           QwenImage21 ONLY — the condition ("edit" / reference) images, in chat-template
+ *           order. An entry is a path string, `{path}`, or `{pixels, width, height,
+ *           channels}` where `pixels` is a planar CHW Float32Array in [0,1] and `channels`
+ *           is 3 or 4 (RGBA is composited over white for the vision tower and carried whole
+ *           into the RGBA autoencoder). Set exactly one of `path` and `pixels` per entry;
+ *           both, or neither, is an error. Every other model class rejects the key.
+ *           See docs/diffusion-control-api.js section 7 for what the images do inside the
+ *           model, and for the row-level hooks over them.
+ * @property {number}  [outputResolution=1024]  QwenImage21 ONLY — the canvas AREA, as a
+ *           square side, that the aspect ratio of the LAST condition image is fitted to
+ *           when no explicit width/height is given: width = round(sqrt(area*ratio)/32)*32
+ *           and height = round((width/ratio)/32)*32, so both sides land on a multiple of
+ *           32. Ignored when width and height are both given. When conditionImages is
+ *           present and no numeric width/height was, the binding resolves the derived size
+ *           BEFORE priming, so the returned image's width/height are the real ones.
  */
 
 /**
@@ -175,6 +194,11 @@
  *
  * @typedef {Object} PipelineConfigSnapshot
  * @property {string}  modelClass       'StableDiffusion' | 'Flux' | 'Sana' | 'PixArt' | 'Krea2' | 'QwenImage21'
+ *           The family decides which GenerateOptions keys mean anything: initImagePath /
+ *           maskImagePath / strength are SD1.5 only, `controls` needs a registered
+ *           ControlNet, and QwenImage21 additionally accepts `conditionImages` and
+ *           `outputResolution` on generate() and prime() (and on
+ *           qwenImage21PrimeEdit(), which takes the images as its own argument).
  * @property {string}  scheduler        'ddim' | 'lcm' | 'flowmatch' | 'scm'. A pipeline
  *           built with scheduler:'dpm' reports 'ddim' here — the snapshot has no separate
  *           name for DPM-Solver.

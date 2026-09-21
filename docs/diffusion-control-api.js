@@ -585,6 +585,57 @@ class Pipeline {
    */
   qwenImage21SetGateScale(attnScale, mlpScale, txtScale, imgScale, blockLo, blockHi) {}
 
+  // The gate delta, and why it is not the same knob as qwenImage21SetModDelta.
+  //
+  // A mod delta's gate chunks land BEFORE the tanh, so its authority over a
+  // gate channel is tanh'(g) — and 74% of the `gate2` chunk's channels sit
+  // where tanh'(g) < 0.05. The model's own largest modulation direction is
+  // therefore exactly the one a pre-tanh dial cannot move: pushing on it
+  // harder just saturates it further. A post-tanh delta has unit authority
+  // over every channel instead, at the cost of leaving the (-1, 1) range the
+  // tanh guarantees — which is the point, since a gate above 1 is not
+  // otherwise reachable at all.
+  //
+  // It costs nothing per token. The delta is folded into the shared
+  // (1, hidden) gate row once per forward, and the fused gated-residual
+  // kernel consumes the combined row exactly as it consumes the plain one.
+
+  /**
+   * Add `delta` to the EFFECTIVE gate of blocks [blockLo, blockHi) — the value
+   * that multiplies the residual, AFTER the tanh and after any
+   * qwenImage21SetGateScale factor:
+   *
+   *     g_eff = scale * tanh(gate) + delta
+   *
+   * `delta` is (1, 2*qwenImage21HiddenSize()) laid out [attn, mlp]: the first
+   * hidden values steer the attention sublayer's gate, the second the SwiGLU's.
+   * `target` picks the row class exactly as qwenImage21SetModDelta's does; a
+   * 'prefix' or 'both' delta is a prefix-side change and resets the prefix
+   * cache so the next step re-extracts.
+   *
+   * @param {?Tensor2D} delta  (1, 2*qwenImage21HiddenSize()); null/undefined clears
+   * @param {number} blockLo
+   * @param {number} blockHi
+   * @param {('target'|'prefix'|'both')} [target='target']
+   * @returns {undefined}
+   *
+   * @example
+   *   // Open the SwiGLU gate past what tanh can reach, deep blocks only.
+   *   const H = pipe.qwenImage21HiddenSize();
+   *   const d = { rows: 1, cols: 2 * H, data: new Float32Array(2 * H) };
+   *   d.data.fill(0.25, H, 2 * H);          // [attn | mlp] — mlp half only
+   *   pipe.qwenImage21SetGateDelta(d, 24, 32);
+   *   const img = st.decode();
+   *   pipe.qwenImage21ClearGateDelta();
+   */
+  qwenImage21SetGateDelta(delta, blockLo, blockHi, target) {}
+
+  /**
+   * Clear the gate delta — sugar for passing null over an empty range.
+   * @returns {undefined}
+   */
+  qwenImage21ClearGateDelta() {}
+
   /**
    * Per-token gate mask over blocks [blockLo, blockHi): both sublayers' gated
    * residual for row r is multiplied by mask[r], after the tanh and after any
@@ -607,6 +658,169 @@ class Pipeline {
    * @returns {undefined}
    */
   qwenImage21SetNormOutScaleDelta(delta) {}
+
+  // ── multi-slot bindings ────────────────────────────────────────────────────
+  //
+  // Every in-network hook above holds an ORDERED LIST of bindings, not one.
+  // All of the bindings in a list apply in the same generation, so a block
+  // covered by two of them gets both.
+  //
+  // For a given block the covering bindings compose the way their semantics
+  // imply: mod deltas and gate deltas ADD, gate scales and gate masks
+  // MULTIPLY, prefix-KV scales multiply per layer. Order within the list
+  // therefore does not change the result.
+  //
+  // Composition happens at BIND time, not per token: each distinct coverage
+  // pattern over the 32 blocks is reduced to one finished (1, hidden)
+  // modulation / gate row, so the fused residual kernel still takes exactly
+  // one pass over the activations no matter how many bindings are armed. Ten
+  // overlapping bindings cost what one costs.
+  //
+  // The qwenImage21Set* calls are unchanged in meaning: each is now sugar for
+  // "replace the whole list with this one entry" — or, with a null tensor or
+  // an empty range (or all-1 scales), "clear the list". A script written
+  // against the single-slot API keeps doing exactly what it did.
+  //
+  // What the list buys is the thing the single-slot API could not express at
+  // all: two different edits, over two different block ranges, live at the
+  // same time. The second qwenImage21SetGateScale() used to erase the first.
+  //
+  // Each qwenImage21Add* returns the new binding's index in its list, each
+  // qwenImage21Clear* empties the list, and each qwenImage21*Count() reports
+  // its length — enough for a UI to keep its own rack in sync.
+  //
+  // The prefix/target rule is unchanged and is per binding: adding or
+  // clearing a prefix-side binding (a 'prefix'/'both' delta, a txtScale != 1,
+  // a gate mask) resets the prefix cache; a pure target-side binding does not.
+
+  /**
+   * Append a modulation-delta binding over blocks [blockLo, blockHi).
+   * Same delta layout and same `target` semantics as
+   * qwenImage21SetModDelta(); this one ADDS to the list instead of replacing
+   * it, and deltas covering the same block sum.
+   *
+   * @param {Tensor2D} delta  (1, 4*qwenImage21HiddenSize())
+   * @param {number} blockLo
+   * @param {number} blockHi
+   * @param {('target'|'prefix'|'both')} [target='target']
+   * @returns {number} the new binding's index in the list
+   *
+   * @example
+   *   // Soften the shallow blocks' attention while pushing the deep blocks'
+   *   // SwiGLU scale — two edits, two ranges, ONE generation. The single-slot
+   *   // API could not say this: the second Set* call erased the first.
+   *   const H = pipe.qwenImage21HiddenSize();
+   *   const d = { rows: 1, cols: 4 * H, data: new Float32Array(4 * H) };
+   *   d.data.fill(0.08, 2 * H, 3 * H);               // the scale2 chunk
+   *
+   *   pipe.qwenImage21ClearGateScales();
+   *   pipe.qwenImage21ClearModDeltas();
+   *   pipe.qwenImage21AddGateScale(0.7, 1.0, 1.0, 1.0, 0, 8);   // shallow
+   *   pipe.qwenImage21AddModDelta(d, 24, 32);                   // deep
+   *   const img = pipe.generate('a lighthouse at dawn', { steps: 8 });
+   */
+  qwenImage21AddModDelta(delta, blockLo, blockHi, target) {}
+
+  /**
+   * Drop every modulation-delta binding.
+   * @returns {undefined}
+   */
+  qwenImage21ClearModDeltas() {}
+
+  /** @returns {number} how many modulation-delta bindings are armed. */
+  qwenImage21ModDeltaCount() {}
+
+  /**
+   * Append a gate-scale binding over blocks [blockLo, blockHi). Same four
+   * factors as qwenImage21SetGateScale(); scales covering the same block
+   * multiply, so two bindings of 0.5 give 0.25.
+   *
+   * @param {number} attnScale
+   * @param {number} mlpScale
+   * @param {number} txtScale
+   * @param {number} imgScale
+   * @param {number} blockLo
+   * @param {number} blockHi
+   * @returns {number} the new binding's index in the list
+   */
+  qwenImage21AddGateScale(attnScale, mlpScale, txtScale, imgScale, blockLo, blockHi) {}
+
+  /**
+   * Drop every gate-scale binding.
+   * @returns {undefined}
+   */
+  qwenImage21ClearGateScales() {}
+
+  /** @returns {number} how many gate-scale bindings are armed. */
+  qwenImage21GateScaleCount() {}
+
+  /**
+   * Append a gate-delta binding over blocks [blockLo, blockHi). Same
+   * (1, 2*hidden) [attn, mlp] layout and same `target` semantics as
+   * qwenImage21SetGateDelta(); deltas covering the same block sum, and the
+   * sum lands after the tanh and after the composed gate scale.
+   *
+   * @param {Tensor2D} delta  (1, 2*qwenImage21HiddenSize())
+   * @param {number} blockLo
+   * @param {number} blockHi
+   * @param {('target'|'prefix'|'both')} [target='target']
+   * @returns {number} the new binding's index in the list
+   */
+  qwenImage21AddGateDelta(delta, blockLo, blockHi, target) {}
+
+  /**
+   * Drop every gate-delta binding.
+   * @returns {undefined}
+   */
+  qwenImage21ClearGateDeltas() {}
+
+  /** @returns {number} how many gate-delta bindings are armed. */
+  qwenImage21GateDeltaCount() {}
+
+  /**
+   * Append a per-token gate-mask binding over blocks [blockLo, blockHi). Same
+   * row order as qwenImage21SetGateMask(); masks covering the same block
+   * multiply element-wise, so a token zeroed by any one of them is zeroed.
+   * Prefix-side, so arming or clearing one re-extracts the cache.
+   *
+   * @param {Tensor2D} mask  (textRows + imgLen) values in joint forward order
+   * @param {number} blockLo
+   * @param {number} blockHi
+   * @returns {number} the new binding's index in the list
+   */
+  qwenImage21AddGateMask(mask, blockLo, blockHi) {}
+
+  /**
+   * Drop every gate-mask binding.
+   * @returns {undefined}
+   */
+  qwenImage21ClearGateMasks() {}
+
+  /** @returns {number} how many gate-mask bindings are armed. */
+  qwenImage21GateMaskCount() {}
+
+  /**
+   * Append a prefix-KV scale binding over layers [layerLo, layerHi). Same
+   * dial semantics as qwenImage21ScalePrefixKv() below — idempotent, applied
+   * where the cached K/V are read — and scales covering the same layer
+   * multiply per layer.
+   *
+   * @param {number} layerLo
+   * @param {number} layerHi
+   * @param {number} kScale
+   * @param {number} vScale
+   * @returns {number} the new binding's index in the list
+   */
+  qwenImage21AddPrefixKvScale(layerLo, layerHi, kScale, vScale) {}
+
+  /**
+   * Drop every prefix-KV scale binding (i.e. back to 1/1 everywhere).
+   * @returns {undefined}
+   */
+  qwenImage21ClearPrefixKvScales() {}
+
+  /** @returns {number} how many prefix-KV scale bindings are armed. */
+  qwenImage21PrefixKvScaleCount() {}
 
   /**
    * Turn gate capture on or off. While on, every stepOnce() overwrites the
@@ -652,6 +866,72 @@ class Pipeline {
    */
   qwenImage21EncodePrompt(prompt) {}
 
+  // ── image-conditioned ("edit") generation ──────────────────────────────────
+  //
+  // 2.1 generates from condition images as well as from a prompt, and the
+  // condition images enter the model TWICE, through two different doors.
+  //
+  //   1. Through the Qwen3-VL vision tower. The chat template reserves a run
+  //      of `<|image_pad|>` rows per image and the vision tower fills them
+  //      (with DeepStack features spliced into the first three decoder
+  //      layers). Those rows are what make the prompt *about* the picture:
+  //      "make the sky red" resolves against what the encoder saw.
+  //   2. Through the 16x RGBA autoencoder. The same resized image is encoded
+  //      to a 64-channel latent grid and joins the DiT's joint sequence as its
+  //      own block-causal segment. Those tokens carry the pixels.
+  //
+  // Door 1's rows are DROPPED before txt_in; the DiT fills those positions
+  // from door 2's latents through a different projection. That is exact
+  // because txt_in (zero-centre RMSNorm + linear) is row-independent.
+  //
+  // The geometry rule is what makes the two doors line up. Each image is
+  // resized once to sides that are multiples of 32; the vision tower emits one
+  // token per 32 px and the autoencoder one latent per 16 px, so
+  //
+  //     hLat * wLat  ===  4 * slots
+  //
+  // and each `<|image_pad|>` slot stands for exactly four CONSECUTIVE latent
+  // tokens in the row-major flatten — four consecutive, not a 2x2 spatial
+  // group. The library asserts the identity, so a mismatched resize fails
+  // loudly instead of silently mis-aligning.
+  //
+  // The joint sequence is [text | image0 | image1 | ... | target]. Text and
+  // condition-image rows both modulate from t = 0, so the WHOLE prefix is
+  // timestep-independent and caches exactly as the text-only prefix does.
+
+  /**
+   * The image-conditioned counterpart of qwenImage21EncodePrompt(): encode a
+   * prompt together with its condition images, running the vision tower.
+   * `images` takes the same entries as GenerateOptions.conditionImages — a
+   * path string, {path}, or {pixels, width, height, channels} with planar CHW
+   * floats in [0,1] and channels 3 or 4. At least one entry is required.
+   * Requires loaded weights.
+   *
+   * `embeds` is (nValid, 4096) with the condition-image rows INCLUDED — this
+   * is the pre-drop sequence, so it is the place to edit what the model saw.
+   * `imagePadMask` is an Int32Array of length nValid holding 1 at a
+   * condition-image row and 0 at a text row. `imageRuns` gives, per image in
+   * template order, its first pad row, its slot count and the latent grid to
+   * encode that image at, with `slots * 4 === hLat * wLat`.
+   *
+   * @param {string} prompt
+   * @param {Array<string|{path?: string, pixels?: Float32Array, width?: number, height?: number, channels?: number}>} images
+   * @param {number} [outputResolution=1024]
+   * @returns {{embeds: Tensor2D, mask: Tensor2D, ids: Int32Array, dropIdx: number,
+   *            imagePadMask: Int32Array,
+   *            imageRuns: Array<{row: number, slots: number, hLat: number, wLat: number}>}}
+   *
+   * @example
+   *   // Damp what the model SAW without touching what it was told.
+   *   const e = pipe.qwenImage21EncodePromptImages('make the sky red', ['cat.png']);
+   *   const run = e.imageRuns[0];
+   *   for (let r = run.row; r < run.row + run.slots; r++)
+   *     for (let c = 0; c < e.embeds.cols; c++)
+   *       e.embeds.data[r * e.embeds.cols + c] *= 0.5;
+   *   const st = pipe.qwenImage21PrimeFromText(e.embeds, e.mask, { steps: 8 });
+   */
+  qwenImage21EncodePromptImages(prompt, images, outputResolution) {}
+
   /**
    * Prime a step-wise generation from caller-supplied (n, 4096) rows instead of
    * a prompt string — the entry point for edited, blended or externally-sourced
@@ -685,6 +965,40 @@ class Pipeline {
   qwenImage21PrimeFromText(embeds, mask, opts, uncondEmbeds, uncondMask) {}
 
   /**
+   * prime() with condition images: returns an ordinary PipelineState the
+   * caller steps itself (stepOnce, the x̂0 preview, every hook in this block —
+   * all unchanged). `images` takes the same entries as
+   * GenerateOptions.conditionImages and OVERRIDES any conditionImages inside
+   * `opts`; at least one entry is required. With no explicit width/height in
+   * `opts` the canvas is derived from the LAST image's aspect at
+   * opts.outputResolution (default 1024).
+   *
+   * Everything in this research block keeps working across an edit prefix:
+   * qwenImage21ScalePrefixKv() addresses the interleaved text+image prefix,
+   * and qwenImage21ResetCache() re-extracts it. The prefix cache is keyed on
+   * the total prefix length together with the target grid, so changing the
+   * image count, the images or the canvas invalidates it for you.
+   *
+   * `pipe.generate(prompt, { conditionImages, outputResolution })` is the
+   * one-call form of the same thing, for when no per-step control is wanted.
+   *
+   * @param {string} prompt
+   * @param {Array<string|{path?: string, pixels?: Float32Array, width?: number, height?: number, channels?: number}>} images
+   * @param {GenerateOptions} [opts]
+   * @returns {PipelineState}
+   *
+   * @example
+   *   const st = pipe.qwenImage21PrimeEdit('make the sky red', ['cat.png'],
+   *                                        { steps: 8, guidanceScale: 4.0 });
+   *   for (let i = 0; i < 8; i++) {
+   *     if (i === 4) pipe.qwenImage21ScalePrefixKv(16, 32, 1.0, 0.6);
+   *     st.stepOnce();
+   *   }
+   *   const img = st.decode();     // canvas derived from cat.png's aspect
+   */
+  qwenImage21PrimeEdit(prompt, images, opts) {}
+
+  /**
    * The prepared (nValid, hidden) text rows of the most recent prime() — the
    * joint sequence's text half AFTER txt_in, one projection further in than
    * qwenImage21EncodePrompt()'s output.
@@ -703,16 +1017,28 @@ class Pipeline {
   qwenImage21SetTextRows(rows, uncond) {}
 
   /**
-   * Attenuate the LIVE prefix KV cache for layers [layerLo, layerHi): the
-   * cached text keys are multiplied by `kScale` and the values by `vScale`.
-   * This is the one prefix-side hook that needs NO re-extraction — after the
-   * extract step the cache is what the image attends to, so scaling it steers
-   * generation at zero cost, mid-denoise.
+   * Attenuate the prefix KV for layers [layerLo, layerHi): the cached prefix
+   * keys are multiplied by `kScale` and the values by `vScale`. This is the
+   * one prefix-side hook that needs NO re-extraction — after the extract step
+   * the cache is what the image attends to, so scaling it steers generation at
+   * zero cost, mid-denoise. Attenuating V alone fades the prefix's
+   * contribution while leaving the attention pattern it induces intact; K
+   * alone flattens that pattern instead. With an edit prefix it addresses the
+   * interleaved text+image rows together.
    *
-   * Attenuating V alone fades the text's contribution while leaving the
-   * attention pattern it induces intact; K alone flattens that pattern instead.
-   * Requires at least one step to have run (there is nothing to scale before
-   * the extract).
+   * This is a DIAL, not a cumulative in-place multiply. It records a per-layer
+   * scale that is applied to the cached K/V where they are READ, on every
+   * forward, so:
+   *
+   *   * it is idempotent — calling it twice with 0.5 is the same as calling it
+   *     once, not 0.25 (compose ranges with qwenImage21AddPrefixKvScale());
+   *   * generate() with a scale armed behaves like every other dial, which the
+   *     old in-place version could not do at all;
+   *   * the scale SURVIVES a cache reset / re-extract, because it is a dial
+   *     and not cache content;
+   *   * it no longer needs a step to have run first — arm it before step 0.
+   *
+   * 1/1 over the full layer range clears it.
    *
    * @param {number} layerLo
    * @param {number} layerHi
@@ -737,6 +1063,65 @@ class Pipeline {
    * @returns {undefined}
    */
   qwenImage21ResetCache() {}
+
+  // ── prefix-cache slots ─────────────────────────────────────────────────────
+  //
+  // The extracted prefix IS the conditioning as far as every step after the
+  // first is concerned. Saving one and blending another towards it is a
+  // prompt crossfade that happens BELOW the text encoder entirely: no
+  // re-encoding, no vision tower, no txt_in — just a lerp over cached K/V that
+  // takes effect on the very next step.
+  //
+  // Slots hold real VRAM (a full per-layer K/V pair each), so there are
+  // qwenImage21PrefixSlots() of them and qwenImage21ClearPrefixSlots() frees
+  // them.
+
+  /**
+   * Deep-copy the LIVE extracted prefix K/V into slot `slot`. Requires the
+   * prefix to have been extracted — run at least one step after priming.
+   *
+   * @param {number} slot  0 .. qwenImage21PrefixSlots() - 1
+   * @returns {undefined}
+   */
+  qwenImage21SavePrefixCache(slot) {}
+
+  /**
+   * Blend the live prefix towards a saved one:
+   *
+   *     k = (1 - alpha) * k + alpha * saved.k        (and likewise v)
+   *
+   * alpha 0 is a no-op and 1 replaces the live prefix wholesale. Both caches
+   * must describe the same LAYOUT — same prefix length, same target grid, same
+   * layer count — which in practice means two prompts that tokenize to the
+   * same length; a mismatch throws. Takes effect on the very next step, with
+   * no re-extraction.
+   *
+   * @param {number} slot
+   * @param {number} alpha  0..1
+   * @returns {undefined}
+   *
+   * @example
+   *   // A prompt crossfade that costs no re-encoding.
+   *   const a = pipe.prime('a lighthouse at dawn', { steps: 8, seed: 7n });
+   *   a.stepOnce();                          // extracts A's prefix
+   *   pipe.qwenImage21SavePrefixCache(0);
+   *
+   *   const b = pipe.prime('a lighthouse at night', { steps: 8, seed: 7n });
+   *   b.stepOnce();                          // extracts B's prefix
+   *   pipe.qwenImage21BlendPrefixCache(0, 0.5);   // half-way to A
+   *   for (let i = 1; i < 8; i++) b.stepOnce();
+   *   const img = b.decode();
+   */
+  qwenImage21BlendPrefixCache(slot, alpha) {}
+
+  /**
+   * Drop every saved prefix slot and free their VRAM.
+   * @returns {undefined}
+   */
+  qwenImage21ClearPrefixSlots() {}
+
+  /** @returns {number} the slot capacity (4). */
+  qwenImage21PrefixSlots() {}
 
   /**
    * Encode RGB pixels into a pipeline-scale latent through the resident 16x
@@ -767,11 +1152,42 @@ class Pipeline {
    * prime() onwards, so releasing it is what buys a BF16 DiT or a bigger canvas
    * on a 24 GB card. An already-primed PipelineState keeps stepping — its
    * conditioning is encoded and the prefix cache is downstream of it — but
-   * qwenImage21EncodePrompt(), encodeConditioning() and prime() throw until the
-   * encoder is reloaded. Safe to call twice.
+   * qwenImage21EncodePrompt() and encodeConditioning() throw until the encoder
+   * is reloaded, and so does prime() / generate() for any prompt the memo
+   * below has not already seen. Safe to call twice.
    * @returns {undefined}
    */
   qwenImage21ReleaseTextEncoder() {}
+
+  // ── the prompt memo ────────────────────────────────────────────────────────
+  //
+  // prime(prompt) and generate(prompt) used to throw after
+  // qwenImage21ReleaseTextEncoder() even for a prompt whose embeddings had
+  // already been produced once — the rows existed, but nothing kept them.
+  //
+  // The pipeline now keeps a small memo of the last 8 encoded prompts (prompt
+  // string -> rows), filled by qwenImage21EncodePrompt() and by every
+  // prime/generate that encoded, so a memoized prompt primes with the encoder
+  // gone. A prompt that is NOT memoized throws an error naming it.
+  //
+  // The recipe, on a 24 GB card: encode (or generate) every prompt you will
+  // need, release the encoder, then prime freely with the 8.5 GiB back.
+  //
+  //   for (const p of prompts) pipe.qwenImage21EncodePrompt(p);   // <= 8
+  //   pipe.qwenImage21ReleaseTextEncoder();
+  //   const st = pipe.prime(prompts[0], { steps: 8 });            // fine
+
+  /**
+   * The prompts currently in the memo, most recently encoded first.
+   * @returns {string[]}
+   */
+  qwenImage21MemoizedPrompts() {}
+
+  /**
+   * Empty the prompt memo.
+   * @returns {undefined}
+   */
+  qwenImage21ClearPromptMemo() {}
 
   /** @returns {boolean} whether the text backbone is currently loaded. */
   qwenImage21TextEncoderResident() {}
