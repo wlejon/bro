@@ -14,7 +14,7 @@
  *   - docs/triposplat-api.js — bro.triposplat (also produced by brodiffusion):
  *     a single image to a 3D Gaussian splat.
  *
- * Five model families are supported; loadModel() auto-detects the family from
+ * Six model families are supported; loadModel() auto-detects the family from
  * the directory's `model_index.json` and config().modelClass reports it:
  *   - StableDiffusion — SD1.5: CLIP text encoder + U-Net + VAE, DDIM / LCM /
  *     DPM-Solver schedulers, LoRA (merged), ControlNet, img2img, inpaint,
@@ -30,6 +30,13 @@
  *   - Krea2 — Qwen3-VL-4B text encoder + single-stream flow DiT + Qwen-Image
  *     VAE decoder. txt2img, runtime-adapter LoRA (live rescale, INT8-safe),
  *     and the krea2* research hooks. No img2img / inpaint / ControlNet.
+ *   - QwenImage21 — Qwen-Image 2.1: Qwen3-VL-8B text encoder + a 7.1B
+ *     block-causal single-stream DiT (one joint [text ; image] sequence, a
+ *     prefix KV cache over the text half) + a 16x RGBA autoencoder. txt2img
+ *     and the qwenImage21* research hooks, including a VAE encode/decode seam
+ *     and a releasable text encoder. INT8 for both the DiT and the encoder is
+ *     the default and the only configuration that fits 1024x1024 on a 24 GB
+ *     card. No img2img / inpaint / ControlNet / LoRA.
  *
  * The native Pipeline owns the multi-GB weights. JavaScript never holds or
  * moves weight bytes — it holds an opaque handle (the Pipeline object).
@@ -167,7 +174,7 @@
  * PipelineConfigSnapshot — the read-only object Pipeline.config() returns.
  *
  * @typedef {Object} PipelineConfigSnapshot
- * @property {string}  modelClass       'StableDiffusion' | 'Flux' | 'Sana' | 'PixArt' | 'Krea2'
+ * @property {string}  modelClass       'StableDiffusion' | 'Flux' | 'Sana' | 'PixArt' | 'Krea2' | 'QwenImage21'
  * @property {string}  scheduler        'ddim' | 'lcm' | 'flowmatch' | 'scm'. A pipeline
  *           built with scheduler:'dpm' reports 'ddim' here — the snapshot has no separate
  *           name for DPM-Solver.
@@ -439,6 +446,7 @@ class Pipeline {
    * @example
    *   const c = pipe.config();
    *   if (c.modelClass === 'Krea2') enableKrea2Panel(pipe.krea2NumLayers());
+   *   if (c.modelClass === 'QwenImage21') enableQi21Panel(pipe.qwenImage21NumLayers());
    *   if (!c.weightsLoaded) throw new Error('call loadWeights() first');
    */
   config() {}
@@ -554,6 +562,14 @@ class PipelineState {
    * @returns {number}
    */
   krea2StepTimestep() {}
+
+  /**
+   * The same value for a Qwen-Image 2.1 pipeline — pair it with
+   * qwenImage21TimeMod() to build a modulation delta for the step that is
+   * about to run. Qwen-Image 2.1 only.
+   * @returns {number}
+   */
+  qwenImage21StepTimestep() {}
 
   /**
    * Deep-copy this state: one latent clone; counters and RNG state are trivial

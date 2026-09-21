@@ -342,7 +342,14 @@ endif()
 # Depends on bromath + brotensor + broimage; all three are already targets by
 # this point. Guards all three with if(NOT TARGET ...) so it reuses those
 # targets and reads the GPU cache vars.
-if(BRO_WITH_VISION)
+#
+# The NOT TARGET guard on brovisionml ITSELF matters because this is the one
+# sibling added AFTER brodiffusion, which needs brovisionml too (the TripoSplat
+# DINOv3 backbone) and adds it into the same ${CMAKE_BINARY_DIR}/brovisionml.
+# Without the guard the second add_subdirectory fails with "binary directory is
+# already used to build a source directory". Every other sibling here is added
+# before its dependents, so their own guards are enough.
+if(BRO_WITH_VISION AND NOT TARGET brovisionml)
     bro_default_sibling_dir(brovisionml _brovisionml_default)
     set(BROVISIONML_DIR "${_brovisionml_default}" CACHE PATH "Path to standalone brovisionml repo")
     if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")

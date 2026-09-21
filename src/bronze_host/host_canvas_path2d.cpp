@@ -1,3 +1,9 @@
+// MSVC's <cmath> only defines M_PI under _USE_MATH_DEFINES, and it has to be
+// set before the first include that pulls <math.h> in.
+#ifndef _USE_MATH_DEFINES
+#define _USE_MATH_DEFINES
+#endif
+
 #include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_canvas2d_paths.h"
 #include "bronze_host/gl_internal.h"
