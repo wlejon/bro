@@ -278,10 +278,11 @@ void installSiblingApis(engine::Engine& engine) {
     adoptGlobalProperty("GpuTensor");
 #endif
 #if BRO_WITH_LM
+    brolm::api::setPathResolver(&brokit::api::resolveAssetPath);
     brolm::api::installLM();
     for (const char* name : {"AsyncHandle", "QwenTokenizer", "MistralTokenizer", "GemmaTokenizer",
                              "Llama3Tokenizer", "LMModel", "Qwen35Model", "Qwen3VLModel", "NllbModel",
-                             "ClipModel", "T5Model"}) {
+                             "ClipModel", "T5Model", "LayaModel"}) {
         adoptGlobalProperty(name);
     }
     {
@@ -389,10 +390,11 @@ void installWorkerSiblingApis() {
     adoptGlobalProperty("GpuTensor");
 #endif
 #if BRO_WITH_LM
+    brolm::api::setPathResolver(&brokit::api::resolveAssetPath);
     brolm::api::installLM();
     for (const char* name : {"AsyncHandle", "QwenTokenizer", "MistralTokenizer", "GemmaTokenizer",
                              "Llama3Tokenizer", "LMModel", "Qwen35Model", "Qwen3VLModel", "NllbModel",
-                             "ClipModel", "T5Model"}) {
+                             "ClipModel", "T5Model", "LayaModel"}) {
         adoptGlobalProperty(name);
     }
 #endif
