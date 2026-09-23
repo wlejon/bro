@@ -693,9 +693,10 @@ bronze::Value dynamicEval(bronze::Value source) {
     if (evalScript(*s_activeEngine, exprCode, "<eval>")) {
         ev::GlobalValue g = ev::globalValue(resName);
         if (g.found) {
-            Value val = g.value;
+            // Rooted: cleanGlobalProp allocates.
+            ev::Persistent val(g.value);
             cleanGlobalProp(resName);
-            return val;
+            return val.get();
         }
     }
     cleanGlobalProp(resName);
@@ -706,9 +707,9 @@ bronze::Value dynamicEval(bronze::Value source) {
     if (evalScript(*s_activeEngine, stmtCode, "<eval>")) {
         ev::GlobalValue g = ev::globalValue(resName);
         if (g.found) {
-            Value val = g.value;
+            ev::Persistent val(g.value);
             cleanGlobalProp(resName);
-            return val;
+            return val.get();
         }
         cleanGlobalProp(resName);
         return ev::undefined();

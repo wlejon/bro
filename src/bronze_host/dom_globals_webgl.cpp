@@ -29,10 +29,14 @@ void installWebGLGlobals() {
     installGlConstants(g_webgl2RenderingContextClass);
 
     // WebGLRenderingContext: branded constructor
-    ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
+    // One constructor for both the registry and globalThis, minted before
+    // globalThis is read: the mint allocates, and an argument list does not
+    // fix which of the two is evaluated first.
+    ev::Persistent ctor(makeBrandConstructor("WebGLRenderingContext"));
+    ev::registerGlobal("WebGLRenderingContext", ctor.get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && !gt.value.isUndefined() && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
+        ev::setProperty(gt.value, "WebGLRenderingContext", ctor.get());
     }
 }
 
