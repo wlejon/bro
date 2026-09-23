@@ -31,6 +31,16 @@
 // factory. `Mesh.geodesicSphere` and `Mesh.rock` exist only when bromesh was
 // built with par_shapes; `Mesh.decodeDraco` / `Mesh.encodeDraco` only with
 // Draco (see docs/mesh-io-api.js).
+//
+// Integer arguments: every count, size, segment, resolution, iteration, lod
+// and index argument across bro.mesh and bro.rigging is checked, never
+// wrapped or clamped. A non-number is a TypeError; NaN, a fraction or a value
+// outside the method's range is a RangeError. The common ceilings: 4096 per
+// grid axis (segments, rings, texture sides), 512 per axis of a 3D volume,
+// 8 subdivision levels, 65536 iterations, 2^24 generated elements. Iteration
+// counts accept 0 as a no-op. Primitive minimums: sphere/torus/cylinder/
+// capsule/cone/disk segments >= 3, sphere rings >= 2, capsule rings, cone
+// stacks and plane segments >= 1.
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
@@ -120,8 +130,8 @@
 
 /**
  * @typedef {Object} MeshletParams
- * @property {number} [maxVertices] -  default 64.
- * @property {number} [maxTriangles] -  default 124.
+ * @property {number} [maxVertices] -  default 64; an integer in [3, 256].
+ * @property {number} [maxTriangles] -  default 124; an integer in [1, 512].
  * @property {number} [coneWeight] -  cluster-cone tightness, default 0.5.
  */
 
@@ -530,10 +540,10 @@ class Mesh {
 
   // --- Subdivision, smoothing, remeshing ------------------------------------
 
-  /** Loop subdivision (smooths). @param {number} [iterations=1] @returns {Mesh} this */
+  /** Loop subdivision (smooths). Each subdivide* takes 0 (no-op) to 8 levels. @param {number} [iterations=1] @returns {Mesh} this */
   subdivideLoop(iterations) {}
 
-  /** Catmull-Clark subdivision (smooths). @param {number} [iterations=1] @returns {Mesh} this */
+  /** Catmull-Clark subdivision (smooths). @param {number} [iterations=1] - 0 to 8. @returns {Mesh} this */
   subdivideCatmullClark(iterations) {}
 
   /**
