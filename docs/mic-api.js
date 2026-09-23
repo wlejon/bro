@@ -120,8 +120,11 @@ bro.mic.levels = function(maxCount) {};
 
 /**
  * Feed synthetic microphone audio samples for offline and headless testing.
+ * `samples` is a Float32Array or a plain array of numbers; any other typed
+ * array (an Int16Array is not converted), an ArrayBuffer, or an array whose
+ * buffer is detached throws TypeError. Empty input does nothing.
  *
- * @param {Float32Array} samples - Float32Array PCM samples at engine rate
+ * @param {Float32Array|Array<number>} samples - PCM samples at engine rate
  * @param {number} [sampleRate] - Optional expected sample rate (must match engine rate)
  */
 bro.mic.feed = function(samples, sampleRate) {};

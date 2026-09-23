@@ -45,7 +45,7 @@
  * - AUTOMATION RUNS ON THE CONTROL TICK, NOT PER SAMPLE. AudioParam keeps a
  *   Web Audio timeline (set / linear / exponential / target / curve). The
  *   binding evaluates it at `currentTime` and pushes the result to the
- *   engine when a param is set or scheduled, on every host frame tick, and
+ *   engine when a param is set or scheduled, on every bro frame tick, and
  *   on each 128-frame quantum of `ctx.renderBlock()`. Between those points
  *   the engine holds the last value, so a ramp moves in steps at frame rate
  *   (in headless rendering, at the 128-frame quantum). A param reaches the
@@ -55,11 +55,15 @@
  *   bound to the master bus (see those classes). Reading `.value` evaluates
  *   the timeline but pushes nothing. Automation never overwrites `.value`'s
  *   stored base, which is what a first ramp starts from.
- * - EVENTS ARRIVE ON THE FRAME TICK. The only event is
- *   AudioBufferSourceNode `onended`. It, and the automation above, are
- *   delivered from the host's once-per-frame tick (the binding's
- *   `tickAsyncJobs()`, the same tick that settles `createClipFromFileAsync`),
- *   and at the end of each `ctx.renderBlock()`. There is no `onstatechange`,
+ * - EVENTS ARRIVE ON THE FRAME TICK. The only event is an
+ *   AudioBufferSourceNode's `ended` (the `onended` property and any
+ *   `addEventListener('ended', ...)` listeners). It, and the automation
+ *   above, are delivered on bro's frame tick: bro's engine frame pump runs
+ *   the audio binding's tick (the same one that settles
+ *   `createClipFromFileAsync` and delivers `bro.mic` chunks) once per frame,
+ *   including while `bro.time` is paused. They are also delivered at the end
+ *   of each `ctx.renderBlock()`. So `ended` fires on the first frame after
+ *   the source stopped, not at the exact sample. There is no `onstatechange`,
  *   AudioWorklet, ScriptProcessorNode, OfflineAudioContext,
  *   MediaElementSource, ConstantSourceNode or IIRFilterNode.
  * - GARBAGE COLLECTION STOPS SOUND, EXCEPT A PLAYING BUFFER SOURCE. A
@@ -71,7 +75,8 @@
  *   its playback and deletes its clip.
  * - UNDERSCORE PROPERTIES ARE INTERNAL. The binding keeps graph edges and
  *   callbacks as plain properties on the JS objects so the collector sees
- *   them: `_targets` (connect() destinations), `_buffer`, `_ch<n>`
+ *   them: `_targets` (connect() destinations), `_listeners`
+ *   (addEventListener), `_buffer`, `_ch<n>`
  *   (getChannelData views), `_pan`, and on the synth helpers `_laneCbs`,
  *   `_voiceSetup`, `_cc_<n>`, `_rawCb`, `_pitchBendCb`,
  *   `_connectedAllocator` and `_allocator`. They are not API: do not read,
@@ -302,6 +307,29 @@ class AudioNode {
    */
   disconnect(destination) {}
 
+  /**
+   * An EventTarget subset. Adds a function listener for `type`; the same
+   * (type, listener) pair is added only once, and `options.once` removes it
+   * before its first call. It is called with `this` = the node and the event
+   * `{ type, target, currentTarget }`, after the `on<type>` property handler
+   * and in the order listeners were added (the list is snapshotted when the
+   * event fires). The only event any node fires is an
+   * AudioBufferSourceNode's 'ended'. A non-string type or a non-function
+   * listener (including an object with `handleEvent`) is ignored; the
+   * capture option means nothing here. There is no `dispatchEvent`.
+   * @param {string} type
+   * @param {function(Object): void} listener
+   * @param {{once: boolean}|boolean} [options]
+   */
+  addEventListener(type, listener, options) {}
+
+  /**
+   * Removes the listener added for (type, listener), if any.
+   * @param {string} type
+   * @param {function(Object): void} listener
+   */
+  removeEventListener(type, listener) {}
+
   /** 0 for sources, the input count for a ChannelMergerNode, else 1. @readonly @type {number} */
   numberOfInputs;
 
@@ -403,8 +431,11 @@ class OscillatorNode extends AudioNode {
   start(when) {}
 
   /**
-   * Releases the voice at `when` (engine seconds; default now). RangeError
-   * for a negative or NaN `when`. No `onended` is fired for an oscillator.
+   * Releases the voice at `when` (engine seconds; default now), at that
+   * sample. A stop issued after `start()` always ends the note, even in the
+   * same tick with no audio rendered between them; a stop time before the
+   * start time means the voice never sounds. RangeError for a negative or
+   * NaN `when`. No `ended` event is fired for an oscillator.
    * @param {number} [when]
    */
   stop(when) {}
@@ -622,16 +653,20 @@ class AudioBuffer {
  * settings, DelayNode as a shift inside the buffer's length, ConvolverNode
  * with its impulse, WaveShaperNode curve, DynamicsCompressorNode, and feeds
  * any AnalyserNode), then plays the result. The gain product, stereo pan and
- * PannerNode position found on the way stay live (see the file header).
+ * PannerNode position found on the way stay live (see the file header). As
+ * for an oscillator, the walk also switches on the master-bus effect of
+ * each Delay / Compressor / WaveShaper / Convolver node it reaches and binds
+ * a Delay's or compressor's params to the bus live, so those nodes act
+ * twice: offline on the buffer and live on the whole mix.
  * Plays whether or not it is connected. The buffer plays at its own
  * `sampleRate`, resampled to the context rate.
  *
  * While it plays, the binding holds the node (it is not collected), and
  * `playbackRate`, `detune`, `loop`, `loopStart` and `loopEnd` are live.
  *
- * Differs from Web Audio: `stop()` ignores its time and stops at once; the
- * playback id is not exposed, so the engine's setPlayback* methods cannot
- * address it.
+ * Differs from Web Audio: the playback id is not exposed, so the engine's
+ * setPlayback* methods cannot address it; `stop()` on a source that was
+ * never started does nothing instead of throwing InvalidStateError.
  */
 class AudioBufferSourceNode extends AudioNode {
 
@@ -651,7 +686,9 @@ class AudioBufferSourceNode extends AudioNode {
    * live while playing (moving either end moves the playing window). The
    * window applies only when 0 <= loopStart < loopEnd; each end is clamped to
    * the buffer's length. Otherwise (including the default loopEnd of 0) the
-   * whole buffer loops, and loopStart is not used.
+   * whole buffer loops, and loopStart is not used. This is the actualLoopStart
+   * / actualLoopEnd rule of Web Audio's playback algorithm, and what Chrome
+   * and Firefox do.
    * @type {number}
    */
   loopStart;
@@ -676,11 +713,11 @@ class AudioBufferSourceNode extends AudioNode {
   /**
    * Called once the source ends: when the playback finishes (the buffer or
    * `duration` runs out, which a loop without `duration` never does) or
-   * `stop()` is called. It runs on the host's frame tick after the end (or
-   * at the end of a `ctx.renderBlock()`), not on the audio thread. It is
-   * called with `this` = the node and one event
-   * `{ type: 'ended', target: node, currentTarget: node }`. Only this
-   * property is read; there is no addEventListener. A source that was never
+   * reaches its `stop()` time. It runs on bro's first frame tick after the
+   * end (or at the end of a `ctx.renderBlock()`), not on the audio thread.
+   * It is called with `this` = the node and one event
+   * `{ type: 'ended', target: node, currentTarget: node }`, before any
+   * `addEventListener('ended', ...)` listeners. A source that was never
    * started, or started without a buffer (or with an empty one), never ends
    * and never fires it.
    * @type {function({type: string, target: AudioBufferSourceNode, currentTarget: AudioBufferSourceNode}): void|null}
@@ -705,10 +742,15 @@ class AudioBufferSourceNode extends AudioNode {
   start(when, offset, duration) {}
 
   /**
-   * Stops immediately (any argument is ignored); `onended` follows on the
-   * next tick.
+   * Web Audio's `stop(when)`: `when` on the context clock. 0 (the default),
+   * or any time already past, stops at once; a later time stops
+   * sample-accurately on the audio clock, and calling again moves the stop.
+   * A stop at or before the scheduled start means the source never sounds
+   * (it still ends). RangeError for a negative or NaN `when`. `ended` fires
+   * on the first frame tick after the playback has stopped.
+   * @param {number} [when=0]
    */
-  stop() {}
+  stop(when) {}
 
 }
 
@@ -796,10 +838,10 @@ class StereoPannerNode extends AudioNode {
 
 /**
  * Drives the master bus delay (see the file header). `delayTime` is applied
- * at `connect()` and when an OscillatorNode's `start()` reaches the node.
- * That start also binds the node to the master bus: from then on its
- * `delayTime` is live (`.value` writes and automation reach the bus). A
- * buffer source's start does not bind it. The engine clamps the time to
+ * at `connect()` and when a source's `start()` (OscillatorNode or
+ * AudioBufferSourceNode) reaches the node. That start also binds the node
+ * to the master bus: from then on its `delayTime` is live (`.value` writes
+ * and automation reach the bus). The engine clamps the time to
  * 0.001..2 s and uses its own feedback setting (`setDelayFeedback`).
  * For an AudioBufferSourceNode the buffer is also shifted by the delay at
  * `start()` (dropped past the buffer's end).
@@ -820,10 +862,10 @@ class DelayNode extends AudioNode {
  * Drives the master bus compressor (see the file header), and compresses an
  * AudioBufferSourceNode's samples at `start()` with the Web Audio parameter
  * meanings below. The params are applied to the bus at `connect()` and when
- * an OscillatorNode's `start()` reaches the node; that start also binds the
- * node to the master bus, and from then on threshold, ratio, attack and
- * release are live (`.value` writes and automation). A buffer source's start
- * does not bind it.
+ * a source's `start()` (OscillatorNode or AudioBufferSourceNode) reaches the
+ * node; that start also binds the node to the master bus, and from then on
+ * threshold, ratio, attack and release are live (`.value` writes and
+ * automation). The buffer-source pass uses the values at `start()` only.
  *
  * Unit conversion onto the bus: `threshold` dB becomes the bus's linear
  * level (10^(dB/20), so -24 dB is about 0.063); attack and release seconds
