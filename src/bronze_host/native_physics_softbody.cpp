@@ -9,7 +9,8 @@ namespace {
 
 static thread_local std::vector<float> tl_softVerts;
 
-static bool readFloatArrayOrObject(Value v, std::vector<float>& out) {
+static bool readFloatArrayOrObject(Value vIn, std::vector<float>& out) {
+    const Rooted v(vIn);
     if (readFloatVector(v, out)) return true;
     if (!ev::isObject(v)) return false;
     out.clear();
@@ -22,7 +23,8 @@ static bool readFloatArrayOrObject(Value v, std::vector<float>& out) {
     return !out.empty();
 }
 
-static bool readU32ArrayOrObject(Value v, std::vector<uint32_t>& out) {
+static bool readU32ArrayOrObject(Value vIn, std::vector<uint32_t>& out) {
+    const Rooted v(vIn);
     if (readU32Vector(v, out)) return true;
     if (!ev::isObject(v)) return false;
     out.clear();
@@ -69,11 +71,11 @@ void* bro_physics_createSoftBody(const char* config) {
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return nullptr;
 
-    Value opts = res.value;
+    const Rooted opts(res.value);
     physics::SoftBodyOptions sopts;
 
-    Value clothV = ev::getProperty(opts, "cloth");
-    Value meshV = ev::getProperty(opts, "mesh");
+    const Rooted clothV(ev::getProperty(opts, "cloth"));
+    const Rooted meshV(ev::getProperty(opts, "mesh"));
     const bool hasCloth = ev::isObject(clothV);
     const bool hasMesh = ev::isObject(meshV);
 

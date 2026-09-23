@@ -24,7 +24,7 @@ int32_t bro_physics_createConstraint(const char* config) {
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return -1;
 
-    Value obj = res.value;
+    const Rooted obj(res.value);
     physics::ConstraintOptions cs;
 
     std::string type = getPropString(obj, "type");
@@ -62,11 +62,7 @@ int32_t bro_physics_createConstraint(const char* config) {
     cs.minDistance = static_cast<float>(getPropNumber(obj, "minDistance", cs.minDistance));
     cs.maxDistance = static_cast<float>(getPropNumber(obj, "maxDistance", cs.maxDistance));
 
-    Value lmin = ev::getProperty(obj, "limitMin");
-    Value lmax = ev::getProperty(obj, "limitMax");
-    if (!ev::isUndefined(lmin) && !ev::isObject(lmin) && !ev::isUndefined(lmax) && !ev::isObject(lmax)) {
-        cs.limitMin = static_cast<float>(ev::toDouble(lmin));
-        cs.limitMax = static_cast<float>(ev::toDouble(lmax));
+    if (readBoundPair(obj, "limitMin", "limitMax", cs.limitMin, cs.limitMax)) {
         cs.hasLimits = true;
     }
 
@@ -78,11 +74,8 @@ int32_t bro_physics_createConstraint(const char* config) {
         cs.wheelHingeAxis = readVec3(ev::getProperty(obj, "hingeAxis"), JPH::Vec3(0, 0, 1));
         cs.wheelHertz = static_cast<float>(getPropNumber(obj, "hertz", cs.wheelHertz));
         cs.wheelDampingRatio = static_cast<float>(getPropNumber(obj, "dampingRatio", cs.wheelDampingRatio));
-        Value lo = ev::getProperty(obj, "lowerTranslation");
-        Value hi = ev::getProperty(obj, "upperTranslation");
-        if (!ev::isUndefined(lo) && !ev::isObject(lo) && !ev::isUndefined(hi) && !ev::isObject(hi)) {
-            cs.wheelLowerTranslation = static_cast<float>(ev::toDouble(lo));
-            cs.wheelUpperTranslation = static_cast<float>(ev::toDouble(hi));
+        if (readBoundPair(obj, "lowerTranslation", "upperTranslation",
+                          cs.wheelLowerTranslation, cs.wheelUpperTranslation)) {
             cs.wheelHasTranslationLimits = true;
         }
         cs.wheelEnableMotor = getPropBool(obj, "enableMotor", cs.wheelEnableMotor);
@@ -133,7 +126,7 @@ int32_t bro_physics_createConstraint(const char* config) {
         std::string swing = getPropString(obj, "swingType");
         cs.sixDofSwingPyramid = (swing == "pyramid");
 
-        Value axesVal = ev::getProperty(obj, "axes");
+        const Rooted axesVal(ev::getProperty(obj, "axes"));
         if (ev::isObject(axesVal)) {
             for (int i = 0; i < 6; i++) {
                 Value v = ev::getProperty(axesVal, kSixDofAxisNames[i]);
@@ -144,7 +137,7 @@ int32_t bro_physics_createConstraint(const char* config) {
             }
         }
 
-        Value motorsVal = ev::getProperty(obj, "motors");
+        const Rooted motorsVal(ev::getProperty(obj, "motors"));
         if (ev::isObject(motorsVal)) {
             for (int i = 0; i < 6; i++) {
                 Value v = ev::getProperty(motorsVal, kSixDofAxisNames[i]);

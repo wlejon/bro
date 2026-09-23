@@ -108,8 +108,9 @@ const char* bro_physics_raycastClosestJsonRaw(double ox, double oy, double oz,
     if (filterConfig && *filterConfig) {
         auto res = ev::parseJson(filterConfig);
         if (!res.thrown && ev::isObject(res.value)) {
-            readQueryFilter(res.value, filter, pw);
-            Value lm = ev::getProperty(res.value, "layerMask");
+            const Rooted cfg(res.value);
+            readQueryFilter(cfg, filter, pw);
+            Value lm = ev::getProperty(cfg, "layerMask");
             if (ev::isNumber(lm)) filter.layerMask = static_cast<uint32_t>(ev::toDouble(lm));
         }
     }
@@ -139,8 +140,9 @@ const char* bro_physics_raycastJsonRaw(double ox, double oy, double oz,
     if (filterConfig && *filterConfig) {
         auto res = ev::parseJson(filterConfig);
         if (!res.thrown && ev::isObject(res.value)) {
-            readQueryFilter(res.value, filter, pw);
-            Value lm = ev::getProperty(res.value, "layerMask");
+            const Rooted cfg(res.value);
+            readQueryFilter(cfg, filter, pw);
+            Value lm = ev::getProperty(cfg, "layerMask");
             if (ev::isNumber(lm)) filter.layerMask = static_cast<uint32_t>(ev::toDouble(lm));
         }
     }
@@ -166,22 +168,22 @@ const char* bro_physics_castShapeRaw(const char* config) {
 
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return natives::strResult("[]");
+    const Rooted cfg(res.value);
 
     physics::BodyOptions shape;
     std::string err;
-    if (!readQueryShape(res.value, shape, err, pw)) {
+    if (!readQueryShape(cfg, shape, err, pw)) {
         return natives::strResult("{\"error\":\"query shape must be convex (box|sphere|capsule|cylinder|convexHull)\"}");
     }
 
     physics::QueryFilter filter;
-    readQueryFilter(res.value, filter, pw);
+    readQueryFilter(cfg, filter, pw);
 
-    Value dv = ev::getProperty(res.value, "direction");
-    JPH::Vec3 dir = readVec3(dv);
+    JPH::Vec3 dir = readVec3(ev::getProperty(cfg, "direction"));
     if (dir == JPH::Vec3::sZero()) {
         return natives::strResult("{\"error\":\"castShape requires a non-zero direction\"}");
     }
-    double maxDist = getPropNumber(res.value, "maxDistance", 1000.0);
+    double maxDist = getPropNumber(cfg, "maxDistance", 1000.0);
 
     auto hits = world->castShape(shape, dir, static_cast<float>(maxDist), filter);
     std::ostringstream ss;
@@ -203,22 +205,22 @@ const char* bro_physics_castShapeClosestRaw(const char* config) {
 
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return natives::strResult("null");
+    const Rooted cfg(res.value);
 
     physics::BodyOptions shape;
     std::string err;
-    if (!readQueryShape(res.value, shape, err, pw)) {
+    if (!readQueryShape(cfg, shape, err, pw)) {
         return natives::strResult("{\"error\":\"query shape must be convex (box|sphere|capsule|cylinder|convexHull)\"}");
     }
 
     physics::QueryFilter filter;
-    readQueryFilter(res.value, filter, pw);
+    readQueryFilter(cfg, filter, pw);
 
-    Value dv = ev::getProperty(res.value, "direction");
-    JPH::Vec3 dir = readVec3(dv);
+    JPH::Vec3 dir = readVec3(ev::getProperty(cfg, "direction"));
     if (dir == JPH::Vec3::sZero()) {
         return natives::strResult("{\"error\":\"castShape requires a non-zero direction\"}");
     }
-    double maxDist = getPropNumber(res.value, "maxDistance", 1000.0);
+    double maxDist = getPropNumber(cfg, "maxDistance", 1000.0);
 
     physics::ShapeCastHit hit;
     if (!world->castShapeClosest(shape, dir, static_cast<float>(maxDist), hit, filter)) {
@@ -241,11 +243,12 @@ void bro_physics_overlapShapeRaw(const char* config, bronze_native_buffer* out) 
     if (world && config && *config) {
         auto res = ev::parseJson(config);
         if (!res.thrown && ev::isObject(res.value)) {
+            const Rooted cfg(res.value);
             physics::BodyOptions shape;
             std::string err;
-            if (readQueryShape(res.value, shape, err, pw)) {
+            if (readQueryShape(cfg, shape, err, pw)) {
                 physics::QueryFilter filter;
-                readQueryFilter(res.value, filter, pw);
+                readQueryFilter(cfg, filter, pw);
                 auto hits = world->overlapShape(shape, filter);
                 for (const auto& h : hits) {
                     int32_t tag = pw->tagForBodyId(h.bodyID);
@@ -267,15 +270,16 @@ const char* bro_physics_overlapShapeJsonRaw(const char* config) {
 
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return natives::strResult("[]");
+    const Rooted cfg(res.value);
 
     physics::BodyOptions shape;
     std::string err;
-    if (!readQueryShape(res.value, shape, err, pw)) {
+    if (!readQueryShape(cfg, shape, err, pw)) {
         return natives::strResult("{\"error\":\"query shape must be convex (box|sphere|capsule|cylinder|convexHull)\"}");
     }
 
     physics::QueryFilter filter;
-    readQueryFilter(res.value, filter, pw);
+    readQueryFilter(cfg, filter, pw);
 
     auto hits = world->overlapShape(shape, filter);
     std::ostringstream ss;
@@ -361,8 +365,9 @@ const char* bro_physics_overlapPointJsonRaw(double x, double y, double z, const 
     if (filterConfig && *filterConfig) {
         auto res = ev::parseJson(filterConfig);
         if (!res.thrown && ev::isObject(res.value)) {
-            readQueryFilter(res.value, filter, pw);
-            Value lm = ev::getProperty(res.value, "layerMask");
+            const Rooted cfg(res.value);
+            readQueryFilter(cfg, filter, pw);
+            Value lm = ev::getProperty(cfg, "layerMask");
             if (ev::isNumber(lm)) filter.layerMask = static_cast<uint32_t>(ev::toDouble(lm));
         }
     }

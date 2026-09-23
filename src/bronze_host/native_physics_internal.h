@@ -4,6 +4,7 @@
 
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_rooted.h"
 #include "natives/physics/native_physics_decl.h"
 #include "engine/engine.h"
 #include "physics/physics_world.h"
@@ -207,27 +208,36 @@ inline uint64_t getPropU64(Value obj, const char* name, uint64_t def) {
 }
 
 
+// One vector component, converted the moment it is read: a component may be a
+// string ("1.5"), a heap value the next read is free to move.
+inline float vecComponent(Value c, float def) {
+    return (!ev::isUndefined(c) && !ev::isObject(c)) ? static_cast<float>(ev::toDouble(c)) : def;
+}
+
 inline JPH::Vec3 readVec3(Value v, JPH::Vec3 def = JPH::Vec3::sZero()) {
     if (!ev::isObject(v)) return def;
-    Value xV = ev::getProperty(v, "x");
-    Value yV = ev::getProperty(v, "y");
-    Value zV = ev::getProperty(v, "z");
-    if (!ev::isUndefined(xV) || !ev::isUndefined(yV) || !ev::isUndefined(zV)) {
-        double x = (!ev::isUndefined(xV) && !ev::isObject(xV)) ? ev::toDouble(xV) : def.GetX();
-        double y = (!ev::isUndefined(yV) && !ev::isObject(yV)) ? ev::toDouble(yV) : def.GetY();
-        double z = (!ev::isUndefined(zV) && !ev::isObject(zV)) ? ev::toDouble(zV) : def.GetZ();
-        return JPH::Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-    }
-    Value e0 = ev::getElement(v, 0);
-    Value e1 = ev::getElement(v, 1);
-    Value e2 = ev::getElement(v, 2);
-    if (!ev::isUndefined(e0) && !ev::isUndefined(e1) && !ev::isUndefined(e2)) {
-        double x = !ev::isObject(e0) ? ev::toDouble(e0) : def.GetX();
-        double y = !ev::isObject(e1) ? ev::toDouble(e1) : def.GetY();
-        double z = !ev::isObject(e2) ? ev::toDouble(e2) : def.GetZ();
-        return JPH::Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-    }
-    return def;
+    const ev::Persistent o(v);
+    Value c = ev::getProperty(o.get(), "x");
+    bool named = !ev::isUndefined(c);
+    const float x = vecComponent(c, def.GetX());
+    c = ev::getProperty(o.get(), "y");
+    named = named || !ev::isUndefined(c);
+    const float y = vecComponent(c, def.GetY());
+    c = ev::getProperty(o.get(), "z");
+    named = named || !ev::isUndefined(c);
+    const float z = vecComponent(c, def.GetZ());
+    if (named) return JPH::Vec3(x, y, z);
+
+    c = ev::getElement(o.get(), 0);
+    bool all = !ev::isUndefined(c);
+    const float e0 = vecComponent(c, def.GetX());
+    c = ev::getElement(o.get(), 1);
+    all = all && !ev::isUndefined(c);
+    const float e1 = vecComponent(c, def.GetY());
+    c = ev::getElement(o.get(), 2);
+    all = all && !ev::isUndefined(c);
+    const float e2 = vecComponent(c, def.GetZ());
+    return all ? JPH::Vec3(e0, e1, e2) : def;
 }
 
 inline JPH::RVec3 readRVec3(Value v, JPH::RVec3 def = JPH::RVec3::sZero()) {
@@ -239,24 +249,41 @@ inline JPH::RVec3 readRVec3(Value v, JPH::RVec3 def = JPH::RVec3::sZero()) {
 
 inline JPH::Quat readQuat(Value v, JPH::Quat def = JPH::Quat::sIdentity()) {
     if (!ev::isObject(v)) return def;
-    Value xV = ev::getProperty(v, "x");
-    Value yV = ev::getProperty(v, "y");
-    Value zV = ev::getProperty(v, "z");
-    Value wV = ev::getProperty(v, "w");
+    const ev::Persistent o(v);
+    // Each component converts before the next read can move it.
+    auto num = [](Value c) { return static_cast<float>(ev::toDouble(c)); };
+    Value wV = ev::getProperty(o.get(), "w");
     if (!ev::isUndefined(wV)) {
-        return JPH::Quat(static_cast<float>(ev::toDouble(xV)),
-                         static_cast<float>(ev::toDouble(yV)),
-                         static_cast<float>(ev::toDouble(zV)),
-                         static_cast<float>(ev::toDouble(wV)));
+        const float w = num(wV);
+        const float x = num(ev::getProperty(o.get(), "x"));
+        const float y = num(ev::getProperty(o.get(), "y"));
+        const float z = num(ev::getProperty(o.get(), "z"));
+        return JPH::Quat(x, y, z, w);
     }
-    Value e3 = ev::getElement(v, 3);
+    Value e3 = ev::getElement(o.get(), 3);
     if (!ev::isUndefined(e3)) {
-        return JPH::Quat(static_cast<float>(ev::toDouble(ev::getElement(v, 0))),
-                         static_cast<float>(ev::toDouble(ev::getElement(v, 1))),
-                         static_cast<float>(ev::toDouble(ev::getElement(v, 2))),
-                         static_cast<float>(ev::toDouble(e3)));
+        const float w = num(e3);
+        const float x = num(ev::getElement(o.get(), 0));
+        const float y = num(ev::getElement(o.get(), 1));
+        const float z = num(ev::getElement(o.get(), 2));
+        return JPH::Quat(x, y, z, w);
     }
     return def;
+}
+
+// A {lo, hi} pair of numeric options that counts only when both are present
+// (limits, translation ranges). Each bound converts as it is read, before the
+// second read can move a string first bound; lo/hi are written only on true.
+inline bool readBoundPair(Value objIn, const char* loKey, const char* hiKey, float& lo, float& hi) {
+    const Rooted obj(objIn);
+    Value b = ev::getProperty(obj, loKey);
+    if (ev::isUndefined(b) || ev::isObject(b)) return false;
+    const float l = static_cast<float>(ev::toDouble(b));
+    b = ev::getProperty(obj, hiKey);
+    if (ev::isUndefined(b) || ev::isObject(b)) return false;
+    lo = l;
+    hi = static_cast<float>(ev::toDouble(b));
+    return true;
 }
 
 inline bool parseCombineMode(const std::string& s, physics::CombineMode& out) {
@@ -285,8 +312,9 @@ inline bool parseDecimalIndex(const std::string& s, int& out) {
     }
 }
 
-inline bool readAreaOverride(Value v, physics::AreaOverride& a, std::string& err) {
-    if (!ev::isObject(v)) { err = "area override must be an object"; return false; }
+inline bool readAreaOverride(Value vIn, physics::AreaOverride& a, std::string& err) {
+    if (!ev::isObject(vIn)) { err = "area override must be an object"; return false; }
+    const Rooted v(vIn);
     std::string mode = getPropString(v, "gravityMode");
     if (mode == "replace") a.gravityMode = physics::AreaOverride::GravityReplace;
     else if (mode == "combine") a.gravityMode = physics::AreaOverride::GravityCombine;
@@ -323,8 +351,9 @@ inline bool readAreaOverride(Value v, physics::AreaOverride& a, std::string& err
     return true;
 }
 
-inline bool readBodyOptions(Value v, physics::BodyOptions& out, std::string& err, physics::PhysicsWorld* world = nullptr) {
-    if (!ev::isObject(v)) { err = "expected object"; return false; }
+inline bool readBodyOptions(Value vIn, physics::BodyOptions& out, std::string& err, physics::PhysicsWorld* world = nullptr) {
+    if (!ev::isObject(vIn)) { err = "expected object"; return false; }
+    const Rooted v(vIn);
     std::string shape = getPropString(v, "shape");
     if (shape.empty() || shape == "box") out.shape = physics::BodyOptions::ShapeBox;
     else if (shape == "sphere")      out.shape = physics::BodyOptions::ShapeSphere;
@@ -398,7 +427,7 @@ inline bool readBodyOptions(Value v, physics::BodyOptions& out, std::string& err
     }
 
     if (out.shape == physics::BodyOptions::ShapeCompound) {
-        Value partsVal = ev::getProperty(v, "parts");
+        const Rooted partsVal(ev::getProperty(v, "parts"));
         if (ev::isObject(partsVal)) {
             Value lenV = ev::getProperty(partsVal, "length");
             if (ev::isNumber(lenV)) {
@@ -429,9 +458,9 @@ inline bool readBodyOptions(Value v, physics::BodyOptions& out, std::string& err
 
     if (out.shape == physics::BodyOptions::ShapeHeightField) {
         out.isStatic = true;
-        Value hVal = ev::getProperty(v, "heights");
+        Rooted hVal(ev::getProperty(v, "heights"));
         if (ev::isUndefined(hVal) || ev::isNull(hVal)) {
-            hVal = ev::getProperty(v, "heightSamples");
+            hVal.set(ev::getProperty(v, "heightSamples"));
         }
         readFloatVector(hVal, out.heightSamples);
         if (out.heightSamples.empty() && ev::isObject(hVal)) {
@@ -519,8 +548,9 @@ inline int motorAxisIndex(const std::string& name) {
     return -1;
 }
 
-inline bool readMotorOptions(Value oVal, physics::MotorOptions& m, std::string& err) {
-    if (!ev::isObject(oVal)) { err = "motor options must be an object"; return false; }
+inline bool readMotorOptions(Value oIn, physics::MotorOptions& m, std::string& err) {
+    if (!ev::isObject(oIn)) { err = "motor options must be an object"; return false; }
+    const Rooted oVal(oIn);
     std::string type = getPropString(oVal, "type");
     if (type == "velocity")      m.state = physics::MotorOptions::Velocity;
     else if (type == "position") m.state = physics::MotorOptions::Position;
@@ -550,7 +580,8 @@ inline bool readMotorOptions(Value oVal, physics::MotorOptions& m, std::string& 
     return true;
 }
 
-inline bool readSixDofAxis(Value v, physics::SixDofAxis& a, std::string& err) {
+inline bool readSixDofAxis(Value vIn, physics::SixDofAxis& a, std::string& err) {
+    const Rooted v(vIn);
     if (!ev::isObject(v)) {
         std::string mode = ev::toUtf8(v);
         if (mode == "locked")    a.mode = physics::SixDofAxis::Locked;
@@ -558,12 +589,8 @@ inline bool readSixDofAxis(Value v, physics::SixDofAxis& a, std::string& err) {
         else { err = "axis mode must be 'locked' | 'free' | {min,max,...}"; return false; }
         return true;
     }
-    Value minV = ev::getProperty(v, "min");
-    Value maxV = ev::getProperty(v, "max");
-    if (!ev::isUndefined(minV) && !ev::isObject(minV) && !ev::isUndefined(maxV) && !ev::isObject(maxV)) {
+    if (readBoundPair(v, "min", "max", a.min, a.max)) {
         a.mode = physics::SixDofAxis::Limited;
-        a.min = static_cast<float>(ev::toDouble(minV));
-        a.max = static_cast<float>(ev::toDouble(maxV));
     } else {
         a.mode = physics::SixDofAxis::Free;
     }
@@ -573,14 +600,15 @@ inline bool readSixDofAxis(Value v, physics::SixDofAxis& a, std::string& err) {
     return true;
 }
 
-inline void readQueryFilter(Value v, physics::QueryFilter& filter, HostPhysicsWorld* pw) {
-    if (!ev::isObject(v)) return;
+inline void readQueryFilter(Value vIn, physics::QueryFilter& filter, HostPhysicsWorld* pw) {
+    if (!ev::isObject(vIn)) return;
+    const Rooted v(vIn);
     Value ign = ev::getProperty(v, "ignoreBody");
     if (!ev::isUndefined(ign) && !ev::isNull(ign) && !ev::isObject(ign)) {
         int32_t t = static_cast<int32_t>(ev::toDouble(ign));
         filter.ignoreBody = pw->bodyIdForTag(t);
     }
-    Value igns = ev::getProperty(v, "ignoreBodies");
+    const Rooted igns(ev::getProperty(v, "ignoreBodies"));
     if (ev::isObject(igns)) {
         Value lenV = ev::getProperty(igns, "length");
         uint32_t len = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
@@ -593,7 +621,7 @@ inline void readQueryFilter(Value v, physics::QueryFilter& filter, HostPhysicsWo
             }
         }
     }
-    Value layers = ev::getProperty(v, "layers");
+    const Rooted layers(ev::getProperty(v, "layers"));
     if (ev::isObject(layers)) {
         auto* world = pw->getWorld();
         if (world) {

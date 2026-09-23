@@ -32,21 +32,22 @@ void* bro_physics_createCharacter(const char* config) {
     if (!world || !config || !*config) return nullptr;
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return nullptr;
+    const Rooted cfg(res.value);
 
     bro::physics::CharacterOptions opts;
-    opts.position = readRVec3(ev::getProperty(res.value, "position"));
-    opts.up = readVec3(ev::getProperty(res.value, "up"), JPH::Vec3(0, 1, 0));
-    opts.radius = static_cast<float>(getPropNumber(res.value, "radius", opts.radius));
-    opts.halfHeight = static_cast<float>(getPropNumber(res.value, "halfHeight", opts.halfHeight));
-    opts.mass = static_cast<float>(getPropNumber(res.value, "mass", opts.mass));
-    opts.maxSlopeAngle = static_cast<float>(getPropNumber(res.value, "maxSlopeAngle", opts.maxSlopeAngle));
-    opts.maxStrength = static_cast<float>(getPropNumber(res.value, "maxStrength", opts.maxStrength));
-    opts.padding = static_cast<float>(getPropNumber(res.value, "padding", opts.padding));
-    opts.stepUp = static_cast<float>(getPropNumber(res.value, "stepUp", opts.stepUp));
-    opts.stickToFloor = static_cast<float>(getPropNumber(res.value, "stickToFloor", opts.stickToFloor));
-    opts.innerBody = getPropBool(res.value, "innerBody", false);
+    opts.position = readRVec3(ev::getProperty(cfg, "position"));
+    opts.up = readVec3(ev::getProperty(cfg, "up"), JPH::Vec3(0, 1, 0));
+    opts.radius = static_cast<float>(getPropNumber(cfg, "radius", opts.radius));
+    opts.halfHeight = static_cast<float>(getPropNumber(cfg, "halfHeight", opts.halfHeight));
+    opts.mass = static_cast<float>(getPropNumber(cfg, "mass", opts.mass));
+    opts.maxSlopeAngle = static_cast<float>(getPropNumber(cfg, "maxSlopeAngle", opts.maxSlopeAngle));
+    opts.maxStrength = static_cast<float>(getPropNumber(cfg, "maxStrength", opts.maxStrength));
+    opts.padding = static_cast<float>(getPropNumber(cfg, "padding", opts.padding));
+    opts.stepUp = static_cast<float>(getPropNumber(cfg, "stepUp", opts.stepUp));
+    opts.stickToFloor = static_cast<float>(getPropNumber(cfg, "stickToFloor", opts.stickToFloor));
+    opts.innerBody = getPropBool(cfg, "innerBody", false);
 
-    Value layerVal = ev::getProperty(res.value, "layer");
+    Value layerVal = ev::getProperty(cfg, "layer");
     if (!ev::isUndefined(layerVal) && !ev::isNull(layerVal)) {
         if (!ev::isObject(layerVal)) {
             std::string s = ev::toUtf8(layerVal);
@@ -55,7 +56,7 @@ void* bro_physics_createCharacter(const char* config) {
             else opts.layer = world->layerIndex(s);
         }
     }
-    Value innerLayerVal = ev::getProperty(res.value, "innerBodyLayer");
+    Value innerLayerVal = ev::getProperty(cfg, "innerBodyLayer");
     if (!ev::isUndefined(innerLayerVal) && !ev::isNull(innerLayerVal)) {
         if (!ev::isObject(innerLayerVal)) {
             std::string s = ev::toUtf8(innerLayerVal);

@@ -122,9 +122,10 @@ void* bro_physics_createWorldHandle(const char* opts) {
     if (opts && *opts) {
         auto res = ev::parseJson(opts);
         if (!res.thrown && ev::isObject(res.value)) {
-            maxBodies = static_cast<uint32_t>(getPropNumber(res.value, "maxBodies", 10240));
-            contactBufferSize = static_cast<uint32_t>(getPropNumber(res.value, "contactBufferSize", 4096));
-            Value gv = ev::getProperty(res.value, "gravity");
+            const Rooted cfg(res.value);
+            maxBodies = static_cast<uint32_t>(getPropNumber(cfg, "maxBodies", 10240));
+            contactBufferSize = static_cast<uint32_t>(getPropNumber(cfg, "contactBufferSize", 4096));
+            Value gv = ev::getProperty(cfg, "gravity");
             if (!ev::isUndefined(gv) && !ev::isNull(gv)) {
                 gravity = readVec3(gv, gravity);
             }
@@ -208,8 +209,9 @@ bool bro_physics_setLayers(const char* config) {
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return false;
 
-    Value namesVal = ev::getProperty(res.value, "names");
-    Value matVal = ev::getProperty(res.value, "matrix");
+    const Rooted cfg(res.value);
+    const Rooted namesVal(ev::getProperty(cfg, "names"));
+    const Rooted matVal(ev::getProperty(cfg, "matrix"));
     std::vector<std::string> names;
     if (ev::isObject(namesVal)) {
         Value lenV = ev::getProperty(namesVal, "length");

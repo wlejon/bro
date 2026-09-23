@@ -15,6 +15,7 @@
 
 #include "bronze_host/gl_profile.h"
 #include "bronze_host/host_callee_namer.h"
+#include "bronze_host/host_rooted.h"
 
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_objects.h"

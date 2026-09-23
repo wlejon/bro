@@ -7,8 +7,9 @@ namespace bro::bronze_host {
 
 namespace {
 
-void readVehicleWheel(Value oVal, physics::VehicleWheelOptions& w) {
-    if (!ev::isObject(oVal)) return;
+void readVehicleWheel(Value oIn, physics::VehicleWheelOptions& w) {
+    if (!ev::isObject(oIn)) return;
+    const Rooted oVal(oIn);
 
     w.position = readVec3(ev::getProperty(oVal, "position"));
     w.suspensionDirection = readVec3(ev::getProperty(oVal, "suspensionDirection"), JPH::Vec3(0, -1, 0));
@@ -91,7 +92,7 @@ void* bro_physics_createVehicle(const char* config) {
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return nullptr;
 
-    Value optsVal = res.value;
+    const Rooted optsVal(res.value);
     physics::VehicleOptions opts;
 
     std::string type = getPropString(optsVal, "type");
@@ -144,7 +145,7 @@ void* bro_physics_createVehicle(const char* config) {
         }
     };
 
-    Value wheelsVal = ev::getProperty(optsVal, "wheels");
+    const Rooted wheelsVal(ev::getProperty(optsVal, "wheels"));
     if (ev::isObject(wheelsVal)) {
         Value lenV = ev::getProperty(wheelsVal, "length");
         uint32_t nw = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
@@ -160,14 +161,14 @@ void* bro_physics_createVehicle(const char* config) {
         return nullptr;
     }
 
-    Value engVal = ev::getProperty(optsVal, "engine");
+    const Rooted engVal(ev::getProperty(optsVal, "engine"));
     if (ev::isObject(engVal)) {
         opts.engine.maxTorque = static_cast<float>(getPropNumber(engVal, "maxTorque", opts.engine.maxTorque));
         opts.engine.minRPM = static_cast<float>(getPropNumber(engVal, "minRPM", opts.engine.minRPM));
         opts.engine.maxRPM = static_cast<float>(getPropNumber(engVal, "maxRPM", opts.engine.maxRPM));
     }
 
-    Value trVal = ev::getProperty(optsVal, "transmission");
+    const Rooted trVal(ev::getProperty(optsVal, "transmission"));
     if (ev::isObject(trVal)) {
         std::string mode = getPropString(trVal, "mode");
         opts.transmission.manual = (mode == "manual");
@@ -180,12 +181,12 @@ void* bro_physics_createVehicle(const char* config) {
     }
 
     if (opts.controller == physics::VehicleOptions::ControllerTracked) {
-        Value tracksVal = ev::getProperty(optsVal, "tracks");
+        const Rooted tracksVal(ev::getProperty(optsVal, "tracks"));
         if (ev::isObject(tracksVal)) {
             Value lenV = ev::getProperty(tracksVal, "length");
             uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
             for (uint32_t i = 0; i < n; ++i) {
-                Value tv = ev::getElement(tracksVal, i);
+                const Rooted tv(ev::getElement(tracksVal, i));
                 physics::VehicleTrackOptions trk;
                 if (ev::isObject(tv)) {
                     std::vector<float> idxs;
@@ -206,11 +207,12 @@ void* bro_physics_createVehicle(const char* config) {
             return nullptr;
         }
     } else if (opts.controller == physics::VehicleOptions::ControllerMotorcycle) {
-        Value leanVal = ev::getProperty(optsVal, "lean");
+        const Rooted leanVal(ev::getProperty(optsVal, "lean"));
         if (ev::isObject(leanVal)) {
             opts.lean.maxAngle = static_cast<float>(getPropNumber(leanVal, "maxAngle", opts.lean.maxAngle));
             opts.lean.springConstant = static_cast<float>(getPropNumber(leanVal, "springConstant", opts.lean.springConstant));
-            opts.lean.springDamping = static_cast<float>(getPropNumber(leanVal, "springDamping", getPropNumber(leanVal, "dampingConstant", opts.lean.springDamping)));
+            const double dampingConstant = getPropNumber(leanVal, "dampingConstant", opts.lean.springDamping);
+            opts.lean.springDamping = static_cast<float>(getPropNumber(leanVal, "springDamping", dampingConstant));
             opts.lean.springIntegrationCoefficient = static_cast<float>(
                 getPropNumber(leanVal, "springIntegrationCoefficient", opts.lean.springIntegrationCoefficient));
             opts.lean.springIntegrationCoefficientDecay = static_cast<float>(
@@ -222,12 +224,12 @@ void* bro_physics_createVehicle(const char* config) {
 
     // Explicit differentials (wheel indices into `wheels`); empty = derived
     // from the wheels' `driven` flags.
-    Value diffsVal = ev::getProperty(optsVal, "differentials");
+    const Rooted diffsVal(ev::getProperty(optsVal, "differentials"));
     if (ev::isObject(diffsVal)) {
         Value lenV = ev::getProperty(diffsVal, "length");
         uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
         for (uint32_t i = 0; i < n; ++i) {
-            Value dv = ev::getElement(diffsVal, i);
+            const Rooted dv(ev::getElement(diffsVal, i));
             physics::VehicleDifferentialOptions d;
             if (ev::isObject(dv)) {
                 d.leftWheel = static_cast<int>(getPropNumber(dv, "leftWheel", d.leftWheel));
@@ -258,12 +260,12 @@ void* bro_physics_createVehicle(const char* config) {
     if (ev::isString(tlVal)) opts.testerLayer = world->layerIndex(ev::toUtf8(tlVal));
     else if (ev::isNumber(tlVal)) opts.testerLayer = static_cast<int>(ev::toDouble(tlVal));
 
-    Value arbVal = ev::getProperty(optsVal, "antiRollBars");
+    const Rooted arbVal(ev::getProperty(optsVal, "antiRollBars"));
     if (ev::isObject(arbVal)) {
         Value lenV = ev::getProperty(arbVal, "length");
         uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
         for (uint32_t i = 0; i < n; ++i) {
-            Value el = ev::getElement(arbVal, i);
+            const Rooted el(ev::getElement(arbVal, i));
             if (ev::isObject(el)) {
                 physics::VehicleAntiRollBarOptions bar;
                 bar.leftWheel = static_cast<int>(getPropNumber(el, "leftWheel", 0));
@@ -309,7 +311,7 @@ void bro_physics_PhysicsVehicle_setInput(void* self, const char* config) {
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return;
 
-    Value o = res.value;
+    const Rooted o(res.value);
     double fwd = getPropNumber(o, "forward", 0.0);
     double right = getPropNumber(o, "right", 0.0);
     double brake = getPropNumber(o, "brake", 0.0);
@@ -317,13 +319,15 @@ void bro_physics_PhysicsVehicle_setInput(void* self, const char* config) {
 
     bool explicitRatios = false;
     if (pv->type == physics::VehicleOptions::ControllerTracked) {
-        Value lrVal = ev::getProperty(o, "leftRatio");
-        Value rrVal = ev::getProperty(o, "rightRatio");
-        if ((!ev::isUndefined(lrVal) && !ev::isObject(lrVal)) ||
-            (!ev::isUndefined(rrVal) && !ev::isObject(rrVal))) {
+        // Each ratio converts before the next read can move it.
+        Value ratio = ev::getProperty(o, "leftRatio");
+        const bool hasLeft = !ev::isUndefined(ratio) && !ev::isObject(ratio);
+        const double lr = hasLeft ? ev::toDouble(ratio) : 1.0;
+        ratio = ev::getProperty(o, "rightRatio");
+        const bool hasRight = !ev::isUndefined(ratio) && !ev::isObject(ratio);
+        const double rr = hasRight ? ev::toDouble(ratio) : 1.0;
+        if (hasLeft || hasRight) {
             explicitRatios = true;
-            double lr = (!ev::isUndefined(lrVal) && !ev::isObject(lrVal)) ? ev::toDouble(lrVal) : 1.0;
-            double rr = (!ev::isUndefined(rrVal) && !ev::isObject(rrVal)) ? ev::toDouble(rrVal) : 1.0;
             w->setVehicleTrackInput(pv->handle, static_cast<float>(fwd), static_cast<float>(lr),
                                     static_cast<float>(rr), static_cast<float>(brake));
         }

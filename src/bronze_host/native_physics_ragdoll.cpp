@@ -10,16 +10,18 @@ namespace {
 static thread_local std::vector<float> tl_poseBuf;
 static thread_local std::vector<float> tl_localPoseBuf;
 
-void readRagdollMotor(Value oVal, physics::RagdollMotorOptions& m) {
-    if (!ev::isObject(oVal)) return;
+void readRagdollMotor(Value oIn, physics::RagdollMotorOptions& m) {
+    if (!ev::isObject(oIn)) return;
+    const Rooted oVal(oIn);
     m.frequency = static_cast<float>(getPropNumber(oVal, "frequency", m.frequency));
     m.damping = static_cast<float>(getPropNumber(oVal, "damping", m.damping));
     m.maxTorque = static_cast<float>(getPropNumber(oVal, "maxTorque", m.maxTorque));
 }
 
-bool readRagdollPart(Value oVal, const std::vector<std::string>& names,
+bool readRagdollPart(Value oIn, const std::vector<std::string>& names,
                      physics::RagdollPartOptions& p, std::string& err) {
-    if (!ev::isObject(oVal)) { err = "part must be an object"; return false; }
+    if (!ev::isObject(oIn)) { err = "part must be an object"; return false; }
+    const Rooted oVal(oIn);
     p.name = getPropString(oVal, "name");
 
     Value pv = ev::getProperty(oVal, "parent");
@@ -66,7 +68,7 @@ bool readRagdollPart(Value oVal, const std::vector<std::string>& names,
     p.friction = static_cast<float>(getPropNumber(oVal, "friction", p.friction));
     p.restitution = static_cast<float>(getPropNumber(oVal, "restitution", p.restitution));
 
-    Value jv = ev::getProperty(oVal, "joint");
+    const Rooted jv(ev::getProperty(oVal, "joint"));
     if (ev::isObject(jv)) {
         std::string jt = getPropString(jv, "type");
         if (jt == "fixed") p.joint = physics::RagdollPartOptions::JointFixed;
@@ -165,7 +167,7 @@ void* bro_physics_createRagdoll(const char* config) {
     auto res = ev::parseJson(config);
     if (res.thrown || !ev::isObject(res.value)) return nullptr;
 
-    Value optsVal = res.value;
+    const Rooted optsVal(res.value);
     physics::RagdollOptions opts;
 
     opts.position = readVec3(ev::getProperty(optsVal, "position"));
@@ -190,7 +192,7 @@ void* bro_physics_createRagdoll(const char* config) {
     Value motorV = ev::getProperty(optsVal, "motor");
     if (ev::isObject(motorV)) readRagdollMotor(motorV, opts.motor);
 
-    Value partsV = ev::getProperty(optsVal, "parts");
+    const Rooted partsV(ev::getProperty(optsVal, "parts"));
     std::vector<std::string> names;
     if (ev::isObject(partsV)) {
         Value lenV = ev::getProperty(partsV, "length");
