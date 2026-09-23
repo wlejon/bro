@@ -313,6 +313,9 @@ Mesh.dualContouring = function(values, dimX, dimY, dimZ, isoLevel) {};
  *
  *  Sign convention is SDF: `value < isoLevel` is inside, normals point out.
  *  A `values` array shorter than `gridSize^3`, or `gridSize < 2`, throws.
+ *  `lod` is an integer with `2^lod <= gridSize - 1` (at least one cell), and
+ *  each `neighborLods` entry an integer in [-1, 30]; a negative, fractional
+ *  or larger value throws a RangeError, a non-number `lod` a TypeError.
  * @example
  *  // lod-0 chunk whose +X neighbour is at lod 1; every other face is open
  *  const chunk = Mesh.transvoxel(field, 17, 0, [1, -1, -1, -1, -1, -1], 0, 0.5);
