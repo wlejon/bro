@@ -20,6 +20,10 @@
  *   - NLLB-200 (loadNllb): machine translation between 200+ FLORES-200 languages.
  *   - CLIP (loadClip): ViT-L/14 cross-modal scorer (text <-> image similarity).
  *   - T5 (loadT5): encoder-only text encoder (T5-XXL, Flux text conditioning).
+ *   - ModernBERT (loadModernBert): bidirectional text encoder (8192-token
+ *     context, alternating global / 128-token sliding attention) for text
+ *     embeddings; a Hugging Face ModernBERT directory or a Laya checkpoint's
+ *     encoder.
  *   - Laya (loadLaya / loadLayaAsync): a realtime decision model — typed
  *     choice / score / yes-no questions about a state, calibrated
  *     probabilities in one forward pass, served by a request scheduler that
@@ -140,6 +144,12 @@
  *   });
  *   const t5enc = t5.encode('a serene mountain lake at dawn');
  *   console.log(t5enc.length, 'tokens', t5enc.dim, 'dims');
+ *
+ * @example
+ *   // --- ModernBERT Encoder -------------------------------------------------
+ *   const bert = bro.lm.loadModernBert('../ModernBERT-large');
+ *   const { pooled } = bert.encode('Please refund the duplicate charge.', { pooling: 'mean' });
+ *   console.log(pooled.length);  // bert.hiddenSize
  */
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
@@ -269,6 +279,44 @@
  * @property {number} length
  * @property {number} dim
  * @property {Int32Array} ids
+ */
+
+/**
+ * ModernBERT loading options. Relative paths resolve against the app
+ * directory; each path defaults to the Hugging Face layout, then the Laya one.
+ * @typedef {Object} LoadModernBertOptions
+ * @property {string} [device="cuda"]
+ * @property {string} [configPath] - Default `<dir>/config.json`, else `<dir>/encoder/config.json`
+ * @property {string} [tokenizerPath] - Default `<dir>/tokenizer.json`, else `<dir>/tokenizer/tokenizer.json`
+ *   (a tokenizer_config.json beside it names the [CLS]/[SEP]/[PAD]/[MASK] roles)
+ * @property {string} [weightsPath] - Default `<dir>/model.safetensors`
+ * @property {string} [prefix] - Tensor-name prefix; found by probing `model.`, `encoder.`, then none
+ * @property {number} [maxLength] - Longest sequence encode() accepts; at most (and by
+ *   default) the config's max_position_embeddings
+ * @property {Function} [onReady] - When given, the load runs on a worker and
+ *   `onReady(model)` fires on a later bro.lm.tick; the call returns an AsyncHandle
+ * @property {Function} [onError] - `(message)` on an async load failure
+ */
+
+/**
+ * Per-call ModernBERT options (encode and tokenize).
+ * @typedef {Object} ModernBertEncodeOptions
+ * @property {boolean} [addSpecialTokens=true] - Wrap text as `[CLS] text [SEP]`, as
+ *   the Hugging Face tokenizer does by default
+ * @property {number} [maxLength] - Cut the ids to this many (both specials kept);
+ *   1..model.maxLength
+ * @property {string} [pooling="none"] - encode(): also return `pooled`, the
+ *   `'cls'` row or the `'mean'` over every row (specials included)
+ */
+
+/**
+ * ModernBERT last hidden state.
+ * @typedef {Object} ModernBertEncodeResult
+ * @property {Float32Array} data - `length * dim`, row-major, one row per id
+ * @property {number} length
+ * @property {number} dim
+ * @property {Int32Array} ids - The ids encoded
+ * @property {Float32Array} [pooled] - `dim` values, when opts.pooling is 'cls' or 'mean'
  */
 
 /**
@@ -1110,6 +1158,94 @@ class T5Model {
 
 }
 
+/**
+ * ModernBERT bidirectional text encoder. The output is the model's last
+ * hidden state (after the final norm), matching Hugging Face's
+ * ModernBertModel.last_hidden_state.
+ */
+class ModernBertModel {
+
+  /**
+   * Always "modernbert".
+   * @readonly
+   * @type {string}
+   */
+  family;
+
+  /**
+   * Hidden width (1024 for ModernBERT-large).
+   * @readonly
+   * @type {number}
+   */
+  hiddenSize;
+
+  /**
+   * Encoder layer count.
+   * @readonly
+   * @type {number}
+   */
+  numLayers;
+
+  /**
+   * Embedding rows; every id passed to encode() must be below it.
+   * @readonly
+   * @type {number}
+   */
+  vocabSize;
+
+  /**
+   * Longest sequence encode() accepts.
+   * @readonly
+   * @type {number}
+   */
+  maxLength;
+
+  /**
+   * [CLS], [SEP], [PAD] and [MASK] ids, from the tokenizer's special-token roles.
+   * @readonly
+   * @type {number}
+   */
+  clsId;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  sepId;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  padId;
+
+  /**
+   * @readonly
+   * @type {number}
+   */
+  maskId;
+
+  /**
+   * Token ids for `text`, wrapped and cut as encode() would.
+   *
+   * @param {string} text
+   * @param {ModernBertEncodeOptions} [opts]
+   * @returns {Int32Array}
+   */
+  tokenize(text, opts) {}
+
+  /**
+   * Encode text, or ids taken as given (already wrapped; each must be below
+   * vocabSize, at most maxLength of them). Blocking; runs on the model's device.
+   *
+   * @param {(string|Int32Array|Array<number>)} text
+   * @param {ModernBertEncodeOptions} [opts]
+   * @returns {ModernBertEncodeResult}
+   */
+  encode(text, opts) {}
+
+}
+
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
 /**
@@ -1214,6 +1350,17 @@ bro.lm.loadClip = function(opts) {};
  * @returns {T5Model} T5Model handle
  */
 bro.lm.loadT5 = function(opts) {};
+
+/**
+ * Load a ModernBERT encoder: a Hugging Face ModernBERT checkpoint directory
+ * (config.json, tokenizer.json, model.safetensors) or a Laya checkpoint
+ * (encoder/config.json, tokenizer/, the `encoder.` tensors of model.safetensors).
+ *
+ * @param {string} checkpointDir
+ * @param {LoadModernBertOptions} [opts]
+ * @returns {(ModernBertModel|AsyncHandle)} The model, or an AsyncHandle with opts.onReady
+ */
+bro.lm.loadModernBert = function(checkpointDir, opts) {};
 
 /**
  * Asynchronously run generation on a background thread with real-time cancellation.
