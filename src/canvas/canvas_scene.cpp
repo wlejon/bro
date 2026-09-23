@@ -1035,12 +1035,12 @@ SkPaint CanvasScene::makeStrokePaint() const {
 }
 
 void CanvasScene::setLineDash(const std::vector<float>& segments) {
-    state_.lineDash.clear();
-    state_.lineDash.reserve(segments.size());
+    // A negative or non-finite entry makes the whole call a no-op: the spec
+    // returns before touching the dash list, so the previous dash survives.
     for (float v : segments) {
-        if (!(v >= 0) || !std::isfinite(v)) { state_.lineDash.clear(); return; }
-        state_.lineDash.push_back(v);
+        if (!(v >= 0) || !std::isfinite(v)) return;
     }
+    state_.lineDash = segments;
 }
 
 const std::vector<float>& CanvasScene::lineDash() const { return state_.lineDash; }
@@ -1544,8 +1544,8 @@ void CanvasScene::drawImage(const void* rgbaData, int imgW, int imgH,
 // ---------------------------------------------------------------------------
 
 std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return {};
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4, 0);
-    if (w <= 0 || h <= 0) return pixels;
 
     if (threaded_) {
         // Defer the readback to the canvas worker so it runs on the same
@@ -1560,10 +1560,12 @@ std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
         }
         if (!snapshotValid_ || snapshot_.empty()) return pixels;
 
-        const int x0 = std::max(0, x);
-        const int x1 = std::min(sw, x + w);
-        const int y0 = std::max(0, y);
-        const int y1 = std::min(sh, y + h);
+        // 64-bit edges: x + w must not overflow for a rectangle a script
+        // placed near INT_MAX.
+        const int x0 = static_cast<int>(std::clamp<int64_t>(x, 0, sw));
+        const int x1 = static_cast<int>(std::clamp<int64_t>(int64_t{x} + w, 0, sw));
+        const int y0 = static_cast<int>(std::clamp<int64_t>(y, 0, sh));
+        const int y1 = static_cast<int>(std::clamp<int64_t>(int64_t{y} + h, 0, sh));
         if (x1 <= x0 || y1 <= y0) return pixels;
         const int copyW = x1 - x0;
         for (int row = y0; row < y1; ++row) {
@@ -1684,32 +1686,23 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
                                int dirtyX, int dirtyY, int dirtyWidth, int dirtyHeight) {
     if (!data || w <= 0 || h <= 0) return;
 
-    if (dirtyWidth < 0) {
-        dirtyX += dirtyWidth;
-        dirtyWidth = -dirtyWidth;
-    }
-    if (dirtyHeight < 0) {
-        dirtyY += dirtyHeight;
-        dirtyHeight = -dirtyHeight;
-    }
-    if (dirtyX < 0) {
-        dirtyWidth += dirtyX;
-        dirtyX = 0;
-    }
-    if (dirtyY < 0) {
-        dirtyHeight += dirtyY;
-        dirtyY = 0;
-    }
-    if (dirtyX + dirtyWidth > w) {
-        dirtyWidth = w - dirtyX;
-    }
-    if (dirtyY + dirtyHeight > h) {
-        dirtyHeight = h - dirtyY;
-    }
-    if (dirtyWidth <= 0 || dirtyHeight <= 0) return;
+    // The dirty rectangle is a script's four numbers: clamp it in 64 bits, so
+    // an edge near INT_MAX cannot overflow on the way into [0, w] x [0, h].
+    int64_t rx = dirtyX, ry = dirtyY, rw = dirtyWidth, rh = dirtyHeight;
+    if (rw < 0) { rx += rw; rw = -rw; }
+    if (rh < 0) { ry += rh; rh = -rh; }
+    if (rx < 0) { rw += rx; rx = 0; }
+    if (ry < 0) { rh += ry; ry = 0; }
+    if (rx + rw > w) rw = w - rx;
+    if (ry + rh > h) rh = h - ry;
+    if (rw <= 0 || rh <= 0) return;
+    dirtyX = static_cast<int>(rx);
+    dirtyY = static_cast<int>(ry);
+    dirtyWidth = static_cast<int>(rw);
+    dirtyHeight = static_cast<int>(rh);
 
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-    sk_sp<SkData> skData = SkData::MakeWithCopy(data, w * h * 4);
+    sk_sp<SkData> skData = SkData::MakeWithCopy(data, static_cast<size_t>(w) * h * 4);
     auto img = SkImages::RasterFromData(info, skData, w * 4);
     if (!img) return;
 

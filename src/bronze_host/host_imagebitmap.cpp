@@ -43,13 +43,18 @@ static sk_sp<SkImage> buildBitmap(const uint8_t* rgba, int srcW, int srcH,
                                   std::string& err) {
     if (!rgba || srcW <= 0 || srcH <= 0) { err = "empty source"; return nullptr; }
     if (!crop) { sx = 0; sy = 0; sw = srcW; sh = srcH; }
-    if (sx < 0) { sw += sx; sx = 0; }
-    if (sy < 0) { sh += sy; sy = 0; }
-    if (sx >= srcW || sy >= srcH || sw <= 0 || sh <= 0) {
+    // The crop rectangle is a script's four numbers: clipped in 64 bits so an
+    // edge near INT_MAX cannot overflow before it lands inside the source.
+    int64_t cx = sx, cy = sy, cw = sw, ch = sh;
+    if (cx < 0) { cw += cx; cx = 0; }
+    if (cy < 0) { ch += cy; cy = 0; }
+    if (cx >= srcW || cy >= srcH || cw <= 0 || ch <= 0) {
         err = "crop rect outside source"; return nullptr;
     }
-    if (sx + sw > srcW) sw = srcW - sx;
-    if (sy + sh > srcH) sh = srcH - sy;
+    if (cx + cw > srcW) cw = srcW - cx;
+    if (cy + ch > srcH) ch = srcH - cy;
+    sx = static_cast<int>(cx); sy = static_cast<int>(cy);
+    sw = static_cast<int>(cw); sh = static_cast<int>(ch);
 
     outPixels.resize(static_cast<size_t>(sw) * sh * 4);
     if (sx == 0 && sy == 0 && sw == srcW && sh == srcH) {
@@ -133,6 +138,8 @@ Value makeImageDataValue(int width, int height, Value dataArr) {
 }
 
 Value makeImageDataValue(int width, int height, const uint8_t* pixels) {
+    // Every caller has bounded width*height*4 to one buffer (rgbaBufferFits);
+    // an engine-sized source (a frame capture) stays far below it.
     size_t sz = static_cast<size_t>(width) * height * 4;
     Value dataArr = ev::createTypedArray(bronze::embed::elements::Uint8Clamped, static_cast<uint32_t>(sz));
     if (pixels && sz > 0) {
@@ -151,7 +158,7 @@ static Value js_imageData_ctor(Value, std::span<const Value> a) {
 
     if (dataFirst) {
         if (a.size() < 2) return ev::throwTypeError("ImageData(data, width[, height]) requires a width");
-        int32_t w = static_cast<int32_t>(ev::toDouble(a[1]));
+        int32_t w = satCast<int32_t>(ev::toDouble(a[1]));
         if (w <= 0) return ev::throwRangeError("ImageData width must be positive");
         if (info0.byteLength % 4 != 0) return ev::throwRangeError("ImageData data length must be a multiple of 4");
         size_t pixelCount = info0.byteLength / 4;
@@ -159,7 +166,7 @@ static Value js_imageData_ctor(Value, std::span<const Value> a) {
             return ev::throwRangeError("ImageData data length is not a multiple of 4*width");
         int h = static_cast<int>(pixelCount / static_cast<size_t>(w));
         if (a.size() >= 3) {
-            int32_t hh = static_cast<int32_t>(ev::toDouble(a[2]));
+            int32_t hh = satCast<int32_t>(ev::toDouble(a[2]));
             if (hh > 0) {
                 if (static_cast<size_t>(w) * hh * 4 != info0.byteLength)
                     return ev::throwRangeError("ImageData data length does not match width*height*4");
@@ -169,10 +176,16 @@ static Value js_imageData_ctor(Value, std::span<const Value> a) {
         width = w; height = h;
         dataArr = a[0];
     } else {
-        int32_t w = static_cast<int32_t>(ev::toDouble(a[0]));
-        int32_t h = a.size() >= 2 ? static_cast<int32_t>(ev::toDouble(a[1])) : 0;
+        int32_t w = satCast<int32_t>(ev::toDouble(a[0]));
+        int32_t h = a.size() >= 2 ? satCast<int32_t>(ev::toDouble(a[1])) : 0;
         if (w <= 0 || h <= 0)
             return ev::throwRangeError("ImageData(width, height) requires positive dimensions");
+        // Checked before the allocation, in 64 bits: width*height*4 past one
+        // buffer's cap would otherwise wrap in the uint32 length below and
+        // hand back an ImageData whose data is shorter than it says.
+        if (!rgbaBufferFits(w, h))
+            return ev::throwRangeError("ImageData(width, height): " + std::to_string(w) + "x" +
+                                       std::to_string(h) + " is larger than one ImageData can hold");
         width = w; height = h;
         size_t sz = static_cast<size_t>(w) * h * 4;
         dataArr = ev::createTypedArray(bronze::embed::elements::Uint8Clamped, static_cast<uint32_t>(sz));
@@ -245,10 +258,10 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
     int sx = 0, sy = 0, sw = 0, sh = 0;
     if (a.size() >= 5) {
         crop = true;
-        sx = static_cast<int>(ev::toDouble(a[1]));
-        sy = static_cast<int>(ev::toDouble(a[2]));
-        sw = static_cast<int>(ev::toDouble(a[3]));
-        sh = static_cast<int>(ev::toDouble(a[4]));
+        sx = satCast<int>(ev::toDouble(a[1]));
+        sy = satCast<int>(ev::toDouble(a[2]));
+        sw = satCast<int>(ev::toDouble(a[3]));
+        sh = satCast<int>(ev::toDouble(a[4]));
     }
 
     std::string err;
@@ -298,8 +311,8 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
             // Each read reduced to a number before the next getProperty
             // (which may allocate) runs; the data pointer is consumed by
             // buildBitmap before anything else can.
-            int w = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
-            int h = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
+            int w = satCast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
+            int h = satCast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
             Value dV = ev::getProperty(a[0], "data");
             auto info = ev::typedArrayInfo(dV);
             if (info.data && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * h * 4) {

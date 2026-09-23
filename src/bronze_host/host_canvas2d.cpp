@@ -577,7 +577,10 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
         std::vector<float> segs;
         if (ev::isObject(a[0])) {
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(a[0], "length")));
+            uint32_t len = 0;
+            if (!lengthWithin(ev::toDouble(ev::getProperty(a[0], "length")), kMaxHostListLength, len)) {
+                return ev::throwRangeError("setLineDash: the segment list's length is not a valid list length");
+            }
             segs.reserve(len);
             for (uint32_t i = 0; i < len; ++i) {
                 segs.push_back(static_cast<float>(ev::toDouble(ev::getElement(a[0], i))));
@@ -703,10 +706,22 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     });
 
     b.def("getImageData", 4, [el](Value, std::span<const Value> a) -> Value {
-        int x = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
-        int y = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
-        int w = a.size() > 2 ? static_cast<int>(ev::toDouble(a[2])) : 1;
-        int h = a.size() > 3 ? static_cast<int>(ev::toDouble(a[3])) : 1;
+        int x = a.size() > 0 ? satCast<int>(ev::toDouble(a[0])) : 0;
+        int y = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
+        int w = a.size() > 2 ? satCast<int>(ev::toDouble(a[2])) : 1;
+        int h = a.size() > 3 ? satCast<int>(ev::toDouble(a[3])) : 1;
+        // The spec's rectangle rules: a zero side is an IndexSizeError, and a
+        // negative one names the same rectangle from its other edge.
+        if (w == 0 || h == 0) {
+            return ev::throwValue(hostMakeDomError(
+                "IndexSizeError", "getImageData: the source width or height is 0"));
+        }
+        if (w < 0) { x = satCast<int>(static_cast<double>(x) + w); w = satCast<int>(-static_cast<double>(w)); }
+        if (h < 0) { y = satCast<int>(static_cast<double>(y) + h); h = satCast<int>(-static_cast<double>(h)); }
+        if (!rgbaBufferFits(w, h)) {
+            return ev::throwRangeError("getImageData: " + std::to_string(w) + "x" +
+                                       std::to_string(h) + " is larger than one ImageData can hold");
+        }
         std::vector<uint8_t> pixels;
         if (el && el->canvasScene()) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -721,14 +736,24 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     b.def("createImageData", 2, [](Value, std::span<const Value> a) -> Value {
         int w = 1, h = 1;
         if (a.size() >= 2) {
-            w = static_cast<int>(ev::toDouble(a[0]));
-            h = static_cast<int>(ev::toDouble(a[1]));
+            w = satCast<int>(ev::toDouble(a[0]));
+            h = satCast<int>(ev::toDouble(a[1]));
         } else if (a.size() == 1 && ev::isObject(a[0])) {
-            w = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
-            h = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
+            w = satCast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
+            h = satCast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
         }
-        if (w <= 0) w = 1;
-        if (h <= 0) h = 1;
+        // createImageData(sw, sh): a zero side is an IndexSizeError, a
+        // negative one counts by its magnitude.
+        if (w == 0 || h == 0) {
+            return ev::throwValue(hostMakeDomError(
+                "IndexSizeError", "createImageData: the width or height is 0"));
+        }
+        if (w < 0) w = satCast<int>(-static_cast<double>(w));
+        if (h < 0) h = satCast<int>(-static_cast<double>(h));
+        if (!rgbaBufferFits(w, h)) {
+            return ev::throwRangeError("createImageData: " + std::to_string(w) + "x" +
+                                       std::to_string(h) + " is larger than one ImageData can hold");
+        }
         return makeImageDataValue(w, h, nullptr);
     });
 
@@ -737,19 +762,28 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         // Every read goes through a[0], a rooted argument slot: each
         // getProperty may allocate (or run a getter), which leaves a copied
         // Value naming the pre-collection address.
-        int dx = static_cast<int>(ev::toDouble(a[1]));
-        int dy = static_cast<int>(ev::toDouble(a[2]));
+        int dx = satCast<int>(ev::toDouble(a[1]));
+        int dy = satCast<int>(ev::toDouble(a[2]));
         const bool dirty = a.size() >= 7;
-        int dirtyX = dirty ? static_cast<int>(ev::toDouble(a[3])) : 0;
-        int dirtyY = dirty ? static_cast<int>(ev::toDouble(a[4])) : 0;
-        int dirtyW = dirty ? static_cast<int>(ev::toDouble(a[5])) : 0;
-        int dirtyH = dirty ? static_cast<int>(ev::toDouble(a[6])) : 0;
-        int w = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
-        int h = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
+        int dirtyX = dirty ? satCast<int>(ev::toDouble(a[3])) : 0;
+        int dirtyY = dirty ? satCast<int>(ev::toDouble(a[4])) : 0;
+        int dirtyW = dirty ? satCast<int>(ev::toDouble(a[5])) : 0;
+        int dirtyH = dirty ? satCast<int>(ev::toDouble(a[6])) : 0;
+        int w = satCast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
+        int h = satCast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
         Value dataVal = ev::getProperty(a[0], "data");
         // The byte pointer is heap-borrowed: nothing may allocate between
         // here and the putImageData that copies it out.
         auto info = ev::typedArrayInfo(dataVal);
+        // width, height and data are three separate reads of whatever object
+        // the script passed, and the copy below reads width*height*4 bytes:
+        // a data array shorter than that is refused, never read past.
+        if (info.data && w > 0 && h > 0 &&
+            (!rgbaBufferFits(w, h) ||
+             static_cast<uint64_t>(info.byteLength) < static_cast<uint64_t>(w) * h * 4)) {
+            return ev::throwTypeError("putImageData: the image data's data holds fewer than "
+                                      "width*height*4 bytes");
+        }
         if (info.data && w > 0 && h > 0) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
             if (dirty) {
