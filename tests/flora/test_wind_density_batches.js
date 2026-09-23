@@ -79,16 +79,19 @@ function runFloraWindDensityBatchTest() {
     assert(Math.abs(batchPos.transforms[16 + 11] - 5) < 1e-4, 'triple 1 posZ mapped');
 
     // Add placement with explicit transforms
+    // Row-major 3x4 affine (translation in floats 3/7/11) plus an RGBA tint
+    // in floats 12-15, the layout docs/flora-api.js gives for placement
+    // batches.
     const customTransforms = new Float32Array([
-        1, 0, 0, 0,
+        1, 0, 0, 10,
         0, 1, 0, 0,
-        0, 0, 1, 0,
-        10, 0, 5, 1,
+        0, 0, 1, 5,
+        1, 1, 1, 1,
 
-        1, 0, 0, 0,
+        1, 0, 0, 20,
         0, 1, 0, 0,
-        0, 0, 1, 0,
-        20, 0, 15, 1,
+        0, 0, 1, 15,
+        1, 1, 1, 1,
     ]);
     const batch2 = bro.flora.placement({
         transforms: customTransforms,
