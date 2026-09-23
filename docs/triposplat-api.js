@@ -182,13 +182,14 @@ bro.triposplat.init = function() {};
 
 /**
  * Load the TripoSplat checkpoints and place them on the compute device.
- * Blocking and multi-GB — run it in a Worker. Every path must exist or it
- * throws, and the paths are used verbatim (no asset-path resolution).
+ * Blocking and multi-GB — run it in a Worker. Every path given must exist or
+ * it throws; paths go through the asset-path resolver.
  *
  * @param {object} paths
- * @param {string} paths.dinov3   DINOv3 ViT-H safetensors (brovisionml weights).
- *        Required and checked for existence; the current sampler feeds its
- *        conditioning slot zeros, so the file is validated but not read.
+ * @param {string} [paths.dinov3] DINOv3 ViT-H weights (brovisionml): a
+ *        .safetensors file or a directory. Also accepted as `paths.dino`.
+ *        Optional: when given, generate() encodes the image with it as the
+ *        flow model's first conditioning; without it that slot is zeros.
  * @param {string} paths.vae      Flux.2 VAE encoder safetensors (brodiffusion weights)
  * @param {string} paths.flow     flow-DiT safetensors (brodiffusion weights)
  * @param {string} paths.decoder  octree Gaussian decoder safetensors (brodiffusion weights)
@@ -208,11 +209,14 @@ bro.triposplat.load = function(paths) {};
  * the octree decode finishes that stage first. The aborted generate() returns
  * { cancelled: true }.
  *
- * No-op when nothing is running; the flag is cleared at the start of each
- * generate().
+ * With no argument it stops every generate() in flight in the process — the
+ * main thread's way to reach a Worker's run. With a TripoSplatPipeline it
+ * stops only that pipeline's run. A generate() that starts after the call is
+ * not affected.
+ * @param {TripoSplatPipeline} [pipeline]
  * @returns {undefined}
  */
-bro.triposplat.cancel = function() {};
+bro.triposplat.cancel = function(pipeline) {};
 
 /**
  * Write ANY SplatCloud to a binary .ply — the free-function form, for a cloud

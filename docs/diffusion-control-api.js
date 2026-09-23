@@ -1498,8 +1498,8 @@ class Pipeline {
  * both a decoder and an encoder with default configs; loadWeights() then fills
  * them from a checkpoint.
  *
- * This class predates the asset-path resolver: its paths are used VERBATIM, so
- * pass an absolute path or one from bro.resolvePath().
+ * loadWeights() resolves its path through the asset-path resolver, like
+ * every other loader.
  */
 class VAE {
 
@@ -1522,8 +1522,8 @@ class VAE {
    * Decode a latent to an image at 8x the latent dims. The latent may be a
    * bare Float32Array or an object { data, width, height }; a second argument
    * { width, height } overrides the dims either way. Both dims default to 64
-   * when nothing supplies them, and the buffer must hold at least
-   * in_channels * height * width values.
+   * when nothing supplies them, must be positive, and the buffer must hold at
+   * least in_channels * height * width values.
    *
    * Unlike PipelineState.decode() this has no includeFp32 option — the result
    * is always { width, height, data }.

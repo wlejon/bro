@@ -181,6 +181,18 @@
  */
 
 /**
+ * DiffusionJobHandle — what generate()'s background form and generateAsync()
+ * return.
+ *
+ * @typedef {Object} DiffusionJobHandle
+ * @property {boolean} done      true once the worker thread has finished (onDone
+ *           may still be waiting for the next tick)
+ * @property {function(): void} cancel  stop the run at the next step
+ * @property {function(): void} wait    block until the run finishes and deliver
+ *           its onDone — a blocking call, like the synchronous generate()
+ */
+
+/**
  * Cancelled — returned INSTEAD of an ImageResult (or instead of a Pipeline, by
  * loadModel) when bro.diffusion.cancel() fires during the call. It has no
  * pixels and no handle, so test for it before touching anything else.
@@ -199,9 +211,10 @@
  *           ControlNet, and QwenImage21 additionally accepts `conditionImages` and
  *           `outputResolution` on generate() and prime() (and on
  *           qwenImage21PrimeEdit(), which takes the images as its own argument).
- * @property {string}  scheduler        'ddim' | 'lcm' | 'flowmatch' | 'scm'. A pipeline
- *           built with scheduler:'dpm' reports 'ddim' here — the snapshot has no separate
- *           name for DPM-Solver.
+ * @property {string}  scheduler        A createPipeline() pipeline reports the name it was
+ *           created with, verbatim ('ddim', 'lcm', 'flowmatch', 'euler', 'scm', 'dpm',
+ *           'dpmsolver'). A loadModel() pipeline reports its scheduler's family:
+ *           'ddim' | 'lcm' | 'flowmatch' | 'scm' | 'dpm'.
  * @property {number}  timeCondProjDim  SD1.5 U-Net time-cond projection dim (256 for an
  *           LCM-distilled checkpoint, else 0). 0 for the DiT families.
  * @property {boolean} quantizeWeights  whether the U-Net was INT8-quantized at load
@@ -288,11 +301,55 @@ class Pipeline {
    * stops at the next step and generate() returns { cancelled: true } with no
    * pixels. The cancel flag is cleared at the start of every generate().
    *
+   * BACKGROUND FORM: with `opts.onDone` (a function) or `opts.async: true`
+   * the run moves to a native worker thread and generate() returns a
+   * DiffusionJobHandle at once. `onDone(result, info)` is called on this
+   * thread from bro.diffusion.tick() (or Pipeline.tick(), or the handle's
+   * wait()) once the run ends: `result` is the ImageResult, or
+   * { cancelled: true }, or null on error; `info` is { cancelled, error? }.
+   * An error with no onDone is written to stderr. While the run is in flight
+   * the pipeline is `busy`: generate, prime, stepOnce, decode, loadWeights,
+   * applyLora, addControlNet, the encode / prime research hooks and every
+   * qwenImage21* hook throw rather than drive the same weights from two
+   * threads, and dispose() cancels and waits for it. imageToImage() and
+   * inpaint() take the same two keys.
+   *
    * @param {string} prompt
-   * @param {GenerateOptions} [opts]
-   * @returns {ImageResult|Cancelled}
+   * @param {GenerateOptions & {onDone?: function(?(ImageResult|Cancelled), {cancelled: boolean, error?: string}): void, async?: boolean}} [opts]
+   * @returns {ImageResult|Cancelled|DiffusionJobHandle}
    */
   generate(prompt, opts) {}
+
+  /**
+   * generate()'s background form, whatever opts says: always returns a
+   * DiffusionJobHandle, and delivers through opts.onDone when given.
+   * @param {string} prompt
+   * @param {GenerateOptions & {onDone?: function}} [opts]
+   * @returns {DiffusionJobHandle}
+   */
+  generateAsync(prompt, opts) {}
+
+  /**
+   * True while a background generate owns this pipeline (see generate()).
+   * @readonly
+   * @type {boolean}
+   */
+  busy;
+
+  /**
+   * Cancel this pipeline's background generates and any synchronous run
+   * polling its cancel flag. The jobs' onDone still fires, with
+   * { cancelled: true }.
+   * @returns {undefined}
+   */
+  cancel() {}
+
+  /**
+   * Deliver finished background generates on this thread — the same as
+   * bro.diffusion.tick().
+   * @returns {undefined}
+   */
+  tick() {}
 
   /**
    * Exact alias of generate(prompt, opts) — the spelling that reads well next
@@ -354,18 +411,25 @@ class Pipeline {
 
   /**
    * Pipeline-side convenience form of the step: advance `state` by one
-   * denoising step using the opts captured at prime() time. Takes NO control
-   * object — for attention trace / attnBias use state.stepOnce(ctrl).
+   * denoising step using the opts captured at prime() time. The optional
+   * second argument is the same control object state.stepOnce(ctrl) takes
+   * ({ trace, attnBias | logitBias }), or the positional form
+   * (state, trace: boolean, attnBias?). With trace on it returns
+   * { hasMore, trace } instead of the boolean; { cancelled: true } when the
+   * pipeline's cancel flag is up.
    *
    * @param {PipelineState} state
-   * @returns {boolean} true while more steps remain (state.stepIndex < state.numSteps)
+   * @param {{trace?: boolean, attnBias?: Array, logitBias?: Array}|boolean} [ctrl]
+   * @param {Array} [attnBias]  positional form only
+   * @returns {boolean|{hasMore: boolean, trace: Array<{Lq: number, Lk: number, data: Float32Array}>}|Cancelled}
+   *          true while more steps remain (state.stepIndex < state.numSteps)
    *
    * @example
    *   const st = pipe.prime(prompt, { steps: 12 });
    *   while (pipe.stepOnce(st)) showProgress(st.stepIndex, st.numSteps);
    *   const img = pipe.decode(st);
    */
-  stepOnce(state) {}
+  stepOnce(state, ctrl, attnBias) {}
 
   /**
    * Pipeline-side convenience form of the decode: VAE-decode `state`'s current
@@ -733,11 +797,26 @@ bro.diffusion.expandNoise = function(src, opts) {};
  * components during a load). The aborted call returns { cancelled: true }.
  *
  * The flag is cleared at the start of each generate-class call, so a stale
- * cancel never kills the next run. The step-wise prime()/stepOnce() loop is
- * NOT cancelled — you own its pacing, so just stop looping.
+ * cancel never kills the next run. A loadModel() only sees a cancel issued
+ * after it started. The step-wise prime()/stepOnce() loop is NOT cancelled —
+ * you own its pacing, so just stop looping (PipelineState.stepOnce() does
+ * return { cancelled: true } while its pipeline's flag is up).
+ *
+ * With an argument it cancels just that target: a Pipeline (its runs and
+ * background generates), a PipelineState (its pipeline's), or any object
+ * with a cancel() method (a DiffusionJobHandle).
+ * @param {Pipeline|PipelineState|DiffusionJobHandle} [target]
  * @returns {undefined}
  */
-bro.diffusion.cancel = function() {};
+bro.diffusion.cancel = function(target) {};
+
+/**
+ * Deliver the onDone callbacks of background generates that have finished on
+ * this thread. Call it once per frame while any are in flight (bro does not
+ * pump it for you yet).
+ * @returns {undefined}
+ */
+bro.diffusion.tick = function() {};
 
 /**
  * The Pipeline class object — for `instanceof`. Not constructible (throws
@@ -759,6 +838,123 @@ bro.diffusion.PipelineState;
  * @type {Function}
  */
 bro.diffusion.VAE;
+
+/**
+ * Load the terrain-diffusion world generator (xandergos/terrain-diffusion,
+ * three magnitude-preserving UNets over a tile-cached DAG) from a CONVERTED
+ * checkpoint dir — config.json, coarse/base/decoder.safetensors and
+ * synthetic_map_stats.json, as brodiffusion's
+ * scripts/convert-terrain-diffusion.py writes them (e.g.
+ * weights/terrain-diffusion-30m-bro). The path goes through the asset-path
+ * resolver. Blocking; the weights are ~1 GB.
+ *
+ * A world is a pure function of (seed, position): any region can be read in
+ * any order and agrees with the same cells read as part of another region (to
+ * within FP16 rounding — the GPU run is not bit-reproducible).
+ *
+ * @param {string} weightsDir
+ * @param {object} [opts]
+ * @param {number|bigint} [opts.seed=0]  world seed (the synthetic climate map uses
+ *        its low 32 bits, as upstream does)
+ * @returns {TerrainWorld}
+ *
+ * @example
+ *   const world = bro.diffusion.loadTerrain('../brodiffusion/weights/terrain-diffusion-30m-bro', { seed: 1234 });
+ *   const e = world.elevation(0, 0, 256, 256);   // 256x256 cells of 30 m, metres
+ *   const h00 = e.data[0], h01 = e.data[1];       // row 0, columns 0 and 1
+ */
+bro.diffusion.loadTerrain = function(weightsDir, opts) {};
+
+/**
+ * The TerrainWorld class object — for `instanceof`. Not constructible; also
+ * registered as the global `TerrainWorld`.
+ * @type {Function}
+ */
+bro.diffusion.TerrainWorld;
+
+/**
+ * TerrainRegion — what every TerrainWorld read returns: `data` is
+ * channel-major, channels x height x width, row i of the region first.
+ *
+ * @typedef {Object} TerrainRegion
+ * @property {number} channels
+ * @property {number} height    i2 - i1
+ * @property {number} width     j2 - j1
+ * @property {Float32Array} data
+ */
+
+/**
+ * A loaded terrain-diffusion world. Every read takes a region
+ * [i1, i2) x [j1, j2) in that read's own cells — i rows (north-south), j
+ * columns, signed and unbounded — and is one synchronous native call that
+ * runs the UNets over any tile it touches that is not cached yet, so a large
+ * cold read belongs in a Worker. One read is limited to 64M cells; an empty
+ * or non-integer region throws TypeError.
+ *
+ * The coarse / latent / residual reads return the normalised values unless
+ * `{ weighted: true }`, which returns the raw weighted sums with the weight
+ * channel appended — the form the next stage consumes.
+ */
+class TerrainWorld {
+  /**
+   * ELEVATION IN METRES at config().elevationCellMetres (30 m) per cell: the
+   * pipeline's product, reconstructed from the decoder's high-pass residual
+   * and the latent map's low band. 1 channel.
+   * @param {number} i1 @param {number} j1 @param {number} i2 @param {number} j2
+   * @returns {TerrainRegion}
+   */
+  elevation(i1, j1, i2, j2) {}
+
+  /**
+   * The coarse map, one cell per config().coarseCellMetres (~7.7 km):
+   * 6 channels — elevation, a derived channel, then four climate fields
+   * (7 with the weight channel when weighted).
+   * @param {number} i1 @param {number} j1 @param {number} i2 @param {number} j2
+   * @param {{weighted?: boolean}} [opts]
+   * @returns {TerrainRegion}
+   */
+  coarse(i1, j1, i2, j2, opts) {}
+
+  /**
+   * The latent map, one cell per config().latentCellMetres: 5 channels
+   * (6 weighted).
+   * @param {number} i1 @param {number} j1 @param {number} i2 @param {number} j2
+   * @param {{weighted?: boolean}} [opts]
+   * @returns {TerrainRegion}
+   */
+  latent(i1, j1, i2, j2, opts) {}
+
+  /**
+   * The decoder's elevation Laplacian residual at native resolution — NOT
+   * elevation; elevation() adds the low band back. 1 channel (2 weighted).
+   * @param {number} i1 @param {number} j1 @param {number} i2 @param {number} j2
+   * @param {{weighted?: boolean}} [opts]
+   * @returns {TerrainRegion}
+   */
+  residual(i1, j1, i2, j2, opts) {}
+
+  /**
+   * The checkpoint's constants.
+   * @returns {{nativeResolution: number, latentCompression: number,
+   *   elevationCellMetres: number, residualCellMetres: number,
+   *   latentCellMetres: number, coarseCellMetres: number,
+   *   residualMean: number, residualStd: number, dropWaterPct: number}}
+   */
+  config() {}
+
+  /**
+   * The world seed: a number, or a decimal string when it exceeds 2^53.
+   * @readonly
+   * @type {number|string}
+   */
+  seed;
+
+  /** Drop every cached tile. Only costs time: the world is unchanged. */
+  clearCache() {}
+
+  /** Free the networks and the tile cache now; every read throws afterwards. */
+  dispose() {}
+}
 
 // ── Workers: generation off the main thread ──────────────────────────────────
 //
