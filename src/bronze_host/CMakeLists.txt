@@ -141,6 +141,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_dom_events.cpp
     host_dom_events_types.cpp
     host_error_events.cpp
+    host_rejection_events.cpp
     host_timers.cpp
     host_image.cpp
     host_platform.cpp

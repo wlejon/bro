@@ -6,6 +6,8 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_headless.h"
+#include "bronze_host/host_rejection_events.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
@@ -434,6 +436,43 @@ void WorkerInstance::threadFunc() {
     // the control above (host_bro_root.cpp); the loop below polls them.
     installWorkerBroRoot();
 
+    // unhandledrejection / rejectionhandled at `self`: bronze reports on this
+    // thread's own drains, and the loop below flushes after each of them.
+    {
+        RejectionSink sink;
+        sink.what = "worker unhandledrejection";
+        sink.queueFlush = [] {};  // the loop polls rejectionEventsPending()
+        sink.global = [] {
+            ev::GlobalValue gt = ev::globalValue("globalThis");
+            return (gt.found && ev::isObject(gt.value)) ? gt.value : ev::undefined();
+        };
+        sink.dispatch = [&workerListeners](Value evtV) {
+            ev::Persistent evt(evtV);
+            ev::Persistent typeV(ev::getProperty(evt.get(), "type"));
+            const std::string type = ev::toUtf8(typeV.get());
+            std::vector<ev::Persistent> fns;
+            for (const auto& l : workerListeners) {
+                if (l.type == type && ev::isFunction(l.fn.get())) fns.emplace_back(l.fn.get());
+            }
+            for (auto& fn : fns) {
+                Value arg = evt.get();
+                ev::CallResult r = ev::call(fn.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+                if (r.thrown) {
+                    LOG_ERROR("[bronze:worker %s listener] uncaught %s", type.c_str(),
+                              thrownValueText(r.value).c_str());
+                }
+            }
+        };
+        sink.onReported = [] { setTestFailure(true); };
+        installRejectionTracking(std::move(sink));
+    }
+    auto flushRejections = [] {
+        for (int i = 0; i < 8 && rejectionEventsPending(); ++i) {
+            flushRejectionEvents();
+            if (ev::microtasksPending()) ev::drainMicrotasks();
+        }
+    };
+
     std::filesystem::path resolvedPath = scriptPath_;
     if (!resolvedPath.is_absolute() && !basePath_.empty()) {
         resolvedPath = std::filesystem::path(basePath_) / scriptPath_;
@@ -619,6 +658,7 @@ void WorkerInstance::threadFunc() {
         if (ev::microtasksPending()) {
             ev::drainMicrotasks();
         }
+        flushRejections();
 
         bool hasPendingWork = false;
         if (ev::isFunction(fetchHasPending.get())) {
@@ -648,6 +688,9 @@ void WorkerInstance::threadFunc() {
         }
     }
 
+    // Before workerListeners (which the sink's dispatch names) goes out of
+    // scope, and while this thread's Persistent slots still exist.
+    uninstallRejectionTracking();
     // The subscriber goes back to the service (its connections close) and
     // the dispatcher Persistent is freed while this thread's slots exist.
     releaseNetState();

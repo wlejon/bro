@@ -478,9 +478,6 @@ class GestureEvent extends UIEvent {
 // re-dispatched. A script whose top level threw is still reported as failed
 // (headless exits non-zero) whatever its handlers do.
 //
-// NOT raised: 'unhandledrejection' / window.onunhandledrejection. bronze
-// reports a promise nothing handled from inside its own microtask drain
-// (stderr: "Unhandled promise rejection: ..."), with no embedder hook yet.
 
 window.onerror = (message, filename, lineno, colno, error) => {
   report(error);
@@ -489,6 +486,34 @@ window.onerror = (message, filename, lineno, colno, error) => {
 window.addEventListener('error', (e) => {
   // e instanceof ErrorEvent; e.message, e.filename, e.lineno, e.colno, e.error
   e.preventDefault();       // handled
+});
+
+// ── Unhandled rejections: 'unhandledrejection' / 'rejectionhandled' ──────────
+//
+// HTML's "notify about rejected promises". A promise rejected with no handler,
+// and still without one when the microtask checkpoint ends, is reported as a
+// TASK (so a `.catch` attached by a later microtask of the same turn still
+// counts as handled and nothing fires):
+//   1. window.onunhandledrejection(event) — returning false cancels;
+//   2. a cancelable PromiseRejectionEvent ('unhandledrejection', `promise`,
+//      `reason`) at the window's listeners — preventDefault() cancels.
+// An uncancelled report is logged like an uncaught error
+// (`[bronze:unhandledrejection] Uncaught (in promise) ...`) and fails a
+// headless run. A promise that was reported and LATER gets a handler fires a
+// non-cancelable 'rejectionhandled' (window.onrejectionhandled, listeners),
+// also as a task. Workers get the same pair at `self`.
+//
+// Headless: a driver script's top-level await that rejects, or that never
+// settles (the script is pumped frame by frame until it reaches its end,
+// BRO_SCRIPT_SETTLE_MS wall-clock ms at most, default 30000), fails the run.
+
+window.addEventListener('unhandledrejection', (e) => {
+  // e instanceof PromiseRejectionEvent; e.promise, e.reason
+  report(e.reason);
+  e.preventDefault();       // handled: no engine log line, no failed run
+});
+window.addEventListener('rejectionhandled', (e) => {
+  forget(e.promise);        // it was handled after all
 });
 
 // ── window.postMessage ───────────────────────────────────────────────────────

@@ -5,9 +5,8 @@
 // line is skipped). Covers the host seams that run page code: timers, rAF,
 // event listeners, queueMicrotask.
 //
-// Unhandled promise rejections are NOT covered: bronze reports those from
-// inside its own microtask drain with no embedder hook, so 'unhandledrejection'
-// cannot be raised from bro yet.
+// Unhandled promise rejections are the other report, `unhandledrejection`:
+// tests/events/test_unhandled_rejection.js.
 
 const onerrorCalls = [];
 const events = [];

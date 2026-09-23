@@ -14,6 +14,7 @@
 #include <broaudio/api.h>
 #endif
 
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <string>
@@ -24,7 +25,9 @@ namespace bro::bronze_host {
 
 namespace {
 
-static bool s_hasTestFailure = false;
+// Atomic: a worker thread's uncancelled unhandled rejection fails the run too
+// (host_worker.cpp), and it reports from its own thread.
+static std::atomic<bool> s_hasTestFailure{false};
 static std::vector<std::string> s_scriptArgs;
 
 static Value makeScriptArgsValue() {

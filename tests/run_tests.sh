@@ -255,6 +255,17 @@ run_one_test() {
         return 1
     fi
 
+    # A rejection nothing handled is a failure, whatever the exit code says.
+    # The headless driver already fails the run for one it reports (an
+    # uncancelled `unhandledrejection`, a top-level await that rejected or
+    # never settled); bronze's own stderr line is what a realm with no host
+    # hook still prints, and it must not read as a pass either.
+    if [[ $STATUS -eq 0 && "$OUTPUT" == *"Unhandled promise rejection:"* ]]; then
+        echo "  FAIL  $REL  (unhandled promise rejection)"
+        echo "$OUTPUT" | grep -A3 "Unhandled promise rejection:" | head -12 | sed 's/^/        /'
+        return 1
+    fi
+
     if [[ $STATUS -eq 0 ]]; then
         echo "  PASS  $REL"
         return 0

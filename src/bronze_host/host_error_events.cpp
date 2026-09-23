@@ -19,10 +19,8 @@
 // `colno` are empty and zero; `message` is `Uncaught Name: message`, the text
 // a browser gives.
 //
-// An `unhandledrejection` is NOT raised from here: bronze reports a promise
-// nothing handled from inside its own microtask drain, straight to stderr,
-// with no embedder hook to intercept it. The PromiseRejectionEvent class
-// exists (js/events.js) for pages that construct one.
+// A promise nothing handled is the other report, `unhandledrejection`, raised
+// from bronze's rejection hook (host_rejection_events.cpp).
 
 #include "bronze_host/host_internal.h"
 #include "util/log.h"

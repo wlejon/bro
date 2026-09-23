@@ -6,6 +6,7 @@
 #include "bronze_host/host_callee_namer.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_pins.h"
+#include "bronze_host/host_rejection_events.h"
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
@@ -18,7 +19,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <cstdlib>
 #include <future>
+#include <thread>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -90,6 +93,78 @@ bool hasImportStmt(const std::string& code) {
         if (i < code.size() && code[i] == '\n') i++;
     }
     return false;
+}
+
+// Appended to a driver script so its END is observable (evalScriptFileJit).
+// A property write on globalThis, not a declaration: the name is nothing a
+// test could collide with, and it needs no host-globals entry.
+constexpr const char* kScriptDoneMarker = "\n;globalThis.__broScriptDone = true;\n";
+
+void resetScriptDone() {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (gt.found && ev::isObject(gt.value)) {
+        ev::setProperty(gt.value, "__broScriptDone", ev::fromBool(false));
+    }
+}
+
+bool scriptDone() {
+    ev::GlobalValue gt = ev::globalValue("globalThis");
+    if (!gt.found || !ev::isObject(gt.value)) return true;
+    Value v = ev::getProperty(gt.value, "__broScriptDone");
+    return ev::isBool(v) && ev::toBool(v);
+}
+
+// Fire the rejection events the last drains queued NOW rather than at the
+// next frame's task drain, which a run that is about to end never reaches:
+// an unhandled rejection left by a script's final turn is still reported
+// (and, uncancelled, fails the run). Bounded, since a handler may reject
+// again.
+void settleRejections() {
+    for (int i = 0; i < 8 && rejectionEventsPending(); ++i) {
+        flushRejectionEvents();
+        if (ev::microtasksPending()) ev::drainMicrotasks();
+    }
+}
+
+// A headless driver script suspended at a top-level `await` is still
+// running: frames are pumped — timers, rAF, host tasks, worker messages, the
+// microtask checkpoint, each advancing the virtual clock one frame and kept
+// no faster than the wall clock, so a worker or a decode on another thread
+// gets the time its reply takes — until the script reaches its end or the
+// run has already failed. One that never gets there fails the run: a test
+// whose remainder never executed has not passed.
+void awaitScriptCompletion(engine::Engine& engine, const std::string& filename) {
+    if (engine.displayMode() != engine::DisplayMode::Headless) return;
+    if (scriptDone() || hasTestFailure() || engine.hasTestFailure()) return;
+
+    double limitMs = 30000.0;
+    if (const char* env = std::getenv("BRO_SCRIPT_SETTLE_MS")) {
+        const double v = std::atof(env);
+        if (v > 0.0) limitMs = v;
+    }
+    constexpr double kFrameMs = 1000.0 / 60.0;
+    const auto start = std::chrono::steady_clock::now();
+    double virtualMs = 0.0;
+    while (!scriptDone() && !hasTestFailure() && !engine.hasTestFailure()) {
+        const double wallMs = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - start).count();
+        if (wallMs >= limitMs) break;
+        if (virtualMs > wallMs) {
+            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(virtualMs - wallMs));
+        }
+        engine.advanceTime(kFrameMs);
+        virtualMs += kFrameMs;
+        pumpBrokitTicks();
+        if (ev::microtasksPending()) ev::drainMicrotasks();
+        settleRejections();
+    }
+    if (!scriptDone() && !hasTestFailure() && !engine.hasTestFailure()) {
+        LOG_ERROR("evalScriptFileJit: the script's top-level await never settled "
+                  "(%.0f ms, %.0f ms of frames) — the rest of %s did not run",
+                  limitMs, virtualMs, filename.c_str());
+        setTestFailure(true);
+        engine.setTestFailure(true);
+    }
 }
 
 template <typename Fn>
@@ -198,6 +273,7 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
     if (bronze::embed::microtasksPending()) {
         bronze::embed::drainMicrotasks();
     }
+    settleRejections();
     std::fflush(stdout);
 
     if (hasTestFailure() || engine.hasTestFailure()) {
@@ -248,22 +324,30 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     // is never published, so running the same driver twice runs it twice.
     opts.moduleRegistry = true;
 
+    // The script's last statement records that it RAN to its end. A script
+    // suspended at a top-level `await` (the async-IIFE form, or a module's
+    // native TLA) returns from its top level long before that, and without
+    // the marker a run would stop there: the rest of the test never executed
+    // and the run still read as a pass.
+    const std::string source = content + kScriptDoneMarker;
+    resetScriptDone();
+
     bronze::embed::CallResult res;
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {
         auto compiled = compileWithPumping(engine, [&]() {
-            return bronze::eval::compileScript(wrapAsyncIife(content, absPath.string()), opts);
+            return bronze::eval::compileScript(wrapAsyncIife(source, absPath.string()), opts);
         });
         res = bronze::eval::runCompiledScript(std::move(compiled), opts);
     } else {
         auto compiled = compileWithPumping(engine, [&]() {
-            return bronze::eval::compileFile(absPath.string(), opts);
+            return bronze::eval::compileScript(source, opts);
         });
         res = bronze::eval::runCompiledScript(std::move(compiled), opts);
         if (res.thrown) {
             std::string errStr = bronze::embed::toUtf8(res.value);
             if (errStr.find("await") != std::string::npos && !hasImportStmt(content)) {
                 auto retryCompiled = compileWithPumping(engine, [&]() {
-                    return bronze::eval::compileScript(wrapAsyncIife(content, absPath.string()), opts);
+                    return bronze::eval::compileScript(wrapAsyncIife(source, absPath.string()), opts);
                 });
                 res = bronze::eval::runCompiledScript(std::move(retryCompiled), opts);
             }
@@ -277,6 +361,8 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     if (bronze::embed::microtasksPending()) {
         bronze::embed::drainMicrotasks();
     }
+    awaitScriptCompletion(engine, absPath.string());
+    settleRejections();
     std::fflush(stdout);
 
     if (hasTestFailure() || engine.hasTestFailure()) {
