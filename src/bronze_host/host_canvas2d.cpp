@@ -627,7 +627,9 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     b.def("drawImage", 9, [el](Value, std::span<const Value> a) -> Value {
         if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
         auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        Value src = a[0];
+        // Rooted: the source probes below may allocate (a property read by
+        // name), and each must see the value's current address.
+        const Rooted src(a[0]);
 
         const uint8_t* rgba = nullptr;
         int imgW = 0, imgH = 0;

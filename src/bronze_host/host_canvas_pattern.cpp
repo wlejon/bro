@@ -97,7 +97,11 @@ struct PatternSource {
     bool threw = false;
 };
 
-PatternSource resolvePatternSource(Value src) {
+PatternSource resolvePatternSource(Value srcIn) {
+    // Rooted: hostImageOf and hostElementOf read a property by name, which
+    // allocates, so a plain copy is stale by the next probe (a GC-stress run
+    // faulted in hostElementOf on an ImageData argument).
+    const Rooted src(srcIn);
     PatternSource out;
     if (auto* bmp = hostImageBitmapOfMut(src)) {
         if (bmp->closed) {

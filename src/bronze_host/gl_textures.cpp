@@ -49,7 +49,11 @@ struct SourcePixels {
     explicit operator bool() const { return data != nullptr; }
 };
 
-SourcePixels resolveSource(Value source, const char* who) {
+SourcePixels resolveSource(Value sourceIn, const char* who) {
+    // Rooted: each probe below may allocate (hostImageOf and hostElementOf
+    // read a property by name), and the next probe must see the value's
+    // current address.
+    const Rooted source(sourceIn);
     if (const HostImageBitmap* bmp = hostImageBitmapOf(source)) {
         if (bmp->closed || bmp->pixels.empty()) {
             LOG_WARN("bronze_host: %s was given an ImageBitmap with no pixels", who);
