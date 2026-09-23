@@ -7,6 +7,7 @@
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
+#include "css/color.h"
 #include "layout/formatting_context.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -3791,76 +3792,19 @@ bool DrawTraversal::tryParseColor(const std::string& colorStr, bromath::Color& o
         }
     }
 
-    // rgb/rgba
-    if (colorStr.substr(0, 4) == "rgb(" || colorStr.substr(0, 5) == "rgba(") {
-        auto start = colorStr.find('(');
-        auto end = colorStr.rfind(')');
-        if (start != std::string::npos && end != std::string::npos) {
-            std::string inner = colorStr.substr(start + 1, end - start - 1);
-            for (char& c : inner) { if (c == ',' || c == '/') c = ' '; }
-            std::istringstream iss(inner);
-            float r, g, b, a = 1.0f;
-            if (iss >> r >> g >> b) {
-                iss >> a;
-                // If alpha is <= 1.0, treat as 0-1 range; otherwise as 0-255
-                if (a <= 1.0f) a *= 255.0f;
-                bromath::Color8 p{
-                    static_cast<uint8_t>(std::clamp(r, 0.0f, 255.0f)),
-                    static_cast<uint8_t>(std::clamp(g, 0.0f, 255.0f)),
-                    static_cast<uint8_t>(std::clamp(b, 0.0f, 255.0f)),
-                    static_cast<uint8_t>(std::clamp(a, 0.0f, 255.0f))
-                };
-                out = cfromColor8(p);
-                return true;
-            }
-        }
-    }
-
-    // hsl/hsla
-    if (colorStr.substr(0, 4) == "hsl(" || colorStr.substr(0, 5) == "hsla(") {
-        auto start = colorStr.find('(');
-        auto end = colorStr.rfind(')');
-        if (start != std::string::npos && end != std::string::npos) {
-            std::string inner = colorStr.substr(start + 1, end - start - 1);
-            // Remove % signs, replace commas/slashes with spaces
-            for (char& c : inner) {
-                if (c == ',' || c == '/' || c == '%') c = ' ';
-            }
-            std::istringstream iss(inner);
-            float h, s, l, a = 1.0f;
-            if (iss >> h >> s >> l) {
-                iss >> a;
-                // Normalize: h in [0,360), s and l in [0,1]
-                h = std::fmod(h, 360.0f);
-                if (h < 0) h += 360.0f;
-                s = std::clamp(s / 100.0f, 0.0f, 1.0f);
-                l = std::clamp(l / 100.0f, 0.0f, 1.0f);
-                if (a <= 1.0f) a *= 255.0f;
-
-                auto hue2rgb = [](float p, float q, float t) -> float {
-                    if (t < 0) t += 1; if (t > 1) t -= 1;
-                    if (t < 1.0f/6) return p + (q-p)*6*t;
-                    if (t < 1.0f/2) return q;
-                    if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
-                    return p;
-                };
-                bromath::Color8 p8;
-                if (s == 0) {
-                    uint8_t v = static_cast<uint8_t>(l * 255);
-                    p8.r = p8.g = p8.b = v;
-                } else {
-                    float q = l < 0.5f ? l*(1+s) : l+s-l*s;
-                    float p = 2*l-q;
-                    float hn = h/360.0f;
-                    p8.r = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
-                    p8.g = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
-                    p8.b = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
-                }
-                p8.a = static_cast<uint8_t>(std::clamp(a, 0.0f, 255.0f));
-                out = cfromColor8(p8);
-                return true;
-            }
-        }
+    // Every functional notation — rgb()/hsl() in legacy and modern syntax,
+    // hwb/lab/lch/oklab/oklch, color() in the wide-gamut spaces (gamut-mapped
+    // into sRGB), color-mix(), relative colours, calc() components — goes
+    // through htmlayout's parser, the same one the cascade validates with.
+    // light-dark() has already been resolved to one branch by the restyle
+    // pass (Document::resolveColorSchemeValues). A `currentcolor` nested in a
+    // function resolves to black here: this parser has no element; a bare
+    // `currentcolor` is left to the caller (false), which knows the colour.
+    if (colorStr.find('(') != std::string::npos) {
+        htmlayout::css::Color c;
+        if (!htmlayout::css::tryParseColor(colorStr, c)) return false;
+        out = cfromColor8({c.r, c.g, c.b, c.a});
+        return true;
     }
 
     // Named colors — full CSS Color Level 4 set

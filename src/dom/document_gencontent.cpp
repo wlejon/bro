@@ -260,6 +260,7 @@ void Document::applyPseudo(Element* elem, const char* which, int depth, GenConte
     auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
     perf_.pseudoResolves++;
     auto pseudoStyle = cascade_.resolvePseudo(*adapter, which, elem->computedStyle());
+    resolveColorSchemeValues(pseudoStyle);
     auto cIt = pseudoStyle.find("content");
     if (cIt == pseudoStyle.end()) { dropPseudo(); return; }
     const std::string& raw = cIt->second;

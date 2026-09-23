@@ -30,7 +30,9 @@ inline htmlayout::css::ComputedStyle resolveStyledPseudo(dom::Element* elem,
     if (!cascade.hasPseudoElementRules(name)) return {};
     auto* adapter = ElementRefAdapter::getOrCreate(elem);
     if (!adapter) return {};
-    return cascade.resolvePseudo(*adapter, name, elem->computedStyle());
+    auto style = cascade.resolvePseudo(*adapter, name, elem->computedStyle());
+    elem->document()->resolveColorSchemeValues(style);
+    return style;
 }
 
 // Apply the font-* subset of a resolved pseudo style onto a FontRef.

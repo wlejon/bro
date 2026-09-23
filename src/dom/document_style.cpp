@@ -13,7 +13,10 @@
 #include "engine/web_animations.h"
 #include "layout/element_ref_adapter.h"
 #include "css/parser.h"
+#include "css/color.h"
 #include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <chrono>
 #include <cstdlib>
 #include <sstream>
@@ -38,6 +41,105 @@ void Document::setActiveElement(Element* el) {
 }
 
 namespace {
+
+// light-dark(<light>, <dark>) resolves at computed-value time to one of its
+// two arguments, picked by the element's used colour scheme. The cascade
+// hands values over as text, and every consumer (paint, getComputedStyle,
+// transitions, inheritance) reads that text, so the pick happens here, on the
+// text: each light-dark(...) is replaced by the chosen argument verbatim.
+// Replacing it with the argument's text rather than a resolved rgb() keeps
+// `currentcolor` inside a branch meaning what it means where it is used.
+// Nested calls (a light-dark() inside a branch or inside color-mix()) are
+// resolved by repeating until none remain.
+bool resolveLightDark(std::string& value, bool dark) {
+    static constexpr std::string_view kFn = "light-dark(";
+    bool changed = false;
+    for (int guard = 0; guard < 64; ++guard) {
+        // Case-insensitive search for the function name.
+        size_t at = std::string::npos;
+        for (size_t i = 0; i + kFn.size() <= value.size(); ++i) {
+            bool match = true;
+            for (size_t k = 0; k < kFn.size(); ++k) {
+                if (std::tolower(static_cast<unsigned char>(value[i + k])) != kFn[k]) {
+                    match = false;
+                    break;
+                }
+            }
+            // Not the tail of a longer identifier (`my-light-dark(`).
+            if (match && i > 0) {
+                const unsigned char p = static_cast<unsigned char>(value[i - 1]);
+                if (std::isalnum(p) || p == '-' || p == '_') match = false;
+            }
+            if (match) { at = i; break; }
+        }
+        if (at == std::string::npos) break;
+
+        // Split the arguments at the top-level comma, find the closing paren.
+        const size_t open = at + kFn.size();
+        int depth = 0;
+        size_t comma = std::string::npos, close = std::string::npos;
+        for (size_t i = open; i < value.size(); ++i) {
+            const char c = value[i];
+            if (c == '(') ++depth;
+            else if (c == ')') {
+                if (depth == 0) { close = i; break; }
+                --depth;
+            } else if (c == ',' && depth == 0 && comma == std::string::npos) {
+                comma = i;
+            }
+        }
+        if (close == std::string::npos || comma == std::string::npos) break;  // malformed: leave it
+
+        auto trim = [](std::string_view s) {
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+            return std::string(s);
+        };
+        const std::string_view whole(value);
+        std::string pick = dark ? trim(whole.substr(comma + 1, close - comma - 1))
+                                : trim(whole.substr(open, comma - open));
+        value.replace(at, close + 1 - at, pick);
+        changed = true;
+    }
+    return changed;
+}
+
+void resolveLightDarkValues(htmlayout::css::ComputedStyle& computed,
+                            const htmlayout::css::MediaContext* media) {
+    // Cheap reject: most styles name no light-dark() at all. Every spelling
+    // of the name has a '-' followed by d/D, then "ark(" in some case.
+    auto mentions = [](const std::string& v) {
+        for (size_t i = v.find('-'); i != std::string::npos; i = v.find('-', i + 1)) {
+            if (i + 6 <= v.size() && (v[i + 1] | 0x20) == 'd' && (v[i + 2] | 0x20) == 'a' &&
+                (v[i + 3] | 0x20) == 'r' && (v[i + 4] | 0x20) == 'k' && v[i + 5] == '(')
+                return true;
+        }
+        return false;
+    };
+    bool any = false;
+    for (const auto& [prop, val] : computed) {
+        if (mentions(val)) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) return;
+
+    const auto preferred = (media && media->colorScheme == "dark") ? htmlayout::css::ColorScheme::Dark
+                                                                    : htmlayout::css::ColorScheme::Light;
+    auto csIt = computed.find("color-scheme");
+    const std::string_view csValue = csIt != computed.end() ? std::string_view(csIt->second)
+                                                            : std::string_view("normal");
+    const bool dark =
+        htmlayout::css::usedColorScheme(csValue, preferred) == htmlayout::css::ColorScheme::Dark;
+    for (auto& [prop, val] : computed) {
+        // A custom property is a token stream until var() substitutes it into
+        // a real property, which is where its light-dark() is resolved.
+        if (prop.size() > 1 && prop[0] == '-' && prop[1] == '-') continue;
+        resolveLightDark(val, dark);
+    }
+}
+
 // Split a class attribute into its whitespace-separated tokens.
 std::vector<std::string> classTokens(const std::string& s) {
     std::vector<std::string> out;
@@ -47,6 +149,10 @@ std::vector<std::string> classTokens(const std::string& s) {
     return out;
 }
 }  // namespace
+
+void Document::resolveColorSchemeValues(htmlayout::css::ComputedStyle& style) const {
+    resolveLightDarkValues(style, hasMediaContext_ ? &mediaContext_ : nullptr);
+}
 
 bool Document::classChangeAffectsDescendants(const std::string& oldCls,
                                              const std::string& newCls) const {
@@ -260,6 +366,11 @@ void Document::resolveStylesRecursive(Element* elem,
                 }
             }
         }
+
+        // light-dark(): the element's used colour scheme (its color-scheme,
+        // weighed against the prefers-color-scheme setting) picks the branch,
+        // before transitions compare old and new values or children inherit.
+        resolveColorSchemeValues(computed);
 
         auto mgrT0 = std::chrono::steady_clock::now();
         // CSS transitions: detect property changes and start transitions

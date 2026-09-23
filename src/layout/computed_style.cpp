@@ -25,7 +25,10 @@ bool isColorProperty(const std::string& prop) {
     return prop == "color" || prop == "background-color" ||
            prop == "border-top-color" || prop == "border-right-color" ||
            prop == "border-bottom-color" || prop == "border-left-color" ||
-           prop == "outline-color";
+           prop == "outline-color" || prop == "text-decoration-color" ||
+           prop == "column-rule-color" || prop == "caret-color" ||
+           prop == "accent-color" || prop == "text-emphasis-color" ||
+           prop == "-webkit-text-stroke-color" || prop == "-webkit-text-fill-color";
 }
 
 // Resolve a CSS color value to rgb(r, g, b) or rgba(r, g, b, a) notation.
@@ -66,6 +69,25 @@ std::string computedProperty(dom::Element* el, const std::string& prop,
     } else {
         // Fall back to CSS initial value for known properties
         value = htmlayout::css::initialValue(prop);
+    }
+
+    // line-clamp is a shorthand (htmlayout expands it into max-lines,
+    // block-ellipsis and continue, which are what layout reads), so the map
+    // has no entry of its own: serialize it back from the longhands.
+    if (prop == "line-clamp") {
+        auto get = [&](const char* p) {
+            auto lit = style.find(p);
+            return lit != style.end() ? lit->second : htmlayout::css::initialValue(p);
+        };
+        const std::string maxLines = get("max-lines");
+        const std::string ellipsis = get("block-ellipsis");
+        const std::string cont = get("continue");
+        if (cont != "collapse" && cont != "-webkit-legacy") return "none";
+        if (maxLines == "none") return ellipsis == "auto" && cont == "collapse" ? "auto" : "none";
+        std::string out = maxLines;
+        if (ellipsis != "auto") out += " " + ellipsis;
+        if (cont == "-webkit-legacy") out += " -webkit-legacy";
+        return out;
     }
 
     // Resolve gap shorthand from longhands if not directly present
@@ -258,9 +280,24 @@ std::string computedProperty(dom::Element* el, const std::string& prop,
         }
     }
 
-    // Resolve colors to rgb() notation (matches browser getComputedStyle behavior)
-    if (isColorProperty(prop))
+    // Resolve colors to rgb() notation (matches browser getComputedStyle behavior).
+    // `currentcolor` (the initial value of the border, outline, decoration and
+    // rule colours) resolves to the element's own `color`, as Chrome reports it;
+    // so does caret-color's `auto`.
+    if (isColorProperty(prop)) {
+        std::string lower = value;
+        for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        // No value at all (a property htmlayout keeps no initial for) means its
+        // initial value, which for every colour here but these two is currentcolor.
+        const bool emptyIsCurrent = lower.empty() && prop != "color" && prop != "background-color" &&
+                                    prop != "accent-color";
+        if (prop != "color" && (emptyIsCurrent || lower == "currentcolor" ||
+                                (prop == "caret-color" && lower == "auto"))) {
+            auto cIt = style.find("color");
+            if (cIt != style.end()) value = cIt->second;
+        }
         value = resolveColorToRgb(value);
+    }
 
     // Resolve font-weight keywords to numeric (matches Chrome)
     if (prop == "font-weight") {

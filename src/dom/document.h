@@ -389,6 +389,13 @@ public:
     // constructed (0x0, light) until setMediaViewport/setMediaColorScheme run.
     const htmlayout::css::MediaContext& mediaContext() const { return mediaContext_; }
 
+    // Resolve every light-dark() in a freshly cascaded style to the branch
+    // its used colour scheme picks: the style's `color-scheme` weighed
+    // against the prefers-color-scheme setting above. The restyle pass runs
+    // it on each element's style; a pseudo-element's style (::before,
+    // ::selection, ...) goes through it too.
+    void resolveColorSchemeValues(htmlayout::css::ComputedStyle& style) const;
+
     // Bumped whenever the media context actually changes (resize, scheme
     // flip). window.matchMedia re-evaluates its live MediaQueryLists when this
     // moves — a cheap "did anything media-relevant happen" probe per realm.

@@ -1,5 +1,6 @@
 #include "engine/css_interpolation.h"
 #include "dom/element.h"
+#include "css/color.h"
 
 #include <algorithm>
 #include <cctype>
@@ -48,44 +49,24 @@ CubicEase parseTimingFunction(const std::string& val) {
 // ---------------------------------------------------------------------------
 
 // Try to parse a CSS color string into RGBA components.
+// Any colour the cascade accepts: hex, named, rgb()/hsl() in both syntaxes,
+// the CSS Color 4 functions and wide-gamut color() (gamut-mapped to sRGB).
+// `currentcolor` is not a colour here (it interpolates discretely), and
+// light-dark() reaches this point already resolved by the restyle pass.
 static bool tryParseColorComponents(const std::string& s, float& r, float& g, float& b, float& a) {
     if (s.empty()) return false;
-
-    // Try rgb(r,g,b) / rgba(r,g,b,a)
-    if (s.substr(0, 4) == "rgba" || s.substr(0, 3) == "rgb") {
-        auto paren = s.find('(');
-        if (paren == std::string::npos) return false;
-        const char* p = s.c_str() + paren + 1;
-        char* end;
-        r = std::strtof(p, &end) / 255.0f; p = end; while (*p == ',' || *p == ' ') ++p;
-        g = std::strtof(p, &end) / 255.0f; p = end; while (*p == ',' || *p == ' ') ++p;
-        b = std::strtof(p, &end) / 255.0f; p = end; while (*p == ',' || *p == ' ' || *p == '/') ++p;
-        a = (*p && *p != ')') ? std::strtof(p, &end) : 1.0f;
-        return true;
+    if (s.size() == 12) {
+        std::string lower = s;
+        for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (lower == "currentcolor") return false;
     }
-
-    // Try #hex
-    if (s[0] == '#') {
-        unsigned int hex = 0;
-        if (s.size() == 7) { // #RRGGBB
-            hex = std::strtoul(s.c_str() + 1, nullptr, 16);
-            r = ((hex >> 16) & 0xFF) / 255.0f;
-            g = ((hex >> 8) & 0xFF) / 255.0f;
-            b = (hex & 0xFF) / 255.0f;
-            a = 1.0f;
-            return true;
-        }
-        if (s.size() == 4) { // #RGB
-            hex = std::strtoul(s.c_str() + 1, nullptr, 16);
-            r = ((hex >> 8) & 0xF) / 15.0f;
-            g = ((hex >> 4) & 0xF) / 15.0f;
-            b = (hex & 0xF) / 15.0f;
-            a = 1.0f;
-            return true;
-        }
-    }
-
-    return false;
+    htmlayout::css::Color c;
+    if (!htmlayout::css::tryParseColor(s, c)) return false;
+    r = c.r / 255.0f;
+    g = c.g / 255.0f;
+    b = c.b / 255.0f;
+    a = c.a / 255.0f;
+    return true;
 }
 
 static std::string colorToRGBA(float r, float g, float b, float a) {
