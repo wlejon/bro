@@ -148,6 +148,9 @@ class Terrain {
   origin;
 
   /**
+   *  Number of material layers the configured `palette` defines (palette
+   *  length / 4; id 0 is air). These are the ids `paint()` takes. 0 before
+   *  `configure()` or without a palette.
    * @readonly
    * @type {number}
    */

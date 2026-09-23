@@ -350,8 +350,13 @@ void bro_terrain_Terrain_splat(void* self, double x, double z, double radius, in
     }
 }
 
+// The material layers the configured palette defines (4 floats per material
+// id, id 0 = air) — the ids paint() / setVoxel take. 0 before configure() or
+// with no palette.
 int32_t bro_terrain_Terrain_layers_get(void* self) {
-    return 4;
+    auto* c = terrainCellOf(self);
+    if (!c || !c->mgr()) return 0;
+    return static_cast<int32_t>(c->mgr()->config().palette.size() / 4);
 }
 
 void bro_terrain_Terrain_destroy(void* self) {

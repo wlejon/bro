@@ -32,6 +32,7 @@ if (!scene) {
         ]),
     });
     assert(terrain !== null, 'createTerrain returns object');
+    assert(terrain.layers === 3, 'layers is the palette material count (3), got ' + terrain.layers);
 
     // Stream chunks at origin
     const loaded = terrain.update(0, 0, 0);
