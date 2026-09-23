@@ -21,6 +21,14 @@
  *   const view = document.createElement('canvas');
  *   const brc = view.getContext('bitmaprenderer');
  *   brc.transferFromImageBitmap(await createImageBitmap(imgData));
+ *
+ * createImageBitmap(canvas) copies what the canvas displays now, at the size
+ * of its bitmap: a 2D canvas's current bitmap, a bitmaprenderer canvas's last
+ * transferred bitmap at that bitmap's own size (not the width/height
+ * attributes), a WebGL canvas's drawing buffer. A canvas with no context yet
+ * gives transparent black at its width/height (300x150 by default) and is
+ * not given a context by the call. A zero-sized canvas rejects with an
+ * InvalidStateError.
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────

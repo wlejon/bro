@@ -482,19 +482,24 @@ inline Value makeEmptyArray() {
 }
 
 inline Value hostMakeDomError(const char* name, const std::string& message) {
+    // Each allocation below may move every value made before it, so each
+    // lands in a Persistent, and each string is made in its own statement
+    // before the receiver it is stored on is read.
+    ev::Persistent msgVal(ev::fromUtf8(message));
+    ev::Persistent errObj;
     auto g = ev::globalValue("Error");
-    Value errObj;
-    Value msgVal = ev::fromUtf8(message);
     if (g.found) {
-        ev::CallResult res = ev::construct(g.value, std::span<const Value>(&msgVal, 1));
-        errObj = res.thrown ? ev::createObject() : res.value;
+        Value arg = msgVal.get();
+        ev::CallResult res = ev::construct(g.value, std::span<const Value>(&arg, 1));
+        errObj.set(res.thrown ? ev::createObject() : res.value);
     } else {
-        errObj = ev::createObject();
+        errObj.set(ev::createObject());
     }
     if (name && *name) {
-        ev::setProperty(errObj, "name", ev::fromUtf8(name));
+        ev::Persistent nameVal(ev::fromUtf8(name));
+        errObj.set(ev::setProperty(errObj.get(), "name", nameVal.get()));
     }
-    return errObj;
+    return errObj.get();
 }
 
 // ---------------------------------------------------------------------------

@@ -31,59 +31,87 @@ std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     return buf;
 }
 
+// A gradient or pattern assigned to fillStyle/strokeStyle is answered back as
+// the very object, so it is kept here (and saved/restored alongside the
+// scene's state); a color is answered from the scene. Undefined in `fill` /
+// `stroke` means the style is a color.
+struct CustomStyles {
+    ev::Persistent fill;
+    ev::Persistent stroke;
+    std::vector<ev::Persistent> fillStack;
+    std::vector<ev::Persistent> strokeStack;
+
+    void reset() {
+        fill.set(ev::undefined());
+        stroke.set(ev::undefined());
+        fillStack.clear();
+        strokeStack.clear();
+    }
+};
+
 }  // namespace
 
 Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
+    // `canvasVal` is current only until the first allocation, and building the
+    // context allocates on nearly every line: root it before anything else.
+    ev::Persistent canvasRoot(canvasVal);
+
     auto tracker = std::make_shared<Canvas2DTransformTracker>();
-    // A gradient or pattern assigned to fillStyle/strokeStyle is answered back
-    // as the very object, so it is kept here (and saved/restored alongside the
-    // scene's state); a color is answered from the scene.
-    auto customFillStyle = std::make_shared<ev::Persistent>();
-    auto customStrokeStyle = std::make_shared<ev::Persistent>();
-    auto fillStyleStack = std::make_shared<std::vector<ev::Persistent>>();
-    auto strokeStyleStack = std::make_shared<std::vector<ev::Persistent>>();
-    tracker->addSaveHook([customFillStyle, fillStyleStack, customStrokeStyle, strokeStyleStack]() {
-        fillStyleStack->emplace_back(customFillStyle->get());
-        strokeStyleStack->emplace_back(customStrokeStyle->get());
+    auto styles = std::make_shared<CustomStyles>();
+    tracker->addSaveHook([styles]() {
+        styles->fillStack.emplace_back(styles->fill.get());
+        styles->strokeStack.emplace_back(styles->stroke.get());
     });
-    tracker->addRestoreHook([customFillStyle, fillStyleStack, customStrokeStyle, strokeStyleStack]() {
-        if (!fillStyleStack->empty()) {
-            customFillStyle->set(fillStyleStack->back().get());
-            fillStyleStack->pop_back();
+    tracker->addRestoreHook([styles]() {
+        if (!styles->fillStack.empty()) {
+            styles->fill.set(styles->fillStack.back().get());
+            styles->fillStack.pop_back();
         }
-        if (!strokeStyleStack->empty()) {
-            customStrokeStyle->set(strokeStyleStack->back().get());
-            strokeStyleStack->pop_back();
+        if (!styles->strokeStack.empty()) {
+            styles->stroke.set(styles->strokeStack.back().get());
+            styles->strokeStack.pop_back();
         }
     });
+    // The scene resets its own drawing state; this is the binding's share of
+    // it — the transform getTransform() answers, the save stack beside it,
+    // and any gradient or pattern style object. The hook reaches the state
+    // weakly: the context object's methods own it, the scene does not.
+    if (el && el->canvasScene()) {
+        std::weak_ptr<Canvas2DTransformTracker> weakTracker = tracker;
+        std::weak_ptr<CustomStyles> weakStyles = styles;
+        static_cast<canvas::CanvasScene*>(el->canvasScene())->setResetHook([weakTracker, weakStyles]() {
+            if (auto t = weakTracker.lock()) t->reset();
+            if (auto s = weakStyles.lock()) s->reset();
+        });
+    }
 
     ObjectBuilder b;
-    b.set("canvas", canvasVal);
+    b.set("canvas", canvasRoot.get());
 
     // fillStyle and strokeStyle share one setter body: a CanvasGradient or a
     // CanvasPattern is kept as the object, a string is parsed as a color, and
     // anything else (an unparseable string, a foreign object) is ignored as
     // the spec says, leaving the previous style in place.
-    auto setStyle = [el](bool fill, const std::shared_ptr<ev::Persistent>& custom,
-                         std::span<const Value> a) -> Value {
+    auto setStyle = [el, styles](bool fill, std::span<const Value> a) -> Value {
+        ev::Persistent& custom = fill ? styles->fill : styles->stroke;
         if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
         auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
         if (ev::isObject(a[0])) {
             if (auto* grad = hostCanvasGradientOf(a[0])) {
                 if (fill) cs->setFillShader(grad->buildShader());
                 else cs->setStrokeShader(grad->buildShader());
-                custom->set(a[0]);
+                custom.set(a[0]);
             } else if (auto* pat = hostCanvasPatternOf(a[0])) {
                 if (fill) cs->setFillPattern(pat->data);
                 else cs->setStrokePattern(pat->data);
-                custom->set(a[0]);
+                custom.set(a[0]);
             }
             return ev::undefined();
         }
         std::string str = ev::toUtf8(a[0]);
         uint8_t r, g, b, a_col;
         if (canvas::parseCSSColor(str, r, g, b, a_col)) {
-            custom->set(ev::undefined());
+            custom.set(ev::undefined());
             if (fill) cs->setFillColor(r, g, b, a_col);
             else cs->setStrokeColor(r, g, b, a_col);
         }
@@ -91,9 +119,9 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     };
 
     b.accessor("fillStyle",
-        [el, customFillStyle](Value, std::span<const Value>) -> Value {
-            if (!customFillStyle->get().isUndefined()) {
-                return customFillStyle->get();
+        [el, styles](Value, std::span<const Value>) -> Value {
+            if (!styles->fill.get().isUndefined()) {
+                return styles->fill.get();
             }
             if (el && el->canvasScene()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -103,14 +131,14 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             }
             return ev::fromUtf8("rgba(0,0,0,1.00)");
         },
-        [setStyle, customFillStyle](Value, std::span<const Value> a) -> Value {
-            return setStyle(true, customFillStyle, a);
+        [setStyle](Value, std::span<const Value> a) -> Value {
+            return setStyle(true, a);
         });
 
     b.accessor("strokeStyle",
-        [el, customStrokeStyle](Value, std::span<const Value>) -> Value {
-            if (!customStrokeStyle->get().isUndefined()) {
-                return customStrokeStyle->get();
+        [el, styles](Value, std::span<const Value>) -> Value {
+            if (!styles->stroke.get().isUndefined()) {
+                return styles->stroke.get();
             }
             if (el && el->canvasScene()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
@@ -120,8 +148,8 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             }
             return ev::fromUtf8("rgba(0,0,0,1.00)");
         },
-        [setStyle, customStrokeStyle](Value, std::span<const Value> a) -> Value {
-            return setStyle(false, customStrokeStyle, a);
+        [setStyle](Value, std::span<const Value> a) -> Value {
+            return setStyle(false, a);
         });
 
     b.accessor("lineWidth",
@@ -704,20 +732,25 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
 
     b.def("putImageData", 7, [el](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3 || !el || !el->canvasScene()) return ev::undefined();
-        Value imgData = a[0];
+        // Every read goes through a[0], a rooted argument slot: each
+        // getProperty may allocate (or run a getter), which leaves a copied
+        // Value naming the pre-collection address.
         int dx = static_cast<int>(ev::toDouble(a[1]));
         int dy = static_cast<int>(ev::toDouble(a[2]));
-        int w = static_cast<int>(ev::toDouble(ev::getProperty(imgData, "width")));
-        int h = static_cast<int>(ev::toDouble(ev::getProperty(imgData, "height")));
-        Value dataVal = ev::getProperty(imgData, "data");
+        const bool dirty = a.size() >= 7;
+        int dirtyX = dirty ? static_cast<int>(ev::toDouble(a[3])) : 0;
+        int dirtyY = dirty ? static_cast<int>(ev::toDouble(a[4])) : 0;
+        int dirtyW = dirty ? static_cast<int>(ev::toDouble(a[5])) : 0;
+        int dirtyH = dirty ? static_cast<int>(ev::toDouble(a[6])) : 0;
+        int w = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
+        int h = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
+        Value dataVal = ev::getProperty(a[0], "data");
+        // The byte pointer is heap-borrowed: nothing may allocate between
+        // here and the putImageData that copies it out.
         auto info = ev::typedArrayInfo(dataVal);
         if (info.data && w > 0 && h > 0) {
             auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-            if (a.size() >= 7) {
-                int dirtyX = static_cast<int>(ev::toDouble(a[3]));
-                int dirtyY = static_cast<int>(ev::toDouble(a[4]));
-                int dirtyW = static_cast<int>(ev::toDouble(a[5]));
-                int dirtyH = static_cast<int>(ev::toDouble(a[6]));
+            if (dirty) {
                 cs->putImageData(info.data, w, h, dx, dy, dirtyX, dirtyY, dirtyW, dirtyH);
             } else {
                 cs->putImageData(info.data, w, h, dx, dy);
@@ -729,7 +762,11 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     // Branded: `ctx instanceof CanvasRenderingContext2D` and
     // `ctx.constructor.name`, which a canvas library sniffs before deciding
     // it has a 2D context. The value handed back is the post-call address.
-    return ev::setPrototype(b.get(), canvasRenderingContext2DHostClass().prototype());
+    // The prototype is fetched in its own statement: the class installs
+    // lazily, and an allocation there would move the object after b.get()
+    // had already been read as the other argument.
+    Value proto = canvasRenderingContext2DHostClass().prototype();
+    return ev::setPrototype(b.get(), proto);
 }
 
 }  // namespace bro::bronze_host

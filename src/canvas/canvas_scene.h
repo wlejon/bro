@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -18,6 +19,7 @@
 #include <include/core/SkFont.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageFilter.h>
+#include <include/core/SkM44.h>
 #include <include/core/SkMatrix.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkPath.h>
@@ -69,11 +71,18 @@ struct CanvasCmd {
     SkSamplingOptions samp;
     // ctx.filter, resolved to an immutable SkImageFilter on the JS thread when
     // the draw was recorded. Non-null means the replay draws this command into
-    // a layer that the filter is applied to on restore, and globalAlpha and the
-    // composite operation are then carried by the layer (layerAlpha /
-    // layerBlend) rather than by `paint` — the spec's order is draw, filter,
-    // then alpha and compositing.
+    // a layer that the filter is applied to on restore.
     sk_sp<SkImageFilter> filter;
+    // The canvas shadow, as a shadow-only image filter (offset, blur, colour,
+    // and `filter` as its input, since the spec shadows the filtered image).
+    // Non-null means the replay first draws the command into a layer this
+    // filter turns into just the shadow, composited on its own, and then
+    // draws the command itself.
+    sk_sp<SkImageFilter> shadow;
+    // Set when `filter` or `shadow` is: globalAlpha and the composite
+    // operation then ride here rather than on `paint`, because the spec
+    // applies them after the filter, and separately to the shadow and to the
+    // shape.
     float layerAlpha = 1.0f;
     SkBlendMode layerBlend = SkBlendMode::kSrcOver;
 };
@@ -274,33 +283,38 @@ public:
     int globalCompositeOperation() const;
 
     void setFont(const std::string& fontStr);
-    const std::string& fontString() const { return fontString_; }
+    const std::string& fontString() const { return state_.fontStr; }
 
     // 0=start, 1=center, 2=right, 3=end, 4=left. `start`/`end` are
     // direction-relative and resolve against direction(); `left`/`right` are
     // absolute. They are distinct codes because the getter has to round-trip
     // what was assigned.
     void setTextAlign(int align);
-    int textAlign() const { return textAlign_; }
+    int textAlign() const { return state_.textAlignVal; }
     void setTextBaseline(int bl);   // 0=alphabetic, 1=top, 2=middle, 3=bottom, 4=hanging, 5=ideographic
-    int textBaseline() const { return textBaseline_; }
+    int textBaseline() const { return state_.textBaselineVal; }
 
     // Canvas2D `direction`: 0=ltr, 1=rtl, 2=inherit. This is the base
     // direction text is shaped against and what `start`/`end` alignment mean.
     void setDirection(int dir);
-    int direction() const { return direction_; }
+    int direction() const { return state_.directionVal; }
 
+    // Shadows. Negative or non-finite blur and non-finite offsets are
+    // ignored, as the spec says for these attributes. A shadow is drawn only
+    // while the colour is not fully transparent and the blur or an offset is
+    // non-zero; the offsets are canvas pixels, unaffected by the transform,
+    // and the blur is a Gaussian of sigma shadowBlur / 2.
     void setShadowBlur(float blur);
-    float shadowBlur() const { return shadowBlur_; }
+    float shadowBlur() const { return state_.shadowBlurVal; }
     void setShadowColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
     void getShadowColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const;
     void setShadowOffsetX(float x);
-    float shadowOffsetX() const { return shadowOffsetX_; }
+    float shadowOffsetX() const { return state_.shadowOX; }
     void setShadowOffsetY(float y);
-    float shadowOffsetY() const { return shadowOffsetY_; }
+    float shadowOffsetY() const { return state_.shadowOY; }
 
     void setImageSmoothingEnabled(bool v);
-    bool imageSmoothingEnabled() const { return imageSmoothingEnabled_; }
+    bool imageSmoothingEnabled() const { return state_.imgSmooth; }
     // 0=low, 1=medium, 2=high.
     void setImageSmoothingQuality(int q);
     int imageSmoothingQuality() const { return state_.smoothQuality; }
@@ -397,9 +411,20 @@ public:
     /// resizes, or reset() runs. Returns null when there's no surface yet.
     sk_sp<SkImage> snapshotImage();
 
-    // --- Reset (discard content) ---
+    // --- Reset ---
 
+    /// ctx.reset(), and what setting canvas.width/height does: clear the
+    /// bitmap to transparent black, empty the current path and the state
+    /// stack, and put the transform, clip, line dash and every attribute back
+    /// to its default.
     void reset();
+
+    /// Called at the end of every reset(). The JS binding keeps a little
+    /// drawing state of its own (the transform it answers getTransform()
+    /// from, a gradient or pattern style object), and this is how a reset
+    /// that did not come through ctx.reset() — a canvas.width assignment —
+    /// reaches it. JS thread only.
+    void setResetHook(std::function<void()> hook) { resetHook_ = std::move(hook); }
 
     // --- Compositing support ---
 
@@ -499,10 +524,16 @@ private:
     SkPaint makeFillPaint() const;
     SkPaint makeStrokePaint() const;
     // The paint for a drawImage: globalAlpha and the composite op, unless a
-    // filter moves both onto the replay layer.
+    // filter or a shadow moves both onto the replay layer.
     SkPaint makeImagePaint() const;
+    // True while a draw has to be replayed through layers: a filter is set,
+    // or a shadow would be drawn.
+    bool drawIsLayered() const;
+    bool shadowActive() const;
+    // The shadow-only image filter for the current shadow state, or null.
+    sk_sp<SkImageFilter> shadowFilter() const;
     // The alpha multiplier and blend mode a draw's own paint carries — 1 and
-    // source-over while a filter is set, since the filter layer applies them.
+    // source-over while the draw is layered, since the layers apply them.
     float drawAlpha() const;
     SkBlendMode drawBlend() const;
     // imageSmoothingEnabled + imageSmoothingQuality as Skia sampling.
@@ -514,8 +545,11 @@ private:
     // One replay loop for both the inline and the worker path.
     static void replayCommands(SkCanvas* c, std::vector<CanvasCmd>& cmds);
     static void replayOne(SkCanvas* c, CanvasCmd& cmd);
+    // Replay `cmd` into a layer `filter` is applied to, opened under the
+    // identity matrix so the filter's lengths are canvas pixels.
+    static void replayThroughFilter(SkCanvas* c, CanvasCmd& cmd, const SkM44& ctm,
+                                    const sk_sp<SkImageFilter>& filter);
     void applyFont();
-    void applyShadow(SkPaint& paint) const;
     float adjustTextX(float x, float textWidth) const;
     float adjustTextY(float y) const;
 
@@ -569,6 +603,10 @@ private:
 
     // --- Canvas 2D state ---
 
+    // Everything save()/restore() carries and reset() puts back. The clip and
+    // the transform are the exception: they live in the recorded command
+    // stream, as kSave/kRestore/kClipPath and the transform commands the
+    // SkCanvas replays.
     struct State {
         SkPaint fillPaint;
         SkPaint strokePaint;
@@ -595,8 +633,11 @@ private:
         sk_sp<SkImageFilter> filter;
     };
 
-    State state_;
+    static State defaultState();
+
+    State state_ = defaultState();
     std::vector<State> stateStack_;
+    std::function<void()> resetHook_;
 
     // Deferred command buffer — recorded during JS, replayed during rasterize()
     std::vector<CanvasCmd> commands_;
@@ -604,16 +645,8 @@ private:
     // Current path (built incrementally, snapshot()'d for drawing)
     SkPathBuilder pathBuilder_;
 
-    // Current font
+    // Current font, resolved from state_.fontStr by applyFont().
     SkFont font_;
-    std::string fontString_ = "16px sans-serif";
-    int textAlign_ = 0;
-    int textBaseline_ = 0;
-    int direction_ = 0;
-    float shadowBlur_ = 0;
-    uint8_t shadowR_ = 0, shadowG_ = 0, shadowB_ = 0, shadowA_ = 0;
-    float shadowOffsetX_ = 0, shadowOffsetY_ = 0;
-    bool imageSmoothingEnabled_ = true;
 
     // Font cache (CSS string -> SkFont). The parsed family and style ride
     // along because the shaper needs what was *asked for*, not just what was

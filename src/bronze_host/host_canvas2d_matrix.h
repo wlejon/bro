@@ -40,6 +40,9 @@ public:
     void transform(double a, double b, double c, double d, double e, double f);
     void setTransform(double a, double b, double c, double d, double e, double f);
     void resetTransform();
+    // ctx.reset() / a canvas resize: the identity transform and an empty save
+    // stack. No restore hook runs — whoever resets owns the rest of the state.
+    void reset();
 
     const Affine2D& current() const { return current_; }
     Value toDOMMatrixValue() const;

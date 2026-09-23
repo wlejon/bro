@@ -22,9 +22,11 @@ bool parseSingleRadius(Value v, SkVector& out, std::string& err) {
         return true;
     }
     if (ev::isObject(v)) {
-        Value xv = ev::getProperty(v, "x");
-        Value yv = ev::getProperty(v, "y");
+        // `v` is current only until the first getProperty allocates.
+        ev::Persistent obj(v);
+        Value xv = ev::getProperty(obj.get(), "x");
         double xd = ev::isUndefined(xv) ? 0.0 : ev::toDouble(xv);
+        Value yv = ev::getProperty(obj.get(), "y");
         double yd = ev::isUndefined(yv) ? 0.0 : ev::toDouble(yv);
         if (xd < 0.0 || yd < 0.0) {
             err = "Failed to execute 'roundRect': radius must be non-negative";
@@ -51,21 +53,24 @@ bool parseRoundRectRadii(Value v, SkVector radii[4], std::string& err) {
         return true;
     }
     if (ev::isObject(v)) {
+        // Rooted: the isArray lookup and call, and every element read, may
+        // allocate and move `v`.
+        ev::Persistent obj(v);
         Value isArrFn = ev::getProperty(ev::globalValue("Array").value, "isArray");
         bool isArr = false;
         if (ev::isFunction(isArrFn)) {
-            isArr = ev::toBool(ev::call(isArrFn, ev::undefined(), std::span<const Value>(&v, 1)).value);
+            Value arg = obj.get();
+            isArr = ev::toBool(ev::call(isArrFn, ev::undefined(), std::span<const Value>(&arg, 1)).value);
         }
         if (isArr) {
-            int len = static_cast<int>(ev::toDouble(ev::getProperty(v, "length")));
+            int len = static_cast<int>(ev::toDouble(ev::getProperty(obj.get(), "length")));
             if (len == 0 || len > 4) {
                 err = "Failed to execute 'roundRect': 1 to 4 radii required";
                 return false;
             }
             SkVector items[4];
             for (int i = 0; i < len; ++i) {
-                std::string idxStr = std::to_string(i);
-                Value itemVal = ev::getProperty(v, idxStr.c_str());
+                Value itemVal = ev::getElement(obj.get(), static_cast<uint32_t>(i));
                 if (!parseSingleRadius(itemVal, items[i], err)) return false;
             }
             if (len == 1) {
@@ -89,7 +94,7 @@ bool parseRoundRectRadii(Value v, SkVector radii[4], std::string& err) {
             return true;
         } else {
             SkVector r;
-            if (!parseSingleRadius(v, r, err)) return false;
+            if (!parseSingleRadius(obj.get(), r, err)) return false;
             for (int i = 0; i < 4; ++i) radii[i] = r;
             return true;
         }
@@ -310,20 +315,21 @@ void installCanvas2DPaths(ObjectBuilder& b, dom::Element* el) {
     b.def("polyline", 1, [el](Value, std::span<const Value> a) -> Value {
         if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
         auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-        Value arg = a[0];
-        auto tinfo = ev::typedArrayInfo(arg);
+        // a[0] is a rooted argument slot; a copy of it would go stale at the
+        // first getElement that allocates.
+        auto tinfo = ev::typedArrayInfo(a[0]);
         if (tinfo.data && tinfo.byteLength >= sizeof(float) * 2) {
             int numPoints = static_cast<int>(tinfo.byteLength / (sizeof(float) * 2));
             cs->polyline(reinterpret_cast<const float*>(tinfo.data), numPoints);
             return ev::undefined();
         }
-        if (ev::isObject(arg)) {
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(arg, "length")));
+        if (ev::isObject(a[0])) {
+            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(a[0], "length")));
             if (len >= 2) {
                 std::vector<float> pts;
                 pts.reserve(len);
                 for (uint32_t i = 0; i < len; ++i) {
-                    pts.push_back(static_cast<float>(ev::toDouble(ev::getElement(arg, i))));
+                    pts.push_back(static_cast<float>(ev::toDouble(ev::getElement(a[0], i))));
                 }
                 cs->polyline(pts.data(), static_cast<int>(pts.size() / 2));
             }

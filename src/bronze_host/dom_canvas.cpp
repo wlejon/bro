@@ -147,7 +147,8 @@ Value makeBitmapRendererContextValue(const ev::Persistent& canvasRoot, dom::Elem
         bmp->pixels.clear();
         return ev::undefined();
     });
-    return ev::setPrototype(b.get(), g_bitmapRendererClass.prototype());
+    Value proto = g_bitmapRendererClass.prototype();
+    return ev::setPrototype(b.get(), proto);
 }
 
 }  // namespace
@@ -245,9 +246,12 @@ Value makeCanvasValue(dom::Element* el) {
         CanvasState* cs = canvasStateFor(el);
         if (!cs || !cs->el) return ev::undefined();
         Value nameV = argAt(a, 0);
-        Value valV = argAt(a, 1);
         if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
             std::string name = ev::toUtf8(nameV);
+            // Read after the name's conversion, which allocates for a
+            // non-string: the argument slot is current, a copy taken before
+            // it would not be.
+            Value valV = argAt(a, 1);
             std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
             cs->el->setAttribute(name, val);
             if (name == "width") {
@@ -259,30 +263,33 @@ Value makeCanvasValue(dom::Element* el) {
         return ev::undefined();
     });
     b.def("getContext", 1, [el](Value thisVal, std::span<const Value> a) {
+        // `thisVal` is a plain copy, current only at entry, and almost every
+        // call below allocates: root it first. The canvas object and each
+        // context value built here live in Persistents, read back with get()
+        // right where they are used.
+        ev::Persistent thisRoot(thisVal);
         CanvasState* cs = canvasStateFor(el);
         if (!cs || !cs->el) return ev::null();
         Value typeV = argAt(a, 0);
         if (ev::isObject(typeV)) return ev::null();
         std::string type = ev::toUtf8(typeV);
         if (!cs->contextType.empty() && cs->contextType != type) return ev::null();
-        Value canvasObj = ev::isObject(thisVal) ? thisVal : hostElementValue(cs->el);
+        ev::Persistent canvasRoot(ev::isObject(thisRoot.get()) ? thisRoot.get() : ev::undefined());
+        if (!ev::isObject(canvasRoot.get())) canvasRoot.set(hostElementValue(cs->el));
         if (type == "2d") {
-            Value existing = ev::getProperty(canvasObj, "__bro_ctx2d__");
+            Value existing = ev::getProperty(canvasRoot.get(), "__bro_ctx2d__");
             if (ev::isObject(existing)) return existing;
             if (auto* eng = hostEngine()) {
                 eng->createCanvasContext(cs->el);
             }
-            Value ctx2d = makeCanvas2DContextValue(canvasObj, cs->el);
-            ev::setProperty(canvasObj, "__bro_ctx2d__", ctx2d);
+            ev::Persistent ctxRoot(makeCanvas2DContextValue(canvasRoot.get(), cs->el));
+            ev::setProperty(canvasRoot.get(), "__bro_ctx2d__", ctxRoot.get());
             cs->contextType = type;
-            return ctx2d;
+            return ctxRoot.get();
         }
         if (type == "bitmaprenderer") {
-            Value existing = ev::getProperty(canvasObj, "__bro_ctxbmp__");
+            Value existing = ev::getProperty(canvasRoot.get(), "__bro_ctxbmp__");
             if (ev::isObject(existing)) return existing;
-            // Rooted: every call below allocates, and a raw Value does not
-            // survive a collection.
-            ev::Persistent canvasRoot(canvasObj);
             if (auto* eng = hostEngine()) {
                 eng->createCanvasContext(cs->el);
             }
@@ -298,14 +305,14 @@ Value makeCanvasValue(dom::Element* el) {
             if (!eng) return ev::null();
             dom::Document* curDoc = currentHostDocument();
             if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
-            Value existing = ev::getProperty(canvasObj, "__bro_scene__");
+            Value existing = ev::getProperty(canvasRoot.get(), "__bro_scene__");
             if (cs->el->sceneGraph() != nullptr && ev::isObject(existing)) return existing;
             scene::SceneGraph* sg = eng->createSceneContext(cs->el);
             if (!sg) return ev::null();
-            Value scn = createSceneGraphValue(sg, cs->el);
-            ev::setProperty(canvasObj, "__bro_scene__", scn);
+            ev::Persistent scnRoot(createSceneGraphValue(sg, cs->el));
+            ev::setProperty(canvasRoot.get(), "__bro_scene__", scnRoot.get());
             cs->contextType = type;
-            return scn;
+            return scnRoot.get();
 #else
             return ev::null();
 #endif
@@ -316,16 +323,16 @@ Value makeCanvasValue(dom::Element* el) {
         if (!eng) return ev::null();
         dom::Document* curDoc = currentHostDocument();
         if (curDoc && (eng->isWindowHostDocument(curDoc) || eng->isIframeDocument(curDoc))) return ev::null();
-        Value existing = ev::getProperty(canvasObj, "__bro_gl__");
+        Value existing = ev::getProperty(canvasRoot.get(), "__bro_gl__");
         if (cs->hasGl && ev::isObject(existing)) return existing;
         webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el);
         if (!ctx) return ev::null();
         cs->glCtx = ctx;
-        Value glValue = createGlContextValue(ctx, canvasObj);
-        ev::setProperty(canvasObj, "__bro_gl__", glValue);
+        ev::Persistent glRoot(createGlContextValue(ctx, canvasRoot.get()));
+        ev::setProperty(canvasRoot.get(), "__bro_gl__", glRoot.get());
         cs->hasGl = true;
         cs->contextType = type;
-        return glValue;
+        return glRoot.get();
     });
 
     b.def("toDataURL", 2, [el](Value, std::span<const Value> a) -> Value {
@@ -393,7 +400,9 @@ Value makeCanvasValue(dom::Element* el) {
         if (a.empty() || !ev::isFunction(a[0])) {
             return ev::throwTypeError("toBlob requires a callback function");
         }
-        Value callback = a[0];
+        // Everything from the encode to the promise allocates; the callback
+        // and each value built on the way live in Persistents.
+        ev::Persistent callback(a[0]);
         std::string type = "image/png";
         double quality = -1.0;
         if (a.size() > 1 && ev::isString(a[1])) {
@@ -423,7 +432,7 @@ Value makeCanvasValue(dom::Element* el) {
             }
         }
 
-        Value blobVal = ev::null();
+        ev::Persistent blobVal(ev::null());
         if (px && w > 0 && h > 0) {
             std::vector<uint8_t> bytes;
             std::string outType = "image/png";
@@ -445,27 +454,27 @@ Value makeCanvasValue(dom::Element* el) {
                 broimage::encode_png_memory(bytes, px, w, h, 4);
             }
             if (!bytes.empty()) {
-                Value ab = ev::createArrayBuffer(std::span<const uint8_t>(bytes.data(), bytes.size()));
-                Value blobCtor = ev::globalValue("Blob").value;
-                if (ev::isFunction(blobCtor)) {
-                    Value parts = ev::parseJson("[]").value;
-                    ev::setElement(parts, 0, ab);
+                ev::Persistent blobCtor(ev::globalValue("Blob").value);
+                if (ev::isFunction(blobCtor.get())) {
+                    ev::Persistent ab(ev::createArrayBuffer(std::span<const uint8_t>(bytes.data(), bytes.size())));
+                    ev::Persistent parts(ev::makeArray(0));
+                    parts.set(ev::setElement(parts.get(), 0, ab.get()));
                     ObjectBuilder opts;
                     opts.set("type", ev::fromUtf8(outType));
-                    const Value ctorArgs[2] = { parts, opts.get() };
-                    auto res = ev::construct(blobCtor, std::span<const Value>(ctorArgs, 2));
+                    const Value ctorArgs[2] = { parts.get(), opts.get() };
+                    auto res = ev::construct(blobCtor.get(), std::span<const Value>(ctorArgs, 2));
                     if (!res.thrown) {
-                        blobVal = res.value;
+                        blobVal.set(res.value);
                     }
                 }
             }
         }
-        Value promise = ev::createPromise();
-        ev::resolvePromise(promise, blobVal);
-        Value thenFn = ev::getProperty(promise, "then");
+        ev::Persistent promise(ev::createPromise());
+        ev::resolvePromise(promise.get(), blobVal.get());
+        Value thenFn = ev::getProperty(promise.get(), "then");
         if (ev::isFunction(thenFn)) {
-            const Value thenArgs[1] = { callback };
-            ev::call(thenFn, promise, std::span<const Value>(thenArgs, 1));
+            const Value thenArgs[1] = { callback.get() };
+            ev::call(thenFn, promise.get(), std::span<const Value>(thenArgs, 1));
         }
         return ev::undefined();
     });

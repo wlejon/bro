@@ -18,6 +18,7 @@
 #include <include/core/SkM44.h>
 #include <include/core/SkMaskFilter.h>
 #include <include/effects/SkDashPathEffect.h>
+#include <include/effects/SkImageFilters.h>
 #include <include/core/SkBlendMode.h>
 #include <include/core/SkBlurTypes.h>
 #include <include/core/SkPathBuilder.h>
@@ -54,20 +55,24 @@ namespace bro::canvas {
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
+CanvasScene::State CanvasScene::defaultState() {
+    // Black fill and stroke, the one piece of the default state the member
+    // initializers cannot spell. Everything else is State's own defaults.
+    State s;
+    s.fillPaint.setAntiAlias(true);
+    s.fillPaint.setStyle(SkPaint::kFill_Style);
+    s.fillPaint.setColor(SK_ColorBLACK);
+
+    s.strokePaint.setAntiAlias(true);
+    s.strokePaint.setStyle(SkPaint::kStroke_Style);
+    s.strokePaint.setColor(SK_ColorBLACK);
+    s.strokePaint.setStrokeWidth(1.0f);
+    return s;
+}
+
 CanvasScene::CanvasScene(render::Renderer* renderer)
     : renderer_(renderer)
 {
-    // Initialize default fill (black) and stroke (black) paints
-    state_.fillPaint.setAntiAlias(true);
-    state_.fillPaint.setStyle(SkPaint::kFill_Style);
-    state_.fillPaint.setColor(SK_ColorBLACK);
-
-    state_.strokePaint.setAntiAlias(true);
-    state_.strokePaint.setStyle(SkPaint::kStroke_Style);
-    state_.strokePaint.setColor(SK_ColorBLACK);
-    state_.strokePaint.setStrokeWidth(1.0f);
-
-    // Default font
     applyFont();
 }
 
@@ -461,7 +466,12 @@ void CanvasScene::replayOne(SkCanvas* c, CanvasCmd& cmd) {
         c->restore();
         break;
     case CanvasCmd::kSave:    c->save(); break;
-    case CanvasCmd::kRestore: c->restore(); break;
+    case CanvasCmd::kRestore:
+        // Never below the drawing state's own level (see ensureSurface). A
+        // surface recreated by a layout resize starts without the saves that
+        // were open on the old one, so a later restore can find none.
+        if (c->getSaveCount() > 2) c->restore();
+        break;
     case CanvasCmd::kTranslate: c->translate(cmd.p[0], cmd.p[1]); break;
     case CanvasCmd::kRotate:    c->rotate(cmd.p[0]); break;
     case CanvasCmd::kScale:     c->scale(cmd.p[0], cmd.p[1]); break;
@@ -482,36 +492,61 @@ void CanvasScene::replayOne(SkCanvas* c, CanvasCmd& cmd) {
         break;
     }
     case CanvasCmd::kReset:
+        // The recorded save()s and clip()s die with the state stack, and the
+        // transform goes back to the identity: restoring to the SkCanvas's
+        // base level drops every one of them, including a clip made outside
+        // any save(), which lives on the level ensureSurface opened above the
+        // base — reopened here for the next one.
+        c->restoreToCount(1);
+        c->save();
         c->clear(SK_ColorTRANSPARENT);
         break;
     }
 }
 
+void CanvasScene::replayThroughFilter(SkCanvas* c, CanvasCmd& cmd, const SkM44& ctm,
+                                      const sk_sp<SkImageFilter>& filter) {
+    // The layer is opened under the identity matrix so the filter's lengths
+    // (a blur radius, a shadow or drop-shadow offset) are canvas pixels and not
+    // scaled by the current transform; the draw itself then runs under the
+    // transform it was recorded with. The layer paint carries globalAlpha and
+    // the composite op, which the spec applies after the filter.
+    c->save();
+    c->resetMatrix();
+    SkPaint layer;
+    layer.setImageFilter(filter);
+    layer.setAlphaf(cmd.layerAlpha);
+    layer.setBlendMode(cmd.layerBlend);
+    c->saveLayer(nullptr, &layer);
+    c->setMatrix(ctm);
+    replayOne(c, cmd);
+    c->restore();
+    c->restore();
+}
+
 void CanvasScene::replayCommands(SkCanvas* c, std::vector<CanvasCmd>& cmds) {
     for (auto& cmd : cmds) {
-        if (!cmd.filter) {
+        if (!cmd.filter && !cmd.shadow) {
             replayOne(c, cmd);
             continue;
         }
-        // ctx.filter: draw into a layer the filter is applied to on restore.
-        // The layer is opened under the identity matrix so the filter's
-        // lengths (a blur radius, a drop-shadow offset) are canvas pixels and
-        // not scaled by the current transform, the same rule shadows follow;
-        // the draw itself then runs under the transform it was recorded with.
-        // The layer paint carries globalAlpha and the composite op, which the
-        // spec applies after the filter.
         const SkM44 ctm = c->getLocalToDevice();
-        c->save();
-        c->resetMatrix();
-        SkPaint layer;
-        layer.setImageFilter(cmd.filter);
-        layer.setAlphaf(cmd.layerAlpha);
-        layer.setBlendMode(cmd.layerBlend);
-        c->saveLayer(nullptr, &layer);
-        c->setMatrix(ctm);
-        replayOne(c, cmd);
-        c->restore();
-        c->restore();
+        // The spec's drawing model: the shadow (of the filtered image, when
+        // there is a filter) is composited first, with globalAlpha and the
+        // composite op of its own, and then the shape is, with the same two.
+        if (cmd.shadow) replayThroughFilter(c, cmd, ctm, cmd.shadow);
+        if (cmd.filter) {
+            replayThroughFilter(c, cmd, ctm, cmd.filter);
+        } else {
+            // Shadow but no filter: the shape needs no layer, so globalAlpha
+            // and the composite op go back onto its own paint — exactly the
+            // paint an unshadowed draw would have carried.
+            const SkPaint recorded = cmd.paint;
+            cmd.paint.setAlphaf(recorded.getAlphaf() * cmd.layerAlpha);
+            cmd.paint.setBlendMode(cmd.layerBlend);
+            replayOne(c, cmd);
+            cmd.paint = recorded;
+        }
     }
 }
 
@@ -641,6 +676,11 @@ void CanvasScene::ensureSurface(int w, int h) {
 
     // Clear to transparent (canvas default)
     if (surface_) {
+        // The drawing state's clip and transform live one save level above
+        // the SkCanvas's base, so that kReset can drop a clip() made outside
+        // any save() by restoring to the base and opening the level again —
+        // SkCanvas has no other way to take a clip back.
+        surface_->getCanvas()->save();
         surface_->getCanvas()->clear(SK_ColorTRANSPARENT);
         dirty_ = true;
     snapshotValid_ = false;
@@ -774,45 +814,38 @@ int CanvasScene::globalCompositeOperation() const { return state_.compositeOp; }
 
 void CanvasScene::setFont(const std::string& fontStr) {
     state_.fontStr = fontStr;
-    fontString_ = fontStr;
     applyFont();
 }
 
 void CanvasScene::setTextAlign(int align) {
     state_.textAlignVal = align;
-    textAlign_ = align;
 }
 
 void CanvasScene::setTextBaseline(int bl) {
     state_.textBaselineVal = bl;
-    textBaseline_ = bl;
 }
 
 void CanvasScene::setDirection(int dir) {
     state_.directionVal = dir;
-    direction_ = dir;
 }
 
 void CanvasScene::setShadowBlur(float blur) {
-    state_.shadowBlurVal = blur;
-    shadowBlur_ = blur;
+    if (std::isfinite(blur) && blur >= 0.0f) state_.shadowBlurVal = blur;
 }
 
 void CanvasScene::setShadowColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     state_.shadowR = r; state_.shadowG = g; state_.shadowB = b; state_.shadowA = a;
-    shadowR_ = r; shadowG_ = g; shadowB_ = b; shadowA_ = a;
 }
 
 void CanvasScene::getShadowColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const {
-    r = shadowR_; g = shadowG_; b = shadowB_; a = shadowA_;
+    r = state_.shadowR; g = state_.shadowG; b = state_.shadowB; a = state_.shadowA;
 }
 
-void CanvasScene::setShadowOffsetX(float x) { state_.shadowOX = x; shadowOffsetX_ = x; }
-void CanvasScene::setShadowOffsetY(float y) { state_.shadowOY = y; shadowOffsetY_ = y; }
+void CanvasScene::setShadowOffsetX(float x) { if (std::isfinite(x)) state_.shadowOX = x; }
+void CanvasScene::setShadowOffsetY(float y) { if (std::isfinite(y)) state_.shadowOY = y; }
 
 void CanvasScene::setImageSmoothingEnabled(bool v) {
     state_.imgSmooth = v;
-    imageSmoothingEnabled_ = v;
 }
 
 void CanvasScene::setImageSmoothingQuality(int q) {
@@ -846,7 +879,8 @@ SkFontMgr* CanvasScene::ensureFontMgr() {
 }
 
 void CanvasScene::applyFont() {
-    auto it = fontCache_.find(fontString_);
+    const std::string& fontStr = state_.fontStr;
+    auto it = fontCache_.find(fontStr);
     if (it != fontCache_.end()) {
         font_ = it->second.font;
         fontFamily_ = it->second.family;
@@ -854,7 +888,7 @@ void CanvasScene::applyFont() {
         return;
     }
 
-    auto pf = parseCSSFont(fontString_);
+    auto pf = parseCSSFont(fontStr);
 
     SkFontStyle style(
         pf.weight,
@@ -875,7 +909,7 @@ void CanvasScene::applyFont() {
     // string's measured width away from what the font specifies.
     f.setSubpixel(true);
 
-    fontCache_[fontString_] = {tf, f, pf.family, style};
+    fontCache_[fontStr] = {tf, f, pf.family, style};
     font_ = f;
     fontFamily_ = pf.family;
     fontStyle_ = style;
@@ -888,7 +922,7 @@ render::TextDirection CanvasScene::baseDirection() const {
     // `ltr`, which is what it resolves to for any document that has not set
     // direction. Scripts that need RTL on a canvas set ctx.direction = "rtl"
     // explicitly, which is honoured exactly.
-    return direction_ == 1 ? render::TextDirection::RTL : render::TextDirection::LTR;
+    return state_.directionVal == 1 ? render::TextDirection::RTL : render::TextDirection::LTR;
 }
 
 const render::ShapedRun* CanvasScene::shapeCurrent(std::string_view text) {
@@ -901,12 +935,31 @@ const render::ShapedRun* CanvasScene::shapeCurrent(std::string_view text) {
 // Paint helpers
 // ---------------------------------------------------------------------------
 
+bool CanvasScene::shadowActive() const {
+    return state_.shadowA > 0 &&
+           (state_.shadowBlurVal > 0.0f || state_.shadowOX != 0.0f || state_.shadowOY != 0.0f);
+}
+
+bool CanvasScene::drawIsLayered() const {
+    return state_.filter || shadowActive();
+}
+
+sk_sp<SkImageFilter> CanvasScene::shadowFilter() const {
+    if (!shadowActive()) return nullptr;
+    const float sigma = state_.shadowBlurVal / 2.0f;
+    const SkColor color = SkColorSetARGB(state_.shadowA, state_.shadowR, state_.shadowG, state_.shadowB);
+    // The filter's output is what the shadow is cast from, so it is the
+    // shadow's input; null means the draw itself.
+    return SkImageFilters::DropShadowOnly(state_.shadowOX, state_.shadowOY, sigma, sigma,
+                                          color, state_.filter);
+}
+
 float CanvasScene::drawAlpha() const {
-    return state_.filter ? 1.0f : state_.globalAlphaVal;
+    return drawIsLayered() ? 1.0f : state_.globalAlphaVal;
 }
 
 SkBlendMode CanvasScene::drawBlend() const {
-    return state_.filter ? SkBlendMode::kSrcOver : blendModeFromOp(state_.compositeOp);
+    return drawIsLayered() ? SkBlendMode::kSrcOver : blendModeFromOp(state_.compositeOp);
 }
 
 // imageSmoothingQuality follows what Chromium maps its three levels to:
@@ -914,7 +967,7 @@ SkBlendMode CanvasScene::drawBlend() const {
 // rather than aliasing), `high` is a cubic resampler. With smoothing off the
 // quality is irrelevant: nearest neighbour.
 SkSamplingOptions CanvasScene::imageSampling() const {
-    if (!imageSmoothingEnabled_) {
+    if (!state_.imgSmooth) {
         return SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone);
     }
     switch (state_.smoothQuality) {
@@ -952,8 +1005,9 @@ SkPaint CanvasScene::makeImagePaint() const {
 }
 
 void CanvasScene::recordDraw(CanvasCmd&& cmd) {
-    if (state_.filter) {
+    if (drawIsLayered()) {
         cmd.filter = state_.filter;
+        cmd.shadow = shadowFilter();
         cmd.layerAlpha = state_.globalAlphaVal;
         cmd.layerBlend = blendModeFromOp(state_.compositeOp);
     }
@@ -997,24 +1051,13 @@ void CanvasScene::setLineDashOffset(float off) {
 
 float CanvasScene::lineDashOffset() const { return state_.lineDashOffset; }
 
-void CanvasScene::applyShadow(SkPaint& paint) const {
-    if (shadowA_ > 0 && (shadowBlur_ > 0 || shadowOffsetX_ != 0 || shadowOffsetY_ != 0)) {
-        // Skia has no direct shadow API; approximate with a blur mask filter
-        // when blur > 0. Shadow offset is not applied — a faithful shadow
-        // would need a separate offset draw pass.
-        if (shadowBlur_ > 0) {
-            paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, shadowBlur_ / 2.0f));
-        }
-    }
-}
-
 float CanvasScene::adjustTextX(float x, float textWidth) const {
     // `start` and `end` name the direction-relative edges: in RTL text the
     // start edge is the right one. `left` and `right` are absolute and do not
     // move. Getting this wrong is invisible in LTR, which is why the two pairs
     // were conflated before there was a direction to resolve them against.
     const bool rtl = baseDirection() == render::TextDirection::RTL;
-    switch (textAlign_) {
+    switch (state_.textAlignVal) {
     case 1: return x - textWidth / 2.0f;             // center
     case 2: return x - textWidth;                    // right
     case 0: return rtl ? x - textWidth : x;          // start
@@ -1072,7 +1115,7 @@ float CanvasScene::adjustTextY(float y) const {
     font_.getMetrics(&metrics);
     float emAsc = 0.0f, emDesc = 0.0f;
     typoMetrics(emAsc, emDesc);
-    switch (textBaseline_) {
+    switch (state_.textBaselineVal) {
     case 1: return y + emAsc;                              // top of the em box
     case 2: return y + emAsc - font_.getSize() / 2.0f;     // middle of it
     case 3: return y - emDesc;                             // bottom of it
@@ -1417,21 +1460,13 @@ void CanvasScene::save() {
 }
 
 void CanvasScene::restore() {
-    if (!stateStack_.empty()) {
-        state_ = stateStack_.back();
-        stateStack_.pop_back();
-        // Sync convenience members from restored state
-        fontString_ = state_.fontStr;
-        textAlign_ = state_.textAlignVal;
-        textBaseline_ = state_.textBaselineVal;
-        direction_ = state_.directionVal;
-        shadowBlur_ = state_.shadowBlurVal;
-        shadowR_ = state_.shadowR; shadowG_ = state_.shadowG;
-        shadowB_ = state_.shadowB; shadowA_ = state_.shadowA;
-        shadowOffsetX_ = state_.shadowOX; shadowOffsetY_ = state_.shadowOY;
-        imageSmoothingEnabled_ = state_.imgSmooth;
-        applyFont();
-    }
+    // restore() with nothing saved does nothing, and must not record a
+    // kRestore either: the replay would pop the save level the drawing
+    // state's own clip lives on (see ensureSurface).
+    if (stateStack_.empty()) return;
+    state_ = stateStack_.back();
+    stateStack_.pop_back();
+    applyFont();
     CanvasCmd cmd;
     cmd.type = CanvasCmd::kRestore;
     commands_.push_back(std::move(cmd));
@@ -1582,7 +1617,9 @@ sk_sp<SkImage> CanvasScene::snapshotImage() {
 
     // Non-threaded: read directly. A raster-backed SkImage is portable —
     // makeImageSnapshot would tie the result to this scene's grContext.
+    // An undrawn canvas gets its (transparent) surface made to read from.
     flushCommands();
+    if (!surface_) skCanvas();
     if (!surface_) return nullptr;
     if (grContext_) grContext_->resetContext();
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
@@ -1616,8 +1653,11 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
         return snapshot_.data();
     }
 
-    // Non-threaded path
+    // Non-threaded path. A canvas nothing has drawn to yet has no surface
+    // (flushCommands creates it only for a command); its bitmap is still
+    // transparent black of its size, so make the surface to read that from.
     flushCommands();
+    if (!surface_) skCanvas();
     if (!surface_ || w <= 0 || h <= 0) {
         snapshotValid_ = false;
         return nullptr;
@@ -1697,12 +1737,23 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
 // ---------------------------------------------------------------------------
 
 void CanvasScene::reset() {
+    // Nothing recorded before a reset can show through it, so drop it here
+    // rather than replay it only to clear it: the kReset below restores the
+    // SkCanvas to its base level, which undoes any save or clip those
+    // commands (or earlier frames) left behind.
+    commands_.clear();
     CanvasCmd cmd;
     cmd.type = CanvasCmd::kReset;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
     snapshotValid_ = false;
     snapshotImageValid_ = false;
+
+    state_ = defaultState();
+    stateStack_.clear();
+    pathBuilder_.reset();
+    applyFont();
+    if (resetHook_) resetHook_();
 }
 
 // ---------------------------------------------------------------------------

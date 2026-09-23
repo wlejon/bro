@@ -164,6 +164,22 @@ class CanvasRenderingContext2D {
   globalCompositeOperation;
 
   /**
+   * Shadow offset in canvas pixels. The transform does not apply to it: a
+   * scaled or rotated draw still casts its shadow this far right. A
+   * non-finite value is ignored.
+   *
+   * Every fill, stroke, text and drawImage casts a shadow while shadowColor
+   * is not fully transparent and shadowBlur or an offset is non-zero
+   * (putImageData and clearRect never do). The shadow is cast from the
+   * shape's alpha — after ctx.filter, when one is set — in shadowColor, and
+   * composited under the shape with globalAlpha, the composite operation
+   * and the clip, each applied to the shadow and the shape separately.
+   * @example
+   *   ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+   *   ctx.shadowOffsetX = 4;
+   *   ctx.shadowOffsetY = 4;
+   *   ctx.shadowBlur = 8;
+   *   ctx.fillRect(20, 20, 100, 60);
    * @type {number}
    */
   shadowOffsetX;
@@ -174,11 +190,15 @@ class CanvasRenderingContext2D {
   shadowOffsetY;
 
   /**
+   * Blur of the shadow: a Gaussian of standard deviation shadowBlur / 2,
+   * in canvas pixels whatever the transform. Negative or non-finite values
+   * are ignored.
    * @type {number}
    */
   shadowBlur;
 
   /**
+   * Default transparent black, which draws no shadow.
    * @type {string}
    */
   shadowColor;
@@ -228,6 +248,15 @@ class CanvasRenderingContext2D {
 
   restore() {}
 
+  /**
+   * Clear the bitmap to transparent black and put the whole drawing state
+   * back to its defaults: the save() stack is emptied, the current path,
+   * transform, clip and line dash are reset, and every attribute (styles,
+   * line settings, font and text settings, shadows, filter, image
+   * smoothing, globalAlpha, the composite operation) returns to its initial
+   * value. Assigning canvas.width or canvas.height does the same, even to
+   * the current value.
+   */
   reset() {}
 
   beginPath() {}

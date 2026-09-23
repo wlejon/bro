@@ -106,6 +106,11 @@ void Canvas2DTransformTracker::resetTransform() {
     current_.reset();
 }
 
+void Canvas2DTransformTracker::reset() {
+    current_.reset();
+    stack_.clear();
+}
+
 Value Canvas2DTransformTracker::toDOMMatrixValue() const {
     ObjectBuilder m;
     m.set("a", ev::fromDouble(current_.a));
@@ -232,20 +237,22 @@ void installCanvas2DTransformMethods(ObjectBuilder& b, dom::Element* el, std::sh
             return ev::undefined();
         }
         if (a.size() == 1 && ev::isObject(a[0])) {
-            Value obj = a[0];
-            Value va = ev::getProperty(obj, "a");
-            Value vb = ev::getProperty(obj, "b");
-            Value vc = ev::getProperty(obj, "c");
-            Value vd = ev::getProperty(obj, "d");
-            Value ve = ev::getProperty(obj, "e");
-            Value vf = ev::getProperty(obj, "f");
-            if (ev::isNumber(va) && ev::isNumber(vd)) {
-                double ma = ev::toDouble(va);
-                double mb = ev::isNumber(vb) ? ev::toDouble(vb) : 0.0;
-                double mc = ev::isNumber(vc) ? ev::toDouble(vc) : 0.0;
-                double md = ev::toDouble(vd);
-                double me = ev::isNumber(ve) ? ev::toDouble(ve) : 0.0;
-                double mf = ev::isNumber(vf) ? ev::toDouble(vf) : 0.0;
+            // Each getProperty may allocate (or run a getter), so every read
+            // goes through the rooted argument slot a[0] and is reduced to a
+            // number before the next one.
+            auto member = [&a](const char* key, bool& present) {
+                Value v = ev::getProperty(a[0], key);
+                present = ev::isNumber(v);
+                return present ? ev::toDouble(v) : 0.0;
+            };
+            bool hasA = false, hasD = false, unused = false;
+            const double ma = member("a", hasA);
+            const double mb = member("b", unused);
+            const double mc = member("c", unused);
+            const double md = member("d", hasD);
+            const double me = member("e", unused);
+            const double mf = member("f", unused);
+            if (hasA && hasD) {
                 tracker->setTransform(ma, mb, mc, md, me, mf);
                 if (el && el->canvasScene()) {
                     auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());

@@ -3,10 +3,12 @@
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include "engine/engine.h"
+#include "webgl/webgl2_context.h"
 #include "broimage/decode.h"
 #include <api/api.h>
 #include <include/core/SkData.h>
 #include <include/core/SkImageInfo.h>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -19,13 +21,16 @@ static thread_local HostClass g_imageBitmapClass;
 static thread_local HostClass g_imageDataClass;
 
 static Value makeTypeError(const std::string& msg) {
+    // The message string is made first: made after the constructor was read,
+    // its allocation would leave `ctor` naming a pre-collection address.
+    ev::Persistent msgVal(ev::fromUtf8(msg));
     Value ctor = ev::globalValue("TypeError").value;
     if (ev::isFunction(ctor)) {
-        Value msgVal = ev::fromUtf8(msg);
-        auto res = ev::construct(ctor, std::span<const Value>(&msgVal, 1));
+        Value arg = msgVal.get();
+        auto res = ev::construct(ctor, std::span<const Value>(&arg, 1));
         if (!res.thrown) return res.value;
     }
-    return ev::fromUtf8(msg);
+    return msgVal.get();
 }
 
 static void hostImageBitmapDtor(void* p) {
@@ -107,23 +112,24 @@ Value wrapHostImageBitmap(const uint8_t* rgba, int w, int h) {
 }
 
 Value makeImageDataValue(int width, int height, Value dataArr) {
+    // `dataArr` is current only at entry, and building the object allocates.
+    ev::Persistent data(dataArr);
     ObjectBuilder b;
     b.set("width", ev::fromDouble(width));
     b.set("height", ev::fromDouble(height));
-    b.set("data", dataArr);
-    Value obj = b.get();
-    Value proto = g_imageDataClass.prototype();
-    if (!ev::isUndefined(proto)) {
+    b.set("data", data.get());
+    ev::Persistent proto(g_imageDataClass.prototype());
+    if (!ev::isUndefined(proto.get())) {
         ev::GlobalValue objCtor = ev::globalValue("Object");
         if (objCtor.found) {
             Value setProto = ev::getProperty(objCtor.value, "setPrototypeOf");
             if (ev::isFunction(setProto)) {
-                const Value args[2] = { obj, proto };
+                const Value args[2] = { b.get(), proto.get() };
                 ev::call(setProto, ev::undefined(), std::span<const Value>(args, 2));
             }
         }
     }
-    return obj;
+    return b.get();
 }
 
 Value makeImageDataValue(int width, int height, const uint8_t* pixels) {
@@ -175,14 +181,66 @@ static Value js_imageData_ctor(Value, std::span<const Value> a) {
     return makeImageDataValue(width, height, dataArr);
 }
 
+// createImageBitmap(<canvas>): a copy of the canvas's bitmap as displayed now,
+// at the bitmap's own size. For a 2D or bitmaprenderer canvas that is the
+// scene's surface size — which for a bitmaprenderer canvas is the size of the
+// ImageBitmap last transferred in, not the width/height attributes; a WebGL
+// canvas reads back its drawing buffer; a canvas with no context yet has a
+// transparent-black bitmap of its attribute size (300x150 by default), and
+// asking for it must not create a context.
+static bool canvasBitmapPixels(dom::Element* el, std::vector<uint8_t>& out, int& w, int& h,
+                               bool& invalidState, std::string& err) {
+    // A zero-sized bitmap is the spec's InvalidStateError.
+    auto empty = [&]() {
+        invalidState = true;
+        err = "createImageBitmap: the canvas has a zero width or height";
+        return false;
+    };
+    if (auto* scene = static_cast<canvas::CanvasScene*>(el->canvasScene())) {
+        w = scene->width();
+        h = scene->height();
+        if (w <= 0 || h <= 0) return empty();
+        const uint8_t* px = scene->snapshotPixels(w, h);
+        if (!px) { err = "Canvas snapshot failed"; return false; }
+        out.assign(px, px + static_cast<size_t>(w) * h * 4);
+        return true;
+    }
+    if (auto* gl = static_cast<webgl::WebGL2RenderingContext*>(el->webglContext())) {
+        w = gl->canvasWidth();
+        h = gl->canvasHeight();
+        if (w <= 0 || h <= 0) return empty();
+        if (!gl->readCanvasPixels(out) || out.size() < static_cast<size_t>(w) * h * 4) {
+            err = "Canvas snapshot failed";
+            return false;
+        }
+        return true;
+    }
+    if (el->sceneGraph()) { err = "createImageBitmap does not read a scene canvas"; return false; }
+    auto attr = [el](const char* name, int fallback) {
+        const std::string& v = el->getAttribute(name);
+        return v.empty() ? fallback : std::atoi(v.c_str());
+    };
+    w = attr("width", 300);
+    h = attr("height", 150);
+    if (w <= 0 || h <= 0) return empty();
+    out.assign(static_cast<size_t>(w) * h * 4, 0);
+    return true;
+}
+
 static Value js_createImageBitmap(Value, std::span<const Value> a) {
-    Value promise = ev::createPromise();
+    // The promise is rooted for the whole call: nearly everything below
+    // allocates, the error objects included. The source is read through a[0],
+    // a rooted argument slot, never through a copy.
+    ev::Persistent promise(ev::createPromise());
+    auto reject = [&promise](const std::string& msg) {
+        ev::Persistent err(makeTypeError(msg));
+        ev::rejectPromise(promise.get(), err.get());
+        return promise.get();
+    };
     if (a.empty() || ev::isNull(a[0]) || ev::isUndefined(a[0])) {
-        ev::rejectPromise(promise, makeTypeError("createImageBitmap requires a source"));
-        return promise;
+        return reject("createImageBitmap requires a source");
     }
 
-    Value src = a[0];
     bool crop = false;
     int sx = 0, sy = 0, sw = 0, sh = 0;
     if (a.size() >= 5) {
@@ -197,40 +255,25 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
     std::vector<uint8_t> outPixels;
     sk_sp<SkImage> resultImg;
 
-    if (auto* bmp = hostImageBitmapOfMut(src)) {
-        if (bmp->closed) {
-            ev::rejectPromise(promise, makeTypeError("ImageBitmap is closed"));
-            return promise;
-        }
+    if (auto* bmp = hostImageBitmapOfMut(a[0])) {
+        if (bmp->closed) return reject("ImageBitmap is closed");
         resultImg = buildBitmap(bmp->pixels.data(), bmp->width, bmp->height,
                                 crop, sx, sy, sw, sh, outPixels, err);
-    } else if (const HostImage* img = hostImageOf(src)) {
-        if (!img->complete || !img->ok || img->rgba.empty()) {
-            ev::rejectPromise(promise, makeTypeError("Image has no valid pixels"));
-            return promise;
-        }
+    } else if (const HostImage* img = hostImageOf(a[0])) {
+        if (!img->complete || !img->ok || img->rgba.empty()) return reject("Image has no valid pixels");
         resultImg = buildBitmap(img->rgba.data(), img->width, img->height,
                                 crop, sx, sy, sw, sh, outPixels, err);
-    } else if (dom::Element* el = hostElementOf(src)) {
+    } else if (dom::Element* el = hostElementOf(a[0])) {
         if (el->tagName() == "canvas" || el->tagName() == "CANVAS") {
-            if (!el->canvasScene()) {
-                if (auto* eng = hostEngine()) {
-                    eng->createCanvasContext(el);
-                }
-            }
-            if (auto* scene = static_cast<canvas::CanvasScene*>(el->canvasScene())) {
-                int w = std::atoi(el->getAttribute("width").c_str());
-                int h = std::atoi(el->getAttribute("height").c_str());
-                if (w <= 0) w = 300;
-                if (h <= 0) h = 150;
-                const uint8_t* px = scene->snapshotPixels(w, h);
-                if (px) {
-                    resultImg = buildBitmap(px, w, h, crop, sx, sy, sw, sh, outPixels, err);
-                } else {
-                    err = "Canvas snapshot failed";
-                }
-            } else {
-                err = "Canvas snapshot failed";
+            std::vector<uint8_t> px;
+            int w = 0, h = 0;
+            bool invalidState = false;
+            if (canvasBitmapPixels(el, px, w, h, invalidState, err)) {
+                resultImg = buildBitmap(px.data(), w, h, crop, sx, sy, sw, sh, outPixels, err);
+            } else if (invalidState) {
+                ev::Persistent domErr(hostMakeDomError("InvalidStateError", err));
+                ev::rejectPromise(promise.get(), domErr.get());
+                return promise.get();
             }
         } else {
             err = "Element is not a canvas";
@@ -238,7 +281,7 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
     } else {
         const uint8_t* bytes = nullptr;
         size_t len = 0;
-        if (brokit::api::blobBytes(src, &bytes, &len) && bytes && len > 0) {
+        if (brokit::api::blobBytes(a[0], &bytes, &len) && bytes && len > 0) {
             // The same ladder an <img> src goes through (host_image.cpp):
             // bitmap codecs, WebP, then SVG — a fetched .webp or .svg blob
             // is as much an image here as a PNG one.
@@ -251,12 +294,13 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
             } else {
                 err = "Blob image decode failed: " + decErr;
             }
-        } else if (ev::isObject(src)) {
-            Value wV = ev::getProperty(src, "width");
-            Value hV = ev::getProperty(src, "height");
-            Value dV = ev::getProperty(src, "data");
-            int w = static_cast<int>(ev::toDouble(wV));
-            int h = static_cast<int>(ev::toDouble(hV));
+        } else if (ev::isObject(a[0])) {
+            // Each read reduced to a number before the next getProperty
+            // (which may allocate) runs; the data pointer is consumed by
+            // buildBitmap before anything else can.
+            int w = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "width")));
+            int h = static_cast<int>(ev::toDouble(ev::getProperty(a[0], "height")));
+            Value dV = ev::getProperty(a[0], "data");
             auto info = ev::typedArrayInfo(dV);
             if (info.data && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * h * 4) {
                 resultImg = buildBitmap(info.data, w, h, crop, sx, sy, sw, sh, outPixels, err);
@@ -274,12 +318,11 @@ static Value js_createImageBitmap(Value, std::span<const Value> a) {
         newBmp->pixels = std::move(outPixels);
         newBmp->width = resultImg->width();
         newBmp->height = resultImg->height();
-        Value bmpVal = g_imageBitmapClass.make(newBmp, hostImageBitmapDtor);
-        ev::resolvePromise(promise, bmpVal);
-    } else {
-        ev::rejectPromise(promise, makeTypeError(err.empty() ? "createImageBitmap failed" : err));
+        ev::Persistent bmpVal(g_imageBitmapClass.make(newBmp, hostImageBitmapDtor));
+        ev::resolvePromise(promise.get(), bmpVal.get());
+        return promise.get();
     }
-    return promise;
+    return reject(err.empty() ? "createImageBitmap failed" : err);
 }
 
 void installImageBitmapGlobals() {
