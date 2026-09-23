@@ -427,6 +427,14 @@ const dealt = world.dealDamage(bot, foe, 25, "magical");
  * inside an MCTS rollout on a cloned World, where `caster` is a clone's agent
  * with no JS wrapper and so arrives as undefined. Guard for that.
  *
+ * It runs only on the JS thread, while a method of this World (or a search
+ * over it) is running. A cast outside that window does not call it: for
+ * example, a rootParallelSearch rollout on one of its worker threads applies
+ * cooldown and mana but skips the fn, because JS can't be called from those
+ * threads. The fn is held on the world handle (`_abilities`), so a world
+ * that is otherwise unreachable is collected even though its ability
+ * closures refer back to it.
+ *
  * @param {number} abilityId
  * @param {Object} spec
  * @param {number} [spec.cooldown=1]

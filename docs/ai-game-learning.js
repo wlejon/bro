@@ -582,6 +582,8 @@ const vec = bro.ai.game.createVecSimulation({
     rewardDamageDealt: 1.0, rewardDamageTakenMul: 1.0,
     rewardKill: 100, rewardDeath: -100, rewardStep: 0, rewardTimeout: 0,
 });
+// numEnvs must be an integer in 1..65536 (RangeError otherwise); it sizes
+// every per-env buffer up front.
 vec.numEnvs;                              // read-only
 vec.seedAndReset(0x1234n);
 const heroObs = vec.observe(1);           // Float32Array, N * OBS_TOTAL
@@ -626,6 +628,8 @@ vec.resetEnv(0);
  * @param {function():(Int32Array|number[])}          opts.env.legalActions - Legal action indices
  *                                                     in [0, numActions). Re-queried at every
  *                                                     expansion, so it must reflect current state.
+ *                                                     Indices outside [0, numActions) are dropped,
+ *                                                     not searched.
  * @param {function():Float32Array}                   opts.env.observe - Observation vector forwarded
  *                                                     to priorFn / valueFn. Shape and semantics
  *                                                     are entirely up to you.

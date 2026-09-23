@@ -20,6 +20,17 @@
 // AIAgent, AIWorld, AIUnit, AIAgentBinding, and the search/learn classes.
 // The constructors are not callable; use the create*/bake* factories.
 //
+// Reserved properties. Handles store the JS callbacks and objects they
+// depend on as own `_`-prefixed properties, so the collector can see them
+// and a handle whose callbacks refer back to it can still be collected:
+// `_callbacks` (search/planner callbacks), `_agents` and `_abilities`
+// (World), `_world` and `_policies` (simulation), `_snapshots` and `_backend`
+// (GenericMcts), and `_agent` (unit proxy, AgentBinding). They are internal:
+// don't read, replace or delete them.
+//
+// A native exception inside any method (e.g. bad_alloc on a corrupt replay)
+// throws a JS Error instead of ending the process.
+//
 // Quick start:
 //   const nav = bro.ai.game.createNavGrid({
 //     minX: -20, minZ: -20, maxX: 20, maxZ: 20,
