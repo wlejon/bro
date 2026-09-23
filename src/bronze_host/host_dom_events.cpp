@@ -599,6 +599,8 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
     // dom::Event may be destroyed at any point and the object must not reach
     // it. A listener that stashed the object gets the named refusal instead.
     live->ev = nullptr;
+    // The thrown value outlives the document swap back, which allocates.
+    ev::Persistent thrown(r.thrown ? r.value : ev::undefined());
 
     if (swapDoc) {
         if (!ev::isNull(prevDocVal.get())) setDocumentGlobal(prevDocVal.get());
@@ -608,7 +610,7 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
 
     // Report and keep going — one broken listener must not silence the ones
     // registered after it, which is what the rAF and window paths do too.
-    if (r.thrown) reportBronzeError(origin, r.value);
+    if (r.thrown) reportBronzeError(origin, thrown.get());
 }
 
 namespace {

@@ -150,6 +150,8 @@ void fireAnimationFrames() {
         Value ts = ev::fromDouble(g_host->clockMs);
         ev::CallResult r = ev::call(entry.fn.get(), ev::undefined(),
                                     std::span<const Value>(&ts, 1));
+        // The thrown value outlives the document swap back, which allocates.
+        ev::Persistent thrown(r.thrown ? r.value : ev::undefined());
 
         if (swapDoc) {
             if (!ev::isNull(prevDocVal.get())) {
@@ -163,7 +165,7 @@ void fireAnimationFrames() {
             exitRealmScope();
         }
 
-        if (r.thrown) reportBronzeError("requestAnimationFrame", r.value);
+        if (r.thrown) reportBronzeError("requestAnimationFrame", thrown.get());
     }
     g_host->rafActiveBatchCancelled.clear();
 }

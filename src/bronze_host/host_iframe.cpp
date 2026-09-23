@@ -50,18 +50,19 @@ Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
             out = g.found ? g.value : ev::undefined();
             return true;
         }
+        // Rooted across exitRealmScope: switching the scope back moves every
+        // expando on and off globalThis, a chain of allocating calls that
+        // leaves a raw Value read inside the frame's scope stale.
         enterRealmScope(scopeId);
         ev::GlobalValue g = ev::globalValue("globalThis");
-        bool found = false;
+        ev::Persistent value;
         if (g.found && ev::isObject(g.value)) {
-            Value v = ev::getProperty(g.value, key);
-            if (!ev::isUndefined(v)) {
-                out = v;
-                found = true;
-            }
+            value.set(ev::getProperty(g.value, key));
         }
         exitRealmScope();
-        return found;
+        if (ev::isUndefined(value.get())) return false;
+        out = value.get();
+        return true;
     };
 
     traps.set = [scopeId](const std::string& key, Value v) {
