@@ -156,6 +156,18 @@ inline constexpr uint32_t kHostGifEncoderTag   = 0x47454E43u;  // 'GENC'
 // loop down.
 void reportBronzeError(const char* origin, Value thrown);
 
+// The browser's "report the exception" step for `thrown`: window.onerror,
+// then an ErrorEvent at the window's `error` listeners (host_error_events.cpp).
+// True when the page cancelled it (onerror returned true, or a listener
+// called preventDefault), which is the caller's cue to skip its log line.
+// A throw from inside an error handler is never re-dispatched. ALLOCATES.
+bool hostDispatchUncaughtError(Value thrown);
+
+// The main window's `postMessage(message, targetOrigin, transfer)`
+// (host_window_message.cpp): clones at the call, delivers a `message`
+// MessageEvent at the window as a later task. ALLOCATES.
+Value makeWindowPostMessage();
+
 // The text `reportBronzeError` prints for a thrown value: its `stack` when a
 // program set one, else `Name: message` for an Error, else its JSON for any
 // other object, else ToString of the primitive. bronze itself records no

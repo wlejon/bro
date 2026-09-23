@@ -461,3 +461,63 @@ class GestureEvent extends UIEvent {
 
 }
 
+// ── Uncaught errors: window.onerror and the 'error' event ────────────────────
+//
+// An exception nothing caught — thrown out of a setTimeout/setInterval
+// callback, a requestAnimationFrame callback, an event listener, a
+// queueMicrotask callback, or a script's top level — is reported to the page
+// the way a browser reports it:
+//   1. window.onerror(message, filename, lineno, colno, error) is called
+//      (legacy five-argument form); returning true cancels the report;
+//   2. an ErrorEvent (cancelable) is dispatched at the window's 'error'
+//      listeners; preventDefault() cancels the report.
+// A cancelled report skips the engine's own `[bronze:...] uncaught` log line.
+// message is 'Uncaught Name: message' (or 'Uncaught <value>' for a thrown
+// primitive); bronze records no source positions, so filename is '' and
+// lineno/colno are 0. An error thrown by an error handler is logged, never
+// re-dispatched. A script whose top level threw is still reported as failed
+// (headless exits non-zero) whatever its handlers do.
+//
+// NOT raised: 'unhandledrejection' / window.onunhandledrejection. bronze
+// reports a promise nothing handled from inside its own microtask drain
+// (stderr: "Unhandled promise rejection: ..."), with no embedder hook yet.
+
+window.onerror = (message, filename, lineno, colno, error) => {
+  report(error);
+  return true;              // handled: no engine log line
+};
+window.addEventListener('error', (e) => {
+  // e instanceof ErrorEvent; e.message, e.filename, e.lineno, e.colno, e.error
+  e.preventDefault();       // handled
+});
+
+// ── window.postMessage ───────────────────────────────────────────────────────
+//
+// window.postMessage(message, targetOrigin[, transfer])
+// window.postMessage(message, { targetOrigin = '/', transfer })
+//
+// Delivers a MessageEvent ('message') to the window itself, as a TASK: after
+// the posting code and its microtasks have run. The message is
+// structured-cloned (structuredClone, as MessageChannel ports do) at the call,
+// so later mutation does not reach the receiver and an uncloneable value
+// throws there. window.onmessage runs first, then 'message' listeners; the
+// event carries data, origin (location.origin, 'bro://app'), source (window)
+// and ports (the MessagePorts in the transfer list).
+// targetOrigin: '*' always delivers; '/' means the page's own origin; an
+// absolute URL delivers only when its origin is 'bro://app' (otherwise the
+// message is silently dropped); anything that is not a URL throws a
+// SyntaxError DOMException. A secondary window (bro.window.open) posts to its
+// opener with bro.window.parent.postMessage instead.
+
+window.addEventListener('message', (e) => { e.data; e.origin; e.source; e.ports; });
+window.postMessage({ kind: 'ping' }, '*');
+
+// ── Navigation / form event classes ──────────────────────────────────────────
+//
+// Constructible for dispatching and for code that sniffs them. bro has no
+// history navigation, so nothing fires hashchange / popstate on its own.
+
+new HashChangeEvent('hashchange', { oldURL: '', newURL: '' });   // oldURL, newURL
+new PopStateEvent('popstate', { state: null });                  // state, hasUAVisualTransition
+new FormDataEvent('formdata', { formData: new FormData() });     // formData
+

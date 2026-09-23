@@ -88,7 +88,8 @@ void installEventsModule() {
     for (const char* name : {"UIEvent", "MouseEvent", "KeyboardEvent", "InputEvent", "FocusEvent",
                              "WheelEvent", "PointerEvent", "DragEvent", "CompositionEvent",
                              "AnimationEvent", "TransitionEvent", "ClipboardEvent", "SubmitEvent",
-                             "ErrorEvent", "ProgressEvent", "PromiseRejectionEvent", "StorageEvent"}) {
+                             "ErrorEvent", "HashChangeEvent", "PopStateEvent", "FormDataEvent",
+                             "ProgressEvent", "PromiseRejectionEvent", "StorageEvent"}) {
         adoptGlobalProperty(name);
     }
     // events.js also puts the 25 legacy `*_ERR` codes and `code` on the

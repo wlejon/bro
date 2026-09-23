@@ -139,6 +139,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_events.cpp
     host_dom_events.cpp
     host_dom_events_types.cpp
+    host_error_events.cpp
     host_timers.cpp
     host_image.cpp
     host_platform.cpp
@@ -167,6 +168,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_worker_msg.cpp
     host_worker.cpp
     host_window_open.cpp
+    host_window_message.cpp
     host_realm_scope.cpp
     host_observer_hooks.cpp
     host_js_modules.cpp

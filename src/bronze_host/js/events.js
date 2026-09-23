@@ -1,7 +1,8 @@
 // The UI event CLASSES a page constructs: UIEvent, MouseEvent, KeyboardEvent,
 // InputEvent, FocusEvent, WheelEvent, PointerEvent, DragEvent,
 // CompositionEvent, AnimationEvent, TransitionEvent, ClipboardEvent,
-// SubmitEvent, ErrorEvent, ProgressEvent, PromiseRejectionEvent — over the
+// SubmitEvent, ErrorEvent, HashChangeEvent, PopStateEvent, FormDataEvent,
+// ProgressEvent, PromiseRejectionEvent — over the
 // `Event` brokit installs (event_target.js), so `new MouseEvent('click')
 // instanceof Event` holds and the base's preventDefault / stopPropagation /
 // composedPath are inherited rather than copied.
@@ -229,6 +230,32 @@
         }
     }
 
+    class HashChangeEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.oldURL = str(opts, 'oldURL', '');
+            this.newURL = str(opts, 'newURL', '');
+        }
+    }
+
+    class PopStateEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.state = (opts && opts.state !== undefined) ? opts.state : null;
+            this.hasUAVisualTransition = flag(opts, 'hasUAVisualTransition');
+        }
+    }
+
+    // The spec makes `formData` a required member; the old runtime defaulted
+    // it to null instead of throwing, and pages written against that still
+    // construct one bare, so the default stays.
+    class FormDataEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.formData = ref(opts, 'formData');
+        }
+    }
+
     class ProgressEvent extends Event {
         constructor(type, opts) {
             super(type, opts);
@@ -337,6 +364,9 @@
     g.ClipboardEvent = ClipboardEvent;
     g.SubmitEvent = SubmitEvent;
     g.ErrorEvent = ErrorEvent;
+    g.HashChangeEvent = HashChangeEvent;
+    g.PopStateEvent = PopStateEvent;
+    g.FormDataEvent = FormDataEvent;
     g.ProgressEvent = ProgressEvent;
     g.PromiseRejectionEvent = PromiseRejectionEvent;
     g.StorageEvent = StorageEvent;

@@ -347,9 +347,13 @@ std::string thrownValueText(Value thrown) {
     return ev::toUtf8(root.get());
 }
 
-// Where an exception out of compiled code ends up. Reports to the log stream.
+// Where an exception out of compiled code ends up: the window's `error`
+// event first (host_error_events.cpp), then the log stream unless a handler
+// cancelled it.
 void reportBronzeError(const char* origin, Value thrown) {
-    LOG_ERROR("[bronze:%s] uncaught %s", origin, thrownValueText(thrown).c_str());
+    ev::Persistent root(thrown);
+    if (hostDispatchUncaughtError(root.get())) return;
+    LOG_ERROR("[bronze:%s] uncaught %s", origin, thrownValueText(root.get()).c_str());
 }
 
 // Zero before the first frame, which is what a program's top level sees. It is
@@ -594,6 +598,12 @@ void installWebHostGlobals(engine::Engine& engine) {
             }
             return ev::undefined();
         });
+
+        // Registered before installWorkerGlobals' no-op `postMessage` stub,
+        // whose found-guard then leaves this one in place.
+        Value postMessageFn = makeWindowPostMessage();
+        b.set("postMessage", postMessageFn);
+        ev::registerGlobal("postMessage", ev::getProperty(gObj, "postMessage"));
 
         Value getComputedStyleFn = makeGetComputedStyle();
         b.set("getComputedStyle", getComputedStyleFn);

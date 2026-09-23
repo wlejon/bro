@@ -44,7 +44,13 @@ namespace {
 bool reportCallResult(engine::Engine& engine, const bronze::embed::CallResult& res,
                       const char* context, const std::string& filename) {
     if (res.thrown) {
-        std::string errMsg = thrownValueText(res.value);
+        // The page's `error` handlers see a script's uncaught throw, as they
+        // do on the web. The run still counts as failed and is still logged:
+        // a script that died at its top level did not finish, whatever a
+        // handler made of it.
+        bronze::embed::Persistent thrownRoot(res.value);
+        hostDispatchUncaughtError(thrownRoot.get());
+        std::string errMsg = thrownValueText(thrownRoot.get());
         LOG_ERROR("%s: uncaught %s (in %s)", context, errMsg.c_str(),
                   filename.empty() ? "<eval>" : filename.c_str());
         setTestFailure(true);
