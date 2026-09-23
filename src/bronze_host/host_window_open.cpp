@@ -217,22 +217,13 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
 
     b.def("postMessage", 2, [id](Value, std::span<const Value> a) -> Value {
         if (a.empty()) return ev::undefined();
-        Value val = a[0];
-        std::span<const Value> transfers;
-        std::vector<Value> transferVec;
-        if (a.size() > 1 && ev::isObject(a[1])) {
-            Value tList = a[1];
-            Value lenVal = ev::getProperty(tList, "length");
-            if (!ev::isUndefined(lenVal) && !ev::isNull(lenVal)) {
-                int len = static_cast<int>(ev::toDouble(lenVal));
-                for (int i = 0; i < len; ++i) {
-                    transferVec.push_back(ev::getElement(tList, i));
-                }
-                transfers = transferVec;
-            }
-        }
+        // The transfer list is rooted element by element, and the message is
+        // read from its rooted argument slot, never from a copy taken before
+        // those allocating reads.
+        std::vector<ev::Persistent> transfers = collectTransferList(a);
         Message msg;
-        if (!serializeMessage(val, transfers, msg)) {
+        const std::vector<Value> transferVals = currentValues(transfers);
+        if (!serializeMessage(a[0], transferVals, msg)) {
             return ev::throwTypeError("postMessage: value is not cloneable");
         }
         auto it = s_handleStates.find(id);
@@ -276,22 +267,10 @@ void installBroWindowParent(Value broWin) {
             return ev::throwTypeError("bro.window.parent.postMessage is only available in a secondary window");
         }
         if (a.empty()) return ev::undefined();
-        Value val = a[0];
-        std::span<const Value> transfers;
-        std::vector<Value> transferVec;
-        if (a.size() > 1 && ev::isObject(a[1])) {
-            Value tList = a[1];
-            Value lenVal = ev::getProperty(tList, "length");
-            if (!ev::isUndefined(lenVal) && !ev::isNull(lenVal)) {
-                int len = static_cast<int>(ev::toDouble(lenVal));
-                for (int i = 0; i < len; ++i) {
-                    transferVec.push_back(ev::getElement(tList, i));
-                }
-                transfers = transferVec;
-            }
-        }
+        std::vector<ev::Persistent> transfers = collectTransferList(a);
         Message msg;
-        if (!serializeMessage(val, transfers, msg)) {
+        const std::vector<Value> transferVals = currentValues(transfers);
+        if (!serializeMessage(a[0], transferVals, msg)) {
             return ev::throwTypeError("postMessage: value is not cloneable");
         }
         dom::Document* curDoc = currentHostDocument();

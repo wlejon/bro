@@ -32,6 +32,26 @@ namespace bro::bronze_host {
 
 namespace {
 
+// The event objects handed to onerror / onmessage and the listeners. Built
+// through ObjectBuilder, whose set() reads the receiver only after the value
+// argument (a fromUtf8 that allocates) has been made — the order a direct
+// setProperty(obj.get(), key, fromUtf8(...)) does not guarantee.
+Value makeErrorEvent(const std::string& message, const std::string& filename, int lineno) {
+    ObjectBuilder evt;
+    evt.set("type", ev::fromUtf8("error"));
+    evt.set("message", ev::fromUtf8(message));
+    evt.set("filename", ev::fromUtf8(filename));
+    evt.set("lineno", ev::fromDouble(lineno));
+    return evt.get();
+}
+
+Value makeMessageEvent(const ev::Persistent& data) {
+    ObjectBuilder evt;
+    evt.set("type", ev::fromUtf8("message"));
+    evt.set("data", data.get());
+    return evt.get();
+}
+
 class WorkerInstance;
 static std::mutex s_workersMutex;
 static std::vector<WorkerInstance*> s_activeWorkers;
@@ -95,15 +115,11 @@ public:
 
         for (auto& msg : batch) {
             if (msg->isError) {
-                ev::Persistent evt(ev::createObject());
-                evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("error")));
-                evt.set(ev::setProperty(evt.get(), "message", ev::fromUtf8(msg->errorMessage)));
-                evt.set(ev::setProperty(evt.get(), "filename", ev::fromUtf8(msg->errorFilename)));
-                evt.set(ev::setProperty(evt.get(), "lineno", ev::fromDouble(msg->errorLineno)));
+                ev::Persistent evt(makeErrorEvent(msg->errorMessage, msg->errorFilename,
+                                                  msg->errorLineno));
 
-                Value cb = onerror_.get();
-                if (ev::isFunction(cb)) {
-                    ev::Persistent cbRoot(cb);
+                if (ev::isFunction(onerror_.get())) {
+                    ev::Persistent cbRoot(onerror_.get());
                     Value event = evt.get();
                     ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
                 }
@@ -120,13 +136,10 @@ public:
                 }
             } else {
                 ev::Persistent dataRoot(deserializeMessage(*msg));
-                ev::Persistent evt(ev::createObject());
-                evt.set(ev::setProperty(evt.get(), "type", ev::fromUtf8("message")));
-                evt.set(ev::setProperty(evt.get(), "data", dataRoot.get()));
+                ev::Persistent evt(makeMessageEvent(dataRoot));
 
-                Value cb = onmessage_.get();
-                if (ev::isFunction(cb)) {
-                    ev::Persistent cbRoot(cb);
+                if (ev::isFunction(onmessage_.get())) {
+                    ev::Persistent cbRoot(onmessage_.get());
                     Value event = evt.get();
                     ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
                 }
@@ -265,25 +278,23 @@ void WorkerInstance::threadFunc() {
         errMsg->errorLineno = line;
         postToMain(std::move(errMsg));
 
-        Value cb = workerOnerror.get();
-        if (!ev::isFunction(cb)) {
+        // The handler is rooted the moment it is read: building the event
+        // below allocates, and a raw function Value held across that would be
+        // called at its pre-collection address.
+        ev::Persistent cb(workerOnerror.get());
+        if (!ev::isFunction(cb.get())) {
             Value gt = ev::globalValue("globalThis").value;
             if (ev::isObject(gt)) {
                 Value p = ev::getProperty(gt, "onerror");
-                if (ev::isFunction(p)) cb = p;
+                if (ev::isFunction(p)) cb.set(p);
             }
         }
 
-        ev::Persistent errEvt(ev::createObject());
-        errEvt.set(ev::setProperty(errEvt.get(), "type", ev::fromUtf8("error")));
-        errEvt.set(ev::setProperty(errEvt.get(), "message", ev::fromUtf8(msg)));
-        errEvt.set(ev::setProperty(errEvt.get(), "filename", ev::fromUtf8(fn)));
-        errEvt.set(ev::setProperty(errEvt.get(), "lineno", ev::fromDouble(line)));
+        ev::Persistent errEvt(makeErrorEvent(msg, fn, line));
 
-        if (ev::isFunction(cb)) {
-            ev::Persistent cbRoot(cb);
+        if (ev::isFunction(cb.get())) {
             Value arg = errEvt.get();
-            ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&arg, 1));
+            ev::call(cb.get(), ev::undefined(), std::span<const Value>(&arg, 1));
         }
 
         std::vector<ev::Persistent> errorListeners;
@@ -298,27 +309,22 @@ void WorkerInstance::threadFunc() {
         }
     };
 
-    Value globalThis = ev::globalValue("globalThis").value;
-    ev::registerGlobal("self", globalThis);
-    ev::setProperty(globalThis, "self", globalThis);
+    {
+        // registerGlobal allocates, so the global is read afresh for the
+        // setProperty rather than reused from before it.
+        ev::Persistent globalThis(ev::globalValue("globalThis").value);
+        ev::registerGlobal("self", globalThis.get());
+        ev::setProperty(globalThis.get(), "self", globalThis.get());
+    }
 
     auto jsPostMessage = [this](Value, std::span<const Value> args) -> Value {
         if (args.empty()) return ev::undefined();
-        Value data = args[0];
         // The transfer list works in this direction too: ArrayBuffers,
         // ImageBitmaps and Meshes listed here move to the main realm.
-        std::vector<Value> transfers;
-        if (args.size() > 1 && ev::isObject(args[1])) {
-            Value lenV = ev::getProperty(args[1], "length");
-            if (ev::isNumber(lenV)) {
-                uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-                for (uint32_t i = 0; i < len; ++i) {
-                    transfers.push_back(ev::getElement(args[1], i));
-                }
-            }
-        }
+        std::vector<ev::Persistent> transfers = collectTransferList(args);
         auto msg = std::make_unique<Message>();
-        if (serializeMessage(data, std::span<const Value>(transfers.data(), transfers.size()), *msg)) {
+        const std::vector<Value> transferVals = currentValues(transfers);
+        if (serializeMessage(args[0], transferVals, *msg)) {
             postToMain(std::move(msg));
         }
         return ev::undefined();
@@ -346,8 +352,13 @@ void WorkerInstance::threadFunc() {
     };
     ev::setGlobalFunction("addEventListener", 2, jsAddEventListener);
     ev::setGlobalFunction("removeEventListener", 2, jsRemoveEventListener);
-    ev::setProperty(globalThis, "addEventListener", ev::globalValue("addEventListener").value);
-    ev::setProperty(globalThis, "removeEventListener", ev::globalValue("removeEventListener").value);
+    for (const char* name : {"addEventListener", "removeEventListener"}) {
+        // Both lookups may allocate, so each lands in a root before the
+        // other is made, and the receiver is read last.
+        ev::Persistent fn(ev::globalValue(name).value);
+        ev::Persistent gt(ev::globalValue("globalThis").value);
+        ev::setProperty(gt.get(), name, fn.get());
+    }
 
     namespace bk = brokit::api;
     bk::installModuleRegistry();
@@ -394,11 +405,14 @@ void WorkerInstance::threadFunc() {
     bk::installUtil();
     bk::installBuffer();
     {
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) {
-            Value buf = ev::getProperty(gt.value, "Buffer");
+        // registerGlobal allocates, so globalThis is rooted for the second
+        // read rather than reused raw.
+        ev::GlobalValue gtv = ev::globalValue("globalThis");
+        if (gtv.found && ev::isObject(gtv.value)) {
+            ev::Persistent gt(gtv.value);
+            Value buf = ev::getProperty(gt.get(), "Buffer");
             if (!ev::isUndefined(buf)) ev::registerGlobal("Buffer", buf);
-            Value sc = ev::getProperty(gt.value, "structuredClone");
+            Value sc = ev::getProperty(gt.get(), "structuredClone");
             if (!ev::isUndefined(sc)) ev::registerGlobal("structuredClone", sc);
         }
     }
@@ -497,21 +511,24 @@ void WorkerInstance::threadFunc() {
         if (res.thrown) {
             std::string errStr;
             int lineno = 0;
-            if (res.value.isObject()) {
-                Value st = ev::getProperty(res.value, "stack");
+            // The thrown value is read three times, with allocating calls
+            // between: root it.
+            ev::Persistent thrown(res.value);
+            if (thrown.get().isObject()) {
+                Value st = ev::getProperty(thrown.get(), "stack");
                 if (!ev::isUndefined(st) && !ev::isNull(st)) {
                     errStr = ev::toUtf8(st);
                 } else {
-                    Value msg = ev::getProperty(res.value, "message");
+                    Value msg = ev::getProperty(thrown.get(), "message");
                     if (!ev::isUndefined(msg) && !ev::isNull(msg)) {
                         errStr = ev::toUtf8(msg);
                     }
                 }
-                Value ln = ev::getProperty(res.value, "lineNumber");
+                Value ln = ev::getProperty(thrown.get(), "lineNumber");
                 if (ev::isNumber(ln)) lineno = static_cast<int>(ev::toDouble(ln));
             }
             if (errStr.empty()) {
-                errStr = ev::toUtf8(res.value);
+                errStr = ev::toUtf8(thrown.get());
             }
             LOG_ERROR("worker script execution failed for %s: %s", resolvedPath.string().c_str(), errStr.c_str());
             dispatchWorkerError(errStr, resolvedPath.string(), lineno);
@@ -526,11 +543,14 @@ void WorkerInstance::threadFunc() {
     while (!terminated_.load(std::memory_order_relaxed)) {
         Value gtVal = ev::globalValue("globalThis").value;
         if (ev::isObject(gtVal)) {
-            Value curOnmessage = ev::getProperty(gtVal, "onmessage");
+            // Rooted: the first getProperty may allocate (a getter, a lazy
+            // namespace), and the second read would then use a dead address.
+            ev::Persistent gt(gtVal);
+            Value curOnmessage = ev::getProperty(gt.get(), "onmessage");
             if (ev::isFunction(curOnmessage)) {
                 workerOnmessage.set(curOnmessage);
             }
-            Value curOnerror = ev::getProperty(gtVal, "onerror");
+            Value curOnerror = ev::getProperty(gt.get(), "onerror");
             if (ev::isFunction(curOnerror)) {
                 workerOnerror.set(curOnerror);
             }
@@ -544,9 +564,7 @@ void WorkerInstance::threadFunc() {
 
         for (auto& msg : batch) {
             ev::Persistent dataRoot(deserializeMessage(*msg));
-            ev::Persistent evObjRoot(ev::createObject());
-            evObjRoot.set(ev::setProperty(evObjRoot.get(), "type", ev::fromUtf8("message")));
-            evObjRoot.set(ev::setProperty(evObjRoot.get(), "data", dataRoot.get()));
+            ev::Persistent evObjRoot(makeMessageEvent(dataRoot));
 
             Value cb = workerOnmessage.get();
             if (ev::isFunction(cb)) {
@@ -742,19 +760,13 @@ void installWorkerGlobals(engine::Engine& engine) {
                 if (!w) return ev::undefined();
                 if (a.empty()) return ev::undefined();
 
-                std::vector<Value> transfers;
-                if (a.size() > 1 && ev::isObject(a[1])) {
-                    Value lenV = ev::getProperty(a[1], "length");
-                    if (ev::isNumber(lenV)) {
-                        uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
-                        for (uint32_t i = 0; i < len; ++i) {
-                            transfers.push_back(ev::getElement(a[1], i));
-                        }
-                    }
-                }
+                // Rooted one by one: each element read can move the ones
+                // before it.
+                std::vector<ev::Persistent> transfers = collectTransferList(a);
 
                 auto msg = std::make_unique<Message>();
-                if (!serializeMessage(a[0], std::span<const Value>(transfers.data(), transfers.size()), *msg)) {
+                const std::vector<Value> transferVals = currentValues(transfers);
+                if (!serializeMessage(a[0], transferVals, *msg)) {
                     return ev::undefined();
                 }
                 w->postToWorker(std::move(msg));

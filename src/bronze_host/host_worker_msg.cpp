@@ -5,6 +5,7 @@
 #if BRO_WITH_3D
 #include <bromesh/api.h>
 #endif
+#include <algorithm>
 #include <cstring>
 #include <memory>
 
@@ -12,10 +13,13 @@ namespace bro::bronze_host {
 
 namespace {
 
-static bool isInstanceOf(Value val, const char* globalCtorName) {
-    if (!ev::isObject(val)) return false;
+// Takes the object as a root: the constructor lookup may allocate (the
+// builtin namespaces build lazily), so the object is read only after it.
+static bool isInstanceOf(const ev::Persistent& obj, const char* globalCtorName) {
     auto g = ev::globalValue(globalCtorName);
     if (!g.found || !ev::isObject(g.value)) return false;
+    Value val = obj.get();
+    if (!ev::isObject(val)) return false;
     return bronze_instanceof(val.rawBits(), g.value.rawBits());
 }
 
@@ -95,9 +99,15 @@ private:
     size_t pos_ = 0;
 };
 
-static bool isTransferred(Value v, std::span<const Value> transfers) {
-    for (Value t : transfers) {
-        if (t.rawBits() == v.rawBits()) return true;
+// The transfer list is held in roots for the whole clone, and compared by the
+// roots' current values: a raw Value copied at entry would name a
+// pre-collection address after the first allocation, and identity would then
+// silently fail — a listed ArrayBuffer copied instead of transferred.
+using TransferRoots = std::vector<ev::Persistent>;
+
+static bool isTransferred(Value v, const TransferRoots& transfers) {
+    for (const ev::Persistent& t : transfers) {
+        if (t.get().rawBits() == v.rawBits()) return true;
     }
     return false;
 }
@@ -107,7 +117,9 @@ static Value getGlobal(std::string_view name) {
     return g.found ? g.value : ev::undefined();
 }
 
-static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
+// `val` is current at entry. Every branch that allocates before it is done
+// with `val` works from a root of it (`self`), never from the parameter.
+static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
                        Message& out, int depth) {
     auto& transferBufs = out.transferredBuffers;
     auto& transferImgs = out.transferredImages;
@@ -211,14 +223,18 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
     if (ev::isTypedArray(val)) {
         auto info = ev::typedArrayInfo(val);
         uint8_t subtype = static_cast<uint8_t>(info.elementKind);
-        Value bufVal = ev::typedArrayBuffer(val);
+        const uint32_t viewBytes = info.byteLength;
+        // Everything read off the view comes before typedArrayBuffer, which
+        // may materialize the buffer object (an allocation that moves `val`),
+        // and the buffer's bytes are read straight after it.
         uint32_t offset = ev::typedArrayByteOffset(val);
+        Value bufVal = ev::typedArrayBuffer(val);
         auto bufInfo = ev::arrayBufferInfo(bufVal);
 
         w.u8(kTypedArray);
         w.u8(subtype);
         w.u32(offset);
-        w.u32(info.byteLength);
+        w.u32(viewBytes);
         w.u32(bufInfo.byteLength);
         if (bufInfo.data && bufInfo.byteLength > 0) {
             w.bytes(bufInfo.data, bufInfo.byteLength);
@@ -234,21 +250,25 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
     if (ev::isObject(val)) {
         const auto* hdr = val.asObject<bronze::HeapObjectHeader>();
         uint16_t flags = hdr ? hdr->flags : 0;
+        // From here on the object is read through this root: the constructor
+        // lookups below (globalValue builds lazily), every getProperty and
+        // every call may allocate and move it.
+        ev::Persistent self(val);
 
         // The collections are ordinary objects with a real prototype (bronze
         // 24.1.4 and friends), so they are told apart the way Date and Promise
         // are below: by their constructor, not by a heap kind.
-        if (isInstanceOf(val, "WeakMap") || isInstanceOf(val, "WeakSet") ||
-            isInstanceOf(val, "WeakRef")) {
+        if (isInstanceOf(self, "WeakMap") || isInstanceOf(self, "WeakSet") ||
+            isInstanceOf(self, "WeakRef")) {
             ev::throwTypeError("postMessage: weak collections are not cloneable");
             return false;
         }
 
-        if (isInstanceOf(val, "Promise")) {
+        if (isInstanceOf(self, "Promise")) {
             ev::throwTypeError("postMessage: Promises are not cloneable");
             return false;
         }
-        if (isInstanceOf(val, "Node")) {
+        if (isInstanceOf(self, "Node")) {
             ev::throwTypeError("postMessage: DOM Nodes are not cloneable");
             return false;
         }
@@ -259,13 +279,13 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
         // be in the transfer list — cloning a mesh silently would copy what
         // is often megabytes of geometry, and a sendClone over the network
         // (an empty transfer list) has no realm to receive a pointer.
-        if (bromesh::api::isMeshValue(val)) {
-            if (!isTransferred(val, transfers)) {
+        if (bromesh::api::isMeshValue(self.get())) {
+            if (!isTransferred(self.get(), transfers)) {
                 ev::throwTypeError("postMessage: Mesh must be listed in the transferList");
                 return false;
             }
             auto data = std::make_unique<bromesh::MeshData>();
-            bromesh::api::takeMeshData(val, *data);
+            bromesh::api::takeMeshData(self.get(), *data);
             uint32_t idx = static_cast<uint32_t>(out.transferredMeshes.size());
             out.transferredMeshes.push_back(std::move(data));
             w.u8(kTransferMesh);
@@ -278,14 +298,13 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
         // so the generic path below would clone it as `{}` and the receiver
         // would get an empty object where it expected the resource.
         // (ImageBitmap and Mesh are handles too, but were answered above.)
-        if (ev::handleData(val)) {
+        if (ev::handleData(self.get())) {
             ev::throwTypeError("postMessage: native objects are not cloneable");
             return false;
         }
 
-        const bool isMap = isInstanceOf(val, "Map");
-        if (isMap || isInstanceOf(val, "Set")) {
-            ev::Persistent self(val);
+        const bool isMap = isInstanceOf(self, "Map");
+        if (isMap || isInstanceOf(self, "Set")) {
             Value arrFrom = ev::getProperty(ev::globalValue("Array").value, "from");
             Value collVal = self.get();
             ev::Persistent flat(ev::call(arrFrom, ev::undefined(), std::span<const Value>(&collVal, 1)).value);
@@ -308,8 +327,8 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
         }
 
         if (flags == bronze::HeapKind::RegExp) {
-            std::string src = ev::toUtf8(ev::getProperty(val, "source"));
-            std::string flagsStr = ev::toUtf8(ev::getProperty(val, "flags"));
+            std::string src = ev::toUtf8(ev::getProperty(self.get(), "source"));
+            std::string flagsStr = ev::toUtf8(ev::getProperty(self.get(), "flags"));
             w.u8(kRegExp);
             w.u32(static_cast<uint32_t>(src.size()));
             w.bytes(reinterpret_cast<const uint8_t*>(src.data()), src.size());
@@ -319,9 +338,11 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
         }
 
         if (flags == bronze::HeapKind::DataView) {
-            Value buf = ev::getProperty(val, "buffer");
-            uint32_t off = static_cast<uint32_t>(ev::toDouble(ev::getProperty(val, "byteOffset")));
-            uint32_t viewBytes = static_cast<uint32_t>(ev::toDouble(ev::getProperty(val, "byteLength")));
+            // The numbers first; the buffer last, its bytes read straight
+            // after the getProperty that answered it.
+            uint32_t off = static_cast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteOffset")));
+            uint32_t viewBytes = static_cast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteLength")));
+            Value buf = ev::getProperty(self.get(), "buffer");
             auto bInfo = ev::arrayBufferInfo(buf);
             w.u8(kDataView);
             w.u32(off);
@@ -333,11 +354,11 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             return true;
         }
 
-        if (isInstanceOf(val, "Date")) {
-            Value getTimeFn = ev::getProperty(val, "getTime");
+        if (isInstanceOf(self, "Date")) {
+            Value getTimeFn = ev::getProperty(self.get(), "getTime");
             double ms = 0;
             if (ev::isFunction(getTimeFn)) {
-                Value r = ev::call(getTimeFn, val, {}).value;
+                Value r = ev::call(getTimeFn, self.get(), {}).value;
                 ms = ev::toDouble(r);
             }
             w.u8(kDate);
@@ -345,10 +366,10 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
             return true;
         }
 
-        if (isInstanceOf(val, "Error")) {
-            std::string name = ev::toUtf8(ev::getProperty(val, "name"));
-            std::string msg = ev::toUtf8(ev::getProperty(val, "message"));
-            std::string stack = ev::toUtf8(ev::getProperty(val, "stack"));
+        if (isInstanceOf(self, "Error")) {
+            std::string name = ev::toUtf8(ev::getProperty(self.get(), "name"));
+            std::string msg = ev::toUtf8(ev::getProperty(self.get(), "message"));
+            std::string stack = ev::toUtf8(ev::getProperty(self.get(), "stack"));
             w.u8(kError);
             w.u32(static_cast<uint32_t>(name.size()));
             w.bytes(reinterpret_cast<const uint8_t*>(name.data()), name.size());
@@ -360,20 +381,22 @@ static bool writeValue(Value val, Writer& w, std::span<const Value> transfers,
         }
 
         Value isArrFn = ev::getProperty(ev::globalValue("Array").value, "isArray");
-        Value isArrVal = ev::call(isArrFn, ev::undefined(), std::span<const Value>(&val, 1)).value;
+        Value arrArg = self.get();
+        Value isArrVal = ev::call(isArrFn, ev::undefined(), std::span<const Value>(&arrArg, 1)).value;
         if (ev::toBool(isArrVal)) {
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(val, "length")));
+            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "length")));
             w.u8(kArray);
             w.u32(len);
             for (uint32_t i = 0; i < len; ++i) {
-                Value elem = ev::getElement(val, i);
+                Value elem = ev::getElement(self.get(), i);
                 if (!writeValue(elem, w, transfers, out, depth + 1)) return false;
             }
             return true;
         }
 
         Value entriesFn = ev::getProperty(ev::globalValue("Object").value, "entries");
-        ev::Persistent entries(ev::call(entriesFn, ev::undefined(), std::span<const Value>(&val, 1)).value);
+        Value entriesArg = self.get();
+        ev::Persistent entries(ev::call(entriesFn, ev::undefined(), std::span<const Value>(&entriesArg, 1)).value);
         uint32_t numProps = static_cast<uint32_t>(ev::toDouble(ev::getProperty(entries.get(), "length")));
         w.u8(kObject);
         w.u32(numProps);
@@ -427,8 +450,11 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
     case kBigInt: {
         std::string s;
         if (!readStr(r, s)) return ev::throwTypeError("postMessage: truncated bigint");
+        // The string first and rooted, the constructor read after it: either
+        // order leaves one raw across the other's allocation otherwise.
+        ev::Persistent strRoot(ev::fromUtf8(s));
         Value ctor = getGlobal("BigInt");
-        Value strV = ev::fromUtf8(s);
+        Value strV = strRoot.get();
         return ev::call(ctor, ev::undefined(), std::span<const Value>(&strV, 1)).value;
     }
     case kArrayBuffer: {
@@ -507,8 +533,10 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
     case kRegExp: {
         std::string src, flags;
         if (!readStr(r, src) || !readStr(r, flags)) return ev::throwTypeError("postMessage: truncated regexp");
+        ev::Persistent srcV(ev::fromUtf8(src));
+        ev::Persistent flagsV(ev::fromUtf8(flags));
         Value ctor = getGlobal("RegExp");
-        const Value args[2] = { ev::fromUtf8(src), ev::fromUtf8(flags) };
+        const Value args[2] = { srcV.get(), flagsV.get() };
         return ev::construct(ctor, std::span<const Value>(args, 2)).value;
     }
     case kMap:
@@ -552,11 +580,16 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         else if (name == "ReferenceError") ctorName = "ReferenceError";
         else if (name == "SyntaxError") ctorName = "SyntaxError";
 
+        ev::Persistent msgRoot(ev::fromUtf8(message));
         Value ctor = getGlobal(ctorName);
-        Value msgVal = ev::fromUtf8(message);
+        Value msgVal = msgRoot.get();
         ev::Persistent err(ev::construct(ctor, std::span<const Value>(&msgVal, 1)).value);
-        err.set(ev::setProperty(err.get(), "name", ev::fromUtf8(name)));
-        err.set(ev::setProperty(err.get(), "stack", ev::fromUtf8(stack)));
+        // Each string is made in its own statement, before the receiver is
+        // read: as one call's arguments their order is unspecified.
+        ev::Persistent nameV(ev::fromUtf8(name));
+        err.set(ev::setProperty(err.get(), "name", nameV.get()));
+        ev::Persistent stackV(ev::fromUtf8(stack));
+        err.set(ev::setProperty(err.get(), "stack", stackV.get()));
         return err.get();
     }
     case kDataView: {
@@ -607,6 +640,13 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
 } // namespace
 
 bool serializeMessage(Value val, std::span<const Value> transfers, Message& out) {
+    // Rooted before anything allocates; the Persistent constructor itself
+    // does not touch the JS heap.
+    ev::Persistent root(val);
+    TransferRoots transferRoots;
+    transferRoots.reserve(transfers.size());
+    for (Value t : transfers) transferRoots.emplace_back(t);
+
     out.data.clear();
     out.transferredBuffers.clear();
     out.transferredImages.clear();
@@ -614,7 +654,29 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out)
     out.transferredMeshes.clear();
 #endif
     Writer w(out.data);
-    return writeValue(val, w, transfers, out, 0);
+    return writeValue(root.get(), w, transferRoots, out, 0);
+}
+
+std::vector<ev::Persistent> collectTransferList(std::span<const Value> args, size_t index) {
+    std::vector<ev::Persistent> roots;
+    // args[index] is a rooted argument slot, current across every read.
+    if (args.size() <= index || !ev::isObject(args[index])) return roots;
+    Value lenV = ev::getProperty(args[index], "length");
+    if (!ev::isNumber(lenV)) return roots;
+    const double len = ev::toDouble(lenV);
+    if (!(len > 0)) return roots;
+    const uint32_t n = static_cast<uint32_t>(std::min(len, 4294967295.0));
+    for (uint32_t i = 0; i < n; ++i) {
+        roots.emplace_back(ev::getElement(args[index], i));
+    }
+    return roots;
+}
+
+std::vector<Value> currentValues(const std::vector<ev::Persistent>& roots) {
+    std::vector<Value> values;
+    values.reserve(roots.size());
+    for (const ev::Persistent& r : roots) values.push_back(r.get());
+    return values;
 }
 
 Value deserializeMessage(const Message& msg, size_t offset) {

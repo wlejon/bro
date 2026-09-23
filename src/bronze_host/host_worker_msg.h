@@ -36,7 +36,22 @@ struct Message {
 #endif
 };
 
+// The structured-clone writer. `val` and every entry of `transfers` need only
+// be current at entry — both are rooted before the first allocation, since
+// cloning runs getters and builtins that allocate. A caller that collects the
+// transfer list itself must keep the entries in Persistents while it does
+// (collectTransferList), because each element read can move the earlier ones,
+// and read them out (currentValues) only in the statement before the call.
 bool serializeMessage(Value val, std::span<const Value> transfers, Message& out);
 Value deserializeMessage(const Message& msg, size_t offset = 0);
+
+// The transfer list of a postMessage call — `args[index]`, an array-like —
+// read element by element into roots. Empty when the argument is absent or
+// not an object.
+std::vector<ev::Persistent> collectTransferList(std::span<const Value> args, size_t index = 1);
+
+// The roots' current values. Allocates nothing on the JS heap, so the result
+// is current until the next call that does.
+std::vector<Value> currentValues(const std::vector<ev::Persistent>& roots);
 
 } // namespace bro::bronze_host
