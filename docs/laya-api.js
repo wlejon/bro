@@ -13,10 +13,30 @@
  * and it returns calibrated probabilities. It never generates text: every
  * option is scored at its own [MASK] marker and softmaxed over that
  * question's options, so the answer space is defined per request and there
- * is nothing to parse. The checkpoint is the English `laya` (ModernBERT-large
- * encoder + a 2-layer decision head, 421M params, 512-token context of which
- * `head_max_len` = 192 hold the question and its options). Backed by brolm on
- * brotensor, FP16 on CUDA.
+ * is nothing to parse. Backed by brolm on brotensor, FP16 on CUDA.
+ *
+ * CHECKPOINTS. A Laya checkout is a family of three; load one by its
+ * directory. Everything checkpoint-specific (encoder shape, tokenizer, special
+ * tokens, context lengths, temperatures) is read from that directory's own
+ * configs, and `config().checkpoint` says which one you have.
+ *
+ *   dir              checkpoint        encoder                        tokenizer       max_len / head_max_len
+ *   laya/            'english'         ModernBERT-large, 28 x 1024    byte-level BPE  512 / 192
+ *   laya/multilingual 'multilingual'   mmBERT-base, 22 x 768, 256k    Metaspace BPE   1024 / 256
+ *   laya/typed-decisions 'typed-decisions' ModernBERT-large, 28 x 1024 byte-level BPE 1024 / 256
+ *
+ * All three add the same 2-layer decision head and answer the same question
+ * types. `multilingual` reads states in any script (CJK, Devanagari, Arabic,
+ * Cyrillic, emoji, mixed) — its tokenizer falls back to bytes, so nothing is
+ * ever unknown — and at 768 wide it runs ~2.2x faster than the English
+ * checkpoint at the same token count. `typed-decisions` is the English
+ * encoder fine-tuned on the typed-decisions benchmark, with twice the
+ * context; per token it costs the same as `english`, so its 1024-token
+ * requests cost twice as much. Questions may stay in English on the
+ * multilingual checkpoint while the state is not.
+ * `max_prefixes` (6 in every shipped config) is a training setting — how
+ * many prefixes of a multi-turn episode become TD(lambda) targets — and has
+ * no effect at inference; config() reports it for completeness.
  *
  * WHAT IT IS GOOD AT (the checkpoint's own in-task evaluation, after
  * calibration): intent / routing (0.99 accuracy), moderation and safety
@@ -37,8 +57,9 @@
  *    0.58, sentiment 0.36); the published typed-decisions benchmark is near
  *    chance on this base checkpoint. It is a fast base to fine-tune, not a
  *    general zero-shot decision engine.
- *  - Non-English text: this is the English checkpoint, and it stays confident
- *    while wrong on other scripts. Use a multilingual checkpoint for those.
+ *  - Non-English text on `english` / `typed-decisions`: they stay confident
+ *    while wrong on other scripts. Load `multilingual` for those.
+ *  (The figures above are the English checkpoint's.)
  *
  * ESCALATION: gate on `confidence`, not on `rl_agent.act_probability`. The
  * act/escalate head is saturated — act_probability is ~1 for essentially
@@ -57,10 +78,15 @@
  * it takes about `targetForwardMs` (12 ms by default; fitted at load and
  * corrected from every forward since), which
  * bounds how long a new request can wait behind a batch already running;
- * admission is by `priority`, then deadline, then arrival, per question, so a
- * big request splits across forwards and idle GPUs. Missed deadlines are
- * counted in stats(), never dropped. All CUDA-graph shapes up to the budget
- * are captured at load (~1-2 s), so no live request pays for one.
+ * admission is by `priority`, then deadline, then arrival. The request at
+ * the head of the queue may split across forwards and idle GPUs (it can be
+ * bigger than any budget); the ones packed behind it go in whole or wait for
+ * the next forward, so a small request never straddles two forwards. Missed
+ * deadlines are counted in stats(), never dropped. All CUDA-graph shapes up
+ * to the budget and to two full-length sequences are captured at load
+ * (~1-2 s), so no live request pays for one. A shape past that (a per-call
+ * `maxLen` above the checkpoint's, say) captures once on first use and is
+ * kept; the ones captured at load stay valid.
  *
  * Measured on an RTX 4090 (submit -> result, tokenize included): one 5-
  * question request on a ~90-token email ~5 ms, one question ~2 ms. Under
@@ -95,6 +121,13 @@
  *   res.answers.department.choice;      // 'billing'
  *   res.answers.department.confidence;  // ~0.9: act on it
  *   res.answers.churn_risk.noul;        // p(true)
+ *
+ * @example
+ *   // --- The multilingual checkpoint: states in any language ---------------
+ *   const ml = await bro.lm.loadLayaAsync('../laya/multilingual', { devices: 'all' });
+ *   ml.config().checkpoint;   // 'multilingual' (mmBERT-base, 'metaspace-bpe', max_len 1024)
+ *   ml.predict({ subject: '重复扣款', body: '三月份的发票被扣了两次款，请退还。' }, QUESTIONS)
+ *     .answers.department;   // choice + confidence as ever; the questions can stay in English
  *
  * @example
  *   // --- Many requests in flight: they share forwards ----------------------
@@ -142,14 +175,14 @@
  * Options of loadLaya / loadLayaAsync (also accepted on the first argument
  * alongside `path`).
  * @typedef {Object} LoadLayaOptions
- * @property {string} [path] - Checkpoint directory (rl_agent_config.json, encoder/, tokenizer/, model.safetensors); `modelPath` is an alias
+ * @property {string} [path] - Checkpoint directory (rl_agent_config.json, encoder/, tokenizer/, model.safetensors): the family root for `english`, or its `multilingual/` / `typed-decisions/` subdirectory; `modelPath` is an alias
  * @property {(string|number|Array<number>)} [devices] - 'all' = one replica per CUDA device; an index; or a list. Default: the default device only
  * @property {number} [targetForwardMs=12] - Forward-time target the per-forward token budget is derived from (<= 0: use maxBatchTokens)
  * @property {number} [maxBatchTokens=2048] - Hard cap on packed tokens per forward, and the range pre-warm covers
  * @property {number} [deadlineMs=30] - Deadline of a request that names none
  * @property {boolean} [prewarm=true] - Capture every CUDA-graph bucket up to maxBatchTokens at load
- * @property {number} [maxLen] - Load-time override of the checkpoint's max_len (512)
- * @property {number} [headMaxLen] - Load-time override of head_max_len (192)
+ * @property {number} [maxLen] - Load-time override of the checkpoint's max_len (english 512, multilingual / typed-decisions 1024)
+ * @property {number} [headMaxLen] - Load-time override of head_max_len (english 192, the others 256)
  */
 
 /**
@@ -267,8 +300,14 @@ class LayaModel {
   predictAsync(state, questions, opts) {}
 
   /**
-   * Checkpoint and scheduler configuration.
-   * @returns {{max_len: number, head_max_len: number, temperature: Float32Array,
+   * Which checkpoint this is, its shape, and the scheduler configuration.
+   * `checkpoint` is 'english', 'multilingual' or 'typed-decisions' (from the
+   * checkpoint's model name and encoder, else the directory's name), or that
+   * directory name for a checkpoint outside the family. `tokenizer` is 'byte-level-bpe' or 'metaspace-bpe'.
+   * `max_prefixes` is training-only (see CHECKPOINTS above).
+   * @returns {{checkpoint: string, model_dir: string, encoder: string, model_name: string,
+   *            tokenizer: string, vocab_size: number, hidden_size: number, num_layers: number,
+   *            max_prefixes: number, max_len: number, head_max_len: number, temperature: Float32Array,
    *            temperature_by_options: Object<string, number>, devices: Array<number>,
    *            tokenBudget: number, maxBatchTokens: number, targetForwardMs: number, deadlineMs: number}}
    */
