@@ -178,9 +178,12 @@
  *   tokenizer's end-of-turn id (`model.eosId`); pass -1 to never stop on one.
  * @property {boolean} [stopOnEos=true]
  * @property {SamplingOptions} [sampling]
- * @property {Grammar} [grammar] - Constrain the output (LMModel only): every
- *   step is masked so the text conforms. Generation works on a copy of the
- *   grammar's state, so one Grammar serves any number of calls.
+ * @property {Grammar} [grammar] - Constrain the output (LMModel, Qwen35Model,
+ *   Qwen3VLModel): every step is masked so the text conforms. Control tokens
+ *   (a special with no text) are never allowed, and the stop token only once
+ *   the grammar accepts; with stopOnEos false the decode ends when the
+ *   grammar is complete. Generation works on a copy of the grammar's state,
+ *   so one Grammar serves any number of calls.
  * @property {(Object|Array<Object>)} [images] - Qwen35Model / Qwen3VLModel:
  *   `{ data, width, height }` RGBA images
  * @property {Function} [onToken] - `(id) => boolean|void`; returning false stops
@@ -335,7 +338,8 @@ class AsyncHandle {
 }
 
 /**
- * A decoding constraint for GenerateOptions.grammar (LMModel). Built by the
+ * A decoding constraint for GenerateOptions.grammar (LMModel, Qwen35Model,
+ * Qwen3VLModel). Built by the
  * static factories only (`new Grammar()` throws). The instance methods drive
  * the object's own state, for validating text by hand; generation never
  * advances the object it is given.
@@ -816,8 +820,8 @@ class Qwen35Model {
 
   /**
    * Generate text or multimodal responses from a string prompt (blocking).
-   * opts.onToken, when given, streams each id. opts.grammar is not supported
-   * by the VLM driver.
+   * opts.onToken, when given, streams each id; opts.grammar constrains the
+   * reply (see GenerateOptions.grammar).
    *
    * @param {string} prompt - Prompt string formatted with ChatML / vision tokens
    * @param {GenerateOptions} [opts] - Generation options including images
@@ -926,8 +930,8 @@ class Qwen3VLModel {
 
   /**
    * Generate text or multimodal responses from a string prompt (blocking).
-   * opts.onToken, when given, streams each id. opts.grammar is not supported
-   * by the VLM driver.
+   * opts.onToken, when given, streams each id; opts.grammar constrains the
+   * reply (see GenerateOptions.grammar).
    *
    * @param {string} prompt - Prompt string formatted with ChatML / vision tokens
    * @param {GenerateOptions} [opts] - Generation options including images
@@ -1217,7 +1221,7 @@ bro.lm.loadT5 = function(opts) {};
  * released before onDone fires, so onDone may start the next generation.
  * opts.onToken(id) fires per token and opts.onDone(ids, { cancelled, error? })
  * once, both on this thread's tick; onDone also fires after cancel() with the
- * ids produced so far. opts.grammar applies for an LMModel.
+ * ids produced so far. opts.grammar applies to every model kind.
  *
  * @param {Object} model - Model handle (LMModel, Qwen35Model, or Qwen3VLModel)
  * @param {(Array<number>|string)} prompt - Token ids for an LMModel, a prompt string for the VLMs
