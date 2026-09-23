@@ -163,7 +163,12 @@ public:
     // Selectors (powered by htmlayout)
     std::vector<Element*> querySelectorAll(const std::string& selector);
     Element* querySelector(const std::string& selector);
+    // In all four, `:scope` is the element the call is made on (DOM spec),
+    // not the stylesheet meaning of the root element.
     bool matches(const std::string& selector) const;
+    // matches() with `:scope` naming `scopingRoot` (closest() tests each
+    // ancestor with :scope still the element closest() was called on).
+    bool matchesScoped(const std::string& selector, const Element* scopingRoot) const;
     Element* closest(const std::string& selector);
 
     // Simple selector matching (works for dynamic elements)

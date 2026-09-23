@@ -264,6 +264,26 @@ public:
         return std::string_view{elem_->getAttribute("part")};
     }
 
+    // :scope. The cascade leaves it the root element (htmlayout's default);
+    // querySelector / querySelectorAll / matches / closest name the element
+    // they were called on for the duration of the match (ScopingRootGuard).
+    bool isScopingRoot() const override {
+        if (scopingRoot_) return elem_ == scopingRoot_;
+        return ElementRef::isScopingRoot();
+    }
+
+    // Names `el` as :scope until destroyed, restoring whatever was named
+    // before (a matches() nested in a querySelectorAll callback, say).
+    class ScopingRootGuard {
+    public:
+        explicit ScopingRootGuard(dom::Element* el) : prev_(scopingRoot_) { scopingRoot_ = el; }
+        ~ScopingRootGuard() { scopingRoot_ = prev_; }
+        ScopingRootGuard(const ScopingRootGuard&) = delete;
+        ScopingRootGuard& operator=(const ScopingRootGuard&) = delete;
+    private:
+        dom::Element* prev_;
+    };
+
     // Global state setters (called by Engine before style resolution)
     static void setHoveredElement(dom::Element* el) { hoveredElement_ = el; }
     static void setActiveElement(dom::Element* el) { activeElement_ = el; }
@@ -287,6 +307,7 @@ private:
 
     static inline thread_local dom::Element* hoveredElement_ = nullptr;
     static inline thread_local dom::Element* activeElement_ = nullptr;
+    static inline thread_local dom::Element* scopingRoot_ = nullptr;
     static inline thread_local std::unordered_map<dom::Element*, std::unique_ptr<ElementRefAdapter>> cache_;
 };
 

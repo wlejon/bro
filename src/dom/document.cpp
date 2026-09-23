@@ -353,16 +353,27 @@ Element* Document::getElementById(const std::string& id) {
     return nullptr;
 }
 
+// A document's descendants include its root element, which the Element
+// search (descendants of the element it is called on) leaves out, so the
+// root is tested first — document.querySelector('html') / (':root'). For a
+// document, :scope is the root element too.
 Element* Document::querySelector(const std::string& selector) {
     if (root_ && root_->nodeType() == NodeType::Element) {
-        return static_cast<Element*>(root_)->querySelector(selector);
+        auto* rootEl = static_cast<Element*>(root_);
+        if (rootEl->matchesScoped(selector, rootEl)) return rootEl;
+        return rootEl->querySelector(selector);
     }
     return nullptr;
 }
 
 std::vector<Element*> Document::querySelectorAll(const std::string& selector) {
     if (root_ && root_->nodeType() == NodeType::Element) {
-        return static_cast<Element*>(root_)->querySelectorAll(selector);
+        auto* rootEl = static_cast<Element*>(root_);
+        std::vector<Element*> out;
+        if (rootEl->matchesScoped(selector, rootEl)) out.push_back(rootEl);
+        auto rest = rootEl->querySelectorAll(selector);
+        out.insert(out.end(), rest.begin(), rest.end());
+        return out;
     }
     return {};
 }

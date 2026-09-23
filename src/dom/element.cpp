@@ -625,6 +625,7 @@ cachedParseSelectorList(const std::string& selector) {
 std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
     std::vector<Element*> result;
     const auto& selectors = cachedParseSelectorList(selector);
+    layout::ElementRefAdapter::ScopingRootGuard scope(this);  // :scope is this element
 
     std::function<void(Element*)> search = [&](Element* elem) {
         for (auto* child : elem->children()) {
@@ -645,6 +646,7 @@ std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
 
 Element* Element::querySelector(const std::string& selector) {
     const auto& selectors = cachedParseSelectorList(selector);
+    layout::ElementRefAdapter::ScopingRootGuard scope(this);  // :scope is this element
 
     std::function<Element*(Element*)> search = [&](Element* elem) -> Element* {
         for (auto* child : elem->children()) {
@@ -666,7 +668,12 @@ Element* Element::querySelector(const std::string& selector) {
 }
 
 bool Element::matches(const std::string& selector) const {
+    return matchesScoped(selector, this);
+}
+
+bool Element::matchesScoped(const std::string& selector, const Element* scopingRoot) const {
     const auto& selectors = cachedParseSelectorList(selector);
+    layout::ElementRefAdapter::ScopingRootGuard scope(const_cast<Element*>(scopingRoot));
     auto* adapter = layout::ElementRefAdapter::getOrCreate(const_cast<Element*>(this));
     bool matched = false;
     for (auto& sel : selectors) {
@@ -680,9 +687,10 @@ bool Element::matches(const std::string& selector) const {
 }
 
 Element* Element::closest(const std::string& selector) {
+    // :scope stays this element while the walk tests its ancestors.
     Element* current = this;
     while (current) {
-        if (current->matches(selector)) return current;
+        if (current->matchesScoped(selector, this)) return current;
         current = current->parentElement();
     }
     return nullptr;
