@@ -41,9 +41,15 @@
  * the placement batches with the same model: the sway is zero at y = 0 and
  * grows with height (0.04h + 0.015h^2), a gust wave phased by ground
  * position moves neighbours out of step, and each point is offset
- * downwind and tilted rigidly toward the wind (at most 0.35 rad), so a
- * vertex, its normal and an instance matrix at the same point move alike
- * and matrices stay orthonormal. `update(dt)` advances the gust phase.
+ * downwind and tilted rigidly toward the wind (at most 0.35 rad). A mesh
+ * vertex moves by the offset at the vertex and its normal turns by the tilt
+ * there. An instance matrix is swayed along its height: its translation
+ * moves by the offset at its origin (so an instance rooted at y = 0 stays
+ * put) and its basis turns by the tilt at its tip, origin + its +Y basis
+ * column (floats 1 / 5 / 9, scale included). So a placement standing on the
+ * ground still bends, a taller instance bends more, matrices stay
+ * rigid (the basis is rotated, never sheared) and the tint floats are left
+ * alone. `update(dt)` advances the gust phase.
  * emitSegments, emitBranchTubes, emitScatterSegments, emitBloomMesh and
  * the SDF meshes are never bent.
  * The global density (default 1) multiplies the leaf placement
@@ -65,6 +71,17 @@
  *   (0.12 + 0.88 * lightExposure01) * min(1, age01) * (1 - senescence01)
  *     * twigGrade01^2 * (isTerminal ? 1 : 0.1)
  * so shaded, young, dying or thick segments go bare.
+ *
+ * ── Lists, counts and seeds ──
+ * Every list an option reads element by element (a prototype's `nodes`,
+ * `edges` and `terminalNodes`, `densityWeight`) is capped at 2^24
+ * (16777216) elements: a longer `length` is a RangeError. The list is read
+ * as it is, never sized by its claimed length first, so a missing element
+ * (a `nodes` entry that is not an object, a `densityWeight` entry that is
+ * not a number) is a TypeError at that index. Placement batches hold at
+ * most 2^24 instances. Seeds (`rngSeed`, the leaf placement `seed`) are
+ * integers in [0, 2^53 - 1]: a non-number is a TypeError, a negative,
+ * fractional, NaN or infinite one a RangeError.
  */
 
 
@@ -74,7 +91,8 @@
 
 /**
  * @typedef {Object} FloraWorldOptions
- * @property {number} [rngSeed] - Seed for the world's RNG (seeding, variation).
+ * @property {number} [rngSeed] - Seed for the world's RNG (seeding, variation):
+ *   an integer in [0, 2^53 - 1] (TypeError for a non-number, RangeError otherwise).
  * @property {FloraClimate} [climate]
  * @property {Object} [shadow] - The voxel shadow grid plants compete in. Omit
  *   it and there is no grid: every module sees full sun and sampleShadow()
@@ -104,7 +122,8 @@
  *   Node rest positions in module space. `ageAtBirth` (default 0) is the
  *   module age at which the node appears, `lengthMax` (default 1) caps the
  *   incoming segment's length, `thickening` (default 1) is its length growth
- *   rate. At least one node is required.
+ *   rate. At least one node is required, each an object (TypeError
+ *   otherwise); at most 2^24 of them, as for `edges` and `terminalNodes`.
  * @property {Array<Array<number>|{a: number, b: number}>} [edges] - Node index
  *   pairs, `[a, b]` or `{a, b}`, parent before child.
  * @property {number} [rootNode=0]
@@ -185,13 +204,15 @@
  * @property {number} [perUnitLength=20] - Average leaves per unit length (times the global density).
  * @property {number} [densityFalloff=0] - >0 biases leaves toward segment tips.
  * @property {Array<number>} [densityWeight] - Per-segment multiplier; default computed from the simulation (see top).
+ *   At most 2^24 entries (RangeError), every one a number (TypeError).
  * @property {number} [upBias=0.5] - 0 = leaves point radially out, 1 = toward +Y.
  * @property {number} [tiltJitter=0.3] - Radians of random pitch.
  * @property {number} [rollJitter=0.2] - Radians of random roll.
  * @property {number} [baseScale=1] @property {number} [scaleJitter=0.2] - Fraction of baseScale.
  * @property {number} [scaleByRadius=0] - 1 = scale leaves with radius / maxRadius.
  * @property {number} [dedupRadius=0] - Minimum spacing between leaf origins; 0 = off.
- * @property {number} [seed=0]
+ * @property {number} [seed=0] - An integer in [0, 2^53 - 1] (TypeError for a
+ *   non-number, RangeError otherwise).
  */
 
 /**
@@ -267,7 +288,10 @@ class FloraWorld {
   removePlant(plantIdx) {}
 
   /**
-   * Advance the simulation by `dt` seconds (throws without `dt`).
+   * Advance the simulation by `dt` seconds. `dt` must be a finite number
+   * >= 0: a missing or non-number `dt` is a TypeError, and NaN, a negative
+   * or an infinite one (or one past float range, ~3.4e38) a RangeError (it would poison simTime and every
+   * plant's age). `step(0)` is accepted.
    * @param {number} dt
    * @returns {FloraWorld} this
    */
@@ -626,7 +650,11 @@ bro.flora.clear = function() {};
  * Float32Array / number array of 16-float matrices, an array of 16-element
  * arrays, or an array of [x, y, z] positions (identity rotation). Failing
  * those, `config.count` identity instances: an integer in [0, 16777216],
- * TypeError for a non-number and RangeError for anything else.
+ * TypeError for a non-number and RangeError for anything else. A
+ * `transforms` list of more than 16777216 instances is a RangeError too.
+ * `update(dt)` sways each instance along its height (see "Wind and
+ * density" at the top), so instances standing at y = 0 bend without
+ * leaving their root; floats 12-15 (the tint) are copied through as given.
  * @param {Object} config
  * @param {*} [config.id] - Default `'flora_batch_<n>'`.
  * @param {*} [config.mesh] @param {*} [config.material] - Stored as given.
