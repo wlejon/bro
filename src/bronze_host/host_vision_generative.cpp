@@ -44,7 +44,10 @@ struct BirefnetJob {
     brovisionml::birefnet::Matte matte;
 };
 
-Value birefnetRemoveBackground(Value thisVal, std::span<const Value> args) {
+// Each op roots its receiver first: reading the inputs and the options
+// allocates, and the receiver is what runVisionOp keeps as the job's selfRef.
+Value birefnetRemoveBackground(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::BirefnetWrapper>(bvm::g_birefnetClass, thisVal,
                                                bvm::kHostBirefnetTag);
     if (!w) {
@@ -199,7 +202,8 @@ struct Sg3Job {
     Sg3Out out;
 };
 
-Value sgGenerate(Value thisVal, std::span<const Value> args) {
+Value sgGenerate(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::StyleGAN3Wrapper>(bvm::g_stylegan3Class, thisVal,
                                                 bvm::kHostStyleGAN3Tag);
     if (!w) return ev::throwTypeError("StyleGAN3.prototype.generate: not a generator");
@@ -255,7 +259,8 @@ Value sgGenerate(Value thisVal, std::span<const Value> args) {
                        std::move(release));
 }
 
-Value sgSynthesize(Value thisVal, std::span<const Value> args) {
+Value sgSynthesize(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::StyleGAN3Wrapper>(bvm::g_stylegan3Class, thisVal,
                                                 bvm::kHostStyleGAN3Tag);
     if (!w) return ev::throwTypeError("StyleGAN3.prototype.synthesize: not a generator");
@@ -307,7 +312,8 @@ Value sgSynthesize(Value thisVal, std::span<const Value> args) {
                        std::move(release));
 }
 
-Value sgInvert(Value thisVal, std::span<const Value> args) {
+Value sgInvert(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::StyleGAN3Wrapper>(bvm::g_stylegan3Class, thisVal,
                                                 bvm::kHostStyleGAN3Tag);
     if (!w) return ev::throwTypeError("StyleGAN3.prototype.invert: not a generator");

@@ -34,7 +34,10 @@ struct DepthJob {
     brovisionml::depth::DepthMap dm;
 };
 
-Value depthEstimate(Value thisVal, std::span<const Value> args) {
+// Each op roots its receiver first: reading the image and the options
+// allocates, and the receiver is what runVisionOp keeps as the job's selfRef.
+Value depthEstimate(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::DepthEstimatorWrapper>(bvm::g_depthEstimatorClass, thisVal,
                                                      bvm::kHostDepthEstimatorTag);
     if (!w) {
@@ -124,7 +127,8 @@ struct NormalJob {
     brovisionml::dsine::NormalMap nm;
 };
 
-Value normalEstimate(Value thisVal, std::span<const Value> args) {
+Value normalEstimate(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::NormalEstimatorWrapper>(bvm::g_normalEstimatorClass, thisVal,
                                                       bvm::kHostNormalEstimatorTag);
     if (!w) {

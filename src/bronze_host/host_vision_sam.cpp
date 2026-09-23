@@ -98,7 +98,10 @@ struct SamSetImageJob {
     bool live = false;
 };
 
-Value samSetImage(Value thisVal, std::span<const Value> args) {
+// Each op roots its receiver first: reading the inputs and the options
+// allocates, and the receiver is what runVisionOp keeps as the job's selfRef.
+Value samSetImage(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::SamWrapper>(bvm::g_samClass, thisVal, bvm::kHostSamTag);
     if (!w) return ev::throwTypeError("Sam.prototype.setImage: not a Sam instance");
     if (args.empty()) return ev::throwTypeError("setImage(image, opts?): image is required");
@@ -145,7 +148,8 @@ struct SamSegmentJob {
     brovisionml::sam::Segmentation seg;
 };
 
-Value samSegment(Value thisVal, std::span<const Value> args) {
+Value samSegment(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::SamWrapper>(bvm::g_samClass, thisVal, bvm::kHostSamTag);
     if (!w) return ev::throwTypeError("Sam.prototype.segment: not a Sam instance");
 
@@ -237,7 +241,8 @@ struct SamEverythingJob {
     std::vector<brovisionml::sam::GeneratedMask> masks;
 };
 
-Value samSegmentEverything(Value thisVal, std::span<const Value> args) {
+Value samSegmentEverything(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::SamWrapper>(bvm::g_samClass, thisVal, bvm::kHostSamTag);
     if (!w) return ev::throwTypeError("Sam.prototype.segmentEverything: not a Sam instance");
     if (args.empty()) {

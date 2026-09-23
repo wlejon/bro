@@ -93,7 +93,10 @@ struct HedJob : AnnotatorInput<bvm::HedWrapper> {
     brovisionml::hed::EdgeMap em;
 };
 
-Value hedDetect(Value thisVal, std::span<const Value> args) {
+// Each detect roots its receiver first: reading the image and the options
+// allocates, and the receiver is what runVisionOp keeps as the job's selfRef.
+Value hedDetect(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::HedWrapper>(bvm::g_hedClass, thisVal, bvm::kHostHedTag);
     if (!w) return ev::throwTypeError("SoftEdgeDetector.prototype.detect: not a detector");
 
@@ -127,7 +130,8 @@ struct LineartJob : AnnotatorInput<bvm::LineartWrapper> {
     brovisionml::lineart::LineMap lm;
 };
 
-Value lineartDetect(Value thisVal, std::span<const Value> args) {
+Value lineartDetect(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::LineartWrapper>(bvm::g_lineartClass, thisVal,
                                               bvm::kHostLineartTag);
     if (!w) return ev::throwTypeError("LineartDetector.prototype.detect: not a detector");
@@ -162,7 +166,8 @@ struct MlsdJob : AnnotatorInput<bvm::MlsdWrapper> {
     brovisionml::mlsd::LineMap lm;
 };
 
-Value mlsdDetect(Value thisVal, std::span<const Value> args) {
+Value mlsdDetect(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::MlsdWrapper>(bvm::g_mlsdClass, thisVal, bvm::kHostMlsdTag);
     if (!w) return ev::throwTypeError("MLSDdetector.prototype.detect: not a detector");
 
@@ -225,7 +230,8 @@ struct OpenposeJob : AnnotatorInput<bvm::OpenposeWrapper> {
     brovisionml::openpose::PoseResult pose;
 };
 
-Value openposeDetect(Value thisVal, std::span<const Value> args) {
+Value openposeDetect(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::OpenposeWrapper>(bvm::g_openposeClass, thisVal,
                                                bvm::kHostOpenposeTag);
     if (!w) return ev::throwTypeError("OpenposeDetector.prototype.detect: not a detector");
@@ -295,7 +301,8 @@ struct SegformerJob : AnnotatorInput<bvm::SegformerWrapper> {
     brovisionml::segformer::SegMap sm;
 };
 
-Value segformerDetect(Value thisVal, std::span<const Value> args) {
+Value segformerDetect(Value thisIn, std::span<const Value> args) {
+    const Rooted thisVal(thisIn);
     auto* w = visionSelf<bvm::SegformerWrapper>(bvm::g_segformerClass, thisVal,
                                                 bvm::kHostSegformerTag);
     if (!w) return ev::throwTypeError("SegformerDetector.prototype.detect: not a detector");
