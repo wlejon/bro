@@ -189,6 +189,23 @@ public:
     float containerBlockSize() const override {
         return elem_ ? elem_->layoutBox().contentRect.height : 0.0f;
     }
+    // style() container queries against a container other than the parent
+    // (a named one, or one further up): its computed value, which the cascade
+    // has already resolved because ancestors resolve first. A custom property
+    // is read as the container sees it, its own or inherited.
+    bool computedStyleValue(std::string_view property, std::string& out) const override {
+        out.clear();
+        if (!elem_) return false;
+        const auto& cs = elem_->computedStyle();
+        const std::string* v = nullptr;
+        if (htmlayout::css::ComputedStyle::isCustom(property)) {
+            v = cs.customProperty(property);
+        } else if (auto it = cs.find(property); it != cs.end()) {
+            v = &it->second;
+        }
+        if (v) out = *v;
+        return true;
+    }
 
     bool isChecked() const override {
         if (!elem_) return false;
