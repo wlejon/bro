@@ -1,281 +1,417 @@
+/**
+ * =============================================================================
+ * AudioContext & friends — Web-Audio-shaped front end over broaudio
+ * =============================================================================
+ *
+ * The binding lives in broaudio (`../broaudio/src/api`) and is installed once
+ * per realm on the main thread. It is NOT available inside a Worker.
+ *
+ * broaudio is not a node-graph renderer. It is a synth-voice + clip-player
+ * engine with a fixed set of mix buses, each carrying a fixed effect chain
+ * (4 filter slots, delay, compressor, chorus, reverb, 7-band EQ, distortion),
+ * a master limiter and a 3D spatializer. The Web Audio classes are a thin
+ * translation layer onto that engine, so read these rules before relying on
+ * Web Audio semantics:
+ *
+ * - ONE ENGINE. Every AudioContext drives the same process-wide engine.
+ *   `currentTime` never restarts, `suspend()` on one context pauses all of
+ *   them, and constructing a context un-pauses the engine.
+ * - SOURCES PLAY WITHOUT BEING CONNECTED. An OscillatorNode is an engine
+ *   voice and an AudioBufferSourceNode is a clip playback; both go straight
+ *   to the master bus on `start()`, connected to `destination` or not.
+ * - THE GRAPH IS READ ONCE, AT start(). `start()` walks the nodes downstream
+ *   of the source and copies what it finds onto the voice / playback: the
+ *   GainNode gain(s), the StereoPannerNode pan, the PannerNode
+ *   position and distance settings. Changing those nodes afterwards does not
+ *   touch a source that is already playing.
+ * - EFFECT NODES ARE MASTER-BUS EFFECTS. BiquadFilterNode owns one of the
+ *   master bus's 4 filter slots; connecting anything to or from a DelayNode,
+ *   DynamicsCompressorNode, WaveShaperNode or ConvolverNode switches on the
+ *   master bus's delay, compressor, distortion (soft clip) or algorithmic
+ *   reverb at 100% wet, and `disconnect()` switches it off again. They filter
+ *   the whole mix, not only their input. For an AudioBufferSourceNode the
+ *   same nodes are ALSO applied offline to the buffer at `start()` (biquad,
+ *   delay shift, the real WaveShaper curve, the real Convolver impulse,
+ *   compressor), so a buffer source routed through them is processed twice.
+ * - AUTOMATION IS NOT SAMPLE-ACCURATE. AudioParam keeps a Web Audio timeline
+ *   (set / linear / exponential / target / curve) but only pushes it to the
+ *   engine when script touches the param: reading `.value`, or calling any
+ *   scheduling method, evaluates the timeline at `currentTime` and applies
+ *   the result. A ramp therefore advances only as fast as you poll it.
+ *   Params that no engine object backs (GainNode.gain, DelayNode.delayTime,
+ *   StereoPannerNode.pan, PannerNode position/orientation, the compressor
+ *   params) are read at `start()` / `connect()` time only.
+ * - NO EVENTS. There is no `onended`, `onstatechange`, AudioWorklet,
+ *   ScriptProcessorNode, OfflineAudioContext, MediaElementSource,
+ *   ConstantSourceNode or IIRFilterNode.
+ * - GARBAGE COLLECTION STOPS SOUND. A collected OscillatorNode stops and
+ *   frees its voice; a collected AudioBufferSourceNode stops its playback and
+ *   deletes its clip; a collected BiquadFilterNode releases its slot. Keep a
+ *   reference to anything that should keep playing.
+ * - Node constructors (`new GainNode()`, `new DelayNode(maxTime)`, ...) ignore
+ *   a context argument and option dictionaries; the `ctx.create*` factories
+ *   are the normal path. `AudioNode`, `AudioParam` and `AudioDestinationNode`
+ *   exist for `instanceof` and throw TypeError when constructed.
+ *
+ * Next to the Web Audio subset, AudioContext carries broaudio's engine API
+ * directly, addressed by integer ids: voices (`createVoice`), clips
+ * (`createClip*`, `playClip`), playbacks, streams, buses and their effects,
+ * wavetables, presets and offline rendering, plus the synth helpers
+ * VoiceAllocator, ModMatrix, MidiInput and Sequence. Anything the Web Audio
+ * layer cannot express (live gain changes, moving a sound in 3D, per-bus
+ * effects) is done there. That half is documented in `audio-engine-api.js`.
+ *
+ * File paths (`decodeAudioFile`, `saveWav`, `exportRecordingToWav`) resolve
+ * the way `fs.*` does: relative to the app directory, mount paths honoured.
+ * A path being written resolves through its parent directory, which must
+ * exist.
+ *
+ * Live microphone chunks for speech/ML consumers are `bro.mic`, documented in
+ * `mic-api.js`; see also the "Microphone" section at the end of this file.
+ *
+ * @example
+ *   // Web Audio style: a synth voice through a gain and a stereo panner
+ *   const ctx = new AudioContext();
+ *   const osc = ctx.createOscillator();
+ *   const g = ctx.createGain();
+ *   const pan = ctx.createStereoPanner();
+ *   osc.type = 'sawtooth';
+ *   osc.frequency.value = 220;
+ *   g.gain.value = 0.3;          // read at start(); later changes do not apply
+ *   pan.pan.value = -0.5;
+ *   osc.connect(g).connect(pan).connect(ctx.destination);
+ *   osc.start();
+ *   osc.stop(ctx.currentTime + 1);
+ *   osc.gain.value = 0.1;        // the voice's own gain param IS live
+ */
+
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
 /**
+ * The fields `decodeAudioFile` returns, and that `decodeAudioData` also sets
+ * on the AudioBuffer it resolves with (and on the returned promise itself).
+ * Audio is always resampled to the engine rate.
  * @typedef {Object} AudioDecodedBuffer
- * @property {Float32Array} [samples]
- * @property {number} [channels]
- * @property {number} [sampleRate]
- * @property {number} [numFrames]
+ * @property {Float32Array} samples -  Interleaved samples, `numFrames * channels` long.
+ * @property {number} channels -  Channel count of the file.
+ * @property {number} sampleRate -  The ENGINE sample rate (not the file's).
+ * @property {number} numFrames -  Frames after resampling.
  */
 
 /**
- * @typedef {Object} StreamStats
- * @property {number} [decodedFrames]
- * @property {number} [playedFrames]
- * @property {number} [bufferedFrames]
- * @property {number} [underrunFrames]
- * @property {boolean} [finished]
+ * The third argument of `createPeriodicWave` / `new PeriodicWave`.
+ * @typedef {Object} PeriodicWaveOptions
+ * @property {boolean} [disableNormalization=false] -  Keep the summed table's
+ *   amplitude instead of scaling its peak to 1.
  */
 
 /**
- * @typedef {Object} StreamFromFileOptions
- * @property {number} [ringFrames]
- * @property {number} [prebufferFrames]
- * @property {boolean} [loop]
- * @property {number} [gain]
+ * The option object of `new AudioBuffer(options)`.
+ * @typedef {Object} AudioBufferOptions
+ * @property {number} length -  Frames; must be positive (TypeError otherwise).
+ * @property {number} [numberOfChannels=1] -  Clamped to 1..32.
+ * @property {number} [sampleRate=44100] -  Stored only; see AudioBuffer.
  */
 
 /**
- * @typedef {Object} SequenceNote
- * @property {number} [beat] beat position (also available as `beatPosition`)
- * @property {number} [beatPosition]
- * @property {number} [note]
- * @property {number} [velocity]
- * @property {number} [duration]
- */
-
-/**
- * Plain-object form of a broaudio VoicePreset: what `voicePresetToJson`
- * takes and `voicePresetFromJson` / `applyVoicePreset` give back. Every
- * field is optional; missing ones keep the struct default.
- * @typedef {Object} VoicePreset
- * @property {string} [waveform="sine"] sine | square | sawtooth | triangle | wavetable | ...
- * @property {number} [frequency=440]
- * @property {number} [gain=1]
- * @property {number} [pan=0]
- * @property {number} [pitchBend=0]
- * @property {number} [attackTime=0.01]
- * @property {number} [decayTime=0.1]
- * @property {number} [sustainLevel=1]
- * @property {number} [releaseTime=0.04]
- * @property {boolean} [filterEnabled=false]
- * @property {string} [filterType="lowpass"]
- * @property {number} [filterFreq=1000]
- * @property {number} [filterQ=1]
- * @property {number} [unisonCount=1]
- * @property {number} [unisonDetune=0.15]
- * @property {number} [unisonStereoWidth=0.7]
- */
-
-/**
- * Plain-object form of a BusPreset (gain, filters, delay, compressor,
- * reverb, chorus, distortion, eq, and `effectOrder`: an array of slot
- * names as accepted by `setBusEffectOrder`).
- * @typedef {Object} BusPreset
- * @property {number} [gain=1]
- * @property {Array<Object>} [filters]
- * @property {Object} [delay]
- * @property {Object} [compressor]
- * @property {Object} [reverb]
- * @property {Object} [chorus]
- * @property {Object} [distortion]
- * @property {Object} [eq]
- * @property {Array<string>} [effectOrder]
- */
-
-/**
- * Plain-object form of a ModPreset: `lfos` (shape, rate, depth, offset,
- * bipolar, sync) and `routes` (source, dest, amount, enabled).
- * @typedef {Object} ModPreset
- * @property {Array<Object>} [lfos]
- * @property {Array<Object>} [routes]
- */
-
-/**
- * Plain-object form of an EnginePreset.
- * @typedef {Object} EnginePreset
- * @property {number} [masterGain=1]
- * @property {Object} [limiter]
- * @property {BusPreset} [masterBus]
- * @property {Array<BusPreset>} [buses]
- * @property {ModPreset} [modulation]
- */
-
-/**
- * @typedef {Object} SequenceAutomationPoint
- * @property {number} [beat]
- * @property {number} [value]
- */
-
-/**
- * @typedef {Object} MidiPort
- * @property {number} [index]
- * @property {string} [name]
- */
-
-/**
- * @typedef {Object} MidiRawEvent
- * @property {string} [type]
- * @property {number} [channel]
- * @property {number} [data1]
- * @property {number} [data2]
- * @property {number} [pitchBend]
- * @property {number} [timestamp]
- */
-
-/**
+ * `getUserMedia` constraints. Ignored: the call always opens the default
+ * capture device.
  * @typedef {Object} MediaStreamConstraints
  * @property {boolean} [audio]
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
 
+/**
+ * An automatable value. Every node param is one of these.
+ *
+ * Differences from Web Audio: the timeline reaches the engine only when
+ * script reads `.value` or calls a scheduling method (see the file header);
+ * there is no `automationRate`; setting `.value` clears the whole timeline;
+ * every value is clamped into [minValue, maxValue]. A ramp with no earlier
+ * event starts from the current value at the call's `currentTime`.
+ */
 class AudioParam {
 
   /**
+   * Reading evaluates the timeline at `currentTime` and pushes the result to
+   * the engine; writing clears the timeline and sets the value.
    * @type {number}
    */
   value;
 
-  /**
-   * @param {number} value
-   * @param {number} time
-   */
-  setValueAtTime(value, time) {}
+  /** @readonly @type {number} */
+  defaultValue;
+
+  /** @readonly @type {number} */
+  minValue;
+
+  /** @readonly @type {number} */
+  maxValue;
 
   /**
    * @param {number} value
-   * @param {number} time
+   * @param {number} [startTime=0]
+   * @returns {AudioParam} this
    */
-  linearRampToValueAtTime(value, time) {}
+  setValueAtTime(value, startTime) {}
 
   /**
    * @param {number} value
-   * @param {number} time
+   * @param {number} [endTime=0]
+   * @returns {AudioParam} this
    */
-  exponentialRampToValueAtTime(value, time) {}
+  linearRampToValueAtTime(value, endTime) {}
 
   /**
+   * Falls back to a linear ramp when either end is not positive.
+   * @param {number} value
+   * @param {number} [endTime=0]
+   * @returns {AudioParam} this
+   */
+  exponentialRampToValueAtTime(value, endTime) {}
+
+  /**
+   * A time constant of 0 jumps straight to `target`.
    * @param {number} target
-   * @param {number} startTime
-   * @param {number} timeConstant
+   * @param {number} [startTime=0]
+   * @param {number} [timeConstant=0]
+   * @returns {AudioParam} this
    */
   setTargetAtTime(target, startTime, timeConstant) {}
 
   /**
-   * @param {Float32Array} values
-   * @param {number} startTime
-   * @param {number} duration
+   * `values` may be a Float32Array or a plain array of numbers.
+   * @param {Float32Array|Array<number>} values
+   * @param {number} [startTime=0]
+   * @param {number} [duration=0]
+   * @returns {AudioParam} this
    */
   setValueCurveAtTime(values, startTime, duration) {}
 
   /**
+   * Drops every event at or after `cancelTime`.
    * @param {number} cancelTime
+   * @returns {AudioParam} this
    */
   cancelScheduledValues(cancelTime) {}
 
   /**
    * @param {number} cancelTime
+   * @returns {AudioParam} this
    */
   cancelAndHoldAtTime(cancelTime) {}
 
+  /**
+   * Not in Web Audio: the timeline's value at engine time `time`, without
+   * applying it.
+   * @param {number} [time=0]
+   * @returns {number}
+   */
+  getValueAtTime(time) {}
+
 }
 
-class OscillatorNode {
+/**
+ * Base of every node class below. `connect`/`disconnect` record the graph
+ * (read by a source's `start()`) and switch master-bus effects on and off as
+ * the file header describes. Output/input indices are ignored.
+ */
+class AudioNode {
 
   /**
+   * Records `destination` and returns it, so calls chain. TypeError with no
+   * argument. Side effects: a BiquadFilterNode enables its filter slot; a
+   * DelayNode / DynamicsCompressorNode / WaveShaperNode / ConvolverNode on
+   * either end enables the master delay (time = delayTime.value, mix 1) /
+   * compressor / distortion (soft clip, mix 1) / reverb (mix 1); a
+   * MediaStreamAudioSourceNode connected to an AnalyserNode sets its
+   * `source` to 1 (microphone).
+   * @param {AudioNode|AudioParam} destination
+   * @returns {AudioNode|AudioParam} destination
+   */
+  connect(destination) {}
+
+  /**
+   * With no argument, forgets every destination; with one, forgets that
+   * destination. Either way a BiquadFilterNode disables its slot and a
+   * Delay / Compressor / WaveShaper / Convolver node disables the matching
+   * master-bus effect (even if another such node is still connected).
+   * @param {AudioNode|AudioParam} [destination]
+   */
+  disconnect(destination) {}
+
+  /** 0 for sources, the input count for a ChannelMergerNode, else 1. @readonly @type {number} */
+  numberOfInputs;
+
+  /** 0 for the destination, the output count for a ChannelSplitterNode, else 1. @readonly @type {number} */
+  numberOfOutputs;
+
+  /** Always 2 (a splitter reports its output count, a merger 1); assignment is ignored. @type {number} */
+  channelCount;
+
+  /** 'max' ('explicit' on splitter/merger). Informational. @type {string} */
+  channelCountMode;
+
+  /** 'speakers' ('discrete' on a splitter). Informational. @type {string} */
+  channelInterpretation;
+
+}
+
+/** `ctx.destination`: the master output. Not constructible. */
+class AudioDestinationNode extends AudioNode {
+
+  /** Always 2. @readonly @type {number} */
+  maxChannelCount;
+
+}
+
+/**
+ * A synth voice. Created voices are engine voices (`voiceId`), so the voice
+ * API on AudioContext (`setVoiceBus`, `setVoiceSpatialPosition`, ... in
+ * `audio-engine-api.js`) works on them too. Plays on `start()` whether or
+ * not it is connected.
+ */
+class OscillatorNode extends AudioNode {
+
+  /**
+   * 'sine' | 'square' | 'sawtooth' | 'triangle' | 'custom' (a PeriodicWave;
+   * also 'wavetable') | 'whitenoise' | 'pinknoise' | 'brownnoise'. Applied to
+   * the voice immediately. An unknown name plays as sine but reads back as
+   * written.
    * @type {string}
    */
   type;
 
-  /**
-   * @readonly
-   * @type {AudioParam}
-   */
+  /** Hz, default 440, range 0..24000. Live. @readonly @type {AudioParam} */
   frequency;
 
-  /**
-   * @readonly
-   * @type {AudioParam}
-   */
+  /** Cents, default 0. Stored only: it has no effect on the voice. @readonly @type {AudioParam} */
   detune;
 
+  /** Not in Web Audio. Voice pan, -1..1, default 0. Live. @readonly @type {AudioParam} */
+  pan;
+
+  /** Not in Web Audio. Envelope attack, seconds (0..60, default 0.01). Live. @readonly @type {AudioParam} */
+  attack;
+
+  /** Not in Web Audio. Envelope decay, seconds (0..60, default 0.1). Live. @readonly @type {AudioParam} */
+  decay;
+
+  /** Not in Web Audio. Envelope sustain level (0..1, default 1). Live. @readonly @type {AudioParam} */
+  sustain;
+
+  /** Not in Web Audio. Envelope release, seconds (0..60, default 0.04). Live. @readonly @type {AudioParam} */
+  release;
+
+  /** Not in Web Audio. Semitones, -24..24, default 0. Live. @readonly @type {AudioParam} */
+  pitchBend;
+
   /**
-   * Starts the voice at `when` (engine seconds, default: now). If the
-   * oscillator is connected to a GainNode, that node's `gain.value` is
-   * applied to the voice first, so `osc.connect(g); g.gain.value = 0.3;
-   * osc.start()` plays at 0.3. Throws if called twice.
-   * @param {number} [when=currentTime]
+   * Not in Web Audio. The voice's own gain, 0..10, default 1. Live. `start()`
+   * overwrites the voice gain (not this param's value) with a downstream
+   * GainNode's gain when there is one.
+   * @readonly @type {AudioParam}
+   */
+  gain;
+
+  /** Not in Web Audio. The engine voice id (-1 without an engine). @readonly @type {number} */
+  voiceId;
+
+  /**
+   * Starts the voice at `when` (engine seconds; default now). First walks the
+   * connected graph: a GainNode's gain (evaluated at `when`) becomes the voice
+   * gain (with several GainNodes the last one reached wins; they are not
+   * multiplied, unlike for AudioBufferSourceNode),
+   * a StereoPannerNode sets its pan, a PannerNode turns on spatialization at
+   * the panner's position / refDistance / maxDistance / rolloffFactor /
+   * distanceModel, and Delay / Compressor / WaveShaper / Convolver nodes
+   * enable their master-bus effect. Throws Error on a second call.
+   * @param {number} [when]
    */
   start(when) {}
 
   /**
-   * @param {number} [when=currentTime]
+   * Releases the voice at `when` (engine seconds; default now).
+   * @param {number} [when]
    */
   stop(when) {}
 
   /**
-   * Returns `destination`. A GainNode destination is remembered for
-   * `start()` (see above); anything else is a pass-through.
-   * @param {Object} destination
+   * Switches the voice to the wave's wavetable and `type` to 'custom'.
+   * TypeError for anything that is not a PeriodicWave.
+   * @param {PeriodicWave} wave
    */
-  connect(destination) {}
-
-  disconnect() {}
+  setPeriodicWave(wave) {}
 
 }
 
-class GainNode {
+/**
+ * Holds a gain for `start()` to read. `gain` has no engine target: changing
+ * it does not affect a source that is already playing (use the source's
+ * `gain` param, `setVoiceGain` or `setPlaybackGain`).
+ */
+class GainNode extends AudioNode {
 
-  /**
-   * @readonly
-   * @type {AudioParam}
-   */
+  /** Default 1, unbounded. @readonly @type {AudioParam} */
   gain;
 
-  /**
-   * @param {Object} destination
-   */
-  connect(destination) {}
+}
 
-  disconnect() {}
+/**
+ * A band-limited wavetable built from Fourier coefficients (cosine terms in
+ * `real`, sine terms in `imag`, index 0 = DC) at the engine sample rate.
+ *
+ * Differs from Web Audio: the constructor is positional,
+ * `new PeriodicWave(real, imag, options)`; `new PeriodicWave(ctx, {real, imag})`
+ * builds an empty wave. It accepts typed or plain arrays and zero-pads the
+ * shorter half. No properties or methods.
+ */
+class PeriodicWave {
+
+  /**
+   * @param {Float32Array|Array<number>} [real]
+   * @param {Float32Array|Array<number>} [imag]
+   * @param {PeriodicWaveOptions} [options]
+   */
+  constructor(real, imag, options) {}
 
 }
 
-class BiquadFilterNode {
+/**
+ * One of the master bus's 4 filter slots. Creating the node allocates the
+ * slot AND enables it (lowpass, 350 Hz, Q 1, 0 dB), so it filters the whole
+ * mix as soon as it exists, connected or not; `disconnect()` disables it and
+ * `connect()` re-enables it. Throws Error("No filter slots available") when
+ * all 4 are taken; garbage collection releases the slot. For per-bus or
+ * per-voice filtering use the bus filter API or `setVoiceFilter*`.
+ */
+class BiquadFilterNode extends AudioNode {
 
   /**
+   * 'lowpass' | 'highpass' | 'bandpass' | 'notch' | 'allpass' | 'peaking' |
+   * 'lowshelf' | 'highshelf'. Live; unknown names act as lowpass.
    * @type {string}
    */
   type;
 
-  /**
-   * @readonly
-   * @type {AudioParam}
-   */
+  /** Hz, default 350 (the engine clamps to 20..20000). Live. @readonly @type {AudioParam} */
   frequency;
 
-  /**
-   * @readonly
-   * @type {AudioParam}
-   */
+  /** Cents, default 0. Used only by getFrequencyResponse. @readonly @type {AudioParam} */
   detune;
 
-  /**
-   * @readonly
-   * @type {AudioParam}
-   */
+  /** Default 1 (the engine clamps to 0.1..30). Live. @readonly @type {AudioParam} */
   Q;
 
-  /**
-   * @readonly
-   * @type {AudioParam}
-   */
+  /** dB, default 0, -40..40 (peaking / shelf types). Live. @readonly @type {AudioParam} */
   gain;
 
   /**
-   * Enables the node's master filter slot (the slot is allocated, enabled
-   * and set to lowpass 350 Hz by createBiquadFilter) and returns
-   * `destination`.
-   * @param {Object} destination
-   */
-  connect(destination) {}
-
-  /** Disables the filter slot; the node keeps it for a later connect(). */
-  disconnect() {}
-
-  /**
-   * @param {Float32Array} frequencyHz
+   * RBJ-cookbook response of the current settings (detune included).
+   * `frequencyHz` may be a plain array; the two outputs must be
+   * Float32Arrays. Writes min(lengths) entries.
+   * @param {Float32Array|Array<number>} frequencyHz
    * @param {Float32Array} magResponse
    * @param {Float32Array} phaseResponse
    */
@@ -283,342 +419,639 @@ class BiquadFilterNode {
 
 }
 
-class AnalyserNode {
+/**
+ * Reads the latest samples of the engine's mono output, the microphone, or
+ * both, and runs a Blackman-windowed FFT on demand. The `get*` methods do
+ * nothing unless given a typed array; the float methods expect a
+ * Float32Array.
+ *
+ * Differs from Web Audio: what it measures is picked by `source`, not by what
+ * is connected to it. An AudioBufferSourceNode upstream writes its processed
+ * buffer into the analyser once, at `start()`, and the analyser then reads
+ * the tail of that buffer rather than the live output. Any other node
+ * connected to it makes it read that (empty) tap, i.e. silence, until
+ * disconnected.
+ */
+class AnalyserNode extends AudioNode {
 
   /**
-   * What the analyser taps: 0 = engine output (default), 1 = microphone
-   * ring (see `bro.mic` / createMediaStreamSource), 2 = both summed
-   * (the mic part is dropped while the mic is muted). Any other value
-   * reads as 0. Connecting a MediaStreamAudioSourceNode to the analyser
-   * sets it to 1.
+   * Not in Web Audio. 0 = engine output (default), 1 = microphone ring
+   * (needs capture running: getUserMedia or bro.mic), 2 = both summed (the
+   * mic part only while `ctx.micMuted` is false). Other values read as 0.
    * @type {number}
    */
   source;
 
   /**
+   * Power of two, 32..32768, default 2048; RangeError otherwise. The source
+   * rings hold 16384 samples, so 32768 repeats data.
    * @type {number}
    */
   fftSize;
 
-  /**
-   * @readonly
-   * @type {number}
-   */
+  /** fftSize / 2. @readonly @type {number} */
   frequencyBinCount;
 
-  /**
-   * @type {number}
-   */
+  /** Default -100. Maps dB to the byte range. @type {number} */
   minDecibels;
 
-  /**
-   * @type {number}
-   */
+  /** Default -30. @type {number} */
   maxDecibels;
 
-  /**
-   * @type {number}
-   */
+  /** 0..1 (clamped), default 0.8. Shared by the float and byte frequency reads. @type {number} */
   smoothingTimeConstant;
 
-  /**
-   * @param {Float32Array} array
-   */
+  /** @param {Float32Array} array  Receives up to frequencyBinCount dB values. */
   getFloatFrequencyData(array) {}
 
-  /**
-   * @param {Uint8Array} array
-   */
+  /** @param {Uint8Array} array  Receives up to frequencyBinCount values, 0..255 over [minDecibels, maxDecibels]. */
   getByteFrequencyData(array) {}
 
-  /**
-   * @param {Float32Array} array
-   */
+  /** @param {Float32Array} array  Receives up to fftSize samples. */
   getFloatTimeDomainData(array) {}
 
-  /**
-   * @param {Uint8Array} array
-   */
+  /** @param {Uint8Array} array  Receives up to fftSize samples mapped -1..1 to 0..255. */
   getByteTimeDomainData(array) {}
-
-  /**
-   * @param {Object} destination
-   */
-  connect(destination) {}
-
-  disconnect() {}
 
 }
 
-class MediaStream {
+/**
+ * PCM data, one Float32 array per channel. Made by `ctx.createBuffer`,
+ * `new AudioBuffer({...})` or `ctx.decodeAudioData`.
+ *
+ * Differs from Web Audio: `sampleRate` is stored but never used for
+ * resampling, so a buffer played or turned into a clip is taken to be at the
+ * engine rate (decodeAudioData already resamples to it).
+ * `copyFromChannel` / `copyToChannel` silently ignore a bad channel or start
+ * index instead of throwing, and expect Float32Arrays.
+ */
+class AudioBuffer {
 
   /**
-   * @readonly
-   * @type {boolean}
+   * @param {AudioBufferOptions} options
    */
+  constructor(options) {}
+
+  /** @readonly @type {number} */
+  numberOfChannels;
+
+  /** Frames. @readonly @type {number} */
+  length;
+
+  /** @readonly @type {number} */
+  sampleRate;
+
+  /** length / sampleRate, in seconds. @readonly @type {number} */
+  duration;
+
+  /**
+   * The channel's Float32Array. The same array is returned on every call,
+   * and writes into it are what `start()`, `createClip` and
+   * `copyFromChannel` read. RangeError for a bad index.
+   * @param {number} channel
+   * @returns {Float32Array}
+   */
+  getChannelData(channel) {}
+
+  /**
+   * @param {Float32Array} destination
+   * @param {number} channelNumber
+   * @param {number} [startInChannel=0]
+   */
+  copyFromChannel(destination, channelNumber, startInChannel) {}
+
+  /**
+   * @param {Float32Array} source
+   * @param {number} channelNumber
+   * @param {number} [startInChannel=0]
+   */
+  copyToChannel(source, channelNumber, startInChannel) {}
+
+}
+
+/**
+ * Plays an AudioBuffer as an engine clip. `start()` interleaves the buffer,
+ * applies the downstream graph to the samples (biquad at the slot's current
+ * settings, DelayNode as a shift inside the buffer's length, ConvolverNode
+ * with its impulse, WaveShaperNode curve, DynamicsCompressorNode, and feeds
+ * any AnalyserNode), then plays the result with the gain product, stereo pan
+ * and PannerNode spatialization found on the way. Plays whether or not it is
+ * connected.
+ *
+ * Differs from Web Audio: `loopStart`, `loopEnd` and the `duration` argument
+ * of `start()` are ignored; `stop()` ignores its time and stops at once; the
+ * playback id is not exposed, so a playing source cannot be moved or re-gained
+ * afterwards (only `playbackRate` and `loop` stay live).
+ */
+class AudioBufferSourceNode extends AudioNode {
+
+  /** An AudioBuffer, or null. @type {AudioBuffer|null} */
+  buffer;
+
+  /** Live after start(). @type {boolean} */
+  loop;
+
+  /** Stored only. @type {number} */
+  loopStart;
+
+  /** Stored only. @type {number} */
+  loopEnd;
+
+  /**
+   * Default 1, range 0..1024 (the engine clamps to 0.01..16). Bound to the
+   * playback after start(), so `.value` writes are live.
+   * @readonly @type {AudioParam}
+   */
+  playbackRate;
+
+  /** Cents, default 0. Folded into the rate once, at start(). @readonly @type {AudioParam} */
+  detune;
+
+  /**
+   * `when` > 0 schedules the start on the audio clock (engine seconds);
+   * otherwise it plays now. `offset` seeks into the buffer. Throws Error on
+   * a second call. Does nothing audible without a buffer.
+   * @param {number} [when=0]
+   * @param {number} [offset=0]  Seconds.
+   */
+  start(when, offset) {}
+
+  /** Stops immediately (any argument is ignored). */
+  stop() {}
+
+}
+
+/**
+ * Spatializes a source. Its settings are copied onto the source at
+ * `start()` (the position params are evaluated at the start time); moving
+ * the panner afterwards does not move a playing source. For a moving
+ * source use `setVoiceSpatialPosition` / `setPlaybackSpatialPosition`.
+ * The engine uses its own head model (`setHeadModel*`) whatever
+ * `panningModel` says, and ignores orientation and the cone settings.
+ */
+class PannerNode extends AudioNode {
+
+  /** 'equalpower' (default) | 'HRTF'. Stored only; other values are ignored. @type {string} */
+  panningModel;
+
+  /** 'inverse' (default) | 'linear' | 'exponential'; other values are ignored. @type {string} */
+  distanceModel;
+
+  /** Default 1. @type {number} */
+  refDistance;
+
+  /** Default 10000. @type {number} */
+  maxDistance;
+
+  /** Default 1. @type {number} */
+  rolloffFactor;
+
+  /** Default 360. Stored only. @type {number} */
+  coneInnerAngle;
+
+  /** Default 360. Stored only. @type {number} */
+  coneOuterAngle;
+
+  /** Default 0. Stored only. @type {number} */
+  coneOuterGain;
+
+  /** Default 0. @readonly @type {AudioParam} */
+  positionX;
+  /** Default 0. @readonly @type {AudioParam} */
+  positionY;
+  /** Default 0. @readonly @type {AudioParam} */
+  positionZ;
+  /** Default 1. Stored only. @readonly @type {AudioParam} */
+  orientationX;
+  /** Default 0. Stored only. @readonly @type {AudioParam} */
+  orientationY;
+  /** Default 0. Stored only. @readonly @type {AudioParam} */
+  orientationZ;
+
+  /**
+   * Sets positionX/Y/Z. Needs all three arguments.
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   */
+  setPosition(x, y, z) {}
+
+  /**
+   * Sets orientationX/Y/Z. Needs all three arguments.
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   */
+  setOrientation(x, y, z) {}
+
+}
+
+/**
+ * Pans a source left/right. Read at `start()`.
+ */
+class StereoPannerNode extends AudioNode {
+
+  /**
+   * -1..1, default 0. Set it through `pan.value`: assigning a number to
+   * `pan` itself replaces the param and has no effect.
+   * @readonly @type {AudioParam}
+   */
+  pan;
+
+}
+
+/**
+ * Drives the master bus delay (see the file header). `delayTime` is read at
+ * `connect()` and at a source's `start()`; the engine clamps the time to
+ * 0.001..2 s and uses its own feedback setting (`setDelayFeedback`).
+ * For an AudioBufferSourceNode the buffer is also shifted by the delay
+ * (dropped past the buffer's end).
+ */
+class DelayNode extends AudioNode {
+
+  /**
+   * @param {number} [maxDelayTime=1]  Seconds; <= 0 means 1, capped at 180.
+   */
+  constructor(maxDelayTime) {}
+
+  /** Seconds, default 0, range 0..maxDelayTime. @readonly @type {AudioParam} */
+  delayTime;
+
+}
+
+/**
+ * Drives the master bus compressor (see the file header), and compresses an
+ * AudioBufferSourceNode's samples at `start()` with the Web Audio parameter
+ * meanings below. The params are read at `connect()` / `start()` only.
+ */
+class DynamicsCompressorNode extends AudioNode {
+
+  /** dB, default -24, -100..0. @readonly @type {AudioParam} */
+  threshold;
+
+  /** dB, default 30, 0..40 (buffer-source processing only). @readonly @type {AudioParam} */
+  knee;
+
+  /** Default 12, 1..20. @readonly @type {AudioParam} */
+  ratio;
+
+  /** Seconds, default 0.003, 0..1. @readonly @type {AudioParam} */
+  attack;
+
+  /** Seconds, default 0.25, 0..1. @readonly @type {AudioParam} */
+  release;
+
+  /**
+   * dB of gain reduction left by the last buffer-source pass (0 until one
+   * has run). It does not follow the live master compressor.
+   * @readonly @type {number}
+   */
+  reduction;
+
+}
+
+/**
+ * Drives the master bus distortion in soft-clip mode (see the file header).
+ * `curve` is applied only to AudioBufferSourceNode samples at `start()`.
+ */
+class WaveShaperNode extends AudioNode {
+
+  /**
+   * A copy of the curve, or null when unset. Assigning copies a Float32Array
+   * or plain array in.
+   * @type {Float32Array|null}
+   */
+  curve;
+
+  /** 'none' (default) | '2x' | '4x'. Stored only; other values are ignored. @type {string} */
+  oversample;
+
+}
+
+/**
+ * Drives the master bus's algorithmic reverb (see the file header); the
+ * impulse response is used only to convolve AudioBufferSourceNode samples at
+ * `start()` (a mono source comes out stereo; more than 2 channels pass
+ * through unconvolved).
+ */
+class ConvolverNode extends AudioNode {
+
+  /** The impulse response. @type {AudioBuffer|null} */
+  buffer;
+
+  /** Default true. @type {boolean} */
+  normalize;
+
+}
+
+/**
+ * Placeholder for graph compatibility: routes nothing, but the `start()`
+ * graph walk passes through it to the nodes behind it.
+ */
+class ChannelSplitterNode extends AudioNode {
+
+  /** @param {number} [numberOfOutputs=6]  Clamped to 1..32 (<= 0 means 6). */
+  constructor(numberOfOutputs) {}
+
+  /** @readonly @type {number} */
+  numberOfOutputs;
+
+}
+
+/**
+ * Placeholder for graph compatibility, like ChannelSplitterNode.
+ */
+class ChannelMergerNode extends AudioNode {
+
+  /** @param {number} [numberOfInputs=6]  Clamped to 1..32 (<= 0 means 6). */
+  constructor(numberOfInputs) {}
+
+  /** @readonly @type {number} */
+  numberOfInputs;
+
+}
+
+/**
+ * What `navigator.mediaDevices.getUserMedia` resolves with. It stands for
+ * "engine mic capture is running" and carries no tracks. `new MediaStream()`
+ * works but does not start capture.
+ */
+class MediaStream {
+
+  /** Always true. @readonly @type {boolean} */
   active;
 
 }
 
-class MediaStreamAudioSourceNode {
+/**
+ * The microphone as a graph node. It carries no audio through the graph: its
+ * only effect is that connecting it to an AnalyserNode sets the analyser's
+ * `source` to 1. Hearing the mic is `ctx.micMuted` / `micMonitorGain` /
+ * `micBus`.
+ */
+class MediaStreamAudioSourceNode extends AudioNode {}
+
+/**
+ * The listener, `ctx.listener`: a plain object, not a class instance. The
+ * methods set the engine's listener, which every spatialized voice and
+ * playback is heard from.
+ *
+ * Differs from Web Audio: the position/forward/up AudioParams exist but are
+ * not wired to the engine; use the methods.
+ */
+class AudioListener {
+
+  /** @param {number} x @param {number} y @param {number} z */
+  setPosition(x, y, z) {}
 
   /**
-   * Returns `destination`. When it is an AnalyserNode, the analyser's
-   * `source` becomes 1 (microphone). Throws TypeError with no argument.
-   * @param {Object} destination
+   * Forward vector then up vector. Needs all six arguments.
+   * @param {number} fx @param {number} fy @param {number} fz
+   * @param {number} ux @param {number} uy @param {number} uz
    */
-  connect(destination) {}
+  setOrientation(fx, fy, fz, ux, uy, uz) {}
 
-  disconnect() {}
+  /** Used for Doppler. @param {number} x @param {number} y @param {number} z */
+  setVelocity(x, y, z) {}
+
+  /** Same as setPosition. @param {number} x @param {number} y @param {number} z */
+  setListenerPosition(x, y, z) {}
+
+  /** Same as setOrientation. */
+  setListenerOrientation(fx, fy, fz, ux, uy, uz) {}
+
+  /** Default 0. Not wired. @readonly @type {AudioParam} */
+  positionX;
+  /** Default 0. Not wired. @readonly @type {AudioParam} */
+  positionY;
+  /** Default 0. Not wired. @readonly @type {AudioParam} */
+  positionZ;
+  /** Default 0, -1..1. Not wired. @readonly @type {AudioParam} */
+  forwardX;
+  /** Default 0, -1..1. Not wired. @readonly @type {AudioParam} */
+  forwardY;
+  /** Default -1, -1..1. Not wired. @readonly @type {AudioParam} */
+  forwardZ;
+  /** Default 0, -1..1. Not wired. @readonly @type {AudioParam} */
+  upX;
+  /** Default 1, -1..1. Not wired. @readonly @type {AudioParam} */
+  upY;
+  /** Default 0, -1..1. Not wired. @readonly @type {AudioParam} */
+  upZ;
 
 }
 
-class AudioDestinationNode {
-
-  /**
-   * @readonly
-   * @type {number}
-   */
-  maxChannelCount;
-
-}
-
-class VoiceAllocator {
-
-  /**
-   * @param {number} note
-   * @param {number} velocity
-   * @returns {number}
-   */
-  noteOn(note, velocity) {}
-
-  /**
-   * @param {number} note
-   */
-  noteOff(note) {}
-
-  allNotesOff() {}
-
-  /**
-   * @returns {number}
-   */
-  voiceCount() {}
-
-}
-
-class ModMatrix {
-
-  /**
-   * @param {string} source
-   * @param {string} dest
-   * @param {number} amount
-   */
-  setRouting(source, dest, amount) {}
-
-  /**
-   * @param {string} source
-   * @param {string} dest
-   * @returns {number}
-   */
-  getRouting(source, dest) {}
-
-  clear() {}
-
-}
-
-class MidiInput {
-
-  /**
-   * @returns {Array<MidiPort>}
-   */
-  listPorts() {}
-
-  /**
-   * @param {number} index
-   * @returns {boolean}
-   */
-  openPort(index) {}
-
-  closePort() {}
-
-  /**
-   * @returns {Array<MidiRawEvent>}
-   */
-  pollEvents() {}
-
-}
-
-class Sequence {
-
-  /**
-   * @type {number}
-   */
-  tempo;
-
-  /**
-   * @type {number}
-   */
-  length;
-
-  /**
-   * @type {boolean}
-   */
-  loop;
-
-  /**
-   * @param {number} beat
-   * @param {number} note
-   * @param {number} velocity
-   * @param {number} duration
-   */
-  addNote(beat, note, velocity, duration) {}
-
-  clearNotes() {}
-
-  /**
-   * @returns {Array<SequenceNote>}
-   */
-  getNotes() {}
-
-}
-
+/**
+ * Entry point. `webkitAudioContext` is the same constructor. Takes no
+ * options (any argument is ignored). See the file header for how contexts
+ * share the one engine. The engine methods (clips, playbacks, streams,
+ * voices, wavetables, buses, master bus, head model, offline rendering,
+ * presets) are in `audio-engine-api.js`.
+ */
 class AudioContext {
 
   constructor() {}
 
-  /**
-   * @readonly
-   * @type {number}
-   */
+  // ── Properties ──────────────────────────────────────────────────────────
+
+  /** Engine time in seconds; shared by every context. @readonly @type {number} */
   currentTime;
 
-  /**
-   * @readonly
-   * @type {number}
-   */
+  /** The engine sample rate. @readonly @type {number} */
   sampleRate;
 
-  /**
-   * @readonly
-   * @type {string}
-   */
+  /** 'running' | 'suspended' | 'closed'. @readonly @type {string} */
   state;
 
-  /**
-   * @readonly
-   * @type {AudioDestinationNode}
-   */
+  /** Device-buffer latency estimate in seconds (0 headless). @readonly @type {number} */
+  outputLatency;
+
+  /** Always 0. @readonly @type {number} */
+  baseLatency;
+
+  /** @readonly @type {AudioDestinationNode} */
   destination;
 
+  /** @readonly @type {AudioListener} */
+  listener;
+
+  /** Not in Web Audio. Engine master gain, default 0.5, clamped 0..2. @type {number} */
+  masterGain;
+
+  /** Not in Web Audio. Whether startRecording is active. @readonly @type {boolean} */
+  recording;
+
+  /** Not in Web Audio. Doppler scale: 0 disables, 1 physical (default), > 1 exaggerates. @type {number} */
+  dopplerFactor;
+
   /**
-   * @returns {OscillatorNode}
+   * Not in Web Audio. Default true: captured mic audio is not played to the
+   * output. Analysis and `bro.mic` taps see the mic either way.
+   * @type {boolean}
    */
+  micMuted;
+
+  /** Not in Web Audio. Mic monitor level when unmuted, default 0.5. @type {number} */
+  micMonitorGain;
+
+  /** Not in Web Audio. Bus the mic monitor goes to; -1 (default) = straight to the output. @type {number} */
+  micBus;
+
+  // ── Lifecycle ───────────────────────────────────────────────────────────
+
+  /**
+   * Pauses the engine clock: every voice, clip, schedule and `currentTime`
+   * freezes (all contexts). No-op once closed.
+   * @returns {Promise<void>}  already resolved
+   */
+  suspend() {}
+
+  /** Unpauses the engine. No-op once closed. @returns {Promise<void>} */
+  resume() {}
+
+  /**
+   * Stops and removes this context's oscillator voices, stops mic capture
+   * and recording, and pauses the engine.
+   * @returns {Promise<void>}
+   */
+  close() {}
+
+  // ── Node factories ──────────────────────────────────────────────────────
+
+  /** @returns {GainNode} */
+  createGain() {}
+
+  /** Allocates an engine voice (sine, 440 Hz). @returns {OscillatorNode} */
   createOscillator() {}
 
   /**
-   * @returns {GainNode}
+   * Both arrays must be typed arrays or ArrayBuffers (read as float32); the
+   * coefficient count is the shorter length.
+   * @param {Float32Array} real
+   * @param {Float32Array} imag
+   * @param {PeriodicWaveOptions} [options]
+   * @returns {PeriodicWave|null} null with fewer than two arguments or a non-typed array
    */
-  createGain() {}
+  createPeriodicWave(real, imag, options) {}
 
-  /**
-   * Allocates one of the engine's master filter slots (there are 4).
-   * Throws Error("No filter slots available") when they are all taken;
-   * dropping a node releases its slot.
-   * @returns {BiquadFilterNode}
-   */
+  /** See BiquadFilterNode (throws when the 4 slots are taken). @returns {BiquadFilterNode} */
   createBiquadFilter() {}
 
-  /**
-   * @returns {AnalyserNode}
-   */
+  /** @returns {AnalyserNode} */
   createAnalyser() {}
 
+  /** @returns {AudioBufferSourceNode} */
+  createBufferSource() {}
+
   /**
-   * Throws TypeError("Expected MediaStream argument") for anything that
-   * is not a MediaStream; returns undefined with no argument.
+   * Unlike Web Audio, a zero length does not throw.
+   * @param {number} [numberOfChannels=1]  Clamped to 1..32.
+   * @param {number} [length=0]  Frames.
+   * @param {number} [sampleRate=44100]
+   * @returns {AudioBuffer}
+   */
+  createBuffer(numberOfChannels, length, sampleRate) {}
+
+  /** @returns {PannerNode} */
+  createPanner() {}
+
+  /** @returns {StereoPannerNode} */
+  createStereoPanner() {}
+
+  /** @param {number} [maxDelayTime=1] @returns {DelayNode} */
+  createDelay(maxDelayTime) {}
+
+  /** @returns {DynamicsCompressorNode} */
+  createDynamicsCompressor() {}
+
+  /** @returns {WaveShaperNode} */
+  createWaveShaper() {}
+
+  /** @returns {ConvolverNode} */
+  createConvolver() {}
+
+  /** @param {number} [numberOfOutputs=6] @returns {ChannelSplitterNode} */
+  createChannelSplitter(numberOfOutputs) {}
+
+  /** @param {number} [numberOfInputs=6] @returns {ChannelMergerNode} */
+  createChannelMerger(numberOfInputs) {}
+
+  /**
+   * TypeError("Expected MediaStream argument") for anything that is not a
+   * MediaStream; undefined with no argument.
    * @param {MediaStream} stream
    * @returns {MediaStreamAudioSourceNode}
    */
   createMediaStreamSource(stream) {}
 
-  /**
-   * @param {number} maxVoices
-   * @returns {VoiceAllocator}
-   */
+  /** See `audio-engine-api.js`. @param {number} [maxVoices=16] @returns {VoiceAllocator} */
   createVoiceAllocator(maxVoices) {}
 
-  /**
-   * @returns {ModMatrix}
-   */
+  /** The engine-wide matrix; see `audio-engine-api.js`. @returns {ModMatrix} */
   createModMatrix() {}
 
-  /**
-   * @returns {MidiInput}
-   */
+  /** Same as createModMatrix. @returns {ModMatrix} */
+  getModMatrix() {}
+
+  /** See `audio-engine-api.js`. @returns {MidiInput|null} null without an engine */
   createMidiInput() {}
 
   /**
-   * Throws TypeError("Expected VoiceAllocator argument") for anything
-   * that is not a VoiceAllocator; returns undefined with no argument.
+   * TypeError("Expected VoiceAllocator argument") for anything that is not a
+   * VoiceAllocator; undefined with no argument. See `audio-engine-api.js`.
    * @param {VoiceAllocator} allocator
    * @returns {Sequence}
    */
   createSequence(allocator) {}
 
-  suspend() {}
+  // ── Decoding ────────────────────────────────────────────────────────────
 
-  resume() {}
+  /**
+   * Decodes WAV / FLAC / MP3 / Ogg bytes synchronously, resamples to the
+   * engine rate, and returns an already-settled promise of an AudioBuffer.
+   * The AudioBuffer (and the promise object itself, so
+   * `ctx.decodeAudioData(bytes).samples` works without awaiting) also carry
+   * the AudioDecodedBuffer fields. `successCallback` / `errorCallback` are
+   * called before the promise settles. Failure rejects with an Error named
+   * 'EncodingError' — except that bad or undecodable input with NO callbacks
+   * returns null instead of a promise. No argument rejects with an Error
+   * named 'TypeError'.
+   * @param {ArrayBuffer|ArrayBufferView} audioData
+   * @param {function(AudioBuffer): void} [successCallback]
+   * @param {function(Error): void} [errorCallback]
+   * @returns {Promise<AudioBuffer>|null}
+   */
+  decodeAudioData(audioData, successCallback, errorCallback) {}
 
-  close() {}
+  /**
+   * Decodes a file synchronously (resampled to the engine rate).
+   * @param {string} path
+   * @returns {AudioDecodedBuffer|null} null when missing or undecodable
+   */
+  decodeAudioFile(path) {}
 
+  // ── Recording & WAV ─────────────────────────────────────────────────────
+
+  /** Starts capturing the engine's mono output mix. */
   startRecording() {}
 
   /**
-   * @returns {Float32Array|null}
+   * Stops and returns the capture: mono samples at the engine rate, at most
+   * the last 2,646,000 (60 s at 44.1 kHz).
+   * @returns {Float32Array|null} null when nothing was recorded
    */
   stopRecording() {}
 
   /**
-   * Loads WAV/FLAC/MP3/Ogg into a clip. `path` resolves like fs.* (app
-   * directory relative); the clip is resampled to the engine rate.
-   * @param {string} path
-   * @returns {number} clip id, or -1
-   */
-  createClipFromFile(path) {}
-
-  /**
-   * Same as createClipFromFile but decodes on a worker thread. Resolves
-   * with the clip id; rejects with an Error whose message starts with
-   * the resolved path ("<path>: cannot open or decode file ..."). Throws
-   * TypeError synchronously when no path is given.
-   * @param {string} path
-   * @returns {Promise<number>}
-   */
-  createClipFromFileAsync(path) {}
-
-  /**
-   * @param {ArrayBuffer} buffer
-   * @returns {AudioDecodedBuffer|null}
-   */
-  decodeAudioData(buffer) {}
-
-  /**
-   * `path` resolves like fs.*.
-   * @param {string} path
-   * @returns {AudioDecodedBuffer|null}
-   */
-  decodeAudioFile(path) {}
-
-  /**
-   * `path` resolves like fs.* (its directory must exist).
+   * Writes the last recording (call after stopRecording) as WAV.
    * @param {string} path
    * @returns {boolean}
    */
   exportRecordingToWav(path) {}
 
   /**
-   * Writes interleaved float samples as a 16-bit WAV. `path` resolves
-   * like fs.*. Throws TypeError("Expected Float32Array as second
+   * Writes interleaved float samples as a 16-bit WAV. Needs all four
+   * arguments (false otherwise). TypeError("Expected Float32Array as second
    * argument") for a non-typed-array `samples`; false when channels or
    * sampleRate is not positive or the file cannot be written.
    * @param {string} path
@@ -629,370 +1062,35 @@ class AudioContext {
    */
   saveWav(path, samples, channels, sampleRate) {}
 
-  /**
-   * Creates a clip from interleaved float samples (or an AudioBuffer).
-   * When `sampleRate` is given and differs from the engine rate the
-   * samples are resampled, so the clip plays at the right pitch.
-   * @param {Float32Array|AudioBuffer} samples
-   * @param {number} [channels=1]
-   * @param {number} [sampleRate=engine rate]
-   * @returns {number}
-   */
-  createClip(samples, channels, sampleRate) {}
-
-  /**
-   * @param {number} id
-   */
-  deleteClip(id) {}
-
-  /**
-   * @param {number} id
-   * @returns {number}
-   */
-  getClipSampleCount(id) {}
-
-  /**
-   * @param {number} id
-   * @returns {number}
-   */
-  getClipChannels(id) {}
-
-  /**
-   * Min/max pairs for drawing: a Float32Array of `numBins * 2` values,
-   * `[min0, max0, min1, max1, ...]`, zero-filled for an unknown clip.
-   * Returns undefined when `numBins` is missing or outside 1..1024.
-   * @param {number} id
-   * @param {number} numBins
-   * @returns {Float32Array|undefined}
-   */
-  getClipWaveform(id, numBins) {}
-
-  /**
-   * Starts a clip and returns a playback id. A numeric `when` (engine
-   * seconds, from `currentTime`) queues the start on the audio clock so
-   * streamed chunks join gaplessly; a `when` at or before now plays
-   * immediately, as does the 3-argument form.
-   * @param {number} id
-   * @param {number} [gain=1]
-   * @param {boolean} [loop=false]
-   * @param {number} [when]
-   * @returns {number}
-   */
-  playClip(id, gain, loop, when) {}
-
-  /**
-   * Same as `playClip(id, gain, loop, when)` with a required `when`.
-   * @param {number} id
-   * @param {number} when
-   * @param {number} [gain=1]
-   * @param {boolean} [loop=false]
-   * @returns {number}
-   */
-  playClipAt(id, when, gain, loop) {}
-
-  /**
-   * @param {number} id
-   * @param {number} sendBusId
-   * @param {number} amount
-   */
-  setPlaybackSend(id, sendBusId, amount) {}
-
-  /**
-   * Creates a push stream at the engine rate. `ringFrames` is the ring
-   * capacity in frames; 0 (the default) means two seconds.
-   * @param {number} [channels=1]
-   * @param {number} [ringFrames=0]
-   * @returns {number}
-   */
-  createStream(channels, ringFrames) {}
-
-  /**
-   * Pushes interleaved frames. Returns the number of frames written
-   * (less than pushed when the ring is full). Throws TypeError("Expected
-   * Float32Array samples") for a non-typed-array.
-   * @param {number} id
-   * @param {Float32Array} samples
-   * @returns {number}
-   */
-  pushStreamSamples(id, samples) {}
-
-  /**
-   * @param {number} id
-   */
-  closeStream(id) {}
-
-  /**
-   * Streams a file from disk (decoded on a worker). `path` resolves like
-   * fs.*. Options: `ringFrames`, `prebufferFrames` (frames decoded before
-   * playback starts), `loop`, `gain`. Throws TypeError without a path
-   * and Error when the file cannot be opened.
-   * @param {string} path
-   * @param {StreamFromFileOptions} [opts]
-   * @returns {number}
-   */
-  createStreamFromFile(path, opts) {}
-
-  /**
-   * @param {number} id
-   * @returns {StreamStats|null}
-   */
-  getStreamStats(id) {}
-
-  /**
-   * @param {number} id
-   */
-  stopPlayback(id) {}
-
-  /**
-   * @param {number} id
-   * @param {number} gain
-   */
-  setPlaybackGain(id, gain) {}
-
-  /**
-   * @param {number} id
-   * @param {boolean} loop
-   */
-  setPlaybackLoop(id, loop) {}
-
-  /**
-   * @param {number} id
-   * @param {boolean} playing
-   */
-  setPlaybackPlaying(id, playing) {}
-
-  /**
-   * @param {number} id
-   * @param {number} startFrame
-   * @param {number} endFrame
-   */
-  setPlaybackRegion(id, startFrame, endFrame) {}
-
-  /**
-   * @param {number} id
-   * @param {number} rate
-   */
-  setPlaybackRate(id, rate) {}
-
-  /**
-   * @param {number} id
-   * @param {number} pan
-   */
-  setPlaybackPan(id, pan) {}
-
-  /**
-   * @param {number} id
-   * @returns {number}
-   */
-  getPlaybackPosition(id) {}
-
-  /**
-   * @param {number} id
-   * @returns {number}
-   */
-  getPlaybackPositionSeconds(id) {}
-
-  /**
-   * @param {number} id
-   * @param {number} seconds
-   */
-  seekPlayback(id, seconds) {}
-
-  // ── Offline rendering and analysis ──────────────────────────────────────
-
-  /**
-   * Renders `numFrames` through the whole pipeline without a device
-   * (headless use) and returns the latest mono mixdown. With no `out`, a
-   * fresh Float32Array of min(numFrames, analysis ring) frames; with a
-   * typed-array `out`, that array filled in place (up to its length) and
-   * returned. Undefined for a missing or non-positive `numFrames`.
-   * @param {number} numFrames
-   * @param {Float32Array} [out]
-   * @returns {Float32Array|undefined}
-   */
-  renderBlock(numFrames, out) {}
-
-  /**
-   * Magnitude spectrum of the latest output, `numBins` values (1..8192;
-   * undefined outside that range).
-   * @param {number} numBins
-   * @returns {Float32Array|undefined}
-   */
-  getSpectrum(numBins) {}
-
-  // ── Wavetables ──────────────────────────────────────────────────────────
-
-  /**
-   * Builds a band-limited wavetable bank at the engine sample rate.
-   * @param {string} type "saw" | "square" | "triangle"
-   * @returns {number|undefined} bank id, or undefined for any other type
-   */
-  createWavetable(type) {}
-
-  /**
-   * Builds a bank from one cycle of a waveform (the whole array is the
-   * cycle) at the engine sample rate. Throws TypeError("Expected
-   * Float32Array") for a non-typed-array.
-   * @param {Float32Array} waveform
-   * @returns {number}
-   */
-  createWavetableFromWaveform(waveform) {}
-
-  /**
-   * @param {number} bankId
-   */
-  deleteWavetable(bankId) {}
-
-  /**
-   * Assigns a bank to a voice and switches the voice to "wavetable" in
-   * one call (a bank on a voice still set to "sine" would be inaudible).
-   * @param {number} voiceId
-   * @param {number} bankId
-   */
-  setVoiceWavetable(voiceId, bankId) {}
-
-  // ── Bus effect order and master effect shortcuts ────────────────────────
-
-  /**
-   * Reorders a bus's effect chain. `order` lists slot names ("filter",
-   * "delay", "compressor", "reverb", "chorus", "distortion", "eq") in
-   * processing order; an unknown name keeps that position's default
-   * slot. Arrays that are empty or longer than the 7 slots are ignored.
-   * @param {number} busId
-   * @param {Array<string>} order
-   */
-  setBusEffectOrder(busId, order) {}
-
-  /**
-   * @param {number} busId
-   * @param {number} seconds
-   */
-  setBusChorusBaseDelay(busId, seconds) {}
-
-  /**
-   * @param {number} busId
-   * @returns {number}
-   */
-  getBusChorusBaseDelay(busId) {}
-
-  /** Master-bus chorus (bus 0) shortcuts. */
-  /** @param {boolean} enabled */
-  setChorusEnabled(enabled) {}
-  /** @param {number} hz */
-  setChorusRate(hz) {}
-  /** @param {number} depth */
-  setChorusDepth(depth) {}
-  /** @param {number} mix */
-  setChorusMix(mix) {}
-  /** @param {number} feedback */
-  setChorusFeedback(feedback) {}
-  /** @param {number} seconds */
-  setChorusBaseDelay(seconds) {}
-
-  /** Master-bus compressor (bus 0) shortcuts. */
-  /** @param {boolean} enabled */
-  setCompressorEnabled(enabled) {}
-  /** @param {number} dB */
-  setCompressorThreshold(dB) {}
-  /** @param {number} ratio */
-  setCompressorRatio(ratio) {}
-  /** @param {number} seconds */
-  setCompressorAttack(seconds) {}
-  /** @param {number} seconds */
-  setCompressorRelease(seconds) {}
-
-  // ── Presets ─────────────────────────────────────────────────────────────
-  // Presets are plain objects on the JS side and JSON strings on disk.
-  // The *ToJson functions take an object and return the JSON string
-  // (null with no argument); the *FromJson functions parse a JSON string
-  // back into an object (null with no argument). The apply* functions
-  // take objects. savePreset / loadPreset move JSON strings to and from
-  // files through the fs.* path resolver.
-
-  /**
-   * @param {VoicePreset} preset
-   * @returns {string|null}
-   */
-  voicePresetToJson(preset) {}
-
-  /**
-   * @param {string} json
-   * @returns {VoicePreset|null}
-   */
-  voicePresetFromJson(json) {}
-
-  /**
-   * @param {BusPreset} preset
-   * @returns {string|null}
-   */
-  busPresetToJson(preset) {}
-
-  /**
-   * @param {string} json
-   * @returns {BusPreset|null}
-   */
-  busPresetFromJson(json) {}
-
-  /**
-   * @param {ModPreset} preset
-   * @returns {string|null}
-   */
-  modPresetToJson(preset) {}
-
-  /**
-   * @param {string} json
-   * @returns {ModPreset|null}
-   */
-  modPresetFromJson(json) {}
-
-  /**
-   * @param {EnginePreset} preset
-   * @returns {string|null}
-   */
-  enginePresetToJson(preset) {}
-
-  /**
-   * @param {string} json
-   * @returns {EnginePreset|null}
-   */
-  enginePresetFromJson(json) {}
-
-  /**
-   * @param {number} voiceId
-   * @param {VoicePreset} preset
-   */
-  applyVoicePreset(voiceId, preset) {}
-
-  /**
-   * @param {number} busId
-   * @param {BusPreset} preset
-   */
-  applyBusPreset(busId, preset) {}
-
-  /**
-   * @param {ModPreset} preset
-   */
-  applyModPreset(preset) {}
-
-  /**
-   * @param {EnginePreset} preset
-   */
-  applyEnginePreset(preset) {}
-
-  /**
-   * Writes a preset's JSON string to `path` (resolved like fs.*).
-   * @param {string} json
-   * @param {string} path
-   * @returns {boolean}
-   */
-  savePreset(json, path) {}
-
-  /**
-   * Reads a preset's JSON string from `path` (resolved like fs.*).
-   * @param {string} path
-   * @returns {string|null} null when the file is missing or empty
-   */
-  loadPreset(path) {}
-
 }
 
+// ── Microphone ───────────────────────────────────────────────────────────────
+
+/**
+ * Starts engine mic capture (default device) and resolves with a MediaStream
+ * for `ctx.createMediaStreamSource`. The constraints are ignored. Rejects
+ * with Error("Failed to access microphone") when capture cannot start.
+ *
+ * Capture feeds the mic analysis ring (AnalyserNode `source` 1 / 2) and every
+ * `bro.mic` tap. It is not heard unless `ctx.micMuted = false` (then at
+ * `ctx.micMonitorGain`, on `ctx.micBus`). `ctx.close()` stops capture.
+ * The same function is also the global `__nativeGetUserMedia`.
+ *
+ * For fixed-size PCM chunks at a chosen rate (speech, ML, level meters) use
+ * `bro.mic` instead: `bro.mic.start({ chunkFrames, targetRate, agc, live,
+ * samples, onChunk, ... })`, `stop`, `isActive`, `engineRate`, `stats`,
+ * `levels`, `feed` and `drain` (deliver pending chunks now, instead of
+ * waiting for the once-per-frame drain). See `mic-api.js`.
+ *
+ * @example
+ *   const ctx = new AudioContext();
+ *   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+ *   const an = ctx.createAnalyser();
+ *   ctx.createMediaStreamSource(stream).connect(an);   // an.source becomes 1
+ *   const buf = new Float32Array(an.fftSize);
+ *   an.getFloatTimeDomainData(buf);
+ *
+ * @param {MediaStreamConstraints} [constraints]
+ * @returns {Promise<MediaStream>}
+ */
+navigator.mediaDevices.getUserMedia = function(constraints) {};

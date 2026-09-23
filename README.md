@@ -166,7 +166,7 @@ Annotated `.js` files in [docs/](docs/), hand-maintained alongside the bindings 
 
 **Graphics & world.** `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `mesh-io-api.js`, `mesh-plants-api.js`, `rigging-api.js`, `terrain-api.js`, `clipmap-api.js`, `tile-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`, `canvas-api.js`, `webgl2-api.js`.
 
-**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web-animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `image-gpu-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `net-api.js`, `intl-api.js`; settings are in [settings.md](docs/settings.md).
+**Web & app surface.** `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web-animations-api.js`, `events-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `image-gpu-api.js`, `imagebitmap-api.js`, `media-api.js`, `audio-api.js`, `audio-engine-api.js`, `net-api.js`, `intl-api.js`; settings are in [settings.md](docs/settings.md).
 
 **On-device AI.** `gpu-api.js`, `tensor-api.js`, `tensor-nn-api.js`, `lm-api.js`, `diffusion-api.js`, `diffusion-control-api.js`, `vision-api.js`, `triposplat-api.js`, `motion-api.js`, `tts-api.js`, `stt-api.js`, `diar-api.js`, `rave-api.js`, `wake-api.js`, `kws-api.js`, `mic-api.js`, `sense-api.js`, `gesture-api.js`, `listen-api.js`.
 

@@ -84,7 +84,8 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 
 | File | Surface |
 |------|---------|
-| `audio-api.js` | `AudioContext`, Web-Audio-style nodes, synth, sequencing, spatial, buses |
+| `audio-api.js` | `AudioContext` Web-Audio half: nodes, params, buffers, listener, decoding, `getUserMedia`; how it maps onto broaudio |
+| `audio-engine-api.js` | `AudioContext` engine half: clips, playbacks, streams, voices, buses + effects, presets; VoiceAllocator, ModMatrix, MidiInput, Sequence |
 | `mesh-api.js` | `bro.mesh`: the `Mesh` container, primitives, CSG, simplify/subdivide/smooth, analysis, `MeshBVH` |
 | `mesh-io-api.js` | `bro.mesh` IO half: loaders/savers, Draco, splat clouds, isosurface + voxel statics, `PolyMesh`, `SDFGraph` |
 | `mesh-plants-api.js` | `bro.mesh` procedural half: sweeps, leaf/flower cards, branch trees, scattering, `CapsuleField`, `LSystem` |
