@@ -33,9 +33,12 @@ int gamepadResolveIndex(Value arg, int (*fromName)(const std::string&)) {
 
 void installHeadlessInput(engine::Engine& engine) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
-    Value gObj = gt.found && ev::isObject(gt.value) ? gt.value : Value::fromUndefined();
+    // Rooted: every registration below allocates (the function, and
+    // registerGlobal's define on the live realms).
+    const Rooted gObj(gt.found && ev::isObject(gt.value) ? gt.value : Value::fromUndefined());
 
-    auto regBoth = [&](const char* name, Value val) {
+    auto regBoth = [&](const char* name, Value valIn) {
+        const Rooted val(valIn);
         ev::registerGlobal(name, val);
         if (ev::isObject(gObj)) {
             ev::setProperty(gObj, name, val);

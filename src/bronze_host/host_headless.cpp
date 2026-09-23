@@ -57,7 +57,7 @@ void setTestFailure(bool failed) {
 void setScriptArgs(const std::vector<std::string>& args) {
     s_scriptArgs = args;
     if (isWebHostGlobalsInstalled()) {
-        Value val = makeScriptArgsValue();
+        const Rooted val(makeScriptArgsValue());  // registerGlobal allocates
         ev::registerGlobal("scriptArgs", val);
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && ev::isObject(gt.value)) {
@@ -72,9 +72,12 @@ void installHeadlessGlobals(engine::Engine& engine) {
     installHeadlessTestHooks(engine);
 
     ev::GlobalValue gt = ev::globalValue("globalThis");
-    Value gObj = gt.found && ev::isObject(gt.value) ? gt.value : Value::fromUndefined();
+    // Rooted: every registration below allocates (the function, and
+    // registerGlobal's define on the live realms).
+    const Rooted gObj(gt.found && ev::isObject(gt.value) ? gt.value : Value::fromUndefined());
 
-    auto regBoth = [&](const char* name, Value val) {
+    auto regBoth = [&](const char* name, Value valIn) {
+        const Rooted val(valIn);
         ev::registerGlobal(name, val);
         if (ev::isObject(gObj)) {
             ev::setProperty(gObj, name, val);
@@ -171,7 +174,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
         [](Value, std::span<const Value> a) {
             std::vector<std::string> paths;
             if (!a.empty()) {
-                Value v = a[0];
+                const Value& v = a[0];  // the rooted slot, current across the reads
                 if (ev::isString(v)) {
                     paths.push_back(ev::toUtf8(v));
                 } else if (ev::isObject(v)) {
