@@ -7,6 +7,7 @@
 #include "scene/agent_binding.h"
 #include "physics/physics_world.h"
 
+#include <brogameagent/api.h>
 #include <brogameagent/brogameagent.h>
 #include <brogameagent/capability.h>
 #include <brogameagent/policy.h>
@@ -22,100 +23,15 @@ namespace bro::bronze_host {
 using namespace brogameagent::api;
 
 // ---------------------------------------------------------------------------
-// Custom Capability Registry
-// ---------------------------------------------------------------------------
-
-struct CustomCapSpec {
-    uint32_t id = 0;
-    std::string name;
-    ev::Persistent gateFn;
-    ev::Persistent startFn;
-    ev::Persistent advanceFn;
-};
-
-struct CapRegistry {
-    uint32_t nextId = 100;
-    std::unordered_map<std::string, std::shared_ptr<CustomCapSpec>> byName;
-    std::unordered_map<uint32_t, std::shared_ptr<CustomCapSpec>> byId;
-};
-
-static CapRegistry& capRegistry() {
-    static CapRegistry reg;
-    return reg;
-}
-
-class BronzeCapability : public brogameagent::Capability {
-public:
-    explicit BronzeCapability(std::shared_ptr<CustomCapSpec> spec) : spec_(std::move(spec)) {}
-    int id() const override { return static_cast<int>(spec_->id); }
-    const char* name() const override { return spec_->name.c_str(); }
-
-    bool gate(const brogameagent::CapContext&) const override {
-        if (ev::isUndefined(spec_->gateFn.get()) || ev::isNull(spec_->gateFn.get())) return true;
-        auto r = ev::call(spec_->gateFn.get(), ev::undefined(), {});
-        return (!r.thrown && ev::toBool(r.value));
-    }
-
-    void start(const brogameagent::CapContext&, brogameagent::Action& a) override {
-        if (!ev::isUndefined(spec_->startFn.get()) && !ev::isNull(spec_->startFn.get())) {
-            ev::call(spec_->startFn.get(), ev::undefined(), {});
-        }
-        a.elapsed = 0.0f;
-        a.done = (a.dur <= 0.0f);
-    }
-
-    void advance(const brogameagent::CapContext&, brogameagent::Action& a, float dt) override {
-        a.elapsed += dt;
-        if (!ev::isUndefined(spec_->advanceFn.get()) && !ev::isNull(spec_->advanceFn.get())) {
-            auto r = ev::call(spec_->advanceFn.get(), ev::undefined(), {});
-            if (!r.thrown && ev::isBool(r.value)) a.done = ev::toBool(r.value);
-        } else if (a.elapsed >= a.dur) {
-            a.done = true;
-        }
-    }
-
-private:
-    std::shared_ptr<CustomCapSpec> spec_;
-};
-
-void installRegisterCapability(ObjectBuilder& b) {
-    b.def("registerCapability", 2, [](Value, std::span<const Value> a) -> Value {
-        if (a.size() < 2 || !ev::isString(a[0]) || !ev::isObject(a[1])) {
-            return ev::throwTypeError("registerCapability(name, spec)");
-        }
-        std::string name = ev::toUtf8(a[0]);
-        if (name.empty()) return ev::throwTypeError("capability name required");
-
-        auto& reg = capRegistry();
-        auto spec = std::make_shared<CustomCapSpec>();
-        spec->name = name;
-
-        ev::Persistent specRoot(a[1]);
-        Value idVal = ev::getProperty(specRoot.get(), "id");
-        if (ev::isNumber(idVal)) {
-            spec->id = static_cast<uint32_t>(ev::toDouble(idVal));
-        } else {
-            spec->id = reg.nextId++;
-        }
-
-        Value gv = ev::getProperty(specRoot.get(), "gate");
-        if (ev::isFunction(gv)) spec->gateFn = ev::Persistent(gv);
-        Value sv = ev::getProperty(specRoot.get(), "start");
-        if (ev::isFunction(sv)) spec->startFn = ev::Persistent(sv);
-        Value av = ev::getProperty(specRoot.get(), "advance");
-        if (ev::isFunction(av)) spec->advanceFn = ev::Persistent(av);
-
-        reg.byName[name] = spec;
-        reg.byId[spec->id] = spec;
-        return ev::fromDouble(spec->id);
-    });
-}
-
-// ---------------------------------------------------------------------------
 // Helpers: Builtin & Custom Capabilities, Lane Waypoints
+//
+// JS-authored capabilities live in brogameagent's registry
+// (bro.ai.game.registerCapability); a name from opts.capabilities that is not
+// a built-in becomes brogameagent::api::makeRegisteredCapability(name), whose
+// gate/start/advance/cancel call the registered spec's functions.
 // ---------------------------------------------------------------------------
 
-static void addBuiltinByName(brogameagent::CapabilitySet& set, const std::string& name) {
+static bool addBuiltinByName(brogameagent::CapabilitySet& set, const std::string& name) {
     using namespace brogameagent;
     if (name == "move_to")           set.add(makeMoveToCapability());
     else if (name == "lane_walk")    set.add(makeLaneWalkCapability());
@@ -123,25 +39,32 @@ static void addBuiltinByName(brogameagent::CapabilitySet& set, const std::string
     else if (name == "cast_ability") set.add(makeCastAbilityCapability());
     else if (name == "flee")         set.add(makeFleeCapability());
     else if (name == "hold")         set.add(makeHoldCapability());
+    else return false;
+    return true;
 }
 
-static void parseCapabilitiesList(Value arr, brogameagent::CapabilitySet& set) {
-    if (!ev::isObject(arr)) return;
+// A name that is neither a built-in nor registered on this thread is an
+// error: silently dropping it leaves an agent that never does what the
+// caller listed.
+static bool parseCapabilitiesList(Value arr, brogameagent::CapabilitySet& set, std::string& unknown) {
+    if (!ev::isObject(arr)) return true;
     ev::Persistent root(arr);
     Value lenVal = ev::getProperty(root.get(), "length");
-    if (!ev::isNumber(lenVal)) return;
+    if (!ev::isNumber(lenVal)) return true;
     uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
     for (uint32_t i = 0; i < len; ++i) {
         Value v = ev::getElement(root.get(), i);
-        if (ev::isString(v)) {
-            std::string name = ev::toUtf8(v);
-            addBuiltinByName(set, name);
-            auto it = capRegistry().byName.find(name);
-            if (it != capRegistry().byName.end()) {
-                set.add(std::make_unique<BronzeCapability>(it->second));
-            }
+        if (!ev::isString(v)) continue;
+        std::string name = ev::toUtf8(v);
+        if (addBuiltinByName(set, name)) continue;
+        if (auto cap = makeRegisteredCapability(name)) {
+            set.add(std::move(cap));
+            continue;
         }
+        unknown = std::move(name);
+        return false;
     }
+    return true;
 }
 
 static void parseLaneWaypoints(Value arr, brogameagent::CapabilitySet& set) {
@@ -323,15 +246,17 @@ static void ensureSelfProxyClassInstalled() {
         b.def("useCapability", 1, [](Value self_, std::span<const Value> a) -> Value {
             auto* sp = selfProxyCellOf(self_);
             if (!sp || !sp->binding || a.empty()) return ev::undefined();
-            std::string name = ev::toUtf8(a[0]);
-            auto it = capRegistry().byName.find(name);
-            if (it != capRegistry().byName.end()) {
-                auto& act = sp->binding->pending();
-                act = brogameagent::Action{};
-                act.capId = it->second->id;
-                if (a.size() >= 2) act.i0 = static_cast<int32_t>(ev::toDouble(a[1]));
-                if (a.size() >= 3) act.i1 = static_cast<int32_t>(ev::toDouble(a[2]));
+            if (!ev::isString(a[0])) return ev::throwTypeError("useCapability(name, arg0?, arg1?): name must be a string");
+            const int id = registeredCapabilityId(ev::toUtf8(a[0]));
+            if (id < 0) {
+                return ev::throwTypeError("useCapability: \"" + ev::toUtf8(a[0]) +
+                                          "\" is not registered with bro.ai.game.registerCapability");
             }
+            auto& act = sp->binding->pending();
+            act = brogameagent::Action{};
+            act.capId = id;
+            if (a.size() >= 2 && ev::isNumber(a[1])) act.i0 = static_cast<int32_t>(ev::toDouble(a[1]));
+            if (a.size() >= 3 && ev::isNumber(a[2])) act.i1 = static_cast<int32_t>(ev::toDouble(a[2]));
             return ev::undefined();
         });
 
@@ -474,7 +399,13 @@ void installSceneNodeAgent(ObjectBuilder& b) {
             Value capsVal = ev::getProperty(opts.get(), "capabilities");
             if (ev::isObject(capsVal)) {
                 explicitList = true;
-                parseCapabilitiesList(capsVal, binding->capabilities());
+                std::string unknown;
+                if (!parseCapabilitiesList(capsVal, binding->capabilities(), unknown)) {
+                    g->detachAgentBinding(node);
+                    return ev::throwTypeError("attachAgent: unknown capability \"" + unknown +
+                                              "\" (not a built-in, and not registered with "
+                                              "bro.ai.game.registerCapability on this thread)");
+                }
             }
 
             Value hzVal = ev::getProperty(opts.get(), "thinkHz");

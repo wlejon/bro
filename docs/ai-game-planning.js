@@ -669,44 +669,75 @@ const s5 = bro.ai.game.steer.evade(
 //   "flee", self.flee([x, z]); retreats away from nearest enemy
 //   "hold", self.hold([dur]); no-op for dur seconds (always exposed)
 //
-// A `self` proxy is built fresh each think tick. It only exposes methods
-// whose capability is present on the binding, towers won't have .moveTo.
+// A `self` proxy is built fresh each think tick. Every proxy has every
+// method, but choosing a capability the binding's list doesn't contain is a
+// no-op: the binding finds no such capability and the agent decides again on
+// its next think. A tower listed with ["basic_attack", "hold"] can call
+// self.moveTo(), and nothing moves.
 //
-// Custom capabilities (registerCapability, below) have no dedicated
-// self.<name>() accessor of their own, invoke them with:
+// Whatever think() picks is checked against that capability's gate() first;
+// a gate that answers false drops the choice the same way (a basic_attack on
+// cooldown, a cast with no ready slot, a custom gate returning false).
+//
+// Custom capabilities (registerCapability, below) have no self.<name>()
+// accessor of their own. Invoke them with
 //   self.useCapability(name, arg0?, arg1?)
-// exposed whenever the binding's capabilities list contains at least one
-// registerCapability'd id. arg0/arg1 land in the capability's Action as
-// i0/i1 (same slots self.attack/self.cast use for target/slot ids) but
-// aren't visible to gate/start/advance below. Read them via a JS-side
-// closure handoff instead, same as self.attack/self.cast's targets aren't
-// passed to the *native* capability callbacks either.
+// which throws a TypeError for a name that isn't registered. arg0/arg1 must
+// be numbers (they're truncated to integers; -1 when omitted) and are passed
+// to the spec's start(arg0, arg1). The capability must also be in the
+// binding's opts.capabilities list, by name, for the choice to run.
 
 
 /**
  * Register a JS-authored capability. Returns the assigned capability id.
- * Callbacks run from C++; keep them fast. `start` is invoked when the
- * capability is chosen; `advance` each frame while it's in flight; `gate`
- * when building the available-capability mask (optional, default true).
+ * The callbacks run synchronously inside the scene's agent step, on the
+ * thread that registered the capability; keep them fast. Every callback is
+ * called with `this` = the spec object, so a spec can keep its own state on
+ * itself. The binding looks the spec up by name on every call, so
+ * registering the same name again replaces the behaviour for every binding
+ * that lists it (and keeps the name's id).
  *
- * @param {string} name
+ *   gate()                 before start(); false (or a throw) drops the
+ *                          choice. Omitted = always available.
+ *   start(arg0, arg1)      when think() picks the capability. arg0/arg1 are
+ *                          useCapability's integers, -1 when omitted. A throw
+ *                          ends the action at once.
+ *   advance(dt, elapsed)   every frame while the action is in flight: dt is
+ *                          this frame's step in seconds, elapsed the seconds
+ *                          since start. Return true when done, false to keep
+ *                          going; any other return keeps it going until the
+ *                          action's duration runs out (0 for useCapability,
+ *                          so it ends that frame). A throw ends the action.
+ *                          Without an advance the action ends right after
+ *                          start().
+ *   cancel()               the binding was torn down (node.detachAgent, the
+ *                          node destroyed) while the action was in flight.
+ *
+ * Only gate/start/advance/cancel are read, and each must be a function or
+ * absent (anything else is a TypeError).
+ *
+ * @param {string} name       - non-empty; also the name used in
+ *                              opts.capabilities and self.useCapability
  * @param {Object} spec
  * @param {function} [spec.gate]     - () => boolean
- * @param {function} [spec.start]    - () => void
- * @param {function} [spec.advance]  - () => boolean (true = done)
- * @param {number}   [spec.id]       - optional explicit id (default: auto-allocated from 100+)
+ * @param {function} [spec.start]    - (arg0: number, arg1: number) => void
+ * @param {function} [spec.advance]  - (dt: number, elapsed: number) => boolean
+ * @param {function} [spec.cancel]   - () => void
+ * @param {number}   [spec.id]       - explicit id, an integer >= 100 that no
+ *                                     other name uses (RangeError otherwise).
+ *                                     Default: auto-allocated from 100 up.
  * @returns {number} capability id
- *
- * LIMITATION, current build: the registration allocates and returns an id but
- * does NOT store `gate` / `start` / `advance` — the callbacks are never
- * invoked. Treat this as id allocation only, and drive custom behaviour from
- * the binding's own think() for now.
  */
 bro.ai.game.registerCapability("kite", {
-    gate()    { return true; },
-    start()   { /* ... */ },
-    advance() { return true; /* done this tick */ },
+    fired: 0,
+    gate()    { return this.fired < 3; },
+    start(targetId, _unused) { this.fired++; this.target = targetId; },
+    advance(dt, elapsed)     { return elapsed >= 0.5; },   // half a second
+    cancel()  { this.target = -1; },
 });
+
+// In think(self, world): self.useCapability("kite", enemy.id);
+// with "kite" in the binding's opts.capabilities.
 
 
 // -----------------------------------------------------------------------------
@@ -739,7 +770,10 @@ scene.detachAIWorld();
  * @param {AIWorld} world
  * @param {AIAgent} agent
  * @param {Object}  [opts]
- * @param {string[]} [opts.capabilities] - ids of enabled caps (default: all built-ins)
+ * @param {string[]} [opts.capabilities] - names of enabled caps: built-ins and
+ *                                         registerCapability'd names (default: all
+ *                                         built-ins). Register custom ones first; an
+ *                                         unknown name is a TypeError.
  * @param {function(self, world): void} [opts.think] - imperative decision fn
  * @param {number}  [opts.thinkHz=15]
  * @param {number}  [opts.yOffset=0]    - node Y (absolute), or clearance above

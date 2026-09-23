@@ -77,7 +77,11 @@ void AgentBinding::step(brogameagent::World* world, float dt, float nowSec) {
             next.capId = brogameagent::kCapHold;
         }
 
-        if (auto* cap = capSet_.get(next.capId)) {
+        // gate() is the guard before start(): a chosen capability whose
+        // gate fails is dropped, and the agent decides again next think.
+        auto* cap = capSet_.get(next.capId);
+        if (cap && !cap->gate(ctx)) cap = nullptr;
+        if (cap) {
             cap->start(ctx, next);
             current_ = next;
         } else {

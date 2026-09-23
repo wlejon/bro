@@ -338,7 +338,6 @@ inline bool terrainSampleHeight(HostTerrainCell* cell, float x, float z,
 
 void installSceneGraphAgent(ObjectBuilder& b);
 void installSceneNodeAgent(ObjectBuilder& b);
-void installRegisterCapability(ObjectBuilder& b);
 
 }  // namespace bro::bronze_host
 
