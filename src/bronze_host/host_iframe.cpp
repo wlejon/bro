@@ -65,10 +65,12 @@ Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
     };
 
     traps.set = [scopeId](const std::string& key, Value v) {
+        // Rooted: globalValue may allocate (embed.h) before the write.
+        ev::Persistent value(v);
         enterRealmScope(scopeId);
         ev::GlobalValue g = ev::globalValue("globalThis");
         if (g.found && ev::isObject(g.value)) {
-            ev::setProperty(g.value, key, v);
+            ev::setProperty(g.value, key, value.get());
         }
         exitRealmScope();
     };
@@ -91,20 +93,25 @@ Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
     traps.ownKeys = [scopeId]() -> std::vector<std::string> {
         std::vector<std::string> keys = {"document", "frameElement", "window", "self", "parent", "top"};
         enterRealmScope(scopeId);
+        // Each value rooted before the next lookup: globalValue, getProperty,
+        // call and getElement may all allocate.
         ev::GlobalValue gt = ev::globalValue("globalThis");
         if (gt.found && ev::isObject(gt.value)) {
+            ev::Persistent global(gt.value);
             ev::GlobalValue objG = ev::globalValue("Object");
             if (objG.found && ev::isObject(objG.value)) {
-                Value getOwnPropertyNamesFn = ev::getProperty(objG.value, "getOwnPropertyNames");
-                if (ev::isFunction(getOwnPropertyNamesFn)) {
-                    Value arg = gt.value;
-                    ev::CallResult res = ev::call(getOwnPropertyNamesFn, objG.value, std::span<const Value>(&arg, 1));
+                ev::Persistent objectNs(objG.value);
+                ev::Persistent namesFn(ev::getProperty(objectNs.get(), "getOwnPropertyNames"));
+                if (ev::isFunction(namesFn.get())) {
+                    const Value arg = global.get();
+                    ev::CallResult res = ev::call(namesFn.get(), objectNs.get(), std::span<const Value>(&arg, 1));
                     if (!res.thrown && ev::isObject(res.value)) {
-                        Value lenVal = ev::getProperty(res.value, "length");
-                        int len = static_cast<int>(ev::toDouble(lenVal));
+                        ev::Persistent names(res.value);
+                        Value lenVal = ev::getProperty(names.get(), "length");
+                        int len = ev::isNumber(lenVal) ? static_cast<int>(ev::toDouble(lenVal)) : 0;
                         for (int i = 0; i < len; ++i) {
-                            Value k = ev::getElement(res.value, i);
-                            keys.push_back(ev::toUtf8(k));
+                            Value k = ev::getElement(names.get(), i);
+                            if (ev::isString(k)) keys.push_back(ev::toUtf8(k));
                         }
                     }
                 }
@@ -251,12 +258,16 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     };
     setDocumentGlobal(hostDocumentValue(subDoc));
 
+    // Module and classic scripts alike, in document order, as the main
+    // document runs its scripts (Engine::initAppRealm). Every script is
+    // compiled as a bronze module, so a module script needs nothing extra:
+    // its imports resolve against its own file, or against the frame's
+    // document for an inline one (the "<inline>" name sits in basePath), and
+    // the realm's module registry evaluates a module that two scripts import
+    // once. Each script is its own unit, so a module's top-level bindings stay
+    // in its own scope.
+    (void)appDir;
     for (const auto& s : scripts) {
-        if (s.isModule) {
-            LOG_WARN("subdoc '%s': <script type=module> not yet supported, skipping",
-                     appDir.c_str());
-            continue;
-        }
         std::string code = s.isInline() ? s.code : engine::AppLoader::loadFile(s.path);
         if (code.empty()) continue;
         std::string fname = s.isInline() ? (basePath + "/<inline>") : s.path;
@@ -269,32 +280,27 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     exitRealmScope();
 }
 
-void triggerPanelsReady(dom::Document* doc) {
+namespace {
+// globalThis.<hook>() in the document's realm. The global is rooted across
+// the property read (a getter may allocate) so the call's receiver is current.
+void callRealmHook(dom::Document* doc, const char* hook) {
     if (!doc) return;
     uint64_t scopeId = scopeIdForDocument(doc);
     enterRealmScope(scopeId);
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
-        Value fn = ev::getProperty(gt.value, "__onPanelsReady");
-        if (ev::isFunction(fn)) {
-            ev::call(fn, gt.value, {});
+        ev::Persistent global(gt.value);
+        ev::Persistent fn(ev::getProperty(global.get(), hook));
+        if (ev::isFunction(fn.get())) {
+            ev::call(fn.get(), global.get(), {});
         }
     }
     exitRealmScope();
 }
+}  // namespace
 
-void triggerSplashDismiss(dom::Document* doc) {
-    if (!doc) return;
-    uint64_t scopeId = scopeIdForDocument(doc);
-    enterRealmScope(scopeId);
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) {
-        Value fn = ev::getProperty(gt.value, "__onDismiss");
-        if (ev::isFunction(fn)) {
-            ev::call(fn, gt.value, {});
-        }
-    }
-    exitRealmScope();
-}
+void triggerPanelsReady(dom::Document* doc) { callRealmHook(doc, "__onPanelsReady"); }
+
+void triggerSplashDismiss(dom::Document* doc) { callRealmHook(doc, "__onDismiss"); }
 
 } // namespace bro::bronze_host

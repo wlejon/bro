@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><style> body { margin: 0; } </style></head>
+<body>
+  <div id="out">pending</div>
+  <script>
+    // A classic script first: module scripts run in document order with it,
+    // the way the main document runs its scripts.
+    window.__order = ['classic'];
+  </script>
+  <script type="module">
+    // An inline module: its relative import resolves against this document.
+    import { greet, counter } from './lib.js';
+    const tag = 'inline';                       // module scope, not a global
+    window.__order.push(tag);
+    window.__greeting = greet('frame');
+    window.__counterAfterInline = counter.n;
+    window.__hasModuleScopeLeak = typeof globalThis.tag !== 'undefined';
+    document.getElementById('out').textContent = window.__greeting;
+  </script>
+  <script type="module" src="entry.js"></script>
+</body>
+</html>

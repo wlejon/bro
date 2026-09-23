@@ -7,6 +7,11 @@
  * sub-documents with independent JS realms, DOM trees, CSS cascades, timers,
  * and GPU surfaces.
  *
+ * The sub-document's `<script>` tags run in document order as the main
+ * document's do, `<script type="module">` included: inline and `src=` modules
+ * resolve their relative imports against the sub-document's folder, and a
+ * module may use top-level `await`.
+ *
  * @example
  *   // Create dynamic iframe and capture its rendered output
  *   const frame = document.createElement('iframe');
