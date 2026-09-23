@@ -40,6 +40,15 @@ bro.net.host = function(port, callback) {};
 
 bro.net.unhost = function() {};
 
+/** Alias of unhost(): stop listening. */
+bro.net.closeHost = function() {};
+
+/**
+ * Whether host() is listening.
+ * @returns {boolean}
+ */
+bro.net.isHosting = function() {};
+
 /**
  * @param {string} address
  * @param {number} port

@@ -483,3 +483,421 @@ bro.math.hashU32 = function(x) {};
  */
 bro.math.cellHash = function(x, y, z) {};
 
+/**
+ * Hash a position's cell (of side cellSize) into a bucket index in
+ * [0, bucketCount). A bucketCount of 0 gives 0.
+ *
+ * @param {Vec3Like} p
+ * @param {number} cellSize
+ * @param {number} bucketCount
+ * @returns {number}
+ */
+bro.math.positionToCell = function(p, cellSize, bucketCount) {};
+
+// ── Shared shapes for the geometry helpers below ────────────────────────────
+
+/**
+ * A 3D point or vector: an {x, y, z} object or an [x, y, z] array. A
+ * non-object where a vector is expected is a TypeError ("expected vector").
+ * @typedef {{x:number,y:number,z:number}|number[]} Vec3Like
+ */
+
+/**
+ * A ray hit. `t` is in units of the ray direction (pass a unit direction for
+ * a Euclidean distance); `point` = origin + direction * t.
+ * @typedef {Object} MathRayHit
+ * @property {number} t
+ * @property {{x:number,y:number,z:number}} point
+ * @property {{x:number,y:number,z:number}} normal
+ */
+
+/**
+ * A 2D grid footprint for the grid* helpers: `origin` is the world XY of
+ * cell (0, 0)'s corner ({x, y} or [x, y]), `width` columns by `depth` rows of
+ * side `cellSize`.
+ * @typedef {Object} MathGrid2D
+ * @property {{x:number,y:number}|number[]} origin
+ * @property {number} cellSize
+ * @property {number} width
+ * @property {number} depth
+ */
+
+// ── Curves ──────────────────────────────────────────────────────────────────
+
+/**
+ * CSS cubic-bezier easing: the curve through (0,0), (p1x,p1y), (p2x,p2y),
+ * (1,1), sampled at x in [0, 1] (t is solved from x by Newton iteration).
+ * Returns 0 with fewer than 5 arguments.
+ *
+ * @param {number} p1x
+ * @param {number} p1y
+ * @param {number} p2x
+ * @param {number} p2y
+ * @param {number} x
+ * @returns {number}
+ */
+bro.math.cubicEase = function(p1x, p1y, p2x, p2y, x) {};
+
+/**
+ * Cubic Bezier point at t through control points p0..p3.
+ *
+ * @param {Vec3Like} p0
+ * @param {Vec3Like} p1
+ * @param {Vec3Like} p2
+ * @param {Vec3Like} p3
+ * @param {number} t
+ * @returns {{x:number,y:number,z:number}|null}  null with fewer than 5 arguments.
+ */
+bro.math.bezier = function(p0, p1, p2, p3, t) {};
+
+/**
+ * Derivative (unnormalised tangent) of the cubic Bezier at t.
+ *
+ * @param {Vec3Like} p0
+ * @param {Vec3Like} p1
+ * @param {Vec3Like} p2
+ * @param {Vec3Like} p3
+ * @param {number} t
+ * @returns {{x:number,y:number,z:number}|null}  null with fewer than 5 arguments.
+ */
+bro.math.bezierTangent = function(p0, p1, p2, p3, t) {};
+
+/**
+ * Cubic Hermite point at t from p0 (tangent m0) to p1 (tangent m1).
+ *
+ * @param {Vec3Like} p0
+ * @param {Vec3Like} m0
+ * @param {Vec3Like} p1
+ * @param {Vec3Like} m1
+ * @param {number} t
+ * @returns {{x:number,y:number,z:number}|null}  null with fewer than 5 arguments.
+ */
+bro.math.hermite = function(p0, m0, p1, m1, t) {};
+
+// ── Color ───────────────────────────────────────────────────────────────────
+// Colors are {r, g, b, a} with linear-light channels in [0, 1].
+
+/**
+ * Parse "#RRGGBB" or "#RRGGBBAA" (sRGB) into a linear color. Malformed input
+ * gives transparent black; no argument gives opaque black.
+ *
+ * @param {string} hex
+ * @returns {{r:number,g:number,b:number,a:number}}
+ */
+bro.math.fromHex = function(hex) {};
+
+/**
+ * HSV (treated as sRGB) to a linear color: h in degrees [0, 360), s and v in
+ * [0, 1], alpha default 1.
+ *
+ * @param {number} h
+ * @param {number} s
+ * @param {number} v
+ * @param {number} [alpha]
+ * @returns {{r:number,g:number,b:number,a:number}}
+ */
+bro.math.fromHSV = function(h, s, v, alpha) {};
+
+/**
+ * 8-bit sRGB channels (each saturated to [0, 255]; alpha default 255) to a
+ * linear color. Alpha is linear in both.
+ *
+ * @param {number} r
+ * @param {number} g
+ * @param {number} b
+ * @param {number} [a]
+ * @returns {{r:number,g:number,b:number,a:number}}
+ */
+bro.math.fromColor8 = function(r, g, b, a) {};
+
+/**
+ * Linear channels (alpha default 1) to rounded 8-bit sRGB. Channels are
+ * saturated to [0, 1] first; a NaN channel encodes as 0.
+ *
+ * @param {number} r
+ * @param {number} g
+ * @param {number} b
+ * @param {number} [a]
+ * @returns {{r:number,g:number,b:number,a:number}}
+ */
+bro.math.toColor8 = function(r, g, b, a) {};
+
+/**
+ * One channel, linear light to the sRGB transfer curve.
+ * @param {number} c
+ * @returns {number}
+ */
+bro.math.linearToSrgb = function(c) {};
+
+/**
+ * One channel, sRGB transfer curve to linear light.
+ * @param {number} c
+ * @returns {number}
+ */
+bro.math.srgbToLinear = function(c) {};
+
+// ── Angles (aliases and extras) ─────────────────────────────────────────────
+
+/** Alias of degToRad. @param {number} deg @returns {number} */
+bro.math.deg2rad = function(deg) {};
+
+/** Alias of radToDeg. @param {number} rad @returns {number} */
+bro.math.rad2deg = function(rad) {};
+
+/**
+ * Fold an angle in radians into [0, 2*PI).
+ * @param {number} a
+ * @returns {number}
+ */
+bro.math.wrapAngle2Pi = function(a) {};
+
+/**
+ * Alias of angleDiff: shortest signed delta from `from` to `to`, in [-PI, PI].
+ * @param {number} from
+ * @param {number} to
+ * @returns {number}
+ */
+bro.math.angleDelta = function(from, to) {};
+
+/**
+ * Interpolate between two angles (radians) the short way round.
+ * @param {number} from
+ * @param {number} to
+ * @param {number} t
+ * @returns {number}
+ */
+bro.math.angleLerp = function(from, to, t) {};
+
+// ── Ray queries ─────────────────────────────────────────────────────────────
+// Each returns a MathRayHit, or null on a miss or with too few arguments.
+
+/**
+ * Slab test. From outside, the entry point and the entered face's outward
+ * normal; from inside, the exit point and the exited face's normal. A zero
+ * direction hits nothing.
+ *
+ * @param {Vec3Like} origin
+ * @param {Vec3Like} dir
+ * @param {Vec3Like} boxMin
+ * @param {Vec3Like} boxMax
+ * @returns {MathRayHit|null}
+ */
+bro.math.rayIntersectAABB = function(origin, dir, boxMin, boxMax) {};
+
+/**
+ * Nearest non-negative hit on a sphere.
+ * @param {Vec3Like} origin
+ * @param {Vec3Like} dir
+ * @param {Vec3Like} center
+ * @param {number} radius
+ * @returns {MathRayHit|null}
+ */
+bro.math.rayIntersectSphere = function(origin, dir, center, radius) {};
+
+/**
+ * Hit on the plane dot(normal, p) + d = 0.
+ * @param {Vec3Like} origin
+ * @param {Vec3Like} dir
+ * @param {Vec3Like} normal
+ * @param {number} d
+ * @returns {MathRayHit|null}
+ */
+bro.math.rayIntersectPlane = function(origin, dir, normal, d) {};
+
+/**
+ * Moller-Trumbore triangle test; single-sided when backfaceCull is true.
+ * @param {Vec3Like} origin
+ * @param {Vec3Like} dir
+ * @param {Vec3Like} v0
+ * @param {Vec3Like} v1
+ * @param {Vec3Like} v2
+ * @param {boolean} [backfaceCull]
+ * @returns {MathRayHit|null}
+ */
+bro.math.rayIntersectTriangle = function(origin, dir, v0, v1, v2, backfaceCull) {};
+
+// ── Plane / sphere / AABB ───────────────────────────────────────────────────
+// A plane is (normal, d) with signed distance dot(normal, p) + d.
+
+/**
+ * @param {Vec3Like} normal
+ * @param {number} d
+ * @param {Vec3Like} p
+ * @returns {number}  0 with fewer than 3 arguments.
+ */
+bro.math.planeSignedDistance = function(normal, d, p) {};
+
+/**
+ * Orthogonal projection of p onto the plane.
+ * @param {Vec3Like} normal
+ * @param {number} d
+ * @param {Vec3Like} p
+ * @returns {{x:number,y:number,z:number}|null}
+ */
+bro.math.planeProject = function(normal, d, p) {};
+
+/**
+ * @param {Vec3Like} center
+ * @param {number} radius
+ * @param {Vec3Like} p
+ * @returns {boolean}
+ */
+bro.math.sphereContains = function(center, radius, p) {};
+
+/**
+ * @param {Vec3Like} c0
+ * @param {number} r0
+ * @param {Vec3Like} c1
+ * @param {number} r1
+ * @returns {boolean}
+ */
+bro.math.sphereIntersects = function(c0, r0, c1, r1) {};
+
+/**
+ * @param {Vec3Like} boxMin
+ * @param {Vec3Like} boxMax
+ * @param {Vec3Like} p
+ * @returns {boolean}
+ */
+bro.math.aabbContains = function(boxMin, boxMax, p) {};
+
+/**
+ * @param {Vec3Like} minA
+ * @param {Vec3Like} maxA
+ * @param {Vec3Like} minB
+ * @param {Vec3Like} maxB
+ * @returns {boolean}
+ */
+bro.math.aabbIntersects = function(minA, maxA, minB, maxB) {};
+
+/**
+ * The box grown to include p.
+ * @param {Vec3Like} boxMin
+ * @param {Vec3Like} boxMax
+ * @param {Vec3Like} p
+ * @returns {{min:{x:number,y:number,z:number}, max:{x:number,y:number,z:number}}|null}
+ */
+bro.math.aabbExpand = function(boxMin, boxMax, p) {};
+
+/**
+ * The smallest box holding both boxes.
+ * @param {Vec3Like} minA
+ * @param {Vec3Like} maxA
+ * @param {Vec3Like} minB
+ * @param {Vec3Like} maxB
+ * @returns {{min:{x:number,y:number,z:number}, max:{x:number,y:number,z:number}}|null}
+ */
+bro.math.aabbMerge = function(minA, maxA, minB, maxB) {};
+
+// ── Frustum ─────────────────────────────────────────────────────────────────
+// A frustum is a flat 24-number array: six planes [nx, ny, nz, d] in the order
+// left, right, bottom, top, near, far, normals pointing inward (a point is
+// inside when every signed distance is >= 0), each normal unit length so the
+// distances are world units.
+
+/**
+ * Extract the frustum planes from a 16-element column-major view-projection
+ * matrix with OpenGL [-1, 1] clip depth. A non-array is a TypeError.
+ *
+ * @param {number[]|Float32Array} viewProj
+ * @returns {number[]}  24 numbers.
+ */
+bro.math.frustumFromViewProj = function(viewProj) {};
+
+/**
+ * @param {number[]} planes  From frustumFromViewProj.
+ * @param {Vec3Like} p
+ * @returns {boolean}
+ */
+bro.math.frustumContainsPoint = function(planes, p) {};
+
+/**
+ * Conservative box test (may report true for a box just outside a corner).
+ * @param {number[]} planes
+ * @param {Vec3Like} boxMin
+ * @param {Vec3Like} boxMax
+ * @returns {boolean}
+ */
+bro.math.frustumIntersectsAABB = function(planes, boxMin, boxMax) {};
+
+/**
+ * @param {number[]} planes
+ * @param {Vec3Like} center
+ * @param {number} radius
+ * @returns {boolean}
+ */
+bro.math.frustumIntersectsSphere = function(planes, center, radius) {};
+
+// ── Segments and capsules ───────────────────────────────────────────────────
+
+/**
+ * Closest distance between segments p1-q1 and p2-q2.
+ * @param {Vec3Like} p1
+ * @param {Vec3Like} q1
+ * @param {Vec3Like} p2
+ * @param {Vec3Like} q2
+ * @returns {number}
+ */
+bro.math.segmentSegmentDistance = function(p1, q1, p2, q2) {};
+
+/**
+ * How far two capsules overlap: max(0, rA + rB - core segment distance).
+ * @param {Vec3Like} a0
+ * @param {Vec3Like} a1
+ * @param {number} rA
+ * @param {Vec3Like} b0
+ * @param {Vec3Like} b1
+ * @param {number} rB
+ * @returns {number}
+ */
+bro.math.capsulePenetration = function(a0, a1, rA, b0, b1, rB) {};
+
+/**
+ * @param {Vec3Like} a0
+ * @param {Vec3Like} a1
+ * @param {number} rA
+ * @param {Vec3Like} b0
+ * @param {Vec3Like} b1
+ * @param {number} rB
+ * @returns {boolean}
+ */
+bro.math.capsulesIntersect = function(a0, a1, rA, b0, b1, rB) {};
+
+// ── 2D grid footprint ───────────────────────────────────────────────────────
+
+/**
+ * Row-major index row * width + col (not bounds-checked; pair with
+ * gridInBounds). Exact for any int col/row. -1 when grid is not an object.
+ * @param {MathGrid2D} grid
+ * @param {number} col
+ * @param {number} row
+ * @returns {number}
+ */
+bro.math.gridIndex2D = function(grid, col, row) {};
+
+/**
+ * @param {MathGrid2D} grid
+ * @param {number} col
+ * @param {number} row
+ * @returns {boolean}
+ */
+bro.math.gridInBounds = function(grid, col, row) {};
+
+/**
+ * The cell holding world point p. May be out of range (clamped to +-2^30;
+ * NaN goes to the low end).
+ * @param {MathGrid2D} grid
+ * @param {{x:number,y:number}|number[]} p
+ * @returns {{col:number,row:number}|null}
+ */
+bro.math.gridCellOf = function(grid, p) {};
+
+/**
+ * World XY centre of cell (col, row).
+ * @param {MathGrid2D} grid
+ * @param {number} col
+ * @param {number} row
+ * @returns {{x:number,y:number}|null}
+ */
+bro.math.gridCellCenter = function(grid, col, row) {};
+
