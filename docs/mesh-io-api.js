@@ -292,12 +292,32 @@ Mesh.surfaceNets = function(values, dimX, dimY, dimZ, isoLevel) {};
 Mesh.dualContouring = function(values, dimX, dimY, dimZ, isoLevel) {};
 
 /**
- *  Transvoxel: marching cubes with LOD-seam transition cells, for a cubic
- *  chunk of `gridSize` samples per side. `neighborLods` is accepted for
- *  forward compatibility but is currently treated as all-zero, so the
- *  transition cells are not yet emitted.
+ *  Transvoxel-style LOD chunk: marching cubes over a cubic chunk of
+ *  `gridSize` samples per side (`values[z*N*N + y*N + x]`, N = gridSize),
+ *  sampled every `2^lod` samples, with the chunk's boundary vertices
+ *  snapped to coarser neighbours' grids so adjacent chunks at different
+ *  LODs meet without cracks. Pick `gridSize = k * 2^lod + 1` so the cells
+ *  reach the far faces. Positions are in sample units times `cellSize`,
+ *  whatever the lod, so chunks of any LOD share one coordinate space.
+ *
+ *  `neighborLods` is the LOD of the chunk across each face, in the order
+ *  `[+X, -X, +Y, -Y, +Z, -Z]`. `-1` means no neighbour (a world edge);
+ *  an omitted array, a missing entry or a non-number entry all read as -1.
+ *  For each face whose neighbour is coarser (`neighborLod > lod`), every
+ *  vertex lying on that face has its two in-face coordinates rounded to
+ *  the neighbour's grid (a step of `2^neighborLod * cellSize`). A same-LOD
+ *  or finer neighbour leaves the face alone (the finer chunk does the
+ *  snapping). No transition cells are emitted: the seam is closed by
+ *  moving vertices only, so snapped boundary triangles can come out
+ *  stretched or degenerate. Normals are recomputed after the snap.
+ *
+ *  Sign convention is SDF: `value < isoLevel` is inside, normals point out.
+ *  A `values` array shorter than `gridSize^3`, or `gridSize < 2`, throws.
+ * @example
+ *  // lod-0 chunk whose +X neighbour is at lod 1; every other face is open
+ *  const chunk = Mesh.transvoxel(field, 17, 0, [1, -1, -1, -1, -1, -1], 0, 0.5);
  * @param {Float32Array} values @param {number} [gridSize=16] @param {number} [lod=0]
- * @param {Array<number>} [neighborLods] @param {number} [isoLevel=0] @param {number} [cellSize=1]
+ * @param {Array<number>} [neighborLods=[-1,-1,-1,-1,-1,-1]] @param {number} [isoLevel=0] @param {number} [cellSize=1]
  * @returns {Mesh}
  */
 Mesh.transvoxel = function(values, gridSize, lod, neighborLods, isoLevel, cellSize) {};
