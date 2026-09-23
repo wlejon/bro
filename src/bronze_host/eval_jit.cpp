@@ -248,7 +248,11 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     auto res = bronze::eval::runCompiledScript(std::move(compiled), opts);
 
     if (res.thrown && execCode == code && !hasImportStmt(code)) {
-        std::string errStr = bronze::embed::toUtf8(res.value);
+        // toUtf8 allocates, so the thrown value is rooted across it and read
+        // back: the caller reports res.value, which must not be stale.
+        bronze::embed::Persistent thrownRoot(res.value);
+        std::string errStr = bronze::embed::toUtf8(thrownRoot.get());
+        res.value = thrownRoot.get();
         if (errStr.find("await") != std::string::npos) {
             // The failed attempt is off the stack and superseded: its handle
             // is retired here so the one written below is the run's only one.
@@ -344,7 +348,10 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
         });
         res = bronze::eval::runCompiledScript(std::move(compiled), opts);
         if (res.thrown) {
-            std::string errStr = bronze::embed::toUtf8(res.value);
+            // Rooted across the allocating toUtf8, as in evalScriptJitResult.
+            bronze::embed::Persistent thrownRoot(res.value);
+            std::string errStr = bronze::embed::toUtf8(thrownRoot.get());
+            res.value = thrownRoot.get();
             if (errStr.find("await") != std::string::npos && !hasImportStmt(content)) {
                 auto retryCompiled = compileWithPumping(engine, [&]() {
                     return bronze::eval::compileScript(wrapAsyncIife(source, absPath.string()), opts);
