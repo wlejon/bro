@@ -48,6 +48,10 @@ class SpatialHash3D {
    * Insert point id at [x, y, z]. If id is already in the index, its entry
    * moves here (a point or sphere entry becomes this point).
    *
+   * Ids are int32: a fractional id truncates toward zero, and a NaN, an
+   * infinity or a value outside -2^31 .. 2^31-1 throws a RangeError (here,
+   * in insertSphere() and in remove()) rather than wrapping onto another id.
+   *
    * @param {number} x
    * @param {number} y
    * @param {number} z

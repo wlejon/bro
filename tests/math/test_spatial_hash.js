@@ -136,3 +136,30 @@ assert(chain.insertSphere(0, 0, 0, 1, 2) === chain, 'insertSphere returns this')
 assert(chain.remove(1) === chain, 'remove returns this');
 assert(chain.clear() === chain, 'clear returns this');
 assert(chain.reset(1) === chain, 'reset returns this');
+
+// ---- ids: int32, anything else a RangeError ------------------------------------
+
+{
+    const ids = new SpatialHash3D(1);
+    const throwsRange = (fn) => {
+        try { fn(); } catch (e) { return e instanceof RangeError; }
+        return false;
+    };
+    for (const bad of [NaN, Infinity, -Infinity, 2 ** 31, -(2 ** 31) - 1, 1e12, undefined]) {
+        assert(throwsRange(() => ids.insert(0, 0, 0, bad)), 'insert with id ' + bad + ' is a RangeError');
+        assert(throwsRange(() => ids.insertSphere(0, 0, 0, 1, bad)), 'insertSphere with id ' + bad + ' is a RangeError');
+        assert(throwsRange(() => ids.remove(bad)), 'remove with id ' + bad + ' is a RangeError');
+    }
+    assert(ids.size === 0, 'a rejected id inserts nothing, size ' + ids.size);
+
+    // The int32 extremes are ids like any other; 2^32 + 5 no longer aliases 5.
+    ids.insert(1, 0, 0, 2 ** 31 - 1);
+    ids.insert(2, 0, 0, -(2 ** 31));
+    ids.insert(3, 0, 0, 5);
+    assert(ids.size === 3, 'the int32 extremes insert, size ' + ids.size);
+    assert(throwsRange(() => ids.insert(9, 0, 0, 2 ** 32 + 5)), '2^32 + 5 is out of range');
+    assert(ids.nearest(3, 0, 0, 0.5) === 5, 'id 5 kept its position');
+    assert(ids.nearest(1, 0, 0, 0.5) === 2 ** 31 - 1, 'the largest id round-trips');
+    ids.remove(-(2 ** 31));
+    assert(ids.size === 2, 'the smallest id removes, size ' + ids.size);
+}
