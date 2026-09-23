@@ -38,7 +38,7 @@ uint32_t listLength(ev::Persistent& list) {
     if (ev::isObject(lenV) || ev::isUndefined(lenV)) return 0;
     double d = ev::toDouble(lenV);
     if (!(d > 0.0)) return 0;  // NaN and negatives answer 0, not a huge cast
-    return static_cast<uint32_t>(d);
+    return satCast<uint32_t>(d);
 }
 
 void setListLength(ev::Persistent& list, uint32_t n) {

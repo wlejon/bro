@@ -88,7 +88,7 @@ std::string pickLocale(std::span<const Value> a, size_t idx = 0) {
     if (ev::isObject(v)) {
         Value lenVal = ev::getProperty(v, "length");
         if (ev::isNumber(lenVal)) {
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
+            uint32_t len = satCast<uint32_t>(ev::toDouble(lenVal));
             if (len > 0) {
                 Value first = ev::getElement(v, 0);
                 if (ev::isString(first)) return canonicalize(ev::toUtf8(first));
@@ -124,9 +124,9 @@ NumberFormatOptions parseNumberFormatOptions(std::span<const Value> a) {
         v = ev::getProperty(o, "useGrouping");
         if (ev::isBool(v)) opt.useGrouping = ev::toBool(v);
         v = ev::getProperty(o, "minimumFractionDigits");
-        if (ev::isNumber(v)) opt.minFractionDigits = static_cast<int>(ev::toDouble(v));
+        if (ev::isNumber(v)) opt.minFractionDigits = satCast<int>(ev::toDouble(v));
         v = ev::getProperty(o, "maximumFractionDigits");
-        if (ev::isNumber(v)) opt.maxFractionDigits = static_cast<int>(ev::toDouble(v));
+        if (ev::isNumber(v)) opt.maxFractionDigits = satCast<int>(ev::toDouble(v));
     }
     if (opt.minFractionDigits < 0) {
         if (opt.style == "currency") opt.minFractionDigits = (opt.currency == "JPY") ? 0 : 2;
@@ -504,7 +504,7 @@ std::string formatDateTimeDetails(Value dateIn, const DateTimeOptions& opt) {
             Value fn = ev::getProperty(dateVal, name);
             if (ev::isFunction(fn)) {
                 auto res = ev::call(fn, dateVal.get(), {});
-                if (!res.thrown) return static_cast<int>(ev::toDouble(res.value));
+                if (!res.thrown) return satCast<int>(ev::toDouble(res.value));
             }
             return 0;
         };
@@ -626,7 +626,7 @@ Value makeListFormatInstance(std::span<const Value> a) {
         const Value& arr = args[0];  // the rooted slot, current across the reads
         Value lenVal = ev::getProperty(arr, "length");
         if (!ev::isNumber(lenVal)) return ev::fromUtf8("");
-        uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
+        uint32_t len = satCast<uint32_t>(ev::toDouble(lenVal));
         if (len == 0) return ev::fromUtf8("");
         if (len == 1) return ev::getProperty(arr, "0");
         std::string word = (type == "disjunction") ? "or" : "and";
@@ -816,7 +816,7 @@ void installIntlGlobals() {
         } else if (ev::isObject(a[0])) {
             Value lenVal = ev::getProperty(a[0], "length");
             if (ev::isNumber(lenVal)) {
-                uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
+                uint32_t len = satCast<uint32_t>(ev::toDouble(lenVal));
                 for (uint32_t i = 0; i < len; ++i) {
                     Value item = ev::getElement(a[0], i);
                     if (ev::isString(item)) results.push_back(canonicalize(ev::toUtf8(item)));

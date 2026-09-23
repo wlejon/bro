@@ -36,7 +36,7 @@ static int intOption(Value opts, const char* name, int fallback) {
     if (!ev::isObject(opts)) return fallback;
     Value v = ev::getProperty(opts, name);
     if (!ev::isUndefined(v) && !ev::isNull(v)) {
-        return static_cast<int>(ev::toDouble(v));
+        return satCast<int>(ev::toDouble(v));
     }
     return fallback;
 }

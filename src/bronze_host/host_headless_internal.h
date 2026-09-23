@@ -2,6 +2,7 @@
 
 #include "embed/embed.h"
 #include "engine/engine.h"
+#include "bronze_host/host_numeric.h"
 #include <span>
 
 namespace bro::bronze_host {
@@ -29,7 +30,7 @@ inline uint64_t argWindowId(std::span<const Value> a, size_t idx) {
     if (idx >= a.size()) return 0;
     if (ev::isUndefined(a[idx]) || ev::isNull(a[idx])) return 0;
     double d = ev::toDouble(a[idx]);
-    return d > 0.0 ? static_cast<uint64_t>(d) : 0;
+    return d > 0.0 ? satCast<uint64_t>(d) : 0;
 }
 
 // Input y for target window (main window reserves top menu inset, secondary doesn't)

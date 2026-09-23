@@ -42,8 +42,8 @@ int32_t bro_physics_createConstraint(const char* config) {
     else if (type == "sixdof" || type == "sixDof" || type == "6dof") cs.type = physics::ConstraintOptions::SixDOF;
     else return -1;
 
-    int32_t b1Tag = static_cast<int32_t>(getPropNumber(obj, "body1", -1.0));
-    int32_t b2Tag = static_cast<int32_t>(getPropNumber(obj, "body2", -1.0));
+    int32_t b1Tag = satCast<int32_t>(getPropNumber(obj, "body1", -1.0));
+    int32_t b2Tag = satCast<int32_t>(getPropNumber(obj, "body2", -1.0));
 
     cs.body1 = pw->bodyIdForTag(b1Tag);
     if (cs.body1.IsInvalid()) return -1;
@@ -115,8 +115,8 @@ int32_t bro_physics_createConstraint(const char* config) {
         const char* ha2Prop = (cs.type == physics::ConstraintOptions::Gear) ? "hingeAxis2" : "sliderAxis";
         cs.hingeAxis2 = readVec3(ev::getProperty(obj, ha2Prop), JPH::Vec3(1, 0, 0));
         cs.ratio = static_cast<float>(getPropNumber(obj, "ratio", 1.0));
-        cs.dependentConstraint1 = static_cast<uint32_t>(getPropNumber(obj, "constraint1", 0.0));
-        cs.dependentConstraint2 = static_cast<uint32_t>(getPropNumber(obj, "constraint2", 0.0));
+        cs.dependentConstraint1 = satCast<uint32_t>(getPropNumber(obj, "constraint1", 0.0));
+        cs.dependentConstraint2 = satCast<uint32_t>(getPropNumber(obj, "constraint2", 0.0));
         if (!cs.dependentConstraint1 || !cs.dependentConstraint2) return -1;
     }
 

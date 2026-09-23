@@ -83,7 +83,7 @@ void decorateSelectionProto(ObjectBuilder& b) {
     b.def("getRangeAt", 1, [](Value self_, std::span<const Value> a) {
         auto* s = hostSelectionOf(self_);
         if (!s) return ev::null();
-        int idx = a.empty() ? 0 : static_cast<int>(ev::toDouble(a[0]));
+        int idx = a.empty() ? 0 : satCast<int>(ev::toDouble(a[0]));
         auto* src = s->getRangeAt(idx);
         if (!src) return ev::null();
         return wrapOwnedRange(src->cloneRange());
@@ -119,7 +119,7 @@ void decorateSelectionProto(ObjectBuilder& b) {
         auto* s = hostSelectionOf(self_);
         if (!s || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
-        int off = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         s->collapse(n, bro::dom::nodeOffsetToBytes(n, off));
         return ev::undefined();
     });
@@ -128,7 +128,7 @@ void decorateSelectionProto(ObjectBuilder& b) {
         auto* s = hostSelectionOf(self_);
         if (!s || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
-        int off = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         s->collapse(n, bro::dom::nodeOffsetToBytes(n, off));
         return ev::undefined();
     });
@@ -147,7 +147,7 @@ void decorateSelectionProto(ObjectBuilder& b) {
         auto* s = hostSelectionOf(self_);
         if (!s || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
-        int off = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         s->extend(n, bro::dom::nodeOffsetToBytes(n, off));
         return ev::undefined();
     });
@@ -164,9 +164,9 @@ void decorateSelectionProto(ObjectBuilder& b) {
         auto* s = hostSelectionOf(self_);
         if (!s || a.size() < 4) return ev::undefined();
         auto* anchor = hostNodeOf(a[0]);
-        int anchorOff = static_cast<int>(ev::toDouble(a[1]));
+        int anchorOff = satCast<int>(ev::toDouble(a[1]));
         auto* focus = hostNodeOf(a[2]);
-        int focusOff = static_cast<int>(ev::toDouble(a[3]));
+        int focusOff = satCast<int>(ev::toDouble(a[3]));
         if (!anchor || !focus) return ev::undefined();
 
         anchorOff = bro::dom::nodeOffsetToBytes(anchor, anchorOff);

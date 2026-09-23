@@ -318,7 +318,7 @@ void installCustomElementsGlobals() {
         if (ev::isObject(obs)) {
             Value lenV = ev::getProperty(obs, "length");
             if (ev::isNumber(lenV)) {
-                uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+                uint32_t len = satCast<uint32_t>(ev::toDouble(lenV));
                 for (uint32_t i = 0; i < len; i++) {
                     Value item = ev::getElement(obs, i);
                     if (ev::isString(item)) {

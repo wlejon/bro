@@ -58,7 +58,8 @@ std::vector<ev::Persistent> listElements(Value listIn) {
     std::vector<ev::Persistent> out;
     if (!ev::isObject(listIn)) return out;
     const Rooted list(listIn);
-    const uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(list, "length")));
+    uint32_t n = 0;
+    if (!lengthWithin(ev::toDouble(ev::getProperty(list, "length")), kMaxHostListLength, n)) return out;
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) out.emplace_back(ev::getElement(list, i));
     return out;

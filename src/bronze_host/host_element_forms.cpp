@@ -353,8 +353,8 @@ void decorateElementForms(ObjectBuilder& b) {
     b.def("setSelectionRange", 2, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el || a.size() < 2) return ev::undefined();
-        int start = static_cast<int>(ev::toDouble(a[0]));
-        int end = static_cast<int>(ev::toDouble(a[1]));
+        int start = satCast<int>(ev::toDouble(a[0]));
+        int end = satCast<int>(ev::toDouble(a[1]));
         const std::string val = selectionValueOf(st->el);
         const int bs = dom::utf16ToUtf8Byte(val, start);
         const int be = dom::utf16ToUtf8Byte(val, end);
@@ -377,7 +377,7 @@ void decorateElementForms(ObjectBuilder& b) {
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el || a.empty()) return ev::undefined();
-                   int start = static_cast<int>(ev::toDouble(a[0]));
+                   int start = satCast<int>(ev::toDouble(a[0]));
                    const std::string val = selectionValueOf(st->el);
                    const int b = dom::utf16ToUtf8Byte(val, start);
                    if (auto* inp = st->el->inputControl())
@@ -401,7 +401,7 @@ void decorateElementForms(ObjectBuilder& b) {
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el || a.empty()) return ev::undefined();
-                   int end = static_cast<int>(ev::toDouble(a[0]));
+                   int end = satCast<int>(ev::toDouble(a[0]));
                    const std::string val = selectionValueOf(st->el);
                    const int b = dom::utf16ToUtf8Byte(val, end);
                    if (auto* inp = st->el->inputControl())

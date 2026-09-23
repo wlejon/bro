@@ -200,7 +200,7 @@ static thread_local HostClass g_rngClass;
 static Value rngCtor(Value, std::span<const Value> a) {
     uint64_t seed = 0;
     if (!a.empty() && ev::isNumber(a[0])) {
-        seed = static_cast<uint64_t>(ev::toDouble(a[0]));
+        seed = satCast<uint64_t>(ev::toDouble(a[0]));
     }
     return g_rngClass.createInstance(std::make_unique<HostRng>(seed));
 }
@@ -209,7 +209,7 @@ static void decorateRngProto(ObjectBuilder& proto) {
     proto.def("reseed", 1, [](Value thisVal, std::span<const Value> a) -> Value {
         auto* r = getRng(thisVal);
         if (!r) return ev::throwTypeError("Rng.reseed: invalid this");
-        uint64_t seed = (!a.empty() && ev::isNumber(a[0])) ? static_cast<uint64_t>(ev::toDouble(a[0])) : 0;
+        uint64_t seed = (!a.empty() && ev::isNumber(a[0])) ? satCast<uint64_t>(ev::toDouble(a[0])) : 0;
         r->state = seed;
         return thisVal;
     });
@@ -235,8 +235,8 @@ static void decorateRngProto(ObjectBuilder& proto) {
     proto.def("int", 2, [](Value thisVal, std::span<const Value> a) -> Value {
         auto* r = getRng(thisVal);
         if (!r) return ev::fromDouble(0);
-        int lo = a.size() > 0 ? static_cast<int>(ev::toDouble(a[0])) : 0;
-        int hi = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int lo = a.size() > 0 ? satCast<int>(ev::toDouble(a[0])) : 0;
+        int hi = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         return ev::fromDouble(bromath::randInt(r->state, lo, hi));
     });
 
@@ -370,7 +370,7 @@ static void decorateSmootherProto(ObjectBuilder& proto) {
     proto.def("tickN", 1, [](Value thisVal, std::span<const Value> a) -> Value {
         auto* sm = getSmoother(thisVal);
         if (!sm) return ev::fromDouble(0.0);
-        int n = !a.empty() ? static_cast<int>(ev::toDouble(a[0])) : 1;
+        int n = !a.empty() ? satCast<int>(ev::toDouble(a[0])) : 1;
         return ev::fromDouble(bromath::smootherTickN(sm->s, n));
     });
 }

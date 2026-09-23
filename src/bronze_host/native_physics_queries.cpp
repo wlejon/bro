@@ -111,7 +111,7 @@ const char* bro_physics_raycastClosestJsonRaw(double ox, double oy, double oz,
             const Rooted cfg(res.value);
             readQueryFilter(cfg, filter, pw);
             Value lm = ev::getProperty(cfg, "layerMask");
-            if (ev::isNumber(lm)) filter.layerMask = static_cast<uint32_t>(ev::toDouble(lm));
+            if (ev::isNumber(lm)) filter.layerMask = jsToUint32(ev::toDouble(lm));
         }
     }
 
@@ -143,7 +143,7 @@ const char* bro_physics_raycastJsonRaw(double ox, double oy, double oz,
             const Rooted cfg(res.value);
             readQueryFilter(cfg, filter, pw);
             Value lm = ev::getProperty(cfg, "layerMask");
-            if (ev::isNumber(lm)) filter.layerMask = static_cast<uint32_t>(ev::toDouble(lm));
+            if (ev::isNumber(lm)) filter.layerMask = jsToUint32(ev::toDouble(lm));
         }
     }
 
@@ -368,7 +368,7 @@ const char* bro_physics_overlapPointJsonRaw(double x, double y, double z, const 
             const Rooted cfg(res.value);
             readQueryFilter(cfg, filter, pw);
             Value lm = ev::getProperty(cfg, "layerMask");
-            if (ev::isNumber(lm)) filter.layerMask = static_cast<uint32_t>(ev::toDouble(lm));
+            if (ev::isNumber(lm)) filter.layerMask = jsToUint32(ev::toDouble(lm));
         }
     }
 

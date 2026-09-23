@@ -921,7 +921,7 @@ static bool globalOwnPropertyNames(std::vector<std::string>& out) {
     ev::CallResult res = ev::call(gopn.get(), objCtor.get(), std::span<const Value>(&arg, 1));
     if (res.thrown) return false;
     ev::Persistent names(res.value);
-    int len = static_cast<int>(ev::toDouble(ev::getProperty(names.get(), "length")));
+    int len = satCast<int>(ev::toDouble(ev::getProperty(names.get(), "length")));
     out.clear();
     out.reserve(len > 0 ? static_cast<size_t>(len) : 0);
     for (int i = 0; i < len; ++i) {

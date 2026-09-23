@@ -21,6 +21,7 @@
 #include "runtime/bigint.h"
 #include "runtime/heap.h"
 #include "dom/event_target.h"
+#include "bronze_host/host_numeric.h"
 
 #include <cstdint>
 #include <functional>
@@ -894,12 +895,13 @@ inline bool readFloatVector(Value v, std::vector<float>& out) {
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
     if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+    uint32_t len = 0;
+    if (!lengthWithin(ev::toDouble(lenV), kMaxHostListLength, len)) return false;
     out.clear();
     out.reserve(len);
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
-        double d = (!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
+        double d =(!ev::isUndefined(e) && !ev::isObject(e)) ? ev::toDouble(e) : 0.0;
         out.push_back(static_cast<float>(d));
     }
     return true;
@@ -925,12 +927,13 @@ inline bool readU32Vector(Value v, std::vector<uint32_t>& out) {
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
     if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+    uint32_t len = 0;
+    if (!lengthWithin(ev::toDouble(lenV), kMaxHostListLength, len)) return false;
     out.clear();
     out.reserve(len);
     for (uint32_t i = 0; i < len; ++i) {
         Value e = ev::getElement(root.get(), i);
-        uint32_t u = (!ev::isUndefined(e) && !ev::isObject(e)) ? static_cast<uint32_t>(ev::toDouble(e)) : 0u;
+        uint32_t u =(!ev::isUndefined(e) && !ev::isObject(e)) ? satCast<uint32_t>(ev::toDouble(e)) : 0u;
         out.push_back(u);
     }
     return true;

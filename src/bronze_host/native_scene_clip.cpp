@@ -179,7 +179,7 @@ static bool readKeyValue(Value v, const PropInfo& info, float* dst, std::string&
 
 static int32_t arrayLength(Value v) {
     Value lenVal = ev::getProperty(v, "length");
-    return ev::isNumber(lenVal) ? static_cast<int32_t>(ev::toDouble(lenVal)) : 0;
+    return ev::isNumber(lenVal) ? satCast<int32_t>(ev::toDouble(lenVal)) : 0;
 }
 
 static bool parsePropTrack(Value trackIn, scene::AnimationClip::PropTrack& out, std::string& err) {

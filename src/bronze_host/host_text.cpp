@@ -32,7 +32,7 @@ static Opts readOpts(Value vIn) {
         Value szVal = ev::getProperty(v, "size");
         o.ref.size = ev::isNumber(szVal) ? static_cast<float>(ev::toDouble(szVal)) : 16.0f;
         Value wVal = ev::getProperty(v, "weight");
-        o.ref.weight = ev::isNumber(wVal) ? static_cast<int>(ev::toDouble(wVal)) : 400;
+        o.ref.weight = ev::isNumber(wVal) ? satCast<int>(ev::toDouble(wVal)) : 400;
         Value itVal = ev::getProperty(v, "italic");
         o.ref.italic = ev::isBool(itVal) ? ev::toBool(itVal) : false;
         Value lsVal = ev::getProperty(v, "letterSpacing");
@@ -97,7 +97,7 @@ Value makeBroTextValue() {
         Opts opts;
         const render::ShapedRun* run = shapeArgs(a, text, opts);
         if (!run) return ev::null();
-        int32_t off = a.size() > 2 ? static_cast<int32_t>(ev::toDouble(a[2])) : 0;
+        int32_t off = a.size() > 2 ? satCast<int32_t>(ev::toDouble(a[2])) : 0;
         auto pos = run->byteOffsetToX(static_cast<size_t>(off < 0 ? 0 : off), opts.spacing);
         ObjectBuilder out;
         out.set("x", ev::fromDouble(pos.primary.x));
@@ -125,7 +125,7 @@ Value makeBroTextValue() {
         Opts opts;
         const render::ShapedRun* run = shapeArgs(a, text, opts);
         if (!run) return ev::null();
-        int32_t off = a.size() > 2 ? static_cast<int32_t>(ev::toDouble(a[2])) : 0;
+        int32_t off = a.size() > 2 ? satCast<int32_t>(ev::toDouble(a[2])) : 0;
         auto span = run->clusterRange(static_cast<size_t>(off < 0 ? 0 : off));
         ObjectBuilder out;
         out.set("start", ev::fromDouble(static_cast<double>(span.byteStart)));
@@ -186,11 +186,14 @@ Value makeBroTextValue() {
     t.def("bidiReorder", 1, [](Value, std::span<const Value> a) -> Value {
         if (a.empty() || !hostIsArray(a[0])) return ev::null();
         const Value& arr = a[0];  // the rooted slot, current across the reads
-        uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(arr, "length")));
+        uint32_t n = 0;
+        if (!lengthWithin(ev::toDouble(ev::getProperty(arr, "length")), kMaxHostListLength, n)) {
+            return ev::throwRangeError("bidiReorder: more than 2^24 levels");
+        }
         std::vector<render::bidi::Level> levels;
         levels.reserve(n);
         for (uint32_t i = 0; i < n; ++i) {
-            int32_t lv = static_cast<int32_t>(ev::toDouble(ev::getElement(arr, i)));
+            int32_t lv = satCast<int32_t>(ev::toDouble(ev::getElement(arr, i)));
             levels.push_back(static_cast<render::bidi::Level>(lv < 0 ? 0 : lv));
         }
         const std::vector<int32_t> order = render::bidi::reorderVisual(levels);

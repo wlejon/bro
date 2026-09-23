@@ -43,8 +43,9 @@ void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext*
         if (ev::isObject(namesVal)) {
             ev::Persistent root(namesVal);
             Value lenV = ev::getProperty(root.get(), "length");
-            if (!ev::isUndefined(lenV) && !ev::isObject(lenV)) {
-                uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+            uint32_t n = 0;
+            if (!ev::isUndefined(lenV) && !ev::isObject(lenV) &&
+                lengthWithin(ev::toDouble(lenV), kMaxHostListLength, n)) {
                 names.reserve(n);
                 for (uint32_t i = 0; i < n; ++i) {
                     names.push_back(ev::toUtf8(ev::getElement(root.get(), i)));

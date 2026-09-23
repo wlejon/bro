@@ -41,7 +41,7 @@ static engine::MenuBar::Item parseMenuItem(Value vIn) {
 
     const Rooted itemsVal(ev::getProperty(v, "items"));
     if (hostIsArray(itemsVal)) {
-        uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(itemsVal, "length")));
+        uint32_t len = satCast<uint32_t>(ev::toDouble(ev::getProperty(itemsVal, "length")));
         for (uint32_t i = 0; i < len; ++i) {
             item.children.push_back(parseMenuItem(ev::getElement(itemsVal, i)));
         }
@@ -114,7 +114,7 @@ Value makeBroMenuValue() {
         std::vector<engine::MenuBar::Item> roots;
         if (!a.empty() && hostIsArray(a[0])) {
             const Value& arr = a[0];  // the rooted slot, current across the reads
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(arr, "length")));
+            uint32_t len = satCast<uint32_t>(ev::toDouble(ev::getProperty(arr, "length")));
             for (uint32_t i = 0; i < len; ++i) {
                 roots.push_back(parseMenuItem(ev::getElement(arr, i)));
             }
@@ -129,7 +129,7 @@ Value makeBroMenuValue() {
         if (!eng || a.size() < 2) return ev::fromBool(false);
         std::string parentId = ev::toUtf8(a[0]);
         engine::MenuBar::Item item = parseMenuItem(a[1]);
-        int idx = a.size() > 2 ? static_cast<int>(ev::toDouble(a[2])) : -1;
+        int idx = a.size() > 2 ? satCast<int>(ev::toDouble(a[2])) : -1;
         bool ok = eng->menuBar().addItem(parentId, std::move(item), idx);
         if (ok) eng->onMenuChanged();
         return ev::fromBool(ok);

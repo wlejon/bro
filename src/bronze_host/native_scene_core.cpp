@@ -113,7 +113,7 @@ double bro_scene_SceneGraph_msaa_get(void* self) {
 
 void bro_scene_SceneGraph_msaa_set(void* self, double v) {
     auto* g = graphOf(self);
-    if (g) g->setMSAA(static_cast<int>(v));
+    if (g) g->setMSAA(satCast<int>(v));
 }
 
 void* bro_scene_SceneGraph_createNode(void* self, bool opts_name_given, const char* opts_name,
@@ -621,7 +621,7 @@ bool registerSceneNatives(std::string* error) {
                     if (!cell || a.empty()) return ev::undefined();
                     auto* n = cell->node();
                     if (!n) return ev::undefined();
-                    int handle = static_cast<int>(ev::toDouble(a[0]));
+                    int handle = satCast<int>(ev::toDouble(a[0]));
                     bool isVoice = a.size() >= 2 && ev::toBool(a[1]);
                     bro::engine::SceneAudioSync::attachAudioEmitter(cell->token, n, handle, isVoice);
                     return ev::undefined();

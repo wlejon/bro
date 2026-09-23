@@ -55,7 +55,7 @@ Value touchListFrom(Value opts, const char* key) {
     Value lenV = ev::getProperty(src.get(), "length");
     const uint32_t len = ev::isUndefined(lenV)
                              ? 0u
-                             : static_cast<uint32_t>(static_cast<int64_t>(ev::toDouble(lenV)));
+                             : static_cast<uint32_t>(satCast<int64_t>(ev::toDouble(lenV)));
     Value listObj = g_touchListClass.make(nullptr, [](void*) {});
     ev::Persistent root(listObj);
     for (uint32_t i = 0; i < len; ++i) {
@@ -116,7 +116,7 @@ Value touchListConstructor(Value self, std::span<const Value> a) {
         Value lenV = ev::getProperty(srcRoot.get(), "length");
         len = ev::isUndefined(lenV)
                   ? 0u
-                  : static_cast<uint32_t>(static_cast<int64_t>(ev::toDouble(lenV)));
+                  : static_cast<uint32_t>(satCast<int64_t>(ev::toDouble(lenV)));
         for (uint32_t i = 0; i < len; ++i) {
             Value item = ev::getElement(srcRoot.get(), i);
             ev::setElement(me.get(), i, item);

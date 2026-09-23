@@ -134,7 +134,7 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
 
     if (ev::isNumber(val)) {
         double d = ev::toDouble(val);
-        int64_t i64 = static_cast<int64_t>(d);
+        int64_t i64 = satCast<int64_t>(d);
         if (static_cast<double>(i64) == d && i64 >= INT32_MIN && i64 <= INT32_MAX) {
             w.u8(kInt32);
             w.u32(static_cast<uint32_t>(static_cast<int32_t>(i64)));
@@ -308,7 +308,7 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
             Value arrFrom = ev::getProperty(ev::globalValue("Array").value, "from");
             Value collVal = self.get();
             ev::Persistent flat(ev::call(arrFrom, ev::undefined(), std::span<const Value>(&collVal, 1)).value);
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(flat.get(), "length")));
+            uint32_t len = satCast<uint32_t>(ev::toDouble(ev::getProperty(flat.get(), "length")));
             w.u8(isMap ? kMap : kSet);
             w.u32(len);
             for (uint32_t i = 0; i < len; ++i) {
@@ -340,8 +340,8 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
         if (flags == bronze::HeapKind::DataView) {
             // The numbers first; the buffer last, its bytes read straight
             // after the getProperty that answered it.
-            uint32_t off = static_cast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteOffset")));
-            uint32_t viewBytes = static_cast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteLength")));
+            uint32_t off = satCast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteOffset")));
+            uint32_t viewBytes = satCast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteLength")));
             Value buf = ev::getProperty(self.get(), "buffer");
             auto bInfo = ev::arrayBufferInfo(buf);
             w.u8(kDataView);
@@ -384,7 +384,7 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
         Value arrArg = self.get();
         Value isArrVal = ev::call(isArrFn, ev::undefined(), std::span<const Value>(&arrArg, 1)).value;
         if (ev::toBool(isArrVal)) {
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "length")));
+            uint32_t len = satCast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "length")));
             w.u8(kArray);
             w.u32(len);
             for (uint32_t i = 0; i < len; ++i) {
@@ -397,7 +397,7 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
         Value entriesFn = ev::getProperty(ev::globalValue("Object").value, "entries");
         Value entriesArg = self.get();
         ev::Persistent entries(ev::call(entriesFn, ev::undefined(), std::span<const Value>(&entriesArg, 1)).value);
-        uint32_t numProps = static_cast<uint32_t>(ev::toDouble(ev::getProperty(entries.get(), "length")));
+        uint32_t numProps = satCast<uint32_t>(ev::toDouble(ev::getProperty(entries.get(), "length")));
         w.u8(kObject);
         w.u32(numProps);
         for (uint32_t i = 0; i < numProps; ++i) {

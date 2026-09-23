@@ -204,7 +204,7 @@ inline std::string getPropString(Value obj, const char* name) {
 inline uint64_t getPropU64(Value obj, const char* name, uint64_t def) {
     if (!ev::isObject(obj)) return def;
     Value v = ev::getProperty(obj, name);
-    return (!ev::isUndefined(v) && !ev::isNull(v) && !ev::isObject(v)) ? static_cast<uint64_t>(ev::toDouble(v)) : def;
+    return (!ev::isUndefined(v) && !ev::isNull(v) && !ev::isObject(v)) ? satCast<uint64_t>(ev::toDouble(v)) : def;
 }
 
 
@@ -347,7 +347,7 @@ inline bool readAreaOverride(Value vIn, physics::AreaOverride& a, std::string& e
     if (!ev::isUndefined(ld) && !ev::isNull(ld)) a.linearDamping = static_cast<float>(ev::toDouble(ld));
     Value ad = ev::getProperty(v, "angularDamping");
     if (!ev::isUndefined(ad) && !ev::isNull(ad)) a.angularDamping = static_cast<float>(ev::toDouble(ad));
-    a.priority = static_cast<int>(getPropNumber(v, "priority", 0));
+    a.priority = satCast<int>(getPropNumber(v, "priority", 0));
     return true;
 }
 
@@ -431,7 +431,7 @@ inline bool readBodyOptions(Value vIn, physics::BodyOptions& out, std::string& e
         if (ev::isObject(partsVal)) {
             Value lenV = ev::getProperty(partsVal, "length");
             if (ev::isNumber(lenV)) {
-                uint32_t len = static_cast<uint32_t>(ev::toDouble(lenV));
+                uint32_t len = satCast<uint32_t>(ev::toDouble(lenV));
                 for (uint32_t i = 0; i < len; ++i) {
                     Value pVal = ev::getElement(partsVal, i);
                     physics::BodyOptions partOpts;
@@ -508,8 +508,8 @@ inline bool readBodyOptions(Value vIn, physics::BodyOptions& out, std::string& e
     }
 
     if (out.shape == physics::BodyOptions::ShapeDecomposedMesh) {
-        out.maxHulls = static_cast<int>(getPropNumber(v, "maxHulls", out.maxHulls));
-        out.maxVerticesPerHull = static_cast<int>(getPropNumber(v, "maxVerticesPerHull", out.maxVerticesPerHull));
+        out.maxHulls = satCast<int>(getPropNumber(v, "maxHulls", out.maxHulls));
+        out.maxVerticesPerHull = satCast<int>(getPropNumber(v, "maxVerticesPerHull", out.maxVerticesPerHull));
         out.decompResolution = static_cast<float>(getPropNumber(v, "resolution", out.decompResolution));
         out.decompResolution = static_cast<float>(getPropNumber(v, "decompResolution", out.decompResolution));
         out.minVolumePerHull = static_cast<float>(getPropNumber(v, "minVolumePerHull", out.minVolumePerHull));
@@ -605,17 +605,17 @@ inline void readQueryFilter(Value vIn, physics::QueryFilter& filter, HostPhysics
     const Rooted v(vIn);
     Value ign = ev::getProperty(v, "ignoreBody");
     if (!ev::isUndefined(ign) && !ev::isNull(ign) && !ev::isObject(ign)) {
-        int32_t t = static_cast<int32_t>(ev::toDouble(ign));
+        int32_t t = satCast<int32_t>(ev::toDouble(ign));
         filter.ignoreBody = pw->bodyIdForTag(t);
     }
     const Rooted igns(ev::getProperty(v, "ignoreBodies"));
     if (ev::isObject(igns)) {
         Value lenV = ev::getProperty(igns, "length");
-        uint32_t len = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        uint32_t len = ev::isNumber(lenV) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0;
         for (uint32_t i = 0; i < len; ++i) {
             Value it = ev::getElement(igns, i);
             if (ev::isNumber(it)) {
-                int32_t t = static_cast<int32_t>(ev::toDouble(it));
+                int32_t t = satCast<int32_t>(ev::toDouble(it));
                 JPH::BodyID bid = pw->bodyIdForTag(t);
                 if (!bid.IsInvalid()) filter.ignoreBodies.push_back(bid);
             }
@@ -627,7 +627,7 @@ inline void readQueryFilter(Value vIn, physics::QueryFilter& filter, HostPhysics
         if (world) {
             filter.layerMask = 0;
             Value lenV = ev::getProperty(layers, "length");
-            uint32_t len = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+            uint32_t len = ev::isNumber(lenV) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0;
             for (uint32_t i = 0; i < len; ++i) {
                 Value it = ev::getElement(layers, i);
                 if (!ev::isUndefined(it) && !ev::isObject(it)) {

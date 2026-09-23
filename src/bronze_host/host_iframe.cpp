@@ -109,7 +109,7 @@ Value makeContentWindowProxy(dom::Element* el, engine::IframeDoc* d) {
                     if (!res.thrown && ev::isObject(res.value)) {
                         ev::Persistent names(res.value);
                         Value lenVal = ev::getProperty(names.get(), "length");
-                        int len = ev::isNumber(lenVal) ? static_cast<int>(ev::toDouble(lenVal)) : 0;
+                        int len = ev::isNumber(lenVal) ? satCast<int>(ev::toDouble(lenVal)) : 0;
                         for (int i = 0; i < len; ++i) {
                             Value k = ev::getElement(names.get(), i);
                             if (ev::isString(k)) keys.push_back(ev::toUtf8(k));

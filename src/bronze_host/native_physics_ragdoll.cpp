@@ -196,7 +196,7 @@ void* bro_physics_createRagdoll(const char* config) {
     std::vector<std::string> names;
     if (ev::isObject(partsV)) {
         Value lenV = ev::getProperty(partsV, "length");
-        uint32_t np = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        uint32_t np = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0;
         for (uint32_t i = 0; i < np; ++i) {
             Value pv = ev::getElement(partsV, i);
             physics::RagdollPartOptions part;

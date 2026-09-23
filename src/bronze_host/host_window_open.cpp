@@ -141,8 +141,8 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
 
     b.def("setSize", 2, [id](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::undefined();
-        int w = static_cast<int>(ev::toDouble(a[0]));
-        int h = static_cast<int>(ev::toDouble(a[1]));
+        int w = satCast<int>(ev::toDouble(a[0]));
+        int h = satCast<int>(ev::toDouble(a[1]));
         auto it = s_handleStates.find(id);
         if (it != s_handleStates.end()) {
             it->second->width = w;
@@ -180,8 +180,8 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
 
     b.def("setPosition", 2, [id](Value, std::span<const Value> a) -> Value {
         if (a.size() < 2) return ev::undefined();
-        int x = static_cast<int>(ev::toDouble(a[0]));
-        int y = static_cast<int>(ev::toDouble(a[1]));
+        int x = satCast<int>(ev::toDouble(a[0]));
+        int y = satCast<int>(ev::toDouble(a[1]));
         auto it = s_handleStates.find(id);
         if (it != s_handleStates.end()) {
             it->second->x = x;
@@ -416,7 +416,7 @@ void installBroWindowOpen(Value broWinIn) {
             };
             auto getInt = [&](const char* k, int def) {
                 Value v = ev::getProperty(o.get(), k);
-                return (!ev::isUndefined(v) && !ev::isNull(v)) ? static_cast<int>(ev::toDouble(v)) : def;
+                return (!ev::isUndefined(v) && !ev::isNull(v)) ? satCast<int>(ev::toDouble(v)) : def;
             };
             auto getBool = [&](const char* k, bool def) {
                 Value v = ev::getProperty(o.get(), k);
@@ -662,12 +662,12 @@ Value handleWindowOpen(std::span<const Value> a) {
             // allocating getProperty.
             Value w = ev::getProperty(a[2], "width");
             if (!ev::isUndefined(w) && !ev::isNull(w)) {
-                opts.width = static_cast<int>(ev::toDouble(w));
+                opts.width = satCast<int>(ev::toDouble(w));
                 opts.provided.width = true;
             }
             Value h = ev::getProperty(a[2], "height");
             if (!ev::isUndefined(h) && !ev::isNull(h)) {
-                opts.height = static_cast<int>(ev::toDouble(h));
+                opts.height = satCast<int>(ev::toDouble(h));
                 opts.provided.height = true;
             }
         }

@@ -223,8 +223,8 @@ void installHeadlessFrame(engine::Engine& engine) {
     ev::registerGlobal("getPixel", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("getPixel(x, y) requires x and y");
-            int x = static_cast<int>(ev::toDouble(a[0]));
-            int y = static_cast<int>(ev::toDouble(a[1]));
+            int x = satCast<int>(ev::toDouble(a[0]));
+            int y = satCast<int>(ev::toDouble(a[1]));
 
             auto pixels = engine.capturePixels();
             int w = engine.contentWidth();
@@ -253,8 +253,8 @@ void installHeadlessFrame(engine::Engine& engine) {
     ev::registerGlobal("getFramePixel", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("getFramePixel(x, y) requires x and y");
-            int x = static_cast<int>(ev::toDouble(a[0]));
-            int y = static_cast<int>(ev::toDouble(a[1]));
+            int x = satCast<int>(ev::toDouble(a[0]));
+            int y = satCast<int>(ev::toDouble(a[1]));
 
             auto pixels = engine.capturePixels();
             int w = engine.viewportWidth();
@@ -415,7 +415,7 @@ void installHeadlessFrame(engine::Engine& engine) {
             if (!el) {
                 return ev::throwTypeError(std::string("inspectTree: no element matches '") + selector + "'");
             }
-            int maxDepth = a.size() >= 2 ? static_cast<int>(ev::toDouble(a[1])) : 3;
+            int maxDepth = a.size() >= 2 ? satCast<int>(ev::toDouble(a[1])) : 3;
             std::ostringstream out;
             buildTreeString(out, el, 0, maxDepth, "");
             return ev::fromUtf8(out.str());
@@ -498,7 +498,7 @@ void installHeadlessFrame(engine::Engine& engine) {
                 return ev::throwTypeError(std::string("inspectOverlayTree: no element matches '") + selector +
                                           "' in panel '" + panel + "'");
             }
-            int maxDepth = a.size() >= 3 ? static_cast<int>(ev::toDouble(a[2])) : 3;
+            int maxDepth = a.size() >= 3 ? satCast<int>(ev::toDouble(a[2])) : 3;
             std::ostringstream out;
             buildTreeString(out, el, 0, maxDepth, "");
             return ev::fromUtf8(out.str());

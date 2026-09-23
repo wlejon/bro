@@ -44,7 +44,7 @@ void readPointsAndLabels(Value v, std::vector<std::array<float, 2>>& points,
             const float y = static_cast<float>(ev::toDouble(ev::getProperty(e.get(), "y")));
             Value lv = ev::getProperty(e.get(), "label");
             points.push_back({x, y});
-            inlineLabels.push_back(ev::isNumber(lv) ? static_cast<int>(ev::toDouble(lv)) : 1);
+            inlineLabels.push_back(ev::isNumber(lv) ? satCast<int>(ev::toDouble(lv)) : 1);
         }
     }
 }
@@ -56,7 +56,7 @@ std::vector<int> readInts(Value v) {
     const uint32_t n = bvm::getJsArrayLength(arr.get());
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        out.push_back(static_cast<int>(ev::toDouble(ev::getElement(arr.get(), i))));
+        out.push_back(satCast<int>(ev::toDouble(ev::getElement(arr.get(), i))));
     }
     return out;
 }

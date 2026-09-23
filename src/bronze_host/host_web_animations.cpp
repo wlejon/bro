@@ -186,7 +186,8 @@ std::vector<std::string> ownKeys(Value objIn) {
     if (r.thrown) return keys;
     ev::Persistent arr(r.value);
     Value lenVal = ev::getProperty(arr.get(), "length");
-    uint32_t len = ev::isNumber(lenVal) ? static_cast<uint32_t>(ev::toDouble(lenVal)) : 0;
+    uint32_t len = 0;
+    if (!ev::isNumber(lenVal) || !lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) return keys;
     keys.reserve(len);
     for (uint32_t k = 0; k < len; ++k) keys.push_back(ev::toUtf8(ev::getElement(arr.get(), k)));
     return keys;
@@ -201,7 +202,8 @@ std::string keyframeValueString(Value v) {
 bool parseKeyframeArray(Value arrIn, std::vector<engine::WebAnimKeyframe>& frames) {
     ev::Persistent arr(arrIn);
     Value lenVal = ev::getProperty(arr.get(), "length");
-    int64_t len = ev::isNumber(lenVal) ? static_cast<int64_t>(ev::toDouble(lenVal)) : 0;
+    uint32_t len = 0;
+    if (ev::isNumber(lenVal) && !lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) return false;
     std::vector<double> offsets;
 
     for (int64_t i = 0; i < len; ++i) {
@@ -246,7 +248,7 @@ bool parseKeyframeObject(Value obj, std::vector<engine::WebAnimKeyframe>& frames
         auto collect = [&](std::vector<std::string>& out) {
             if (isJsArray(pv.get())) {
                 Value lv = ev::getProperty(pv.get(), "length");
-                int64_t arrLen = ev::isNumber(lv) ? static_cast<int64_t>(ev::toDouble(lv)) : 0;
+                int64_t arrLen = ev::isNumber(lv) ? satCast<int64_t>(ev::toDouble(lv)) : 0;
                 for (int64_t i = 0; i < arrLen; ++i) {
                     out.push_back(keyframeValueString(ev::getElement(pv.get(), static_cast<uint32_t>(i))));
                 }

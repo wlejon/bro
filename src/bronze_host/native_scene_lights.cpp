@@ -442,7 +442,7 @@ uint64_t bro_scene_SceneNode_getBoneWorldMatrix(void* self, uint64_t argBits) {
     bool ok = false;
     Value arg = ev::fromBits(argBits);
     if (ev::isNumber(arg)) {
-        int32_t idx = static_cast<int32_t>(ev::toDouble(arg));
+        int32_t idx = satCast<int32_t>(ev::toDouble(arg));
         ok = sm->player()->boneWorldMatrix(idx, mat);
     } else if (ev::isString(arg)) {
         std::string name = ev::toUtf8(arg);

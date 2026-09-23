@@ -291,7 +291,7 @@ inline bool parseColorValue(Value v, float& r, float& g, float& b, float& a) {
         const Rooted arr(v);
         Value lenV = ev::getProperty(arr, "length");
         if (ev::isNumber(lenV)) {
-            int len = static_cast<int>(ev::toDouble(lenV));
+            int len = satCast<int>(ev::toDouble(lenV));
             if (len >= 3) {
                 r = static_cast<float>(ev::toDouble(ev::getElement(arr, 0)));
                 g = static_cast<float>(ev::toDouble(ev::getElement(arr, 1)));

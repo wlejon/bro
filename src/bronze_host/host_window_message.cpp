@@ -201,7 +201,7 @@ bool cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& tr
         cloneOpts.set(ev::setProperty(cloneOpts.get(), "transfer", transfer.get()));
         // MessagePorts in the transfer list travel as the event's `ports`.
         Value lenV = ev::getProperty(transfer.get(), "length");
-        const uint32_t n = ev::isNumber(lenV) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0u;
+        const uint32_t n = ev::isNumber(lenV) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0u;
         ev::Persistent mpCtor(ev::undefined());
         {
             ev::GlobalValue mp = ev::globalValue("MessagePort");

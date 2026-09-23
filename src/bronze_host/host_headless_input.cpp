@@ -24,7 +24,7 @@ int gamepadResolveIndex(Value arg, int (*fromName)(const std::string&)) {
         return fromName(s);
     }
     if (ev::isNumber(arg)) {
-        return static_cast<int>(ev::toDouble(arg));
+        return satCast<int>(ev::toDouble(arg));
     }
     return -1;
 }
@@ -55,7 +55,7 @@ void installHeadlessInput(engine::Engine& engine) {
             if (a.size() < 2) return ev::throwTypeError("mouseDown(x, y [, button, windowId]) requires x and y");
             double x = ev::toDouble(a[0]);
             double y = ev::toDouble(a[1]);
-            int btn = a.size() > 2 && !ev::isUndefined(a[2]) ? static_cast<int>(ev::toDouble(a[2])) : 0;
+            int btn = a.size() > 2 && !ev::isUndefined(a[2]) ? satCast<int>(ev::toDouble(a[2])) : 0;
             const uint64_t wid = argWindowId(a, 3);
             const float fy = toWindowY(&engine, y, wid);
             if (wid) engine.hostMouseDown(wid, static_cast<float>(x), fy, domToSdlButton(btn));
@@ -70,7 +70,7 @@ void installHeadlessInput(engine::Engine& engine) {
             if (a.size() < 2) return ev::throwTypeError("mouseUp(x, y [, button, windowId]) requires x and y");
             double x = ev::toDouble(a[0]);
             double y = ev::toDouble(a[1]);
-            int btn = a.size() > 2 && !ev::isUndefined(a[2]) ? static_cast<int>(ev::toDouble(a[2])) : 0;
+            int btn = a.size() > 2 && !ev::isUndefined(a[2]) ? satCast<int>(ev::toDouble(a[2])) : 0;
             const uint64_t wid = argWindowId(a, 3);
             const float fy = toWindowY(&engine, y, wid);
             if (wid) engine.hostMouseUp(wid, static_cast<float>(x), fy, domToSdlButton(btn));
@@ -112,7 +112,7 @@ void installHeadlessInput(engine::Engine& engine) {
             if (a.size() < 2) return ev::throwTypeError("click(x, y [, button, windowId]) requires x and y");
             double x = ev::toDouble(a[0]);
             double y = ev::toDouble(a[1]);
-            int btn = a.size() > 2 && !ev::isUndefined(a[2]) ? static_cast<int>(ev::toDouble(a[2])) : 0;
+            int btn = a.size() > 2 && !ev::isUndefined(a[2]) ? satCast<int>(ev::toDouble(a[2])) : 0;
             const uint64_t wid = argWindowId(a, 3);
             const float fy = toWindowY(&engine, y, wid);
             int sdlBtn = domToSdlButton(btn);
@@ -153,7 +153,7 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("touchDown", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchDown(id, x, y [, pressure]) requires id, x, y");
-            int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
+            int64_t id = satCast<int64_t>(ev::toDouble(a[0]));
             double x = ev::toDouble(a[1]);
             double y = ev::toDouble(a[2]);
             double pressure = a.size() > 3 && !ev::isUndefined(a[3]) ? ev::toDouble(a[3]) : 1.0;
@@ -167,7 +167,7 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("touchMove", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchMove(id, x, y [, pressure]) requires id, x, y");
-            int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
+            int64_t id = satCast<int64_t>(ev::toDouble(a[0]));
             double x = ev::toDouble(a[1]);
             double y = ev::toDouble(a[2]);
             double pressure = a.size() > 3 && !ev::isUndefined(a[3]) ? ev::toDouble(a[3]) : 1.0;
@@ -181,7 +181,7 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("touchUp", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchUp(id, x, y) requires id, x, y");
-            int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
+            int64_t id = satCast<int64_t>(ev::toDouble(a[0]));
             double x = ev::toDouble(a[1]);
             double y = ev::toDouble(a[2]);
             engine.handleTouchUp(static_cast<uint64_t>(id), static_cast<float>(x),
@@ -194,7 +194,7 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("touchCancel", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("touchCancel(id, x, y) requires id, x, y");
-            int64_t id = static_cast<int64_t>(ev::toDouble(a[0]));
+            int64_t id = satCast<int64_t>(ev::toDouble(a[0]));
             double x = ev::toDouble(a[1]);
             double y = ev::toDouble(a[2]);
             engine.handleTouchCancel(static_cast<uint64_t>(id), static_cast<float>(x),
@@ -211,9 +211,9 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("keyDown", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("keyDown(keycode [, scancode, mod, repeat, windowId])");
-            int keycode = static_cast<int>(ev::toDouble(a[0]));
-            int scancode = a.size() > 1 && !ev::isUndefined(a[1]) ? static_cast<int>(ev::toDouble(a[1])) : 0;
-            int mod = a.size() > 2 && !ev::isUndefined(a[2]) ? static_cast<int>(ev::toDouble(a[2])) : 0;
+            int keycode = satCast<int>(ev::toDouble(a[0]));
+            int scancode = a.size() > 1 && !ev::isUndefined(a[1]) ? satCast<int>(ev::toDouble(a[1])) : 0;
+            int mod = a.size() > 2 && !ev::isUndefined(a[2]) ? satCast<int>(ev::toDouble(a[2])) : 0;
             bool repeat = a.size() > 3 && !ev::isUndefined(a[3]) ? ev::toBool(a[3]) : false;
             if (scancode == 0) scancode = scancodeForKeycode(keycode);
 
@@ -228,9 +228,9 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("keyUp", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("keyUp(keycode [, scancode, mod, windowId])");
-            int keycode = static_cast<int>(ev::toDouble(a[0]));
-            int scancode = a.size() > 1 && !ev::isUndefined(a[1]) ? static_cast<int>(ev::toDouble(a[1])) : 0;
-            int mod = a.size() > 2 && !ev::isUndefined(a[2]) ? static_cast<int>(ev::toDouble(a[2])) : 0;
+            int keycode = satCast<int>(ev::toDouble(a[0]));
+            int scancode = a.size() > 1 && !ev::isUndefined(a[1]) ? satCast<int>(ev::toDouble(a[1])) : 0;
+            int mod = a.size() > 2 && !ev::isUndefined(a[2]) ? satCast<int>(ev::toDouble(a[2])) : 0;
             if (scancode == 0) scancode = scancodeForKeycode(keycode);
 
             const uint64_t wid = argWindowId(a, 3);
@@ -261,7 +261,7 @@ void installHeadlessInput(engine::Engine& engine) {
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("imeCompose(text [, cursorPos, windowId]) requires text");
             std::string text = ev::toUtf8(a[0]);
-            int cursor = a.size() > 1 && !ev::isUndefined(a[1]) ? static_cast<int>(ev::toDouble(a[1])) : -1;
+            int cursor = a.size() > 1 && !ev::isUndefined(a[1]) ? satCast<int>(ev::toDouble(a[1])) : -1;
             const uint64_t wid = argWindowId(a, 2);
             if (wid) engine.hostTextEditing(wid, text, cursor, 0);
             else engine.handleTextEditing(text, cursor, 0);
@@ -349,7 +349,7 @@ void installHeadlessInput(engine::Engine& engine) {
             } else if (ev::isObject(pathsVal)) {
                 ev::Persistent p(pathsVal);
                 Value lenVal = ev::getProperty(p.get(), "length");
-                uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
+                uint32_t len = satCast<uint32_t>(ev::toDouble(lenVal));
                 for (uint32_t i = 0; i < len; ++i) {
                     paths.push_back(ev::toUtf8(ev::getElement(p.get(), i)));
                 }
@@ -402,7 +402,7 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("gamepadDisconnect", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.empty()) return ev::throwTypeError("gamepadDisconnect(index) requires index");
-            int idx = static_cast<int>(ev::toDouble(a[0]));
+            int idx = satCast<int>(ev::toDouble(a[0]));
             bool ok = engine.gamepadDisconnectVirtual(idx);
             engine.flush();
             if (!ok) return ev::throwTypeError("gamepadDisconnect: no virtual gamepad at index " + std::to_string(idx));
@@ -413,7 +413,7 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("gamepadButton", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("gamepadButton(index, button, pressed [, value])");
-            int idx = static_cast<int>(ev::toDouble(a[0]));
+            int idx = satCast<int>(ev::toDouble(a[0]));
             int button = gamepadResolveIndex(a[1], engine::gamepadButtonIndex);
             if (button < 0 || button >= engine::kGamepadButtonCount)
                 return ev::throwTypeError("gamepadButton: unknown button");
@@ -429,7 +429,7 @@ void installHeadlessInput(engine::Engine& engine) {
     regBoth("gamepadAxis", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 3) return ev::throwTypeError("gamepadAxis(index, axis, value)");
-            int idx = static_cast<int>(ev::toDouble(a[0]));
+            int idx = satCast<int>(ev::toDouble(a[0]));
             int axis = gamepadResolveIndex(a[1], engine::gamepadAxisIndex);
             if (axis < 0 || axis >= engine::kGamepadAxisCount)
                 return ev::throwTypeError("gamepadAxis: unknown axis");

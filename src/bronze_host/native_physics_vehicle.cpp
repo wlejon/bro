@@ -106,7 +106,7 @@ void* bro_physics_createVehicle(const char* config) {
 
     Value bodyVal = ev::getProperty(optsVal, "body");
     if (!ev::isUndefined(bodyVal) && !ev::isObject(bodyVal)) {
-        chassisTag = static_cast<int32_t>(ev::toDouble(bodyVal));
+        chassisTag = satCast<int32_t>(ev::toDouble(bodyVal));
     }
 
     if (chassisTag < 0) {
@@ -148,7 +148,7 @@ void* bro_physics_createVehicle(const char* config) {
     const Rooted wheelsVal(ev::getProperty(optsVal, "wheels"));
     if (ev::isObject(wheelsVal)) {
         Value lenV = ev::getProperty(wheelsVal, "length");
-        uint32_t nw = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        uint32_t nw = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0;
         for (uint32_t i = 0; i < nw; ++i) {
             Value wv = ev::getElement(wheelsVal, i);
             physics::VehicleWheelOptions wheel;
@@ -184,7 +184,7 @@ void* bro_physics_createVehicle(const char* config) {
         const Rooted tracksVal(ev::getProperty(optsVal, "tracks"));
         if (ev::isObject(tracksVal)) {
             Value lenV = ev::getProperty(tracksVal, "length");
-            uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+            uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0;
             for (uint32_t i = 0; i < n; ++i) {
                 const Rooted tv(ev::getElement(tracksVal, i));
                 physics::VehicleTrackOptions trk;
@@ -193,7 +193,7 @@ void* bro_physics_createVehicle(const char* config) {
                     if (readFloatVector(ev::getProperty(tv, "wheels"), idxs)) {
                         for (float f : idxs) trk.wheels.push_back(static_cast<int>(f));
                     }
-                    trk.drivenWheel = static_cast<int>(getPropNumber(tv, "drivenWheel", trk.drivenWheel));
+                    trk.drivenWheel = satCast<int>(getPropNumber(tv, "drivenWheel", trk.drivenWheel));
                     trk.inertia = static_cast<float>(getPropNumber(tv, "inertia", trk.inertia));
                     trk.angularDamping = static_cast<float>(getPropNumber(tv, "angularDamping", trk.angularDamping));
                     trk.maxBrakeTorque = static_cast<float>(getPropNumber(tv, "maxBrakeTorque", trk.maxBrakeTorque));
@@ -227,13 +227,13 @@ void* bro_physics_createVehicle(const char* config) {
     const Rooted diffsVal(ev::getProperty(optsVal, "differentials"));
     if (ev::isObject(diffsVal)) {
         Value lenV = ev::getProperty(diffsVal, "length");
-        uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0;
         for (uint32_t i = 0; i < n; ++i) {
             const Rooted dv(ev::getElement(diffsVal, i));
             physics::VehicleDifferentialOptions d;
             if (ev::isObject(dv)) {
-                d.leftWheel = static_cast<int>(getPropNumber(dv, "leftWheel", d.leftWheel));
-                d.rightWheel = static_cast<int>(getPropNumber(dv, "rightWheel", d.rightWheel));
+                d.leftWheel = satCast<int>(getPropNumber(dv, "leftWheel", d.leftWheel));
+                d.rightWheel = satCast<int>(getPropNumber(dv, "rightWheel", d.rightWheel));
                 d.ratio = static_cast<float>(getPropNumber(dv, "ratio", d.ratio));
                 d.leftRightSplit = static_cast<float>(getPropNumber(dv, "leftRightSplit", d.leftRightSplit));
                 d.limitedSlipRatio = static_cast<float>(getPropNumber(dv, "limitedSlipRatio", d.limitedSlipRatio));
@@ -258,18 +258,18 @@ void* bro_physics_createVehicle(const char* config) {
     }
     Value tlVal = ev::getProperty(optsVal, "testerLayer");
     if (ev::isString(tlVal)) opts.testerLayer = world->layerIndex(ev::toUtf8(tlVal));
-    else if (ev::isNumber(tlVal)) opts.testerLayer = static_cast<int>(ev::toDouble(tlVal));
+    else if (ev::isNumber(tlVal)) opts.testerLayer = satCast<int>(ev::toDouble(tlVal));
 
     const Rooted arbVal(ev::getProperty(optsVal, "antiRollBars"));
     if (ev::isObject(arbVal)) {
         Value lenV = ev::getProperty(arbVal, "length");
-        uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? satCast<uint32_t>(ev::toDouble(lenV)) : 0;
         for (uint32_t i = 0; i < n; ++i) {
             const Rooted el(ev::getElement(arbVal, i));
             if (ev::isObject(el)) {
                 physics::VehicleAntiRollBarOptions bar;
-                bar.leftWheel = static_cast<int>(getPropNumber(el, "leftWheel", 0));
-                bar.rightWheel = static_cast<int>(getPropNumber(el, "rightWheel", 1));
+                bar.leftWheel = satCast<int>(getPropNumber(el, "leftWheel", 0));
+                bar.rightWheel = satCast<int>(getPropNumber(el, "rightWheel", 1));
                 bar.stiffness = static_cast<float>(getPropNumber(el, "stiffness", bar.stiffness));
                 opts.antiRollBars.push_back(bar);
             }

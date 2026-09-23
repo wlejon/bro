@@ -202,7 +202,7 @@ static bool parseSendOptions(uint64_t optsBits, net::SendOptions& opts, const ch
     if (optsBits == 0) return true;
     const Rooted optVal(ev::fromBits(optsBits));
     auto clampChannel = [](Value v) {
-        int ch = static_cast<int>(ev::toDouble(v));
+        int ch = satCast<int>(ev::toDouble(v));
         if (ch < 0) ch = 0;
         if (ch >= net::kNetLaneCount) ch = net::kNetLaneCount - 1;
         return ch;

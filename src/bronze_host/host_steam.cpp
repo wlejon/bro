@@ -59,7 +59,7 @@ static uint64_t parseSteamId(Value v) {
             return 0;
         }
     } else if (ev::isNumber(v)) {
-        return static_cast<uint64_t>(ev::toDouble(v));
+        return satCast<uint64_t>(ev::toDouble(v));
     }
     return 0;
 }
@@ -482,7 +482,7 @@ Value makeBroSteamValue() {
                 else if (sz == "large") size = 2;
                 else size = 1;
             } else if (ev::isNumber(a[1])) {
-                size = static_cast<int>(ev::toDouble(a[1]));
+                size = satCast<int>(ev::toDouble(a[1]));
             }
         }
         uint32_t reqId = s->nextAvatarReq++;
@@ -505,7 +505,7 @@ Value makeBroSteamValue() {
         }
         int maxMembers = 8;
         if (a.size() > 1 && ev::isNumber(a[1])) {
-            int m = static_cast<int>(ev::toDouble(a[1]));
+            int m = satCast<int>(ev::toDouble(a[1]));
             if (m > 0) maxMembers = m;
         }
         uint32_t reqId = s->nextLobbyReq++;
@@ -584,7 +584,7 @@ Value makeBroSteamValue() {
         auto* s = getSteamState();
         if (!s || !s->service || a.size() < 2) return ev::undefined();
         uint64_t id = parseSteamId(a[0]);
-        int limit = static_cast<int>(ev::toDouble(a[1]));
+        int limit = satCast<int>(ev::toDouble(a[1]));
         if (id && limit > 0) s->service->setLobbyMemberLimit(id, limit);
         return ev::undefined();
     });
@@ -656,7 +656,7 @@ Value makeBroSteamValue() {
                 auto kres = ev::call(keysFn.get(), objCtor.get(), std::span<const Value>(&arg, 1));
                 if (kres.thrown || !hostIsArray(kres.value)) return;
                 ev::Persistent keys(kres.value);
-                uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(keys.get(), "length")));
+                uint32_t len = satCast<uint32_t>(ev::toDouble(ev::getProperty(keys.get(), "length")));
                 for (uint32_t i = 0; i < len; ++i) {
                     std::string key = ev::toUtf8(ev::getElement(keys.get(), i));
                     read(key, ev::getProperty(obj.get(), key));
@@ -671,7 +671,7 @@ Value makeBroSteamValue() {
             forEachEntry("numberFilters", opts, [&filters](const std::string& key, Value v) {
                 steam::LobbyListFilter f;
                 f.kind = steam::LobbyListFilter::Numeric;
-                f.key = key; f.ival = static_cast<int32_t>(ev::toDouble(v)); f.comparison = 0;
+                f.key = key; f.ival = satCast<int32_t>(ev::toDouble(v)); f.comparison = 0;
                 filters.push_back(std::move(f));
             });
 
@@ -686,7 +686,7 @@ Value makeBroSteamValue() {
 
             Value mr = ev::getProperty(opts.get(), "maxResults");
             if (ev::isNumber(mr)) {
-                int32_t n = static_cast<int32_t>(ev::toDouble(mr));
+                int32_t n = satCast<int32_t>(ev::toDouble(mr));
                 if (n > 0) {
                     steam::LobbyListFilter f;
                     f.kind = steam::LobbyListFilter::ResultCount;
@@ -761,7 +761,7 @@ Value makeBroSteamValue() {
 
         int rate = 0;
         if (a.size() > 1 && ev::isNumber(a[1])) {
-            rate = static_cast<int>(ev::toDouble(a[1]));
+            rate = satCast<int>(ev::toDouble(a[1]));
         }
 
         uint32_t reqId = s->nextVoiceReq++;

@@ -61,7 +61,7 @@ double attrDimension(dom::Element* el, const char* name) {
 // in every browser, and code that compares two of them (`a.clientWidth ===
 // b.clientWidth`) depends on it.
 Value fromCssPixels(double v) {
-    return ev::fromDouble(static_cast<double>(static_cast<int>(v)));
+    return ev::fromDouble(static_cast<double>(satCast<int32_t>(v)));
 }
 
 // ---------------------------------------------------------------------------

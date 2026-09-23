@@ -123,7 +123,7 @@ Value makeStyleObject(HostNodeState* st) {
     });
     b.def("item", 1, [st](Value, std::span<const Value> a) {
         if (!st->el || a.empty()) return ev::fromUtf8("");
-        size_t idx = static_cast<size_t>(ev::toDouble(a[0]));
+        size_t idx = satCast<size_t>(ev::toDouble(a[0]));
         const auto& props = st->el->style().properties();
         if (idx >= props.size()) return ev::fromUtf8("");
         auto it = props.begin();

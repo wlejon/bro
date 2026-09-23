@@ -481,7 +481,7 @@ void decorateVideoProto(ObjectBuilder& b) {
         [](Value self, std::span<const Value> a) -> Value {
             auto* el = getElement(self);
             if (el && !a.empty()) {
-                el->setAttribute("width", std::to_string(static_cast<int>(ev::toDouble(a[0]))));
+                el->setAttribute("width", std::to_string(satCast<int>(ev::toDouble(a[0]))));
             }
             return ev::undefined();
         });
@@ -495,7 +495,7 @@ void decorateVideoProto(ObjectBuilder& b) {
         [](Value self, std::span<const Value> a) -> Value {
             auto* el = getElement(self);
             if (el && !a.empty()) {
-                el->setAttribute("height", std::to_string(static_cast<int>(ev::toDouble(a[0]))));
+                el->setAttribute("height", std::to_string(satCast<int>(ev::toDouble(a[0]))));
             }
             return ev::undefined();
         });
@@ -519,7 +519,7 @@ void decorateVideoProto(ObjectBuilder& b) {
 
         int32_t frames = 1;
         if (!a.empty() && !ev::isUndefined(a[0])) {
-            frames = static_cast<int32_t>(ev::toDouble(a[0]));
+            frames = satCast<int32_t>(ev::toDouble(a[0]));
         }
         fireMediaEvent(el, "seeking");
         const int moved = v->stepFrame(frames);

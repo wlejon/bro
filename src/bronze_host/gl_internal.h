@@ -15,6 +15,7 @@
 
 #include "bronze_host/gl_profile.h"
 #include "bronze_host/host_callee_namer.h"
+#include "bronze_host/host_numeric.h"
 #include "bronze_host/host_rooted.h"
 
 #include "webgl/webgl2_context.h"
@@ -182,14 +183,15 @@ inline double numAt(std::span<const Value> args, size_t i) {
     return std::isnan(d) ? 0.0 : d;
 }
 
+// WebIDL `long` / `unsigned long`: ToInt32 / ToUint32, so a value past the
+// type's range wraps (0x8xxxxxxx bitmasks stay exact) and ±Infinity or 1e300
+// is 0 — a plain cast of either is undefined behaviour.
 inline int32_t i32At(std::span<const Value> args, size_t i) {
-    return static_cast<int32_t>(static_cast<int64_t>(numAt(args, i)));
+    return jsToInt32(numAt(args, i));
 }
 
 inline uint32_t u32At(std::span<const Value> args, size_t i) {
-    // GL enums arrive as exact small doubles; the int64 detour keeps values
-    // above INT32_MAX (0x8xxxxxxx bitmasks, should one appear) well-defined.
-    return static_cast<uint32_t>(static_cast<int64_t>(numAt(args, i)));
+    return jsToUint32(numAt(args, i));
 }
 
 inline int64_t i64At(std::span<const Value> args, size_t i) {
@@ -245,7 +247,10 @@ inline bool plainArrayData(Value v, std::vector<T>& storage, Convert convert,
     ev::Persistent root(v);
     Value lenV = ev::getProperty(root.get(), "length");
     if (ev::isUndefined(lenV) || ev::isObject(lenV)) return false;
-    uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+    // `length` is whatever the object says: bounded like any buffer a script
+    // sizes, so `{length: 4e9}` is refused rather than a 16 GB resize.
+    uint32_t n = satCast<uint32_t>(ev::toDouble(lenV));
+    if (static_cast<uint64_t>(n) * sizeof(T) >= kMaxHostBufferBytes) return false;
     storage.resize(n);
     for (uint32_t i = 0; i < n; ++i) {
         Value e = ev::getElement(root.get(), i);
@@ -279,7 +284,7 @@ inline bool int32Data(Value v, std::vector<int32_t>& storage,
     }
     return plainArrayData<int32_t>(
         v, storage,
-        [](double d) { return static_cast<int32_t>(static_cast<int64_t>(d)); },
+        [](double d) { return jsToInt32(d); },
         outData, outCount);
 }
 
@@ -292,7 +297,7 @@ inline bool uint32Data(Value v, std::vector<uint32_t>& storage,
     }
     return plainArrayData<uint32_t>(
         v, storage,
-        [](double d) { return static_cast<uint32_t>(static_cast<int64_t>(d)); },
+        [](double d) { return jsToUint32(d); },
         outData, outCount);
 }
 

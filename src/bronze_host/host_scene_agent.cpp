@@ -51,7 +51,7 @@ static bool parseCapabilitiesList(Value arr, brogameagent::CapabilitySet& set, s
     ev::Persistent root(arr);
     Value lenVal = ev::getProperty(root.get(), "length");
     if (!ev::isNumber(lenVal)) return true;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
+    uint32_t len = satCast<uint32_t>(ev::toDouble(lenVal));
     for (uint32_t i = 0; i < len; ++i) {
         Value v = ev::getElement(root.get(), i);
         if (!ev::isString(v)) continue;
@@ -71,8 +71,8 @@ static void parseLaneWaypoints(Value arr, brogameagent::CapabilitySet& set) {
     if (!ev::isObject(arr)) return;
     ev::Persistent root(arr);
     Value lenVal = ev::getProperty(root.get(), "length");
-    if (!ev::isNumber(lenVal)) return;
-    uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
+    uint32_t len = 0;
+    if (!ev::isNumber(lenVal) || !lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) return;
     std::vector<bromath::Vec2> wps;
     wps.reserve(len);
     for (uint32_t i = 0; i < len; ++i) {
@@ -206,7 +206,7 @@ static void ensureSelfProxyClassInstalled() {
             auto& act = sp->binding->pending();
             act = brogameagent::Action{};
             act.capId = brogameagent::kCapBasicAttack;
-            act.i0 = static_cast<int32_t>(ev::toDouble(a[0]));
+            act.i0 = satCast<int32_t>(ev::toDouble(a[0]));
             return ev::undefined();
         });
 
@@ -216,8 +216,8 @@ static void ensureSelfProxyClassInstalled() {
             auto& act = sp->binding->pending();
             act = brogameagent::Action{};
             act.capId = brogameagent::kCapCastAbility;
-            act.i0 = static_cast<int32_t>(ev::toDouble(a[0]));
-            if (a.size() >= 2) act.i1 = static_cast<int32_t>(ev::toDouble(a[1]));
+            act.i0 = satCast<int32_t>(ev::toDouble(a[0]));
+            if (a.size() >= 2) act.i1 = satCast<int32_t>(ev::toDouble(a[1]));
             return ev::undefined();
         });
 
@@ -255,8 +255,8 @@ static void ensureSelfProxyClassInstalled() {
             auto& act = sp->binding->pending();
             act = brogameagent::Action{};
             act.capId = id;
-            if (a.size() >= 2 && ev::isNumber(a[1])) act.i0 = static_cast<int32_t>(ev::toDouble(a[1]));
-            if (a.size() >= 3 && ev::isNumber(a[2])) act.i1 = static_cast<int32_t>(ev::toDouble(a[2]));
+            if (a.size() >= 2 && ev::isNumber(a[1])) act.i0 = satCast<int32_t>(ev::toDouble(a[1]));
+            if (a.size() >= 3 && ev::isNumber(a[2])) act.i1 = satCast<int32_t>(ev::toDouble(a[2]));
             return ev::undefined();
         });
 
@@ -344,7 +344,7 @@ void installSceneGraphAgent(ObjectBuilder& b) {
             Value hzVal = ev::getProperty(opts.get(), "stepHz");
             if (ev::isNumber(hzVal)) stepHz = static_cast<float>(ev::toDouble(hzVal));
             Value maxVal = ev::getProperty(opts.get(), "maxStepsPerFrame");
-            if (ev::isNumber(maxVal)) maxSteps = static_cast<int>(ev::toDouble(maxVal));
+            if (ev::isNumber(maxVal)) maxSteps = satCast<int>(ev::toDouble(maxVal));
         }
         auto keepAlive = std::make_shared<ev::Persistent>(a[0]);
         g->attachAIWorld(&hw->world, stepHz, maxSteps, std::move(keepAlive));
@@ -488,14 +488,14 @@ void installSceneNodeAgent(ObjectBuilder& b) {
                         Value lenV = ev::getProperty(lvr.get(), "length");
                         if (ev::isNumber(lenV)) {
                             uint32_t mask = 0;
-                            uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+                            uint32_t n = satCast<uint32_t>(ev::toDouble(lenV));
                             for (uint32_t i = 0; i < n; ++i) {
                                 Value el = ev::getElement(lvr.get(), i);
                                 int32_t idx = -1;
                                 if (ev::isString(el)) {
                                     idx = pw->layerIndex(ev::toUtf8(el));
                                 } else if (ev::isNumber(el)) {
-                                    idx = static_cast<int32_t>(ev::toDouble(el));
+                                    idx = satCast<int32_t>(ev::toDouble(el));
                                 }
                                 if (idx >= 0 && idx < 32) mask |= (1u << idx);
                             }

@@ -569,7 +569,7 @@ void WorkerInstance::threadFunc() {
                     }
                 }
                 Value ln = ev::getProperty(thrown.get(), "lineNumber");
-                if (ev::isNumber(ln)) lineno = static_cast<int>(ev::toDouble(ln));
+                if (ev::isNumber(ln)) lineno = satCast<int>(ev::toDouble(ln));
             }
             if (errStr.empty()) {
                 errStr = thrownValueText(thrown.get());

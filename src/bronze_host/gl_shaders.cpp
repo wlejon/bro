@@ -196,7 +196,8 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         ev::Persistent root(namesVal);
         Value lenV = ev::getProperty(root.get(), "length");
         if (ev::isUndefined(lenV) || ev::isObject(lenV)) return ev::null();
-        uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+        uint32_t n = 0;
+        if (!lengthWithin(ev::toDouble(lenV), kMaxHostListLength, n)) return ev::null();
         std::vector<std::string> names;
         names.reserve(n);
         for (uint32_t i = 0; i < n; ++i) {

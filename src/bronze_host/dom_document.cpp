@@ -277,7 +277,7 @@ Value makeLiveHTMLCollection(dom::Element* root, dom::Document* fixed, std::stri
 
     ObjectBuilder mb;
     mb.def("item", 1, [root, fixed, selector](Value, std::span<const Value> a) -> Value {
-        int idx = a.empty() ? 0 : static_cast<int>(ev::toDouble(a[0]));
+        int idx = a.empty() ? 0 : satCast<int>(ev::toDouble(a[0]));
         auto elems = runCollectionQuery(root, fixed, selector);
         if (idx < 0 || static_cast<size_t>(idx) >= elems.size()) return ev::null();
         return hostElementValue(elems[idx]);

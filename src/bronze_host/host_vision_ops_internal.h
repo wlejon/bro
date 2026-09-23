@@ -44,7 +44,7 @@ WrapperT* visionSelf(const bvm::HostClass& cls, Value thisVal, uint32_t tag) {
 inline void visionIntOpt(Value opts, const char* key, int& dst) {
     if (!ev::isObject(opts)) return;
     Value v = ev::getProperty(opts, key);
-    if (ev::isNumber(v)) dst = static_cast<int>(ev::toDouble(v));
+    if (ev::isNumber(v)) dst = satCast<int>(ev::toDouble(v));
 }
 
 inline void visionFloatOpt(Value opts, const char* key, float& dst) {
@@ -63,7 +63,7 @@ inline bool visionBoolOpt(Value opts, const char* key, bool def) {
 inline void visionInt64Opt(Value opts, const char* key, int64_t& dst) {
     if (!ev::isObject(opts)) return;
     Value v = ev::getProperty(opts, key);
-    if (ev::isNumber(v)) dst = static_cast<int64_t>(ev::toDouble(v));
+    if (ev::isNumber(v)) dst = satCast<int64_t>(ev::toDouble(v));
 }
 
 // A Float32Array-valued option into a host vector. False when the key is

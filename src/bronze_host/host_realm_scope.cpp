@@ -58,7 +58,7 @@ std::vector<std::string> ownPropertyNames(const ev::Persistent& obj) {
     if (res.thrown) return names;
     ev::Persistent namesArr(res.value);
     Value lenVal = ev::getProperty(namesArr.get(), "length");
-    const int len = static_cast<int>(ev::toDouble(lenVal));
+    const int len = satCast<int>(ev::toDouble(lenVal));
     names.reserve(static_cast<size_t>(len > 0 ? len : 0));
     for (int i = 0; i < len; ++i) {
         Value k = ev::getElement(namesArr.get(), i);

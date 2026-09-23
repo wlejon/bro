@@ -190,7 +190,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
-        int off = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         r->setStart(n, bro::dom::nodeOffsetToBytes(n, off));
         return ev::undefined();
     });
@@ -199,7 +199,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
-        int off = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         r->setEnd(n, bro::dom::nodeOffsetToBytes(n, off));
         return ev::undefined();
     });
@@ -264,7 +264,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r || a.empty()) return ev::fromDouble(0.0);
         auto* n = hostNodeOf(a[0]);
-        int off = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         return ev::fromDouble(r->comparePoint(n, bro::dom::nodeOffsetToBytes(n, off)));
     });
 
@@ -272,7 +272,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r || a.empty()) return ev::fromBool(false);
         auto* n = hostNodeOf(a[0]);
-        int off = a.size() > 1 ? static_cast<int>(ev::toDouble(a[1])) : 0;
+        int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         return ev::fromBool(r->isPointInRange(n, bro::dom::nodeOffsetToBytes(n, off)));
     });
 

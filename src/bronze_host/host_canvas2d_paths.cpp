@@ -63,7 +63,7 @@ bool parseRoundRectRadii(Value v, SkVector radii[4], std::string& err) {
             isArr = ev::toBool(ev::call(isArrFn, ev::undefined(), std::span<const Value>(&arg, 1)).value);
         }
         if (isArr) {
-            int len = static_cast<int>(ev::toDouble(ev::getProperty(obj.get(), "length")));
+            int len = satCast<int>(ev::toDouble(ev::getProperty(obj.get(), "length")));
             if (len == 0 || len > 4) {
                 err = "Failed to execute 'roundRect': 1 to 4 radii required";
                 return false;
@@ -324,8 +324,9 @@ void installCanvas2DPaths(ObjectBuilder& b, dom::Element* el) {
             return ev::undefined();
         }
         if (ev::isObject(a[0])) {
-            uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(a[0], "length")));
-            if (len >= 2) {
+            uint32_t len = 0;
+            if (lengthWithin(ev::toDouble(ev::getProperty(a[0], "length")), kMaxHostListLength, len) &&
+                len >= 2) {
                 std::vector<float> pts;
                 pts.reserve(len);
                 for (uint32_t i = 0; i < len; ++i) {

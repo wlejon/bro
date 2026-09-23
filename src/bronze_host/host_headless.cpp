@@ -155,8 +155,8 @@ void installHeadlessGlobals(engine::Engine& engine) {
     regBoth("resize", ev::makeFunction(
         [&engine](Value, std::span<const Value> a) -> Value {
             if (a.size() < 2) return ev::throwTypeError("resize(w, h) requires width and height");
-            int w = static_cast<int>(ev::toDouble(a[0]));
-            int h = static_cast<int>(ev::toDouble(a[1]));
+            int w = satCast<int>(ev::toDouble(a[0]));
+            int h = satCast<int>(ev::toDouble(a[1]));
             engine.handleResize(w, h);
             engine.flush();
             return ev::undefined();
@@ -178,7 +178,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
                 if (ev::isString(v)) {
                     paths.push_back(ev::toUtf8(v));
                 } else if (ev::isObject(v)) {
-                    const uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(v, "length")));
+                    const uint32_t n = satCast<uint32_t>(ev::toDouble(ev::getProperty(v, "length")));
                     for (uint32_t i = 0; i < n; ++i) {
                         paths.push_back(ev::toUtf8(ev::getElement(v, i)));
                     }

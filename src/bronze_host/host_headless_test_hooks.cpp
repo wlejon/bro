@@ -176,8 +176,8 @@ Value visionProbe(Value, std::span<const Value> a) {
         return ev::throwTypeError("__host.visionProbe(width, height, opts?)");
     }
     auto job = std::make_shared<VisionProbeJob>();
-    job->w = static_cast<int>(ev::toDouble(a[0]));
-    job->h = static_cast<int>(ev::toDouble(a[1]));
+    job->w = satCast<int>(ev::toDouble(a[0]));
+    job->h = satCast<int>(ev::toDouble(a[1]));
     if (job->w <= 0 || job->h <= 0) return ev::throwTypeError("__host.visionProbe: empty size");
     job->caller = std::this_thread::get_id();
 
@@ -261,8 +261,8 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         if (!parent) return ev::throwError("__host: document has no body");
 
         std::string id = a.size() >= 1 && ev::isString(a[0]) ? ev::toUtf8(a[0]) : "";
-        int32_t w = a.size() >= 2 && ev::isNumber(a[1]) ? static_cast<int32_t>(ev::toDouble(a[1])) : 128;
-        int32_t h = a.size() >= 3 && ev::isNumber(a[2]) ? static_cast<int32_t>(ev::toDouble(a[2])) : 128;
+        int32_t w = a.size() >= 2 && ev::isNumber(a[1]) ? satCast<int32_t>(ev::toDouble(a[1])) : 128;
+        int32_t h = a.size() >= 3 && ev::isNumber(a[2]) ? satCast<int32_t>(ev::toDouble(a[2])) : 128;
 
         auto* canvas = doc->createElement("canvas");
         if (!canvas) return ev::throwError("__host: createElement failed");
@@ -336,7 +336,7 @@ void installHeadlessTestHooks(engine::Engine& engine) {
     host.def("removeWindowListener", 1, [](Value, std::span<const Value> a) {
         auto* eng = hostEngine();
         if (!eng) return ev::throwError("__host: no Engine for this realm");
-        uint64_t id = a.empty() ? 0 : static_cast<uint64_t>(ev::toDouble(a[0]));
+        uint64_t id = a.empty() ? 0 : satCast<uint64_t>(ev::toDouble(a[0]));
         return ev::fromBool(eng->removeWindowEventListener(dom::ListenerHandle{id}));
     });
 
@@ -361,7 +361,7 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         if (a.size() < 2) return ev::throwTypeError("__host.removeElementListener(el, id)");
         auto* el = hostElementOf(a[0]);
         if (!el) return ev::throwTypeError("__host.removeElementListener: not an Element");
-        uint64_t id = static_cast<uint64_t>(ev::toDouble(a[1]));
+        uint64_t id = satCast<uint64_t>(ev::toDouble(a[1]));
         return ev::fromBool(el->removeEventListener(dom::ListenerHandle{id}));
     });
 
