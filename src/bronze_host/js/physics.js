@@ -558,6 +558,14 @@
             });
         }
     }
+    // Explicit push/pop of the active world, for a run of `Physics.*` calls
+    // against this handle without the per-call forwarding above.
+    fn(PhysicsWorldHandle.prototype, "enter", function enter() {
+        __bro_native.physics.PhysicsWorldHandle_enter(this);
+    });
+    fn(PhysicsWorldHandle.prototype, "exit", function exit() {
+        __bro_native.physics.PhysicsWorldHandle_exit(this);
+    });
 
     // ---- PhysicsCharacter ----------------------------------------------------
     function PhysicsCharacter() {
