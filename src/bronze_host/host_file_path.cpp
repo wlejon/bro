@@ -76,7 +76,8 @@ Value makeFileFromPath(const std::string& path) {
     ev::fillTypedArray(view.get(), bytes);
     ev::Persistent parts(hostArrayOf(1, [&view](size_t) { return view.get(); }));
     ev::Persistent opts(ev::createObject());
-    opts.set(ev::setProperty(opts.get(), "type", ev::fromUtf8(mimeForName(name))));
+    ev::Persistent mime(ev::fromUtf8(mimeForName(name)));
+    opts.set(ev::setProperty(opts.get(), "type", mime.get()));
     opts.set(ev::setProperty(opts.get(), "lastModified", ev::fromDouble(lastModified)));
     ev::Persistent nameV(ev::fromUtf8(name));
     Value args[3] = {parts.get(), nameV.get(), opts.get()};
@@ -86,7 +87,8 @@ Value makeFileFromPath(const std::string& path) {
         return ev::undefined();
     }
     ev::Persistent file(r.value);
-    file.set(ev::setProperty(file.get(), "path", ev::fromUtf8(path)));
+    ev::Persistent pathV(ev::fromUtf8(path));
+    file.set(ev::setProperty(file.get(), "path", pathV.get()));
     return file.get();
 }
 

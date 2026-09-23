@@ -440,7 +440,8 @@ void installHeadlessFrame(engine::Engine& engine) {
             }
             ev::Persistent obj(ev::createObject());
             for (auto& [k, v] : styles) {
-                obj.set(ev::setProperty(obj.get(), k, ev::fromUtf8(v)));
+                ev::Persistent val(ev::fromUtf8(v));
+                obj.set(ev::setProperty(obj.get(), k, val.get()));
             }
             return obj.get();
         }, 1, "computedStyle"));
@@ -518,18 +519,25 @@ void installHeadlessFrame(engine::Engine& engine) {
 
     // perf object
     ev::Persistent perf(ev::createObject());
-    perf.set(ev::setProperty(perf.get(), "now", ev::makeFunction(
+    // The function is made (and rooted) in its own statement: in
+    // setProperty(perf.get(), k, makeFunction(...)) the receiver may be read
+    // before the allocation moves it.
+    auto setPerfFn = [&perf](const char* name, uint32_t arity, ev::NativeFn fn) {
+        ev::Persistent f(ev::makeFunction(std::move(fn), arity, name));
+        perf.set(ev::setProperty(perf.get(), name, f.get()));
+    };
+    setPerfFn("now", 0,
         [](Value, std::span<const Value>) -> Value {
             auto now = std::chrono::steady_clock::now().time_since_epoch();
             double ms = std::chrono::duration<double, std::milli>(now).count();
             return ev::fromDouble(ms);
-        }, 0, "now")));
-    perf.set(ev::setProperty(perf.get(), "reset", ev::makeFunction(
+        });
+    setPerfFn("reset", 0,
         [&engine](Value, std::span<const Value>) -> Value {
             if (engine.document()) engine.document()->resetPerf();
             return ev::undefined();
-        }, 0, "reset")));
-    perf.set(ev::setProperty(perf.get(), "stats", ev::makeFunction(
+        });
+    setPerfFn("stats", 0,
         [&engine](Value, std::span<const Value>) -> Value {
             if (!engine.document()) return ev::createObject();
             const auto& p = engine.document()->perf();
@@ -603,11 +611,11 @@ void installHeadlessFrame(engine::Engine& engine) {
                 o.set(ev::setProperty(o.get(), "bronze", bz.get()));
             }
             return o.get();
-        }, 0, "stats")));
-    perf.set(ev::setProperty(perf.get(), "gpuFrameMs", ev::makeFunction(
+        });
+    setPerfFn("gpuFrameMs", 0,
         [&engine](Value, std::span<const Value>) -> Value {
             return ev::fromDouble(engine.gpuFrameMs());
-        }, 0, "gpuFrameMs")));
+        });
     ev::registerGlobal("perf", perf.get());
 }
 

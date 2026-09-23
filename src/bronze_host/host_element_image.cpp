@@ -148,7 +148,8 @@ void decorateImageProto(ObjectBuilder& b) {
         HostImage* img = imageStateOf(self);
         ev::Persistent p{ev::createPromise()};
         if (!img) {
-            ev::rejectPromise(p.get(), ev::fromUtf8("EncodingError: image state missing"));
+            ev::Persistent reason{ev::fromUtf8("EncodingError: image state missing")};
+            ev::rejectPromise(p.get(), reason.get());
             return p.get();
         }
         if (!img->complete && img->activeLoadToken) {
@@ -161,8 +162,9 @@ void decorateImageProto(ObjectBuilder& b) {
         if (ok) {
             ev::resolvePromise(p.get(), ev::undefined());
         } else {
-            Value ctor = ev::globalValue("Error").value;
             Value reason = ev::fromUtf8("EncodingError: the image could not be decoded");
+            // Read after the string's allocation, not before it.
+            Value ctor = ev::globalValue("Error").value;
             if (ev::isFunction(ctor)) {
                 ev::CallResult made = ev::construct(ctor, std::span<const Value>(&reason, 1));
                 if (!made.thrown) reason = made.value;

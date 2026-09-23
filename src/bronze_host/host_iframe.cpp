@@ -237,15 +237,19 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
     setCurrentHostDocument(subDoc);
     reloadHostStorage(basePath);
 
+    // Rooted: running the scripts allocates, and the restore must name the
+    // previous document's CURRENT address; globalThis is re-read each time.
     ev::GlobalValue docG = ev::globalValue("document");
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    Value prevDoc = docG.found ? docG.value : ev::null();
-
-    Value subDocVal = hostDocumentValue(subDoc);
-    ev::registerGlobal("document", subDocVal);
-    if (gt.found && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "document", subDocVal);
-    }
+    ev::Persistent prevDoc(docG.found ? docG.value : ev::null());
+    auto setDocumentGlobal = [](Value docIn) {
+        ev::Persistent doc(docIn);
+        ev::registerGlobal("document", doc.get());
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) {
+            ev::setProperty(gt.value, "document", doc.get());
+        }
+    };
+    setDocumentGlobal(hostDocumentValue(subDoc));
 
     for (const auto& s : scripts) {
         if (s.isModule) {
@@ -259,12 +263,7 @@ void runHostSubDocScripts(engine::Engine& engine, dom::Document* subDoc,
         evalScript(engine, code, fname);
     }
 
-    if (!ev::isNull(prevDoc)) {
-        ev::registerGlobal("document", prevDoc);
-        if (gt.found && ev::isObject(gt.value)) {
-            ev::setProperty(gt.value, "document", prevDoc);
-        }
-    }
+    if (!ev::isNull(prevDoc.get())) setDocumentGlobal(prevDoc.get());
 
     setCurrentHostDocument(prevHostDoc);
     exitRealmScope();

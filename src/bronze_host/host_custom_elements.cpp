@@ -82,13 +82,16 @@ static bool isConnected(dom::Node* n) {
 
 static void fireLifecycle(dom::Element* el, const char* name) {
     if (!isUpgraded(el)) return;
-    Value elVal = hostElementValue(el);
-    Value cb = ev::getProperty(elVal, name);
+    // Rooted across the callback read, which may run a getter.
+    ev::Persistent elVal(hostElementValue(el));
+    Value cb = ev::getProperty(elVal.get(), name);
     if (ev::isFunction(cb)) {
-        ev::CallResult r = ev::call(cb, elVal, {});
+        ev::CallResult r = ev::call(cb, elVal.get(), {});
         if (r.thrown) {
+            // thrownValueText: an Error is an object, and toUtf8 of an
+            // object is a hard error in the embed API.
             LOG_WARN("customElements: <%s> %s threw: %s", toLowerStr(el->tagName()).c_str(), name,
-                     ev::toUtf8(r.value).c_str());
+                     thrownValueText(r.value).c_str());
         }
     }
 }
@@ -104,18 +107,22 @@ static ev::CallResult runCustomElementConstructor(dom::Element* el, const Custom
     s_activeConstructingElement = nullptr;
     s_activeCtor = ev::undefined();
     if (res.thrown) return res;
-    Value customVal = res.value;
-    if (ev::isObject(customVal)) {
-        noteHostElementValue(el, customVal);
+    if (ev::isObject(res.value)) {
+        // Rooted: setProperty and fromUtf8 allocate, and `res.value` is
+        // what the caller reads back afterwards.
+        ev::Persistent customVal(res.value);
+        noteHostElementValue(el, customVal.get());
         HostNodeState* st = hostNodeStateFor(el);
         if (st) {
-            ev::setProperty(customVal, "__bro_node_id__",
+            ev::setProperty(customVal.get(), "__bro_node_id__",
                             ev::fromDouble(static_cast<double>(reinterpret_cast<uintptr_t>(st))));
         }
-        ev::setProperty(customVal, "nodeType", ev::fromDouble(1));
-        ev::setProperty(customVal, "tagName", ev::fromUtf8(el->domTagName()));
-        ev::setProperty(customVal, "nodeName", ev::fromUtf8(el->domTagName()));
-        ev::setProperty(customVal, kUpgradedMarker, ev::fromBool(true));
+        ev::setProperty(customVal.get(), "nodeType", ev::fromDouble(1));
+        ev::Persistent tagName(ev::fromUtf8(el->domTagName()));
+        ev::setProperty(customVal.get(), "tagName", tagName.get());
+        ev::setProperty(customVal.get(), "nodeName", tagName.get());
+        ev::setProperty(customVal.get(), kUpgradedMarker, ev::fromBool(true));
+        res.value = customVal.get();
     }
     return res;
 }
@@ -128,7 +135,7 @@ static bool upgradeElement(dom::Element* el, const CustomElementDef& def) {
     ev::CallResult res = runCustomElementConstructor(el, def);
     if (res.thrown) {
         LOG_WARN("customElements: <%s> constructor threw during upgrade: %s", def.tagName.c_str(),
-                 ev::toUtf8(res.value).c_str());
+                 thrownValueText(res.value).c_str());
         return false;
     }
     // Attributes present at upgrade time are reported the way the spec's
@@ -200,14 +207,16 @@ void onCustomElementAttributeChanged(dom::Element* el, const std::string& name,
     }
     if (!observed) return;
 
-    Value elVal = hostElementValue(el);
-    Value cb = ev::getProperty(elVal, "attributeChangedCallback");
-    if (ev::isFunction(cb)) {
-        Value nameVal = ev::fromUtf8(name);
-        Value oldVal = oldValue ? ev::fromUtf8(oldValue) : ev::null();
-        Value newVal = newValue ? ev::fromUtf8(newValue) : ev::null();
-        const Value args[3] = { nameVal, oldVal, newVal };
-        ev::call(cb, elVal, std::span<const Value>(args, 3));
+    // Each fromUtf8 allocates, so the element, the callback and the earlier
+    // strings are rooted before the next one is made.
+    ev::Persistent elVal(hostElementValue(el));
+    ev::Persistent cb(ev::getProperty(elVal.get(), "attributeChangedCallback"));
+    if (ev::isFunction(cb.get())) {
+        ev::Persistent nameVal(ev::fromUtf8(name));
+        ev::Persistent oldVal(oldValue ? ev::fromUtf8(oldValue) : ev::null());
+        ev::Persistent newVal(newValue ? ev::fromUtf8(newValue) : ev::null());
+        const Value args[3] = { nameVal.get(), oldVal.get(), newVal.get() };
+        ev::call(cb.get(), elVal.get(), std::span<const Value>(args, 3));
     }
 }
 
@@ -277,8 +286,9 @@ Value constructCustomElementBase(Value newObject) {
                         ev::fromDouble(static_cast<double>(reinterpret_cast<uintptr_t>(st))));
     }
     ev::setProperty(self.get(), "nodeType", ev::fromDouble(1));
-    ev::setProperty(self.get(), "tagName", ev::fromUtf8(el->domTagName()));
-    ev::setProperty(self.get(), "nodeName", ev::fromUtf8(el->domTagName()));
+    ev::Persistent tagName(ev::fromUtf8(el->domTagName()));
+    ev::setProperty(self.get(), "tagName", tagName.get());
+    ev::setProperty(self.get(), "nodeName", tagName.get());
     ev::setProperty(self.get(), kUpgradedMarker, ev::fromBool(true));
     return self.get();
 }
@@ -327,9 +337,10 @@ void installCustomElementsGlobals() {
 
         // Stamp the tag on the class's prototype so `new MyElement()` can find
         // it again through the receiver (constructCustomElementBase).
-        Value proto = ev::getProperty(a[1], "prototype");
-        if (ev::isObject(proto)) {
-            ev::setProperty(proto, kTagMarker, ev::fromUtf8(name));
+        ev::Persistent proto(ev::getProperty(a[1], "prototype"));
+        if (ev::isObject(proto.get())) {
+            ev::Persistent tag(ev::fromUtf8(name));
+            ev::setProperty(proto.get(), kTagMarker, tag.get());
         }
 
         // Elements already parsed under this name are upgraded now, in
@@ -357,19 +368,20 @@ void installCustomElementsGlobals() {
         }
         std::string name = toLowerStr(ev::toUtf8(a[0]));
         if (name.find('-') == std::string::npos) {
-            Value p = ev::createPromise();
-            ev::rejectPromise(p, hostMakeDomError("SyntaxError", "customElements.whenDefined: name must contain a hyphen"));
-            return p;
+            ev::Persistent p(ev::createPromise());
+            ev::Persistent err(hostMakeDomError("SyntaxError", "customElements.whenDefined: name must contain a hyphen"));
+            ev::rejectPromise(p.get(), err.get());
+            return p.get();
         }
         auto it = s_registry.find(name);
         if (it != s_registry.end()) {
-            Value p = ev::createPromise();
-            ev::resolvePromise(p, it->second.ctor.get());
-            return p;
+            ev::Persistent p(ev::createPromise());
+            ev::resolvePromise(p.get(), it->second.ctor.get());
+            return p.get();
         }
         Value p = ev::createPromise();
         s_pendingWhenDefined[name].emplace_back(p);
-        return p;
+        return s_pendingWhenDefined[name].back().get();
     });
 
     ce.def("upgrade", 1, [](Value, std::span<const Value> a) -> Value {

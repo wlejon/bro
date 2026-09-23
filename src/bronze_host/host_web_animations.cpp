@@ -89,19 +89,26 @@ void rejectFinishedPromise(AnimationState* st) {
 
 void fireHandler(Value handler, Value animObj, const char* type, Value currentTime) {
     if (!ev::isFunction(handler)) return;
+    // Rooted before the event object is built: its allocations would leave
+    // the raw parameters pointing at the old semispace.
+    ev::Persistent handlerP(handler);
+    ev::Persistent animP(animObj);
+    ev::Persistent timeP(currentTime);
     ObjectBuilder eb;
     eb.set("type", ev::fromUtf8(type));
-    eb.set("currentTime", currentTime);
-    eb.set("target", animObj);
-    Value evt = eb.get();
-    Value args[1] = { evt };
-    ev::call(handler, animObj, std::span<const Value>(args, 1));
+    eb.set("currentTime", timeP.get());
+    eb.set("target", animP.get());
+    Value args[1] = { eb.get() };
+    ev::call(handlerP.get(), animP.get(), std::span<const Value>(args, 1));
 }
 
-void settleFinish(AnimationState* st, Value animObj) {
+void settleFinish(AnimationState* st, Value animObjIn) {
     if (st->finishDelivered) return;
     st->finishDelivered = true;
-    resolveFinishedPromise(st, animObj);
+    // Resolving the promise allocates; the handler call below needs the
+    // object's post-resolve address.
+    ev::Persistent animP(animObjIn);
+    resolveFinishedPromise(st, animP.get());
     engine::Engine* eng = hostEngine();
     Value ct = ev::null();
     if (eng) {
@@ -112,7 +119,7 @@ void settleFinish(AnimationState* st, Value animObj) {
             if (cur) ct = ev::fromDouble(*cur);
         }
     }
-    fireHandler(st->onfinish.get(), animObj, "finish", ct);
+    fireHandler(st->onfinish.get(), animP.get(), "finish", ct);
     strongPins().erase(st->id);
 }
 
@@ -165,25 +172,44 @@ bool computeOffsets(std::vector<double>& spec, std::vector<engine::WebAnimKeyfra
     return true;
 }
 
-bool parseKeyframeArray(Value arr, std::vector<engine::WebAnimKeyframe>& frames) {
-    Value lenVal = ev::getProperty(arr, "length");
+// Object.keys(obj) as strings. Everything is rooted across the call and the
+// element reads, which allocate.
+std::vector<std::string> ownKeys(Value objIn) {
+    std::vector<std::string> keys;
+    ev::Persistent obj(objIn);
+    ev::Persistent objCtor(ev::globalValue("Object").value);
+    ev::Persistent keysFn(ev::getProperty(objCtor.get(), "keys"));
+    Value arg = obj.get();
+    ev::CallResult r = ev::call(keysFn.get(), objCtor.get(), std::span<const Value>(&arg, 1));
+    if (r.thrown) return keys;
+    ev::Persistent arr(r.value);
+    Value lenVal = ev::getProperty(arr.get(), "length");
+    uint32_t len = ev::isNumber(lenVal) ? static_cast<uint32_t>(ev::toDouble(lenVal)) : 0;
+    keys.reserve(len);
+    for (uint32_t k = 0; k < len; ++k) keys.push_back(ev::toUtf8(ev::getElement(arr.get(), k)));
+    return keys;
+}
+
+// A keyframe value as its string: strings as they are, numbers through
+// ToString, anything else empty. Converted at once, never held raw.
+std::string keyframeValueString(Value v) {
+    return (ev::isString(v) || ev::isNumber(v)) ? ev::toUtf8(v) : std::string();
+}
+
+bool parseKeyframeArray(Value arrIn, std::vector<engine::WebAnimKeyframe>& frames) {
+    ev::Persistent arr(arrIn);
+    Value lenVal = ev::getProperty(arr.get(), "length");
     int64_t len = ev::isNumber(lenVal) ? static_cast<int64_t>(ev::toDouble(lenVal)) : 0;
     std::vector<double> offsets;
-    Value objCtor = ev::globalValue("Object").value;
-    Value keysFn = ev::getProperty(objCtor, "keys");
 
     for (int64_t i = 0; i < len; ++i) {
-        Value item = ev::getElement(arr, static_cast<uint32_t>(i));
-        if (!ev::isObject(item)) return false;
+        ev::Persistent item(ev::getElement(arr.get(), static_cast<uint32_t>(i)));
+        if (!ev::isObject(item.get())) return false;
         engine::WebAnimKeyframe kf;
         double off = -1.0;
 
-        Value keysArr = ev::call(keysFn, objCtor, std::span<const Value>(&item, 1)).value;
-        Value klenVal = ev::getProperty(keysArr, "length");
-        uint32_t klen = ev::isNumber(klenVal) ? static_cast<uint32_t>(ev::toDouble(klenVal)) : 0;
-        for (uint32_t k = 0; k < klen; ++k) {
-            std::string pname = ev::toUtf8(ev::getElement(keysArr, k));
-            Value pv = ev::getProperty(item, pname.c_str());
+        for (const std::string& pname : ownKeys(item.get())) {
+            Value pv = ev::getProperty(item.get(), pname.c_str());
             if (pname == "offset") {
                 if (ev::isNumber(pv)) off = ev::toDouble(pv);
             } else if (pname == "easing") {
@@ -193,9 +219,7 @@ bool parseKeyframeArray(Value arr, std::vector<engine::WebAnimKeyframe>& frames)
                     kf.hasEasing = true;
                 }
             } else {
-                std::string valStr = ev::isString(pv) ? ev::toUtf8(pv) :
-                                     (ev::isNumber(pv) ? ev::toUtf8(pv) : "");
-                kf.props.emplace_back(keyToCssProp(pname), valStr);
+                kf.props.emplace_back(keyToCssProp(pname), keyframeValueString(pv));
             }
         }
         offsets.push_back(off);
@@ -212,30 +236,20 @@ bool parseKeyframeObject(Value obj, std::vector<engine::WebAnimKeyframe>& frames
     std::vector<PropList> lists;
     std::vector<std::string> easings;
 
-    Value objCtor = ev::globalValue("Object").value;
-    Value keysFn = ev::getProperty(objCtor, "keys");
-    Value keysArr = ev::call(keysFn, objCtor, std::span<const Value>(&obj, 1)).value;
-    Value klenVal = ev::getProperty(keysArr, "length");
-    uint32_t klen = ev::isNumber(klenVal) ? static_cast<uint32_t>(ev::toDouble(klenVal)) : 0;
-
-    for (uint32_t p = 0; p < klen; ++p) {
-        std::string pname = ev::toUtf8(ev::getElement(keysArr, p));
-        Value pv = ev::getProperty(obj, pname.c_str());
+    ev::Persistent objP(obj);
+    for (const std::string& pname : ownKeys(objP.get())) {
+        // Rooted: each element read and number conversion below allocates.
+        ev::Persistent pv(ev::getProperty(objP.get(), pname.c_str()));
 
         auto collect = [&](std::vector<std::string>& out) {
-            if (isJsArray(pv)) {
-                Value lv = ev::getProperty(pv, "length");
+            if (isJsArray(pv.get())) {
+                Value lv = ev::getProperty(pv.get(), "length");
                 int64_t arrLen = ev::isNumber(lv) ? static_cast<int64_t>(ev::toDouble(lv)) : 0;
                 for (int64_t i = 0; i < arrLen; ++i) {
-                    Value el = ev::getElement(pv, static_cast<uint32_t>(i));
-                    std::string s = ev::isString(el) ? ev::toUtf8(el) :
-                                    (ev::isNumber(el) ? ev::toUtf8(el) : "");
-                    out.push_back(std::move(s));
+                    out.push_back(keyframeValueString(ev::getElement(pv.get(), static_cast<uint32_t>(i))));
                 }
             } else {
-                std::string s = ev::isString(pv) ? ev::toUtf8(pv) :
-                                (ev::isNumber(pv) ? ev::toUtf8(pv) : "");
-                out.push_back(std::move(s));
+                out.push_back(keyframeValueString(pv.get()));
             }
         };
 
@@ -704,11 +718,13 @@ void installWebAnimationGlobals() {
             if (!rec || rec->state == engine::WebAnimState::Idle) return ev::undefined();
             eng->webAnimationManager().cancelOp(*rec);
             if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
+            // `self_` is a plain copy; rejecting the promise allocates.
+            ev::Persistent selfP(self_);
             rejectFinishedPromise(st);
             st->finishedPromise.set(ev::undefined());
             st->promiseSettled = false;
             st->finishDelivered = false;
-            fireHandler(st->oncancel.get(), self_, "cancel", ev::null());
+            fireHandler(st->oncancel.get(), selfP.get(), "cancel", ev::null());
             strongPins().erase(st->id);
             return ev::undefined();
         });

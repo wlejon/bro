@@ -263,11 +263,14 @@ void bro_terrain_Terrain_setHeightSource(void* self, uint64_t fn) {
                                   int paddedW, int paddedH, float cellSize,
                                   float worldX0, float worldZ0) -> bool {
         if (!c->hasHeightSource) return false;
-        Value callback = c->heightSource.get();
-        if (!ev::isFunction(callback)) return false;
+        if (!ev::isFunction(c->heightSource.get())) return false;
 
         const size_t totalFloats = static_cast<size_t>(paddedW) * static_cast<size_t>(paddedH);
-        Value paddedView = makeFloat32Array(padded, totalFloats);
+        // Rooted: it is read again after the callback, which allocates.
+        ev::Persistent paddedViewP(makeFloat32Array(padded, totalFloats));
+        Value paddedView = paddedViewP.get();
+        // Read after the view's allocation, not before it.
+        Value callback = c->heightSource.get();
 
         Value args[9] = {
             ev::fromDouble(cx),
@@ -294,7 +297,7 @@ void bro_terrain_Terrain_setHeightSource(void* self, uint64_t fn) {
             }
         }
 
-        auto info = ev::typedArrayInfo(paddedView);
+        auto info = ev::typedArrayInfo(paddedViewP.get());
         if (info.data) {
             std::memcpy(padded, info.data, totalFloats * sizeof(float));
             return true;

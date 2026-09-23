@@ -539,7 +539,9 @@ void WorkerInstance::threadFunc() {
 
         auto res = bronze::eval::evalScript(scriptCode, opts);
         if (res.thrown) {
-            std::string errStr = ev::toUtf8(res.value);
+            // thrownValueText, not toUtf8: a thrown Error is an object, and
+            // toUtf8 of an object is a hard error in the embed API.
+            std::string errStr = thrownValueText(res.value);
             if (errStr.find("await") != std::string::npos) {
                 std::string wrapped = "(async () => {\n" + scriptCode +
                                       "\n})().catch(err => { console.error(err && err.stack ? err.stack : err); });\n";
@@ -567,7 +569,7 @@ void WorkerInstance::threadFunc() {
                 if (ev::isNumber(ln)) lineno = static_cast<int>(ev::toDouble(ln));
             }
             if (errStr.empty()) {
-                errStr = ev::toUtf8(thrown.get());
+                errStr = thrownValueText(thrown.get());
             }
             LOG_ERROR("worker script execution failed for %s: %s", resolvedPath.string().c_str(), errStr.c_str());
             dispatchWorkerError(errStr, resolvedPath.string(), lineno);
@@ -611,7 +613,7 @@ void WorkerInstance::threadFunc() {
                 Value event = evObjRoot.get();
                 ev::CallResult r = ev::call(cbRoot.get(), ev::undefined(), std::span<const Value>(&event, 1));
                 if (r.thrown) {
-                    std::string errStr = ev::toUtf8(r.value);
+                    std::string errStr = thrownValueText(r.value);
                     dispatchWorkerError(errStr, scriptPath_, 0);
                 }
             }
@@ -626,7 +628,7 @@ void WorkerInstance::threadFunc() {
                 Value event = evObjRoot.get();
                 ev::CallResult r = ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&event, 1));
                 if (r.thrown) {
-                    std::string errStr = ev::toUtf8(r.value);
+                    std::string errStr = thrownValueText(r.value);
                     dispatchWorkerError(errStr, scriptPath_, 0);
                 }
             }

@@ -128,12 +128,14 @@ net::NetSubscriber* getNetSubscriber() {
                     size_t payloadLen = msg.data.size() - kWireHeaderSize;
                     payloadVal = ev::createArrayBuffer(std::span<const uint8_t>(payload, payloadLen));
                 }
-                Value args[4] = {
-                    ev::fromUtf8("message"),
-                    ev::fromDouble(msg.connection),
-                    payloadVal,
-                    ev::fromDouble(msg.channel)
-                };
+                // The payload is rooted before the argument values are made:
+                // fromUtf8 (and a boxed fromDouble) allocate, which would
+                // leave a raw payloadVal pointing at the old semispace.
+                ev::Persistent payload(payloadVal);
+                ev::Persistent type(ev::fromUtf8("message"));
+                ev::Persistent conn(ev::fromDouble(msg.connection));
+                ev::Persistent chan(ev::fromDouble(msg.channel));
+                Value args[4] = {type.get(), conn.get(), payload.get(), chan.get()};
                 ev::call(g_net.dispatcher->get(), ev::undefined(), args);
             }
         };

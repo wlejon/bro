@@ -129,15 +129,19 @@ bool readEventSpec(Value descV, const char* what, EventSpec& out) {
         return true;
     }
 
-    Value detailV = ev::getProperty(desc.get(), "detail");
+    // Rooted: the stringify lookup may run a getter and allocate.
+    ev::Persistent detailP(ev::getProperty(desc.get(), "detail"));
+    Value detailV = detailP.get();
     if (!ev::isUndefined(detailV) && !ev::isNull(detailV)) {
         out.hasDetail = true;
         if (ev::isObject(detailV)) {
             ev::GlobalValue g = ev::globalValue("JSON");
             if (g.found && ev::isObject(g.value)) {
-                Value stringifyFn = ev::getProperty(g.value, "stringify");
-                if (ev::isFunction(stringifyFn)) {
-                    ev::CallResult res = ev::call(stringifyFn, g.value, std::span<const Value>(&detailV, 1));
+                ev::Persistent json(g.value);
+                ev::Persistent stringifyFn(ev::getProperty(json.get(), "stringify"));
+                if (ev::isFunction(stringifyFn.get())) {
+                    Value d = detailP.get();
+                    ev::CallResult res = ev::call(stringifyFn.get(), json.get(), std::span<const Value>(&d, 1));
                     if (!res.thrown && ev::isString(res.value)) {
                         out.detail = ev::toUtf8(res.value);
                     }

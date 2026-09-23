@@ -549,7 +549,8 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // rejects with AbortError per instructions.
     b.def("makeXRCompatible", 0, [](Value, std::span<const Value>) {
         ev::Persistent p{ev::createPromise()};
-        ev::rejectPromise(p.get(), hostMakeDomError("AbortError", "WebXR is not supported"));
+        ev::Persistent err{hostMakeDomError("AbortError", "WebXR is not supported")};
+        ev::rejectPromise(p.get(), err.get());
         return p.get();
     });
 }

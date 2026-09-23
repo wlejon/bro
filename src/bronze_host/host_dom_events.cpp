@@ -221,10 +221,12 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
             if (det.front() == '{' || det.front() == '[') {
                 ev::GlobalValue g = ev::globalValue("JSON");
                 if (g.found && ev::isObject(g.value)) {
-                    Value parseFn = ev::getProperty(g.value, "parse");
-                    if (ev::isFunction(parseFn)) {
+                    // Rooted across the string's allocation.
+                    ev::Persistent json(g.value);
+                    ev::Persistent parseFn(ev::getProperty(json.get(), "parse"));
+                    if (ev::isFunction(parseFn.get())) {
                         Value sVal = ev::fromUtf8(det);
-                        ev::CallResult res = ev::call(parseFn, g.value, std::span<const Value>(&sVal, 1));
+                        ev::CallResult res = ev::call(parseFn.get(), json.get(), std::span<const Value>(&sVal, 1));
                         if (!res.thrown && !ev::isUndefined(res.value)) {
                             detail = res.value;
                         }
@@ -561,17 +563,22 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
     bool swapDoc = (targetDoc && targetDoc != prevDoc);
 
     ev::GlobalValue docG = ev::globalValue("document");
-    ev::GlobalValue gt = ev::globalValue("globalThis");
-    Value prevDocVal = docG.found ? docG.value : ev::null();
+    // Rooted: the listener call below allocates, and the restore must name
+    // the previous document's CURRENT address (as the rAF path does).
+    ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
+    auto setDocumentGlobal = [](Value docIn) {
+        ev::Persistent doc(docIn);
+        ev::registerGlobal("document", doc.get());
+        ev::GlobalValue gt = ev::globalValue("globalThis");
+        if (gt.found && ev::isObject(gt.value)) {
+            ev::setProperty(gt.value, "document", doc.get());
+        }
+    };
 
     if (swapDoc) {
         enterRealmScope(scopeIdForDocument(targetDoc));
         setCurrentHostDocument(targetDoc);
-        Value subDocVal = hostDocumentValue(targetDoc);
-        ev::registerGlobal("document", subDocVal);
-        if (gt.found && ev::isObject(gt.value)) {
-            ev::setProperty(gt.value, "document", subDocVal);
-        }
+        setDocumentGlobal(hostDocumentValue(targetDoc));
     }
 
     auto live = std::make_shared<LiveEvent>();
@@ -594,12 +601,7 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
     live->ev = nullptr;
 
     if (swapDoc) {
-        if (!ev::isNull(prevDocVal)) {
-            ev::registerGlobal("document", prevDocVal);
-            if (gt.found && ev::isObject(gt.value)) {
-                ev::setProperty(gt.value, "document", prevDocVal);
-            }
-        }
+        if (!ev::isNull(prevDocVal.get())) setDocumentGlobal(prevDocVal.get());
         setCurrentHostDocument(prevDoc);
         exitRealmScope();
     }
@@ -659,8 +661,11 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                       ".addEventListener: listener must be a function");
         }
         ev::Persistent fnP(fn);
+        // The type string first: readOptions reads properties, which may
+        // allocate, and `typeV` is a plain copy (the `a` slots themselves
+        // are what the collector updates).
+        std::string type = ev::toUtf8(argAt(a, 0));
         dom::ListenerOptions opts = readOptions(argAt(a, 2));
-        std::string type = ev::toUtf8(typeV);
 
         if (!el) {
             // The registration says so rather than vanishing: a listener the
@@ -711,7 +716,6 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                                    std::span<const Value> a) {
         dom::Element* el = targetElement(source, thisValue);
         Value typeV = argAt(a, 0);
-        Value fn = argAt(a, 1);
         if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
             return ev::throwTypeError(targetName(source, name, el) +
                                       ".removeEventListener: type must be a string");
@@ -722,10 +726,11 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         for (auto it = list.begin(); it != list.end(); ++it) {
             // Identity by a compare of two CURRENT addresses with no
             // allocation between them — the one moment raw bits are a valid
-            // identity for heap values.
+            // identity for heap values. The listener is re-read from its
+            // argument slot here, after readOptions, which may allocate.
             if (it->el != el || it->type != type) continue;
             if (it->capture != opts.capture) continue;
-            if (ev::toBits(it->fn.get()) != ev::toBits(fn)) continue;
+            if (ev::toBits(it->fn.get()) != ev::toBits(argAt(a, 1))) continue;
             if (el) {
                 el->removeEventListener(it->handle);
                 el->removeJsListener(type);

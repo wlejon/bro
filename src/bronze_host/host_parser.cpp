@@ -79,9 +79,10 @@ Value parserParseFromString(Value, std::span<const Value> a) {
     }
     const std::string html = ev::isUndefined(htmlV) ? std::string() : ev::toUtf8(htmlV);
     dom::Document* doc = parseIntoNewDocument(html);
-    Value docVal = hostDocumentValue(doc);
-    ev::setProperty(docVal, "contentType", ev::fromUtf8(mime));
-    return docVal;
+    ev::Persistent docVal(hostDocumentValue(doc));
+    ev::Persistent mimeStr(ev::fromUtf8(mime));
+    ev::setProperty(docVal.get(), "contentType", mimeStr.get());
+    return docVal.get();
 }
 
 Value makeParserValue() {

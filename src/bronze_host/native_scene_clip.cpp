@@ -517,16 +517,18 @@ void bro_animation_AnimationPlayer_setOnEvent(void* self, uint64_t cbBits) {
         auto fnRef = std::make_shared<ev::Persistent>(cb);
         c->player()->setOnEvent([fnRef](const std::string& name, const std::string& argsJson) {
             if (fnRef && ev::isFunction(fnRef->get())) {
-                Value nameVal = ev::fromUtf8(name);
-                Value argsVal = ev::undefined();
+                // Rooted: the JSON parse below allocates several times.
+                ev::Persistent nameVal(ev::fromUtf8(name));
+                ev::Persistent argsVal(ev::undefined());
                 if (!argsJson.empty()) {
-                    Value jsonVal = ev::globalValue("JSON").value;
-                    Value parseFn = ev::getProperty(jsonVal, "parse");
-                    Value sVal = ev::fromUtf8(argsJson);
-                    auto r = ev::call(parseFn, jsonVal, std::span<const Value>(&sVal, 1));
-                    if (!r.thrown) argsVal = r.value;
+                    ev::Persistent jsonVal(ev::globalValue("JSON").value);
+                    ev::Persistent parseFn(ev::getProperty(jsonVal.get(), "parse"));
+                    ev::Persistent sVal(ev::fromUtf8(argsJson));
+                    Value s = sVal.get();
+                    auto r = ev::call(parseFn.get(), jsonVal.get(), std::span<const Value>(&s, 1));
+                    if (!r.thrown) argsVal.set(r.value);
                 }
-                const Value argv[2] = {nameVal, argsVal};
+                const Value argv[2] = {nameVal.get(), argsVal.get()};
                 ev::call(fnRef->get(), ev::undefined(), std::span<const Value>(argv, 2));
             }
         });

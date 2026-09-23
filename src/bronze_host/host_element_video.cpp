@@ -88,11 +88,14 @@ void decorateMediaProto(ObjectBuilder& b) {
     // Methods
     b.def("play", 0, [](Value self, std::span<const Value>) -> Value {
         auto* el = getElement(self);
-        Value p = ev::createPromise();
-        if (!el) {
-            ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "The element has no supported sources."));
-            return p;
-        }
+        // Rooted: making the DOMException, and the 'play' event, allocate.
+        ev::Persistent p(ev::createPromise());
+        auto reject = [&p](const char* msg) {
+            ev::Persistent err(hostMakeDomError("NotSupportedError", msg));
+            ev::rejectPromise(p.get(), err.get());
+            return p.get();
+        };
+        if (!el) return reject("The element has no supported sources.");
         std::string src = el->getAttribute("src");
         if (src.empty()) {
             for (auto* kid : el->childNodes()) {
@@ -107,26 +110,17 @@ void decorateMediaProto(ObjectBuilder& b) {
                 }
             }
         }
-        if (src.empty()) {
-            ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "The element has no supported sources."));
-            return p;
-        }
+        if (src.empty()) return reject("The element has no supported sources.");
         auto* v = getVideoControl(el, true);
-        if (!v) {
-            ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "Failed to create media pipeline."));
-            return p;
-        }
+        if (!v) return reject("Failed to create media pipeline.");
         if (!v->hasPipeline()) {
-            if (!v->load(src)) {
-                ev::rejectPromise(p, hostMakeDomError("NotSupportedError", "The media resource failed to load."));
-                return p;
-            }
+            if (!v->load(src)) return reject("The media resource failed to load.");
         }
         bool wasPaused = !v->isPlaying();
         v->play();
         if (wasPaused) fireMediaEvent(el, "play");
-        ev::resolvePromise(p, ev::undefined());
-        return p;
+        ev::resolvePromise(p.get(), ev::undefined());
+        return p.get();
     });
 
     b.def("pause", 0, [](Value self, std::span<const Value>) -> Value {

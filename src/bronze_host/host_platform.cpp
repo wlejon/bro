@@ -253,33 +253,28 @@ Value makeShowSaveFileDialog() {
 }  // namespace
 
 void installPlatformGlobals() {
-    Value queueMicrotaskVal = makeQueueMicrotask();
-    Value screenVal = makeScreenValue();
-    ev::registerGlobal("queueMicrotask", queueMicrotaskVal);
-    ev::registerGlobal("screen", screenVal);
-    Value alertVal = makeAlert();
-    Value confirmVal = makeConfirm();
-    Value promptVal = makePrompt();
-    Value openFileVal = makeShowOpenFileDialog();
-    Value openFolderVal = makeShowOpenFolderDialog();
-    Value saveFileVal = makeShowSaveFileDialog();
-    ev::registerGlobal("alert", alertVal);
-    ev::registerGlobal("confirm", confirmVal);
-    ev::registerGlobal("prompt", promptVal);
-    ev::registerGlobal("showOpenFileDialog", openFileVal);
-    ev::registerGlobal("showOpenFolderDialog", openFolderVal);
-    ev::registerGlobal("showSaveFileDialog", saveFileVal);
+    // Each value is registered (which roots it) the moment it is made, and
+    // the globalThis copies are read back from the registry: every make*
+    // allocates, so a raw Value held across the next one would be stale.
+    struct Entry { const char* name; Value (*make)(); };
+    const Entry entries[] = {
+        {"queueMicrotask", makeQueueMicrotask},
+        {"screen", makeScreenValue},
+        {"alert", makeAlert},
+        {"confirm", makeConfirm},
+        {"prompt", makePrompt},
+        {"showOpenFileDialog", makeShowOpenFileDialog},
+        {"showOpenFolderDialog", makeShowOpenFolderDialog},
+        {"showSaveFileDialog", makeShowSaveFileDialog},
+    };
+    for (const Entry& e : entries) ev::registerGlobal(e.name, e.make());
 
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "queueMicrotask", queueMicrotaskVal);
-        ev::setProperty(gt.value, "screen", screenVal);
-        ev::setProperty(gt.value, "alert", alertVal);
-        ev::setProperty(gt.value, "confirm", confirmVal);
-        ev::setProperty(gt.value, "prompt", promptVal);
-        ev::setProperty(gt.value, "showOpenFileDialog", openFileVal);
-        ev::setProperty(gt.value, "showOpenFolderDialog", openFolderVal);
-        ev::setProperty(gt.value, "showSaveFileDialog", saveFileVal);
+        ev::Persistent global(gt.value);
+        for (const Entry& e : entries) {
+            ev::setProperty(global.get(), e.name, ev::globalValue(e.name).value);
+        }
     }
     // window.screenX / screenY (and the screenLeft / screenTop aliases): the
     // window's position on the desktop, live like `screen` is; 0 headless,
@@ -313,14 +308,10 @@ void installPlatformGlobals() {
     }
     ev::GlobalValue win = ev::globalValue("window");
     if (win.found && ev::isObject(win.value) && win.value != gt.value) {
-        ev::setProperty(win.value, "queueMicrotask", queueMicrotaskVal);
-        ev::setProperty(win.value, "screen", screenVal);
-        ev::setProperty(win.value, "alert", alertVal);
-        ev::setProperty(win.value, "confirm", confirmVal);
-        ev::setProperty(win.value, "prompt", promptVal);
-        ev::setProperty(win.value, "showOpenFileDialog", openFileVal);
-        ev::setProperty(win.value, "showOpenFolderDialog", openFolderVal);
-        ev::setProperty(win.value, "showSaveFileDialog", saveFileVal);
+        ev::Persistent winRoot(win.value);
+        for (const Entry& e : entries) {
+            ev::setProperty(winRoot.get(), e.name, ev::globalValue(e.name).value);
+        }
     }
     // Gamepad, GamepadButton, GamepadEvent globals
     installGamepadButtonGlobals();

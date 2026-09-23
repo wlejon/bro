@@ -200,10 +200,11 @@ void installTouchGlobals() {
         baseClass = ev::globalValue("Event");
     }
     if (baseClass.found && ev::isFunction(baseClass.value)) {
-        Value baseProto = ev::getProperty(baseClass.value, "prototype");
-        if (ev::isObject(baseProto)) {
-            ev::setPrototype(g_touchEventClass.prototype(), baseProto);
-            ev::setPrototype(g_gestureEventClass.prototype(), baseProto);
+        // Rooted across the first setPrototype, which may allocate.
+        ev::Persistent baseProto(ev::getProperty(baseClass.value, "prototype"));
+        if (ev::isObject(baseProto.get())) {
+            ev::setPrototype(g_touchEventClass.prototype(), baseProto.get());
+            ev::setPrototype(g_gestureEventClass.prototype(), baseProto.get());
         }
     }
 }

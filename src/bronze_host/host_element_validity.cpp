@@ -169,7 +169,8 @@ void decorateElementValidity(ObjectBuilder& b) {
                        // First control of a given name wins, as it does on the
                        // web; a later one must not shadow it.
                        if (!ev::isUndefined(ev::getProperty(arr.get(), n.c_str()))) continue;
-                       arr.set(ev::setProperty(arr.get(), n.c_str(), hostElementValue(c)));
+                       ev::Persistent cv(hostElementValue(c));
+                       arr.set(ev::setProperty(arr.get(), n.c_str(), cv.get()));
                    }
                    return arr.get();
                },

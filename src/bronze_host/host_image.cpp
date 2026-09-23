@@ -216,8 +216,9 @@ void loadHostImage(HostImage& image, const std::string& src, const dom::Document
                     if (success) {
                         ev::resolvePromise(p.get(), ev::undefined());
                     } else {
-                        Value ctor = ev::globalValue("Error").value;
                         Value reason = ev::fromUtf8("EncodingError: the remote image could not be decoded");
+                        // Read after the string's allocation, not before it.
+                        Value ctor = ev::globalValue("Error").value;
                         if (ev::isFunction(ctor)) {
                             ev::CallResult made = ev::construct(ctor, std::span<const Value>(&reason, 1));
                             if (!made.thrown) reason = made.value;

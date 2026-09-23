@@ -17,6 +17,9 @@ namespace bro::bronze_host {
 namespace {
 
 struct MqlListener {
+    // Identity for the abort callback, which outlives any address the
+    // listener function had when it was registered (the collector moves it).
+    uint64_t key = 0;
     ev::Persistent fn;
     bool once = false;
     bool capture = false;
@@ -36,6 +39,7 @@ struct MqlState {
 };
 
 static uint64_t s_nextMqlId = 1;
+static uint64_t s_nextListenerKey = 1;
 static std::unordered_map<uint64_t, std::shared_ptr<MqlState>> s_mqlStates;
 
 } // namespace
@@ -145,54 +149,55 @@ Value makeHostMatchMediaObject(const std::string& rawQuery) {
         auto it = s_mqlStates.find(id);
         if (it == s_mqlStates.end()) return ev::undefined();
 
-        Value fn = a[1];
-        Value optV = argAt(a, 2);
+        // The option reads may run getters (and allocate), so the listener
+        // and signal are rooted rather than held as raw copies.
+        ev::Persistent fn(a[1]);
         bool capture = false;
         bool once = false;
         bool hasSignal = false;
-        Value signalV = ev::undefined();
+        ev::Persistent signalV(ev::undefined());
 
-        if (ev::isObject(optV)) {
-            Value capV = ev::getProperty(optV, "capture");
-            capture = ev::toBool(capV);
-            Value onceV = ev::getProperty(optV, "once");
-            once = ev::toBool(onceV);
-            Value sigV = ev::getProperty(optV, "signal");
+        if (ev::isObject(argAt(a, 2))) {
+            ev::Persistent optV(argAt(a, 2));
+            capture = ev::toBool(ev::getProperty(optV.get(), "capture"));
+            once = ev::toBool(ev::getProperty(optV.get(), "once"));
+            Value sigV = ev::getProperty(optV.get(), "signal");
             if (ev::isObject(sigV)) {
                 hasSignal = true;
-                signalV = sigV;
+                signalV.set(sigV);
             }
-        } else if (!ev::isUndefined(optV)) {
-            capture = ev::toBool(optV);
+        } else if (!ev::isUndefined(argAt(a, 2))) {
+            capture = ev::toBool(argAt(a, 2));
         }
 
         if (hasSignal) {
-            Value ab = ev::getProperty(signalV, "aborted");
+            Value ab = ev::getProperty(signalV.get(), "aborted");
             if (ev::toBool(ab)) return ev::undefined();
         }
 
-        uint64_t fnBits = ev::toBits(fn);
         for (const auto& existing : it->second->listeners) {
-            if (ev::toBits(existing.fn.get()) == fnBits && existing.capture == capture) {
+            if (ev::toBits(existing.fn.get()) == ev::toBits(fn.get()) && existing.capture == capture) {
                 return ev::undefined();
             }
         }
 
         MqlListener lit;
-        lit.fn.set(fn);
+        lit.key = s_nextListenerKey++;
+        lit.fn.set(fn.get());
         lit.once = once;
         lit.capture = capture;
         lit.hasSignal = hasSignal;
 
         if (hasSignal) {
-            lit.signal.set(signalV);
-            ev::Persistent sigP(signalV);
-            ev::Persistent abortCb(ev::makeFunction([id, fnBits, capture](Value, std::span<const Value>) {
+            lit.signal.set(signalV.get());
+            ev::Persistent sigP(signalV.get());
+            const uint64_t key = lit.key;
+            ev::Persistent abortCb(ev::makeFunction([id, key](Value, std::span<const Value>) {
                 auto sit = s_mqlStates.find(id);
                 if (sit != s_mqlStates.end()) {
                     auto& list = sit->second->listeners;
                     for (auto litIt = list.begin(); litIt != list.end(); ++litIt) {
-                        if (ev::toBits(litIt->fn.get()) == fnBits && litIt->capture == capture) {
+                        if (litIt->key == key) {
                             if (litIt->hasSignal && !ev::isUndefined(litIt->signal.get())) {
                                 removeHostListener(litIt->signal, "abort", litIt->abortCb.get());
                             }
@@ -219,17 +224,16 @@ Value makeHostMatchMediaObject(const std::string& rawQuery) {
         auto it = s_mqlStates.find(id);
         if (it == s_mqlStates.end()) return ev::undefined();
 
-        Value fn = a[1];
-        Value optV = argAt(a, 2);
         bool capture = false;
-        if (ev::isObject(optV)) {
-            Value capV = ev::getProperty(optV, "capture");
-            capture = ev::toBool(capV);
-        } else if (!ev::isUndefined(optV)) {
-            capture = ev::toBool(optV);
+        if (ev::isObject(argAt(a, 2))) {
+            capture = ev::toBool(ev::getProperty(argAt(a, 2), "capture"));
+        } else if (!ev::isUndefined(argAt(a, 2))) {
+            capture = ev::toBool(argAt(a, 2));
         }
 
-        uint64_t fnBits = ev::toBits(fn);
+        // Read after the option getter: a[1] is the slot the collector
+        // updates, and nothing allocates between this read and the compare.
+        uint64_t fnBits = ev::toBits(a[1]);
         auto& list = it->second->listeners;
         for (auto litIt = list.begin(); litIt != list.end(); ++litIt) {
             if (ev::toBits(litIt->fn.get()) == fnBits && litIt->capture == capture) {
@@ -330,18 +334,22 @@ void deliverHostMediaQueryChanges() {
             evt.set("matches", ev::fromBool(freshMatches));
             evt.set("media", ev::fromUtf8(st->media));
             evt.set("target", st->mqlObj.get());
-            Value evVal = evt.get();
+            // Everything held across the listener calls is rooted: the calls,
+            // the document wrapper and the property writes all allocate.
+            ev::Persistent evRoot(evt.get());
 
             dom::Document* prevDoc = currentHostDocument();
             ev::GlobalValue docG = ev::globalValue("document");
-            ev::GlobalValue gt = ev::globalValue("globalThis");
-            Value prevDocVal = docG.found ? docG.value : ev::null();
+            ev::GlobalValue gtG = ev::globalValue("globalThis");
+            const bool haveGlobal = gtG.found && ev::isObject(gtG.value);
+            ev::Persistent global(haveGlobal ? gtG.value : ev::undefined());
+            ev::Persistent prevDocVal(docG.found ? docG.value : ev::null());
             if (st->doc) {
                 setCurrentHostDocument(st->doc);
-                Value subDocVal = hostDocumentValue(st->doc);
-                ev::registerGlobal("document", subDocVal);
-                if (gt.found && ev::isObject(gt.value)) {
-                    ev::setProperty(gt.value, "document", subDocVal);
+                ev::Persistent subDocVal(hostDocumentValue(st->doc));
+                ev::registerGlobal("document", subDocVal.get());
+                if (haveGlobal) {
+                    ev::setProperty(global.get(), "document", subDocVal.get());
                 }
             }
 
@@ -369,6 +377,7 @@ void deliverHostMediaQueryChanges() {
 
             for (auto& lit : toInvoke) {
                 if (ev::isFunction(lit.fn.get())) {
+                    Value evVal = evRoot.get();
                     ev::CallResult r = ev::call(lit.fn.get(), st->mqlObj.get(),
                                                 std::span<const Value>(&evVal, 1));
                     if (r.thrown) reportBronzeError("matchMedia listener", r.value);
@@ -376,16 +385,17 @@ void deliverHostMediaQueryChanges() {
             }
             if (!ev::isUndefined(st->onchange.get()) && !ev::isNull(st->onchange.get()) &&
                 ev::isFunction(st->onchange.get())) {
+                Value evVal = evRoot.get();
                 ev::CallResult r = ev::call(st->onchange.get(), st->mqlObj.get(),
                                             std::span<const Value>(&evVal, 1));
                 if (r.thrown) reportBronzeError("matchMedia onchange", r.value);
             }
 
             if (st->doc && dom::Document::isLiveDocument(st->doc)) {
-                if (!ev::isNull(prevDocVal)) {
-                    ev::registerGlobal("document", prevDocVal);
-                    if (gt.found && ev::isObject(gt.value)) {
-                        ev::setProperty(gt.value, "document", prevDocVal);
+                if (!ev::isNull(prevDocVal.get())) {
+                    ev::registerGlobal("document", prevDocVal.get());
+                    if (haveGlobal) {
+                        ev::setProperty(global.get(), "document", prevDocVal.get());
                     }
                 }
                 setCurrentHostDocument(prevDoc);

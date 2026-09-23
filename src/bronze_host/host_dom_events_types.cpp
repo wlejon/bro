@@ -48,12 +48,13 @@ void installDomEventTypes() {
                 b.set("cancelable", ev::fromBool(false));
                 b.set("detail", ev::null());
                 if (a.size() > 1 && ev::isObject(a[1])) {
-                    Value opts = a[1];
-                    Value bub = ev::getProperty(opts, "bubbles");
+                    // Read through the argument slot each time: b.set
+                    // allocates, and a raw copy of a[1] would go stale.
+                    Value bub = ev::getProperty(a[1], "bubbles");
                     if (!ev::isUndefined(bub)) b.set("bubbles", ev::fromBool(ev::toBool(bub)));
-                    Value canc = ev::getProperty(opts, "cancelable");
+                    Value canc = ev::getProperty(a[1], "cancelable");
                     if (!ev::isUndefined(canc)) b.set("cancelable", ev::fromBool(ev::toBool(canc)));
-                    Value det = ev::getProperty(opts, "detail");
+                    Value det = ev::getProperty(a[1], "detail");
                     if (!ev::isUndefined(det)) b.set("detail", det);
                 }
                 return b.get();

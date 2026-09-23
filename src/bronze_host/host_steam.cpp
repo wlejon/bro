@@ -156,10 +156,10 @@ static void initSubscriberCallbacks(SteamCtxState* state) {
     state->subscriber->onJoinRequest = [](uint64_t friendId, const std::string& connect) {
         auto* s = getSteamState();
         if (!s || !ev::isFunction(s->onJoinRequest.get())) return;
-        Value args[2] = {
-            ev::fromUtf8(std::to_string(friendId)),
-            ev::fromUtf8(connect),
-        };
+        // Two allocations: the first string is rooted across the second.
+        ev::Persistent a0(ev::fromUtf8(std::to_string(friendId)));
+        ev::Persistent a1(ev::fromUtf8(connect));
+        Value args[2] = {a0.get(), a1.get()};
         ev::call(s->onJoinRequest.get(), ev::undefined(), std::span<const Value>(args, 2));
     };
 
@@ -259,20 +259,18 @@ static void initSubscriberCallbacks(SteamCtxState* state) {
     state->subscriber->onLobbyInvite = [](uint64_t friendId, uint64_t lobbyId) {
         auto* s = getSteamState();
         if (!s || !ev::isFunction(s->onLobbyInvite.get())) return;
-        Value args[2] = {
-            ev::fromUtf8(std::to_string(friendId)),
-            ev::fromUtf8(std::to_string(lobbyId)),
-        };
+        ev::Persistent a0(ev::fromUtf8(std::to_string(friendId)));
+        ev::Persistent a1(ev::fromUtf8(std::to_string(lobbyId)));
+        Value args[2] = {a0.get(), a1.get()};
         ev::call(s->onLobbyInvite.get(), ev::undefined(), std::span<const Value>(args, 2));
     };
 
     state->subscriber->onLobbyJoinRequested = [](uint64_t lobbyId, uint64_t friendId) {
         auto* s = getSteamState();
         if (!s || !ev::isFunction(s->onLobbyJoinRequest.get())) return;
-        Value args[2] = {
-            ev::fromUtf8(std::to_string(lobbyId)),
-            ev::fromUtf8(std::to_string(friendId)),
-        };
+        ev::Persistent a0(ev::fromUtf8(std::to_string(lobbyId)));
+        ev::Persistent a1(ev::fromUtf8(std::to_string(friendId)));
+        Value args[2] = {a0.get(), a1.get()};
         ev::call(s->onLobbyJoinRequest.get(), ev::undefined(), std::span<const Value>(args, 2));
     };
 
@@ -465,16 +463,16 @@ Value makeBroSteamValue() {
     });
 
     st.def("getAvatar", 2, [](Value, std::span<const Value> a) -> Value {
-        Value p = ev::createPromise();
+        ev::Persistent p(ev::createPromise());
         auto* s = getSteamState();
         if (!s || !s->service || !s->subscriber || !s->service->available() || a.empty()) {
-            ev::resolvePromise(p, ev::null());
-            return p;
+            ev::resolvePromise(p.get(), ev::null());
+            return p.get();
         }
         uint64_t id = parseSteamId(a[0]);
         if (!id) {
-            ev::resolvePromise(p, ev::null());
-            return p;
+            ev::resolvePromise(p.get(), ev::null());
+            return p.get();
         }
         int size = 1; // medium
         if (a.size() > 1) {
@@ -490,16 +488,16 @@ Value makeBroSteamValue() {
         uint32_t reqId = s->nextAvatarReq++;
         s->pendingAvatars.emplace(reqId, ev::Persistent(p));
         s->service->requestAvatar(s->subscriber->id(), reqId, id, size);
-        return p;
+        return p.get();
     });
 
     // --- Lobby API ---
     st.def("createLobby", 2, [](Value, std::span<const Value> a) -> Value {
-        Value p = ev::createPromise();
+        ev::Persistent p(ev::createPromise());
         auto* s = getSteamState();
         if (!s || !s->service || !s->subscriber || !s->service->available()) {
-            ev::resolvePromise(p, ev::null());
-            return p;
+            ev::resolvePromise(p.get(), ev::null());
+            return p.get();
         }
         int type = 2;
         if (!a.empty() && ev::isString(a[0])) {
@@ -513,11 +511,11 @@ Value makeBroSteamValue() {
         uint32_t reqId = s->nextLobbyReq++;
         s->pendingLobby.emplace(reqId, ev::Persistent(p));
         s->service->createLobby(s->subscriber->id(), reqId, type, maxMembers);
-        return p;
+        return p.get();
     });
 
     st.def("joinLobby", 1, [](Value, std::span<const Value> a) -> Value {
-        Value p = ev::createPromise();
+        ev::Persistent p(ev::createPromise());
         auto* s = getSteamState();
         uint64_t id = !a.empty() ? parseSteamId(a[0]) : 0;
         if (!s || !s->service || !s->subscriber || !s->service->available() || !id) {
@@ -525,13 +523,13 @@ Value makeBroSteamValue() {
             res.set("success", ev::fromBool(false));
             res.set("lobbyId", ev::fromUtf8("0"));
             res.set("response", ev::fromDouble(0));
-            ev::resolvePromise(p, res.get());
-            return p;
+            ev::resolvePromise(p.get(), res.get());
+            return p.get();
         }
         uint32_t reqId = s->nextLobbyReq++;
         s->pendingLobby.emplace(reqId, ev::Persistent(p));
         s->service->joinLobby(s->subscriber->id(), reqId, id);
-        return p;
+        return p.get();
     });
 
     st.def("leaveLobby", 1, [](Value, std::span<const Value> a) -> Value {
@@ -633,57 +631,51 @@ Value makeBroSteamValue() {
     });
 
     st.def("requestLobbyList", 1, [](Value, std::span<const Value> a) -> Value {
-        Value p = ev::createPromise();
+        ev::Persistent p(ev::createPromise());
         auto* s = getSteamState();
         if (!s || !s->service || !s->subscriber || !s->service->available()) {
-            ev::resolvePromise(p, hostArrayOf(0, [](size_t) { return ev::undefined(); }));
-            return p;
+            ev::Persistent empty(hostArrayOf(0, [](size_t) { return ev::undefined(); }));
+            ev::resolvePromise(p.get(), empty.get());
+            return p.get();
         }
 
         std::vector<steam::LobbyListFilter> filters;
         if (!a.empty() && ev::isObject(a[0])) {
-            Value opts = a[0];
-            Value sf = ev::getProperty(opts, "stringFilters");
-            if (ev::isObject(sf)) {
-                Value objCtor = ev::globalValue("Object").value;
-                Value keysFn = ev::getProperty(objCtor, "keys");
-                auto kres = ev::call(keysFn, objCtor, std::span<const Value>(&sf, 1));
-                if (!kres.thrown && hostIsArray(kres.value)) {
-                    uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(kres.value, "length")));
-                    for (uint32_t i = 0; i < len; ++i) {
-                        Value kVal = ev::getElement(kres.value, i);
-                        std::string key = ev::toUtf8(kVal);
-                        Value vVal = ev::getProperty(sf, key);
-                        std::string val = ev::toUtf8(vVal);
-                        steam::LobbyListFilter f;
-                        f.kind = steam::LobbyListFilter::String;
-                        f.key = key; f.sval = val; f.comparison = 0;
-                        filters.push_back(std::move(f));
-                    }
+            // Every value below is rooted: the property reads can run
+            // getters and the Object.keys call allocates.
+            ev::Persistent opts(a[0]);
+            // Object.keys(obj) as (key, value) pairs, the value converted by
+            // `read` while the key array is still rooted.
+            auto forEachEntry = [](const char* field, const ev::Persistent& from,
+                                   const std::function<void(const std::string&, Value)>& read) {
+                ev::Persistent obj(ev::getProperty(from.get(), field));
+                if (!ev::isObject(obj.get())) return;
+                ev::Persistent objCtor(ev::globalValue("Object").value);
+                ev::Persistent keysFn(ev::getProperty(objCtor.get(), "keys"));
+                Value arg = obj.get();
+                auto kres = ev::call(keysFn.get(), objCtor.get(), std::span<const Value>(&arg, 1));
+                if (kres.thrown || !hostIsArray(kres.value)) return;
+                ev::Persistent keys(kres.value);
+                uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(keys.get(), "length")));
+                for (uint32_t i = 0; i < len; ++i) {
+                    std::string key = ev::toUtf8(ev::getElement(keys.get(), i));
+                    read(key, ev::getProperty(obj.get(), key));
                 }
-            }
+            };
+            forEachEntry("stringFilters", opts, [&filters](const std::string& key, Value v) {
+                steam::LobbyListFilter f;
+                f.kind = steam::LobbyListFilter::String;
+                f.key = key; f.sval = ev::toUtf8(v); f.comparison = 0;
+                filters.push_back(std::move(f));
+            });
+            forEachEntry("numberFilters", opts, [&filters](const std::string& key, Value v) {
+                steam::LobbyListFilter f;
+                f.kind = steam::LobbyListFilter::Numeric;
+                f.key = key; f.ival = static_cast<int32_t>(ev::toDouble(v)); f.comparison = 0;
+                filters.push_back(std::move(f));
+            });
 
-            Value nf = ev::getProperty(opts, "numberFilters");
-            if (ev::isObject(nf)) {
-                Value objCtor = ev::globalValue("Object").value;
-                Value keysFn = ev::getProperty(objCtor, "keys");
-                auto kres = ev::call(keysFn, objCtor, std::span<const Value>(&nf, 1));
-                if (!kres.thrown && hostIsArray(kres.value)) {
-                    uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(kres.value, "length")));
-                    for (uint32_t i = 0; i < len; ++i) {
-                        Value kVal = ev::getElement(kres.value, i);
-                        std::string key = ev::toUtf8(kVal);
-                        Value vVal = ev::getProperty(nf, key);
-                        int32_t num = static_cast<int32_t>(ev::toDouble(vVal));
-                        steam::LobbyListFilter f;
-                        f.kind = steam::LobbyListFilter::Numeric;
-                        f.key = key; f.ival = num; f.comparison = 0;
-                        filters.push_back(std::move(f));
-                    }
-                }
-            }
-
-            Value dist = ev::getProperty(opts, "distance");
+            Value dist = ev::getProperty(opts.get(), "distance");
             if (ev::isString(dist)) {
                 std::string d = ev::toUtf8(dist);
                 steam::LobbyListFilter f;
@@ -692,7 +684,7 @@ Value makeBroSteamValue() {
                 filters.push_back(std::move(f));
             }
 
-            Value mr = ev::getProperty(opts, "maxResults");
+            Value mr = ev::getProperty(opts.get(), "maxResults");
             if (ev::isNumber(mr)) {
                 int32_t n = static_cast<int32_t>(ev::toDouble(mr));
                 if (n > 0) {
@@ -707,7 +699,7 @@ Value makeBroSteamValue() {
         uint32_t reqId = s->nextLobbyReq++;
         s->pendingLobby.emplace(reqId, ev::Persistent(p));
         s->service->requestLobbyList(s->subscriber->id(), reqId, std::move(filters));
-        return p;
+        return p.get();
     });
 
     st.def("inviteUserToLobby", 2, [](Value, std::span<const Value> a) -> Value {
@@ -733,18 +725,18 @@ Value makeBroSteamValue() {
     });
 
     st.def("decodeVoice", 2, [](Value, std::span<const Value> a) -> Value {
-        Value p = ev::createPromise();
+        ev::Persistent p(ev::createPromise());
         auto settleEmpty = [&p]() {
             ObjectBuilder res;
             res.set("pcm", makeFloat32Array(nullptr, 0));
             res.set("sampleRate", ev::fromDouble(0));
-            ev::resolvePromise(p, res.get());
+            ev::resolvePromise(p.get(), res.get());
         };
 
         auto* s = getSteamState();
         if (!s || !s->service || !s->subscriber || a.empty()) {
             settleEmpty();
-            return p;
+            return p.get();
         }
 
         const uint8_t* base = nullptr;
@@ -759,12 +751,12 @@ Value makeBroSteamValue() {
 
         if (!base || viewLen == 0) {
             settleEmpty();
-            return p;
+            return p.get();
         }
 
         if (!s->service->available()) {
             settleEmpty();
-            return p;
+            return p.get();
         }
 
         int rate = 0;
@@ -775,7 +767,7 @@ Value makeBroSteamValue() {
         uint32_t reqId = s->nextVoiceReq++;
         s->pendingVoice.emplace(reqId, ev::Persistent(p));
         s->service->decodeVoice(s->subscriber->id(), reqId, base, viewLen, rate);
-        return p;
+        return p.get();
     });
 
     // Achievements & Stats stubs for IDL completeness

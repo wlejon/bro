@@ -56,16 +56,21 @@ void trackDynamicBronzeModule(ev::ModuleHandle h) {
 void cleanGlobalProp(const std::string& name) {
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
-        ev::GlobalValue reflect = ev::globalValue("Reflect");
-        if (reflect.found && ev::isObject(reflect.value)) {
-            Value delFn = ev::getProperty(reflect.value, "deleteProperty");
-            if (ev::isFunction(delFn)) {
-                const Value dArgs[2] = { gt.value, ev::fromUtf8(name) };
-                ev::call(delFn, reflect.value, std::span<const Value>(dArgs, 2));
+        // Rooted: getProperty and fromUtf8 allocate, and the argument array
+        // must not pair a pre-allocation globalThis with the new string.
+        ev::Persistent global(gt.value);
+        ev::GlobalValue reflectG = ev::globalValue("Reflect");
+        if (reflectG.found && ev::isObject(reflectG.value)) {
+            ev::Persistent reflect(reflectG.value);
+            ev::Persistent delFn(ev::getProperty(reflect.get(), "deleteProperty"));
+            if (ev::isFunction(delFn.get())) {
+                ev::Persistent key(ev::fromUtf8(name));
+                const Value dArgs[2] = { global.get(), key.get() };
+                ev::call(delFn.get(), reflect.get(), std::span<const Value>(dArgs, 2));
                 return;
             }
         }
-        ev::setProperty(gt.value, name, ev::undefined());
+        ev::setProperty(global.get(), name, ev::undefined());
     }
 }
 
@@ -649,10 +654,11 @@ bronze::Value dynamicFunction(ev::DynamicFunctionKind kind, std::span<const bron
         cleanGlobalProp(globalName);
         return ev::throwError("new Function: created function was not found");
     }
-    Value result = g.value;
+    // Into the cache (a root) before cleanGlobalProp allocates.
+    ev::Persistent& cached = s_dynFnCache[cacheKey];
+    cached.set(g.value);
     cleanGlobalProp(globalName);
-    s_dynFnCache[cacheKey].set(result);
-    return result;
+    return cached.get();
 }
 
 bronze::Value dynamicEval(bronze::Value source) {

@@ -827,83 +827,81 @@ void installIntlGlobals() {
         return hostArrayOf(results.size(), cb);
     });
 
-    Value intlVal = intl.get();
+    // Rooted from here on: every step below allocates.
+    ev::Persistent intlVal(intl.get());
 
     // Set Symbol.toStringTag = 'Intl'
     ev::GlobalValue objG = ev::globalValue("Object");
     ev::GlobalValue symG = ev::globalValue("Symbol");
     if (objG.found && symG.found) {
-        Value defProp = ev::getProperty(objG.value, "defineProperty");
-        Value tagSym = ev::getProperty(symG.value, "toStringTag");
-        if (ev::isFunction(defProp) && !ev::isUndefined(tagSym)) {
+        ev::Persistent objCtor(objG.value);
+        ev::Persistent symCtor(symG.value);
+        ev::Persistent defProp(ev::getProperty(objCtor.get(), "defineProperty"));
+        ev::Persistent tagSym(ev::getProperty(symCtor.get(), "toStringTag"));
+        if (ev::isFunction(defProp.get()) && !ev::isUndefined(tagSym.get())) {
             ObjectBuilder desc;
             desc.set("value", ev::fromUtf8("Intl"));
             desc.set("configurable", ev::fromBool(true));
-            Value args[3] = { intlVal, tagSym, desc.get() };
-            ev::call(defProp, objG.value, args);
+            Value args[3] = { intlVal.get(), tagSym.get(), desc.get() };
+            ev::call(defProp.get(), objCtor.get(), args);
         }
     }
 
-    ev::registerGlobal("Intl", intlVal);
+    ev::registerGlobal("Intl", intlVal.get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "Intl", intlVal);
+        ev::Persistent global(gt.value);
+        ev::setProperty(global.get(), "Intl", intlVal.get());
     }
+
+    // <Ctor>.prototype[name] = fn, with the prototype and the new function
+    // rooted across makeFunction's allocation.
+    auto setProtoMethod = [](const char* ctorName, const char* name, uint32_t arity,
+                             ev::NativeFn fn) {
+        ev::GlobalValue ctorG = ev::globalValue(ctorName);
+        if (!ctorG.found || !ev::isObject(ctorG.value)) return;
+        ev::Persistent ctor(ctorG.value);
+        ev::Persistent proto(ev::getProperty(ctor.get(), "prototype"));
+        if (!ev::isObject(proto.get())) return;
+        ev::Persistent f(ev::makeFunction(std::move(fn), arity, name));
+        ev::setProperty(proto.get(), name, f.get());
+    };
 
     // Number.prototype.toLocaleString
-    ev::GlobalValue numG = ev::globalValue("Number");
-    if (numG.found && ev::isObject(numG.value)) {
-        Value proto = ev::getProperty(numG.value, "prototype");
-        if (ev::isObject(proto)) {
-            ev::setProperty(proto, "toLocaleString", ev::makeFunction(
-                [](Value thisValue, std::span<const Value> a) {
-                    double n = ev::isNumber(thisValue) ? ev::toDouble(thisValue) : 0.0;
-                    NumberFormatOptions opt = parseNumberFormatOptions(a);
-                    return ev::fromUtf8(formatNumberDetails(n, opt).fullString);
-                }, 1, "toLocaleString"));
-        }
-    }
+    setProtoMethod("Number", "toLocaleString", 1,
+        [](Value thisValue, std::span<const Value> a) {
+            double n = ev::isNumber(thisValue) ? ev::toDouble(thisValue) : 0.0;
+            NumberFormatOptions opt = parseNumberFormatOptions(a);
+            return ev::fromUtf8(formatNumberDetails(n, opt).fullString);
+        });
 
     // Date.prototype.toLocaleDateString & Date.prototype.toLocaleTimeString
-    ev::GlobalValue dateG = ev::globalValue("Date");
-    if (dateG.found && ev::isObject(dateG.value)) {
-        Value proto = ev::getProperty(dateG.value, "prototype");
-        if (ev::isObject(proto)) {
-            ev::setProperty(proto, "toLocaleDateString", ev::makeFunction(
-                [](Value thisValue, std::span<const Value> a) {
-                    DateTimeOptions opt = parseDateTimeOptions(a);
-                    opt.hasYear = true;
-                    opt.hasMonth = true;
-                    opt.hasDay = true;
-                    return ev::fromUtf8(formatDateTimeDetails(thisValue, opt));
-                }, 1, "toLocaleDateString"));
-
-            ev::setProperty(proto, "toLocaleTimeString", ev::makeFunction(
-                [](Value thisValue, std::span<const Value> a) {
-                    DateTimeOptions opt = parseDateTimeOptions(a);
-                    opt.hasHour = true;
-                    opt.hasMinute = true;
-                    opt.hasSecond = true;
-                    return ev::fromUtf8(formatDateTimeDetails(thisValue, opt));
-                }, 1, "toLocaleTimeString"));
-        }
-    }
+    setProtoMethod("Date", "toLocaleDateString", 1,
+        [](Value thisValue, std::span<const Value> a) {
+            DateTimeOptions opt = parseDateTimeOptions(a);
+            opt.hasYear = true;
+            opt.hasMonth = true;
+            opt.hasDay = true;
+            return ev::fromUtf8(formatDateTimeDetails(thisValue, opt));
+        });
+    setProtoMethod("Date", "toLocaleTimeString", 1,
+        [](Value thisValue, std::span<const Value> a) {
+            DateTimeOptions opt = parseDateTimeOptions(a);
+            opt.hasHour = true;
+            opt.hasMinute = true;
+            opt.hasSecond = true;
+            return ev::fromUtf8(formatDateTimeDetails(thisValue, opt));
+        });
 
     // String.prototype.localeCompare
-    ev::GlobalValue strG = ev::globalValue("String");
-    if (strG.found && ev::isObject(strG.value)) {
-        Value proto = ev::getProperty(strG.value, "prototype");
-        if (ev::isObject(proto)) {
-            ev::setProperty(proto, "localeCompare", ev::makeFunction(
-                [](Value thisValue, std::span<const Value> a) {
-                    std::string s1 = ev::isString(thisValue) ? ev::toUtf8(thisValue) : "";
-                    std::string s2 = (a.size() > 0 && ev::isString(a[0])) ? ev::toUtf8(a[0]) : "";
-                    std::span<const Value> collArgs = a.empty() ? a : a.subspan(1);
-                    CollatorOptions opt = parseCollatorOptions(collArgs);
-                    return ev::fromDouble(collatorCompare(s1, s2, opt));
-                }, 1, "localeCompare"));
-        }
-    }
+    setProtoMethod("String", "localeCompare", 1,
+        [](Value thisValue, std::span<const Value> a) {
+            std::string s1 = ev::isString(thisValue) ? ev::toUtf8(thisValue) : "";
+            std::string s2 = (a.size() > 0 && ev::isString(a[0])) ? ev::toUtf8(a[0]) : "";
+            std::span<const Value> collArgs = a.empty() ? a : a.subspan(1);
+            CollatorOptions opt = parseCollatorOptions(collArgs);
+            return ev::fromDouble(collatorCompare(s1, s2, opt));
+        });
 }
 
 }  // namespace bro::bronze_host

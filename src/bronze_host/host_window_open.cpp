@@ -453,19 +453,37 @@ void installBroWindowOpen(Value broWinIn) {
     ev::setProperty(broWin.get(), "open", openFn.get());
 }
 
+namespace {
+
+// Calls each listener with (this = handle, event). Both are re-read from
+// their roots per call: every ev::call allocates, so a raw Value held from
+// one iteration to the next would be stale.
+void fireHandleListeners(const std::vector<ev::Persistent>& listeners,
+                         const ev::Persistent& handle, const ev::Persistent& event) {
+    for (auto& fn : listeners) {
+        Value evVal = event.get();
+        ev::call(fn.get(), handle.get(), std::span<const Value>(&evVal, 1));
+    }
+}
+
+// The { type, target } event object; the handle is rooted by the caller.
+ev::Persistent makeHandleEvent(const char* type, const ev::Persistent& handle) {
+    ObjectBuilder evObj;
+    evObj.set("type", ev::fromUtf8(type));
+    evObj.set("target", handle.get());
+    return ev::Persistent(evObj.get());
+}
+
+}  // namespace
+
 void windowHostNotifyLoaded(uint64_t id) {
     auto hIt = s_windowHandles.find(id);
     auto sIt = s_handleStates.find(id);
     if (hIt == s_windowHandles.end() || sIt == s_handleStates.end()) return;
-    Value handle = hIt->second.get();
-    ObjectBuilder evObj;
-    evObj.set("type", ev::fromUtf8("load"));
-    evObj.set("target", handle);
-    Value evVal = evObj.get();
+    ev::Persistent handle(hIt->second.get());
+    ev::Persistent event = makeHandleEvent("load", handle);
     auto listeners = sIt->second->loadListeners;
-    for (auto& fn : listeners) {
-        ev::call(fn.get(), handle, std::span<const Value>(&evVal, 1));
-    }
+    fireHandleListeners(listeners, handle, event);
 }
 
 void windowHostNotifyResized(uint64_t id, int width, int height) {
@@ -474,17 +492,14 @@ void windowHostNotifyResized(uint64_t id, int width, int height) {
     if (hIt == s_windowHandles.end() || sIt == s_handleStates.end()) return;
     sIt->second->width = width;
     sIt->second->height = height;
-    Value handle = hIt->second.get();
-    ObjectBuilder evObj;
-    evObj.set("type", ev::fromUtf8("resize"));
-    evObj.set("target", handle);
+    ev::Persistent handle(hIt->second.get());
+    ev::Persistent event = makeHandleEvent("resize", handle);
+    ObjectBuilder evObj(event.get());
     evObj.set("width", ev::fromDouble(width));
     evObj.set("height", ev::fromDouble(height));
-    Value evVal = evObj.get();
+    event.set(evObj.get());
     auto listeners = sIt->second->resizeListeners;
-    for (auto& fn : listeners) {
-        ev::call(fn.get(), handle, std::span<const Value>(&evVal, 1));
-    }
+    fireHandleListeners(listeners, handle, event);
 }
 
 void windowHostNotifyClosed(uint64_t id) {
@@ -492,35 +507,29 @@ void windowHostNotifyClosed(uint64_t id) {
     auto sIt = s_handleStates.find(id);
     if (hIt == s_windowHandles.end() || sIt == s_handleStates.end()) return;
     sIt->second->closed = true;
-    Value handle = hIt->second.get();
-    ObjectBuilder evObj;
-    evObj.set("type", ev::fromUtf8("close"));
-    evObj.set("target", handle);
-    Value evVal = evObj.get();
+    // Rooted here before the erase below drops the table's root.
+    ev::Persistent handle(hIt->second.get());
+    ev::Persistent event = makeHandleEvent("close", handle);
     auto listeners = sIt->second->closeListeners;
     s_windowHandles.erase(hIt);
     s_childInboxes.erase(id);
     s_openerProxies.erase(id);
     clearRealmScope(id);
-    for (auto& fn : listeners) {
-        ev::call(fn.get(), handle, std::span<const Value>(&evVal, 1));
-    }
+    fireHandleListeners(listeners, handle, event);
 }
 
-void windowHostNotifyMessage(uint64_t id, Value data) {
+void windowHostNotifyMessage(uint64_t id, Value dataIn) {
+    ev::Persistent data(dataIn);
     auto hIt = s_windowHandles.find(id);
     auto sIt = s_handleStates.find(id);
     if (hIt == s_windowHandles.end() || sIt == s_handleStates.end()) return;
-    Value handle = hIt->second.get();
-    ObjectBuilder evObj;
-    evObj.set("type", ev::fromUtf8("message"));
-    evObj.set("target", handle);
-    evObj.set("data", data);
-    Value evVal = evObj.get();
+    ev::Persistent handle(hIt->second.get());
+    ev::Persistent event = makeHandleEvent("message", handle);
+    ObjectBuilder evObj(event.get());
+    evObj.set("data", data.get());
+    event.set(evObj.get());
     auto listeners = sIt->second->messageListeners;
-    for (auto& fn : listeners) {
-        ev::call(fn.get(), handle, std::span<const Value>(&evVal, 1));
-    }
+    fireHandleListeners(listeners, handle, event);
 }
 
 void drainHostWindowMessages() {

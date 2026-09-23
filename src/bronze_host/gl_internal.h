@@ -351,9 +351,9 @@ struct ObjectBuilder {
         // distinguishes them. One line here names every method reached through
         // this builder, DOM included, for the same reason hostProfileWrap's
         // comment gives: they all funnel through one place.
-        Value f = ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity, name);
-        registerHostCalleeName(f, name);
-        obj.set(ev::setProperty(obj.get(), name, f));
+        ev::Persistent f(ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity, name));
+        registerHostCalleeName(f.get(), name);
+        obj.set(ev::setProperty(obj.get(), name, f.get()));
     }
 
     void accessor(const char* name, ev::NativeFn getter, ev::NativeFn setter) {
@@ -365,15 +365,19 @@ struct ObjectBuilder {
         // property name the two would otherwise share.
         const std::string getName = "get " + std::string(name);
         const std::string setName = "set " + std::string(name);
+        // The setter is rooted too: nothing between its makeFunction and
+        // defineAccessor may be assumed allocation-free, now or after a
+        // change to registerHostCalleeName.
         ev::Persistent g(
             ev::makeFunction(hostProfileWrap(name, std::move(getter)), 0, getName));
         registerHostCalleeName(g.get(), getName);
-        Value s = setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1, setName)
-                         : ev::undefined();
+        ev::Persistent s(setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1,
+                                                   setName)
+                                : ev::undefined());
         if (setter) {
-            registerHostCalleeName(s, setName);
+            registerHostCalleeName(s.get(), setName);
         }
-        obj.set(ev::defineAccessor(obj.get(), name, g.get(), s, /*enumerable=*/true));
+        obj.set(ev::defineAccessor(obj.get(), name, g.get(), s.get(), /*enumerable=*/true));
     }
 
     Value get() const { return obj.get(); }

@@ -123,7 +123,8 @@ Value buildGamepadSnapshot(const engine::GamepadState& gp) {
         }
 
         ev::Persistent p{ev::createPromise()};
-        ev::resolvePromise(p.get(), ev::fromUtf8(ok ? "complete" : "preempted"));
+        ev::Persistent result{ev::fromUtf8(ok ? "complete" : "preempted")};
+        ev::resolvePromise(p.get(), result.get());
         return p.get();
     });
 
@@ -133,7 +134,8 @@ Value buildGamepadSnapshot(const engine::GamepadState& gp) {
             engine->gamepadRumbleTriggers(index, 0.0f, 0.0f, 0);
         }
         ev::Persistent p{ev::createPromise()};
-        ev::resolvePromise(p.get(), ev::fromUtf8("complete"));
+        ev::Persistent result{ev::fromUtf8("complete")};
+        ev::resolvePromise(p.get(), result.get());
         return p.get();
     });
 
