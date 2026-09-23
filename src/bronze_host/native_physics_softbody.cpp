@@ -32,7 +32,7 @@ static bool readU32ArrayOrObject(Value vIn, std::vector<uint32_t>& out) {
         std::string key = std::to_string(i);
         Value elem = ev::getProperty(v, key.c_str());
         if (ev::isUndefined(elem)) break;
-        out.push_back(static_cast<uint32_t>(ev::toDouble(elem)));
+        out.push_back(satCast<uint32_t>(ev::toDouble(elem)));
     }
     return !out.empty();
 }
@@ -94,9 +94,13 @@ void* bro_physics_createSoftBody(const char* config) {
 
     if (hasCloth) {
         sopts.kind = physics::SoftBodyOptions::Cloth;
-        sopts.gridX = static_cast<int>(getPropNumber(clothV, "gridX", 10.0));
-        sopts.gridZ = static_cast<int>(getPropNumber(clothV, "gridZ", 10.0));
+        sopts.gridX = satCast<int>(getPropNumber(clothV, "gridX", 10.0));
+        sopts.gridZ = satCast<int>(getPropNumber(clothV, "gridZ", 10.0));
         if (sopts.gridX < 2 || sopts.gridZ < 2) return nullptr;
+        // gridX*gridZ vertices, allocated up front (and gx*gz below is an
+        // int): a cloth of more than 2^20 vertices is refused like one under
+        // 2x2, not an overflowed or runaway allocation.
+        if (static_cast<int64_t>(sopts.gridX) * sopts.gridZ > (int64_t{1} << 20)) return nullptr;
 
         sopts.spacing = static_cast<float>(getPropNumber(clothV, "spacing", 0.2));
         sopts.mass = static_cast<float>(getPropNumber(clothV, "mass", 1.0));
@@ -134,7 +138,7 @@ void* bro_physics_createSoftBody(const char* config) {
     sopts.compliance = static_cast<float>(getPropNumber(opts, "compliance", sopts.compliance));
     sopts.shearCompliance = static_cast<float>(getPropNumber(opts, "shearCompliance", sopts.shearCompliance));
     sopts.bendCompliance = static_cast<float>(getPropNumber(opts, "bendCompliance", sopts.bendCompliance));
-    sopts.numIterations = static_cast<int>(getPropNumber(opts, "numIterations", sopts.numIterations));
+    sopts.numIterations = satCast<int>(getPropNumber(opts, "numIterations", sopts.numIterations));
     sopts.friction = static_cast<float>(getPropNumber(opts, "friction", sopts.friction));
     sopts.restitution = static_cast<float>(getPropNumber(opts, "restitution", sopts.restitution));
     sopts.linearDamping = static_cast<float>(getPropNumber(opts, "linearDamping", sopts.linearDamping));

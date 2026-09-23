@@ -50,7 +50,8 @@
 // Required:
 //   path, output .webm file path (string).
 //   width,
-//   height, frame size in pixels. Both must be even (4:2:0 chroma).
+//   height, frame size in pixels. Both must be even (4:2:0 chroma)
+//                   and at most 16384.
 //                   Omit BOTH, with audioSampleRate set, to write a
 //                   sound-only file: an Opus track and no video track at
 //                   all. addFrameRGBA() then refuses rather than silently
@@ -98,7 +99,8 @@ const enc = new VideoEncoder({
 // -----------------------------------------------------------------------------
 //
 // Push one RGBA frame, top-down, 4 bytes per pixel. The buffer must hold at
-// least stride*height bytes. `stride` defaults to width*4. Returns true; on
+// least stride*height bytes. `stride` defaults to width*4 and may not be less
+// than that (a RangeError: rows would overlap past the buffer). Returns true; on
 // encoder failure throws with the libvpx error string.
 //
 // The encoder copies pixels into its own YUV plane, so the caller can reuse
@@ -212,7 +214,8 @@ enc2.finish();
 // new GifEncoder({ path, width, height, fps?, delayCs?, paletteBits?, loopCount? })
 //
 //   path, output .gif file path.
-//   width, height, frame size in pixels (no even-size requirement).
+//   width, height, frame size in pixels (no even-size requirement; at
+//                   most 65535, the GIF format's own limit).
 //   fps, frames per second (default 25). Converted internally to
 //                   delayCs = round(100 / fps).
 //   delayCs, frame delay in centiseconds (1/100 sec). Used if fps

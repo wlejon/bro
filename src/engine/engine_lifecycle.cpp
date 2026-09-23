@@ -192,6 +192,13 @@ Engine::~Engine() {
 }
 
 void Engine::handleResize(int w, int h) {
+    // A script reaches this with its own numbers (headless resize(), a
+    // headless bro.window.setSize): the viewport sizes every layer surface
+    // and readback, so it stays within what one GL texture can be. An OS
+    // window never reports a size outside this.
+    constexpr int kMaxViewportSide = 16384;
+    w = std::clamp(w, 1, kMaxViewportSide);
+    h = std::clamp(h, 1, kMaxViewportSide);
     viewportWidth_ = w;
     viewportHeight_ = h;
     uiDirty_ = true;

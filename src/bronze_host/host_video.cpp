@@ -130,7 +130,7 @@ struct ConfigReader {
         if (ev::isObject(v)) return dflt;
         const double d = ev::toDouble(v);
         if (std::isnan(d)) return dflt;
-        return static_cast<int>(d);
+        return satCast<int>(d);
     }
 
     std::string getStr(const char* key) {
@@ -270,7 +270,15 @@ Value addFrameFromTypedArray(std::span<const Value> a, int width, int height,
     int stride = width * 4;
     if (!ev::isUndefined(strideV) && !ev::isNull(strideV) && !ev::isObject(strideV)) {
         const double d = ev::toDouble(strideV);
-        if (!std::isnan(d) && d > 0) stride = static_cast<int>(d);
+        if (!std::isnan(d) && d > 0) stride = satCast<int>(d);
+    }
+    // Each row is read as width*4 bytes from row*stride: a stride shorter
+    // than a row would put the last row's tail past the stride*height bytes
+    // the size check below accepts.
+    if (static_cast<int64_t>(stride) < static_cast<int64_t>(width) * 4) {
+        return ev::throwRangeError(std::string(what) + ": stride " + std::to_string(stride) +
+                                   " is shorter than one row (" + std::to_string(width * 4) +
+                                   " bytes)");
     }
 
     const ev::TypedArrayInfo info = ev::typedArrayInfo(view.get());

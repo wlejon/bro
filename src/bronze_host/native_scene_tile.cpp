@@ -65,10 +65,10 @@ static void readFloatArray(Value vIn, std::vector<float>& out) {
     if (ev::isObject(vIn)) {
         const Rooted v(vIn);
         Value lenVal = ev::getProperty(v, "length");
-        if (ev::isNumber(lenVal)) {
-            int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
+        uint32_t len = 0;
+        if (ev::isNumber(lenVal) && lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) {
             out.resize(len);
-            for (int32_t i = 0; i < len; ++i) {
+            for (uint32_t i = 0; i < len; ++i) {
                 Value el = ev::getElement(v, i);
                 out[i] = ev::isNumber(el) ? static_cast<float>(ev::toDouble(el)) : 0.0f;
             }
@@ -82,10 +82,10 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     const Rooted opts(optsIn);
 
     Value wVal = ev::getProperty(opts, "width");
-    if (ev::isNumber(wVal)) cfg.width = static_cast<int>(ev::toDouble(wVal));
+    if (ev::isNumber(wVal)) cfg.width = satCast<int>(ev::toDouble(wVal));
 
     Value hVal = ev::getProperty(opts, "height");
-    if (ev::isNumber(hVal)) cfg.height = static_cast<int>(ev::toDouble(hVal));
+    if (ev::isNumber(hVal)) cfg.height = satCast<int>(ev::toDouble(hVal));
 
     Value csVal = ev::getProperty(opts, "cellSize");
     if (ev::isNumber(csVal)) cfg.cellSize = static_cast<float>(ev::toDouble(csVal));
@@ -94,10 +94,10 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     if (ev::isNumber(hsVal)) cfg.heightStep = static_cast<float>(ev::toDouble(hsVal));
 
     Value chkVal = ev::getProperty(opts, "chunkSize");
-    if (ev::isNumber(chkVal)) cfg.chunkSize = static_cast<int>(ev::toDouble(chkVal));
+    if (ev::isNumber(chkVal)) cfg.chunkSize = satCast<int>(ev::toDouble(chkVal));
 
     Value blVal = ev::getProperty(opts, "baseLevel");
-    if (ev::isNumber(blVal)) cfg.baseLevel = static_cast<int>(ev::toDouble(blVal));
+    if (ev::isNumber(blVal)) cfg.baseLevel = satCast<int>(ev::toDouble(blVal));
 
     Value aoVal = ev::getProperty(opts, "aoStrength");
     if (ev::isNumber(aoVal)) cfg.aoStrength = static_cast<float>(ev::toDouble(aoVal));
@@ -111,10 +111,10 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     const Rooted layers(ev::getProperty(opts, "layers"));
     if (ev::isObject(layers)) {
         Value lenVal = ev::getProperty(layers, "length");
-        if (ev::isNumber(lenVal)) {
-            int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
+        uint32_t len = 0;
+        if (ev::isNumber(lenVal) && lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) {
             std::vector<std::string> names;
-            for (int32_t i = 0; i < len; ++i) {
+            for (uint32_t i = 0; i < len; ++i) {
                 Value el = ev::getElement(layers, i);
                 if (ev::isString(el)) names.emplace_back(ev::toUtf8(el));
             }
@@ -137,13 +137,13 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     readFloatArray(pal, cfg.palette);
 
     Value acVal = ev::getProperty(opts, "atlasColumns");
-    if (ev::isNumber(acVal)) cfg.atlasColumns = static_cast<int>(ev::toDouble(acVal));
+    if (ev::isNumber(acVal)) cfg.atlasColumns = satCast<int>(ev::toDouble(acVal));
 
     Value arVal = ev::getProperty(opts, "atlasRows");
-    if (ev::isNumber(arVal)) cfg.atlasRows = static_cast<int>(ev::toDouble(arVal));
+    if (ev::isNumber(arVal)) cfg.atlasRows = satCast<int>(ev::toDouble(arVal));
 
     Value ccVal = ev::getProperty(opts, "cliffCell");
-    if (ev::isNumber(ccVal)) cfg.cliffCell = static_cast<int>(ev::toDouble(ccVal));
+    if (ev::isNumber(ccVal)) cfg.cliffCell = satCast<int>(ev::toDouble(ccVal));
 
     Value aiVal = ev::getProperty(opts, "atlasInset");
     if (ev::isNumber(aiVal)) cfg.atlasInset = static_cast<float>(ev::toDouble(aiVal));
@@ -163,17 +163,18 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
         const Rooted px(ev::getProperty(opts, "atlasPixels"));
         if (ev::isObject(px)) {
             Value lenVal = ev::getProperty(px, "length");
-            if (ev::isNumber(lenVal)) {
-                int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
+            uint32_t len = 0;
+            if (ev::isNumber(lenVal) &&
+                lengthWithin(ev::toDouble(lenVal), static_cast<uint32_t>(kMaxHostBufferBytes), len)) {
                 cfg.atlasPixels.resize(len);
-                for (int32_t i = 0; i < len; ++i) {
+                for (uint32_t i = 0; i < len; ++i) {
                     Value el = ev::getElement(px, i);
-                    cfg.atlasPixels[i] = ev::isNumber(el) ? static_cast<uint8_t>(ev::toDouble(el)) : 0;
+                    cfg.atlasPixels[i] = ev::isNumber(el) ? satCast<uint8_t>(ev::toDouble(el)) : 0;
                 }
                 Value aw = ev::getProperty(opts, "atlasWidth");
                 Value ah = ev::getProperty(opts, "atlasHeight");
-                cfg.atlasWidth = ev::isNumber(aw) ? static_cast<int>(ev::toDouble(aw)) : 0;
-                cfg.atlasHeight = ev::isNumber(ah) ? static_cast<int>(ev::toDouble(ah)) : 0;
+                cfg.atlasWidth = ev::isNumber(aw) ? satCast<int>(ev::toDouble(aw)) : 0;
+                cfg.atlasHeight = ev::isNumber(ah) ? satCast<int>(ev::toDouble(ah)) : 0;
             }
         }
     }
@@ -181,12 +182,12 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     const Rooted ta(ev::getProperty(opts, "tileAtlas"));
     if (ev::isObject(ta)) {
         Value lenVal = ev::getProperty(ta, "length");
-        if (ev::isNumber(lenVal)) {
-            int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
+        uint32_t len = 0;
+        if (ev::isNumber(lenVal) && lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) {
             cfg.tileAtlas.resize(len);
-            for (int32_t i = 0; i < len; ++i) {
+            for (uint32_t i = 0; i < len; ++i) {
                 Value el = ev::getElement(ta, i);
-                cfg.tileAtlas[i] = ev::isNumber(el) ? static_cast<int>(ev::toDouble(el)) : 0;
+                cfg.tileAtlas[i] = ev::isNumber(el) ? satCast<int>(ev::toDouble(el)) : 0;
             }
         }
     }
@@ -194,16 +195,16 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     const Rooted autos(ev::getProperty(opts, "autotiles"));
     if (ev::isObject(autos)) {
         Value lenVal = ev::getProperty(autos, "length");
-        if (ev::isNumber(lenVal)) {
-            int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
-            for (int32_t i = 0; i < len; ++i) {
+        uint32_t len = 0;
+        if (ev::isNumber(lenVal) && lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) {
+            for (uint32_t i = 0; i < len; ++i) {
                 const Rooted e(ev::getElement(autos, i));
                 if (!ev::isObject(e)) continue;
                 scene::TileWorldConfig::AutotileRule rule;
                 Value idVal = ev::getProperty(e, "id");
-                if (ev::isNumber(idVal)) rule.id = static_cast<uint16_t>(ev::toDouble(idVal));
+                if (ev::isNumber(idVal)) rule.id = satCast<uint16_t>(ev::toDouble(idVal));
                 Value lVal = ev::getProperty(e, "layer");
-                if (ev::isNumber(lVal)) rule.layer = static_cast<int>(ev::toDouble(lVal));
+                if (ev::isNumber(lVal)) rule.layer = satCast<int>(ev::toDouble(lVal));
 
                 Value mode = ev::getProperty(e, "mode");
                 if (ev::isString(mode)) {
@@ -222,12 +223,12 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
                 const Rooted cells(ev::getProperty(e, "cells"));
                 if (ev::isObject(cells)) {
                     Value cl = ev::getProperty(cells, "length");
-                    if (ev::isNumber(cl)) {
-                        int32_t clen = static_cast<int32_t>(ev::toDouble(cl));
+                    uint32_t clen = 0;
+                    if (ev::isNumber(cl) && lengthWithin(ev::toDouble(cl), kMaxHostListLength, clen)) {
                         rule.cells.resize(clen);
-                        for (int32_t k = 0; k < clen; ++k) {
+                        for (uint32_t k = 0; k < clen; ++k) {
                             Value el = ev::getElement(cells, k);
-                            rule.cells[k] = ev::isNumber(el) ? static_cast<int>(ev::toDouble(el)) : 0;
+                            rule.cells[k] = ev::isNumber(el) ? satCast<int>(ev::toDouble(el)) : 0;
                         }
                     }
                 }
@@ -239,10 +240,10 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     const Rooted ovs(ev::getProperty(opts, "overlays"));
     if (ev::isObject(ovs)) {
         Value lenVal = ev::getProperty(ovs, "length");
-        if (ev::isNumber(lenVal)) {
-            int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
+        uint32_t len = 0;
+        if (ev::isNumber(lenVal) && lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) {
             cfg.overlays.resize(len);
-            for (int32_t i = 0; i < len; ++i) {
+            for (uint32_t i = 0; i < len; ++i) {
                 const Rooted e(ev::getElement(ovs, i));
                 if (ev::isObject(e)) {
                     Value op = ev::getProperty(e, "opacity");
@@ -257,14 +258,14 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     const Rooted anims(ev::getProperty(opts, "animations"));
     if (ev::isObject(anims)) {
         Value lenVal = ev::getProperty(anims, "length");
-        if (ev::isNumber(lenVal)) {
-            int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
-            for (int32_t i = 0; i < len; ++i) {
+        uint32_t len = 0;
+        if (ev::isNumber(lenVal) && lengthWithin(ev::toDouble(lenVal), kMaxHostListLength, len)) {
+            for (uint32_t i = 0; i < len; ++i) {
                 const Rooted e(ev::getElement(anims, i));
                 if (!ev::isObject(e)) continue;
                 scene::TileWorldConfig::TileAnimation an;
                 Value idVal = ev::getProperty(e, "id");
-                if (ev::isNumber(idVal)) an.id = static_cast<uint16_t>(ev::toDouble(idVal));
+                if (ev::isNumber(idVal)) an.id = satCast<uint16_t>(ev::toDouble(idVal));
                 Value fpsVal = ev::getProperty(e, "fps");
                 if (ev::isNumber(fpsVal)) an.fps = static_cast<float>(ev::toDouble(fpsVal));
                 else an.fps = 4.0f;
@@ -272,12 +273,12 @@ static scene::TileWorldConfig parseTileConfig(Value optsIn) {
                 const Rooted fr(ev::getProperty(e, "frames"));
                 if (ev::isObject(fr)) {
                     Value fl = ev::getProperty(fr, "length");
-                    if (ev::isNumber(fl)) {
-                        int32_t flen = static_cast<int32_t>(ev::toDouble(fl));
+                    uint32_t flen = 0;
+                    if (ev::isNumber(fl) && lengthWithin(ev::toDouble(fl), kMaxHostListLength, flen)) {
                         an.frames.resize(flen);
-                        for (int32_t k = 0; k < flen; ++k) {
+                        for (uint32_t k = 0; k < flen; ++k) {
                             Value el = ev::getElement(fr, k);
-                            an.frames[k] = ev::isNumber(el) ? static_cast<int>(ev::toDouble(el)) : 0;
+                            an.frames[k] = ev::isNumber(el) ? satCast<int>(ev::toDouble(el)) : 0;
                         }
                     }
                 }
@@ -712,7 +713,7 @@ void bro_tile_world_TileWorld_addObject(void* self, int32_t kindId, double x, do
     auto* c = tileWorldCellOf(self);
     if (c && c->tileWorld()) {
         scene::TileWorld::ObjectPlacement p;
-        c->tileWorld()->addObject(kindId, static_cast<int>(x), static_cast<int>(y), p);
+        c->tileWorld()->addObject(kindId, satCast<int>(x), satCast<int>(y), p);
     }
 }
 

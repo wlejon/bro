@@ -188,9 +188,13 @@
  */
 
 /**
+ * maxBodies (default 10240) sizes the world's body tables up front and is
+ * clamped to [1, 2^20]. contactBufferSize (default 4096) is the per-step
+ * contact-event buffer, clamped to [16, 65536]; events past it are dropped.
  * @typedef {Object} PhysicsWorldOptions
  * @property {PhysicsVec3} [gravity]
  * @property {number} [maxBodies]
+ * @property {number} [contactBufferSize]
  */
 
 /**
@@ -274,6 +278,9 @@
  */
 
 /**
+ * A cloth is a gridX x gridZ sheet of vertices: each side at least 2, and at
+ * most 2^20 vertices in all; createSoftBody throws outside those bounds (a
+ * RangeError past the vertex cap).
  * @typedef {Object} PhysicsClothOptions
  * @property {number} [gridX]
  * @property {number} [gridZ]

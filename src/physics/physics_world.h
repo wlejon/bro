@@ -692,7 +692,13 @@ public:
     PhysicsWorld();
     ~PhysicsWorld();
 
+    /// The most bodies one world may be sized for. Jolt allocates its body
+    /// tables for maxBodies up front, and its BodyID index tops out at 2^23;
+    /// a million bodies is far past any scene this runtime draws.
+    static constexpr int kMaxBodies = 1 << 20;
+
     /// Initialize the physics system. Call once before use.
+    /// maxBodies is clamped to [1, kMaxBodies].
     /// contactCapacity sizes the per-step contact-event buffer (clamped to
     /// [16, 65536]); 0 = auto (4*maxBodies, min 1024). Overflow drops events
     /// and is reported via drainContactEvents().

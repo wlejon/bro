@@ -89,12 +89,44 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  */
 
 /**
+ * Geometry comes from, in order: raw `positions` + `indices` (with optional
+ * `normals`, `colors`, `uvs`, `tangents`; see MeshGeometry), a Mesh object in
+ * `mesh` or `data`, or a primitive named by `mesh`:
+ *
+ *   'box'      halfW, halfH, halfD (0.5 each)
+ *   'sphere'   radius (0.5), segments (16), rings (12)
+ *   'cylinder' radius (0.5), halfHeight (0.5; or `height`, the full extent), segments (16)
+ *   'capsule'  radius (0.5), halfHeight (0.5; or `height`), segments (16), rings (8)
+ *   'plane'    halfW (5), halfD (5), subdivX (1), subdivZ (1)
+ *   'torus'    majorRadius (1), minorRadius (0.3), majorSegments (24), minorSegments (12)
+ *
+ * Each count is capped at 4096 (the bound bromesh's Mesh.sphere etc. enforce);
+ * one below the primitive's minimum (3 segments, 2 sphere rings) gives an
+ * empty mesh. Any other name is a box.
+ *
  * @typedef {Object} MeshNodeOptions
- * @property {Mesh|string} [mesh] - A Mesh object, or a primitive name ('box', 'sphere', ...).
+ * @property {Mesh|string} [mesh] - A Mesh object, or a primitive name (above).
  * @property {Mesh} [data] - Alias of `mesh` for a Mesh object.
- * @property {string} [material]
- * @property {string} [castShadow]
- * @property {string} [receiveShadow]
+ * @property {string|Array<number>} [color] - CSS colour or [r, g, b(, a)] in 0..1.
+ * @property {{metallic?: number, roughness?: number}} [material] - PBR params; the flat keys below win.
+ * @property {number} [metallic]
+ * @property {number} [roughness]
+ * @property {number} [emissive] - Emissive intensity; tinted by `emissiveColor`, else the base colour.
+ * @property {string|Array<number>} [emissiveColor]
+ * @property {boolean} [unlit]
+ * @property {boolean} [twoSided] - `doubleSided` is accepted as the glTF spelling.
+ * @property {number} [subsurface]
+ * @property {number} [alphaCutoff]
+ * @property {boolean} [vertexColorTint]
+ * @property {'triangles'|'lines'} [drawMode]
+ * @property {number} [lineWidth]
+ * @property {boolean|number} [wind] - Wind sway: true is 1, or a [0, 1] multiplier.
+ * @property {boolean} [castsShadow]
+ * @property {boolean} [receivesShadow]
+ * @property {number|Array<number>} [depthBias] - Units, or [factor, units].
+ * @property {{width: number, height: number, data: Uint8Array}} [texture] - RGBA8 base colour map;
+ *   also normalTexture, metallicRoughnessTexture, occlusionTexture, emissiveTexture. A map whose
+ *   data is shorter than width*height*4 bytes is ignored.
  * @property {Array<number>} [position]
  * @property {Array<number>} [rotation]
  * @property {Array<number>} [scale]
@@ -118,7 +150,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 
 /**
  * @typedef {Object} SkinnedMeshNodeOptions
- * @property {Mesh} [mesh] - A Mesh object (or raw `positions`/`indices`/... streams as in MeshGeometry).
+ * @property {Mesh|string} [mesh] - A Mesh object (or raw `positions`/`indices`/... streams as in
+ *   MeshGeometry), or a primitive name read exactly as MeshNodeOptions reads it.
  * @property {Mesh} [data] - Alias of `mesh` for a Mesh object.
  * @property {SkinData} [skin]
  * @property {Skeleton} [skeleton]

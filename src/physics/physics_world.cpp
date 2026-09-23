@@ -364,6 +364,10 @@ PhysicsWorld::~PhysicsWorld() {
 bool PhysicsWorld::init(int maxBodies, int contactCapacity) {
     if (initialized_) return true;
 
+    // A script's option: bounded before it sizes Jolt's tables, and before
+    // `maxBodies * 2` below can overflow.
+    maxBodies = std::clamp(maxBodies, 1, kMaxBodies);
+
     ensureJoltInit();
 
     tempAllocator_ = std::make_unique<TempAllocatorImpl>(10 * 1024 * 1024);

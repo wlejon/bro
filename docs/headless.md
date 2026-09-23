@@ -109,7 +109,7 @@ gamepad/`"action"` stream on the main window (see
 | `setPickedFiles(paths)` | What the next `<input type=file>` click picks (a path string or an array of them). There is no native picker with no user present, so queue the choice and click the input as a user would; the click consumes it, and a click with nothing queued is a cancelled pick. See docs/file-api.js. |
 | `lastDownload()` | Absolute path of the file the most recent `<a download>` click saved, or `null` if none has. Lets a test assert on an app's export without knowing the user's Downloads folder. See docs/file-api.js. |
 | `setDialogAnswer(accept)` | What `alert`/`confirm`/`prompt` do with no user to ask. Headless never blocks on them: the message is logged and the call returns at once, accepting by default (`confirm` → `true`, `prompt` → its default value). Pass `false` to take the cancel branch instead (`confirm` → `false`, `prompt` → `null`) until set back. See docs/dialogs-api.js. |
-| `resize(w, h)` | Resize the virtual viewport |
+| `resize(w, h)` | Resize the virtual viewport. Each side is clamped to [1, 16384], the largest surface one GL texture can back. |
 | `gamepadConnect([id])` | Connect a virtual gamepad; returns its slot index. Fires `gamepadconnected` on window, appears in `navigator.getGamepads()`. |
 | `gamepadDisconnect(index)` | Disconnect a virtual gamepad. Fires `gamepaddisconnected`. |
 | `gamepadButton(index, button, pressed [, value])` | Set a virtual pad's button. `button` is a W3C index (0-16) or name (`"south"`, `"start"`, `"lefttrigger"`, ...). `value` gives triggers an analog level (defaults to pressed ? 1 : 0). Press/release edges dispatch bound `"action"` events. |

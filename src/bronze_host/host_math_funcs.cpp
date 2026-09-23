@@ -102,8 +102,8 @@ static bromath::GridFootprint2D readGrid(Value gIn) {
     readVec2(originVal, o);
     f.origin = o;
     f.cellSize = static_cast<float>(propNum(g, "cellSize"));
-    f.width = static_cast<int>(propNum(g, "width"));
-    f.depth = static_cast<int>(propNum(g, "depth"));
+    f.width = satCast<int>(propNum(g, "width"));
+    f.depth = satCast<int>(propNum(g, "depth"));
     return f;
 }
 
@@ -185,10 +185,10 @@ Value makeBroMathValue() {
     });
 
     m.def("fromColor8", 4, [](Value, std::span<const Value> a) -> Value {
-        uint8_t r = a.size() > 0 ? static_cast<uint8_t>(ev::toDouble(a[0])) : 0;
-        uint8_t g = a.size() > 1 ? static_cast<uint8_t>(ev::toDouble(a[1])) : 0;
-        uint8_t b = a.size() > 2 ? static_cast<uint8_t>(ev::toDouble(a[2])) : 0;
-        uint8_t alpha = a.size() > 3 ? static_cast<uint8_t>(ev::toDouble(a[3])) : 255;
+        uint8_t r = a.size() > 0 ? satCast<uint8_t>(ev::toDouble(a[0])) : 0;
+        uint8_t g = a.size() > 1 ? satCast<uint8_t>(ev::toDouble(a[1])) : 0;
+        uint8_t b = a.size() > 2 ? satCast<uint8_t>(ev::toDouble(a[2])) : 0;
+        uint8_t alpha = a.size() > 3 ? satCast<uint8_t>(ev::toDouble(a[3])) : 255;
         bromath::Color8 c8{r, g, b, alpha};
         return colorToJS(bromath::cfromColor8(c8));
     });
@@ -529,15 +529,20 @@ Value makeBroMathValue() {
     // Grid
     m.def("gridIndex2D", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3 || !ev::isObject(a[0])) return ev::fromDouble(-1);
-        int col = static_cast<int>(ev::toDouble(a[1]));
-        int row = static_cast<int>(ev::toDouble(a[2]));
-        return ev::fromDouble(bromath::gridIndex2D(readGrid(a[0]), col, row));
+        int col = satCast<int>(ev::toDouble(a[1]));
+        int row = satCast<int>(ev::toDouble(a[2]));
+        // row * width + col in 64 bits: bromath's int arithmetic overflows
+        // (undefined behaviour) for a far cell of a wide grid, and the index
+        // is a JS number, which holds the exact 64-bit answer.
+        const bromath::GridFootprint2D grid = readGrid(a[0]);
+        return ev::fromDouble(static_cast<double>(
+            static_cast<int64_t>(row) * grid.width + col));
     });
 
     m.def("gridInBounds", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3 || !ev::isObject(a[0])) return ev::fromBool(false);
-        int col = static_cast<int>(ev::toDouble(a[1]));
-        int row = static_cast<int>(ev::toDouble(a[2]));
+        int col = satCast<int>(ev::toDouble(a[1]));
+        int row = satCast<int>(ev::toDouble(a[2]));
         return ev::fromBool(bromath::gridInBounds(readGrid(a[0]), col, row));
     });
 
@@ -555,8 +560,8 @@ Value makeBroMathValue() {
 
     m.def("gridCellCenter", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.size() < 3 || !ev::isObject(a[0])) return ev::null();
-        int col = static_cast<int>(ev::toDouble(a[1]));
-        int row = static_cast<int>(ev::toDouble(a[2]));
+        int col = satCast<int>(ev::toDouble(a[1]));
+        int row = satCast<int>(ev::toDouble(a[2]));
         return vec2ToJS(bromath::gridCellCenter(readGrid(a[0]), col, row));
     });
 
@@ -564,20 +569,20 @@ Value makeBroMathValue() {
     m.def("fnv1a32", 2, [](Value, std::span<const Value> a) -> Value {
         if (a.empty()) return ev::fromDouble(0.0);
         std::string str = ev::toUtf8(a[0]);
-        uint32_t seed = a.size() > 1 ? static_cast<uint32_t>(ev::toDouble(a[1])) : 2166136261u;
+        uint32_t seed = a.size() > 1 ? satCast<uint32_t>(ev::toDouble(a[1])) : 2166136261u;
         return ev::fromDouble(static_cast<double>(bromath::fnv1a32(str.data(), str.size(), seed)));
     });
 
     m.def("hashU32", 1, [](Value, std::span<const Value> a) -> Value {
-        uint32_t x = !a.empty() ? static_cast<uint32_t>(ev::toDouble(a[0])) : 0;
+        uint32_t x = !a.empty() ? satCast<uint32_t>(ev::toDouble(a[0])) : 0;
         return ev::fromDouble(static_cast<double>(bromath::hashU32(x)));
     });
 
     m.def("cellHash", 3, [](Value, std::span<const Value> a) -> Value {
-        int32_t x = a.size() > 0 ? static_cast<int32_t>(ev::toDouble(a[0])) : 0;
-        int32_t y = a.size() > 1 ? static_cast<int32_t>(ev::toDouble(a[1])) : 0;
+        int32_t x = a.size() > 0 ? satCast<int32_t>(ev::toDouble(a[0])) : 0;
+        int32_t y = a.size() > 1 ? satCast<int32_t>(ev::toDouble(a[1])) : 0;
         if (a.size() > 2 && !ev::isUndefined(a[2])) {
-            int32_t z = static_cast<int32_t>(ev::toDouble(a[2]));
+            int32_t z = satCast<int32_t>(ev::toDouble(a[2]));
             return ev::fromDouble(static_cast<double>(bromath::cellHash(x, y, z)));
         }
         return ev::fromDouble(static_cast<double>(bromath::cellHash(x, y)));
@@ -588,7 +593,7 @@ Value makeBroMathValue() {
         bromath::Vec3 pt{0,0,0};
         if (!readVec3(a[0], pt)) return ev::throwTypeError("expected vector");
         float cs = static_cast<float>(ev::toDouble(a[1]));
-        uint32_t buckets = static_cast<uint32_t>(ev::toDouble(a[2]));
+        uint32_t buckets = satCast<uint32_t>(ev::toDouble(a[2]));
         return ev::fromDouble(static_cast<double>(bromath::positionToCell(pt, cs, buckets)));
     });
 

@@ -83,6 +83,13 @@ public:
             if (err) *err = lastErr_;
             return false;
         }
+        // Each frame is converted into a YUV plane set sized width*height up
+        // front; past 16384 a side that is gigabytes per frame, not a video.
+        if (hasVideo_ && (cfg_.width > 16384 || cfg_.height > 16384)) {
+            setErr("width/height must be at most 16384");
+            if (err) *err = lastErr_;
+            return false;
+        }
         if (cfg_.fpsNum <= 0 || cfg_.fpsDen <= 0) {
             setErr("fps numerator and denominator must be positive");
             if (err) *err = lastErr_;

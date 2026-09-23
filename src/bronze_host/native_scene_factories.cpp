@@ -14,6 +14,10 @@
 #include <json.hpp>
 
 namespace bro::bronze_host {
+// The most segments, rings or subdivisions a named primitive may ask for on
+// one axis — the bound bromesh's Mesh.sphere/cylinder/... bindings enforce.
+inline constexpr int kMaxPrimitiveAxis = 4096;
+
 // A particle colour from JSON: [r,g,b(,a)] or "#rrggbb", white otherwise.
 // A free function rather than a lambda inside createParticles3D because MSVC
 // gives a captureless lambda in an extern "C" function a C-linkage invoker,
@@ -126,8 +130,8 @@ void applyMeshMaterialOpts(scene::MeshNode* node, Value optsIn) {
         Value wV = ev::getProperty(tex, "width");
         Value hV = ev::getProperty(tex, "height");
         if (!ev::isNumber(wV) || !ev::isNumber(hV)) return;
-        const int w = static_cast<int>(ev::toDouble(wV));
-        const int h = static_cast<int>(ev::toDouble(hV));
+        const int w = satCast<int>(ev::toDouble(wV));
+        const int h = satCast<int>(ev::toDouble(hV));
         auto info = ev::typedArrayInfo(ev::getProperty(tex, "data"));
         if (info && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
             (node->*setter)(w, h, info.data);
@@ -183,8 +187,8 @@ void applyInstancedOpts(scene::InstancedMeshNode* node, Value optsIn) {
         Value wV = ev::getProperty(tex, "width");
         Value hV = ev::getProperty(tex, "height");
         if (!ev::isNumber(wV) || !ev::isNumber(hV)) return;
-        const int w = static_cast<int>(ev::toDouble(wV));
-        const int h = static_cast<int>(ev::toDouble(hV));
+        const int w = satCast<int>(ev::toDouble(wV));
+        const int h = satCast<int>(ev::toDouble(hV));
         auto info = ev::typedArrayInfo(ev::getProperty(tex, "data"));
         if (info && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
             (node->*setter)(w, h, info.data);
@@ -200,8 +204,8 @@ void applyInstancedOpts(scene::InstancedMeshNode* node, Value optsIn) {
     Value acVal = ev::getProperty(opts, "atlasCols");
     Value arVal = ev::getProperty(opts, "atlasRows");
     if (ev::isNumber(acVal) || ev::isNumber(arVal)) {
-        node->setAtlasGrid(ev::isNumber(acVal) ? static_cast<int>(ev::toDouble(acVal)) : 1,
-                           ev::isNumber(arVal) ? static_cast<int>(ev::toDouble(arVal)) : 1);
+        node->setAtlasGrid(ev::isNumber(acVal) ? satCast<int>(ev::toDouble(acVal)) : 1,
+                           ev::isNumber(arVal) ? satCast<int>(ev::toDouble(arVal)) : 1);
     }
 
     // Collapse every instance into one merged draw (InstancedMeshNode::setStaticBatch).
@@ -264,6 +268,12 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
                 Value v = ev::getProperty(opts, k);
                 return ev::isNumber(v) ? static_cast<float>(ev::toDouble(v)) : def;
             };
+            // A segment / ring / subdivision count: at most kMaxPrimitiveAxis
+            // per axis (bromesh's own Mesh.* bound), so an option cannot size
+            // a mesh of 10^12 vertices.
+            auto countOpt = [&](const char* k, float def) -> int {
+                return std::min(satCast<int>(getNum(k, def)), kMaxPrimitiveAxis);
+            };
             // bromesh::cylinder/capsule take a HALF height; `halfHeight` is
             // the documented key, `height` the full-extent convenience.
             auto halfHeight = [&]() -> float {
@@ -275,29 +285,29 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
             };
             if (meshType == "sphere") {
                 float r = getNum("radius", 0.5f);
-                int seg = static_cast<int>(getNum("segments", 16));
-                int rings = static_cast<int>(getNum("rings", 12));
+                int seg = countOpt("segments", 16);
+                int rings = countOpt("rings", 12);
                 meshData = bromesh::sphere(r, seg, rings);
             } else if (meshType == "cylinder") {
                 float r = getNum("radius", 0.5f);
-                int seg = static_cast<int>(getNum("segments", 16));
+                int seg = countOpt("segments", 16);
                 meshData = bromesh::cylinder(r, halfHeight(), seg);
             } else if (meshType == "capsule") {
                 float r = getNum("radius", 0.5f);
-                int seg = static_cast<int>(getNum("segments", 16));
-                int rings = static_cast<int>(getNum("rings", 8));
+                int seg = countOpt("segments", 16);
+                int rings = countOpt("rings", 8);
                 meshData = bromesh::capsule(r, halfHeight(), seg, rings);
             } else if (meshType == "plane") {
                 float hw = getNum("halfW", 5.0f);
                 float hd = getNum("halfD", 5.0f);
-                int sx = static_cast<int>(getNum("subdivX", 1));
-                int sz = static_cast<int>(getNum("subdivZ", 1));
+                int sx = countOpt("subdivX", 1);
+                int sz = countOpt("subdivZ", 1);
                 meshData = bromesh::plane(hw, hd, sx, sz);
             } else if (meshType == "torus") {
                 float maj = getNum("majorRadius", 1.0f);
                 float min = getNum("minorRadius", 0.3f);
-                int majSeg = static_cast<int>(getNum("majorSegments", 24));
-                int minSeg = static_cast<int>(getNum("minorSegments", 12));
+                int majSeg = countOpt("majorSegments", 24);
+                int minSeg = countOpt("minorSegments", 12);
                 meshData = bromesh::torus(maj, min, majSeg, minSeg);
             } else {
                 float hw = getNum("halfW", 0.5f);
@@ -382,33 +392,45 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
             Value v = ev::getProperty(opts, k);
             return ev::isNumber(v) ? static_cast<float>(ev::toDouble(v)) : def;
         };
+        auto countOpt = [&](const char* k, float def) -> int {
+            return std::min(satCast<int>(getNum(k, def)), kMaxPrimitiveAxis);
+        };
+        // The same half-height reading createMesh gives a primitive: the
+        // documented `halfHeight`, or `height` as the full extent. This path
+        // used to hand `height` to bromesh as the HALF height, so the same
+        // options built a mesh twice as tall here as there.
+        auto halfHeight = [&]() -> float {
+            Value hh = ev::getProperty(opts, "halfHeight");
+            if (ev::isNumber(hh)) return static_cast<float>(ev::toDouble(hh));
+            Value h = ev::getProperty(opts, "height");
+            if (ev::isNumber(h)) return static_cast<float>(ev::toDouble(h)) * 0.5f;
+            return 0.5f;
+        };
         if (meshType == "sphere") {
             float r = getNum("radius", 0.5f);
-            int seg = static_cast<int>(getNum("segments", 16));
-            int rings = static_cast<int>(getNum("rings", 12));
+            int seg = countOpt("segments", 16);
+            int rings = countOpt("rings", 12);
             meshData = bromesh::sphere(r, seg, rings);
         } else if (meshType == "cylinder") {
             float r = getNum("radius", 0.5f);
-            float h = getNum("height", 1.0f);
-            int seg = static_cast<int>(getNum("segments", 16));
-            meshData = bromesh::cylinder(r, h, seg);
+            int seg = countOpt("segments", 16);
+            meshData = bromesh::cylinder(r, halfHeight(), seg);
         } else if (meshType == "capsule") {
             float r = getNum("radius", 0.5f);
-            float h = getNum("height", 1.0f);
-            int seg = static_cast<int>(getNum("segments", 16));
-            int rings = static_cast<int>(getNum("rings", 8));
-            meshData = bromesh::capsule(r, h, seg, rings);
+            int seg = countOpt("segments", 16);
+            int rings = countOpt("rings", 8);
+            meshData = bromesh::capsule(r, halfHeight(), seg, rings);
         } else if (meshType == "plane") {
             float hw = getNum("halfW", 5.0f);
             float hd = getNum("halfD", 5.0f);
-            int sx = static_cast<int>(getNum("subdivX", 1));
-            int sz = static_cast<int>(getNum("subdivZ", 1));
+            int sx = countOpt("subdivX", 1);
+            int sz = countOpt("subdivZ", 1);
             meshData = bromesh::plane(hw, hd, sx, sz);
         } else if (meshType == "torus") {
             float maj = getNum("majorRadius", 1.0f);
             float min = getNum("minorRadius", 0.3f);
-            int majSeg = static_cast<int>(getNum("majorSegments", 24));
-            int minSeg = static_cast<int>(getNum("minorSegments", 12));
+            int majSeg = countOpt("majorSegments", 24);
+            int minSeg = countOpt("minorSegments", 12);
             meshData = bromesh::torus(maj, min, majSeg, minSeg);
         } else {
             float hw = getNum("halfW", 0.5f);

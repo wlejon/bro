@@ -342,8 +342,13 @@ private:
     tile::Cell pixelToHexCell(float lx, float lz) const;
 
     bool hasAtlas() const {
+        // The pixels must cover width*height*4 bytes: the texture upload reads
+        // that many, and the three come from a config a script wrote.
         return !config_.atlasPixels.empty() &&
-               config_.atlasWidth > 0 && config_.atlasHeight > 0;
+               config_.atlasWidth > 0 && config_.atlasHeight > 0 &&
+               config_.atlasPixels.size() >=
+                   static_cast<size_t>(config_.atlasWidth) *
+                       static_cast<size_t>(config_.atlasHeight) * 4u;
     }
     // Atlas cell index for a tile id: the current animation frame if the id is
     // animated, else the tileAtlas override, else the id itself.

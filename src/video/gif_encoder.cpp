@@ -284,6 +284,13 @@ public:
             setErr("width/height must be positive"); if (err) *err = lastErr_;
             return false;
         }
+        // The GIF header stores each side in 16 bits; a larger size would be
+        // written truncated while the frame buffers were sized to the full one.
+        if (cfg_.width > 65535 || cfg_.height > 65535) {
+            setErr("width/height must be at most 65535 (the GIF format's limit)");
+            if (err) *err = lastErr_;
+            return false;
+        }
         if (cfg_.paletteBits < 1) cfg_.paletteBits = 1;
         if (cfg_.paletteBits > 8) cfg_.paletteBits = 8;
         if (cfg_.delayCs < 0) cfg_.delayCs = 0;

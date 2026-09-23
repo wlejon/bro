@@ -301,6 +301,11 @@
             if (config.cloth.gridZ !== undefined && config.cloth.gridZ < 2) {
                 throw new Error("Physics.createSoftBody: cloth gridZ must be >= 2");
             }
+            const gx = config.cloth.gridX !== undefined ? config.cloth.gridX : 10;
+            const gz = config.cloth.gridZ !== undefined ? config.cloth.gridZ : 10;
+            if (!(Math.trunc(gx) * Math.trunc(gz) <= 1048576)) {
+                throw new RangeError("Physics.createSoftBody: cloth gridX*gridZ must be at most 2^20 vertices");
+            }
         }
         if (config.mesh) {
             const ind = config.mesh.indices;

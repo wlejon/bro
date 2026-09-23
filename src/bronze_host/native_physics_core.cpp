@@ -123,8 +123,11 @@ void* bro_physics_createWorldHandle(const char* opts) {
         auto res = ev::parseJson(opts);
         if (!res.thrown && ev::isObject(res.value)) {
             const Rooted cfg(res.value);
-            maxBodies = static_cast<uint32_t>(getPropNumber(cfg, "maxBodies", 10240));
-            contactBufferSize = static_cast<uint32_t>(getPropNumber(cfg, "contactBufferSize", 4096));
+            // Both size native tables up front, so they are bounded here:
+            // PhysicsWorld::init clamps maxBodies to its body cap and the
+            // contact buffer to [16, 65536].
+            maxBodies = satCast<uint32_t>(getPropNumber(cfg, "maxBodies", 10240));
+            contactBufferSize = satCast<uint32_t>(getPropNumber(cfg, "contactBufferSize", 4096));
             Value gv = ev::getProperty(cfg, "gravity");
             if (!ev::isUndefined(gv) && !ev::isNull(gv)) {
                 gravity = readVec3(gv, gravity);
@@ -132,7 +135,9 @@ void* bro_physics_createWorldHandle(const char* opts) {
         }
     }
 
-    pw->world->init(maxBodies, contactBufferSize);
+    pw->world->init(static_cast<int>(std::min<uint32_t>(
+                        maxBodies, physics::PhysicsWorld::kMaxBodies)),
+                    static_cast<int>(std::min<uint32_t>(contactBufferSize, 65536)));
     pw->world->setGravity(gravity.GetX(), gravity.GetY(), gravity.GetZ());
     return pw;
 }
@@ -216,7 +221,7 @@ bool bro_physics_setLayers(const char* config) {
     if (ev::isObject(namesVal)) {
         Value lenV = ev::getProperty(namesVal, "length");
         if (ev::isNumber(lenV)) {
-            uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+            uint32_t n = satCast<uint32_t>(ev::toDouble(lenV));
             for (uint32_t i = 0; i < n; ++i) {
                 Value el = ev::getElement(namesVal, i);
                 names.push_back(ev::isString(el) ? ev::toUtf8(el) : "");
@@ -227,7 +232,7 @@ bool bro_physics_setLayers(const char* config) {
     if (ev::isObject(matVal)) {
         Value lenV = ev::getProperty(matVal, "length");
         if (ev::isNumber(lenV)) {
-            uint32_t n = static_cast<uint32_t>(ev::toDouble(lenV));
+            uint32_t n = satCast<uint32_t>(ev::toDouble(lenV));
             for (uint32_t i = 0; i < n; ++i) {
                 matrix.push_back(ev::toBool(ev::getElement(matVal, i)));
             }

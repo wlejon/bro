@@ -323,12 +323,26 @@ void TileWorld::setFlag(int x, int y, uint32_t bit, bool on) {
     // Flags don't affect geometry; no dirty needed.
 }
 
+// A fill rectangle is a script's four corners, in either order and possibly
+// far outside the grid: it is clipped to [0, w) x [0, h) before any loop runs.
+// Unclipped, `for (x = lo; x <= INT_MAX; ++x)` never ends (the increment past
+// INT_MAX is undefined), and a merely huge rectangle walked billions of cells
+// that were all out of bounds. False when nothing of it is on the grid.
+static bool clipFillRect(int x0, int y0, int x1, int y1, int w, int h,
+                         int& lo_x, int& lo_y, int& hi_x, int& hi_y) {
+    lo_x = std::max(0, std::min(x0, x1));
+    lo_y = std::max(0, std::min(y0, y1));
+    hi_x = std::min(w - 1, std::max(x0, x1));
+    hi_y = std::min(h - 1, std::max(y0, y1));
+    return lo_x <= hi_x && lo_y <= hi_y;
+}
+
 void TileWorld::fillTile(int x0, int y0, int x1, int y1, uint16_t id, int layer) {
     if (!grid_) return;
     if (layer < 0 || layer >= grid_->layerCount()) return;
     grid_->fillRect(layer, {x0, y0}, {x1, y1}, id);
-    int lo_x = std::min(x0, x1), hi_x = std::max(x0, x1);
-    int lo_y = std::min(y0, y1), hi_y = std::max(y0, y1);
+    int lo_x, lo_y, hi_x, hi_y;
+    if (!clipFillRect(x0, y0, x1, y1, config_.width, config_.height, lo_x, lo_y, hi_x, hi_y)) return;
     for (int y = lo_y; y <= hi_y; ++y)
         for (int x = lo_x; x <= hi_x; ++x)
             markCellDirty(x, y);
@@ -336,8 +350,8 @@ void TileWorld::fillTile(int x0, int y0, int x1, int y1, uint16_t id, int layer)
 
 void TileWorld::fillElevation(int x0, int y0, int x1, int y1, int level) {
     if (!grid_) return;
-    int lo_x = std::min(x0, x1), hi_x = std::max(x0, x1);
-    int lo_y = std::min(y0, y1), hi_y = std::max(y0, y1);
+    int lo_x, lo_y, hi_x, hi_y;
+    if (!clipFillRect(x0, y0, x1, y1, grid_->width(), grid_->height(), lo_x, lo_y, hi_x, hi_y)) return;
     for (int y = lo_y; y <= hi_y; ++y)
         for (int x = lo_x; x <= hi_x; ++x) {
             if (grid_->inBounds({x, y})) {
@@ -348,9 +362,12 @@ void TileWorld::fillElevation(int x0, int y0, int x1, int y1, int level) {
 }
 
 static uint32_t packRGBA(float r, float g, float b, float a) {
+    // Clamped as a float first: a NaN or huge channel cast straight to int is
+    // undefined behaviour. NaN reads as 0.
     auto u8 = [](float v) -> uint32_t {
-        int n = static_cast<int>(v * 255.0f + 0.5f);
-        return static_cast<uint32_t>(n < 0 ? 0 : (n > 255 ? 255 : n));
+        if (!(v > 0.0f)) return 0;
+        if (v >= 1.0f) return 255;
+        return static_cast<uint32_t>(v * 255.0f + 0.5f);
     };
     return (u8(r) << 24) | (u8(g) << 16) | (u8(b) << 8) | u8(a);
 }
@@ -366,8 +383,8 @@ void TileWorld::setTint(int x, int y, float r, float g, float b, float a) {
 void TileWorld::fillTint(int x0, int y0, int x1, int y1,
                          float r, float g, float b, float a) {
     uint32_t packed = packRGBA(r, g, b, a);
-    int lo_x = std::min(x0, x1), hi_x = std::max(x0, x1);
-    int lo_y = std::min(y0, y1), hi_y = std::max(y0, y1);
+    int lo_x, lo_y, hi_x, hi_y;
+    if (!clipFillRect(x0, y0, x1, y1, config_.width, config_.height, lo_x, lo_y, hi_x, hi_y)) return;
     for (int y = lo_y; y <= hi_y; ++y)
         for (int x = lo_x; x <= hi_x; ++x) {
             if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) continue;
