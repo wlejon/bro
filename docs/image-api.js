@@ -178,9 +178,12 @@ class Image extends HTMLImageElement {}
  * @param {number} [params.stride=1] visit every Nth element — a cheap
  *   approximate range for huge buffers. `mean` is the mean of the *visited*
  *   elements; `histogram` counts only the visited ones.
- * @param {number} [params.bins=256] histogram only
- * @param {number} [params.lo=0] histogram only; values outside [lo,hi) are dropped
- * @param {number} [params.hi=1] histogram only
+ * @param {number} [params.bins=256] histogram only; an integer in 1..2^24
+ *   (16777216). RangeError outside it, or for NaN ("bins is out of range").
+ * @param {number} [params.lo=0] histogram only; values outside [lo,hi) are
+ *   dropped, and so are NaN samples (each is range-checked as a float before
+ *   it becomes a bin index)
+ * @param {number} [params.hi=1] histogram only; must be > lo (RangeError)
  * @returns {{min:number,max:number}|number|Uint32Array}
  *
  * @example
@@ -228,6 +231,9 @@ bro.image.combine = function(dst, a, b, opSpec) {};
  *
  * For each `src[i]`: `t = (src[i] - lo) / (hi - lo)`,
  * `idx = clamp(floor(t * (lutN - 1)))`, `dst[i*4 .. i*4+3] = lut[idx*4 ...]`.
+ * A NaN sample maps to entry 0, as does an infinite one in 'wrap' mode (in
+ * 'clamp' mode +-Infinity clamps to the last / first entry); no sample ever
+ * indexes outside the LUT.
  *
  * `dst` must be a 1-byte-per-element array (Uint8Array / Uint8ClampedArray)
  * holding at least `4 * src.length` bytes — typically `imageData.data`. `lut`
@@ -302,10 +308,14 @@ bro.image.resample = function(dst, src, params) {};
  *
  * Each stop is `[t, r, g, b]` or `[t, r, g, b, a]`, `t` in [0,1] and the
  * components in [0,255]. A stop with no alpha is fully opaque. Positions
- * outside `[first.t, last.t]` clamp to the endpoints. At least two stops.
+ * outside `[first.t, last.t]` clamp to the endpoints. At least two stops
+ * (TypeError otherwise, and for a stop that is not an array of 4 or 5
+ * numbers), at most 2^20 (1048576) stops (RangeError).
  *
  * @param {Array<Array<number>>} stops
- * @param {number} [n=256] LUT entry count, >= 2
+ * @param {number} [n=256] LUT entry count, an integer in 2..2^24 (16777216):
+ *   RangeError outside it. A fraction truncates; NaN reads as 0 and so is a
+ *   RangeError.
  * @returns {Uint8Array} `4 * n` bytes
  *
  * @example
@@ -713,7 +723,10 @@ bro.image.applyGamma = function(dst, src, count, gamma) {};
  */
 bro.image.rgbToHsv = function(dst, src, pixelCount) {};
 
-/** HSV to RGB. @param {number} pixelCount */
+/**
+ * HSV to RGB. Hue wraps into [0,1); a NaN or infinite hue reads as 0 (red).
+ * @param {number} pixelCount
+ */
 bro.image.hsvToRgb = function(dst, src, pixelCount) {};
 
 /** RGB to HSL. @param {number} pixelCount */
