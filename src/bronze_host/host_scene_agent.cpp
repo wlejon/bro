@@ -363,7 +363,10 @@ void installSceneGraphAgent(ObjectBuilder& b) {
 // ---------------------------------------------------------------------------
 
 void installSceneNodeAgent(ObjectBuilder& b) {
-    b.def("attachAgent", 2, [](Value self_, std::span<const Value> a) -> Value {
+    b.def("attachAgent", 2, [](Value selfIn, std::span<const Value> a) -> Value {
+        // `this` is a plain copy (the args are rooted slots, it is not), and
+        // the option reads below allocate before it is returned.
+        const Rooted self_(selfIn);
         auto* cell = sceneNodeCellOf(self_);
         auto* node = cell ? cell->node() : nullptr;
         auto* g = cell ? cell->graph() : nullptr;
