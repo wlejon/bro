@@ -152,34 +152,58 @@
  */
 
 /**
- * Autoregressive sampling configuration options.
+ * Autoregressive sampling configuration options. The penalty knobs may also
+ * sit directly on the GenerateOptions object (camelCase or snake_case).
+ * Penalties read the whole context (prompt + generated ids).
  * @typedef {Object} SamplingOptions
- * @property {number} [temperature]
- * @property {number} [topK]
- * @property {number} [topP]
- * @property {number} [seed]
+ * @property {number} [temperature=1] - <= 0 is greedy (argmax)
+ * @property {number} [topK=0] - 0 disables
+ * @property {number} [topP=1] - >= 1 disables
+ * @property {number} [minP=0] - keep tokens with p >= minP * max p; 0 disables
+ * @property {number} [repetitionPenalty=1] - 1 disables
+ * @property {number} [frequencyPenalty=0]
+ * @property {number} [presencePenalty=0]
+ * @property {number} [penaltyLastN=64] - context window the penalties see; 0 = all (LMModel only)
+ * @property {number} [dryMultiplier=0] - DRY n-gram repetition penalty; 0 disables (LMModel only)
+ * @property {number} [dryBase=1.75] - (LMModel only)
+ * @property {number} [dryAllowedLength=2] - (LMModel only)
+ * @property {(number|bigint)} [seed=0]
  */
 
 /**
  * Text and multimodal generation options.
  * @typedef {Object} GenerateOptions
- * @property {number} [maxNewTokens]
- * @property {number} [eosId]
+ * @property {number} [maxNewTokens=64]
+ * @property {number} [eosId] - Stop token. LMModel defaults to its paired
+ *   tokenizer's end-of-turn id (`model.eosId`); pass -1 to never stop on one.
+ * @property {boolean} [stopOnEos=true]
  * @property {SamplingOptions} [sampling]
- * @property {(Object|Array<Object>)} [images]
- * @property {Function} [onToken]
- * @property {Function} [onDone]
- * @property {Function} [onError]
+ * @property {Grammar} [grammar] - Constrain the output (LMModel only): every
+ *   step is masked so the text conforms. Generation works on a copy of the
+ *   grammar's state, so one Grammar serves any number of calls.
+ * @property {(Object|Array<Object>)} [images] - Qwen35Model / Qwen3VLModel:
+ *   `{ data, width, height }` RGBA images
+ * @property {Function} [onToken] - `(id) => boolean|void`; returning false stops
+ * @property {Function} [onDone] - bro.lm.generate: `(ids, { cancelled, error? })`,
+ *   also after cancel() with the ids produced so far
+ * @property {Function} [onError] - bro.lm.generate: `(message)` on a failure
+ *   (without it the failure rides onDone's `info.error`)
  */
 
 /**
- * Model loading options for causal LM backends.
+ * Model loading options for causal LM backends. Relative paths resolve
+ * against the app directory.
  * @typedef {Object} LoadModelOptions
  * @property {string} [device="cuda"]
  * @property {string} [tokenizerPath]
- * @property {number} [maxSeqLen=4096]
- * @property {Function} [onReady]
- * @property {Function} [onError]
+ * @property {number} [maxSeqLen=4096] - Qwen3.5 / Qwen3-VL KV/state capacity
+ * @property {Function} [onReady] - When given, the load runs on a worker
+ *   thread and the loader returns an AsyncHandle at once; `onReady(result)`
+ *   fires on a later tick with what the loader would have returned (the
+ *   `{ model, tokenizer }` pair, or the model handle). Not fired after cancel().
+ *   Supported by loadQwen, loadMistral, loadGemma2, loadQwen35, loadQwen3VL,
+ *   loadNllb.
+ * @property {Function} [onError] - `(message)` when an async load fails
  */
 
 /**
@@ -278,14 +302,133 @@
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
 
 /**
- * Asynchronous job handle with cancellation support.
+ * Asynchronous job handle with cancellation support. Callbacks of the job
+ * fire on the thread that started it, when bro.lm.tick() runs (bro's frame
+ * pump does this) or inside wait().
  */
 class AsyncHandle {
 
   /**
-   * Cancel the in-flight background job.
+   * True once the job finished and its callbacks ran.
+   * @readonly
+   * @type {boolean}
+   */
+  done;
+
+  /**
+   * True once cancel() was called.
+   * @readonly
+   * @type {boolean}
+   */
+  cancelled;
+
+  /**
+   * Cancel the in-flight background job (a generation stops within one token).
    */
   cancel() {}
+
+  /**
+   * Block until the job finished, delivering its callbacks meanwhile.
+   */
+  wait() {}
+
+}
+
+/**
+ * A decoding constraint for GenerateOptions.grammar (LMModel). Built by the
+ * static factories only (`new Grammar()` throws). The instance methods drive
+ * the object's own state, for validating text by hand; generation never
+ * advances the object it is given.
+ *
+ * @example
+ *   const g = bro.lm.Grammar.jsonSchema({ type: 'object',
+ *     properties: { mood: { enum: ['happy', 'sad'] } }, required: ['mood'] });
+ *   const ids = model.generate(promptIds, { maxNewTokens: 32, grammar: g });
+ */
+class Grammar {
+
+  /**
+   * Regular expression: literals, classes [a-z] [^0-9], \d \w \s, `.`, `|`,
+   * groups, and the quantifiers * + ? {n} {m,n} {m,}.
+   * @param {string} pattern
+   * @returns {Grammar}
+   */
+  static regex(pattern) {}
+
+  /**
+   * BNF / EBNF: `rule ::= expression` lines; the start rule is `root` (or the first).
+   * @param {string} text
+   * @returns {Grammar}
+   */
+  static bnf(text) {}
+
+  /**
+   * A JSON Schema (text, or an object that is JSON.stringify'd): object
+   * properties, required, types, enums, string patterns.
+   * @param {(string|Object)} schema
+   * @returns {Grammar}
+   */
+  static jsonSchema(schema) {}
+
+  /**
+   * Exactly one of the given strings.
+   * @param {Array<string>} options
+   * @returns {Grammar}
+   */
+  static choice(options) {}
+
+  /**
+   * Exactly this string.
+   * @param {string} text
+   * @returns {Grammar}
+   */
+  static exact(text) {}
+
+  /** @returns {Grammar} any JSON object */
+  static jsonObject() {}
+  /** @returns {Grammar} any JSON array */
+  static jsonArray() {}
+  /** @returns {Grammar} any JSON value */
+  static jsonValue() {}
+  /** @returns {Grammar} a JSON string */
+  static jsonString() {}
+  /** @returns {Grammar} a JSON number */
+  static jsonNumber() {}
+  /** @returns {Grammar} a JSON integer */
+  static jsonInteger() {}
+  /** @returns {Grammar} true | false */
+  static jsonBoolean() {}
+  /** @returns {Grammar} null */
+  static jsonNull() {}
+
+  /**
+   * Would appending `text` keep the state valid? Does not change the state.
+   * @param {string} text
+   * @returns {boolean}
+   */
+  canAccept(text) {}
+
+  /**
+   * Advance the state by `text`.
+   * @param {string} text
+   * @returns {boolean} false when `text` is not a valid continuation
+   */
+  accept(text) {}
+
+  /**
+   * Is the consumed text a complete match?
+   * @returns {boolean}
+   */
+  isAccepted() {}
+
+  /** Back to the initial state. */
+  reset() {}
+
+  /**
+   * A copy in the current state.
+   * @returns {Grammar}
+   */
+  clone() {}
 
 }
 
@@ -309,12 +452,43 @@ class QwenTokenizer {
   imStartId;
 
   /**
+   * End-of-sequence id (the <|im_end|> turn terminator).
+   * @readonly
+   * @type {number}
+   */
+  eosId;
+
+  /**
+   * Id of <|endoftext|>.
+   * @readonly
+   * @type {number}
+   */
+  endoftextId;
+
+  /**
+   * Vocabulary entries.
+   * @readonly
+   * @type {number}
+   */
+  vocabCount;
+
+  /**
+   * BPE merge rules.
+   * @readonly
+   * @type {number}
+   */
+  mergeCount;
+
+  /**
    * BPE-encode a string to token ids.
+   * Special-token literals in `text` (e.g. `<|im_start|>`) always encode
+   * as their single ids.
    *
    * @param {string} text - Text string to encode
-   * @returns {Array<number>} Array of token ids
+   * @param {boolean} [addSpecial=false] - Append <|endoftext|> (Qwen3 has no BOS)
+   * @returns {Int32Array} Token ids
    */
-  encode(text) {}
+  encode(text, addSpecial) {}
 
   /**
    * Decode token ids back to text string.
@@ -496,6 +670,23 @@ class LMModel {
   cacheLen;
 
   /**
+   * The paired tokenizer's end-of-turn id: the stop token generate() uses
+   * when opts.eosId is absent.
+   * @readonly
+   * @type {number}
+   */
+  eosId;
+
+  /**
+   * True while a generation (sync or a bro.lm.generate job) owns the model.
+   * A model runs one decode at a time: a call made meanwhile throws
+   * "a generation is already in flight on this model".
+   * @readonly
+   * @type {boolean}
+   */
+  busy;
+
+  /**
    * Size and allocate the KV cache. Reused across generate calls.
    *
    * @param {number} maxTokens - Maximum capacity (prompt + generated tokens)
@@ -508,21 +699,30 @@ class LMModel {
   resetCache() {}
 
   /**
+   * Raw logits of one forward over the ids (all positions, row-major L x vocab).
+   *
+   * @param {(Array<number>|Int32Array)} ids
+   * @returns {Float32Array}
+   */
+  forward(ids) {}
+
+  /**
    * Run synchronous autoregressive generation.
    *
    * @param {(Array<number>|Int32Array)} promptIds - Input prompt token ids
-   * @param {GenerateOptions} [opts] - Sampling and stopping options
-   * @returns {Array<number>} Generated token ids (excluding prompt)
+   * @param {GenerateOptions} [opts] - Sampling, stopping and grammar options
+   * @returns {Int32Array} Generated token ids (excluding prompt)
    */
   generate(promptIds, opts) {}
 
   /**
    * Run synchronous streaming generation with per-token callbacks.
+   * Also `generateStream(promptIds, onToken)`.
    *
    * @param {(Array<number>|Int32Array)} promptIds - Input prompt token ids
-   * @param {GenerateOptions} opts - Sampling and stopping options
-   * @param {Function} onToken - Callback invoked with each generated token id
-   * @returns {Array<number>} All newly generated token ids
+   * @param {GenerateOptions} opts - Sampling, stopping and grammar options
+   * @param {Function} onToken - `(id) => boolean|void`; returning false stops
+   * @returns {Int32Array} All newly generated token ids
    */
   generateStream(promptIds, opts, onToken) {}
 
@@ -607,13 +807,34 @@ class Qwen35Model {
   decode(ids) {}
 
   /**
-   * Generate text or multimodal responses from a string prompt.
+   * True while a generation owns the model (one decode at a time; a call
+   * made meanwhile throws).
+   * @readonly
+   * @type {boolean}
+   */
+  busy;
+
+  /**
+   * Generate text or multimodal responses from a string prompt (blocking).
+   * opts.onToken, when given, streams each id. opts.grammar is not supported
+   * by the VLM driver.
    *
    * @param {string} prompt - Prompt string formatted with ChatML / vision tokens
    * @param {GenerateOptions} [opts] - Generation options including images
    * @returns {Int32Array} Generated token ids
    */
   generate(prompt, opts) {}
+
+  /**
+   * generate() with a required per-token callback. The prompt may also be
+   * token ids (decoded back to text); also `generateStream(prompt, onToken)`.
+   *
+   * @param {(string|Int32Array|Array<number>)} prompt
+   * @param {GenerateOptions} opts
+   * @param {Function} onToken - `(id) => boolean|void`; returning false stops
+   * @returns {Int32Array} Generated token ids
+   */
+  generateStream(prompt, opts, onToken) {}
 
 }
 
@@ -696,13 +917,34 @@ class Qwen3VLModel {
   decode(ids) {}
 
   /**
-   * Generate text or multimodal responses from a string prompt.
+   * True while a generation owns the model (one decode at a time; a call
+   * made meanwhile throws).
+   * @readonly
+   * @type {boolean}
+   */
+  busy;
+
+  /**
+   * Generate text or multimodal responses from a string prompt (blocking).
+   * opts.onToken, when given, streams each id. opts.grammar is not supported
+   * by the VLM driver.
    *
    * @param {string} prompt - Prompt string formatted with ChatML / vision tokens
    * @param {GenerateOptions} [opts] - Generation options including images
    * @returns {Int32Array} Generated token ids
    */
   generate(prompt, opts) {}
+
+  /**
+   * generate() with a required per-token callback. The prompt may also be
+   * token ids (decoded back to text); also `generateStream(prompt, onToken)`.
+   *
+   * @param {(string|Int32Array|Array<number>)} prompt
+   * @param {GenerateOptions} opts
+   * @param {Function} onToken - `(id) => boolean|void`; returning false stops
+   * @returns {Int32Array} Generated token ids
+   */
+  generateStream(prompt, opts, onToken) {}
 
 }
 
@@ -929,12 +1171,29 @@ bro.lm.loadQwen3VL = function(checkpointDir, opts) {};
 bro.lm.loadNllb = function(checkpointDir, opts) {};
 
 /**
- * Load standalone Qwen tokenizer without weights.
+ * Load standalone Qwen tokenizer without weights: a tokenizer.json path, or
+ * { vocabPath, mergesPath }, or { tokenizerPath }.
  *
- * @param {LoadTokenizerOptions} opts - Options specifying vocabPath and mergesPath
+ * @param {(string|LoadTokenizerOptions)} opts - tokenizer.json path or options
  * @returns {QwenTokenizer} QwenTokenizer handle
  */
 bro.lm.loadTokenizer = function(opts) {};
+
+/**
+ * Load a Llama-3 tokenizer (tokenizer.json) without weights.
+ *
+ * @param {(string|{tokenizerPath: string})} pathOrOpts
+ * @returns {Llama3Tokenizer} handle with encode(text, addBos=true), decode(ids),
+ *   applyChatTemplate(messages, addGenerationPrompt=true) and the ids bosId,
+ *   eosId, endOfTextId, eotId, startHeaderId, endHeaderId, vocabCount
+ */
+bro.lm.loadLlama3Tokenizer = function(pathOrOpts) {};
+
+/** Alias of bro.lm.loadQwen. */
+bro.lm.loadModel = function(ggufPath, opts) {};
+
+/** Alias of bro.lm.loadClip. */
+bro.lm.loadClipModel = function(opts) {};
 
 /**
  * Load CLIP ViT-L/14 cross-modal scorer.
@@ -954,11 +1213,23 @@ bro.lm.loadT5 = function(opts) {};
 
 /**
  * Asynchronously run generation on a background thread with real-time cancellation.
+ * The model is claimed for the job (a sync call on it meanwhile throws) and
+ * released before onDone fires, so onDone may start the next generation.
+ * opts.onToken(id) fires per token and opts.onDone(ids, { cancelled, error? })
+ * once, both on this thread's tick; onDone also fires after cancel() with the
+ * ids produced so far. opts.grammar applies for an LMModel.
  *
  * @param {Object} model - Model handle (LMModel, Qwen35Model, or Qwen3VLModel)
- * @param {(Array<number>|string)} prompt - Token ids array or prompt string
- * @param {GenerateOptions} [opts] - Generation options including onToken and onDone callbacks
- * @returns {AsyncHandle} AsyncHandle for cancellation
+ * @param {(Array<number>|string)} prompt - Token ids for an LMModel, a prompt string for the VLMs
+ * @param {GenerateOptions} [opts] - Generation options including onToken / onDone / onError
+ * @returns {AsyncHandle} AsyncHandle for cancel() / wait()
  */
 bro.lm.generate = function(model, prompt, opts) {};
+
+/**
+ * Deliver finished background work: token / done / error callbacks of
+ * bro.lm.generate and async loads, and LayaModel promise settlement. bro's
+ * frame pump calls it every frame; a Worker calls it from its own loop.
+ */
+bro.lm.tick = function() {};
 
