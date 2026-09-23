@@ -20,6 +20,11 @@
  *   - NLLB-200 (loadNllb): machine translation between 200+ FLORES-200 languages.
  *   - CLIP (loadClip): ViT-L/14 cross-modal scorer (text <-> image similarity).
  *   - T5 (loadT5): encoder-only text encoder (T5-XXL, Flux text conditioning).
+ *   - Laya (loadLaya / loadLayaAsync): a realtime decision model — typed
+ *     choice / score / yes-no questions about a state, calibrated
+ *     probabilities in one forward pass, served by a request scheduler that
+ *     batches concurrent calls across GPUs. Documented in laya-api.js: what
+ *     it is good and bad at, escalation, latency under load.
  *
  * @example
  *   // --- Qwen3 Text Generation ----------------------------------------------

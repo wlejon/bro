@@ -286,10 +286,21 @@ void installSiblingApis(engine::Engine& engine) {
         adoptGlobalProperty(name);
     }
     {
+        // The LM tick fires generate() callbacks and settles LayaModel
+        // promises (predictAsync / loadLayaAsync). Their reactions run right
+        // after, in this frame, before it renders: a result the device
+        // finished mid-frame reaches the page one frame sooner than waiting
+        // for the next frame's microtask checkpoint. The shutdown hook stops
+        // every Laya scheduler's device threads before the runtime and
+        // brotensor go away.
         static bool lmHooksInstalled = false;
         if (!lmHooksInstalled) {
             lmHooksInstalled = true;
-            engine.addFramePump([] { brolm::api::tickLMAsync(); });
+            engine.addFramePump([] {
+                brolm::api::tickLMAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brolm::api::shutdownLM(); });
         }
     }
 #endif

@@ -127,6 +127,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `diffusion-api.js` | `bro.diffusion`: `loadModel`, `generate`, the step-wise `PipelineState` API, LoRA, schedulers |
 | `diffusion-control-api.js` | `bro.diffusion` steering: ControlNet, control vectors, Sana identity anchor, krea2 hooks, `VAE`, attention trace |
 | `lm-api.js` | `bro.lm` text generation: Qwen3/Mistral (GGUF), Qwen3.5 (safetensors); streaming `generate` + cancel |
+| `laya-api.js` | `bro.lm.loadLaya`: Laya decision model (choice/score/noul, calibrated), request scheduler across GPUs, `predictAsync`, stats; what it is good and bad at |
 | `stt-api.js` | `bro.stt` speech-to-text: Whisper, Parakeet-TDT (timestamps), Qwen3-ASR (+streaming encoder) |
 | `diar-api.js` | `bro.diar` diarization: streaming Sortformer (4 speakers) + ClusterDiarizer (similar voices, discovers count) |
 | `tts-api.js` | `bro.tts` text-to-speech: Kokoro (phoneme), Qwen3-TTS (text), OmniVoice (masked-diffusion, prompt clone / instruct, codes seam), to 24 kHz PCM |
