@@ -186,6 +186,9 @@ void installSiblingApis(engine::Engine& engine);
 // thread's async jobs from the worker's loop.
 void installWorkerSiblingApis();
 void tickWorkerSiblingApis();
+// At worker exit, before its realm goes: stops the calling thread's sibling
+// async jobs that need an explicit join (diffusion).
+void shutdownWorkerSiblingApis();
 
 // The engine hook bro.settings.onChange listens through (native_settings.cpp).
 void installSettingsObserver(engine::Engine& engine);

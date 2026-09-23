@@ -348,6 +348,24 @@ void installSiblingApis(engine::Engine& engine) {
     // bro.diffusion and bro.triposplat together.
     brodiffusion::api::setPathResolver(&brokit::api::resolveAssetPath);
     brodiffusion::api::installDiffusion();
+    {
+        // A background generate (generateAsync, or generate/imageToImage/
+        // inpaint with onDone or async: true) delivers its onDone from this
+        // tick; without it the result waits for a script that calls
+        // bro.diffusion.tick() itself. Their reactions run in the same
+        // frame, as the LM tick's do. Ungated by bro.time pause, like every
+        // frame pump. The shutdown hook cancels and joins the jobs still
+        // running before the runtime and brotensor go away.
+        static bool diffusionHooksInstalled = false;
+        if (!diffusionHooksInstalled) {
+            diffusionHooksInstalled = true;
+            engine.addFramePump([] {
+                brodiffusion::api::tickDiffusionAsync();
+                if (ev::microtasksPending()) ev::drainMicrotasks();
+            });
+            engine.addShutdownHook([] { brodiffusion::api::shutdownDiffusionAsync(); });
+        }
+    }
 #endif
 #if BRO_WITH_VISION
     brovisionml::api::setPathResolver(&brokit::api::resolveAssetPath);
@@ -448,6 +466,17 @@ void tickWorkerSiblingApis() {
     // This thread's async jobs only (a job's callbacks belong to the realm
     // that launched it).
     brosoundml::api::tickSoundMLAsync();
+#endif
+#if BRO_WITH_DIFFUSION
+    brodiffusion::api::tickDiffusionAsync();
+#endif
+}
+
+void shutdownWorkerSiblingApis() {
+#if BRO_WITH_DIFFUSION
+    // This thread's diffusion jobs: cancelled and joined while the worker's
+    // realm (their callbacks' home) still exists.
+    brodiffusion::api::shutdownDiffusionAsync();
 #endif
 }
 

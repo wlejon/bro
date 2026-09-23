@@ -693,6 +693,9 @@ void WorkerInstance::threadFunc() {
         }
     }
 
+    // This thread's sibling jobs still in flight, joined while the realm
+    // their callbacks belong to is alive.
+    shutdownWorkerSiblingApis();
     // Before workerListeners (which the sink's dispatch names) goes out of
     // scope, and while this thread's Persistent slots still exist.
     uninstallRejectionTracking();

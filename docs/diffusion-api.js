@@ -306,8 +306,10 @@ class Pipeline {
    * BACKGROUND FORM: with `opts.onDone` (a function) or `opts.async: true`
    * the run moves to a native worker thread and generate() returns a
    * DiffusionJobHandle at once. `onDone(result, info)` is called on this
-   * thread from bro.diffusion.tick() (or Pipeline.tick(), or the handle's
-   * wait()) once the run ends: `result` is the ImageResult, or
+   * thread once the run ends, from bro's frame pump (every frame, bro.time
+   * pause or not; a Worker's own loop in a Worker), or sooner from
+   * bro.diffusion.tick(), Pipeline.tick() or the handle's wait(). Jobs still
+   * running at teardown are cancelled and joined: `result` is the ImageResult, or
    * { cancelled: true }, or null on error; `info` is { cancelled, error? }.
    * An error with no onDone is written to stderr. While the run is in flight
    * the pipeline is `busy`: generate, prime, stepOnce, decode, loadWeights,
@@ -821,8 +823,9 @@ bro.diffusion.cancel = function(target) {};
 
 /**
  * Deliver the onDone callbacks of background generates that have finished on
- * this thread. Call it once per frame while any are in flight (bro does not
- * pump it for you yet).
+ * this thread. bro already runs this every frame (and a Worker's loop runs
+ * it for the worker), so you only need to call it to deliver results sooner
+ * than the next frame, e.g. inside a long synchronous loop.
  * @returns {undefined}
  */
 bro.diffusion.tick = function() {};
