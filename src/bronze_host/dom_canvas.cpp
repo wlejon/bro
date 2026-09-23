@@ -1,6 +1,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_canvas2d.h"
+#include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_window_open.h"
 
@@ -51,6 +52,10 @@ struct CanvasState {
 // FBO is a GL error every following draw repeats.
 void resizeBacking(CanvasState* cs, int w, int h, bool widthChanged) {
     if (!cs || !cs->el) return;
+    // A bitmaprenderer canvas displays the ImageBitmap it was handed at that
+    // bitmap's own size; its width/height attributes do not resize or clear
+    // it.
+    if (cs->contextType == "bitmaprenderer") return;
     if (auto* cScene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
         if (widthChanged) cScene->setIntrinsicWidth(w); else cScene->setIntrinsicHeight(h);
         cScene->reset();
@@ -90,6 +95,59 @@ int canvasHeightOf(CanvasState* cs) {
     if (!cs || !cs->el) return 150;
     if (cs->glCtx) return cs->glCtx->canvasHeight();
     return attributeOr(cs->el, "height", 150);
+}
+
+// ImageBitmapRenderingContext — getContext('bitmaprenderer'). The canvas gets
+// an ordinary CanvasScene, and transferFromImageBitmap replaces its whole
+// bitmap with the ImageBitmap's pixels (recorded as a putImageData, so it
+// travels through the same command stream to the canvas worker as any 2D
+// draw) and detaches the ImageBitmap, which is the "transfer".
+HostClass g_bitmapRendererClass;
+
+Value makeBitmapRendererContextValue(const ev::Persistent& canvasRoot, dom::Element* el) {
+    static bool installed = false;
+    if (!installed) {
+        installed = true;
+        g_bitmapRendererClass.install("ImageBitmapRenderingContext", 0, nullptr, nullptr);
+    }
+    ObjectBuilder b;
+    b.set("canvas", canvasRoot.get());
+    b.def("transferFromImageBitmap", 1, [el](Value, std::span<const Value> a) -> Value {
+        CanvasState* cs = canvasStateFor(el);
+        if (!cs || !cs->el) return ev::undefined();
+        auto* scene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene());
+        Value arg = a.empty() ? ev::undefined() : a[0];
+        if (ev::isNull(arg) || ev::isUndefined(arg)) {
+            // null: the output bitmap becomes transparent black at the
+            // canvas's own size.
+            if (scene) {
+                scene->setIntrinsicSize(canvasWidthOf(cs), canvasHeightOf(cs));
+                scene->reset();
+            }
+            return ev::undefined();
+        }
+        HostImageBitmap* bmp = hostImageBitmapOfMut(arg);
+        if (!bmp) {
+            return ev::throwTypeError(
+                "ImageBitmapRenderingContext.transferFromImageBitmap: argument is not an ImageBitmap");
+        }
+        if (bmp->closed) {
+            return ev::throwValue(hostMakeDomError("InvalidStateError",
+                "ImageBitmapRenderingContext.transferFromImageBitmap: the ImageBitmap is detached"));
+        }
+        if (scene && bmp->width > 0 && bmp->height > 0 && !bmp->pixels.empty()) {
+            scene->setIntrinsicSize(bmp->width, bmp->height);
+            scene->reset();
+            scene->putImageData(bmp->pixels.data(), bmp->width, bmp->height, 0, 0);
+        }
+        bmp->closed = true;
+        bmp->width = 0;
+        bmp->height = 0;
+        bmp->image = nullptr;
+        bmp->pixels.clear();
+        return ev::undefined();
+    });
+    return ev::setPrototype(b.get(), g_bitmapRendererClass.prototype());
 }
 
 }  // namespace
@@ -218,6 +276,20 @@ Value makeCanvasValue(dom::Element* el) {
             ev::setProperty(canvasObj, "__bro_ctx2d__", ctx2d);
             cs->contextType = type;
             return ctx2d;
+        }
+        if (type == "bitmaprenderer") {
+            Value existing = ev::getProperty(canvasObj, "__bro_ctxbmp__");
+            if (ev::isObject(existing)) return existing;
+            // Rooted: every call below allocates, and a raw Value does not
+            // survive a collection.
+            ev::Persistent canvasRoot(canvasObj);
+            if (auto* eng = hostEngine()) {
+                eng->createCanvasContext(cs->el);
+            }
+            ev::Persistent ctxRoot(makeBitmapRendererContextValue(canvasRoot, cs->el));
+            ev::setProperty(canvasRoot.get(), "__bro_ctxbmp__", ctxRoot.get());
+            cs->contextType = type;
+            return ctxRoot.get();
         }
         if (type == "scene") {
 #if BRO_WITH_3D

@@ -14,6 +14,13 @@
  * @example
  *   const imgData = new ImageData(new Uint8ClampedArray(64), 4, 4);
  *   const bmpFromData = await createImageBitmap(imgData);
+ *
+ * @example
+ *   // Show a bitmap on a canvas without a 2D context: the bitmaprenderer
+ *   // context takes the bitmap over (the bitmap is detached afterwards).
+ *   const view = document.createElement('canvas');
+ *   const brc = view.getContext('bitmaprenderer');
+ *   brc.transferFromImageBitmap(await createImageBitmap(imgData));
  */
 
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
@@ -86,6 +93,35 @@ class ImageData {
    * @type {Uint8ClampedArray}
    */
   data;
+
+}
+
+/**
+ * The context `canvas.getContext('bitmaprenderer')` answers. A canvas has one
+ * context mode for its life, so a bitmaprenderer canvas answers null to
+ * getContext('2d') and the WebGL types. Its width/height attributes do not
+ * resize or clear the displayed bitmap. The canvas can itself be a drawImage /
+ * createImageBitmap / createPattern source.
+ */
+class ImageBitmapRenderingContext {
+
+  /**
+   * @readonly
+   * @type {HTMLCanvasElement}
+   */
+  canvas;
+
+  /**
+   * Make the canvas show `bitmap`, at the bitmap's own size, and detach
+   * `bitmap`: its width/height become 0 and it can no longer be drawn or
+   * transferred (the ownership moves to the canvas, as the name says).
+   * `null` resets the canvas to transparent black at its width/height.
+   * Throws InvalidStateError for a detached or closed bitmap and TypeError for
+   * anything that is not an ImageBitmap.
+   *
+   * @param {ImageBitmap|null} bitmap
+   */
+  transferFromImageBitmap(bitmap) {}
 
 }
 
