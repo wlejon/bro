@@ -20,6 +20,9 @@
 #include <bromesh/manipulation/normals.h>
 #include <bromesh/api.h>
 
+#include "util/string_utils.h"
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -60,15 +63,15 @@ scene::SpriteNode* spriteOf(void* self) {
     return (n && n->type() == scene::SceneNode::Type::Sprite) ? static_cast<scene::SpriteNode*>(n) : nullptr;
 }
 
-// "rgba(r,g,b,a.aa)" — the shape the old ShapeNode color getters answered,
-// and the same one canvas 2D's fillStyle getter uses.
+// The same serialization canvas 2D's fillStyle getter answers (HTML's
+// serialization of a color): "#rrggbb" when opaque, "rgba(r, g, b, a)"
+// otherwise, the channels taken to 8 bits first.
 const char* cssOf(bromath::Color c) {
-    char buf[40];
-    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)",
-                  static_cast<int>(c.r * 255.0f + 0.5f),
-                  static_cast<int>(c.g * 255.0f + 0.5f),
-                  static_cast<int>(c.b * 255.0f + 0.5f), c.a);
-    return strResult(buf);
+    auto byte = [](float v) {
+        return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+    const std::string s = bro::util::serializeCanvasColor(byte(c.r), byte(c.g), byte(c.b), byte(c.a));
+    return strResult(s.c_str());
 }
 
 bool colorOf(const char* css, bromath::Color& out) {

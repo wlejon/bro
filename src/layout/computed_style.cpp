@@ -9,6 +9,7 @@
 #include "css/properties.h"
 #include "layout/formatting_context.h"
 #include "layout/skia_text_metrics.h"
+#include "util/string_utils.h"
 
 #include <cctype>
 #include <cstdio>
@@ -41,16 +42,9 @@ std::string resolveColorToRgb(const std::string& value) {
     if (c.a == 0 && c.r == 0 && c.g == 0 && c.b == 0 && value != "transparent")
         return value;
 
-    if (c.a == 255) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "rgb(%d, %d, %d)", c.r, c.g, c.b);
-        return buf;
-    } else {
-        char buf[48];
-        snprintf(buf, sizeof(buf), "rgba(%d, %d, %d, %.2g)",
-                 c.r, c.g, c.b, c.a / 255.0);
-        return buf;
-    }
+    // CSSOM: rgb() when opaque, rgba() with the shortest alpha that
+    // round-trips the 8-bit value otherwise (%.2g printed 13/255 as 0.051).
+    return util::serializeCssColor(c.r, c.g, c.b, c.a);
 }
 
 }  // namespace

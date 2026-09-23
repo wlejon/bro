@@ -60,10 +60,35 @@
     flush();
     const ctx = c.getContext('2d');
 
+    // HTML's serialization of a color: #rrggbb when opaque, rgba(r, g, b, a)
+    // with the shortest round-tripping alpha otherwise.
+    assert(ctx.fillStyle === '#000000', 'default fillStyle is #000000, got ' + ctx.fillStyle);
+    assert(ctx.strokeStyle === '#000000', 'default strokeStyle is #000000, got ' + ctx.strokeStyle);
+    assert(ctx.shadowColor === 'rgba(0, 0, 0, 0)', 'default shadowColor is transparent black, got ' + ctx.shadowColor);
     ctx.fillStyle = 'red';
-    assert(ctx.fillStyle === 'rgba(255,0,0,1.00)', 'fillStyle reads back rgba(r,g,b,a.aa), got ' + ctx.fillStyle);
+    assert(ctx.fillStyle === '#ff0000', 'an opaque fillStyle reads back #rrggbb, got ' + ctx.fillStyle);
+    ctx.fillStyle = 'rgb(18, 52, 86)';
+    assert(ctx.fillStyle === '#123456', 'lowercase hex, zero-padded, got ' + ctx.fillStyle);
+    ctx.fillStyle = 'hsl(0, 0%, 100%)';
+    assert(ctx.fillStyle === '#ffffff', 'hsl serializes as hex too, got ' + ctx.fillStyle);
     ctx.strokeStyle = 'rgba(0, 128, 255, 0.5)';
-    assert(ctx.strokeStyle === 'rgba(0,128,255,0.50)', 'strokeStyle keeps a two-decimal alpha, got ' + ctx.strokeStyle);
+    assert(ctx.strokeStyle === 'rgba(0, 128, 255, 0.5)', 'a translucent strokeStyle reads back rgba(), got ' + ctx.strokeStyle);
+    ctx.strokeStyle = 'rgba(1, 2, 3, 0.3)';
+    assert(ctx.strokeStyle === 'rgba(1, 2, 3, 0.3)', 'alpha 0.3 round-trips as 0.3, got ' + ctx.strokeStyle);
+    ctx.strokeStyle = '#11223380';
+    assert(ctx.strokeStyle === 'rgba(17, 34, 51, 0.5)', '8-digit hex alpha 0x80 prints 0.5, got ' + ctx.strokeStyle);
+    ctx.strokeStyle = 'transparent';
+    assert(ctx.strokeStyle === 'rgba(0, 0, 0, 0)', 'transparent is rgba(0, 0, 0, 0), got ' + ctx.strokeStyle);
+    ctx.shadowColor = 'blue';
+    assert(ctx.shadowColor === '#0000ff', 'shadowColor serializes the same way, got ' + ctx.shadowColor);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
+    assert(ctx.shadowColor === 'rgba(0, 0, 0, 0.25)', 'shadowColor alpha 0.25, got ' + ctx.shadowColor);
+    // The serialized form parses back to the same color.
+    ctx.fillStyle = 'rgba(10, 20, 30, 0.7)';
+    const s = ctx.fillStyle;
+    ctx.fillStyle = '#000';
+    ctx.fillStyle = s;
+    assert(ctx.fillStyle === s, 'the serialization round-trips, got ' + ctx.fillStyle + ' vs ' + s);
 
     ctx.lineCap = 'round';
     ctx.lineCap = 'bogus';

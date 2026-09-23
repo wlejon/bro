@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 
 namespace bro::util {
 
@@ -114,6 +116,43 @@ std::string base64Encode(const uint8_t* data, size_t len) {
         out.push_back('=');
     }
     return out;
+}
+
+std::string alphaToString(uint8_t a) {
+    if (a == 0) return "0";
+    if (a == 255) return "1";
+    char buf[32];
+    // Fewest decimals that round-trip through the byte; three always do
+    // (1/255 > 0.001), so the loop always returns.
+    for (int digits = 1; digits <= 3; ++digits) {
+        std::snprintf(buf, sizeof(buf), "%.*f", digits, a / 255.0);
+        const double back = std::strtod(buf, nullptr);
+        if (static_cast<int>(back * 255.0 + 0.5) == a) break;
+    }
+    std::string s = buf;
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+    return s;
+}
+
+std::string serializeCanvasColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    char buf[64];
+    if (a == 255) {
+        std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", r, g, b);
+        return buf;
+    }
+    std::snprintf(buf, sizeof(buf), "rgba(%d, %d, %d, ", r, g, b);
+    return std::string(buf) + alphaToString(a) + ")";
+}
+
+std::string serializeCssColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    char buf[64];
+    if (a == 255) {
+        std::snprintf(buf, sizeof(buf), "rgb(%d, %d, %d)", r, g, b);
+        return buf;
+    }
+    std::snprintf(buf, sizeof(buf), "rgba(%d, %d, %d, ", r, g, b);
+    return std::string(buf) + alphaToString(a) + ")";
 }
 
 } // namespace bro::util

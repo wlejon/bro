@@ -68,6 +68,16 @@ static bool startsWith(const std::string& s, const char* lit) {
     return s.compare(0, std::strlen(lit), lit) == 0;
 }
 
+// CSS Color 4 rounds to the nearest byte; truncating made rgba(0,0,0,0.5)
+// alpha 127 (0.498) where every browser keeps 128, and the serialized form
+// then failed to read back as the value that was set.
+static uint8_t unitToByte(float v) {
+    return static_cast<uint8_t>(std::lround(std::min(1.0f, std::max(0.0f, v)) * 255.0f));
+}
+static uint8_t channelToByte(float v) {
+    return static_cast<uint8_t>(std::lround(std::min(255.0f, std::max(0.0f, v))));
+}
+
 static int hexVal(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return 10 + c - 'a';
@@ -129,10 +139,10 @@ bool parseCSSColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& b, u
         else if (h < 240) { rf = 0; gf = x; bf = c; }
         else if (h < 300) { rf = x; gf = 0; bf = c; }
         else              { rf = c; gf = 0; bf = x; }
-        r = (uint8_t)((rf + m) * 255.0f);
-        g = (uint8_t)((gf + m) * 255.0f);
-        b = (uint8_t)((bf + m) * 255.0f);
-        a = (uint8_t)(std::min(1.0f, std::max(0.0f, vals[3])) * 255.0f);
+        r = unitToByte(rf + m);
+        g = unitToByte(gf + m);
+        b = unitToByte(bf + m);
+        a = unitToByte(vals[3]);
         return true;
     }
 
@@ -143,10 +153,10 @@ bool parseCSSColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& b, u
         if (p == std::string::npos || e == std::string::npos) return false;
         float vals[4] = {0, 0, 0, 1.0f};
         parseNumberList(str.data() + p + 1, str.data() + e, vals, 4);
-        r = (uint8_t)std::min(255.0f, std::max(0.0f, vals[0]));
-        g = (uint8_t)std::min(255.0f, std::max(0.0f, vals[1]));
-        b = (uint8_t)std::min(255.0f, std::max(0.0f, vals[2]));
-        a = (uint8_t)(std::min(1.0f, std::max(0.0f, vals[3])) * 255.0f);
+        r = channelToByte(vals[0]);
+        g = channelToByte(vals[1]);
+        b = channelToByte(vals[2]);
+        a = unitToByte(vals[3]);
         return true;
     }
     if (startsWith(str, "rgb")) {
@@ -156,10 +166,10 @@ bool parseCSSColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& b, u
         // CSS Color 4 allows an alpha in plain rgb() too: rgb(1 2 3 / 0.5).
         float vals[4] = {0, 0, 0, 1.0f};
         parseNumberList(str.data() + p + 1, str.data() + e, vals, 4);
-        a = (uint8_t)(std::min(1.0f, std::max(0.0f, vals[3])) * 255.0f);
-        r = (uint8_t)std::min(255.0f, std::max(0.0f, vals[0]));
-        g = (uint8_t)std::min(255.0f, std::max(0.0f, vals[1]));
-        b = (uint8_t)std::min(255.0f, std::max(0.0f, vals[2]));
+        a = unitToByte(vals[3]);
+        r = channelToByte(vals[0]);
+        g = channelToByte(vals[1]);
+        b = channelToByte(vals[2]);
         return true;
     }
 

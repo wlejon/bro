@@ -24,4 +24,18 @@ std::vector<uint8_t> base64Decode(const std::string& s);
 /// `data:` URL wants, which is what canvas.toDataURL() hands back.
 std::string base64Encode(const uint8_t* data, size_t len);
 
+/// An 8-bit alpha as the shortest decimal that maps back to the same byte
+/// (128 -> "0.5", 77 -> "0.3", 0 -> "0", 255 -> "1") — how browsers print
+/// the alpha of a color they keep at 8 bits.
+std::string alphaToString(uint8_t a);
+
+/// HTML's "serialization of a color" (canvas fillStyle / strokeStyle /
+/// shadowColor): "#rrggbb" in lowercase hex when opaque, otherwise
+/// "rgba(r, g, b, a)".
+std::string serializeCanvasColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+
+/// CSSOM's resolved value of a color (getComputedStyle): "rgb(r, g, b)" when
+/// opaque, otherwise "rgba(r, g, b, a)".
+std::string serializeCssColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+
 } // namespace bro::util

@@ -12,6 +12,7 @@
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include "layout/el_video.h"
+#include "util/string_utils.h"
 
 #include <cmath>
 #include <cstdio>
@@ -22,13 +23,12 @@ namespace bro::bronze_host {
 
 namespace {
 
-// The serialization the fillStyle / strokeStyle getters have always answered:
-// `rgba(r,g,b,a)` with the alpha to two decimals (`1.00`, `0.50`), which is
-// what apps that round-trip a style string compare against.
+// HTML's serialization of a color, which is what the fillStyle / strokeStyle
+// / shadowColor getters answer: `#rrggbb` when opaque, `rgba(r, g, b, a)`
+// otherwise — so `ctx.fillStyle = 'red'; ctx.fillStyle` is "#ff0000", the
+// string apps compare against in every browser.
 std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", r, g, b, a / 255.0f);
-    return buf;
+    return util::serializeCanvasColor(r, g, b, a);
 }
 
 // A gradient or pattern assigned to fillStyle/strokeStyle is answered back as
@@ -129,7 +129,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 cs->getFillColor(r, g, b, a);
                 return ev::fromUtf8(colorToRGBA(r, g, b, a));
             }
-            return ev::fromUtf8("rgba(0,0,0,1.00)");
+            return ev::fromUtf8("#000000");
         },
         [setStyle](Value, std::span<const Value> a) -> Value {
             return setStyle(true, a);
@@ -146,7 +146,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 cs->getStrokeColor(r, g, b, a);
                 return ev::fromUtf8(colorToRGBA(r, g, b, a));
             }
-            return ev::fromUtf8("rgba(0,0,0,1.00)");
+            return ev::fromUtf8("#000000");
         },
         [setStyle](Value, std::span<const Value> a) -> Value {
             return setStyle(false, a);
@@ -420,7 +420,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 cs->getShadowColor(r, g, b, a);
                 return ev::fromUtf8(colorToRGBA(r, g, b, a));
             }
-            return ev::fromUtf8("rgba(0,0,0,0)");
+            return ev::fromUtf8("rgba(0, 0, 0, 0)");
         },
         [el](Value, std::span<const Value> a) -> Value {
             if (el && el->canvasScene() && !a.empty()) {

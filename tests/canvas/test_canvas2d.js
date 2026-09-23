@@ -12,10 +12,11 @@ var ctx = canvas.getContext('2d');
 assert(ctx !== null && ctx !== undefined, 'getContext("2d") returns a context');
 
 // --- fillStyle / strokeStyle ---
+// Opaque colors serialize as #rrggbb (HTML's serialization of a color).
 ctx.fillStyle = 'red';
-assert(ctx.fillStyle.indexOf('255') !== -1, 'fillStyle accepts named color, got: ' + ctx.fillStyle);
+assert(ctx.fillStyle === '#ff0000', 'fillStyle accepts named color, got: ' + ctx.fillStyle);
 ctx.strokeStyle = '#00ff00';
-assert(ctx.strokeStyle.indexOf('255') !== -1, 'strokeStyle accepts hex color, got: ' + ctx.strokeStyle);
+assert(ctx.strokeStyle === '#00ff00', 'strokeStyle accepts hex color, got: ' + ctx.strokeStyle);
 
 // --- lineWidth ---
 ctx.lineWidth = 3;
@@ -47,10 +48,9 @@ assert(ctx.textBaseline === 'middle', 'textBaseline middle');
 ctx.fillStyle = '#0000ff';
 ctx.save();
 ctx.fillStyle = '#ff0000';
-// fillStyle returns rgba format
-assert(ctx.fillStyle.indexOf('255,0,0') !== -1, 'fillStyle changed after save');
+assert(ctx.fillStyle === '#ff0000', 'fillStyle changed after save');
 ctx.restore();
-assert(ctx.fillStyle.indexOf('0,0,255') !== -1, 'fillStyle restored after restore');
+assert(ctx.fillStyle === '#0000ff', 'fillStyle restored after restore');
 
 // --- Basic drawing methods (should not throw) ---
 ctx.fillRect(0, 0, 100, 100);

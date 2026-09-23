@@ -58,9 +58,10 @@ if (!scene) {
     shape.radius = 7;
     assert(near(shape.radius, 7), 'radius round-trips');
     shape.fillColor = 'rgb(255, 0, 0)';
-    assert(shape.fillColor === 'rgba(255,0,0,1.00)', 'fillColor reads back rgba(), got ' + shape.fillColor);
+    // Serialized the way canvas fillStyle is: #rrggbb opaque, rgba() otherwise.
+    assert(shape.fillColor === '#ff0000', 'fillColor reads back #rrggbb, got ' + shape.fillColor);
     shape.strokeColor = '#00ff0080';
-    assert(shape.strokeColor.indexOf('rgba(0,255,0,') === 0, 'strokeColor reads back rgba(), got ' + shape.strokeColor);
+    assert(shape.strokeColor === 'rgba(0, 255, 0, 0.5)', 'strokeColor reads back rgba(), got ' + shape.strokeColor);
     shape.strokeWidth = 2.5;
     assert(near(shape.strokeWidth, 2.5), 'strokeWidth round-trips');
 
