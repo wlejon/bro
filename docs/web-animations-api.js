@@ -24,10 +24,13 @@
  *     order: the LAST-CREATED animation wins per property (no full
  *     composite-order machinery; composite modes other than "replace" are
  *     ignored).
- *   - commitStyles() / persist() / updatePlaybackRate() / ready promise /
- *     KeyframeEffect object / timeline objects are not implemented.
- *     animation.effect and animation.startTime are absent; `pending` is
- *     always false (play/pause apply immediately).
+ *   - commitStyles() / persist() / updatePlaybackRate() are not implemented.
+ *     `pending` is always false (play/pause apply immediately), so `ready`
+ *     is an already-resolved promise. `effect` is a read-only view
+ *     (target / getTiming / getComputedTiming / getKeyframes; no
+ *     setKeyframes / updateTiming, and it cannot be swapped). `timeline` is
+ *     always document.timeline. `new KeyframeEffect(...)` is not
+ *     constructible.
  *   - getAnimations() returns running/paused animations plus finished ones
  *     still holding a forwards fill (spec "relevant" ≈ same set).
  *   - Object-form keyframes distribute values evenly; an explicit `offset`
@@ -114,6 +117,37 @@ await anim.finished;
 
 anim.onfinish = (e) => { /* e.type === 'finish', e.currentTime, e.target */ };
 anim.oncancel = (e) => { /* e.type === 'cancel' */ };
+
+// Already resolved with the animation (nothing is ever pending).
+await anim.ready;
+
+// ── Timeline & start time ────────────────────────────────────────────────────
+
+// The DocumentTimeline (an AnimationTimeline) every element.animate() runs on.
+// currentTime is the engine's scaled bro.time clock in ms, so it pauses and
+// stretches with bro.time and advances with headless advanceTime(ms).
+document.timeline.currentTime;
+anim.timeline === document.timeline;   // true
+
+// Timeline time at which currentTime was 0; null while paused, finished via
+// a hold, or idle. For a running animation:
+//   anim.currentTime === (document.timeline.currentTime - anim.startTime) * anim.playbackRate
+anim.startTime;
+anim.startTime = document.timeline.currentTime - 250;   // seek to 250 ms and run
+
+// ── The effect ───────────────────────────────────────────────────────────────
+
+// A KeyframeEffect (an AnimationEffect); the same object on every read.
+const fx = anim.effect;
+fx.target;               // the animated element (null once it is gone)
+fx.getTiming();          // { delay, endDelay, fill, iterationStart: 0, iterations,
+                         //   duration, direction, easing } as given
+fx.getComputedTiming();  // getTiming() plus { activeDuration, endTime, localTime,
+                         //   progress, currentIteration }; progress is directed
+                         //   and eased, null outside the active interval when
+                         //   no fill applies there
+fx.getKeyframes();       // [{ offset, computedOffset, easing, composite,
+                         //    <camelCase property>: '<value>', ... }, ...]
 
 // ── Enumeration ──────────────────────────────────────────────────────────────
 
