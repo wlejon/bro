@@ -297,11 +297,9 @@ void installBroRoots(engine::Engine& engine) {
     setUnavailable("motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
 #endif
     {
+        // installBroWindowOpen roots it and installs `parent` as well.
         Value broWin = ev::getProperty(bro->get(), "window");
-        if (ev::isObject(broWin)) {
-            installBroWindowOpen(broWin);
-            installBroWindowParent(broWin);
-        }
+        if (ev::isObject(broWin)) installBroWindowOpen(broWin);
     }
 
     std::string err;

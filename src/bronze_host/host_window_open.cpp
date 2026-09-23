@@ -8,6 +8,10 @@
 #include "platform/sdl_window.h"
 #include "util/log.h"
 
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_misc.h>
+
+#include <cctype>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -315,7 +319,9 @@ Value hostWindowOpener() {
     return openerProxyFor(hostId);
 }
 
-void installBroWindowParent(Value broWin) {
+void installBroWindowParent(Value broWinIn) {
+    // Rooted: building `parent` allocates, and broWinIn is a plain copy.
+    ev::Persistent broWin(broWinIn);
     ObjectBuilder parent;
     parent.def("postMessage", 2, [](Value, std::span<const Value> a) -> Value {
         if (!isChildRealm()) {
@@ -339,13 +345,53 @@ void installBroWindowParent(Value broWin) {
         s_parentInbox.push_back({hostId, std::move(msg)});
         return ev::undefined();
     });
-    ev::setProperty(broWin, "parent", parent.get());
+    ev::setProperty(broWin.get(), "parent", parent.get());
 }
 
-void installBroWindowOpen(Value broWin) {
-    installBroWindowParent(broWin);
+namespace {
 
-    ev::setProperty(broWin, "open", ev::makeFunction([](Value, std::span<const Value> a) -> Value {
+// Opens a window host (hidden in headless, which is the engine's policy, not
+// this layer's) and answers the handle both bro.window.open and window.open
+// return; null when the engine has no primary window to share with.
+Value openWindowHandle(engine::Engine* eng, const engine::WindowHostOptions& opts) {
+    uint64_t id = eng->openWindowHost(opts);
+    if (id == 0) return ev::null();
+
+    auto state = std::make_shared<WindowHandleState>();
+    state->engine = eng;
+    state->id = id;
+    state->width = opts.width;
+    state->height = opts.height;
+    state->x = opts.x;
+    state->y = opts.y;
+    state->title = opts.title;
+    s_handleStates[id] = state;
+
+    ev::Persistent handle(makeWindowHandle(state));
+    s_windowHandles.emplace(id, handle.get());
+    return handle.get();
+}
+
+// A URL with a scheme of its own (https:, mailto:, file:, ...) is for the OS,
+// not a bro app directory. One letter before the colon is a drive (C:/...),
+// which is a path.
+bool isExternalUrl(const std::string& url) {
+    size_t i = 0;
+    if (url.empty() || !std::isalpha(static_cast<unsigned char>(url[0]))) return false;
+    while (i < url.size() && (std::isalnum(static_cast<unsigned char>(url[i])) ||
+                              url[i] == '+' || url[i] == '-' || url[i] == '.')) {
+        ++i;
+    }
+    return i >= 2 && i < url.size() && url[i] == ':';
+}
+
+}  // namespace
+
+void installBroWindowOpen(Value broWinIn) {
+    ev::Persistent broWin(broWinIn);
+    installBroWindowParent(broWin.get());
+
+    ev::Persistent openFn(ev::makeFunction([](Value, std::span<const Value> a) -> Value {
         if (isChildRealm()) {
             return ev::throwTypeError("bro.window.open is only available from the main app realm");
         }
@@ -362,21 +408,22 @@ void installBroWindowOpen(Value broWin) {
         engine::WindowHostOptions opts;
         opts.src = src;
         if (a.size() > 1 && ev::isObject(a[1])) {
-            Value o = a[1];
+            // Rooted: every getProperty below may run a getter and allocate.
+            ev::Persistent o(a[1]);
             auto hasProp = [&](const char* k) {
-                Value v = ev::getProperty(o, k);
+                Value v = ev::getProperty(o.get(), k);
                 return !ev::isUndefined(v) && !ev::isNull(v);
             };
             auto getInt = [&](const char* k, int def) {
-                Value v = ev::getProperty(o, k);
+                Value v = ev::getProperty(o.get(), k);
                 return (!ev::isUndefined(v) && !ev::isNull(v)) ? static_cast<int>(ev::toDouble(v)) : def;
             };
             auto getBool = [&](const char* k, bool def) {
-                Value v = ev::getProperty(o, k);
+                Value v = ev::getProperty(o.get(), k);
                 return (!ev::isUndefined(v) && !ev::isNull(v)) ? ev::toBool(v) : def;
             };
             auto getStr = [&](const char* k, const std::string& def) {
-                Value v = ev::getProperty(o, k);
+                Value v = ev::getProperty(o.get(), k);
                 return (!ev::isUndefined(v) && !ev::isNull(v)) ? ev::toUtf8(v) : def;
             };
 
@@ -397,23 +444,13 @@ void installBroWindowOpen(Value broWin) {
         if (opts.width < 1) opts.width = 1;
         if (opts.height < 1) opts.height = 1;
 
-        uint64_t id = eng->openWindowHost(opts);
-        if (id == 0) return ev::throwTypeError("bro.window.open: failed to open window host");
-
-        auto state = std::make_shared<WindowHandleState>();
-        state->engine = eng;
-        state->id = id;
-        state->width = opts.width;
-        state->height = opts.height;
-        state->x = opts.x;
-        state->y = opts.y;
-        state->title = opts.title;
-        s_handleStates[id] = state;
-
-        Value handle = makeWindowHandle(state);
-        s_windowHandles.emplace(id, handle);
+        Value handle = openWindowHandle(eng, opts);
+        if (ev::isNull(handle)) {
+            return ev::throwTypeError("bro.window.open: failed to open window host");
+        }
         return handle;
-    }, 2));
+    }, 2, "open"));
+    ev::setProperty(broWin.get(), "open", openFn.get());
 }
 
 void windowHostNotifyLoaded(uint64_t id) {
@@ -544,18 +581,35 @@ Value handleWindowOpen(std::span<const Value> a) {
     std::string url = ev::toUtf8(a[0]);
     auto* e = hostEngine();
     if (!e) return ev::null();
-    if (e->displayMode() == engine::DisplayMode::Headless) {
-        if (!url.empty()) {
-            LOG_INFO("window.open('%s'): suppressed in headless mode", url.c_str());
+    // No document to put in a blank window: bro windows are app directories.
+    if (url.empty() || url == "about:blank") return ev::null();
+
+    // A URL with its own scheme goes to the OS handler (browser, mail
+    // client) and there is no window object to return. Headless never
+    // shells out.
+    if (isExternalUrl(url)) {
+        if (e->displayMode() == engine::DisplayMode::Headless || !e->window()) {
+            LOG_INFO("window.open('%s'): external URL not opened (headless)", url.c_str());
+        } else if (!SDL_OpenURL(url.c_str())) {
+            LOG_WARN("window.open('%s'): SDL_OpenURL failed: %s", url.c_str(), SDL_GetError());
         }
         return ev::null();
     }
+    // A secondary window is only opened from the main realm, as
+    // bro.window.open is.
+    if (isChildRealm()) return ev::null();
 
     engine::WindowHostOptions opts;
     opts.src = url;
+    // The second argument is the target name. The `_blank`/`_self`/...
+    // keywords name no window; any other name titles the new one.
     if (a.size() > 1 && ev::isString(a[1])) {
-        opts.title = ev::toUtf8(a[1]);
+        std::string target = ev::toUtf8(a[1]);
+        if (!target.empty() && target[0] != '_') opts.title = target;
     }
+    // `noopener` / `noreferrer`: the window opens, the caller gets null
+    // (HTML's window open steps).
+    bool noopener = false;
     if (a.size() > 2) {
         if (ev::isString(a[2])) {
             std::string feats = ev::toUtf8(a[2]);
@@ -564,6 +618,12 @@ Value handleWindowOpen(std::span<const Value> a) {
                 size_t comma = feats.find(',', start);
                 if (comma == std::string::npos) comma = feats.size();
                 std::string token = feats.substr(start, comma - start);
+                {
+                    std::string t = token;
+                    while (!t.empty() && (t.front() == ' ' || t.front() == '\t')) t.erase(0, 1);
+                    while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
+                    if (t == "noopener" || t == "noreferrer") noopener = true;
+                }
                 size_t eq = token.find('=');
                 if (eq != std::string::npos) {
                     std::string k = token.substr(0, eq);
@@ -589,13 +649,14 @@ Value handleWindowOpen(std::span<const Value> a) {
                 start = comma + 1;
             }
         } else if (ev::isObject(a[2])) {
-            Value o = a[2];
-            Value w = ev::getProperty(o, "width");
+            // a[2] is a rooted argument slot, read afresh after each
+            // allocating getProperty.
+            Value w = ev::getProperty(a[2], "width");
             if (!ev::isUndefined(w) && !ev::isNull(w)) {
                 opts.width = static_cast<int>(ev::toDouble(w));
                 opts.provided.width = true;
             }
-            Value h = ev::getProperty(o, "height");
+            Value h = ev::getProperty(a[2], "height");
             if (!ev::isUndefined(h) && !ev::isNull(h)) {
                 opts.height = static_cast<int>(ev::toDouble(h));
                 opts.provided.height = true;
@@ -605,22 +666,8 @@ Value handleWindowOpen(std::span<const Value> a) {
     if (opts.width < 1) opts.width = 1;
     if (opts.height < 1) opts.height = 1;
 
-    uint64_t id = e->openWindowHost(opts);
-    if (id == 0) return ev::null();
-
-    auto state = std::make_shared<WindowHandleState>();
-    state->engine = e;
-    state->id = id;
-    state->width = opts.width;
-    state->height = opts.height;
-    state->x = opts.x;
-    state->y = opts.y;
-    state->title = opts.title;
-    s_handleStates[id] = state;
-
-    Value handle = makeWindowHandle(state);
-    s_windowHandles.emplace(id, handle);
-    return handle;
+    Value handle = openWindowHandle(e, opts);
+    return noopener ? ev::null() : handle;
 }
 
 } // namespace bro::bronze_host

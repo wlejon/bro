@@ -217,7 +217,7 @@ The `bro.settings` API is available in headless mode for reading and writing per
 
 ### Window management, screen, and battery
 
-`bro.window`, `window.screen`, `window.open`, and `navigator.getBattery` all install in headless mode, pinned for determinism ([window-api.js](window-api.js)): flag/limit setters (borderless, alwaysOnTop, min/max size) round-trip against the hidden window; state-affecting ops (minimize/maximize/restore, setPosition, moveToDisplay) no-op; `getDisplays()` enumerates the machine's real displays (assert shapes, not values); `screen.*` pins to the hidden window's size; `window.open` never shells out; `getBattery()` always resolves the no-battery shape `{charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1}`.
+`bro.window`, `window.screen`, `window.open`, and `navigator.getBattery` all install in headless mode, pinned for determinism ([window-api.js](window-api.js)): flag/limit setters (borderless, alwaysOnTop, min/max size) round-trip against the hidden window; state-affecting ops (minimize/maximize/restore, setPosition, moveToDisplay) no-op; `getDisplays()` enumerates the machine's real displays (assert shapes, not values); `screen.*` pins to the hidden window's size; `window.open` never shells out for an external URL (it returns null) but opens an app-relative src as a hidden bro window and returns its handle, as `bro.window.open` does; `getBattery()` always resolves the no-battery shape `{charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1}`.
 
 ### CSS/Layout inspection
 

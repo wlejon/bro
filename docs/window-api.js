@@ -182,6 +182,64 @@ window.resizeTo = function(width, height) {};
  */
 window.resizeBy = function(dx, dy) {};
 
+// ── Secondary windows: bro.window.open / window.open ────────────────────────
+//
+// A secondary window hosts another app directory (its own index.html, its own
+// realm and DOM) in a second OS window. open() is queued: the OS window and
+// its document materialize at the engine's next idle drain (flush() in
+// headless), which is when 'load' fires. Headless windows are always hidden;
+// everything else — the document, capture(), messaging, input routed by
+// window id — works the same. Only the main app realm may open one.
+
+/**
+ * Open a secondary window on the app directory `src` (relative to the app).
+ * The child's bro.json fills in any option left unset.
+ * @param {string} src
+ * @param {Object} [opts]  width, height, title, x, y, display (index into
+ *   getDisplays()), resizable, borderless, alwaysOnTop, minWidth, minHeight,
+ *   maxWidth, maxHeight
+ * @returns {BroWindowHandle}  throws TypeError on a missing/empty src, from a
+ *   child realm, or when there is no primary window (Server mode).
+ */
+bro.window.open = function(src, opts) {};
+
+/**
+ * The handle open() returns.
+ * @typedef {Object} BroWindowHandle
+ * @property {number} id        routes headless input: click(x, y, 0, win.id)
+ * @property {boolean} closed   true once closed, by close(), the OS, or a src
+ *                              that failed to load (it closes at the drain)
+ * getSize() / setSize(w, h) / getPosition() / setPosition(x, y) (a no-op on a
+ * hidden window) / setTitle(s) / focus() / close()
+ * capture() -> ImageData of the window's rendered document, or null
+ * postMessage(data, targetOrigin | options | transfer) -> a MessageEvent at
+ *   the child's window (events-api.js)
+ * addEventListener / removeEventListener for 'load', 'close', 'resize',
+ *   'message' (messages the child posts with window.opener.postMessage or
+ *   bro.window.parent.postMessage)
+ */
+
+/**
+ * The web spelling. `url` with a scheme of its own (https:, mailto:, file:,
+ * ...) is handed to the OS handler (browser, mail client) via SDL_OpenURL and
+ * returns null; headless never shells out. An app-relative `url` opens a bro
+ * window exactly as bro.window.open does and returns its handle — in headless
+ * too. `target` names the window (its title), except the `_blank`/`_self`
+ * keywords; `features` is either "width=400,height=300,left=..,top=.." or an
+ * { width, height } object. With `noopener`/`noreferrer` in `features` the
+ * window still opens and the call returns null. Empty / about:blank / a call
+ * from a child realm returns null.
+ * @param {string} [url]
+ * @param {string} [target]
+ * @param {string|Object} [features]
+ * @returns {BroWindowHandle|null}
+ *
+ * @example
+ *   const palette = window.open('palette', 'Palette', 'width=300,height=200');
+ *   window.open('https://example.com');   // default browser; returns null
+ */
+window.open = function(url, target, features) {};
+
 /**
  * Quits the app: the run loop stops at the top of the next frame, as when the
  * main window is closed. A no-op in `bro-headless` (the script's end is the
