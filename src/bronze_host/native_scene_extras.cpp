@@ -85,7 +85,7 @@ bool colorOf(const char* css, bromath::Color& out) {
 // { positions, indices, normals?, uvs?, colors?, tangents? } — the shape
 // updateMesh takes (native_scene_shaders.cpp).
 bool meshDataOf(uint64_t meshBits, bromesh::MeshData& out, const char* who) {
-    Value meshVal = ev::fromBits(meshBits);
+    const Rooted meshVal(ev::fromBits(meshBits));
     if (!ev::isObject(meshVal)) {
         ev::throwTypeError(std::string(who) + ": expected a Mesh or { positions, indices, ... }");
         return false;

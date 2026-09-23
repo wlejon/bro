@@ -61,8 +61,9 @@ const char* tileJson(const std::string& s) {
     return tl_tileJson.c_str();
 }
 
-static void readFloatArray(Value v, std::vector<float>& out) {
-    if (ev::isObject(v)) {
+static void readFloatArray(Value vIn, std::vector<float>& out) {
+    if (ev::isObject(vIn)) {
+        const Rooted v(vIn);
         Value lenVal = ev::getProperty(v, "length");
         if (ev::isNumber(lenVal)) {
             int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
@@ -75,9 +76,10 @@ static void readFloatArray(Value v, std::vector<float>& out) {
     }
 }
 
-static scene::TileWorldConfig parseTileConfig(Value opts) {
+static scene::TileWorldConfig parseTileConfig(Value optsIn) {
     scene::TileWorldConfig cfg;
-    if (!ev::isObject(opts)) return cfg;
+    if (!ev::isObject(optsIn)) return cfg;
+    const Rooted opts(optsIn);
 
     Value wVal = ev::getProperty(opts, "width");
     if (ev::isNumber(wVal)) cfg.width = static_cast<int>(ev::toDouble(wVal));
@@ -106,7 +108,7 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
         if (s == "hex") cfg.topology = tile::Topology::Hex;
     }
 
-    Value layers = ev::getProperty(opts, "layers");
+    const Rooted layers(ev::getProperty(opts, "layers"));
     if (ev::isObject(layers)) {
         Value lenVal = ev::getProperty(layers, "length");
         if (ev::isNumber(lenVal)) {
@@ -120,7 +122,7 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
         }
     }
 
-    Value orig = ev::getProperty(opts, "origin");
+    const Rooted orig(ev::getProperty(opts, "origin"));
     if (ev::isObject(orig)) {
         Value ox = ev::getElement(orig, 0);
         Value oy = ev::getElement(orig, 1);
@@ -158,7 +160,7 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
             cfg.atlasPixels = std::move(img.pixels);
         }
     } else {
-        Value px = ev::getProperty(opts, "atlasPixels");
+        const Rooted px(ev::getProperty(opts, "atlasPixels"));
         if (ev::isObject(px)) {
             Value lenVal = ev::getProperty(px, "length");
             if (ev::isNumber(lenVal)) {
@@ -176,7 +178,7 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
         }
     }
 
-    Value ta = ev::getProperty(opts, "tileAtlas");
+    const Rooted ta(ev::getProperty(opts, "tileAtlas"));
     if (ev::isObject(ta)) {
         Value lenVal = ev::getProperty(ta, "length");
         if (ev::isNumber(lenVal)) {
@@ -189,13 +191,13 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
         }
     }
 
-    Value autos = ev::getProperty(opts, "autotiles");
+    const Rooted autos(ev::getProperty(opts, "autotiles"));
     if (ev::isObject(autos)) {
         Value lenVal = ev::getProperty(autos, "length");
         if (ev::isNumber(lenVal)) {
             int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
             for (int32_t i = 0; i < len; ++i) {
-                Value e = ev::getElement(autos, i);
+                const Rooted e(ev::getElement(autos, i));
                 if (!ev::isObject(e)) continue;
                 scene::TileWorldConfig::AutotileRule rule;
                 Value idVal = ev::getProperty(e, "id");
@@ -217,7 +219,7 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
                     if (s == "nonEmpty") rule.family = scene::TileWorldConfig::AutotileFamily::NonEmpty;
                 }
 
-                Value cells = ev::getProperty(e, "cells");
+                const Rooted cells(ev::getProperty(e, "cells"));
                 if (ev::isObject(cells)) {
                     Value cl = ev::getProperty(cells, "length");
                     if (ev::isNumber(cl)) {
@@ -234,14 +236,14 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
         }
     }
 
-    Value ovs = ev::getProperty(opts, "overlays");
+    const Rooted ovs(ev::getProperty(opts, "overlays"));
     if (ev::isObject(ovs)) {
         Value lenVal = ev::getProperty(ovs, "length");
         if (ev::isNumber(lenVal)) {
             int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
             cfg.overlays.resize(len);
             for (int32_t i = 0; i < len; ++i) {
-                Value e = ev::getElement(ovs, i);
+                const Rooted e(ev::getElement(ovs, i));
                 if (ev::isObject(e)) {
                     Value op = ev::getProperty(e, "opacity");
                     if (ev::isNumber(op)) cfg.overlays[i].opacity = static_cast<float>(ev::toDouble(op));
@@ -252,13 +254,13 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
         }
     }
 
-    Value anims = ev::getProperty(opts, "animations");
+    const Rooted anims(ev::getProperty(opts, "animations"));
     if (ev::isObject(anims)) {
         Value lenVal = ev::getProperty(anims, "length");
         if (ev::isNumber(lenVal)) {
             int32_t len = static_cast<int32_t>(ev::toDouble(lenVal));
             for (int32_t i = 0; i < len; ++i) {
-                Value e = ev::getElement(anims, i);
+                const Rooted e(ev::getElement(anims, i));
                 if (!ev::isObject(e)) continue;
                 scene::TileWorldConfig::TileAnimation an;
                 Value idVal = ev::getProperty(e, "id");
@@ -267,7 +269,7 @@ static scene::TileWorldConfig parseTileConfig(Value opts) {
                 if (ev::isNumber(fpsVal)) an.fps = static_cast<float>(ev::toDouble(fpsVal));
                 else an.fps = 4.0f;
 
-                Value fr = ev::getProperty(e, "frames");
+                const Rooted fr(ev::getProperty(e, "frames"));
                 if (ev::isObject(fr)) {
                     Value fl = ev::getProperty(fr, "length");
                     if (ev::isNumber(fl)) {
@@ -917,7 +919,7 @@ int32_t bro_tile_world_TileWorld_addObjectKind(void* self, uint64_t meshVal, con
     if (styleJson && *styleJson) {
         auto res = ev::parseJson(styleJson);
         if (!res.thrown && ev::isObject(res.value)) {
-            Value col = ev::getProperty(res.value, "color");
+            const Rooted col(ev::getProperty(res.value, "color"));
             if (ev::isObject(col)) {
                 for (int i = 0; i < 4; ++i) {
                     Value el = ev::getElement(col, i);

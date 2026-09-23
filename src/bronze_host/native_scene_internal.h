@@ -288,15 +288,16 @@ inline bool parseColorValue(Value v, float& r, float& g, float& b, float& a) {
         return parseHexOrCssColor(ev::toUtf8(v), r, g, b, a);
     }
     if (ev::isObject(v)) {
-        Value lenV = ev::getProperty(v, "length");
+        const Rooted arr(v);
+        Value lenV = ev::getProperty(arr, "length");
         if (ev::isNumber(lenV)) {
             int len = static_cast<int>(ev::toDouble(lenV));
             if (len >= 3) {
-                r = static_cast<float>(ev::toDouble(ev::getElement(v, 0)));
-                g = static_cast<float>(ev::toDouble(ev::getElement(v, 1)));
-                b = static_cast<float>(ev::toDouble(ev::getElement(v, 2)));
+                r = static_cast<float>(ev::toDouble(ev::getElement(arr, 0)));
+                g = static_cast<float>(ev::toDouble(ev::getElement(arr, 1)));
+                b = static_cast<float>(ev::toDouble(ev::getElement(arr, 2)));
                 if (len >= 4) {
-                    Value va = ev::getElement(v, 3);
+                    Value va = ev::getElement(arr, 3);
                     if (!ev::isUndefined(va)) a = static_cast<float>(ev::toDouble(va));
                 }
                 return true;

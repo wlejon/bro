@@ -284,7 +284,8 @@ static void ensureSelfProxyClassInstalled() {
     });
 }
 
-static Value makeSelfProxy(scene::AgentBinding* b, Value agentRef) {
+static Value makeSelfProxy(scene::AgentBinding* b, Value agentRefIn) {
+    const Rooted agentRef(agentRefIn);  // the class install and make allocate
     ensureSelfProxyClassInstalled();
     auto* cell = new HostSelfProxyCell();
     cell->binding = b;

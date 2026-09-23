@@ -178,7 +178,7 @@ void bro_scene_SceneNode_updateMesh(void* self, uint64_t meshBits, bool recomput
         ev::throwTypeError("updateMesh: node is not a MeshNode");
         return;
     }
-    Value meshVal = ev::fromBits(meshBits);
+    const Rooted meshVal(ev::fromBits(meshBits));
     if (!ev::isObject(meshVal)) {
         ev::throwTypeError("updateMesh: expected a Mesh or { positions, indices, ... }");
         return;

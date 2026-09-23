@@ -21,10 +21,12 @@ thread_local std::string tl_errorStr;
 thread_local std::string tl_clipDefStr;
 
 
-static ev::CallResult stringifyJson(Value v) {
-    Value jsonVal = ev::globalValue("JSON").value;
+static ev::CallResult stringifyJson(Value vIn) {
+    const Rooted v(vIn);
+    const Rooted jsonVal(ev::globalValue("JSON").value);
     Value stringifyFn = ev::getProperty(jsonVal, "stringify");
-    return ev::call(stringifyFn, jsonVal, std::span<const Value>(&v, 1));
+    const Value arg = v.get();
+    return ev::call(stringifyFn, jsonVal.get(), std::span<const Value>(&arg, 1));
 }
 
 struct PropInfo {
@@ -66,23 +68,24 @@ static bool readKeyVec3(Value v, bromath::Vec3& out) {
         return true;
     }
     if (!ev::isObject(v)) return false;
-    double x = 0, y = 0, z = 0;
-    Value e0 = ev::getElement(v, 0);
-    Value e1 = ev::getElement(v, 1);
-    Value e2 = ev::getElement(v, 2);
-    if (!ev::isUndefined(e0)) x = ev::toDouble(e0);
-    if (!ev::isUndefined(e1)) y = ev::toDouble(e1);
-    if (!ev::isUndefined(e2)) z = ev::toDouble(e2);
-    out = {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+    const Rooted arr(v);
+    // Each element converts before the next read can move it.
+    double xyz[3] = {0, 0, 0};
+    for (uint32_t i = 0; i < 3; ++i) {
+        Value e = ev::getElement(arr, i);
+        if (!ev::isUndefined(e)) xyz[i] = ev::toDouble(e);
+    }
+    out = {static_cast<float>(xyz[0]), static_cast<float>(xyz[1]), static_cast<float>(xyz[2])};
     return true;
 }
 
-static bool readKeyQuat(Value v, bromath::Quat& out) {
-    if (ev::isNumber(v)) {
-        out = bromath::qfromEuler(0.0f, 0.0f, static_cast<float>(ev::toDouble(v)));
+static bool readKeyQuat(Value vIn, bromath::Quat& out) {
+    if (ev::isNumber(vIn)) {
+        out = bromath::qfromEuler(0.0f, 0.0f, static_cast<float>(ev::toDouble(vIn)));
         return true;
     }
-    if (ev::isObject(v)) {
+    if (ev::isObject(vIn)) {
+        const Rooted v(vIn);
         Value lenV = ev::getProperty(v, "length");
         if (ev::isNumber(lenV)) {
             double q[4] = {0, 0, 0, 1};
@@ -106,7 +109,8 @@ static bool readKeyQuat(Value v, bromath::Quat& out) {
     return false;
 }
 
-static bool readKeyRotation(Value v, bromath::Quat& out) {
+static bool readKeyRotation(Value vIn, bromath::Quat& out) {
+    const Rooted v(vIn);
     if (ev::isObject(v)) {
         Value e = ev::getProperty(v, "euler");
         if (!ev::isUndefined(e)) {
@@ -120,7 +124,8 @@ static bool readKeyRotation(Value v, bromath::Quat& out) {
     return readKeyQuat(v, out);
 }
 
-static bool readKeyColor(Value v, bromath::Vec3& out) {
+static bool readKeyColor(Value vIn, bromath::Vec3& out) {
+    const Rooted v(vIn);
     float r = 1, g = 1, b = 1, a = 1;
     if (parseColorValue(v, r, g, b, a)) {
         out = {r, g, b};
@@ -177,7 +182,8 @@ static int32_t arrayLength(Value v) {
     return ev::isNumber(lenVal) ? static_cast<int32_t>(ev::toDouble(lenVal)) : 0;
 }
 
-static bool parsePropTrack(Value trackVal, scene::AnimationClip::PropTrack& out, std::string& err) {
+static bool parsePropTrack(Value trackIn, scene::AnimationClip::PropTrack& out, std::string& err) {
+    const Rooted trackVal(trackIn);
     Value targetVal = ev::getProperty(trackVal, "target");
     out.target = ev::isString(targetVal) ? ev::toUtf8(targetVal) : "";
     if (out.target.empty()) {
@@ -194,7 +200,7 @@ static bool parsePropTrack(Value trackVal, scene::AnimationClip::PropTrack& out,
     out.prop = info->prop;
     out.stride = info->stride;
 
-    Value keysVal = ev::getProperty(trackVal, "keys");
+    const Rooted keysVal(ev::getProperty(trackVal, "keys"));
     int32_t nKeys = ev::isObject(keysVal) ? arrayLength(keysVal) : 0;
     if (nKeys < 1) {
         err = "track '" + out.target + "." + propName + "' needs a non-empty 'keys' array";
@@ -210,7 +216,7 @@ static bool parsePropTrack(Value trackVal, scene::AnimationClip::PropTrack& out,
     std::vector<Parsed> keys(static_cast<size_t>(nKeys));
 
     for (int32_t i = 0; i < nKeys; ++i) {
-        Value keyVal = ev::getElement(keysVal, static_cast<uint32_t>(i));
+        const Rooted keyVal(ev::getElement(keysVal, static_cast<uint32_t>(i)));
         Parsed& k = keys[static_cast<size_t>(i)];
 
         Value timeVal = ev::getProperty(keyVal, "time");
@@ -265,7 +271,7 @@ static bool parsePropTrack(Value trackVal, scene::AnimationClip::PropTrack& out,
 }
 
 static bool parseEventTrack(Value trackVal, scene::AnimationClip::EventTrack& out, std::string& err) {
-    Value keysVal = ev::getProperty(trackVal, "keys");
+    const Rooted keysVal(ev::getProperty(trackVal, "keys"));
     int32_t nKeys = ev::isObject(keysVal) ? arrayLength(keysVal) : 0;
     if (nKeys < 1) {
         err = "event track needs a non-empty 'keys' array";
@@ -273,7 +279,7 @@ static bool parseEventTrack(Value trackVal, scene::AnimationClip::EventTrack& ou
     }
     out.keys.resize(static_cast<size_t>(nKeys));
     for (int32_t i = 0; i < nKeys; ++i) {
-        Value keyVal = ev::getElement(keysVal, static_cast<uint32_t>(i));
+        const Rooted keyVal(ev::getElement(keysVal, static_cast<uint32_t>(i)));
         auto& k = out.keys[static_cast<size_t>(i)];
 
         Value timeVal = ev::getProperty(keyVal, "time");
@@ -304,11 +310,12 @@ static bool parseEventTrack(Value trackVal, scene::AnimationClip::EventTrack& ou
     return true;
 }
 
-static bool parseClipDef(Value def, scene::AnimationClip& out, std::string& err) {
-    if (!ev::isObject(def)) {
+static bool parseClipDef(Value defIn, scene::AnimationClip& out, std::string& err) {
+    if (!ev::isObject(defIn)) {
         err = "clipDef must be an object";
         return false;
     }
+    const Rooted def(defIn);
 
     Value loopVal = ev::getProperty(def, "loop");
     std::string loop = ev::isString(loopVal) ? ev::toUtf8(loopVal) : "none";
@@ -320,7 +327,7 @@ static bool parseClipDef(Value def, scene::AnimationClip& out, std::string& err)
         return false;
     }
 
-    Value tracksVal = ev::getProperty(def, "tracks");
+    const Rooted tracksVal(ev::getProperty(def, "tracks"));
     int32_t nTracks = ev::isObject(tracksVal) ? arrayLength(tracksVal) : 0;
     if (nTracks < 1) {
         err = "clipDef needs a non-empty 'tracks' array";
@@ -328,7 +335,7 @@ static bool parseClipDef(Value def, scene::AnimationClip& out, std::string& err)
     }
     float maxKeyTime = 0.0f;
     for (int32_t i = 0; i < nTracks; ++i) {
-        Value trackVal = ev::getElement(tracksVal, static_cast<uint32_t>(i));
+        const Rooted trackVal(ev::getElement(tracksVal, static_cast<uint32_t>(i)));
         Value typeVal = ev::getProperty(trackVal, "type");
         std::string type = ev::isString(typeVal) ? ev::toUtf8(typeVal) : "property";
         bool ok = false;
@@ -424,7 +431,7 @@ const char* bro_animation_AnimationPlayer_addClip(void* self, const char* name, 
     auto* c = clipPlayerCellOf(self);
     if (!c || !c->player()) return "player destroyed";
     if (!name || name[0] == '\0') return "name required";
-    Value clipVal = ev::fromBits(clipBits);
+    const Rooted clipVal(ev::fromBits(clipBits));
     scene::AnimationClip clip;
     std::string err;
     if (!parseClipDef(clipVal, clip, err)) {
@@ -451,7 +458,7 @@ const char* bro_animation_AnimationPlayer_play(void* self, const char* clipName,
     if (!c || !c->player() || !c->graph()) return "player destroyed";
     if (!clipName || clipName[0] == '\0') return "clipName required";
     scene::ClipPlayer::PlayOptions opts;
-    Value optsVal = ev::fromBits(optsBits);
+    const Rooted optsVal(ev::fromBits(optsBits));
     if (ev::isObject(optsVal)) {
         Value spd = ev::getProperty(optsVal, "speed");
         if (ev::isNumber(spd)) opts.speed = static_cast<float>(ev::toDouble(spd));

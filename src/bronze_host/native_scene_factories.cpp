@@ -39,7 +39,8 @@ bromath::Color particleColorFromJson(const nlohmann::json& v) {
 // (see SceneGraph.createMesh in docs/scene-api.js). Transform keys (x/y/z,
 // scale, rx/ry/rz, name, visible) are applied by the JS wrapper's
 // applyNodeOpts through the node attributes.
-void applyMeshMaterialOpts(scene::MeshNode* node, Value opts) {
+void applyMeshMaterialOpts(scene::MeshNode* node, Value optsIn) {
+    const Rooted opts(optsIn);
     Value colorVal = ev::getProperty(opts, "color");
     float cr = 1, cg = 1, cb = 1, ca = 1;
     if (parseColorValue(colorVal, cr, cg, cb, ca)) {
@@ -48,7 +49,8 @@ void applyMeshMaterialOpts(scene::MeshNode* node, Value opts) {
 
     // PBR params: nested {material:{metallic, roughness}} and the flat
     // shortcuts, the flat ones winning.
-    auto applyMat = [&](Value obj) {
+    auto applyMat = [&](Value objIn) {
+        const Rooted obj(objIn);
         Value metVal = ev::getProperty(obj, "metallic");
         if (ev::isNumber(metVal)) node->setMetallic(static_cast<float>(ev::toDouble(metVal)));
         Value roughVal = ev::getProperty(obj, "roughness");
@@ -119,7 +121,7 @@ void applyMeshMaterialOpts(scene::MeshNode* node, Value opts) {
 
     // Texture maps, each { width, height, data: Uint8Array(rgba8) }.
     auto applyTex = [&](const char* key, void (scene::MeshNode::*setter)(int, int, const uint8_t*)) {
-        Value tex = ev::getProperty(opts, key);
+        const Rooted tex(ev::getProperty(opts, key));
         if (!ev::isObject(tex)) return;
         Value wV = ev::getProperty(tex, "width");
         Value hV = ev::getProperty(tex, "height");
@@ -142,7 +144,8 @@ void applyMeshMaterialOpts(scene::MeshNode* node, Value opts) {
 // texture maps, the atlas grid and static batching. Transform / name keys
 // are applied by the JS wrapper's applyNodeOpts, the instance buffers by
 // setInstances, and scatter / tube by js/scene_extras.js.
-void applyInstancedOpts(scene::InstancedMeshNode* node, Value opts) {
+void applyInstancedOpts(scene::InstancedMeshNode* node, Value optsIn) {
+    const Rooted opts(optsIn);
     float cr = 1, cg = 1, cb = 1, ca = 1;
     if (parseColorValue(ev::getProperty(opts, "color"), cr, cg, cb, ca)) node->setColor(cr, cg, cb, ca);
 
@@ -175,7 +178,7 @@ void applyInstancedOpts(scene::InstancedMeshNode* node, Value opts) {
     flag("receivesShadow", [&](bool v) { node->setReceivesShadow(v); });
 
     auto applyTex = [&](const char* key, void (scene::InstancedMeshNode::*setter)(int, int, const uint8_t*)) {
-        Value tex = ev::getProperty(opts, key);
+        const Rooted tex(ev::getProperty(opts, key));
         if (!ev::isObject(tex)) return;
         Value wV = ev::getProperty(tex, "width");
         Value hV = ev::getProperty(tex, "height");
@@ -224,11 +227,11 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
         meshData = *md;
     }
 
-    Value opts = ev::fromBits(optsBits);
+    const Rooted opts(ev::fromBits(optsBits));
     if (ev::isObject(opts)) {
         // 1. Raw positions/indices
-        Value posVal = ev::getProperty(opts, "positions");
-        Value idxVal = ev::getProperty(opts, "indices");
+        const Rooted posVal(ev::getProperty(opts, "positions"));
+        const Rooted idxVal(ev::getProperty(opts, "indices"));
         bool hasRaw = false;
         if (!ev::isUndefined(posVal) && !ev::isUndefined(idxVal)) {
             if (readFloatVector(posVal, meshData.positions) && readU32Vector(idxVal, meshData.indices)) {
@@ -241,10 +244,10 @@ void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t me
         }
 
         // 2. Mesh object (`mesh` or its `data` alias) or primitive name
-        Value meshProp = ev::getProperty(opts, "mesh");
+        const Rooted meshProp(ev::getProperty(opts, "mesh"));
         if (!hasRaw && meshData.positions.empty()) {
             Value dataProp = ev::getProperty(opts, "data");
-            for (Value cand : {meshProp, dataProp}) {
+            for (Value cand : {meshProp.get(), dataProp}) {
                 if (!ev::isObject(cand)) continue;
                 if (const auto* md = bromesh::api::meshDataOf(cand)) {
                     meshData = *md;
@@ -326,7 +329,8 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
     auto* g = graphOf(self);
     if (!g) return nullptr;
 
-    Value opts = ev::fromBits(optsBits);
+    const Rooted opts(ev::fromBits(optsBits));
+    const Rooted meshArg(ev::fromBits(meshHandle));  // read after the option reads
     if (!ev::isObject(opts)) {
         ev::throwTypeError("createSkinnedMesh: options object with 'skin' is required");
         return nullptr;
@@ -339,13 +343,13 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
     }
 
     bromesh::MeshData meshData;
-    if (const auto* md = bromesh::api::meshDataOf(bronze::Value{meshHandle})) {
+    if (const auto* md = bromesh::api::meshDataOf(meshArg)) {
         meshData = *md;
     }
 
     // 1. Raw positions/indices
-    Value posVal = ev::getProperty(opts, "positions");
-    Value idxVal = ev::getProperty(opts, "indices");
+    const Rooted posVal(ev::getProperty(opts, "positions"));
+    const Rooted idxVal(ev::getProperty(opts, "indices"));
     bool hasRaw = false;
     if (!ev::isUndefined(posVal) && !ev::isUndefined(idxVal)) {
         if (readFloatVector(posVal, meshData.positions) && readU32Vector(idxVal, meshData.indices)) {
@@ -358,10 +362,10 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
     }
 
     // 2. Mesh object (`mesh` or its `data` alias) or primitive name
-    Value meshProp = ev::getProperty(opts, "mesh");
+    const Rooted meshProp(ev::getProperty(opts, "mesh"));
     if (!hasRaw && meshData.positions.empty()) {
         Value dataProp = ev::getProperty(opts, "data");
-        for (Value cand : {meshProp, dataProp}) {
+        for (Value cand : {meshProp.get(), dataProp}) {
             if (!ev::isObject(cand)) continue;
             if (const auto* md = bromesh::api::meshDataOf(cand)) {
                 meshData = *md;
@@ -452,7 +456,7 @@ void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, ui
     if (const auto* srcMesh = bromesh::api::meshDataOf(bronze::Value{meshVal})) {
         node->setMesh(*srcMesh);
     }
-    Value opts = ev::fromBits(optsBits);
+    const Rooted opts(ev::fromBits(optsBits));
     if (ev::isObject(opts)) applyInstancedOpts(node, opts);
     return wrapNode(node, g);
 }

@@ -29,23 +29,24 @@ static bool readTweenVec3(Value v, bromath::Vec3& out) {
         return true;
     }
     if (!ev::isObject(v)) return false;
-    double x = 0, y = 0, z = 0;
-    Value e0 = ev::getElement(v, 0);
-    Value e1 = ev::getElement(v, 1);
-    Value e2 = ev::getElement(v, 2);
-    if (!ev::isUndefined(e0)) x = ev::toDouble(e0);
-    if (!ev::isUndefined(e1)) y = ev::toDouble(e1);
-    if (!ev::isUndefined(e2)) z = ev::toDouble(e2);
-    out = {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)};
+    const Rooted arr(v);
+    // Each element converts before the next read can move it.
+    double xyz[3] = {0, 0, 0};
+    for (uint32_t i = 0; i < 3; ++i) {
+        Value e = ev::getElement(arr, i);
+        if (!ev::isUndefined(e)) xyz[i] = ev::toDouble(e);
+    }
+    out = {static_cast<float>(xyz[0]), static_cast<float>(xyz[1]), static_cast<float>(xyz[2])};
     return true;
 }
 
-static bool readTweenQuat(Value v, bromath::Quat& out) {
-    if (ev::isNumber(v)) {
-        out = bromath::qfromEuler(0.0f, 0.0f, static_cast<float>(ev::toDouble(v)));
+static bool readTweenQuat(Value vIn, bromath::Quat& out) {
+    if (ev::isNumber(vIn)) {
+        out = bromath::qfromEuler(0.0f, 0.0f, static_cast<float>(ev::toDouble(vIn)));
         return true;
     }
-    if (ev::isObject(v)) {
+    if (ev::isObject(vIn)) {
+        const Rooted v(vIn);
         Value lenV = ev::getProperty(v, "length");
         if (ev::isNumber(lenV)) {
             double q[4] = {0, 0, 0, 1};
@@ -69,7 +70,8 @@ static bool readTweenQuat(Value v, bromath::Quat& out) {
     return false;
 }
 
-static bool readTweenColor(Value v, bromath::Vec3& out) {
+static bool readTweenColor(Value vIn, bromath::Vec3& out) {
+    const Rooted v(vIn);
     float r = 1, g = 1, b = 1, a = 1;
     if (parseColorValue(v, r, g, b, a)) {
         out = {r, g, b};
@@ -78,7 +80,7 @@ static bool readTweenColor(Value v, bromath::Vec3& out) {
     return readTweenVec3(v, out);
 }
 
-static void parseTweenProps(Value props, uint32_t nodeId,
+static void parseTweenProps(Value propsIn, uint32_t nodeId,
                             float duration, float delay, scene::Tween::Ease ease,
                             std::vector<scene::Tween::Anim>& out) {
     using Anim = scene::Tween::Anim;
@@ -93,6 +95,7 @@ static void parseTweenProps(Value props, uint32_t nodeId,
         return a;
     };
 
+    const Rooted props(propsIn);
     Value v = ev::getProperty(props, "position");
     if (!ev::isUndefined(v)) {
         Anim a = base(Prop::Position);
@@ -229,13 +232,15 @@ void* bro_animation_Tween_to(void* self, int32_t targetId, uint64_t propsBits, d
 
     uint32_t nodeId = targetId > 0 ? static_cast<uint32_t>(targetId) : 0;
 
-    Value props = ev::fromBits(propsBits);
+    // All three are read after the option reads below allocate.
+    const Rooted props(ev::fromBits(propsBits));
+    const Rooted opts(ev::fromBits(optsBits));
+    const Rooted onUpdate(ev::fromBits(onUpdateBits));
     float dur = static_cast<float>(duration);
     if (!(dur >= 0.0f)) dur = 0.0f;
 
     float delay = 0.0f;
     auto ease = scene::Tween::Ease::Linear;
-    Value opts = ev::fromBits(optsBits);
     if (ev::isObject(opts)) {
         Value easingVal = ev::getProperty(opts, "easing");
         if (ev::isString(easingVal)) {
@@ -254,14 +259,13 @@ void* bro_animation_Tween_to(void* self, int32_t targetId, uint64_t propsBits, d
         parseTweenProps(props, nodeId, dur, delay, ease, anims);
     }
 
-    Value onUpdate = ev::fromBits(onUpdateBits);
     if (ev::isFunction(onUpdate)) {
         scene::Tween::Anim anim;
         anim.prop = scene::Tween::Prop::Custom;
         anim.duration = dur;
         anim.delay = delay;
         anim.ease = ease;
-        auto fnRef = std::make_shared<ev::Persistent>(onUpdate);
+        auto fnRef = std::make_shared<ev::Persistent>(onUpdate.get());
         anim.onUpdate = [fnRef](float val) {
             if (fnRef && ev::isFunction(fnRef->get())) {
                 const Value arg = ev::fromDouble(val);
