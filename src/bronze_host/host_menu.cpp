@@ -13,9 +13,10 @@ namespace bro::bronze_host {
 
 namespace {
 
-static engine::MenuBar::Item parseMenuItem(Value v) {
+static engine::MenuBar::Item parseMenuItem(Value vIn) {
     engine::MenuBar::Item item;
-    if (!ev::isObject(v)) return item;
+    if (!ev::isObject(vIn)) return item;
+    const Rooted v(vIn);  // each property read allocates
 
     Value idVal = ev::getProperty(v, "id");
     if (ev::isString(idVal)) item.id = ev::toUtf8(idVal);
@@ -38,7 +39,7 @@ static engine::MenuBar::Item parseMenuItem(Value v) {
     Value chkVal = ev::getProperty(v, "checked");
     if (!ev::isUndefined(chkVal)) item.checked = ev::toBool(chkVal);
 
-    Value itemsVal = ev::getProperty(v, "items");
+    const Rooted itemsVal(ev::getProperty(v, "items"));
     if (hostIsArray(itemsVal)) {
         uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(itemsVal, "length")));
         for (uint32_t i = 0; i < len; ++i) {
@@ -112,7 +113,7 @@ Value makeBroMenuValue() {
         if (!eng) return ev::undefined();
         std::vector<engine::MenuBar::Item> roots;
         if (!a.empty() && hostIsArray(a[0])) {
-            Value arr = a[0];
+            const Value& arr = a[0];  // the rooted slot, current across the reads
             uint32_t len = static_cast<uint32_t>(ev::toDouble(ev::getProperty(arr, "length")));
             for (uint32_t i = 0; i < len; ++i) {
                 roots.push_back(parseMenuItem(ev::getElement(arr, i)));
@@ -138,7 +139,7 @@ Value makeBroMenuValue() {
         auto* eng = hostEngine();
         if (!eng || a.size() < 2) return ev::fromBool(false);
         std::string id = ev::toUtf8(a[0]);
-        Value props = a[1];
+        const Value& props = a[1];  // the rooted slot, current across the reads
         if (!ev::isObject(props)) return ev::fromBool(false);
 
         auto* item = eng->menuBar().find(id);

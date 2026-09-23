@@ -102,12 +102,14 @@ SourcePixels resolveSource(Value source, const char* who) {
     // matched here so a texture built from raw RGBA needs no new object kind.
     if (ev::isObject(source)) {
         ev::Persistent root(source);
-        Value widthV = ev::getProperty(root.get(), "width");
-        Value heightV = ev::getProperty(root.get(), "height");
-        if (!ev::isObject(widthV) && !ev::isObject(heightV) && !ev::isUndefined(widthV) &&
-            !ev::isUndefined(heightV)) {
-            const GLsizei w = static_cast<GLsizei>(ev::toDouble(widthV));
-            const GLsizei h = static_cast<GLsizei>(ev::toDouble(heightV));
+        // Each dimension converts before the next read can move a string one.
+        Value dimV = ev::getProperty(root.get(), "width");
+        const bool hasW = !ev::isObject(dimV) && !ev::isUndefined(dimV);
+        const GLsizei w = hasW ? static_cast<GLsizei>(ev::toDouble(dimV)) : 0;
+        dimV = ev::getProperty(root.get(), "height");
+        const bool hasH = !ev::isObject(dimV) && !ev::isUndefined(dimV);
+        const GLsizei h = hasH ? static_cast<GLsizei>(ev::toDouble(dimV)) : 0;
+        if (hasW && hasH) {
             // LAST, and deliberately: every allocating read is above this line,
             // so the view's pointer is still valid when the caller's GL call
             // consumes it on the very next statement.

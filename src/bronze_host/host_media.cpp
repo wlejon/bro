@@ -99,19 +99,17 @@ static Value js_media_thumbnails(Value, std::span<const Value> a) {
     video::ThumbnailStrip strip;
     if (!video::grabThumbnails(path, count, height, strip, window)) return ev::null();
 
-    Value data = makeUint8Array(strip.rgba);
-
-    Value times = hostArrayOf(strip.times.size(), [&](size_t i) -> Value {
-        return ev::fromDouble(strip.times[i] / 1e9);
-    });
-
+    // Each array is made as it is stored, so none is held across another's
+    // allocation.
     ObjectBuilder out;
     out.set("width", ev::fromDouble(strip.width));
     out.set("height", ev::fromDouble(strip.height));
     out.set("count", ev::fromDouble(strip.count));
     out.set("rotation", ev::fromDouble(strip.rotationDegrees));
-    out.set("times", times);
-    out.set("data", data);
+    out.set("times", hostArrayOf(strip.times.size(), [&](size_t i) -> Value {
+        return ev::fromDouble(strip.times[i] / 1e9);
+    }));
+    out.set("data", makeUint8Array(strip.rgba));
     return out.get();
 }
 

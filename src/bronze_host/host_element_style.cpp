@@ -318,10 +318,11 @@ Value hostComputedStyleFor(Value elValue) {
         return empty.get();
     }
     if (!st->hasComputed) {
+        const Rooted el(elValue);
         Value c = makeComputedStyleObject(st);
         // makeComputedStyleObject allocates, so the entry pointer is re-taken
-        // from the value rather than trusted across the call.
-        st = static_cast<HostNodeState*>(ev::handleData(elValue));
+        // from the element's CURRENT address rather than trusted across the call.
+        st = static_cast<HostNodeState*>(ev::handleData(el));
         st->computedObj.set(c);
         st->hasComputed = true;
     }

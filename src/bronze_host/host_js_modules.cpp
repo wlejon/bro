@@ -50,12 +50,14 @@ namespace {
 void mountImageGpu() {
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (!gt.found || !ev::isObject(gt.value)) return;
-    Value broVal = ev::getProperty(gt.value, "bro");
+    // globalThis and bro.image are held across property reads, which allocate.
+    const ev::Persistent global(gt.value);
+    Value broVal = ev::getProperty(global.get(), "bro");
     if (!ev::isObject(broVal)) return;
-    Value imgVal = ev::getProperty(broVal, "image");
-    Value gpuVal = ev::getProperty(gt.value, "__bro_image_gpu");
-    if (ev::isObject(imgVal) && !ev::isUndefined(gpuVal)) {
-        ev::setProperty(imgVal, "gpu", gpuVal);
+    const ev::Persistent imgVal(ev::getProperty(broVal, "image"));
+    Value gpuVal = ev::getProperty(global.get(), "__bro_image_gpu");
+    if (ev::isObject(imgVal.get()) && !ev::isUndefined(gpuVal)) {
+        ev::setProperty(imgVal.get(), "gpu", gpuVal);
     }
 }
 

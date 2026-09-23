@@ -99,7 +99,7 @@ Value buildGamepadSnapshot(const engine::GamepadState& gp) {
         double duration = 0.0, strong = 0.0, weak = 0.0;
         double leftTrigger = 0.0, rightTrigger = 0.0;
         if (a.size() >= 2 && ev::isObject(a[1])) {
-            Value params = a[1];
+            const Value& params = a[1];  // the rooted slot, current across the reads
             Value v = ev::getProperty(params, "duration");
             if (!ev::isUndefined(v) && !ev::isObject(v)) duration = ev::toDouble(v);
             v = ev::getProperty(params, "strongMagnitude");

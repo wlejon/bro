@@ -60,7 +60,8 @@ Value entryValue(const Entry& e) {
     b.set("startTime", ev::fromDouble(e.startTime));
     b.set("duration", ev::fromDouble(e.duration));
     if (e.entryType == "mark") b.set("detail", ev::null());
-    b.def("toJSON", 0, [](Value self, std::span<const Value>) -> Value {
+    b.def("toJSON", 0, [](Value selfIn, std::span<const Value>) -> Value {
+        const Rooted self(selfIn);  // read after each allocating set
         ObjectBuilder j;
         j.set("name", ev::getProperty(self, "name"));
         j.set("entryType", ev::getProperty(self, "entryType"));
@@ -141,15 +142,20 @@ Value makePerformanceValue() {
             return true;  // absent: keep the default
         };
         if (a.size() > 1 && ev::isObject(a[1])) {
+            // Each read is resolved before the next one allocates.
             Value sV = ev::getProperty(a[1], "start");
+            const bool noStart = ev::isUndefined(sV) || ev::isNull(sV);
+            bool found = resolve(sV, start);
             Value eV = ev::getProperty(a[1], "end");
-            Value dV = ev::getProperty(a[1], "duration");
-            if (!resolve(sV, start) || !resolve(eV, end)) {
+            const bool noEnd = ev::isUndefined(eV) || ev::isNull(eV);
+            found = resolve(eV, end) && found;
+            if (!found) {
                 return ev::throwError("performance.measure: no mark with that name");
             }
+            Value dV = ev::getProperty(a[1], "duration");
             if (ev::isNumber(dV)) {
-                if (ev::isUndefined(eV) || ev::isNull(eV)) end = start + ev::toDouble(dV);
-                else if (ev::isUndefined(sV) || ev::isNull(sV)) start = end - ev::toDouble(dV);
+                if (noEnd) end = start + ev::toDouble(dV);
+                else if (noStart) start = end - ev::toDouble(dV);
             }
         } else {
             if (a.size() > 1 && !resolve(a[1], start)) {

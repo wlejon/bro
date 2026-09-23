@@ -315,46 +315,28 @@ void fireHostTimers(double nowMs) {
 
 void installTimerGlobals() {
     ev::GlobalValue gt = ev::globalValue("globalThis");
-    bool hasGt = gt.found && ev::isObject(gt.value);
-    {
-        Value fn = ev::makeFunction(
-            [](Value, std::span<const Value> a) { return addTimer(a, /*repeating=*/false); },
-            2);
-        ev::registerGlobal("setTimeout", fn);
-        if (hasGt) ev::setProperty(gt.value, "setTimeout", fn);
-    }
-    {
-        Value fn = ev::makeFunction(
-            [](Value, std::span<const Value> a) { return clearTimer(a); }, 1);
-        ev::registerGlobal("clearTimeout", fn);
-        if (hasGt) ev::setProperty(gt.value, "clearTimeout", fn);
-    }
-    {
-        Value fn = ev::makeFunction(
-            [](Value, std::span<const Value> a) { return addTimer(a, /*repeating=*/true); },
-            2);
-        ev::registerGlobal("setInterval", fn);
-        if (hasGt) ev::setProperty(gt.value, "setInterval", fn);
-    }
-    {
-        Value fn = ev::makeFunction(
-            [](Value, std::span<const Value> a) { return clearTimer(a); }, 1);
-        ev::registerGlobal("clearInterval", fn);
-        if (hasGt) ev::setProperty(gt.value, "clearInterval", fn);
-    }
-    {
-        Value fn = ev::makeFunction(
-            [](Value, std::span<const Value> a) { return addIdleCallback(a); }, 2);
-        ev::registerGlobal("requestIdleCallback", fn);
-        if (hasGt) ev::setProperty(gt.value, "requestIdleCallback", fn);
-    }
-    {
-        // Same table, same ids: cancelIdleCallback(id) is clearTimeout(id).
-        Value fn = ev::makeFunction(
-            [](Value, std::span<const Value> a) { return clearTimer(a); }, 1);
-        ev::registerGlobal("cancelIdleCallback", fn);
-        if (hasGt) ev::setProperty(gt.value, "cancelIdleCallback", fn);
-    }
+    const bool hasGt = gt.found && ev::isObject(gt.value);
+    // Rooted: globalThis and each function outlive the allocations that
+    // follow them (the next makeFunction, registerGlobal's define).
+    const Rooted global(hasGt ? gt.value : ev::undefined());
+    auto install = [&](const char* name, Value fnIn) {
+        const Rooted fn(fnIn);
+        ev::registerGlobal(name, fn);
+        if (hasGt) ev::setProperty(global, name, fn);
+    };
+    install("setTimeout", ev::makeFunction(
+        [](Value, std::span<const Value> a) { return addTimer(a, /*repeating=*/false); }, 2));
+    install("clearTimeout", ev::makeFunction(
+        [](Value, std::span<const Value> a) { return clearTimer(a); }, 1));
+    install("setInterval", ev::makeFunction(
+        [](Value, std::span<const Value> a) { return addTimer(a, /*repeating=*/true); }, 2));
+    install("clearInterval", ev::makeFunction(
+        [](Value, std::span<const Value> a) { return clearTimer(a); }, 1));
+    install("requestIdleCallback", ev::makeFunction(
+        [](Value, std::span<const Value> a) { return addIdleCallback(a); }, 2));
+    // Same table, same ids: cancelIdleCallback(id) is clearTimeout(id).
+    install("cancelIdleCallback", ev::makeFunction(
+        [](Value, std::span<const Value> a) { return clearTimer(a); }, 1));
 }
 
 void clearHostTimers() {

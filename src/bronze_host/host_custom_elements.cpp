@@ -23,7 +23,10 @@ struct CustomElementDef {
 static std::unordered_map<std::string, CustomElementDef> s_registry;
 static std::unordered_map<std::string, std::vector<ev::Persistent>> s_pendingWhenDefined;
 static thread_local dom::Element* s_activeConstructingElement = nullptr;
-static thread_local Value s_activeCtor = ev::undefined();
+// The constructor being run, by its definition's root: it is read again from
+// inside the construct call (constructCustomElementBase), after user code has
+// allocated, so a raw Value copy here would be stale by then.
+static thread_local const ev::Persistent* s_activeCtor = nullptr;
 
 static std::string toLowerStr(std::string_view s) {
     std::string out;
@@ -102,10 +105,10 @@ static void fireLifecycle(dom::Element* el, const char* name) {
 // holds keeps its identity and gains the class prototype.
 static ev::CallResult runCustomElementConstructor(dom::Element* el, const CustomElementDef& def) {
     s_activeConstructingElement = el;
-    s_activeCtor = def.ctor.get();
-    ev::CallResult res = ev::construct(s_activeCtor, {});
+    s_activeCtor = &def.ctor;
+    ev::CallResult res = ev::construct(def.ctor.get(), {});
     s_activeConstructingElement = nullptr;
-    s_activeCtor = ev::undefined();
+    s_activeCtor = nullptr;
     if (res.thrown) return res;
     if (ev::isObject(res.value)) {
         // Rooted: setProperty and fromUtf8 allocate, and `res.value` is
@@ -256,8 +259,8 @@ Value constructCustomElementBase(Value newObject) {
         // Rooted across the prototype read, which may allocate the class's
         // prototype object on first touch.
         ev::Persistent wrapper(hostElementValue(s_activeConstructingElement));
-        if (ev::isObject(wrapper.get()) && ev::isFunction(s_activeCtor)) {
-            Value proto = ev::getProperty(s_activeCtor, "prototype");
+        if (ev::isObject(wrapper.get()) && s_activeCtor && ev::isFunction(s_activeCtor->get())) {
+            Value proto = ev::getProperty(s_activeCtor->get(), "prototype");
             if (ev::isObject(proto)) return ev::setPrototype(wrapper.get(), proto);
         }
         return wrapper.get();
@@ -311,7 +314,7 @@ void installCustomElementsGlobals() {
         def.tagName = name;
         def.ctor.set(a[1]);
 
-        Value obs = ev::getProperty(a[1], "observedAttributes");
+        const Rooted obs(ev::getProperty(a[1], "observedAttributes"));
         if (ev::isObject(obs)) {
             Value lenV = ev::getProperty(obs, "length");
             if (ev::isNumber(lenV)) {
@@ -391,11 +394,10 @@ void installCustomElementsGlobals() {
         return ev::undefined();
     });
 
-    Value customElements = ce.get();
-    ev::registerGlobal("customElements", customElements);
+    ev::registerGlobal("customElements", ce.get());
     auto g = ev::globalValue("globalThis");
     if (g.found && ev::isObject(g.value)) {
-        ev::setProperty(g.value, "customElements", customElements);
+        ev::setProperty(g.value, "customElements", ce.get());
     }
 }
 
@@ -406,7 +408,7 @@ void resetCustomElementsRegistry() {
     s_registry.clear();
     s_pendingWhenDefined.clear();
     s_activeConstructingElement = nullptr;
-    s_activeCtor = ev::undefined();
+    s_activeCtor = nullptr;
 }
 
 } // namespace bro::bronze_host

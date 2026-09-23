@@ -264,10 +264,11 @@ void installObserverHooks() {
     b.def("takeMutations", 0, takeMutations);
     b.def("onMutation", 1, onMutation);
     b.def("onFrame", 1, onFrame);
-    Value hooks = b.get();
-    ev::registerGlobal("__bro_observers", hooks);
+    // The builder roots the object; registerGlobal and globalValue both
+    // allocate, so each use re-reads it.
+    ev::registerGlobal("__bro_observers", b.get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
-    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "__bro_observers", hooks);
+    if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "__bro_observers", b.get());
 }
 
 void fireHostObserverFrame() {

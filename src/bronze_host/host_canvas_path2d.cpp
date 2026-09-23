@@ -261,7 +261,7 @@ void installPath2DClass() {
                         if (auto* other = hostCanvasPath2DOf(a[0])) {
                             SkPath src = other->snapshot();
                             if (a.size() > 1 && ev::isObject(a[1])) {
-                                Value m = a[1];
+                                const Value& m = a[1];  // the rooted slot, current across the reads
                                 float ma = static_cast<float>(ev::toDouble(ev::getProperty(m, "a")));
                                 float mb = static_cast<float>(ev::toDouble(ev::getProperty(m, "b")));
                                 float mc = static_cast<float>(ev::toDouble(ev::getProperty(m, "c")));

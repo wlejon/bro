@@ -24,11 +24,13 @@ namespace bro::bronze_host {
 
 namespace {
 
-static bool isJsArray(Value v) {
-    if (!ev::isObject(v)) return false;
+static bool isJsArray(Value vIn) {
+    if (!ev::isObject(vIn)) return false;
+    const Rooted v(vIn);  // looking up Array.isArray allocates
     Value isArrFn = ev::getProperty(ev::globalValue("Array").value, "isArray");
     if (!ev::isFunction(isArrFn)) return false;
-    Value res = ev::call(isArrFn, ev::undefined(), std::span<const Value>(&v, 1)).value;
+    const Value arg = v.get();
+    Value res = ev::call(isArrFn, ev::undefined(), std::span<const Value>(&arg, 1)).value;
     return ev::toBool(res);
 }
 
@@ -301,15 +303,16 @@ bool parseKeyframeObject(Value obj, std::vector<engine::WebAnimKeyframe>& frames
     return true;
 }
 
-bool parseOptions(Value opt, engine::WebAnimation& a, std::string& name) {
-    if (ev::isUndefined(opt) || ev::isNull(opt)) return true;
-    if (ev::isNumber(opt)) {
-        double d = ev::toDouble(opt);
+bool parseOptions(Value optIn, engine::WebAnimation& a, std::string& name) {
+    if (ev::isUndefined(optIn) || ev::isNull(optIn)) return true;
+    if (ev::isNumber(optIn)) {
+        double d = ev::toDouble(optIn);
         if (!(d >= 0)) return false;
         a.duration = d;
         return true;
     }
-    if (!ev::isObject(opt)) return false;
+    if (!ev::isObject(optIn)) return false;
+    const Rooted opt(optIn);  // each property read allocates
 
     Value durVal = ev::getProperty(opt, "duration");
     if (ev::isNumber(durVal)) {
@@ -921,15 +924,18 @@ void installWebAnimationGlobals() {
 
     ev::registerGlobal("Animation", g_animationClass.constructor());
     ev::registerGlobal("WebAnimation", g_animationClass.constructor());
+    // Each global object is rooted across its two defines (setProperty allocates).
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "Animation", g_animationClass.constructor());
-        ev::setProperty(gt.value, "WebAnimation", g_animationClass.constructor());
+        const Rooted global(gt.value);
+        ev::setProperty(global, "Animation", g_animationClass.constructor());
+        ev::setProperty(global, "WebAnimation", g_animationClass.constructor());
     }
     ev::GlobalValue win = ev::globalValue("window");
     if (win.found && ev::isObject(win.value)) {
-        ev::setProperty(win.value, "Animation", g_animationClass.constructor());
-        ev::setProperty(win.value, "WebAnimation", g_animationClass.constructor());
+        const Rooted window(win.value);
+        ev::setProperty(window, "Animation", g_animationClass.constructor());
+        ev::setProperty(window, "WebAnimation", g_animationClass.constructor());
     }
 }
 

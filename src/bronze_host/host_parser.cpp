@@ -93,7 +93,7 @@ Value makeParserValue() {
 
 Value xmlSerializerSerializeToString(Value, std::span<const Value> a) {
     if (a.empty()) return ev::fromUtf8("");
-    Value nodeVal = a[0];
+    const Value& nodeVal = a[0];  // the rooted slot, current across the reads
     if (ev::isNull(nodeVal) || ev::isUndefined(nodeVal)) return ev::fromUtf8("");
 
     if (dom::Element* el = hostElementOf(nodeVal)) {
@@ -132,18 +132,20 @@ Value makeXMLSerializerValue() {
 // ---------------------------------------------------------------------------
 
 void installParserGlobal() {
-    Value ctor = ev::makeFunction(
-        [](Value, std::span<const Value>) { return makeParserValue(); }, 0);
+    // Rooted: each is used again after later allocations.
+    const Rooted ctor(ev::makeFunction(
+        [](Value, std::span<const Value>) { return makeParserValue(); }, 0));
     ev::registerGlobal("DOMParser", ctor);
 
-    Value xmlSerializerCtor = ev::makeFunction(
-        [](Value, std::span<const Value>) { return makeXMLSerializerValue(); }, 0);
+    const Rooted xmlSerializerCtor(ev::makeFunction(
+        [](Value, std::span<const Value>) { return makeXMLSerializerValue(); }, 0));
     ev::registerGlobal("XMLSerializer", xmlSerializerCtor);
 
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
-        ev::setProperty(gt.value, "DOMParser", ctor);
-        ev::setProperty(gt.value, "XMLSerializer", xmlSerializerCtor);
+        const Rooted global(gt.value);
+        ev::setProperty(global, "DOMParser", ctor);
+        ev::setProperty(global, "XMLSerializer", xmlSerializerCtor);
     }
 }
 

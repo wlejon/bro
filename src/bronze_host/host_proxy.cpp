@@ -51,6 +51,27 @@ struct TrapPack {
     ev::Persistent methods;
 };
 
+// The elements of an argument list, each rooted as it is read: every
+// getElement allocates, so neither the list nor an element read earlier
+// survives the next read as a raw Value.
+std::vector<ev::Persistent> listElements(Value listIn) {
+    std::vector<ev::Persistent> out;
+    if (!ev::isObject(listIn)) return out;
+    const Rooted list(listIn);
+    const uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(list, "length")));
+    out.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) out.emplace_back(ev::getElement(list, i));
+    return out;
+}
+
+// The rooted elements' current values, read with nothing allocating after.
+std::vector<Value> currentValues(const std::vector<ev::Persistent>& rooted) {
+    std::vector<Value> out;
+    out.reserve(rooted.size());
+    for (const ev::Persistent& p : rooted) out.push_back(p.get());
+    return out;
+}
+
 }  // namespace
 
 Value makeHostProxy(HostProxyTraps traps) {
@@ -143,27 +164,15 @@ Value makeHostProxy(HostProxyTraps traps) {
     // a non-callable target is a trap the language will never consult.
     if (pack->t.apply) {
         h.def("apply", 3, [pack](Value, std::span<const Value> a) -> Value {
-            Value list = argAt(a, 2);
-            const uint32_t n = ev::isObject(list)
-                                   ? static_cast<uint32_t>(
-                                         ev::toDouble(ev::getProperty(list, "length")))
-                                   : 0;
-            std::vector<Value> args;
-            args.reserve(n);
-            for (uint32_t i = 0; i < n; ++i) args.push_back(ev::getElement(list, i));
+            const std::vector<ev::Persistent> rooted = listElements(argAt(a, 2));
+            const std::vector<Value> args = currentValues(rooted);
             return pack->t.apply(argAt(a, 1), std::span<const Value>(args));
         });
     }
     if (pack->t.construct) {
         h.def("construct", 3, [pack](Value, std::span<const Value> a) -> Value {
-            Value list = argAt(a, 1);
-            const uint32_t n = ev::isObject(list)
-                                   ? static_cast<uint32_t>(
-                                         ev::toDouble(ev::getProperty(list, "length")))
-                                   : 0;
-            std::vector<Value> args;
-            args.reserve(n);
-            for (uint32_t i = 0; i < n; ++i) args.push_back(ev::getElement(list, i));
+            const std::vector<ev::Persistent> rooted = listElements(argAt(a, 1));
+            const std::vector<Value> args = currentValues(rooted);
             return pack->t.construct(std::span<const Value>(args));
         });
     }

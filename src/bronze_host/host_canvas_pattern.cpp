@@ -28,7 +28,8 @@ void hostCanvasPatternDtor(void* p) {
 // member missing from the dictionary takes its identity default; when both
 // spellings are present they must agree (the spec's "validate and fixup").
 // Returns false (and throws) on a non-finite or contradictory member.
-bool readMatrix2DInit(Value init, SkMatrix& out) {
+bool readMatrix2DInit(Value initIn, SkMatrix& out) {
+    const Rooted init(initIn);
     double v[6] = {1, 0, 0, 1, 0, 0};
     static const char* kShort[6] = {"a", "b", "c", "d", "e", "f"};
     static const char* kLong[6] = {"m11", "m12", "m21", "m22", "m41", "m42"};

@@ -165,15 +165,16 @@ static void dispatchStorageEvent(bool isSession,
         evObj.set("storageArea", ev::null());
     }
 
-    Value evVal = evObj.get();
+    // The event object is re-read from its builder after the constructor
+    // lookup, which may allocate.
     ev::GlobalValue seCtor = ev::globalValue("StorageEvent");
     if (seCtor.found && ev::isObject(seCtor.value)) {
         Value proto = ev::getProperty(seCtor.value, "prototype");
         if (ev::isObject(proto)) {
-            evVal = ev::setPrototype(evVal, proto);
+            evObj.obj.set(ev::setPrototype(evObj.get(), proto));
         }
     }
-    hostDispatchToWindow(evVal);
+    hostDispatchToWindow(evObj.get());
 }
 
 Value makeLocalStorageValue() {
