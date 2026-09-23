@@ -425,6 +425,17 @@ sim.resetCounters();                // does NOT reset world state
 //
 // For a schema-driven, non-combat replay (your own row/event layout) use
 // bro.ai.game.grid.createGenericRecorder instead — docs/ai-game-tools.js.
+//
+// Offsets are 64-bit, so a replay past 2 GiB records and reopens correctly.
+// A reader treats the file as untrusted: every count it reads (roster,
+// schema fields, frames, a frame's rows) is checked against a sane limit
+// and against the bytes the file actually holds before anything is
+// allocated, the index and footer must sit exactly where the writer puts
+// them, and every frame offset must lie inside the frame stream. A file that
+// fails any of that does not open (open() is false, errorMessage says why,
+// and the reader is left empty); a frame whose counts overrun its own bytes
+// reads as empty rather than past its end. The same holds for the generic
+// reader in docs/ai-game-tools.js.
 
 /** @returns {AIRecorder} */
 const rec = bro.ai.game.createRecorder();
@@ -451,7 +462,10 @@ rec.writeRoster(world);
 rec.recordFrame(state.steps, state.elapsed, world);
 
 rec.frameCount;                                    // frames written so far
-rec.close();                                       // appends index + footer
+/** Appends the index + footer.
+ *  @returns {boolean} false when a write or a file-position read failed
+ *      (the replay is then incomplete) */
+rec.close();
 
 /** @returns {AIReplayReader} */
 const rr = bro.ai.game.createReplayReader();

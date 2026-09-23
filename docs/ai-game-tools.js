@@ -210,6 +210,14 @@ gtrainer.warmupWith(bcSits);
 // f64). Recorder streams variable-count rows per frame; reader random-accesses
 // any frame via the offset index appended at close. Distinct magic from .bgar
 // so the existing combat-shaped reader isn't burdened.
+//
+// close() returns false when a write failed. The reader validates the file
+// as docs/ai-game-learning.js describes for .bgar: counts are checked
+// against sane limits and the bytes present before allocating, the index
+// and footer must be where the writer put them, frame offsets must lie in
+// the frame stream (64-bit, so files past 2 GiB work), an unknown field type
+// or a roster row size that disagrees with the schema is rejected, and a
+// failed open() (false) leaves the reader empty.
 
 const rec = bro.ai.game.grid.createGenericRecorder();
 rec.open("ep_0001.bgargrid", /*episodeId*/ 1n, /*seed*/ 0xC0DEn, /*dt*/ 1/60, {

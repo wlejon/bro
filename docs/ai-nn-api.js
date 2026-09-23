@@ -301,6 +301,9 @@ net.load(net.save());         // Uint8Array; a bad blob throws a TypeError
  * @returns {AIPolicyValueNet}
  * @throws {TypeError} when inDim / hidden / valueHidden are missing, or
  *     neither numActions nor headSizes is given
+ * @throws {RangeError} when headSizes breaks the head limits (at most 64
+ *     heads, each 1..2^24, product within int32; see the multi-head helpers
+ *     below)
  */
 const pvnet = bro.ai.game.nn.createPolicyValueNet({
     inDim: 60,
@@ -467,27 +470,42 @@ const fLoss = bro.ai.game.nn.factoredXent(
 // the PRODUCT of the head sizes. These four convert between the two, the way
 // a trainer worker shuffles data. They take Float32Arrays and plain integer
 // arrays, never tensors.
+//
+// Head sizes are checked wherever a `headSizes` list is taken (these four
+// and createPolicyValueNet): at most 64 heads, every head an integer in
+// 1..2^24, and their product (the flat action count) within int32
+// (2^31 - 1). Anything else is a RangeError naming the argument: a zero head
+// used to divide by zero in decodeFlatAction, and an overflowing product
+// sized the flat buffers wrong.
 
 /**
  * Turn per-head logits into a flat prior over prod(headSizes): softmax each
  * head, then multiply the per-head probabilities of every combination.
  *
  * @param {Float32Array} logits    - at least sum(headSizes) entries
- * @param {number[]|Int32Array} headSizes - non-empty
+ * @param {number[]|Int32Array} headSizes - non-empty; head limits above
  * @param {Float32Array} flatPrior - OUT, at least prod(headSizes) entries
  * @param {Float32Array} [headMasks] - sum(headSizes) legality mask; null/
  *     undefined means everything is legal
  * @throws {TypeError} when a buffer is shorter than its head layout requires
+ * @throws {RangeError} for a head size outside 1..2^24, more than 64 heads,
+ *     or a head-size product past int32
  */
 bro.ai.game.nn.factoredToFlat(logits, [9, 6, 3], flatPrior, headMasks);
 
-/** @param {number[]|Int32Array} headSizes @returns {number} prod(headSizes) */
+/** @param {number[]|Int32Array} headSizes @returns {number} prod(headSizes)
+ *  @throws {RangeError} under the same head limits (e.g. [65536, 65536]
+ *      overflows int32) */
 const total = bro.ai.game.nn.flatActionCount([9, 6, 3]);   // 162
 
 /** Flat index → per-head choices.
- *  @returns {number[]} one entry per head */
+ *  @returns {number[]} one entry per head
+ *  @throws {RangeError} for a flat index outside 0..prod(headSizes) - 1, or
+ *      head sizes outside the limits */
 const perHead = bro.ai.game.nn.decodeFlatAction(77, [9, 6, 3]);
 
 /** Per-head choices → flat index. Inverse of decodeFlatAction.
- *  @throws {TypeError} when perHead.length !== headSizes.length */
+ *  @throws {TypeError} when perHead.length !== headSizes.length
+ *  @throws {RangeError} when perHead[i] is outside 0..headSizes[i] - 1, or
+ *      head sizes outside the limits */
 const flat = bro.ai.game.nn.encodeFlatAction(perHead, [9, 6, 3]);

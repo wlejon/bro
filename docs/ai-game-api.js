@@ -31,6 +31,25 @@
 // A native exception inside any method (e.g. bad_alloc on a corrupt replay)
 // throws a JS Error instead of ending the process.
 //
+// Integer options and arguments are checked across bro.ai.game (and its nn /
+// learn / grid namespaces). Ids, teamId, counts, dims, iterations, budgetMs
+// and the like are truncated toward zero like any JS integer conversion, but
+// NaN, +-Infinity or a value outside the option's range is a RangeError
+// naming the key ("<what> must be an integer in [lo, hi], got ...") instead
+// of a wrapped value (a negative maxNeighbors once reached a
+// resize((size_t)-1)). Absent keys keep their defaults. 32-bit seeds accept
+// any safe integer, taken modulo 2^32 (so Date.now() or a negative number is
+// a usable seed); NaN and +-Infinity throw. 64-bit seeds take a BigInt (its
+// low 64 bits) or a number in [0, 2^64), anything else a RangeError. Values
+// read from a callback's RESULT while a native search runs (policy, combat
+// and legal actions, obs cells, heuristic picks) never throw mid-rollout:
+// an out-of-range one is replaced by the call's fallback, and a combat
+// action's moveDir and slots are clamped into their enum / int8 ranges.
+// A HexNav field's `ring` (default 64) is clamped to at most 2^20 before it
+// sizes the search's bucket array. Limits specific to other calls
+// (createVecSimulation's numEnvs 1..65536, factored head sizes, replay files)
+// are documented with them.
+//
 // Quick start:
 //   const nav = bro.ai.game.createNavGrid({
 //     minX: -20, minZ: -20, maxX: 20, maxZ: 20,
