@@ -23,10 +23,24 @@
  * and generate() is ONE synchronous native call, so run it in a Worker (the
  * binding is installed in worker realms too) and cancel from the main thread.
  *
- * There is no background-removal stage in this binding. The preprocessor only
- * cover-fits and composites the image's OWN alpha over black, so hand it a
- * pre-masked / foreground-on-black image (bro.vision's BiRefNet matting is the
- * natural upstream step — see docs/vision-api.js).
+ * Background removal runs only when the pipeline was loaded with a BiRefNet
+ * matte model (load({ birefnet })): generate() then replaces the image's alpha
+ * with the predicted matte. Without it the preprocessor composites the
+ * image's OWN alpha over black, so hand it a pre-masked / foreground-on-black
+ * image (bro.vision's BiRefNet matting is the natural upstream step — see
+ * docs/vision-api.js).
+ *
+ * With DINOv3 loaded, its features pass through an affine-free LayerNorm over
+ * the channels (the reference's F.layer_norm) before conditioning the flow
+ * model.
+ *
+ * Profiling: run with the environment variable BRO_TRIPOSPLAT_PROFILE=1 and
+ * every generate() prints one stderr line per stage — read image, birefnet
+ * matte, preprocess, VAE encode, DINOv3 encode, feature1 LayerNorm, feature2
+ * assembly, flow sampler (N steps), octree decode, pack — and the TOTAL, in
+ * milliseconds. GPU stages are timed after a device sync, so each line is
+ * that stage's real cost. The first generate() includes one-time warmup;
+ * the second is the steady-state figure.
  *
  * @example
  *   if (!bro.gpu.available) console.warn('No GPU — TripoSplat on CPU is impractical.');
