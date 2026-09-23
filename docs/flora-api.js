@@ -37,9 +37,15 @@
  * `bro.flora.setWind` / `setDensity` / `update` are process-global, not per
  * world. The global wind bends geometry *at emit time* in emitMesh,
  * emitPlantMesh, emitFoliageMesh, emitPlantFoliageMesh,
- * emitFoliageTransforms and emitSegmentTransforms (higher points sway
- * further; `update(dt)` advances the gust phase). emitSegments, emitBranchTubes,
- * emitScatterSegments, emitBloomMesh and the SDF meshes are never bent.
+ * emitFoliageTransforms and emitSegmentTransforms, and `update(dt)` sways
+ * the placement batches with the same model: the sway is zero at y = 0 and
+ * grows with height (0.04h + 0.015h^2), a gust wave phased by ground
+ * position moves neighbours out of step, and each point is offset
+ * downwind and tilted rigidly toward the wind (at most 0.35 rad), so a
+ * vertex, its normal and an instance matrix at the same point move alike
+ * and matrices stay orthonormal. `update(dt)` advances the gust phase.
+ * emitSegments, emitBranchTubes, emitScatterSegments, emitBloomMesh and
+ * the SDF meshes are never bent.
  * The global density (default 1) multiplies the leaf placement
  * `perUnitLength` of every foliage emit.
  *
@@ -48,8 +54,9 @@
  * use 16 floats per instance laid out row by row: floats 0-2 / 4-6 / 8-10
  * are the three rows of the 3x3 basis (columns = local X, Y, Z axes, scale
  * baked in) and floats 3 / 7 / 11 are the translation. Floats 12-15 are
- * written as 1, 1, 1, 1 by the native emitters (not 0, 0, 0, 1), so treat
- * the buffer as a 3x4 affine and ignore the last four floats.
+ * not a fourth matrix row: they are the RGBA instance tint of bro's
+ * InstancedMeshNode layout, written as white (1, 1, 1, 1). Read the buffer
+ * as a row-major 3x4 affine plus a tint, never as a column-major 4x4.
  *
  * ── Foliage density ──
  * Every foliage emit places leaves with bromesh's leaf placement
@@ -300,8 +307,9 @@ class FloraWorld {
 
   /**
    * Bark mesh of every plant: one tapered open cylinder per segment,
-   * `sides` facets around (values below 3 mean 6). Wind-bent.
-   * @param {number} [sides=6]
+   * `sides` facets around. Wind-bent.
+   * @param {number} [sides=6] - An integer in [3, 256]: TypeError for a
+   *   non-number, RangeError for NaN, a fraction or a value out of range.
    * @returns {Mesh}
    */
   emitMesh(sides) {}
@@ -309,7 +317,7 @@ class FloraWorld {
   /**
    * Bark mesh of one plant. Wind-bent.
    * @param {number} plantIdx
-   * @param {number} [sides=6]
+   * @param {number} [sides=6] - An integer in [3, 256], as for emitMesh.
    * @returns {Mesh|null}
    */
   emitPlantMesh(plantIdx, sides) {}
@@ -532,7 +540,8 @@ bro.flora.prototypes = {
  *   name (either case; `'pinnate'` / `'compound_pinnate'` also work). Unknown
  *   values mean Alternate.
  * @param {Object} [opts]
- * @param {number} [opts.count=6] - Leaves / leaflets.
+ * @param {number} [opts.count=6] - Leaves / leaflets, an integer in [0, 4096]
+ *   (RangeError otherwise).
  * @param {number} [opts.twigLength=0.25] @param {number} [opts.twigRadius=0.005]
  * @param {number} [opts.petioleLength=0.04]
  * @param {number} [opts.leafWidth=0.12] @param {number} [opts.leafLength=0.2]
@@ -616,7 +625,8 @@ bro.flora.clear = function() {};
  * Instances come from `config.transforms` (alias `instances`): a flat
  * Float32Array / number array of 16-float matrices, an array of 16-element
  * arrays, or an array of [x, y, z] positions (identity rotation). Failing
- * those, `config.count` identity instances.
+ * those, `config.count` identity instances: an integer in [0, 16777216],
+ * TypeError for a non-number and RangeError for anything else.
  * @param {Object} config
  * @param {*} [config.id] - Default `'flora_batch_<n>'`.
  * @param {*} [config.mesh] @param {*} [config.material] - Stored as given.
