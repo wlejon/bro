@@ -71,8 +71,22 @@ public:
         return tag_;
     }
 
-    // Tag and identity
+    // Tag and identity. tagName() is bro's internal key — upper-cased, no
+    // prefix — which every matcher in the engine compares against. What the
+    // PAGE reads (Element.tagName / localName / prefix, DOM §4.9) is below:
+    // the name as created, case kept, so an SVG element is `linearGradient`
+    // and an HTML one reads upper-cased only because it is HTML.
     const std::string& tagName() const { return tag_; }
+    // The qualified name as created: createElementNS's argument verbatim, or
+    // the parser's (gumbo's SVG case adjustment applied). Unset means the
+    // lower-cased tag, which is what every HTML element is.
+    void setQualifiedName(const std::string& qualifiedName);
+    std::string qualifiedName() const;
+    std::string localName() const;   // the qualified name after any `prefix:`
+    std::string prefix() const;      // "" for none
+    // DOM's `tagName`: the qualified name, upper-cased for an element in the
+    // HTML namespace (bro's documents are all HTML documents).
+    std::string domTagName() const;
     const std::string& id() const;
     void setId(const std::string& val);
     const std::string& className() const;
@@ -519,6 +533,9 @@ private:
     Element* templateContent_ = nullptr;
     // Namespace::Other only; heap so the common element pays 8 bytes.
     std::unique_ptr<std::string> otherNs_;
+    // Only when it differs from the lower-cased tag (a camelCase SVG name, a
+    // prefix, an upper-case createElementNS name): same 8-byte rule.
+    std::unique_ptr<std::string> qualifiedName_;
     Namespace ns_ = Namespace::HTML;
     bool isTemplateContent_ = false;
     bool dirty_ = false;

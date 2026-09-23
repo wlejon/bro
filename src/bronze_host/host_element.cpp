@@ -423,8 +423,11 @@ void installElementGlobals() {
 
 void installElementCore(ObjectBuilder& b, dom::Element* el) {
     b.set("nodeType", ev::fromDouble(1));
-    b.set("tagName", ev::fromUtf8(el->tagName()));
-    b.set("nodeName", ev::fromUtf8(el->tagName()));
+    // The DOM's name, not the engine's key: `linearGradient` for an SVG
+    // element, `DIV` for an HTML one (dom::Element::domTagName).
+    const std::string domName = el->domTagName();
+    b.set("tagName", ev::fromUtf8(domName));
+    b.set("nodeName", ev::fromUtf8(domName));
 
 }
 
@@ -478,8 +481,8 @@ void decorateElementProto(ObjectBuilder& b) {
 
     // DOM §4.9: the namespace the parser or createElementNS gave the element
     // (XHTML for HTML elements, SVG / MathML for foreign content, null for
-    // the null namespace), and the local name, which for every element this
-    // DOM makes is the lower-cased tag.
+    // the null namespace), the local name as the element was created (case
+    // kept: an SVG `linearGradient` is not `lineargradient`), and the prefix.
     b.accessor("namespaceURI",
                [](Value self_, std::span<const Value>) -> Value {
                    HostNodeState* st = nodeStateOf(self_);
@@ -494,9 +497,16 @@ void decorateElementProto(ObjectBuilder& b) {
                    HostNodeState* st = nodeStateOf(self_);
                    if (!st || !st->el) return ev::undefined();
                    if (st->el->nodeType() == dom::NodeType::DocumentFragment) return ev::undefined();
-                   std::string name = st->el->tagName();
-                   for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                   return ev::fromUtf8(name);
+                   return ev::fromUtf8(st->el->localName());
+               },
+               nullptr);
+    b.accessor("prefix",
+               [](Value self_, std::span<const Value>) -> Value {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->el) return ev::undefined();
+                   if (st->el->nodeType() == dom::NodeType::DocumentFragment) return ev::undefined();
+                   std::string p = st->el->prefix();
+                   return p.empty() ? ev::null() : ev::fromUtf8(p);
                },
                nullptr);
 

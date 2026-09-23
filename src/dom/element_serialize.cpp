@@ -224,7 +224,12 @@ static const std::unordered_map<std::string, std::string> kSvgAttrCaseMap = {
 
 std::string Element::outerHTML() const {
     std::ostringstream oss;
-    std::string serialized_tag = svgCorrectTagName(tag_);
+    // A foreign element serializes under the name it was created with; the
+    // table covers the ones whose name was never recorded (an HTML-namespace
+    // element, or a foreign one that had nothing to preserve).
+    std::string serialized_tag = (ns_ != Namespace::HTML && qualifiedName_)
+                                     ? *qualifiedName_
+                                     : svgCorrectTagName(tag_);
     oss << "<" << serialized_tag;
     for (const auto& [key, val] : attributes_) {
         auto attrIt = kSvgAttrCaseMap.find(key);

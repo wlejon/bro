@@ -281,6 +281,48 @@ Element::Element(const std::string& tag)
     }
 }
 
+namespace {
+std::string asciiLower(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+std::string asciiUpper(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return s;
+}
+}  // namespace
+
+void Element::setQualifiedName(const std::string& qualifiedName) {
+    if (qualifiedName.empty() || qualifiedName == asciiLower(tag_)) {
+        qualifiedName_.reset();
+    } else {
+        qualifiedName_ = std::make_unique<std::string>(qualifiedName);
+    }
+}
+
+std::string Element::qualifiedName() const {
+    return qualifiedName_ ? *qualifiedName_ : asciiLower(tag_);
+}
+
+std::string Element::localName() const {
+    std::string qn = qualifiedName();
+    const size_t colon = qn.find(':');
+    return colon == std::string::npos ? qn : qn.substr(colon + 1);
+}
+
+std::string Element::prefix() const {
+    if (!qualifiedName_) return {};
+    const size_t colon = qualifiedName_->find(':');
+    return colon == std::string::npos ? std::string() : qualifiedName_->substr(0, colon);
+}
+
+std::string Element::domTagName() const {
+    if (!qualifiedName_) {
+        return ns_ == Namespace::HTML ? tag_ : asciiLower(tag_);
+    }
+    return ns_ == Namespace::HTML ? asciiUpper(*qualifiedName_) : *qualifiedName_;
+}
+
 std::string Element::namespaceURI() const {
     switch (ns_) {
         case Namespace::HTML: return kHtmlNamespace;

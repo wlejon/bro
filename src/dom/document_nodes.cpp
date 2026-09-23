@@ -73,6 +73,7 @@ Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
     if (!clone) return nullptr;
     if (srcEl->ns() == Element::Namespace::Other) clone->setNamespaceURI(srcEl->namespaceURI());
     else clone->setNs(srcEl->ns());
+    clone->setQualifiedName(srcEl->qualifiedName());
 
     for (const auto& [name, val] : srcEl->attributes()) {
         if (!preserveId && name == "id") continue;

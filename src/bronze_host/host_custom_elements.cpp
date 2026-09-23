@@ -113,8 +113,8 @@ static ev::CallResult runCustomElementConstructor(dom::Element* el, const Custom
                             ev::fromDouble(static_cast<double>(reinterpret_cast<uintptr_t>(st))));
         }
         ev::setProperty(customVal, "nodeType", ev::fromDouble(1));
-        ev::setProperty(customVal, "tagName", ev::fromUtf8(el->tagName()));
-        ev::setProperty(customVal, "nodeName", ev::fromUtf8(el->tagName()));
+        ev::setProperty(customVal, "tagName", ev::fromUtf8(el->domTagName()));
+        ev::setProperty(customVal, "nodeName", ev::fromUtf8(el->domTagName()));
         ev::setProperty(customVal, kUpgradedMarker, ev::fromBool(true));
     }
     return res;
@@ -277,8 +277,8 @@ Value constructCustomElementBase(Value newObject) {
                         ev::fromDouble(static_cast<double>(reinterpret_cast<uintptr_t>(st))));
     }
     ev::setProperty(self.get(), "nodeType", ev::fromDouble(1));
-    ev::setProperty(self.get(), "tagName", ev::fromUtf8(el->tagName()));
-    ev::setProperty(self.get(), "nodeName", ev::fromUtf8(el->tagName()));
+    ev::setProperty(self.get(), "tagName", ev::fromUtf8(el->domTagName()));
+    ev::setProperty(self.get(), "nodeName", ev::fromUtf8(el->domTagName()));
     ev::setProperty(self.get(), kUpgradedMarker, ev::fromBool(true));
     return self.get();
 }

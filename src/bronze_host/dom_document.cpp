@@ -160,20 +160,47 @@ Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
     // createElementNS(ns, qualifiedName): the namespace is argument 0 (null /
     // undefined / "" are the null namespace) and a `prefix:` is dropped from
     // the local name the element is made with.
+    //
+    // Only createElement lower-cases (it makes HTML elements in an HTML
+    // document). createElementNS keeps the qualified name EXACTLY as given —
+    // `linearGradient` stays camelCase in tagName and localName, as the SVG
+    // paint path and every SVG library expect — while the engine's internal
+    // key (dom::Element::tagName) is still the case-folded local name.
     const bool withNs = tagIndex == 1;
     std::string nsUri;
+    const std::string qualifiedName = tag;
     if (withNs) {
         Value nsV = argAt(a, 0);
         if (!ev::isNull(nsV) && !ev::isUndefined(nsV)) nsUri = ev::toUtf8(nsV);
         size_t colon = tag.find(':');
-        if (colon != std::string::npos) tag = tag.substr(colon + 1);
+        if (colon != std::string::npos) {
+            // DOM "validate and extract": a prefix needs a namespace, and
+            // xml / xmlns prefixes need theirs.
+            const std::string prefix = tag.substr(0, colon);
+            if (nsUri.empty() ||
+                (prefix == "xml" && nsUri != "http://www.w3.org/XML/1998/namespace") ||
+                (prefix == "xmlns" && nsUri != "http://www.w3.org/2000/xmlns/")) {
+                return ev::throwValue(hostMakeDomError(
+                    "NamespaceError", "createElementNS: '" + qualifiedName +
+                                          "' has a prefix its namespace does not allow"));
+            }
+            tag = tag.substr(colon + 1);
+        }
+        if (tag.empty()) {
+            return ev::throwValue(hostMakeDomError(
+                "InvalidCharacterError", "createElementNS: '" + qualifiedName +
+                                             "' is not a valid qualified name"));
+        }
     }
     for (char& ch : tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     dom::Document* doc = documentFor(fixed);
     if (!doc) return ev::throwError("bronze host: engine has no document");
     dom::Element* el = doc->createElement(tag);
     if (!el) return ev::throwError("bronze host: createElement failed");
-    if (withNs) el->setNamespaceURI(nsUri);
+    if (withNs) {
+        el->setNamespaceURI(nsUri);
+        el->setQualifiedName(qualifiedName);
+    }
     Value customVal = constructCustomElement(el, tag);
     if (!ev::isUndefined(customVal)) {
         return customVal;

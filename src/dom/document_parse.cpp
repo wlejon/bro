@@ -164,7 +164,19 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
             auto* childElem = allocateNode<Element>(tagStr);
             childElem->setDocument(this);
             switch (child->v.element.tag_namespace) {
-                case GUMBO_NAMESPACE_SVG: childElem->setNs(Element::Namespace::SVG); break;
+                case GUMBO_NAMESPACE_SVG: {
+                    childElem->setNs(Element::Namespace::SVG);
+                    // The HTML parser's SVG tag-name adjustment (§13.2.6.5):
+                    // `lineargradient` in any case is `linearGradient`. The
+                    // engine key stays upper-cased; this is the DOM's name.
+                    std::string lower = tagStr;
+                    for (char& c : lower)
+                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    GumboStringPiece piece{lower.data(), lower.size()};
+                    const char* adjusted = gumbo_normalize_svg_tagname(&piece);
+                    childElem->setQualifiedName(adjusted ? std::string(adjusted) : lower);
+                    break;
+                }
                 case GUMBO_NAMESPACE_MATHML: childElem->setNs(Element::Namespace::MathML); break;
                 default: break;
             }
