@@ -203,7 +203,14 @@ APP_ARG="$(to_win_path "$APP")"
 run_case() {
     rm -f "$APP/app$EXT"
     [[ -n "$2" ]] && cp "$2" "$APP/app$EXT"
-    "$BIN" "$APP_ARG" -e "1" 2>&1 | tr -d '\r'
+    # stdout (the module's own prints) and stderr (the engine log, written from
+    # several threads) are captured apart and printed one after the other: one
+    # merged pipe lets a line from one land inside a line of the other, and a
+    # searched-for string split that way reads as missing.
+    local err="$WORK/run_case.err"
+    "$BIN" "$APP_ARG" -e "1" 2>"$err" | tr -d '\r'
+    tr -d '\r' < "$err"
+    rm -f "$err"
 }
 
 check() {  # name, module-path-or-empty, must-contain, [must-not-contain]

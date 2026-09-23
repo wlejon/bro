@@ -213,16 +213,20 @@ bh_ensure_module() {
 #   --expr <js>        run `-e <js>` instead of `-e advanceTime(frames*16)`
 #   --driver <file>    run under a driver script instead of -e — the only mode
 #                      that can produce a click
-#   --split-streams    capture stderr separately and diff TWO blocks: the
-#                      compiled app's `APP ` lines from stdout in order, then
-#                      the interpreted `PAGE `/`DRV ` console lines from the
-#                      engine log in order. The two are different OS streams
-#                      with different buffers, so their INTERLEAVING is not
-#                      something a byte-for-byte expectation may depend on —
-#                      each stream's own order is. Causality across the
-#                      boundary survives the split because it is carried in
-#                      the payload rather than in the interleaving.
-#   --two-block        the same two-block cut, from one merged 2>&1 stream
+#   --two-block        diff TWO blocks: the compiled app's `APP ` lines in
+#                      order, then the `PAGE `/`DRV ` console lines in order
+#                      (stdout's, then the engine log's). Causality across the
+#                      two survives because it is carried in the payload
+#                      rather than in the interleaving.
+#   --split-streams    the old name for --two-block; the same cut
+#
+# stdout and stderr are ALWAYS captured apart, never merged with 2>&1. The
+# app's console (brokit's log sink) is stdout, block-buffered into a pipe; the
+# engine log is stderr, written by whichever thread logs — the net service's
+# "hosting on port" line lands from its own thread mid-run. Merged into one
+# pipe, a stdout buffer flush can split an `APP ` line at any byte and an
+# engine line lands inside it, so the check failed on output that was right.
+# Each stream's own order is sound; their interleaving never is.
 #   --pre-clean <str>  rm -f these space-separated CWD-relative files first
 #                      (drivers that call screenshot() write into the CWD)
 #   --run-in <dir>     cd there for the run (the video probe writes its
@@ -235,14 +239,14 @@ bh_ensure_module() {
 # mode expands each newline, and the expectations are byte-for-byte.
 bh_run_check() {
     local name="$1" appdir="$2" probe="$3" expected="$4"; shift 4
-    local frames=8 expr="" driver="" split=0 twoblock=0 preclean="" runin=""
+    local frames=8 expr="" driver="" twoblock=0 preclean="" runin=""
     local diffhead=60 quietpass=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --frames)        frames="$2";   shift 2 ;;
             --expr)          expr="$2";     shift 2 ;;
             --driver)        driver="$2";   shift 2 ;;
-            --split-streams) split=1;       shift ;;
+            --split-streams) twoblock=1;    shift ;;
             --two-block)     twoblock=1;    shift ;;
             --pre-clean)     preclean="$2"; shift 2 ;;
             --run-in)        runin="$2";    shift 2 ;;
@@ -285,34 +289,28 @@ bh_run_check() {
     if [[ -n "$driver" ]]; then cmd+=("$(bh_to_win_path "$driver")")
     else cmd+=(-e "$expr"); fi
 
+    # Two captures, never one merged 2>&1 pipe (see the note above the option
+    # list): an engine line from another thread must not be able to land
+    # inside an app line.
     local raw err_raw="" status
-    if [[ $split -eq 1 ]]; then
-        local err_file="${TMPDIR:-/tmp}/${name}_err.$$"
-        if [[ -n "$runin" ]]; then raw="$(cd "$runin" && "${cmd[@]}" 2>"$err_file")"
-        else raw="$("${cmd[@]}" 2>"$err_file")"; fi
-        status=$?
-        err_raw="$(cat "$err_file" 2>/dev/null || true)"
-        rm -f "$err_file"
-    else
-        if [[ -n "$runin" ]]; then raw="$(cd "$runin" && "${cmd[@]}" 2>&1)"
-        else raw="$("${cmd[@]}" 2>&1)"; fi
-        status=$?
-    fi
+    local err_file="${TMPDIR:-/tmp}/${name}_err.$$"
+    if [[ -n "$runin" ]]; then raw="$(cd "$runin" && "${cmd[@]}" 2>"$err_file")"
+    else raw="$("${cmd[@]}" 2>"$err_file")"; fi
+    status=$?
+    err_raw="$(cat "$err_file" 2>/dev/null || true)"
+    rm -f "$err_file"
 
-    # `APP ` is the app's own prefix; everything else on the stream is engine
-    # log, which is neither deterministic nor this check's business. The
-    # interpreted halves log as `[hh:mm:ss.mmm] [INFO] [console] <text>`, and
-    # the timestamp is stripped — it is the one part that differs every run.
+    # `APP ` is the app's own prefix, printed by the app's console on stdout;
+    # the engine log on stderr is neither deterministic nor this check's
+    # business. The interpreted halves log as
+    # `[hh:mm:ss.mmm] [INFO] [console] <text>`, and the timestamp is stripped —
+    # it is the one part that differs every run.
     local clean_out clean_err app_lines js_lines actual
     clean_out="$(printf '%s\n' "$raw" | tr -d '\r')"
+    clean_err="$(printf '%s\n' "$err_raw" | tr -d '\r')"
     app_lines="$(printf '%s\n' "$clean_out" | sed -n 's/^\(.*\[INFO\]  \)*\(APP .*\)$/\2/p' || true)"
-    if [[ $split -eq 1 ]]; then
-        clean_err="$(printf '%s\n' "$err_raw" | tr -d '\r')"
+    if [[ $twoblock -eq 1 ]]; then
         js_lines="$(printf '%s\n%s\n' "$clean_out" "$clean_err" \
-            | sed -n 's/^\(.*\[\(console\|INFO\)\][ ]*\)*\(\(PAGE\|DRV\) .*\)$/\3/p' || true)"
-        actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
-    elif [[ $twoblock -eq 1 ]]; then
-        js_lines="$(printf '%s\n' "$clean_out" \
             | sed -n 's/^\(.*\[\(console\|INFO\)\][ ]*\)*\(\(PAGE\|DRV\) .*\)$/\3/p' || true)"
         actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
     else
@@ -321,9 +319,7 @@ bh_run_check() {
 
     if [[ $status -ne 0 ]]; then
         echo "  FAIL  $name  (exit $status)"
-        local diag="$clean_out"
-        [[ $split -eq 1 ]] && diag="$clean_err"
-        printf '%s\n' "$diag" | tail -20 | sed 's/^/        /'
+        printf '%s\n%s\n' "$clean_out" "$clean_err" | tail -20 | sed 's/^/        /'
         return 1
     fi
 

@@ -144,7 +144,11 @@ carrying the interpreted `console.log`s is stderr. Two streams, two buffers, so
 their interleaving is not something a byte-for-byte expectation may depend on.
 Each stream's own order is pinned, and causality across the boundary survives
 the split because it is carried in the payload rather than in the interleaving.
-`bh_run_check`'s `--split-streams` option says the same at the code.
+`bh_run_check`'s `--two-block` option says the same at the code. For the same
+reason every check captures the two streams apart, never through one merged
+`2>&1` pipe: there, an engine log line from another thread (the net service's
+"hosting on port" line) could land inside an `APP ` line and fail a check
+whose output was right.
 
 ## Why the expectation is only booleans and integers
 
