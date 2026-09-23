@@ -240,6 +240,15 @@ if (!scene) {
     } catch (e) { threw = true; }
     assert(threw, 'createSkinnedMesh with mismatched skin vertex count throws');
 
+    // `data:` is an alias of `mesh:` for a Mesh object (createMesh takes both).
+    const stripMesh = new Mesh({ positions, normals, indices });
+    for (const key of ['data', 'mesh']) {
+        const n = scene.createSkinnedMesh({ [key]: stripMesh, skin, color: 'red' });
+        assert(n && n.type === 'skinnedMesh' && n.skinReady === true,
+               'createSkinnedMesh({' + key + ': Mesh}) builds a ready skinned node');
+        n.visible = false;
+    }
+
     const plainMesh = scene.createMesh({ mesh: 'box', color: 'blue' });
     assert(plainMesh.boneCount === 0, 'plain mesh boneCount 0');
     assert(plainMesh.skinReady === false, 'plain mesh skinReady false');

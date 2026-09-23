@@ -87,6 +87,38 @@
     typed('frameIndex', isSprite,
         (n) => __bro_native.scene.SceneNode_frameIndex_get(n),
         (n, v) => __bro_native.scene.SceneNode_frameIndex_set(n, v | 0));
+    const isShapeOrSprite = (node) => { const t = typeOf(node); return t === 'shape' || t === 'sprite'; };
+    const isHtml = (node) => typeOf(node) === 'html';
+    typed('anchorX', isShapeOrSprite,
+        (n) => __bro_native.scene.SceneNode_anchorX_get(n),
+        (n, v) => __bro_native.scene.SceneNode_anchor_set(n, +v, __bro_native.scene.SceneNode_anchorY_get(n)));
+    typed('anchorY', isShapeOrSprite,
+        (n) => __bro_native.scene.SceneNode_anchorY_get(n),
+        (n, v) => __bro_native.scene.SceneNode_anchor_set(n, __bro_native.scene.SceneNode_anchorX_get(n), +v));
+    typed('cornerRadius', isShape,
+        (n) => __bro_native.scene.SceneNode_cornerRadius_get(n),
+        (n, v) => __bro_native.scene.SceneNode_cornerRadius_set(n, +v));
+    typed('pxPerUnit', isHtml,
+        (n) => __bro_native.scene.SceneNode_pxPerUnit_get(n),
+        (n, v) => __bro_native.scene.SceneNode_pxPerUnit_set(n, +v));
+    typed('staticBatch', isInstanced,
+        (n) => __bro_native.scene.SceneNode_staticBatch_get(n),
+        (n, v) => __bro_native.scene.SceneNode_staticBatch_set(n, !!v));
+    // Read-only: the atlas grid is set with setAtlasGrid / the atlasCols,
+    // atlasRows or atlas create options.
+    accessor(SceneNode.prototype, 'atlasCols', function () {
+        return isInstanced(this) ? __bro_native.scene.SceneNode_atlasCols_get(this) : 0;
+    }, undefined);
+    accessor(SceneNode.prototype, 'atlasRows', function () {
+        return isInstanced(this) ? __bro_native.scene.SceneNode_atlasRows_get(this) : 0;
+    }, undefined);
+    // The Jolt body id a physics node drives from; null with no body,
+    // undefined on other node types.
+    accessor(SceneNode.prototype, 'bodyId', function () {
+        if (!isPhysics(this)) return undefined;
+        const id = __bro_native.scene.SceneNode_bodyId_get(this);
+        return id < 0 ? null : id;
+    }, undefined);
     // billboard is a base-node field (drawn by Shape/Sprite/Html): 'full' | 'ylock'.
     accessor(SceneNode.prototype, 'billboard',
         function () { return __bro_native.scene.SceneNode_billboard_get(this); },
@@ -162,6 +194,13 @@
         if (opts.frameIndex !== undefined && isSprite(node)) node.frameIndex = opts.frameIndex;
         if (opts.autoSync !== undefined && isPhysics(node)) node.autoSync = opts.autoSync;
         if (opts.pixelsPerUnit !== undefined && isPhysics(node)) node.pixelsPerUnit = opts.pixelsPerUnit;
+        if (isHtml(node)) {
+            // createHtmlNode's native takes html/size/transform; the rest are
+            // node attributes.
+            if (opts.pxPerUnit !== undefined) node.pxPerUnit = opts.pxPerUnit;
+            if (opts.worldAnchor !== undefined) node.worldAnchor = opts.worldAnchor;
+            if (typeof opts.name === 'string') node.name = opts.name;
+        }
         if (isInstanced(node)) {
             if (opts.atlas && typeof opts.atlas === 'object') {
                 const cols = opts.atlas.cols !== undefined ? opts.atlas.cols : opts.atlas.columns;

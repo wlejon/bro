@@ -166,6 +166,25 @@ void* bro_scene_SceneGraph_createHtmlNode(void* self, bool opts_html_given, cons
                           static_cast<float>(opts_position[1]),
                           static_cast<float>(opts_position[2]));
     }
+    // rotation: a quaternion [x,y,z,w], or a bare number = Z rotation (the
+    // SceneNode.rotation setter's two spellings). scale: [x,y,z] or uniform.
+    if (opts_rotation && opts_rotation_len >= 4) {
+        node->setRotation(bromath::Quat(static_cast<float>(opts_rotation[0]),
+                                        static_cast<float>(opts_rotation[1]),
+                                        static_cast<float>(opts_rotation[2]),
+                                        static_cast<float>(opts_rotation[3])));
+    } else if (opts_rotation && opts_rotation_len == 1) {
+        auto e = node->rotationEuler();
+        node->setRotationEuler(e.x, e.y, static_cast<float>(opts_rotation[0]));
+    }
+    if (opts_scale && opts_scale_len >= 3) {
+        node->setScale(static_cast<float>(opts_scale[0]),
+                       static_cast<float>(opts_scale[1]),
+                       static_cast<float>(opts_scale[2]));
+    } else if (opts_scale && opts_scale_len == 1) {
+        const float s = static_cast<float>(opts_scale[0]);
+        node->setScale(s, s, s);
+    }
     if (opts_visible_given) node->setVisible(opts_visible);
     return wrapNode(node, g);
 }
@@ -625,7 +644,7 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneGraph_readTonemapPixels", (void*)&bro_scene_SceneGraph_readTonemapPixels, "u8[]", {"__bro_native.scene.SceneGraph"}, error) &&
            fn("__bro_native.scene.SceneGraph_createMesh", (void*)&bro_scene_SceneGraph_createMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            fn("__bro_native.scene.SceneGraph_createSkinnedMesh", (void*)&bro_scene_SceneGraph_createSkinnedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
-           fn("__bro_native.scene.SceneGraph_createInstancedMesh", (void*)&bro_scene_SceneGraph_createInstancedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str", "dynamic"}, error) &&
+           fn("__bro_native.scene.SceneGraph_createInstancedMesh", (void*)&bro_scene_SceneGraph_createInstancedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            fn("__bro_native.scene.SceneGraph_createShape", (void*)&bro_scene_SceneGraph_createShape, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
            fn("__bro_native.scene.SceneGraph_createSprite", (void*)&bro_scene_SceneGraph_createSprite, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&
            fn("__bro_native.scene.SceneGraph_createPhysicsNode", (void*)&bro_scene_SceneGraph_createPhysicsNode, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "str"}, error) &&

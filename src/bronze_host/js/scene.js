@@ -831,7 +831,7 @@
     fn(SceneGraph.prototype, "createInstancedMesh", function createInstancedMesh(opts) {
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;
         const meshObj = (opts && opts.mesh && typeof opts.mesh !== 'string') ? opts.mesh : null;
-        const node = __bro_native.scene.SceneGraph_createInstancedMesh(this, opts ? JSON.stringify(opts) : "", meshObj);
+        const node = __bro_native.scene.SceneGraph_createInstancedMesh(this, opts || {}, meshObj);
         if (!node) return undefined;
         applyNodeOpts(node, opts);
         if (opts) {

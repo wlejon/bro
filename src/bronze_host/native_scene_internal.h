@@ -465,7 +465,7 @@ void bro_scene_SceneGraph_setCanvasSize(void* self, double w, double h);
 void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* out);
 void* bro_scene_SceneGraph_createMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
-void* bro_scene_SceneGraph_createInstancedMesh(void* self, const char* jsonOpts, uint64_t meshHandle);
+void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, uint64_t meshHandle);
 void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts);
 void* bro_scene_SceneGraph_createPhysicsNode(void* self, const char* jsonOpts);

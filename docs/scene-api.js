@@ -90,7 +90,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 
 /**
  * @typedef {Object} MeshNodeOptions
- * @property {Mesh} [mesh]
+ * @property {Mesh|string} [mesh] - A Mesh object, or a primitive name ('box', 'sphere', ...).
+ * @property {Mesh} [data] - Alias of `mesh` for a Mesh object.
  * @property {string} [material]
  * @property {string} [castShadow]
  * @property {string} [receiveShadow]
@@ -117,7 +118,8 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 
 /**
  * @typedef {Object} SkinnedMeshNodeOptions
- * @property {Mesh} [mesh]
+ * @property {Mesh} [mesh] - A Mesh object (or raw `positions`/`indices`/... streams as in MeshGeometry).
+ * @property {Mesh} [data] - Alias of `mesh` for a Mesh object.
  * @property {SkinData} [skin]
  * @property {Skeleton} [skeleton]
  * @property {string} [material]
@@ -132,6 +134,23 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {Mesh} [mesh]
  * @property {number} [capacity]
  * @property {string} [material]
+ * @property {Float32Array} [instances] - 16 floats (column-major matrix) per instance
+ * @property {Float32Array} [instancesFromTransforms] - 9 floats per instance
+ * @property {string|Array<number>} [color]
+ * @property {number} [metallic]
+ * @property {number} [roughness]
+ * @property {number} [emissive]
+ * @property {string|Array<number>} [emissiveColor]
+ * @property {boolean} [unlit]
+ * @property {number} [alphaCutoff]
+ * @property {boolean} [vertexColorTint]
+ * @property {boolean} [doubleSided]
+ * @property {boolean} [castsShadow]
+ * @property {boolean} [receivesShadow]
+ * @property {{width: number, height: number, data: Uint8Array}} [texture] - also normalTexture, metallicRoughnessTexture, occlusionTexture, emissiveTexture
+ * @property {number} [atlasCols] - atlas grid columns (the other defaults to 1)
+ * @property {number} [atlasRows] - atlas grid rows
+ * @property {boolean} [staticBatch] - merge all instances into one draw
  * @property {Array<number>} [position]
  * @property {Array<number>} [rotation]
  * @property {Array<number>} [scale]
@@ -152,12 +171,57 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
 /**
  * @typedef {Object} HtmlNodeOptions
  * @property {string} [html]
+ * @property {string} [name]
+ * @property {number} [width=200] - layout width in DOM pixels
+ * @property {number} [height=50]
+ * @property {number} [pxPerUnit=100] - DOM pixels per world unit
+ * @property {Array<number>} [worldAnchor] - [x, y, z] world point the billboard follows
+ * @property {string} [billboard] - 'full' | 'ylock'
+ * @property {Array<number>} [position]
+ * @property {Array<number>|number} [rotation] - quaternion [x, y, z, w], or a number = Z rotation
+ * @property {Array<number>|number} [scale] - [x, y, z], or a number = uniform
+ * @property {boolean} [visible]
+ */
+
+/**
+ * @typedef {Object} ShapeNodeOptions
+ * @property {string} [shape='rect'] - 'rect' | 'roundrect' | 'circle' | 'ellipse' | 'polygon' | 'line'
+ * @property {string} [name]
  * @property {number} [width]
  * @property {number} [height]
- * @property {Array<number>} [position]
- * @property {Array<number>} [rotation]
- * @property {Array<number>} [scale]
- * @property {boolean} [visible]
+ * @property {number} [radius] - circle
+ * @property {number} [cornerRadius] - roundrect
+ * @property {number} [radiusX] - ellipse
+ * @property {number} [radiusY]
+ * @property {Array<number>} [points] - polygon, flat [x0, y0, x1, y1, ...]
+ * @property {string} [fill] - CSS colour
+ * @property {string} [stroke] - CSS colour
+ * @property {number} [strokeWidth]
+ * @property {number} [anchorX=0.5]
+ * @property {number} [anchorY=0.5]
+ * @property {number} [x]
+ * @property {number} [y]
+ * @property {Array<number>} [worldAnchor]
+ * @property {string} [billboard] - 'full' | 'ylock'
+ */
+
+/**
+ * @typedef {Object} SpriteNodeOptions
+ * @property {string} [name]
+ * @property {string} [src] - image path (app-relative or a mount path)
+ * @property {number} [width]
+ * @property {number} [height]
+ * @property {number} [opacity]
+ * @property {number} [anchorX=0.5]
+ * @property {number} [anchorY=0.5]
+ * @property {{frameWidth?: number, frameHeight?: number, columns?: number, rows?: number, frames?: Array<{x: number, y: number, w: number, h: number}>}} [sheet]
+ * @property {Object<string, {frames: Array<number>, fps?: number, loop?: boolean, next?: string}>} [animations]
+ * @property {string} [play] - animation to start
+ * @property {number} [frameIndex]
+ * @property {number} [x]
+ * @property {number} [y]
+ * @property {Array<number>} [worldAnchor]
+ * @property {string} [billboard] - 'full' | 'ylock'
  */
 
 /**
@@ -224,6 +288,54 @@ class SceneNode {
    * @type {boolean}
    */
   visible;
+
+  /**
+   *  Shape / Sprite: the anchor point in [0,1] (0.5, 0.5 = centred). Undefined on other nodes.
+   * @type {number}
+   */
+  anchorX;
+
+  /** @type {number} */
+  anchorY;
+
+  /**
+   *  Shape: rounded-rect corner radius. Undefined on other nodes.
+   * @type {number}
+   */
+  cornerRadius;
+
+  /**
+   *  HtmlNode: DOM pixels per world unit (default 100). Undefined on other nodes.
+   * @type {number}
+   */
+  pxPerUnit;
+
+  /**
+   *  InstancedMesh: collapse every instance into one merged draw (kills the
+   *  per-instance GPU cost of many tiny meshes; base-colour-only materials).
+   *  Undefined on other nodes.
+   * @type {boolean}
+   */
+  staticBatch;
+
+  /**
+   *  InstancedMesh: the atlas grid set by `setAtlasGrid` / the `atlasCols`,
+   *  `atlasRows` or `atlas` options (1x1 by default); 0 on other nodes.
+   * @readonly
+   * @type {number}
+   */
+  atlasCols;
+
+  /** @readonly @type {number} */
+  atlasRows;
+
+  /**
+   *  PhysicsNode: the Jolt body id it follows (the `bodyId` create option),
+   *  null with no body; undefined on other nodes.
+   * @readonly
+   * @type {number|null}
+   */
+  bodyId;
 
   /**
    * @type {number}
@@ -735,13 +847,13 @@ class SceneGraph {
   createNode(opts) {}
 
   /**
-   * @param {Object} [opts]
+   * @param {ShapeNodeOptions} [opts]
    * @returns {SceneNode}
    */
   createShape(opts) {}
 
   /**
-   * @param {Object} [opts]
+   * @param {SpriteNodeOptions} [opts]
    * @returns {SceneNode}
    */
   createSprite(opts) {}

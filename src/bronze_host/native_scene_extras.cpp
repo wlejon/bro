@@ -269,6 +269,67 @@ void bro_scene_SceneNode_frameIndex_set(void* self, int32_t v) {
     if (auto* s = spriteOf(self)) s->setFrameIndex(v);
 }
 
+// ---- anchorX / anchorY (Shape, Sprite) ------------------------------------
+double bro_scene_SceneNode_anchorX_get(void* self) {
+    if (auto* s = shapeOf(self)) return s->anchorX();
+    if (auto* s = spriteOf(self)) return s->anchorX();
+    return 0.5;
+}
+double bro_scene_SceneNode_anchorY_get(void* self) {
+    if (auto* s = shapeOf(self)) return s->anchorY();
+    if (auto* s = spriteOf(self)) return s->anchorY();
+    return 0.5;
+}
+void bro_scene_SceneNode_anchor_set(void* self, double ax, double ay) {
+    if (auto* s = shapeOf(self)) s->setAnchor(static_cast<float>(ax), static_cast<float>(ay));
+    else if (auto* s = spriteOf(self)) s->setAnchor(static_cast<float>(ax), static_cast<float>(ay));
+}
+
+// ---- cornerRadius (Shape) -------------------------------------------------
+double bro_scene_SceneNode_cornerRadius_get(void* self) {
+    auto* s = shapeOf(self);
+    return s ? s->cornerRadius() : 0.0;
+}
+void bro_scene_SceneNode_cornerRadius_set(void* self, double v) {
+    if (auto* s = shapeOf(self)) s->setCornerRadius(static_cast<float>(v));
+}
+
+// ---- pxPerUnit (Html) -----------------------------------------------------
+double bro_scene_SceneNode_pxPerUnit_get(void* self) {
+    auto* n = nodeOf(self);
+    return (n && n->type() == scene::SceneNode::Type::Html) ? static_cast<scene::HtmlNode*>(n)->pxPerUnit() : 0.0;
+}
+void bro_scene_SceneNode_pxPerUnit_set(void* self, double v) {
+    auto* n = nodeOf(self);
+    if (n && n->type() == scene::SceneNode::Type::Html && v > 0.0) {
+        static_cast<scene::HtmlNode*>(n)->setPxPerUnit(static_cast<float>(v));
+    }
+}
+
+// ---- bodyId (Physics): the Jolt body id, -1 with no body ------------------
+double bro_scene_SceneNode_bodyId_get(void* self) {
+    auto* p = physicsOf(self);
+    if (!p || !p->hasBody()) return -1.0;
+    return static_cast<double>(p->bodyId().GetIndexAndSequenceNumber());
+}
+
+// ---- atlasCols / atlasRows / staticBatch (InstancedMesh) ------------------
+int32_t bro_scene_SceneNode_atlasCols_get(void* self) {
+    auto* im = instancedOf(self);
+    return im ? im->atlasCols() : 0;
+}
+int32_t bro_scene_SceneNode_atlasRows_get(void* self) {
+    auto* im = instancedOf(self);
+    return im ? im->atlasRows() : 0;
+}
+bool bro_scene_SceneNode_staticBatch_get(void* self) {
+    auto* im = instancedOf(self);
+    return im ? im->staticBatch() : false;
+}
+void bro_scene_SceneNode_staticBatch_set(void* self, bool v) {
+    if (auto* im = instancedOf(self)) im->setStaticBatch(v);
+}
+
 // ---- InstancedMesh operations ---------------------------------------------
 void bro_scene_SceneNode_updateInstance(void* self, int32_t index, const float* data, uint32_t len) {
     auto* im = instancedOf(self);
@@ -425,7 +486,19 @@ bool registerSceneExtraNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_setScatterSegments", (void*)&bro_scene_SceneNode_setScatterSegments, "void", {N, "f32[]", "f32[]", "f64[]", "f32[]"}, error) &&
            fn("__bro_native.scene.SceneNode_setTubeSegments", (void*)&bro_scene_SceneNode_setTubeSegments, "void", {N, "f32[]", "i32", "f64", "f32[]"}, error) &&
            fn("__bro_native.scene.SceneNode_isScatter", (void*)&bro_scene_SceneNode_isScatter, "bool", {N}, error) &&
-           fn("__bro_native.scene.SceneNode_isTube", (void*)&bro_scene_SceneNode_isTube, "bool", {N}, error);
+           fn("__bro_native.scene.SceneNode_isTube", (void*)&bro_scene_SceneNode_isTube, "bool", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_anchorX_get", (void*)&bro_scene_SceneNode_anchorX_get, "f64", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_anchorY_get", (void*)&bro_scene_SceneNode_anchorY_get, "f64", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_anchor_set", (void*)&bro_scene_SceneNode_anchor_set, "void", {N, "f64", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_cornerRadius_get", (void*)&bro_scene_SceneNode_cornerRadius_get, "f64", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_cornerRadius_set", (void*)&bro_scene_SceneNode_cornerRadius_set, "void", {N, "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_pxPerUnit_get", (void*)&bro_scene_SceneNode_pxPerUnit_get, "f64", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_pxPerUnit_set", (void*)&bro_scene_SceneNode_pxPerUnit_set, "void", {N, "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_bodyId_get", (void*)&bro_scene_SceneNode_bodyId_get, "f64", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_atlasCols_get", (void*)&bro_scene_SceneNode_atlasCols_get, "i32", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_atlasRows_get", (void*)&bro_scene_SceneNode_atlasRows_get, "i32", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_staticBatch_get", (void*)&bro_scene_SceneNode_staticBatch_get, "bool", {N}, error) &&
+           fn("__bro_native.scene.SceneNode_staticBatch_set", (void*)&bro_scene_SceneNode_staticBatch_set, "void", {N, "bool"}, error);
 }
 
 }  // namespace bro::bronze_host

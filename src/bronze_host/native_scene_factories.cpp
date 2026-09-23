@@ -138,6 +138,73 @@ void applyMeshMaterialOpts(scene::MeshNode* node, Value opts) {
     applyTex("emissiveTexture",          &scene::MeshNode::setEmissiveTexture);
 }
 
+// The createInstancedMesh option surface the old binding read: material,
+// texture maps, the atlas grid and static batching. Transform / name keys
+// are applied by the JS wrapper's applyNodeOpts, the instance buffers by
+// setInstances, and scatter / tube by js/scene_extras.js.
+void applyInstancedOpts(scene::InstancedMeshNode* node, Value opts) {
+    float cr = 1, cg = 1, cb = 1, ca = 1;
+    if (parseColorValue(ev::getProperty(opts, "color"), cr, cg, cb, ca)) node->setColor(cr, cg, cb, ca);
+
+    Value emissVal = ev::getProperty(opts, "emissive");
+    const float emissive = ev::isNumber(emissVal) ? static_cast<float>(ev::toDouble(emissVal)) : 0.0f;
+    if (ev::isNumber(emissVal)) node->setEmissive(emissive);
+    float er = 1, eg = 1, eb = 1, ea = 1;
+    if (parseColorValue(ev::getProperty(opts, "emissiveColor"), er, eg, eb, ea)) {
+        node->setEmissiveColor(er, eg, eb);
+    } else if (emissive > 0.0f) {
+        const float* c = node->color();
+        node->setEmissiveColor(c[0], c[1], c[2]);
+    }
+
+    auto num = [&](const char* k, auto&& set) {
+        Value v = ev::getProperty(opts, k);
+        if (ev::isNumber(v)) set(static_cast<float>(ev::toDouble(v)));
+    };
+    auto flag = [&](const char* k, auto&& set) {
+        Value v = ev::getProperty(opts, k);
+        if (!ev::isUndefined(v)) set(ev::toBool(v));
+    };
+    num("metallic", [&](float v) { node->setMetallic(v); });
+    num("roughness", [&](float v) { node->setRoughness(v); });
+    num("alphaCutoff", [&](float v) { node->setAlphaCutoff(v); });
+    flag("unlit", [&](bool v) { node->setUnlit(v); });
+    flag("vertexColorTint", [&](bool v) { node->setVertexColorTint(v); });
+    flag("doubleSided", [&](bool v) { node->setDoubleSided(v); });
+    flag("castsShadow", [&](bool v) { node->setCastsShadow(v); });
+    flag("receivesShadow", [&](bool v) { node->setReceivesShadow(v); });
+
+    auto applyTex = [&](const char* key, void (scene::InstancedMeshNode::*setter)(int, int, const uint8_t*)) {
+        Value tex = ev::getProperty(opts, key);
+        if (!ev::isObject(tex)) return;
+        Value wV = ev::getProperty(tex, "width");
+        Value hV = ev::getProperty(tex, "height");
+        if (!ev::isNumber(wV) || !ev::isNumber(hV)) return;
+        const int w = static_cast<int>(ev::toDouble(wV));
+        const int h = static_cast<int>(ev::toDouble(hV));
+        auto info = ev::typedArrayInfo(ev::getProperty(tex, "data"));
+        if (info && w > 0 && h > 0 && info.byteLength >= static_cast<size_t>(w) * static_cast<size_t>(h) * 4) {
+            (node->*setter)(w, h, info.data);
+        }
+    };
+    applyTex("texture",                  &scene::InstancedMeshNode::setBaseColorTexture);
+    applyTex("normalTexture",            &scene::InstancedMeshNode::setNormalTexture);
+    applyTex("metallicRoughnessTexture", &scene::InstancedMeshNode::setMetallicRoughnessTexture);
+    applyTex("occlusionTexture",         &scene::InstancedMeshNode::setOcclusionTexture);
+    applyTex("emissiveTexture",          &scene::InstancedMeshNode::setEmissiveTexture);
+
+    // Atlas grid: either key alone defaults the other to 1.
+    Value acVal = ev::getProperty(opts, "atlasCols");
+    Value arVal = ev::getProperty(opts, "atlasRows");
+    if (ev::isNumber(acVal) || ev::isNumber(arVal)) {
+        node->setAtlasGrid(ev::isNumber(acVal) ? static_cast<int>(ev::toDouble(acVal)) : 1,
+                           ev::isNumber(arVal) ? static_cast<int>(ev::toDouble(arVal)) : 1);
+    }
+
+    // Collapse every instance into one merged draw (InstancedMeshNode::setStaticBatch).
+    flag("staticBatch", [&](bool v) { node->setStaticBatch(v); });
+}
+
 }  // namespace bro::bronze_host
 
 extern "C" {
@@ -290,13 +357,16 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
         }
     }
 
-    // 2. Mesh object or primitive name
+    // 2. Mesh object (`mesh` or its `data` alias) or primitive name
     Value meshProp = ev::getProperty(opts, "mesh");
     if (!hasRaw && meshData.positions.empty()) {
-        if (ev::isObject(meshProp)) {
-            if (const auto* md = bromesh::api::meshDataOf(meshProp)) {
+        Value dataProp = ev::getProperty(opts, "data");
+        for (Value cand : {meshProp, dataProp}) {
+            if (!ev::isObject(cand)) continue;
+            if (const auto* md = bromesh::api::meshDataOf(cand)) {
                 meshData = *md;
                 hasRaw = true;
+                break;
             }
         }
     }
@@ -374,7 +444,7 @@ void* bro_scene_SceneGraph_createSkinnedMesh(void* self, uint64_t optsBits, uint
     return wrapNode(node, g);
 }
 
-void* bro_scene_SceneGraph_createInstancedMesh(void* self, const char* jsonOpts, uint64_t meshVal) {
+void* bro_scene_SceneGraph_createInstancedMesh(void* self, uint64_t optsBits, uint64_t meshVal) {
     auto* g = graphOf(self);
     if (!g) return nullptr;
     auto* node = g->createInstancedMesh();
@@ -382,6 +452,8 @@ void* bro_scene_SceneGraph_createInstancedMesh(void* self, const char* jsonOpts,
     if (const auto* srcMesh = bromesh::api::meshDataOf(bronze::Value{meshVal})) {
         node->setMesh(*srcMesh);
     }
+    Value opts = ev::fromBits(optsBits);
+    if (ev::isObject(opts)) applyInstancedOpts(node, opts);
     return wrapNode(node, g);
 }
 
@@ -393,14 +465,53 @@ void* bro_scene_SceneGraph_createShape(void* self, const char* jsonOpts) {
         try {
             auto j = nlohmann::json::parse(jsonOpts);
             if (j.contains("name") && j["name"].is_string()) node->setName(j["name"].get<std::string>());
-            if (j.contains("width") && j.contains("height")) {
-                node->setSize(j["width"].get<float>(), j["height"].get<float>());
+            if (j.contains("shape") && j["shape"].is_string()) {
+                const std::string s = j["shape"].get<std::string>();
+                using S = scene::ShapeNode::Shape;
+                if (s == "rect") node->setShape(S::Rect);
+                else if (s == "roundrect") node->setShape(S::RoundRect);
+                else if (s == "circle") node->setShape(S::Circle);
+                else if (s == "ellipse") node->setShape(S::Ellipse);
+                else if (s == "polygon") node->setShape(S::Polygon);
+                else if (s == "line") node->setShape(S::Line);
+            }
+            auto num = [&](const char* k, float def) -> float {
+                return (j.contains(k) && j[k].is_number()) ? j[k].get<float>() : def;
+            };
+            if (j.contains("width") || j.contains("height")) {
+                node->setSize(num("width", 0.0f), num("height", 0.0f));
+            }
+            if (j.contains("radius") && j["radius"].is_number()) node->setRadius(num("radius", 0.0f));
+            if (j.contains("cornerRadius") && j["cornerRadius"].is_number()) {
+                node->setCornerRadius(num("cornerRadius", 0.0f));
+            }
+            if (j.contains("radiusX") || j.contains("radiusY")) {
+                node->setRadii(num("radiusX", 0.0f), num("radiusY", 0.0f));
             }
             if (j.contains("fill") && j["fill"].is_string()) {
                 float r = 1, g = 1, b = 1, a = 1;
                 if (parseHexOrCssColor(j["fill"].get<std::string>(), r, g, b, a)) {
                     node->setFillColor(bromath::Color{r, g, b, a});
                 }
+            }
+            if (j.contains("stroke") && j["stroke"].is_string()) {
+                float r = 1, g = 1, b = 1, a = 1;
+                if (parseHexOrCssColor(j["stroke"].get<std::string>(), r, g, b, a)) {
+                    node->setStrokeColor(bromath::Color{r, g, b, a});
+                }
+            }
+            if (j.contains("strokeWidth") && j["strokeWidth"].is_number()) {
+                node->setStrokeWidth(num("strokeWidth", 0.0f));
+                node->setHasStroke(true);
+            }
+            if (j.contains("anchorX") || j.contains("anchorY")) {
+                node->setAnchor(num("anchorX", 0.5f), num("anchorY", 0.5f));
+            }
+            if (j.contains("points") && j["points"].is_array()) {
+                std::vector<float> pts;
+                pts.reserve(j["points"].size());
+                for (const auto& p : j["points"]) pts.push_back(p.is_number() ? p.get<float>() : 0.0f);
+                node->setPoints(pts);
             }
             if (j.contains("worldAnchor")) {
                 const auto& wa = j["worldAnchor"];
@@ -449,8 +560,31 @@ void* bro_scene_SceneGraph_createSprite(void* self, const char* jsonOpts) {
                     }
                 }
             }
-            if (j.contains("width") && j.contains("height")) node->setSize(j.value("width", 0.0f), j.value("height", 0.0f));
+            // The explicit-frame form of `sheet`: { frames: [{x,y,w,h}, ...] }.
+            if (j.contains("sheet") && j["sheet"].is_object() && j["sheet"].contains("frames") &&
+                j["sheet"]["frames"].is_array()) {
+                std::vector<scene::SpriteNode::Frame> frames;
+                for (const auto& f : j["sheet"]["frames"]) {
+                    if (!f.is_object()) continue;
+                    scene::SpriteNode::Frame fr{};
+                    fr.x = f.value("x", 0.0f);
+                    fr.y = f.value("y", 0.0f);
+                    fr.w = f.value("w", 0.0f);
+                    fr.h = f.value("h", 0.0f);
+                    frames.push_back(fr);
+                }
+                node->setSheetFrames(std::move(frames));
+            }
+            if (j.contains("name") && j["name"].is_string()) node->setName(j["name"].get<std::string>());
+            if (j.contains("src") && j["src"].is_string()) {
+                node->setImagePath(bro::util::resolveAssetPath(j["src"].get<std::string>()));
+            }
+            if (j.contains("width") || j.contains("height")) node->setSize(j.value("width", 0.0f), j.value("height", 0.0f));
             if (j.contains("opacity")) node->setOpacity(j.value("opacity", 1.0f));
+            if (j.contains("anchorX") || j.contains("anchorY")) {
+                node->setAnchor(j.value("anchorX", 0.5f), j.value("anchorY", 0.5f));
+            }
+            if (j.contains("play") && j["play"].is_string()) node->play(j["play"].get<std::string>());
         } catch (const std::exception& e) {
             LOG_WARN("SceneGraph.createSprite: failed to parse jsonOpts: %s", e.what());
         } catch (...) {
