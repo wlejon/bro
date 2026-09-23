@@ -59,8 +59,10 @@ void installGlobalPrototype(const char* ctorName) {
     ev::setPrototype(proto.get(), base.get());
 
     // proto[Symbol.toStringTag] = ctorName, non-enumerable, as WebIDL does.
-    ev::GlobalValue symG = ev::globalValue("Symbol");
+    // defineProperty first: its lookup allocates, and a GlobalValue read
+    // before it would name the pre-collection address of Symbol.
     ev::Persistent defineProperty(objectStatic(objectCtor, "defineProperty"));
+    ev::GlobalValue symG = ev::globalValue("Symbol");
     if (symG.found && ev::isObject(symG.value) && ev::isFunction(defineProperty.get())) {
         ev::Persistent symbolCtor(symG.value);
         ev::Persistent tagKey(ev::getProperty(symbolCtor.get(), "toStringTag"));
