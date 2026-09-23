@@ -517,6 +517,12 @@ class SkeletonRig {
   /** @readonly @type {number} */
   landmarkCount;
 
+  /** @readonly @type {number} attachment sockets the spec declares */
+  socketCount;
+
+  /** @readonly @type {boolean} whether fitting enforces left/right mirror symmetry */
+  symmetric;
+
   /** @returns {string} the spec as JSON text */
   toJSON() {}
 
@@ -583,8 +589,9 @@ Rig.fitSkeleton = function(spec, landmarks, mesh) {};
  * supplied — quadruped detection when the spec is named 'quadruped',
  * humanoid otherwise.
  *
- * The only weighting knobs the binding reads are `method` and
- * `smoothIterations`; per-method sub-objects are not plumbed through.
+ * Each per-method block (`voxel`, `boneHeat`, `bbw`) is read independently,
+ * so a caller can set all three and switch `method`; only the block matching
+ * the method used is consulted.
  *
  * @param {Mesh} mesh
  * @param {SkeletonRig|Object} [specOrOpts]
@@ -594,7 +601,15 @@ Rig.fitSkeleton = function(spec, landmarks, mesh) {};
  * @param {string} [opts.rigType] -  used when no `spec` is given.
  * @param {Landmarks|Object} [opts.landmarks]
  * @param {string} [opts.method] -  'auto' | 'voxelBind' | 'boneHeat' | 'bbw'.
- * @param {number} [opts.smoothIterations]
+ * @param {number} [opts.smoothIterations=2] -  Laplacian smoothing passes on the final skin (all methods).
+ * @param {number} [opts.smoothAlpha=0.5]
+ * @param {number} [opts.minWeight=0.001] -  top-K pruner threshold.
+ * @param {{maxResolution?: number, maxInfluences?: number, falloffPower?: number, minWeight?: number, smoothIterations?: number, smoothAlpha?: number}} [opts.voxel]
+ *   voxelBind: grid resolution (96), influences per vertex (4), falloff exponent (4), its own smoothing.
+ * @param {{maxInfluences?: number, minWeight?: number, heatStrength?: number, solverTol?: number, solverMaxIter?: number}} [opts.boneHeat]
+ *   boneHeat: influences (4), heat-source strength (1.0), CG tolerance (1e-7) / iteration cap (2000).
+ * @param {{maxInfluences?: number, minWeight?: number, anchorsPerBone?: number, eps?: number, maxIter?: number}} [opts.bbw]
+ *   bbw: influences (4), anchors per bone (3), OSQP tolerance (1e-4) / iteration cap (5000).
  * @returns {AutoRigResult}
  *
  * @example
@@ -605,13 +620,24 @@ Rig.fitSkeleton = function(spec, landmarks, mesh) {};
 Rig.autoRig = function(mesh, specOrOpts, landmarks, opts) {};
 
 /**
- *  A synthesized walk / run cycle for a fitted skeleton. `gait` is a gait NAME
- *  string; the richer parameter object is native-only. Global `Rig` only; not
+ *  A synthesized walk / run cycle for a fitted skeleton. `params` is a gait
+ *  NAME string, or the parameter object below. Global `Rig` only; not
  *  forwarded onto `bro.rigging`.
- * @param {Skeleton} skeleton @param {SkeletonRig} spec @param {string} [gait]
+ * @param {Skeleton} skeleton @param {SkeletonRig} spec
+ * @param {string|Object} [params]
+ * @param {number} [params.strideLength=0.3] -  world units per stride.
+ * @param {number} [params.cycleDuration=1.0] -  seconds; the clip's duration.
+ * @param {number} [params.footLiftHeight=0.08]
+ * @param {number} [params.keyframesPerCycle=24]
+ * @param {number} [params.bodyBobAmplitude=0.02] -  0 disables the root bob.
+ * @param {number} [params.armSwingAmplitude=0.35] -  radians; 0 disables.
+ * @param {Array<number>} [params.forwardAxis=[0,0,1]]
+ * @param {Array<number>} [params.upAxis=[0,1,0]]
+ * @param {string|{name?: string, phases?: Array<number>, dutyFactor?: number}} [params.gait]
+ *   gait name, or per-leg phase offsets in [0,1) and the stance fraction (0.6).
  * @returns {AnimationClip}
  */
-Rig.generateLocomotionCycle = function(skeleton, spec, gait) {};
+Rig.generateLocomotionCycle = function(skeleton, spec, params) {};
 
 /** Alias of `SkinData.transfer`. @returns {SkinData} */
 Rig.transferWeights = function(targetMesh, sourceMesh, sourceSkin, maxDistance) {};

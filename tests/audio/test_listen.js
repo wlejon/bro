@@ -58,6 +58,9 @@ if (bro.listen.available === false) {
     assert(typeof stream.wake === "object" && stream.wake !== null, "stream.wake view exists");
     assert(typeof stream.sense === "object" && stream.sense !== null, "stream.sense view exists");
     assert(typeof stream.gesture === "object" && stream.gesture !== null, "stream.gesture view exists");
+    // KwsStreamView.listening: the pre-bronze spelling of `active`.
+    assert(stream.kws.listening === false, "stream.kws.listening is false before listen()");
+    assert(stream.kws.listening === stream.kws.active, "kws.listening mirrors kws.active");
 
     // Stream retention and feed
     stream.retain(2);

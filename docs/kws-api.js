@@ -103,10 +103,18 @@
 class KwsStreamView {
 
   /**
+   *  Whether this stream is listening (between `listen()` and `stop()`).
    * @readonly
    * @type {boolean}
    */
   active;
+
+  /**
+   *  Alias of `active` (the original spelling).
+   * @readonly
+   * @type {boolean}
+   */
+  listening;
 
   /**
    * @param {string} name

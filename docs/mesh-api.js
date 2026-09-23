@@ -971,6 +971,9 @@ class ProgressiveMesh {
   /** @readonly @type {number} triangles once every collapse is applied */
   minTriangles;
 
+  /** @readonly @type {number} edge collapses in the recorded sequence */
+  collapseCount;
+
   /** @param {number} ratio -  0..1 of `maxTriangles`. @returns {Mesh} */
   atRatio(ratio) {}
 

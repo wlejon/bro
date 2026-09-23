@@ -97,6 +97,15 @@ class TripoSplatPipeline {
   device;
 
   /**
+   * True when a BiRefNet matte model was loaded (`load({ birefnet })`), i.e.
+   * generate() can isolate the subject. Lets a UI gate a "remove background"
+   * control.
+   * @readonly
+   * @type {boolean}
+   */
+  backgroundRemoval;
+
+  /**
    * Reconstruct a Gaussian cloud from a single image. Blocking; the result is
    * also retained on the handle for exportPLY(path) / exportSplat(path).
    *
@@ -112,6 +121,9 @@ class TripoSplatPipeline {
    * @param {number} [opts.numGaussians=131072] target splat count, rounded down to a
    *        multiple of the decoder's Gaussians-per-point (32); 32768–262144 is the
    *        useful range
+   * @param {boolean} [opts.removeBackground] replace the image's alpha with the
+   *        BiRefNet matte before encoding. Default: on when `backgroundRemoval`
+   *        is true; pass false for an already-masked input.
    * @returns {SplatCloud|{cancelled: true}}
    */
   generate(image, opts) {}
@@ -180,6 +192,8 @@ bro.triposplat.init = function() {};
  * @param {string} paths.vae      Flux.2 VAE encoder safetensors (brodiffusion weights)
  * @param {string} paths.flow     flow-DiT safetensors (brodiffusion weights)
  * @param {string} paths.decoder  octree Gaussian decoder safetensors (brodiffusion weights)
+ * @param {string} [paths.birefnet] optional BiRefNet (Swin-L) matte safetensors
+ *        (brovisionml weights); enables background removal in generate().
  * @param {string} [paths.device] 'cuda' | 'metal' | 'cpu'. Default: the best backend
  *        brotensor reports available.
  * @returns {TripoSplatPipeline}

@@ -80,3 +80,8 @@ assert(bytes instanceof Uint8Array, 'serialized to Uint8Array');
 assert(bytes.length > 0, 'serialized bytes non-empty');
 const pm2 = ProgressiveMesh.deserialize(bytes);
 assert(pm2.maxTriangles === pm.maxTriangles, 'deserialized pm preserves max');
+
+// collapseCount: the recorded edge-collapse sequence.
+assert(typeof pm.collapseCount === 'number' && pm.collapseCount > 0,
+       'pm.collapseCount counts the collapses, got ' + pm.collapseCount);
+assert(pm2.collapseCount === pm.collapseCount, 'deserialized pm preserves collapseCount');

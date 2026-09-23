@@ -107,4 +107,56 @@
     assert(typeof anim.duration === 'number', 'locomotion has duration');
 }
 
+// ── RigSpec.symmetric / socketCount ────────────────────────────────────────
+{
+    const s = Rig.spec('humanoid');
+    assert(s.symmetric === true, 'built-in humanoid spec is symmetric');
+    assert(typeof s.socketCount === 'number' && s.socketCount >= 0, 'socketCount is a number');
+    const j = JSON.parse(s.toJSON());
+    j.symmetric = false;
+    assert(Rig.specFromJSON(JSON.stringify(j)).symmetric === false, 'symmetric follows the JSON');
+    assert(Rig.spec('nope').symmetric === false, 'an empty spec is not symmetric');
+}
+
+// ── autoRig per-method sub-options reach the weighting ──────────────────────
+{
+    const mesh = Mesh.capsule(0.3, 1.0, 16, 8);
+    const spec = Rig.spec('humanoid');
+    const lm   = Rig.detectHumanoid(mesh);
+    // Weights as a fingerprint: equal runs agree exactly, and a sub-option
+    // that changes the algorithm's input changes the result.
+    const weightsOf = (r) => Array.from(r.skin.boneWeights);
+    const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+    const base = { method: 'voxelBind', smoothIterations: 0 };
+    const w96  = weightsOf(Rig.autoRig(mesh, spec, lm, Object.assign({ voxel: { maxResolution: 96 } }, base)));
+    const w96b = weightsOf(Rig.autoRig(mesh, spec, lm, Object.assign({ voxel: { maxResolution: 96 } }, base)));
+    const w12  = weightsOf(Rig.autoRig(mesh, spec, lm, Object.assign({ voxel: { maxResolution: 12 } }, base)));
+    const wFall = weightsOf(Rig.autoRig(mesh, spec, lm, Object.assign({ voxel: { falloffPower: 16 } }, base)));
+    assert(same(w96, w96b), 'voxelBind is deterministic');
+    assert(!same(w96, w12), 'voxel.maxResolution reaches the voxel binder');
+    assert(!same(w96, wFall), 'voxel.falloffPower reaches the voxel binder');
+    // The top-level smoothing keys still apply after the method.
+    const wSmooth = weightsOf(Rig.autoRig(mesh, spec, lm, { method: 'voxelBind', smoothIterations: 6, smoothAlpha: 0.9 }));
+    assert(!same(w96, wSmooth), 'smoothIterations / smoothAlpha reach the post-pass');
+    // The options-object form (mesh, { spec, landmarks, ... }) reads the same blocks.
+    const wObj = weightsOf(Rig.autoRig(mesh, Object.assign({ spec, landmarks: lm, voxel: { maxResolution: 12 } }, base)));
+    assert(same(wObj, w12), 'options-object form reads the voxel block');
+}
+
+// ── generateLocomotionCycle params reach the cycle ──────────────────────────
+{
+    const mesh = Mesh.capsule(0.3, 1.0, 16, 8);
+    const spec = Rig.spec('humanoid');
+    const skel = Rig.fitSkeleton(spec, Rig.detectHumanoid(mesh), mesh);
+    const a1 = Rig.generateLocomotionCycle(skel, spec, { cycleDuration: 1.0 });
+    const a2 = Rig.generateLocomotionCycle(skel, spec, { cycleDuration: 2.5, strideLength: 0.5,
+                                                          gait: { name: 'walk', dutyFactor: 0.7 } });
+    const a3 = Rig.generateLocomotionCycle(skel, spec, 'walk');
+    if (a1.duration > 0) {
+        assert(Math.abs(a1.duration - 1.0) < 1e-3, 'cycleDuration 1.0 -> duration ' + a1.duration);
+        assert(Math.abs(a2.duration - 2.5) < 1e-3, 'cycleDuration 2.5 -> duration ' + a2.duration);
+    }
+    assert(typeof a3.duration === 'number', 'a gait-name string is still accepted');
+}
+
 console.log('PASS test_rig');

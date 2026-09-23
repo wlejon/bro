@@ -58,5 +58,14 @@ if (bro.triposplat.available === false) {
     assert(String(err.message).includes('triposplat.load failed'),
            'second failed load errors identically');
 
+    // ── backgroundRemoval: a prototype accessor (true once load({birefnet})) ─
+    const TSP = bro.triposplat.TripoSplatPipeline;
+    assert(typeof TSP === 'function', 'bro.triposplat.TripoSplatPipeline is exposed');
+    const bgDesc = Object.getOwnPropertyDescriptor(TSP.prototype, 'backgroundRemoval');
+    assert(bgDesc && typeof bgDesc.get === 'function',
+           'TripoSplatPipeline.prototype.backgroundRemoval is an accessor');
+    assert(TSP.prototype.backgroundRemoval === false,
+           'backgroundRemoval reads false off a non-pipeline receiver');
+
     console.log('bro.triposplat binding contract OK (weights-free)');
 }
