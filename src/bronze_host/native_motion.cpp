@@ -1,8 +1,8 @@
 // native_motion.cpp — bro.motion: ARDY-G1 text-to-motion over brodiffusion's
 // ardy pipeline and brolm's LLM2Vec text encoder. The C entry points are the
-// ones idl/motion.idl declares (natives/motion/native_motion_decl.h); the
-// dictionary result of generate() sits in a per-thread slot that the generated
-// wrapper reads member by member right after the call.
+// ones natives/motion/native_motion_decl.h declares; the dictionary result of
+// generate() sits in a per-thread slot that js/motion.js reads member by
+// member right after the call.
 //
 // The pipeline is a port of the QuickJS-era motion_bindings.cpp: load() builds
 // the denoiser + FSQ decoder + generator from an ARDY checkpoint directory and

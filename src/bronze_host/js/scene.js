@@ -513,8 +513,6 @@
         const d_opts = opts === undefined ? {} : opts;
         return __bro_native.scene.SceneGraph_createParticles(this, d_opts.maxParticles !== undefined, d_opts.maxParticles === undefined ? 0 : d_opts.maxParticles, d_opts.texture !== undefined, d_opts.texture === undefined ? '' : d_opts.texture, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.visible !== undefined, d_opts.visible === undefined ? false : d_opts.visible);
     });
-    // [manual] bro.scene.SceneGraph.prototype.createParticles3D: operation (opts) — no native is generated; hand-written JS
-    // installs it on SceneGraph.prototype after this module has run.
     fn(SceneGraph.prototype, "createDecal", function createDecal(opts) {
         const d_opts = opts === undefined ? {} : opts;
         let sz = d_opts.size;
@@ -765,18 +763,12 @@
         if (screenPoint === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.unprojectLocal: screenPoint is required");
         return Array.from(__bro_native.scene.SceneGraph_unprojectLocal(this, node, toF64(screenPoint)));
     });
-    // [manual] bro.scene.SceneGraph.prototype.toImageData: operation () — no native is generated; hand-written JS
-    // installs it on SceneGraph.prototype after this module has run.
-    // [manual] bro.scene.SceneGraph.prototype.captureFrame: operation (format, quality) — no native is generated; hand-written JS
-    // installs it on SceneGraph.prototype after this module has run.
-    // [manual] bro.scene.SceneGraph.prototype.asTexture: operation () — no native is generated; hand-written JS
-    // installs it on SceneGraph.prototype after this module has run.
     fn(SceneGraph.prototype, "bindAudioListenerToCamera", function bindAudioListenerToCamera(bind) {
         if (bind === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.bindAudioListenerToCamera: bind is required");
         __bro_native.scene.SceneGraph_bindAudioListenerToCamera(this, bind);
     });
-    // [manual] bro.scene.SceneGraph.prototype.attachAIWorld: operation (aiWorld, opts) — no native is generated; hand-written JS
-    // installs it on SceneGraph.prototype after this module has run.
+    // attachAIWorld is installed from C++ on the native SceneGraph prototype
+    // (installSceneGraphAgent, host_scene_agent.cpp).
     fn(SceneGraph.prototype, "detachAIWorld", function detachAIWorld() {
         __bro_native.scene.SceneGraph_detachAIWorld(this);
     });

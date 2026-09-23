@@ -23,13 +23,13 @@ void popActiveWorld() {
 
 bool registerNatives_physics(std::string* error);
 
-// Physics.setMotionType is [manual] in the IDL: the public member takes
-// 'static' | 'dynamic' | 'kinematic' or a boolean, the native takes the
+// Physics.setMotionType is hand-written in js/physics.js: the public member
+// takes 'static' | 'dynamic' | 'kinematic' or a boolean, the native takes the
 // boolean, and js/physics.js maps between them. So the native is declared
-// and registered here, not in the generated natives/physics/ pair.
+// and registered here, not in the natives/physics/ pair.
 extern "C" void bro_physics_setMotionType(int32_t tag, bool isStatic);
 
-// Physics.moveKinematic is [manual] in the IDL for the same reason: the public
+// Physics.moveKinematic is hand-written in js/physics.js for the same reason: the public
 // member has always taken either (tag, x, y, z, dt) or (tag, x, y, z, qx, qy,
 // qz, qw, dt) — the QuickJS binding dispatched on argc — and a native has one
 // arity, so each form is its own entry point and js/physics.js picks by the

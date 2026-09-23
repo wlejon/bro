@@ -55,7 +55,7 @@ done
 SIBLINGS=(
     bromath brokit htmlayout broaudio bromesh broflora
     brotensor brogameagent brolm brodiffusion broimage brosoundml brovisionml
-    brass bronze brosurface
+    brass bronze
 )
 
 # ANSI colors (disabled when not a tty).

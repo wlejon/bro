@@ -1,12 +1,12 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on sixteen sibling repos with submodule fallbacks under `third_party/`: thirteen libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the JavaScript runtime & AOT compiler), **[brass](https://github.com/wlejon/brass)** (the backend JIT/AOT compiler required by bronze), and **[brosurface](https://github.com/wlejon/brosurface)** (the WebIDL code generation toolchain).
+bro depends on fifteen sibling repos with submodule fallbacks under `third_party/`: thirteen libraries linked directly into the engine, **[bronze](https://github.com/wlejon/bronze)** (the JavaScript runtime & AOT compiler), and **[brass](https://github.com/wlejon/brass)** (the backend JIT/AOT compiler required by bronze).
 
 Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`. The configure that resolves bronze and brass reports which trees it picked (`bronze: standalone tree (...)` or `bronze: submodule tree (...)`) — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
 
 Eleven of the thirteen libraries (every one but bromath and htmlayout) also own their JavaScript binding, a `<name>_api` static library under the sibling's `src/api/`, so those siblings depend on bronze — and through it brass — which they did not before 2026-09-13. See [Sibling JavaScript APIs](#sibling-javascript-apis-name_api) below for what that changes.
 
-A seventeenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A sixteenth sibling repo, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library or CMake dependency. It's the apps tree (launcher, games, tools, demos, AI) with no submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library / Tool | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -25,7 +25,6 @@ A seventeenth sibling repo, **[broworkshop](https://github.com/wlejon/broworksho
 | **brovisionml** | `../brovisionml` | `third_party/brovisionml` |
 | **brass** (compiler backend, required) | `../brass` | `third_party/brass` |
 | **bronze** (JS runtime, mandatory) | `../bronze` | `third_party/bronze` |
-| **brosurface** (generator tool) | `../brosurface` | `third_party/brosurface` |
 
 ## Directory Layout
 
@@ -47,8 +46,7 @@ D:/projects/
 │       ├── brosoundml/           # submodule (CI / fallback)
 │       ├── brovisionml/          # submodule (CI / fallback)
 │       ├── brass/                # submodule (CI / fallback; backend for bronze)
-│       ├── bronze/               # submodule (CI / fallback; JS runtime)
-│       └── brosurface/           # submodule (CI / fallback)
+│       └── bronze/               # submodule (CI / fallback; JS runtime)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
 ├── htmlayout/                    # standalone repo (preferred for dev)
@@ -64,7 +62,6 @@ D:/projects/
 ├── brovisionml/                  # standalone repo (preferred for dev)
 ├── brass/                        # standalone repo (the backend JIT/AOT compiler)
 ├── bronze/                       # standalone repo (the AOT compiler)
-├── brosurface/                   # standalone repo (IDL code generation toolchain)
 └── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
 ```
 
@@ -148,7 +145,7 @@ Until 2026-09-13 the JavaScript surface of every sibling (`bro.mesh`, `bro.lm`, 
 
 **The public header is a trampoline.** `include/<name>/api.h` is two lines that include `../../src/api/api.h`, guarded by a named `#ifndef <NAME>_API_H` rather than `#pragma once`. The reason is in each header: every sibling ships this same two-line file, and GCC identifies a `#pragma once` header by content and mtime rather than path, so two siblings checked out in the same second make GCC silently skip the second include — and bro includes all of them from one file (`src/bronze_host/host_sibling_apis.cpp`). broflora is the odd one out: its entry is `include/broflora/api/api.h`, a real declaration under `#pragma once`, not a trampoline. brokit has no `include/` header; bro reaches its `api/api.h` through the target's include directories.
 
-**Siblings now depend on bronze and brass, and carry no fallback for either.** Each sibling's top-level `CMakeLists.txt` has an `if(NOT TARGET bronze_runtime_shared)` block that takes `-DBRONZE_DIR`, then `../bronze`, and is a `FATAL_ERROR` ("bronze not found") otherwise; it forces `BRONZE_BUILD_SHARED_RUNTIME=ON` and `BRONZE_BUILD_TESTS=OFF` before adding bronze `EXCLUDE_FROM_ALL`. (brotensor's block is the reference shape; the others still list a `third_party/bronze` candidate that no sibling has.) brass is resolved by bronze itself (`bronze/src/codegen-brass/CMakeLists.txt`: `BRASS_ROOT`, then `<bronze>/../brass`, then `<root>/../brass`, then `<root>/third_party/brass`) and **added with `add_subdirectory`**, so a brass checkout beside bronze is all it takes — nothing is pre-built — and brotensor's own kernel-JIT block then finds the `brass` target already there. **No sibling has a `third_party/bronze` or `third_party/brass` submodule**, so a sibling built standalone needs `../bronze` and `../brass` checked out beside it, and so does its CI. The resolution is unconditional in every sibling but broimage (which gates it under `BROIMAGE_ENABLE_API`), so `-D<NAME>_ENABLE_API=OFF` where that option exists does not remove the requirement.
+**Siblings now depend on bronze and brass, and carry no fallback for either.** Each sibling's top-level `CMakeLists.txt` has an `if(NOT TARGET bronze_runtime_shared)` block that takes `-DBRONZE_DIR`, then `../bronze`, and is a `FATAL_ERROR` ("bronze not found") otherwise; it forces `BRONZE_BUILD_SHARED_RUNTIME=ON` and `BRONZE_BUILD_TESTS=OFF` before adding bronze `EXCLUDE_FROM_ALL`. Every sibling carries the same block. brass is resolved by bronze itself (`bronze/src/codegen-brass/CMakeLists.txt`: `BRASS_ROOT`, then `<bronze>/../brass`, then `<root>/../brass`, then `<root>/third_party/brass`) and **added with `add_subdirectory`**, so a brass checkout beside bronze is all it takes — nothing is pre-built — and brotensor's own kernel-JIT block then finds the `brass` target already there. **No sibling has a `third_party/bronze` or `third_party/brass` submodule**, so a sibling built standalone needs `../bronze` and `../brass` checked out beside it, and so does its CI. The resolution is unconditional in every sibling but broimage (which gates it under `BROIMAGE_ENABLE_API`), so `-D<NAME>_ENABLE_API=OFF` where that option exists does not remove the requirement.
 
 Under bro the first sibling `third_party/CMakeLists.txt` adds resolves bronze from its own `../bronze` — `D:/projects/bronze` for a standalone checkout, `third_party/bronze` for a submodule, the same two trees bro would pick — and every later guard trips, bro's own in `src/bronze_host/CMakeLists.txt` included, which is what prints the `bronze: standalone tree` / `submodule tree` line for the tree actually in use. brass is added by bro's `third_party/CMakeLists.txt` before any sibling, so bronze's and brotensor's brass blocks never run inside bro.
 
@@ -240,9 +237,9 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, `brass`, `bronze`, and `brosurface`.
+Same shape for `bromath`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, `brovisionml`, `brass`, and `bronze`.
 
-## Status, pull, sync across all sixteen repos
+## Status, pull, sync across all fifteen repos
 
 `scripts/repo-status.ps1` (Windows) and `scripts/repo-status.sh` (Linux/macOS) are the same tool in two ports. Run either from anywhere; both resolve paths from the script location.
 

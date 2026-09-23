@@ -202,9 +202,8 @@ set(BRO_BRONZE_HOST_SOURCES
 # The physics and scene natives are bodies over src/physics and src/scene,
 # which a build without BRO_WITH_PHYSICS / BRO_WITH_3D does not configure at
 # all (src/CMakeLists.txt), so their headers — Jolt's, bromesh's — are not on
-# the include path. The generated natives/*/native_*_register.cpp files carry
-# no #if of their own (brosurface emits a gate only where the IDL declares
-# one), so the list is conditioned here, the way host_physics_stub.cpp and
+# the include path. The natives/*/native_*_register.cpp files carry no #if
+# of their own, so the list is conditioned here, the way host_physics_stub.cpp and
 # host_net_stub.cpp were before the natives moved. Without the flag nothing
 # registers (host_natives.h answers registerPhysicsNatives inline;
 # registerBroNatives skips the 3D families under #if BRO_WITH_3D), js/physics.js

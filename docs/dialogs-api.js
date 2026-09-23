@@ -4,7 +4,11 @@
  * =============================================================================
  *
  * Native open/save file dialogs backed by SDL3's portable file dialog API, plus
- * the browser's standard modal dialog trio (alert, confirm, prompt).
+ * the browser's standard modal dialog trio (alert, confirm, prompt). All six are
+ * globals (on `globalThis`), not members of `bro`.
+ *
+ * Every one of them blocks until the user answers, so never call one from a
+ * headless test: there is nobody to answer it.
  *
  * @example
  *   const files = showOpenFileDialog('Audio Files|wav;flac;mp3;ogg;opus');
@@ -18,47 +22,43 @@
  *   }
  */
 
-// ── Namespaces ───────────────────────────────────────────────────────────────
-
-/**
- * Native modal dialogs and file system pickers interface.
- */
 /**
  * @param {string} [message]
  */
-bro.dialogs.alert = function(message) {};
+function alert(message) {}
 
 /**
  * @param {string} [message]
  * @returns {boolean}
  */
-bro.dialogs.confirm = function(message) {};
+function confirm(message) {}
 
 /**
  * @param {string} [message]
  * @param {string} [defaultText]
- * @returns {string}
+ * @returns {string|null} The entered text, or null when cancelled.
  */
-bro.dialogs.prompt = function(message, defaultText) {};
+function prompt(message, defaultText) {}
 
 /**
- * @param {string} [filter]
+ * @param {string} [filter] `'Label|ext;ext'`. A filter SDL refuses is thrown
+ *   as a TypeError rather than returned.
  * @param {string} [defaultName]
- * @returns {string}
+ * @returns {string|null} The chosen path, or null when cancelled.
  */
-bro.dialogs.showSaveFileDialog = function(filter, defaultName) {};
+function showSaveFileDialog(filter, defaultName) {}
 
 /**
- * @param {string} [filter]
+ * @param {string} [filter] `'Label|ext;ext'`. A filter SDL refuses is thrown
+ *   as a TypeError rather than returned.
  * @param {boolean} [allowMultiple]
- * @returns {string}
+ * @returns {string[]} The chosen paths; empty when cancelled.
  */
-bro.dialogs.showOpenFileDialog = function(filter, allowMultiple) {};
+function showOpenFileDialog(filter, allowMultiple) {}
 
 /**
  * @param {string} [defaultLocation]
  * @param {boolean} [allowMultiple]
- * @returns {string}
+ * @returns {string[]} The chosen folders; empty when cancelled.
  */
-bro.dialogs.showOpenFolderDialog = function(defaultLocation, allowMultiple) {};
-
+function showOpenFolderDialog(defaultLocation, allowMultiple) {}

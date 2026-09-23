@@ -55,7 +55,7 @@ $ProjectsRoot = (Resolve-Path (Join-Path $BroRoot '..')).Path
 $Siblings = @(
     'bromath', 'brokit', 'htmlayout', 'broaudio', 'bromesh', 'broflora',
     'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml', 'brovisionml',
-    'brass', 'bronze', 'brosurface'
+    'brass', 'bronze'
 )
 
 # Run a git command in a repo, returning trimmed stdout (errors swallowed).

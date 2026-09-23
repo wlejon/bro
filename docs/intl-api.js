@@ -307,16 +307,16 @@ class DisplayNames {
 
 }
 
-// ── Namespaces ───────────────────────────────────────────────────────────────
+// ── The Intl global ──────────────────────────────────────────────────────────
+//
+// The classes above are members of the global `Intl` (Intl.NumberFormat, ...),
+// not of `bro`. The main realm has it; Worker realms do not yet.
 
-/**
- * Standard ECMA-402 internationalization namespace.
- */
 /**
  *  Normalizes BCP-47 language tag strings to canonical form.
  *
  * @param {*} [locales]
  * @returns {Array<string>}
  */
-bro.Intl.getCanonicalLocales = function(locales) {};
+Intl.getCanonicalLocales = function(locales) {};
 

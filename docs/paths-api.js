@@ -1,10 +1,11 @@
 /**
  * =============================================================================
- * bro.paths (bro.appDir / bro.resolvePath) — Application Filesystem Path Resolution
+ * bro.appDir / bro.userDataDir / bro.resolvePath — Filesystem Path Resolution
  * =============================================================================
  *
  * Resolves virtual asset mount paths and relative application asset paths into
  * absolute native filesystem paths suitable for external child processes and tools.
+ * These are members of `bro` itself; there is no `bro.paths` namespace.
  *
  * @example
  *   // Resolve application asset path to absolute filesystem path
@@ -17,24 +18,19 @@
  *   console.log('Real config path:', configPath);
  */
 
-// ── Namespaces ───────────────────────────────────────────────────────────────
-
-/**
- * Engine asset and application filesystem path resolution namespace.
- */
 /**
  * Absolute native filesystem path of the running application's root directory.
  * @readonly
  * @type {string}
  */
-bro.paths.appDir;
+bro.appDir;
 
 /**
  * Absolute native filesystem path for user data / save directory.
  * @readonly
  * @type {string}
  */
-bro.paths.userDataDir;
+bro.userDataDir;
 
 /**
  * Resolves a virtual mount path or relative application path to an absolute native filesystem path.
@@ -42,7 +38,7 @@ bro.paths.userDataDir;
  * @param {string} path - Input path string
  * @returns {string} Resolved absolute filesystem path
  */
-bro.paths.resolvePath = function(path) {};
+bro.resolvePath = function(path) {};
 
 /**
  * Resolves a path for writing.
@@ -50,5 +46,4 @@ bro.paths.resolvePath = function(path) {};
  * @param {string} path - Input path string
  * @returns {string} Resolved absolute filesystem path for write target
  */
-bro.paths.resolveWritePath = function(path) {};
-
+bro.resolveWritePath = function(path) {};

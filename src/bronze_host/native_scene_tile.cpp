@@ -322,7 +322,7 @@ void bro_tile_world_TileWorld_fillShade(void* self, int32_t x0, int32_t y0, int3
 void bro_tile_world_TileWorld_setShadeMapFloat(void* self, const float* data, uint32_t count);
 void bro_tile_world_TileWorld_setShadeMapBytes(void* self, const uint8_t* data, uint32_t count);
 double bro_tile_world_TileWorld_getShade(void* self, int32_t x, int32_t y);
-// [manual] in the IDL: bromesh mints `Mesh` as a host class, not a
+// Result typed `dynamic`: bromesh mints `Mesh` as a host class, not a
 // __bro_native.mesh class, so the result has no native class path to
 // register under and is declared `dynamic` here.
 void* bro_tile_world_TileWorld_extractVoxelMesh(void* self,
