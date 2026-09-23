@@ -41,6 +41,24 @@
 // counts accept 0 as a no-op. Primitive minimums: sphere/torus/cylinder/
 // capsule/cone/disk segments >= 3, sphere rings >= 2, capsule rings, cone
 // stacks and plane segments >= 1.
+//
+// Lists: a plain array or array-like the bindings copy element by element
+// (anywhere a Float32Array / Uint32Array or a list of points, segments,
+// capsules, contours or modules is accepted) is capped at 2^24 elements: a
+// longer `length` is a RangeError, raised before anything is sized by it.
+// Typed arrays are not affected. Seeds are integers in [0, max], where max
+// is 2^53 - 1 for the 64-bit seeds and the parameter type's maximum for the
+// narrower ones (`Mesh.rock` 2^31 - 1, `sampleSurface` 2^32 - 1): a
+// non-number is a TypeError, a negative, fractional, NaN or out-of-range one
+// a RangeError. (A negative seed used to wrap and seed like a large one.)
+//
+// Receivers and Mesh arguments are brand-checked: only a handle one of
+// bromesh's own classes made is read as that class. Another class's or
+// another library's handle, even one moved onto `Mesh.prototype` with
+// `Object.setPrototypeOf`, reads as no Mesh: a method called on it throws
+// TypeError ("not a Mesh instance") or gives its empty answer (a getter's
+// 0 / empty array), and a Mesh argument that is not a real Mesh is refused
+// (TypeError, or the method's no-mesh answer). Its payload is never read.
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
 
@@ -50,7 +68,9 @@
  * @property {Float32Array} [normals] -  xyz, stride 3; one per vertex.
  * @property {Float32Array} [uvs] -  uv, stride 2; one per vertex.
  * @property {Float32Array} [colors] -  rgba, stride 4; one per vertex.
- * @property {Uint32Array} [indices] -  triangle indices; length must be a multiple of 3.
+ * @property {Uint32Array} [indices] -  triangle indices; length must be a multiple of 3
+ *   (TypeError otherwise), and every index must name a vertex of `positions`
+ *   (RangeError otherwise).
  */
 
 /**
@@ -220,7 +240,10 @@ class Mesh {
   /**
    * Build from raw streams, either as an options object or positionally as
    * `(positions, normals, uvs, colors, indices)`. No argument gives an empty
-   * mesh.
+   * mesh. Either form range-checks the indices against the positions, as
+   * the `indices` setter does: an index past the last vertex is a
+   * RangeError (the routines index positions with it unchecked), and an
+   * index list whose length is not a multiple of 3 is a TypeError.
    *
    * @param {MeshOptions} [opts]
    *
@@ -235,7 +258,13 @@ class Mesh {
 
   // --- Attribute streams ----------------------------------------------------
 
-  /** @type {Float32Array} xyz, stride 3. */
+  /**
+   * xyz, stride 3. Setting fewer vertices than the current triangles
+   * reference clears the index list (triangleCount becomes 0), so a reused
+   * Mesh can be rebuilt as "positions, then indices" whether the vertex
+   * count grows or shrinks; setting at least as many keeps the triangles.
+   * @type {Float32Array}
+   */
   positions;
 
   /** @type {Float32Array} xyz, stride 3; one per vertex. */
@@ -414,7 +443,8 @@ class Mesh {
   /**
    *  Noise-displaced sphere. Present only in a par_shapes build. For a scaled
    *  and offset variant in one call see `Mesh.blob` (docs/mesh-plants-api.js).
-   * @param {number} [radius=1] @param {number} [seed=1] @param {number} [subdivisions=2]
+   * @param {number} [radius=1] @param {number} [seed=1] - An integer in [0, 2^31 - 1].
+   * @param {number} [subdivisions=2]
    * @returns {Mesh}
    */
   static rock(radius, seed, subdivisions) {}
@@ -724,6 +754,7 @@ class Mesh {
    *  Area-weighted point cloud over the surface, as a Mesh with positions (and
    *  normals/UVs when the source has them) and no indices.
    * @param {number} [count=100] @param {number} [seed=0] -  0 = non-deterministic.
+   *   An integer in [0, 2^32 - 1] (it used to wrap modulo 2^32).
    * @returns {Mesh}
    */
   sampleSurface(count, seed) {}

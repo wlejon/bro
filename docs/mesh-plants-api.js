@@ -18,6 +18,17 @@
 //   Vec2 list   Float32Array(2N) | [[x,y]...] | flat [x,y,x,y,...]
 //   float-like  a single number, or one entry per ring/sample
 //
+// Lists (docs/mesh-api.js has the general rule): a list longer than 2^24 is
+// a RangeError. Under that, a list is read entry by entry and never sized by
+// its claimed length first: a segment, capsule, sphere or module entry that
+// is not an object makes the list invalid (the method's TypeError), so an
+// array-like whose `length` lies costs nothing. `CapsuleField` / `capsuleField`
+// throw TypeError for such a capsule or sphere list instead of dropping the
+// rest of it. Seeds are integers in [0, max]: 2^53 - 1 for leaf placement,
+// `packAnchors` and `LSystem.derive*`, 2^31 - 1 for `blob` and `tree`. A
+// non-number is a TypeError; a negative, fractional, NaN or out-of-range
+// seed a RangeError.
+//
 // The usual pipeline:
 //   const segs = Mesh.spaceColonize(attractors, [[0,0,0]], [0,1,0], opts);
 //   Mesh.thickenBranches(segs, 0.02, 2.5);
@@ -103,7 +114,7 @@
 /**
  * @typedef {Object} MeshBlobOptions
  * @property {number} [radius] -  default 0.5.
- * @property {number} [seed] -  default 42.
+ * @property {number} [seed] -  default 42. An integer in [0, 2^31 - 1].
  * @property {number} [nsub] -  subdivisions 0..3, default 2.
  * @property {number|Array<number>} [scale] -  uniform, or per-axis.
  * @property {Array<number>} [center] -  translation baked into the positions.
@@ -191,7 +202,7 @@
  * @property {number} [sides] -  branch-tube ring resolution. Default 8.
  * @property {number} [leafRadius] -  tip radius for `thickenBranches`. Default 0.05.
  * @property {number} [pipeExp] -  pipe-model exponent. Default 2.5.
- * @property {number} [seed] -  default 1.
+ * @property {number} [seed] -  default 1. An integer in [0, 2^31 - 1].
  * @property {MeshSpaceColonizationOptions} [colonize] -  space-colonization tuning for the skeleton pass.
  */
 
@@ -222,7 +233,7 @@
  * @property {number} [obstacleClearance] -  extra clearance on every avoid test. Default 0.
  * @property {number} [obstaclePushout] -  push a rejected candidate this far along the nearest normal and retry once; 0 = hard reject. Default 0.
  * @property {Array<MeshSphere>} [keepOut] -  extra keep-out spheres, e.g. volume reserved for blooms.
- * @property {number} [seed] -  default 0.
+ * @property {number} [seed] -  default 0. An integer in [0, 2^53 - 1].
  */
 
 /**
@@ -244,7 +255,7 @@
  * @property {number} [minSpacing] -  minimum distance between accepted anchors; 0 disables. Default 0.
  * @property {number} [minObstacleDistance] -  ignored without `avoid`. Default 0.
  * @property {number} [maxCount] -  0 = unlimited. Default 0.
- * @property {number} [seed] -  seeds the candidate visit order. Default 0.
+ * @property {number} [seed] -  seeds the candidate visit order. Default 0. An integer in [0, 2^53 - 1].
  * @property {CapsuleField} [avoid]
  * @property {Array<MeshSphere>} [keepOut]
  */
@@ -615,13 +626,18 @@ class LSystem {
 
   /**
    *  Run `iterations` rewrite passes. Deterministic given `seed`.
-   * @param {number} iterations @param {number} [seed=0]
+   *  `iterations` is an integer in [0, 64]. The derived word is capped at
+   *  2^20 (1048576) modules: a growing rule (F -> FF doubles the word every
+   *  pass) that passes it is a RangeError naming the pass, rather than a
+   *  derivation that runs out of memory.
+   * @param {number} iterations @param {number} [seed=0] - An integer in [0, 2^53 - 1].
    * @returns {string} compact-form serialization of the derived modules
    */
   derive(iterations, seed) {}
 
   /**
    *  `derive` without the re-parse: the structured module list directly.
+   *  Same iteration, word-size and seed limits as `derive`.
    * @param {number} iterations @param {number} [seed=0]
    * @returns {Array<MeshLSystemModule>}
    */
