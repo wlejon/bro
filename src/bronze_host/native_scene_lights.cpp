@@ -819,7 +819,22 @@ void bro_scene_SceneNode_setCloud(void* self,
     if (rots && rotCount > 0) cloud.rotations.assign(rots, rots + rotCount);
     if (opacities && opCount > 0) cloud.opacities.assign(opacities, opacities + opCount);
     if (sh && shCount > 0) cloud.sh.assign(sh, sh + shCount);
-    cloud.shDegree = shDegree;
+    cloud.shDegree = std::clamp(shDegree, 0, 3);
+    // The splat pass reads every stream at each splat's index, so a cloud
+    // must be whole: N*3 positions, N*3 scales, N*4 rotations, N opacities
+    // and N*(deg+1)^2*3 sh. A missing or short stream was read past the end
+    // of its (possibly empty) vector.
+    const size_t count = cloud.count();
+    if (!cloud.empty() &&
+        (cloud.positions.size() % 3 != 0 ||
+         cloud.scales.size() != count * 3 ||
+         cloud.rotations.size() != count * 4 ||
+         cloud.opacities.size() != count ||
+         cloud.sh.size() != count * static_cast<size_t>(cloud.shStride()))) {
+        ev::throwTypeError("setCloud: positions (N*3), scales (N*3), rotations (N*4), "
+                           "opacities (N) and sh (N*(shDegree+1)^2*3) must all describe the same N splats");
+        return;
+    }
     sn->setCloud(std::move(cloud));
 }
 

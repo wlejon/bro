@@ -722,7 +722,7 @@
         if (typeof opts !== 'object') return false;
         const d_opts = opts;
         const pano = d_opts.panorama !== undefined ? d_opts.panorama : d_opts.hdr;
-        const rot = d_opts.rotation !== undefined ? d_opts.rotation : d_opts.blur;
+        const rot = d_opts.rotation;
         __bro_native.scene.SceneGraph_setEnvironment(this,
             pano !== undefined, pano === undefined ? '' : pano,
             d_opts.cubeMap !== undefined, d_opts.cubeMap === undefined ? '' : d_opts.cubeMap,
@@ -924,21 +924,28 @@
         return this;
     });
     accessor(SceneNode.prototype, "instanceCount", function () { return __bro_native.scene.SceneNode_instanceCount_get(this); }, undefined);
+    // RGBA bytes of an { data, width, height } image. A view keeps its own
+    // window of the buffer (ImageData.data, a subarray), not the whole buffer.
+    function rgbaBytes(d) {
+        if (d instanceof Uint8Array) return d;
+        if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+        return new Uint8Array(d);
+    }
     fn(SceneNode.prototype, "setBaseColorTexture", function setBaseColorTexture(src) {
         if (!src) { __bro_native.scene.SceneNode_clearBaseColorTexture(this); return this; }
         const scn = src._scene || (src instanceof SceneGraph ? src : null);
         if (scn) { __bro_native.scene.SceneNode_setBaseColorTextureFromScene(this, scn); return this; }
         if (src.data && src.width && src.height) {
-            const u8 = src.data instanceof Uint8Array ? src.data : new Uint8Array(src.data.buffer || src.data);
-            __bro_native.scene.SceneNode_setBaseColorTextureData(this, src.width, src.height, u8);
+            __bro_native.scene.SceneNode_setBaseColorTextureData(this, src.width, src.height, rgbaBytes(src.data));
             return this;
         }
         return this;
     });
     fn(SceneNode.prototype, "setEmissionTexture", function setEmissionTexture(src) {
         if (src && src.data && src.width && src.height) {
-            const u8 = src.data instanceof Uint8Array ? src.data : new Uint8Array(src.data.buffer || src.data);
-            __bro_native.scene.SceneNode_setEmissionTextureData(this, src.width, src.height, u8);
+            __bro_native.scene.SceneNode_setEmissionTextureData(this, src.width, src.height, rgbaBytes(src.data));
+        } else if (!src) {
+            __bro_native.scene.SceneNode_setEmissionTextureData(this, 0, 0, new Uint8Array(0));
         }
         return this;
     });
@@ -988,7 +995,7 @@
         }
         return { width: w, height: h, data };
     });
-    fn(SceneGraph.prototype, "setClearColor", function setClearColor(r, g, b, a) {
-        __bro_native.scene.SceneGraph_setEnvironment(this, false, '', false, '', toF64([r, g, b, a !== undefined ? a : 1]), true, 1.0, false, 0.0, true, true);
-    });
+    // No setClearColor: the scene clears to transparent and the canvas's CSS
+    // background shows through (docs/scene-api.js). The method that was here
+    // dropped its colour and only reset the environment intensity to 1.
 })();

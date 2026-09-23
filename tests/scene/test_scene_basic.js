@@ -20,9 +20,9 @@ if (!scene) {
         position: [2, 2, 2], target: [0, 0, 0], up: [0, 1, 0],
     });
 
-    // Ambient and clear
-    if (typeof scene.setClearColor === 'function')
-        scene.setClearColor(0.1, 0.1, 0.1, 1);
+    // The scene clears to transparent (the canvas CSS background shows
+    // through); there is no setClearColor that would pretend otherwise.
+    assert(typeof scene.setClearColor === 'undefined', 'no no-op setClearColor');
 
     // =====================================================================
     // Mesh primitives

@@ -271,6 +271,23 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
     if (!n || !name) return false;
     if (n->type() == scene::SceneNode::Type::Mesh) {
         auto* mn = static_cast<scene::MeshNode*>(n);
+        // The slot copies width * height * channels floats out of `data`: one
+        // channel for a new slot, the slot's own count for a sub-rect write
+        // (an engine-made slot, a clipmap surface say, is RGBA). A shorter
+        // array is refused rather than read past. A zero or negative extent
+        // is the documented release, which reads nothing.
+        uint64_t channels = 1;
+        if (isSub) {
+            for (const auto& t : mn->customShaderTextures()) {
+                if (t.name == name) { channels = static_cast<uint64_t>(std::max(t.channels, 1)); break; }
+            }
+        }
+        if (width > 0 && height > 0 && data &&
+            static_cast<uint64_t>(dataCount) <
+                static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * channels) {
+            ev::throwRangeError("setShaderTexture: data holds fewer than width * height * channels floats");
+            return false;
+        }
         if (isSub) {
             return mn->updateCustomShaderTexture(name, x, y, width, height, data);
         } else {
@@ -280,10 +297,32 @@ bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t 
     return false;
 }
 
+}  // extern "C"
+
+namespace {
+
+// An RGBA8 upload copies width * height * 4 bytes out of `data`: a shorter
+// array (or a size past the host buffer cap) throws instead of being read
+// past. A zero side is the clear, and reads nothing.
+bool rgbaUploadFits(const char* who, int32_t width, int32_t height, const uint8_t* data, uint32_t len) {
+    if (!data || width <= 0 || height <= 0) return true;
+    if (!rgbaBufferFits(width, height) ||
+        static_cast<uint64_t>(len) < static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 4u) {
+        ev::throwRangeError(std::string(who) + ": data holds fewer than width * height * 4 bytes");
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+extern "C" {
+
 void bro_scene_SceneNode_setBaseColorTextureData(void* self, int32_t width, int32_t height,
                                                  const uint8_t* data, uint32_t len) {
     auto* n = nodeOf(self);
     if (!n) return;
+    if (!rgbaUploadFits("setBaseColorTexture", width, height, data, len)) return;
     if (n->type() == scene::SceneNode::Type::Mesh) {
         auto* mn = static_cast<scene::MeshNode*>(n);
         if (data && width > 0 && height > 0) mn->setBaseColorTexture(width, height, data);
@@ -309,6 +348,7 @@ void bro_scene_SceneNode_setEmissionTextureData(void* self, int32_t width, int32
                                                 const uint8_t* data, uint32_t len) {
     auto* n = nodeOf(self);
     if (!n) return;
+    if (!rgbaUploadFits("setEmissionTexture", width, height, data, len)) return;
     if (n->type() == scene::SceneNode::Type::Decal) {
         auto* dn = static_cast<scene::DecalNode*>(n);
         if (data && width > 0 && height > 0) dn->setEmissionTexture(width, height, data);

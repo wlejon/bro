@@ -65,28 +65,49 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  */
 
 /**
+ * An octahedral impostor atlas: a cols x rows grid of views of one object,
+ * each cell seen from the direction its octahedral coordinate encodes, in a
+ * width x height RGBA8 image (alpha < 0.5 is cut out). `bounds` is the
+ * object's bounding sphere in its local frame.
  * @typedef {Object} ImpostorAtlasInfo
- * @property {number} [width]
- * @property {number} [height]
- * @property {number} [cols]
- * @property {number} [rows]
- * @property {number} [boundsRadius]
- * @property {Array<number>} [boundsCenter]
- * @property {Uint8Array} [atlasRGBA]
+ * @property {number} width
+ * @property {number} height
+ * @property {number} cols
+ * @property {number} rows
+ * @property {{center: Array<number>, radius: number}} [bounds]  Default a unit sphere at the origin.
+ * @property {Uint8Array|Uint8ClampedArray} atlasRGBA  width * height * 4 bytes.
  */
 
 /**
  * @typedef {Object} ImpostorOptions
- * @property {number} [margin]
- * @property {number} [cullNear]
- * @property {number} [cullFar]
+ * @property {number} [margin]  Billboard half-extent as a multiple of the bounds radius (default 1.03).
+ * @property {number} [cullNear]  Distance where the dithered fade-out starts (default 450).
+ * @property {number} [cullFar]  Distance past which billboards are gone (default 950).
  */
 
 /**
  * @typedef {Object} ImpostorResult
- * @property {SceneNode} [node]
- * @property {number} [quadCount]
+ * @property {SceneNode} node  The one MeshNode carrying every billboard.
+ * @property {number} quadCount  Billboards built.
+ * @property {function(number, number): void} setCull  Change (cullNear, cullFar) live.
  */
+
+/**
+ * Draw many copies of an object as camera-facing octahedral impostors in a
+ * single MeshNode: one quad per transform, each picking the atlas cell for
+ * the view direction and fading out by dither between cullNear and cullFar.
+ * `transforms` is 9 floats per copy (px py pz, qx qy qz qw, scale, unused;
+ * the setInstancesFromTransforms layout), of which position and scale are
+ * used. The atlas color is drawn as emission; casts no shadow. Needs GPU rendering (it
+ * installs a custom shader).
+ *
+ * @param {SceneGraph} scene
+ * @param {ImpostorAtlasInfo} atlas
+ * @param {Float32Array|number[]} transforms
+ * @param {ImpostorOptions} [opts]
+ * @returns {ImpostorResult}
+ */
+bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
 
 /**
  * Geometry comes from, in order: raw `positions` + `indices` (with optional
@@ -633,6 +654,217 @@ class SceneNode {
    */
   updateMesh(mesh, opts) {}
 
+  // ── Custom shaders (MeshNode, SkinnedMeshNode, InstancedMeshNode) ────────
+
+  /**
+   *  True while a custom shader from setShader() is installed.
+   * @readonly
+   * @type {boolean}
+   */
+  hasShader;
+
+  /**
+   * Splice GLSL into the node's PBR program. `vertex` must define
+   * `void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv)`,
+   * run on the object-space position (after skinning and wind; for an
+   * InstancedMesh, in mesh-local space before the per-instance transform)
+   * so lighting, fog and shadows follow the displacement. `fragment` must
+   * define `void userFragment(inout vec3 baseColor, inout vec3 normal,
+   * inout float metallic, inout float roughness, inout vec3 emissive,
+   * inout float alpha)`, run after every material input is gathered and
+   * before lighting (`normal` is world space and renormalised after). At
+   * least one is required. User uniforms and samplers are declared in the
+   * chunk and must be named `u_*`; `uniforms` gives their initial values
+   * (a number or an array of up to 4 numbers). Throws TypeError on bad
+   * options and Error with the GLSL log when the program fails to compile.
+   * Needs GPU rendering.
+   *
+   * @param {{vertex?: string, fragment?: string, uniforms?: Object<string, number|number[]>}} opts
+   * @returns {SceneNode}
+   * @example
+   * box.setShader({
+   *   fragment: `uniform vec3 u_tint;
+   *     void userFragment(inout vec3 baseColor, inout vec3 normal,
+   *                       inout float metallic, inout float roughness,
+   *                       inout vec3 emissive, inout float alpha) {
+   *       emissive = u_tint;
+   *     }`,
+   *   uniforms: { u_tint: [1, 0, 0] },
+   * });
+   */
+  setShader(opts) {}
+
+  /**
+   * Set one `u_*` uniform of the custom shader: a number, or 1 to 4 numbers
+   * (float, vec2, vec3, vec4). Extra components are ignored.
+   *
+   * @param {string} name
+   * @param {number|number[]|Float32Array} value
+   * @returns {SceneNode}
+   */
+  setShaderUniform(name, value) {}
+
+  /**
+   * Upload a single-channel float (R32F) texture for a `uniform sampler2D
+   * u_*` in the custom shader (MeshNode only). `data` holds width * height
+   * floats, row-major. With `x`/`y` given it writes a sub-rectangle of an
+   * existing slot instead (width * height floats for the rect alone; a rect
+   * outside the texture is ignored). A zero width or height releases the
+   * slot. `mipmap` builds a mip chain for textureLod(). A data array
+   * shorter than the extent is a RangeError. Returns the node.
+   *
+   * @param {string} name
+   * @param {{data: Float32Array|number[], width: number, height: number, x?: number, y?: number, mipmap?: boolean}} opts
+   * @returns {SceneNode}
+   */
+  setShaderTexture(name, opts) {}
+
+  /**
+   * Remove the custom shader; the node draws with the stock program again.
+   * @returns {SceneNode}
+   */
+  clearShader() {}
+
+  // ── Level of detail and distance gating ─────────────────────────────────
+
+  /**
+   * Install a discrete LOD chain on a MeshNode (not skinned): each frame
+   * the level whose `maxDist` first exceeds the camera distance to the
+   * node's origin draws, in every pass; beyond the last the coarsest keeps
+   * drawing (pair with setVisibilityRange to cull). The base mesh stays the
+   * raycast source. An empty array clears the chain.
+   *
+   * @param {Array<{maxDist: number, mesh: {positions: ArrayLike<number>, normals?: ArrayLike<number>, indices: ArrayLike<number>}}>} lods
+   * @returns {SceneNode}
+   */
+  setLodMeshes(lods) {}
+
+  /**
+   *  Levels in the LOD chain (0 without one).
+   * @readonly
+   * @type {number}
+   */
+  lodCount;
+
+  /**
+   *  The level selected this frame.
+   * @readonly
+   * @type {number}
+   */
+  lodLevel;
+
+  /**
+   * Render the node (and its subtree) only while begin <= d < end, d being
+   * the camera's distance to the node's world origin. `margin` adds
+   * hysteresis on both edges so a camera on a boundary does not flicker.
+   * Independent of `visible`; raycasts are not gated.
+   *
+   * @param {number} begin
+   * @param {number} end
+   * @param {number} [margin]
+   * @returns {SceneNode}
+   */
+  setVisibilityRange(begin, end, margin) {}
+
+  /**
+   * Remove the distance gate.
+   * @returns {SceneNode}
+   */
+  clearVisibilityRange() {}
+
+  /**
+   *  The distance gate, or null without one. Assigning an object sets it,
+   *  assigning null clears it.
+   * @type {{begin: number, end: number, margin: number}|null}
+   */
+  visibilityRange;
+
+  // ── Instances (InstancedMeshNode) ───────────────────────────────────────
+
+  /**
+   * Replace every instance. With a length that is a multiple of 16, each
+   * instance is 16 floats: a row-major 4x3 affine [m00 m01 m02 tx, m10 m11
+   * m12 ty, m20 m21 m22 tz] then an RGBA tint that multiplies the material
+   * color. Otherwise, with a multiple of 9, it is the setInstancesFromTransforms
+   * layout. (A length divisible by both is read as 16-float records.)
+   *
+   * @param {Float32Array|number[]} data
+   * @returns {SceneNode}
+   */
+  setInstances(data) {}
+
+  /**
+   * Replace every instance from 9 floats each: px py pz, qx qy qz qw,
+   * uniform scale, variant index (packed into the tint's alpha, picking the
+   * atlas cell when an atlas grid is set; RGB is white).
+   *
+   * @param {Float32Array|number[]} data
+   * @returns {SceneNode}
+   */
+  setInstancesFromTransforms(data) {}
+
+  /**
+   *  Number of instances.
+   * @readonly
+   * @type {number}
+   */
+  instanceCount;
+
+  // ── Textures from pixels ────────────────────────────────────────────────
+
+  /**
+   * Base-color texture for a MeshNode or DecalNode. `src` is an RGBA8
+   * image ({data, width, height}, e.g. an ImageData; data holds width *
+   * height * 4 bytes, shorter is a RangeError), another SceneGraph (or its
+   * asTexture()) whose live output is sampled each frame, or null to clear.
+   *
+   * @param {{data: Uint8Array|Uint8ClampedArray, width: number, height: number}|SceneGraph|Object|null} src
+   * @returns {SceneNode}
+   */
+  setBaseColorTexture(src) {}
+
+  /**
+   * Emission texture for a MeshNode or DecalNode from an RGBA8 image
+   * ({data, width, height}; shorter data is a RangeError), or null to clear.
+   *
+   * @param {{data: Uint8Array|Uint8ClampedArray, width: number, height: number}|null} src
+   * @returns {SceneNode}
+   */
+  setEmissionTexture(src) {}
+
+  /**
+   * Replace a Gaussian-splat node's cloud from structure-of-arrays data
+   * (the shape bro.triposplat returns): for N splats, positions N*3, scales
+   * N*3, rotations N*4 (quaternions), opacities N, and sh N*(shDegree+1)^2*3
+   * spherical-harmonic coefficients; shDegree is clamped to [0, 3]. Streams
+   * that do not all describe the same N are a TypeError.
+   *
+   * @param {{positions: Float32Array, scales: Float32Array, rotations: Float32Array, opacities: Float32Array, sh: Float32Array, shDegree?: number}} cloud
+   * @returns {SceneNode}
+   */
+  setCloud(cloud) {}
+
+  // ── Spatial audio ───────────────────────────────────────────────────────
+
+  /**
+   * Make an engine voice follow this node: spatialization is turned on for
+   * it, and every frame its position and velocity are set from the node's
+   * world origin. While a scene's listener is bound to its camera
+   * (SceneGraph.bindAudioListenerToCamera) the voice is also muffled when
+   * scene geometry lies between camera and node. `handle` is a voice id
+   * (OscillatorNode.voiceId) with isVoice true; with isVoice false it is an
+   * engine playback handle. One emitter per node (attaching again replaces
+   * it); the link ends when the node is destroyed. A negative handle is
+   * ignored.
+   *
+   * @param {number} handle
+   * @param {boolean} [isVoice]
+   */
+  attachAudioEmitter(handle, isVoice) {}
+
+  /** Stop driving the attached voice from this node. */
+  detachAudioEmitter() {}
+
   /**
    * @param {Object} mat
    * @returns {SceneNode}
@@ -809,6 +1041,12 @@ class SceneNode {
 
 }
 
+/**
+ * A scene canvas clears to transparent: where nothing draws (and no sky or
+ * environment background is set), the canvas element's CSS background and
+ * the page behind it show through. For a solid backdrop, style the canvas
+ * (`canvas.style.background = '#1a1a1a'`) or set an environment.
+ */
 class SceneGraph {
 
   /**
