@@ -8,6 +8,7 @@
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
 #include "layout/formatting_context.h"
+#include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "dom/text_node.h"
@@ -610,6 +611,9 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // then positive-z child SCs.
     auto rootSC = buildStackingContextTree(root, scrollX, scrollY);
     if (rootSC) paintStackingContext(rootSC.get());
+    // Then the top layer, above everything, each entry over its ::backdrop.
+    if (rootSC) paintTopLayer(root);
+    topLayerSCs_.clear();
 }
 
 void DrawTraversal::drawElement(dom::Element* elem, float offsetX, float offsetY) {
@@ -3964,6 +3968,13 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
 
     int dfsCounter = 1;
 
+    // The document's top layer, when this pass paints the whole document.
+    std::unordered_set<const dom::Element*> topLayerSet;
+    topLayerSCs_.clear();
+    if (dom::Document* doc = root->document(); doc && doc->documentElement() == root) {
+        for (const auto& e : doc->topLayer()) topLayerSet.insert(e.element);
+    }
+
     // Compute the border-box clip rect contributed by `elem` if it has overflow
     // clipping on either axis. Mirrors the in-flow walker at lines ~966-983.
     auto elementClipRect = [](dom::Element* elem, float offX, float offY,
@@ -4040,6 +4051,20 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         auto fcIt = style.find("-x-flow-collapse");
         if (fcIt != style.end() && fcIt->second == "collapse") return;
 
+        // A top-layer element leaves every ancestor stacking context and clip:
+        // it becomes a root-level SC of its own, collected into topLayerSCs_
+        // and painted after the whole document by paintTopLayer. It sits where
+        // layout put it — no ancestor scroll offset — and a fixed one ignores
+        // the document scroll too (draw space is viewport space).
+        static const std::vector<ClipRect> kNoClips;
+        StackingContext topHolder;
+        const bool inTopLayer = elem != root && topLayerSet.count(elem) != 0;
+        if (inTopLayer) {
+            topLayerOffset(elem, offX, offY);
+            currentSC = &topHolder;
+        }
+        const std::vector<ClipRect>& inClips = inTopLayer ? kNoClips : ancestorClips;
+
         // Compute child offset using the same logic as drawElementContent
         auto& box = elem->layoutBox();
         float x = box.contentRect.x + offX;
@@ -4050,14 +4075,14 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         float childOffY = y - scrollTop;
 
         bool isThisRoot = (elem == root);
-        bool isSC = createsStackingContext(elem, isThisRoot);
+        bool isSC = inTopLayer || createsStackingContext(elem, isThisRoot);
         bool positioned = isPositioned(style);
 
         // Clips this element is actually subject to: an out-of-flow box drops
         // the ones belonging to ancestors below its containing block.
         static const std::string kStatic = "static";
         const std::string& elemPosition = styleProp(style, "position", kStatic);
-        std::vector<ClipRect> ownClips = clipsFor(elem, elemPosition, ancestorClips);
+        std::vector<ClipRect> ownClips = clipsFor(elem, elemPosition, inClips);
 
         StackingContext* descendantSC = currentSC;
 
@@ -4120,6 +4145,10 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
                 visit(static_cast<dom::Element*>(child),
                       descendantSC, childOffX, childOffY, childClips);
             }
+        }
+
+        if (inTopLayer && !topHolder.children.empty()) {
+            topLayerSCs_[elem] = std::move(topHolder.children.back());
         }
     };
 

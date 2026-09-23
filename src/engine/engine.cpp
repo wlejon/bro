@@ -4,6 +4,7 @@
 #include "layout/box.h"
 #include "layout/layout_node_adapter.h"
 #include "layout/pseudo_style.h"
+#include "layout/top_layer_hit.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
 #include "dom/element_geometry.h"
@@ -140,6 +141,9 @@ dom::Element* Engine::hitTest(float x, float y) {
 
     auto* root = document_->layoutRoot();
     if (!root) return document_->body();
+    // The top layer first: a modal dialog, and everything outside it inert.
+    if (auto top = layout::hitTestTopLayer(document_.get(), root, x, y, scrollY_); top.handled)
+        return top.element;
     auto* node = htmlayout::layout::hitTest(root, x, y);
     auto* hit = layout::LayoutNodeAdapter::elementFor(node);
     // The <html> element fills the viewport — stray clicks outside any
@@ -169,6 +173,17 @@ void Engine::dispatchElementEvent(dom::Element* target, dom::Event& event) {
 void Engine::dispatchWindowEvent(dom::Event& event) {
     if (!document_) return;
     dom::dispatchWindowEvent(document_.get(), event);
+}
+
+void Engine::requestTopLayerClose(dom::Document* doc) {
+    if (!doc || !topLayerCloseRequest_) return;
+    // A copy: the handler closes the entry (and runs page code) as it goes.
+    std::vector<dom::Element*> order;
+    for (const auto& e : doc->topLayer()) order.push_back(e.element);
+    for (auto it = order.rbegin(); it != order.rend(); ++it) {
+        if (!doc->isInTopLayer(*it)) continue;
+        if (topLayerCloseRequest_(*it)) return;
+    }
 }
 
 dom::Element* Engine::pointerCaptureFor(int pointerId) const {

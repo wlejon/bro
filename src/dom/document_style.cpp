@@ -65,6 +65,10 @@ bool Document::classChangeAffectsDescendants(const std::string& oldCls,
 
 void Document::resolveStyles() {
     if (!documentElement_) return;
+    // A top-layer entry whose element left the tree or lost its required
+    // attribute (a dialog's `open` removed by hand) leaves before :modal is
+    // matched again.
+    pruneTopLayer();
     auto styleT0 = std::chrono::steady_clock::now();
     // A new stylesheet can restyle anything, and the elements it now matches
     // were never marked dirty (nobody touched them — the *rules* changed). So a

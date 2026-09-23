@@ -329,6 +329,9 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
 // TypeError for a descriptor without a string `type`.
 Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
 Value hostDispatchToWindow(Value desc);
+// element.focus()'s steps (host_element_interaction.cpp): focus, blur,
+// focusin, focusout. A no-op for an inert element (outside a modal dialog).
+void hostFocusElement(dom::Element* el);
 // The same at one document's window — a secondary window's, an iframe's.
 Value hostDispatchToWindowOf(dom::Document* doc, Value desc);
 

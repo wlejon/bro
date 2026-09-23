@@ -266,6 +266,16 @@ public:
     void dispatchElementEvent(dom::Element* target, dom::Event& event);
     void dispatchWindowEvent(dom::Event& event);
 
+    // Close requests (Escape) for a document's top layer. The host answers for
+    // the kinds of entry it owns — a modal dialog fires `cancel` and closes —
+    // returning true when it took the request. requestTopLayerClose offers it
+    // to the topmost entry, then the next, until one is taken.
+    using TopLayerCloseRequestFn = std::function<bool(dom::Element*)>;
+    void setTopLayerCloseRequestHandler(TopLayerCloseRequestFn fn) {
+        topLayerCloseRequest_ = std::move(fn);
+    }
+    void requestTopLayerClose(dom::Document* doc);
+
     scene::SceneGraph* createSceneContext(dom::Element* canvas);
     size_t sceneContextCount() const;
     webgl::WebGL2RenderingContext* createWebGL2Context(dom::Element* canvas);
@@ -946,6 +956,8 @@ private:
     float scrollY_ = 0.0f;
     float documentHeight_ = 0.0f;
     float wheelResidualY_ = 0.0f;
+
+    TopLayerCloseRequestFn topLayerCloseRequest_;
 
     Scrollbar viewportScrollbar_;
     Scrollbar elementScrollbar_;

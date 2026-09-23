@@ -32,6 +32,7 @@ void Document::parse(const std::string& html, const std::string& authorCss,
     documentElement_ = nullptr;
     body_ = nullptr;
     focusedElement_ = nullptr;   // ownedNodes_.clear() bypasses freeNode's scrub
+    topLayer_.clear();           // likewise
     idMap_.clear();
     // LayoutRoot points into ownedNodes_ via raw Element*; clear it first so
     // we don't hold dangling pointers when ownedNodes_ drops its unique_ptrs.

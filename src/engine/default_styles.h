@@ -296,9 +296,10 @@ details:not([open]) > *:not(summary) {
 /* ---------- <dialog> ---------- */
 /* HTML §15.3.1's rendering: a closed dialog is not rendered; an open one is
    an absolutely positioned, horizontally centred, content-sized box.
-   show() / showModal() / close() toggle [open] (host_dialog.cpp). There is
-   no top layer or ::backdrop, so a modal dialog renders as a non-modal
-   one does. */
+   show() / showModal() / close() toggle [open] (host_dialog.cpp).
+   showModal() also puts the dialog in the top layer (dom::Document), where it
+   paints above everything over its ::backdrop, and makes it :modal — fixed
+   to the viewport and centred on both axes. */
 
 dialog:not([open]) {
     display: none;
@@ -315,6 +316,30 @@ dialog {
     padding: 1em;
     background-color: white;
     color: black;
+}
+
+dialog:modal {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    max-width: calc(100% - 6px - 2em);
+    max-height: calc(100% - 6px - 2em);
+    overflow: auto;
+    visibility: visible;
+}
+
+/* The box painted under every top-layer element, over the rest of the page
+   (CSS Position 4 §backdrop). Only a modal dialog gets a visible one. */
+::backdrop {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+}
+
+dialog:modal::backdrop {
+    background-color: rgba(0, 0, 0, 0.1);
 }
 
 /* ---------- Links ---------- */

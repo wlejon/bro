@@ -190,6 +190,8 @@ void Document::freeNode(Node* node) {
         // the next mousemove. Engine::reapDeadInputPointers scrubs the
         // engine's own cached pointers but not this document-owned one.)
         if (elem == focusedElement_) focusedElement_ = nullptr;
+        // And the top layer, which the paint and hit-test paths walk.
+        if (!topLayer_.empty()) removeFromTopLayer(elem);
         // Same reasoning, one layer up: the CSS transition and animation
         // managers index by raw Element* and dereference the key on the next
         // tick (markDirty() when a transition/animation completes, and the

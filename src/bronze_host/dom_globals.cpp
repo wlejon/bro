@@ -42,6 +42,7 @@
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/host_rejection_events.h"
+#include "bronze_host/host_template.h"
 #include "bronze_host/host_window_open.h"
 #include "bronze_host/host_intl.h"
 #include "bronze_host/host_dom_events_types.h"
@@ -864,6 +865,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     // unhandledrejection / rejectionhandled at the window: bronze's
     // end-of-drain report goes to the page from here on, not to stderr.
     installMainThreadRejectionTracking();
+    // Escape → close request → the topmost modal dialog's cancel/close.
+    installDialogHooks(engine);
 
     if (engine.installHostBindings()) {
         engine.installHostBindings()(engine);

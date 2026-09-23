@@ -189,6 +189,21 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
+    // Escape while the top layer holds something: the keydown goes to the
+    // focused element first, and unless it is cancelled it is a close request
+    // to the topmost entry (a modal dialog: `cancel`, then close).
+    if (keycode == SDLK_ESCAPE && !document_->topLayer().empty()) {
+        auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+        dom::Element* target = document_->activeElement();
+        if (!target) target = document_->body();
+        if (target) dispatchEvent(target, evt);
+        if (!evt.defaultPrevented() && !repeat) {
+            requestTopLayerClose(document_.get());
+            uiDirty_ = true;
+        }
+        return;
+    }
+
     if (util::hasPrimaryMod(mod) &&
         (keycode == SDLK_C || keycode == SDLK_X || keycode == SDLK_V)) {
 
@@ -460,6 +475,9 @@ void Engine::advanceFocus(bool reverse) {
                 if (el->getAttribute("disabled") == "true" || el->attributes().count("disabled"))
                     isFocusable = false;
             }
+            // Outside a modal dialog (the top layer's blocking element) the
+            // page is inert: Tab cycles inside the dialog only.
+            if (isFocusable && document_->isInert(el)) isFocusable = false;
             if (isFocusable) focusable.push_back(el);
         }
         for (auto* child : node->childNodes()) walk(child);

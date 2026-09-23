@@ -102,6 +102,17 @@ void Document::notifyNodeRemoved(Node* removed) {
             setActiveElement(nullptr);
         }
     }
+    // A top-layer element leaving the tree leaves the top layer with it
+    // ("remove an element from the top layer immediately").
+    if (!topLayer_.empty()) {
+        std::vector<Element*> leaving;
+        for (const auto& e : topLayer_) {
+            for (const Node* p = e.element; p; p = p->parentNode()) {
+                if (p == removed) { leaving.push_back(e.element); break; }
+            }
+        }
+        for (Element* el : leaving) removeFromTopLayer(el);
+    }
     Node* parent = removed->parentNode();
     if (!parent) return;
     int idx = -1;

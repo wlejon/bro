@@ -144,6 +144,43 @@ public:
     Element* activeElement() const { return focusedElement_ ? focusedElement_ : body_; }
     void setActiveElement(Element* el);
 
+    // ---------- The top layer (CSS Position 4 §top-layer, HTML §6.3) ----------
+    // An ordered set of elements painted above the whole document, each over
+    // its own ::backdrop, in insertion order (last = topmost), regardless of
+    // z-index, stacking contexts or ancestor overflow clipping; hit testing
+    // tries them first, topmost first. A modal dialog is one client, and
+    // Fullscreen and popovers are the others the mechanism is shaped for.
+    //
+    // `modal` marks an entry that makes everything outside it inert: the
+    // topmost modal entry is the "blocking element" — it matches :modal, only
+    // its subtree (and top-layer entries above it) can be hit or focused.
+    //
+    // `requiredAttribute`, when non-empty, is a condition the entry holds
+    // only while the element carries that attribute (a dialog's `open`):
+    // pruneTopLayer() drops an entry whose element lost it, or left the
+    // document. Removal from the tree and freeing prune immediately.
+    struct TopLayerEntry {
+        Element* element = nullptr;
+        bool modal = false;
+        std::string requiredAttribute;
+    };
+    // Append (moving it to the top when already present). Marks the document
+    // dirty: the element's :modal state and its paint order change.
+    void addToTopLayer(Element* el, bool modal, std::string requiredAttribute = {});
+    // False when `el` was not in the top layer.
+    bool removeFromTopLayer(Element* el);
+    bool isInTopLayer(const Element* el) const;
+    const std::vector<TopLayerEntry>& topLayer() const { return topLayer_; }
+    // The topmost modal entry, or null.
+    Element* topLayerBlockingElement() const;
+    // True when a blocking element exists and `node` is outside it: not a
+    // shadow-including inclusive descendant of it, nor of a top-layer entry
+    // above it. Inert nodes are not hit, not focusable and not activatable.
+    bool isInert(const Node* node) const;
+    // Drop entries whose element left the document or lost its required
+    // attribute. Cheap when the top layer is empty. Returns true if any went.
+    bool pruneTopLayer();
+
     // Title
     std::string title() const;
     void setTitle(const std::string& title);
@@ -520,6 +557,7 @@ private:
     Element* documentElement_ = nullptr;
     Element* body_ = nullptr;
     Element* focusedElement_ = nullptr;
+    std::vector<TopLayerEntry> topLayer_;
     bool dirty_ = false;
     uint64_t mutationEpoch_ = 0;
     uint64_t layoutCurrentEpoch_ = UINT64_MAX;   // never "current" before a pass

@@ -194,6 +194,18 @@ private:
     // BaseSkipPromoted modes.
     void paintStackingContext(StackingContext* sc, bool withinPromoted = false);
 
+    // The top layer (dom::Document::topLayer, draw_traversal_top_layer.cpp).
+    // buildStackingContextTree lifts each entry's subtree out of its ancestors
+    // into a root-level stacking context here, keyed by element; draw() paints
+    // them after the root SC in top-layer order, each over its ::backdrop.
+    std::unordered_map<const dom::Element*, std::unique_ptr<StackingContext>> topLayerSCs_;
+    void paintTopLayer(dom::Element* root);
+    void paintBackdrop(dom::Element* elem);
+    // Where a top-layer element's parent content box is in draw space: its
+    // layout position, ignoring ancestor scroll, and the document scroll too
+    // when the element is position:fixed.
+    void topLayerOffset(dom::Element* elem, float& offX, float& offY) const;
+
     // While drawElementContent walks children, it consults skipSet_ to avoid
     // descending into elements that will be painted separately by the SC walker
     // (their own SC, or a positioned non-SC descendant in some ancestor SC's

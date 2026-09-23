@@ -227,6 +227,16 @@ public:
 
     bool isTarget() const override { return false; } // no URL fragment tracking
 
+    // :modal — a top-layer entry that blocks the rest of the document (a
+    // dialog opened with showModal()).
+    bool isModal() const override {
+        if (!elem_ || !elem_->document()) return false;
+        for (const auto& e : elem_->document()->topLayer()) {
+            if (e.element == elem_) return e.modal;
+        }
+        return false;
+    }
+
     void* scope() const override {
         if (!elem_) return nullptr;
         return static_cast<void*>(elem_->containingShadowRoot());

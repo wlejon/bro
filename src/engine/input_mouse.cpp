@@ -14,6 +14,7 @@
 #include "dom/selection.h"
 #include "dom/text_node.h"
 #include "layout/control_text.h"
+#include "layout/top_layer_hit.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
@@ -49,6 +50,8 @@ dom::Element* Engine::iframeHitTest(IframeDoc* dp, float lx, float ly) {
     if (!dp || !dp->document) return nullptr;
     auto* root = dp->document->layoutRoot();
     if (!root) return nullptr;
+    if (auto top = layout::hitTestTopLayer(dp->document.get(), root, lx, ly); top.handled)
+        return top.element;
     auto* node = htmlayout::layout::hitTest(root, lx, ly);
     auto* hit = layout::LayoutNodeAdapter::elementFor(node);
     if (!hit || hit == dp->document->documentElement()) return nullptr;

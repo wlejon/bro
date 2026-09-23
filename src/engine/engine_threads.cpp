@@ -95,8 +95,13 @@ void Engine::layoutThreadFunc() {
             // to here so this decision — which needs both managers — is made in
             // one place, after both have advanced.
             promotedElements_.clear();
+            // No compositor layers while the top layer is in use: a promoted
+            // layer composites over the whole base, and the top layer has to
+            // stay above everything. Those animations re-record instead.
+            const bool topLayerActive = !document_->topLayer().empty();
             auto routePromotion = [&](dom::Element* e) {
-                if (isTransformOpacityOnly(e, animationManager_, transitionManager_,
+                if (!topLayerActive &&
+                    isTransformOpacityOnly(e, animationManager_, transitionManager_,
                                            webAnimationManager_))
                     promotedElements_.insert(e);
                 else {

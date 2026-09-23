@@ -38,6 +38,7 @@
 #include "dom/event_dispatch.h"
 #include "layout/el_input.h"
 #include "layout/el_select.h"
+#include "layout/top_layer_hit.h"
 #include "layout/el_textarea.h"
 #include "layout/key_handle_result.h"
 #include "layout/layout_node_adapter.h"
@@ -68,6 +69,8 @@ dom::Element* Engine::windowHostHitTest(WindowHost& h, float x, float y) {
     if (!h.document) return nullptr;
     auto* root = h.document->layoutRoot();
     if (!root) return nullptr;
+    if (auto top = layout::hitTestTopLayer(h.document.get(), root, x, y); top.handled)
+        return top.element;
     auto* node = htmlayout::layout::hitTest(root, x, y);
     auto* hit = layout::LayoutNodeAdapter::elementFor(node);
     // The documentElement itself is "no target", matching iframeHitTest: a
@@ -392,6 +395,7 @@ void Engine::windowHostAdvanceFocus(WindowHost& h, bool reverse) {
                     ok = false;
                 if (el->attributes().count("disabled")) ok = false;
             }
+            if (ok && h.document->isInert(el)) ok = false;   // outside a modal dialog
             if (ok) focusable.push_back(el);
         }
         for (auto* child : node->childNodes()) walk(child);
@@ -475,6 +479,16 @@ void Engine::hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod,
         if (!target) target = h.document->body();
         if (target) windowHostDispatch(h, target, evt);
         if (!evt.defaultPrevented()) windowHostAdvanceFocus(h, (mod & SDL_KMOD_SHIFT) != 0);
+        return;
+    }
+
+    // Escape with a top layer: a close request to its topmost entry.
+    if (keycode == SDLK_ESCAPE && !h.document->topLayer().empty()) {
+        auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+        dom::Element* target = h.document->activeElement();
+        if (!target) target = h.document->body();
+        if (target) windowHostDispatch(h, target, evt);
+        if (!evt.defaultPrevented() && !repeat) requestTopLayerClose(h.document.get());
         return;
     }
 
