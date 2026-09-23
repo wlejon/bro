@@ -37,13 +37,12 @@
  */
 
 /**
+ * Image-based lighting from an HDR panorama, which also draws as the sky.
+ * setEnvironment(null) clears it.
  * @typedef {Object} EnvironmentConfig
- * @property {string} [panorama]
- * @property {string} [cubeMap]
- * @property {Array<number>} [color]
- * @property {number} [intensity]
- * @property {number} [blur]
- * @property {boolean} [background]
+ * @property {string} [panorama]  Path to an equirectangular .hdr (`hdr` is an alias); "" clears. On a load failure the previous environment stays.
+ * @property {number} [intensity]  IBL strength multiplier.
+ * @property {number} [rotation]  Y-axis rotation in radians, to line the panorama's sun up with a directional light.
  */
 
 /**
@@ -68,37 +67,42 @@
  */
 
 /**
+ * The static shadow-tile cache (on by default): a shadow-atlas tile is
+ * re-rendered only when its light moved or a caster over it changed. Pixels
+ * are identical either way; turning it off is for debugging.
  * @typedef {Object} ShadowCacheConfig
  * @property {boolean} [enabled]
- * @property {number} [staticResolution]
  */
 
 /**
+ * Every setFog call replaces the whole fog state; setFog({}) turns it off.
+ * With density > 0 the fog is exponential-squared, 1 - exp(-(density*d)^2)
+ * for d the camera distance past `start`; otherwise a linear start..end ramp
+ * when end > 0.
  * @typedef {Object} FogConfig
- * @property {string} [mode]
- * @property {Array<number>} [color]
- * @property {number} [density]
- * @property {number} [start]
- * @property {number} [end]
- * @property {number} [heightFalloff]
- * @property {number} [height]
+ * @property {string} [mode]  "linear" ignores density; "none" (or "off") turns fog off. Any other value, or none, picks by density as above.
+ * @property {Array<number>} [color]  Linear RGB.
+ * @property {number} [density]  Exponential mode density per world unit.
+ * @property {number} [start]  Distance where fog begins (both modes). `startDistance` is an alias.
+ * @property {number} [end]  Linear mode: distance of full fog.
+ * @property {number} [heightFalloff]  Exponential mode: density thins by exp(-heightFalloff * (y - height)) with world height y.
+ * @property {number} [height]  World y of the fog layer's base, where the density is `density` (default 0).
  */
 
 /**
+ * Physical sky scattering. Omitted fields keep the Earth defaults.
  * @typedef {Object} AtmosphereConfig
- * @property {Array<number>} [rayleigh]
- * @property {Array<number>} [mie]
- * @property {number} [turbidity]
- * @property {Array<number>} [sunPosition]
- * @property {number} [sunIntensity]
+ * @property {Array<number>} [rayleigh]  Rayleigh scattering per metre, [r, g, b] (default [5.802e-6, 13.558e-6, 33.1e-6]).
+ * @property {Array<number>} [mie]  [coefficient per metre (default 3.996e-6), anisotropy g in (-1, 1) (default 0.76)].
+ * @property {number} [turbidity]  Haze: multiplies the Mie coefficient (default 1).
+ * @property {Array<number>} [sunPosition]  Direction towards the sun, [x, y, z].
+ * @property {number} [sunIntensity]  Pins the sun's radiance (20 * sunIntensity). Without it the sky follows the brightest directional light.
  */
 
 /**
  * @typedef {Object} StarfieldConfig
- * @property {number} [starCount]
- * @property {number} [starSize]
- * @property {number} [twinkleSpeed]
- * @property {Array<number>} [tint]
+ * @property {number} [starCount]  Relative density: 1000 is the default field, about 0..2000.
+ * @property {number} [starSize]  Brightness multiplier (default 1); star sprites have a fixed size.
  */
 
 /**
@@ -113,7 +117,6 @@
  * @property {number} [threshold]
  * @property {number} [intensity]
  * @property {number} [radius]
- * @property {number} [iterations]
  */
 
 /**
@@ -121,7 +124,6 @@
  * @property {number} [radius]
  * @property {number} [bias]
  * @property {number} [intensity]
- * @property {number} [sampleCount]
  */
 
 /**
@@ -135,8 +137,7 @@
 /**
  * @typedef {Object} DepthOfFieldConfig
  * @property {number} [focusDistance]
- * @property {number} [focalLength]
- * @property {number} [fStop]
+ * @property {number} [focalLength]  The depth range around focusDistance that stays sharp (default 5).
  * @property {number} [maxBlur]
  */
 

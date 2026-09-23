@@ -559,7 +559,18 @@ void bro_scene_SceneGraph_setFog(void* self, bool opts_mode_given, const char* o
     }
     float density = opts_density_given ? static_cast<float>(opts_density) : 0.0f;
     float hFalloff = opts_heightFalloff_given ? static_cast<float>(opts_heightFalloff) : 0.0f;
-    float h = opts_height_given ? static_cast<float>(opts_height) : 0.0f;
+    // `height` is the fog layer's base: the shader thins density by
+    // exp(-falloff * worldY), and exp(-falloff * (worldY - height)) is that
+    // times exp(falloff * height), so the base folds into the density.
+    if (opts_height_given && hFalloff > 0.0f && density > 0.0f && std::isfinite(opts_height)) {
+        const double scaled = static_cast<double>(density) * std::exp(static_cast<double>(hFalloff) * opts_height);
+        density = std::isfinite(scaled) ? static_cast<float>(std::min(scaled, 1e30)) : 1e30f;
+    }
+    // mode: "linear" uses start/end only, "none" turns fog off; any other
+    // mode (or none given) picks exponential when density > 0, else linear.
+    const std::string mode = (opts_mode_given && opts_mode) ? opts_mode : "";
+    if (mode == "linear") density = 0.0f;
+    if (mode == "none" || mode == "off") { density = 0.0f; end = 0.0f; }
     g->setFog(start, end, r, gr, b);
     g->setFogExp(density, hFalloff, start);
 }
@@ -573,12 +584,34 @@ void bro_scene_SceneGraph_setAtmosphere(void* self, const double* opts_rayleigh,
     if (!g) return;
     scene::AtmosphereParams a;
     a.enabled = true;
+    // A coefficient a script gives is taken when it is a finite, non-negative
+    // number; anything else keeps the physical default.
+    const auto coeff = [](double v, float& out) {
+        if (std::isfinite(v) && v >= 0.0) out = static_cast<float>(v);
+    };
+    if (opts_rayleigh && opts_rayleigh_len >= 3) {
+        for (int i = 0; i < 3; ++i) coeff(opts_rayleigh[i], a.betaR[i]);
+    }
+    if (opts_mie && opts_mie_len >= 1) coeff(opts_mie[0], a.betaM);
+    if (opts_mie && opts_mie_len >= 2 && std::isfinite(opts_mie[1])) {
+        a.mieG = std::clamp(static_cast<float>(opts_mie[1]), -0.999f, 0.999f);
+    }
+    // Turbidity: haze as a multiple of the clear-air Mie coefficient.
+    if (opts_turbidity_given && std::isfinite(opts_turbidity) && opts_turbidity > 0.0) {
+        a.betaM *= static_cast<float>(opts_turbidity);
+    }
     if (opts_sunPosition && opts_sunPosition_len >= 3) {
         a.sunDir[0] = static_cast<float>(opts_sunPosition[0]);
         a.sunDir[1] = static_cast<float>(opts_sunPosition[1]);
         a.sunDir[2] = static_cast<float>(opts_sunPosition[2]);
     }
-    if (opts_sunIntensity_given) a.sunColor[0] = a.sunColor[1] = a.sunColor[2] = static_cast<float>(opts_sunIntensity) * 20.0f;
+    // An explicit intensity pins the sun's radiance; without the flag the
+    // renderer tracks the brightest directional light and the value given
+    // here was silently replaced.
+    if (opts_sunIntensity_given && std::isfinite(opts_sunIntensity)) {
+        a.sunColor[0] = a.sunColor[1] = a.sunColor[2] = static_cast<float>(opts_sunIntensity) * 20.0f;
+        a.sunColorExplicit = true;
+    }
     g->setAtmosphere(a);
 }
 
@@ -617,12 +650,16 @@ bool registerSceneNatives(std::string* error) {
                 ObjectBuilder b(snProto);
                 installSceneNodeAgent(b);
                 b.def("attachAudioEmitter", 2, [](Value self_, std::span<const Value> a) {
-                    auto* cell = sceneNodeCellOf(self_);
-                    if (!cell || a.empty()) return ev::undefined();
-                    auto* n = cell->node();
-                    if (!n) return ev::undefined();
+                    if (a.empty()) return ev::undefined();
+                    // Convert first: toDouble runs a script's valueOf, which
+                    // may destroy this node, and allocates (self_ is a copy).
+                    const Rooted self(self_);
                     int handle = satCast<int>(ev::toDouble(a[0]));
                     bool isVoice = a.size() >= 2 && ev::toBool(a[1]);
+                    auto* cell = sceneNodeCellOf(self);
+                    if (!cell) return ev::undefined();
+                    auto* n = cell->node();
+                    if (!n) return ev::undefined();
                     bro::engine::SceneAudioSync::attachAudioEmitter(cell->token, n, handle, isVoice);
                     return ev::undefined();
                 });
