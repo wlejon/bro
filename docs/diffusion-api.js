@@ -20,7 +20,7 @@
  *     DPM-Solver schedulers, LoRA (merged), ControlNet, img2img, inpaint,
  *     INT8 (W8A16) quantization.
  *   - Flux — CLIP (pooled) + T5-XXL encoders + Flux DiT + VAE, flow-match
- *     scheduler. txt2img only.
+ *     scheduler. txt2img and img2img (no inpaint / ControlNet).
  *   - Sana — Gemma-2 encoder + Linear DiT + DC-AE f32c32 autoencoder (32x
  *     latent, vs 8x for SD/Flux), flow-match (SCM for the guidance-distilled
  *     Sana-Sprint). txt2img plus the identity-anchor seam; no img2img /
@@ -126,7 +126,9 @@
  *
  * @property {string}  [initImagePath]      img2img: VAE-encode this image and noise it
  *           to the right point in the schedule instead of starting from pure Gaussian
- *           noise. Decoded by broimage and resized to width x height. SD1.5 only.
+ *           noise. Decoded by broimage and resized to width x height. SD1.5 and Flux
+ *           (Flux: the latent is (z - shift) * scale and flow-match noised to the
+ *           strength's sigma, as diffusers' FluxImg2ImgPipeline does).
  * @property {number}  [strength=0.8]       0..1 — fraction of the schedule actually
  *           denoised; higher = more freedom from the init. Ignored without initImagePath.
  * @property {boolean} [vaeEncodeSample=false] false = use the VAE mean (deterministic);
@@ -207,7 +209,7 @@
  * @typedef {Object} PipelineConfigSnapshot
  * @property {string}  modelClass       'StableDiffusion' | 'Flux' | 'Sana' | 'PixArt' | 'Krea2' | 'QwenImage21'
  *           The family decides which GenerateOptions keys mean anything: initImagePath /
- *           maskImagePath / strength are SD1.5 only, `controls` needs a registered
+ *           strength are SD1.5 and Flux, maskImagePath is SD1.5 only, `controls` needs a registered
  *           ControlNet, and QwenImage21 additionally accepts `conditionImages` and
  *           `outputResolution` on generate() and prime() (and on
  *           qwenImage21PrimeEdit(), which takes the images as its own argument).
@@ -331,6 +333,13 @@ class Pipeline {
 
   /**
    * True while a background generate owns this pipeline (see generate()).
+   * Besides the model-running calls, every research setter throws while it is
+   * set, since the job reads that state mid-run: loadControlDictionary,
+   * setControl, clearControl, setControlBudget, setControlVector,
+   * removeControl, setIdentityWeight, clearIdentityAnchor, setLoraScale,
+   * clearLoras, removeControlNet, clearControlNets, sigmas() and the krea2*
+   * hooks. Read-only queries (config, controlAxes, controlNorm, numLoras, ...)
+   * still answer.
    * @readonly
    * @type {boolean}
    */
@@ -363,7 +372,7 @@ class Pipeline {
   /**
    * img2img: generate() with opts.initImagePath forced to `imagePath`. The
    * image is VAE-encoded and noised to the point in the schedule `strength`
-   * selects, so the result stays near the init. SD1.5 only.
+   * selects, so the result stays near the init. SD1.5 and Flux.
    *
    * `imagePath` is used verbatim (no asset-path resolution).
    *
