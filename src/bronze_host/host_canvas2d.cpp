@@ -1,6 +1,7 @@
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_canvas2d_matrix.h"
 #include "bronze_host/host_canvas_gradient.h"
+#include "bronze_host/host_canvas_pattern.h"
 #include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_canvas2d_paths.h"
 #include "bronze_host/gl_internal.h"
@@ -34,20 +35,60 @@ std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 
 Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
     auto tracker = std::make_shared<Canvas2DTransformTracker>();
+    // A gradient or pattern assigned to fillStyle/strokeStyle is answered back
+    // as the very object, so it is kept here (and saved/restored alongside the
+    // scene's state); a color is answered from the scene.
     auto customFillStyle = std::make_shared<ev::Persistent>();
+    auto customStrokeStyle = std::make_shared<ev::Persistent>();
     auto fillStyleStack = std::make_shared<std::vector<ev::Persistent>>();
-    tracker->addSaveHook([customFillStyle, fillStyleStack]() {
+    auto strokeStyleStack = std::make_shared<std::vector<ev::Persistent>>();
+    tracker->addSaveHook([customFillStyle, fillStyleStack, customStrokeStyle, strokeStyleStack]() {
         fillStyleStack->emplace_back(customFillStyle->get());
+        strokeStyleStack->emplace_back(customStrokeStyle->get());
     });
-    tracker->addRestoreHook([customFillStyle, fillStyleStack]() {
+    tracker->addRestoreHook([customFillStyle, fillStyleStack, customStrokeStyle, strokeStyleStack]() {
         if (!fillStyleStack->empty()) {
             customFillStyle->set(fillStyleStack->back().get());
             fillStyleStack->pop_back();
+        }
+        if (!strokeStyleStack->empty()) {
+            customStrokeStyle->set(strokeStyleStack->back().get());
+            strokeStyleStack->pop_back();
         }
     });
 
     ObjectBuilder b;
     b.set("canvas", canvasVal);
+
+    // fillStyle and strokeStyle share one setter body: a CanvasGradient or a
+    // CanvasPattern is kept as the object, a string is parsed as a color, and
+    // anything else (an unparseable string, a foreign object) is ignored as
+    // the spec says, leaving the previous style in place.
+    auto setStyle = [el](bool fill, const std::shared_ptr<ev::Persistent>& custom,
+                         std::span<const Value> a) -> Value {
+        if (!el || !el->canvasScene() || a.empty()) return ev::undefined();
+        auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+        if (ev::isObject(a[0])) {
+            if (auto* grad = hostCanvasGradientOf(a[0])) {
+                if (fill) cs->setFillShader(grad->buildShader());
+                else cs->setStrokeShader(grad->buildShader());
+                custom->set(a[0]);
+            } else if (auto* pat = hostCanvasPatternOf(a[0])) {
+                if (fill) cs->setFillPattern(pat->data);
+                else cs->setStrokePattern(pat->data);
+                custom->set(a[0]);
+            }
+            return ev::undefined();
+        }
+        std::string str = ev::toUtf8(a[0]);
+        uint8_t r, g, b, a_col;
+        if (canvas::parseCSSColor(str, r, g, b, a_col)) {
+            custom->set(ev::undefined());
+            if (fill) cs->setFillColor(r, g, b, a_col);
+            else cs->setStrokeColor(r, g, b, a_col);
+        }
+        return ev::undefined();
+    };
 
     b.accessor("fillStyle",
         [el, customFillStyle](Value, std::span<const Value>) -> Value {
@@ -62,28 +103,15 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             }
             return ev::fromUtf8("rgba(0,0,0,1.00)");
         },
-        [el, customFillStyle](Value, std::span<const Value> a) -> Value {
-            if (el && el->canvasScene() && !a.empty()) {
-                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-                if (ev::isObject(a[0])) {
-                    if (auto* grad = hostCanvasGradientOf(a[0])) {
-                        cs->setFillShader(grad->buildShader());
-                    }
-                    customFillStyle->set(a[0]);
-                    return ev::undefined();
-                }
-                customFillStyle->set(ev::undefined());
-                std::string str = ev::toUtf8(a[0]);
-                uint8_t r, g, b, a_col;
-                if (canvas::parseCSSColor(str, r, g, b, a_col)) {
-                    cs->setFillColor(r, g, b, a_col);
-                }
-            }
-            return ev::undefined();
+        [setStyle, customFillStyle](Value, std::span<const Value> a) -> Value {
+            return setStyle(true, customFillStyle, a);
         });
 
     b.accessor("strokeStyle",
-        [el](Value, std::span<const Value>) -> Value {
+        [el, customStrokeStyle](Value, std::span<const Value>) -> Value {
+            if (!customStrokeStyle->get().isUndefined()) {
+                return customStrokeStyle->get();
+            }
             if (el && el->canvasScene()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 uint8_t r, g, b, a;
@@ -92,22 +120,8 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             }
             return ev::fromUtf8("rgba(0,0,0,1.00)");
         },
-        [el](Value, std::span<const Value> a) -> Value {
-            if (el && el->canvasScene() && !a.empty()) {
-                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
-                if (ev::isObject(a[0])) {
-                    if (auto* grad = hostCanvasGradientOf(a[0])) {
-                        cs->setStrokeShader(grad->buildShader());
-                        return ev::undefined();
-                    }
-                }
-                std::string str = ev::toUtf8(a[0]);
-                uint8_t r, g, b, a_col;
-                if (canvas::parseCSSColor(str, r, g, b, a_col)) {
-                    cs->setStrokeColor(r, g, b, a_col);
-                }
-            }
-            return ev::undefined();
+        [setStyle, customStrokeStyle](Value, std::span<const Value> a) -> Value {
+            return setStyle(false, customStrokeStyle, a);
         });
 
     b.accessor("lineWidth",
@@ -408,6 +422,43 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             return ev::undefined();
         });
 
+    b.accessor("imageSmoothingQuality",
+        [el](Value, std::span<const Value>) -> Value {
+            static const char* names[] = {"low", "medium", "high"};
+            int q = 0;
+            if (el && el->canvasScene()) {
+                q = static_cast<canvas::CanvasScene*>(el->canvasScene())->imageSmoothingQuality();
+            }
+            return ev::fromUtf8(names[(q >= 0 && q <= 2) ? q : 0]);
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                // An enum attribute: a value outside the enum is ignored.
+                std::string s = ev::toUtf8(a[0]);
+                if (s == "low") cs->setImageSmoothingQuality(0);
+                else if (s == "medium") cs->setImageSmoothingQuality(1);
+                else if (s == "high") cs->setImageSmoothingQuality(2);
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("filter",
+        [el](Value, std::span<const Value>) -> Value {
+            if (el && el->canvasScene()) {
+                return ev::fromUtf8(static_cast<canvas::CanvasScene*>(el->canvasScene())->filterString());
+            }
+            return ev::fromUtf8("none");
+        },
+        [el](Value, std::span<const Value> a) -> Value {
+            if (el && el->canvasScene() && !a.empty()) {
+                auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+                // An unparseable value is ignored and the filter kept.
+                cs->setFilter(ev::toUtf8(a[0]));
+            }
+            return ev::undefined();
+        });
+
     b.accessor("lineDashOffset",
         [el](Value, std::span<const Value>) -> Value {
             if (el && el->canvasScene()) {
@@ -539,6 +590,10 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         float y1 = static_cast<float>(ev::toDouble(a[4]));
         float r1 = static_cast<float>(ev::toDouble(a[5]));
         return makeRadialGradientValue(x0, y0, r0, x1, y1, r1);
+    });
+
+    b.def("createPattern", 2, [](Value, std::span<const Value> a) -> Value {
+        return createCanvasPatternValue(a);
     });
 
     b.def("drawImage", 9, [el](Value, std::span<const Value> a) -> Value {

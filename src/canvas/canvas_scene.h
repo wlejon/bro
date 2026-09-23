@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -15,11 +16,15 @@
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkFont.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkImageFilter.h>
+#include <include/core/SkMatrix.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkPath.h>
 #include <include/core/SkPathBuilder.h>
 #include <include/core/SkShader.h>
 #include <include/core/SkSurface.h>
+#include <include/core/SkTileMode.h>
 #include <include/core/SkTypeface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
@@ -62,6 +67,29 @@ struct CanvasCmd {
     sk_sp<SkImage> img;
     SkRect src{}, dst{};
     SkSamplingOptions samp;
+    // ctx.filter, resolved to an immutable SkImageFilter on the JS thread when
+    // the draw was recorded. Non-null means the replay draws this command into
+    // a layer that the filter is applied to on restore, and globalAlpha and the
+    // composite operation are then carried by the layer (layerAlpha /
+    // layerBlend) rather than by `paint` — the spec's order is draw, filter,
+    // then alpha and compositing.
+    sk_sp<SkImageFilter> filter;
+    float layerAlpha = 1.0f;
+    SkBlendMode layerBlend = SkBlendMode::kSrcOver;
+};
+
+/// The state behind a CanvasPattern: an immutable image snapshot, the
+/// repetition as a pair of tile modes (kDecal for a non-repeating axis), and
+/// the pattern transform. Shared between the JS CanvasPattern object and every
+/// canvas state whose fill/stroke style names it, because setTransform() after
+/// assignment must reach the next draw. Only ever read and written on the JS
+/// thread: the shader is built when a draw is recorded, and the worker sees
+/// only that shader.
+struct CanvasPatternData {
+    sk_sp<SkImage> image;
+    SkTileMode tileX = SkTileMode::kRepeat;
+    SkTileMode tileY = SkTileMode::kRepeat;
+    SkMatrix transform;  // identity
 };
 
 /// Canvas2D TextMetrics. Every distance is measured from the *alignment point*
@@ -220,6 +248,12 @@ public:
     // the previous gradient).
     void setFillShader(sk_sp<SkShader> shader);
     void setStrokeShader(sk_sp<SkShader> shader);
+
+    // CanvasPattern styles. The shader is built per draw from the pattern's
+    // current transform and the current image-smoothing state, so neither is
+    // frozen at assignment time. Setting a color or a gradient clears it.
+    void setFillPattern(std::shared_ptr<CanvasPatternData> pattern);
+    void setStrokePattern(std::shared_ptr<CanvasPatternData> pattern);
     bool hasFillShader() const   { return static_cast<bool>(state_.fillPaint.getShader()); }
     bool hasStrokeShader() const { return static_cast<bool>(state_.strokePaint.getShader()); }
 
@@ -267,6 +301,15 @@ public:
 
     void setImageSmoothingEnabled(bool v);
     bool imageSmoothingEnabled() const { return imageSmoothingEnabled_; }
+    // 0=low, 1=medium, 2=high.
+    void setImageSmoothingQuality(int q);
+    int imageSmoothingQuality() const { return state_.smoothQuality; }
+
+    // ctx.filter: a CSS <filter-value-list> or "none". Answers false and keeps
+    // the current filter when the string does not parse, which is what the
+    // spec says an invalid assignment does.
+    bool setFilter(const std::string& filter);
+    const std::string& filterString() const { return state_.filterStr; }
 
     void setLineDash(const std::vector<float>& segments);
     const std::vector<float>& lineDash() const;
@@ -455,6 +498,22 @@ private:
     SkCanvas* skCanvas();
     SkPaint makeFillPaint() const;
     SkPaint makeStrokePaint() const;
+    // The paint for a drawImage: globalAlpha and the composite op, unless a
+    // filter moves both onto the replay layer.
+    SkPaint makeImagePaint() const;
+    // The alpha multiplier and blend mode a draw's own paint carries — 1 and
+    // source-over while a filter is set, since the filter layer applies them.
+    float drawAlpha() const;
+    SkBlendMode drawBlend() const;
+    // imageSmoothingEnabled + imageSmoothingQuality as Skia sampling.
+    SkSamplingOptions imageSampling() const;
+    void applyPattern(SkPaint& p, const std::shared_ptr<CanvasPatternData>& pat) const;
+    // Every drawing command funnels through here: stamps the current filter
+    // onto the command and marks the canvas dirty.
+    void recordDraw(CanvasCmd&& cmd);
+    // One replay loop for both the inline and the worker path.
+    static void replayCommands(SkCanvas* c, std::vector<CanvasCmd>& cmds);
+    static void replayOne(SkCanvas* c, CanvasCmd& cmd);
     void applyFont();
     void applyShadow(SkPaint& paint) const;
     float adjustTextX(float x, float textWidth) const;
@@ -527,8 +586,13 @@ private:
         uint8_t shadowR = 0, shadowG = 0, shadowB = 0, shadowA = 0;
         float shadowOX = 0, shadowOY = 0;
         bool imgSmooth = true;
+        int smoothQuality = 0;  // low
         std::vector<float> lineDash;
         float lineDashOffset = 0;
+        std::shared_ptr<CanvasPatternData> fillPattern;
+        std::shared_ptr<CanvasPatternData> strokePattern;
+        std::string filterStr = "none";
+        sk_sp<SkImageFilter> filter;
     };
 
     State state_;

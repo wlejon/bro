@@ -23,6 +23,59 @@ class CanvasGradient {
 
 }
 
+/**
+ * An image tiled as a fill or stroke style, from `ctx.createPattern()`.
+ * The pattern keeps a snapshot of its source taken at createPattern time,
+ * lives in user space (the current transform moves and scales it), and is
+ * sampled with the context's imageSmoothingEnabled / imageSmoothingQuality at
+ * draw time.
+ *
+ * @example
+ *   const p = ctx.createPattern(tileCanvas, 'repeat');
+ *   p.setTransform({ a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 });  // tiles at 2x
+ *   ctx.fillStyle = p;
+ *   ctx.fillRect(0, 0, 200, 200);
+ */
+class CanvasPattern {
+
+  /**
+   * Set the pattern's own transform, applied on top of the context's current
+   * transform. Takes effect on later draws even when the pattern was already
+   * assigned to fillStyle/strokeStyle. Omitted members take their identity
+   * values; `m11/m12/m21/m22/m41/m42` are accepted as aliases of `a..f`.
+   * Throws TypeError for a non-finite member.
+   *
+   * @param {{a?:number,b?:number,c?:number,d?:number,e?:number,f?:number}} [transform]
+   */
+  setTransform(transform) {}
+
+}
+
+/**
+ * The context of a `canvas.getContext('bitmaprenderer')` canvas: it shows an
+ * ImageBitmap handed to it, at that bitmap's size. See imagebitmap-api.js.
+ */
+class ImageBitmapRenderingContext {
+
+  /**
+   * @readonly
+   * @type {HTMLCanvasElement}
+   */
+  canvas;
+
+  /**
+   * Replace the canvas's bitmap with `bitmap`'s pixels and detach `bitmap`
+   * (its width/height become 0 and it can no longer be drawn or transferred).
+   * `null` resets the canvas to transparent black at its own width/height.
+   * Throws InvalidStateError for an already detached or closed bitmap and
+   * TypeError for anything that is not an ImageBitmap.
+   *
+   * @param {ImageBitmap|null} bitmap
+   */
+  transferFromImageBitmap(bitmap) {}
+
+}
+
 class TextMetrics {
 
   /**
@@ -48,14 +101,37 @@ class CanvasRenderingContext2D {
   canvasHeight;
 
   /**
-   * @type {*}
+   * A CSS color string, a CanvasGradient or a CanvasPattern. A gradient or
+   * pattern reads back as the same object; a color reads back as
+   * `rgba(r,g,b,a)`. An unparseable value is ignored.
+   * @type {string|CanvasGradient|CanvasPattern}
    */
   fillStyle;
 
   /**
-   * @type {*}
+   * As fillStyle, for strokes.
+   * @type {string|CanvasGradient|CanvasPattern}
    */
   strokeStyle;
+
+  /**
+   * A CSS filter applied to every later draw (fills, strokes, text,
+   * drawImage; not clearRect or putImageData): "none" (the default) or a
+   * space-separated list of blur(<length>), brightness(), contrast(),
+   * grayscale(), invert(), opacity(), saturate(), sepia() (each a <number> or
+   * <percentage>), hue-rotate(<angle>) and drop-shadow(<color>? <dx> <dy>
+   * <blur>?). Lengths are canvas pixels and are not scaled by the current
+   * transform. The filter runs before globalAlpha and
+   * globalCompositeOperation, as the spec orders them. An invalid value
+   * (unknown function, negative amount, unitless non-zero length, url()) is
+   * ignored and the previous filter kept. Saved and restored with the state.
+   * @example
+   *   ctx.filter = 'blur(4px) grayscale(1)';
+   *   ctx.drawImage(photo, 0, 0);
+   *   ctx.filter = 'none';
+   * @type {string}
+   */
+  filter;
 
   /**
    * @type {number}
@@ -128,12 +204,18 @@ class CanvasRenderingContext2D {
   direction;
 
   /**
+   * false samples drawImage and patterns nearest-neighbour, whatever the
+   * quality.
    * @type {boolean}
    */
   imageSmoothingEnabled;
 
   /**
-   * @type {string}
+   * 'low' (the default: bilinear), 'medium' (bilinear with mipmaps, which
+   * only differs when an image is drawn smaller) or 'high' (a Mitchell
+   * cubic). Any other value is ignored. Applies to drawImage and patterns
+   * while imageSmoothingEnabled is true. Saved and restored with the state.
+   * @type {'low'|'medium'|'high'}
    */
   imageSmoothingQuality;
 
@@ -372,6 +454,22 @@ class CanvasRenderingContext2D {
    * @returns {CanvasGradient}
    */
   createRadialGradient(x0, y0, r0, x1, y1, r1) {}
+
+  /**
+   * Make a pattern from an image: an HTMLImageElement / Image, an
+   * HTMLCanvasElement, an HTMLVideoElement (its current frame) or an
+   * ImageBitmap. `repetition` is 'repeat' (also for null or ''), 'repeat-x',
+   * 'repeat-y' or 'no-repeat'; anything else throws SyntaxError. Answers null
+   * for an image that has not finished loading (or a video with no frame);
+   * throws InvalidStateError for a broken image, a closed ImageBitmap or a
+   * canvas with zero width or height, and TypeError for anything else
+   * (ImageData included, as in browsers — wrap it with createImageBitmap).
+   *
+   * @param {HTMLImageElement|HTMLCanvasElement|HTMLVideoElement|ImageBitmap} image
+   * @param {string|null} repetition
+   * @returns {CanvasPattern|null}
+   */
+  createPattern(image, repetition) {}
 
   /**
    * @param {string} text
