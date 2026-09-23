@@ -543,9 +543,12 @@ class BiquadFilterNode extends AudioNode {
  * Differs from Web Audio: what it measures is picked by `source`, not by what
  * is connected to it. An AudioBufferSourceNode upstream writes its processed
  * buffer into the analyser once, at `start()`, and the analyser then reads
- * the tail of that buffer rather than the live output. Any other node
- * connected to it makes it read that (empty) tap, i.e. silence, until
- * disconnected.
+ * the tail of that buffer rather than the live output, until disconnected.
+ * Otherwise (with `source` 0) it reads the engine's mono output mix. A live
+ * source connected to it (an oscillator, directly or through other nodes)
+ * therefore shows up, since sources play whether connected onward or not,
+ * but so does everything else that is playing, and it shows up at its
+ * mixed level.
  */
 class AnalyserNode extends AudioNode {
 
