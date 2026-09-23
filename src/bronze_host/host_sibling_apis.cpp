@@ -282,7 +282,7 @@ void installSiblingApis(engine::Engine& engine) {
     brolm::api::installLM();
     for (const char* name : {"AsyncHandle", "QwenTokenizer", "MistralTokenizer", "GemmaTokenizer",
                              "Llama3Tokenizer", "LMModel", "Qwen35Model", "Qwen3VLModel", "NllbModel",
-                             "ClipModel", "T5Model", "LayaModel"}) {
+                             "ClipModel", "T5Model", "LayaModel", "ModernBertModel", "Grammar"}) {
         adoptGlobalProperty(name);
     }
     {
@@ -423,7 +423,7 @@ void installWorkerSiblingApis() {
     brolm::api::installLM();
     for (const char* name : {"AsyncHandle", "QwenTokenizer", "MistralTokenizer", "GemmaTokenizer",
                              "Llama3Tokenizer", "LMModel", "Qwen35Model", "Qwen3VLModel", "NllbModel",
-                             "ClipModel", "T5Model", "LayaModel"}) {
+                             "ClipModel", "T5Model", "LayaModel", "ModernBertModel", "Grammar"}) {
         adoptGlobalProperty(name);
     }
 #endif
