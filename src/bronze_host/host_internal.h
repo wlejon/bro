@@ -798,6 +798,13 @@ void adoptGlobalProperty(const char* name);
 // primitives); `__bro_image_gpu` (colormap, fbm2D).
 void installObserversModule();
 void installEventsModule();
+// The global object's prototype chain (host_global_proto.cpp): globalThis ->
+// <ctorName>.prototype -> EventTarget.prototype (Object.prototype without
+// one), with Symbol.toStringTag = <ctorName>, and <ctorName> registered as
+// a global whose `new` is an Illegal constructor TypeError. Without it the
+// global object has no prototype and String(window) throws. "Window" for the
+// page realm, "DedicatedWorkerGlobalScope" for a Worker's.
+void installGlobalPrototype(const char* ctorName);
 void installNetSyncModule();
 void installImageGpuModule();
 // js/bro_core.js: the public bro.time / bro.window / bro.settings /

@@ -130,6 +130,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_element_interaction.cpp
     host_html_interfaces.cpp
     host_iframe.cpp
+    host_global_proto.cpp
     host_template.cpp
     host_dialog.cpp
     host_matchmedia.cpp

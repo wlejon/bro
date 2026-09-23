@@ -338,9 +338,10 @@ std::string thrownValueText(Value thrown) {
     }
     Value msgV = ev::getProperty(root.get(), "message");
     if (ev::isString(msgV)) {
+        // Copied out before the `name` read, whose getter may allocate.
+        std::string msg = ev::toUtf8(msgV);
         Value nameV = ev::getProperty(root.get(), "name");
         std::string name = ev::isString(nameV) ? ev::toUtf8(nameV) : std::string("Error");
-        std::string msg = ev::toUtf8(msgV);
         if (name.empty()) return msg;
         return msg.empty() ? name : name + ": " + msg;
     }
@@ -791,22 +792,20 @@ void installWebHostGlobals(engine::Engine& engine) {
         }
     }
     {
-        Value raf = makeRequestAnimationFrame();
-        ev::registerGlobal("requestAnimationFrame", raf);
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "requestAnimationFrame", raf);
-    }
-    {
-        Value caf = makeCancelAnimationFrame();
-        ev::registerGlobal("cancelAnimationFrame", caf);
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "cancelAnimationFrame", caf);
-    }
-    {
-        Value perf = makePerformanceValue();
-        ev::registerGlobal("performance", perf);
-        ev::GlobalValue gt = ev::globalValue("globalThis");
-        if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "performance", perf);
+        // Registered (rooted) first, then read back from the registry for the
+        // globalThis copy: the globalThis lookup may allocate, which a raw
+        // local would not survive.
+        auto registerAndSet = [](const char* name, Value made) {
+            ev::registerGlobal(name, made);
+            ev::GlobalValue gt = ev::globalValue("globalThis");
+            if (!gt.found || !ev::isObject(gt.value)) return;
+            ev::Persistent global(gt.value);
+            ev::Persistent v(ev::globalValue(name).value);
+            ev::setProperty(global.get(), name, v.get());
+        };
+        registerAndSet("requestAnimationFrame", makeRequestAnimationFrame());
+        registerAndSet("cancelAnimationFrame", makeCancelAnimationFrame());
+        registerAndSet("performance", makePerformanceValue());
     }
     installWebGLGlobals();
 
@@ -829,6 +828,10 @@ void installWebHostGlobals(engine::Engine& engine) {
     // The UI event classes (js/events.js) extend the `Event` brokit just
     // installed.
     installEventsModule();
+    // window -> Window.prototype -> EventTarget.prototype -> Object.prototype
+    // (brokit's EventTarget is installed by now), so String(window) and
+    // window instanceof Window work.
+    installGlobalPrototype("Window");
     installDomEventTypes();
     // The math classes BEFORE the roots: bro.math aliases the SpatialHash3D /
     // Rng / Smoother constructors, so they have to exist when the root is

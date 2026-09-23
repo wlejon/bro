@@ -435,6 +435,9 @@ void WorkerInstance::threadFunc() {
     // sibling compute APIs over this thread's own classes, bro.server over
     // the control above (host_bro_root.cpp); the loop below polls them.
     installWorkerBroRoot();
+    // The worker global's prototype chain, as the window's (host_global_proto.cpp):
+    // String(self) is "[object DedicatedWorkerGlobalScope]".
+    installGlobalPrototype("DedicatedWorkerGlobalScope");
 
     // unhandledrejection / rejectionhandled at `self`: bronze reports on this
     // thread's own drains, and the loop below flushes after each of them.
