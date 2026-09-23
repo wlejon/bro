@@ -1,46 +1,87 @@
 // ── Classes & Interfaces ─────────────────────────────────────────────────────
 
+/**
+ * Uniform-grid 3D spatial hash over int32 ids. Ids are UNIQUE KEYS: each id
+ * names at most one entry, so inserting an id that is already present MOVES
+ * that entry to the new position (or sphere) instead of adding a second copy.
+ * To move an object, insert it again; there is no need to remove it first.
+ * Ids are converted to int32.
+ *
+ * Positions and query bounds of any size are defined: cell coordinates clamp
+ * to +-2^30, so a huge, infinite or NaN position still has a cell, and a
+ * query box that is very large or infinite falls back to scanning every entry
+ * rather than walking cells. Every match is checked against the real distance.
+ */
 class SpatialHash3D {
 
   /**
    * Create a 3D spatial hash index.
    *
-   * @param {number} [cellSize=1]
-   * @param {number} [bucketCount=1024]
+   * @param {number} [cellSize=1]  Grid cell edge length. Non-positive values
+   *   are clamped to 1.
    */
-  constructor(cellSize, bucketCount) {}
+  constructor(cellSize) {}
 
   /**
-   * Total number of indexed entries.
+   * Total number of indexed entries (one per distinct id).
    * @readonly
    * @type {number}
    */
   size;
 
   /**
-   * Insert point ID into cell at [x, y, z].
+   * The cell edge length in use.
+   * @readonly
+   * @type {number}
+   */
+  cellSize;
+
+  /**
+   * Largest sphere radius ever inserted (queries dilate by it). It is never
+   * tightened by remove(); clear() or reset() resets it.
+   * @readonly
+   * @type {number}
+   */
+  maxRadius;
+
+  /**
+   * Insert point id at [x, y, z]. If id is already in the index, its entry
+   * moves here (a point or sphere entry becomes this point).
    *
-   * @param {number} id
    * @param {number} x
    * @param {number} y
    * @param {number} z
+   * @param {number} id
    * @returns {SpatialHash3D}
    */
-  insert(id, x, y, z) {}
+  insert(x, y, z, id) {}
 
   /**
-   * Remove point ID from cell at [x, y, z].
+   * Insert a sphere of radius r centred at [x, y, z]. It matches a radius
+   * query when its surface comes within the query radius. As with insert(),
+   * an id already present moves.
    *
-   * @param {number} id
    * @param {number} x
    * @param {number} y
    * @param {number} z
-   * @returns {boolean}
+   * @param {number} r
+   * @param {number} id
+   * @returns {SpatialHash3D}
    */
-  remove(id, x, y, z) {}
+  insertSphere(x, y, z, r, id) {}
 
   /**
-   * Find all point IDs within radius of [x, y, z].
+   * Remove the entry with this id, in O(1). An unknown id is a no-op.
+   *
+   * @param {number} id
+   * @returns {SpatialHash3D}
+   */
+  remove(id) {}
+
+  /**
+   * Find all ids within radius of [x, y, z] (alias: radiusQuery). A point
+   * matches when its distance is <= radius, so radius 0 finds points exactly
+   * at the centre; a negative or NaN radius matches nothing.
    *
    * @param {number} x
    * @param {number} y
@@ -51,7 +92,7 @@ class SpatialHash3D {
   queryRadius(x, y, z, radius) {}
 
   /**
-   * Find all point IDs within bounding box.
+   * Find all ids whose point lies in, or whose sphere touches, the box.
    *
    * @param {number} minX
    * @param {number} minY
@@ -64,21 +105,31 @@ class SpatialHash3D {
   queryAABB(minX, minY, minZ, maxX, maxY, maxZ) {}
 
   /**
-   * Find nearest point ID within maxDist.
+   * Nearest id whose centre lies within maxDist of [x, y, z], by centre
+   * distance (sphere radii are ignored). Returns -1 when none is in range or
+   * maxDist is not > 0.
    *
    * @param {number} x
    * @param {number} y
    * @param {number} z
-   * @param {number} maxDist
+   * @param {number} [maxDist=Infinity]
    * @returns {number}
    */
   nearest(x, y, z, maxDist) {}
 
   /**
-   * Clear all index buckets.
+   * Remove every entry.
    * @returns {SpatialHash3D}
    */
   clear() {}
+
+  /**
+   * Change the cell size and remove every entry.
+   *
+   * @param {number} [cellSize=1]  Non-positive values are clamped to 1.
+   * @returns {SpatialHash3D}
+   */
+  reset(cellSize) {}
 
 }
 
@@ -251,15 +302,53 @@ class Smoother {
  * Comprehensive mathematics and geometry utilities for 2D/3D games and simulations.
  * Includes SpatialHash3D spatial indexing, SplitMix64 deterministic PRNG, single-pole
  * exponential signal smoothing, splines/curves, color conversion, and raycast intersection queries.
+ *
+ * bromath behaviour that shows up outside bro.math:
+ *   - Quaternion to Euler (the rotationX/Y/Z read back from a SceneNode after
+ *     a quaternion, lookAt, animation or physics rotation). The triple is
+ *     XYZ radians, the inverse of q = qz * qy * qx. At the gimbal pole
+ *     (|pitch| = pi/2) roll is folded into yaw: rotationX reads 0 and
+ *     rotationZ carries the combined angle, which is now the correct angle
+ *     (it used to read +-pi/2 whatever the rotation was). The fold starts
+ *     within about 1e-3 rad of the pole, where the separate roll and yaw are
+ *     rounding noise. So near straight up or down, rotationX and rotationZ do
+ *     not read back as written, but the rotation they describe is the same.
+ *   - Matrix inverse (camera view matrix, inverse world transforms for
+ *     decals, probes, splats and normals). Singularity is judged relative to
+ *     the matrix's own scale, not by a fixed determinant cutoff, so a small
+ *     but valid transform (a node at scale 1e-5, say) inverts correctly
+ *     instead of being treated as singular. A zero-scale or non-finite matrix
+ *     is still singular and inverts to the identity.
  * @example
- * const hash = new bro.math.SpatialHash3D(2.0, 4096);
- *   hash.insert(1, 10.0, 5.0, -2.0);
+ * const hash = new bro.math.SpatialHash3D(2.0);
+ *   hash.insert(10.0, 5.0, -2.0, 1);   // x, y, z, id
+ *   hash.insert(11.0, 5.0, -2.0, 1);   // same id: the entry moves, size stays 1
  *   const nearby = hash.queryRadius(10.0, 5.0, -2.0, 5.0);
  * @example
  * const rng = new bro.math.Rng(12345);
  *   const p = rng.inUnitSphere();
  *   const v = bro.math.lerp(0.0, 100.0, 0.5);
  */
+/**
+ * Centripetal Catmull-Rom (alpha 0.5) point between p1 (t = 0) and p2
+ * (t = 1), shaped by the neighbours p0 and p3. Points are {x, y, z} objects
+ * or [x, y, z] arrays; a non-object point is a TypeError.
+ *
+ * A repeated end point (p0 equal to p1, or p3 equal to p2, the usual way to
+ * start or end a spline) is replaced by the reflection of the other
+ * neighbour, so the end segment stays curved instead of becoming a straight
+ * lerp. A zero-length segment (p1 equal to p2) returns p1; if the knots still
+ * coincide (non-finite input) the result is a plain lerp from p1 to p2.
+ *
+ * @param {{x:number,y:number,z:number}|number[]} p0
+ * @param {{x:number,y:number,z:number}|number[]} p1
+ * @param {{x:number,y:number,z:number}|number[]} p2
+ * @param {{x:number,y:number,z:number}|number[]} p3
+ * @param {number} t
+ * @returns {{x:number,y:number,z:number}|null}  null with fewer than 5 arguments.
+ */
+bro.math.catmullRom = function(p0, p1, p2, p3, t) {};
+
 /**
  * Linear interpolation between scalars a and b by factor t.
  *
