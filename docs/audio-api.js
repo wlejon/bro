@@ -434,8 +434,9 @@ class OscillatorNode extends AudioNode {
    * Releases the voice at `when` (engine seconds; default now), at that
    * sample. A stop issued after `start()` always ends the note, even in the
    * same tick with no audio rendered between them; a stop time before the
-   * start time means the voice never sounds. RangeError for a negative or
-   * NaN `when`. No `ended` event is fired for an oscillator.
+   * start time means the voice never sounds. InvalidStateError (a
+   * DOMException) when the oscillator was never started; RangeError for a
+   * negative or NaN `when`. No `ended` event is fired for an oscillator.
    * @param {number} [when]
    */
   stop(when) {}
@@ -665,8 +666,7 @@ class AudioBuffer {
  * `playbackRate`, `detune`, `loop`, `loopStart` and `loopEnd` are live.
  *
  * Differs from Web Audio: the playback id is not exposed, so the engine's
- * setPlayback* methods cannot address it; `stop()` on a source that was
- * never started does nothing instead of throwing InvalidStateError.
+ * setPlayback* methods cannot address it.
  */
 class AudioBufferSourceNode extends AudioNode {
 
@@ -746,7 +746,8 @@ class AudioBufferSourceNode extends AudioNode {
    * or any time already past, stops at once; a later time stops
    * sample-accurately on the audio clock, and calling again moves the stop.
    * A stop at or before the scheduled start means the source never sounds
-   * (it still ends). RangeError for a negative or NaN `when`. `ended` fires
+   * (it still ends). InvalidStateError (a DOMException) when the source was
+   * never started; RangeError for a negative or NaN `when`. `ended` fires
    * on the first frame tick after the playback has stopped.
    * @param {number} [when=0]
    */
