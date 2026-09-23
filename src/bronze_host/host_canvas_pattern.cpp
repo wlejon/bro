@@ -147,6 +147,13 @@ PatternSource resolvePatternSource(Value src) {
             if (!out.image) out.bad = true;
             return out;
         }
+        // An <img> that has never been given a source carries no decoded
+        // image at all (st->image is made on the first src): its request is
+        // "unavailable", which is not usable yet — null, not a TypeError.
+        if (tag == "img") {
+            out.bad = true;
+            return out;
+        }
         if (auto* vc = el->videoControl()) {
             int vw = 0, vh = 0;
             const uint8_t* px = vc->currentFrameRgba(&vw, &vh);
