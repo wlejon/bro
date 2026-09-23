@@ -23,9 +23,10 @@
 # absence ? proving the guard prevents execution rather than reporting it
 # afterwards.
 #
-# WHY THE FINGERPRINT IS RECOMPUTED HERE. It is the first 32 bits of
-# bronze_abi.h's SHA-256 (bronze's src/abi/CMakeLists.txt). Deriving it the
-# same way bronze's build does, from the same file, is what lets `good.dll`
+# WHY THE FINGERPRINT IS RECOMPUTED HERE. It is the first 32 bits of the
+# SHA-256 of bronze_abi.h followed by bronze_abi_tls.h, when the latter exists
+# (bronze's src/abi/CMakeLists.txt). Deriving it the same way bronze's build
+# does, from the same files, is what lets `good.dll`
 # match and `wrongabi.dll` differ without either value being written down
 # anywhere it could go stale.
 #
@@ -101,7 +102,12 @@ if [[ "$BRONZE_DIR" =~ ^([a-zA-Z]):[/\\](.*) ]]; then
 fi
 ABI_HEADER="$BRONZE_DIR/src/abi/bronze_abi.h"
 [[ -f "$ABI_HEADER" ]] || skip "cannot find bronze_abi.h under $BRONZE_DIR"
-FP="$(sha256sum "$ABI_HEADER" | cut -c1-8)"
+ABI_TLS_HEADER="$BRONZE_DIR/src/abi/bronze_abi_tls.h"
+if [[ -f "$ABI_TLS_HEADER" ]]; then
+    FP="$(cat "$ABI_HEADER" "$ABI_TLS_HEADER" | sha256sum | cut -c1-8)"
+else
+    FP="$(sha256sum "$ABI_HEADER" | cut -c1-8)"
+fi
 
 case "$(uname -s)" in
     Darwin) EXT=".dylib" ;;
