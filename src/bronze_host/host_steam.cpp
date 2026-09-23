@@ -770,7 +770,9 @@ Value makeBroSteamValue() {
         return p.get();
     });
 
-    // Achievements & Stats stubs for IDL completeness
+    // Achievements & stats: placeholders. ISteamUserStats isn't bound in
+    // steam_flat, so these answer false / 0 without contacting Steam, and
+    // docs/steam-api.js says so.
     st.def("getAchievement", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
     st.def("setAchievement", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
     st.def("clearAchievement", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });

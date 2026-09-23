@@ -5,12 +5,17 @@
  * bro.steam — Steamworks Integration & Services
  * =============================================================================
  *
- * Steamworks integration providing user authentication, achievements, stats,
- * overlay activation, friends list, rich presence, matchmaking lobbies, and voice chat.
+ * Steamworks integration providing user identity, overlay activation, friends
+ * list, rich presence, matchmaking lobbies, and voice chat.
+ *
+ * Achievements and stats are NOT implemented yet: the ISteamUserStats flat
+ * entry points are not bound, so getAchievement/setAchievement/clearAchievement/
+ * setStat/storeStats always return false and getStat returns 0. They exist so
+ * code written against the full surface loads; don't rely on them.
  * @example
  * if (bro.steam.available) {
  *     console.log('Logged into Steam as:', bro.steam.personaName);
- *     bro.steam.setAchievement('ACH_FIRST_WIN');
+ *     bro.steam.setRichPresence('status', 'In the main menu');
  *   }
  */
 /**
@@ -110,6 +115,9 @@ bro.steam.onlobbyjoinrequest;
  * @type {EventHandler}
  */
 bro.steam.onvoicecaptured;
+
+// Achievements & stats: placeholders, not implemented (see the header). Each
+// returns false (getStat: 0) without contacting Steam.
 
 /**
  * @param {string} name
