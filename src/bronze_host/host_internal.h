@@ -163,10 +163,37 @@ void reportBronzeError(const char* origin, Value thrown);
 // A throw from inside an error handler is never re-dispatched. ALLOCATES.
 bool hostDispatchUncaughtError(Value thrown);
 
-// The main window's `postMessage(message, targetOrigin, transfer)`
+// `window.postMessage(message, targetOrigin, transfer)` for every realm
 // (host_window_message.cpp): clones at the call, delivers a `message`
-// MessageEvent at the window as a later task. ALLOCATES.
+// MessageEvent at the CALLING realm's window as a later task. ALLOCATES.
 Value makeWindowPostMessage();
+
+// The origin every realm of the page has (`location.origin`).
+inline constexpr const char* kHostPageOrigin = "bro://app";
+
+// The parsed tail of a postMessage call: (message, targetOrigin, transfer),
+// (message, {targetOrigin, transfer}) and — with `legacyTransferArray` —
+// (message, transferArray). `deliver` is false when targetOrigin names
+// another origin (the message is then dropped silently, per spec).
+struct PostMessageTarget {
+    std::string targetOrigin;
+    ev::Persistent transfer;
+    bool deliver = true;
+};
+// False with `thrown` set to a pending SyntaxError for a bad targetOrigin.
+bool parsePostMessageArgs(std::span<const Value> args, const char* what,
+                          bool legacyTransferArray, PostMessageTarget& out, Value& thrown);
+// structuredClone `message` with `transfer`; the MessagePorts in the list come
+// back as `portsOut` (an array). False with `thrown` pending on a clone error.
+bool cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& transfer,
+                         ev::Persistent& dataOut, ev::Persistent& portsOut, Value& thrown);
+// Deliver a `message` MessageEvent at one window: the realm `scopeId` (0 =
+// main; a window host id; an iframe document's scope) whose document is
+// `doc` (ignored for 0). `onmessage` first, then that document's window
+// listeners. A window that has gone away receives nothing. ALLOCATES.
+void deliverWindowMessageEvent(uint64_t scopeId, dom::Document* doc, const ev::Persistent& data,
+                               const ev::Persistent& ports, const ev::Persistent& source,
+                               const std::string& origin);
 
 // The text `reportBronzeError` prints for a thrown value: its `stack` when a
 // program set one, else `Name: message` for an Error, else its JSON for any
@@ -302,6 +329,8 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
 // TypeError for a descriptor without a string `type`.
 Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
 Value hostDispatchToWindow(Value desc);
+// The same at one document's window — a secondary window's, an iframe's.
+Value hostDispatchToWindowOf(dom::Document* doc, Value desc);
 
 // ---------------------------------------------------------------------------
 // The node registry (host_element.cpp owns it; host_node.cpp shares it)

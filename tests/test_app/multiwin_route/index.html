@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head><style>html, body { margin: 0; background: #000; }</style></head>
+<body>
+  <!-- postMessage routing child for tests/window/test_multiwindow_postmessage_routing.js.
+       Records every `message` event its OWN window receives, posts one message
+       to itself at load, and on 'report' sends its log to window.opener. -->
+  <script>
+    var log = [];
+    var viaOn = 0;
+    window.onmessage = function () { viaOn++; };
+    window.addEventListener('message', function (e) {
+      if (e.data === 'report') {
+        window.opener.postMessage({
+          log: log.slice(),
+          viaOn: viaOn,
+          openerIsObject: typeof window.opener === 'object' && window.opener !== null,
+          openerStable: window.opener === window.opener,
+        }, '*');
+        return;
+      }
+      log.push({
+        data: e.data,
+        origin: e.origin,
+        isMessageEvent: e instanceof MessageEvent,
+        sourceIsSelf: e.source === window,
+        sourceIsOpener: e.source === window.opener,
+        docIsMine: document.title === 'route-child',
+      });
+    });
+    document.title = 'route-child';
+    window.postMessage({ self: 'child' }, '*');
+  </script>
+</body>
+</html>

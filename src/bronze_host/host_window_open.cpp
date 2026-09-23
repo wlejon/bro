@@ -37,11 +37,69 @@ struct ParentMessage {
     Message msg;
 };
 
+// A window.postMessage between two windows, cloned at the call and waiting for
+// the drain: `hostId` is the secondary window on the other end.
+struct WindowMessage {
+    uint64_t hostId = 0;
+    ev::Persistent data;
+    ev::Persistent ports;
+};
+
 static std::unordered_map<uint64_t, std::shared_ptr<WindowHandleState>> s_handleStates;
 static std::unordered_map<uint64_t, ev::Persistent> s_windowHandles;
-static std::unordered_map<uint64_t, std::vector<Message>> s_childInboxes;
+// handle.postMessage → the opened window's own window (MessageEvent there).
+static std::unordered_map<uint64_t, std::vector<WindowMessage>> s_childInboxes;
+// bro.window.parent.postMessage → the handle's 'message' listeners.
 static std::vector<ParentMessage> s_parentInbox;
-static std::unordered_map<uint64_t, std::vector<ev::Persistent>> s_childMessageListeners;
+// window.opener.postMessage → the main window (MessageEvent there).
+static std::vector<WindowMessage> s_openerInbox;
+// Each secondary window's `window.opener`: the WindowProxy-shaped object that
+// stands for the main window inside it, and the `source` of every message
+// the main window posts to it.
+static std::unordered_map<uint64_t, ev::Persistent> s_openerProxies;
+
+// The secondary window whose realm is running, or 0.
+static uint64_t currentWindowHostId() {
+    engine::Engine* eng = hostEngine();
+    dom::Document* doc = currentHostDocument();
+    if (!eng || !doc) return 0;
+    engine::WindowHost* wh = eng->windowHostForDocument(doc);
+    return wh ? wh->id : 0;
+}
+
+static Value openerProxyFor(uint64_t hostId) {
+    auto it = s_openerProxies.find(hostId);
+    if (it != s_openerProxies.end()) return it->second.get();
+
+    ObjectBuilder b;
+    b.def("postMessage", 2, [hostId](Value, std::span<const Value> a) -> Value {
+        if (a.empty()) {
+            return ev::throwTypeError(
+                "Window.postMessage: 1 argument required, but only 0 present");
+        }
+        ev::Persistent message(a[0]);
+        PostMessageTarget target;
+        Value thrown = ev::undefined();
+        if (!parsePostMessageArgs(a, "Window.postMessage", false, target, thrown)) return thrown;
+        WindowMessage m;
+        m.hostId = hostId;
+        if (!cloneForPostMessage(message, target.transfer, m.data, m.ports, thrown)) {
+            return thrown;
+        }
+        if (target.deliver) s_openerInbox.push_back(std::move(m));
+        return ev::undefined();
+    });
+    // The main window outlives every secondary one.
+    b.accessor("closed", [](Value, std::span<const Value>) -> Value {
+        return ev::fromBool(false);
+    }, nullptr);
+    b.def("focus", 0, [](Value, std::span<const Value>) -> Value {
+        return ev::undefined();
+    });
+    Value proxy = b.get();
+    auto [ins, _] = s_openerProxies.emplace(hostId, ev::Persistent(proxy));
+    return ins->second.get();
+}
 
 static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
     uint64_t id = state->id;
@@ -215,22 +273,32 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
         return ev::undefined();
     });
 
+    // The opened window's postMessage, seen from its opener: a `message`
+    // MessageEvent at THAT window (onmessage + its window listeners), with
+    // `source` its `window.opener` and origin the page's. Takes the Window
+    // overloads plus (message, transferArray), the Worker-style form bro's
+    // first callers used. The clone — and so any transfer's detach — happens
+    // at the call even when the window has closed.
     b.def("postMessage", 2, [id](Value, std::span<const Value> a) -> Value {
-        if (a.empty()) return ev::undefined();
-        // The transfer list is rooted element by element, and the message is
-        // read from its rooted argument slot, never from a copy taken before
-        // those allocating reads.
-        std::vector<ev::Persistent> transfers = collectTransferList(a);
-        Message msg;
-        const std::vector<Value> transferVals = currentValues(transfers);
-        if (!serializeMessage(a[0], transferVals, msg)) {
-            return ev::throwTypeError("postMessage: value is not cloneable");
+        if (a.empty()) {
+            return ev::throwTypeError(
+                "Window.postMessage: 1 argument required, but only 0 present");
         }
+        ev::Persistent message(a[0]);
+        PostMessageTarget target;
+        Value thrown = ev::undefined();
+        if (!parsePostMessageArgs(a, "Window.postMessage", true, target, thrown)) return thrown;
+        WindowMessage m;
+        m.hostId = id;
+        if (!cloneForPostMessage(message, target.transfer, m.data, m.ports, thrown)) {
+            return thrown;
+        }
+        if (!target.deliver) return ev::undefined();
         auto it = s_handleStates.find(id);
         if (it != s_handleStates.end() && !it->second->closed && it->second->engine) {
             auto* host = it->second->engine->windowHostById(id);
             if (host && !host->pendingClose) {
-                s_childInboxes[id].push_back(std::move(msg));
+                s_childInboxes[id].push_back(std::move(m));
             }
         }
         return ev::undefined();
@@ -241,23 +309,10 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
 
 } // namespace
 
-void addWindowHostChildMessageListener(uint64_t hostId, Value fn) {
-    if (ev::isFunction(fn)) {
-        s_childMessageListeners[hostId].emplace_back(fn);
-    }
-}
-
-void removeWindowHostChildMessageListener(uint64_t hostId, Value fn) {
-    auto it = s_childMessageListeners.find(hostId);
-    if (it != s_childMessageListeners.end()) {
-        auto& list = it->second;
-        for (auto lit = list.begin(); lit != list.end(); ++lit) {
-            if (lit->get() == fn) {
-                list.erase(lit);
-                break;
-            }
-        }
-    }
+Value hostWindowOpener() {
+    const uint64_t hostId = currentWindowHostId();
+    if (hostId == 0) return ev::null();
+    return openerProxyFor(hostId);
 }
 
 void installBroWindowParent(Value broWin) {
@@ -407,8 +462,8 @@ void windowHostNotifyClosed(uint64_t id) {
     Value evVal = evObj.get();
     auto listeners = sIt->second->closeListeners;
     s_windowHandles.erase(hIt);
-    s_childMessageListeners.erase(id);
     s_childInboxes.erase(id);
+    s_openerProxies.erase(id);
     clearRealmScope(id);
     for (auto& fn : listeners) {
         ev::call(fn.get(), handle, std::span<const Value>(&evVal, 1));
@@ -435,68 +490,35 @@ void drainHostWindowMessages() {
     auto* eng = hostEngine();
     if (!eng) return;
 
-    // Phase 1: Children first
+    // Phase 1: Children first — each a MessageEvent at the opened window,
+    // with its `window.opener` as the source.
     if (!s_childInboxes.empty()) {
         auto inboxes = std::move(s_childInboxes);
         s_childInboxes.clear();
 
         for (auto& [hostId, batch] : inboxes) {
-            auto* host = eng->windowHostById(hostId);
-            if (!host || host->pendingClose || !host->document) continue;
-
-            dom::Document* subDoc = host->document.get();
-            dom::Document* prevDoc = currentHostDocument();
-            ev::GlobalValue docG = ev::globalValue("document");
-            ev::GlobalValue gt = ev::globalValue("globalThis");
-            Value prevDocVal = docG.found ? docG.value : ev::null();
-
-            enterRealmScope(hostId);
-            setCurrentHostDocument(subDoc);
-            Value subDocVal = hostDocumentValue(subDoc);
-            ev::registerGlobal("document", subDocVal);
-            if (gt.found && ev::isObject(gt.value)) {
-                ev::setProperty(gt.value, "document", subDocVal);
-            }
-
             for (auto& m : batch) {
-                Value data = deserializeMessage(m);
-
-                ObjectBuilder evt;
-                evt.set("type", ev::fromUtf8("message"));
-                evt.set("data", data);
-                evt.set("target", gt.value);
-                Value evtVal = evt.get();
-
-                auto it = s_childMessageListeners.find(hostId);
-                if (it != s_childMessageListeners.end()) {
-                    auto listenersCopy = it->second;
-                    for (auto& fn : listenersCopy) {
-                        if (ev::isFunction(fn.get())) {
-                            ev::CallResult r = ev::call(fn.get(), gt.value, std::span<const Value>(&evtVal, 1));
-                            if (r.thrown) reportBronzeError("child window message listener", r.value);
-                        }
-                    }
-                }
-
-                Value onmessage = ev::getProperty(gt.value, "onmessage");
-                if (ev::isFunction(onmessage)) {
-                    ev::CallResult r = ev::call(onmessage, gt.value, std::span<const Value>(&evtVal, 1));
-                    if (r.thrown) reportBronzeError("child window onmessage", r.value);
-                }
+                auto* host = eng->windowHostById(hostId);
+                if (!host || host->pendingClose || !host->document) break;
+                ev::Persistent source(openerProxyFor(hostId));
+                deliverWindowMessageEvent(hostId, host->document.get(), m.data, m.ports, source,
+                                          kHostPageOrigin);
             }
-
-            if (!ev::isNull(prevDocVal)) {
-                ev::registerGlobal("document", prevDocVal);
-                if (gt.found && ev::isObject(gt.value)) {
-                    ev::setProperty(gt.value, "document", prevDocVal);
-                }
-            }
-            setCurrentHostDocument(prevDoc);
-            exitRealmScope();
         }
     }
 
-    // Phase 2: Parent second (in post order)
+    // Phase 2: the main window, in post order — window.opener.postMessage
+    // from a secondary window, a MessageEvent whose source is that window's
+    // handle; then bro.window.parent.postMessage to the handles.
+    if (!s_openerInbox.empty()) {
+        auto batch = std::move(s_openerInbox);
+        s_openerInbox.clear();
+        for (auto& m : batch) {
+            auto hIt = s_windowHandles.find(m.hostId);
+            ev::Persistent source(hIt != s_windowHandles.end() ? hIt->second.get() : ev::null());
+            deliverWindowMessageEvent(0, nullptr, m.data, m.ports, source, kHostPageOrigin);
+        }
+    }
     if (!s_parentInbox.empty()) {
         auto batch = std::move(s_parentInbox);
         s_parentInbox.clear();
@@ -513,7 +535,8 @@ void resetWindowHostOpenState() {
     s_windowHandles.clear();
     s_childInboxes.clear();
     s_parentInbox.clear();
-    s_childMessageListeners.clear();
+    s_openerInbox.clear();
+    s_openerProxies.clear();
 }
 
 Value handleWindowOpen(std::span<const Value> a) {

@@ -36,6 +36,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "dom/event_target.h"
+#include "dom/event_dispatch.h"
 
 #include <algorithm>
 #include <cctype>
@@ -736,15 +737,26 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc) 
     return ev::fromBool(notPrevented);
 }
 
+// The window of the realm the caller is running in: a secondary window's or an
+// iframe's own document when one is current, the main document otherwise.
+// Every realm shares one `window` object, so dispatching at "the" window has
+// to mean this one — the main document's listeners are not a secondary
+// window's.
 Value hostDispatchToWindow(Value desc) {
-    EventSpec spec;
-    if (!readEventSpec(desc, "window", spec)) return ev::undefined();
     engine::Engine* engine = hostEngine();
     if (!engine) return ev::throwError("window.dispatchEvent: no engine");
+    dom::Document* doc = currentHostDocument();
+    return hostDispatchToWindowOf(doc ? doc : engine->document(), desc);
+}
+
+Value hostDispatchToWindowOf(dom::Document* doc, Value desc) {
+    EventSpec spec;
+    if (!readEventSpec(desc, "window", spec)) return ev::undefined();
+    if (!doc) return ev::throwError("window.dispatchEvent: no document");
     ev::Persistent descRoot(desc);
-    return ev::fromBool(dispatchEventSpec(spec, [engine, &descRoot](dom::Event& evt) {
+    return ev::fromBool(dispatchEventSpec(spec, [doc, &descRoot](dom::Event& evt) {
         ProvidedEventScope scope(evt, descRoot.get());
-        engine->dispatchWindowEvent(evt);
+        dom::dispatchWindowEvent(doc, evt);
     }));
 }
 

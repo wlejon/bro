@@ -512,6 +512,10 @@ void installWebHostGlobals(engine::Engine& engine) {
                    },
                    nullptr);
 
+        b.accessor("opener",
+                   [](Value, std::span<const Value>) { return hostWindowOpener(); },
+                   nullptr);
+
         b.def("close", 0, [enginePtr](Value, std::span<const Value>) -> Value {
             dom::Document* curDoc = currentHostDocument();
             if (curDoc && enginePtr) {
@@ -539,13 +543,6 @@ void installWebHostGlobals(engine::Engine& engine) {
             dom::ListenerOptions opts = readOptions(argAt(a, 2));
             ev::Persistent fnP(fn);
             dom::Document* targetDoc = currentHostDocument() ? currentHostDocument() : (enginePtr ? enginePtr->document() : nullptr);
-            if (type == "message") {
-                if (targetDoc && enginePtr) {
-                    if (auto* wh = enginePtr->windowHostForDocument(targetDoc)) {
-                        addWindowHostChildMessageListener(wh->id, fn);
-                    }
-                }
-            }
             if (!targetDoc) {
                 return ev::throwError(
                     "window.addEventListener: the engine refused the registration");
@@ -582,13 +579,6 @@ void installWebHostGlobals(engine::Engine& engine) {
             if (ev::isObject(typeV)) return ev::undefined();
             std::string type = ev::toUtf8(typeV);
             dom::Document* targetDoc = currentHostDocument() ? currentHostDocument() : (enginePtr ? enginePtr->document() : nullptr);
-            if (type == "message") {
-                if (targetDoc && enginePtr) {
-                    if (auto* wh = enginePtr->windowHostForDocument(targetDoc)) {
-                        removeWindowHostChildMessageListener(wh->id, fn);
-                    }
-                }
-            }
             auto& list = g_host->windowListeners;
             for (auto it = list.begin(); it != list.end(); ++it) {
                 if (it->type == type && ev::toBits(it->fn.get()) == ev::toBits(fn)) {

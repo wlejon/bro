@@ -18,8 +18,10 @@ void windowHostNotifyClosed(uint64_t id);
 void windowHostNotifyResized(uint64_t id, int width, int height);
 void windowHostNotifyMessage(uint64_t id, bronze::Value data);
 
-void addWindowHostChildMessageListener(uint64_t hostId, bronze::Value fn);
-void removeWindowHostChildMessageListener(uint64_t hostId, bronze::Value fn);
+// `window.opener` as the running realm sees it: in a secondary window, an
+// object standing for the main window (postMessage, closed, focus); null in
+// the main window and in an iframe.
+bronze::Value hostWindowOpener();
 
 void drainHostWindowMessages();
 
