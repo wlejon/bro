@@ -16,15 +16,22 @@
  *
  * ── Devices ──
  * Every loader takes `opts.device`: 'cuda' (or the alias 'gpu'), 'metal', or
- * 'cpu'. brovisionml resolves anything it does not recognise — including an
- * omitted `device` — to CPU, and an unavailable backend silently falls back to
- * CPU too, which for these models means minutes instead of milliseconds. So
- * ASK FOR THE GPU EXPLICITLY, gate a big load on `bro.gpu`, and read back
- * `model.device` to see what you actually got.
+ * 'cpu' (case-insensitive). Omitted, it picks the best backend present —
+ * CUDA, then Metal, then CPU — so a GPU machine gets the GPU without asking.
+ * Anything else throws a TypeError, and asking for a backend that is not
+ * available (not compiled in, or no device) throws an Error rather than
+ * falling back to CPU, which for these models means minutes instead of
+ * milliseconds. Gate a big load on `bro.gpu` and read back `model.device` to
+ * see what you got.
  *
  *   if (!bro.gpu.available) return;                     // no GPU, don't bother
- *   const depth = bro.vision.loadDepth(dir, { device: 'cuda' });
+ *   const depth = bro.vision.loadDepth(dir);            // CUDA/Metal when present
  *   console.log(depth.device);                          // 'CUDA' | 'Metal' | 'CPU'
+ *   bro.vision.loadDepth(dir, { device: 'tpu' });       // TypeError
+ *
+ * A loader throws when its path is missing, not a directory/file it can read,
+ * or holds a checkpoint that fails to load; the message names the loader
+ * ("loadDepth failed: …").
  *
  * ── Inputs ──
  * Every model takes an image as either:
@@ -35,10 +42,12 @@
  * Holding an `ImageBitmap`? Draw it to a canvas and pass the `getImageData()`
  * result — that object already has the `{ width, height, data }` shape.
  *
- * A model whose weights failed to load still answers: you get a correctly
- * shaped empty / mid-gray result instead of a throw, so a surface probe works
- * without a checkpoint on disk. Check `min`/`max`, `num`, or `masks.length`
- * rather than assuming inference ran.
+ * An `{ width, height, data }` image needs integer sides in 1..65536 and a
+ * `data` of at least width*height*4 bytes; anything else throws a TypeError
+ * rather than reading past the buffer.
+ *
+ * A model with no weights never answers with a placeholder: calling a model
+ * after `dispose()` (or one whose weights are not loaded) throws.
  */
 
 
@@ -142,7 +151,7 @@ bro.vision.init();
  * checkpoint is read as ViT-B.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device='cpu']  'cuda' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'gpu' | 'metal' | 'cpu'
  * @returns {Sam}
  */
 const sam = bro.vision.loadSam('weights/sam-vit-base', { device: 'cuda' });
@@ -246,7 +255,7 @@ sam.segmentEverything(photo, {
  * a directory holding model.safetensors, or the file itself.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device='cpu']  'cuda' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'gpu' | 'metal' | 'cpu'
  * @returns {DepthEstimator}
  */
 const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small',
@@ -284,7 +293,7 @@ ctx.putImageData(new ImageData(turbo.data, turbo.width, turbo.height), 0, 0);
 /**
  * @param {string} path  dir holding model.safetensors, or the file
  * @param {Object} [opts]
- * @param {string} [opts.device='cpu']
+ * @param {string} [opts.device=best available]
  * @returns {NormalEstimator}
  */
 const normals = bro.vision.loadNormal('weights/dsine', { device: 'cuda' });
@@ -419,9 +428,9 @@ const sem = segformer.detect(photo, {
  * @param {string} path
  * @param {Object} [opts]
  * @param {number} [opts.modelSize=1024]  square inference resolution, a
- *   multiple of 32. Lower is faster at the cost of edge fidelity; 1024 is the
- *   reference recipe.
- * @param {string} [opts.device='cpu']
+ *   multiple of 32 up to 4096 (anything else is a TypeError). Lower is faster
+ *   at the cost of edge fidelity; 1024 is the reference recipe.
+ * @param {string} [opts.device=best available]
  * @returns {Birefnet}   props: `device`, `modelSize`
  */
 const rembg = bro.vision.loadBirefnet(
@@ -456,8 +465,7 @@ cut.alpha[y * cut.width + x];          // per-pixel coverage in [0, 1]
 /**
  * Birefnet.dispose() — free the weights now. They are GPU-resident and
  * invisible to the JS heap accounting, so a caller done with the model must
- * not wait for the finalizer. The handle still answers afterwards, but with
- * the empty placeholder result.
+ * not wait for the finalizer. Calling removeBackground() afterwards throws.
  */
 rembg.dispose();
 
@@ -482,7 +490,7 @@ rembg.dispose();
  * @param {number} [opts.resolution=256]  256 | 512 | 1024
  * @param {string} [opts.variant='r']     'r' (config-R, rotation-equivariant)
  *                                        | 't' (config-T, translation-equivariant)
- * @param {string} [opts.device='cpu']
+ * @param {string} [opts.device=best available]
  * @returns {StyleGAN3}
  *   props: `device`, `resolution` (and its alias `imgResolution`),
  *   `imgChannels` (3), `variant`, `zDim` (512), `wDim` (512), `numWs`, `cDim`
@@ -585,7 +593,7 @@ const edited = gan.synthesize(rec.w);      // edit rec.w first, then re-render
  * @param {Object} [opts]
  * @param {string} [opts.variant='small']  'small'|'vit_s' | 'base'|'vit_b' |
  *                                         'large'|'vit_l'
- * @param {string} [opts.device='cpu']
+ * @param {string} [opts.device=best available]
  * @returns {Dinov2}
  *   props: `device`, `patchSize`, `embedDim`, `defaultSize` (the config's
  *   img_size, 518 for ViT-S)
@@ -618,7 +626,7 @@ d2.dispose();
  * the checkpoint. The variant is fixed at ViT-H.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device='cpu']
+ * @param {string} [opts.device=best available]
  * @returns {Dinov3}
  *   props: `device`, `patchSize`, `embedDim`, `numRegisterTokens`,
  *   `defaultSize`
@@ -678,15 +686,24 @@ d3.dispose();
 const boxes = bro.vision.decodeBoxes(head, { numClasses: 80, transposed: true });
 
 /**
- * bro.vision.nms(boxes, opts?) — greedy non-maximum suppression over a box
- * array you already have.
- * @param {Array<{x1, y1, x2, y2, score?, classId?}>} boxes  must be an Array
+ * bro.vision.nms(boxes, opts?) — greedy non-maximum suppression over boxes
+ * you already have.
+ * @param {Array<{x1,y1,x2,y2,score?,classId?}>|Array<number[]>|Array<Float32Array>|Float32Array|ArrayBuffer|{data|boxes|buffer}} boxes
+ *   box objects; per-box arrays or Float32Array views `[x1,y1,x2,y2,score?,classId?]`;
+ *   or one flat Float32Array / ArrayBuffer of `stride` floats per box (bare or
+ *   under `.data` / `.boxes` / `.buffer`)
  * @param {Object} [opts]
  * @param {number} [opts.iouThreshold=0.45]
  * @param {number} [opts.maxDetections=100]
  * @param {boolean} [opts.perClass=false]     suppress only within a class
  * @param {number} [opts.scoreThreshold=0]    drop below this before suppressing
- * @returns {Array<{x1, y1, x2, y2, score, classId}>}  sorted by score
+ * @param {number} [opts.stride]              floats per box in a flat input
+ *   (4 = no score, 5 = no class, 6); below 4 it is inferred from the length
+ * @param {boolean} [opts.returnIndices=false] return the kept input indices
+ * @param {boolean} [opts.asTypedArray=false]  kept boxes as a flat Float32Array
+ *   (6 per box), or with returnIndices an Int32Array
+ * @returns {Array<{x1, y1, x2, y2, score, classId, index}>|number[]|Float32Array|Int32Array}
+ *   sorted by score; `index` is the box's position in the input
  */
 const kept = bro.vision.nms(boxes, { iouThreshold: 0.5, perClass: true });
 
@@ -704,6 +721,8 @@ const kept = bro.vision.nms(boxes, { iouThreshold: 0.5, perClass: true });
  * @param {number} [opts.targetHeight]  output height (defaults to height, else 512)
  * @param {number} [opts.threshold=0]   Float32Array cutoff
  * @returns {{ width: number, height: number, data: Uint8Array }}  0 or 255
+ *   Sides are capped at 16384, and a typed source must hold width*height
+ *   values; either violation is a RangeError.
  */
 const up = bro.vision.rasterizeMask(best.logits, {
   width: seg.width, height: seg.height,
@@ -719,8 +738,8 @@ const up = bro.vision.rasterizeMask(best.logits, {
  *   Uint8Array   — normalized /255, or palette-looked-up with map:'palette'.
  *   Int32Array   — always class ids through the discrete palette.
  * @param {Object} [opts]
- * @param {number} [opts.width=512]
- * @param {number} [opts.height=512]
+ * @param {number} [opts.width=512]   1..16384, else a RangeError
+ * @param {number} [opts.height=512]  1..16384, else a RangeError
  * @param {string} [opts.map='turbo']  'turbo' | 'viridis' | 'grayscale' |
  *                                     'palette' (Uint8Array class ids)
  * @param {number} [opts.min]  pin the low end (disables auto-ranging)
@@ -739,23 +758,28 @@ ctx.putImageData(new ImageData(semRgba.data, semRgba.width, semRgba.height), 0, 
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * bro.vision.loadModel(path, opts?) — a task-tagged generic handle. It records
- * the path, device and thresholds but wires up no network of its own: its
- * `predict()`, `detect()`, `segment()`, `depth()`, `pose()` and `ocr()` methods
- * return correctly shaped EMPTY results, not inference. It exists so a caller
- * can carry a model reference through a pipeline before the specific loader is
- * chosen. For real work use the specific loaders above.
+ * bro.vision.loadModel(path, opts?) — one loader for every task: `opts.type`
+ * picks the network, loads its weights exactly as the specific loader would,
+ * and the handle dispatches to it. `predict()` runs the loaded task;
+ * `detect()` (hed / lineart / mlsd / openpose / segformer), `segment()` (sam /
+ * segformer / birefnet), `depth()` and `pose()` run it when it is one of
+ * theirs and throw otherwise. `ocr()` always throws — there is no OCR network.
+ * A type it does not know throws "unrecognized task type", and so does the
+ * default: pass one.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.type='generic']     free-form task tag, read back as `.type`
+ * @param {string} opts.type  'depth' | 'sam' (alias 'segment') | 'normal' |
+ *   'hed' (alias 'edge') | 'lineart' | 'mlsd' | 'openpose' (alias 'pose') |
+ *   'segformer' | 'birefnet'; read back as `.type`
  * @param {number} [opts.confThreshold=0.25]
  * @param {number} [opts.iouThreshold=0.45]
- * @param {string} [opts.device='cpu']
+ * @param {string} [opts.device=best available]
  * @returns {VisionModel}  props: `device`, `type`, `isLoaded`; also `dispose()`
  */
-const generic = bro.vision.loadModel('weights/whatever', { type: 'detection' });
-generic.type;       // 'detection'
+const generic = bro.vision.loadModel('weights/depth-anything-v2-small', { type: 'depth' });
+generic.type;       // 'depth'
 generic.isLoaded;   // true
+generic.depth(photo);   // the DepthEstimator result
 
 
 // ═════════════════════════════════════════════════════════════════════════════

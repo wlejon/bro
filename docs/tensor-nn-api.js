@@ -11,8 +11,13 @@
 // Conventions carried over from tensor-api.js:
 //   - `mask|null` is a device-resident FP32 GpuTensor (1 valid / 0 masked) or
 //     null. Host Float32Arrays are rejected.
-//   - INT32 buffers (cuSeq*, posT/posH/posW, pooling Idx, sampler indices) are
-//     GpuTensors whose storage is read as INT32, so they never leave the device.
+//   - INT32 buffers (cuSeq*, posT/posH/posW, pooling Idx, seqBounds,
+//     ropeQkvPackedInplace's pos) are GpuTensors; GpuTensor.prototype.uploadInt32
+//     builds one. Their values address memory the kernels do not bounds-check,
+//     so the binding reads them back to the host (one device sync per call)
+//     and throws on an out-of-range entry. Every one except pooling Idx (the
+//     forward's INT32 output) also accepts whole-number FP32. The sampler's
+//     `indices` is an INT32 output and stays on the device.
 //   - NCHW / NCTHW / NCL activations are packed as 2D tensors — (N, C*H*W),
 //     (N, C*T*H*W), (N, C*L) — with the spatial dims passed as ints.
 //   - Outputs are resized + dtype-set to their input unless a comment says
@@ -123,6 +128,19 @@ gpu.buildCausalMaskRow(L, q, mask);
 gpu.selfAttentionBiasForward(X, Wq, Wk, Wv, Wo,
                              /*mask|null*/ null, /*attnBias|null*/ bias,
                              numHeads, /*scale*/ 1.0, O);
+
+/**
+ * The device-side producer of that bias for the FastConformer / Conformer /
+ * Transformer-XL family, where the position term is a second dot product
+ * against a projected relative positional encoding:
+ *   Bias[h*T + q, k] = sum_d Qv[q, h*headDim + d] * Pk[(T-1-q) + k, h*headDim + d]
+ * (NeMo's rel_shift of Qv . Pk^T, per head). Qv is the position-term query
+ * (q-projection + pos_bias_v, already scaled by 1/sqrt(headDim)); Pk the
+ * relative-key projection of the (2T-1, D) encoding.
+ *   Qv: (T, D) FP32.  Pk: (2T-1, D) FP32.  D = numHeads*headDim.
+ *   Bias: (numHeads*T, T) FP32, resized — feed it to selfAttentionBiasForward.
+ */
+gpu.relPosBiasXlForward(Qv, Pk, numHeads, headDim, Bias);
 
 
 // -----------------------------------------------------------------------------
@@ -239,6 +257,18 @@ gpu.flashAttentionDecodeMasked(Q, K_cache, V_cache, dMask, numHeads, O,
  */
 gpu.kvCacheAppend(K_new, V_new, curLen, K_cache, V_cache);
 
+/**
+ * Grouped-query self-attention over pre-projected Q/K/V, causal or fully
+ * bidirectional (the encoder prefill of an LLM2Vec-style bidirectional
+ * decoder). Q carries numQHeads, K/V carry numKvHeads (which must divide
+ * numQHeads; equal is plain MHA). Tiled online softmax, FP32 accumulation.
+ *   Q: (Lq, numQHeads*headDim);  K, V: (Lk, numKvHeads*headDim); one dtype
+ *   (FP32/FP16/BF16).  Lk >= Lq; causal additionally needs Lq === Lk.
+ *   mask: optional length-Lk FP32 key mask.   O: (Lq, numQHeads*headDim).
+ */
+gpu.flashAttentionGqaForward(Q, K, V, /*mask|null*/ null, numQHeads, numKvHeads,
+                             /*causal*/ false, O);
+
 
 // -----------------------------------------------------------------------------
 // Specialised attention (SAM rel-pos, packed varlen, gated delta rule, M-RoPE)
@@ -270,8 +300,10 @@ gpu.selfAttentionDecomposedRelPosWindowedForward(
  * Packed variable-length flash attention (Qwen-VL window attention). Q is
  * (totalTokensQ, numHeads*headDim), K/V are (totalTokensK, ...); the
  * per-sequence boundaries are the INT32 prefix sums cuSeqQ / cuSeqK, each of
- * length batch+1, in a GpuTensor read as INT32 storage (null only with
- * batch === 0). No cross-sequence attention.
+ * length batch+1, in an INT32 (or whole-number FP32) GpuTensor (null only
+ * with batch === 0). They must be non-decreasing within [0, totalTokens], and
+ * no sequence may be longer than maxQ / maxK; anything else throws. No
+ * cross-sequence attention.
  *
  * The backward is recompute-based — it consumes no forward caches (O is taken
  * for API symmetry) — and OVERWRITES dQ / dK / dV.
@@ -281,6 +313,35 @@ gpu.flashAttentionVarlenForward(Q, K, V, cuSeqQ, cuSeqK,
 gpu.flashAttentionVarlenBackward(Q, K, V, O, dO, cuSeqQ, cuSeqK,
                                  batch, maxQ, maxK, numHeads, headDim, causal,
                                  dQ, dK, dV);
+
+/**
+ * Packed bidirectional self-attention straight off a fused QKV projection:
+ * many independent sequences of any length packed back to back, no padding,
+ * one launch per layer (encoder batching).
+ *   QKV: (L, 3*numHeads*headDim), each row [q heads | k heads | v heads].
+ *        FP16/BF16/FP32 on the GPU (headDim 64 takes the tensor-core kernel),
+ *        FP32 on the CPU.
+ *   seqBounds: (L, 2) INT32 (or whole-number FP32): row r's sequence is rows
+ *        [seqBounds[r,0], seqBounds[r,1]), which must lie inside [0, L) and
+ *        contain r. Checked on the host before the launch (the call syncs).
+ *   window > 0: row r attends keys j of its sequence with |r - j| <= window/2;
+ *   window <= 0: its whole sequence.
+ *   O: (L, numHeads*headDim), QKV's dtype.
+ * The backward is recompute-based (no forward caches), takes the same bounds
+ * and window, and OVERWRITES dQKV (L, 3*numHeads*headDim) = [dQ | dK | dV].
+ */
+gpu.flashAttentionPackedQkvForward(QKV, seqBounds, numHeads, /*window*/ 0, O);
+gpu.flashAttentionPackedQkvBackward(QKV, dO, seqBounds, numHeads, /*window*/ 0, dQKV);
+
+/**
+ * In-place RoPE over the Q and K sections of that packed QKV buffer, with a
+ * per-row position id so each packed sequence restarts at 0. Same interleaved
+ * pair rotation as ropeApply; the V section is untouched.
+ *   cosTbl / sinTbl: (P, headDim/2) FP32.
+ *   pos: (L, 1) INT32 (or whole-number FP32), every entry in [0, P) — checked
+ *        on the host.
+ */
+gpu.ropeQkvPackedInplace(QKV, cosTbl, sinTbl, pos, numHeads, headDim);
 
 /**
  * Gated delta rule, the linear attention of Qwen3-Next.
@@ -300,8 +361,8 @@ gpu.gatedDeltaRuleStep(Q, K, V, aRaw, beta, logA, numHeads, d_k, d_v, state, O);
  * three contiguous sub-ranges of widths 2*d_t, 2*d_h, 2*d_w (in that order),
  * each rotated by its own position stream.
  *   X, Y: (L, numHeads*headDim).  cos_a / sin_a: (maxPos_a, d_a) FP32.
- *   posT / posH / posW: length-L INT32 streams in a GpuTensor read as INT32
- *   storage, or null for an axis whose d_a is 0.
+ *   posT / posH / posW: length-L INT32 (or whole-number FP32) GpuTensors,
+ *   every entry in [0, maxPos_a), or null for an axis whose d_a is 0.
  */
 gpu.ropeApplyMrope(X, cosT, sinT, cosH, sinH, cosW, sinW,
                    posT, posH, posW, headDim, numHeads, d_t, d_h, d_w, Y);
@@ -348,6 +409,23 @@ gpu.convTranspose2dBackwardBias(dY, N, C_out, H_out, W_out, dB);
 gpu.conv3dForward(X, Wt, /*bias|null*/ null,
                   N, C_in, T, H, W, C_out, kT, kH, kW,
                   sT, sH, sW, pT, pH, pW, dT, dH, dW, groups, Y);
+
+/**
+ * Modulated deformable conv2d (torchvision deform_conv2d / DCNv2), forward
+ * only. Each output pixel's kH x kW taps are shifted by a learned offset and
+ * optionally reweighted by a learned modulator, bilinearly sampled with zero
+ * padding outside the input. FP32 / FP16 (CPU FP32); every operand shares
+ * X's dtype.
+ *   offset: (N, deformGroups*2*kH*kW * H_out*W_out); channel
+ *           g*(2*kH*kW) + 2*(kh*kW+kw) is the ROW (y) offset, +1 the COL (x).
+ *   mask:   (N, deformGroups*kH*kW * H_out*W_out) or null (all 1).
+ *   Wt:     OIHW (C_out, (C_in/groups)*kH*kW) like conv2dForward.
+ * groups divides C_in and C_out; deformGroups divides C_in. H_out / W_out
+ * follow the conv2d formula above.
+ */
+gpu.deformConv2dForward(X, offset, /*mask|null*/ null, Wt, /*bias|null*/ null,
+                        N, C_in, H, W, C_out, kH, kW, sH, sW, pH, pW, dH, dW,
+                        groups, deformGroups, Y);
 
 
 // -----------------------------------------------------------------------------
@@ -442,6 +520,26 @@ gpu.windowReverseForward(X, N, C, H, W, window, Y);
  * Flux.2 VAE tail).
  */
 gpu.spatialMerge2x2Forward(X, N, C, H, W, Y, /*channelMajor*/ false);
+
+/**
+ * The DC-AE up-shortcut (diffusers DCUpBlock2d, interpolate mode): channel
+ * repeat_interleave then a 2x pixel shuffle, fused into one gather:
+ *   Y[n, c, 2h+i, 2w+j] = X[n, (4c + 2i + j) / repeats, h, w],
+ *   repeats = 4*C_out/C_in (C_in must divide 4*C_out).
+ * C_in === 4*C_out is a plain pixel shuffle; C_in === C_out a 2x nearest
+ * upsample. X: (N, C_in*H*W); Y: (N, C_out*2H*2W). Inference-only.
+ */
+gpu.pixelShuffleUpsample2xForward(X, N, C_in, H, W, C_out, Y);
+
+/**
+ * DiT unpatchify: token rows back to an NCHW image, dropping trailing
+ * channels (PixArt's learned-variance half).
+ *   tokens: (hp*wp, P*P*C_total), row i*wp + j is grid cell (i, j). Within a
+ *           row, channelMajor=false reads col = block*C_total + c, true reads
+ *           col = c*P*P + block, with block = py*P + px.
+ *   Y:      (1, C_keep*(hp*P)*(wp*P)); channels [C_keep, C_total) dropped.
+ */
+gpu.patchUnpackForward(tokens, hp, wp, P, C_total, C_keep, /*channelMajor*/ false, Y);
 
 
 // -----------------------------------------------------------------------------
@@ -556,6 +654,103 @@ gpu.dpmpp2mStep(x_t, eps_pred, x0_prev, sigma_t,
  *   timesteps: (N, 1) FP32.  Y: (N, dim) FP32.  maxPeriod defaults to 10000.
  */
 gpu.timestepEmbedding(timesteps, dim, /*maxPeriod*/ 10000, Y);
+
+
+// -----------------------------------------------------------------------------
+// StyleGAN3-R generator primitives
+// -----------------------------------------------------------------------------
+//
+// modulated conv, upfirdn2d, bias_act and filtered_lrelu, mirroring the NVlabs
+// `_ref` implementations. NCHW packed (N, C*H*W); FP32 / FP16 / BF16 with FP32
+// math (CPU FP32). The Fourier-feature sin / cos, the demod rsqrt and the
+// mapping network's pixelNorm are in tensor-api.js.
+
+/**
+ * Fused per-channel bias + activation + gain + clamp:
+ *   t = X + b[c];  y = gain * act(t);  clamp >= 0 clips y to [-clamp, clamp].
+ *   X: (N, C*HW).  b: (C, 1) or null.  act: 0 linear, 1 leaky ReLU (alpha).
+ *   Defaults: alpha 0.2, gain sqrt(2) for lrelu (1 for linear), clamp -1 (off).
+ * The backward overwrites dX and ACCUMULATES dB (caller zeros; null skips);
+ * the gradient is cut where the pre-clamp |y| exceeded clamp.
+ */
+gpu.biasActForward(X, /*b|null*/ b, N, C, HW, /*act*/ 1, /*alpha*/ 0.2, Math.SQRT2, /*clamp*/ -1, Y);
+gpu.biasActBackward(dY, X, b, N, C, HW, 1, 0.2, Math.SQRT2, -1, dX, /*dB|null*/ dB);
+
+/**
+ * upfirdn2d: zero-insert upsample -> pad / crop (negative pads crop) -> 2D FIR
+ * with the constant depthwise filter f (fH, fW), same dtype as X -> downsample
+ * -> gain.  flipFilter false = true convolution, true = plain correlation.
+ *   H_out = (H*upY + padY0 + padY1 - fH) / downY + 1   (W_out likewise)
+ * The backward takes the SAME forward arguments (H, W the forward INPUT dims)
+ * and overwrites dX (N, C*H*W). No gradient reaches f.
+ */
+gpu.upfirdn2dForward(X, f, N, C, H, W, fH, fW, upX, upY, downX, downY,
+                     padX0, padX1, padY0, padY1, /*flipFilter*/ false, /*gain*/ 4, Y);
+gpu.upfirdn2dBackward(dY, f, N, C, H, W, fH, fW, upX, upY, downX, downY,
+                      padX0, padX1, padY0, padY1, false, 4, dX);
+
+/**
+ * The synthesis-layer conv: per-sample style modulation of shared weights,
+ * optional demodulation, then a stride-1 conv2d per sample.
+ *   X: (N, C_in*H*W).  W: (C_out, C_in*kH*kW).  s: (N, C_in) styles.
+ *   w' = W * s[n];  dcoef[n,o] = demodulate ? rsqrt(sum w'^2 + eps) : 1
+ *   dcoef: (N, C_out) FP32 out, kept for the backward.
+ *   H_out = H + 2*padH - (kH-1)   (W_out likewise).
+ * Backward: dX and ds overwritten; dW ACCUMULATES (caller zeros) — or pass
+ * null to skip the weight gradient entirely (inversion with frozen weights).
+ */
+gpu.modulatedConv2dForward(X, W, s, N, C_in, H, Wd, C_out, kH, kW, padH, padW,
+                           /*demodulate*/ true, /*eps*/ 1e-8, dcoef, Y);
+gpu.modulatedConv2dBackward(X, W, s, dcoef, dY, N, C_in, H, Wd, C_out, kH, kW,
+                            padH, padW, true, 1e-8, dX, /*dW|null*/ dW, ds);
+
+/**
+ * The alias-free nonlinearity: bias -> upfirdn2d(fu, up, pads, gain up^2) ->
+ * leaky ReLU (gain, slope, clamp) -> upfirdn2d(fd, down). CUDA runs a fused
+ * kernel; elsewhere (and for configs it does not cover) the composite.
+ *   X: (N, C*H*W).  fu / fd: the up / down filters.  b: (C, 1) or null.
+ *   upBuf / actBuf: cache outputs (post-upsample / post-lrelu). The fused
+ *   kernel may leave them empty.
+ *   out_w = (W*up + padX0 + padX1 - (fuW-1) - (fdW-1) + (down-1)) / down.
+ * The backward chains the sub-backwards: dX overwritten, dB accumulated
+ * (null skips). upBuf is optional — null or an empty tensor recomputes it
+ * from X.
+ */
+gpu.filteredLreluForward(X, fu, fd, /*b|null*/ null, N, C, H, W, /*up*/ 2, /*down*/ 2,
+                         padX0, padX1, padY0, padY1, /*gain*/ Math.SQRT2, /*slope*/ 0.2,
+                         /*clamp*/ 256, upBuf, actBuf, Y);
+gpu.filteredLreluBackward(dY, X, fu, fd, null, N, C, H, W, 2, 2,
+                          padX0, padX1, padY0, padY1, Math.SQRT2, 0.2, 256,
+                          /*upBuf|null*/ upBuf, dX, /*dB|null*/ null);
+
+
+// -----------------------------------------------------------------------------
+// LSTM (training forward + full BPTT)
+// -----------------------------------------------------------------------------
+//
+// A single-layer, single-direction LSTM over a length-T sequence of batch B,
+// PyTorch nn.LSTM weight layout and gate order [input, forget, cell, output].
+// FP32; CPU, CUDA and Metal. Bidirectional / stacked networks are built by
+// wrapping the cell (reverse the sequence; feed one layer's Y to the next).
+//   X: (T*B, I), row t*B + b.   W_ih: (4H, I).   W_hh: (4H, H).
+//   b_ih / b_hh: (4H, 1) or null.   h0 / c0: (B, H) or null (zeros).
+//   Y: (T*B, H) hidden states.   gates: (T*B, 4H) post-activation [i|f|g|o]
+//   and C: (T*B, H) cell states are the backward's cache — pass them back
+//   unchanged.   hT / cT: (B, H) final states, or null.
+
+gpu.lstmForwardTrain(X, W_ih, W_hh, /*b_ih*/ null, /*b_hh*/ null, /*h0*/ null, /*c0*/ null,
+                     T, B, Y, gates, C, /*hT|null*/ hT, /*cT|null*/ cT);
+
+/**
+ * BPTT. dY: (T*B, H) upstream (zero all but the last step for a last-step
+ * loss). dX (T*B, I) is overwritten; dW_ih (4H, I), dW_hh (4H, H), db_ih and
+ * db_hh (4H, 1) ACCUMULATE (caller zeros; the two bias grads are equal, as in
+ * nn.LSTM). dh0 / dc0 (B, H) are overwritten when given. db_* / dh0 / dc0 may
+ * be null.
+ */
+gpu.lstmBackward(X, W_ih, W_hh, null, null, Y, gates, C, dY, T, B,
+                 dX, dW_ih, dW_hh, /*db_ih|null*/ db_ih, /*db_hh|null*/ db_hh,
+                 /*dh0|null*/ null, /*dc0|null*/ null);
 
 
 // -----------------------------------------------------------------------------
@@ -887,3 +1082,43 @@ gpu.sampleLogits(logits, /*temperature*/ 1.0, /*topK*/ 0, /*topP*/ 1.0,
  */
 gpu.sampleLogitsInto(logits, /*temperature*/ 1.0, /*topK*/ 0, /*topP*/ 1.0,
                      key, counterTensor, scratch, indices);
+
+
+// -----------------------------------------------------------------------------
+// Masked-diffusion token selection (OmniVoice-style codebook grids)
+// -----------------------------------------------------------------------------
+//
+// One step of a masked-diffusion LM over a (C codebooks, T frames) grid with
+// vocabulary V, where token id `maskId` marks a still-masked cell. Scores fuse
+// classifier-free guidance, log-softmax, the per-cell prediction and the
+// confidence every masked cell competes with; the host picks the k best cells
+// (topKRows over `scores` viewed as one (1, C*T) row) and Commit writes them.
+// FP32 only; CPU, CUDA and Metal. Noise is a counter hash of (seed, cell), so
+// the same inputs and seed always give the same result on every backend.
+
+/**
+ * logits: (R, C*V) FP32, column c*V + v; R = 2T with guidance (rows [0,T)
+ *         conditional, [T,2T) unconditional), else T.
+ * tokens: (C, T) INT32 current grid (or whole-number FP32).
+ * pred:   (C, T) INT32 out — the predicted id for every cell.
+ * scores: (C, T) FP32 out — the selection score; -Infinity where the cell is
+ *         already decided.
+ * confidence: (C, T) FP32 out — the raw max log-prob of EVERY cell (no layer
+ *         penalty, temperature, noise or masking), for per-step logging.
+ * opts: { guidanceScale = 0, layerPenalty = 0 (score -= c*layerPenalty),
+ *         positionTemperature = 0 (> 0 adds Gumbel noise to scores),
+ *         classTemperature = 0 (> 0 samples pred from the top classTopFrac*V
+ *         classes instead of argmax), classTopFrac = 1, seed = 0 (Number or
+ *         BigInt) }
+ */
+gpu.maskedDiffusionScores(logits, tokens, T, C, V, maskId,
+                          { guidanceScale: 2.0, positionTemperature: 5.0, seed: step },
+                          pred, scores, confidence);
+
+/**
+ * Commit k chosen cells: for i < k, p = idx[i]: tokens[p] = pred[p],
+ * unmaskStep[p] = step. idx holds flat cell indices c*T + t (topKRows' Idx);
+ * an index outside [0, C*T) is ignored. pred / tokens / unmaskStep are
+ * pre-sized (C, T) INT32 tensors (tokens and unmaskStep updated in place).
+ */
+gpu.maskedDiffusionCommit(pred, idx, k, step, tokens, unmaskStep);

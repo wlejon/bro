@@ -56,10 +56,16 @@
 //   is a host-buffer op throughout.
 //
 // INT32 index / offset buffers:
-//   `idx`, `headOffsets`, `cuSeq*`, `posT/posH/posW`, pooling `Idx` and the
-//   sampler's `indices` are GpuTensors whose storage is read as INT32. They
-//   stay device-resident between calls, so an index never round-trips to the
-//   host mid-pipeline.
+//   Index and offset operands (`idx`, `Idx`, `headOffsets`, `cuSeq*`,
+//   `posT/posH/posW`) are GpuTensors. GpuTensor.prototype.uploadInt32 builds
+//   one; plain upload() lands FP32, and embedding / gatherRows /
+//   scatterRowsAdd / cuSeq* / pos* accept that too when every value is a
+//   whole number. `headOffsets` and pooling `Idx` must be INT32 (pooling
+//   `Idx` is the forward's own output). Because these values address memory
+//   the kernels do not bounds-check, the binding reads each one back to the
+//   host and throws on an out-of-range entry, which costs one device sync
+//   per call. The sampler's `indices` is an INT32 output and never leaves
+//   the device.
 //
 // Errors:
 //   A native never throws across the bronze ABI: it records a message the JS
@@ -180,6 +186,22 @@ const u16 = t16.downloadFp16();
 q8.uploadInt8(quant.weights);
 const bytes = q8.downloadInt8();
 
+/**
+ * INT32 staging, for the index / position / bound / token-grid operands.
+ *   uploadInt32(data)  — Int32Array (or plain array of ints); same reshape
+ *                        rule as upload(); dtype becomes INT32.
+ *   downloadInt32()    — a fresh Int32Array of an INT32 tensor's values
+ *                        (throws for any other dtype). How rowsCountAbove
+ *                        counts, maskedDiffusionScores `pred`, topKRows Idx
+ *                        etc. come back to the host.
+ * Ops that only READ an index operand also accept an FP32 tensor of whole
+ * numbers (what upload() produces) and convert it; operands an op writes in
+ * place (maskedDiffusionCommit's token grid) must already be INT32.
+ */
+const pos = gpu.createTensor(4, 1, "int32");
+pos.uploadInt32([0, 1, 0, 1]);
+const back = pos.downloadInt32();   // Int32Array [0, 1, 0, 1]
+
 
 // -----------------------------------------------------------------------------
 // Counter-based RNG (Philox) + initialisers
@@ -292,6 +314,30 @@ gpu.mulInplace(y, x);            // y[i] *= x[i]
 gpu.clamp(y, -1.0, 1.0);         // y[i] = clip(y[i], lo, hi)
 
 /**
+ * y[i] = a*y[i] + b*x[i], with the arithmetic in FP32 whatever the storage
+ * dtype (FP32/FP16/BF16; x and y share shape and dtype). The classifier-free
+ * guidance blend v = s*v_cond - (s-1)*v_uncond, which cancels catastrophically
+ * if combined at half precision.
+ */
+gpu.axpbyInplace(y, x, /*a*/ 2.0, /*b*/ -1.0);
+
+/**
+ * Broadcast bias adds, in place, bias sharing y's dtype.
+ *   addChannelBiasInplace: y is channel-major (C, L), y[c*L+i] += bias[c];
+ *                          y must hold exactly C*L elements, bias C.
+ *   addRowBiasInplace:     Y is row-major (R, D), Y[r, d] += bias[d];
+ *                          bias must hold exactly Y.cols elements.
+ */
+gpu.addChannelBiasInplace(y, bias, C, L);
+gpu.addRowBiasInplace(Y, bias);
+
+/**
+ * Byte mask: Y[i] = X[i] > t ? 1 : 0 (strict >). X is FP32 or FP16; Y is
+ * resized to INT8 (read it with downloadInt8()). Not differentiable.
+ */
+gpu.thresholdU8(X, /*t*/ 0.0, Y);
+
+/**
  * Build a slot-validity mask on-device, without a host sync:
  *   mask[k] = (x[offset + k*stride] > 0.5) ? 1 : 0,  k in [0, K)
  * Resizes mask to (K, 1).
@@ -303,6 +349,16 @@ gpu.buildSlotMask(x, offset, K, stride, mask);
  * dst[dstOff]. Both tensors are treated as flat buffers, whatever their shape.
  */
 gpu.copyD2D(src, srcOff, dst, dstOff, n);
+
+/**
+ * Strided row-block copy: `height` rows of `width` elements, row r read from
+ * src[srcOff + r*srcPitch] and written to dst[dstOff + r*dstPitch] (offsets
+ * and pitches in elements, pitch >= width). One call replaces a loop of
+ * copyD2D calls, e.g. padding / unpadding the W axis of an NCHW activation.
+ * src and dst share a dtype; dst is not resized, so both must already cover
+ * every row the copy touches (an Error otherwise).
+ */
+gpu.copyD2DStrided(src, srcOff, srcPitch, dst, dstOff, dstPitch, width, height);
 
 /**
  * Dtype cast: dst = src converted to outDtype, resized + dtype-set to src's
@@ -335,6 +391,16 @@ gpu.swigluForward(X, Y);      gpu.swigluBackward(X, dY, dX);
 gpu.gegluForward(X, Y);       gpu.gegluBackward(X, dY, dX);
 gpu.gegluExactForward(X, Y);  gpu.gegluExactBackward(X, dY, dX);
 
+/**
+ * FP32-only elementwise maps (StyleGAN3's Fourier features and demod
+ * reciprocal-sqrt). sin / cos backwards read the forward INPUT x; rsqrt's
+ * reads the forward OUTPUT y (dX = -0.5 * dY * y^3). rsqrt does not guard
+ * x > 0. Backwards overwrite dX; dY must match the forward's size.
+ */
+gpu.sinForward(x, y);     gpu.sinBackward(x, dY, dX);     // dX = dY*cos(x)
+gpu.cosForward(x, y);     gpu.cosBackward(x, dY, dX);     // dX = -dY*sin(x)
+gpu.rsqrtForward(x, y);   gpu.rsqrtBackward(y, dY, dX);   // y = 1/sqrt(x)
+
 
 // -----------------------------------------------------------------------------
 // Softmax
@@ -354,6 +420,23 @@ gpu.softmaxForward(logits, probs, /*temperature*/ 0.7);
 
 /** Full-Jacobian backward: dLogits = (diag(p) - p p^T) dProbs. */
 gpu.softmaxBackward(probs, dProbs, dLogits);
+
+/**
+ * Row-batched softmax in one launch: Y[r, :] = softmax(X[r, :]) for `rows`
+ * rows of `cols` (X must hold rows*cols elements; rows / cols default to X's
+ * shape). FP32 / FP16 / BF16. Y may be X (in place). Inference only.
+ */
+gpu.softmaxRowsForward(X, Y, rows, cols);
+
+/**
+ * Fused softmax + cross-entropy over the flat N elements of `logits`, the
+ * CPU-style argument order of softmaxXentFused. Returns the loss
+ * -sum target*log(p); writes probs and dLogits = probs - target (both resized).
+ * All FP32; target holds N elements; the optional mask is an FP32 length-N
+ * legal-action mask (masked entries get probability 0 and no gradient).
+ * @returns {number}
+ */
+const xent = gpu.softmaxXent(logits, target, probs, dLogits, /*mask|null*/ null);
 
 
 // -----------------------------------------------------------------------------
@@ -416,6 +499,15 @@ gpu.groupNormBackward(X, gamma, dY, N, C, H, W, numGroups, 1e-5,
 gpu.l2NormForward(X, headDim, numHeads, /*eps*/ 1e-6, Y);
 gpu.l2NormBackward(X, headDim, numHeads, /*eps*/ 1e-6, dY, dX);
 
+/**
+ * Pixel norm (StyleGAN's normalize_2nd_moment): per row of an (N, C) FP32
+ * tensor, Y = X * rsqrt(mean_c(X^2) + eps). Root-MEAN-square — the 1/C is
+ * included, unlike the L2 norms above. No parameters; the backward reads the
+ * raw forward input X and overwrites dX.
+ */
+gpu.pixelNormForward(X, /*eps*/ 1e-8, Y);
+gpu.pixelNormBackward(X, dY, /*eps*/ 1e-8, dX);
+
 
 // -----------------------------------------------------------------------------
 // Matmul
@@ -430,6 +522,17 @@ gpu.matmul(A, B, C);
  *   dA += dC @ B^T   ;   dB += A^T @ dC
  */
 gpu.matmulBackward(A, B, dC, dA, dB);
+
+/**
+ * Batched A @ B^T, 16-bit (FP16 or BF16, shared by A, B, C and bias) with FP32
+ * accumulation: for b in [0, batch), C[b](M,N) = A[b](M,K) @ B[b](N,K)^T,
+ * slices `stride*` elements apart (defaults: tightly packed M*K, N*K, M*N; a
+ * stride of 0 reuses one slice for every b). bias (N) may be null; act is a
+ * gpu.LinearActivation value fused into the store. C is NOT resized — it must
+ * already hold every slice the call writes (an Error otherwise).
+ */
+gpu.matmulAbt(A, B, C, batch, M, N, K, strideA, strideB, strideC,
+              /*bias|null*/ null, gpu.LinearActivation.none);
 
 
 // -----------------------------------------------------------------------------
@@ -452,11 +555,23 @@ gpu.ropeBackward(dY, headDim, numHeads, seqOffset, 10000.0, dX);
  * thetaBase. Use it when the position schedule is irregular (packed sequences,
  * 2D/3D RoPE) or shared across calls.
  *   X / Y: (L, numHeads*headDim).  cosTbl / sinTbl: (L, headDim/2).
- * The backward takes no tables — the rotation is its own inverse up to sign,
- * so dX is recovered from dY alone.
+ * The backward rotates dY by the inverse angles, so it takes the SAME tables
+ * the forward used: dX = R(-t) * dY.
  */
 gpu.ropeApply(X, cosTbl, sinTbl, headDim, numHeads, Y);
-gpu.ropeApplyBackward(dY, headDim, numHeads, dX);
+gpu.ropeApplyBackward(dY, cosTbl, sinTbl, headDim, numHeads, dX);
+
+/**
+ * ropeApply with PER-HEAD tables: every (row, head) pair carries its own
+ * angles (content-dependent rotary, e.g. TripoSplat's RePo3D).
+ *   X / Y: (L, numHeads*headDim), FP32/FP16/BF16.
+ *   cosTbl / sinTbl: (L*numHeads, headDim/2) FP32, head-minor within a row.
+ * Inference-only (no backward).
+ */
+gpu.ropeApplyPerhead(X, cosTbl, sinTbl, headDim, numHeads, Y);
+
+// ropeQkvPackedInplace, the in-place rotary over a packed (L, 3*D) QKV buffer,
+// is with flashAttentionPackedQkvForward in tensor-nn-api.js.
 
 // The Qwen-VL multimodal variant, ropeApplyMrope, is in tensor-nn-api.js.
 
@@ -507,6 +622,35 @@ gpu.scatterRowsAdd(dY, Idx, R, dX);
  */
 gpu.topKRows(X, k, Vals, Idx);
 
+/**
+ * Scatter-OVERWRITE rows in place: X[Idx[m], :] = Y[m, :]. Rows Idx does not
+ * name keep their contents; X is never resized. Idx is (Y.rows, 1), INT32 or
+ * whole-number FP32, and every entry must lie in [0, X.rows) — the binding
+ * reads Idx on the host and throws otherwise (so this call syncs). X and Y
+ * share dtype and column count; duplicate indices race.
+ */
+gpu.scatterRows(Y, Idx, X);
+
+/**
+ * Two above-threshold counts per row in one pass (strict >):
+ *   counts[r] = [ #{X[r][c] > tLo}, #{X[r][c] > tHi} ]
+ * X is (R, C) FP32 or FP16; counts is resized to (R, 2) INT32
+ * (downloadInt32()). SAM's stability score without downloading the logits.
+ */
+gpu.rowsCountAbove(X, tLo, tHi, counts);
+
+/**
+ * Softmax summary of variable-length segments of a logit column. Segment s is
+ * rows [segOffsets[s], segOffsets[s+1]); with p its softmax and
+ * k = max(2, length):
+ *   out[s] = [ top1, top1 - top2, entropy(p)/log(k), k/255 ]
+ * (top2 = 0 for a one-row segment; an empty segment writes zeros).
+ *   logits: (K, 1) FP32/FP16/BF16.   out: (S, 4), logits' dtype, resized.
+ *   segOffsets: (S+1, 1) INT32 (or whole-number FP32), non-decreasing within
+ *               [0, K] — checked on the host before the launch.
+ */
+gpu.segmentSoftmaxStats(logits, segOffsets, out);
+
 
 // -----------------------------------------------------------------------------
 // Batched dense family (B, D)
@@ -528,6 +672,35 @@ gpu.addInplaceBatched(Y_BD, X_BD);
  * `bias` may be null.
  */
 gpu.linearForwardBatchedFp16(W, /*bias|null*/ null, X_BD, Y_BD);
+
+/**
+ * Epilogue codes for the fused batched linears and matmulAbt:
+ *   gpu.LinearActivation = { none: 0, relu: 1, geluTanh: 2, geluExact: 3,
+ *                            silu: 4, quickGelu: 5 }
+ *   gpu.LinearEpilogue   = { store: 0, accumulate: 1, geglu: 2, fastAccum: 16 }
+ */
+gpu.LinearActivation;
+gpu.LinearEpilogue;
+
+/**
+ * linearForwardBatchedFp16 with bias + activation fused into the GEMM's store
+ * (no separate bias / activation pass). FP16 or BF16 throughout; GPU only.
+ */
+gpu.linearForwardBatchedFp16Act(W, /*bias|null*/ null, X_BD, gpu.LinearActivation.geluTanh, Y_BD);
+
+/**
+ * Batched linear r = act(X_BD . W^T + bias) with a fused epilogue:
+ *   store       Y = r                     (Y resized to (B, out))
+ *   accumulate  Y += r (residual add)     (Y must already be (B, out))
+ *   geglu       Y[:, j] = r[:, 2j] * gelu_exact(r[:, 2j+1]); act must be none,
+ *               W's rows interleave the two halves; Y is (B, out/2)
+ * OR `fastAccum` in to let FP16 accumulate each 16-deep k step in FP16 (faster
+ * on consumer GPUs, bounded extra error; opt in per model). FP16/BF16 on the
+ * GPU, FP32 on the CPU. `workspace` is an optional FP32 scratch tensor that
+ * lets a short-B call split K across more blocks; reuse one across calls.
+ */
+gpu.linearForwardBatchedEx(W, /*bias|null*/ null, X_BD, gpu.LinearActivation.none,
+                           gpu.LinearEpilogue.accumulate, /*workspace|null*/ null, Y_BD);
 
 gpu.linearBackwardBatched(W, X_BD, dY_BD, dX_BD, dW, dB);  // dW/dB accumulate
 gpu.reluBackwardBatched(X_BD, dY_BD, dX_BD);   // reads X:  dX = dY*(X>0)
@@ -589,7 +762,8 @@ const xentLoss = gpu.softmaxXentFused(logits, target, /*mask|null*/ null,
  * trainers that share one (B, n_act_total) logits buffer across actor heads.
  *   logits_BL, target_BL, probs_BL, dLogits_BL: (B, n_act_total)
  *   mask:          (B, n_act_total) device mask or null
- *   headOffsets:   a GpuTensor read as INT32, n_heads+1 cumulative offsets
+ *   headOffsets:   an INT32 GpuTensor, n_heads+1 non-decreasing offsets in
+ *                  [0, n_act_total]
  *   lossPerSample: (B, 1), overwritten with the sum-over-heads loss
  */
 gpu.softmaxXentFusedBatched(logits_BL, target_BL, /*mask|null*/ null,
