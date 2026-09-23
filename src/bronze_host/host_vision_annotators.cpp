@@ -51,26 +51,38 @@ Value scalarPlaneResult(int w, int h, const std::vector<float>& plane, const cha
     return res.get();
 }
 
-// The launch-side state every annotator shares: the decoded pixels and
-// whether there is a model to run them through.
+// The launch-side state every annotator shares: the decoded pixels.
 template <typename WrapperT>
 struct AnnotatorInput {
     WrapperT* w = nullptr;
     std::vector<uint8_t> rgba;
-    int inW = 512;
-    int inH = 512;
-    bool live = false;
+    int inW = 0;
+    int inH = 0;
 };
 
+// The sibling's refusals, in its order and words (native_vision_annotators.cpp):
+// no weights, no image, an image that does not decode. Returns false with
+// `thrown` holding the pending exception to return; there is no placeholder
+// answer.
 template <typename WrapperT, typename DetectorPtrT>
 bool fillAnnotatorInput(AnnotatorInput<WrapperT>& in, WrapperT* w, std::span<const Value> args,
-                        DetectorPtrT WrapperT::*detector) {
+                        DetectorPtrT WrapperT::*detector, const char* name, Value& thrown) {
     in.w = w;
+    if (!w->loaded || (w->*detector) == nullptr) {
+        thrown = ev::throwError(std::string(name) +
+                                ": detector is uninitialized or model weights not loaded");
+        return false;
+    }
+    if (args.empty()) {
+        thrown = ev::throwTypeError(std::string(name) + ".detect: image argument required");
+        return false;
+    }
     std::string err;
-    const bool decoded =
-        !args.empty() && bvm::readImageInput(args[0], in.rgba, in.inW, in.inH, err);
-    in.live = decoded && w->loaded && (w->*detector) != nullptr;
-    return decoded;
+    if (!bvm::readImageInput(args[0], in.rgba, in.inW, in.inH, err)) {
+        thrown = ev::throwTypeError(std::string(name) + ".detect: " + err);
+        return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,22 +98,18 @@ Value hedDetect(Value thisVal, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("SoftEdgeDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<HedJob>();
-    fillAnnotatorInput(*job, w, args, &bvm::HedWrapper::detector);
+    Value thrown;
+    if (!fillAnnotatorInput(*job, w, args, &bvm::HedWrapper::detector, "Hed", thrown)) {
+        return thrown;
+    }
 
     BRO_VISION_BEGIN(w, "detect")
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (job->live) {
-            brotensor::DeviceScope scope(job->w->device);
-            job->em = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
-            return;
-        }
-        job->em.width = job->inW;
-        job->em.height = job->inH;
-        job->em.edge.assign(static_cast<std::size_t>(job->inW) * job->inH, 0.0f);
+        brotensor::DeviceScope scope(job->w->device);
+        job->em = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
     };
     auto build = [job]() -> Value {
         return scalarPlaneResult(job->em.width, job->em.height, job->em.edge, "edge", "edges");
@@ -125,22 +133,18 @@ Value lineartDetect(Value thisVal, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("LineartDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<LineartJob>();
-    fillAnnotatorInput(*job, w, args, &bvm::LineartWrapper::detector);
+    Value thrown;
+    if (!fillAnnotatorInput(*job, w, args, &bvm::LineartWrapper::detector, "Lineart", thrown)) {
+        return thrown;
+    }
 
     BRO_VISION_BEGIN(w, "detect")
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (job->live) {
-            brotensor::DeviceScope scope(job->w->device);
-            job->lm = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
-            return;
-        }
-        job->lm.width = job->inW;
-        job->lm.height = job->inH;
-        job->lm.line.assign(static_cast<std::size_t>(job->inW) * job->inH, 0.0f);
+        brotensor::DeviceScope scope(job->w->device);
+        job->lm = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
     };
     auto build = [job]() -> Value {
         return scalarPlaneResult(job->lm.width, job->lm.height, job->lm.line, "line", "lines");
@@ -163,21 +167,18 @@ Value mlsdDetect(Value thisVal, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("MLSDdetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<MlsdJob>();
-    fillAnnotatorInput(*job, w, args, &bvm::MlsdWrapper::detector);
+    Value thrown;
+    if (!fillAnnotatorInput(*job, w, args, &bvm::MlsdWrapper::detector, "Mlsd", thrown)) {
+        return thrown;
+    }
 
     BRO_VISION_BEGIN(w, "detect")
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (job->live) {
-            brotensor::DeviceScope scope(job->w->device);
-            job->lm = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
-            return;
-        }
-        job->lm.width = job->inW;
-        job->lm.height = job->inH;
+        brotensor::DeviceScope scope(job->w->device);
+        job->lm = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
     };
     auto build = [job]() -> Value {
         const auto& lm = job->lm;
@@ -230,21 +231,19 @@ Value openposeDetect(Value thisVal, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("OpenposeDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<OpenposeJob>();
-    fillAnnotatorInput(*job, w, args, &bvm::OpenposeWrapper::detector);
+    Value thrown;
+    if (!fillAnnotatorInput(*job, w, args, &bvm::OpenposeWrapper::detector, "Openpose",
+                            thrown)) {
+        return thrown;
+    }
 
     BRO_VISION_BEGIN(w, "detect")
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (job->live) {
-            brotensor::DeviceScope scope(job->w->device);
-            job->pose = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
-            return;
-        }
-        job->pose.width = job->inW;
-        job->pose.height = job->inH;
+        brotensor::DeviceScope scope(job->w->device);
+        job->pose = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
     };
     auto build = [job]() -> Value {
         const auto& pose = job->pose;
@@ -302,22 +301,19 @@ Value segformerDetect(Value thisVal, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("SegformerDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<SegformerJob>();
-    fillAnnotatorInput(*job, w, args, &bvm::SegformerWrapper::detector);
+    Value thrown;
+    if (!fillAnnotatorInput(*job, w, args, &bvm::SegformerWrapper::detector, "Segformer",
+                            thrown)) {
+        return thrown;
+    }
 
     BRO_VISION_BEGIN(w, "detect")
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (job->live) {
-            brotensor::DeviceScope scope(job->w->device);
-            job->sm = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
-            return;
-        }
-        job->sm.width = job->inW;
-        job->sm.height = job->inH;
-        job->sm.classes.assign(static_cast<std::size_t>(job->inW) * job->inH, 0);
+        brotensor::DeviceScope scope(job->w->device);
+        job->sm = job->w->detector->detect(job->rgba.data(), job->inW, job->inH, 4);
     };
     auto build = [job]() -> Value {
         const auto& sm = job->sm;

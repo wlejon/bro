@@ -1,4 +1,4 @@
-// bro.vision heavy ops run off the JS thread again
+// bro.vision heavy ops run off the JS thread
 // (src/bronze_host/host_vision_jobs.cpp).
 //
 // The old QuickJS binding took an `onDone` callback, ran the model on a
@@ -6,35 +6,29 @@
 // bronze port made every op synchronous, so a depth pass blocked the frame.
 // This checks the restored contract:
 //
-//   * no onDone  -> the result, synchronously, exactly as before;
-//   * onDone     -> an AsyncHandle with cancel(), and onDone(result, info)
-//                   later, on the JS thread, from the frame pump;
-//   * the two paths produce the SAME result — the whole reason the sync path
-//     runs the same compute and the same builder rather than a second copy;
-//   * one op at a time per model;
-//   * cancel() delivers (null, { cancelled: true }).
+//   * no onDone  -> the result, synchronously;
+//   * onDone     -> a handle with cancel() and `done`, and onDone(result,
+//                   info) later, on the JS thread, from the frame pump, with
+//                   the compute itself on another thread;
+//   * the two paths produce the SAME result — the reason the sync path runs
+//     the same compute and the same builder rather than a second copy;
+//   * one op at a time per model, and the model is free again inside onDone;
+//   * cancel() delivers (null, { cancelled: true });
+//   * a compute that throws is a thrown Error synchronously and
+//     info.error asynchronously.
 //
-// WEIGHTS-FREE: the loaders are handed '.', which exists and holds no
-// checkpoint, so each op runs its probe answer. The job machine does not care
-// what the worker computed — only that it computed it on another thread and
-// that the callback arrived here.
+// WEIGHTS-FREE. Every real vision op needs a checkpoint on disk (brovisionml's
+// loaders refuse a directory without one, and the ops refuse an unloaded
+// model), so the machine is driven through `__host.visionProbe` — the headless
+// test hook that runs a synthetic compute through the very same runVisionOp
+// the model ops use. What the models add on top is their compute, which is
+// brovisionml's to test.
 
 function expectThrows(fn, what) {
     let err = null;
     try { fn(); } catch (e) { err = e; }
     assert(err !== null, what + ' throws');
     return err;
-}
-
-function makeImage(w, h) {
-    const data = new Uint8Array(w * h * 4);
-    for (let i = 0; i < w * h; i++) {
-        data[4 * i + 0] = (i * 31) & 255;
-        data[4 * i + 1] = (i * 17) & 255;
-        data[4 * i + 2] = (i * 3) & 255;
-        data[4 * i + 3] = 255;
-    }
-    return { width: w, height: h, data };
 }
 
 // Run frames until `pred()` or the wall clock runs out. advanceTime() moves
@@ -47,18 +41,15 @@ function pump(pred, timeoutMs, what) {
     while (Date.now() - t0 < timeoutMs) {
         advanceTime(16);
         if (pred()) return true;
-        sleep(2);
+        wallSleep(2);
     }
     assert(false, what + ' did not complete within ' + timeoutMs + 'ms');
     return false;
 }
 
-// Key sets and every typed-array / number leaf, compared. ImageBitmaps
-// compare by size: two runs of the same compute rasterize the same pixels,
-// but the bitmap objects are necessarily distinct.
 function assertSameResult(a, b, what) {
-    const ka = Object.keys(a).sort();
-    const kb = Object.keys(b).sort();
+    const ka = Object.keys(a).sort().filter(k => k !== 'onWorker');
+    const kb = Object.keys(b).sort().filter(k => k !== 'onWorker');
     assert(ka.join(',') === kb.join(','),
            what + ': same keys (' + ka.join(',') + ' vs ' + kb.join(',') + ')');
     for (const k of ka) {
@@ -67,19 +58,14 @@ function assertSameResult(a, b, what) {
             assert(vb instanceof ImageBitmap, what + '.' + k + ' is a bitmap on both sides');
             assert(va.width === vb.width && va.height === vb.height,
                    what + '.' + k + ' bitmaps agree on size');
-        } else if (va === null) {
-            assert(vb === null, what + '.' + k + ' is null on both sides');
         } else if (typeof va === 'number') {
             assert(va === vb, what + '.' + k + ' is ' + va + ' on both sides, got ' + vb);
-        } else if (Array.isArray(va)) {
-            assert(Array.isArray(vb) && va.length === vb.length,
-                   what + '.' + k + ' arrays agree on length');
         } else if (va && typeof va.length === 'number') {
-            assert(vb && vb.length === va.length,
-                   what + '.' + k + ' planes agree on length');
+            assert(vb && vb.length === va.length, what + '.' + k + ' planes agree on length');
             for (let i = 0; i < va.length; i++) {
                 if (va[i] !== vb[i]) {
                     assert(false, what + '.' + k + '[' + i + ']: ' + va[i] + ' vs ' + vb[i]);
+                    break;
                 }
             }
         }
@@ -89,113 +75,112 @@ function assertSameResult(a, b, what) {
 assert(typeof bro === 'object', 'bro global exists');
 assert(bro.vision !== undefined && bro.vision !== null, 'bro.vision namespace exists');
 
-if (bro.vision.available === false) {
-    console.log('bro.vision is the unavailable stub; no jobs to run');
+if (bro.vision.available === false || typeof __host.visionProbe !== 'function') {
+    console.log('bro.vision is compiled out; no job machine to drive');
 } else {
+    const probe = __host.visionProbe;
     const W = 10, H = 8;
-    const img = makeImage(W, H);
-    const dir = '.';
+
+    // ── sync form ───────────────────────────────────────────────────────────
+    const sync = probe(W, H);
+    assert(sync.width === W && sync.height === H, 'sync result has the size');
+    assert(sync.onWorker === false, 'the sync form computes on the calling thread');
+    assert(sync.plane instanceof Float32Array && sync.plane.length === W * H,
+           'sync plane is a Float32Array of w*h');
 
     // ── the handle, the callback, and the thread ────────────────────────────
     {
-        const depth = bro.vision.loadDepth(dir);
-
-        const sync = depth.estimate(img);
-        assert(sync.width === W, 'the no-callback form still returns the result');
-
         let got = null, info = null, calls = 0;
-        const handle = depth.estimate(img, {
-            onDone(r, i) { got = r; info = i; calls++; }
-        });
-        assert(handle !== null && typeof handle === 'object',
-               'the onDone form returns a handle');
+        const handle = probe(W, H, { holdMs: 30, onDone(r, i) { got = r; info = i; calls++; } });
+        assert(handle !== null && typeof handle === 'object', 'the onDone form returns a handle');
         assert(typeof handle.cancel === 'function', 'the handle has cancel()');
-        assert(got === null, 'onDone does not fire inside the call');
+        assert(handle.done === false, 'handle.done is false while the worker holds');
+        assert(got === null && calls === 0, 'onDone does not fire inside the call');
 
-        pump(() => calls > 0, 5000, 'depth.estimate onDone');
+        pump(() => calls > 0, 5000, 'probe onDone');
         assert(calls === 1, 'onDone fires exactly once, got ' + calls);
+        assert(handle.done === true, 'handle.done is true once settled');
         assert(info !== null && info.cancelled === false, 'info.cancelled is false');
         assert(info.error === undefined, 'info carries no error: ' + info.error);
         assert(got !== null, 'onDone received a result');
+        assert(got.onWorker === true, 'the async compute ran on another thread');
 
         // The point of running one compute and one builder for both paths.
-        assertSameResult(sync, got, 'depth sync vs async');
+        assertSameResult(sync, got, 'sync vs async');
+
+        // Nothing fires twice on later frames.
+        for (let i = 0; i < 5; i++) advanceTime(16);
+        assert(calls === 1, 'onDone stays at one call after more frames');
     }
 
     // ── one op at a time per model ──────────────────────────────────────────
     {
-        const hed = bro.vision.loadHed(dir);
         let calls = 0;
-        hed.detect(img, { onDone() { calls++; } });
-        const err = expectThrows(() => hed.detect(img, { onDone() {} }),
-                                 'a second op while one is in flight');
+        probe(W, H, { holdMs: 50, onDone() { calls++; } });
+        const err = expectThrows(() => probe(W, H), 'a second op while one is in flight');
         assert(String(err.message).includes('already in flight'),
                'the busy error says so: ' + err.message);
-        pump(() => calls > 0, 5000, 'hed.detect onDone');
+        pump(() => calls > 0, 5000, 'held probe onDone');
         // ...and the model is free again as soon as the callback has run.
-        const after = hed.detect(img);
-        assert(after.width === W, 'the model is usable again after the job settles');
+        assert(probe(W, H).width === W, 'the model is usable again after the job settles');
+    }
+
+    // ── the model is released BEFORE onDone: step i can start step i+1 ─────
+    {
+        let chained = null, calls = 0;
+        probe(W, H, {
+            onDone() {
+                calls++;
+                chained = probe(W, H, { onDone() { calls++; } });
+            }
+        });
+        pump(() => calls >= 2, 5000, 'chained probe');
+        assert(chained !== null && typeof chained.cancel === 'function',
+               'onDone could launch the next op on the same model');
     }
 
     // ── cancel ──────────────────────────────────────────────────────────────
     {
-        const lineart = bro.vision.loadLineart(dir);
         let got = 'unset', info = null, calls = 0;
-        const handle = lineart.detect(img, {
-            onDone(r, i) { got = r; info = i; calls++; }
-        });
+        const handle = probe(W, H, { holdMs: 5000, onDone(r, i) { got = r; info = i; calls++; } });
+        const t0 = Date.now();
         handle.cancel();
-        pump(() => calls > 0, 5000, 'cancelled lineart.detect onDone');
+        pump(() => calls > 0, 5000, 'cancelled probe onDone');
+        assert(Date.now() - t0 < 4000, 'cancel() cut the worker short');
         assert(info.cancelled === true, 'a cancelled job reports cancelled');
         assert(got === null, 'a cancelled job delivers a null result, got ' + got);
-        // Cancelling still releases the model.
-        assert(lineart.detect(img).width === W, 'the model is free after a cancel');
+        assert(probe(W, H).width === W, 'the model is free after a cancel');
     }
 
-    // ── every wrapped family takes the callback ─────────────────────────────
+    // ── a throwing compute ──────────────────────────────────────────────────
     {
-        const cases = [
-            ['normal',     bro.vision.loadNormal(dir),    m => (o) => m.estimate(img, o)],
-            ['mlsd',       bro.vision.loadMlsd(dir),      m => (o) => m.detect(img, o)],
-            ['openpose',   bro.vision.loadOpenpose(dir),  m => (o) => m.detect(img, o)],
-            ['segformer',  bro.vision.loadSegformer(dir), m => (o) => m.detect(img, o)],
-            ['birefnet',   bro.vision.loadBirefnet(dir),  m => (o) => m.removeBackground(img, o)],
-        ];
-        for (const [name, model, mk] of cases) {
-            const call = mk(model);
-            const sync = call(undefined);
-            let got = null, calls = 0;
-            call({ onDone(r) { got = r; calls++; } });
-            pump(() => calls > 0, 5000, name + ' onDone');
-            assert(got !== null, name + ' async delivered a result');
-            assertSameResult(sync, got, name + ' sync vs async');
-        }
+        const e = expectThrows(() => probe(W, H, { fail: 'probe exploded' }), 'sync failure');
+        assert(String(e.message).includes('probe exploded'), 'sync error carries the message: ' + e.message);
+        assert(probe(W, H).width === W, 'a sync failure releases the model');
+
+        let got = 'unset', info = null, calls = 0;
+        probe(W, H, { fail: 'async exploded', onDone(r, i) { got = r; info = i; calls++; } });
+        pump(() => calls > 0, 5000, 'failed probe onDone');
+        assert(got === null, 'a failed job delivers a null result');
+        assert(info.cancelled === false, 'a failed job is not cancelled');
+        assert(String(info.error).includes('async exploded'), 'info.error carries the message: ' + info.error);
+        assert(probe(W, H).width === W, 'an async failure releases the model');
     }
 
-    // ── SAM: setImage and segmentEverything are the expensive halves ────────
+    // ── a throwing onDone is reported, not fatal, and the model is free ─────
     {
-        const sam = bro.vision.loadSam(dir);
         let calls = 0;
-        sam.setImage(img, { onDone() { calls++; } });
-        pump(() => calls > 0, 5000, 'sam.setImage onDone');
-        assert(sam.hasImage === true, 'setImage recorded the frame');
-
-        const sync = sam.segmentEverything(img);
-        let got = null;
-        calls = 0;
-        sam.segmentEverything(img, { onDone(r) { got = r; calls++; } });
-        pump(() => calls > 0, 5000, 'sam.segmentEverything onDone');
-        assertSameResult(sync, got, 'segmentEverything sync vs async');
+        probe(W, H, { onDone() { calls++; throw new Error('from onDone'); } });
+        pump(() => calls > 0, 5000, 'throwing onDone');
+        assert(probe(W, H).width === W, 'the model is free after a throwing onDone');
     }
 
-    // ── StyleGAN3 ───────────────────────────────────────────────────────────
+    // ── the model ops refuse a model with no weights up front ───────────────
+    // (the loaders already refuse a directory without a checkpoint, which is
+    // why the machine above is driven through the probe)
     {
-        const gan = bro.vision.loadStyleGAN3(dir, { resolution: 256 });
-        const sync = gan.generate({ seed: 3 });
-        let got = null, calls = 0;
-        gan.generate({ seed: 3, onDone(r) { got = r; calls++; } });
-        pump(() => calls > 0, 10000, 'stylegan3.generate onDone');
-        assertSameResult(sync, got, 'stylegan3 generate sync vs async');
+        const e = expectThrows(() => bro.vision.loadDepth('.'), 'loadDepth of a weightless dir');
+        assert(/loadDepth failed/.test(String(e.message)), 'loadDepth says what failed: ' + e.message);
     }
 
     console.log('bro.vision async jobs OK (weights-free)');

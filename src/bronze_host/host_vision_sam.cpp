@@ -142,9 +142,6 @@ struct SamSegmentJob {
     std::vector<int> labels;
     std::vector<std::array<float, 4>> boxes;
     bool multimask = true;
-    bool live = false;
-    int placeholderW = 512;
-    int placeholderH = 512;
     brovisionml::sam::Segmentation seg;
 };
 
@@ -173,23 +170,18 @@ Value samSegment(Value thisVal, std::span<const Value> args) {
     if (job->points.empty() && job->boxes.empty()) {
         return ev::throwTypeError("segment: opts.points or opts.boxes required");
     }
-    job->live = w->loaded && w->sam;
-    if (job->live && !w->sam->has_image()) {
+    // Then the sibling's two refusals, in its order: no weights, no image.
+    if (!(w->loaded && w->sam)) {
+        return ev::throwError("Sam.segment: model is not initialized/loaded");
+    }
+    if (!w->sam->has_image()) {
         return ev::throwError("segment: call setImage() before segment()");
     }
-    job->placeholderW = w->imageW > 0 ? w->imageW : 512;
-    job->placeholderH = w->imageH > 0 ? w->imageH : 512;
 
     BRO_VISION_BEGIN(w, "segment")
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (!job->live) {
-            job->seg.width = job->placeholderW;
-            job->seg.height = job->placeholderH;
-            job->seg.num = 0;
-            return;
-        }
         brotensor::DeviceScope scope(job->w->device);
         job->seg = job->w->sam->segment(job->points, job->labels, job->boxes, job->multimask);
     };
@@ -241,7 +233,6 @@ struct SamEverythingJob {
     std::vector<uint8_t> rgba;
     int inW = 0;
     int inH = 0;
-    bool live = false;
     brovisionml::sam::AmgConfig cfg;
     std::vector<brovisionml::sam::GeneratedMask> masks;
 };
@@ -271,25 +262,24 @@ Value samSegmentEverything(Value thisVal, std::span<const Value> args) {
         visionIntOpt(optsRoot.get(), "cropNLayers", job->cfg.crop_n_layers);
         visionIntOpt(optsRoot.get(), "minMaskRegionArea", job->cfg.min_mask_region_area);
     }
-    job->live = w->loaded && w->sam;
+    if (!(w->loaded && w->sam)) {
+        return ev::throwError("Sam.segmentEverything: model is not initialized/loaded");
+    }
 
     BRO_VISION_BEGIN(w, "segmentEverything")
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (!job->live) return;
         brotensor::DeviceScope scope(job->w->device);
         brovisionml::sam::AutomaticMaskGenerator gen(*job->w->sam, job->cfg);
         job->masks = gen.generate(job->rgba.data(), job->inW, job->inH, 4);
     };
 
     auto build = [job]() -> Value {
-        if (job->live) {
-            // generate() leaves its own image cached on the model.
-            job->w->hasImage = true;
-            job->w->imageW = job->inW;
-            job->w->imageH = job->inH;
-        }
+        // generate() leaves its own image cached on the model.
+        job->w->hasImage = true;
+        job->w->imageW = job->inW;
+        job->w->imageH = job->inH;
         ev::Persistent arr(hostArrayOf(job->masks.size(), [&job](std::size_t i) -> Value {
             const auto& gm = job->masks[i];
             ev::Persistent bmp(

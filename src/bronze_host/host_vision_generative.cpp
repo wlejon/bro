@@ -174,21 +174,13 @@ Value sg3Result(const bvm::StyleGAN3Wrapper& w, const Sg3Out& out) {
     return res.get();
 }
 
-// An un-loaded generator still answers, so a surface probe works without
-// weights: a mid-gray image of the model resolution, no latents.
-void sg3Placeholder(const bvm::StyleGAN3Wrapper* w, int64_t seed, Sg3Out& out) {
-    const int res = w ? w->imgResolution : 1024;
-    const int ch = w ? w->imgChannels : 3;
-    out.img.width = res;
-    out.img.height = res;
-    out.img.channels = ch;
-    out.img.rgb.assign(static_cast<std::size_t>(res) * res * ch, 128);
-    out.seed = seed;
-}
+// The sibling refuses an un-loaded generator up front, before reading any
+// option (native_vision_generative.cpp); there is no placeholder image.
+constexpr const char* kSg3NotLoaded =
+    "StyleGAN3: generator is uninitialized or model weights not loaded";
 
 struct Sg3Job {
     bvm::StyleGAN3Wrapper* w = nullptr;
-    bool live = false;
     std::vector<float> z;
     std::vector<float> win;
     float psi = 1.0f;
@@ -211,9 +203,9 @@ Value sgGenerate(Value thisVal, std::span<const Value> args) {
     auto* w = visionSelf<bvm::StyleGAN3Wrapper>(bvm::g_stylegan3Class, thisVal,
                                                 bvm::kHostStyleGAN3Tag);
     if (!w) return ev::throwTypeError("StyleGAN3.prototype.generate: not a generator");
+    if (!(w->loaded && w->generator)) return ev::throwError(kSg3NotLoaded);
 
-    Value opts = args.empty() ? ev::undefined() : args[0];
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.empty() ? ev::undefined() : args[0]);
     auto job = std::make_shared<Sg3Job>();
     job->w = w;
     visionFloatOpt(optsRoot.get(), "truncation", job->psi);
@@ -238,16 +230,11 @@ Value sgGenerate(Value thisVal, std::span<const Value> args) {
         std::normal_distribution<float> nd(0.0f, 1.0f);
         for (float& v : job->z) v = nd(rng);
     }
-    job->live = w->loaded && w->generator;
 
     BRO_VISION_BEGIN(w, "generate")
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (!job->live) {
-            sg3Placeholder(job->w, job->seed, job->out);
-            return;
-        }
         auto* g = job->w;
         brotensor::DeviceScope scope(g->device);
         brotensor::Tensor zt = brotensor::Tensor::mat(1, g->zDim);
@@ -272,6 +259,7 @@ Value sgSynthesize(Value thisVal, std::span<const Value> args) {
     auto* w = visionSelf<bvm::StyleGAN3Wrapper>(bvm::g_stylegan3Class, thisVal,
                                                 bvm::kHostStyleGAN3Tag);
     if (!w) return ev::throwTypeError("StyleGAN3.prototype.synthesize: not a generator");
+    if (!(w->loaded && w->generator)) return ev::throwError(kSg3NotLoaded);
     if (args.empty() || !ev::isObject(args[0])) {
         return ev::throwTypeError("synthesize(w, opts?): w Float32Array required");
     }
@@ -293,19 +281,12 @@ Value sgSynthesize(Value thisVal, std::span<const Value> args) {
             "synthesize: w must have length numWs*wDim (W+) or wDim (single w)");
     }
     job->seed = -1;
-    job->live = w->loaded && w->generator;
 
     BRO_VISION_BEGIN(w, "synthesize")
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (!job->live) {
-            sg3Placeholder(job->w, -1, job->out);
-            job->out.seed = -1;
-            return;
-        }
         auto* g = job->w;
         brotensor::DeviceScope scope(g->device);
         brotensor::Tensor ws = brotensor::Tensor::mat(g->numWs, g->wDim);

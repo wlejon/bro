@@ -474,8 +474,8 @@ rembg.dispose();
  *
  * `resolution` and `variant` are not sniffed from the file — they select the
  * config the weights are read into, so they MUST match the checkpoint. A bad
- * value throws a TypeError; a missing checkpoint does not (the handle stays
- * usable for a surface probe, answering with a mid-gray placeholder image).
+ * value throws a TypeError; a missing or unreadable checkpoint throws an
+ * Error ("loadStyleGAN3 failed: ..."). There is no weights-free placeholder.
  *
  * @param {string} path
  * @param {Object} [opts]

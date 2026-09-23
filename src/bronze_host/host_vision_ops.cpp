@@ -3,8 +3,9 @@
 // Both were `estimate(image, opts?)` returning typed-array planes; both get
 // their `image` ImageBitmap back and an `opts.onDone` that moves the model
 // pass off the JS thread. Everything else — the option names, the plane
-// names, the unloaded-model placeholder, the error text — is the sibling's,
-// read from brovisionml/src/api/native_vision_models.cpp so the two agree.
+// names, the refusals (no model loaded, no image, an image that does not
+// decode) and their error text — is the sibling's, read from
+// brovisionml/src/api/native_vision_models.cpp so the two agree.
 
 #if BRO_WITH_VISION
 
@@ -30,7 +31,6 @@ struct DepthJob {
     int inW = 512;
     int inH = 512;
     bool invert = false;
-    bool live = false;  // weights loaded AND the image decoded
     brovisionml::depth::DepthMap dm;
 };
 
@@ -41,31 +41,30 @@ Value depthEstimate(Value thisVal, std::span<const Value> args) {
         return ev::throwTypeError("DepthEstimator.prototype.estimate: not a DepthEstimator");
     }
 
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
+    // The sibling's refusals, in the sibling's order and words: no model, no
+    // image, an image that does not decode. There is no placeholder answer.
+    if (!w->loaded || !w->estimator) {
+        return ev::throwError("DepthEstimator.estimate: model is not initialized/loaded");
+    }
+    if (args.empty()) {
+        return ev::throwTypeError("DepthEstimator.estimate: image argument required");
+    }
     auto job = std::make_shared<DepthJob>();
     job->w = w;
-    job->invert = visionBoolOpt(opts, "invert", false);
+    job->invert = visionBoolOpt(args.size() > 1 ? args[1] : ev::undefined(), "invert", false);
 
     std::string err;
-    const bool decoded =
-        !args.empty() && bvm::readImageInput(args[0], job->rgba, job->inW, job->inH, err);
-    job->live = decoded && w->loaded && w->estimator;
+    if (!bvm::readImageInput(args[0], job->rgba, job->inW, job->inH, err)) {
+        return ev::throwTypeError(std::string("DepthEstimator.estimate: ") + err);
+    }
 
     BRO_VISION_BEGIN(w, "estimate")
-    ev::Persistent optsRoot(opts);
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (job->live) {
-            brotensor::DeviceScope scope(job->w->device);
-            job->dm = job->w->estimator->estimate(job->rgba.data(), job->inW, job->inH, 4);
-            return;
-        }
-        // The sibling's probe answer: a flat half-depth plane at the size it
-        // knows, so a surface check works with no weights on disk.
-        job->dm.width = job->inW;
-        job->dm.height = job->inH;
-        job->dm.depth.assign(static_cast<std::size_t>(job->inW) * job->inH, 0.5f);
+        brotensor::DeviceScope scope(job->w->device);
+        job->dm = job->w->estimator->estimate(job->rgba.data(), job->inW, job->inH, 4);
     };
 
     auto build = [job]() -> Value {
@@ -117,7 +116,6 @@ struct NormalJob {
     std::vector<uint8_t> rgba;
     int inW = 512;
     int inH = 512;
-    bool live = false;
     bool hasIntrinsics = false;
     float fx = 0.0f;
     float fy = 0.0f;
@@ -133,44 +131,46 @@ Value normalEstimate(Value thisVal, std::span<const Value> args) {
         return ev::throwTypeError("NormalEstimator.prototype.estimate: not a NormalEstimator");
     }
 
-    Value opts = args.size() > 1 ? args[1] : ev::undefined();
+    if (!w->loaded || !w->estimator) {
+        return ev::throwError("NormalEstimator.estimate: model is not initialized/loaded");
+    }
+    if (args.empty()) {
+        return ev::throwTypeError("NormalEstimator.estimate: image argument required");
+    }
     auto job = std::make_shared<NormalJob>();
     job->w = w;
 
+    // Every read below goes through the rooted slot: getProperty can run a
+    // getter, which allocates.
+    ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
+
     // Passing fx is what switches DSINE off its fov-synthesized default, so
     // fx alone decides; fy/cx/cy ride along.
-    if (ev::isObject(opts)) {
-        Value fxv = ev::getProperty(opts, "fx");
+    if (ev::isObject(optsRoot.get())) {
+        Value fxv = ev::getProperty(optsRoot.get(), "fx");
         if (ev::isNumber(fxv)) {
             job->hasIntrinsics = true;
             job->fx = static_cast<float>(ev::toDouble(fxv));
-            visionFloatOpt(opts, "fy", job->fy);
-            visionFloatOpt(opts, "cx", job->cx);
-            visionFloatOpt(opts, "cy", job->cy);
+            visionFloatOpt(optsRoot.get(), "fy", job->fy);
+            visionFloatOpt(optsRoot.get(), "cx", job->cx);
+            visionFloatOpt(optsRoot.get(), "cy", job->cy);
         }
     }
 
     std::string err;
-    const bool decoded =
-        !args.empty() && bvm::readImageInput(args[0], job->rgba, job->inW, job->inH, err);
-    job->live = decoded && w->loaded && w->estimator;
+    if (!bvm::readImageInput(args[0], job->rgba, job->inW, job->inH, err)) {
+        return ev::throwTypeError(std::string("NormalEstimator.estimate: ") + err);
+    }
 
     BRO_VISION_BEGIN(w, "estimate")
-    ev::Persistent optsRoot(opts);
     Value onDone = visionOnDone(optsRoot.get());
 
     auto compute = [job](const std::atomic<bool>&) {
-        if (job->live) {
-            brotensor::DeviceScope scope(job->w->device);
-            job->nm = job->hasIntrinsics
-                          ? job->w->estimator->estimate(job->rgba.data(), job->inW, job->inH,
-                                                        4, job->fx, job->fy, job->cx, job->cy)
-                          : job->w->estimator->estimate(job->rgba.data(), job->inW, job->inH, 4);
-            return;
-        }
-        job->nm.width = job->inW;
-        job->nm.height = job->inH;
-        job->nm.normals.assign(static_cast<std::size_t>(job->inW) * job->inH * 3, 0.0f);
+        brotensor::DeviceScope scope(job->w->device);
+        job->nm = job->hasIntrinsics
+                      ? job->w->estimator->estimate(job->rgba.data(), job->inW, job->inH, 4,
+                                                    job->fx, job->fy, job->cx, job->cy)
+                      : job->w->estimator->estimate(job->rgba.data(), job->inW, job->inH, 4);
     };
 
     auto build = [job]() -> Value {
