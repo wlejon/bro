@@ -83,7 +83,12 @@ bool registerNatives_window(std::string* error) {
         fn("__bro_native.window.getDisplays_contentScale", p(&bro_window_getDisplays_contentScale), "f64", {"i32"}, error) &&
         fn("__bro_native.window.getDisplays_isPrimary", p(&bro_window_getDisplays_isPrimary), "bool", {"i32"}, error) &&
         fn("__bro_native.window.getDisplays_isCurrent", p(&bro_window_getDisplays_isCurrent), "bool", {"i32"}, error) &&
-        fn("__bro_native.window.moveToDisplay", p(&bro_window_moveToDisplay), "bool", {"f64"}, error);
+        fn("__bro_native.window.moveToDisplay", p(&bro_window_moveToDisplay), "bool", {"f64"}, error) &&
+        fn("__bro_native.window.getSize", p(&bro_window_getSize), "void", {}, error) &&
+        fn("__bro_native.window.getSize_width", p(&bro_window_getSize_width), "i32", {}, error) &&
+        fn("__bro_native.window.getSize_height", p(&bro_window_getSize_height), "i32", {}, error) &&
+        fn("__bro_native.window.setSize", p(&bro_window_setSize), "void", {"i32", "i32"}, error) &&
+        fn("__bro_native.window.quit", p(&bro_window_quit), "void", {}, error);
     if (!ok) return false;
     return true;
 }

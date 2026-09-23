@@ -178,6 +178,20 @@ bool bro_window_getDisplays_isCurrent(int32_t index);
 //   registered at __bro_native.window.moveToDisplay
 bool bro_window_moveToDisplay(double id);
 
+// bro.window.getSize — a dictionary result read through _width / _height
+//   registered at __bro_native.window.getSize
+void bro_window_getSize(void);
+int32_t bro_window_getSize_width(void);
+int32_t bro_window_getSize_height(void);
+
+// bro.window.setSize, window.resizeTo / resizeBy
+//   registered at __bro_native.window.setSize
+void bro_window_setSize(int32_t width, int32_t height);
+
+// bro.quit
+//   registered at __bro_native.window.quit
+void bro_window_quit(void);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

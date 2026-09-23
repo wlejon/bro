@@ -7,6 +7,7 @@
 #include "engine/engine.h"
 #include "natives/window/native_window_decl.h"
 #include "platform/sdl_window.h"
+#include "util/interrupt.h"
 
 #include <vector>
 
@@ -30,6 +31,7 @@ struct WindowSize { int w = 0, h = 0; };
 thread_local WindowPosition g_pos;
 thread_local WindowSize g_minSize;
 thread_local WindowSize g_maxSize;
+thread_local WindowSize g_size;
 thread_local std::vector<platform::DisplayInfo> g_displays;
 
 const platform::DisplayInfo* displayAt(int32_t i) {
@@ -183,6 +185,48 @@ bool bro_window_moveToDisplay(double id) {
     auto* w = getWindow();
     if (!w || isHeadless()) return false;
     return w->moveToDisplay(static_cast<uint32_t>(id));
+}
+
+// Windowed, the size is the live client area (SDL points), so a read right
+// after setSize answers the new size before the resize event arrives.
+// Headless has no real window size; the virtual viewport is the size.
+void bro_window_getSize(void) {
+    int w = 0, h = 0;
+    auto* eng = hostEngine();
+    if (!isHeadless()) {
+        if (auto* win = getWindow()) win->getSize(w, h);
+    } else if (eng) {
+        w = eng->viewportWidth();
+        h = eng->viewportHeight();
+    }
+    g_size = {w, h};
+}
+int32_t bro_window_getSize_width(void) { return g_size.w; }
+int32_t bro_window_getSize_height(void) { return g_size.h; }
+
+// Windowed: resize the OS window; SDL's resize event then runs the engine's
+// relayout + 'resize' dispatch. Headless: resize the virtual viewport
+// directly (the same path as the headless resize() helper), so the relayout
+// and the 'resize' event happen here instead.
+void bro_window_setSize(int32_t width, int32_t height) {
+    if (width < 1 || height < 1) return;
+    auto* eng = hostEngine();
+    if (!eng) return;
+    if (isHeadless()) {
+        eng->handleResize(width, height);
+        return;
+    }
+    if (auto* w = getWindow()) {
+        w->setWindowSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    }
+}
+
+// The main window's close path: the run loop stops at the top of its next
+// frame. Headless is script-driven (the script's end is the exit), so this is
+// a no-op there, which keeps an app's "Quit" button from ending a test.
+void bro_window_quit(void) {
+    if (isHeadless()) return;
+    if (!bro::util::interrupted()) bro::util::requestInterrupt();
 }
 
 }  // extern "C"

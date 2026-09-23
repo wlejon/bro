@@ -76,6 +76,23 @@ assert(notThere.length > 'bin/does-not-exist.bin'.length,
        'a missing file resolves to an absolute path, not the input');
 assert(!fs.existsSync(notThere), 'resolving does not create anything');
 
+// ── resolveWritePath: a file the app is about to create ────────────────────
+//
+// The directory resolves through the mounts, the filename is appended as-is.
+
+assert(typeof bro.resolveWritePath === 'function', 'bro.resolveWritePath is a function');
+const w = bro.resolveWritePath('/app/saves/slot1.json');
+assert(path.isAbsolute(w), 'resolveWritePath is absolute: ' + w);
+assert(path.basename(w) === 'slot1.json', 'resolveWritePath keeps the filename: ' + w);
+assert(path.normalize(path.dirname(w)) === path.normalize(bro.resolvePath('/app/saves')),
+       'resolveWritePath dir == resolvePath(dir): ' + w);
+assert(path.normalize(bro.resolveWritePath('/app/index.html')) === path.normalize(bro.resolvePath('/app/index.html')),
+       'resolveWritePath agrees with resolvePath for an existing file');
+assert(bro.resolveWritePath(bro.appDir) === bro.appDir, 'an absolute path passes through');
+let threw = false;
+try { bro.resolveWritePath(); } catch (e) { threw = e instanceof TypeError; }
+assert(threw, 'resolveWritePath() without a path throws TypeError');
+
 // ── the resolved path is usable by a real process ──────────────────────────
 //
 // The reason this binding exists. A mount path is meaningless to a child

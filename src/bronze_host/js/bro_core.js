@@ -37,6 +37,10 @@
         if (path === undefined) throw new TypeError('bro.resolvePath: path required');
         return __bro_native.paths.resolvePath(String(path));
     });
+    fn(bro, 'resolveWritePath', function resolveWritePath(path) {
+        if (path === undefined) throw new TypeError('bro.resolveWritePath: path required');
+        return __bro_native.paths.resolveWritePath(String(path));
+    });
 
     // ---- bro.window --------------------------------------------------------
     accessor(bro.window, 'state', () => __bro_native.window.state, undefined);
@@ -103,6 +107,29 @@
     fn(bro.window, 'moveToDisplay', function moveToDisplay(id) {
         return __bro_native.window.moveToDisplay(id);
     });
+    fn(bro.window, 'getSize', function getSize() {
+        __bro_native.window.getSize();
+        return { width: __bro_native.window.getSize_width(), height: __bro_native.window.getSize_height() };
+    });
+    function setSize(width, height) {
+        if (width === undefined || height === undefined) {
+            throw new TypeError('bro.window.setSize: width and height are required');
+        }
+        const w = Math.round(Number(width)), h = Math.round(Number(height));
+        if (!(w >= 1 && h >= 1)) throw new RangeError('bro.window.setSize: width and height must be >= 1');
+        __bro_native.window.setSize(w, h);
+    }
+    fn(bro.window, 'setSize', setSize);
+    // window.resizeTo / resizeBy: the main window's size, as bro.window.setSize.
+    fn(globalThis, 'resizeTo', function resizeTo(width, height) { setSize(width, height); });
+    fn(globalThis, 'resizeBy', function resizeBy(dx, dy) {
+        const cur = bro.window.getSize();
+        setSize(cur.width + (Number(dx) || 0), cur.height + (Number(dy) || 0));
+    });
+
+    // ---- bro.quit ------------------------------------------------------------
+    // Stops the app as closing the main window does. A no-op headless.
+    fn(bro, 'quit', function quit() { __bro_native.window.quit(); });
 
     // ---- bro.settings ------------------------------------------------------
     // The store is text. A value is typed by its content on the way out —

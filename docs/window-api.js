@@ -145,3 +145,47 @@ bro.window.getDisplays = function() {};
  */
 bro.window.moveToDisplay = function(id) {};
 
+/**
+ * Current client-area size of the main window. Windowed, this is the live OS
+ * window size (so it reads the new size straight after `setSize`); headless,
+ * it is the virtual viewport.
+ * @returns {WindowSize}
+ */
+bro.window.getSize = function() {};
+
+/**
+ * Resizes the main window's client area. Windowed, the OS window is resized
+ * and the document relays out / fires `resize` when the OS confirms it;
+ * headless, the virtual viewport is resized immediately (relayout and the
+ * `resize` event happen inside the call, as with the headless `resize()`
+ * helper). Throws `RangeError` for a size below 1x1.
+ * @param {number} width
+ * @param {number} height
+ *
+ * @example
+ *   bro.window.setSize(1280, 720);
+ */
+bro.window.setSize = function(width, height) {};
+
+/**
+ * Web-compatible spelling of `bro.window.setSize(width, height)` for the main window.
+ * @param {number} width
+ * @param {number} height
+ */
+window.resizeTo = function(width, height) {};
+
+/**
+ * Grows (or shrinks, with negative deltas) the main window by `dx`, `dy`
+ * relative to `bro.window.getSize()`.
+ * @param {number} dx
+ * @param {number} dy
+ */
+window.resizeBy = function(dx, dy) {};
+
+/**
+ * Quits the app: the run loop stops at the top of the next frame, as when the
+ * main window is closed. A no-op in `bro-headless` (the script's end is the
+ * exit there), so an app's Quit button cannot end a test.
+ */
+bro.quit = function() {};
+
