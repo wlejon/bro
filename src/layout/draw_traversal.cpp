@@ -9,6 +9,7 @@
 #include "css/transform.h"
 #include "css/color.h"
 #include "layout/formatting_context.h"
+#include "layout/line_clamp.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
@@ -1475,6 +1476,24 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
 
     // ::after pseudo content (drawn after children)
     if (visible) drawPseudo(elem, "after", childOffsetX, childOffsetY);
+
+    // A line-clamp container whose kept lines hold no text node (images,
+    // inline-blocks, or an empty last line) carries the ellipsis as its own
+    // run, in its content coordinates and its font (htmlayout line_clamp.h).
+    if (visible && box.textTruncated) {
+        for (const auto& run : box.textRuns) {
+            if (run.srcStart != htmlayout::layout::kContainerEllipsisSrc ||
+                run.text.empty())
+                continue;
+            render::FontRef fontRef = getFontRef(elem);
+            float ascent = renderer_->measureText("", fontRef).ascent;
+            bromath::Color color = cfromColor8({0, 0, 0, 255});
+            auto cIt = style.find("color");
+            if (cIt != style.end()) tryParseColor(cIt->second, color);
+            renderer_->drawText(run.text, childOffsetX + run.x,
+                                childOffsetY + run.y + ascent, fontRef, color);
+        }
+    }
 
     // Draw replaced element content (input, textarea, select, svg)
     if (visible) {
