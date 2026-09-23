@@ -31,26 +31,27 @@ Value makeClipboardValue() {
         return ev::fromBool(ok);
     });
     clip.def("readText", 0, [](Value, std::span<const Value>) {
-        Value p = ev::createPromise();
-        ev::resolvePromise(p, ev::fromUtf8(bro::platform::getClipboardText()));
-        return p;
+        ev::Persistent p(ev::createPromise());
+        ev::Persistent text(ev::fromUtf8(bro::platform::getClipboardText()));
+        ev::resolvePromise(p.get(), text.get());
+        return p.get();
     });
     clip.def("writeText", 1, [](Value, std::span<const Value> a) {
         Value textV = argAt(a, 0);
         std::string text = (!ev::isObject(textV) && !ev::isUndefined(textV)) ? ev::toUtf8(textV) : "";
         bool ok = bro::platform::setClipboardText(text);
-        Value p = ev::createPromise();
+        ev::Persistent promise(ev::createPromise());
         if (ok) {
-            ev::resolvePromise(p, ev::undefined());
+            ev::resolvePromise(promise.get(), ev::undefined());
         } else {
-            ev::Persistent promise(p);
-            Value msg = ev::fromUtf8("clipboard write failed");
-            ev::CallResult err = ev::construct(ev::globalValue("Error").value,
-                                               std::span<const Value>(&msg, 1));
-            ev::rejectPromise(promise.get(), err.value);
-            return promise.get();
+            ev::Persistent msg(ev::fromUtf8("clipboard write failed"));
+            ev::Persistent ctor(ev::globalValue("Error").value);
+            Value m = msg.get();
+            ev::CallResult err = ev::construct(ctor.get(), std::span<const Value>(&m, 1));
+            ev::Persistent errP(err.value);
+            ev::rejectPromise(promise.get(), errP.get());
         }
-        return p;
+        return promise.get();
     });
     return clip.get();
 }
@@ -151,12 +152,31 @@ void installNavigatorGlobal() {
             ev::resolvePromise(p.get(), list.get());
             return p.get();
         });
-        md.def("getUserMedia", 1, [](Value, std::span<const Value>) {
+        // broaudio's installAudio installs the real getUserMedia as the
+        // global `__nativeGetUserMedia`, and also over this one when the
+        // navigator already exists. Looking the global up per call makes
+        // the result the same whichever of the two installs ran first.
+        md.def("getUserMedia", 1, [](Value, std::span<const Value> a) {
+            ev::GlobalValue native = ev::globalValue("__nativeGetUserMedia");
+            if (native.found && ev::isFunction(native.value)) {
+                ev::Persistent fn(native.value);
+                ev::Persistent constraints(a.empty() ? ev::undefined() : a[0]);
+                Value arg = constraints.get();
+                ev::CallResult r = ev::call(fn.get(), ev::undefined(),
+                                            std::span<const Value>(&arg, 1));
+                if (!r.thrown) return r.value;
+                ev::Persistent reason(r.value);
+                ev::Persistent p(ev::createPromise());
+                ev::rejectPromise(p.get(), reason.get());
+                return p.get();
+            }
             ev::Persistent p(ev::createPromise());
-            Value msg = ev::fromUtf8("NotSupportedError: getUserMedia is not available; use bro.mic");
-            ev::CallResult err = ev::construct(ev::globalValue("Error").value,
-                                               std::span<const Value>(&msg, 1));
-            ev::rejectPromise(p.get(), err.value);
+            ev::Persistent msg(ev::fromUtf8("NotSupportedError: getUserMedia is not available; use bro.mic"));
+            ev::Persistent ctor(ev::globalValue("Error").value);
+            Value m = msg.get();
+            ev::CallResult err = ev::construct(ctor.get(), std::span<const Value>(&m, 1));
+            ev::Persistent errP(err.value);
+            ev::rejectPromise(p.get(), errP.get());
             return p.get();
         });
         md.def("getSupportedConstraints", 0, [](Value, std::span<const Value>) {
