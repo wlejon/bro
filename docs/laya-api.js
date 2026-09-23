@@ -54,7 +54,8 @@
  * Workers, anything — joins one queue; whichever replica is idle packs what
  * is queued into its next forward, so concurrent calls batch together and
  * load spreads over the GPUs. A forward is capped at a token budget sized so
- * it takes about `targetForwardMs` (12 ms by default, measured at load), which
+ * it takes about `targetForwardMs` (12 ms by default; fitted at load and
+ * corrected from every forward since), which
  * bounds how long a new request can wait behind a batch already running;
  * admission is by `priority`, then deadline, then arrival, per question, so a
  * big request splits across forwards and idle GPUs. Missed deadlines are
@@ -64,9 +65,13 @@
  * Measured on an RTX 4090 (submit -> result, tokenize included): one 5-
  * question request on a ~90-token email ~5 ms, one question ~2 ms. Under
  * Poisson arrivals of 5-question email-sized requests, one GPU holds p99
- * under 30 ms up to ~175 requests/s (875 decisions/s), two GPUs ~350/s;
- * ~200-token conversation states about half that. The larger shapes are
- * GEMM-bound: a forward costs ~7.7 us per packed token plus ~1.5 ms.
+ * under 30 ms up to ~100-150 requests/s (p99 ~17 ms at 100, ~28-31 ms at
+ * 150), two GPUs ~300-350/s (p99 ~20-29 ms at 300). With ~200-token
+ * conversation states a 5-question request is ~2 forwards, so one GPU sits
+ * near 30 ms p99 even at light load; two GPUs split it and hold ~100-150/s.
+ * The knee is sharp: past ~70 % device busy the queue, and p99, grow fast.
+ * The larger shapes are GEMM-bound: a forward costs ~6-8 us per packed token
+ * plus ~1.5 ms. `brolm_bench_laya --sweep` measures a machine's own knee.
  *
  * predictAsync promises settle on the frame they complete (the LM tick runs
  * in the engine's frame pump and drains microtasks after it), so JS sees a
