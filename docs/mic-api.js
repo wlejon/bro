@@ -44,10 +44,16 @@
  * Options for configuring and starting live mic stream capture.
  * @typedef {Object} MicStartOptions
  * @property {number} [chunkFrames] -  Samples per chunk measured at targetRate (default 160 = 10ms @ 16kHz). 0 = resampler cadence.
+ *   At most 2^20 (1048576): a larger value is a RangeError. A negative one is an Error.
  * @property {number} [targetRate] -  Sample rate delivered to callback in Hz (default 16000). 0 = engine native rate.
+ *   At most 768000: a larger value is a RangeError. A negative one is an Error.
  * @property {boolean} [agc] -  Enable broaudio peak-track AGC (default false).
  * @property {boolean} [live] -  Open recording device (default true). Set false for offline/feed testing.
  * @property {boolean} [samples] -  Deliver raw Float32Array PCM samples in onChunk callback (default false).
+ *   Needs chunkFrames > 0 (an Error otherwise). The PCM waits in a sample ring capped at 64 MB
+ *   (2^24 floats): it holds min(4096, max(8, 2^24 / chunkFrames)) chunks, so with a large
+ *   chunkFrames fewer chunks fit, and a main thread that falls that many chunks behind drops
+ *   the oldest (counted in stats().dropped) instead of the ring growing.
  * @property {Function} [onChunk] -  Callback invoked per chunk on the main thread: (chunk: MicChunk) => void.
  * @property {number} [targetPeak] -  AGC target peak level in [0, 1] (default 0.95).
  * @property {number} [halfLifeSec] -  AGC running-peak decay half-life in seconds.
@@ -62,7 +68,8 @@
  * @property {number} [samplesDelivered] -  Total audio samples handed to callback.
  * @property {number} [rollingPeak] -  Rolling peak level post-AGC in range [0, 1].
  * @property {number} [chunkCount] -  Total chunks published to lock-free ring.
- * @property {number} [dropped] -  Number of chunks dropped due to main-thread backlog.
+ * @property {number} [dropped] -  Number of chunks dropped due to main-thread backlog (more than 4096 chunks
+ *   behind, or more than the sample ring holds when opts.samples is set).
  * @property {number} [chunkFrames] -  Configured frame count per chunk.
  */
 
@@ -81,7 +88,9 @@
  * Real-time microphone audio capture and fixed-size chunk streaming namespace.
  */
 /**
- * Register a microphone tap and start chunk delivery.
+ * Register a microphone tap and start chunk delivery. Numeric options are
+ * read as numbers and saturated to 32-bit integers before the range checks
+ * (chunkFrames <= 2^20, targetRate <= 768000; RangeError past either).
  *
  * @param {MicStartOptions} [opts] - Capture configuration options
  */
