@@ -97,6 +97,58 @@ int canvasHeightOf(CanvasState* cs) {
     return attributeOr(cs->el, "height", 150);
 }
 
+// The canvas's bitmap as it is displayed, at ITS size — which is not always
+// the width/height attributes: a bitmaprenderer canvas shows the ImageBitmap
+// it was handed at that bitmap's size, and an attribute-less 2D canvas
+// follows its layout box. The CanvasScene's own size is the one its surface
+// has, so the snapshot is taken at exactly that. False with no pixels.
+bool readCanvasBitmap(CanvasState* cs, std::vector<uint8_t>& out, int& w, int& h) {
+    w = h = 0;
+    if (!cs || !cs->el) return false;
+    if (cs->glCtx) {
+        if (!cs->glCtx->readCanvasPixels(out)) return false;
+        w = cs->glCtx->canvasWidth();
+        h = cs->glCtx->canvasHeight();
+        return w > 0 && h > 0;
+    }
+    auto* scene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene());
+    if (!scene) return false;
+    w = scene->width();
+    h = scene->height();
+    if (w <= 0 || h <= 0) return false;
+    const uint8_t* p = scene->snapshotPixels(w, h);
+    if (!p) return false;
+    out.assign(p, p + static_cast<size_t>(w) * h * 4);
+    return true;
+}
+
+// PNG, or JPEG when asked for (alpha composited onto black, as browsers do);
+// an unknown type is PNG (HTML: "image/png" is the fallback).
+bool encodeCanvasBitmap(const std::vector<uint8_t>& px, int w, int h, const std::string& type,
+                        double quality, std::vector<uint8_t>& bytes, std::string& outType) {
+    bytes.clear();
+    outType = "image/png";
+    if (type == "image/jpeg" || type == "image/jpg") {
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+        for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) {
+            const uint8_t alpha = px[i * 4 + 3];
+            for (int c = 0; c < 3; ++c) {
+                rgb[i * 3 + c] = static_cast<uint8_t>((px[i * 4 + c] * alpha + 127) / 255);
+            }
+        }
+        int q = (quality > 0.0 && quality <= 1.0) ? static_cast<int>(quality * 100.0 + 0.5) : 92;
+        if (q < 1) q = 1;
+        if (broimage::encode_jpeg_memory(bytes, rgb.data(), w, h, 3, q)) {
+            outType = "image/jpeg";
+        }
+    }
+    if (outType == "image/png") {
+        bytes.clear();
+        if (!broimage::encode_png_memory(bytes, px.data(), w, h, 4)) bytes.clear();
+    }
+    return !bytes.empty();
+}
+
 // ImageBitmapRenderingContext — getContext('bitmaprenderer'). The canvas gets
 // an ordinary CanvasScene, and transferFromImageBitmap replaces its whole
 // bitmap with the ImageBitmap's pixels (recorded as a putImageData, so it
@@ -346,49 +398,13 @@ Value makeCanvasValue(dom::Element* el) {
         if (a.size() > 1 && ev::isNumber(a[1])) {
             quality = ev::toDouble(a[1]);
         }
-        std::vector<uint8_t> owned;
-        const uint8_t* px = nullptr;
+        std::vector<uint8_t> pixels;
         int w = 0, h = 0;
-        if (cs->glCtx) {
-            if (cs->glCtx->readCanvasPixels(owned)) {
-                px = owned.data();
-                w = cs->glCtx->canvasWidth();
-                h = cs->glCtx->canvasHeight();
-            }
-        } else if (auto* scene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
-            int cw = canvasWidthOf(cs);
-            int ch = canvasHeightOf(cs);
-            const uint8_t* p = scene->snapshotPixels(cw, ch);
-            if (p) {
-                owned.assign(p, p + static_cast<size_t>(cw) * ch * 4);
-                px = owned.data();
-                w = cw;
-                h = ch;
-            }
-        }
-        if (!px || w <= 0 || h <= 0) {
-            return ev::fromUtf8("data:,");
-        }
         std::vector<uint8_t> bytes;
-        std::string outType = "image/png";
-        if (type == "image/jpeg" || type == "image/jpg") {
-            std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
-            for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) {
-                const uint8_t alpha = px[i * 4 + 3];
-                for (int c = 0; c < 3; ++c) {
-                    rgb[i * 3 + c] = static_cast<uint8_t>((px[i * 4 + c] * alpha + 127) / 255);
-                }
-            }
-            int q = (quality > 0.0 && quality <= 1.0) ? static_cast<int>(quality * 100.0 + 0.5) : 92;
-            if (q < 1) q = 1;
-            if (broimage::encode_jpeg_memory(bytes, rgb.data(), w, h, 3, q)) {
-                outType = "image/jpeg";
-            }
-        }
-        if (outType == "image/png") {
-            if (!broimage::encode_png_memory(bytes, px, w, h, 4) || bytes.empty()) {
-                return ev::fromUtf8("data:,");
-            }
+        std::string outType;
+        if (!readCanvasBitmap(cs, pixels, w, h) ||
+            !encodeCanvasBitmap(pixels, w, h, type, quality, bytes, outType)) {
+            return ev::fromUtf8("data:,");
         }
         std::string url = "data:" + outType + ";base64," + util::base64Encode(bytes.data(), bytes.size());
         return ev::fromUtf8(url);
@@ -411,49 +427,14 @@ Value makeCanvasValue(dom::Element* el) {
         if (a.size() > 2 && ev::isNumber(a[2])) {
             quality = ev::toDouble(a[2]);
         }
-        std::vector<uint8_t> owned;
-        const uint8_t* px = nullptr;
+        std::vector<uint8_t> pixels;
         int w = 0, h = 0;
-        if (cs->glCtx) {
-            if (cs->glCtx->readCanvasPixels(owned)) {
-                px = owned.data();
-                w = cs->glCtx->canvasWidth();
-                h = cs->glCtx->canvasHeight();
-            }
-        } else if (auto* scene = static_cast<canvas::CanvasScene*>(cs->el->canvasScene())) {
-            int cw = canvasWidthOf(cs);
-            int ch = canvasHeightOf(cs);
-            const uint8_t* p = scene->snapshotPixels(cw, ch);
-            if (p) {
-                owned.assign(p, p + static_cast<size_t>(cw) * ch * 4);
-                px = owned.data();
-                w = cw;
-                h = ch;
-            }
-        }
-
         ev::Persistent blobVal(ev::null());
-        if (px && w > 0 && h > 0) {
-            std::vector<uint8_t> bytes;
-            std::string outType = "image/png";
-            if (type == "image/jpeg" || type == "image/jpg") {
-                std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
-                for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) {
-                    const uint8_t alpha = px[i * 4 + 3];
-                    for (int c = 0; c < 3; ++c) {
-                        rgb[i * 3 + c] = static_cast<uint8_t>((px[i * 4 + c] * alpha + 127) / 255);
-                    }
-                }
-                int q = (quality > 0.0 && quality <= 1.0) ? static_cast<int>(quality * 100.0 + 0.5) : 92;
-                if (q < 1) q = 1;
-                if (broimage::encode_jpeg_memory(bytes, rgb.data(), w, h, 3, q)) {
-                    outType = "image/jpeg";
-                }
-            }
-            if (outType == "image/png") {
-                broimage::encode_png_memory(bytes, px, w, h, 4);
-            }
-            if (!bytes.empty()) {
+        std::vector<uint8_t> bytes;
+        std::string outType;
+        if (readCanvasBitmap(cs, pixels, w, h) &&
+            encodeCanvasBitmap(pixels, w, h, type, quality, bytes, outType)) {
+            {
                 ev::Persistent blobCtor(ev::globalValue("Blob").value);
                 if (ev::isFunction(blobCtor.get())) {
                     ev::Persistent ab(ev::createArrayBuffer(std::span<const uint8_t>(bytes.data(), bytes.size())));

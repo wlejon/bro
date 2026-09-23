@@ -73,11 +73,13 @@ SourcePixels resolveSource(Value source, const char* who) {
 
     if (dom::Element* el = hostElementOf(source)) {
         if (auto* scene = static_cast<bro::canvas::CanvasScene*>(el->canvasScene())) {
-            int w = std::atoi(el->getAttribute("width").c_str());
-            int h = std::atoi(el->getAttribute("height").c_str());
-            if (w <= 0) w = 300;
-            if (h <= 0) h = 150;
-            const uint8_t* px = scene->snapshotPixels(w, h);
+            // The bitmap's own size (the scene's surface), not the
+            // attributes: a bitmaprenderer canvas shows its ImageBitmap at
+            // that bitmap's size, and snapshotPixels answers null for any
+            // size but the surface's.
+            const int w = scene->width();
+            const int h = scene->height();
+            const uint8_t* px = (w > 0 && h > 0) ? scene->snapshotPixels(w, h) : nullptr;
             if (px) {
                 // A cache hit touches no GL, a miss ran Ganesh; flagged either
                 // way, because guessing wrong the other way corrupts the frame.
