@@ -273,7 +273,9 @@ void bro_clipmap_ClipmapTerrain_setHeightLayer(void* self, int32_t index, const 
     auto* c = clipmapCellOf(self);
     if (!c || !c->clipmap()) return;
     if (index < 0 || index >= scene::ClipmapTerrain::kMaxLayers) return;
-    if (width <= 0 || height <= 0 || !data || data_len < static_cast<uint32_t>(width * height)) {
+    // width * height in 64 bits: two script-chosen int32 sides overflow int.
+    if (width <= 0 || height <= 0 || !data ||
+        static_cast<uint64_t>(data_len) < static_cast<uint64_t>(width) * static_cast<uint64_t>(height)) {
         c->clipmap()->setHeightLayer(index, nullptr, 0, 0, 0, 0, 1);
         return;
     }
@@ -292,19 +294,24 @@ void bro_clipmap_ClipmapTerrain_setChartCenter(void* self, bool has_xz, double x
     }
 }
 
-void bro_clipmap_ClipmapTerrain_setSurfaceLayer(void* self, int32_t index, const float* data, uint32_t /*data_len*/,
+void bro_clipmap_ClipmapTerrain_setSurfaceLayer(void* self, int32_t index, const float* data, uint32_t data_len,
                                                 int32_t width, int32_t height, double originX, double originZ,
                                                 double metresPerCell, int32_t components) {
     auto* c = clipmapCellOf(self);
     if (!c || !c->clipmap()) return;
     if (index < 0 || index >= scene::ClipmapTerrain::kMaxLayers) return;
-    if (width <= 0 || height <= 0 || !data) {
+    const int comps = (components == 3 || components == 4) ? components : 3;
+    // The layer copies width * height * comps floats, so a shorter array
+    // releases the layer (as setHeightLayer does) instead of being read past.
+    if (width <= 0 || height <= 0 || !data ||
+        static_cast<uint64_t>(data_len) <
+            static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * static_cast<uint64_t>(comps)) {
         c->clipmap()->setSurfaceLayer(index, nullptr, 0, 0, 0, 0, 1, 3);
         return;
     }
     c->clipmap()->setSurfaceLayer(index, data, width, height, static_cast<float>(originX),
                                   static_cast<float>(originZ), static_cast<float>(metresPerCell),
-                                  (components == 3 || components == 4) ? components : 3);
+                                  comps);
 }
 
 }  // extern "C"

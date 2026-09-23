@@ -63,9 +63,14 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     // side, so the resolution must be a multiple of 4 for the rings to tile
     // exactly. Round rather than reject — a 126 that silently became a
     // half-cell-offset hole would be a far worse failure mode.
-    cfg_.resolution = std::max(4, (cfg_.resolution / 4) * 4);
+    // Capped at 2048: the ring geometry is resolution^2 quads per level, built
+    // up front, and a script's resolution of 1e9 was that many.
+    cfg_.resolution = std::clamp((cfg_.resolution / 4) * 4, 4, 2048);
     cfg_.levels     = std::clamp(cfg_.levels, 1, 20);
     if (!(cfg_.cellSize > 0.0f)) cfg_.cellSize = 1.0f;
+    // The CPU sampler and the shader both stop at 8 octaves; clamping here
+    // keeps the uniform and cfg_ in step with what is actually summed.
+    cfg_.detailOctaves = std::clamp(cfg_.detailOctaves, 0, 8);
 
     node_ = graph.createMesh("clipmapTerrain");
     if (!node_) return;
@@ -982,6 +987,7 @@ void ClipmapTerrain::setDetail(float wavelength, float relief, float gain, int o
     cfg_.detailWavelength = wavelength;
     cfg_.detailRelief = relief;
     cfg_.detailGain = gain;
+    octaves = std::clamp(octaves, 0, 8);
     cfg_.detailOctaves = octaves;
     if (node_) {
         node_->setCustomShaderUniform("u_detailWavelength", 1, &wavelength);

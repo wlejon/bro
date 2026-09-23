@@ -60,7 +60,7 @@ struct ClipmapConfig {
     // fine end, above 1 sharpens it.
     float detailRelief     = 0.35f;
     float detailGain       = 1.0f;
-    int   detailOctaves    = 7;       // clamped to 8 by the shader
+    int   detailOctaves    = 7;       // clamped to [0, 8]
 
     float snowLine = 1600.0f;         // world metres, before per-place jitter
 

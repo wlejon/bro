@@ -53,13 +53,20 @@
  * Fractal Brownian Motion (FBm) noise generator configuration for procedural terrain.
  * @typedef {Object} TerrainNoiseConfig
  * @property {number} [frequency] -  Base frequency of the noise generator (default ~0.035).
- * @property {number} [octaves] -  Number of noise octaves to blend (default 5).
+ * @property {number} [octaves] -  Number of noise octaves to blend (default 5; clamped to [1, 16]).
  * @property {number} [gain] -  Octave gain multiplier (default 0.5).
  * @property {number} [lacunarity] -  Octave lacunarity frequency multiplier (default 2.0).
  */
 
 /**
  * Terrain creation and generation options bag.
+ *
+ * The counts are clamped, since each sizes an allocation or a per-update
+ * loop: chunkSize x and z to [1, 1024] and y to [1, 4096], loadRadius to
+ * [0, 64], unloadRadius to [0, 128], maxLoadsPerUpdate to [0, 256],
+ * mountainOctaves to [0, 16], lodLevels to [1, 8], lodScaleFactor to
+ * [1, 16]. A cellSize that is not a positive finite number is 1.
+ *
  * @typedef {Object} TerrainConfig
  * @property {Array<number>} [chunkSize] -  Grid cells per chunk [x, y, z] (default [64, 48, 64]).
  * @property {number} [cellSize] -  World units per cell (default 1.0).

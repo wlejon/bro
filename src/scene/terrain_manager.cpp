@@ -100,6 +100,23 @@ TerrainManager::~TerrainManager() {
 void TerrainManager::configure(const TerrainConfig& config) {
     clear();
     config_ = config;
+    // Every count here is a script's option and sizes an allocation or a
+    // loop: a chunk is chunkSizeX*chunkSizeZ columns of chunkSizeY cells, the
+    // streamer walks (2*loadRadius+1)^2 chunks per LOD per update, and a zero
+    // chunk or cell size divides a camera position by zero. Bounded here, in
+    // the one place every caller goes through.
+    auto& c = config_;
+    c.chunkSizeX = std::clamp(c.chunkSizeX, 1, 1024);
+    c.chunkSizeY = std::clamp(c.chunkSizeY, 1, 4096);
+    c.chunkSizeZ = std::clamp(c.chunkSizeZ, 1, 1024);
+    if (!(c.cellSize > 0.0f) || !std::isfinite(c.cellSize)) c.cellSize = 1.0f;
+    c.loadRadius = std::clamp(c.loadRadius, 0, 64);
+    c.unloadRadius = std::clamp(c.unloadRadius, 0, 128);
+    c.maxLoadsPerUpdate = std::clamp(c.maxLoadsPerUpdate, 0, 256);
+    c.noiseOctaves = std::clamp(c.noiseOctaves, 1, 16);
+    c.mountainOctaves = std::clamp(c.mountainOctaves, 0, 16);
+    c.lodLevelCount = std::clamp(c.lodLevelCount, 1, 8);
+    c.lodScaleFactor = std::clamp(c.lodScaleFactor, 1, 16);
     noise_->build(config_);
     lastCamChunk_ = {INT_MAX, INT_MAX, 0};
 }

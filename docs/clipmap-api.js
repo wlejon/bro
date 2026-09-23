@@ -59,6 +59,10 @@
  */
 
 /**
+ * `levels` (default 10) is clamped to [1, 20]. `resolution` (default 128) is
+ * quads per level per axis, rounded down to a multiple of 4 and clamped to
+ * [4, 2048]. A `cellSize` that is not positive is 1. `detailOctaves`
+ * (default 7, also `setDetail({octaves})`) is clamped to [0, 8].
  * @typedef {Object} ClipmapTerrainConfig
  * @property {number} [levels]
  * @property {number} [resolution]
