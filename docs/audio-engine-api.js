@@ -16,6 +16,13 @@
  * Every AudioContext drives the same process-wide engine, so ids made through
  * one context are valid through any other.
  *
+ * As in `audio-api.js`, underscore-prefixed properties on these objects
+ * (`_laneCbs`, `_voiceSetup`, `_cc_<n>`, `_rawCb`, `_pitchBendCb`,
+ * `_connectedAllocator`, `_allocator`, ...) are the binding's internal
+ * bookkeeping, not API. Typed-array parameters are checked the same way: a
+ * Float32Array parameter throws TypeError for another element type or a
+ * detached array and never reinterprets its bytes.
+ *
  * File paths (`createClipFromFile*`, `createStreamFromFile`, `savePreset`,
  * `loadPreset`) resolve the way `fs.*` does: relative to the app directory,
  * mount paths honoured. A path being written resolves through its parent
@@ -357,6 +364,28 @@ class MidiInput {
   /** Receives every message before dispatch. @param {function(MidiRawEvent): void|null} fn */
   onRawEvent(fn) {}
 
+  /**
+   * Feeds one raw MIDI message in as if it had arrived from the port: the
+   * same parse and the same queue, dispatched (raw callback, CC and
+   * pitch-bend handlers, allocator routing) by the next `processEvents()`.
+   * Works with no port open, so it serves tests, headless runs and on-screen
+   * keyboards. Do not call it while an open port is delivering messages.
+   *
+   * Understood: note on (velocity 0 is a note off), note off, control change,
+   * pitch bend, program change, polyphonic aftertouch, channel pressure.
+   * `bytes` is a plain array of numbers or a typed array: a 1-byte typed
+   * array (Uint8Array, Int8Array, Uint8ClampedArray) is taken as raw bytes,
+   * and any other array is read element-wise, each value masked to 0..255.
+   * TypeError for a typed array whose buffer is detached.
+   * @param {Array<number>|Uint8Array} bytes  Status byte, then data bytes.
+   * @param {number} [timestamp]  Engine seconds, reported as the event's
+   *   `timestamp`. Missing or negative: `currentTime`.
+   * @returns {boolean} false for a system message (sysex, clock, ...), a
+   *   truncated message, a non-array argument, or a full queue (1024
+   *   pending events; the message is dropped)
+   */
+  injectMessage(bytes, timestamp) {}
+
   /** Drains the queue and dispatches it. */
   processEvents() {}
 
@@ -507,15 +536,16 @@ class AudioContext {
   // a playback instance (another id) that the setPlayback* methods address.
 
   /**
-   * From an AudioBuffer (getChannelData writes included; its sampleRate is
-   * NOT honoured), or from interleaved float samples in a Float32Array, any
-   * typed array or an ArrayBuffer (the bytes are read as float32). With a
-   * numeric `sampleRate` that differs from the engine rate the samples are
-   * resampled. TypeError("createClip: expected AudioBuffer or Float32Array")
-   * for anything else or empty data.
+   * From an AudioBuffer (getChannelData writes included), resampled from the
+   * buffer's `sampleRate` to the engine rate (`channels` and `sampleRate`
+   * are then ignored). Or from interleaved float samples in a Float32Array
+   * or an ArrayBuffer (its bytes read as float32); with a numeric
+   * `sampleRate` that differs from the engine rate these are resampled.
+   * TypeError for any other argument, another typed array (an Int16Array is
+   * not converted), a detached array, or empty data.
    * @param {AudioBuffer|Float32Array|ArrayBuffer} samples
    * @param {number} [channels=1]
-   * @param {number} [sampleRate]  Default: the engine rate.
+   * @param {number} [sampleRate]  Raw samples only. Default: the engine rate.
    * @returns {number} clip id (-1 with no argument or an empty AudioBuffer)
    */
   createClip(samples, channels, sampleRate) {}
@@ -581,8 +611,14 @@ class AudioContext {
   stopClip(playbackId) {}
 
   /**
-   * True while the playback's normalized position is above 0 (so false at
-   * the very start of a playback, and still true while paused mid-way).
+   * True while the playback is producing audio, answered from its own state:
+   * started, its `when` reached, not paused, not finished, not stopped. So a
+   * playback at position 0 that has begun counts, and one scheduled for
+   * later, paused, finished (parked at its end) or stopped does not; neither
+   * does an unknown id. A `createStream` stream counts for as long as it is
+   * open and not paused, even while its ring is empty; a
+   * `createStreamFromFile` stream starts counting once its prebuffer is
+   * decoded.
    * @param {number} playbackId
    * @returns {boolean}
    */
@@ -695,7 +731,8 @@ class AudioContext {
 
   /**
    * Appends interleaved samples, which must be at the engine rate.
-   * TypeError("Expected Float32Array samples") for a non-typed-array.
+   * TypeError for anything but a Float32Array (another element type or a
+   * detached array included).
    * @param {number} playbackId
    * @param {Float32Array} samples
    * @returns {number} frames written (fewer than given when the ring is full)
@@ -845,8 +882,9 @@ class AudioContext {
   createWavetable(type) {}
 
   /**
-   * A bank from one cycle (the whole array is the cycle). TypeError("Expected
-   * Float32Array") for a non-typed-array.
+   * A bank from one cycle (the whole array is the cycle), built at the
+   * engine rate. TypeError for anything but a Float32Array (another element
+   * type or a detached array included).
    * @param {Float32Array} waveform
    * @returns {number} bank id
    */
@@ -1061,7 +1099,9 @@ class AudioContext {
    * Runs mono samples through a copy of a bus's effect chain without
    * touching live audio.
    * @param {number} busId
-   * @param {Float32Array} samples  Read as float32 (an ArrayBuffer works too).
+   * @param {Float32Array|ArrayBuffer} samples  A Float32Array, or an
+   *   ArrayBuffer read as float32. TypeError for another typed array or a
+   *   detached one.
    * @returns {Float32Array|null} null for missing or empty input
    */
   processEffectsOffline(busId, samples) {}
@@ -1173,11 +1213,19 @@ class AudioContext {
   /**
    * Renders `numFrames` through the whole pipeline without a device and
    * returns the latest mono mixdown: a new Float32Array of
-   * min(numFrames, 16384) frames, or `out` (any typed array, read as
-   * float32) filled in place up to its length. Undefined for a missing or
-   * non-positive `numFrames`. Headless use only: it races a live device.
+   * min(numFrames, 16384) frames, or `out` filled in place up to its length.
+   * `out` must be a Float32Array when given (null or undefined means a new
+   * array); anything else throws TypeError before any frame is rendered.
+   * Undefined for a missing or non-positive `numFrames`. Headless use only:
+   * it races a live device.
+   *
+   * It renders in 128-frame quanta and evaluates AudioParam automation
+   * before each one, so a ramp moves within the block. When the block is
+   * done it runs the same tick as the host frame (automation, then
+   * `onended` for buffer sources that ended in the block), so a headless
+   * driver that only calls renderBlock still gets those events.
    * @param {number} numFrames
-   * @param {Float32Array} [out]
+   * @param {Float32Array|null} [out]
    * @returns {Float32Array|undefined}
    */
   renderBlock(numFrames, out) {}

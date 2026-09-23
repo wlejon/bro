@@ -19,39 +19,74 @@
  * - SOURCES PLAY WITHOUT BEING CONNECTED. An OscillatorNode is an engine
  *   voice and an AudioBufferSourceNode is a clip playback; both go straight
  *   to the master bus on `start()`, connected to `destination` or not.
- * - THE GRAPH IS READ ONCE, AT start(). `start()` walks the nodes downstream
- *   of the source and copies what it finds onto the voice / playback: the
- *   GainNode gain(s), the StereoPannerNode pan, the PannerNode
- *   position and distance settings. Changing those nodes afterwards does not
- *   touch a source that is already playing.
+ * - THE GRAPH'S SHAPE IS READ AT start(); ITS PARAMS STAY LIVE. `start()`
+ *   walks the nodes downstream of the source once and records which
+ *   GainNodes, StereoPannerNode and PannerNode lie on its path. Connecting or
+ *   disconnecting nodes afterwards does not re-route a playing source. The
+ *   params of the nodes it found do stay live: the source's gain is its own
+ *   gain times every GainNode's gain on the path, its pan follows the
+ *   StereoPannerNode, its 3D position follows the PannerNode's
+ *   positionX/Y/Z, and its pitch follows its frequency (or playbackRate) and
+ *   detune. A `.value` write or a scheduling call on any of those params
+ *   reaches a source that is already playing. The PannerNode's distance
+ *   settings (refDistance, maxDistance, rolloffFactor, distanceModel) are
+ *   copied at `start()` only.
  * - EFFECT NODES ARE MASTER-BUS EFFECTS. BiquadFilterNode owns one of the
- *   master bus's 4 filter slots; connecting anything to or from a DelayNode,
- *   DynamicsCompressorNode, WaveShaperNode or ConvolverNode switches on the
- *   master bus's delay, compressor, distortion (soft clip) or algorithmic
- *   reverb at 100% wet, and `disconnect()` switches it off again. They filter
- *   the whole mix, not only their input. For an AudioBufferSourceNode the
- *   same nodes are ALSO applied offline to the buffer at `start()` (biquad,
- *   delay shift, the real WaveShaper curve, the real Convolver impulse,
- *   compressor), so a buffer source routed through them is processed twice.
- * - AUTOMATION IS NOT SAMPLE-ACCURATE. AudioParam keeps a Web Audio timeline
- *   (set / linear / exponential / target / curve) but only pushes it to the
- *   engine when script touches the param: reading `.value`, or calling any
- *   scheduling method, evaluates the timeline at `currentTime` and applies
- *   the result. A ramp therefore advances only as fast as you poll it.
- *   Params that no engine object backs (GainNode.gain, DelayNode.delayTime,
- *   StereoPannerNode.pan, PannerNode position/orientation, the compressor
- *   params) are read at `start()` / `connect()` time only.
- * - NO EVENTS. There is no `onended`, `onstatechange`, AudioWorklet,
- *   ScriptProcessorNode, OfflineAudioContext, MediaElementSource,
- *   ConstantSourceNode or IIRFilterNode.
- * - GARBAGE COLLECTION STOPS SOUND. A collected OscillatorNode stops and
- *   frees its voice; a collected AudioBufferSourceNode stops its playback and
- *   deletes its clip; a collected BiquadFilterNode releases its slot. Keep a
- *   reference to anything that should keep playing.
+ *   master bus's 4 filter slots, which is switched on only while the filter
+ *   node itself is connected (`filter.connect(...)`). Connecting anything to
+ *   or from a DelayNode, DynamicsCompressorNode, WaveShaperNode or
+ *   ConvolverNode switches on the master bus's delay, compressor, distortion
+ *   (soft clip) or algorithmic reverb at 100% wet, and `disconnect()`
+ *   switches it off again. They filter the whole mix, not only their input.
+ *   For an AudioBufferSourceNode the same nodes are ALSO applied offline to
+ *   the buffer at `start()` (biquad, delay shift, the real WaveShaper curve,
+ *   the real Convolver impulse, compressor), so a buffer source routed
+ *   through them is processed twice.
+ * - AUTOMATION RUNS ON THE CONTROL TICK, NOT PER SAMPLE. AudioParam keeps a
+ *   Web Audio timeline (set / linear / exponential / target / curve). The
+ *   binding evaluates it at `currentTime` and pushes the result to the
+ *   engine when a param is set or scheduled, on every host frame tick, and
+ *   on each 128-frame quantum of `ctx.renderBlock()`. Between those points
+ *   the engine holds the last value, so a ramp moves in steps at frame rate
+ *   (in headless rendering, at the 128-frame quantum). A param reaches the
+ *   engine only through something that uses it: a playing source whose path
+ *   it lies on (see above), a BiquadFilterNode's slot, an oscillator's own
+ *   envelope / pitch-bend params, or a DelayNode / DynamicsCompressorNode
+ *   bound to the master bus (see those classes). Reading `.value` evaluates
+ *   the timeline but pushes nothing. Automation never overwrites `.value`'s
+ *   stored base, which is what a first ramp starts from.
+ * - EVENTS ARRIVE ON THE FRAME TICK. The only event is
+ *   AudioBufferSourceNode `onended`. It, and the automation above, are
+ *   delivered from the host's once-per-frame tick (the binding's
+ *   `tickAsyncJobs()`, the same tick that settles `createClipFromFileAsync`),
+ *   and at the end of each `ctx.renderBlock()`. There is no `onstatechange`,
+ *   AudioWorklet, ScriptProcessorNode, OfflineAudioContext,
+ *   MediaElementSource, ConstantSourceNode or IIRFilterNode.
+ * - GARBAGE COLLECTION STOPS SOUND, EXCEPT A PLAYING BUFFER SOURCE. A
+ *   collected OscillatorNode stops and frees its voice, and a collected
+ *   BiquadFilterNode releases its slot. Keep a reference to anything that
+ *   should keep playing. A started AudioBufferSourceNode that is playing a
+ *   buffer is held by the binding, as Web Audio holds it, until the tick
+ *   that sees it end and fires `onended`. After that, collecting it stops
+ *   its playback and deletes its clip.
+ * - UNDERSCORE PROPERTIES ARE INTERNAL. The binding keeps graph edges and
+ *   callbacks as plain properties on the JS objects so the collector sees
+ *   them: `_targets` (connect() destinations), `_buffer`, `_ch<n>`
+ *   (getChannelData views), `_pan`, and on the synth helpers `_laneCbs`,
+ *   `_voiceSetup`, `_cc_<n>`, `_rawCb`, `_pitchBendCb`,
+ *   `_connectedAllocator` and `_allocator`. They are not API: do not read,
+ *   write or rely on them.
  * - Node constructors (`new GainNode()`, `new DelayNode(maxTime)`, ...) ignore
  *   a context argument and option dictionaries; the `ctx.create*` factories
- *   are the normal path. `AudioNode`, `AudioParam` and `AudioDestinationNode`
- *   exist for `instanceof` and throw TypeError when constructed.
+ *   are the normal path. `new PeriodicWave(ctx, {real, imag})` and
+ *   `new AudioBuffer({...})` are the exceptions that read their options.
+ *   `AudioNode`, `AudioParam` and `AudioDestinationNode` exist for
+ *   `instanceof` and throw TypeError when constructed.
+ * - TYPED ARRAYS ARE CHECKED. A parameter documented as Float32Array (or
+ *   Uint8Array) throws TypeError for any other element type, and for a view
+ *   whose buffer has been detached (transferred). It never reinterprets
+ *   another array's bytes. Where a plain array of numbers is also accepted,
+ *   the parameter says so.
  *
  * Next to the Web Audio subset, AudioContext carries broaudio's engine API
  * directly, addressed by integer ids: voices (`createVoice`), clips
@@ -77,12 +112,25 @@
  *   const pan = ctx.createStereoPanner();
  *   osc.type = 'sawtooth';
  *   osc.frequency.value = 220;
- *   g.gain.value = 0.3;          // read at start(); later changes do not apply
+ *   g.gain.value = 0.3;
  *   pan.pan.value = -0.5;
  *   osc.connect(g).connect(pan).connect(ctx.destination);
  *   osc.start();
  *   osc.stop(ctx.currentTime + 1);
- *   osc.gain.value = 0.1;        // the voice's own gain param IS live
+ *   // Live: the voice plays at osc.gain * g.gain, so this fades it to 0.03
+ *   // over half a second, stepped on the frame tick.
+ *   g.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 0.5);
+ *
+ * @example
+ *   // A buffer source with a loop window and an ended handler
+ *   const src = ctx.createBufferSource();
+ *   src.buffer = buf;                          // plays at buf.sampleRate
+ *   src.loop = true;
+ *   src.loopStart = 0.5;
+ *   src.loopEnd = 1.5;                         // seconds into the buffer
+ *   src.onended = (e) => console.log('done', e.target === src);
+ *   src.connect(ctx.destination);
+ *   src.start(0, 0.25, 4);                     // from 0.25 s, 4 s of content
  */
 
 // ── Dictionaries ─────────────────────────────────────────────────────────────
@@ -99,8 +147,12 @@
  */
 
 /**
- * The third argument of `createPeriodicWave` / `new PeriodicWave`.
+ * The third argument of `createPeriodicWave` / `new PeriodicWave(real, imag,
+ * options)`. `new PeriodicWave(ctx, options)` takes `real` and `imag` in the
+ * same object.
  * @typedef {Object} PeriodicWaveOptions
+ * @property {Float32Array|Array<number>} [real] -  `new PeriodicWave(ctx, options)` only.
+ * @property {Float32Array|Array<number>} [imag] -  `new PeriodicWave(ctx, options)` only.
  * @property {boolean} [disableNormalization=false] -  Keep the summed table's
  *   amplitude instead of scaling its peak to 1.
  */
@@ -110,7 +162,8 @@
  * @typedef {Object} AudioBufferOptions
  * @property {number} length -  Frames; must be positive (TypeError otherwise).
  * @property {number} [numberOfChannels=1] -  Clamped to 1..32.
- * @property {number} [sampleRate=44100] -  Stored only; see AudioBuffer.
+ * @property {number} [sampleRate] -  Default: the context (engine) rate. The
+ *   rate the frames are at; see AudioBuffer.
  */
 
 /**
@@ -125,17 +178,21 @@
 /**
  * An automatable value. Every node param is one of these.
  *
- * Differences from Web Audio: the timeline reaches the engine only when
- * script reads `.value` or calls a scheduling method (see the file header);
- * there is no `automationRate`; setting `.value` clears the whole timeline;
- * every value is clamped into [minValue, maxValue]. A ramp with no earlier
- * event starts from the current value at the call's `currentTime`.
+ * Differences from Web Audio: the timeline reaches the engine when it is set
+ * or scheduled and then on each control tick, not per sample (see the file
+ * header); there is no `automationRate`; setting `.value` clears the whole
+ * timeline; every value is clamped into [minValue, maxValue]. A ramp with no
+ * earlier event starts from `.value`'s stored base at the call's
+ * `currentTime`.
  */
 class AudioParam {
 
   /**
-   * Reading evaluates the timeline at `currentTime` and pushes the result to
-   * the engine; writing clears the timeline and sets the value.
+   * Reading returns the timeline evaluated at `currentTime` (the stored base
+   * when nothing is scheduled). It pushes nothing to the engine and does not
+   * write the evaluated value back, so the base a later ramp starts from is
+   * unchanged. Writing clears the timeline, sets the base and applies it to
+   * the engine at once.
    * @type {number}
    */
   value;
@@ -220,12 +277,16 @@ class AudioParam {
 class AudioNode {
 
   /**
-   * Records `destination` and returns it, so calls chain. TypeError with no
-   * argument. Side effects: a BiquadFilterNode enables its filter slot; a
-   * DelayNode / DynamicsCompressorNode / WaveShaperNode / ConvolverNode on
-   * either end enables the master delay (time = delayTime.value, mix 1) /
-   * compressor / distortion (soft clip, mix 1) / reverb (mix 1); a
-   * MediaStreamAudioSourceNode connected to an AnalyserNode sets its
+   * Records `destination` and returns it, so calls chain. TypeError when
+   * `destination` is missing, undefined, or not an AudioNode or AudioParam.
+   * An AudioParam destination is recorded but has no effect (there is no
+   * audio-rate modulation). Side effects: a BiquadFilterNode's own connect()
+   * enables its filter slot (connecting something INTO the filter does not);
+   * a DelayNode / DynamicsCompressorNode / WaveShaperNode / ConvolverNode on
+   * either end enables the master delay (time = delayTime at `currentTime`,
+   * mix 1) / compressor (the node's params, converted as described under
+   * DynamicsCompressorNode) / distortion (soft clip, mix 1) / reverb (mix 1);
+   * a MediaStreamAudioSourceNode connected to an AnalyserNode sets its
    * `source` to 1 (microphone).
    * @param {AudioNode|AudioParam} destination
    * @returns {AudioNode|AudioParam} destination
@@ -286,10 +347,18 @@ class OscillatorNode extends AudioNode {
   /** Hz, default 440, range 0..24000. Live. @readonly @type {AudioParam} */
   frequency;
 
-  /** Cents, default 0. Stored only: it has no effect on the voice. @readonly @type {AudioParam} */
+  /**
+   * Cents, default 0. Live: the voice plays at
+   * frequency * 2^(detune / 1200).
+   * @readonly @type {AudioParam}
+   */
   detune;
 
-  /** Not in Web Audio. Voice pan, -1..1, default 0. Live. @readonly @type {AudioParam} */
+  /**
+   * Not in Web Audio. Voice pan, -1..1, default 0. Live. Added to a
+   * StereoPannerNode's pan on the path, the sum clamped to -1..1.
+   * @readonly @type {AudioParam}
+   */
   pan;
 
   /** Not in Web Audio. Envelope attack, seconds (0..60, default 0.01). Live. @readonly @type {AudioParam} */
@@ -308,9 +377,9 @@ class OscillatorNode extends AudioNode {
   pitchBend;
 
   /**
-   * Not in Web Audio. The voice's own gain, 0..10, default 1. Live. `start()`
-   * overwrites the voice gain (not this param's value) with a downstream
-   * GainNode's gain when there is one.
+   * Not in Web Audio. The voice's own gain, 0..10, default 1. Live. The
+   * voice plays at this gain multiplied by every GainNode's gain on its path
+   * (all of them, each live).
    * @readonly @type {AudioParam}
    */
   gain;
@@ -320,19 +389,22 @@ class OscillatorNode extends AudioNode {
 
   /**
    * Starts the voice at `when` (engine seconds; default now). First walks the
-   * connected graph: a GainNode's gain (evaluated at `when`) becomes the voice
-   * gain (with several GainNodes the last one reached wins; they are not
-   * multiplied, unlike for AudioBufferSourceNode),
-   * a StereoPannerNode sets its pan, a PannerNode turns on spatialization at
-   * the panner's position / refDistance / maxDistance / rolloffFactor /
-   * distanceModel, and Delay / Compressor / WaveShaper / Convolver nodes
-   * enable their master-bus effect. Throws Error on a second call.
+   * connected graph once: every GainNode's gain joins the voice's gain
+   * product, a StereoPannerNode's pan joins its pan, a PannerNode turns on
+   * spatialization (its position stays live; refDistance / maxDistance /
+   * rolloffFactor / distanceModel are copied now), and Delay / Compressor /
+   * WaveShaper / Convolver nodes enable their master-bus effect. A DelayNode
+   * or DynamicsCompressorNode reached this way is bound to the master bus,
+   * so its params stay live from then on. Throws Error on a second call and
+   * RangeError for a negative or NaN `when` (a rejected call does not count
+   * as the start).
    * @param {number} [when]
    */
   start(when) {}
 
   /**
-   * Releases the voice at `when` (engine seconds; default now).
+   * Releases the voice at `when` (engine seconds; default now). RangeError
+   * for a negative or NaN `when`. No `onended` is fired for an oscillator.
    * @param {number} [when]
    */
   stop(when) {}
@@ -347,13 +419,14 @@ class OscillatorNode extends AudioNode {
 }
 
 /**
- * Holds a gain for `start()` to read. `gain` has no engine target: changing
- * it does not affect a source that is already playing (use the source's
- * `gain` param, `setVoiceGain` or `setPlaybackGain`).
+ * A gain on a source's path. Every source started with this node downstream
+ * multiplies its gain by `gain`, live: `.value` writes and automation reach
+ * the playing sources (see the file header). Several GainNodes on one path
+ * multiply. A source started before the node was connected is not affected.
  */
 class GainNode extends AudioNode {
 
-  /** Default 1, unbounded. @readonly @type {AudioParam} */
+  /** Default 1, unbounded. Live. @readonly @type {AudioParam} */
   gain;
 
 }
@@ -362,29 +435,33 @@ class GainNode extends AudioNode {
  * A band-limited wavetable built from Fourier coefficients (cosine terms in
  * `real`, sine terms in `imag`, index 0 = DC) at the engine sample rate.
  *
- * Differs from Web Audio: the constructor is positional,
- * `new PeriodicWave(real, imag, options)`; `new PeriodicWave(ctx, {real, imag})`
- * builds an empty wave. It accepts typed or plain arrays and zero-pads the
- * shorter half. No properties or methods.
+ * Two constructor forms: Web Audio's `new PeriodicWave(ctx, {real, imag,
+ * disableNormalization})`, recognised by an AudioContext first argument, and
+ * a positional `new PeriodicWave(real, imag, options)`. Each half is a
+ * Float32Array or a plain array of numbers; a missing, undefined or null half
+ * is empty, and anything else (another typed array, a detached one, an
+ * ArrayBuffer) is a TypeError. Unlike Web Audio, the halves may differ in
+ * length: the shorter is zero-padded. No properties or methods.
  */
 class PeriodicWave {
 
   /**
-   * @param {Float32Array|Array<number>} [real]
-   * @param {Float32Array|Array<number>} [imag]
-   * @param {PeriodicWaveOptions} [options]
+   * @param {AudioContext|Float32Array|Array<number>} [ctxOrReal]
+   * @param {PeriodicWaveOptions|Float32Array|Array<number>} [optionsOrImag]
+   * @param {PeriodicWaveOptions} [options]  Positional form only.
    */
-  constructor(real, imag, options) {}
+  constructor(ctxOrReal, optionsOrImag, options) {}
 
 }
 
 /**
  * One of the master bus's 4 filter slots. Creating the node allocates the
- * slot AND enables it (lowpass, 350 Hz, Q 1, 0 dB), so it filters the whole
- * mix as soon as it exists, connected or not; `disconnect()` disables it and
- * `connect()` re-enables it. Throws Error("No filter slots available") when
- * all 4 are taken; garbage collection releases the slot. For per-bus or
- * per-voice filtering use the bus filter API or `setVoiceFilter*`.
+ * slot (lowpass, 350 Hz, Q 1, 0 dB) but leaves it OFF, so creating a filter
+ * does not change the sound. The filter node's own `connect()` switches the
+ * slot on, and it then filters the whole mix; `disconnect()` switches it off
+ * again. Throws Error("No filter slots available") when all 4 are taken;
+ * garbage collection releases the slot. For per-bus or per-voice filtering
+ * use the bus filter API or `setVoiceFilter*`.
  */
 class BiquadFilterNode extends AudioNode {
 
@@ -395,10 +472,14 @@ class BiquadFilterNode extends AudioNode {
    */
   type;
 
-  /** Hz, default 350 (the engine clamps to 20..20000). Live. @readonly @type {AudioParam} */
+  /**
+   * Hz, default 350. Live. The slot's cutoff is
+   * frequency * 2^(detune / 1200), which the engine clamps to 20..20000.
+   * @readonly @type {AudioParam}
+   */
   frequency;
 
-  /** Cents, default 0. Used only by getFrequencyResponse. @readonly @type {AudioParam} */
+  /** Cents, default 0. Live: shifts the slot's cutoff, as above. @readonly @type {AudioParam} */
   detune;
 
   /** Default 1 (the engine clamps to 0.1..30). Live. @readonly @type {AudioParam} */
@@ -408,9 +489,10 @@ class BiquadFilterNode extends AudioNode {
   gain;
 
   /**
-   * RBJ-cookbook response of the current settings (detune included).
-   * `frequencyHz` may be a plain array; the two outputs must be
-   * Float32Arrays. Writes min(lengths) entries.
+   * RBJ-cookbook response of the params at `currentTime` (automation and
+   * detune included). `frequencyHz` is a Float32Array or a plain array of
+   * numbers; the two outputs must be Float32Arrays. TypeError otherwise,
+   * including for a detached array. Writes min(lengths) entries.
    * @param {Float32Array|Array<number>} frequencyHz
    * @param {Float32Array} magResponse
    * @param {Float32Array} phaseResponse
@@ -421,9 +503,10 @@ class BiquadFilterNode extends AudioNode {
 
 /**
  * Reads the latest samples of the engine's mono output, the microphone, or
- * both, and runs a Blackman-windowed FFT on demand. The `get*` methods do
- * nothing unless given a typed array; the float methods expect a
- * Float32Array.
+ * both, and runs a Blackman-windowed FFT on demand. The float `get*` methods
+ * take a Float32Array and the byte methods a Uint8Array; anything else
+ * (no argument, a plain array, another element type, a detached array)
+ * throws TypeError.
  *
  * Differs from Web Audio: what it measures is picked by `source`, not by what
  * is connected to it. An AudioBufferSourceNode upstream writes its processed
@@ -479,11 +562,15 @@ class AnalyserNode extends AudioNode {
  * PCM data, one Float32 array per channel. Made by `ctx.createBuffer`,
  * `new AudioBuffer({...})` or `ctx.decodeAudioData`.
  *
- * Differs from Web Audio: `sampleRate` is stored but never used for
- * resampling, so a buffer played or turned into a clip is taken to be at the
- * engine rate (decodeAudioData already resamples to it).
- * `copyFromChannel` / `copyToChannel` silently ignore a bad channel or start
- * index instead of throwing, and expect Float32Arrays.
+ * `sampleRate` is the rate the frames are at, and it is honoured: an
+ * AudioBufferSourceNode plays the buffer at its own rate, resampled to the
+ * context rate on the fly, and `createClip(buffer)` resamples it to the
+ * engine rate. `createBuffer` and `new AudioBuffer` default it to the
+ * context rate; decodeAudioData's buffers are already at that rate.
+ *
+ * Differs from Web Audio: `copyFromChannel` / `copyToChannel` silently
+ * ignore a bad channel or start index instead of throwing. Their array must
+ * be a Float32Array (TypeError otherwise, including for a detached one).
  */
 class AudioBuffer {
 
@@ -534,60 +621,105 @@ class AudioBuffer {
  * applies the downstream graph to the samples (biquad at the slot's current
  * settings, DelayNode as a shift inside the buffer's length, ConvolverNode
  * with its impulse, WaveShaperNode curve, DynamicsCompressorNode, and feeds
- * any AnalyserNode), then plays the result with the gain product, stereo pan
- * and PannerNode spatialization found on the way. Plays whether or not it is
- * connected.
+ * any AnalyserNode), then plays the result. The gain product, stereo pan and
+ * PannerNode position found on the way stay live (see the file header).
+ * Plays whether or not it is connected. The buffer plays at its own
+ * `sampleRate`, resampled to the context rate.
  *
- * Differs from Web Audio: `loopStart`, `loopEnd` and the `duration` argument
- * of `start()` are ignored; `stop()` ignores its time and stops at once; the
- * playback id is not exposed, so a playing source cannot be moved or re-gained
- * afterwards (only `playbackRate` and `loop` stay live).
+ * While it plays, the binding holds the node (it is not collected), and
+ * `playbackRate`, `detune`, `loop`, `loopStart` and `loopEnd` are live.
+ *
+ * Differs from Web Audio: `stop()` ignores its time and stops at once; the
+ * playback id is not exposed, so the engine's setPlayback* methods cannot
+ * address it.
  */
 class AudioBufferSourceNode extends AudioNode {
 
-  /** An AudioBuffer, or null. @type {AudioBuffer|null} */
+  /**
+   * An AudioBuffer, or null (the initial value). Assigning null or undefined
+   * clears it; assigning anything that is not an AudioBuffer throws
+   * TypeError. Read at `start()`.
+   * @type {AudioBuffer|null}
+   */
   buffer;
 
-  /** Live after start(). @type {boolean} */
+  /** Live while playing. @type {boolean} */
   loop;
 
-  /** Stored only. @type {number} */
+  /**
+   * Seconds into the buffer, default 0. With `loopEnd`, the loop window;
+   * live while playing (moving either end moves the playing window). The
+   * window applies only when 0 <= loopStart < loopEnd; each end is clamped to
+   * the buffer's length. Otherwise (including the default loopEnd of 0) the
+   * whole buffer loops, and loopStart is not used.
+   * @type {number}
+   */
   loopStart;
 
-  /** Stored only. @type {number} */
+  /** Seconds into the buffer, default 0. See loopStart. @type {number} */
   loopEnd;
 
   /**
-   * Default 1, range 0..1024 (the engine clamps to 0.01..16). Bound to the
-   * playback after start(), so `.value` writes are live.
+   * Default 1, range 0..1024 (the engine clamps the resulting rate to
+   * 0.01..16). Live.
    * @readonly @type {AudioParam}
    */
   playbackRate;
 
-  /** Cents, default 0. Folded into the rate once, at start(). @readonly @type {AudioParam} */
+  /**
+   * Cents, default 0. Live: the playback rate is
+   * playbackRate * 2^(detune / 1200), times the buffer-to-context rate ratio.
+   * @readonly @type {AudioParam}
+   */
   detune;
 
   /**
-   * `when` > 0 schedules the start on the audio clock (engine seconds);
-   * otherwise it plays now. `offset` seeks into the buffer. Throws Error on
+   * Called once the source ends: when the playback finishes (the buffer or
+   * `duration` runs out, which a loop without `duration` never does) or
+   * `stop()` is called. It runs on the host's frame tick after the end (or
+   * at the end of a `ctx.renderBlock()`), not on the audio thread. It is
+   * called with `this` = the node and one event
+   * `{ type: 'ended', target: node, currentTarget: node }`. Only this
+   * property is read; there is no addEventListener. A source that was never
+   * started, or started without a buffer (or with an empty one), never ends
+   * and never fires it.
+   * @type {function({type: string, target: AudioBufferSourceNode, currentTarget: AudioBufferSourceNode}): void|null}
+   */
+  onended;
+
+  /**
+   * Web Audio's `start(when, offset, duration)`, all in seconds:
+   * `when` on the context clock (0, or any time already past, plays now;
+   * later times are scheduled sample-accurately on the audio clock),
+   * `offset` into the buffer (in buffer time, clamped to its length), and
+   * `duration` of buffer content to play before the source ends, counting
+   * content played across loop wraps (so it is measured in buffer time, not
+   * wall time when playbackRate is not 1). Without `duration` a
+   * non-looping source plays to the buffer's end and a looping one plays
+   * until stopped. RangeError when any argument is negative or NaN; Error on
    * a second call. Does nothing audible without a buffer.
    * @param {number} [when=0]
-   * @param {number} [offset=0]  Seconds.
+   * @param {number} [offset=0]
+   * @param {number} [duration]
    */
-  start(when, offset) {}
+  start(when, offset, duration) {}
 
-  /** Stops immediately (any argument is ignored). */
+  /**
+   * Stops immediately (any argument is ignored); `onended` follows on the
+   * next tick.
+   */
   stop() {}
 
 }
 
 /**
- * Spatializes a source. Its settings are copied onto the source at
- * `start()` (the position params are evaluated at the start time); moving
- * the panner afterwards does not move a playing source. For a moving
- * source use `setVoiceSpatialPosition` / `setPlaybackSpatialPosition`.
- * The engine uses its own head model (`setHeadModel*`) whatever
- * `panningModel` says, and ignores orientation and the cone settings.
+ * Spatializes a source started with it downstream. The position params are
+ * live: `.value` writes, `setPosition()` and automation move a playing
+ * source. The distance settings (refDistance, maxDistance, rolloffFactor,
+ * distanceModel) are copied onto the source at `start()`; changing them
+ * afterwards does not affect it. The engine uses its own head model
+ * (`setHeadModel*`) whatever `panningModel` says, and ignores orientation and
+ * the cone settings.
  */
 class PannerNode extends AudioNode {
 
@@ -615,11 +747,11 @@ class PannerNode extends AudioNode {
   /** Default 0. Stored only. @type {number} */
   coneOuterGain;
 
-  /** Default 0. @readonly @type {AudioParam} */
+  /** Default 0. Live. @readonly @type {AudioParam} */
   positionX;
-  /** Default 0. @readonly @type {AudioParam} */
+  /** Default 0. Live. @readonly @type {AudioParam} */
   positionY;
-  /** Default 0. @readonly @type {AudioParam} */
+  /** Default 0. Live. @readonly @type {AudioParam} */
   positionZ;
   /** Default 1. Stored only. @readonly @type {AudioParam} */
   orientationX;
@@ -647,12 +779,14 @@ class PannerNode extends AudioNode {
 }
 
 /**
- * Pans a source left/right. Read at `start()`.
+ * Pans a source started with it downstream left/right, live. For an
+ * oscillator the pan is added to the voice's own `pan` param (the sum
+ * clamped to -1..1).
  */
 class StereoPannerNode extends AudioNode {
 
   /**
-   * -1..1, default 0. Set it through `pan.value`: assigning a number to
+   * -1..1, default 0. Live. Set it through `pan.value`: assigning a number to
    * `pan` itself replaces the param and has no effect.
    * @readonly @type {AudioParam}
    */
@@ -661,11 +795,14 @@ class StereoPannerNode extends AudioNode {
 }
 
 /**
- * Drives the master bus delay (see the file header). `delayTime` is read at
- * `connect()` and at a source's `start()`; the engine clamps the time to
+ * Drives the master bus delay (see the file header). `delayTime` is applied
+ * at `connect()` and when an OscillatorNode's `start()` reaches the node.
+ * That start also binds the node to the master bus: from then on its
+ * `delayTime` is live (`.value` writes and automation reach the bus). A
+ * buffer source's start does not bind it. The engine clamps the time to
  * 0.001..2 s and uses its own feedback setting (`setDelayFeedback`).
- * For an AudioBufferSourceNode the buffer is also shifted by the delay
- * (dropped past the buffer's end).
+ * For an AudioBufferSourceNode the buffer is also shifted by the delay at
+ * `start()` (dropped past the buffer's end).
  */
 class DelayNode extends AudioNode {
 
@@ -682,20 +819,30 @@ class DelayNode extends AudioNode {
 /**
  * Drives the master bus compressor (see the file header), and compresses an
  * AudioBufferSourceNode's samples at `start()` with the Web Audio parameter
- * meanings below. The params are read at `connect()` / `start()` only.
+ * meanings below. The params are applied to the bus at `connect()` and when
+ * an OscillatorNode's `start()` reaches the node; that start also binds the
+ * node to the master bus, and from then on threshold, ratio, attack and
+ * release are live (`.value` writes and automation). A buffer source's start
+ * does not bind it.
+ *
+ * Unit conversion onto the bus: `threshold` dB becomes the bus's linear
+ * level (10^(dB/20), so -24 dB is about 0.063); attack and release seconds
+ * become milliseconds. The bus clamps attack to 0.1..100 ms, so an `attack`
+ * above 0.1 s acts as 0.1 s on the bus (the buffer-source pass uses the
+ * full value), and release to 1..1000 ms.
  */
 class DynamicsCompressorNode extends AudioNode {
 
   /** dB, default -24, -100..0. @readonly @type {AudioParam} */
   threshold;
 
-  /** dB, default 30, 0..40 (buffer-source processing only). @readonly @type {AudioParam} */
+  /** dB, default 30, 0..40. Buffer-source processing only: the bus has no knee. @readonly @type {AudioParam} */
   knee;
 
   /** Default 12, 1..20. @readonly @type {AudioParam} */
   ratio;
 
-  /** Seconds, default 0.003, 0..1. @readonly @type {AudioParam} */
+  /** Seconds, default 0.003, 0..1. The bus caps it at 0.1 s. @readonly @type {AudioParam} */
   attack;
 
   /** Seconds, default 0.25, 0..1. @readonly @type {AudioParam} */
@@ -718,7 +865,8 @@ class WaveShaperNode extends AudioNode {
 
   /**
    * A copy of the curve, or null when unset. Assigning copies a Float32Array
-   * or plain array in.
+   * or plain array of numbers in; null or undefined clears it; anything else
+   * (another typed array, a detached one) throws TypeError.
    * @type {Float32Array|null}
    */
   curve;
@@ -736,7 +884,11 @@ class WaveShaperNode extends AudioNode {
  */
 class ConvolverNode extends AudioNode {
 
-  /** The impulse response. @type {AudioBuffer|null} */
+  /**
+   * The impulse response, or null (the initial value). Assigning null or
+   * undefined clears it; anything that is not an AudioBuffer throws TypeError.
+   * @type {AudioBuffer|null}
+   */
   buffer;
 
   /** Default true. @type {boolean} */
@@ -925,12 +1077,15 @@ class AudioContext {
   createOscillator() {}
 
   /**
-   * Both arrays must be typed arrays or ArrayBuffers (read as float32); the
-   * coefficient count is the shorter length.
-   * @param {Float32Array} real
-   * @param {Float32Array} imag
+   * Each half is a Float32Array or a plain array of numbers; anything else
+   * (another typed array, a detached one, an ArrayBuffer) throws TypeError.
+   * Unlike Web Audio the lengths may differ: the shorter half is
+   * zero-padded to the longer. `options.disableNormalization` is read only
+   * when it is a boolean.
+   * @param {Float32Array|Array<number>} real
+   * @param {Float32Array|Array<number>} imag
    * @param {PeriodicWaveOptions} [options]
-   * @returns {PeriodicWave|null} null with fewer than two arguments or a non-typed array
+   * @returns {PeriodicWave|null} null with fewer than two arguments
    */
   createPeriodicWave(real, imag, options) {}
 
@@ -947,7 +1102,8 @@ class AudioContext {
    * Unlike Web Audio, a zero length does not throw.
    * @param {number} [numberOfChannels=1]  Clamped to 1..32.
    * @param {number} [length=0]  Frames.
-   * @param {number} [sampleRate=44100]
+   * @param {number} [sampleRate]  Default: the context rate. Honoured when
+   *   the buffer plays (see AudioBuffer).
    * @returns {AudioBuffer}
    */
   createBuffer(numberOfChannels, length, sampleRate) {}
@@ -1051,9 +1207,10 @@ class AudioContext {
 
   /**
    * Writes interleaved float samples as a 16-bit WAV. Needs all four
-   * arguments (false otherwise). TypeError("Expected Float32Array as second
-   * argument") for a non-typed-array `samples`; false when channels or
-   * sampleRate is not positive or the file cannot be written.
+   * arguments (false otherwise). TypeError when `samples` is not a
+   * Float32Array (another element type or a detached array included); false
+   * when channels or sampleRate is not positive or the file cannot be
+   * written.
    * @param {string} path
    * @param {Float32Array} samples
    * @param {number} channels
