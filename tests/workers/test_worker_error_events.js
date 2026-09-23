@@ -6,10 +6,13 @@
 
 const workerPath = '../workers/worker_error_events.js';
 
-// A wall-clock budget, returning as soon as `pred` holds: long enough for a
-// BRONZE_GC_STRESS run, where both threads collect on every allocation.
+// A wall-clock budget, returning as soon as `pred` holds. Under
+// BRONZE_GC_STRESS both threads collect on every allocation and twelve
+// churned rounds outlast two minutes, so the budget grows there (the runner's
+// own cap grows with it, tests/run_tests.sh).
+const GC_STRESS = !!(process.env.BRONZE_GC_STRESS && process.env.BRONZE_GC_STRESS !== '0');
 function pumpUntil(pred, ms) {
-    const deadline = Date.now() + (ms || 120000);
+    const deadline = Date.now() + (ms || 120000) * (GC_STRESS ? 8 : 1);
     while (!pred() && Date.now() < deadline) { advanceTime(16); wallSleep(2); }
 }
 

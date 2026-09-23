@@ -116,6 +116,10 @@ onmessage = (e) => {
             const obj = bro.net.sync.get(m.id);
             if (!obj) { report({ ev: 'reply', seq: m.seq, error: 'no obj' }); break; }
             const start = obj[m.prop];
+            // Tell the host sampling has begun, so it changes the prop only
+            // once the watcher is running (under GC stress this message can
+            // take far longer to arrive than any fixed pause).
+            report({ ev: 'watching', seq: m.seq, start });
             let sawIntermediate = false;
             let ticks = 0;
             const t = setInterval(() => {

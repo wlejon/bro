@@ -24,6 +24,18 @@ function pump(realMs, virtualMs) {
     advanceTime(virtualMs);
 }
 
+// Every wait is a wall-clock budget that returns as soon as its condition
+// holds. Under BRONZE_GC_STRESS the host and both client threads collect on
+// every allocation, so a round trip takes seconds and the budgets grow by
+// SCALE (the runner's cap grows with them, tests/run_tests.sh).
+const GC_STRESS = !!(process.env.BRONZE_GC_STRESS && process.env.BRONZE_GC_STRESS !== '0');
+const SCALE = GC_STRESS ? 15 : 1;
+function pumpUntil(pred, ms) {
+    const deadline = Date.now() + ms * SCALE;
+    while (!pred() && Date.now() < deadline) pump(10, 10);
+    return pred();
+}
+
 const sync = bro.net.sync;
 assert(sync && typeof sync.rpc === 'function', 'bro.net.sync is installed');
 
@@ -60,7 +72,7 @@ sync.rpc('upstream', (from, ...args) => got.upstream.push({ from, args }),
 sync.rpc('secret', null, { relay: false });
 
 sync.host({ port: PORT, tickHz: 20 });
-for (let i = 0; i < 200 && !bro.net.isHosting(); i++) pump(10, 10);
+pumpUntil(() => bro.net.isHosting(), 2000);
 assert(bro.net.isHosting(), 'hosting on port ' + PORT);
 
 const connEvents = [];
@@ -73,12 +85,9 @@ function makeClient() {
     const msgs = [];
     wk.onmessage = (e) => msgs.push(e.data);
     const wait = (pred, ms = 8000) => {
-        for (let t = 0; t < ms; t += 10) {
-            const hit = msgs.find(pred);
-            if (hit) return hit;
-            pump(10, 10);
-        }
-        return null;
+        let hit;
+        pumpUntil(() => (hit = msgs.find(pred)) !== undefined, ms);
+        return hit || null;
     };
     const ask = (cmd, ms = 8000) => {
         const seq = ++seqCounter;
@@ -91,7 +100,7 @@ function makeClient() {
 
 const c1 = makeClient();
 assert(c1.wait((m) => m.ev === 'joined') !== null, 'client 1 joined');
-for (let i = 0; i < 500 && connEvents.length === 0; i++) pump(10, 10);
+pumpUntil(() => connEvents.length > 0, 5000);
 assert(connEvents.length === 1, 'client 1 connected');
 const conn1 = connEvents[0];
 
@@ -107,7 +116,7 @@ assert(typeof u1.from === 'number' && u1.from !== 0,
 // on the sending side. ---
 assert(c1.ask({ cmd: 'call', name: 'upstream', args: [9] }) !== null,
        'client issued the unreliable rpc');
-for (let i = 0; i < 500 && got.upstream.length === 0; i++) pump(10, 10);
+pumpUntil(() => got.upstream.length > 0, 5000);
 assert(got.upstream.length === 1, 'unreliable client->host rpc arrived');
 assert(got.upstream[0].from === conn1 && got.upstream[0].args[0] === 9,
        'unreliable client->host rpc sender + args intact');
@@ -131,7 +140,7 @@ assert(c1.ask({ cmd: 'call', name: 'announce', args: ['from-client'] }) !== null
 const a2 = c1.wait((m) => m.ev === 'rpc' && m.name === 'announce' && m.from === 0);
 assert(a2 !== null, 'client callLocal fired its own handler with fromConn 0');
 assert(a2.args[0] === 'from-client', 'client local invocation got the args');
-for (let i = 0; i < 500 && got.announce.length < 2; i++) pump(10, 10);
+pumpUntil(() => got.announce.length >= 2, 5000);
 assert(got.announce.length === 2, 'host handler also ran once');
 assert(got.announce[1].from === conn1, 'wire invocation kept the true sender');
 
@@ -139,7 +148,7 @@ assert(got.announce[1].from === conn1, 'wire invocation kept the true sender');
 assert(sync._stats().rpcsRejected === 0, 'no rejections yet');
 assert(c1.ask({ cmd: 'call', name: 'admin', args: ['sneaky'] }) !== null,
        'client issued the host-only rpc');
-for (let i = 0; i < 500 && sync._stats().rpcsRejected === 0; i++) pump(10, 10);
+pumpUntil(() => sync._stats().rpcsRejected !== 0, 5000);
 assert(sync._stats().rpcsRejected === 1, 'host counted the rejection');
 assert(got.admin.length === 0, 'host-only handler never ran for the client call');
 assert(warns.some((s) => s.includes('admin') && s.includes('host-only')),
@@ -155,19 +164,19 @@ assert(adm !== null && adm.args[0] === 'legit',
 warns.length = 0;
 assert(c1.ask({ cmd: 'call', name: 'nonexistent', args: [] }) !== null,
        'client issued an unknown rpc');
-for (let i = 0; i < 500 && warns.length === 0; i++) pump(10, 10);
+pumpUntil(() => warns.length > 0, 5000);
 assert(warns.some((s) => s.includes('nonexistent')),
        'unknown rpc logged, not thrown');
 assert(c1.ask({ cmd: 'call', name: 'upstream', args: [10] }) !== null,
        'client issued a follow-up rpc');
-for (let i = 0; i < 500 && got.upstream.length < 2; i++) pump(10, 10);
+pumpUntil(() => got.upstream.length >= 2, 5000);
 assert(got.upstream.length === 2 && got.upstream[1].args[0] === 10,
        'session still healthy after the unknown rpc');
 
 // --- 7. Client->client targeted RPC via host relay, true origin stamped. ---
 const c2 = makeClient();
 assert(c2.wait((m) => m.ev === 'joined') !== null, 'client 2 joined');
-for (let i = 0; i < 500 && connEvents.length < 2; i++) pump(10, 10);
+pumpUntil(() => connEvents.length >= 2, 5000);
 assert(connEvents.length === 2, 'client 2 connected');
 const conn2 = connEvents[1];
 
@@ -193,8 +202,7 @@ warns.length = 0;
 const rejBefore = sync._stats().rpcsRejected;
 assert(c1.ask({ cmd: 'callTo', to: conn2, name: 'secret', args: ['leak?'] }) !== null,
        'client 1 attempted the pinned rpc');
-for (let i = 0; i < 500 && sync._stats().rpcsRejected === rejBefore; i++)
-    pump(10, 10);
+pumpUntil(() => sync._stats().rpcsRejected !== rejBefore, 5000);
 assert(sync._stats().rpcsRejected === rejBefore + 1,
        'host counted the refused relay');
 assert(warns.some((s) => s.includes('secret') && s.includes('relay')),
@@ -203,8 +211,7 @@ assert(warns.some((s) => s.includes('secret') && s.includes('relay')),
 // authority:'host' also blocks relaying, even with relay left at default.
 assert(c1.ask({ cmd: 'callTo', to: conn2, name: 'admin', args: ['esc'] }) !== null,
        'client 1 attempted to relay a host-only rpc');
-for (let i = 0; i < 500 && sync._stats().rpcsRejected === rejBefore + 1; i++)
-    pump(10, 10);
+pumpUntil(() => sync._stats().rpcsRejected !== rejBefore + 1, 5000);
 assert(sync._stats().rpcsRejected === rejBefore + 2,
        'host refused to relay the host-only rpc');
 

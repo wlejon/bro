@@ -169,8 +169,14 @@ FILTER="${1:-}"
 # Per-test timeout so one hung test can't wedge the whole suite (or CI).
 # Override with BRO_TEST_TIMEOUT (seconds). Uses coreutils `timeout` when
 # available (git-bash and Linux have it; stock macOS may not — fall back to
-# running the test bare there).
-TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-300}"
+# running the test bare there). Under BRONZE_GC_STRESS every allocation
+# collects, and a test that takes a minute normally can take several; the
+# default cap grows to 1200 s there so only a real hang trips it.
+if [[ -n "${BRONZE_GC_STRESS:-}" && "${BRONZE_GC_STRESS}" != "0" ]]; then
+    TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-1200}"
+else
+    TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-300}"
+fi
 TIMEOUT_BIN=""
 if command -v timeout >/dev/null 2>&1; then
     TIMEOUT_BIN="timeout"

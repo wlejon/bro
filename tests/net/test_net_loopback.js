@@ -14,6 +14,19 @@
 const PORT = 27050 + (Date.now() % 400);   // avoid colliding with a stale socket
 const COUNT = 3000;                         // ~3x the 1024-slot ring
 
+// Wall-clock budgets; each wait returns as soon as its condition holds. Under
+// BRONZE_GC_STRESS both threads collect on every allocation, so the flood and
+// its drain take minutes rather than seconds.
+const GC_STRESS = !!(process.env.BRONZE_GC_STRESS && process.env.BRONZE_GC_STRESS !== '0');
+const SCALE = GC_STRESS ? 15 : 1;
+function pumpUntil(pred, ms) {
+    const deadline = Date.now() + ms * SCALE;
+    while (!pred() && Date.now() < deadline) {
+        advanceTime(16);
+        wallSleep(2);
+    }
+}
+
 const received = [];
 bro.net.onmessage = (conn, data) => {
     received.push(new DataView(data).getUint32(0, true));
@@ -22,12 +35,7 @@ bro.net.onmessage = (conn, data) => {
 assert(bro.net.host(PORT) !== false, 'host() accepted');
 
 // Pump until the listen socket is actually up.
-let waited = 0;
-while (!bro.net.isHosting() && waited < 3000) {
-    advanceTime(16);
-    wallSleep(2);
-    waited += 16;
-}
+pumpUntil(() => bro.net.isHosting(), 3000);
 assert(bro.net.isHosting() === true, 'hosting on port ' + PORT);
 
 // Start the flood. The worker runs its own event loop on its own thread, so it
@@ -44,12 +52,7 @@ wallSleep(1000);
 assert(received.length === 0, 'host did not drain while stalled');
 
 // Now drain.
-waited = 0;
-while (received.length < COUNT && waited < 20000) {
-    advanceTime(16);
-    wallSleep(2);
-    waited += 16;
-}
+pumpUntil(() => received.length >= COUNT && workerDone !== null, 20000);
 
 assert(workerDone !== null, 'worker reported back');
 assert(workerDone.done === true, 'worker connected and sent: ' + JSON.stringify(workerDone));

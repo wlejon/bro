@@ -40,7 +40,15 @@ for (const type of ['ball', 'crate']) {
 
 sync.host({ port: PORT, tickHz: 20, keyframeEvery: 8 });
 assert(sync.active === true && sync.isHost === true, 'sync active as host');
-for (let i = 0; i < 200 && !bro.net.isHosting(); i++) pump(10, 10);
+// (Defined here so the hosting wait can use it; see the budget note below.)
+const GC_STRESS = !!(process.env.BRONZE_GC_STRESS && process.env.BRONZE_GC_STRESS !== '0');
+const SCALE = GC_STRESS ? 15 : 1;
+function pumpUntil(pred, ms) {
+    const deadline = Date.now() + ms * SCALE;
+    while (!pred() && Date.now() < deadline) pump(10, 10);
+    return pred();
+}
+pumpUntil(() => bro.net.isHosting(), 2000);
 assert(bro.net.isHosting(), 'hosting on port ' + PORT);
 
 // Spawn BEFORE the client joins — exercises the late-join replay.
@@ -67,13 +75,14 @@ const wmsgs = [];
 w.onmessage = (e) => wmsgs.push(e.data);
 w.postMessage({ cmd: 'join', port: PORT });
 
+// Every wait is a wall-clock budget (pumpUntil above) that returns as soon as
+// its condition holds. Under BRONZE_GC_STRESS both threads collect on every
+// allocation, so a round trip takes seconds and the budgets grow by SCALE
+// (the runner's cap grows with them, tests/run_tests.sh).
 function waitMsg(pred, ms = 8000) {
-    for (let t = 0; t < ms; t += 10) {
-        const hit = wmsgs.find(pred);
-        if (hit) return hit;
-        pump(10, 10);
-    }
-    return null;
+    let hit = null;
+    pumpUntil(() => (hit = wmsgs.find(pred)) !== undefined, ms);
+    return hit || null;
 }
 
 let seqCounter = 0;
@@ -146,7 +155,7 @@ let reported = null;
 sync.rpc('report', (from, a, b) => { reported = { from, a, b }; });
 assert(ask({ cmd: 'rpc', name: 'report', args: [7, { deep: { n: 3 } }] }) !== null,
        'client issued the rpc');
-for (let i = 0; i < 500 && reported === null; i++) pump(10, 10);
+pumpUntil(() => reported !== null, 5000);
 assert(reported !== null, 'client->host rpc arrived');
 assert(reported.from === clientConn, 'rpc sender is the client conn');
 assert(reported.a === 7 && reported.b.deep.n === 3, 'client->host rpc args roundtrip');
@@ -165,7 +174,7 @@ assert(sync.isAuthority(c1) === false, 'host relinquished authority');
 }
 assert(ask({ cmd: 'set', id: c1id, props: { x: 42.5, label: 'moved' } }).ok === true,
        'client wrote to its object');
-for (let i = 0; i < 800 && !(c1.x === 42.5 && c1.label === 'moved'); i++) pump(10, 10);
+pumpUntil(() => c1.x === 42.5 && c1.label === 'moved', 8000);
 assert(c1.x === 42.5 && c1.label === 'moved',
        'client-authority writes replicated to the host (x=' + c1.x
        + ', label=' + c1.label + ')');
@@ -174,7 +183,7 @@ assert(c1.x === 42.5 && c1.label === 'moved',
 appMsgs.length = 0;
 assert(ask({ cmd: 'appsend', value: { hello: 'app', n: 1 }, raw: 'raw-bytes' }) !== null,
        'client sent app-level messages');
-for (let i = 0; i < 500 && appMsgs.length < 2; i++) pump(10, 10);
+pumpUntil(() => appMsgs.length >= 2, 5000);
 assert(appMsgs.length >= 2, 'host app onmessage got both messages (got '
        + appMsgs.length + ')');
 const cloneMsg = appMsgs.find((m) => !(m.data instanceof ArrayBuffer));
@@ -200,7 +209,9 @@ assert(wmsgs.filter((m) => m.ev === 'appmsg').length === 1,
 {
     const seq = ++seqCounter;
     w.postMessage({ cmd: 'watch', id: b1id, prop: 'y', target: 200, seq });
-    pump(100, 100);        // let the watcher start sampling
+    const watching = waitMsg((m) => m.ev === 'watching' && m.seq === seq);
+    assert(watching !== null && watching.start === 2,
+           'watcher started sampling from the old value');
     b1.y = 200;
     const r = waitMsg((m) => m.ev === 'reply' && m.seq === seq, 15000);
     assert(r !== null, 'interpolation watch completed');
@@ -218,7 +229,7 @@ assert(waitMsg((m) => m.ev === 'despawn' && m.id === b1id) !== null,
 
 // --- 12. Authority disconnect: the crate reverts to host authority. ---
 assert(ask({ cmd: 'disconnect' }) !== null, 'client disconnected');
-for (let i = 0; i < 800 && disconnects.length === 0; i++) pump(10, 10);
+pumpUntil(() => disconnects.length > 0, 8000);
 assert(disconnects.length === 1, 'chained app ondisconnect fired');
 assert(sync.isAuthority(c1) === true, 'client-owned object reverted to host authority');
 
