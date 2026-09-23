@@ -267,6 +267,13 @@ void installBroRoots(engine::Engine& engine) {
         publish("Physics", stub);
     }
 #endif
+#if !BRO_WITH_AUDIO
+    // bro.mic is broaudio's (installAudio mounts it on the makeRoot
+    // placeholder); without the stub the empty placeholder would be marked
+    // available by markAvailableNamespaces and `bro.mic.start` would be
+    // undefined rather than a call that names the flag.
+    setUnavailable("mic", "BRO_WITH_AUDIO");
+#endif
 #if !BRO_WITH_LM
     setUnavailable("lm", "BRO_WITH_LM");
 #endif
@@ -324,11 +331,13 @@ void markAvailableNamespaces() {
         "tensor", "flora", "media", "mesh", "rigging", "scene", "terrain", "clipmap",
         "tile_world", "lighting", "animation", "mic",
     };
-    auto decorate = [](Value ns) {
-        if (!ev::isObject(ns)) return;
-        Value cur = ev::getProperty(ns, "available");
+    auto decorate = [](Value nsIn) {
+        if (!ev::isObject(nsIn)) return;
+        // Rooted across the read, which may run a getter and allocate.
+        ev::Persistent ns(nsIn);
+        Value cur = ev::getProperty(ns.get(), "available");
         if (!ev::isUndefined(cur)) return;
-        ev::setProperty(ns, "available", ev::fromBool(true));
+        ev::setProperty(ns.get(), "available", ev::fromBool(true));
     };
     ev::GlobalValue broG = ev::globalValue("bro");
     if (broG.found && ev::isObject(broG.value)) {
