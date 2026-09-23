@@ -325,15 +325,6 @@ void bro_tile_world_TileWorld_fillShade(void* self, int32_t x0, int32_t y0, int3
 void bro_tile_world_TileWorld_setShadeMapFloat(void* self, const float* data, uint32_t count);
 void bro_tile_world_TileWorld_setShadeMapBytes(void* self, const uint8_t* data, uint32_t count);
 double bro_tile_world_TileWorld_getShade(void* self, int32_t x, int32_t y);
-// Result typed `dynamic`: bromesh mints `Mesh` as a host class, not a
-// __bro_native.mesh class, so the result has no native class path to
-// register under and is declared `dynamic` here.
-void* bro_tile_world_TileWorld_extractVoxelMesh(void* self,
-                                              bool opts_minX_given, int32_t opts_minX,
-                                              bool opts_minY_given, int32_t opts_minY,
-                                              bool opts_maxX_given, int32_t opts_maxX,
-                                              bool opts_maxY_given, int32_t opts_maxY,
-                                              bool opts_heightScale_given, double opts_heightScale);
 }
 
 
@@ -398,8 +389,6 @@ bool registerTileWorldNatives(std::string* error) {
              "void", {"__bro_native.tile_world.TileWorld", "u8[]"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_getShade", (void*)&bro_tile_world_TileWorld_getShade,
              "f64", {"__bro_native.tile_world.TileWorld", "i32", "i32"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_extractVoxelMesh", (void*)&bro_tile_world_TileWorld_extractVoxelMesh,
-             "dynamic", {"__bro_native.tile_world.TileWorld", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "i32", "bool", "f64"})) return false;
 
     bronze::embed::NativeSignature s;
     s.returnType = "__bro_native.tile_world.TileWorld";
@@ -459,12 +448,6 @@ int32_t bro_tile_world_TileWorld_chunks_get(void* self) {
     return bro_tile_world_TileWorld_chunkCount_get(self);
 }
 
-bool bro_tile_world_TileWorld_paging_get(void* /*self*/) {
-    return false;
-}
-
-void bro_tile_world_TileWorld_paging_set(void* /*self*/, bool /*v*/) {}
-
 int32_t bro_tile_world_TileWorld_vertexCount_get(void* self) {
     auto* c = tileWorldCellOf(self);
     return (c && c->tileWorld()) ? c->tileWorld()->totalVertices() : 0;
@@ -473,10 +456,6 @@ int32_t bro_tile_world_TileWorld_vertexCount_get(void* self) {
 int32_t bro_tile_world_TileWorld_triangleCount_get(void* self) {
     auto* c = tileWorldCellOf(self);
     return (c && c->tileWorld()) ? c->tileWorld()->totalTriangles() : 0;
-}
-
-int32_t bro_tile_world_TileWorld_update(void* /*self*/, double /*camX*/, double /*camY*/, double /*camZ*/) {
-    return 0;
 }
 
 void bro_tile_world_TileWorld_setTile(void* self, int32_t layer, int32_t x, int32_t y, int32_t tileId) {
@@ -494,7 +473,12 @@ int32_t bro_tile_world_TileWorld_getTile(void* self, int32_t layer, int32_t x, i
 void bro_tile_world_TileWorld_fillRect(void* self, int32_t layer, int32_t x, int32_t y, int32_t w, int32_t h, int32_t tileId) {
     auto* c = tileWorldCellOf(self);
     if (c && c->tileWorld() && w > 0 && h > 0) {
-        c->tileWorld()->fillTile(x, y, x + w - 1, y + h - 1, static_cast<uint16_t>(tileId), layer);
+        // The far corner in 64 bits, saturated: x + w - 1 overflows int for
+        // a script's large x and w. fillTile clips to the grid either way.
+        const auto farEdge = [](int32_t o, int32_t n) {
+            return static_cast<int32_t>(std::min<int64_t>(int64_t{o} + n - 1, INT32_MAX));
+        };
+        c->tileWorld()->fillTile(x, y, farEdge(x, w), farEdge(y, h), static_cast<uint16_t>(tileId), layer);
     }
 }
 
@@ -684,17 +668,6 @@ int32_t bro_tile_world_TileWorld_computeRegions_area(int32_t index) {
         return tl_regions[index].area;
     }
     return 0;
-}
-
-void bro_tile_world_TileWorld_applyAutotile(void* /*self*/, int32_t /*layer*/, const char* /*rules*/) {}
-
-void* bro_tile_world_TileWorld_extractVoxelMesh(void* /*self*/,
-                                              bool /*opts_minX_given*/, int32_t /*opts_minX*/,
-                                              bool /*opts_minY_given*/, int32_t /*opts_minY*/,
-                                              bool /*opts_maxX_given*/, int32_t /*opts_maxX*/,
-                                              bool /*opts_maxY_given*/, int32_t /*opts_maxY*/,
-                                              bool /*opts_heightScale_given*/, double /*opts_heightScale*/) {
-    return nullptr;
 }
 
 void bro_tile_world_TileWorld_setOrigin(void* self, double x, double y, double z) {

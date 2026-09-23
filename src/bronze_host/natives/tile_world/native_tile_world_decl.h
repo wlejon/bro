@@ -65,14 +65,6 @@ int32_t bro_tile_world_TileWorld_chunkCount_get(void* self);
 //   registered at __bro_native.tile_world.TileWorld_chunks_get
 int32_t bro_tile_world_TileWorld_chunks_get(void* self);
 
-// bro.tile_world.TileWorld.prototype.paging read
-//   registered at __bro_native.tile_world.TileWorld_paging_get
-bool bro_tile_world_TileWorld_paging_get(void* self);
-
-// bro.tile_world.TileWorld.prototype.paging write
-//   registered at __bro_native.tile_world.TileWorld_paging_set
-void bro_tile_world_TileWorld_paging_set(void* self, bool v);
-
 // bro.tile_world.TileWorld.prototype.vertexCount read
 //   registered at __bro_native.tile_world.TileWorld_vertexCount_get
 int32_t bro_tile_world_TileWorld_vertexCount_get(void* self);
@@ -80,10 +72,6 @@ int32_t bro_tile_world_TileWorld_vertexCount_get(void* self);
 // bro.tile_world.TileWorld.prototype.triangleCount read
 //   registered at __bro_native.tile_world.TileWorld_triangleCount_get
 int32_t bro_tile_world_TileWorld_triangleCount_get(void* self);
-
-// bro.tile_world.TileWorld.prototype.update
-//   registered at __bro_native.tile_world.TileWorld_update
-int32_t bro_tile_world_TileWorld_update(void* self, double camX, double camY, double camZ);
 
 // bro.tile_world.TileWorld.prototype.setTile
 //   registered at __bro_native.tile_world.TileWorld_setTile
@@ -160,11 +148,6 @@ const char* bro_tile_world_TileWorld_computeRegions_tiles(int32_t index);
 // TileRegionResult.area of the result TileWorld_computeRegions kept, at [index]
 //   registered at __bro_native.tile_world.TileWorld_computeRegions_area
 int32_t bro_tile_world_TileWorld_computeRegions_area(int32_t index);
-
-// bro.tile_world.TileWorld.prototype.applyAutotile
-//   registered at __bro_native.tile_world.TileWorld_applyAutotile
-//   rules: JSON of sequence<TileAutotileRule>
-void bro_tile_world_TileWorld_applyAutotile(void* self, int32_t layer, const char* rules);
 
 // bro.tile_world.TileWorld.prototype.setOrigin
 //   registered at __bro_native.tile_world.TileWorld_setOrigin

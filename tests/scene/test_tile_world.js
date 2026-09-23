@@ -75,6 +75,23 @@ if (!scene) {
     assert(rayHit !== null && rayHit.x === 3 && rayHit.y === 3, "raycastCell hits cell (3,3)");
 
     assert(world.isWalkable(3, 3) === true, "isWalkable is true for open cell");
+
+    // Members that did nothing are gone rather than silently inert:
+    // autotiles are config (opts.autotiles), the grid does not page.
+    for (const name of ["applyAutotile", "extractVoxelMesh", "update", "paging"]) {
+        assert(!(name in world), "TileWorld has no stub member " + name);
+    }
+
+    // fillRect with a far corner past int range clips instead of overflowing.
+    world.clearLayer(0);
+    world.fillRect(0, 2, 2, 0x7fffffff, 0x7fffffff, 2);
+    assert(world.getTile(7, 7, 0) === 2 && world.getTile(1, 1, 0) === 0, "fillRect clips a huge rectangle to the grid");
+    world.clearLayer(0);
+    assert(world.getTile(7, 7, 0) === 0, "clearLayer empties the layer");
+
+    const pick = world.pickTile(3.5, 3.5);
+    assert(pick !== null && pick.tileX === 3 && pick.tileY === 3 && pick.layer === 0, "pickTile names the cell under the point");
+    assert(world.pickTile(-5, -5) === null, "pickTile is null outside the grid");
 }
 
 document.body.removeChild(canvas);

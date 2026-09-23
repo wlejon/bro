@@ -49,13 +49,6 @@
             return __bro_native.tile_world.TileWorld_chunks_get(this);
         },
         undefined);
-    accessor(TileWorld.prototype, "paging",
-        function () {
-            return __bro_native.tile_world.TileWorld_paging_get(this);
-        },
-        function (v) {
-            __bro_native.tile_world.TileWorld_paging_set(this, v);
-        });
     accessor(TileWorld.prototype, "vertexCount",
         function () {
             return __bro_native.tile_world.TileWorld_vertexCount_get(this);
@@ -66,9 +59,6 @@
             return __bro_native.tile_world.TileWorld_triangleCount_get(this);
         },
         undefined);
-    fn(TileWorld.prototype, "update", function update(camX, camY, camZ) {
-        return __bro_native.tile_world.TileWorld_update(this, camX === undefined ? 0 : camX, camY === undefined ? 0 : camY, camZ === undefined ? 0 : camZ);
-    });
     fn(TileWorld.prototype, "setTile", function setTile(x, y, tileId, layer) {
         if (layer === undefined) layer = 0;
         __bro_native.tile_world.TileWorld_setTile(this, layer, x, y, tileId);
@@ -191,15 +181,6 @@
             out[i] = { regionId: __bro_native.tile_world.TileWorld_computeRegions_regionId(i), tiles: JSON.parse(__bro_native.tile_world.TileWorld_computeRegions_tiles(i)), area: __bro_native.tile_world.TileWorld_computeRegions_area(i) };
         }
         return out;
-    });
-    fn(TileWorld.prototype, "applyAutotile", function applyAutotile(layer, rules) {
-        if (layer === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.applyAutotile: layer is required");
-        if (rules === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.applyAutotile: rules is required");
-        __bro_native.tile_world.TileWorld_applyAutotile(this, layer, JSON.stringify(rules));
-    });
-    fn(TileWorld.prototype, "extractVoxelMesh", function extractVoxelMesh(opts) {
-        const d_opts = opts === undefined ? {} : opts;
-        return __bro_native.tile_world.TileWorld_extractVoxelMesh(this, d_opts.minX !== undefined, d_opts.minX === undefined ? 0 : d_opts.minX, d_opts.minY !== undefined, d_opts.minY === undefined ? 0 : d_opts.minY, d_opts.maxX !== undefined, d_opts.maxX === undefined ? 0 : d_opts.maxX, d_opts.maxY !== undefined, d_opts.maxY === undefined ? 0 : d_opts.maxY, d_opts.heightScale !== undefined, d_opts.heightScale === undefined ? 0 : d_opts.heightScale);
     });
     fn(TileWorld.prototype, "setOrigin", function setOrigin(x, y, z) {
         if (x === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.setOrigin: x is required");

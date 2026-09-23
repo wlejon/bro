@@ -171,6 +171,12 @@ class TileWorld {
   /** Fill an inclusive rectangle of tiles on `layer` (default 0). */
   fillTile(x0, y0, x1, y1, id, layer) {}
 
+  /** Fill the w x h rectangle at (x, y) on `layer`; clipped to the grid. */
+  fillRect(layer, x, y, w, h, id) {}
+
+  /** Set every tile on `layer` to 0 (empty). */
+  clearLayer(layer) {}
+
   /** Fill an inclusive rectangle of elevation levels. */
   fillElevation(x0, y0, x1, y1, level) {}
 
@@ -248,6 +254,14 @@ class TileWorld {
    * elevation). Returns { x, y } or null if outside the grid.
    */
   worldToCell(worldX, worldZ) {}
+
+  /**
+   * The cell under a world XZ point, as worldToCell, plus what is there:
+   * { tileX, tileY, layer, tileId, worldPosition: [x, groundY, z] } where
+   * tileId is the ground (layer 0) tile, `layer` is always 0 and groundY is
+   * sampleHeight at the point. null outside the grid.
+   */
+  pickTile(worldX, worldZ) {}
 
   /**
    * World-space XZ center of cell (x, y), topology-aware (square cell center
@@ -398,6 +412,13 @@ class TileWorld {
    * floodFill. Returns [ [{x,y},...], ... ], "how many separate districts".
    */
   components(opts) {}
+
+  /**
+   * Edge-connected regions of non-empty tiles on `layer`, scan order:
+   * [{ regionId, area, tiles: [[x, y], ...] }]. components({ layer }) with
+   * edge connectivity, shaped for region bookkeeping.
+   */
+  computeRegions(layer) {}
 
   /**
    * Topology grid distance between two cells: Manhattan (edge) / Chebyshev

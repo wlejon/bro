@@ -73,11 +73,8 @@ bool registerNatives_tile_world(std::string* error) {
         fn("__bro_native.tile_world.TileWorld_height_get", p(&bro_tile_world_TileWorld_height_get), "i32", {"__bro_native.tile_world.TileWorld"}, error) &&
         fn("__bro_native.tile_world.TileWorld_chunkCount_get", p(&bro_tile_world_TileWorld_chunkCount_get), "i32", {"__bro_native.tile_world.TileWorld"}, error) &&
         fn("__bro_native.tile_world.TileWorld_chunks_get", p(&bro_tile_world_TileWorld_chunks_get), "i32", {"__bro_native.tile_world.TileWorld"}, error) &&
-        fn("__bro_native.tile_world.TileWorld_paging_get", p(&bro_tile_world_TileWorld_paging_get), "bool", {"__bro_native.tile_world.TileWorld"}, error) &&
-        fn("__bro_native.tile_world.TileWorld_paging_set", p(&bro_tile_world_TileWorld_paging_set), "void", {"__bro_native.tile_world.TileWorld", "bool"}, error) &&
         fn("__bro_native.tile_world.TileWorld_vertexCount_get", p(&bro_tile_world_TileWorld_vertexCount_get), "i32", {"__bro_native.tile_world.TileWorld"}, error) &&
         fn("__bro_native.tile_world.TileWorld_triangleCount_get", p(&bro_tile_world_TileWorld_triangleCount_get), "i32", {"__bro_native.tile_world.TileWorld"}, error) &&
-        fn("__bro_native.tile_world.TileWorld_update", p(&bro_tile_world_TileWorld_update), "i32", {"__bro_native.tile_world.TileWorld", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.tile_world.TileWorld_setTile", p(&bro_tile_world_TileWorld_setTile), "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32"}, error) &&
         fn("__bro_native.tile_world.TileWorld_getTile", p(&bro_tile_world_TileWorld_getTile), "i32", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32"}, error) &&
         fn("__bro_native.tile_world.TileWorld_fillRect", p(&bro_tile_world_TileWorld_fillRect), "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "i32", "i32", "i32"}, error) &&
@@ -96,7 +93,6 @@ bool registerNatives_tile_world(std::string* error) {
         fn("__bro_native.tile_world.TileWorld_computeRegions_regionId", p(&bro_tile_world_TileWorld_computeRegions_regionId), "i32", {"i32"}, error) &&
         fn("__bro_native.tile_world.TileWorld_computeRegions_tiles", p(&bro_tile_world_TileWorld_computeRegions_tiles), "str", {"i32"}, error) &&
         fn("__bro_native.tile_world.TileWorld_computeRegions_area", p(&bro_tile_world_TileWorld_computeRegions_area), "i32", {"i32"}, error) &&
-        fn("__bro_native.tile_world.TileWorld_applyAutotile", p(&bro_tile_world_TileWorld_applyAutotile), "void", {"__bro_native.tile_world.TileWorld", "i32", "str"}, error) &&
         fn("__bro_native.tile_world.TileWorld_setOrigin", p(&bro_tile_world_TileWorld_setOrigin), "void", {"__bro_native.tile_world.TileWorld", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.tile_world.TileWorld_advance", p(&bro_tile_world_TileWorld_advance), "bool", {"__bro_native.tile_world.TileWorld", "f64"}, error) &&
         fn("__bro_native.tile_world.TileWorld_addObject", p(&bro_tile_world_TileWorld_addObject), "void", {"__bro_native.tile_world.TileWorld", "i32", "f64", "f64", "f64"}, error) &&
