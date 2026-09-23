@@ -134,7 +134,11 @@ target/up/mode: the 6DOF / FPS path that avoids target+up precision loss.
  * @property {Mesh} [mesh]
  * @property {number} [capacity]
  * @property {string} [material]
- * @property {Float32Array} [instances] - 16 floats (column-major matrix) per instance
+ * @property {Float32Array} [instances] - 16 floats per instance, stored as
+ *   given: a row-major 3x4 affine in floats 0-11 (basis rows at 0-2 / 4-6 /
+ *   8-10, translation at 3 / 7 / 11) and an RGBA tint in floats 12-15 (write
+ *   1, 1, 1, 1 for none). Not a column-major 4x4; `setInstanceTransform`
+ *   is the call that takes one of those.
  * @property {Float32Array} [instancesFromTransforms] - 9 floats per instance
  * @property {string|Array<number>} [color]
  * @property {number} [metallic]
@@ -726,8 +730,10 @@ class SceneNode {
   setSkinningMatrices(matrices) {}
 
   /**
+   * Replace one instance's transform, keeping the node's row-major storage
+   * (see `InstancedMeshNodeOptions.instances`) and resetting its tint to white.
    * @param {number} index
-   * @param {Array<number>} matrix
+   * @param {Array<number>} matrix - a column-major 4x4 (16 numbers).
    */
   setInstanceTransform(index, matrix) {}
 
