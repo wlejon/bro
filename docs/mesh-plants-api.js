@@ -226,9 +226,12 @@
  */
 
 /**
- *  Flat per-leaf instance buffer. `transforms` is column-major 4x4 of
- *  T * R * uniform-S, stride 16; the leaf's local frame matches `leafCard`
- *  output (+Z tip, +Y card normal, +X side).
+ *  Flat per-leaf instance buffer. `transforms` holds 16 floats per leaf in
+ *  bro's InstancedMeshNode layout: floats 0-11 are a row-major 3x4 affine
+ *  of T * R * uniform-S (rows 0-2 / 4-6 / 8-10 are the basis, translation
+ *  at 3 / 7 / 11) and floats 12-15 an RGBA tint, written white. It is not
+ *  a column-major 4x4. The leaf's local frame matches `leafCard` output
+ *  (+Z tip, +Y card normal, +X side).
  * @typedef {Object} MeshPlacedLeaves
  * @property {number} [count]
  * @property {Float32Array} [transforms]
