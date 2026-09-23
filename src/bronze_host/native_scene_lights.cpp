@@ -607,13 +607,11 @@ void bro_scene_SceneNode_setInstanceTransform(void* self, int32_t index, const d
         auto* im = static_cast<scene::InstancedMeshNode*>(n);
         size_t idx = static_cast<size_t>(index);
         if (idx < im->instanceCount()) {
+            // Only the transform changes: the record's tint (setInstanceColor,
+            // or a variant index packed into alpha) is read back and kept.
             float rec[16];
-            float rows[12];
-            if (!im->instanceRows(idx, rows)) {
+            if (!im->instanceRecord(idx, rec)) {
                 std::memset(rec, 0, sizeof(rec));
-                rec[12] = 1.0f; rec[13] = 1.0f; rec[14] = 1.0f; rec[15] = 1.0f;
-            } else {
-                for (int k = 0; k < 12; ++k) rec[k] = rows[k];
                 rec[12] = 1.0f; rec[13] = 1.0f; rec[14] = 1.0f; rec[15] = 1.0f;
             }
             rec[0] = static_cast<float>(matrix[0]);  rec[1] = static_cast<float>(matrix[4]);  rec[2] = static_cast<float>(matrix[8]);   rec[3] = static_cast<float>(matrix[12]);

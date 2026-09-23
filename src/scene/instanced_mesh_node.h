@@ -70,6 +70,15 @@ public:
         return true;
     }
 
+    /// Instance `i`'s whole 16-float record: the 12 affine rows, then the
+    /// RGBA tint. False when `i` is out of range.
+    bool instanceRecord(size_t i, float* out16) const {
+        if (i >= instanceCount_ || instanceData_.size() < (i + 1) * 16) return false;
+        const float* rec = instanceData_.data() + i * 16;
+        for (int k = 0; k < 16; ++k) out16[k] = rec[k];
+        return true;
+    }
+
     /// Lazily-built, cached BVH over the instance mesh — one BVH shared by every
     /// instance, since they all draw the same geometry. Mirrors MeshNode::bvh().
     const bromesh::MeshBVH& bvh() const;

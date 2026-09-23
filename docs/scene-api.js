@@ -731,7 +731,8 @@ class SceneNode {
 
   /**
    * Replace one instance's transform, keeping the node's row-major storage
-   * (see `InstancedMeshNodeOptions.instances`) and resetting its tint to white.
+   * (see `InstancedMeshNodeOptions.instances`). The instance's tint (floats
+   * 12-15, as `setInstanceColor` or `instances` set it) is kept.
    * @param {number} index
    * @param {Array<number>} matrix - a column-major 4x4 (16 numbers).
    */
