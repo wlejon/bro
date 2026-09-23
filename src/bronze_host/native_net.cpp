@@ -229,16 +229,25 @@ static bool parseSendOptions(uint64_t optsBits, net::SendOptions& opts, const ch
 
 // Raw bytes with the full option set; the generated `send` / `broadcast`
 // natives carry only a channel, so js/net.js routes through these.
-bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
-    auto* sub = getNetSubscriber();
-    if (!sub || !data) return false;
-    net::SendOptions opts;
-    if (!parseSendOptions(optsBits, opts, "send")) return false;
+// `data` points into the caller's buffer, which lives in the moving heap: the
+// bytes are copied out BEFORE the option reads, which allocate and so may
+// move the buffer out from under the pointer (under GC stress the send then
+// carried the poisoned old copy).
+static std::vector<uint8_t> frameRaw(const uint8_t* data, uint32_t data_len) {
     std::vector<uint8_t> framed;
     framed.reserve(kWireHeaderSize + data_len);
     framed.push_back(kWireMagic);
     framed.push_back(kWireRaw);
     framed.insert(framed.end(), data, data + data_len);
+    return framed;
+}
+
+bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
+    auto* sub = getNetSubscriber();
+    if (!sub || !data) return false;
+    std::vector<uint8_t> framed = frameRaw(data, data_len);
+    net::SendOptions opts;
+    if (!parseSendOptions(optsBits, opts, "send")) return false;
     sub->send(static_cast<uint32_t>(peerId), std::move(framed), opts);
     return true;
 }
@@ -246,22 +255,18 @@ bool bro_net_sendRawOpts(int32_t peerId, const uint8_t* data, uint32_t data_len,
 bool bro_net_sendUnframed(int32_t peerId, const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub || !data) return false;
+    std::vector<uint8_t> payload(data, data + data_len);  // before the allocating option reads
     net::SendOptions opts;
     if (!parseSendOptions(optsBits, opts, "_sendUnframed")) return false;
-    std::vector<uint8_t> payload(data, data + data_len);
     return sub->send(static_cast<uint32_t>(peerId), std::move(payload), opts);
 }
 
 void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub || !data) return;
+    std::vector<uint8_t> framed = frameRaw(data, data_len);
     net::SendOptions opts;
     if (!parseSendOptions(optsBits, opts, "broadcast")) return;
-    std::vector<uint8_t> framed;
-    framed.reserve(kWireHeaderSize + data_len);
-    framed.push_back(kWireMagic);
-    framed.push_back(kWireRaw);
-    framed.insert(framed.end(), data, data + data_len);
     sub->broadcast(std::move(framed), opts);
 }
 
