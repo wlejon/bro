@@ -824,6 +824,11 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     auto fcIt = style.find("-x-flow-collapse");
     if (fcIt != style.end() && fcIt->second == "collapse") return;
 
+    // Past a line-clamp container's clamp point (htmlayout line_clamp.h):
+    // laid out, not hit-testable, and not painted — background, border and
+    // subtree alike. The clamped text needs no check; its runs are gone.
+    if (elem->layoutBox().clampHidden) return;
+
     // Check visibility:hidden (still occupies space but not drawn)
     bool visible = true;
     auto visIt = style.find("visibility");
@@ -4050,6 +4055,9 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         // into the stacking-context buckets.
         auto fcIt = style.find("-x-flow-collapse");
         if (fcIt != style.end() && fcIt->second == "collapse") return;
+        // Clamped away by an ancestor's line-clamp: the same, for the same
+        // reason (a positioned descendant must not leak into an SC bucket).
+        if (elem->layoutBox().clampHidden) return;
 
         // A top-layer element leaves every ancestor stacking context and clip:
         // it becomes a root-level SC of its own, collected into topLayerSCs_
