@@ -531,8 +531,20 @@ window.addEventListener('rejectionhandled', (e) => {
 // targetOrigin: '*' always delivers; '/' means the page's own origin; an
 // absolute URL delivers only when its origin is 'bro://app' (otherwise the
 // message is silently dropped); anything that is not a URL throws a
-// SyntaxError DOMException. A secondary window (bro.window.open) posts to its
-// opener with bro.window.parent.postMessage instead.
+// SyntaxError DOMException.
+//
+// Every window posts to ITSELF: in a secondary window (bro.window.open /
+// window.open) or an <iframe>, window.postMessage reaches that window's own
+// listeners, never the main window's. Between windows:
+//   handle.postMessage(msg, targetOrigin | options | transferArray)
+//     the handle bro.window.open returned → a MessageEvent at the opened
+//     window, source = its window.opener, origin 'bro://app';
+//   window.opener.postMessage(msg, targetOrigin | options)
+//     in the opened window → a MessageEvent at the main window, source = the
+//     handle. window.opener is null in the main window and in an iframe.
+// Both arrive at the next window-message drain (flush() / the frame).
+// bro.window.parent.postMessage(msg) still reaches the handle's own 'message'
+// listeners as a plain { type, target, data } object.
 
 window.addEventListener('message', (e) => { e.data; e.origin; e.source; e.ports; });
 window.postMessage({ kind: 'ping' }, '*');
