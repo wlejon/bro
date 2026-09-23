@@ -194,43 +194,12 @@ inline bromath::Mat4 makeOrthoZeroToOne(float l, float r, float b, float t,
 ///   [-1,1] (conventional GL):  -w <= z <= w   ->  near = r3+r2, far = r3-r2
 ///   [0,1]  (clip control on):   0 <= z <= w   ->  near = r2,    far = r3-r2
 ///
-/// bromath::ffromViewProj only implements the first pair. Normalizing the
-/// planes does not reconcile them — a wrong combination of rows is a wrong
-/// plane at any scale — so the [0,1] case is built here.
-///
-/// The infinite reversed projection makes the near row constant (z_clip is
-/// literally znear), which collapses that plane to "always true". A zero
-/// normal would otherwise fall through to a default {0,1,0} plane and cull
-/// everything below the camera, so degenerate planes are emitted as
-/// unconditionally-passing instead.
+/// Normalizing the planes does not reconcile the two — a wrong combination of
+/// rows is a wrong plane at any scale — so the pair has to follow the policy;
+/// bromath::ffromViewProj builds either. Every projection here keeps a finite
+/// far plane (see makePerspective), so no depth row degenerates to a constant.
 inline bromath::Frustum makeFrustum(const bromath::Mat4& vp) {
-    if (!gReversedZ) return bromath::ffromViewProj(vp);
-
-    auto row = [&](int r) {
-        return bromath::Vec3{vp.at(r, 0), vp.at(r, 1), vp.at(r, 2)};
-    };
-    auto rowW = [&](int r) { return vp.at(r, 3); };
-
-    auto makePlane = [&](bromath::Vec3 n, float d) {
-        const float L = bromath::vlen(n);
-        // Degenerate == the inequality is independent of position, i.e. it
-        // holds everywhere. Emit a plane every point is "inside" of.
-        if (L < 1e-20f) return bromath::Plane{{0.0f, 0.0f, 0.0f}, 1e30f};
-        const float inv = 1.0f / L;
-        return bromath::Plane{n * inv, d * inv};
-    };
-
-    const bromath::Vec3 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
-    const float w0 = rowW(0), w1 = rowW(1), w2 = rowW(2), w3 = rowW(3);
-
-    bromath::Frustum f;
-    f.planes[0] = makePlane(r3 + r0, w3 + w0);   // left
-    f.planes[1] = makePlane(r3 - r0, w3 - w0);   // right
-    f.planes[2] = makePlane(r3 + r1, w3 + w1);   // bottom
-    f.planes[3] = makePlane(r3 - r1, w3 - w1);   // top
-    f.planes[4] = makePlane(r2, w2);             // near: z >= 0
-    f.planes[5] = makePlane(r3 - r2, w3 - w2);   // far:  z <= w
-    return f;
+    return bromath::ffromViewProj(vp, /*zeroToOneDepth=*/gReversedZ);
 }
 
 }  // namespace bro::scene
