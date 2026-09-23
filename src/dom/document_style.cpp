@@ -104,6 +104,94 @@ bool resolveLightDark(std::string& value, bool dark) {
     return changed;
 }
 
+// The CSS Color 4 §6.2 system colours and their deprecated §6.2.1 aliases,
+// lowercase. htmlayout's parser holds their light and dark values; this list
+// only says which identifiers to hand it.
+bool isSystemColorName(std::string_view lower) {
+    static constexpr std::string_view kNames[] = {
+        "accentcolor", "accentcolortext", "activetext", "buttonborder", "buttonface",
+        "buttontext", "canvas", "canvastext", "field", "fieldtext", "graytext",
+        "highlight", "highlighttext", "linktext", "mark", "marktext", "selecteditem",
+        "selecteditemtext", "visitedtext",
+        "activeborder", "activecaption", "appworkspace", "background", "buttonhighlight",
+        "buttonshadow", "captiontext", "inactiveborder", "inactivecaption",
+        "inactivecaptiontext", "infobackground", "infotext", "menu", "menutext",
+        "scrollbar", "threeddarkshadow", "threedface", "threedhighlight",
+        "threedlightshadow", "threedshadow", "window", "windowframe", "windowtext",
+    };
+    for (std::string_view n : kNames)
+        if (n == lower) return true;
+    return false;
+}
+
+// Properties whose values may hold a <color>. Only these are scanned for
+// system colours, since the same words are ordinary identifiers elsewhere
+// (`animation-name: highlight`, `transition-property: background`).
+bool isColorBearingProperty(std::string_view prop) {
+    if (prop == "color-scheme") return false;
+    if (prop.find("color") != std::string_view::npos) return true;
+    static constexpr std::string_view kProps[] = {
+        "background", "background-image", "border", "border-top", "border-right",
+        "border-bottom", "border-left", "outline", "box-shadow", "text-shadow",
+        "fill", "stroke", "text-decoration", "column-rule", "filter",
+    };
+    for (std::string_view p : kProps)
+        if (p == prop) return true;
+    return false;
+}
+
+// Replace every system colour keyword in `value` with the rgb() it has in
+// the used colour scheme, the way light-dark() is replaced by its branch, so
+// paint, getComputedStyle, transitions and inheritance see the scheme's
+// colour. Quoted strings and url() bodies are skipped, as are identifiers
+// that name a function or are part of a longer one (`--canvas`).
+bool resolveSystemColors(std::string& value, htmlayout::css::ColorScheme scheme) {
+    auto identChar = [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; };
+    bool changed = false;
+    size_t i = 0;
+    while (i < value.size()) {
+        const unsigned char c = static_cast<unsigned char>(value[i]);
+        if (c == '"' || c == '\'') {
+            size_t j = value.find(static_cast<char>(c), i + 1);
+            i = j == std::string::npos ? value.size() : j + 1;
+            continue;
+        }
+        if (!identChar(c)) { ++i; continue; }
+        size_t j = i;
+        while (j < value.size() && identChar(static_cast<unsigned char>(value[j]))) ++j;
+        // Lowercased into a stack buffer: the longest system colour name is
+        // 19 characters, and most identifiers here are much shorter.
+        char buf[24];
+        const size_t len = j - i;
+        const bool fits = len < sizeof(buf);
+        if (fits) {
+            for (size_t k = 0; k < len; ++k)
+                buf[k] = static_cast<char>(std::tolower(static_cast<unsigned char>(value[i + k])));
+        }
+        const std::string_view lower = fits ? std::string_view(buf, len) : std::string_view();
+        if (j < value.size() && value[j] == '(') {
+            if (lower == "url") {  // an unquoted url() body is not colour text
+                size_t close = value.find(')', j);
+                i = close == std::string::npos ? value.size() : close + 1;
+            } else {
+                i = j + 1;
+            }
+            continue;
+        }
+        if (!fits || !isSystemColorName(lower)) { i = j; continue; }
+        htmlayout::css::ColorContext ctx;
+        ctx.scheme = scheme;
+        htmlayout::css::Color col;
+        if (!htmlayout::css::tryParseColor(std::string(lower), col, ctx)) { i = j; continue; }
+        std::string rgb = "rgb(" + std::to_string(col.r) + ", " + std::to_string(col.g) + ", " +
+                          std::to_string(col.b) + ")";
+        value.replace(i, j - i, rgb);
+        i += rgb.size();
+        changed = true;
+    }
+    return changed;
+}
+
 void resolveLightDarkValues(htmlayout::css::ComputedStyle& computed,
                             const htmlayout::css::MediaContext* media) {
     // Cheap reject: most styles name no light-dark() at all. Every spelling
@@ -116,27 +204,37 @@ void resolveLightDarkValues(htmlayout::css::ComputedStyle& computed,
         }
         return false;
     };
-    bool any = false;
-    for (const auto& [prop, val] : computed) {
-        if (mentions(val)) {
-            any = true;
-            break;
+    // The used scheme, worked out on first need: most styles need it for
+    // neither.
+    bool haveScheme = false;
+    auto scheme = htmlayout::css::ColorScheme::Light;
+    auto usedScheme = [&]() {
+        if (!haveScheme) {
+            haveScheme = true;
+            const auto preferred = (media && media->colorScheme == "dark")
+                                       ? htmlayout::css::ColorScheme::Dark
+                                       : htmlayout::css::ColorScheme::Light;
+            auto csIt = computed.find("color-scheme");
+            const std::string_view csValue = csIt != computed.end()
+                                                 ? std::string_view(csIt->second)
+                                                 : std::string_view("normal");
+            scheme = htmlayout::css::usedColorScheme(csValue, preferred);
         }
-    }
-    if (!any) return;
-
-    const auto preferred = (media && media->colorScheme == "dark") ? htmlayout::css::ColorScheme::Dark
-                                                                    : htmlayout::css::ColorScheme::Light;
-    auto csIt = computed.find("color-scheme");
-    const std::string_view csValue = csIt != computed.end() ? std::string_view(csIt->second)
-                                                            : std::string_view("normal");
-    const bool dark =
-        htmlayout::css::usedColorScheme(csValue, preferred) == htmlayout::css::ColorScheme::Dark;
+        return scheme;
+    };
     for (auto& [prop, val] : computed) {
         // A custom property is a token stream until var() substitutes it into
-        // a real property, which is where its light-dark() is resolved.
+        // a real property, which is where its colours are resolved.
         if (prop.size() > 1 && prop[0] == '-' && prop[1] == '-') continue;
-        resolveLightDark(val, dark);
+        if (mentions(val))
+            resolveLightDark(val, usedScheme() == htmlayout::css::ColorScheme::Dark);
+        // System colours (Canvas, CanvasText, ...) take the same scheme.
+        if (isColorBearingProperty(prop)) {
+            bool any = false;
+            for (unsigned char c : val)
+                if (std::isalpha(c)) { any = true; break; }
+            if (any) resolveSystemColors(val, usedScheme());
+        }
     }
 }
 
@@ -371,9 +469,10 @@ void Document::resolveStylesRecursive(Element* elem,
             }
         }
 
-        // light-dark(): the element's used colour scheme (its color-scheme,
-        // weighed against the prefers-color-scheme setting) picks the branch,
-        // before transitions compare old and new values or children inherit.
+        // light-dark() and the system colours: the element's used colour
+        // scheme (its color-scheme, weighed against the prefers-color-scheme
+        // setting) picks the branch or the colour, before transitions compare
+        // old and new values or children inherit.
         resolveColorSchemeValues(computed);
 
         auto mgrT0 = std::chrono::steady_clock::now();

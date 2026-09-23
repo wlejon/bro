@@ -390,7 +390,9 @@ public:
     const htmlayout::css::MediaContext& mediaContext() const { return mediaContext_; }
 
     // Resolve every light-dark() in a freshly cascaded style to the branch
-    // its used colour scheme picks: the style's `color-scheme` weighed
+    // its used colour scheme picks, and every system colour (Canvas,
+    // CanvasText, ...) in a colour property to that scheme's value as rgb():
+    // the style's `color-scheme` weighed
     // against the prefers-color-scheme setting above. The restyle pass runs
     // it on each element's style; a pseudo-element's style (::before,
     // ::selection, ...) goes through it too.
