@@ -858,8 +858,11 @@ bro.diffusion.VAE;
  * resolver. Blocking; the weights are ~1 GB.
  *
  * A world is a pure function of (seed, position): any region can be read in
- * any order and agrees with the same cells read as part of another region (to
- * within FP16 rounding — the GPU run is not bit-reproducible).
+ * any order and agrees with the same cells read as part of another region to
+ * within FP16 rounding (a few cm at ~1000 m). The same read from the same
+ * cache state is bit-identical; reads with a different history can batch the
+ * latent stage differently, and the batch size changes the GPU reduction
+ * order. That is rounding, not a race.
  *
  * @param {string} weightsDir
  * @param {object} [opts]
@@ -958,7 +961,10 @@ class TerrainWorld {
    */
   seed;
 
-  /** Drop every cached tile. Only costs time: the world is unchanged. */
+  /**
+   * Drop every cached tile. Only costs time: the world is unchanged, up to
+   * the FP16 rounding a re-read with a different batching can introduce.
+   */
   clearCache() {}
 
   /** Free the networks and the tile cache now; every read throws afterwards. */
