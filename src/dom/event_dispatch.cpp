@@ -58,6 +58,10 @@ void invokeElementListeners(Element* el, Event& event, int phase) {
 
 void dispatchToWindow(Document* doc, Event& event, bool isCapture) {
     if (!doc) return;
+    // The window is the outermost entry of the path: it is the current
+    // target for its own listeners, in the phase the walk is in.
+    event.setCurrentTargetToWindow();
+    event.setEventPhase(isCapture ? CAPTURING_PHASE : BUBBLING_PHASE);
     auto& list = doc->windowListeners();
     auto snapshot = list.snapshot(event.type());
     for (auto& entry : snapshot) {
@@ -127,11 +131,20 @@ void dispatchDomEvent(Element* target, Event& event) {
         }
     }
 
+    // After the walk: target stays, currentTarget and the phase are cleared
+    // (DOM 2.9 dispatch, steps 12-14).
     event.setTarget(realTarget);
+    event.setCurrentTarget(nullptr);
+    event.setEventPhase(0);
 }
 
 void dispatchWindowEvent(Document* doc, Event& event) {
     if (!doc) return;
+    // An event dispatched AT the window: the window is its target and its
+    // current target, and every listener, capture or not, runs at-target.
+    event.setTargetToWindow();
+    event.setCurrentTargetToWindow();
+    event.setEventPhase(AT_TARGET);
     auto& list = doc->windowListeners();
     auto snapshot = list.snapshot(event.type());
     for (auto& entry : snapshot) {
@@ -140,6 +153,8 @@ void dispatchWindowEvent(Document* doc, Event& event) {
         if (entry->opts.once) list.remove(ListenerHandle{entry->id});
         entry->cb(event);
     }
+    event.setCurrentTarget(nullptr);
+    event.setEventPhase(0);
 }
 
 } // namespace bro::dom

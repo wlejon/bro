@@ -23,8 +23,16 @@ public:
     bool isTrusted() const { return isTrusted_; }
     int eventPhase() const { return eventPhase_; }
 
-    void setTarget(Element* t) { target_ = t; }
-    void setCurrentTarget(Element* t) { currentTarget_ = t; }
+    // The window is an event target but not an Element, so it is a flag
+    // beside the pointer: when set, target()/currentTarget() read null and
+    // the scripted event object answers `window` for them.
+    bool targetIsWindow() const { return targetIsWindow_; }
+    bool currentTargetIsWindow() const { return currentTargetIsWindow_; }
+
+    void setTarget(Element* t) { target_ = t; targetIsWindow_ = false; }
+    void setCurrentTarget(Element* t) { currentTarget_ = t; currentTargetIsWindow_ = false; }
+    void setTargetToWindow() { target_ = nullptr; targetIsWindow_ = true; }
+    void setCurrentTargetToWindow() { currentTarget_ = nullptr; currentTargetIsWindow_ = true; }
     void setComposed(bool v) { composed_ = v; }
     void setIsTrusted(bool v) { isTrusted_ = v; }
     void setEventPhase(int v) { eventPhase_ = v; }
@@ -38,6 +46,8 @@ private:
     std::string type_;
     Element* target_ = nullptr;
     Element* currentTarget_ = nullptr;
+    bool targetIsWindow_ = false;
+    bool currentTargetIsWindow_ = false;
     bool bubbles_;
     bool cancelable_;
     bool composed_ = false;

@@ -69,6 +69,21 @@ Value describeTarget(dom::Element* el) {
 
 namespace {
 
+// The window is an event target without an Element behind it; dom::Event
+// flags it, and this answers the realm's `window` object for it.
+Value windowObjectValue() {
+    ev::GlobalValue w = ev::globalValue("window");
+    return w.found ? w.value : ev::null();
+}
+
+Value eventTargetValue(const dom::Event& e) {
+    return e.targetIsWindow() ? windowObjectValue() : describeTarget(e.target());
+}
+
+Value eventCurrentTargetValue(const dom::Event& e) {
+    return e.currentTargetIsWindow() ? windowObjectValue() : describeTarget(e.currentTarget());
+}
+
 // ---------------------------------------------------------------------------
 // The live event, and the window it is live in
 // ---------------------------------------------------------------------------
@@ -181,11 +196,11 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
         b.set("type", type);
     }
     {
-        Value target = describeTarget(e.target());
+        Value target = eventTargetValue(e);
         b.set("target", target);
     }
     {
-        Value cur = describeTarget(e.currentTarget());
+        Value cur = eventCurrentTargetValue(e);
         b.set("currentTarget", cur);
     }
     b.set("eventPhase", ev::fromDouble(e.eventPhase()));
@@ -425,11 +440,11 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
 Value decorateProvidedEventValue(Value provided, dom::Event& e, const LiveEventPtr& live) {
     ObjectBuilder b(provided);
     {
-        Value target = describeTarget(e.target());
+        Value target = eventTargetValue(e);
         b.set("target", target);
     }
     {
-        Value cur = describeTarget(e.currentTarget());
+        Value cur = eventCurrentTargetValue(e);
         b.set("currentTarget", cur);
     }
     b.set("eventPhase", ev::fromDouble(e.eventPhase()));
@@ -437,6 +452,20 @@ Value decorateProvidedEventValue(Value provided, dom::Event& e, const LiveEventP
     b.set("isTrusted", ev::fromBool(e.isTrusted()));
     installEventPropagationMethods(b, live);
     return b.get();
+}
+
+// The caller's own object once dispatch returns: it keeps its target (even
+// when no listener ran to see it), and its currentTarget and phase are
+// cleared, which is what the program reads off it after dispatchEvent().
+void finishProvidedEventValue(Value provided, const dom::Event& e) {
+    ObjectBuilder b(provided);
+    {
+        Value target = eventTargetValue(e);
+        b.set("target", target);
+    }
+    b.set("currentTarget", ev::null());
+    b.set("eventPhase", ev::fromDouble(0));
+    b.set("defaultPrevented", ev::fromBool(e.defaultPrevented()));
 }
 
 // ---------------------------------------------------------------------------
@@ -716,20 +745,24 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
 }
 
 Value hostDispatchToElement(ElementSource source, const char* what, Value desc) {
+    // Rooted first: readEventSpec reads properties, which allocates.
+    ev::Persistent descRoot(desc);
     EventSpec spec;
-    if (!readEventSpec(desc, what, spec)) return ev::undefined();
+    if (!readEventSpec(descRoot.get(), what, spec)) return ev::undefined();
     engine::Engine* engine = hostEngine();
     dom::Element* el = source();
     if (!engine || !el) {
         return ev::throwError(std::string(what) +
                               ".dispatchEvent: no element to dispatch at");
     }
-    ev::Persistent descRoot(desc);
     const bool notPrevented = dispatchEventSpec(spec, [engine, el, &descRoot](dom::Event& evt) {
         // Listeners on the path receive the caller's own object, not a copy of
         // its fields — see decorateProvidedEventValue.
-        ProvidedEventScope scope(evt, descRoot.get());
-        engine->dispatchElementEvent(el, evt);
+        {
+            ProvidedEventScope scope(evt, descRoot.get());
+            engine->dispatchElementEvent(el, evt);
+        }
+        finishProvidedEventValue(descRoot.get(), evt);
     });
     if (spec.type == "click" && notPrevented) {
         runAnchorDownload(el);
@@ -750,13 +783,17 @@ Value hostDispatchToWindow(Value desc) {
 }
 
 Value hostDispatchToWindowOf(dom::Document* doc, Value desc) {
-    EventSpec spec;
-    if (!readEventSpec(desc, "window", spec)) return ev::undefined();
-    if (!doc) return ev::throwError("window.dispatchEvent: no document");
+    // Rooted first: readEventSpec reads properties, which allocates.
     ev::Persistent descRoot(desc);
+    EventSpec spec;
+    if (!readEventSpec(descRoot.get(), "window", spec)) return ev::undefined();
+    if (!doc) return ev::throwError("window.dispatchEvent: no document");
     return ev::fromBool(dispatchEventSpec(spec, [doc, &descRoot](dom::Event& evt) {
-        ProvidedEventScope scope(evt, descRoot.get());
-        dom::dispatchWindowEvent(doc, evt);
+        {
+            ProvidedEventScope scope(evt, descRoot.get());
+            dom::dispatchWindowEvent(doc, evt);
+        }
+        finishProvidedEventValue(descRoot.get(), evt);
     }));
 }
 

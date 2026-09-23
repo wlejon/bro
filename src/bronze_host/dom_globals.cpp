@@ -530,19 +530,22 @@ void installWebHostGlobals(engine::Engine& engine) {
         });
 
         b.def("addEventListener", 3, [enginePtr](Value thisValue, std::span<const Value> a) {
-            ev::Persistent self(thisValue);
+            // A bare `addEventListener(...)` arrives with no receiver; the
+            // listener's `this` is the window either way.
+            ev::Persistent self(ev::isObject(thisValue) ? thisValue
+                                                        : ev::globalValue("window").value);
             Value typeV = argAt(a, 0);
-            Value fn = argAt(a, 1);
             if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
                 return ev::throwTypeError("window.addEventListener: type must be a string");
             }
-            if (!ev::isFunction(fn)) {
+            if (!ev::isFunction(argAt(a, 1))) {
                 return ev::throwTypeError(
                     "window.addEventListener: listener must be a function");
             }
-            std::string type = ev::toUtf8(typeV);
+            // Rooted before toUtf8/readOptions, which can allocate.
+            ev::Persistent fnP(argAt(a, 1));
+            std::string type = ev::toUtf8(argAt(a, 0));
             dom::ListenerOptions opts = readOptions(argAt(a, 2));
-            ev::Persistent fnP(fn);
             dom::Document* targetDoc = currentHostDocument() ? currentHostDocument() : (enginePtr ? enginePtr->document() : nullptr);
             if (!targetDoc) {
                 return ev::throwError(
