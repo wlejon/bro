@@ -19,9 +19,14 @@
  * As in `audio-api.js`, underscore-prefixed properties on these objects
  * (`_laneCbs`, `_voiceSetup`, `_cc_<n>`, `_rawCb`, `_pitchBendCb`,
  * `_connectedAllocator`, `_allocator`, ...) are the binding's internal
- * bookkeeping, not API. Typed-array parameters are checked the same way: a
+ * bookkeeping, not API (`_laneCbs`, for one, is where a Sequence keeps its
+ * lane callbacks for the collector to see). Typed-array parameters are checked the same way: a
  * Float32Array parameter throws TypeError for another element type or a
- * detached array and never reinterprets its bytes.
+ * detached array and never reinterprets its bytes. Numbers are clamped the
+ * same way too (see "NUMBERS ARE CLAMPED" in `audio-api.js`): an integer
+ * argument here (a clip frame, a region start/end, a stream's `ringFrames`
+ * or `prebufferFrames`, a preset int, a MIDI byte) is truncated and
+ * saturated into the int32 range, NaN reading as 0, never wrapped.
  *
  * File paths (`createClipFromFile*`, `createStreamFromFile`, `savePreset`,
  * `loadPreset`) resolve the way `fs.*` does: relative to the app directory,

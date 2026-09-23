@@ -76,11 +76,25 @@
  * - UNDERSCORE PROPERTIES ARE INTERNAL. The binding keeps graph edges and
  *   callbacks as plain properties on the JS objects so the collector sees
  *   them: `_targets` (connect() destinations), `_listeners`
- *   (addEventListener), `_buffer`, `_ch<n>`
- *   (getChannelData views), `_pan`, and on the synth helpers `_laneCbs`,
- *   `_voiceSetup`, `_cc_<n>`, `_rawCb`, `_pitchBendCb`,
+ *   (addEventListener), `_buffer` (a buffer source's or convolver's
+ *   AudioBuffer), `_pan`, and on the synth helpers `_laneCbs` (Sequence lane
+ *   callbacks), `_voiceSetup`, `_cc_<n>`, `_rawCb`, `_pitchBendCb`,
  *   `_connectedAllocator` and `_allocator`. They are not API: do not read,
- *   write or rely on them.
+ *   write or rely on them. Overwriting one does not reach the binding's
+ *   memory safety: a `_targets` or `_listeners` array whose length is past
+ *   2^20 is read as empty rather than walked. (getChannelData's views are no
+ *   longer `_ch<n>` properties; they live on the buffer's native side.)
+ * - NUMBERS ARE CLAMPED, NOT WRAPPED. An integer argument or option
+ *   (frame counts, channel counts, sample rates, ring sizes, preset ints,
+ *   MIDI bytes, bus effect order) is truncated and saturated into the
+ *   32-bit range: NaN reads as 0, Infinity and anything past the range as
+ *   the nearest end, and a negative value where only a non-negative one
+ *   makes sense as 0. Each parameter's own clamp (channels 1..32, gains,
+ *   rates) then applies. A size that would allocate is capped instead of
+ *   trusted: an AudioBuffer over 2^28 samples (channels x length), or one
+ *   that cannot be allocated, is a RangeError, and a plain array (or
+ *   array-like) of more than 2^26 numbers is refused where a Float32Array
+ *   could be passed.
  * - Node constructors (`new GainNode()`, `new DelayNode(maxTime)`, ...) ignore
  *   a context argument and option dictionaries; the `ctx.create*` factories
  *   are the normal path. `new PeriodicWave(ctx, {real, imag})` and
@@ -165,7 +179,9 @@
 /**
  * The option object of `new AudioBuffer(options)`.
  * @typedef {Object} AudioBufferOptions
- * @property {number} length -  Frames; must be positive (TypeError otherwise).
+ * @property {number} length -  Frames; must be positive (TypeError otherwise,
+ *   NaN included). numberOfChannels x length over 2^28 samples is a
+ *   RangeError (Infinity and 1e10 included: they saturate to 2^31 - 1).
  * @property {number} [numberOfChannels=1] -  Clamped to 1..32.
  * @property {number} [sampleRate] -  Default: the context (engine) rate. The
  *   rate the frames are at; see AudioBuffer.
@@ -629,7 +645,9 @@ class AudioBuffer {
   /**
    * The channel's Float32Array. The same array is returned on every call,
    * and writes into it are what `start()`, `createClip` and
-   * `copyFromChannel` read. RangeError for a bad index.
+   * `copyFromChannel` read. RangeError for a bad index. The view is held on
+   * the buffer's native side, not as a property of the AudioBuffer, so no
+   * script write can swap what the engine reads.
    * @param {number} channel
    * @returns {Float32Array}
    */
@@ -1145,9 +1163,11 @@ class AudioContext {
   createBufferSource() {}
 
   /**
-   * Unlike Web Audio, a zero length does not throw.
+   * Unlike Web Audio, a zero length does not throw (a negative one reads as
+   * 0). A buffer over 2^28 samples (numberOfChannels x length) is a
+   * RangeError, as is one that cannot be allocated.
    * @param {number} [numberOfChannels=1]  Clamped to 1..32.
-   * @param {number} [length=0]  Frames.
+   * @param {number} [length=0]  Frames, saturated into the int32 range.
    * @param {number} [sampleRate]  Default: the context rate. Honoured when
    *   the buffer plays (see AudioBuffer).
    * @returns {AudioBuffer}
