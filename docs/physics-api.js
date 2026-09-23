@@ -492,6 +492,8 @@ class PhysicsCharacter {
   setShape(shape) {}
 
   /**
+   * Does nothing: characters are stepped by the world's step(). Kept so
+   * code written against an explicit per-character update still runs.
    * @param {number} dt
    */
   update(dt) {}
