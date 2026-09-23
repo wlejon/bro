@@ -281,6 +281,28 @@ Element::Element(const std::string& tag)
     }
 }
 
+std::string Element::namespaceURI() const {
+    switch (ns_) {
+        case Namespace::HTML: return kHtmlNamespace;
+        case Namespace::SVG: return kSvgNamespace;
+        case Namespace::MathML: return kMathMLNamespace;
+        case Namespace::None: return {};
+        case Namespace::Other: return otherNs_ ? *otherNs_ : std::string();
+    }
+    return {};
+}
+
+void Element::setNamespaceURI(const std::string& uri) {
+    if (uri == kHtmlNamespace) setNs(Namespace::HTML);
+    else if (uri == kSvgNamespace) setNs(Namespace::SVG);
+    else if (uri == kMathMLNamespace) setNs(Namespace::MathML);
+    else if (uri.empty()) setNs(Namespace::None);
+    else {
+        ns_ = Namespace::Other;
+        otherNs_ = std::make_unique<std::string>(uri);
+    }
+}
+
 const std::string& Element::id() const {
     return getAttribute("id");
 }

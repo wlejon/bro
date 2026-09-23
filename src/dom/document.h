@@ -306,20 +306,6 @@ public:
     void registerElementId(const std::string& id, Element* elem);
     void unregisterElementId(const std::string& id, const Element* elem);
 
-    /// Pre-process HTML: extract <template> blocks that gumbo would
-    /// discard, replacing them with hidden placeholder divs.
-    struct TemplateBlock {
-        std::string id;
-        std::string attrs;
-        std::string innerHTML;
-    };
-    static std::string extractTemplates(const std::string& html,
-                                        std::vector<TemplateBlock>& out);
-
-    /// After parse(), call this to populate placeholder elements with
-    /// their template content.
-    void injectTemplates(const std::vector<TemplateBlock>& templates);
-
     // Parse an HTML string and replace an element's children (innerHTML setter)
     void parseInnerHTML(Element* parent, const std::string& html);
 

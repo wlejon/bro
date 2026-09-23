@@ -360,9 +360,9 @@ void Engine::initAppRealm() {
         }
     }
 
-    std::vector<dom::Document::TemplateBlock> templateBlocks;
-    html = dom::Document::extractTemplates(html, templateBlocks);
-
+    // <template> elements go through gumbo like everything else: the tree
+    // builder puts their children in the inert content fragment
+    // (Document::buildTreeFromGumbo), so the app document needs no pre-pass.
     document_ = std::make_unique<dom::Document>();
     document_->setBasePath(manifest_.basePath);
     document_->setMediaViewport(static_cast<float>(contentWidth()),
@@ -379,9 +379,6 @@ void Engine::initAppRealm() {
         return css;
     });
     document_->parse(html, authorStyles, kDefaultStyles);
-
-    if (!templateBlocks.empty())
-        document_->injectTemplates(templateBlocks);
 
     if (window_) {
         if (!titleOverride_.empty()) {

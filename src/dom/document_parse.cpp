@@ -1,6 +1,5 @@
 // HTML in, tree out: everything that turns markup into this document's nodes.
 // The full-document parse(), the gumbo walk both entry points share, the
-// <template> pre-pass that runs before gumbo ever sees the source, the
 // innerHTML fragment parse, and the child-list release a fragment parse starts
 // from.
 //
@@ -133,8 +132,7 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
     // whether to descend (see the comment on the enum in gumbo.h). bro only ever
     // matched GUMBO_NODE_ELEMENT, so every <template> and everything inside it
     // silently vanished from any document parsed straight through gumbo
-    // (DOMParser, innerHTML). The app-HTML path only escaped that because
-    // extractTemplates() rewrites templates to placeholders before parsing.
+    // (DOMParser, innerHTML, and the app document itself).
     if (!node || (node->type != GUMBO_NODE_ELEMENT &&
                   node->type != GUMBO_NODE_TEMPLATE)) return;
     auto* gumboElem = &node->v.element;
@@ -165,6 +163,11 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
 
             auto* childElem = allocateNode<Element>(tagStr);
             childElem->setDocument(this);
+            switch (child->v.element.tag_namespace) {
+                case GUMBO_NAMESPACE_SVG: childElem->setNs(Element::Namespace::SVG); break;
+                case GUMBO_NAMESPACE_MATHML: childElem->setNs(Element::Namespace::MathML); break;
+                default: break;
+            }
 
             // Copy attributes
             GumboVector* attrs = &child->v.element.attributes;
@@ -213,108 +216,6 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
 }
 
 // ---------------------------------------------------------------------------
-// Template extraction — pre-process HTML before gumbo parsing
-// ---------------------------------------------------------------------------
-
-std::string Document::extractTemplates(const std::string& html,
-                                       std::vector<TemplateBlock>& out)
-{
-    std::string result;
-    result.reserve(html.size());
-    size_t pos = 0;
-    int genId = 0;
-
-    while (pos < html.size()) {
-        // Skip HTML comments that might contain "<template" as text
-        size_t commentStart = html.find("<!--", pos);
-        size_t start = html.find("<template", pos);
-        if (start == std::string::npos) {
-            result.append(html, pos, html.size() - pos);
-            break;
-        }
-        // If a comment starts before this match, skip past it first
-        while (commentStart != std::string::npos && commentStart < start) {
-            size_t commentEnd = html.find("-->", commentStart + 4);
-            if (commentEnd == std::string::npos) break;
-            commentEnd += 3; // past "-->"
-            if (start < commentEnd) {
-                // The "<template" was inside a comment — skip and re-search
-                result.append(html, pos, commentEnd - pos);
-                pos = commentEnd;
-                start = html.find("<template", pos);
-                if (start == std::string::npos) break;
-                commentStart = html.find("<!--", pos);
-                continue;
-            }
-            break;
-        }
-        if (start == std::string::npos) {
-            result.append(html, pos, html.size() - pos);
-            break;
-        }
-        result.append(html, pos, start - pos);
-
-        size_t tagEnd = html.find('>', start);
-        if (tagEnd == std::string::npos) {
-            result.append(html, start, html.size() - start);
-            break;
-        }
-
-        std::string openTag = html.substr(start, tagEnd - start + 1);
-        std::string id;
-        size_t idPos = openTag.find("id=\"");
-        if (idPos == std::string::npos) idPos = openTag.find("id='");
-        if (idPos != std::string::npos) {
-            char quote = openTag[idPos + 3];
-            size_t idStart = idPos + 4;
-            size_t idEnd = openTag.find(quote, idStart);
-            if (idEnd != std::string::npos)
-                id = openTag.substr(idStart, idEnd - idStart);
-        }
-        if (id.empty()) {
-            id = "__bro_tmpl_" + std::to_string(genId++);
-        }
-
-        size_t contentStart = tagEnd + 1;
-        size_t closeTag = html.find("</template>", contentStart);
-        if (closeTag == std::string::npos) {
-            result.append(html, start, html.size() - start);
-            break;
-        }
-
-        std::string innerHTML = html.substr(contentStart, closeTag - contentStart);
-
-        TemplateBlock block;
-        block.id = id;
-        block.innerHTML = innerHTML;
-        out.push_back(std::move(block));
-
-        result += "<div data-bro-template=\"" + id + "\" id=\"" + id + "\" style=\"display:none\"></div>";
-        pos = closeTag + 11;
-    }
-
-    return result;
-}
-
-void Document::injectTemplates(const std::vector<TemplateBlock>& templates) {
-    for (auto& tmpl : templates) {
-        Element* placeholder = getElementById(tmpl.id);
-        if (!placeholder) continue;
-
-        auto* tmplElem = createElement("TEMPLATE");
-        tmplElem->setAttribute("id", tmpl.id);
-        tmplElem->setAttribute("data-bro-template-html", tmpl.innerHTML);
-
-        auto* parent = placeholder->parentElement();
-        if (parent) {
-            parent->insertBefore(tmplElem, placeholder);
-            parent->removeChild(placeholder);
-            registerElementId(tmpl.id, tmplElem);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // innerHTML parsing with gumbo
 // ---------------------------------------------------------------------------
 
@@ -343,12 +244,28 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
     std::string lowerTag = parent->tagName();
     for (auto& c : lowerTag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     GumboTag ctxTag = gumbo_tag_enum(lowerTag.c_str());
+    // A template's content fragment parses in the template's own context
+    // ("in template" mode), where <tr>, <td>, <col>, <option> ... are all
+    // legal at the top level — `tmpl.innerHTML = '<tr>...'` keeps its rows.
+    if (parent->isTemplateContent()) ctxTag = GUMBO_TAG_TEMPLATE;
 
     GumboOptions opts = kGumboDefaultOptions;
     std::string wrapper;
     GumboOutput* output = nullptr;
 
-    if (ctxTag != GUMBO_TAG_UNKNOWN && ctxTag != GUMBO_TAG_LAST) {
+    // Foreign content: markup set into an <svg> / <math> subtree parses in
+    // that namespace, so `svg.innerHTML = '<circle/>'` makes an SVG circle.
+    // gumbo's fragment mode only takes an HTML-namespace context tag, so the
+    // wrapper carries a foreign root and the walk starts inside it.
+    const bool foreignCtx = parent->ns() == Element::Namespace::SVG ||
+                            parent->ns() == Element::Namespace::MathML;
+    const char* foreignRoot = parent->ns() == Element::Namespace::SVG ? "svg" : "math";
+
+    if (foreignCtx) {
+        wrapper = std::string("<html><body><div><") + foreignRoot + ">" + html + "</" +
+                  foreignRoot + "></div></body></html>";
+        output = gumbo_parse_with_options(&opts, wrapper.c_str(), wrapper.length());
+    } else if (ctxTag != GUMBO_TAG_UNKNOWN && ctxTag != GUMBO_TAG_LAST) {
         opts.fragment_context = ctxTag;
         opts.fragment_namespace = GUMBO_NAMESPACE_HTML;
         output = gumbo_parse_with_options(&opts, html.c_str(), html.length());
@@ -393,6 +310,16 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
     GumboNode* source = (opts.fragment_context != GUMBO_TAG_LAST)
                       ? output->root
                       : findWrapper(output->root);
+    if (source && foreignCtx) {
+        // The wrapper div's one element child is the foreign root.
+        GumboNode* root = nullptr;
+        GumboVector* kids = &source->v.element.children;
+        for (unsigned int i = 0; i < kids->length && !root; ++i) {
+            auto* k = static_cast<GumboNode*>(kids->data[i]);
+            if (k->type == GUMBO_NODE_ELEMENT) root = k;
+        }
+        source = root;
+    }
     if (source) {
         buildTreeFromGumbo(source, parent);
     }

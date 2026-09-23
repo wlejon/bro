@@ -51,6 +51,7 @@ HostClass g_htmlIFrameElementClass;
 HostClass g_htmlHeadingElementClass;
 HostClass g_htmlOptionElementClass;
 HostClass g_htmlTemplateElementClass;
+HostClass g_htmlDialogElementClass;
 HostClass g_htmlHtmlElementClass;
 HostClass g_htmlBodyElementClass;
 HostClass g_htmlMediaElementClass;
@@ -86,7 +87,6 @@ constexpr ExtraTagDef kExtraTags[] = {
     {"HTMLDataElement", "data"},
     {"HTMLDataListElement", "datalist"},
     {"HTMLDetailsElement", "details"},
-    {"HTMLDialogElement", "dialog"},
     {"HTMLEmbedElement", "embed"},
     {"HTMLFieldSetElement", "fieldset"},
     {"HTMLHRElement", "hr"},
@@ -276,6 +276,7 @@ void installHtmlInterfaces() {
         {g_htmlHeadingElementClass, "HTMLHeadingElement"},
         {g_htmlOptionElementClass, "HTMLOptionElement"},
         {g_htmlTemplateElementClass, "HTMLTemplateElement", decorateTemplateProto},
+        {g_htmlDialogElementClass, "HTMLDialogElement", decorateDialogProto},
         {g_htmlHtmlElementClass, "HTMLHtmlElement"},
         {g_htmlBodyElementClass, "HTMLBodyElement"},
     };
@@ -366,6 +367,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
     }
     if (tag == "option") return g_htmlOptionElementClass.prototype();
     if (tag == "template") return g_htmlTemplateElementClass.prototype();
+    if (tag == "dialog") return g_htmlDialogElementClass.prototype();
     if (tag == "html") return g_htmlHtmlElementClass.prototype();
     if (tag == "body") return g_htmlBodyElementClass.prototype();
     if (tag == "video") return g_htmlVideoElementClass.prototype();

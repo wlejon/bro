@@ -157,11 +157,23 @@ Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
     Value tagV = argAt(a, tagIndex);
     if (ev::isObject(tagV)) return ev::throwTypeError("createElement: tag must be a string");
     std::string tag = ev::toUtf8(tagV);
+    // createElementNS(ns, qualifiedName): the namespace is argument 0 (null /
+    // undefined / "" are the null namespace) and a `prefix:` is dropped from
+    // the local name the element is made with.
+    const bool withNs = tagIndex == 1;
+    std::string nsUri;
+    if (withNs) {
+        Value nsV = argAt(a, 0);
+        if (!ev::isNull(nsV) && !ev::isUndefined(nsV)) nsUri = ev::toUtf8(nsV);
+        size_t colon = tag.find(':');
+        if (colon != std::string::npos) tag = tag.substr(colon + 1);
+    }
     for (char& ch : tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     dom::Document* doc = documentFor(fixed);
     if (!doc) return ev::throwError("bronze host: engine has no document");
     dom::Element* el = doc->createElement(tag);
     if (!el) return ev::throwError("bronze host: createElement failed");
+    if (withNs) el->setNamespaceURI(nsUri);
     Value customVal = constructCustomElement(el, tag);
     if (!ev::isUndefined(customVal)) {
         return customVal;

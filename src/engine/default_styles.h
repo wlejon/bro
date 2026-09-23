@@ -293,6 +293,30 @@ details:not([open]) > *:not(summary) {
     -x-flow-collapse: collapse;
 }
 
+/* ---------- <dialog> ---------- */
+/* HTML §15.3.1's rendering: a closed dialog is not rendered; an open one is
+   an absolutely positioned, horizontally centred, content-sized box.
+   show() / showModal() / close() toggle [open] (host_dialog.cpp). There is
+   no top layer or ::backdrop, so a modal dialog renders as a non-modal
+   one does. */
+
+dialog:not([open]) {
+    display: none;
+}
+
+dialog {
+    position: absolute;
+    left: 0;
+    right: 0;
+    width: fit-content;
+    height: fit-content;
+    margin: auto;
+    border: solid;
+    padding: 1em;
+    background-color: white;
+    color: black;
+}
+
 /* ---------- Links ---------- */
 
 a {

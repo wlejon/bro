@@ -332,6 +332,11 @@ struct HostNodeState {
     bool hasComputed = false;
     bool hasDataset = false;
     bool fromImageConstructor = false;
+    // <dialog> only (host_dialog.cpp): `returnValue`, and whether it was
+    // opened by showModal() — the "is modal" flag show() and showModal()
+    // check each other against.
+    bool dialogModal = false;
+    std::string dialogReturnValue;
     // Non-null only for an <img>: its src, its size and its RGBA. Owned here
     // so it dies with the node's entry, which is what the registry's
     // unique_ptr already guarantees.

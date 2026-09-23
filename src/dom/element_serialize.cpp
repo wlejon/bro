@@ -89,6 +89,9 @@ void Element::stickToBottomOnAppend(const std::string& text) {
 }
 
 std::string Element::innerHTML() const {
+    // A <template>'s markup is its content fragment's (HTML §4.12.3's
+    // serialization rule), not its (always empty) child list.
+    if (templateContent_ && children_.empty()) return templateContent_->innerHTML();
     std::ostringstream oss;
     for (const auto& child : children_) {
         if (child->nodeType() == NodeType::Text) {
@@ -359,6 +362,16 @@ std::string serializeSvgForRenderer(const Element* svgRoot) {
 }
 
 void Element::setInnerHTML(const std::string& html) {
+    // Setting a <template>'s innerHTML replaces its CONTENT's children: the
+    // markup is parsed into the inert fragment, never into the template's own
+    // child list, so it neither renders nor answers a document query.
+    if (document_ && (tag_ == "TEMPLATE") && !isTemplateContent_) {
+        if (!templateContent_) {
+            setTemplateContent(document_->createElement("#DOCUMENT-FRAGMENT"));
+        }
+        document_->parseInnerHTML(templateContent_, html);
+        return;
+    }
     if (document_) {
         document_->parseInnerHTML(this, html);
         return;

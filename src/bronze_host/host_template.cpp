@@ -6,6 +6,10 @@
 
 namespace bro::bronze_host {
 
+// `template.content`: the inert DocumentFragment the parser (and a template's
+// innerHTML setter, Element::setInnerHTML) fills. A template made by
+// createElement has none until something reads or writes it, so the first
+// read mints an empty one; after that it is the same fragment every time.
 void decorateTemplateProto(ObjectBuilder& b) {
     b.accessor("content",
                [](Value self_, std::span<const Value>) -> Value {
@@ -23,10 +27,6 @@ void decorateTemplateProto(ObjectBuilder& b) {
                            frag = new dom::Element("#DOCUMENT-FRAGMENT");
                        }
                        st->el->setTemplateContent(frag);
-                       if (st->el->hasAttribute("data-bro-template-html")) {
-                           std::string html = st->el->getAttribute("data-bro-template-html");
-                           if (doc) doc->parseInnerHTML(frag, html);
-                       }
                    }
                    return hostNodeValue(frag);
                },

@@ -6,4 +6,7 @@ namespace bro::bronze_host {
 
 void decorateTemplateProto(ObjectBuilder& b);
 
+// HTMLDialogElement's members (host_dialog.cpp).
+void decorateDialogProto(ObjectBuilder& b);
+
 }  // namespace bro::bronze_host

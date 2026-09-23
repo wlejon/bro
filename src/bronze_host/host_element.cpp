@@ -468,9 +468,37 @@ void decorateElementProto(ObjectBuilder& b) {
              {"onblur", "blur"},
              {"onload", "load"},
              {"onerror", "error"},
+             // <dialog>'s two (host_dialog.cpp); GlobalEventHandlers, so every
+             // element answers them.
+             {"onclose", "close"},
+             {"oncancel", "cancel"},
          }) {
         installInlineEventHandler(b, prop, type);
     }
+
+    // DOM §4.9: the namespace the parser or createElementNS gave the element
+    // (XHTML for HTML elements, SVG / MathML for foreign content, null for
+    // the null namespace), and the local name, which for every element this
+    // DOM makes is the lower-cased tag.
+    b.accessor("namespaceURI",
+               [](Value self_, std::span<const Value>) -> Value {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->el) return ev::undefined();
+                   if (st->el->nodeType() == dom::NodeType::DocumentFragment) return ev::undefined();
+                   if (st->el->ns() == dom::Element::Namespace::None) return ev::null();
+                   return ev::fromUtf8(st->el->namespaceURI());
+               },
+               nullptr);
+    b.accessor("localName",
+               [](Value self_, std::span<const Value>) -> Value {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st || !st->el) return ev::undefined();
+                   if (st->el->nodeType() == dom::NodeType::DocumentFragment) return ev::undefined();
+                   std::string name = st->el->tagName();
+                   for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                   return ev::fromUtf8(name);
+               },
+               nullptr);
 
     b.accessor("id",
                [](Value self_, std::span<const Value>) {

@@ -6,6 +6,7 @@
 #include "dom/string_flat_map.h"
 #include "css/cascade.h"
 #include "layout/box.h"
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -475,6 +476,21 @@ public:
     bool isTemplateContent() const { return isTemplateContent_; }
     void setIsTemplateContent(bool val) { isTemplateContent_ = val; }
 
+    // The element's namespace (DOM §4.9, `namespaceURI`). HTML unless the
+    // parser put it in foreign content (<svg>, <math> subtrees) or
+    // createElementNS named another. None is the null namespace; Other keeps
+    // the URI it was given.
+    enum class Namespace : uint8_t { HTML, SVG, MathML, None, Other };
+    static constexpr const char* kHtmlNamespace = "http://www.w3.org/1999/xhtml";
+    static constexpr const char* kSvgNamespace = "http://www.w3.org/2000/svg";
+    static constexpr const char* kMathMLNamespace = "http://www.w3.org/1998/Math/MathML";
+    Namespace ns() const { return ns_; }
+    void setNs(Namespace ns) { ns_ = ns; otherNs_.reset(); }
+    // The URI, "" for the null namespace.
+    std::string namespaceURI() const;
+    // Sets from a URI: the three known ones map to their enum, "" to None.
+    void setNamespaceURI(const std::string& uri);
+
     // Debug: detect use-after-free
     //
     // NOTE: magic_ is stamped 0xDEAD by ~Element and nowhere else, so a false
@@ -501,6 +517,9 @@ private:
     std::unique_ptr<NativeListenerList> nativeListeners_;
     ShadowRoot* shadowRoot_ = nullptr;
     Element* templateContent_ = nullptr;
+    // Namespace::Other only; heap so the common element pays 8 bytes.
+    std::unique_ptr<std::string> otherNs_;
+    Namespace ns_ = Namespace::HTML;
     bool isTemplateContent_ = false;
     bool dirty_ = false;
     bool layoutDirty_ = false;
