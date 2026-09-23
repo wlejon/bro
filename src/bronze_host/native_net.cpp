@@ -2,6 +2,7 @@
 
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/host_rooted.h"
 #include "engine/engine.h"
 #if BRO_WITH_NET
 // net_service.h pulls in GameNetworkingSockets, which a build without
@@ -199,7 +200,7 @@ bool bro_net_init() {
 static bool parseSendOptions(uint64_t optsBits, net::SendOptions& opts, const char* who) {
     opts = net::SendOptions{};
     if (optsBits == 0) return true;
-    Value optVal = ev::fromBits(optsBits);
+    const Rooted optVal(ev::fromBits(optsBits));
     auto clampChannel = [](Value v) {
         int ch = static_cast<int>(ev::toDouble(v));
         if (ch < 0) ch = 0;
@@ -207,7 +208,7 @@ static bool parseSendOptions(uint64_t optsBits, net::SendOptions& opts, const ch
         return ch;
     };
     if (ev::isObject(optVal)) {
-        const auto* hdr = optVal.asObject<bronze::HeapObjectHeader>();
+        const auto* hdr = optVal.get().asObject<bronze::HeapObjectHeader>();
         if (hdr && hdr->flags == bronze::HeapKind::Array) {
             ev::throwTypeError(std::string(who) + ": transfer lists are not supported over the network");
             return false;
@@ -267,7 +268,7 @@ void bro_net_broadcastRawOpts(const uint8_t* data, uint32_t data_len, uint64_t o
 bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub) return false;
-    Value val = ev::fromBits(valBits);
+    const Rooted val(ev::fromBits(valBits));  // the option reads allocate
     net::SendOptions opts;
     if (!parseSendOptions(optsBits, opts, "sendClone")) return false;
     std::vector<uint8_t> framed;
@@ -292,7 +293,7 @@ bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits) {
 void bro_net_broadcastCloneRaw(uint64_t valBits, uint64_t optsBits) {
     auto* sub = getNetSubscriber();
     if (!sub) return;
-    Value val = ev::fromBits(valBits);
+    const Rooted val(ev::fromBits(valBits));  // the option reads allocate
     net::SendOptions opts;
     if (!parseSendOptions(optsBits, opts, "broadcastClone")) return;
     std::vector<uint8_t> framed;
