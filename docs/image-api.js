@@ -35,6 +35,42 @@
  * filter instead of silently falling back to bilinear, and they are what the
  * ML preprocessors in the stack call.
  *
+ * ERRORS. A kernel trusts its dimensions (it touches w*h*channels elements
+ * whatever the buffer holds), so the broimage kernels check every buffer
+ * against what the kernel will read or write BEFORE running, and throw
+ * instead of reading or writing out of bounds:
+ *
+ *   RangeError  a buffer too small for its dimensions: "<fn>: <name> is too
+ *               small (needs N bytes, has M)". An image spans (h-1) rows of
+ *               its stride plus one row of w*channels elements; rotate90's
+ *               dst is checked at the rotated size for odd turns.
+ *   RangeError  a row stride that is negative or shorter than
+ *               width*channels bytes (0 = tightly packed).
+ *   RangeError  a span past 2^31-1 bytes ("dimensions are too large"), and
+ *               alloc() whose w*h*channels is too large.
+ *   RangeError  a positional width / height / channels / count / N,C,H,W
+ *               that is not a number in 1..2^31-1 (0, negative, NaN);
+ *               encoders also require channels <= 4 and a quality or
+ *               strideBytes in 0..2^31-1.
+ *   RangeError  an integer option outside int32, or NaN ("<key> is out of
+ *               range"). Integers are truncated toward zero.
+ *   TypeError   a float kernel given anything but a Float32Array (another
+ *               4-byte view such as Int32Array is refused, not reinterpreted);
+ *               an encoder's pixels that are not a Uint8Array.
+ *   TypeError   an option of the wrong type ("<key> must be a number" /
+ *               "must be a string"). A missing or null key takes its default.
+ *   TypeError   normalize's mean/std that are not an array or typed array,
+ *               have fewer than C entries, or hold a non-number; an encoder's
+ *               file path that is not a string; a non-number orient / alpha /
+ *               gamma.
+ *
+ * Covered: the geometric kernels in both name sets (resize, crop, centerCrop,
+ * flip, rotate90, pad, letterbox and the alpha-aware RGBA8 resizes), the
+ * colour converters (rgbaToRgb ... hslToRgb, srgbToLinear / linearToSrgb,
+ * applyGamma, whose `count` sizes both buffers), the layout shuffles
+ * (normalize, u8ToF32 / f32ToU8, nhwcToNchw / nchwToNhwc, u8NhwcToF32Nchw /
+ * f32NchwToU8Nhwc), applyExifOrientation and the PNG / JPEG encoders.
+ *
  * @example
  *   // The colormap pipeline: build a LUT once, reduce, look up, blit.
  *   const lut = bro.image.gradient([
