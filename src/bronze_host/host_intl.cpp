@@ -83,7 +83,7 @@ std::string regionOf(const std::string& tag) {
 
 std::string pickLocale(std::span<const Value> a, size_t idx = 0) {
     if (a.size() <= idx || ev::isUndefined(a[idx]) || ev::isNull(a[idx])) return "en-US";
-    Value v = a[idx];
+    const Value& v = a[idx];  // the rooted slot, current across the reads
     if (ev::isString(v)) return canonicalize(ev::toUtf8(v));
     if (ev::isObject(v)) {
         Value lenVal = ev::getProperty(v, "length");
@@ -116,7 +116,7 @@ NumberFormatOptions parseNumberFormatOptions(std::span<const Value> a) {
     NumberFormatOptions opt;
     opt.locale = pickLocale(a, 0);
     if (a.size() > 1 && ev::isObject(a[1])) {
-        Value o = a[1];
+        const Value& o = a[1];  // the rooted slot, current across the reads
         Value v = ev::getProperty(o, "style");
         if (ev::isString(v)) opt.style = ev::toUtf8(v);
         v = ev::getProperty(o, "currency");
@@ -478,7 +478,7 @@ DateTimeOptions parseDateTimeOptions(std::span<const Value> a) {
     DateTimeOptions opt;
     opt.locale = pickLocale(a, 0);
     if (a.size() > 1 && ev::isObject(a[1])) {
-        Value o = a[1];
+        const Value& o = a[1];  // the rooted slot, current across the reads
         Value v = ev::getProperty(o, "month");
         if (ev::isString(v)) { opt.monthStyle = ev::toUtf8(v); opt.hasMonth = true; }
         v = ev::getProperty(o, "year");
@@ -495,13 +495,15 @@ DateTimeOptions parseDateTimeOptions(std::span<const Value> a) {
     return opt;
 }
 
-std::string formatDateTimeDetails(Value dateVal, const DateTimeOptions& opt) {
+std::string formatDateTimeDetails(Value dateIn, const DateTimeOptions& opt) {
     int year = 1970, month = 0, day = 1, hours = 0, minutes = 0, seconds = 0;
-    if (ev::isObject(dateVal)) {
+    if (ev::isObject(dateIn)) {
+        // Rooted: each getter read and call below allocates.
+        const Rooted dateVal(dateIn);
         auto callGetter = [&dateVal](const char* name) -> int {
             Value fn = ev::getProperty(dateVal, name);
             if (ev::isFunction(fn)) {
-                auto res = ev::call(fn, dateVal, {});
+                auto res = ev::call(fn, dateVal.get(), {});
                 if (!res.thrown) return static_cast<int>(ev::toDouble(res.value));
             }
             return 0;
@@ -621,7 +623,7 @@ Value makeListFormatInstance(std::span<const Value> a) {
     ObjectBuilder b;
     b.def("format", 1, [loc, type](Value, std::span<const Value> args) {
         if (args.empty() || !ev::isObject(args[0])) return ev::fromUtf8("");
-        Value arr = args[0];
+        const Value& arr = args[0];  // the rooted slot, current across the reads
         Value lenVal = ev::getProperty(arr, "length");
         if (!ev::isNumber(lenVal)) return ev::fromUtf8("");
         uint32_t len = static_cast<uint32_t>(ev::toDouble(lenVal));
@@ -878,19 +880,21 @@ void installIntlGlobals() {
     // Date.prototype.toLocaleDateString & Date.prototype.toLocaleTimeString
     setProtoMethod("Date", "toLocaleDateString", 1,
         [](Value thisValue, std::span<const Value> a) {
+            const Rooted date(thisValue);  // the option reads allocate
             DateTimeOptions opt = parseDateTimeOptions(a);
             opt.hasYear = true;
             opt.hasMonth = true;
             opt.hasDay = true;
-            return ev::fromUtf8(formatDateTimeDetails(thisValue, opt));
+            return ev::fromUtf8(formatDateTimeDetails(date, opt));
         });
     setProtoMethod("Date", "toLocaleTimeString", 1,
         [](Value thisValue, std::span<const Value> a) {
+            const Rooted date(thisValue);  // the option reads allocate
             DateTimeOptions opt = parseDateTimeOptions(a);
             opt.hasHour = true;
             opt.hasMinute = true;
             opt.hasSecond = true;
-            return ev::fromUtf8(formatDateTimeDetails(thisValue, opt));
+            return ev::fromUtf8(formatDateTimeDetails(date, opt));
         });
 
     // String.prototype.localeCompare

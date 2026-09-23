@@ -20,9 +20,10 @@ struct Opts {
     render::Spacing spacing{};
 };
 
-static Opts readOpts(Value v) {
+static Opts readOpts(Value vIn) {
     Opts o;
-    if (ev::isObject(v)) {
+    if (ev::isObject(vIn)) {
+        const Rooted v(vIn);  // each property read allocates
         Value famVal = ev::getProperty(v, "family");
         if (ev::isString(famVal)) {
             std::string fam = ev::toUtf8(famVal);
@@ -184,7 +185,7 @@ Value makeBroTextValue() {
 
     t.def("bidiReorder", 1, [](Value, std::span<const Value> a) -> Value {
         if (a.empty() || !hostIsArray(a[0])) return ev::null();
-        Value arr = a[0];
+        const Value& arr = a[0];  // the rooted slot, current across the reads
         uint32_t n = static_cast<uint32_t>(ev::toDouble(ev::getProperty(arr, "length")));
         std::vector<render::bidi::Level> levels;
         levels.reserve(n);

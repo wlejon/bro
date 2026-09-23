@@ -38,8 +38,10 @@ static double idxNum(Value arr, size_t i) {
     return ev::toDouble(v);
 }
 
-static bool readVec3(Value v, bromath::Vec3& o) {
-    if (!ev::isObject(v)) return false;
+// The readers root their argument: each component read allocates.
+static bool readVec3(Value vIn, bromath::Vec3& o) {
+    if (!ev::isObject(vIn)) return false;
+    const Rooted v(vIn);
     if (hostIsArray(v)) {
         o = { static_cast<float>(idxNum(v, 0)), static_cast<float>(idxNum(v, 1)), static_cast<float>(idxNum(v, 2)) };
         return true;
@@ -48,8 +50,9 @@ static bool readVec3(Value v, bromath::Vec3& o) {
     return true;
 }
 
-static bool readVec2(Value v, bromath::Vec2& o) {
-    if (!ev::isObject(v)) return false;
+static bool readVec2(Value vIn, bromath::Vec2& o) {
+    if (!ev::isObject(vIn)) return false;
+    const Rooted v(vIn);
     if (hostIsArray(v)) {
         o = { static_cast<float>(idxNum(v, 0)), static_cast<float>(idxNum(v, 1)) };
         return true;
@@ -91,7 +94,8 @@ static Value rayHitToJS(const bromath::RayHit& h) {
     return o.get();
 }
 
-static bromath::GridFootprint2D readGrid(Value g) {
+static bromath::GridFootprint2D readGrid(Value gIn) {
+    const Rooted g(gIn);
     bromath::GridFootprint2D f;
     Value originVal = ev::getProperty(g, "origin");
     bromath::Vec2 o{0, 0};
