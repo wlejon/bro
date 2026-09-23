@@ -214,9 +214,57 @@
  */
 
 /**
- * @typedef {Object} PhysicsVehicleOptions
+ * One wheel of `PhysicsVehicleOptions.wheels` (position is chassis-local).
+ * @typedef {Object} PhysicsVehicleWheelOptions
  * @property {PhysicsVec3} [position]
- * @property {PhysicsQuat} [rotation]
+ * @property {PhysicsVec3} [suspensionDirection]
+ * @property {number} [radius]
+ * @property {number} [width]
+ * @property {number} [suspensionMinLength]
+ * @property {number} [suspensionMaxLength]
+ * @property {number} [suspensionFrequency]
+ * @property {number} [suspensionDamping]
+ * @property {boolean} [steerable]
+ * @property {number} [maxSteerAngle] - degrees
+ * @property {boolean} [driven] - engine-driven; used only when `differentials` is omitted
+ * @property {number} [maxBrakeTorque]
+ * @property {number} [maxHandBrakeTorque]
+ * @property {number} [longitudinalFriction]
+ * @property {number} [lateralFriction]
+ * @property {Array<number>} [longitudinalFrictionCurve]
+ * @property {Array<number>} [lateralFrictionCurve]
+ */
+
+/**
+ * A left/right wheel pair the engine drives. Wheel fields index `wheels`; -1 = none.
+ * @typedef {Object} PhysicsVehicleDifferential
+ * @property {number} [leftWheel=-1]
+ * @property {number} [rightWheel=-1]
+ * @property {number} [ratio=3.42] - gearbox to wheel rotation ratio
+ * @property {number} [leftRightSplit=0.5] - 0 = all torque left, 1 = all right
+ * @property {number} [limitedSlipRatio=1.4]
+ * @property {number} [engineTorqueRatio=1] - share of engine torque for this differential
+ */
+
+/**
+ * `Physics.createVehicle` options.
+ * @typedef {Object} PhysicsVehicleOptions
+ * @property {string} [type='wheeled'] - 'wheeled' | 'tracked' | 'motorcycle'
+ * @property {number} [body] - an existing dynamic body tag for the chassis, or
+ * @property {PhysicsBodyOptions} [chassis] - a body created for it
+ * @property {PhysicsVec3} [up]
+ * @property {PhysicsVec3} [forward]
+ * @property {number} [maxPitchRollAngle=180] - degrees
+ * @property {Array<PhysicsVehicleWheelOptions>} wheels
+ * @property {{maxTorque?: number, minRPM?: number, maxRPM?: number}} [engine]
+ * @property {{mode?: string, gearRatios?: Array<number>, reverseGearRatios?: Array<number>, switchTime?: number, clutchStrength?: number, shiftUpRPM?: number, shiftDownRPM?: number}} [transmission]
+ * @property {Array<{wheels: Array<number>, drivenWheel?: number, inertia?: number, angularDamping?: number, maxBrakeTorque?: number, differentialRatio?: number}>} [tracks] - tracked only: [left, right]
+ * @property {{maxAngle?: number, springConstant?: number, springDamping?: number, springIntegrationCoefficient?: number, springIntegrationCoefficientDecay?: number, smoothingFactor?: number}} [lean] - motorcycle only
+ * @property {Array<PhysicsVehicleDifferential>} [differentials] - explicit drive pairs; omitted = derived from the wheels' `driven` flags
+ * @property {number} [differentialLimitedSlipRatio=1.4] - limited slip between differentials
+ * @property {Array<{leftWheel: number, rightWheel: number, stiffness?: number}>} [antiRollBars]
+ * @property {string} [collisionTester='cylinder'] - 'ray' | 'sphere' | 'cylinder'; anything else throws TypeError
+ * @property {string|number} [testerLayer] - object layer (name or index) the wheels collide as; default = the chassis's layer
  */
 
 /**

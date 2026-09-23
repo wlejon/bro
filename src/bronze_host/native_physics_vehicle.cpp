@@ -211,8 +211,52 @@ void* bro_physics_createVehicle(const char* config) {
             opts.lean.maxAngle = static_cast<float>(getPropNumber(leanVal, "maxAngle", opts.lean.maxAngle));
             opts.lean.springConstant = static_cast<float>(getPropNumber(leanVal, "springConstant", opts.lean.springConstant));
             opts.lean.springDamping = static_cast<float>(getPropNumber(leanVal, "springDamping", getPropNumber(leanVal, "dampingConstant", opts.lean.springDamping)));
+            opts.lean.springIntegrationCoefficient = static_cast<float>(
+                getPropNumber(leanVal, "springIntegrationCoefficient", opts.lean.springIntegrationCoefficient));
+            opts.lean.springIntegrationCoefficientDecay = static_cast<float>(
+                getPropNumber(leanVal, "springIntegrationCoefficientDecay", opts.lean.springIntegrationCoefficientDecay));
+            opts.lean.smoothingFactor = static_cast<float>(
+                getPropNumber(leanVal, "smoothingFactor", opts.lean.smoothingFactor));
         }
     }
+
+    // Explicit differentials (wheel indices into `wheels`); empty = derived
+    // from the wheels' `driven` flags.
+    Value diffsVal = ev::getProperty(optsVal, "differentials");
+    if (ev::isObject(diffsVal)) {
+        Value lenV = ev::getProperty(diffsVal, "length");
+        uint32_t n = (!ev::isUndefined(lenV) && !ev::isObject(lenV)) ? static_cast<uint32_t>(ev::toDouble(lenV)) : 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            Value dv = ev::getElement(diffsVal, i);
+            physics::VehicleDifferentialOptions d;
+            if (ev::isObject(dv)) {
+                d.leftWheel = static_cast<int>(getPropNumber(dv, "leftWheel", d.leftWheel));
+                d.rightWheel = static_cast<int>(getPropNumber(dv, "rightWheel", d.rightWheel));
+                d.ratio = static_cast<float>(getPropNumber(dv, "ratio", d.ratio));
+                d.leftRightSplit = static_cast<float>(getPropNumber(dv, "leftRightSplit", d.leftRightSplit));
+                d.limitedSlipRatio = static_cast<float>(getPropNumber(dv, "limitedSlipRatio", d.limitedSlipRatio));
+                d.engineTorqueRatio = static_cast<float>(getPropNumber(dv, "engineTorqueRatio", d.engineTorqueRatio));
+            }
+            opts.differentials.push_back(d);
+        }
+    }
+    opts.differentialLimitedSlipRatio = static_cast<float>(
+        getPropNumber(optsVal, "differentialLimitedSlipRatio", opts.differentialLimitedSlipRatio));
+
+    // Wheel-vs-ground test shape, and the object layer the wheels test as
+    // (a layer name or index; default = the chassis's layer).
+    const std::string tester = getPropString(optsVal, "collisionTester");
+    if (tester == "ray") opts.tester = physics::VehicleOptions::TesterRay;
+    else if (tester == "sphere") opts.tester = physics::VehicleOptions::TesterCastSphere;
+    else if (tester == "cylinder" || tester.empty()) opts.tester = physics::VehicleOptions::TesterCastCylinder;
+    else {
+        cleanupOnFail();
+        ev::throwTypeError("Physics.createVehicle: collisionTester must be 'ray' | 'sphere' | 'cylinder'");
+        return nullptr;
+    }
+    Value tlVal = ev::getProperty(optsVal, "testerLayer");
+    if (ev::isString(tlVal)) opts.testerLayer = world->layerIndex(ev::toUtf8(tlVal));
+    else if (ev::isNumber(tlVal)) opts.testerLayer = static_cast<int>(ev::toDouble(tlVal));
 
     Value arbVal = ev::getProperty(optsVal, "antiRollBars");
     if (ev::isObject(arbVal)) {
