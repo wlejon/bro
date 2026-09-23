@@ -219,6 +219,11 @@ void fireAnimationFrames() {
 //     reads geometry, and a geometry read lays the document out first, so
 //     "after layout" is what it measures. Its own callbacks' promise jobs
 //     drain at 6c.
+//
+// NOT here: broaudio's per-frame tick (audioFramePump below). Audio plays in
+// real time whether or not bro.time is paused, so its automation, `onended`
+// and mic chunks ride the engine's ungated frame pump rather than this
+// pause-gated seam.
 void hostFrame(double dtMs) {
     if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
     g_host->clockMs += dtMs;                             // 2
@@ -233,9 +238,6 @@ void hostFrame(double dtMs) {
     ev::drainMicrotasks();                               // 6
     fireHostObserverFrame();                             // 6b
     deliverWebAnimationFinishEvents();
-#if BRO_WITH_AUDIO
-    broaudio::api::drainMicChunks();
-#endif
     ev::drainMicrotasks();                               // 6c
     hostNotifyIdleFrame(dtMs);                           // 7
     flushHostStorage();
@@ -421,6 +423,21 @@ void installWebHostGlobals(engine::Engine& engine) {
     // with rAF's pause semantics, in every display mode. hostFrame above owns
     // the ordering, drain included, and says why each step sits where it does.
     engine.onFrame([](double dtMs) { hostFrame(dtMs); });
+
+#if BRO_WITH_AUDIO
+    // broaudio's once-per-frame host call (broaudio/api.h): drainMicChunks
+    // delivers bro.mic chunks and runs tickAsyncJobs, which evaluates
+    // AudioParam automation into the playing sources, fires a finished
+    // source's `onended`, and settles createClipFromFileAsync. Without it
+    // automation freezes and `onended` never fires. An engine frame pump,
+    // not the pause-gated frame seam: audio keeps playing while bro.time is
+    // paused, so its automation and end events keep coming too. The
+    // callbacks' promise jobs drain here, in the frame that produced them.
+    engine.addFramePump([] {
+        broaudio::api::drainMicChunks();
+        if (ev::microtasksPending()) ev::drainMicrotasks();
+    });
+#endif
 
     // Install HTML interfaces BEFORE document is created:
     installHtmlInterfaces();
