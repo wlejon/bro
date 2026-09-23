@@ -169,6 +169,11 @@ public:
     // matches() with `:scope` naming `scopingRoot` (closest() tests each
     // ancestor with :scope still the element closest() was called on).
     bool matchesScoped(const std::string& selector, const Element* scopingRoot) const;
+    // querySelector(All) over a non-element root (a ShadowRoot or a
+    // DocumentFragment): every element descendant in tree order, full
+    // selector matching, combinators kept inside that tree.
+    static void querySelectorAllUnder(Node* root, const std::string& selector,
+                                      std::vector<Element*>& out, bool firstOnly = false);
     Element* closest(const std::string& selector);
 
     // Simple selector matching (works for dynamic elements)

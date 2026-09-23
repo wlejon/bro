@@ -754,13 +754,10 @@ Value makeFragmentValue(dom::Node* frag) {
         if (auto* el = dynamic_cast<dom::Element*>(st->node)) {
             return hostElementValue(el->querySelector(sel));
         }
-        for (dom::Node* child : st->node->childNodes()) {
-            if (auto* cel = dynamic_cast<dom::Element*>(child)) {
-                if (cel->matches(sel)) return hostElementValue(cel);
-                if (dom::Element* found = cel->querySelector(sel)) return hostElementValue(found);
-            }
-        }
-        return ev::null();
+        // A fragment or shadow root: full selector matching over its tree.
+        std::vector<dom::Element*> out;
+        dom::Element::querySelectorAllUnder(st->node, sel, out, /*firstOnly=*/true);
+        return out.empty() ? ev::null() : hostElementValue(out[0]);
     });
 
     b.def("querySelectorAll", 1, [](Value self_, std::span<const Value> a) -> Value {
@@ -774,12 +771,7 @@ Value makeFragmentValue(dom::Node* frag) {
         if (auto* el = dynamic_cast<dom::Element*>(st->node)) {
             out = el->querySelectorAll(sel);
         } else {
-            for (dom::Node* child : st->node->childNodes()) {
-                if (auto* cel = dynamic_cast<dom::Element*>(child)) {
-                    if (cel->matches(sel)) out.push_back(cel);
-                    cel->querySelectorAllSimple(sel, out);
-                }
-            }
+            dom::Element::querySelectorAllUnder(st->node, sel, out);
         }
         return hostArrayOf(out.size(), [&out](size_t i) {
             return hostElementValue(out[i]);

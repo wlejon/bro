@@ -50,10 +50,15 @@ public:
         if (!p) {
             // If the parent is a ShadowRoot (not an Element), cross to the shadow host.
             // This allows :host(...) descendant selectors to walk up to the host.
+            // A plain DocumentFragment (template content, createDocumentFragment)
+            // shares the node type, so the cast has to be checked. A DOM query
+            // (ScopingRootGuard) stays inside its own tree, as the selector
+            // APIs specify; only the cascade crosses to the host.
             auto* parentNode = elem_->parentNode();
-            if (parentNode && parentNode->nodeType() == dom::NodeType::DocumentFragment) {
-                auto* sr = static_cast<dom::ShadowRoot*>(parentNode);
-                if (sr->host()) return getOrCreate(sr->host());
+            if ((!inDomQuery_ || queryCrossesHost_) && parentNode &&
+                parentNode->nodeType() == dom::NodeType::DocumentFragment) {
+                auto* sr = dynamic_cast<dom::ShadowRoot*>(parentNode);
+                if (sr && sr->host()) return getOrCreate(sr->host());
             }
             return nullptr;
         }
@@ -268,20 +273,42 @@ public:
     // querySelector / querySelectorAll / matches / closest name the element
     // they were called on for the duration of the match (ScopingRootGuard).
     bool isScopingRoot() const override {
-        if (scopingRoot_) return elem_ == scopingRoot_;
+        if (hasScopingRoot_) return scopingRoot_ != nullptr && elem_ == scopingRoot_;
         return ElementRef::isScopingRoot();
     }
 
-    // Names `el` as :scope until destroyed, restoring whatever was named
-    // before (a matches() nested in a querySelectorAll callback, say).
+    // A DOM query (querySelector/All, matches, closest) for its duration:
+    // names `el` as :scope (null: no element is, as for a shadow root or a
+    // fragment), and keeps combinators inside the element's own tree rather
+    // than walking from a shadow tree out to its host — `div span` inside a
+    // shadow tree must not match through a <div> host. A selector naming
+    // :host / :host-context still reaches the host, which is what those
+    // pseudo-classes test (htmlayout matches :host on any shadow host).
+    // Restores the previous state when destroyed (a matches() nested in
+    // another query, say).
     class ScopingRootGuard {
     public:
-        explicit ScopingRootGuard(dom::Element* el) : prev_(scopingRoot_) { scopingRoot_ = el; }
-        ~ScopingRootGuard() { scopingRoot_ = prev_; }
+        ScopingRootGuard(dom::Element* el, std::string_view selectorText)
+            : prev_(scopingRoot_), prevInQuery_(inDomQuery_),
+              prevHasRoot_(hasScopingRoot_), prevCrosses_(queryCrossesHost_) {
+            scopingRoot_ = el;
+            hasScopingRoot_ = true;
+            inDomQuery_ = true;
+            queryCrossesHost_ = selectorText.find(":host") != std::string_view::npos;
+        }
+        ~ScopingRootGuard() {
+            scopingRoot_ = prev_;
+            hasScopingRoot_ = prevHasRoot_;
+            inDomQuery_ = prevInQuery_;
+            queryCrossesHost_ = prevCrosses_;
+        }
         ScopingRootGuard(const ScopingRootGuard&) = delete;
         ScopingRootGuard& operator=(const ScopingRootGuard&) = delete;
     private:
         dom::Element* prev_;
+        bool prevInQuery_;
+        bool prevHasRoot_;
+        bool prevCrosses_;
     };
 
     // Global state setters (called by Engine before style resolution)
@@ -308,6 +335,9 @@ private:
     static inline thread_local dom::Element* hoveredElement_ = nullptr;
     static inline thread_local dom::Element* activeElement_ = nullptr;
     static inline thread_local dom::Element* scopingRoot_ = nullptr;
+    static inline thread_local bool hasScopingRoot_ = false;
+    static inline thread_local bool inDomQuery_ = false;
+    static inline thread_local bool queryCrossesHost_ = false;
     static inline thread_local std::unordered_map<dom::Element*, std::unique_ptr<ElementRefAdapter>> cache_;
 };
 

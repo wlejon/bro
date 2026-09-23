@@ -32,15 +32,14 @@ Element* ShadowRoot::getElementById(const std::string& id) {
 }
 
 Element* ShadowRoot::querySelector(const std::string& selector) {
-    auto results = querySelectorAll(selector);
+    std::vector<Element*> results;
+    Element::querySelectorAllUnder(this, selector, results, /*firstOnly=*/true);
     return results.empty() ? nullptr : results[0];
 }
 
 std::vector<Element*> ShadowRoot::querySelectorAll(const std::string& selector) {
     std::vector<Element*> results;
-    for (auto* child : children_) {
-        collectElements(child, selector, results);
-    }
+    Element::querySelectorAllUnder(this, selector, results);
     return results;
 }
 
