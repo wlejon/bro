@@ -6,8 +6,10 @@
 
 const workerPath = '../workers/worker_error_events.js';
 
+// A wall-clock budget, returning as soon as `pred` holds: long enough for a
+// BRONZE_GC_STRESS run, where both threads collect on every allocation.
 function pumpUntil(pred, ms) {
-    const deadline = Date.now() + (ms || 15000);
+    const deadline = Date.now() + (ms || 120000);
     while (!pred() && Date.now() < deadline) { advanceTime(16); wallSleep(2); }
 }
 

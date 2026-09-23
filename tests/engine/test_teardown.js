@@ -71,8 +71,10 @@ worker.onmessage = (e) => { got = e.data; };
 worker.postMessage({ cmd: 'echo', payload: 'ping' });
 // advanceTime() delivers queued replies, wallSleep() gives the worker's real
 // thread CPU time; the budget is wall-clock so a loaded machine (e.g. the
-// parallel test runner) can't starve the worker out of a virtual-time budget.
-const workerDeadline = Date.now() + 15000;
+// parallel test runner) can't starve the worker out of a virtual-time budget,
+// and it is generous enough for a BRONZE_GC_STRESS run (the loop exits as
+// soon as the reply lands).
+const workerDeadline = Date.now() + 120000;
 while (got === null && Date.now() < workerDeadline) { advanceTime(16); wallSleep(2); }
 assert(got && got.echo === 'ping', 'worker replied');
 

@@ -24,6 +24,13 @@
 // the model ops use. What the models add on top is their compute, which is
 // brovisionml's to test.
 
+// Wall-clock budgets. A wait returns as soon as its condition holds, so a
+// long budget costs nothing when things work; it only has to outlast a slow
+// run (BRONZE_GC_STRESS collects on every allocation, on both threads).
+const WAIT_MS = 120000;
+// A hold long enough that only cancel() can end it within the wait above.
+const CANCEL_HOLD_MS = 600000;
+
 function expectThrows(fn, what) {
     let err = null;
     try { fn(); } catch (e) { err = e; }
@@ -97,7 +104,7 @@ if (bro.vision.available === false || typeof __host.visionProbe !== 'function') 
         assert(handle.done === false, 'handle.done is false while the worker holds');
         assert(got === null && calls === 0, 'onDone does not fire inside the call');
 
-        pump(() => calls > 0, 5000, 'probe onDone');
+        pump(() => calls > 0, WAIT_MS, 'probe onDone');
         assert(calls === 1, 'onDone fires exactly once, got ' + calls);
         assert(handle.done === true, 'handle.done is true once settled');
         assert(info !== null && info.cancelled === false, 'info.cancelled is false');
@@ -120,7 +127,7 @@ if (bro.vision.available === false || typeof __host.visionProbe !== 'function') 
         const err = expectThrows(() => probe(W, H), 'a second op while one is in flight');
         assert(String(err.message).includes('already in flight'),
                'the busy error says so: ' + err.message);
-        pump(() => calls > 0, 5000, 'held probe onDone');
+        pump(() => calls > 0, WAIT_MS, 'held probe onDone');
         // ...and the model is free again as soon as the callback has run.
         assert(probe(W, H).width === W, 'the model is usable again after the job settles');
     }
@@ -134,7 +141,7 @@ if (bro.vision.available === false || typeof __host.visionProbe !== 'function') 
                 chained = probe(W, H, { onDone() { calls++; } });
             }
         });
-        pump(() => calls >= 2, 5000, 'chained probe');
+        pump(() => calls >= 2, WAIT_MS, 'chained probe');
         assert(chained !== null && typeof chained.cancel === 'function',
                'onDone could launch the next op on the same model');
     }
@@ -142,11 +149,11 @@ if (bro.vision.available === false || typeof __host.visionProbe !== 'function') 
     // ── cancel ──────────────────────────────────────────────────────────────
     {
         let got = 'unset', info = null, calls = 0;
-        const handle = probe(W, H, { holdMs: 5000, onDone(r, i) { got = r; info = i; calls++; } });
+        const handle = probe(W, H, { holdMs: CANCEL_HOLD_MS, onDone(r, i) { got = r; info = i; calls++; } });
         const t0 = Date.now();
         handle.cancel();
-        pump(() => calls > 0, 5000, 'cancelled probe onDone');
-        assert(Date.now() - t0 < 4000, 'cancel() cut the worker short');
+        pump(() => calls > 0, WAIT_MS, 'cancelled probe onDone');
+        assert(Date.now() - t0 < CANCEL_HOLD_MS / 2, 'cancel() cut the worker short');
         assert(info.cancelled === true, 'a cancelled job reports cancelled');
         assert(got === null, 'a cancelled job delivers a null result, got ' + got);
         assert(probe(W, H).width === W, 'the model is free after a cancel');
@@ -160,7 +167,7 @@ if (bro.vision.available === false || typeof __host.visionProbe !== 'function') 
 
         let got = 'unset', info = null, calls = 0;
         probe(W, H, { fail: 'async exploded', onDone(r, i) { got = r; info = i; calls++; } });
-        pump(() => calls > 0, 5000, 'failed probe onDone');
+        pump(() => calls > 0, WAIT_MS, 'failed probe onDone');
         assert(got === null, 'a failed job delivers a null result');
         assert(info.cancelled === false, 'a failed job is not cancelled');
         assert(String(info.error).includes('async exploded'), 'info.error carries the message: ' + info.error);
@@ -171,7 +178,7 @@ if (bro.vision.available === false || typeof __host.visionProbe !== 'function') 
     {
         let calls = 0;
         probe(W, H, { onDone() { calls++; throw new Error('from onDone'); } });
-        pump(() => calls > 0, 5000, 'throwing onDone');
+        pump(() => calls > 0, WAIT_MS, 'throwing onDone');
         assert(probe(W, H).width === W, 'the model is free after a throwing onDone');
     }
 
