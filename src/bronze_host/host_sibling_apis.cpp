@@ -382,11 +382,11 @@ void installSiblingApis(engine::Engine& engine) {
     adoptGlobalProperty("FloraWorld");
 #endif
     {
-        // `bro.image` is ONE object with three sources: brokit's kernels
-        // (which create it, now that `bro` is registered), the codecs and
-        // ops from broimage_api, and `gpu`, which installImageGpuModule
-        // mounts right after installBroRoots returns.
-        installBrokitImageKernels();
+        // `bro.image` is ONE object with two sources: the kernels, codecs
+        // and ops from broimage_api (which creates it, now that `bro` is
+        // registered), and `gpu`, which installImageGpuModule mounts right
+        // after installBroRoots returns. brokit carries a copy of the
+        // kernels too; broimage's are the ones installed.
         broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
         broimage::api::installImage();
     }
@@ -448,7 +448,6 @@ void installWorkerSiblingApis() {
     broflora::api::installFlora();
     adoptGlobalProperty("FloraWorld");
 #endif
-    installBrokitImageKernels();
     broimage::api::setPathResolver(&brokit::api::resolveAssetPath);
     broimage::api::installImage();
 }

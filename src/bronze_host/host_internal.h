@@ -744,12 +744,6 @@ void installVendorGlobals();
 
 void installBrokitGlobals(engine::Engine& engine);
 
-// brokit's `bro.image` kernels (gradient, alloc, reduce, map, combine,
-// lookup, stencil, resample), mounted onto the registered `bro` root — so
-// called from installBroRoots, after that root exists and before the codec
-// and gpu members join the same object.
-void installBrokitImageKernels();
-
 // A brokit `File` read off disk (host_file_path.cpp): bytes, the MIME type
 // its extension implies, `lastModified`, and the non-standard `.path` — the
 // object a drop and an <input type=file> pick hand a page. `undefined` for

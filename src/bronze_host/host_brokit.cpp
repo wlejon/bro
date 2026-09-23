@@ -200,10 +200,9 @@ void installBrokitGlobals(engine::Engine& engine) {
     bk::installNetJS();
     bk::installWebSocketServerJS();
     bk::installRequire();
-    // Not here: bk::installImage(). It mounts onto whatever `bro` is
-    // registered, and at this point none is — installBroRoots runs after
-    // this and would replace the object it made. installBrokitImageKernels
-    // below is called from there instead.
+    // Not bk::installImage(): broimage_api installs the same typed-array
+    // kernels (and the codecs beside them) onto `bro.image`, from
+    // installSiblingApis, so brokit's copy would only be overwritten.
 
     // Where bro's virtual paths (`/app`, `/lib`, `/system`, ...) point, so
     // `fs.readFileSync('/app/data.json')` and `fetch('/app/data.json')` read
@@ -244,15 +243,6 @@ void installBrokitGlobals(engine::Engine& engine) {
     g_pumps->wsHasPending.set(globalProperty("__brokit_ws_has_pending"));
     g_pumps->netHasPending.set(globalProperty("__brokit_net_has_pending"));
     g_pumps->fsWatchHasPending.set(globalProperty("__brokit_fs_watch_has_pending"));
-}
-
-// The bro.image typed-array kernels (reduce/map/combine/lookup/stencil/
-// resample, gradient, alloc — brokit's src/api/image.cpp over broimage).
-// brokit's installer finds the registered `bro` and sets `bro.image` on it,
-// so it runs from installBroRoots once that root exists; the codec and gpu
-// members are then added to the object it made (host_bro_root.cpp).
-void installBrokitImageKernels() {
-    brokit::api::installImage();
 }
 
 void pumpBrokitTicks() {
