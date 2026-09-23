@@ -172,13 +172,15 @@ fetch(url).then(function (resp) {
     record('trip.blobSize', blob.size);
     record('trip.blobType', blob.type);
     // Revoked means gone. A table that only grows is a leak nothing else in
-    // the process would ever report.
+    // the process would ever report. Fetching a revoked blob: URL is a
+    // network error (File API 8.3), so the fetch rejects with a TypeError;
+    // only the error's name is recorded, as the message carries the URL.
     URL.revokeObjectURL(url);
     return fetch(url);
 }).then(function (resp) {
     record('trip.afterRevoke', resp.status);
 }).catch(function (e) {
-    record('trip.threw', String(e));
+    record('trip.threw', e && e.name ? e.name : String(e));
 });
 
 // A data: URL carries its own bytes and must take the same path — no file, no
