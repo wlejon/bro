@@ -373,7 +373,8 @@
     accessor(SceneNode.prototype, "boneCount", function () { return __bro_native.scene.SceneNode_boneCount_get(this); }, undefined);
     accessor(SceneNode.prototype, "skinReady", function () { return __bro_native.scene.SceneNode_skinReady_get(this); }, undefined);
     accessor(SceneNode.prototype, "isPlaying", function () {
-        return this.type === 'particles3d' ? __bro_native.scene.SceneNode_particlePlaying_get(this) : __bro_native.scene.SceneNode_isPlaying_get(this);
+        const t = this.type;
+        return t === 'particles3d' || t === 'particles' ? __bro_native.scene.SceneNode_particlePlaying_get(this) : __bro_native.scene.SceneNode_isPlaying_get(this);
     }, undefined);
     accessor(SceneNode.prototype, "currentAnimation", function () { const c = __bro_native.scene.SceneNode_currentAnimation_get(this); return c ? c : null; }, undefined);
     accessor(SceneNode.prototype, "animationDuration", function () { return __bro_native.scene.SceneNode_animationDuration_get(this); }, undefined);
@@ -510,8 +511,8 @@
     });
 
     fn(SceneGraph.prototype, "createParticles", function createParticles(opts) {
-        const d_opts = opts === undefined ? {} : opts;
-        return __bro_native.scene.SceneGraph_createParticles(this, d_opts.maxParticles !== undefined, d_opts.maxParticles === undefined ? 0 : d_opts.maxParticles, d_opts.texture !== undefined, d_opts.texture === undefined ? '' : d_opts.texture, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.visible !== undefined, d_opts.visible === undefined ? false : d_opts.visible);
+        return __bro_native.scene.SceneGraph_createParticles(this, opts ? JSON.stringify(opts, (k, v) =>
+            ArrayBuffer.isView(v) && !(v instanceof DataView) ? Array.from(v) : v) : "");
     });
     fn(SceneGraph.prototype, "createDecal", function createDecal(opts) {
         const d_opts = opts === undefined ? {} : opts;

@@ -296,10 +296,30 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  */
 
 /**
+ * A 2D particle emitter (drawn with the 2D scene layer, like shapes and
+ * sprites). Units are canvas pixels and seconds; angles are degrees, 0 = +x,
+ * -90 = up. The node reads back `liveCount` (alias `particleCount`),
+ * `isPlaying` and `rate` (settable), and takes `burst(n)`, `clear()`,
+ * `play()`, `stop()`.
+ *
  * @typedef {Object} ParticleNodeOptions
- * @property {number} [maxParticles]
- * @property {string} [texture]
- * @property {Array<number>} [position]
+ * @property {number} [maxParticles=256] - hard cap on live particles; extra emits drop
+ * @property {string} [texture] - app-relative image; absent draws filled circles
+ * @property {'normal'|'additive'} [blend='normal']
+ * @property {number} [rate=0] - particles emitted per second while playing
+ * @property {number} [burst] - particles emitted once, at creation
+ * @property {number|{min:number,max:number}} [lifetime={min:0.5,max:1}] - seconds
+ * @property {{angle?:number, angleSpread?:number, speed?:number, speedSpread?:number}} [velocity]
+ *   - defaults -90 / 360 / 100 / 0 (px per second)
+ * @property {Array<number>|{x:number,y:number}} [gravity] - px/s² ([x, y] or {x, y})
+ * @property {number|{start:number,end:number}} [size] - diameter in px over the lifetime
+ * @property {string|Array<number>|{start:(string|Array<number>), end:(string|Array<number>)}} [color]
+ *   - CSS colour or [r,g,b,a] 0..1; `end` defaults to `start` at alpha 0
+ * @property {{start?:number, spinSpeed?:number, spinSpread?:number}} [rotation] - degrees, degrees/s
+ * @property {number} [drag] - per-second velocity multiplier (1 = none)
+ * @property {boolean} [autoplay=true] - false: emit only on burst() until play()
+ * @property {Array<number>} [position] - [x, y(, z)]; or `x` / `y`
+ * @property {string} [name]
  * @property {boolean} [visible]
  */
 

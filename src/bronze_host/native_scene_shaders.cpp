@@ -4,6 +4,7 @@
 #include <bromesh/manipulation/normals.h>
 #include <bromesh/api.h>
 #include "scene/particles3d_node.h"
+#include "scene/particle_node.h"
 #include "scene/decal_node.h"
 #include "scene/sprite_node.h"
 #include <json.hpp>
@@ -468,10 +469,15 @@ void bro_scene_SceneNode_modulate_set(void* self, const double* data, uint32_t l
     }
 }
 
+// The emitter getters answer both particle node kinds: the 2D ParticleNode
+// and the 3D Particles3DNode.
 int32_t bro_scene_SceneNode_particleCount_get(void* self) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Particles3D) {
         return static_cast<scene::Particles3DNode*>(n)->liveCount();
+    }
+    if (n && n->type() == scene::SceneNode::Type::Particles) {
+        return static_cast<scene::ParticleNode*>(n)->liveCount();
     }
     return 0;
 }
@@ -480,6 +486,9 @@ bool bro_scene_SceneNode_particlePlaying_get(void* self) {
     if (n && n->type() == scene::SceneNode::Type::Particles3D) {
         return static_cast<scene::Particles3DNode*>(n)->isPlaying();
     }
+    if (n && n->type() == scene::SceneNode::Type::Particles) {
+        return static_cast<scene::ParticleNode*>(n)->isPlaying();
+    }
     return false;
 }
 double bro_scene_SceneNode_particleRate_get(void* self) {
@@ -487,12 +496,17 @@ double bro_scene_SceneNode_particleRate_get(void* self) {
     if (n && n->type() == scene::SceneNode::Type::Particles3D) {
         return static_cast<scene::Particles3DNode*>(n)->rate();
     }
+    if (n && n->type() == scene::SceneNode::Type::Particles) {
+        return static_cast<scene::ParticleNode*>(n)->rate();
+    }
     return 0.0;
 }
 void bro_scene_SceneNode_particleRate_set(void* self, double r) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Particles3D) {
         static_cast<scene::Particles3DNode*>(n)->setRate(static_cast<float>(r));
+    } else if (n && n->type() == scene::SceneNode::Type::Particles) {
+        static_cast<scene::ParticleNode*>(n)->setRate(static_cast<float>(r));
     }
 }
 double bro_scene_SceneNode_softness_get(void* self) {

@@ -226,25 +226,6 @@ void* bro_scene_SceneGraph_createLight(void* self, bool opts_type_given, const c
     return wrapNode(node, g);
 }
 
-void* bro_scene_SceneGraph_createParticles(void* self, bool opts_maxParticles_given, int32_t opts_maxParticles,
-                                          bool opts_texture_given, const char* opts_texture,
-                                          const double* opts_position, uint32_t opts_position_len,
-                                          bool opts_visible_given, bool opts_visible) {
-    auto* g = graphOf(self);
-    if (!g) return nullptr;
-    auto* node = g->createParticles();
-    g->root()->addChild(node);
-    if (opts_maxParticles_given) node->setMaxParticles(opts_maxParticles);
-    if (opts_texture_given && opts_texture) node->setTexturePath(opts_texture);
-    if (opts_position && opts_position_len >= 3) {
-        node->setPosition(static_cast<float>(opts_position[0]),
-                          static_cast<float>(opts_position[1]),
-                          static_cast<float>(opts_position[2]));
-    }
-    if (opts_visible_given) node->setVisible(opts_visible);
-    return wrapNode(node, g);
-}
-
 void* bro_scene_SceneGraph_createDecal(void* self, bool opts_texture_given, const char* opts_texture,
                                        const double* opts_size, uint32_t opts_size_len,
                                        const double* opts_position, uint32_t opts_position_len,

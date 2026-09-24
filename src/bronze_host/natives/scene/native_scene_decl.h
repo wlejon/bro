@@ -470,8 +470,8 @@ void* bro_scene_SceneGraph_createLight(void* self, bool opts_type_given, const c
 
 // bro.scene.SceneGraph.prototype.createParticles
 //   registered at __bro_native.scene.SceneGraph_createParticles
-//   opts_maxParticles_given, opts_texture_given, opts_visible_given: false when the value was not passed (no declared default)
-void* bro_scene_SceneGraph_createParticles(void* self, bool opts_maxParticles_given, int32_t opts_maxParticles, bool opts_texture_given, const char* opts_texture, const double* opts_position, uint32_t opts_position_len, bool opts_visible_given, bool opts_visible);
+//   jsonOpts: the ParticleNodeOptions as JSON ("" for none); body in native_scene_particles.cpp
+void* bro_scene_SceneGraph_createParticles(void* self, const char* jsonOpts);
 
 // bro.scene.SceneGraph.prototype.createDecal
 //   registered at __bro_native.scene.SceneGraph_createDecal
