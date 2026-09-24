@@ -9,9 +9,12 @@ add_library(bro_engine STATIC
     engine_frame.cpp
     engine_frame_render.cpp
     css_transitions.cpp
+    css_animations.cpp
+    css_easing.cpp
     css_interpolation.cpp
     element_activation.cpp
     web_animations.cpp
+    web_animations_effect.cpp
     input_common.cpp
     input_editable.cpp
     input_keyboard.cpp

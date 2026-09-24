@@ -142,6 +142,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_css_namespace.cpp
     host_intl.cpp
     host_web_animations.cpp
+    host_web_animations_effect.cpp
     host_brokit.cpp
     host_headless.cpp
     host_headless_input.cpp

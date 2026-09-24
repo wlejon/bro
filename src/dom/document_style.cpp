@@ -366,8 +366,9 @@ void Document::resolveStylesRecursive(Element* elem,
     // document, so the cached base is never re-recorded on its account. Without
     // this, applyOverrides only ran on the frame the animation was registered
     // and every animation froze on its first applied value.
+    // (CSS animations are Web Animations records, so the web manager answers
+    // for them too.)
     bool animatingSelf =
-        (animationManager_ && animationManager_->hasActive(elem)) ||
         (transitionManager_ && transitionManager_->hasActive(elem)) ||
         (webAnimationManager_ && webAnimationManager_->hasActive(elem));
 
@@ -524,13 +525,9 @@ void Document::resolveStylesRecursive(Element* elem,
             transitionManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }
 
-        // CSS animations: apply keyframe overrides
-        if (animationManager_) {
-            animationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
-        }
-
-        // Web Animations (element.animate): script animations sit above both
-        // CSS transitions and CSS animations in composite order.
+        // Animations, above the transitions: CSS @keyframes animations (in
+        // animation-name order), then script animations (element.animate) —
+        // one Web Animations stack, one composite order.
         if (webAnimationManager_) {
             webAnimationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }

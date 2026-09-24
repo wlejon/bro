@@ -6,12 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <string_view>
 #include <unordered_set>
 
 namespace bro::engine {
-
-using bromath::ccubicEase;
 
 // ---------------------------------------------------------------------------
 // WebAnimation timing model
@@ -31,6 +28,27 @@ std::optional<double> WebAnimation::currentTimeMs(double now) const {
     if (hasHoldTime) return holdTime;
     if (hasStartTime) return (now - startTime) * playbackRate;
     return std::nullopt;
+}
+
+WebAnimPhase WebAnimation::phaseAt(double now, double& iteration, double& localTime) const {
+    if (state == WebAnimState::Idle) return WebAnimPhase::Idle;
+    auto ct = currentTimeMs(now);
+    if (!ct) return WebAnimPhase::Idle;
+    localTime = *ct;
+    // Web Animations §4.6.
+    const double active = activeDuration();
+    const double end = endTimeMs();
+    const double beforeActive = std::max(std::min(delay, end), 0.0);
+    const double activeAfter = std::max(std::min(delay + active, end), 0.0);
+    const bool backwards = playbackRate < 0;
+    if (localTime < beforeActive || (backwards && localTime == beforeActive))
+        return WebAnimPhase::Before;
+    if (localTime > activeAfter || (!backwards && localTime == activeAfter))
+        return WebAnimPhase::After;
+    iteration = duration > 0 ? std::floor((localTime - delay) / duration) : 0.0;
+    if (std::isfinite(iterations) && iterations > 0)
+        iteration = std::min(iteration, std::ceil(iterations) - 1.0);
+    return WebAnimPhase::Active;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,8 +76,8 @@ WebAnimation& WebAnimationManager::create(dom::Element* elem, double now) {
     WebAnimation& a = records_[id];
     a.id = id;
     a.elem = elem;
-    a.nodeId = elem->nodeId();
-    a.doc = elem->document();
+    a.nodeId = elem ? elem->nodeId() : 0;
+    a.doc = elem ? elem->document() : nullptr;
     a.startTime = now;
     a.hasStartTime = true;
     a.state = WebAnimState::Running;
@@ -72,6 +90,11 @@ WebAnimation* WebAnimationManager::find(uint64_t id) {
     return it != records_.end() ? &it->second : nullptr;
 }
 
+const WebAnimation* WebAnimationManager::find(uint64_t id) const {
+    auto it = records_.find(id);
+    return it != records_.end() ? &it->second : nullptr;
+}
+
 void WebAnimationManager::eraseIndex(const WebAnimation& a) {
     auto range = byElem_.equal_range(a.elem);
     for (auto it = range.first; it != range.second; ++it) {
@@ -79,13 +102,29 @@ void WebAnimationManager::eraseIndex(const WebAnimation& a) {
     }
 }
 
+void WebAnimationManager::erase(uint64_t id) {
+    auto it = records_.find(id);
+    if (it == records_.end()) return;
+    eraseIndex(it->second);
+    records_.erase(it);
+}
+
+void WebAnimationManager::noteWrapped(uint64_t id) {
+    if (WebAnimation* a = find(id)) a->wrapped = true;
+}
+
 void WebAnimationManager::releaseFromWrapper(uint64_t id) {
     auto it = records_.find(id);
     if (it == records_.end()) return;
     WebAnimation& a = it->second;
+    a.wrapped = false;
+    // Its markup still owns a CSS animation: the record lives on, and a
+    // later getAnimations() mints a fresh wrapper for it.
+    if (a.cssOwned) return;
     // A finished forwards-filling animation keeps applying its final value
     // with no JS reference (per spec); everything else is reclaimable now.
-    bool holdsFill = a.state == WebAnimState::Finished && a.fillsForwards();
+    bool holdsFill = a.state == WebAnimState::Finished && a.fillsForwards() &&
+                     a.replaceState != WebAnimReplaceState::Removed;
     bool stillTicking = a.state == WebAnimState::Running ||
                         a.state == WebAnimState::Paused;
     if (holdsFill || stillTicking) {
@@ -99,8 +138,21 @@ void WebAnimationManager::releaseFromWrapper(uint64_t id) {
     records_.erase(it);
 }
 
+void WebAnimationManager::cancelFromMarkup(uint64_t id) {
+    WebAnimation* a = find(id);
+    if (!a) return;
+    const bool wasActive = a->state != WebAnimState::Idle;
+    cancelOp(*a);
+    a->cssOwned = false;
+    if (!a->wrapped) {
+        erase(id);
+        return;
+    }
+    if (wasActive) pendingCanceled_.push_back(id);
+}
+
 dom::Element* WebAnimationManager::resolveElement(const WebAnimation& a) const {
-    if (!dom::Document::isLiveDocument(a.doc)) return nullptr;
+    if (!a.elem || !dom::Document::isLiveDocument(a.doc)) return nullptr;
     dom::Node* n = a.doc->resolveNode(a.elem, a.nodeId);
     if (!n) return nullptr;
     // Nodes queued in pendingFrees_ still resolve (memory alive) but are on
@@ -198,11 +250,29 @@ void WebAnimationManager::seek(WebAnimation& a, double t, double now) {
     }
 }
 
+void WebAnimationManager::timingChanged(WebAnimation& a, double now) {
+    if (a.state != WebAnimState::Finished || a.playbackRate == 0) return;
+    auto ctOpt = a.currentTimeMs(now);
+    if (!ctOpt) return;
+    const double ct = *ctOpt;
+    const double end = a.endTimeMs();
+    const bool stillFinished = (a.playbackRate > 0 && ct >= end) ||
+                               (a.playbackRate < 0 && ct <= 0);
+    if (stillFinished) return;
+    // The end moved past where it stopped: it runs on from there.
+    a.startTime = now - ct / a.playbackRate;
+    a.hasStartTime = true;
+    a.hasHoldTime = false;
+    a.state = WebAnimState::Running;
+    a.finishNotified = false;
+}
+
 // ---------------------------------------------------------------------------
 // Properties
 // ---------------------------------------------------------------------------
 
 void WebAnimationManager::setStartTime(WebAnimation& a, double st, double now) {
+    (void)now;
     a.startTime = st;
     a.hasStartTime = true;
     a.hasHoldTime = false;
@@ -229,6 +299,19 @@ void WebAnimationManager::setCurrentTime(WebAnimation& a, double ct, double now)
         a.holdTime = ct;
         a.hasHoldTime = true;
         a.hasStartTime = false;
+    }
+    if (a.state == WebAnimState::Finished) {
+        // Seeking a finished animation back inside its interval runs it again.
+        const bool stillFinished = (a.playbackRate > 0 && ct >= a.endTimeMs()) ||
+                                   (a.playbackRate < 0 && ct <= 0);
+        if (stillFinished) {
+            a.holdTime = ct;
+            a.hasHoldTime = true;
+            a.hasStartTime = false;
+        } else {
+            a.state = WebAnimState::Running;
+            a.finishNotified = false;
+        }
     }
 }
 
@@ -276,6 +359,7 @@ bool WebAnimationManager::tick(double now) {
     for (auto it = records_.begin(); it != records_.end(); ) {
         WebAnimation& a = it->second;
 
+        if (!a.elem) { ++it; continue; }  // new Animation(): no target yet
         if (!dom::Document::isLiveDocument(a.doc)) {
             eraseIndex(a);
             it = records_.erase(it);
@@ -305,12 +389,20 @@ bool WebAnimationManager::tick(double now) {
                     // same settling markDirty the CSS managers issue.
                     if (elem) elem->markDirty();
                     anyCompleted = true;
+                } else if (a.cssOwned && elem && inDisplayNoneSubtree(elem)) {
+                    // A CSS animation under display:none does not drive frames:
+                    // an infinite spinner in a hidden overlay must not pin the
+                    // document on the re-layout path. Its clock runs on, so it
+                    // is where it should be when shown again.
                 } else {
                     anyActive = true;
                     if (elem) activeThisTick_.push_back(elem);
                 }
             }
         }
+
+        // Records their markup owns live as long as the markup names them.
+        if (a.cssOwned) { ++it; continue; }
 
         // GC orphaned records that no longer contribute anything.
         if (a.orphaned && a.state != WebAnimState::Running &&
@@ -330,164 +422,59 @@ bool WebAnimationManager::tick(double now) {
         ++it;
     }
 
+    removeReplaced();
     return anyActive || anyCompleted;
 }
 
-void WebAnimationManager::applyOne(const WebAnimation& a,
-                                   htmlayout::css::ComputedStyle& style,
-                                   double now) const {
-    if (a.keyframes.empty()) return;
-
-    auto ctOpt = a.currentTimeMs(now);
-    if (!ctOpt) return; // idle
-    double ct = *ctOpt;
-
-    double activeDur = a.activeDuration();
-    double localT = ct - a.delay;
-    bool before = localT < 0;
-    bool after = std::isfinite(activeDur) && localT >= activeDur;
-
-    // Fill phases: nothing applies before the delay without a backwards fill,
-    // nor after the active interval without a forwards fill.
-    if (before && !a.fillsBackwards()) return;
-    if (after && !a.fillsForwards()) return;
-
-    // Iteration progress + current iteration index.
-    double localProgress;
-    int curIter;
-    if (a.duration <= 0 || a.iterations <= 0) {
-        localProgress = before ? 0.0 : 1.0;
-        curIter = 0;
-        if (!before && a.iterations > 1.0 && std::isfinite(a.iterations))
-            curIter = std::max(0, static_cast<int>(std::ceil(a.iterations)) - 1);
-    } else if (before) {
-        localProgress = 0.0;
-        curIter = 0;
-    } else {
-        double overall = std::min(localT, std::isfinite(activeDur) ? activeDur : localT);
-        double ip = overall / a.duration;
-        curIter = static_cast<int>(ip);
-        localProgress = ip - curIter;
-        if (after) {
-            // Land exactly on the final iteration's end progress.
-            double frac = std::isfinite(a.iterations)
-                              ? a.iterations - std::floor(a.iterations)
-                              : 0.0;
-            curIter = std::isfinite(a.iterations)
-                          ? std::max(0, static_cast<int>(std::ceil(a.iterations)) - 1)
-                          : curIter;
-            localProgress = frac > 0 ? frac : 1.0;
-        }
-    }
-
-    // Direction.
-    bool rev = false;
-    switch (a.direction) {
-        case WebAnimDirection::Normal:           rev = false; break;
-        case WebAnimDirection::Reverse:          rev = true; break;
-        case WebAnimDirection::Alternate:        rev = (curIter % 2) != 0; break;
-        case WebAnimDirection::AlternateReverse: rev = (curIter % 2) == 0; break;
-    }
-    if (rev) localProgress = 1.0 - localProgress;
-
-    // Whole-iteration easing (options.easing), then per-keyframe easing below.
-    float t = static_cast<float>(std::clamp(localProgress, 0.0, 1.0));
-    t = ccubicEase(a.easing, t);
-    t = std::clamp(t, 0.0f, 1.0f);
-
-    // Per-property interpolation: each property collects its own stops from
-    // the keyframes that declare it, with implicit endpoints synthesized from
-    // the element's base (un-animated) value — the same rule the CSS
-    // animation path uses for one-sided @keyframes.
-    struct Stop {
-        float offset;
-        const std::string* value;
-        const WebAnimKeyframe* kf; // null for implicit endpoints
+// Web Animations §5.5 "Replacing animations": a finished, forwards-filling
+// script animation whose every property is also animated by a later such
+// animation on the same element contributes nothing any more. It is removed
+// (a `remove` event for script, replaceState "removed") unless persist() was
+// called — without this, every fire-and-forget `fill: 'forwards'` animation
+// stayed in the stack for the life of the element.
+void WebAnimationManager::removeReplaced() {
+    auto replaceable = [](const WebAnimation& a) {
+        return !a.cssOwned && a.state == WebAnimState::Finished && a.fillsForwards() &&
+               a.replaceState != WebAnimReplaceState::Removed && a.elem;
     };
+    std::unordered_set<const dom::Element*> elems;
+    for (const auto& [id, a] : records_)
+        if (replaceable(a) && a.replaceState == WebAnimReplaceState::Active) elems.insert(a.elem);
+    if (elems.empty()) return;
 
-    // Union of animated properties, in first-seen order.
-    std::vector<const std::string*> props;
-    {
-        std::unordered_set<std::string_view> seen;
-        for (const auto& kf : a.keyframes)
-            for (const auto& [p, v] : kf.props)
-                if (seen.insert(p).second) props.push_back(&p);
-    }
-
-    auto baseValueFor = [&](const std::string& prop,
-                            const std::string& ref) -> std::string {
-        auto sIt = style.find(prop);
-        if (sIt != style.end() && !sIt->second.empty() && sIt->second != "none")
-            return sIt->second;
-        std::string iv = cssInitialValueForProperty(prop, ref);
-        return iv.empty() ? ref : iv;
-    };
-
-    std::vector<Stop> stops;
-    for (const std::string* propPtr : props) {
-        const std::string& prop = *propPtr;
-        stops.clear();
-        for (const auto& kf : a.keyframes) {
-            for (const auto& [p, v] : kf.props) {
-                if (p == prop) { stops.push_back({kf.offset, &v, &kf}); break; }
-            }
+    std::vector<uint64_t> doomed;
+    for (const dom::Element* elem : elems) {
+        std::vector<const WebAnimation*> stack;
+        auto range = byElem_.equal_range(elem);
+        for (auto it = range.first; it != range.second; ++it) {
+            const WebAnimation* a = find(it->second);
+            if (a && replaceable(*a)) stack.push_back(a);
         }
-        if (stops.empty()) continue;
-
-        // Implicit endpoints from the base value.
-        std::string implicitStart, implicitEnd;
-        bool hasImplicitStart = stops.front().offset > 0.0001f;
-        bool hasImplicitEnd = stops.back().offset < 0.9999f;
-        if (hasImplicitStart) implicitStart = baseValueFor(prop, *stops.front().value);
-        if (hasImplicitEnd) implicitEnd = baseValueFor(prop, *stops.back().value);
-        if (hasImplicitStart) stops.insert(stops.begin(), {0.0f, &implicitStart, nullptr});
-        if (hasImplicitEnd) stops.push_back({1.0f, &implicitEnd, nullptr});
-
-        // Bracket t.
-        const Stop* b = &stops.front();
-        const Stop* e = &stops.back();
-        if (t <= stops.front().offset) {
-            b = e = &stops.front();
-        } else if (t >= stops.back().offset) {
-            b = e = &stops.back();
-        } else {
-            for (size_t i = 0; i + 1 < stops.size(); ++i) {
-                if (t >= stops[i].offset && t <= stops[i + 1].offset) {
-                    b = &stops[i];
-                    e = &stops[i + 1];
-                    break;
-                }
+        if (stack.size() < 2) continue;
+        std::sort(stack.begin(), stack.end(),
+                  [](const WebAnimation* x, const WebAnimation* y) { return compositeOrderLess(*x, *y); });
+        // Walk from the top of the stack down, collecting what is covered.
+        std::unordered_set<std::string> covered;
+        for (size_t i = stack.size(); i-- > 0;) {
+            const WebAnimation& a = *stack[i];
+            bool allCovered = !covered.empty();
+            for (const auto& kf : a.keyframes)
+                for (const auto& [p, v] : kf.props)
+                    if (!covered.count(p)) allCovered = false;
+            if (allCovered && a.replaceState == WebAnimReplaceState::Active) {
+                doomed.push_back(a.id);
+                continue;
             }
+            for (const auto& kf : a.keyframes)
+                for (const auto& [p, v] : kf.props) covered.insert(p);
         }
-
-        float range = e->offset - b->offset;
-        float segT = range > 0 ? (t - b->offset) / range : 1.0f;
-        if (b->kf && b->kf->hasEasing)
-            segT = std::clamp(ccubicEase(b->kf->easing, segT), 0.0f, 1.0f);
-
-        style[prop] = TransitionManager::interpolate(*b->value, *e->value, segT, prop);
     }
-}
-
-void WebAnimationManager::applyOverrides(dom::Element* elem,
-                                         htmlayout::css::ComputedStyle& style,
-                                         double now) const {
-    auto range = byElem_.equal_range(elem);
-    if (range.first == range.second) return;
-
-    // Creation order: later-created animations apply last and win per property.
-    std::vector<uint64_t> ids;
-    for (auto it = range.first; it != range.second; ++it) ids.push_back(it->second);
-    std::sort(ids.begin(), ids.end());
-
-    for (uint64_t id : ids) {
-        auto rIt = records_.find(id);
-        if (rIt == records_.end()) continue;
-        const WebAnimation& a = rIt->second;
-        // Generation check: the map key is a raw pointer; a recycled address
-        // must not inherit the old element's animations.
-        if (a.elem != elem || a.nodeId != elem->nodeId()) continue;
-        applyOne(a, style, now);
+    for (uint64_t id : doomed) {
+        WebAnimation* a = find(id);
+        if (!a) continue;
+        a->replaceState = WebAnimReplaceState::Removed;
+        if (a->wrapped) pendingRemoved_.push_back(id);
+        else erase(id);
     }
 }
 
@@ -503,26 +490,9 @@ bool WebAnimationManager::hasActive(dom::Element* elem) const {
     return false;
 }
 
-bool WebAnimationManager::activeAnimatesOnly(
-    dom::Element* elem, const std::set<std::string>& allowed) const {
-    auto range = byElem_.equal_range(elem);
-    bool any = false;
-    for (auto it = range.first; it != range.second; ++it) {
-        auto rIt = records_.find(it->second);
-        if (rIt == records_.end()) continue;
-        const WebAnimation& a = rIt->second;
-        if (a.elem != elem || a.nodeId != elem->nodeId()) continue;
-        if (a.state != WebAnimState::Running) continue;
-        any = true;
-        for (const auto& kf : a.keyframes)
-            for (const auto& [p, v] : kf.props)
-                if (allowed.find(p) == allowed.end()) return false;
-    }
-    return any;
-}
-
 bool WebAnimationManager::isRelevant(const WebAnimation& a, double now) const {
     (void)now;
+    if (a.replaceState == WebAnimReplaceState::Removed) return false;
     if (a.state == WebAnimState::Running || a.state == WebAnimState::Paused)
         return true;
     return a.state == WebAnimState::Finished && a.fillsForwards();
@@ -531,40 +501,26 @@ bool WebAnimationManager::isRelevant(const WebAnimation& a, double now) const {
 std::vector<uint64_t> WebAnimationManager::animationsFor(const dom::Element* elem,
                                                          double now) const {
     std::vector<uint64_t> out;
-    auto range = byElem_.equal_range(elem);
-    for (auto it = range.first; it != range.second; ++it) {
-        auto rIt = records_.find(it->second);
-        if (rIt == records_.end()) continue;
-        const WebAnimation& a = rIt->second;
-        if (a.elem != elem) continue;
-        if (isRelevant(a, now)) out.push_back(a.id);
-    }
-    std::sort(out.begin(), out.end());
+    for (const WebAnimation* a : stackFor(elem, false))
+        if (isRelevant(*a, now)) out.push_back(a->id);
     return out;
 }
 
 std::vector<uint64_t> WebAnimationManager::allAnimations(double now) const {
-    std::vector<uint64_t> out;
+    // CSS animations first, then script animations, each in creation order —
+    // the document-wide composite order without a tree walk.
+    std::vector<const WebAnimation*> list;
     for (const auto& [id, a] : records_) {
-        if (isRelevant(a, now)) out.push_back(id);
+        if (a.elem && isRelevant(a, now)) list.push_back(&a);
     }
-    std::sort(out.begin(), out.end());
+    std::sort(list.begin(), list.end(), [](const WebAnimation* x, const WebAnimation* y) {
+        if (x->cssOwned != y->cssOwned) return x->cssOwned;
+        return x->id < y->id;
+    });
+    std::vector<uint64_t> out;
+    out.reserve(list.size());
+    for (const WebAnimation* a : list) out.push_back(a->id);
     return out;
-}
-
-bool isTransformOpacityOnly(dom::Element* elem,
-                            const AnimationManager& anim,
-                            const TransitionManager& trans,
-                            const WebAnimationManager& web) {
-    const std::set<std::string> allowed{"transform", "opacity"};
-    bool A = anim.hasActive(elem);
-    bool T = trans.hasActive(elem);
-    bool W = web.hasActive(elem);
-    if (!A && !T && !W) return false;
-    if (A && !anim.activeAnimatesOnly(elem, allowed)) return false;
-    if (T && !trans.activeAnimatesOnly(elem, allowed)) return false;
-    if (W && !web.activeAnimatesOnly(elem, allowed)) return false;
-    return true;
 }
 
 } // namespace bro::engine

@@ -1,4 +1,5 @@
 #include "bronze_host/host_web_animations.h"
+#include "bronze_host/host_web_animations_internal.h"
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
@@ -6,7 +7,7 @@
 #include "bronze_host/host_globals_internal.h"
 #include "dom/document.h"
 #include "dom/element.h"
-#include "engine/css_transitions.h"
+#include "engine/css_easing.h"
 #include "engine/engine.h"
 #include "engine/web_animations.h"
 #include "util/log.h"
@@ -35,24 +36,9 @@ static bool isJsArray(Value vIn) {
 }
 
 HostClass g_animationClass;
-
-struct AnimationState {
-    uint64_t id = 0;
-    std::string name;
-    ev::Persistent self;
-    ev::Persistent onfinish;
-    ev::Persistent oncancel;
-    ev::Persistent finishedPromise;
-    // `ready`: minted on first read and already resolved — this model has no
-    // pending play/pause tasks (`pending` is always false), so an animation is
-    // ready the moment it exists.
-    ev::Persistent readyPromise;
-    // `effect`: the KeyframeEffect, minted on first read and kept so
-    // `anim.effect === anim.effect`.
-    ev::Persistent effect;
-    bool promiseSettled = false;
-    bool finishDelivered = false;
-};
+// CSSAnimation: the object a CSS @keyframes animation is seen through — an
+// Animation with an animationName (CSS Animations 2).
+HostClass g_cssAnimationClass;
 
 std::unordered_map<uint64_t, AnimationState*>& liveStates() {
     static auto* m = new std::unordered_map<uint64_t, AnimationState*>();
@@ -122,6 +108,18 @@ void settleFinish(AnimationState* st, Value animObjIn) {
         }
     }
     fireHandler(st->onfinish.get(), animP.get(), "finish", ct);
+    strongPins().erase(st->id);
+}
+
+// cancel(): reject `finished` (and replace it with a fresh pending promise on
+// the next read), fire oncancel, release the pin.
+void settleCancel(AnimationState* st, Value animObjIn) {
+    ev::Persistent selfP(animObjIn);
+    rejectFinishedPromise(st);
+    st->finishedPromise.set(ev::undefined());
+    st->promiseSettled = false;
+    st->finishDelivered = false;
+    fireHandler(st->oncancel.get(), selfP.get(), "cancel", ev::null());
     strongPins().erase(st->id);
 }
 
@@ -199,7 +197,20 @@ std::string keyframeValueString(Value v) {
     return (ev::isString(v) || ev::isNumber(v)) ? ev::toUtf8(v) : std::string();
 }
 
-bool parseKeyframeArray(Value arrIn, std::vector<engine::WebAnimKeyframe>& frames) {
+// A keyframe's `easing`: a TypeError on anything that is not an
+// <easing-function>, as the spec has it (it used to fall back to `ease`).
+bool parseKeyframeEasing(const std::string& es, engine::WebAnimKeyframe& kf, std::string& error) {
+    if (es.empty()) return true;
+    if (!engine::tryParseEasing(es, kf.easing)) {
+        error = "invalid easing '" + es + "'";
+        return false;
+    }
+    kf.hasEasing = true;
+    return true;
+}
+
+bool parseKeyframeArray(Value arrIn, std::vector<engine::WebAnimKeyframe>& frames,
+                        std::string& error) {
     ev::Persistent arr(arrIn);
     Value lenVal = ev::getProperty(arr.get(), "length");
     uint32_t len = 0;
@@ -217,12 +228,8 @@ bool parseKeyframeArray(Value arrIn, std::vector<engine::WebAnimKeyframe>& frame
             if (pname == "offset") {
                 if (ev::isNumber(pv)) off = ev::toDouble(pv);
             } else if (pname == "easing") {
-                std::string es = ev::toUtf8(pv);
-                if (!es.empty()) {
-                    kf.easing = engine::parseTimingFunction(es);
-                    kf.hasEasing = true;
-                }
-            } else {
+                if (!parseKeyframeEasing(ev::toUtf8(pv), kf, error)) return false;
+            } else if (pname != "composite") {
                 kf.props.emplace_back(keyToCssProp(pname), keyframeValueString(pv));
             }
         }
@@ -232,7 +239,8 @@ bool parseKeyframeArray(Value arrIn, std::vector<engine::WebAnimKeyframe>& frame
     return computeOffsets(offsets, frames);
 }
 
-bool parseKeyframeObject(Value obj, std::vector<engine::WebAnimKeyframe>& frames) {
+bool parseKeyframeObject(Value obj, std::vector<engine::WebAnimKeyframe>& frames,
+                         std::string& error) {
     struct PropList {
         std::string prop;
         std::vector<std::string> values;
@@ -293,73 +301,40 @@ bool parseKeyframeObject(Value obj, std::vector<engine::WebAnimKeyframe>& frames
                 }
             }
         }
-        if (!easings.empty()) {
-            const std::string& es = easings[f % easings.size()];
-            if (!es.empty()) {
-                kf.easing = engine::parseTimingFunction(es);
-                kf.hasEasing = true;
-            }
-        }
+        if (!easings.empty() && !parseKeyframeEasing(easings[f % easings.size()], kf, error))
+            return false;
         frames.push_back(std::move(kf));
     }
     return true;
 }
 
-bool parseOptions(Value optIn, engine::WebAnimation& a, std::string& name) {
-    if (ev::isUndefined(optIn) || ev::isNull(optIn)) return true;
-    if (ev::isNumber(optIn)) {
-        double d = ev::toDouble(optIn);
-        if (!(d >= 0)) return false;
-        a.duration = d;
-        return true;
+// The native side of an Animation method call: its state, the engine, and
+// the record (any may be null).
+struct Call {
+    AnimationState* st = nullptr;
+    engine::Engine* eng = nullptr;
+    engine::WebAnimation* rec = nullptr;
+};
+
+Call callOf(Value self) {
+    Call c;
+    c.st = static_cast<AnimationState*>(ev::handleData(self));
+    c.eng = hostEngine();
+    if (c.st && c.eng) c.rec = c.eng->webAnimationManager().find(c.st->id);
+    return c;
+}
+
+void markTargetDirty(const Call& c) {
+    if (!c.rec || !c.eng) return;
+    if (auto* el = c.eng->webAnimationManager().resolveElement(*c.rec)) el->markDirty();
+}
+
+const char* replaceStateName(engine::WebAnimReplaceState s) {
+    switch (s) {
+        case engine::WebAnimReplaceState::Removed: return "removed";
+        case engine::WebAnimReplaceState::Persisted: return "persisted";
+        default: return "active";
     }
-    if (!ev::isObject(optIn)) return false;
-    const Rooted opt(optIn);  // each property read allocates
-
-    Value durVal = ev::getProperty(opt, "duration");
-    if (ev::isNumber(durVal)) {
-        double d = ev::toDouble(durVal);
-        if (!(d >= 0)) return false;
-        a.duration = d;
-    }
-    Value delVal = ev::getProperty(opt, "delay");
-    if (ev::isNumber(delVal)) a.delay = ev::toDouble(delVal);
-
-    Value endDelVal = ev::getProperty(opt, "endDelay");
-    if (ev::isNumber(endDelVal)) a.endDelay = ev::toDouble(endDelVal);
-
-    Value iterVal = ev::getProperty(opt, "iterations");
-    if (ev::isNumber(iterVal)) {
-        double d = ev::toDouble(iterVal);
-        if (!std::isnan(d) && d >= 0) a.iterations = d;
-    }
-
-    Value dirVal = ev::getProperty(opt, "direction");
-    if (ev::isString(dirVal)) {
-        std::string dir = ev::toUtf8(dirVal);
-        if (dir == "reverse") a.direction = engine::WebAnimDirection::Reverse;
-        else if (dir == "alternate") a.direction = engine::WebAnimDirection::Alternate;
-        else if (dir == "alternate-reverse") a.direction = engine::WebAnimDirection::AlternateReverse;
-    }
-
-    Value fillVal = ev::getProperty(opt, "fill");
-    if (ev::isString(fillVal)) {
-        std::string fill = ev::toUtf8(fillVal);
-        if (fill == "forwards") a.fill = engine::WebAnimFill::Forwards;
-        else if (fill == "backwards") a.fill = engine::WebAnimFill::Backwards;
-        else if (fill == "both") a.fill = engine::WebAnimFill::Both;
-    }
-
-    Value easeVal = ev::getProperty(opt, "easing");
-    if (ev::isString(easeVal)) {
-        std::string easing = ev::toUtf8(easeVal);
-        if (!easing.empty()) a.easing = engine::parseTimingFunction(easing);
-    }
-
-    Value idVal = ev::getProperty(opt, "id");
-    if (ev::isString(idVal)) name = ev::toUtf8(idVal);
-
-    return true;
 }
 
 } // namespace
@@ -369,16 +344,19 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
     if (it != liveStates().end()) {
         return it->second->self.get();
     }
+    engine::Engine* eng = hostEngine();
+    engine::WebAnimation* rec = eng ? eng->webAnimationManager().find(id) : nullptr;
     auto* st = new AnimationState();
     st->id = id;
     st->name = name;
-    ObjectBuilder b(g_animationClass.make(st, animationFinalizer));
+    HostClass& cls = rec && rec->isCssAnimation ? g_cssAnimationClass : g_animationClass;
+    ObjectBuilder b(cls.make(st, animationFinalizer));
     Value obj = b.get();
     st->self = ev::Persistent(obj);
     liveStates()[id] = st;
-    engine::Engine* eng = hostEngine();
     if (eng) {
-        engine::WebAnimation* rec = eng->webAnimationManager().find(id);
+        eng->webAnimationManager().noteWrapped(id);
+        rec = eng->webAnimationManager().find(id);
         if (rec && (rec->state == engine::WebAnimState::Running ||
                     rec->state == engine::WebAnimState::Paused)) {
             strongPins()[id] = ev::Persistent(obj);
@@ -389,255 +367,10 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// document.timeline — the DocumentTimeline every element.animate() runs on.
-// Its currentTime is the engine's scaled clock (bro.time), the same clock a
-// record's startTime is expressed in, so
-//     anim.currentTime == (document.timeline.currentTime - anim.startTime) * rate
-// holds for a running animation.
-// ---------------------------------------------------------------------------
-HostClass g_animationTimelineClass;
-HostClass g_documentTimelineClass;
-ev::Persistent* g_documentTimeline = nullptr;
-
-Value documentTimelineValue() {
-    if (!g_documentTimeline) {
-        g_documentTimeline = new ev::Persistent(g_documentTimelineClass.make(nullptr, [](void*) {}));
-    }
-    return g_documentTimeline->get();
-}
-
-// ---------------------------------------------------------------------------
-// KeyframeEffect — what `anim.effect` answers: the target, the timing as
-// given (getTiming), the timing as it stands now (getComputedTiming), and the
-// keyframes (getKeyframes). A view over the engine record, not a copy, so it
-// always reads the animation's current state.
-// ---------------------------------------------------------------------------
-constexpr uint32_t kEffectTag = 0x4B464546u;  // 'KFEF'
-struct EffectState {
-    uint32_t tag = kEffectTag;
-    uint64_t id = 0;
-};
-HostClass g_animationEffectClass;
-HostClass g_keyframeEffectClass;
-
-engine::WebAnimation* effectRecord(Value self) {
-    if (!ev::isObject(self)) return nullptr;
-    auto* es = static_cast<EffectState*>(ev::handleData(self));
-    engine::Engine* eng = hostEngine();
-    if (!es || es->tag != kEffectTag || !eng) return nullptr;
-    return eng->webAnimationManager().find(es->id);
-}
-
-const char* fillName(engine::WebAnimFill f) {
-    switch (f) {
-        case engine::WebAnimFill::Forwards: return "forwards";
-        case engine::WebAnimFill::Backwards: return "backwards";
-        case engine::WebAnimFill::Both: return "both";
-        default: return "none";
-    }
-}
-
-const char* directionName(engine::WebAnimDirection d) {
-    switch (d) {
-        case engine::WebAnimDirection::Reverse: return "reverse";
-        case engine::WebAnimDirection::Alternate: return "alternate";
-        case engine::WebAnimDirection::AlternateReverse: return "alternate-reverse";
-        default: return "normal";
-    }
-}
-
-std::string easingName(const bromath::CubicEase& e) {
-    auto is = [&e](float a, float b, float c, float d) {
-        return e.p1x == a && e.p1y == b && e.p2x == c && e.p2y == d;
-    };
-    if (is(0.0f, 0.0f, 1.0f, 1.0f)) return "linear";
-    if (is(0.25f, 0.1f, 0.25f, 1.0f)) return "ease";
-    if (is(0.42f, 0.0f, 1.0f, 1.0f)) return "ease-in";
-    if (is(0.0f, 0.0f, 0.58f, 1.0f)) return "ease-out";
-    if (is(0.42f, 0.0f, 0.58f, 1.0f)) return "ease-in-out";
-    char buf[96];
-    std::snprintf(buf, sizeof(buf), "cubic-bezier(%g, %g, %g, %g)", e.p1x, e.p1y, e.p2x, e.p2y);
-    return buf;
-}
-
-std::string kebabToCamel(const std::string& s) {
-    std::string out;
-    bool up = false;
-    for (char c : s) {
-        if (c == '-') { up = true; continue; }
-        out.push_back(up ? static_cast<char>(std::toupper(static_cast<unsigned char>(c))) : c);
-        up = false;
-    }
-    return out;
-}
-
-// EffectTiming members, shared by getTiming and getComputedTiming.
-void setTimingMembers(ObjectBuilder& o, const engine::WebAnimation& rec) {
-    o.set("delay", ev::fromDouble(rec.delay));
-    o.set("endDelay", ev::fromDouble(rec.endDelay));
-    o.set("fill", ev::fromUtf8(fillName(rec.fill)));
-    o.set("iterationStart", ev::fromDouble(0));
-    o.set("iterations", ev::fromDouble(rec.iterations));
-    o.set("duration", ev::fromDouble(rec.duration));
-    o.set("direction", ev::fromUtf8(directionName(rec.direction)));
-    o.set("easing", ev::fromUtf8(easingName(rec.easing)));
-}
-
-// Web Animations §4.8-4.10: phase, overall / simple iteration progress, the
-// current iteration, direction, then the effect easing. False when the
-// effect is not in effect (outside its active interval with no fill there).
-bool computedProgress(const engine::WebAnimation& rec, double localTime,
-                      double& progress, double& iteration) {
-    const double active = rec.activeDuration();
-    const double beforeEnd = std::max(std::min(rec.delay, rec.endTimeMs()), 0.0);
-    const double activeEnd = std::max(std::min(rec.delay + active, rec.endTimeMs()), 0.0);
-    double activeTime;
-    bool after = false;
-    if (localTime < beforeEnd) {
-        if (!rec.fillsBackwards()) return false;
-        activeTime = std::max(localTime - rec.delay, 0.0);
-    } else if (localTime >= activeEnd && std::isfinite(active)) {
-        if (!rec.fillsForwards()) return false;
-        after = true;
-        activeTime = std::max(std::min(localTime - rec.delay, active), 0.0);
-    } else {
-        activeTime = localTime - rec.delay;
-    }
-
-    double overall = rec.duration == 0 ? (after ? rec.iterations : 0.0)
-                                       : activeTime / rec.duration;
-    double simple = std::isfinite(overall) ? std::fmod(overall, 1.0) : std::fmod(rec.iterations, 1.0);
-    if (simple == 0 && (after || localTime >= beforeEnd) && activeTime == active &&
-        rec.iterations != 0) {
-        simple = 1.0;
-    }
-    if (after && !std::isfinite(rec.iterations)) {
-        iteration = INFINITY;
-    } else if (simple == 1.0) {
-        iteration = std::floor(overall) - 1.0;
-        if (iteration < 0) iteration = 0;
-    } else {
-        iteration = std::floor(overall);
-    }
-
-    bool reversed = false;
-    switch (rec.direction) {
-        case engine::WebAnimDirection::Reverse: reversed = true; break;
-        case engine::WebAnimDirection::Alternate:
-            reversed = std::isfinite(iteration) && std::fmod(iteration, 2.0) == 1.0;
-            break;
-        case engine::WebAnimDirection::AlternateReverse:
-            reversed = !(std::isfinite(iteration) && std::fmod(iteration, 2.0) == 1.0);
-            break;
-        default: break;
-    }
-    const double directed = reversed ? 1.0 - simple : simple;
-    progress = bromath::ccubicEase(rec.easing, static_cast<float>(directed));
-    if (directed <= 0.0) progress = 0.0;
-    if (directed >= 1.0) progress = 1.0;
-    return true;
-}
-
-void decorateTimelineProto(ObjectBuilder& b) {
-    b.accessor("currentTime",
-               [](Value, std::span<const Value>) -> Value {
-                   engine::Engine* eng = hostEngine();
-                   return eng ? ev::fromDouble(eng->timeNowMs()) : ev::null();
-               },
-               nullptr);
-}
-
-void decorateKeyframeEffectProto(ObjectBuilder& b) {
-    b.accessor("target",
-               [](Value self, std::span<const Value>) -> Value {
-                   engine::WebAnimation* rec = effectRecord(self);
-                   engine::Engine* eng = hostEngine();
-                   if (!rec || !eng) return ev::null();
-                   dom::Element* el = eng->webAnimationManager().resolveElement(*rec);
-                   return el ? hostElementValue(el) : ev::null();
-               },
-               nullptr);
-    b.accessor("pseudoElement", [](Value, std::span<const Value>) { return ev::null(); },
-               nullptr);
-    b.accessor("composite", [](Value, std::span<const Value>) { return ev::fromUtf8("replace"); },
-               nullptr);
-
-    b.def("getTiming", 0, [](Value self, std::span<const Value>) -> Value {
-        engine::WebAnimation* rec = effectRecord(self);
-        ObjectBuilder o;
-        if (rec) setTimingMembers(o, *rec);
-        return o.get();
-    });
-
-    b.def("getComputedTiming", 0, [](Value self, std::span<const Value>) -> Value {
-        engine::WebAnimation* rec = effectRecord(self);
-        engine::Engine* eng = hostEngine();
-        ObjectBuilder o;
-        if (!rec || !eng) return o.get();
-        setTimingMembers(o, *rec);
-        o.set("activeDuration", ev::fromDouble(rec->activeDuration()));
-        o.set("endTime", ev::fromDouble(rec->endTimeMs()));
-        std::optional<double> local = rec->state == engine::WebAnimState::Idle
-                                          ? std::nullopt
-                                          : rec->currentTimeMs(eng->timeNowMs());
-        double progress = 0, iteration = 0;
-        if (local && computedProgress(*rec, *local, progress, iteration)) {
-            o.set("localTime", ev::fromDouble(*local));
-            o.set("progress", ev::fromDouble(progress));
-            o.set("currentIteration", ev::fromDouble(iteration));
-        } else {
-            o.set("localTime", local ? ev::fromDouble(*local) : ev::null());
-            o.set("progress", ev::null());
-            o.set("currentIteration", ev::null());
-        }
-        return o.get();
-    });
-
-    b.def("getKeyframes", 0, [](Value self, std::span<const Value>) -> Value {
-        engine::WebAnimation* rec = effectRecord(self);
-        if (!rec) return makeEmptyArray();
-        // A copy: building the objects allocates, and nothing may hold a
-        // pointer into the record across that.
-        const std::vector<engine::WebAnimKeyframe> frames = rec->keyframes;
-        return hostArrayOf(frames.size(), [&frames](size_t i) {
-            const engine::WebAnimKeyframe& kf = frames[i];
-            ObjectBuilder o;
-            o.set("offset", ev::fromDouble(kf.offset));
-            o.set("computedOffset", ev::fromDouble(kf.offset));
-            o.set("easing", ev::fromUtf8(kf.hasEasing ? easingName(kf.easing) : "linear"));
-            o.set("composite", ev::fromUtf8("auto"));
-            for (const auto& [prop, value] : kf.props) {
-                o.set(kebabToCamel(prop).c_str(), ev::fromUtf8(value));
-            }
-            return o.get();
-        });
-    });
-}
-
-void installTimelineAndEffectClasses() {
-    g_animationTimelineClass.install("AnimationTimeline", 0, nullptr, decorateTimelineProto);
-    g_documentTimelineClass.install("DocumentTimeline", 0, nullptr, nullptr);
-    g_documentTimelineClass.inherit(g_animationTimelineClass);
-    g_animationEffectClass.install("AnimationEffect", 0, nullptr, nullptr);
-    g_keyframeEffectClass.install("KeyframeEffect", 0, nullptr, decorateKeyframeEffectProto);
-    g_keyframeEffectClass.inherit(g_animationEffectClass);
-}
-
-Value effectValueFor(AnimationState* st) {
-    if (ev::isUndefined(st->effect.get())) {
-        auto* es = new EffectState();
-        es->id = st->id;
-        st->effect.set(g_keyframeEffectClass.make(es, [](void* p) {
-            delete static_cast<EffectState*>(p);
-        }));
-    }
-    return st->effect.get();
-}
-
 static ev::Persistent s_skeletalAnimationCtor;
 
 Value animationConstructor(Value self, std::span<const Value> a) {
+    (void)self;
     if (ev::isFunction(s_skeletalAnimationCtor.get()) && !a.empty() && ev::isObject(a[0])) {
         Value chan = ev::getProperty(a[0], "channels");
         Value dur = ev::getProperty(a[0], "duration");
@@ -655,6 +388,248 @@ Value animationConstructor(Value self, std::span<const Value> a) {
     return wrapAnimation(id);
 }
 
+void decorateAnimationProto(ObjectBuilder& b) {
+    b.def("play", 0, [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::undefined();
+        c.eng->webAnimationManager().play(*c.rec, c.eng->timeNowMs());
+        c.rec->cssPlayOverride = true;  // animation-play-state no longer rules it
+        if (c.st->promiseSettled) {
+            c.st->finishedPromise.set(ev::undefined());
+            c.st->promiseSettled = false;
+        }
+        c.st->finishDelivered = false;
+        strongPins()[c.st->id] = ev::Persistent(self_);
+        markTargetDirty(c);
+        return ev::undefined();
+    });
+
+    b.def("pause", 0, [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::undefined();
+        c.eng->webAnimationManager().pause(*c.rec, c.eng->timeNowMs());
+        c.rec->cssPlayOverride = true;
+        markTargetDirty(c);
+        return ev::undefined();
+    });
+
+    b.def("finish", 0, [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::undefined();
+        if (c.rec->playbackRate == 0 ||
+            (c.rec->playbackRate > 0 && !std::isfinite(c.rec->endTimeMs()))) {
+            return ev::throwValue(hostMakeDomError("InvalidStateError", "Animation cannot be finished if playbackRate is 0 or end time is infinite"));
+        }
+        c.eng->webAnimationManager().finishOp(*c.rec);
+        markTargetDirty(c);
+        settleFinish(c.st, self_);
+        return ev::undefined();
+    });
+
+    b.def("cancel", 0, [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec || c.rec->state == engine::WebAnimState::Idle) return ev::undefined();
+        c.eng->webAnimationManager().cancelOp(*c.rec);
+        markTargetDirty(c);
+        settleCancel(c.st, self_);
+        return ev::undefined();
+    });
+
+    b.def("reverse", 0, [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::undefined();
+        c.eng->webAnimationManager().reverse(*c.rec, c.eng->timeNowMs());
+        c.rec->cssPlayOverride = true;
+        markTargetDirty(c);
+        return ev::undefined();
+    });
+
+    // updatePlaybackRate(rate): the rate change without a jump. With no
+    // pending tasks in this model it takes effect at once, preserving the
+    // current time, as `playbackRate = rate` does on a running animation.
+    b.def("updatePlaybackRate", 1, [](Value self_, std::span<const Value> a) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::undefined();
+        double r = a.empty() ? 1.0 : ev::toDouble(a[0]);
+        if (!std::isfinite(r)) return ev::throwTypeError("updatePlaybackRate: rate must be finite");
+        c.eng->webAnimationManager().setRate(*c.rec, r, c.eng->timeNowMs());
+        markTargetDirty(c);
+        return ev::undefined();
+    });
+
+    // commitStyles(): write the effect's current values into the target's
+    // inline style, so they outlast the animation (the idiom for keeping the
+    // end state of a fill:'none' animation, or before cancel()).
+    b.def("commitStyles", 0, [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::undefined();
+        engine::WebAnimationManager& mgr = c.eng->webAnimationManager();
+        dom::Element* el = mgr.resolveElement(*c.rec);
+        if (!el) {
+            return ev::throwValue(hostMakeDomError(
+                "InvalidStateError", "commitStyles: the animation has no target element"));
+        }
+        const uint64_t id = c.st->id;
+        c.eng->flushLayoutForRead(el->document());
+        engine::WebAnimation* rec = mgr.find(id);
+        el = rec ? mgr.resolveElement(*rec) : nullptr;
+        if (!rec || !el) return ev::undefined();
+        std::vector<std::pair<std::string, std::string>> values;
+        if (mgr.effectValues(*rec, el->computedStyle(), c.eng->timeNowMs(), values)) {
+            for (const auto& [prop, value] : values) el->style().setProperty(prop, value);
+        }
+        return ev::undefined();
+    });
+
+    // persist(): exempt a finished fill-forwards animation from automatic
+    // removal (or bring back one that was removed).
+    b.def("persist", 0, [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::undefined();
+        c.rec->replaceState = engine::WebAnimReplaceState::Persisted;
+        markTargetDirty(c);
+        return ev::undefined();
+    });
+
+    b.accessor("replaceState", [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        return ev::fromUtf8(c.rec ? replaceStateName(c.rec->replaceState) : "active");
+    }, nullptr);
+
+    b.accessor("playState", [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        if (!c.rec) return ev::fromUtf8("idle");
+        return ev::fromUtf8(c.eng->webAnimationManager().playState(*c.rec, c.eng->timeNowMs()));
+    }, nullptr);
+
+    b.accessor("playbackRate",
+        [](Value self_, std::span<const Value>) {
+            Call c = callOf(self_);
+            return ev::fromDouble(c.rec ? c.rec->playbackRate : 1.0);
+        },
+        [](Value self_, std::span<const Value> a) {
+            Call c = callOf(self_);
+            if (c.rec) {
+                double r = a.empty() ? 1.0 : ev::toDouble(a[0]);
+                c.eng->webAnimationManager().setRate(*c.rec, r, c.eng->timeNowMs());
+                markTargetDirty(c);
+            }
+            return ev::undefined();
+        });
+
+    b.accessor("currentTime",
+        [](Value self_, std::span<const Value>) {
+            Call c = callOf(self_);
+            if (!c.rec) return ev::null();
+            auto ct = c.rec->currentTimeMs(c.eng->timeNowMs());
+            return ct ? ev::fromDouble(*ct) : ev::null();
+        },
+        [](Value self_, std::span<const Value> a) {
+            Call c = callOf(self_);
+            if (c.rec && !a.empty()) {
+                double ct = ev::toDouble(a[0]);
+                c.eng->webAnimationManager().setCurrentTime(*c.rec, ct, c.eng->timeNowMs());
+                markTargetDirty(c);
+            }
+            return ev::undefined();
+        });
+
+    // startTime: the timeline time at which currentTime was 0 — null while
+    // a hold time (pause, finish, idle) resolves currentTime instead.
+    b.accessor("startTime",
+        [](Value self_, std::span<const Value>) {
+            Call c = callOf(self_);
+            if (!c.rec || c.rec->hasHoldTime || !c.rec->hasStartTime ||
+                c.rec->state == engine::WebAnimState::Idle) {
+                return ev::null();
+            }
+            return ev::fromDouble(c.rec->startTime);
+        },
+        [](Value self_, std::span<const Value> a) {
+            Call c = callOf(self_);
+            if (!c.rec || a.empty() || !ev::isNumber(a[0])) return ev::undefined();
+            c.eng->webAnimationManager().setStartTime(*c.rec, ev::toDouble(a[0]), c.eng->timeNowMs());
+            markTargetDirty(c);
+            return ev::undefined();
+        });
+
+    b.accessor("timeline", [](Value, std::span<const Value>) {
+        return documentTimelineValue();
+    }, nullptr);
+
+    b.accessor("effect", [](Value self_, std::span<const Value>) {
+        auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+        return st ? effectValueFor(st) : ev::null();
+    }, nullptr);
+
+    b.accessor("ready", [](Value self_, std::span<const Value>) {
+        auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+        if (!st) return ev::null();
+        if (ev::isUndefined(st->readyPromise.get())) {
+            ev::Persistent self(self_);
+            st->readyPromise.set(ev::createPromise());
+            ev::resolvePromise(st->readyPromise.get(), self.get());
+        }
+        return st->readyPromise.get();
+    }, nullptr);
+
+    b.accessor("pending", [](Value, std::span<const Value>) {
+        return ev::fromBool(false);
+    }, nullptr);
+
+    b.accessor("id",
+        [](Value self_, std::span<const Value>) {
+            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+            return st ? ev::fromUtf8(st->name) : ev::fromUtf8("");
+        },
+        [](Value self_, std::span<const Value> a) {
+            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+            if (st && !a.empty()) st->name = ev::toUtf8(a[0]);
+            return ev::undefined();
+        });
+
+    b.accessor("finished", [](Value self_, std::span<const Value>) {
+        auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+        if (!st) return ev::null();
+        if (ev::isUndefined(st->finishedPromise.get())) {
+            st->finishedPromise.set(ev::createPromise());
+            st->promiseSettled = false;
+            Call c = callOf(self_);
+            if (c.rec) {
+                std::string ps = c.eng->webAnimationManager().playState(*c.rec, c.eng->timeNowMs());
+                if (ps == "finished") resolveFinishedPromise(st, self_);
+            }
+        }
+        return st->finishedPromise.get();
+    }, nullptr);
+
+    auto handlerAccessor = [&b](const char* name, ev::Persistent AnimationState::*slot) {
+        b.accessor(name,
+            [slot](Value self_, std::span<const Value>) {
+                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+                return (st && ev::isFunction((st->*slot).get())) ? (st->*slot).get() : ev::null();
+            },
+            [slot](Value self_, std::span<const Value> a) {
+                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
+                if (st) {
+                    if (!a.empty() && ev::isFunction(a[0])) (st->*slot).set(a[0]);
+                    else (st->*slot).set(ev::undefined());
+                }
+                return ev::undefined();
+            });
+    };
+    handlerAccessor("onfinish", &AnimationState::onfinish);
+    handlerAccessor("oncancel", &AnimationState::oncancel);
+    handlerAccessor("onremove", &AnimationState::onremove);
+}
+
+void decorateCssAnimationProto(ObjectBuilder& b) {
+    b.accessor("animationName", [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        return ev::fromUtf8(c.rec ? c.rec->cssName : std::string());
+    }, nullptr);
+}
+
 } // namespace
 
 void installWebAnimationGlobals() {
@@ -667,251 +642,9 @@ void installWebAnimationGlobals() {
 
     installTimelineAndEffectClasses();
 
-    g_animationClass.install("Animation", 0, animationConstructor, [](ObjectBuilder& b) {
-        b.def("play", 0, [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::undefined();
-            engine::Engine* eng = hostEngine();
-            if (!eng) return ev::undefined();
-            engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-            if (!rec) return ev::undefined();
-            eng->webAnimationManager().play(*rec, eng->timeNowMs());
-            if (st->promiseSettled) {
-                st->finishedPromise.set(ev::undefined());
-                st->promiseSettled = false;
-            }
-            st->finishDelivered = false;
-            strongPins()[st->id] = ev::Persistent(self_);
-            if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-            return ev::undefined();
-        });
-
-        b.def("pause", 0, [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::undefined();
-            engine::Engine* eng = hostEngine();
-            if (!eng) return ev::undefined();
-            engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-            if (!rec) return ev::undefined();
-            eng->webAnimationManager().pause(*rec, eng->timeNowMs());
-            if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-            return ev::undefined();
-        });
-
-        b.def("finish", 0, [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::undefined();
-            engine::Engine* eng = hostEngine();
-            if (!eng) return ev::undefined();
-            engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-            if (!rec) return ev::undefined();
-            if (rec->playbackRate == 0 || (rec->playbackRate > 0 && !std::isfinite(rec->endTimeMs()))) {
-                return ev::throwValue(hostMakeDomError("InvalidStateError", "Animation cannot be finished if playbackRate is 0 or end time is infinite"));
-            }
-            eng->webAnimationManager().finishOp(*rec);
-            if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-            settleFinish(st, self_);
-            return ev::undefined();
-        });
-
-        b.def("cancel", 0, [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::undefined();
-            engine::Engine* eng = hostEngine();
-            if (!eng) return ev::undefined();
-            engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-            if (!rec || rec->state == engine::WebAnimState::Idle) return ev::undefined();
-            eng->webAnimationManager().cancelOp(*rec);
-            if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-            // `self_` is a plain copy; rejecting the promise allocates.
-            ev::Persistent selfP(self_);
-            rejectFinishedPromise(st);
-            st->finishedPromise.set(ev::undefined());
-            st->promiseSettled = false;
-            st->finishDelivered = false;
-            fireHandler(st->oncancel.get(), selfP.get(), "cancel", ev::null());
-            strongPins().erase(st->id);
-            return ev::undefined();
-        });
-
-        b.def("reverse", 0, [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::undefined();
-            engine::Engine* eng = hostEngine();
-            if (!eng) return ev::undefined();
-            engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-            if (!rec) return ev::undefined();
-            eng->webAnimationManager().reverse(*rec, eng->timeNowMs());
-            if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-            return ev::undefined();
-        });
-
-        b.accessor("playState", [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::fromUtf8("idle");
-            engine::Engine* eng = hostEngine();
-            if (!eng) return ev::fromUtf8("idle");
-            engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-            if (!rec) return ev::fromUtf8("idle");
-            return ev::fromUtf8(eng->webAnimationManager().playState(*rec, eng->timeNowMs()));
-        }, nullptr);
-
-        b.accessor("playbackRate",
-            [](Value self_, std::span<const Value>) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                if (!st) return ev::fromDouble(1.0);
-                engine::Engine* eng = hostEngine();
-                if (!eng) return ev::fromDouble(1.0);
-                engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-                return ev::fromDouble(rec ? rec->playbackRate : 1.0);
-            },
-            [](Value self_, std::span<const Value> a) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                if (!st) return ev::undefined();
-                engine::Engine* eng = hostEngine();
-                if (!eng) return ev::undefined();
-                engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-                if (rec) {
-                    double r = a.empty() ? 1.0 : ev::toDouble(a[0]);
-                    eng->webAnimationManager().setRate(*rec, r, eng->timeNowMs());
-                    if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-                }
-                return ev::undefined();
-            });
-
-        b.accessor("currentTime",
-            [](Value self_, std::span<const Value>) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                if (!st) return ev::null();
-                engine::Engine* eng = hostEngine();
-                if (!eng) return ev::null();
-                engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-                if (!rec) return ev::null();
-                auto ct = rec->currentTimeMs(eng->timeNowMs());
-                return ct ? ev::fromDouble(*ct) : ev::null();
-            },
-            [](Value self_, std::span<const Value> a) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                if (!st) return ev::undefined();
-                engine::Engine* eng = hostEngine();
-                if (!eng) return ev::undefined();
-                engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-                if (rec && !a.empty()) {
-                    double ct = ev::toDouble(a[0]);
-                    eng->webAnimationManager().setCurrentTime(*rec, ct, eng->timeNowMs());
-                    if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-                }
-                return ev::undefined();
-            });
-
-        // startTime: the timeline time at which currentTime was 0 — null while
-        // a hold time (pause, finish, idle) resolves currentTime instead.
-        b.accessor("startTime",
-            [](Value self_, std::span<const Value>) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                engine::Engine* eng = hostEngine();
-                if (!st || !eng) return ev::null();
-                engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-                if (!rec || rec->hasHoldTime || !rec->hasStartTime ||
-                    rec->state == engine::WebAnimState::Idle) {
-                    return ev::null();
-                }
-                return ev::fromDouble(rec->startTime);
-            },
-            [](Value self_, std::span<const Value> a) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                engine::Engine* eng = hostEngine();
-                if (!st || !eng || a.empty() || !ev::isNumber(a[0])) return ev::undefined();
-                engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-                if (!rec) return ev::undefined();
-                eng->webAnimationManager().setStartTime(*rec, ev::toDouble(a[0]), eng->timeNowMs());
-                if (auto* el = eng->webAnimationManager().resolveElement(*rec)) el->markDirty();
-                return ev::undefined();
-            });
-
-        b.accessor("timeline", [](Value, std::span<const Value>) {
-            return documentTimelineValue();
-        }, nullptr);
-
-        b.accessor("effect", [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            return st ? effectValueFor(st) : ev::null();
-        }, nullptr);
-
-        b.accessor("ready", [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::null();
-            if (ev::isUndefined(st->readyPromise.get())) {
-                ev::Persistent self(self_);
-                st->readyPromise.set(ev::createPromise());
-                ev::resolvePromise(st->readyPromise.get(), self.get());
-            }
-            return st->readyPromise.get();
-        }, nullptr);
-
-        b.accessor("pending", [](Value, std::span<const Value>) {
-            return ev::fromBool(false);
-        }, nullptr);
-
-        b.accessor("id",
-            [](Value self_, std::span<const Value>) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                return st ? ev::fromUtf8(st->name) : ev::fromUtf8("");
-            },
-            [](Value self_, std::span<const Value> a) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                if (st && !a.empty()) st->name = ev::toUtf8(a[0]);
-                return ev::undefined();
-            });
-
-        b.accessor("finished", [](Value self_, std::span<const Value>) {
-            auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-            if (!st) return ev::null();
-            if (ev::isUndefined(st->finishedPromise.get())) {
-                st->finishedPromise.set(ev::createPromise());
-                st->promiseSettled = false;
-                engine::Engine* eng = hostEngine();
-                if (eng) {
-                    engine::WebAnimation* rec = eng->webAnimationManager().find(st->id);
-                    if (rec) {
-                        std::string ps = eng->webAnimationManager().playState(*rec, eng->timeNowMs());
-                        if (ps == "finished") {
-                            resolveFinishedPromise(st, self_);
-                        }
-                    }
-                }
-            }
-            return st->finishedPromise.get();
-        }, nullptr);
-
-        b.accessor("onfinish",
-            [](Value self_, std::span<const Value>) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                return (st && ev::isFunction(st->onfinish.get())) ? st->onfinish.get() : ev::null();
-            },
-            [](Value self_, std::span<const Value> a) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                if (st) {
-                    if (!a.empty() && ev::isFunction(a[0])) st->onfinish.set(a[0]);
-                    else st->onfinish.set(ev::undefined());
-                }
-                return ev::undefined();
-            });
-
-        b.accessor("oncancel",
-            [](Value self_, std::span<const Value>) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                return (st && ev::isFunction(st->oncancel.get())) ? st->oncancel.get() : ev::null();
-            },
-            [](Value self_, std::span<const Value> a) {
-                auto* st = static_cast<AnimationState*>(ev::handleData(self_));
-                if (st) {
-                    if (!a.empty() && ev::isFunction(a[0])) st->oncancel.set(a[0]);
-                    else st->oncancel.set(ev::undefined());
-                }
-                return ev::undefined();
-            });
-    });
+    g_animationClass.install("Animation", 0, animationConstructor, decorateAnimationProto);
+    g_cssAnimationClass.install("CSSAnimation", 0, nullptr, decorateCssAnimationProto);
+    g_cssAnimationClass.inherit(g_animationClass);
 
     if (ev::isFunction(s_skeletalAnimationCtor.get())) {
         Value skelProto = ev::getProperty(s_skeletalAnimationCtor.get(), "prototype");
@@ -926,18 +659,21 @@ void installWebAnimationGlobals() {
 
     ev::registerGlobal("Animation", g_animationClass.constructor());
     ev::registerGlobal("WebAnimation", g_animationClass.constructor());
-    // Each global object is rooted across its two defines (setProperty allocates).
+    ev::registerGlobal("CSSAnimation", g_cssAnimationClass.constructor());
+    // Each global object is rooted across its defines (setProperty allocates).
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
         const Rooted global(gt.value);
         ev::setProperty(global, "Animation", g_animationClass.constructor());
         ev::setProperty(global, "WebAnimation", g_animationClass.constructor());
+        ev::setProperty(global, "CSSAnimation", g_cssAnimationClass.constructor());
     }
     ev::GlobalValue win = ev::globalValue("window");
     if (win.found && ev::isObject(win.value)) {
         const Rooted window(win.value);
         ev::setProperty(window, "Animation", g_animationClass.constructor());
         ev::setProperty(window, "WebAnimation", g_animationClass.constructor());
+        ev::setProperty(window, "CSSAnimation", g_cssAnimationClass.constructor());
     }
 }
 
@@ -952,14 +688,26 @@ void decorateElementWebAnimations(ObjectBuilder& b) {
         }
 
         std::vector<engine::WebAnimKeyframe> frames;
-        bool ok = isJsArray(a[0]) ? parseKeyframeArray(a[0], frames)
-                                  : parseKeyframeObject(a[0], frames);
-        if (!ok) return ev::throwTypeError("Element.animate: invalid keyframes");
+        std::string error;
+        bool ok = isJsArray(a[0]) ? parseKeyframeArray(a[0], frames, error)
+                                  : parseKeyframeObject(a[0], frames, error);
+        if (!ok) {
+            return ev::throwTypeError(
+                ("Element.animate: " + (error.empty() ? std::string("invalid keyframes") : error)).c_str());
+        }
 
         engine::WebAnimation scratch;
         std::string name;
-        if (a.size() >= 2) {
-            if (!parseOptions(a[1], scratch, name)) {
+        if (a.size() >= 2 && !ev::isUndefined(a[1]) && !ev::isNull(a[1])) {
+            if (ev::isNumber(a[1])) {
+                double d = ev::toDouble(a[1]);
+                if (!(d >= 0)) return ev::throwTypeError("Element.animate: duration must be a non-negative number");
+                scratch.duration = d;
+            } else if (ev::isObject(a[1])) {
+                uint32_t mask = 0;
+                if (!parseEffectTiming(a[1], scratch, mask, error, &name))
+                    return ev::throwTypeError(("Element.animate: " + error).c_str());
+            } else {
                 return ev::throwTypeError("Element.animate: invalid options");
             }
         }
@@ -984,6 +732,9 @@ void decorateElementWebAnimations(ObjectBuilder& b) {
         if (!nst || !nst->el) return makeEmptyArray();
         engine::Engine* eng = hostEngine();
         if (!eng) return makeEmptyArray();
+        // Style first, as on the web: an animation a class change just
+        // started is listed by the getAnimations() that follows it.
+        eng->flushLayoutForRead(nst->el->document());
         auto ids = eng->webAnimationManager().animationsFor(nst->el, eng->timeNowMs());
         return hostArrayOf(ids.size(), [&ids](size_t i) {
             return wrapAnimation(ids[i]);
@@ -999,6 +750,7 @@ void decorateDocumentWebAnimations(ObjectBuilder& b) {
     b.def("getAnimations", 0, [](Value, std::span<const Value>) {
         engine::Engine* eng = hostEngine();
         if (!eng) return makeEmptyArray();
+        if (eng->document()) eng->flushLayoutForRead(eng->document());
         auto ids = eng->webAnimationManager().allAnimations(eng->timeNowMs());
         return hostArrayOf(ids.size(), [&ids](size_t i) {
             return wrapAnimation(ids[i]);
@@ -1009,12 +761,33 @@ void decorateDocumentWebAnimations(ObjectBuilder& b) {
 void deliverWebAnimationFinishEvents() {
     engine::Engine* eng = hostEngine();
     if (!eng) return;
-    std::vector<uint64_t> ids = eng->webAnimationManager().takeFinishedEvents();
-    for (uint64_t id : ids) {
+    auto& mgr = eng->webAnimationManager();
+    for (uint64_t id : mgr.takeFinishedEvents()) {
         auto it = liveStates().find(id);
         if (it != liveStates().end()) {
             AnimationState* st = it->second;
             settleFinish(st, st->self.get());
+        }
+    }
+    // A CSS animation its markup stopped naming, while script held it.
+    for (uint64_t id : mgr.takeCanceledEvents()) {
+        auto it = liveStates().find(id);
+        if (it != liveStates().end()) {
+            AnimationState* st = it->second;
+            settleCancel(st, st->self.get());
+        }
+    }
+    // Replaced by later animations (Web Animations §5.5).
+    for (uint64_t id : mgr.takeRemovedEvents()) {
+        auto it = liveStates().find(id);
+        if (it != liveStates().end()) {
+            AnimationState* st = it->second;
+            ev::Persistent selfP(st->self.get());
+            Value ct = ev::null();
+            if (engine::WebAnimation* rec = mgr.find(id)) {
+                if (auto cur = rec->currentTimeMs(eng->timeNowMs())) ct = ev::fromDouble(*cur);
+            }
+            fireHandler(st->onremove.get(), selfP.get(), "remove", ct);
         }
     }
 }

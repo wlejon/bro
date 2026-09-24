@@ -1,11 +1,15 @@
 #pragma once
 
-// Web Animations API (element.animate) — the script-driven sibling of the CSS
-// transition/animation managers in css_transitions.h. Animations plug into the
-// exact same seams the CSS managers use: applyOverrides() during style
-// resolution injects interpolated values into computed style, tick() advances
-// the clock on the engine's scaled (bro.time) timeline, and activeThisTick()
-// feeds the compositor-promotion decision.
+// Web Animations: the one animation model behind element.animate() AND CSS
+// @keyframes animations. A CSS animation is a record here like any script
+// animation (a CSSAnimation, per CSS Animations 2): AnimationManager in
+// css_transitions.h creates, updates and cancels it from the element's
+// animation-* longhands and derives the animation* events from its phase,
+// and script sees the very same record through getAnimations() and can pause,
+// seek or re-time it. Records plug into the seams the CSS managers use:
+// applyOverrides() during style resolution injects interpolated values into
+// computed style, tick() advances the clock on the engine's scaled (bro.time)
+// timeline, and activeThisTick() feeds the compositor-promotion decision.
 //
 // Threading: identical discipline to TransitionManager — records are mutated
 // by JS on the main thread (only while the layout thread is idle, the same
@@ -21,7 +25,8 @@
 // (engine teardown destroys members before the JS runtime), the static
 // isLive() registry makes the release a no-op.
 
-#include <bromath/curves.h>
+#include "engine/css_easing.h"
+
 #include <css/cascade.h>
 
 #include <cstdint>
@@ -44,7 +49,7 @@ class TransitionManager;
 // properties (kebab-case name → CSS value string).
 struct WebAnimKeyframe {
     float offset = 0.0f;
-    bromath::CubicEase easing{0.0f, 0.0f, 1.0f, 1.0f}; // linear
+    TimingFunction easing;  // linear
     bool hasEasing = false;
     std::vector<std::pair<std::string, std::string>> props;
 };
@@ -55,6 +60,26 @@ enum class WebAnimFill { None, Forwards, Backwards, Both };
 // Idle only after cancel(); a canceled record is kept so play() can restart
 // it (per spec), but it applies nothing and never ticks.
 enum class WebAnimState { Idle, Running, Paused, Finished };
+
+// Web Animations §5.5: a finished, forwards-filling script animation whose
+// every property a later one of the same kind overrides is removed.
+enum class WebAnimReplaceState { Active, Removed, Persisted };
+
+// The effect's phase at a time (Web Animations §4.6), with the current
+// iteration while active.
+enum class WebAnimPhase { Idle, Before, Active, After };
+
+// effect.updateTiming() members set by script. A CSS animation stops taking
+// those members from its animation-* longhands once script has set them.
+enum WebAnimTimingField : uint32_t {
+    kTimingDuration = 1u << 0,
+    kTimingDelay = 1u << 1,
+    kTimingEndDelay = 1u << 2,
+    kTimingIterations = 1u << 3,
+    kTimingDirection = 1u << 4,
+    kTimingFill = 1u << 5,
+    kTimingEasing = 1u << 6,
+};
 
 struct WebAnimation {
     uint64_t id = 0;
@@ -73,7 +98,11 @@ struct WebAnimation {
     double iterations = 1.0; // may be INFINITY
     WebAnimDirection direction = WebAnimDirection::Normal;
     WebAnimFill fill = WebAnimFill::None;
-    bromath::CubicEase easing{0.0f, 0.0f, 1.0f, 1.0f}; // whole-iteration; WAAPI default linear
+    TimingFunction easing;   // whole-iteration; WAAPI default linear
+    // Easing of the 0% / 100% keyframes synthesized for a property no
+    // explicit end keyframe names: linear for script animations, the
+    // animation-timing-function for CSS ones.
+    TimingFunction implicitKeyframeEasing;
 
     // Playback state (simplified spec model: exactly one of startTime /
     // holdTime resolves currentTime; holdTime wins).
@@ -83,13 +112,29 @@ struct WebAnimation {
     double startTime = 0;    // engine ms at which currentTime was 0 (rate-adjusted)
     bool hasHoldTime = false;
     double holdTime = 0;     // frozen currentTime (paused / finished / rate 0)
+    WebAnimReplaceState replaceState = WebAnimReplaceState::Active;
 
+    // --- CSS animation (CSSAnimation) ------------------------------------
+    bool isCssAnimation = false;
+    // Still tied to its animation-name layer: markup controls it and it
+    // sorts with the CSS animations. Cleared when the layer goes away.
+    bool cssOwned = false;
+    std::string cssName;      // animationName
+    int cssLayer = 0;         // position in the animation-name list
+    // Script called play()/pause(): animation-play-state no longer applies.
+    bool cssPlayOverride = false;
+    uint32_t cssTimingOverride = 0; // WebAnimTimingField bits
+
+    bool wrapped = false;        // a JS Animation object exists for it
     bool orphaned = false;       // JS wrapper finalized; GC record when it stops contributing
     bool finishNotified = false; // finish event already queued/delivered
 
     double activeDuration() const;               // duration * iterations (inf ok)
     double endTimeMs() const;                    // max(delay + activeDuration + endDelay, 0)
     std::optional<double> currentTimeMs(double now) const; // nullopt = unresolved (idle)
+    // Phase at `now`; `iteration` is the current iteration index when
+    // Active, and `localTime` the current time (both untouched when Idle).
+    WebAnimPhase phaseAt(double now, double& iteration, double& localTime) const;
     bool fillsForwards() const {
         return fill == WebAnimFill::Forwards || fill == WebAnimFill::Both;
     }
@@ -115,11 +160,18 @@ public:
     WebAnimation& create(dom::Element* elem, double now);
 
     WebAnimation* find(uint64_t id);
+    const WebAnimation* find(uint64_t id) const;
 
+    // Drop a record outright (its owner is done with it and nothing wraps it).
+    void erase(uint64_t id);
+
+    // A JS wrapper now exists for the record.
+    void noteWrapped(uint64_t id);
     // JS wrapper finalized: drop the record unless it is still holding a
     // forwards-fill (a finished forwards animation keeps applying its final
     // value even with no JS reference, per spec — such records are marked
-    // orphaned and reclaimed when their element/document goes away).
+    // orphaned and reclaimed when their element/document goes away) or is a
+    // CSS animation its markup still owns.
     void releaseFromWrapper(uint64_t id);
 
     // --- playback control (main thread, layout idle) ---------------------
@@ -132,6 +184,16 @@ public:
     void setRate(WebAnimation& a, double rate, double now);
     void setStartTime(WebAnimation& a, double st, double now);
     void setCurrentTime(WebAnimation& a, double ct, double now);
+    // The effect's timing changed (updateTiming, or a CSS animation's
+    // longhands): a finished animation whose end moved past its current time
+    // runs again.
+    void timingChanged(WebAnimation& a, double now);
+
+    // The markup that owned a CSS animation stopped naming it (or its element
+    // went away): the animation is canceled and handed to script if a JS
+    // object holds it, dropped otherwise. The cancel is queued for the
+    // wrapper (finished rejection + oncancel).
+    void cancelFromMarkup(uint64_t id);
 
     // Fresh play state including boundary crossings between ticks:
     // "idle" | "running" | "paused" | "finished".
@@ -142,17 +204,24 @@ public:
     dom::Element* resolveElement(const WebAnimation& a) const;
 
     // --- engine seams (mirror TransitionManager) -------------------------
-    // Advance clocks, detect finishes (queued for main-thread delivery), and
-    // collect this tick's active elements. Returns true if anything is
-    // running or just completed (document should keep pumping frames).
+    // Advance clocks, detect finishes (queued for main-thread delivery),
+    // remove replaced animations, and collect this tick's active elements.
+    // Returns true if anything is running or just completed (document should
+    // keep pumping frames).
     bool tick(double now);
 
-    // Inject interpolated values into a computed style. Called after the CSS
-    // transition/animation overrides — script animations sit above both in
-    // composite order. Multiple animations on one element apply in creation
-    // order, so the last-created wins per property.
+    // Inject interpolated values into a computed style, after the CSS
+    // transition overrides. Composite order: CSS animations first, in
+    // animation-name order, then script animations in creation order, so a
+    // later one wins per property.
     void applyOverrides(dom::Element* elem, htmlayout::css::ComputedStyle& style,
                         double now) const;
+
+    // What `a` alone contributes on top of `base` right now (commitStyles):
+    // false when its effect is not in effect.
+    bool effectValues(const WebAnimation& a, const htmlayout::css::ComputedStyle& base,
+                      double now,
+                      std::vector<std::pair<std::string, std::string>>& out) const;
 
     // Element has ≥1 running (not paused/finished/idle) animation — drives the
     // per-frame re-resolve (animatingSelf) and compositor promotion.
@@ -165,12 +234,15 @@ public:
 
     const std::vector<dom::Element*>& activeThisTick() const { return activeThisTick_; }
 
-    // Finish events queued by tick(), drained on the main thread and delivered
-    // to the JS wrappers (finished promise + onfinish).
+    // Events queued by tick() / cancelFromMarkup, drained on the main thread
+    // and delivered to the JS wrappers: finish (finished promise + onfinish),
+    // cancel (rejection + oncancel), remove (onremove).
     std::vector<uint64_t> takeFinishedEvents() { return std::move(pendingFinished_); }
+    std::vector<uint64_t> takeCanceledEvents() { return std::move(pendingCanceled_); }
+    std::vector<uint64_t> takeRemovedEvents() { return std::move(pendingRemoved_); }
 
     // Animation ids relevant to `elem` (running/paused, or finished while
-    // holding a forwards fill), creation order. For getAnimations().
+    // holding a forwards fill), composite order. For getAnimations().
     std::vector<uint64_t> animationsFor(const dom::Element* elem, double now) const;
     std::vector<uint64_t> allAnimations(double now) const;
 
@@ -180,13 +252,18 @@ public:
         byElem_.clear();
         activeThisTick_.clear();
         pendingFinished_.clear();
+        pendingCanceled_.clear();
+        pendingRemoved_.clear();
     }
 
 private:
     bool isRelevant(const WebAnimation& a, double now) const;
-    void applyOne(const WebAnimation& a, htmlayout::css::ComputedStyle& style,
+    bool applyOne(const WebAnimation& a, htmlayout::css::ComputedStyle& style,
                   double now) const;
     void eraseIndex(const WebAnimation& a);
+    // Records on `elem`, composite order.
+    std::vector<const WebAnimation*> stackFor(const dom::Element* elem, bool checkNode) const;
+    void removeReplaced();
 
     std::unordered_map<uint64_t, WebAnimation> records_;
     // Element* used purely as a hash key (never dereferenced); entries carry a
@@ -194,16 +271,19 @@ private:
     std::unordered_multimap<const dom::Element*, uint64_t> byElem_;
     std::vector<dom::Element*> activeThisTick_;
     std::vector<uint64_t> pendingFinished_;
+    std::vector<uint64_t> pendingCanceled_;
+    std::vector<uint64_t> pendingRemoved_;
     uint64_t nextId_ = 1;
 };
 
-// Extended compositor hint over all three animation sources — true iff the
-// element has at least one active animation/transition and every active one
-// (CSS animation, CSS transition, or script animation) is confined to
-// transform/opacity. Supersedes the two-manager overload in css_transitions.h
-// at the layout-thread promotion site.
+// Composite order of two records on one element: CSS animations the markup
+// owns come first in animation-name order, then everything else by creation.
+bool compositeOrderLess(const WebAnimation& a, const WebAnimation& b);
+
+// Extended compositor hint over the animation sources — true iff the element
+// has at least one active animation/transition and every active one (CSS
+// transition, or animation of either kind) is confined to transform/opacity.
 bool isTransformOpacityOnly(dom::Element* elem,
-                            const AnimationManager& anim,
                             const TransitionManager& trans,
                             const WebAnimationManager& web);
 

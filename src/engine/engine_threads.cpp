@@ -66,7 +66,7 @@ void Engine::layoutThreadFunc() {
             // skip signalling layout the following frame, and the animation
             // would freeze on its first applied value (e.g. 2048's tile-pop-in
             // stuck at scale(0), tiles invisible). Re-trigger after completion
-            // is prevented by the previousName memo in AnimationManager.
+            // is prevented by AnimationManager's longhand signature memo.
             document_->resolveStyles();
 
             // Decided AFTER resolveStyles so it sees layoutDirty_ promotions:
@@ -101,8 +101,7 @@ void Engine::layoutThreadFunc() {
             const bool topLayerActive = !document_->topLayer().empty();
             auto routePromotion = [&](dom::Element* e) {
                 if (!topLayerActive &&
-                    isTransformOpacityOnly(e, animationManager_, transitionManager_,
-                                           webAnimationManager_))
+                    isTransformOpacityOnly(e, transitionManager_, webAnimationManager_))
                     promotedElements_.insert(e);
                 else {
                     // A non-promoted animation (width/left/color/…) can change
@@ -111,8 +110,9 @@ void Engine::layoutThreadFunc() {
                     layoutAffecting = true;
                 }
             };
+            // CSS animations are Web Animations records: the web manager's
+            // active list covers them.
             for (auto* e : transitionManager_.activeThisTick())   routePromotion(e);
-            for (auto* e : animationManager_.activeThisTick())    routePromotion(e);
             for (auto* e : webAnimationManager_.activeThisTick()) routePromotion(e);
 
             layoutPipeline_->setAnimationsActive(animActive);

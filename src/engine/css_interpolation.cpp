@@ -7,42 +7,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
-#include <unordered_map>
-#include <unordered_set>
 
 namespace bro::engine {
-
-using bromath::CubicEase;
-using bromath::ccubicEase;
-
-// ---------------------------------------------------------------------------
-// CSS timing-function presets (control points for bromath::CubicEase)
-// ---------------------------------------------------------------------------
-// Endpoints (0,0) and (1,1) are implicit. `linear` is a degenerate case
-// (CPs colinear with the endpoints) — ccubicEase returns the input.
-
-
-CubicEase parseTimingFunction(const std::string& val) {
-    if (val.empty() || val == "ease") return kEase;
-    if (val == "linear") return kLinear;
-    if (val == "ease-in") return kEaseIn;
-    if (val == "ease-out") return kEaseOut;
-    if (val == "ease-in-out") return kEaseInOut;
-
-    // cubic-bezier(x1, y1, x2, y2)
-    auto pos = val.find("cubic-bezier(");
-    if (pos != std::string::npos) {
-        const char* p = val.c_str() + pos + 13;
-        char* end = nullptr;
-        float x1 = std::strtof(p, &end); p = end; while (*p == ',' || *p == ' ') ++p;
-        float y1 = std::strtof(p, &end); p = end; while (*p == ',' || *p == ' ') ++p;
-        float x2 = std::strtof(p, &end); p = end; while (*p == ',' || *p == ' ') ++p;
-        float y2 = std::strtof(p, &end);
-        return {x1, y1, x2, y2};
-    }
-
-    return kEase;
-}
 
 // ---------------------------------------------------------------------------
 // Value interpolation
@@ -159,6 +125,9 @@ std::string TransitionManager::interpolate(const std::string& from, const std::s
         float b = std::strtof(to.c_str(), &endB);
         if (endA != from.c_str() && endB != to.c_str()) {
             float v = a + (b - a) * t;
+            // An overshooting easing extrapolates past the endpoints; opacity
+            // is still a [0,1] value (its computed value is clamped).
+            if (property == "opacity") v = std::clamp(v, 0.0f, 1.0f);
             // Preserve unit from target
             std::string unit(endB);
             // Clean up float formatting
@@ -176,7 +145,7 @@ std::string TransitionManager::interpolate(const std::string& from, const std::s
             float r = r1 + (r2 - r1) * t;
             float g = g1 + (g2 - g1) * t;
             float b = b1 + (b2 - b1) * t;
-            float a = a1 + (a2 - a1) * t;
+            float a = std::clamp(a1 + (a2 - a1) * t, 0.0f, 1.0f);
             return colorToRGBA(r, g, b, a);
         }
     }
@@ -295,163 +264,6 @@ std::string initialValueForProperty(const std::string& prop,
 std::string cssInitialValueForProperty(const std::string& prop,
                                        const std::string& refValue) {
     return initialValueForProperty(prop, refValue);
-}
-
-void applyKeyframeInterpolation(const htmlayout::css::KeyframeBlock* kf,
-                                const Animation& anim,
-                                double currentTime,
-                                htmlayout::css::ComputedStyle& style) {
-    if (!kf || kf->stops.empty()) return;
-
-    double elapsed = anim.effectiveTime(currentTime) - anim.startTime - anim.delay;
-    if (elapsed < 0) {
-        // In delay period — apply backwards fill if applicable
-        if (anim.fillMode != "backwards" && anim.fillMode != "both") return;
-        elapsed = 0;
-    }
-
-    // Compute iteration and progress
-    double iterProgress = elapsed / anim.duration;
-    int currentIter = static_cast<int>(iterProgress);
-    float localProgress = static_cast<float>(iterProgress - currentIter);
-
-    // Clamp to iteration count
-    if (anim.iterationCount >= 0 && currentIter >= anim.iterationCount) {
-        if (anim.fillMode == "forwards" || anim.fillMode == "both") {
-            currentIter = anim.iterationCount - 1;
-            localProgress = 1.0f;
-        } else {
-            return;
-        }
-    }
-
-    // Handle direction
-    bool thisIterReverse = anim.reverse;
-    if (anim.alternate && (currentIter % 2 != 0))
-        thisIterReverse = !thisIterReverse;
-    if (thisIterReverse)
-        localProgress = 1.0f - localProgress;
-
-    // No easing here: a CSS animation's timing function applies to each
-    // keyframe INTERVAL, not to the whole iteration, so it is applied to
-    // segmentT below, once the bracketing stops are known. Easing the whole
-    // iteration made a 0% / 50% / 100% animation run one curve end to end.
-
-    // Find bracketing keyframe stops. When the @keyframes omits a 0% or
-    // 100% stop, CSS synthesizes an implicit endpoint from the element's
-    // *base* (un-animated) value — that is what makes a one-sided rule like
-    //   @keyframes spin { to { transform: rotate(360deg); } }
-    // actually interpolate rotate(0deg)→rotate(360deg) and spin. Without it,
-    // front()==back() collapses the segment and the value stays constant.
-    float t = std::clamp(localProgress, 0.0f, 1.0f);
-    const auto& stops = kf->stops;
-
-    // Union of properties this animation touches (for implicit endpoints).
-    std::unordered_set<std::string> animProps;
-    for (auto& stop : stops)
-        for (auto& d : stop.declarations)
-            if (d.property != "animation-timing-function") animProps.insert(d.property);
-
-    // Base (un-animated) value for a property, shaped to the opposite
-    // endpoint so transform identities match (rotate→rotate(0deg), etc.).
-    auto baseValueFor = [&](const std::string& prop,
-                            const std::string& ref) -> std::string {
-        auto sIt = style.find(prop);
-        if (sIt != style.end() && !sIt->second.empty() && sIt->second != "none")
-            return sIt->second;
-        std::string iv = initialValueForProperty(prop, ref);
-        return iv.empty() ? ref : iv;
-    };
-
-    const htmlayout::css::KeyframeStop* beforeStop = nullptr;
-    const htmlayout::css::KeyframeStop* afterStop = nullptr;
-    float beforeOffset = 0.0f, afterOffset = 1.0f;
-    bool beforeImplicit = false, afterImplicit = false;
-
-    if (t <= stops.front().offset) {
-        if (stops.front().offset <= 0.0001f) {
-            beforeStop = afterStop = &stops.front();
-            beforeOffset = afterOffset = stops.front().offset;
-        } else {
-            // No 0% stop: implicit-from (base) → first real stop.
-            beforeImplicit = true;
-            afterStop = &stops.front();
-            afterOffset = stops.front().offset;
-        }
-    } else if (t >= stops.back().offset) {
-        if (stops.back().offset >= 0.9999f) {
-            beforeStop = afterStop = &stops.back();
-            beforeOffset = afterOffset = stops.back().offset;
-        } else {
-            // No 100% stop: last real stop → implicit-to (base).
-            beforeStop = &stops.back();
-            beforeOffset = stops.back().offset;
-            afterImplicit = true;
-        }
-    } else {
-        for (size_t i = 0; i + 1 < stops.size(); ++i) {
-            if (t >= stops[i].offset && t <= stops[i + 1].offset) {
-                beforeStop = &stops[i];     beforeOffset = stops[i].offset;
-                afterStop  = &stops[i + 1]; afterOffset  = stops[i + 1].offset;
-                break;
-            }
-        }
-    }
-
-    float segmentRange = afterOffset - beforeOffset;
-    float segmentT = segmentRange > 0 ? (t - beforeOffset) / segmentRange : 0.0f;
-
-    // The interval's easing: the element's animation-timing-function, unless
-    // the keyframe that starts the interval names its own. A keyframe's
-    // animation-timing-function is that interval's easing, never an animated
-    // property.
-    static const std::string kTimingProp = "animation-timing-function";
-    CubicEase segEasing = anim.easing;
-    if (beforeStop)
-        for (auto& d : beforeStop->declarations)
-            if (d.property == kTimingProp) segEasing = parseTimingFunction(d.value);
-    segmentT = ccubicEase(segEasing, segmentT);
-
-    // Build property maps for the two endpoints, filling implicit endpoints
-    // from the element's base value.
-    std::unordered_map<std::string, std::string> beforeProps, afterProps;
-    if (beforeStop)
-        for (auto& d : beforeStop->declarations)
-            if (d.property != kTimingProp) beforeProps[d.property] = d.value;
-    if (afterStop)
-        for (auto& d : afterStop->declarations)
-            if (d.property != kTimingProp) afterProps[d.property] = d.value;
-    if (beforeImplicit)
-        for (auto& p : animProps) {
-            auto aIt = afterProps.find(p);
-            beforeProps[p] = baseValueFor(p, aIt != afterProps.end()
-                                                 ? aIt->second : std::string());
-        }
-    if (afterImplicit)
-        for (auto& p : animProps) {
-            auto bIt = beforeProps.find(p);
-            afterProps[p] = baseValueFor(p, bIt != beforeProps.end()
-                                                ? bIt->second : std::string());
-        }
-
-    // Interpolate each property present in either stop
-    std::unordered_set<std::string> allProps;
-    for (auto& [k, v] : beforeProps) allProps.insert(k);
-    for (auto& [k, v] : afterProps) allProps.insert(k);
-
-    for (auto& prop : allProps) {
-        auto bIt = beforeProps.find(prop);
-        auto aIt = afterProps.find(prop);
-        if (bIt != beforeProps.end() && aIt != afterProps.end()) {
-            style[prop] = TransitionManager::interpolate(bIt->second, aIt->second,
-                                                         segmentT, prop);
-        } else if (aIt != afterProps.end()) {
-            // Only in after — snap at start of segment
-            style[prop] = aIt->second;
-        } else {
-            style[prop] = bIt->second;
-        }
-    }
 }
 
 } // namespace bro::engine

@@ -1,13 +1,15 @@
 /**
- * element.animate(), Web Animations API (commonly-used subset)
+ * element.animate(), Web Animations API, and CSS animations as CSSAnimation
  *
- * Script-driven animations that ride the exact same machinery as CSS
- * transitions and @keyframes animations: interpolated values are injected
- * into computed style during style resolution (above both CSS transitions and
- * CSS animations in composite order), the clock is the engine's scaled
- * bro.time clock (bro.time.paused freezes them, bro.time.scale stretches
- * them), transform/opacity-only animations get the same compositor-layer
- * promotion, and headless advanceTime(ms) drives them deterministically.
+ * One animation model: a CSS @keyframes animation IS a Web Animation (a
+ * CSSAnimation, per CSS Animations 2), listed by getAnimations() and driven by
+ * the same engine records as element.animate(). Interpolated values are
+ * injected into computed style during style resolution (above CSS
+ * transitions; CSS animations first in animation-name order, then script
+ * animations in creation order), the clock is the engine's scaled bro.time
+ * clock (bro.time.paused freezes them, bro.time.scale stretches them),
+ * transform/opacity-only animations get compositor-layer promotion, and
+ * headless advanceTime(ms) drives them deterministically.
  *
  * PROPERTY COVERAGE: inherited from the transition interpolator:
  *   - numbers and lengths (opacity, width, top, margin-*, border-radius, …
@@ -19,29 +21,33 @@
  *   Anything else is non-interpolable and snaps at 50% (discrete-ish).
  *   Values are not validated: they land in computed style verbatim.
  *
+ * EASING: every <easing-function>, the same parser for WAAPI options,
+ *   keyframe easings, and CSS transition/animation timing functions:
+ *   linear | ease | ease-in | ease-out | ease-in-out | cubic-bezier(...) |
+ *   step-start | step-end | steps(n[, jump-start|jump-end|jump-none|
+ *   jump-both|start|end]) | linear(<number> [<percentage>{1,2}], ...).
+ *   Anything else throws a TypeError (element.animate, updateTiming). The
+ *   default is linear (the WAAPI default). getTiming().easing reads back the
+ *   canonical form ('steps(4, end)' reads 'steps(4)').
+ *
  * DELIBERATE SIMPLIFICATIONS (vs the full spec):
- *   - Stacking: multiple animations on one element compose in creation
- *     order: the LAST-CREATED animation wins per property (no full
- *     composite-order machinery; composite modes other than "replace" are
- *     ignored).
- *   - commitStyles() / persist() / updatePlaybackRate() are not implemented.
- *     `pending` is always false (play/pause apply immediately), so `ready`
- *     is an already-resolved promise. `effect` is a read-only view
- *     (target / getTiming / getComputedTiming / getKeyframes; no
- *     setKeyframes / updateTiming, and it cannot be swapped). `timeline` is
- *     always document.timeline. `new KeyframeEffect(...)` is not
- *     constructible.
- *   - getAnimations() returns running/paused animations plus finished ones
- *     still holding a forwards fill (spec "relevant" ≈ same set).
+ *   - Composite modes other than "replace" are ignored.
+ *   - `pending` is always false (play/pause apply immediately), so `ready`
+ *     is an already-resolved promise and updatePlaybackRate() applies at
+ *     once, like setting playbackRate. `effect` cannot be swapped and has no
+ *     setKeyframes; `timeline` is always document.timeline; `new
+ *     KeyframeEffect(...)` is not constructible; iterationStart is always 0.
+ *   - document.getAnimations() orders CSS animations before script ones,
+ *     each in creation order (not a full tree-order sort).
  *   - Object-form keyframes distribute values evenly; an explicit `offset`
  *     list inside the object form is ignored (use the array form for
  *     explicit offsets). An `easing` array is applied cyclically across the
  *     merged keyframes.
- *   - easing accepts what the CSS transition engine parses: linear | ease |
- *     ease-in | ease-out | ease-in-out | cubic-bezier(...). steps() is not
- *     supported (falls back to ease). Unknown strings fall back to ease
- *     rather than throwing. The default is linear (the WAAPI default).
  *   - reverse() on an infinite animation seeks to 0 (spec throws).
+ *   - A CSS animation under display:none keeps its record (and its clock);
+ *     it stops driving frames and events until shown again, where the spec
+ *     cancels it.
+ *   - CSS transitions are not yet CSSTransition objects in getAnimations().
  *
  * LIFETIME:
  *   - The Animation object holds an id into an engine-side record, never a
@@ -101,6 +107,11 @@ anim.finish();           // jump to the end (start when playbackRate < 0);
                          // fill:forwards keeps the final value applied.
                          // Throws InvalidStateError on infinite animations.
 anim.reverse();          // flip playbackRate and play (from the end if done)
+anim.updatePlaybackRate(2); // change the rate without a jump in currentTime
+anim.commitStyles();     // write the effect's current values into the target's
+                         // inline style (keep an end state, then cancel())
+anim.persist();          // exempt a finished fill-forwards animation from
+                         // automatic removal (see "Replaced animations")
 
 anim.currentTime;        // number ms (null when idle), get/set to seek
 anim.currentTime = 500;  // seek; un-finishes a finished animation
@@ -117,6 +128,8 @@ await anim.finished;
 
 anim.onfinish = (e) => { /* e.type === 'finish', e.currentTime, e.target */ };
 anim.oncancel = (e) => { /* e.type === 'cancel' */ };
+anim.onremove = (e) => { /* e.type === 'remove': replaced, see below */ };
+anim.replaceState;       // 'active' | 'removed' | 'persisted'
 
 // Already resolved with the animation (nothing is ever pending).
 await anim.ready;
@@ -148,18 +161,56 @@ fx.getComputedTiming();  // getTiming() plus { activeDuration, endTime, localTim
                          //   no fill applies there
 fx.getKeyframes();       // [{ offset, computedOffset, easing, composite,
                          //    <camelCase property>: '<value>', ... }, ...]
+fx.updateTiming({ duration: 2000, easing: 'steps(4)' });
+                         // any EffectTiming members; a finished animation whose
+                         // end moves past its current time runs again. Invalid
+                         // values throw a TypeError.
+
+// ── Replaced animations ──────────────────────────────────────────────────────
+//
+// A finished fill:'forwards' script animation whose every property a later
+// finished fill-forwards animation on the same element also animates is
+// removed (Web Animations §5.5): replaceState becomes 'removed', onremove
+// fires, it stops applying and leaves getAnimations(). This is what keeps
+// fire-and-forget `fill: 'forwards'` animations from piling up. persist()
+// opts one out. CSS animations are never removed this way.
+
+// ── CSS animations (CSSAnimation) ────────────────────────────────────────────
+//
+// Every layer of an element's animation-name list (so `animation: a 1s, b 2s`
+// runs both) is a CSSAnimation, an Animation with one extra member:
+const cssAnim = el.getAnimations().find((a) => a instanceof CSSAnimation);
+cssAnim.animationName;     // the @keyframes name
+// Its timing comes from the animation-* longhands (getTiming().easing is
+// 'linear': animation-timing-function eases each keyframe interval and is
+// reported per keyframe by getKeyframes()). It follows the markup: changing
+// animation-duration re-times it, animation-play-state pauses it, removing
+// the name cancels it. Script can drive it like any animation:
+cssAnim.pause(); cssAnim.currentTime = 500; cssAnim.play();
+// - play()/pause() take playback over: animation-play-state no longer applies.
+// - effect.updateTiming() members stop following their longhands.
+// - cancel() stops it; it restarts only if animation-name changes and back.
+// - animationstart / animationiteration / animationend / animationcancel
+//   fire from its phase, so a script seek or finish() fires them too
+//   (animationstart after the delay, not when the name is set).
 
 // ── Enumeration ──────────────────────────────────────────────────────────────
 
 el.getAnimations();        // Animation[] for this element (running/paused +
-                           // finished-while-filling-forwards), creation order,
-                           // identity-preserving (same objects you got back)
+                           // finished-while-filling-forwards), CSS animations
+                           // first in animation-name order then script ones
+                           // in creation order, identity-preserving (same
+                           // objects you got back). Styles are brought up to
+                           // date first, so an animation a class change just
+                           // started is listed.
 document.getAnimations();  // the same across the whole document
 
 // ── Interplay ────────────────────────────────────────────────────────────────
 //
 // - Overrides inline style and the cascade while active, and sits above CSS
 //   transitions AND CSS animations for the properties it animates.
+// - An overshooting easing (cubic-bezier with y outside [0,1]) extrapolates
+//   past the end keyframes, as on the web; opacity and alpha stay clamped.
 // - bro.time: pause freezes playback in place; scale stretches it, identical
 //   behavior to CSS transitions.
 // - Headless: advanceTime(ms) advances animations deterministically;

@@ -76,6 +76,8 @@ Engine::Engine(const EngineConfig& config)
     titleOverride_ = config.title;
     installHostBindings_ = config.installHostBindings;
     initDevLoopConfig(config);
+    // CSS animations are Web Animations records (css_transitions.h).
+    animationManager_.setWebAnimations(&webAnimationManager_);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     {

@@ -1,6 +1,7 @@
 #pragma once
 
-#include <bromath/curves.h>
+#include "engine/css_easing.h"
+
 #include <css/cascade.h>
 
 #include <cstdint>
@@ -14,10 +15,10 @@ namespace bro::dom { class Element; class Document; }
 
 namespace bro::engine {
 
-// Parse a CSS timing-function string → bromath::CubicEase.
-// Named easings map to standard control points; cubic-bezier(x1,y1,x2,y2) is
-// parsed directly. Unknown / empty → "ease".
-bromath::CubicEase parseTimingFunction(const std::string& val);
+class WebAnimationManager;
+
+// The element or an ancestor computes to display:none.
+bool inDisplayNoneSubtree(dom::Element* elem);
 
 // CSS initial value for a property, shaped to match `refValue` where structure
 // matters (transform identities: "scale(1.4)" → "scale(1)"). Empty string when
@@ -34,7 +35,7 @@ struct Transition {
     double startTime;   // ms (engine time)
     double duration;    // ms
     double delay;       // ms
-    bromath::CubicEase easing;
+    TimingFunction easing;
 };
 
 // Per-element transition state.
@@ -143,72 +144,57 @@ private:
 // CSS Animations (@keyframes)
 // ---------------------------------------------------------------------------
 
-// A single in-flight animation instance on an element.
-struct Animation {
-    std::string name;           // @keyframes name
-    double duration;            // ms
-    double delay;               // ms
-    bromath::CubicEase easing;
-    int iterationCount;         // -1 = infinite
-    bool alternate;             // direction: alternate
-    bool reverse;               // direction: reverse
-    std::string fillMode;       // none, forwards, backwards, both
-    double startTime;           // ms (engine time)
-    int completedIterations = 0;
-    // animation-play-state: while paused, the clock freezes at pausedAt;
-    // resuming shifts startTime forward by the paused span.
-    bool paused = false;
-    double pausedAt = 0;        // ms (engine time), valid while paused
+// A CSS animation IS a Web Animation (CSS Animations 2: a CSSAnimation): each
+// layer of an element's animation-name list owns one record in the
+// WebAnimationManager, which runs, interpolates and composites it exactly as
+// it does element.animate(), and which script reaches through getAnimations().
+// This manager is the markup side of that: it creates, re-times and cancels
+// the records as the animation-* longhands change, keeps them on the current
+// @keyframes, and derives the animationstart / iteration / end / cancel events
+// from each record's phase, so a script seek or pause fires them as on the web.
 
-    // The clock used for progress: frozen at pausedAt while paused.
-    double effectiveTime(double currentTime) const {
-        return paused ? pausedAt : currentTime;
-    }
+// One entry of an element's animation-name list.
+struct CssAnimationLayer {
+    std::string name;
+    uint64_t id = 0;            // WebAnimation record; 0 = no @keyframes of that name
+    // Keyframes the record was built from, to rebuild when the rule changes.
+    const htmlayout::css::KeyframeBlock* block = nullptr;
+    size_t blockHash = 0;
+    TimingFunction timing;      // the layer's animation-timing-function
+    // Phase/iteration last reported through events.
+    int lastPhase = 0;          // WebAnimPhase as int; 0 = Idle
+    double lastIteration = 0;
+    double lastElapsed = 0;     // s of active time, for a script cancel()
 };
 
 struct ElementAnimations {
-    std::vector<Animation> active;
-    // Last-seen animation-name from the cascade. Used to detect when
-    // animation-name actually changes vs. when it's just being re-cascaded
-    // with the same value — only the former should (re)start an animation.
-    std::string previousName;
+    std::vector<CssAnimationLayer> layers;
+    // The animation-* longhands last seen, joined. Unchanged longhands (the
+    // cascade re-resolves an animating element every frame) are a no-op, and
+    // an animation that ran to completion is not restarted by them.
+    std::string signature;
 };
 
 class AnimationManager {
 public:
-    // Called during style resolution to detect animation-name changes.
+    // The record store CSS animations live in. Set once by the engine.
+    void setWebAnimations(WebAnimationManager* web) { web_ = web; }
+
+    // Called during style resolution: reconcile the element's animation-*
+    // longhands with the records it owns.
     void onStyleChange(dom::Element* elem,
                        const htmlayout::css::ComputedStyle& newStyle,
                        double currentTime);
 
-    // Tick all animations. Returns true if any are active.
+    // Queue the animation* events due at `currentTime` and keep records on
+    // their current @keyframes. Frame pumping is the WebAnimationManager's
+    // tick; this returns whether anything was queued.
     bool tick(double currentTime);
-
-    // Apply animation property overrides to computed style.
-    void applyOverrides(dom::Element* elem,
-                        htmlayout::css::ComputedStyle& style,
-                        double currentTime) const;
 
     // Set the keyframe store (from htmlayout Cascade).
     void setKeyframes(const std::vector<htmlayout::css::KeyframeBlock>* kf) {
         keyframes_ = kf;
     }
-
-    bool hasActiveAnimations() const { return !elements_.empty(); }
-
-    // Read-only compositor-hint accessors.
-    // hasActive: element is present with at least one active animation.
-    bool hasActive(dom::Element* elem) const;
-    // activeAnimatesOnly: element has at least one active animation AND the
-    // union of all animated property longhands across its active animations
-    // (resolved via the keyframe blocks, same as applyOverrides) is a non-empty
-    // subset of `allowed`. False if it has no active animations.
-    bool activeAnimatesOnly(dom::Element* elem,
-                            const std::set<std::string>& allowed) const;
-
-    // Elements with ≥1 active animation after the most recent tick(). See the
-    // matching TransitionManager::activeThisTick() note.
-    const std::vector<dom::Element*>& activeThisTick() const { return activeThisTick_; }
 
     // Take all pending events (call from main thread after layout completes).
     std::vector<PendingCSSEvent> takePendingEvents() {
@@ -216,21 +202,17 @@ public:
     }
 
     // See TransitionManager::forgetElement / forgetDocument — the entries here
-    // are keyed by raw Element* in exactly the same way, and this manager holds
-    // them even longer: a completed animation's entry stays behind so
-    // `previousName` can stop the cascade from restarting it, so a removed
-    // element leaks its slot forever unless something drops it. tick()
-    // dereferences the key (`elem->markDirty()`) whenever an animation
-    // completes, which is the crash an element removed mid-animation takes.
+    // are keyed by raw Element* in exactly the same way. Forgetting an
+    // element also cancels the records its layers own.
     void forgetElement(dom::Element* elem);
     void forgetDocument(const dom::Document* doc);
 
     // Whole-document teardown reset — see TransitionManager::clearAll().
     // Also drops the keyframe-store pointer: it aims into the old document's
-    // cascade, which is freed with the document.
+    // cascade, which is freed with the document. (The records go with
+    // WebAnimationManager::clearAll.)
     void clearAll() {
         elements_.clear();
-        activeThisTick_.clear();
         pendingEvents_.clear();
         keyframes_ = nullptr;
     }
@@ -239,17 +221,10 @@ private:
     std::vector<PendingCSSEvent> pendingEvents_;
     const std::vector<htmlayout::css::KeyframeBlock>* keyframes_ = nullptr;
     std::unordered_map<dom::Element*, ElementAnimations> elements_;
-    std::vector<dom::Element*> activeThisTick_;
+    WebAnimationManager* web_ = nullptr;
 
     const htmlayout::css::KeyframeBlock* findKeyframes(const std::string& name) const;
+    void dropLayer(dom::Element* elem, CssAnimationLayer& layer, double now, bool fireCancel);
 };
-
-// True iff the element has active CSS animations and/or transitions and they are
-// ALL confined to transform/opacity — the properties a compositor layer can
-// animate without re-rasterizing surrounding content. Requires at least one of
-// the two managers to report an active animation/transition on the element.
-bool isTransformOpacityOnly(dom::Element* elem,
-                            const AnimationManager& anim,
-                            const TransitionManager& trans);
 
 } // namespace bro::engine
