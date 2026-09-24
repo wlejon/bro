@@ -1213,7 +1213,7 @@ CanvasTextMetrics CanvasScene::measureText(const std::string& text) {
     SkRect ink = SkRect::MakeEmpty();
     if (const render::ShapedRun* run = shapeCurrent(t)) {
         m.width = run->width();
-        ink = run->bounds();
+        ink = run->inkBounds();
     }
 
     // Everything below is relative to the alignment point. `anchorX` is where

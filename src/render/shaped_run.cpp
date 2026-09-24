@@ -147,6 +147,39 @@ void ShapedRun::finalize() {
     }
 }
 
+SkRect ShapedRun::inkBounds() const {
+    struct Ctx {
+        const ShapedRun* run;
+        const GlyphRun*  r;
+        std::size_t      k;
+        SkRect           ink;
+    } ctx{this, nullptr, 0, SkRect::MakeEmpty()};
+    for (const auto& r : runs_) {
+        if (r.count == 0) continue;
+        ctx.r = &r;
+        ctx.k = 0;
+        // getPaths visits the glyphs in order, one callback each, with the
+        // path in glyph space and the matrix that scales it to the font size.
+        r.font.getPaths(
+            SkSpan<const SkGlyphID>(glyphs_.data() + r.first, r.count),
+            [](const SkPath* path, const SkMatrix& mx, void* p) {
+                auto& c = *static_cast<Ctx*>(p);
+                const std::size_t gi = c.r->first + c.k++;
+                SkRect b;
+                if (path) {
+                    if (path->isEmpty()) return;
+                    b = mx.mapRect(path->getBounds());
+                } else {
+                    b = c.r->font.getBounds(c.run->glyphs_[gi], nullptr);
+                }
+                const SkPoint at = c.run->positions_[gi] + c.run->offsets_[gi];
+                c.ink.join(b.makeOffset(at.fX, at.fY));
+            },
+            &ctx);
+    }
+    return ctx.ink;
+}
+
 // Visit clusters in visual order with the pen x that `spacing` puts them at.
 // Letter-spacing goes between clusters (never after the last, so the drawn
 // extent matches the layout box and centered text is not dragged left);
