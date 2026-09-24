@@ -73,13 +73,15 @@ let events = [];
 let onchangeFires = 0;
 let legacyFires = 0;
 let styleAtEvent = '';
+let onchangeCurrentTarget = null;
 const listener = (ev) => {
-  events.push({ matches: ev.matches, media: ev.media, type: ev.type });
+  events.push({ matches: ev.matches, media: ev.media, type: ev.type,
+                target: ev.target, currentTarget: ev.currentTarget });
   styleAtEvent = getComputedStyle(box).backgroundColor;
 };
 dark.addEventListener('change', listener);
 dark.addEventListener('change', listener); // dupe registers once
-dark.onchange = () => { onchangeFires++; };
+dark.onchange = (ev) => { onchangeFires++; onchangeCurrentTarget = ev.currentTarget; };
 dark.addListener(() => { legacyFires++; });
 
 bro.settings.set('appearance.colorScheme', 'dark');
@@ -88,7 +90,10 @@ assert(events.length === 1, 'one change event on flip to dark, got ' + events.le
 assert(events[0].matches === true, 'event.matches is the new state');
 assert(events[0].media === '(prefers-color-scheme: dark)', 'event.media set, got ' + events[0].media);
 assert(events[0].type === 'change', 'event.type is change');
+assert(events[0].target === dark, 'event.target is the list');
+assert(events[0].currentTarget === dark, 'event.currentTarget is the list');
 assert(onchangeFires === 1, 'onchange fired once, got ' + onchangeFires);
+assert(onchangeCurrentTarget === dark, 'onchange sees currentTarget === the list');
 assert(legacyFires === 1, 'legacy addListener fired once, got ' + legacyFires);
 assert(dark.matches === true, 'mql.matches updated');
 assert(styleAtEvent.indexOf('200') !== -1,

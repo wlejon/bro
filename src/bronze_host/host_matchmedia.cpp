@@ -334,6 +334,15 @@ void deliverHostMediaQueryChanges() {
             evt.set("matches", ev::fromBool(freshMatches));
             evt.set("media", ev::fromUtf8(st->media));
             evt.set("target", st->mqlObj.get());
+            // Dispatched at the list itself: it is also the current target,
+            // at-target phase, and the event neither bubbles nor cancels.
+            evt.set("currentTarget", st->mqlObj.get());
+            evt.set("srcElement", st->mqlObj.get());
+            evt.set("eventPhase", ev::fromDouble(2));
+            evt.set("bubbles", ev::fromBool(false));
+            evt.set("cancelable", ev::fromBool(false));
+            evt.set("defaultPrevented", ev::fromBool(false));
+            evt.set("isTrusted", ev::fromBool(true));
             // Everything held across the listener calls is rooted: the calls,
             // the document wrapper and the property writes all allocate.
             ev::Persistent evRoot(evt.get());
