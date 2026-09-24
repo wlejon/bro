@@ -2,6 +2,7 @@
 
 #include "bronze_host/native_scene_internal.h"
 #include "bronze_host/host_natives.h"
+#include "bronze_host/native_physics_internal.h"
 #include "natives/scene/native_scene_decl.h"
 #include "scene/particles3d_node.h"
 #include "scene/physics_node.h"
@@ -640,7 +641,12 @@ void* bro_scene_SceneGraph_createPhysicsNode(void* self, const char* jsonOpts) {
             } else if (j.contains("pixelsPerMeter") && j["pixelsPerMeter"].is_number()) {
                 node->setPixelsPerUnit(j["pixelsPerMeter"].get<float>());
             }
-            if (j.contains("bodyId") && j["bodyId"].is_number_unsigned()) {
+            // `body` is the JS body tag Physics.createBody returns; `bodyId`
+            // is the raw Jolt id, kept for callers that already hold one.
+            if (j.contains("body") && j["body"].is_number_integer()) {
+                JPH::BodyID id = getActiveWorld()->bodyIdForTag(j["body"].get<int32_t>());
+                if (!id.IsInvalid()) node->setBody(id);
+            } else if (j.contains("bodyId") && j["bodyId"].is_number_unsigned()) {
                 node->setBody(JPH::BodyID(j["bodyId"].get<uint32_t>()));
             }
         } catch (const std::exception& e) {

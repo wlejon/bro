@@ -92,6 +92,16 @@ if (!scene) {
         assert(pn.bodyId === null, 'no body: bodyId is null, got ' + pn.bodyId);
         const pn2 = scene.createPhysicsNode({ bodyId: 7 });
         assert(pn2.bodyId === 7, 'bodyId reads the body the node was given, got ' + pn2.bodyId);
+        // `body` takes the tag Physics.createBody returns and binds the Jolt body.
+        if (typeof Physics !== 'undefined') {
+            const tag = Physics.createBody({ shape: 'box', halfExtents: { x: 1, y: 1, z: 1 },
+                                             position: { x: 3, y: 2, z: 0 }, static: true });
+            const pn3 = scene.createPhysicsNode({ body: tag });
+            assert(pn3.bodyId !== null, 'body tag binds the node, got ' + pn3.bodyId);
+            scene.syncPhysics();
+            assert(near(pn3.x, 3) && near(pn3.y, 2), 'tagged node syncs to its body: ' + pn3.x + ',' + pn3.y);
+            Physics.destroyBody(tag);
+        }
     }
     assert(m.bodyId === undefined, 'bodyId is undefined off physics nodes');
 
