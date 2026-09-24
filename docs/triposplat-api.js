@@ -13,10 +13,12 @@
  * generate() preprocesses the image (alpha-eroded bounding box, cover-fit into
  * a 1024² canvas, composited over black by its own alpha), runs the encoder,
  * draws seeded noise, samples the latent and decodes it to Gaussians. The
- * cloud comes back as typed arrays in the scene's Y-up convention — the
- * sampler works Z-up and the binding rotates positions and quaternions on the
- * way out — so it feeds scene.createGaussianSplat({ cloud }) directly (EWA
- * splatting, see docs/scene-api.js).
+ * cloud comes back as typed arrays in the scene's Y-up convention, the subject
+ * upright and facing +Z (the image's left on -x, as a camera on +Z sees it) —
+ * the sampler works Z-up facing +X and the binding rotates positions and
+ * quaternions on the way out — so it feeds scene.createGaussianSplat({ cloud })
+ * directly (EWA splatting, see docs/scene-api.js). exportPLY/exportSplat
+ * write the same scene-space cloud.
  *
  * GPU by default (FP16), like every bro ML namespace: gate the load on
  * `bro.gpu`. The pipeline is heavy — seconds to a couple of minutes per image —
