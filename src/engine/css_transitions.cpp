@@ -398,13 +398,35 @@ void AnimationManager::onStyleChange(dom::Element* elem,
         auto it = newStyle.find(prop);
         return it != newStyle.end() ? firstLayer(it->second) : std::string();
     };
+    // Cancel every running animation on `ea` except one named `keep`: an
+    // animation stops the moment animation-name stops naming it, with an
+    // animationcancel event (CSS Animations §4.2).
+    auto cancelOthers = [&](ElementAnimations& ea, const std::string& keep) {
+        ea.active.erase(
+            std::remove_if(ea.active.begin(), ea.active.end(),
+                [&](const Animation& a) {
+                    if (a.name == keep) return false;
+                    double elapsed = a.effectiveTime(currentTime) - a.startTime - a.delay;
+                    pendingEvents_.push_back({elem, "animationcancel", a.name,
+                                              std::max(0.0, elapsed) / 1000.0});
+                    return true;
+                }),
+            ea.active.end());
+    };
+
     animName = longhand("animation-name");
     if (animName.empty() || animName == "none") {
-        // animation-name has been cleared. Reset the previousName memo so
-        // that re-applying the same animation later (e.g. by re-adding a
-        // class) triggers a fresh start, per CSS Animations §4.2.
+        // animation-name has been cleared: the animation is cancelled, and
+        // the previousName memo reset so that re-applying the same animation
+        // later (e.g. by re-adding a class) is a fresh start. Keeping the
+        // animation running here left an infinite animation spinning after
+        // its class was removed, and a remove + re-add carried on from the
+        // old start instead of restarting.
         auto eit = elements_.find(elem);
-        if (eit != elements_.end()) eit->second.previousName.clear();
+        if (eit != elements_.end()) {
+            eit->second.previousName.clear();
+            cancelOthers(eit->second, std::string());
+        }
         return;
     }
     durStr = longhand("animation-duration");
@@ -443,6 +465,10 @@ void AnimationManager::onStyleChange(dom::Element* elem,
         return;
     }
     ea.previousName = animName;
+
+    // A different name replaces whatever ran before (this manager runs the
+    // first layer only).
+    cancelOthers(ea, animName);
 
     // Belt-and-braces: if the same name is somehow already in the
     // active list (e.g. previousName was cleared mid-flight), don't
