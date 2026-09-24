@@ -7,6 +7,7 @@
 #include "scene/reflection_probe_node.h"
 #include "scene/particle_node.h"
 #include "scene/particles3d_node.h"
+#include "scene/sprite_node.h"
 #include "scene/html_node.h"
 #include <bromesh/animation/pose.h>
 #include <bromesh/rigging/auto_rig.h>
@@ -543,8 +544,11 @@ bool bro_scene_SceneNode_skinReady_get(void* self) {
     return sm ? sm->skinReady() : false;
 }
 
+// A sprite's sheet animation answers the same two getters as a skinned
+// mesh's clip player.
 bool bro_scene_SceneNode_isPlaying_get(void* self) {
     auto* n = nodeOf(self);
+    if (n && n->type() == scene::SceneNode::Type::Sprite) return static_cast<scene::SpriteNode*>(n)->isPlaying();
     if (!n || n->type() != scene::SceneNode::Type::Mesh) return false;
     auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
     return (sm && sm->player()) ? sm->player()->isPlaying() : false;
@@ -552,6 +556,7 @@ bool bro_scene_SceneNode_isPlaying_get(void* self) {
 
 const char* bro_scene_SceneNode_currentAnimation_get(void* self) {
     auto* n = nodeOf(self);
+    if (n && n->type() == scene::SceneNode::Type::Sprite) return static_cast<scene::SpriteNode*>(n)->currentAnimation().c_str();
     if (!n || n->type() != scene::SceneNode::Type::Mesh) return "";
     auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
     return (sm && sm->player()) ? sm->player()->currentClip().c_str() : "";
