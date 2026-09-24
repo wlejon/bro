@@ -2,10 +2,12 @@
 #include "engine/css_transitions.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/shadow_root.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace bro::engine {
@@ -151,6 +153,13 @@ void WebAnimationManager::cancelFromMarkup(uint64_t id) {
     if (wasActive) pendingCanceled_.push_back(id);
 }
 
+void WebAnimationManager::disownFromMarkup(uint64_t id) {
+    WebAnimation* a = find(id);
+    if (!a) return;
+    a->cssOwned = false;
+    if (!a->wrapped) erase(id);
+}
+
 dom::Element* WebAnimationManager::resolveElement(const WebAnimation& a) const {
     if (!a.elem || !dom::Document::isLiveDocument(a.doc)) return nullptr;
     dom::Node* n = a.doc->resolveNode(a.elem, a.nodeId);
@@ -201,6 +210,7 @@ void WebAnimationManager::pause(WebAnimation& a, double now) {
 }
 
 void WebAnimationManager::cancelOp(WebAnimation& a) {
+    if (a.state != WebAnimState::Idle) a.settling = true;
     a.hasStartTime = false;
     a.hasHoldTime = false;
     a.state = WebAnimState::Idle;
@@ -213,6 +223,7 @@ void WebAnimationManager::finishOp(WebAnimation& a) {
     a.hasHoldTime = true;
     a.hasStartTime = false;
     a.state = WebAnimState::Finished;
+    a.settling = !a.fillsForwards();
     a.finishNotified = true; // delivered synchronously by the binding
 }
 
@@ -380,6 +391,7 @@ bool WebAnimationManager::tick(double now) {
                     a.hasHoldTime = true;
                     a.hasStartTime = false;
                     a.state = WebAnimState::Finished;
+                    a.settling = !a.fillsForwards();
                     if (!a.finishNotified) {
                         a.finishNotified = true;
                         pendingFinished_.push_back(a.id);
@@ -389,12 +401,9 @@ bool WebAnimationManager::tick(double now) {
                     // same settling markDirty the CSS managers issue.
                     if (elem) elem->markDirty();
                     anyCompleted = true;
-                } else if (a.cssOwned && elem && inDisplayNoneSubtree(elem)) {
-                    // A CSS animation under display:none does not drive frames:
-                    // an infinite spinner in a hidden overlay must not pin the
-                    // document on the re-layout path. Its clock runs on, so it
-                    // is where it should be when shown again.
                 } else {
+                    // (CSS animations and transitions under display:none do
+                    // not get here: display:none cancels them.)
                     anyActive = true;
                     if (elem) activeThisTick_.push_back(elem);
                 }
@@ -506,16 +515,60 @@ std::vector<uint64_t> WebAnimationManager::animationsFor(const dom::Element* ele
     return out;
 }
 
-std::vector<uint64_t> WebAnimationManager::allAnimations(double now) const {
-    // CSS animations first, then script animations, each in creation order —
-    // the document-wide composite order without a tree walk.
-    std::vector<const WebAnimation*> list;
-    for (const auto& [id, a] : records_) {
-        if (a.elem && isRelevant(a, now)) list.push_back(&a);
+namespace {
+
+// A node's position in shadow-including tree order, as the child indices
+// from its root down (a shadow root is its host's first child, index -1).
+// Lexicographic order of these paths is tree order: an ancestor's path is a
+// prefix of its descendants', and prefixes sort first.
+std::vector<int> treePath(const dom::Node* n) {
+    std::vector<int> path;
+    while (n) {
+        const dom::Node* parent = n->parentNode();
+        if (!parent) {
+            if (auto* sr = dynamic_cast<const dom::ShadowRoot*>(n)) {
+                path.push_back(-1);
+                n = sr->host();
+                continue;
+            }
+            break;
+        }
+        const auto& kids = parent->childNodes();
+        auto it = std::find(kids.begin(), kids.end(), n);
+        path.push_back(static_cast<int>(it - kids.begin()));
+        n = parent;
     }
-    std::sort(list.begin(), list.end(), [](const WebAnimation* x, const WebAnimation* y) {
-        if (x->cssOwned != y->cssOwned) return x->cssOwned;
-        return x->id < y->id;
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
+}  // namespace
+
+std::vector<uint64_t> WebAnimationManager::allAnimations(double now) const {
+    // Document composite order (Web Animations §5.4.2 with CSS Transitions 2
+    // / CSS Animations 2): CSS transitions, then CSS animations, each sorted
+    // by the tree order of their owning elements and then by their order on
+    // the element; then script animations in creation order.
+    std::vector<const WebAnimation*> list;
+    std::unordered_map<const dom::Element*, std::vector<int>> paths;
+    for (const auto& [id, a] : records_) {
+        if (!a.elem || !isRelevant(a, now)) continue;
+        if (a.cssOwned && !paths.count(a.elem)) {
+            dom::Element* el = resolveElement(a);
+            paths.emplace(a.elem, el ? treePath(el) : std::vector<int>{});
+        }
+        list.push_back(&a);
+    }
+    std::sort(list.begin(), list.end(), [&](const WebAnimation* x, const WebAnimation* y) {
+        const bool xs = x->cssOwned, ys = y->cssOwned;
+        if (xs != ys) return xs;
+        if (xs && x->isCssTransition != y->isCssTransition) return x->isCssTransition;
+        if (xs && x->elem != y->elem) {
+            const auto& px = paths[x->elem];
+            const auto& py = paths[y->elem];
+            if (px != py) return px < py;
+        }
+        return compositeOrderLess(*x, *y);
     });
     std::vector<uint64_t> out;
     out.reserve(list.size());

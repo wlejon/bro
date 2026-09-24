@@ -366,11 +366,9 @@ void Document::resolveStylesRecursive(Element* elem,
     // document, so the cached base is never re-recorded on its account. Without
     // this, applyOverrides only ran on the frame the animation was registered
     // and every animation froze on its first applied value.
-    // (CSS animations are Web Animations records, so the web manager answers
-    // for them too.)
-    bool animatingSelf =
-        (transitionManager_ && transitionManager_->hasActive(elem)) ||
-        (webAnimationManager_ && webAnimationManager_->hasActive(elem));
+    // (CSS animations and transitions are Web Animations records, so the web
+    // manager answers for all three kinds.)
+    bool animatingSelf = webAnimationManager_ && webAnimationManager_->hasActive(elem);
 
     bool needsResolve = force || selDirty || hoverResolve || elem->isDirty() ||
                         elem->computedStyle().empty() || animatingSelf;
@@ -518,16 +516,23 @@ void Document::resolveStylesRecursive(Element* elem,
         // same pointer when its contents did not change, so the descendants'
         // pointer comparison above stays quiet across an unrelated re-resolve.
         computed.stableChildVarsFrom(elem->computedStyle());
+        // display:none flipping here takes the subtree out of (or back into)
+        // the rendering without re-resolving it: the CSS animations and
+        // transitions under it must hear of it in this same pass.
+        auto isNone = [](const htmlayout::css::ComputedStyle& s) {
+            auto it = s.find("display");
+            return it != s.end() && it->second == "none";
+        };
+        const bool displayFlipped = isNone(elem->computedStyle()) != isNone(computed);
         elem->setComputedStyle(std::move(computed));
-
-        // CSS transitions: apply interpolated overrides after setting style
-        if (transitionManager_) {
-            transitionManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
+        if (displayFlipped) {
+            if (transitionManager_) transitionManager_->displayToggled(elem);
+            if (animationManager_) animationManager_->displayToggled(elem);
         }
 
-        // Animations, above the transitions: CSS @keyframes animations (in
-        // animation-name order), then script animations (element.animate) —
-        // one Web Animations stack, one composite order.
+        // Transitions and animations: CSS transitions, then CSS @keyframes
+        // animations (in animation-name order), then script animations
+        // (element.animate) — one Web Animations stack, one composite order.
         if (webAnimationManager_) {
             webAnimationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }

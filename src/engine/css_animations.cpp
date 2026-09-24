@@ -16,12 +16,11 @@
 
 namespace bro::engine {
 
-// Per CSS Animations §4: setting display:none on an element (or any ancestor)
-// takes it out of the rendering. Its animations keep their records (they
-// resume, at the time their clock reached, if it is shown again) but must not
-// report themselves active — otherwise a single infinite animation on a
-// hidden element (a load spinner in a display:none overlay, say) pins the
-// whole document on the re-layout + re-raster path every frame.
+// Per CSS Animations §3: setting display:none on an element (or any ancestor)
+// takes it out of the rendering and cancels its animations (animationcancel);
+// displaying it again starts them afresh. CSS transitions are cancelled the
+// same way. So a load spinner in a hidden overlay neither runs nor pins the
+// document on the re-layout path.
 bool inDisplayNoneSubtree(dom::Element* elem) {
     for (dom::Element* e = elem; e; e = e->parentElement()) {
         const auto& cs = e->computedStyle();
@@ -29,6 +28,17 @@ bool inDisplayNoneSubtree(dom::Element* elem) {
         if (it != cs.end() && it->second == "none") return true;
     }
     return false;
+}
+
+bool isElementAncestor(const dom::Element* ancestor, dom::Element* elem) {
+    for (dom::Element* e = elem ? elem->parentElement() : nullptr; e; e = e->parentElement())
+        if (e == ancestor) return true;
+    return false;
+}
+
+void AnimationManager::displayToggled(dom::Element* ancestor) {
+    for (auto& [elem, ea] : elements_)
+        if (isElementAncestor(ancestor, elem)) elem->markDirty();
 }
 
 namespace {
@@ -200,13 +210,21 @@ void AnimationManager::onStyleChange(dom::Element* elem,
         signature += '\x1f';
         lists.push_back(v.empty() ? std::vector<std::string>{} : splitCSS(v));
     }
-    const std::vector<std::string>& names = lists[0];
-    const bool none = std::all_of(names.begin(), names.end(),
+    const bool none = std::all_of(lists[0].begin(), lists[0].end(),
                                   [](const std::string& n) { return n.empty() || n == "none"; });
+    // Not rendered: no animation runs (those running are cancelled below, as
+    // if the names had gone), and they start afresh once it is displayed.
+    auto dispIt = newStyle.find("display");
+    const bool hidden = (dispIt != newStyle.end() && dispIt->second == "none") ||
+                        inDisplayNoneSubtree(elem->parentElement());
+    if (hidden) signature += "\x1ehidden";
+    static const std::vector<std::string> kNoNames;
+    const std::vector<std::string>& names = hidden ? kNoNames : lists[0];
 
     auto eit = elements_.find(elem);
     if (eit == elements_.end() && none) return;
     ElementAnimations& ea = elements_[elem];
+    ea.hidden = hidden;
     // Unchanged longhands: the per-frame re-resolve of an animating element,
     // or a finished animation whose name is still set (which must not
     // restart it — an animation starts only when animation-name changes).
@@ -296,8 +314,26 @@ bool AnimationManager::tick(double currentTime) {
     const size_t before = pendingEvents_.size();
 
     for (auto& [elem, ea] : elements_) {
-        // Hidden: no events until it is shown; the phase catches up then.
-        if (inDisplayNoneSubtree(elem)) continue;
+        // display:none on an ancestor takes the element out of the rendering
+        // without re-resolving it: cancel its animations here. Shown again,
+        // it re-resolves and they start from the beginning.
+        const bool hiddenNow = inDisplayNoneSubtree(elem);
+        if (ea.hidden) {
+            if (!hiddenNow) {
+                ea.hidden = false;
+                ea.signature.clear();
+                elem->markDirty();
+            }
+            continue;
+        }
+        if (hiddenNow) {
+            for (CssAnimationLayer& layer : ea.layers)
+                dropLayer(elem, layer, currentTime, /*fireCancel=*/true);
+            ea.hidden = true;
+            ea.signature.clear();
+            elem->markDirty();  // drop the values the animations applied
+            continue;
+        }
 
         for (CssAnimationLayer& layer : ea.layers) {
             if (!layer.id) {

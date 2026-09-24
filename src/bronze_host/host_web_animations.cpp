@@ -39,6 +39,9 @@ HostClass g_animationClass;
 // CSSAnimation: the object a CSS @keyframes animation is seen through — an
 // Animation with an animationName (CSS Animations 2).
 HostClass g_cssAnimationClass;
+// CSSTransition: a running CSS transition — an Animation with a
+// transitionProperty (CSS Transitions 2).
+HostClass g_cssTransitionClass;
 
 std::unordered_map<uint64_t, AnimationState*>& liveStates() {
     static auto* m = new std::unordered_map<uint64_t, AnimationState*>();
@@ -349,7 +352,9 @@ Value wrapAnimation(uint64_t id, const std::string& name = "") {
     auto* st = new AnimationState();
     st->id = id;
     st->name = name;
-    HostClass& cls = rec && rec->isCssAnimation ? g_cssAnimationClass : g_animationClass;
+    HostClass& cls = rec && rec->isCssAnimation    ? g_cssAnimationClass
+                     : rec && rec->isCssTransition ? g_cssTransitionClass
+                                                   : g_animationClass;
     ObjectBuilder b(cls.make(st, animationFinalizer));
     Value obj = b.get();
     st->self = ev::Persistent(obj);
@@ -630,6 +635,13 @@ void decorateCssAnimationProto(ObjectBuilder& b) {
     }, nullptr);
 }
 
+void decorateCssTransitionProto(ObjectBuilder& b) {
+    b.accessor("transitionProperty", [](Value self_, std::span<const Value>) {
+        Call c = callOf(self_);
+        return ev::fromUtf8(c.rec ? c.rec->cssProperty : std::string());
+    }, nullptr);
+}
+
 } // namespace
 
 void installWebAnimationGlobals() {
@@ -645,6 +657,8 @@ void installWebAnimationGlobals() {
     g_animationClass.install("Animation", 0, animationConstructor, decorateAnimationProto);
     g_cssAnimationClass.install("CSSAnimation", 0, nullptr, decorateCssAnimationProto);
     g_cssAnimationClass.inherit(g_animationClass);
+    g_cssTransitionClass.install("CSSTransition", 0, nullptr, decorateCssTransitionProto);
+    g_cssTransitionClass.inherit(g_animationClass);
 
     if (ev::isFunction(s_skeletalAnimationCtor.get())) {
         Value skelProto = ev::getProperty(s_skeletalAnimationCtor.get(), "prototype");
@@ -660,6 +674,7 @@ void installWebAnimationGlobals() {
     ev::registerGlobal("Animation", g_animationClass.constructor());
     ev::registerGlobal("WebAnimation", g_animationClass.constructor());
     ev::registerGlobal("CSSAnimation", g_cssAnimationClass.constructor());
+    ev::registerGlobal("CSSTransition", g_cssTransitionClass.constructor());
     // Each global object is rooted across its defines (setProperty allocates).
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) {
@@ -667,6 +682,7 @@ void installWebAnimationGlobals() {
         ev::setProperty(global, "Animation", g_animationClass.constructor());
         ev::setProperty(global, "WebAnimation", g_animationClass.constructor());
         ev::setProperty(global, "CSSAnimation", g_cssAnimationClass.constructor());
+        ev::setProperty(global, "CSSTransition", g_cssTransitionClass.constructor());
     }
     ev::GlobalValue win = ev::globalValue("window");
     if (win.found && ev::isObject(win.value)) {
@@ -674,6 +690,7 @@ void installWebAnimationGlobals() {
         ev::setProperty(window, "Animation", g_animationClass.constructor());
         ev::setProperty(window, "WebAnimation", g_animationClass.constructor());
         ev::setProperty(window, "CSSAnimation", g_cssAnimationClass.constructor());
+        ev::setProperty(window, "CSSTransition", g_cssTransitionClass.constructor());
     }
 }
 

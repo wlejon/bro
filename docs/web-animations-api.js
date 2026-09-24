@@ -1,12 +1,14 @@
 /**
- * element.animate(), Web Animations API, and CSS animations as CSSAnimation
+ * element.animate(), Web Animations API, CSS animations as CSSAnimation and
+ * CSS transitions as CSSTransition
  *
  * One animation model: a CSS @keyframes animation IS a Web Animation (a
- * CSSAnimation, per CSS Animations 2), listed by getAnimations() and driven by
- * the same engine records as element.animate(). Interpolated values are
- * injected into computed style during style resolution (above CSS
- * transitions; CSS animations first in animation-name order, then script
- * animations in creation order), the clock is the engine's scaled bro.time
+ * CSSAnimation, per CSS Animations 2), and so is a running CSS transition (a
+ * CSSTransition, per CSS Transitions 2), listed by getAnimations() and driven
+ * by the same engine records as element.animate(). Interpolated values are
+ * injected into computed style during style resolution (CSS transitions
+ * first, then CSS animations in animation-name order, then script animations
+ * in creation order; later wins), the clock is the engine's scaled bro.time
  * clock (bro.time.paused freezes them, bro.time.scale stretches them),
  * transform/opacity-only animations get compositor-layer promotion, and
  * headless advanceTime(ms) drives them deterministically.
@@ -37,17 +39,14 @@
  *     once, like setting playbackRate. `effect` cannot be swapped and has no
  *     setKeyframes; `timeline` is always document.timeline; `new
  *     KeyframeEffect(...)` is not constructible; iterationStart is always 0.
- *   - document.getAnimations() orders CSS animations before script ones,
- *     each in creation order (not a full tree-order sort).
  *   - Object-form keyframes distribute values evenly; an explicit `offset`
  *     list inside the object form is ignored (use the array form for
  *     explicit offsets). An `easing` array is applied cyclically across the
  *     merged keyframes.
  *   - reverse() on an infinite animation seeks to 0 (spec throws).
- *   - A CSS animation under display:none keeps its record (and its clock);
- *     it stops driving frames and events until shown again, where the spec
- *     cancels it.
- *   - CSS transitions are not yet CSSTransition objects in getAnimations().
+ *   - Transitions start for any computed value that changes under a matching
+ *     transition-property, discrete ones included (they snap at 50%);
+ *     transition-behavior is not consulted.
  *
  * LIFETIME:
  *   - The Animation object holds an id into an engine-side record, never a
@@ -193,22 +192,52 @@ cssAnim.pause(); cssAnim.currentTime = 500; cssAnim.play();
 // - animationstart / animationiteration / animationend / animationcancel
 //   fire from its phase, so a script seek or finish() fires them too
 //   (animationstart after the delay, not when the name is set).
+// - display:none on the element or an ancestor cancels it (animationcancel;
+//   it leaves getAnimations()); displayed again, a new CSSAnimation starts
+//   from the beginning.
+
+// ── CSS transitions (CSSTransition) ──────────────────────────────────────────
+//
+// A running transition is a CSSTransition, an Animation with one extra member:
+el.style.opacity = '0';    // under `transition: opacity 1s`
+const tr = el.getAnimations().find((a) => a instanceof CSSTransition);
+tr.transitionProperty;     // 'opacity' (the longhand, also under `all`)
+// Two keyframes, from the value before the change to the value after; its
+// duration and delay come from transition-duration / -delay, and the
+// transition-timing-function is the first keyframe's easing (getTiming()
+// .easing is 'linear'). The start value holds through the delay.
+// - Script can pause, seek, finish() or cancel() it; either of the last two
+//   leaves the element on the end value, with no new transition.
+// - Changing the value mid-flight cancels it and starts a new CSSTransition
+//   from where it had got to; going back to where it came from is shortened
+//   to the time it had run (CSS Transitions §3.1 reversing).
+// - It is cancelled when transition-property stops naming the property, and
+//   by display:none on the element or an ancestor; no transition starts on an
+//   element that is, or was just, display:none.
+// - transitionrun (at once) / transitionstart (after the delay) /
+//   transitionend / transitioncancel fire from its phase, so a script seek,
+//   finish() or cancel() fires them too.
+// - Done, it leaves getAnimations() (a transition does not fill forwards).
 
 // ── Enumeration ──────────────────────────────────────────────────────────────
 
 el.getAnimations();        // Animation[] for this element (running/paused +
-                           // finished-while-filling-forwards), CSS animations
-                           // first in animation-name order then script ones
-                           // in creation order, identity-preserving (same
+                           // finished-while-filling-forwards) in composite
+                           // order: CSS transitions, then CSS animations in
+                           // animation-name order, then script ones in
+                           // creation order; identity-preserving (same
                            // objects you got back). Styles are brought up to
-                           // date first, so an animation a class change just
-                           // started is listed.
-document.getAnimations();  // the same across the whole document
+                           // date first, so an animation or transition a
+                           // class change just started is listed.
+document.getAnimations();  // the whole document: CSS transitions, then CSS
+                           // animations, each by the tree order of their
+                           // elements, then script animations by creation
 
 // ── Interplay ────────────────────────────────────────────────────────────────
 //
 // - Overrides inline style and the cascade while active, and sits above CSS
-//   transitions AND CSS animations for the properties it animates.
+//   transitions AND CSS animations for the properties it animates. A value
+//   an animation drives never starts a CSS transition.
 // - An overshooting easing (cubic-bezier with y outside [0,1]) extrapolates
 //   past the end keyframes, as on the web; opacity and alpha stay clamped.
 // - bro.time: pause freezes playback in place; scale stretches it, identical

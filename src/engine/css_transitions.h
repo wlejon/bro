@@ -20,6 +20,9 @@ class WebAnimationManager;
 // The element or an ancestor computes to display:none.
 bool inDisplayNoneSubtree(dom::Element* elem);
 
+// `ancestor` is a proper ancestor of `elem` (parent-element chain).
+bool isElementAncestor(const dom::Element* ancestor, dom::Element* elem);
+
 // CSS initial value for a property, shaped to match `refValue` where structure
 // matters (transform identities: "scale(1.4)" → "scale(1)"). Empty string when
 // no useful initial exists. Shared by the transition, CSS-animation, and Web
@@ -27,23 +30,38 @@ bool inDisplayNoneSubtree(dom::Element* elem);
 std::string cssInitialValueForProperty(const std::string& prop,
                                        const std::string& refValue);
 
-// A single in-flight property transition.
-struct Transition {
+// ---------------------------------------------------------------------------
+// CSS Transitions
+// ---------------------------------------------------------------------------
+
+// A running CSS transition IS a Web Animation (CSS Transitions 2: a
+// CSSTransition): a two-keyframe record in the WebAnimationManager, which
+// runs, interpolates and composites it like any animation and which script
+// reaches through getAnimations(). This manager is the markup side: it starts,
+// retargets (with the reversing shortening of CSS Transitions §3.1) and
+// cancels those records as style changes, and derives transitionrun / start /
+// end / cancel from each record's phase, so a script seek or cancel fires
+// them as on the web.
+
+// One running transition of an element.
+struct RunningTransition {
     std::string property;
-    std::string startValue;
+    uint64_t id = 0;                    // WebAnimation record
     std::string endValue;
-    double startTime;   // ms (engine time)
-    double duration;    // ms
-    double delay;       // ms
-    TimingFunction easing;
+    std::string reversingAdjustedStart; // CSS Transitions §3.1
+    double shorteningFactor = 1.0;
+    int lastPhase = -1;                 // WebAnimPhase as int; -1 = not reported yet
+    double lastElapsed = 0;             // s of active time, for transitioncancel
 };
 
 // Per-element transition state.
 struct ElementTransitions {
-    std::vector<Transition> active;
-    // The "resting" computed style — what cascade produced last time,
-    // before transition overrides were applied.
-    htmlayout::css::ComputedStyle targetStyle;
+    std::vector<RunningTransition> running;
+    // Transitions that just completed (or script cancelled): property → end
+    // value. The next style change of the element must not start a new
+    // transition from the value the finished one last applied to the value it
+    // ended on; it consumes these.
+    std::vector<std::pair<std::string, std::string>> completed;
 };
 
 // Queued CSS event for thread-safe dispatch.
@@ -58,40 +76,30 @@ struct PendingCSSEvent {
 // Manages CSS transitions for all elements.
 class TransitionManager {
 public:
-    // Called during style resolution. Compares oldStyle to newStyle and starts
-    // transitions for properties that have transition-* declarations.
-    // Modifies newStyle in-place: for transitioning properties, the value is
-    // set to the interpolated value (not the target).
+    // The record store transitions live in. Set once by the engine.
+    void setWebAnimations(WebAnimationManager* web) { web_ = web; }
+
+    // Called during style resolution with the element's previous computed
+    // style and the cascade's new one: starts, retargets and cancels the
+    // element's transitions. A property with a transition in flight keeps its
+    // previous value in newStyle (the record's interpolated value replaces it
+    // when the Web Animations overrides apply), so the style diff does not
+    // count a running transition as a style change of its own.
     void onStyleChange(dom::Element* elem,
                        const htmlayout::css::ComputedStyle& oldStyle,
                        htmlayout::css::ComputedStyle& newStyle,
                        double currentTime);
 
-    // Tick all active transitions. Returns true if any transitions are active
-    // (meaning the document should be marked dirty for re-render).
+    // Queue the transition* events due at `currentTime`, retire completed
+    // transitions and cancel those display:none took out of the rendering.
+    // Frame pumping is the WebAnimationManager's tick; this returns whether
+    // anything was queued or completed.
     bool tick(double currentTime);
 
-    // Apply transition overrides to an element's computed style.
-    // Called after resolveStyles to re-inject interpolated values.
-    void applyOverrides(dom::Element* elem, htmlayout::css::ComputedStyle& style,
-                        double currentTime);
-
-    // Check if any transitions are running.
-    bool hasActiveTransitions() const { return !elements_.empty(); }
-
-    // Read-only compositor-hint accessors.
-    // hasActive: element is present with at least one active transition.
-    bool hasActive(dom::Element* elem) const;
-    // activeAnimatesOnly: element has at least one active transition AND every
-    // active Transition::property is in `allowed`. False if none are active.
-    bool activeAnimatesOnly(dom::Element* elem,
-                            const std::set<std::string>& allowed) const;
-
-    // Elements with ≥1 active transition after the most recent tick(). tick()
-    // collects these instead of marking them dirty itself, so the layout-thread
-    // coordinator can decide per element whether it's a compositor-promotable
-    // (transform/opacity-only) layer or a base change that must re-record.
-    const std::vector<dom::Element*>& activeThisTick() const { return activeThisTick_; }
+    // `ancestor`'s display flipped to or from none during style resolution:
+    // mark the elements under it that have transitions dirty, so they
+    // re-resolve in the same pass and are cancelled.
+    void displayToggled(dom::Element* ancestor);
 
     // Interpolate between two CSS values at progress t ∈ [0,1].
     static std::string interpolate(const std::string& from, const std::string& to,
@@ -102,9 +110,8 @@ public:
         return std::move(pendingEvents_);
     }
 
-    // Forget everything this manager holds about `elem`: its registered
-    // transitions, its slot in the most recent tick's active list, and any
-    // queued event naming it.
+    // Forget everything this manager holds about `elem`: its transitions
+    // (their records are cancelled) and any queued event naming it.
     //
     // MUST be called before the Element's storage goes away. The keys here are
     // raw Element* (unlike WebAnimationManager, whose records are generation-
@@ -127,17 +134,30 @@ public:
     // Drop every registered transition and queued event. Used when the app
     // document is torn down as a whole (top-level location.reload()) — the
     // Element* keys are about to dangle and per-element removal would need
-    // a full tree walk.
+    // a full tree walk. (The records go with WebAnimationManager::clearAll.)
     void clearAll() {
         elements_.clear();
-        activeThisTick_.clear();
         pendingEvents_.clear();
     }
 
 private:
     std::vector<PendingCSSEvent> pendingEvents_;
     std::unordered_map<dom::Element*, ElementTransitions> elements_;
-    std::vector<dom::Element*> activeThisTick_;
+    WebAnimationManager* web_ = nullptr;
+    uint64_t generation_ = 0;
+
+    // Derive the events for `run`'s phase change since it was last seen.
+    // True when the transition is over (completed, or cancelled by script);
+    // it is then recorded in et.completed and its record let go of.
+    bool advance(dom::Element* elem, ElementTransitions& et, RunningTransition& run,
+                 double now);
+    // Cancel a running transition from markup (transitioncancel if it had
+    // not ended).
+    void cancel(dom::Element* elem, RunningTransition& run, double now);
+    void start(dom::Element* elem, ElementTransitions& et, const std::string& prop,
+               const std::string& from, const std::string& to, double duration,
+               double delay, const TimingFunction& timing, double now,
+               const std::string& reversingAdjustedStart, double shorteningFactor);
 };
 
 // ---------------------------------------------------------------------------
@@ -173,6 +193,9 @@ struct ElementAnimations {
     // cascade re-resolves an animating element every frame) are a no-op, and
     // an animation that ran to completion is not restarted by them.
     std::string signature;
+    // The element (or an ancestor) is display:none: its animations are
+    // cancelled, and start afresh when it is displayed again.
+    bool hidden = false;
 };
 
 class AnimationManager {
@@ -190,6 +213,12 @@ public:
     // their current @keyframes. Frame pumping is the WebAnimationManager's
     // tick; this returns whether anything was queued.
     bool tick(double currentTime);
+
+    // `ancestor`'s display flipped to or from none during style resolution:
+    // mark the elements under it that have CSS animations dirty, so they
+    // re-resolve in the same pass — their animations are cancelled, or start
+    // afresh — and getAnimations() right after the change agrees.
+    void displayToggled(dom::Element* ancestor);
 
     // Set the keyframe store (from htmlayout Cascade).
     void setKeyframes(const std::vector<htmlayout::css::KeyframeBlock>* kf) {

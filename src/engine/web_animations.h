@@ -1,15 +1,17 @@
 #pragma once
 
-// Web Animations: the one animation model behind element.animate() AND CSS
-// @keyframes animations. A CSS animation is a record here like any script
-// animation (a CSSAnimation, per CSS Animations 2): AnimationManager in
-// css_transitions.h creates, updates and cancels it from the element's
-// animation-* longhands and derives the animation* events from its phase,
-// and script sees the very same record through getAnimations() and can pause,
-// seek or re-time it. Records plug into the seams the CSS managers use:
-// applyOverrides() during style resolution injects interpolated values into
-// computed style, tick() advances the clock on the engine's scaled (bro.time)
-// timeline, and activeThisTick() feeds the compositor-promotion decision.
+// Web Animations: the one animation model behind element.animate(), CSS
+// @keyframes animations and CSS transitions. A CSS animation is a record here
+// like any script animation (a CSSAnimation, per CSS Animations 2):
+// AnimationManager in css_transitions.h creates, updates and cancels it from
+// the element's animation-* longhands and derives the animation* events from
+// its phase, and script sees the very same record through getAnimations() and
+// can pause, seek or re-time it. A running CSS transition is one too (a
+// CSSTransition, CSS Transitions 2), owned by TransitionManager the same way.
+// Records plug into the style pipeline here: applyOverrides() during style
+// resolution injects interpolated values into computed style, tick() advances
+// the clock on the engine's scaled (bro.time) timeline, and activeThisTick()
+// feeds the compositor-promotion decision.
 //
 // Threading: identical discipline to TransitionManager — records are mutated
 // by JS on the main thread (only while the layout thread is idle, the same
@@ -42,7 +44,6 @@ namespace bro::dom { class Element; class Document; }
 namespace bro::engine {
 
 class AnimationManager;
-class TransitionManager;
 
 // One keyframe: computed offset in [0,1], optional per-keyframe easing
 // (applies to the segment from this keyframe to the next), and the declared
@@ -125,6 +126,22 @@ struct WebAnimation {
     bool cssPlayOverride = false;
     uint32_t cssTimingOverride = 0; // WebAnimTimingField bits
 
+    // --- CSS transition (CSSTransition) -----------------------------------
+    // A running transition is a record too: two keyframes (the start and end
+    // values), the transition-timing-function as the start keyframe's easing,
+    // a backwards fill for the delay. cssOwned while the transition is running.
+    bool isCssTransition = false;
+    std::string cssProperty;      // transitionProperty
+    // Transition generation (CSS Transitions 2 composite order): the style
+    // change that started it. Ties sort by property name.
+    uint64_t cssGeneration = 0;
+
+    // Stopped contributing (finished without a forwards fill, or cancelled)
+    // since its element last re-resolved: that re-resolve's drop from the
+    // animated value to the base value is no style change to transition.
+    // Cleared by applyOverrides at the re-resolve.
+    mutable bool settling = false;
+
     bool wrapped = false;        // a JS Animation object exists for it
     bool orphaned = false;       // JS wrapper finalized; GC record when it stops contributing
     bool finishNotified = false; // finish event already queued/delivered
@@ -195,6 +212,16 @@ public:
     // wrapper (finished rejection + oncancel).
     void cancelFromMarkup(uint64_t id);
 
+    // A CSS transition that ran to completion: its markup lets go of it. The
+    // record stays (finished) while a JS object holds it, else it is dropped.
+    void disownFromMarkup(uint64_t id);
+
+    // Some animation on `elem` other than a CSS transition animates `prop`
+    // and is in effect (running, paused, or holding a forwards fill), or just
+    // stopped (settling). A value an animation drives, or drops on ending, is
+    // not a style change a transition answers.
+    bool animatesProperty(const dom::Element* elem, const std::string& prop) const;
+
     // Fresh play state including boundary crossings between ticks:
     // "idle" | "running" | "paused" | "finished".
     const char* playState(const WebAnimation& a, double now) const;
@@ -244,6 +271,9 @@ public:
     // Animation ids relevant to `elem` (running/paused, or finished while
     // holding a forwards fill), composite order. For getAnimations().
     std::vector<uint64_t> animationsFor(const dom::Element* elem, double now) const;
+    // Every relevant animation, in document composite order: CSS transitions,
+    // then CSS animations, each by the tree order of their elements, then
+    // script animations by creation.
     std::vector<uint64_t> allAnimations(double now) const;
 
     // Whole-document teardown — Element*/Document* keys are about to dangle.
@@ -276,15 +306,14 @@ private:
     uint64_t nextId_ = 1;
 };
 
-// Composite order of two records on one element: CSS animations the markup
-// owns come first in animation-name order, then everything else by creation.
+// Composite order of two records on one element: CSS transitions the markup
+// owns first (by generation, then property name), then CSS animations it owns
+// in animation-name order, then everything else by creation.
 bool compositeOrderLess(const WebAnimation& a, const WebAnimation& b);
 
-// Extended compositor hint over the animation sources — true iff the element
-// has at least one active animation/transition and every active one (CSS
-// transition, or animation of either kind) is confined to transform/opacity.
-bool isTransformOpacityOnly(dom::Element* elem,
-                            const TransitionManager& trans,
-                            const WebAnimationManager& web);
+// Compositor hint — true iff the element has at least one running animation
+// (CSS transition, CSS animation or script) and every running one is confined
+// to transform/opacity.
+bool isTransformOpacityOnly(dom::Element* elem, const WebAnimationManager& web);
 
 } // namespace bro::engine

@@ -101,7 +101,7 @@ void Engine::layoutThreadFunc() {
             const bool topLayerActive = !document_->topLayer().empty();
             auto routePromotion = [&](dom::Element* e) {
                 if (!topLayerActive &&
-                    isTransformOpacityOnly(e, transitionManager_, webAnimationManager_))
+                    isTransformOpacityOnly(e, webAnimationManager_))
                     promotedElements_.insert(e);
                 else {
                     // A non-promoted animation (width/left/color/…) can change
@@ -110,9 +110,8 @@ void Engine::layoutThreadFunc() {
                     layoutAffecting = true;
                 }
             };
-            // CSS animations are Web Animations records: the web manager's
-            // active list covers them.
-            for (auto* e : transitionManager_.activeThisTick())   routePromotion(e);
+            // CSS animations and transitions are Web Animations records: the
+            // web manager's active list covers them.
             for (auto* e : webAnimationManager_.activeThisTick()) routePromotion(e);
 
             layoutPipeline_->setAnimationsActive(animActive);

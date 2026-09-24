@@ -14,9 +14,25 @@
 
 namespace bro::engine {
 
+namespace {
+// Animation class (Web Animations §5.4.2): owned CSS transitions, then owned
+// CSS animations, then everything else. A record its markup let go of sorts
+// with the script animations.
+int animationClass(const WebAnimation& a) {
+    if (!a.cssOwned) return 2;
+    return a.isCssTransition ? 0 : 1;
+}
+}  // namespace
+
 bool compositeOrderLess(const WebAnimation& a, const WebAnimation& b) {
-    if (a.cssOwned != b.cssOwned) return a.cssOwned;  // CSS animations sort first
-    if (a.cssOwned && a.cssLayer != b.cssLayer) return a.cssLayer < b.cssLayer;
+    const int ca = animationClass(a), cb = animationClass(b);
+    if (ca != cb) return ca < cb;
+    if (ca == 0) {
+        if (a.cssGeneration != b.cssGeneration) return a.cssGeneration < b.cssGeneration;
+        if (a.cssProperty != b.cssProperty) return a.cssProperty < b.cssProperty;
+    } else if (ca == 1 && a.cssLayer != b.cssLayer) {
+        return a.cssLayer < b.cssLayer;
+    }
     return a.id < b.id;
 }
 
@@ -186,7 +202,12 @@ bool WebAnimationManager::applyOne(const WebAnimation& a,
 void WebAnimationManager::applyOverrides(dom::Element* elem,
                                          htmlayout::css::ComputedStyle& style,
                                          double now) const {
-    if (byElem_.find(elem) == byElem_.end()) return;
+    auto range = byElem_.equal_range(elem);
+    if (range.first == range.second) return;
+    for (auto it = range.first; it != range.second; ++it) {
+        auto rIt = records_.find(it->second);
+        if (rIt != records_.end()) rIt->second.settling = false;
+    }
     for (const WebAnimation* a : stackFor(elem, true)) applyOne(*a, style, now);
 }
 
@@ -224,16 +245,24 @@ bool WebAnimationManager::activeAnimatesOnly(
     return any;
 }
 
-bool isTransformOpacityOnly(dom::Element* elem,
-                            const TransitionManager& trans,
-                            const WebAnimationManager& web) {
-    const std::set<std::string> allowed{"transform", "opacity"};
-    bool T = trans.hasActive(elem);
-    bool W = web.hasActive(elem);
-    if (!T && !W) return false;
-    if (T && !trans.activeAnimatesOnly(elem, allowed)) return false;
-    if (W && !web.activeAnimatesOnly(elem, allowed)) return false;
-    return true;
+bool WebAnimationManager::animatesProperty(const dom::Element* elem,
+                                           const std::string& prop) const {
+    auto range = byElem_.equal_range(elem);
+    for (auto it = range.first; it != range.second; ++it) {
+        auto rIt = records_.find(it->second);
+        if (rIt == records_.end()) continue;
+        const WebAnimation& a = rIt->second;
+        if (a.elem != elem || a.isCssTransition || !(a.settling || isRelevant(a, 0))) continue;
+        for (const auto& kf : a.keyframes)
+            for (const auto& [p, v] : kf.props)
+                if (p == prop) return true;
+    }
+    return false;
+}
+
+bool isTransformOpacityOnly(dom::Element* elem, const WebAnimationManager& web) {
+    static const std::set<std::string> allowed{"transform", "opacity"};
+    return web.activeAnimatesOnly(elem, allowed);
 }
 
 } // namespace bro::engine

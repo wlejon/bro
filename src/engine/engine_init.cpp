@@ -78,6 +78,7 @@ Engine::Engine(const EngineConfig& config)
     initDevLoopConfig(config);
     // CSS animations are Web Animations records (css_transitions.h).
     animationManager_.setWebAnimations(&webAnimationManager_);
+    transitionManager_.setWebAnimations(&webAnimationManager_);
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     {
