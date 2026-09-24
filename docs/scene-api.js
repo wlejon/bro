@@ -933,6 +933,10 @@ class SceneNode {
   setBlendPos(name, x, y) {}
 
   /**
+   *  The live mix: `{ state, clips: [{ name, weight }], phase, pos?,
+   *  layers: [{ slot, name, weight, phase }] }`. `pos` ([x] or [x, y]) is
+   *  present only while a blend space is the base source; a plain clip has
+   *  no `pos` at all.
    * @param {string} [name]
    * @returns {Object|null}
    */
