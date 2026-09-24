@@ -256,20 +256,46 @@ void Engine::handleMouseDown(float x, float y, int button) {
             target = nullptr;
         }
 
-        if (button == 0 && document_ && textMetrics_) {
+        // The press's default action on the selection. None at all when the
+        // page cancelled the mousedown — that is how a canvas or a custom
+        // widget says "this drag is mine" — and none inside a form control,
+        // which keeps its own caret: a press on the <b> inside a toolbar
+        // <button> leaves the document's selection where it was, exactly as
+        // a press on the button itself does.
+        if (button == 0 && document_ && textMetrics_ && !evt.defaultPrevented()) {
             bool isEditableControl = false;
-            if (target) {
-                const std::string& tag = target->tagName();
+            for (dom::Element* e = target; e; e = e->parentElement()) {
+                const std::string& tag = e->tagName();
                 if (tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" ||
                     tag == "BUTTON" || tag == "OPTION") {
                     isEditableControl = true;
+                    break;
                 }
             }
+            // A replaced element (canvas, image, video) holds no text a press
+            // could put a caret in. Outside an editing host the press clears
+            // the selection and starts none — a double-click on a game canvas
+            // does not word-select the HUD text beside it.
+            bool replaced = false;
+            if (target && !inEditableHost(target)) {
+                const std::string& tag = target->tagName();
+                replaced = tag == "CANVAS" || tag == "IMG" || tag == "VIDEO";
+            }
             bool suppressed = target && isSelectionSuppressed(target);
-            if (!isEditableControl && !suppressed) {
+            if (replaced && !isEditableControl && !suppressed) {
+                document_->selection()->removeAllRanges();
+                selectionDragging_ = false;
+                selectionAnchorNode_.reset();
+                markAppBaseDirty();
+            } else if (!isEditableControl && !suppressed) {
+                // The caret goes into the text of the element pressed, not
+                // the nearest text anywhere: a press on an empty block used to
+                // land the caret in whatever paragraph was closest (possibly
+                // a contenteditable one). Editing hosts scope to the host.
                 auto* editHost = editableHostOf(target);
+                dom::Element* scope = editHost ? editHost : target;
                 auto hit = layout::hitTestText(document_.get(), docX, docY,
-                                               *textMetrics_, editHost);
+                                               *textMetrics_, scope);
                 auto* sel = document_->selection();
                 if (hit.textNode && document_->ownsNode(hit.textNode)) {
                     int detail = intent.ordinal;
@@ -309,6 +335,13 @@ void Engine::handleMouseDown(float x, float y, int button) {
                            inEditableHost(target)) {
                     const int idx = static_cast<int>(target->childNodes().size());
                     sel->collapse(target, idx);
+                    selectionDragging_ = false;
+                    selectionAnchorNode_.reset();
+                    markAppBaseDirty();
+                } else if (target && document_->ownsNode(target)) {
+                    // A block with no text of its own: the caret goes into
+                    // it (Chromium's answer), not into text elsewhere.
+                    sel->collapse(target, 0);
                     selectionDragging_ = false;
                     selectionAnchorNode_.reset();
                     markAppBaseDirty();

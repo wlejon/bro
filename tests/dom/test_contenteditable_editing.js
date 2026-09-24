@@ -220,16 +220,17 @@ function clickAt(el, dx, dy) {
 }
 
 {
-    // Non-editable content is untouched: a press that hits no text still
-    // clears the selection there.
+    // Non-editable content: a press that hits no text puts a (non-editing)
+    // caret in the block pressed — Chromium's answer — and not in text
+    // anywhere else.
     root.innerHTML = '<div id="plain" style="width:320px;height:60px"></div>';
     flush();
     const plain = document.getElementById('plain');
     const sel = window.getSelection();
     clickAt(plain, 20, 10);
-    assert(sel.rangeCount === 0,
-           'a non-editable empty div still clears the selection, got ' +
-           sel.rangeCount);
+    assert(sel.rangeCount === 1 && sel.isCollapsed && sel.anchorNode === plain,
+           'a non-editable empty div takes the caret itself, got rangeCount ' +
+           sel.rangeCount + ' anchor ' + (sel.anchorNode && sel.anchorNode.nodeName));
 }
 
 // ---------------------------------------------------------------------------
