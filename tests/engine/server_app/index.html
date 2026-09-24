@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<body>
+<!-- tests/engine/test_server_skips_page.js: bro-server must not run this. -->
+<script>
+  console.log('SERVER_APP_PAGE_RAN');
+  throw new Error('the page assumes a renderer');
+</script>
+</body>
+</html>

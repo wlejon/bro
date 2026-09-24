@@ -409,7 +409,17 @@ void Engine::initAppRealm() {
         syncIframes();
     }
 
-    if (!manifest_.scripts.empty()) {
+    // bro-server runs its server script, not the page: index.html's scripts
+    // are written for a renderer the server does not have, and a throw there
+    // is no failure of the server's. A script-entry app (no index.html; its
+    // server.js / main.js is the entry, htmlPath empty) still runs here.
+    const bool serverSkipsPage = displayMode_ == DisplayMode::Server &&
+                                 !manifest_.htmlPath.empty();
+    if (serverSkipsPage && !manifest_.scripts.empty()) {
+        LOG_INFO("bro-server: not running the %zu page script(s) of '%s'",
+                 manifest_.scripts.size(), manifest_.htmlPath.c_str());
+    }
+    if (!manifest_.scripts.empty() && !serverSkipsPage) {
         std::string combinedScripts;
         for (const auto& script : manifest_.scripts) {
             std::string code;

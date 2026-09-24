@@ -31,6 +31,9 @@ int main(int argc, char* argv[]) {
             "\n"
             "Usage: bro-server [options] [app-directory] [script.js] [-- script-args...]\n"
             "\n"
+            "Runs script.js (default: the app's server.js) against the app directory.\n"
+            "An app's page (index.html and its scripts) is not run.\n"
+            "\n"
             "Options:\n"
             "  --tickrate N          Server tick rate in Hz (default: 60)\n"
             "  -h, --help            Show this help text\n"
@@ -97,13 +100,26 @@ int main(int argc, char* argv[]) {
 
         bro::engine::publishLaunchEnv(config);
 
+        // A page app (one with an index.html) is not run here: its scripts,
+        // and the app.dll they compile to, are written for a renderer. The
+        // server runs the script named on the command line, else the app's
+        // own server.js. An app without index.html is a script-entry app and
+        // its server.js / main.js (or compiled module) is the entry as before.
+        std::error_code fsEc;
+        const std::filesystem::path appPath(config.appDir);
+        const bool pageApp = std::filesystem::is_regular_file(appPath / "index.html", fsEc);
+        if (pageApp && scriptPath.empty() &&
+            std::filesystem::is_regular_file(appPath / "server.js", fsEc)) {
+            scriptPath = (appPath / "server.js").string();
+        }
+
         std::optional<std::string> appModule = bro::bronze_host::findAppModule(config.appDir);
         config.hostProvidesCompiledApp = appModule.has_value();
 
         auto engine = std::make_unique<bro::engine::Engine>(config);
         engine->setServerTickRate(tickrate);
 
-        if (appModule) {
+        if (appModule && !pageApp) {
             bro::bronze_host::runAppModule(*engine, *appModule);
         }
 
