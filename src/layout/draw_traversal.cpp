@@ -2054,8 +2054,21 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
 
                     // Pull up to two trailing position tokens (kept in order).
                     std::vector<float> positions;
+                    // Only a space outside any parens separates a position:
+                    // the spaces inside `rgb(20, 40, 90)` precede number
+                    // tokens too ("90)"), and peeling those shreds the color.
+                    auto lastTopLevelSpace = [](const std::string& s) -> size_t {
+                        int d = 0;
+                        size_t found = std::string::npos;
+                        for (size_t k = 0; k < s.size(); ++k) {
+                            if (s[k] == '(') ++d;
+                            else if (s[k] == ')') --d;
+                            else if (s[k] == ' ' && d == 0) found = k;
+                        }
+                        return found;
+                    };
                     for (int n = 0; n < 2; ++n) {
-                        size_t sp = part.find_last_of(' ');
+                        size_t sp = lastTopLevelSpace(part);
                         if (sp == std::string::npos) break;
                         std::string tail = part.substr(sp + 1);
                         if (!looksLikePos(tail)) break;
