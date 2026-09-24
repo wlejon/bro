@@ -8,6 +8,7 @@
     const fn = (obj, name, value) =>
         Object.defineProperty(obj, name, { value, writable: true, enumerable: true, configurable: true });
     const EMPTY_U8 = new Uint8Array(0);
+    const EMPTY_F64 = new Float64Array(0);
     const bufferOf = (a) => a.byteOffset === 0 && a.byteLength === a.buffer.byteLength ? a.buffer : a.buffer.slice(a.byteOffset, a.byteOffset + a.byteLength);
     const bytesOf = (v) => v instanceof Uint8Array ? v : v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
     const mount = (root, name) => root[name] !== undefined ? root[name] : (root[name] = {});
@@ -198,7 +199,8 @@
     fn(TileWorld.prototype, "addObject", function addObject(kindId, x, y, opts) {
         opts = opts || {};
         return __bro_native.tile_world.TileWorld_addObjectPlacement(this, kindId, x, y,
-            opts.yaw || 0, opts.scale || 1, opts.yOffset || 0, opts.offsetX || 0, opts.offsetZ || 0, opts.variant || 0);
+            opts.yaw || 0, opts.scale == null ? 1 : opts.scale, opts.yOffset || 0, opts.offsetX || 0, opts.offsetZ || 0, opts.variant || 0,
+            opts.color == null ? EMPTY_F64 : Float64Array.from(opts.color));
     });
     fn(TileWorld.prototype, "clearObjects", function clearObjects(kindId) {
         __bro_native.tile_world.TileWorld_clearObjects(this, kindId !== undefined, kindId === undefined ? 0 : kindId);
