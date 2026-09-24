@@ -31,7 +31,9 @@
  *
  * A loader throws when its path is missing, not a directory/file it can read,
  * or holds a checkpoint that fails to load; the message names the loader
- * ("loadDepth failed: …").
+ * ("loadDepth failed: …"). The loaders are synchronous: they return the
+ * model and take no onReady / onError callbacks (only the inference calls
+ * have async forms).
  *
  * ── Inputs ──
  * Every model takes an image as either:
