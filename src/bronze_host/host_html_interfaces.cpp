@@ -58,6 +58,45 @@ HostClass g_htmlMediaElementClass;
 HostClass g_htmlVideoElementClass;
 HostClass g_htmlAudioElementClass;
 HostClass g_audioClass;
+HostClass g_htmlDetailsElementClass;
+
+// `new Option(text, value, defaultSelected, selected)`, the legacy factory:
+// an <option> holding `text`, with `value` when one is given. Selectedness
+// is the `selected` attribute here, so either flag sets it.
+Value optionConstructor(Value, std::span<const Value> a) {
+    auto* eng = hostEngine();
+    if (!eng || !eng->document()) return ev::throwError("new Option(): the engine has no document");
+    dom::Document* doc = eng->document();
+    dom::Element* el = doc->createElement("option");
+    if (!el) return ev::throwError("new Option(): the document refused an <option>");
+    if (!a.empty() && !a[0].isUndefined()) {
+        std::string text = ev::toUtf8(a[0]);
+        if (!text.empty()) el->appendChild(doc->createTextNode(text));
+    }
+    if (a.size() > 1 && !a[1].isUndefined()) el->setAttribute("value", ev::toUtf8(a[1]));
+    const bool defaultSelected = a.size() > 2 && ev::toBool(a[2]);
+    const bool selected = a.size() > 3 && ev::toBool(a[3]);
+    if (defaultSelected || selected) el->setAttribute("selected", "");
+    return hostElementValue(el);
+}
+
+// HTMLDetailsElement.open reflects the `open` attribute; the UA sheet shows
+// the details' content only while it is present.
+void decorateDetailsProto(ObjectBuilder& b) {
+    b.accessor(
+        "open",
+        [](Value self, std::span<const Value>) -> Value {
+            HostNodeState* st = hostNodeStateOfValue(self);
+            return ev::fromBool(st && st->el && st->el->hasAttribute("open"));
+        },
+        [](Value self, std::span<const Value> a) -> Value {
+            HostNodeState* st = hostNodeStateOfValue(self);
+            if (!st || !st->el) return ev::undefined();
+            if (ev::toBool(argAt(a, 0))) st->el->setAttribute("open", "");
+            else st->el->removeAttribute("open");
+            return ev::undefined();
+        });
+}
 
 Value audioConstructor(Value, std::span<const Value> a) {
     auto* eng = hostEngine();
@@ -86,7 +125,6 @@ constexpr ExtraTagDef kExtraTags[] = {
     {"HTMLDListElement", "dl"},
     {"HTMLDataElement", "data"},
     {"HTMLDataListElement", "datalist"},
-    {"HTMLDetailsElement", "details"},
     {"HTMLEmbedElement", "embed"},
     {"HTMLFieldSetElement", "fieldset"},
     {"HTMLHRElement", "hr"},
@@ -274,7 +312,7 @@ void installHtmlInterfaces() {
         {g_htmlFormElementClass, "HTMLFormElement"},
         {g_htmlIFrameElementClass, "HTMLIFrameElement", decorateIFrameProto},
         {g_htmlHeadingElementClass, "HTMLHeadingElement"},
-        {g_htmlOptionElementClass, "HTMLOptionElement"},
+        {g_htmlDetailsElementClass, "HTMLDetailsElement", decorateDetailsProto},
         {g_htmlTemplateElementClass, "HTMLTemplateElement", decorateTemplateProto},
         {g_htmlDialogElementClass, "HTMLDialogElement", decorateDialogProto},
         {g_htmlHtmlElementClass, "HTMLHtmlElement"},
@@ -285,6 +323,13 @@ void installHtmlInterfaces() {
         item.cls.install(item.name, 0, illegalConstructor, item.decorator);
         item.cls.inherit(g_htmlElementClass);
     }
+    // `Option` is HTMLOptionElement's legacy factory, the way `Image` is
+    // HTMLImageElement's: one constructor under both names, so
+    // `new Option() instanceof HTMLOptionElement` and `Option.prototype`
+    // is the interface prototype.
+    g_htmlOptionElementClass.install("HTMLOptionElement", 0, optionConstructor, nullptr);
+    g_htmlOptionElementClass.alias("Option");
+    g_htmlOptionElementClass.inherit(g_htmlElementClass);
 
     // 5. The media family is one level deeper: <video> and <audio> are
     // HTMLMediaElements, which is the interface a player library tests for
@@ -366,6 +411,7 @@ Value htmlInterfaceProto(const std::string& tagName) {
         return g_htmlHeadingElementClass.prototype();
     }
     if (tag == "option") return g_htmlOptionElementClass.prototype();
+    if (tag == "details") return g_htmlDetailsElementClass.prototype();
     if (tag == "template") return g_htmlTemplateElementClass.prototype();
     if (tag == "dialog") return g_htmlDialogElementClass.prototype();
     if (tag == "html") return g_htmlHtmlElementClass.prototype();

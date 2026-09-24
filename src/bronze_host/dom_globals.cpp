@@ -820,6 +820,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Element's has to exist first (host_element_image.cpp).
     installImageGlobal();
     installParserGlobal();
+    installCssNamespace();
 
     installNavigatorGlobal();
     // HTMLCanvasElement and HTMLImageElement are installed as real classes

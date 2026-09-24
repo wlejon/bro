@@ -139,6 +139,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_event_spec.cpp
     host_navigator.cpp
     host_performance.cpp
+    host_css_namespace.cpp
     host_intl.cpp
     host_web_animations.cpp
     host_brokit.cpp

@@ -711,6 +711,9 @@ void installPlatformGlobals();
 
 void installParserGlobal();
 
+// The `CSS` namespace: supports() and escape() (host_css_namespace.cpp).
+void installCssNamespace();
+
 // A detached document parsed from `html`, owned for the life of the process
 // like every DOMParser result; what document.implementation.createHTMLDocument
 // hands back as well.
