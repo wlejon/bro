@@ -40,8 +40,7 @@ if(BRO_BUILD_EXECUTABLES)
     # main.cpp calls AttachConsole() at startup so stdout still shows when
     # launched from a terminal. Ignored on non-Windows platforms.
     add_executable(bro WIN32 main.cpp)
-    # BRO_BRASS_LIB first: see the note above bro_bronze_host's link line.
-    target_link_libraries(bro PRIVATE ${BRO_BRASS_LIB} bro_engine bro_bronze_host bro_bronze_js)
+    target_link_libraries(bro PRIVATE bro_engine bro_bronze_host bro_bronze_js)
     if(BRO_WITH_GAMEAI)
         target_link_libraries(bro PRIVATE brogameagent)
     endif()

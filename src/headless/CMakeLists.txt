@@ -1,6 +1,5 @@
 add_executable(bro-headless main.cpp)
-# BRO_BRASS_LIB first: see the note above bro_bronze_host's link line.
-target_link_libraries(bro-headless PRIVATE ${BRO_BRASS_LIB} bro_engine bro_bronze_host bro_bronze_js)
+target_link_libraries(bro-headless PRIVATE bro_engine bro_bronze_host bro_bronze_js)
 if(BRO_WITH_GAMEAI)
     target_link_libraries(bro-headless PRIVATE brogameagent)
 endif()
