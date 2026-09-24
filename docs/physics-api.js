@@ -390,19 +390,25 @@
 
 /**
  * @typedef {Object} PhysicsConstraintOptions
- * @property {string} [type]
+ * @property {string} [type]  'distance' | 'point' | 'hinge' | 'fixed' | 'slider' | 'wheel' | 'cone' |
+ *   'swingTwist' | 'pulley' | 'gear' | 'rackAndPinion' | 'sixdof'
  * @property {number} [body1]
- * @property {number} [body2]
- * @property {PhysicsVec3} [point1]
- * @property {PhysicsVec3} [point2]
+ * @property {number} [body2]  -1 (the default) anchors body1 to the world. Limits, motor targets,
+ *   and the hinge angle / slider position readbacks then measure body1 relative to the world:
+ *   a slider with axis +Y and limitMax 3 lets body1 rise 3 above where it was created.
+ * @property {PhysicsVec3} [point1]  world-space anchor on body1 (wheel: the hub)
+ * @property {PhysicsVec3} [point2]  world-space anchor on body2
+ * @property {PhysicsVec3} [axis]  hinge axis / slider axis / cone and swingTwist twist axis
  * @property {number} [minDistance]
  * @property {number} [maxDistance]
- * @property {PhysicsVec3} [axis1]
- * @property {PhysicsVec3} [axis2]
- * @property {number} [minAngle]
- * @property {number} [maxAngle]
- * @property {number} [minLimit]
- * @property {number} [maxLimit]
+ * @property {number} [limitMin]  hinge (radians) / slider (metres) limits
+ * @property {number} [limitMax]
+ * @property {number} [hertz]  wheel: suspension spring frequency (default 2; 0 = free suspension).
+ *   The spring pulls toward the rest position the wheel was created at; with
+ *   lowerTranslation/upperTranslation it acts only outside that range.
+ * @property {number} [dampingRatio]  wheel: suspension damping ratio
+ * @property {number} [lowerTranslation]  wheel: suspension travel limits along suspensionAxis
+ * @property {number} [upperTranslation]
  */
 
 /**

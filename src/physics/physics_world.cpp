@@ -1650,8 +1650,30 @@ void PhysicsWorld::evictConstraintPair(const ConstraintEntry& entry) {
     if (entry.hasPair && pairFilter_) pairFilter_->enablePair(entry.pairKey);
 }
 
-uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
+uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& optsIn) {
     auto& bi = physicsSystem_.GetBodyInterface();
+
+    // Jolt measures a constraint's body2 relative to its body1: slider
+    // position, hinge angle, limits, motor targets. The API's world-anchored
+    // form names the moving body as body1 and the world as body2 (-1), which
+    // handed to Jolt as-is measures the world relative to the body, so every
+    // limit and motor ran mirrored (and gear / rack-and-pinion, which read
+    // those hinge angles and slider positions, corrected the wrong way).
+    // Put the world first, as Jolt's own samples do. Gear, rack-and-pinion
+    // and pulley name two real bodies whose order is part of their meaning.
+    ConstraintOptions swapped;
+    const bool worldAnchored = optsIn.body2.IsInvalid() && !optsIn.body1.IsInvalid() &&
+        optsIn.type != ConstraintOptions::Pulley &&
+        optsIn.type != ConstraintOptions::Gear &&
+        optsIn.type != ConstraintOptions::RackAndPinion;
+    if (worldAnchored) {
+        swapped = optsIn;
+        std::swap(swapped.body1, swapped.body2);
+        std::swap(swapped.point1, swapped.point2);
+        // The wheel's hub is point1 whichever body holds it.
+        if (swapped.type == ConstraintOptions::Wheel) swapped.point1 = optsIn.point1;
+    }
+    const ConstraintOptions& opts = worldAnchored ? swapped : optsIn;
 
     // Wheel = SixDOFConstraint configured Box2D-style: free translation along
     // the suspension axis (with optional soft limits via spring), free rotation

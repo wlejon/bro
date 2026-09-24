@@ -45,7 +45,7 @@ function angleZ(w, tag) {
 
     stepN(w, 60);
     const av = w.getVelocity(body).angular;
-    assert(Math.abs(Math.abs(av.z) - 5) < 0.3,
+    assert(Math.abs((av.z) - 5) < 0.3,
         'hinge velocity motor reaches ~5 rad/s about Z, got ' + av.z);
     assert(Math.abs(av.x) < 0.05 && Math.abs(av.y) < 0.05,
         'hinge motor spins only about the hinge axis');
@@ -54,7 +54,7 @@ function angleZ(w, tag) {
     w.setConstraintMotor(hinge, { type: 'off' });
     stepN(w, 10);
     const av2 = w.getVelocity(body).angular;
-    assert(Math.abs(Math.abs(av2.z) - 5) < 0.5, 'spin persists after motor off');
+    assert(Math.abs((av2.z) - 5) < 0.5, 'spin persists after motor off');
     w.destroy();
 }
 
@@ -78,8 +78,8 @@ function angleZ(w, tag) {
     });
     stepN(w, 180);
     const a = angleZ(w, body);
-    assert(Math.abs(Math.abs(a) - 0.6) < 0.05,
-        'hinge position motor converges to |0.6| rad, got ' + a);
+    assert(Math.abs((a) - 0.6) < 0.05,
+        'hinge position motor converges to +0.6 rad, got ' + a);
     w.destroy();
 }
 
@@ -101,7 +101,7 @@ function angleZ(w, tag) {
     assert(hinge > 0, 'hinge with create-time motor');
     stepN(w, 60);
     const av = w.getVelocity(body).angular;
-    assert(Math.abs(Math.abs(av.z) - 3) < 0.3,
+    assert(Math.abs((av.z) - 3) < 0.3,
         'create-time velocity motor active, got ' + av.z);
     w.destroy();
 }
@@ -125,7 +125,7 @@ function angleZ(w, tag) {
     w.setConstraintMotor(slider, { type: 'velocity', target: 1.5, maxForce: 1e6 });
     stepN(w, 60);
     const lv = w.getVelocity(body).linear;
-    assert(Math.abs(Math.abs(lv.x) - 1.5) < 0.1,
+    assert(Math.abs((lv.x) - 1.5) < 0.1,
         'slider velocity motor reaches ~1.5 m/s, got ' + lv.x);
     assert(Math.abs(lv.y) < 0.01 && Math.abs(lv.z) < 0.01, 'slider motion is axis-only');
 
@@ -135,8 +135,8 @@ function angleZ(w, tag) {
     });
     stepN(w, 240);
     const px = w.getTransform(body).position.x;
-    assert(Math.abs(Math.abs(px) - 2.0) < 0.05,
-        'slider position motor converges to |2.0| m, got ' + px);
+    assert(Math.abs((px) - 2.0) < 0.05,
+        'slider position motor converges to +2.0 m, got ' + px);
     w.destroy();
 }
 
@@ -267,7 +267,7 @@ function angleZ(w, tag) {
     // Create-time rotationY velocity motor.
     stepN(w, 60);
     const av = w.getVelocity(body).angular;
-    assert(Math.abs(Math.abs(av.y) - 3) < 0.3,
+    assert(Math.abs((av.y) - 3) < 0.3,
         'sixdof create-time rotationY motor reaches ~3 rad/s, got ' + av.y);
 
     // Runtime per-axis position motor on translationX — separate body so the
@@ -289,8 +289,8 @@ function angleZ(w, tag) {
     assert(ok === true, 'sixdof per-axis setConstraintMotor ok');
     stepN(w, 240);
     const px = w.getTransform(body2).position.x;
-    assert(Math.abs(Math.abs(px) - 1.5) < 0.1,
-        'sixdof translationX position motor converges to |1.5|, got ' + px);
+    assert(Math.abs((px) - 1.5) < 0.1,
+        'sixdof translationX position motor converges to +1.5, got ' + px);
 
     // Bad axis is rejected.
     assert(w.setConstraintMotor(c, { type: 'velocity', target: 1 }) === false,

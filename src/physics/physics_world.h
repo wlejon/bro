@@ -609,7 +609,8 @@ struct ConstraintOptions {
     };
     Type type = Distance;
     JPH::BodyID body1;
-    JPH::BodyID body2;          // may be invalid → attach to world
+    JPH::BodyID body2;          // may be invalid → attach body1 to the world;
+                                // limits/motors then measure body1 vs the world
 
     // Anchor points (world-space by default; for fixed/slider some use this as ref)
     JPH::RVec3 point1{0, 0, 0};
