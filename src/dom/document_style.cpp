@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::dom {
@@ -562,22 +563,42 @@ void Document::resolveStylesRecursive(Element* elem,
     // levels in between re-match nothing themselves.
     const bool childHoverForce = hoverDirty;
 
-    for (auto* child : elem->childNodes()) {
-        if (child->nodeType() == NodeType::Element) {
-            resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
-                                   childForce, selDirty, childHoverForce);
-        }
-    }
-
-    // Recurse into shadow DOM children
-    if (elem->hasShadow()) {
-        auto* sr = elem->shadowRoot();
-        for (auto* child : sr->childNodes()) {
+    ShadowRoot* sr = elem->hasShadow() ? elem->shadowRoot() : nullptr;
+    if (!sr) {
+        for (auto* child : elem->childNodes()) {
             if (child->nodeType() == NodeType::Element) {
                 resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
                                        childForce, selDirty, childHoverForce);
             }
         }
+        return;
+    }
+
+    // A shadow host: its shadow tree first, then its light children, which
+    // inherit through the FLAT tree — a child assigned to a <slot> takes its
+    // inherited values from that slot (so from whatever the shadow tree wraps
+    // the slot in), not from the host. The slots have to be resolved before
+    // the children that read them, and a slot that re-resolved this pass
+    // forces the children assigned to it.
+    const size_t restyledBefore = restyled_.size();
+    for (auto* child : sr->childNodes()) {
+        if (child->nodeType() == NodeType::Element) {
+            resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
+                                   childForce, selDirty, childHoverForce);
+        }
+    }
+    std::unordered_set<const Element*> restyledSlots;
+    for (size_t i = restyledBefore; i < restyled_.size(); ++i) {
+        if (restyled_[i]->tagName() == "SLOT") restyledSlots.insert(restyled_[i]);
+    }
+    for (auto* child : elem->childNodes()) {
+        if (child->nodeType() != NodeType::Element) continue;
+        auto* childEl = static_cast<Element*>(child);
+        Element* slot = sr->assignedSlot(childEl);
+        const htmlayout::css::ComputedStyle* inheritFrom =
+            slot ? &slot->computedStyle() : &elem->computedStyle();
+        const bool force = childForce || (slot && restyledSlots.count(slot) != 0);
+        resolveStylesRecursive(childEl, inheritFrom, force, selDirty, childHoverForce);
     }
 }
 

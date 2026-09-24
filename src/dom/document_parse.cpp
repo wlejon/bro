@@ -339,14 +339,23 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
 
     gumbo_destroy_output(&opts, output);
 
-    // Extract <style> elements from the fragment and add CSS to the cascade
+    // Extract <style> elements from the fragment and add CSS to the cascade —
+    // document-wide, so only when the fragment landed in the document's own
+    // tree. Markup parsed into a shadow tree, a template's content, or any
+    // detached container is not in the document scope: a shadow root's sheets
+    // go in its own scope (ShadowRoot::registerStyleElements), and a detached
+    // <style> applies once it is connected (reconcileStyleElements). Adding
+    // those here is what leaked every shadow root's <style> to the whole page.
+    Node* top = parent;
+    while (top->parentNode()) top = top->parentNode();
+    const bool inDocumentTree = top == root_;
     std::vector<Element*> newElems;
     for (auto* child : parent->childNodes()) {
         if (child->nodeType() == NodeType::Element)
             collectElements(child, newElems);
     }
     for (auto* elem : newElems) {
-        if (elem->tagName() == "STYLE") {
+        if (inDocumentTree && elem->tagName() == "STYLE") {
             std::string css = elem->textContent();
             if (!css.empty()) {
                 addSheetToCascade(htmlayout::css::parse(css));
