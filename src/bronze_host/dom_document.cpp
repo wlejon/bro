@@ -11,7 +11,6 @@
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
-#include "dom/element_geometry.h"
 #include "platform/sdl_window.h"
 
 #include "canvas/canvas_scene.h"
@@ -102,33 +101,11 @@ Value wrapElement(dom::Element* el) {
     return hostElementValue(el);
 }
 
-dom::Element* findDeepestElement(dom::Element* root, float docX, float docY) {
-    if (!root) return nullptr;
-    const auto& children = root->children();
-    for (auto it = children.rbegin(); it != children.rend(); ++it) {
-        dom::Element* child = *it;
-        if (!child) continue;
-        const auto& cs = child->computedStyle();
-        auto dIt = cs.find("display");
-        if (dIt != cs.end() && dIt->second == "none") continue;
-
-        dom::Element* deepest = findDeepestElement(child, docX, docY);
-        if (deepest) return deepest;
-
-        auto vIt = cs.find("visibility");
-        if (vIt != cs.end() && vIt->second == "hidden") continue;
-
-        dom::AbsoluteRect r = dom::absoluteBorderBox(child);
-        if (r.width > 0.0f && r.height > 0.0f &&
-            docX >= r.x && docX <= (r.x + r.width) &&
-            docY >= r.y && docY <= (r.y + r.height)) {
-            return child;
-        }
-    }
-    return nullptr;
-}
-
-dom::Element* hitTestWithFallback(engine::Engine* e, dom::Document* doc, float x, float y) {
+// The element a pointer at client (x, y) would target: the same hit test the
+// input pipeline runs, so elementFromPoint and a click there always agree
+// (stacking order, clips, pointer-events, fixed boxes against the viewport).
+// Where no box is hit, the document element answers, as on the web.
+dom::Element* hitTestClientPoint(engine::Engine* e, dom::Document* doc, float x, float y) {
     if (!e) return nullptr;
     float vw = static_cast<float>(e->contentWidth());
     float vh = static_cast<float>(e->contentHeight());
@@ -136,16 +113,7 @@ dom::Element* hitTestWithFallback(engine::Engine* e, dom::Document* doc, float x
     if (doc) {
         e->flushLayoutForRead(doc);
     }
-    float docX = x;
-    float docY = y + e->viewportScrollY();
-    dom::Element* hit = e->hitTest(docX, docY);
-    if (!hit || (doc && hit == doc->documentElement())) {
-        if (doc) {
-            if (dom::Element* fallback = findDeepestElement(doc->documentElement(), docX, docY)) {
-                hit = fallback;
-            }
-        }
-    }
+    dom::Element* hit = e->hitTest(x, y + e->viewportScrollY());
     if (!hit && doc) {
         hit = doc->documentElement();
     }
@@ -458,7 +426,7 @@ void decorateDocumentProto(ObjectBuilder& b) {
         auto* e = hostEngine();
         if (!e) return ev::null();
         dom::Document* doc = e->document();
-        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
+        dom::Element* hit = hitTestClientPoint(e, doc, x, y);
         return wrapElement(hit);
     });
     b.def("elementsFromPoint", 2, [](Value, std::span<const Value> a) -> Value {
@@ -469,7 +437,7 @@ void decorateDocumentProto(ObjectBuilder& b) {
         auto* e = hostEngine();
         if (!e) return emptyArr();
         dom::Document* doc = e->document();
-        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
+        dom::Element* hit = hitTestClientPoint(e, doc, x, y);
         if (!hit) return emptyArr();
         std::vector<dom::Element*> chain;
         for (dom::Element* cur = hit; cur; cur = cur->parentElement()) {
@@ -620,7 +588,7 @@ Value makeDocumentValue(dom::Document* fixed) {
         auto* e = hostEngine();
         if (!e) return ev::null();
         dom::Document* doc = documentFor(fixed);
-        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
+        dom::Element* hit = hitTestClientPoint(e, doc, x, y);
         return wrapElement(hit);
     });
     b.def("elementsFromPoint", 2, [fixed](Value, std::span<const Value> a) {
@@ -632,7 +600,7 @@ Value makeDocumentValue(dom::Document* fixed) {
         auto* e = hostEngine();
         if (!e) return emptyArr();
         dom::Document* doc = documentFor(fixed);
-        dom::Element* hit = hitTestWithFallback(e, doc, x, y);
+        dom::Element* hit = hitTestClientPoint(e, doc, x, y);
         if (!hit) return emptyArr();
         std::vector<dom::Element*> chain;
         for (dom::Element* cur = hit; cur; cur = cur->parentElement()) {

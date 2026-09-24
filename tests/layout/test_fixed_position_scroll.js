@@ -5,11 +5,19 @@
 // overflow container ignores that container's scroll as well, and a fixed
 // box under a transformed ancestor (which takes the containing-block job
 // from the viewport) still moves with the page.
+//
+// Nothing but <html> lies under the bar (the body is a narrow column off to
+// the right), so elementFromPoint has only the fixed box to find there; it
+// used to fall back to a tree-order search of its own that disagreed with
+// the click hit test. A pointer-events:none fixed box is not a hit either.
 
 const root = document.getElementById('root');
 document.body.style.height = 'auto';
+document.body.style.width = '40px';
+document.body.style.marginLeft = '1200px';
 root.innerHTML =
     '<div id="bar" style="position:fixed;top:10px;left:20px;width:200px;height:50px;background:rgb(255,0,0)"></div>' +
+    '<div id="ghost" style="position:fixed;top:900px;left:20px;width:200px;height:50px;pointer-events:none"></div>' +
     '<div style="height:5000px"></div>' +
     '<div id="box" style="height:300px;overflow:auto">' +
     '  <div style="height:2000px">' +
@@ -53,6 +61,11 @@ assert(document.elementFromPoint(30, 20) === bar,
        'elementFromPoint finds the bar where it sits, got ' +
        (document.elementFromPoint(30, 20) || {}).id);
 assert(document.elementFromPoint(310, 110) === inner, 'and the inner fixed box');
+assert(document.elementFromPoint(30, 910) === document.documentElement,
+       'a pointer-events:none fixed box is not hit, got ' +
+       (document.elementFromPoint(30, 910) || {}).id);
+assert(document.elementFromPoint(600, 600) === document.documentElement,
+       'empty viewport answers <html>');
 click(30, 20);
 flush();
 assert(clicks === 1, 'a click at the bar reaches it, clicks ' + clicks);
@@ -65,4 +78,6 @@ assert(q.b > 200 && q.r < 50, 'so does the inner fixed box: ' + JSON.stringify(q
 
 window.scrollTo(0, 0);
 document.body.style.height = '';
+document.body.style.width = '';
+document.body.style.marginLeft = '';
 root.innerHTML = '';
