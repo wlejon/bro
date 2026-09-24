@@ -134,14 +134,20 @@ bro.diar.loadSortformer = function(modelDir, opts) {};
 bro.diar.diarize = function(model, audio, opts) {};
 
 /**
- * Asynchronously load offline cluster diarizer models (embedding + VAD).
+ * Load the offline cluster diarizer: Sortformer's activity is the VAD (where
+ * anyone speaks), and the Qwen3-TTS Base ECAPA-TDNN speaker encoder embeds
+ * each speech span into an x-vector that is then clustered. An optional
+ * `xvector_mean.f32` beside the encoder is used as the centering vector.
+ * Like the other loaders it returns the ClusterDiarizer synchronously, or an
+ * AsyncHandle (loading on a work thread) when `opts.onReady` is given.
  *
- * @param {string} embeddingDir
- * @param {string} vadDir
- * @param {Object} [opts]
- * @returns {AsyncHandle}
+ * @param {string} sortformerDir  the Sortformer checkpoint (as loadSortformer)
+ * @param {string} speakerEncoderDir  the Qwen3-TTS speaker encoder
+ *   (`speaker_encoder.*` weights)
+ * @param {Object} [opts]  `device`, `onReady(model)`, `onError(message)`
+ * @returns {ClusterDiarizer|AsyncHandle}
  */
-bro.diar.loadClusterDiarizer = function(embeddingDir, vadDir, opts) {};
+bro.diar.loadClusterDiarizer = function(sortformerDir, speakerEncoderDir, opts) {};
 
 /**
  * Asynchronously run clustering diarization on audio clip.
