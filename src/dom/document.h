@@ -436,7 +436,12 @@ public:
     // Call AFTER a child is inserted at `index` under `parent`.
     void notifyChildInserted(Node* parent, int index);
 
+    // Queue a `selectionchange` for the document (coalesced: one outstanding
+    // at a time). A no-op until the host installs a task poster — the event
+    // is a task, and the task queue belongs to the script host.
     void fireSelectionChange();
+    using TaskPoster = void (*)(std::function<void()>);
+    static void setTaskPoster(TaskPoster poster) { s_taskPoster = poster; }
 
     // External host layers that wrap elements (e.g. the Bronze host holds a
     // compiled-side object per element, keyed by raw Element*). Observers receive
@@ -662,6 +667,17 @@ private:
 
     // Selection + live ranges (registered via Range::setDocument()).
     std::unique_ptr<Selection> selection_;
+    // The selection range's endpoints, compared across a mutation so a DOM
+    // change that moves them reports selectionchange and one that does not
+    // stays quiet.
+    struct SelectionBoundaries {
+        Node* startNode = nullptr; int startOffset = 0;
+        Node* endNode = nullptr;   int endOffset = 0;
+        bool operator==(const SelectionBoundaries&) const = default;
+    };
+    SelectionBoundaries selectionBoundaries() const;
+    bool selectionChangeQueued_ = false;
+    static TaskPoster s_taskPoster;
     std::unordered_set<Range*> liveRanges_;
     std::vector<NodeObserver> nodeFreedObservers_;
     std::vector<MutationObserverFn> mutationObservers_;

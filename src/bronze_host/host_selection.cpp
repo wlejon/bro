@@ -40,6 +40,23 @@ HostSelectionCell* hostSelectionCellOf(Value v) {
 
 std::unordered_map<bro::dom::Selection*, ev::Persistent> s_selectionWrappers;
 
+// The JS object for each selection's live range, so getRangeAt(0) is the same
+// object every call and the one addRange() was given. An entry is only reused
+// while its cell still holds the selection's current range; the cached cell
+// keeps that Range alive, so a stale entry can never alias a new range.
+std::unordered_map<bro::dom::Selection*, ev::Persistent> s_rangeWrappers;
+
+Value liveRangeWrapper(bro::dom::Selection* s, std::shared_ptr<bro::dom::Range> r) {
+    auto it = s_rangeWrappers.find(s);
+    if (it != s_rangeWrappers.end()) {
+        Value cached = it->second.get();
+        if (!cached.isUndefined() && hostSharedRangeOf(cached) == r) return cached;
+    }
+    Value v = wrapSharedRange(std::move(r));
+    s_rangeWrappers[s].set(v);
+    return v;
+}
+
 void decorateSelectionProto(ObjectBuilder& b) {
     b.accessor("anchorNode", [](Value self_, std::span<const Value>) {
         auto* s = hostSelectionOf(self_);
@@ -84,16 +101,24 @@ void decorateSelectionProto(ObjectBuilder& b) {
         auto* s = hostSelectionOf(self_);
         if (!s) return ev::null();
         int idx = a.empty() ? 0 : satCast<int>(ev::toDouble(a[0]));
-        auto* src = s->getRangeAt(idx);
-        if (!src) return ev::null();
-        return wrapOwnedRange(src->cloneRange());
+        // The live range, not a copy: moving its boundaries (or running
+        // surroundContents on it) moves the selection, as on the web.
+        auto src = s->sharedRangeAt(idx);
+        if (!src) {
+            return ev::throwValue(hostMakeDomError("IndexSizeError",
+                "getRangeAt: index " + std::to_string(idx) + " is out of range"));
+        }
+        return liveRangeWrapper(s, std::move(src));
     });
 
     b.def("addRange", 1, [](Value self_, std::span<const Value> a) {
         auto* s = hostSelectionOf(self_);
         if (!s || a.empty()) return ev::undefined();
-        auto* r = hostRangeOf(a[0]);
-        if (r) s->addRange(*r);
+        // By reference: later changes to `r` are changes to the selection.
+        if (auto r = hostSharedRangeOf(a[0])) {
+            s->addSharedRange(r);
+            if (s->sharedRangeAt(0) == r) s_rangeWrappers[s].set(a[0]);
+        }
         return ev::undefined();
     });
 

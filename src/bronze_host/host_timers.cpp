@@ -23,6 +23,7 @@
 #include "bronze_host/host_realm_scope.h"
 #include "bronze_host/gl_internal.h"  // argAt / numAt / i32At
 
+#include "dom/document.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -337,6 +338,8 @@ void installTimerGlobals() {
     // Same table, same ids: cancelIdleCallback(id) is clearTimeout(id).
     install("cancelIdleCallback", ev::makeFunction(
         [](Value, std::span<const Value> a) { return clearTimer(a); }, 1));
+    // The DOM queues its own tasks (selectionchange) through this queue.
+    dom::Document::setTaskPoster(&postHostTask);
 }
 
 void clearHostTimers() {

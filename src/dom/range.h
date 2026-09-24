@@ -62,13 +62,18 @@ public:
     // Serialize the text content between endpoints.
     std::string toString() const;
 
-    // Content manipulation. Caller owns lifetime of returned / inserted nodes
-    // via Document::ownedNodes_.
+    // Content manipulation (the DOM standard's clone / extract / delete
+    // algorithms, partially contained nodes included). Caller owns lifetime
+    // of returned / inserted nodes via Document::ownedNodes_.
+    //
+    // insertNode / surroundContents report the DOMException the spec throws;
+    // the JS binding raises it.
+    enum class Error { None, InvalidState, HierarchyRequest, InvalidNodeType };
     void deleteContents();
     Node* cloneContents() const;   // returns a DocumentFragment
     Node* extractContents();       // returns a DocumentFragment
-    void insertNode(Node* node);
-    void surroundContents(Element* newParent);
+    Error insertNode(Node* node);
+    Error surroundContents(Element* newParent);
 
     // Parse `html` in the context of startContainer() and return a fragment.
     // Returns nullptr if the range has no document or container.

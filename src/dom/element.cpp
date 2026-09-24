@@ -162,6 +162,9 @@ void Node::appendChild(Node* child) {
     Node* prev = children_.empty() ? nullptr : children_.back();
     child->parent_ = this;
     children_.push_back(child);
+    // Live ranges: boundary points past the insertion index shift (DOM "insert").
+    if (auto* doc = findDocument(this))
+        doc->notifyChildInserted(this, static_cast<int>(children_.size()) - 1);
     notifyChildListChanged(this);
     notifyChildListMutation(this, child, nullptr, prev, nullptr);
 }
@@ -205,7 +208,9 @@ void Node::insertBefore(Node* newChild, Node* refChild) {
     if (it != children_.end()) {
         Node* prev = it == children_.begin() ? nullptr : *(it - 1);
         newChild->parent_ = this;
+        const int index = static_cast<int>(it - children_.begin());
         children_.insert(it, newChild);
+        if (auto* doc = findDocument(this)) doc->notifyChildInserted(this, index);
         notifyChildListChanged(this);
         notifyChildListMutation(this, newChild, nullptr, prev, refChild);
     }

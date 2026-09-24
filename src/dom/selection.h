@@ -1,5 +1,6 @@
 #pragma once
 #include "dom/range.h"
+#include <memory>
 #include <string>
 
 namespace bro::dom {
@@ -27,10 +28,20 @@ public:
     Node* focusNode() const;
     int   focusOffset() const;
 
-    bool isCollapsed() const { return range_.collapsed() || !hasRange_; }
+    bool isCollapsed() const { return !hasRange_ || range_->collapsed(); }
     int  rangeCount()  const { return hasRange_ ? 1 : 0; }
     const Range* getRangeAt(int index) const;
     Range*       getRangeAt(int index);
+
+    // The selection's range as a shareable object — what script's
+    // getRangeAt() hands out. It is the LIVE range (DOM Selection API): a
+    // script that moves its boundaries, or runs surroundContents on it, moves
+    // the selection. Operations that give the selection a new range
+    // (collapse, setBaseAndExtent, extend, removeAllRanges...) leave a range
+    // script still holds as it was, detached from the selection.
+    std::shared_ptr<Range> sharedRangeAt(int index);
+    // Make `r` the selection's range, by reference (addRange).
+    void addSharedRange(std::shared_ptr<Range> r);
     std::string  type() const; // "None" | "Caret" | "Range"
     std::string  toString() const;
 
@@ -56,8 +67,12 @@ public:
     bool hasPendingChange() const { return pendingChange_; }
 
 private:
+    // Before the selection takes a new range: if script holds the current one,
+    // leave it to script and start a fresh one here.
+    void detachShared();
+
     Document* document_;
-    Range     range_;      // single live range, always attached to `document_`
+    std::shared_ptr<Range> range_;  // single live range, always attached to `document_`
     bool      hasRange_ = false;
     Direction direction_ = None;
     bool      pendingChange_ = false;

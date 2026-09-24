@@ -5,6 +5,7 @@
 #include "bronze_host/host_internal.h"
 
 #include "dom/range.h"
+#include "dom/selection.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
@@ -26,21 +27,25 @@ namespace {
 
 inline constexpr uint32_t kHostRangeTag = 0x524E4745u;  // 'RNGE'
 
+// Shared, not owned outright: the object a script holds may also be the
+// document Selection's live range (getRangeAt / addRange share it), and
+// either side can outlive the other.
 struct HostRangeCell {
     uint32_t tag = kHostRangeTag;
-    bro::dom::Range* range = nullptr;
-    bool owned = true;
+    std::shared_ptr<bro::dom::Range> range;
 };
 
 void hostRangeDtor(void* p) {
-    auto* cell = static_cast<HostRangeCell*>(p);
-    if (cell) {
-        if (cell->range && cell->owned) {
-            cell->range->setDocument(nullptr);
-            delete cell->range;
-        }
-        delete cell;
-    }
+    delete static_cast<HostRangeCell*>(p);
+}
+
+// A Range method moved this range's boundaries. If it is the selection's live
+// range, the selection moved: report it (and repaint).
+void noteRangeMutated(bro::dom::Range* r) {
+    if (!r || !r->document()) return;
+    auto* doc = r->document();
+    if (auto* sel = doc->selection(); sel && sel->getRangeAt(0) == r)
+        doc->fireSelectionChange();
 }
 
 HostRangeCell* hostRangeCellOf(Value v) {
@@ -80,8 +85,32 @@ bool fetchGeometryDeps(bro::dom::Document*& outDoc,
     if (!outDoc) return false;
     outMetrics = engine->textMetrics();
     if (!outMetrics) return false;
-    outOffsetY = engine->docContentOffsetY();
+    // A geometry read lays the document out first, as an element's does.
+    engine->flushLayoutForRead(outDoc);
+    // Viewport space: the document scroll comes off, the menu bar's inset
+    // does NOT go on. Client coordinates start below the menu bar — that is
+    // where element rects and mouse clientY already start — so adding
+    // contentTop() put every range rect one menu bar too low.
+    outOffsetY = -engine->viewportScrollY();
     return true;
+}
+
+// The DOMException a Range mutation reports, or undefined when it succeeded.
+Value throwRangeError(bro::dom::Range::Error e, const char* who) {
+    using E = bro::dom::Range::Error;
+    switch (e) {
+    case E::None: return ev::undefined();
+    case E::InvalidState:
+        return ev::throwValue(hostMakeDomError("InvalidStateError",
+            std::string(who) + ": the range partially selects a non-Text node"));
+    case E::HierarchyRequest:
+        return ev::throwValue(hostMakeDomError("HierarchyRequestError",
+            std::string(who) + ": the node cannot be inserted at the range's start"));
+    case E::InvalidNodeType:
+        return ev::throwValue(hostMakeDomError("InvalidNodeTypeError",
+            std::string(who) + ": the new parent cannot be a document fragment"));
+    }
+    return ev::undefined();
 }
 
 Value js_range_ctor(Value, std::span<const Value>) {
@@ -144,6 +173,66 @@ bool computeCollapsedCaret(bro::dom::Document* doc,
     return false;
 }
 
+// The topmost elements the range selects whole, in tree order — the ones
+// whose own boxes CSSOM puts in the range's client rects.
+void collectContainedElements(bro::dom::Range* r, dom::Node* n,
+                              std::vector<dom::Element*>& out) {
+    const auto& kids = n->childNodes();
+    for (size_t i = 0; i < kids.size(); ++i) {
+        dom::Node* c = kids[i];
+        const int idx = static_cast<int>(i);
+        if (r->comparePoint(n, idx) == 0 && r->comparePoint(n, idx + 1) == 0) {
+            if (c->nodeType() == dom::NodeType::Element)
+                out.push_back(static_cast<dom::Element*>(c));
+            continue;
+        }
+        if (r->intersectsNode(c)) collectContainedElements(r, c, out);
+    }
+}
+
+// Range.getClientRects() in viewport space: the border boxes of the elements
+// the range selects whole (per line fragment for an inline), then the
+// selected text, band per line. Not clipped to scrollers — CSSOM reports text
+// scrolled out of view where it is. A range selecting no box answers its
+// caret, so a collapsed or empty range still has a position.
+std::vector<bro::dom::AbsoluteRect> rangeClientRects(bro::dom::Range* r) {
+    std::vector<bro::dom::AbsoluteRect> out;
+    bro::dom::Document* doc = nullptr;
+    htmlayout::layout::TextMetrics* metrics = nullptr;
+    float offY = 0.0f;
+    if (!r || !r->startContainer() || !fetchGeometryDeps(doc, metrics, offY)) return out;
+
+    if (!r->collapsed()) {
+        std::vector<dom::Element*> whole;
+        if (dom::Node* common = r->commonAncestorContainer())
+            collectContainedElements(r, common, whole);
+        for (dom::Element* el : whole) {
+            for (auto pr : clientRectsOf(el)) {
+                pr.y += offY;
+                out.push_back(pr);
+            }
+        }
+        auto rects = bro::layout::getSelectionRects(
+            doc, r->startContainer(), r->startOffset(),
+            r->endContainer(), r->endOffset(), *metrics, /*clipToOverflow=*/false);
+        auto* ctxEl = nearestElementAncestor(r->startContainer());
+        for (const auto& rect : rects) {
+            auto pr = ctxEl
+                ? bro::dom::projectRectThroughAncestors(ctxEl, rect.x, rect.y, rect.width, rect.height)
+                : bro::dom::AbsoluteRect{rect.x, rect.y, rect.width, rect.height};
+            pr.y += offY;
+            out.push_back(pr);
+        }
+        if (!out.empty()) return out;
+    }
+
+    double cx = 0, cy = 0, cw = 0, ch = 0;
+    if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch))
+        out.push_back({static_cast<float>(cx), static_cast<float>(cy),
+                       static_cast<float>(cw), static_cast<float>(ch)});
+    return out;
+}
+
 void decorateRangeProto(ObjectBuilder& b) {
     // Spec constants on prototype
     b.set("START_TO_START", ev::fromDouble(0));
@@ -192,6 +281,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* n = hostNodeOf(a[0]);
         int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         r->setStart(n, bro::dom::nodeOffsetToBytes(n, off));
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -201,6 +291,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* n = hostNodeOf(a[0]);
         int off = a.size() > 1 ? satCast<int>(ev::toDouble(a[1])) : 0;
         r->setEnd(n, bro::dom::nodeOffsetToBytes(n, off));
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -209,6 +300,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
         if (n) r->setStartBefore(n);
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -217,6 +309,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
         if (n) r->setStartAfter(n);
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -225,6 +318,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
         if (n) r->setEndBefore(n);
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -233,6 +327,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
         if (n) r->setEndAfter(n);
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -241,6 +336,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         if (!r) return ev::undefined();
         bool toStart = a.empty() || ev::toBool(a[0]);
         r->collapse(toStart);
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -249,6 +345,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
         if (n) r->selectNode(n);
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -257,6 +354,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
         if (n) r->selectNodeContents(n);
+        noteRangeMutated(r);
         return ev::undefined();
     });
 
@@ -284,7 +382,10 @@ void decorateRangeProto(ObjectBuilder& b) {
     });
 
     b.def("deleteContents", 0, [](Value self_, std::span<const Value>) {
-        if (auto* r = hostRangeOf(self_)) r->deleteContents();
+        if (auto* r = hostRangeOf(self_)) {
+            r->deleteContents();
+            noteRangeMutated(r);
+        }
         return ev::undefined();
     });
 
@@ -299,6 +400,7 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r) return ev::null();
         dom::Node* frag = r->extractContents();
+        noteRangeMutated(r);
         return hostNodeValue(frag);
     });
 
@@ -306,16 +408,20 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r || a.empty()) return ev::undefined();
         auto* n = hostNodeOf(a[0]);
-        if (n) r->insertNode(n);
-        return ev::undefined();
+        if (!n) return ev::throwTypeError("insertNode: argument is not a node");
+        auto err = r->insertNode(n);
+        noteRangeMutated(r);
+        return throwRangeError(err, "insertNode");
     });
 
     b.def("surroundContents", 1, [](Value self_, std::span<const Value> a) {
         auto* r = hostRangeOf(self_);
         if (!r || a.empty()) return ev::undefined();
         auto* el = hostElementOf(a[0]);
-        if (el) r->surroundContents(el);
-        return ev::undefined();
+        if (!el) return ev::throwTypeError("surroundContents: argument is not an element");
+        auto err = r->surroundContents(el);
+        noteRangeMutated(r);
+        return throwRangeError(err, "surroundContents");
     });
 
     b.def("createContextualFragment", 1, [](Value self_, std::span<const Value> a) {
@@ -347,44 +453,10 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
 
-        bro::dom::Document* doc = nullptr;
-        htmlayout::layout::TextMetrics* metrics = nullptr;
-        float offY = 0.0f;
-        if (!fetchGeometryDeps(doc, metrics, offY)) {
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        }
-
-        if (r->collapsed()) {
-            double cx = 0, cy = 0, cw = 0, ch = 0;
-            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
-                return hostArrayOf(1, [&](size_t) {
-                    return makeDomRectValue(cx, cy, cw, ch);
-                });
-            }
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        }
-
-        auto rects = bro::layout::getSelectionRects(
-            doc, r->startContainer(), r->startOffset(),
-            r->endContainer(), r->endOffset(), *metrics);
-
-        if (rects.empty()) {
-            double cx = 0, cy = 0, cw = 0, ch = 0;
-            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
-                return hostArrayOf(1, [&](size_t) {
-                    return makeDomRectValue(cx, cy, cw, ch);
-                });
-            }
-            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        }
-
-        auto* ctxEl = nearestElementAncestor(r->startContainer());
+        std::vector<bro::dom::AbsoluteRect> rects = rangeClientRects(r);
         return hostArrayOf(rects.size(), [&](size_t i) {
-            const auto& rect = rects[i];
-            auto pr = ctxEl
-                ? bro::dom::projectRectThroughAncestors(ctxEl, rect.x, rect.y, rect.width, rect.height)
-                : bro::dom::AbsoluteRect{rect.x, rect.y, rect.width, rect.height};
-            return makeDomRectValue(pr.x, pr.y + offY, pr.width, pr.height);
+            const auto& pr = rects[i];
+            return makeDomRectValue(pr.x, pr.y, pr.width, pr.height);
         });
     });
 
@@ -392,51 +464,26 @@ void decorateRangeProto(ObjectBuilder& b) {
         auto* r = hostRangeOf(self_);
         if (!r) return makeDomRectValue(0, 0, 0, 0);
 
-        bro::dom::Document* doc = nullptr;
-        htmlayout::layout::TextMetrics* metrics = nullptr;
-        float offY = 0.0f;
-        if (!fetchGeometryDeps(doc, metrics, offY)) {
-            return makeDomRectValue(0, 0, 0, 0);
-        }
-
-        if (r->collapsed()) {
-            double cx = 0, cy = 0, cw = 0, ch = 0;
-            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
-                return makeDomRectValue(cx, cy, cw, ch);
+        std::vector<bro::dom::AbsoluteRect> rects = rangeClientRects(r);
+        if (rects.empty()) return makeDomRectValue(0, 0, 0, 0);
+        // The union of the client rects (CSSOM), skipping empty ones unless
+        // every one is empty — a collapsed caret is all-empty and still has a
+        // position.
+        bool any = false;
+        float left = 0, top = 0, right = 0, bottom = 0;
+        for (const auto& pr : rects) {
+            if (any && (pr.width <= 0 && pr.height <= 0)) continue;
+            if (!any) {
+                left = pr.x; top = pr.y; right = pr.x + pr.width; bottom = pr.y + pr.height;
+                any = true;
+                continue;
             }
-            return makeDomRectValue(0, 0, 0, 0);
-        }
-
-        auto rects = bro::layout::getSelectionRects(
-            doc, r->startContainer(), r->startOffset(),
-            r->endContainer(), r->endOffset(), *metrics);
-
-        if (rects.empty()) {
-            double cx = 0, cy = 0, cw = 0, ch = 0;
-            if (computeCollapsedCaret(doc, r, metrics, offY, cx, cy, cw, ch)) {
-                return makeDomRectValue(cx, cy, cw, ch);
-            }
-            return makeDomRectValue(0, 0, 0, 0);
-        }
-
-        auto* ctxEl = nearestElementAncestor(r->startContainer());
-        auto proj = [&](const htmlayout::layout::Rect& rect) {
-            return ctxEl
-                ? bro::dom::projectRectThroughAncestors(ctxEl, rect.x, rect.y, rect.width, rect.height)
-                : bro::dom::AbsoluteRect{rect.x, rect.y, rect.width, rect.height};
-        };
-
-        auto first = proj(rects.front());
-        float left = first.x, top = first.y;
-        float right = first.x + first.width, bottom = first.y + first.height;
-        for (const auto& rect : rects) {
-            auto pr = proj(rect);
             left   = std::min(left,   pr.x);
             top    = std::min(top,    pr.y);
             right  = std::max(right,  pr.x + pr.width);
             bottom = std::max(bottom, pr.y + pr.height);
         }
-        return makeDomRectValue(left, top + offY, right - left, bottom - top);
+        return makeDomRectValue(left, top, right - left, bottom - top);
     });
 }
 
@@ -444,12 +491,28 @@ void decorateRangeProto(ObjectBuilder& b) {
 
 bro::dom::Range* hostRangeOf(Value v) {
     auto* cell = hostRangeCellOf(v);
+    return cell ? cell->range.get() : nullptr;
+}
+
+std::shared_ptr<bro::dom::Range> hostSharedRangeOf(Value v) {
+    auto* cell = hostRangeCellOf(v);
     return cell ? cell->range : nullptr;
 }
 
 Value wrapOwnedRange(bro::dom::Range* r) {
     if (!r) return ev::null();
-    auto* cell = new HostRangeCell{kHostRangeTag, r, true};
+    // The deleter unregisters from the document first (~Range would too; this
+    // keeps the order explicit when the document is already gone).
+    std::shared_ptr<bro::dom::Range> sp(r, [](bro::dom::Range* p) {
+        p->setDocument(nullptr);
+        delete p;
+    });
+    return wrapSharedRange(std::move(sp));
+}
+
+Value wrapSharedRange(std::shared_ptr<bro::dom::Range> r) {
+    if (!r) return ev::null();
+    auto* cell = new HostRangeCell{kHostRangeTag, std::move(r)};
     return g_rangeClass.make(cell, hostRangeDtor);
 }
 

@@ -63,6 +63,7 @@ std::vector<Node*> ancestorsInclusive(Node* node) {
     return out;
 }
 
+// True when `ancestor` is `node` or one of its ancestors.
 bool isAncestorOf(Node* ancestor, Node* node) {
     for (Node* n = node; n; n = n->parentNode())
         if (n == ancestor) return true;
@@ -308,301 +309,279 @@ std::string Range::toString() const {
 
 // ---------------------------------------------------------------------------
 // Content manipulation
+//
+// The DOM standard's "clone the contents", "extract" and "delete" algorithms
+// (https://dom.spec.whatwg.org/#concept-range-clone), written the way the
+// spec writes them: split the common ancestor's children into the first
+// partially contained child, the fully contained ones, and the last partially
+// contained child, and recurse into the partial ones through a sub-range. A
+// partially selected element is therefore cloned SHALLOW into the fragment
+// with just its selected descendants inside — `ect any <em>live</em>` for a
+// range from inside a text node into an <em> — which the old
+// "collect-the-whole-nodes" walk could not express at all.
 // ---------------------------------------------------------------------------
 
 namespace {
 
-// Split a text node at `offset` and return the tail so the caller can splice
-// ranges. The tail is inserted immediately after the original.
-TextNode* splitAt(TextNode* tn, int offset) {
-    if (!tn || offset <= 0 || offset >= static_cast<int>(tn->length())) return nullptr;
-    Node* parent = tn->parentNode();
-    if (!parent) return nullptr;
-    auto* doc = [&]() -> Document* {
-        auto* p = parent;
-        while (p && p->nodeType() != NodeType::Document) {
-            if (p->nodeType() == NodeType::Element)
-                return static_cast<Element*>(p)->document();
-            p = p->parentNode();
-        }
-        return nullptr;
-    }();
-    if (!doc) return nullptr;
-    auto* tail = doc->createTextNode(tn->data().substr(offset));
-    tn->setData(tn->data().substr(0, offset));
-    // Insert after tn
-    int idx = indexOf(parent, tn);
-    if (idx < 0) return nullptr;
-    auto& kids = parent->childNodes();
-    if (idx + 1 >= static_cast<int>(kids.size())) {
-        parent->appendChild(tail);
-    } else {
-        parent->insertBefore(tail, kids[idx + 1]);
+bool isCharData(const Node* n) {
+    return n && (n->nodeType() == NodeType::Text || n->nodeType() == NodeType::Comment);
+}
+
+const std::string& charData(Node* n) {
+    if (n->nodeType() == NodeType::Text) return static_cast<TextNode*>(n)->data();
+    return static_cast<CommentNode*>(n)->data();
+}
+
+// "Replace data": through the node's own mutator, so live ranges (this one
+// included) and mutation observers see it the way they see a script's edit.
+void deleteCharData(Node* n, int offset, int count) {
+    if (count <= 0) return;
+    if (n->nodeType() == NodeType::Text)
+        static_cast<TextNode*>(n)->deleteData(static_cast<size_t>(offset),
+                                              static_cast<size_t>(count));
+    else if (n->nodeType() == NodeType::Comment)
+        static_cast<CommentNode*>(n)->deleteData(static_cast<size_t>(offset),
+                                                 static_cast<size_t>(count));
+}
+
+// A same-type node holding data[from, to).
+Node* cloneCharSubstring(Document* doc, Node* n, int from, int to) {
+    const std::string& data = charData(n);
+    int lo = std::clamp(from, 0, static_cast<int>(data.size()));
+    int hi = std::clamp(to, lo, static_cast<int>(data.size()));
+    std::string piece = data.substr(lo, hi - lo);
+    if (n->nodeType() == NodeType::Text) return doc->createTextNode(piece);
+    return doc->createComment(piece);
+}
+
+// "Contained": (node, 0) is after the start and (node, length) before the end.
+bool isContained(Node* n, Node* sC, int sO, Node* eC, int eO) {
+    return comparePositions(n, 0, sC, sO) > 0 &&
+           comparePositions(n, childCountOrLen(n), eC, eO) < 0;
+}
+
+// Clone (extract == false) or extract the contents of [(sC,sO), (eC,eO)] into
+// `out` — the fragment, or the shallow clone of a partially contained element
+// one level up. Offsets are UTF-8 byte offsets for character data.
+void contentsInto(Document* doc, Node* out, Node* sC, int sO, Node* eC, int eO,
+                  bool extract) {
+    if (sC == eC && sO == eO) return;
+
+    if (sC == eC && isCharData(sC)) {
+        out->appendChild(cloneCharSubstring(doc, sC, sO, eO));
+        if (extract) deleteCharData(sC, sO, eO - sO);
+        return;
     }
-    return tail;
-}
 
-// Collect the top-level nodes fully contained in [(startC,startOff),
-// (endC,endOff)] without touching the tree. Partially contained text endpoints
-// are simply not collected — the caller decides what to do about them (split
-// them, for the destructive operations; clone a substring, for cloneContents).
-std::vector<Node*> collectFullyContained(Node* startC, int startOff,
-                                         Node* endC, int endOff) {
-    std::vector<Node*> result;
-    Node* common = commonAncestor(startC, endC);
-    if (!common) return result;
+    Node* common = sC;
+    while (common && !isAncestorOf(common, eC)) common = common->parentNode();
+    if (!common) return;
 
-    // Walk common's descendants in tree order; collect the topmost nodes
-    // fully inside the range.
-    std::function<void(Node*)> walk = [&](Node* n) {
-        if (!n) return;
-        // Determine if n is fully contained.
-        Node* parent = n->parentNode();
-        if (parent) {
-            int idx = indexOf(parent, n);
-            bool afterS = comparePositions(parent, idx, startC, startOff) >= 0;
-            bool beforeE = comparePositions(parent, idx + 1, endC, endOff) <= 0;
-            if (afterS && beforeE) {
-                result.push_back(n);
-                return;
-            }
-        }
-        for (auto* child : n->childNodes()) walk(child);
-    };
+    Node* firstPartial = nullptr;
+    if (!isAncestorOf(sC, eC)) {
+        for (Node* c : common->childNodes())
+            if (isAncestorOf(c, sC)) { firstPartial = c; break; }
+    }
+    Node* lastPartial = nullptr;
+    if (!isAncestorOf(eC, sC)) {
+        const auto& kids = common->childNodes();
+        for (auto it = kids.rbegin(); it != kids.rend(); ++it)
+            if (isAncestorOf(*it, eC)) { lastPartial = *it; break; }
+    }
+    std::vector<Node*> contained;
+    for (Node* c : common->childNodes())
+        if (isContained(c, sC, sO, eC, eO)) contained.push_back(c);
 
-    for (auto* child : common->childNodes()) walk(child);
-    return result;
-}
-
-// Collect the top-level nodes "fully contained" within [start,end]. Partially
-// contained text endpoints are split so the region between them is a clean
-// run of whole nodes. DESTRUCTIVE — only for deleteContents/extractContents,
-// where the source nodes are about to be removed anyway. cloneContents must
-// not use this.
-std::vector<Node*> contentsInRange(Range& range) {
-    std::vector<Node*> result;
-    Node* startC = range.startContainer();
-    Node* endC = range.endContainer();
-    int startOff = range.startOffset();
-    int endOff = range.endOffset();
-    if (!startC || !endC) return result;
-
-    // Single text container: split, capture middle.
-    if (startC == endC && startC->nodeType() == NodeType::Text) {
-        auto* tn = static_cast<TextNode*>(startC);
-        if (startOff > 0) {
-            auto* after = splitAt(tn, startOff);
-            if (after) {
-                // Adjust endOff into the new node
-                int newEnd = endOff - startOff;
-                if (newEnd > 0 && newEnd < static_cast<int>(after->length())) {
-                    splitAt(after, newEnd);
-                }
-                result.push_back(after);
-                return result;
-            }
+    if (firstPartial) {
+        if (isCharData(firstPartial)) {
+            // firstPartial is the start node itself.
+            int len = childCountOrLen(sC);
+            out->appendChild(cloneCharSubstring(doc, sC, sO, len));
+            if (extract) deleteCharData(sC, sO, len - sO);
         } else {
-            if (endOff < static_cast<int>(tn->length())) {
-                splitAt(tn, endOff);
+            Node* clone = doc->cloneNode(firstPartial, /*deep=*/false);
+            if (clone) {
+                out->appendChild(clone);
+                contentsInto(doc, clone, sC, sO, firstPartial,
+                             childCountOrLen(firstPartial), extract);
             }
-            result.push_back(tn);
-            return result;
         }
     }
 
-    // If endpoints land in text nodes, split so the boundary becomes between
-    // nodes rather than inside them.
-    if (startC->nodeType() == NodeType::Text && startOff > 0 &&
-        startOff < static_cast<int>(static_cast<TextNode*>(startC)->length())) {
-        auto* after = splitAt(static_cast<TextNode*>(startC), startOff);
-        if (after) { startC = after; startOff = 0; }
-    }
-    if (endC->nodeType() == NodeType::Text && endOff > 0 &&
-        endOff < static_cast<int>(static_cast<TextNode*>(endC)->length())) {
-        splitAt(static_cast<TextNode*>(endC), endOff);
+    for (Node* c : contained) {
+        if (extract) {
+            out->appendChild(c);  // detaches it from the source tree
+        } else if (Node* clone = doc->cloneNode(c, /*deep=*/true)) {
+            out->appendChild(clone);
+        }
     }
 
-    return collectFullyContained(startC, startOff, endC, endOff);
+    if (lastPartial) {
+        if (isCharData(lastPartial)) {
+            out->appendChild(cloneCharSubstring(doc, eC, 0, eO));
+            if (extract) deleteCharData(eC, 0, eO);
+        } else {
+            Node* clone = doc->cloneNode(lastPartial, /*deep=*/false);
+            if (clone) {
+                out->appendChild(clone);
+                contentsInto(doc, clone, lastPartial, 0, eC, eO, extract);
+            }
+        }
+    }
+}
+
+// Where the range collapses after extract/delete: the start, when the start
+// node contains the end; otherwise just after the start's topmost ancestor
+// that does not contain the end.
+void collapsePointAfterRemoval(Node* sC, int sO, Node* eC, Node*& node, int& off) {
+    if (isAncestorOf(sC, eC)) { node = sC; off = sO; return; }
+    Node* ref = sC;
+    while (ref->parentNode() && !isAncestorOf(ref->parentNode(), eC))
+        ref = ref->parentNode();
+    node = ref->parentNode();
+    off = indexOf(node, ref) + 1;
+}
+
+// Split `tn` at `offset` (the Text.splitText algorithm): the tail becomes a new
+// sibling right after it, and live-range endpoints past the split move with
+// the characters they sat between.
+TextNode* splitTextNode(Document* doc, TextNode* tn, int offset) {
+    int len = static_cast<int>(tn->length());
+    offset = std::clamp(offset, 0, len);
+    auto* tail = doc->createTextNode(tn->data().substr(offset));
+    if (Node* parent = tn->parentNode()) {
+        const auto& kids = parent->childNodes();
+        int idx = indexOf(parent, tn);
+        if (idx + 1 < static_cast<int>(kids.size()))
+            parent->insertBefore(tail, kids[idx + 1]);
+        else
+            parent->appendChild(tail);
+    }
+    doc->notifyTextSplit(tn, offset, tail);
+    tn->deleteData(static_cast<size_t>(offset), static_cast<size_t>(len - offset));
+    return tail;
 }
 
 } // namespace
 
 void Range::deleteContents() {
-    if (collapsed()) return;
-    auto nodes = contentsInRange(*this);
-    Node* start = startContainer_;
-    int startOff = startOffset_;
-    Document* doc = document_;
-
-    // Where the range collapses afterwards. The start container is often one
-    // of the nodes about to be removed — contentsInRange() splits a partially
-    // selected text node so the selected half becomes a whole node, and a
-    // fully selected one is removed outright — so keeping the old start
-    // position would leave both endpoints pointing at freed memory. Anchor to
-    // the first removed node's parent and its child index instead: that
-    // parent survives, and the index is exactly the gap the removal leaves.
-    Node* collapseTo = start;
-    int collapseOff = startOff;
-    bool startRemoved = false;
-    for (auto* n : nodes) {
-        for (Node* a = start; a; a = a->parentNode()) {
-            if (a == n) { startRemoved = true; break; }
-        }
-        if (startRemoved) break;
+    if (!document_ || !startContainer_ || !endContainer_ || collapsed()) return;
+    // Extract into a scratch fragment: the source-tree effect of "delete" is
+    // exactly extract's (trim the partial character data, detach the contained
+    // nodes, empty the partial elements' selected descendants). The detached
+    // nodes are not freed — a script may still hold them, as it may after
+    // removeChild.
+    Node* scratch = extractContents();
+    if (scratch) {
+        auto kids = scratch->childNodes();
+        for (Node* k : kids) scratch->removeChild(k);
     }
-    if (startRemoved && nodes[0] && nodes[0]->parentNode()) {
-        Node* p = nodes[0]->parentNode();
-        const auto& kids = p->childNodes();
-        for (size_t i = 0; i < kids.size(); ++i) {
-            if (kids[i] == nodes[0]) {
-                collapseTo = p;
-                collapseOff = static_cast<int>(i);
-                break;
-            }
-        }
-    }
-
-    for (auto* n : nodes) {
-        if (!n) continue;
-        Node* p = n->parentNode();
-        if (p) p->removeChild(n);
-        if (doc) doc->freeNode(n);
-    }
-    startContainer_ = endContainer_ = collapseTo;
-    startOffset_ = endOffset_ = collapseOff;
 }
 
 Node* Range::cloneContents() const {
     if (!document_) return nullptr;
     auto* frag = document_->createElement("#DOCUMENT-FRAGMENT");
-    if (collapsed()) return frag;
-
-    // Cloning must not modify the source tree (DOM spec: the clone steps only
-    // read). Partially contained text endpoints are therefore copied as
-    // substrings rather than split — the destructive contentsInRange() path is
-    // reserved for extract/delete, which are about to remove the nodes anyway.
-
-    // Appends a deep copy of `n` to the fragment. This used to serialize the
-    // node to outerHTML and reparse it, which quietly dropped every piece of
-    // state markup cannot express — canvas backing stores, <select> selection,
-    // custom-element upgrade state. Document::cloneNode is a real native deep
-    // clone; it still drops event listeners, which is what the spec requires.
-    auto cloneInto = [&](Node* n) {
-        if (Node* c = document_->cloneNode(n, /*deep=*/true)) frag->appendChild(c);
-    };
-
-    // Character-data helper: clone data[from,to) as a same-type node.
-    // Offsets here are UTF-8 byte offsets (the JS layer converts from UTF-16).
-    auto cloneSubstring = [&](Node* n, int from, int to) {
-        if (!n || to <= from) return;
-        const std::string* data = nullptr;
-        if (n->nodeType() == NodeType::Text)
-            data = &static_cast<TextNode*>(n)->data();
-        else if (n->nodeType() == NodeType::Comment)
-            data = &static_cast<CommentNode*>(n)->data();
-        if (!data) return;
-        int lo = std::clamp(from, 0, static_cast<int>(data->size()));
-        int hi = std::clamp(to, lo, static_cast<int>(data->size()));
-        auto piece = data->substr(lo, hi - lo);
-        if (n->nodeType() == NodeType::Text)
-            frag->appendChild(document_->createTextNode(piece));
-        else
-            frag->appendChild(document_->createComment(piece));
-    };
-
-    bool startIsChars = startContainer_ &&
-                        (startContainer_->nodeType() == NodeType::Text ||
-                         startContainer_->nodeType() == NodeType::Comment);
-    bool endIsChars = endContainer_ &&
-                      (endContainer_->nodeType() == NodeType::Text ||
-                       endContainer_->nodeType() == NodeType::Comment);
-
-    // Both endpoints inside the same character-data node: one substring.
-    if (startContainer_ == endContainer_ && startIsChars) {
-        cloneSubstring(startContainer_, startOffset_, endOffset_);
-        return frag;
-    }
-
-    int startLen = childCountOrLen(startContainer_);
-    int endLen = childCountOrLen(endContainer_);
-
-    // Partially contained head: [startOffset_, end of node). When startOffset_
-    // is 0 the node is fully contained and the walk below picks it up instead.
-    if (startIsChars && startOffset_ > 0 && startOffset_ < startLen)
-        cloneSubstring(startContainer_, startOffset_, startLen);
-
-    for (auto* n : collectFullyContained(startContainer_, startOffset_,
-                                         endContainer_, endOffset_))
-        cloneInto(n);
-
-    // Partially contained tail: [0, endOffset_). When endOffset_ equals the
-    // node length the node is fully contained and was collected above.
-    if (endIsChars && endOffset_ > 0 && endOffset_ < endLen)
-        cloneSubstring(endContainer_, 0, endOffset_);
-
+    if (!startContainer_ || !endContainer_ || collapsed()) return frag;
+    contentsInto(document_, frag, startContainer_, startOffset_,
+                 endContainer_, endOffset_, /*extract=*/false);
     return frag;
 }
 
 Node* Range::extractContents() {
     if (!document_) return nullptr;
     auto* frag = document_->createElement("#DOCUMENT-FRAGMENT");
-    if (collapsed()) return frag;
+    if (!startContainer_ || !endContainer_ || collapsed()) return frag;
 
-    auto nodes = contentsInRange(*this);
-    Node* start = startContainer_;
-    int startOff = startOffset_;
-    for (auto* n : nodes) {
-        if (!n) continue;
-        Node* p = n->parentNode();
-        if (p) p->removeChild(n);
-        frag->appendChild(n);
-    }
-    startContainer_ = endContainer_ = start;
-    startOffset_ = endOffset_ = startOff;
+    Node* sC = startContainer_;
+    int sO = startOffset_;
+    Node* eC = endContainer_;
+    int eO = endOffset_;
+    Node* newNode = sC;
+    int newOff = sO;
+    if (!(sC == eC && isCharData(sC)))
+        collapsePointAfterRemoval(sC, sO, eC, newNode, newOff);
+
+    contentsInto(document_, frag, sC, sO, eC, eO, /*extract=*/true);
+
+    startContainer_ = endContainer_ = newNode;
+    startOffset_ = endOffset_ = std::clamp(newOff, 0, childCountOrLen(newNode));
     return frag;
 }
 
-void Range::insertNode(Node* node) {
-    if (!node || !startContainer_) return;
-    if (startContainer_->nodeType() == NodeType::Text) {
-        auto* tn = static_cast<TextNode*>(startContainer_);
-        auto* parent = tn->parentNode();
-        if (!parent) return;
-        if (startOffset_ == 0) {
-            parent->insertBefore(node, tn);
-        } else if (startOffset_ >= static_cast<int>(tn->length())) {
-            int idx = indexOf(parent, tn);
-            auto& kids = parent->childNodes();
-            if (idx + 1 >= static_cast<int>(kids.size())) parent->appendChild(node);
-            else parent->insertBefore(node, kids[idx + 1]);
-        } else {
-            auto* tail = splitAt(tn, startOffset_);
-            if (tail) parent->insertBefore(node, tail);
-            else parent->appendChild(node);
-        }
-        return;
-    }
-    // Element container: insert at the child index.
-    auto& kids = startContainer_->childNodes();
-    if (startOffset_ >= static_cast<int>(kids.size())) {
-        startContainer_->appendChild(node);
+Range::Error Range::insertNode(Node* node) {
+    if (!node || !startContainer_ || !document_) return Error::None;
+    Node* start = startContainer_;
+    if (start->nodeType() == NodeType::Comment ||
+        (start->nodeType() == NodeType::Text && !start->parentNode()) ||
+        start == node)
+        return Error::HierarchyRequest;
+
+    Node* reference = nullptr;
+    if (start->nodeType() == NodeType::Text) {
+        reference = start;
     } else {
-        startContainer_->insertBefore(node, kids[startOffset_]);
+        const auto& kids = start->childNodes();
+        if (startOffset_ < static_cast<int>(kids.size())) reference = kids[startOffset_];
     }
+    Node* parent = reference ? reference->parentNode() : start;
+    // Pre-insertion validity: the node may not be an inclusive ancestor of
+    // the parent it is going into.
+    if (isAncestorOf(node, parent)) return Error::HierarchyRequest;
+
+    if (start->nodeType() == NodeType::Text)
+        reference = splitTextNode(document_, static_cast<TextNode*>(start), startOffset_);
+    if (node == reference) {
+        int idx = indexOf(parent, reference);
+        const auto& kids = parent->childNodes();
+        reference = (idx >= 0 && idx + 1 < static_cast<int>(kids.size())) ? kids[idx + 1]
+                                                                          : nullptr;
+    }
+    if (node->parentNode()) node->parentNode()->removeChild(node);
+
+    int newOffset = reference ? indexOf(parent, reference)
+                              : static_cast<int>(parent->childNodes().size());
+    const bool isFragment = node->nodeType() == NodeType::DocumentFragment ||
+        (node->nodeType() == NodeType::Element &&
+         static_cast<Element*>(node)->tagName() == "#DOCUMENT-FRAGMENT");
+    newOffset += isFragment ? static_cast<int>(node->childNodes().size()) : 1;
+    const bool wasCollapsed = collapsed();
+
+    if (isFragment) {
+        auto kids = node->childNodes();
+        for (Node* k : kids) parent->insertBefore(k, reference);
+    } else {
+        parent->insertBefore(node, reference);
+    }
+    if (wasCollapsed) {
+        endContainer_ = parent;
+        endOffset_ = newOffset;
+    }
+    return Error::None;
 }
 
-void Range::surroundContents(Element* newParent) {
-    if (!newParent) return;
-    auto* extracted = extractContents();
-    insertNode(newParent);
-    if (extracted) {
-        auto kids = extracted->childNodes();
-        for (auto* k : kids) k->setParent(nullptr);
-        extracted->childNodes().clear();
-        for (auto* k : kids) newParent->appendChild(k);
-        if (document_) document_->freeNode(extracted);
+Range::Error Range::surroundContents(Element* newParent) {
+    if (!newParent || !document_ || !startContainer_ || !endContainer_) return Error::None;
+    // A non-Text node partially contained in the range cannot be wrapped: the
+    // result would have to split it.
+    Node* common = commonAncestorContainer();
+    for (Node* n = startContainer_; n && n != common; n = n->parentNode())
+        if (n->nodeType() != NodeType::Text && !isAncestorOf(n, endContainer_))
+            return Error::InvalidState;
+    for (Node* n = endContainer_; n && n != common; n = n->parentNode())
+        if (n->nodeType() != NodeType::Text && !isAncestorOf(n, startContainer_))
+            return Error::InvalidState;
+    if (newParent->tagName() == "#DOCUMENT-FRAGMENT") return Error::InvalidNodeType;
+
+    Node* fragment = extractContents();
+    auto oldKids = newParent->childNodes();
+    for (Node* k : oldKids) newParent->removeChild(k);
+    if (Error e = insertNode(newParent); e != Error::None) return e;
+    if (fragment) {
+        auto kids = fragment->childNodes();
+        for (Node* k : kids) newParent->appendChild(k);
     }
     selectNode(newParent);
+    return Error::None;
 }
 
 Node* Range::createContextualFragment(const std::string& html) {
@@ -672,9 +651,13 @@ void Range::onTextSplit(Node* node, int offset, Node* tail) {
     adjust(endContainer_, endOffset_);
 }
 
+// DOM "insert" step: a boundary point in `parent` AFTER the insertion index
+// shifts right; one exactly AT it stays put, so it now sits before the
+// inserted node (which is what keeps a collapsed caret ahead of text a script
+// inserts at it — insertNode then moves the end explicitly).
 void Range::onChildInserted(Node* parent, int index) {
     auto adjust = [&](Node* c, int& off) {
-        if (c == parent && off >= index) off++;
+        if (c == parent && off > index) off++;
     };
     adjust(startContainer_, startOffset_);
     adjust(endContainer_, endOffset_);

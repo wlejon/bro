@@ -11,6 +11,8 @@
 #include "dom/document.h"
 #include "dom/range.h"
 #include "dom/selection.h"
+#include "dom/event.h"
+#include "dom/event_dispatch.h"
 #include "engine/css_transitions.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/layout_node_adapter.h"
@@ -120,22 +122,29 @@ void Document::notifyNodeRemoved(Node* removed) {
     for (size_t i = 0; i < kids.size(); ++i)
         if (kids[i] == removed) { idx = static_cast<int>(i); break; }
     if (idx < 0) return;
+    SelectionBoundaries before = selectionBoundaries();
     for (auto* r : liveRanges_)
         r->onNodeRemoved(removed, parent, idx);
-    if (selection_ && selection_->rangeCount() > 0) {
-        selection_->schedulePendingChange();
-        selection_->flushPendingChange();
-    }
+    if (selectionBoundaries() != before) fireSelectionChange();
 }
 
 void Document::notifyTextDataChanged(Node* node, int offset, int count, int newLen) {
     if (!node) return;
+    SelectionBoundaries before = selectionBoundaries();
     for (auto* r : liveRanges_)
         r->onTextDataChanged(node, offset, count, newLen);
-    if (selection_ && selection_->rangeCount() > 0) {
-        selection_->schedulePendingChange();
-        selection_->flushPendingChange();
-    }
+    if (selectionBoundaries() != before) fireSelectionChange();
+}
+
+Document::SelectionBoundaries Document::selectionBoundaries() const {
+    SelectionBoundaries b;
+    if (!selection_ || selection_->rangeCount() == 0) return b;
+    const Range* r = selection_->getRangeAt(0);
+    b.startNode = r->startContainer();
+    b.startOffset = r->startOffset();
+    b.endNode = r->endContainer();
+    b.endOffset = r->endOffset();
+    return b;
 }
 
 void Document::notifyTextSplit(Node* node, int offset, Node* tail) {
@@ -150,7 +159,30 @@ void Document::notifyChildInserted(Node* parent, int index) {
         r->onChildInserted(parent, index);
 }
 
+Document::TaskPoster Document::s_taskPoster = nullptr;
+
+// selectionchange is queued as a task, not dispatched inline: the selection
+// changes in the middle of whatever script or input handling moved it, and a
+// listener that reads the selection wants the settled result. At most one is
+// outstanding per document, so a drag that moves the focus every mousemove —
+// or a script that collapses and then extends — reports once per task, the
+// coalescing Chromium applies. Fired at the document (whose listeners live on
+// the document element here), neither bubbling nor cancelable.
 void Document::fireSelectionChange() {
+    // Whatever moved the selection, its highlight has to be repainted.
+    markPaintDirty();
+    if (selectionChangeQueued_ || !s_taskPoster) return;
+    selectionChangeQueued_ = true;
+    Document* self = this;
+    s_taskPoster([self] {
+        if (!isLiveDocument(self)) return;
+        self->selectionChangeQueued_ = false;
+        Element* root = self->documentElement();
+        if (!root) return;
+        Event evt("selectionchange", /*bubbles=*/false, /*cancelable=*/false);
+        evt.setIsTrusted(true);
+        dispatchDomEvent(root, evt);
+    });
 }
 
 // ---------------------------------------------------------------------------
