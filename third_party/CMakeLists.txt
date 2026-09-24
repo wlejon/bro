@@ -105,16 +105,36 @@ if(NOT TARGET bromath)
 endif()
 
 # --- brass (JIT compiler and intermediate representation) ---
+# This is the only place brass is resolved inside bro: bronze's and the
+# siblings' own brass blocks all sit behind `if(NOT TARGET brass)`. So the knob
+# is BRASS_ROOT, the name bronze and CI use — a BRASS_ROOT read anywhere later
+# would arrive after the target exists and change nothing. An explicit root
+# that holds no brass is an error rather than a quiet fall-through, and the
+# chosen tree is always reported, as bronze's is.
 if(NOT TARGET brass)
-    bro_default_sibling_dir(brass _brass_default)
-    set(BRASS_DIR "${_brass_default}" CACHE PATH "Path to standalone brass repo")
-    if(EXISTS "${BRASS_DIR}/CMakeLists.txt")
-        message(STATUS "brass: using standalone repo at ${BRASS_DIR}")
-        add_subdirectory("${BRASS_DIR}" "${CMAKE_BINARY_DIR}/brass-build" EXCLUDE_FROM_ALL)
-    else()
-        message(STATUS "brass: using submodule at third_party/brass")
-        add_subdirectory(brass "${CMAKE_BINARY_DIR}/brass-build" EXCLUDE_FROM_ALL)
+    get_filename_component(_brass_submodule "${CMAKE_CURRENT_SOURCE_DIR}/brass" ABSOLUTE)
+    if(DEFINED ENV{BRASS_ROOT} AND NOT "$ENV{BRASS_ROOT}" STREQUAL "")
+        set(BRASS_ROOT "$ENV{BRASS_ROOT}" CACHE PATH "brass source tree" FORCE)
+    elseif(NOT DEFINED BRASS_ROOT OR BRASS_ROOT STREQUAL "")
+        bro_default_sibling_dir(brass _brass_default)
+        if(NOT EXISTS "${_brass_default}/CMakeLists.txt")
+            set(_brass_default "${_brass_submodule}")
+        endif()
+        set(BRASS_ROOT "${_brass_default}" CACHE PATH "brass source tree")
     endif()
+    if(NOT EXISTS "${BRASS_ROOT}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "brass not found at\n    ${BRASS_ROOT}\n"
+            "Initialize the submodule (git submodule update --init third_party/brass), "
+            "clone it as a sibling of bro (../brass), or pass -DBRASS_ROOT=<path>.")
+    endif()
+    get_filename_component(_brass_chosen "${BRASS_ROOT}" ABSOLUTE)
+    if(_brass_chosen STREQUAL _brass_submodule)
+        message(STATUS "brass: submodule tree (${_brass_chosen})")
+    else()
+        message(STATUS "brass: standalone tree (${_brass_chosen})")
+    endif()
+    add_subdirectory("${_brass_chosen}" "${CMAKE_BINARY_DIR}/brass-build" EXCLUDE_FROM_ALL)
 endif()
 
 # --- brotensor (tensor + ops — the AI-tower base) ---

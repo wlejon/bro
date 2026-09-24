@@ -297,10 +297,10 @@ cmake -B build -DBROMATH_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
                -DBROFLORA_DIR=none -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none \
                -DBROLM_DIR=none -DBRODIFFUSION_DIR=none -DBROIMAGE_DIR=none \
-               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none -DBRASS_ROOT=none -DBRONZE_DIR=none
+               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none
 ```
 
-`-DBRONZE_DIR=none` is the one to treat with suspicion since the `<name>_api` move: the first sibling to resolve bronze (brotensor or broimage, from `third_party/CMakeLists.txt`) honours an explicit `BRONZE_DIR` and errors with "bronze not found" when it does not exist, rather than falling through to `third_party/bronze`. Forcing the bronze submodule means pointing at it: `-DBRONZE_DIR=<abs path>/third_party/bronze`.
+bronze and brass are the exceptions: neither falls through on a bad path. The first sibling to resolve bronze (brotensor or broimage, from `third_party/CMakeLists.txt`) honours an explicit `BRONZE_DIR` and errors with "bronze not found" when it does not exist, and bro's brass block does the same with "brass not found" for a `BRASS_ROOT` (cache variable or environment) holding no brass. Forcing either submodule means pointing at it: `-DBRONZE_DIR=<abs path>/third_party/bronze -DBRASS_ROOT=<abs path>/third_party/brass`. `BRASS_ROOT` is read in exactly one place inside bro, `third_party/CMakeLists.txt`, which runs before anything else names brass and prints `brass: standalone tree (...)` or `brass: submodule tree (...)`; every later brass block (bronze's, the siblings') finds the target already there. A build directory configured before 2026-09-24 still carries a `BRASS_DIR` cache entry, which nothing reads any more.
 
 ## Apps tree
 

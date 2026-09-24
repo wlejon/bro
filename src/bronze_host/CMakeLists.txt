@@ -34,24 +34,8 @@ else()
     message(STATUS "bronze: standalone tree (${BRONZE_DIR})")
 endif()
 
-# Resolve brass: sibling working tree, else submodule
-if(NOT TARGET brass)
-    bro_default_sibling_dir(brass _brass_default)
-    if(NOT EXISTS "${_brass_default}/include/brass/brass.hpp")
-        set(_brass_default "${bro_SOURCE_DIR}/third_party/brass")
-    endif()
-    if(NOT DEFINED BRASS_ROOT OR BRASS_ROOT STREQUAL "")
-        set(BRASS_ROOT "${_brass_default}" CACHE PATH "Path to Brass root directory" FORCE)
-    endif()
-    get_filename_component(_brass_submodule "${bro_SOURCE_DIR}/third_party/brass" ABSOLUTE)
-    get_filename_component(_brass_chosen "${BRASS_ROOT}" ABSOLUTE)
-    if(_brass_chosen STREQUAL _brass_submodule)
-        message(STATUS "brass: submodule tree (${BRASS_ROOT})")
-    else()
-        message(STATUS "brass: standalone tree (${BRASS_ROOT})")
-    endif()
-    add_subdirectory("${BRASS_ROOT}" "${CMAKE_BINARY_DIR}/brass-build" EXCLUDE_FROM_ALL)
-endif()
+# brass is already a target here: third_party/CMakeLists.txt resolves it
+# (BRASS_ROOT) before any sibling, and reports which tree it picked.
 
 # bronze builds its runtime as a shared library only when asked, and its own
 # default for the question is "am I the top-level project" — which is OFF here,
