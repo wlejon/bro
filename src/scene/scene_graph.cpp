@@ -668,6 +668,28 @@ bool SceneGraph::unprojectLocal(float localX, float localY,
     return true;
 }
 
+bool SceneGraph::projectLocal(const Vec3& world,
+                              float& outX, float& outY, float& outDepth) const {
+    if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return false;
+    const auto& P = projectionMatrix_;
+    const auto& V = viewMatrix_;
+    const Vec3 v = bromath::mtransformPoint(V, world);   // view space, camera looks down -Z
+    outDepth = -v.z;
+    const float cx = P.at(0, 0) * v.x + P.at(0, 1) * v.y + P.at(0, 2) * v.z + P.at(0, 3);
+    const float cy = P.at(1, 0) * v.x + P.at(1, 1) * v.y + P.at(1, 2) * v.z + P.at(1, 3);
+    const float cw = P.at(3, 0) * v.x + P.at(3, 1) * v.y + P.at(3, 2) * v.z + P.at(3, 3);
+    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(cw)) return false;
+    if (std::fabs(cw) < 1e-12f) {
+        // On the camera plane of a perspective projection: no finite pixel.
+        outX = outY = 0.0f;
+        return true;
+    }
+    const float nx = cx / cw, ny = cy / cw;
+    outX = (nx * 0.5f + 0.5f) * static_cast<float>(canvasWidth_);
+    outY = (0.5f - ny * 0.5f) * static_cast<float>(canvasHeight_);
+    return true;
+}
+
 bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
                               HtmlNodePick& out) const {
     Vec3 rayOrigin, rayDir;

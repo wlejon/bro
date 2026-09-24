@@ -1397,11 +1397,39 @@ class SceneGraph {
   raycast(origin, direction) {}
 
   /**
-   * @param {SceneNode} node
-   * @param {Array<number>} screenPoint
-   * @returns {Array<number>}
+   * World-space pick ray through a canvas-local pixel. `x`/`y` are CSS
+   * pixels relative to the canvas content box (top-left origin), e.g.
+   * `ev.clientX - canvas.getBoundingClientRect().left`. Works for every
+   * camera: `setCamera` (perspective or orthographic), `setCameraQuat`, and
+   * an active camera node. Orthographic rays are parallel: `dir` is the
+   * camera forward and `origin` slides across the view plane.
+   *
+   *     const r = canvas.getBoundingClientRect();
+   *     const ray = scene.unprojectLocal(ev.clientX - r.left, ev.clientY - r.top);
+   *     const hit = ray && scene.raycast(ray.origin, ray.dir, 100);
+   *
+   * @param {number} x
+   * @param {number} y
+   * @returns {?{ origin: number[], dir: number[] }} `dir` is unit length;
+   *   null before the canvas has a size
    */
-  unprojectLocal(node, screenPoint) {}
+  unprojectLocal(x, y) {}
+
+  /**
+   * The inverse of unprojectLocal: the canvas-local CSS pixel a world point
+   * renders at under the current camera. Add the canvas rect's left/top for
+   * a page position (to click a 3D object from a test, or to place a DOM
+   * label over it). Also takes one `[x, y, z]` array.
+   *
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   * @returns {?{ x: number, y: number, depth: number, behind: boolean }}
+   *   `depth` is the distance along the camera forward axis; `behind` is true
+   *   at or behind the camera plane (x/y are then meaningless). null before
+   *   the canvas has a size.
+   */
+  projectLocal(x, y, z) {}
 
   /**
    * @returns {ImageData}

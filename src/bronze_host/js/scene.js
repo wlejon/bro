@@ -758,10 +758,18 @@
         return res;
     });
 
-    fn(SceneGraph.prototype, "unprojectLocal", function unprojectLocal(node, screenPoint) {
-        if (node === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.unprojectLocal: node is required");
-        if (screenPoint === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.unprojectLocal: screenPoint is required");
-        return Array.from(__bro_native.scene.SceneGraph_unprojectLocal(this, node, toF64(screenPoint)));
+    fn(SceneGraph.prototype, "unprojectLocal", function unprojectLocal(x, y) {
+        if (x === undefined || y === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.unprojectLocal: x and y are required");
+        const r = __bro_native.scene.SceneGraph_unprojectLocal(this, +x, +y);
+        if (r.length < 6) return null;
+        return { origin: [r[0], r[1], r[2]], dir: [r[3], r[4], r[5]] };
+    });
+    fn(SceneGraph.prototype, "projectLocal", function projectLocal(x, y, z) {
+        if (Array.isArray(x) || ArrayBuffer.isView(x)) { z = x[2]; y = x[1]; x = x[0]; }
+        if (x === undefined || y === undefined || z === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.projectLocal: x, y and z are required");
+        const r = __bro_native.scene.SceneGraph_projectLocal(this, +x, +y, +z);
+        if (r.length < 3) return null;
+        return { x: r[0], y: r[1], depth: r[2], behind: !(r[2] > 1e-6) };
     });
     fn(SceneGraph.prototype, "bindAudioListenerToCamera", function bindAudioListenerToCamera(bind) {
         if (bind === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.bindAudioListenerToCamera: bind is required");

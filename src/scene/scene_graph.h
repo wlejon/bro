@@ -315,6 +315,14 @@ public:
     bool unprojectLocal(float localX, float localY,
                         bromath::Vec3& outOrigin, bromath::Vec3& outDir) const;
 
+    /// The inverse of unprojectLocal: project a world point to canvas-local
+    /// pixels (top-left origin, same space unprojectLocal takes). `outDepth`
+    /// is the view-space distance along the camera forward axis; a point at
+    /// or behind the camera plane has outDepth <= 0 and its x/y are
+    /// meaningless. Returns false if the camera has not been initialised.
+    bool projectLocal(const bromath::Vec3& world,
+                      float& outX, float& outY, float& outDepth) const;
+
     /// Pick the front-most world-anchored HtmlNode hit by a canvas-local
     /// ray. On hit, writes the HtmlNode pointer and the local CSS-pixel
     /// coordinates inside its layout box (top-left origin, matching the

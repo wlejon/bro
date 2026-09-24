@@ -210,7 +210,8 @@ bool registerNatives_scene(std::string* error) {
         fn("__bro_native.scene.SceneGraph_raycast_point", p(&bro_scene_SceneGraph_raycast_point), "f64[]", {}, error) &&
         fn("__bro_native.scene.SceneGraph_raycast_normal", p(&bro_scene_SceneGraph_raycast_normal), "f64[]", {}, error) &&
         fn("__bro_native.scene.SceneGraph_raycast_distance", p(&bro_scene_SceneGraph_raycast_distance), "f64", {}, error) &&
-        fn("__bro_native.scene.SceneGraph_unprojectLocal", p(&bro_scene_SceneGraph_unprojectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "__bro_native.scene.SceneNode", "f64[]"}, error) &&
+        fn("__bro_native.scene.SceneGraph_unprojectLocal", p(&bro_scene_SceneGraph_unprojectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
+        fn("__bro_native.scene.SceneGraph_projectLocal", p(&bro_scene_SceneGraph_projectLocal), "f64[]", {"__bro_native.scene.SceneGraph", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.scene.SceneGraph_bindAudioListenerToCamera", p(&bro_scene_SceneGraph_bindAudioListenerToCamera), "void", {"__bro_native.scene.SceneGraph", "bool"}, error) &&
         fn("__bro_native.scene.SceneGraph_detachAIWorld", p(&bro_scene_SceneGraph_detachAIWorld), "void", {"__bro_native.scene.SceneGraph"}, error);
     if (!ok) return false;

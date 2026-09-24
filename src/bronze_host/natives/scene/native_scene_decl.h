@@ -661,7 +661,12 @@ double bro_scene_SceneGraph_raycast_distance(void);
 // bro.scene.SceneGraph.prototype.unprojectLocal
 //   registered at __bro_native.scene.SceneGraph_unprojectLocal
 //   result: f64[] in *out; out->release == NULL, the runtime copies
-void bro_scene_SceneGraph_unprojectLocal(void* self, void* node, const double* screenPoint, uint32_t screenPoint_len, bronze_native_buffer* out);
+void bro_scene_SceneGraph_unprojectLocal(void* self, double x, double y, bronze_native_buffer* out);
+
+// bro.scene.SceneGraph.prototype.projectLocal
+//   registered at __bro_native.scene.SceneGraph_projectLocal
+//   result: f64[] in *out ([x, y, depth], or empty before the camera exists); out->release == NULL, the runtime copies
+void bro_scene_SceneGraph_projectLocal(void* self, double x, double y, double z, bronze_native_buffer* out);
 
 // bro.scene.SceneGraph.prototype.bindAudioListenerToCamera
 //   registered at __bro_native.scene.SceneGraph_bindAudioListenerToCamera

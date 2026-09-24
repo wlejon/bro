@@ -13,6 +13,8 @@
 #include <glad/gl.h>
 #include <json.hpp>
 
+#include <cmath>
+
 namespace bro::bronze_host {
 
 namespace {
@@ -420,28 +422,15 @@ int32_t bro_scene_SceneGraph_raycast_instance(void) {
     return tl_raycastSlot.instance;
 }
 
-void bro_scene_SceneGraph_unprojectLocal(void* self, void* node, const double* screenPoint, uint32_t screenPoint_len, bronze_native_buffer* out) {
+// The graph's own view/projection answer both directions, whichever way the
+// camera was set: scene.setCamera / setCameraQuat / setCameraOrtho write them
+// directly, and an active CameraNode writes them the same way.
+void bro_scene_SceneGraph_unprojectLocal(void* self, double x, double y, bronze_native_buffer* out) {
     auto* g = graphOf(self);
-    if (!g || !out || !screenPoint || screenPoint_len < 2) {
-        copyBuffer<double>(nullptr, 0, out);
-        return;
-    }
-    auto cam = g->activeCamera();
-    if (!cam) {
-        copyBuffer<double>(nullptr, 0, out);
-        return;
-    }
-
+    if (!out) return;
     bromath::Vec3 origin, dir;
-    if (g->unprojectLocal(static_cast<float>(screenPoint[0]), static_cast<float>(screenPoint[1]), origin, dir)) {
-        if (node) {
-            auto* n = nodeOf(node);
-            if (n) {
-                auto inv = bromath::minverse(n->worldMatrix());
-                origin = bromath::mtransformPoint(inv, origin);
-                dir = bromath::vnorm(bromath::mtransformDir(inv, dir));
-            }
-        }
+    if (g && std::isfinite(x) && std::isfinite(y) &&
+        g->unprojectLocal(static_cast<float>(x), static_cast<float>(y), origin, dir)) {
         tl_unprojectBuf[0] = origin.x;
         tl_unprojectBuf[1] = origin.y;
         tl_unprojectBuf[2] = origin.z;
@@ -449,6 +438,22 @@ void bro_scene_SceneGraph_unprojectLocal(void* self, void* node, const double* s
         tl_unprojectBuf[4] = dir.y;
         tl_unprojectBuf[5] = dir.z;
         copyBuffer(tl_unprojectBuf, 6, out);
+    } else {
+        copyBuffer<double>(nullptr, 0, out);
+    }
+}
+
+void bro_scene_SceneGraph_projectLocal(void* self, double x, double y, double z, bronze_native_buffer* out) {
+    auto* g = graphOf(self);
+    if (!out) return;
+    float px = 0.0f, py = 0.0f, depth = 0.0f;
+    if (g && std::isfinite(x) && std::isfinite(y) && std::isfinite(z) &&
+        g->projectLocal(bromath::Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)),
+                        px, py, depth)) {
+        tl_unprojectBuf[0] = px;
+        tl_unprojectBuf[1] = py;
+        tl_unprojectBuf[2] = depth;
+        copyBuffer(tl_unprojectBuf, 3, out);
     } else {
         copyBuffer<double>(nullptr, 0, out);
     }
