@@ -102,6 +102,15 @@
  * quads per level per axis, rounded down to a multiple of 4 and clamped to
  * [4, 2048]. A `cellSize` that is not positive is 1. `detailOctaves`
  * (default 7, also `setDetail({octaves})`) is clamped to [0, 8].
+ *
+ * Detail synthesis below the data floor: `detailWavelength` (metres, default
+ * 48) is the coarsest synthesised octave. `detailRelief` (default 0.35) is a
+ * unitless SLOPE, not a height: each octave's amplitude is detailRelief x
+ * that octave's wavelength x the ground's own slope, so it needs no retuning
+ * when heightScale changes and adds nothing to flat ground. Keep it around
+ * 0.1-1; a value like 18 read as "metres" makes km-high walls.
+ * `detailGain` (default 1) tilts the octaves: below 1 smooths the fine end,
+ * above 1 sharpens it.
  * @typedef {Object} ClipmapTerrainConfig
  * @property {number} [levels]
  * @property {number} [resolution]

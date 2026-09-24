@@ -184,7 +184,13 @@ class Terrain {
   raycast(origin, direction, maxDist) {}
 
   /**
-   * Raise or lower the terrain height column at world coordinates (wx, wz).
+   * Raise or lower the terrain height column at world coordinates (wx, wz)
+   * by one unit. The column is the height-grid node at floor(wx / cellSize),
+   * floor(wz / cellSize), not the nearest one: a hit at x = 3.9 edits node 3.
+   * So to see an edit through heightAt(), sample at that floored node
+   * (Math.floor(x / cellSize) * cellSize), not at the raycast hit itself.
+   * `wy` does not choose the column; call rebuild() (or wait for streaming)
+   * for the mesh to follow.
    *
    * @param {number} wx - World X position
    * @param {number} wy - World Y position (altitude)

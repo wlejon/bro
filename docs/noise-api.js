@@ -20,6 +20,19 @@
  *   node.getMembers();                    // { type, variables, nodes, hybrids }
  *   FastNoise.types();                    // list all registered node types
  *
+ * Scale, read this first: the coherent generators (Simplex, SuperSimplex,
+ * Perlin, Value, Cellular*, Checkerboard, SineWave) default to a
+ * "Feature Scale" of about 100 world units per feature. The grid generators'
+ * `frequency` argument is the world-space step between samples and the
+ * offsets are world-space positions, so with the default scale a classic
+ * frequency (0.01..0.1) samples a small patch of one feature and comes out
+ * as a smooth slope (~100x smoother than intended). For "features per unit" semantics (what bro.image.gpu.fbm2D's
+ * `frequency` means) set the scale to 1 first:
+ *   const n = FastNoise.create("Simplex");
+ *   n.set("Feature Scale", 1);
+ *   n.genUniformGrid2D(0, 0, 256, 256, 0.05, 1337);   // ~13 features across
+ * or keep the default scale and step in world units (frequency 1..4).
+ *
  * =============================================================================
  *
  * =============================================================================
