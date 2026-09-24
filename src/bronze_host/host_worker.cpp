@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -723,6 +724,62 @@ static WorkerInstance* getWorker(Value v) {
     return static_cast<WorkerInstance*>(ev::handleData(v));
 }
 
+static std::string percentDecode(const std::string& s) {
+    auto hex = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size() && hex(s[i + 1]) >= 0 && hex(s[i + 2]) >= 0) {
+            out.push_back(static_cast<char>(hex(s[i + 1]) * 16 + hex(s[i + 2])));
+            i += 2;
+        } else {
+            out.push_back(s[i]);
+        }
+    }
+    return out;
+}
+
+// The Worker's scriptURL as a path WorkerInstance loads. `new URL('./w.js',
+// import.meta.url)` names a file: URL (import.meta.url is the module's file
+// URL); the page's own base is bro://app/; anything else is a path, relative
+// to the app directory as before. False (with `err`) for another scheme.
+static bool workerScriptPath(const std::string& url, std::string& path, std::string& err) {
+    auto startsWith = [&](const char* p) { return url.rfind(p, 0) == 0; };
+    std::string rest;
+    if (startsWith("file://")) {
+        rest = url.substr(7);
+        // file:///D:/x → D:/x; file:///home/x → /home/x; file://host/x is a
+        // UNC path the loader has no business reading.
+        if (rest.empty() || rest[0] != '/') { err = "unsupported file URL host"; return false; }
+        if (rest.size() >= 3 && std::isalpha(static_cast<unsigned char>(rest[1])) && rest[2] == ':') {
+            rest.erase(0, 1);
+        }
+    } else if (startsWith("bro://app/")) {
+        rest = url.substr(10);
+    } else {
+        const size_t colon = url.find(':');
+        const size_t slash = url.find('/');
+        // A scheme is letters before a ':' with no '/' ahead of it, and is
+        // longer than a Windows drive letter.
+        if (colon != std::string::npos && colon > 1 &&
+            (slash == std::string::npos || colon < slash)) {
+            err = "unsupported URL scheme '" + url.substr(0, colon) + ":'";
+            return false;
+        }
+        path = url;
+        return true;
+    }
+    const size_t cut = rest.find_first_of("?#");
+    if (cut != std::string::npos) rest.erase(cut);
+    path = percentDecode(rest);
+    return true;
+}
+
 } // namespace
 
 void drainWorkerMessages() {
@@ -754,10 +811,22 @@ void terminateAllWorkers() {
 void installWorkerGlobals(engine::Engine& engine) {
     g_workerClass.install("Worker", 1,
         [&engine](Value, std::span<const Value> a) -> Value {
-            if (a.empty() || !ev::isString(a[0])) {
-                return ev::throwTypeError("new Worker(scriptPath) requires a script path");
+            // scriptURL: a string, or a URL (anything stringifying through
+            // its href), as `new Worker(new URL('./w.js', import.meta.url))`.
+            std::string url;
+            if (!a.empty() && ev::isString(a[0])) {
+                url = ev::toUtf8(a[0]);
+            } else if (!a.empty() && ev::isObject(a[0])) {
+                Value href = ev::getProperty(a[0], "href");
+                if (ev::isString(href)) url = ev::toUtf8(href);
             }
-            std::string script = ev::toUtf8(a[0]);
+            if (url.empty()) {
+                return ev::throwTypeError("new Worker(scriptURL) requires a script path or URL");
+            }
+            std::string script, err;
+            if (!workerScriptPath(url, script, err)) {
+                return ev::throwTypeError("new Worker('" + url + "'): " + err);
+            }
             std::string base = engine.appDir().empty() ? "." : engine.appDir();
             auto* w = new WorkerInstance(script, base, &engine.assetMounts());
             {

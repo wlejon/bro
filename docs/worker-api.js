@@ -15,7 +15,11 @@
 class Worker {
 
   /**
-   * @param {string} scriptURL
+   * @param {string|URL} scriptURL  a path relative to the app directory
+   *   ('sim/worker.js'), or a URL: the standard module form
+   *   `new Worker(new URL('./worker.js', import.meta.url), { type: 'module' })`
+   *   (a file: URL, since import.meta.url is the module's file URL) or a
+   *   `bro://app/...` URL. Other schemes throw a TypeError.
    * @param {Object} [options]
    */
   constructor(scriptURL, options) {}
