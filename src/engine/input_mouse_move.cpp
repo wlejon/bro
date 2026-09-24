@@ -22,6 +22,7 @@
 #include "platform/sdl_window.h"
 
 #if BRO_WITH_3D
+#include "layout/draw_traversal.h"
 #include "scene/scene_graph.h"
 #include "scene/html_node.h"
 #endif
@@ -31,8 +32,26 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace bro::engine {
+
+#if BRO_WITH_3D
+namespace {
+// Whether an element paints a background of its own (a visible colour or an
+// image / gradient): what makes an HtmlNode's <html>/<body> backdrop solid.
+bool paintsBackground(dom::Element* el) {
+    if (!el) return false;
+    const auto& style = el->computedStyle();
+    auto img = style.find("background-image");
+    if (img != style.end() && !img->second.empty() && img->second != "none") return true;
+    auto bg = style.find("background-color");
+    bromath::Color c;
+    return bg != style.end() && !bg->second.empty() &&
+           layout::DrawTraversal::tryParseColor(bg->second, c) && c.a > 0.0f;
+}
+}  // namespace
+#endif
 
 bool Engine::iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY,
                                    float movementX, float movementY, int mod) {
@@ -434,25 +453,39 @@ bool Engine::pickHtmlNodeUnderMouse(dom::Element* canvasEl, float docX, float do
     const float canvasLocalX = docX - originX;
     const float canvasLocalY = docY - originY;
 
-    scene::SceneGraph::HtmlNodePick pick;
-    if (!sg->pickHtmlNode(canvasLocalX, canvasLocalY, pick)) return false;
-    if (!pick.node) return false;
+    // A billboard takes the pointer only where it shows content: the hit
+    // test inside its document must land on an element (pointer-events:
+    // none content is skipped by the hit test itself), and a landing on the
+    // bare backdrop (<html>, <body>, and the shell's root wrapper the node's
+    // html is parsed into) counts only if that backdrop is painted.
+    // Otherwise the pointer passes to the next billboard behind, and past
+    // the last one to the canvas, as it would through a transparent overlay.
+    std::vector<scene::SceneGraph::HtmlNodePick> picks;
+    sg->pickHtmlNodes(canvasLocalX, canvasLocalY, picks);
+    for (const auto& pick : picks) {
+        if (!pick.node) continue;
+        auto* doc = pick.node->document();
+        if (!doc) continue;
+        auto* root = doc->layoutRoot();
+        if (!root) continue;
 
-    auto* doc = pick.node->document();
-    if (!doc) return false;
-    auto* root = doc->layoutRoot();
-    if (!root) return false;
+        auto* layoutNode = htmlayout::layout::hitTest(root, pick.localPxX, pick.localPxY);
+        auto* hitEl = layout::LayoutNodeAdapter::elementFor(layoutNode);
+        if (!hitEl) continue;
+        const bool onBackdropBox =
+            static_cast<layout::LayoutNodeAdapter*>(layoutNode)->element() == hitEl &&
+            (hitEl == doc->documentElement() || hitEl == doc->body() || hitEl == pick.node->root());
+        if (onBackdropBox &&
+            !paintsBackground(doc->documentElement()) && !paintsBackground(doc->body()) &&
+            !paintsBackground(pick.node->root())) continue;
 
-    auto* layoutNode = htmlayout::layout::hitTest(root, pick.localPxX, pick.localPxY);
-    auto* hitEl = layout::LayoutNodeAdapter::elementFor(layoutNode);
-    if (!hitEl) hitEl = doc->documentElement();
-    if (!hitEl) return false;
-
-    outNode = pick.node;
-    outEl = hitEl;
-    outLocalPxX = pick.localPxX;
-    outLocalPxY = pick.localPxY;
-    return true;
+        outNode = pick.node;
+        outEl = hitEl;
+        outLocalPxX = pick.localPxX;
+        outLocalPxY = pick.localPxY;
+        return true;
+    }
+    return false;
 }
 
 void Engine::dispatchHtmlNodeMouseEvent(const std::string& type,

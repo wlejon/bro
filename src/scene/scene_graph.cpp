@@ -692,9 +692,19 @@ bool SceneGraph::projectLocal(const Vec3& world,
 
 bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
                               HtmlNodePick& out) const {
+    std::vector<HtmlNodePick> hits;
+    pickHtmlNodes(canvasLocalX, canvasLocalY, hits);
+    if (hits.empty()) return false;
+    out = hits.front();
+    return true;
+}
+
+void SceneGraph::pickHtmlNodes(float canvasLocalX, float canvasLocalY,
+                               std::vector<HtmlNodePick>& out) const {
+    out.clear();
     Vec3 rayOrigin, rayDir;
     if (!unprojectLocal(canvasLocalX, canvasLocalY, rayOrigin, rayDir)) {
-        return false;
+        return;
     }
 
     // Camera basis vectors — match the full-face billboard orientation
@@ -709,10 +719,6 @@ bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
         camRight.z * camUp.x - camRight.x * camUp.z,
         camRight.x * camUp.y - camRight.y * camUp.x,
     };
-
-    float closest = 1e30f;
-    bool found = false;
-    HtmlNodePick best{};
 
     for (auto& [id, node] : nodes_) {
         if (!node) continue;
@@ -743,7 +749,7 @@ bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
         const float t = (toAnchor.x * quadNormal.x
                        + toAnchor.y * quadNormal.y
                        + toAnchor.z * quadNormal.z) / denom;
-        if (t <= 0.0f || t >= closest) continue;
+        if (t <= 0.0f) continue;
 
         const Vec3 hitWorld{rayOrigin.x + rayDir.x * t,
                             rayOrigin.y + rayDir.y * t,
@@ -760,17 +766,16 @@ bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
         // = up). The raster surface is top-down, so flip v.
         const float fx = (u / halfW) * 0.5f + 0.5f;          // 0..1, left→right
         const float fy = 0.5f - (v / halfH) * 0.5f;          // 0..1, top→bottom
-        best.node = hn;
-        best.localPxX = fx * hn->layoutWidth();
-        best.localPxY = fy * hn->layoutHeight();
-        best.distance = t;
-        closest = t;
-        found = true;
+        HtmlNodePick pick;
+        pick.node = hn;
+        pick.localPxX = fx * hn->layoutWidth();
+        pick.localPxY = fy * hn->layoutHeight();
+        pick.distance = t;
+        out.push_back(pick);
     }
 
-    if (!found) return false;
-    out = best;
-    return true;
+    std::sort(out.begin(), out.end(),
+              [](const HtmlNodePick& a, const HtmlNodePick& b) { return a.distance < b.distance; });
 }
 
 // ---------------------------------------------------------------------------

@@ -336,6 +336,11 @@ public:
     };
     bool pickHtmlNode(float canvasLocalX, float canvasLocalY,
                       HtmlNodePick& out) const;
+    /// Every world-anchored HtmlNode whose quad the ray crosses, nearest
+    /// first. The input router walks this list so a transparent part of a
+    /// front billboard can pass the click to one behind it (or the canvas).
+    void pickHtmlNodes(float canvasLocalX, float canvasLocalY,
+                       std::vector<HtmlNodePick>& out) const;
 
     // --- Render settings (forwarded to the SceneRenderer) ---
 
