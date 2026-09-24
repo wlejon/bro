@@ -109,7 +109,12 @@ static Value js_media_thumbnails(Value, std::span<const Value> a) {
     out.set("times", hostArrayOf(strip.times.size(), [&](size_t i) -> Value {
         return ev::fromDouble(strip.times[i] / 1e9);
     }));
-    out.set("data", makeUint8Array(strip.rgba));
+    // Clamped bytes, as ImageData wants them: `new ImageData(strip.data, ...)`.
+    Value data = ev::createTypedArray(ev::elements::Uint8Clamped,
+                                      static_cast<uint32_t>(strip.rgba.size()));
+    if (!strip.rgba.empty())
+        ev::fillTypedArray(data, std::span<const uint8_t>(strip.rgba.data(), strip.rgba.size()));
+    out.set("data", data);
     return out.get();
 }
 

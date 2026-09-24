@@ -78,6 +78,12 @@ assert(strip.width === Math.round(32 * W / H),
 assert(strip.data.length === strip.width * strip.count * strip.height * 4,
        'one image, count thumbnails wide');
 assert(strip.times.length === strip.count, 'a timestamp per thumbnail');
+assert(strip.data instanceof Uint8ClampedArray,
+       'data is a Uint8ClampedArray, got ' + strip.data.constructor.name);
+{
+    const img = new ImageData(strip.data, strip.width * strip.count, strip.height);
+    assert(img.width === strip.width * strip.count, 'the strip goes straight into ImageData');
+}
 for (let i = 1; i < strip.times.length; ++i)
     assert(strip.times[i] > strip.times[i - 1],
            `times walk forward (${strip.times[i - 1]} -> ${strip.times[i]})`);
