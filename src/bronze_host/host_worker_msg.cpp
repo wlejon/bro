@@ -206,7 +206,8 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
             } else {
                 transferBufs.emplace_back();
             }
-            ev::detachArrayBuffer(val);
+            // Detached by serializeMessage once the whole value is written:
+            // a view of this buffer later in the payload still reads it.
             w.u8(kTransferIndex);
             w.u32(idx);
             return true;
@@ -654,7 +655,14 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out)
     out.transferredMeshes.clear();
 #endif
     Writer w(out.data);
-    return writeValue(root.get(), w, transferRoots, out, 0);
+    if (!writeValue(root.get(), w, transferRoots, out, 0)) return false;
+    // Serialize first, detach after (HTML StructuredSerializeWithTransfer):
+    // every listed ArrayBuffer is detached, including one the payload reaches
+    // only through a view, and none is when the clone fails.
+    for (const ev::Persistent& t : transferRoots) {
+        if (ev::isArrayBuffer(t.get())) ev::detachArrayBuffer(t.get());
+    }
+    return true;
 }
 
 std::vector<ev::Persistent> collectTransferList(std::span<const Value> args, size_t index) {
