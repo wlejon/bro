@@ -45,6 +45,7 @@ enum Tag : uint8_t {
     kError           = 0x13,
     kDataView        = 0x14,
     kTransferMesh    = 0x15,  // index into transferredMeshes (zero-copy Mesh)
+    kBufferRef       = 0x16,  // an ArrayBuffer already in this message, by order
 };
 
 class Writer {
@@ -117,11 +118,56 @@ static Value getGlobal(std::string_view name) {
     return g.found ? g.value : ev::undefined();
 }
 
+// One clone's state. `buffers` holds every ArrayBuffer written so far, in
+// the order written, so a buffer reached a second time (two views over one
+// buffer, or the buffer and a view of it) is sent as a reference to the
+// first, and the receiver rebuilds one buffer that all its views share, as
+// structuredClone does. Held in roots and compared by current value, like
+// the transfer list.
+struct CloneState {
+    const TransferRoots& transfers;
+    std::vector<ev::Persistent> buffers;
+};
+
+static bool writeValue(Value val, Writer& w, CloneState& st,
+                       Message& out, int depth);
+
+// Writes an ArrayBuffer: a back-reference when this clone has written it
+// already, else its bytes (or its transfer slot), registering it.
+static void writeBuffer(Value buf, Writer& w, CloneState& st, Message& out) {
+    for (size_t i = 0; i < st.buffers.size(); ++i) {
+        if (st.buffers[i].get().rawBits() == buf.rawBits()) {
+            w.u8(kBufferRef);
+            w.u32(static_cast<uint32_t>(i));
+            return;
+        }
+    }
+    st.buffers.emplace_back(buf);   // no JS heap allocation
+    auto info = ev::arrayBufferInfo(buf);
+    if (isTransferred(buf, st.transfers)) {
+        auto& transferBufs = out.transferredBuffers;
+        uint32_t idx = static_cast<uint32_t>(transferBufs.size());
+        if (info.data && info.byteLength > 0) {
+            transferBufs.emplace_back(info.data, info.data + info.byteLength);
+        } else {
+            transferBufs.emplace_back();
+        }
+        // Detached by serializeMessage once the whole value is written:
+        // a view of this buffer later in the payload still reads it.
+        w.u8(kTransferIndex);
+        w.u32(idx);
+        return;
+    }
+    w.u8(kArrayBuffer);
+    w.u32(info.byteLength);
+    if (info.data && info.byteLength > 0) w.bytes(info.data, info.byteLength);
+}
+
 // `val` is current at entry. Every branch that allocates before it is done
 // with `val` works from a root of it (`self`), never from the parameter.
-static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
+static bool writeValue(Value val, Writer& w, CloneState& st,
                        Message& out, int depth) {
-    auto& transferBufs = out.transferredBuffers;
+    const TransferRoots& transfers = st.transfers;
     auto& transferImgs = out.transferredImages;
     if (depth > 64) {
         ev::throwTypeError("postMessage: object too deeply nested");
@@ -198,27 +244,8 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
     }
 
     if (ev::isArrayBuffer(val)) {
-        auto info = ev::arrayBufferInfo(val);
-        if (isTransferred(val, transfers)) {
-            uint32_t idx = static_cast<uint32_t>(transferBufs.size());
-            if (info.data && info.byteLength > 0) {
-                transferBufs.emplace_back(info.data, info.data + info.byteLength);
-            } else {
-                transferBufs.emplace_back();
-            }
-            // Detached by serializeMessage once the whole value is written:
-            // a view of this buffer later in the payload still reads it.
-            w.u8(kTransferIndex);
-            w.u32(idx);
-            return true;
-        } else {
-            w.u8(kArrayBuffer);
-            w.u32(info.byteLength);
-            if (info.data && info.byteLength > 0) {
-                w.bytes(info.data, info.byteLength);
-            }
-            return true;
-        }
+        writeBuffer(val, w, st, out);
+        return true;
     }
 
     if (ev::isTypedArray(val)) {
@@ -227,19 +254,15 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
         const uint32_t viewBytes = info.byteLength;
         // Everything read off the view comes before typedArrayBuffer, which
         // may materialize the buffer object (an allocation that moves `val`),
-        // and the buffer's bytes are read straight after it.
+        // and the buffer is written straight after it.
         uint32_t offset = ev::typedArrayByteOffset(val);
         Value bufVal = ev::typedArrayBuffer(val);
-        auto bufInfo = ev::arrayBufferInfo(bufVal);
 
         w.u8(kTypedArray);
         w.u8(subtype);
         w.u32(offset);
         w.u32(viewBytes);
-        w.u32(bufInfo.byteLength);
-        if (bufInfo.data && bufInfo.byteLength > 0) {
-            w.bytes(bufInfo.data, bufInfo.byteLength);
-        }
+        writeBuffer(bufVal, w, st, out);
         return true;
     }
 
@@ -316,12 +339,12 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
                 ev::Persistent entry(ev::getElement(flat.get(), i));
                 if (isMap) {
                     Value k = ev::getElement(entry.get(), 0);
-                    if (!writeValue(k, w, transfers, out, depth + 1)) return false;
+                    if (!writeValue(k, w, st, out, depth + 1)) return false;
                     Value v = ev::getElement(entry.get(), 1);
-                    if (!writeValue(v, w, transfers, out, depth + 1)) return false;
+                    if (!writeValue(v, w, st, out, depth + 1)) return false;
                 } else {
                     Value item = entry.get();
-                    if (!writeValue(item, w, transfers, out, depth + 1)) return false;
+                    if (!writeValue(item, w, st, out, depth + 1)) return false;
                 }
             }
             return true;
@@ -344,14 +367,10 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
             uint32_t off = satCast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteOffset")));
             uint32_t viewBytes = satCast<uint32_t>(ev::toDouble(ev::getProperty(self.get(), "byteLength")));
             Value buf = ev::getProperty(self.get(), "buffer");
-            auto bInfo = ev::arrayBufferInfo(buf);
             w.u8(kDataView);
             w.u32(off);
             w.u32(viewBytes);
-            w.u32(bInfo.byteLength);
-            if (bInfo.data && bInfo.byteLength > 0) {
-                w.bytes(bInfo.data, bInfo.byteLength);
-            }
+            writeBuffer(buf, w, st, out);
             return true;
         }
 
@@ -390,7 +409,7 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
             w.u32(len);
             for (uint32_t i = 0; i < len; ++i) {
                 Value elem = ev::getElement(self.get(), i);
-                if (!writeValue(elem, w, transfers, out, depth + 1)) return false;
+                if (!writeValue(elem, w, st, out, depth + 1)) return false;
             }
             return true;
         }
@@ -407,7 +426,7 @@ static bool writeValue(Value val, Writer& w, const TransferRoots& transfers,
             Value propVal = ev::getElement(entry.get(), 1);
             w.u32(static_cast<uint32_t>(key.size()));
             w.bytes(reinterpret_cast<const uint8_t*>(key.data()), key.size());
-            if (!writeValue(propVal, w, transfers, out, depth + 1)) return false;
+            if (!writeValue(propVal, w, st, out, depth + 1)) return false;
         }
         return true;
     }
@@ -425,7 +444,27 @@ static bool readStr(Reader& r, std::string& out) {
     return true;
 }
 
-static Value readValue(Reader& r, const Message& msg, int depth) {
+// `bufs` holds each ArrayBuffer made so far, in the order the writer
+// registered them, for kBufferRef to name.
+using BufferRoots = std::vector<ev::Persistent>;
+
+static Value registerBuffer(BufferRoots& bufs, Value ab) {
+    if (!bronze_exception_pending()) bufs.emplace_back(ab);
+    return ab;
+}
+
+// Reads the ArrayBuffer a view is over: a fresh one or a reference.
+static Value readValue(Reader& r, const Message& msg, BufferRoots& bufs, int depth);
+
+static Value readViewBuffer(Reader& r, const Message& msg, BufferRoots& bufs, int depth) {
+    if (!r.ok(1)) return ev::throwTypeError("postMessage: truncated view buffer");
+    Value ab = readValue(r, msg, bufs, depth + 1);
+    if (bronze_exception_pending()) return ab;
+    if (!ev::isArrayBuffer(ab)) return ev::throwTypeError("postMessage: view over a non-buffer");
+    return ab;
+}
+
+static Value readValue(Reader& r, const Message& msg, BufferRoots& bufs, int depth) {
     if (depth > 64) return ev::throwTypeError("postMessage: object too deeply nested");
     if (!r.ok(1)) return ev::throwTypeError("postMessage: truncated data");
 
@@ -463,14 +502,20 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         uint32_t len = r.u32();
         if (!r.ok(len)) return ev::throwTypeError("postMessage: truncated arraybuffer data");
         const uint8_t* p = r.ptr(len);
-        return ev::createArrayBuffer(std::span<const uint8_t>(p, len));
+        return registerBuffer(bufs, ev::createArrayBuffer(std::span<const uint8_t>(p, len)));
     }
     case kTransferIndex: {
         if (!r.ok(4)) return ev::throwTypeError("postMessage: truncated transfer index");
         uint32_t idx = r.u32();
         if (idx >= msg.transferredBuffers.size()) return ev::throwTypeError("postMessage: invalid transfer index");
         const auto& buf = msg.transferredBuffers[idx];
-        return ev::createArrayBuffer(std::span<const uint8_t>(buf.data(), buf.size()));
+        return registerBuffer(bufs, ev::createArrayBuffer(std::span<const uint8_t>(buf.data(), buf.size())));
+    }
+    case kBufferRef: {
+        if (!r.ok(4)) return ev::throwTypeError("postMessage: truncated buffer reference");
+        uint32_t idx = r.u32();
+        if (idx >= bufs.size()) return ev::throwTypeError("postMessage: invalid buffer reference");
+        return bufs[idx].get();
     }
     case kTransferImageBitmap: {
         if (!r.ok(4)) return ev::throwTypeError("postMessage: truncated imagebitmap transfer index");
@@ -496,14 +541,12 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
 #endif
     }
     case kTypedArray: {
-        if (!r.ok(1 + 4 + 4 + 4)) return ev::throwTypeError("postMessage: truncated typed array header");
+        if (!r.ok(1 + 4 + 4)) return ev::throwTypeError("postMessage: truncated typed array header");
         uint8_t subtype = r.u8();
         uint32_t offset = r.u32();
         uint32_t viewBytes = r.u32();
-        uint32_t bufBytes = r.u32();
-        if (!r.ok(bufBytes)) return ev::throwTypeError("postMessage: truncated typed array data");
-        const uint8_t* bufData = r.ptr(bufBytes);
-        Value ab = ev::createArrayBuffer(std::span<const uint8_t>(bufData, bufBytes));
+        Value ab = readViewBuffer(r, msg, bufs, depth);
+        if (bronze_exception_pending()) return ab;
         uint32_t bpe = 1;
         switch (subtype) {
             case 3: // Int16
@@ -549,11 +592,11 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         ev::Persistent coll(ev::construct(ctor, {}).value);
         ev::Persistent adder(ev::getProperty(coll.get(), isMap ? "set" : "add"));
         for (uint32_t i = 0; i < len; ++i) {
-            Value aVal = readValue(r, msg, depth + 1);
+            Value aVal = readValue(r, msg, bufs, depth + 1);
             if (bronze_exception_pending()) return aVal;
             ev::Persistent a(aVal);
             if (isMap) {
-                Value bVal = readValue(r, msg, depth + 1);
+                Value bVal = readValue(r, msg, bufs, depth + 1);
                 if (bronze_exception_pending()) return bVal;
                 ev::Persistent b(bVal);
                 const Value args[2] = { a.get(), b.get() };
@@ -594,13 +637,12 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         return err.get();
     }
     case kDataView: {
-        if (!r.ok(4 + 4 + 4)) return ev::throwTypeError("postMessage: truncated dataview header");
+        if (!r.ok(4 + 4)) return ev::throwTypeError("postMessage: truncated dataview header");
         uint32_t off = r.u32();
         uint32_t viewBytes = r.u32();
-        uint32_t bufBytes = r.u32();
-        if (!r.ok(bufBytes)) return ev::throwTypeError("postMessage: truncated dataview data");
-        const uint8_t* p = r.ptr(bufBytes);
-        ev::Persistent ab(ev::createArrayBuffer(std::span<const uint8_t>(p, bufBytes)));
+        Value abVal = readViewBuffer(r, msg, bufs, depth);
+        if (bronze_exception_pending()) return abVal;
+        ev::Persistent ab(abVal);
         Value ctor = getGlobal("DataView");
         const Value args[3] = { ab.get(), ev::fromDouble(off), ev::fromDouble(viewBytes) };
         return ev::construct(ctor, std::span<const Value>(args, 3)).value;
@@ -612,7 +654,7 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         Value lenVal = ev::fromDouble(len);
         ev::Persistent arr(ev::construct(arrCtor, std::span<const Value>(&lenVal, 1)).value);
         for (uint32_t i = 0; i < len; ++i) {
-            Value elemVal = readValue(r, msg, depth + 1);
+            Value elemVal = readValue(r, msg, bufs, depth + 1);
             if (bronze_exception_pending()) return elemVal;
             ev::Persistent elem(elemVal);
             arr.set(ev::setElement(arr.get(), i, elem.get()));
@@ -626,7 +668,7 @@ static Value readValue(Reader& r, const Message& msg, int depth) {
         for (uint32_t i = 0; i < numProps; ++i) {
             std::string key;
             if (!readStr(r, key)) return ev::throwTypeError("postMessage: truncated key");
-            Value propValRaw = readValue(r, msg, depth + 1);
+            Value propValRaw = readValue(r, msg, bufs, depth + 1);
             if (bronze_exception_pending()) return propValRaw;
             ev::Persistent propVal(propValRaw);
             obj.set(ev::setProperty(obj.get(), key, propVal.get()));
@@ -655,7 +697,8 @@ bool serializeMessage(Value val, std::span<const Value> transfers, Message& out)
     out.transferredMeshes.clear();
 #endif
     Writer w(out.data);
-    if (!writeValue(root.get(), w, transferRoots, out, 0)) return false;
+    CloneState st{transferRoots, {}};
+    if (!writeValue(root.get(), w, st, out, 0)) return false;
     // Serialize first, detach after (HTML StructuredSerializeWithTransfer):
     // every listed ArrayBuffer is detached, including one the payload reaches
     // only through a view, and none is when the clone fails.
@@ -692,7 +735,8 @@ Value deserializeMessage(const Message& msg, size_t offset) {
         return ev::throwTypeError("deserializeMessage: offset out of range");
     }
     Reader r(msg.data.data() + offset, msg.data.size() - offset);
-    return readValue(r, msg, 0);
+    BufferRoots bufs;
+    return readValue(r, msg, bufs, 0);
 }
 
 } // namespace bro::bronze_host
