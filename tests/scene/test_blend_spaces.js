@@ -207,6 +207,8 @@ if (!scene) {
     // ------------------------------------------------------------------
     node.play('walk', { loop: false });
     advanceTime(250);                          // walk at 0.25
+    assert(!('pos' in node.blendState()),
+        'a plain clip on the base track has no blend position (pos absent, not [])');
     node.setBlendPos('locomotion', 1);
     node.play('locomotion', { fadeTime: 0.5 });
     assert(node.currentAnimation === 'locomotion', 'fade target is the space');

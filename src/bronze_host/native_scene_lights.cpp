@@ -476,14 +476,13 @@ const char* bro_scene_SceneNode_blendState(void* self) {
     for (const auto& ls : bs.layers) {
         j["layers"].push_back({{"slot", ls.slot}, {"name", ls.name}, {"weight", ls.weight}, {"phase", ls.phase}});
     }
+    // pos is present only while a blend space is the base source.
     if (bs.hasPos) {
         if (bs.is2D) {
             j["pos"] = {bs.pos[0], bs.pos[1]};
         } else {
-            j["pos"] = {bs.pos[0]};
+            j["pos"] = json::array({bs.pos[0]});
         }
-    } else {
-        j["pos"] = json::array();
     }
     tl_bsJson = j.dump();
     return tl_bsJson.c_str();
