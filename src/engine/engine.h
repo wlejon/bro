@@ -434,6 +434,10 @@ public:
     /// (what an event's clientY carries, and what elementFromPoint takes) are
     /// this much above document coordinates, which is what hitTest() wants.
     float viewportScrollY() const { return scrollY_; }
+    /// Scroll the app document's root scroller (the viewport) to `y`, clamped
+    /// to its scrollable range once layout is current: window.scrollTo and
+    /// friends. Fires `scroll` on the document element when the offset moves.
+    void scrollViewportTo(float y);
 
     ContentInsets contentInsets() const;
     int contentTop() const { return contentInsets().top; }

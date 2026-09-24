@@ -306,6 +306,25 @@ void decorateElementMutate(ObjectBuilder& b) {
             }
             target = borderBoxOf(anc);
         }
+        // Last, the root scroller: the viewport, when the element is in the
+        // app document and <html> does not scroll by itself (an <html> that
+        // does is an ancestor, handled above).
+        if (auto* eng = hostEngine();
+            eng && eng->document() == st->el->document() && !rootScrollerElement()) {
+            const float viewH = static_cast<float>(eng->contentHeight());
+            float delta = 0.0f;
+            const float top = target.y - eng->viewportScrollY();
+            switch (align) {
+                case 1: delta = (top + target.height * 0.5f) - viewH * 0.5f; break;
+                case 2: delta = (top + target.height) - viewH; break;
+                case 3:
+                    if (top < 0.0f) delta = top;
+                    else if (top + target.height > viewH) delta = top + target.height - viewH;
+                    break;
+                default: delta = top; break;
+            }
+            if (delta != 0.0f) eng->scrollViewportTo(eng->viewportScrollY() + delta);
+        }
         if (scrolled && st->el->document()) st->el->document()->markDirty();
         return ev::undefined();
     });

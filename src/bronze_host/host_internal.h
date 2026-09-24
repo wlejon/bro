@@ -405,6 +405,20 @@ void decorateElementMutate(ObjectBuilder& b);
 void decorateElementInteraction(ObjectBuilder& b);
 void decorateElementGeometry(ObjectBuilder& b);
 dom::AbsoluteRect borderBoxOf(dom::Element* el);
+// How far client coordinates sit above `el`'s document coordinates: the app
+// document's root scroller (viewport) offset, 0 in any other document (an
+// iframe, a secondary window, a system panel). borderBoxOf / clientRectsOf
+// are document coordinates; a CSSOM client rect subtracts this.
+float viewportScrollOf(const dom::Element* el);
+// The root scroller of the app document is the viewport, unless <html> is a
+// scroll container of its own with somewhere to scroll (an app that sizes it
+// to the window and lets it overflow). `el` is the element that plays that
+// part when it is <html>; null means the viewport.
+dom::Element* rootScrollerElement();
+// window.scrollY: the root scroller's offset.
+float rootScrollY();
+// window.scrollTo(_, y): move the root scroller.
+void scrollRootTo(float y);
 // Element.getClientRects(): one border box per line fragment for an inline
 // element, the border box otherwise, none for display:none/contents. Same
 // coordinate space as borderBoxOf.

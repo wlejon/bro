@@ -52,7 +52,49 @@ std::vector<dom::AbsoluteRect> clientRectsOf(dom::Element* el) {
     return out;
 }
 
+float viewportScrollOf(const dom::Element* el) {
+    auto* eng = hostEngine();
+    if (!eng || !el || !eng->document() || el->document() != eng->document()) return 0.0f;
+    return eng->viewportScrollY();
+}
+
+dom::Element* rootScrollerElement() {
+    auto* eng = hostEngine();
+    if (!eng || !eng->document()) return nullptr;
+    dom::Element* html = eng->document()->documentElement();
+    if (!html) return nullptr;
+    eng->flushLayoutForRead(eng->document());
+    if (dom::elementClipsOverflow(html) && dom::maxScrollTopOf(html) > 0.0f) return html;
+    return nullptr;
+}
+
+float rootScrollY() {
+    auto* eng = hostEngine();
+    if (!eng) return 0.0f;
+    if (dom::Element* html = rootScrollerElement()) return html->scrollTopValue();
+    return eng->viewportScrollY();
+}
+
+void scrollRootTo(float y) {
+    auto* eng = hostEngine();
+    if (!eng) return;
+    if (dom::Element* html = rootScrollerElement()) {
+        dom::setElementScrollTop(html, y);
+        return;
+    }
+    eng->scrollViewportTo(y);
+}
+
 namespace {
+
+// <html>'s scrollTop is the viewport's when the viewport is the root scroller
+// (CSSOM View: the scrolling element of a standards-mode document).
+bool scrollsViewport(dom::Element* el) {
+    auto* eng = hostEngine();
+    if (!eng || !el || !eng->document() || el != eng->document()->documentElement())
+        return false;
+    return rootScrollerElement() == nullptr;
+}
 
 const htmlayout::layout::LayoutBox& laidOutBox(dom::Element* el) {
     hostEngine()->flushLayoutForRead(el->document());
@@ -229,8 +271,11 @@ void decorateElementGeometry(ObjectBuilder& b) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st) return ev::undefined();
         if (!st->el) return makeHostRectValue(0, 0, 0, 0);
+        // Client coordinates: the root scroller's offset comes off, as it
+        // does for a Range's rects and an event's clientY.
         dom::AbsoluteRect r = borderBoxOf(st->el);
-        return makeHostRectValue(r.x, r.y, r.width, r.height);
+        const float sy = viewportScrollOf(st->el);
+        return makeHostRectValue(r.x, r.y - sy, r.width, r.height);
     });
     // One rect per box fragment: a wrapped inline answers one per line it
     // occupies (clientRectsOf), everything else its border box.
@@ -238,9 +283,10 @@ void decorateElementGeometry(ObjectBuilder& b) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         std::vector<dom::AbsoluteRect> rects = clientRectsOf(st->el);
-        return hostArrayOf(rects.size(), [&rects](size_t i) {
+        const float sy = viewportScrollOf(st->el);
+        return hostArrayOf(rects.size(), [&rects, sy](size_t i) {
             const auto& r = rects[i];
-            return makeHostRectValue(r.x, r.y, r.width, r.height);
+            return makeHostRectValue(r.x, r.y - sy, r.width, r.height);
         });
     });
 
@@ -366,12 +412,18 @@ void decorateElementGeometry(ObjectBuilder& b) {
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st) return ev::undefined();
+                   if (scrollsViewport(st->el))
+                       return ev::fromDouble(hostEngine()->viewportScrollY());
                    return ev::fromDouble(st->el ? st->el->scrollTopValue() : 0.0);
                },
                [](Value self_, std::span<const Value> a) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
                    if (!st || !st->el) return ev::undefined();
-                   dom::setElementScrollTop(st->el, ev::toDouble(argAt(a, 0)));
+                   const double v = ev::toDouble(argAt(a, 0));
+                   if (scrollsViewport(st->el))
+                       hostEngine()->scrollViewportTo(static_cast<float>(v));
+                   else
+                       dom::setElementScrollTop(st->el, v);
                    return ev::undefined();
                });
     b.accessor("scrollLeft",
@@ -391,7 +443,12 @@ void decorateElementGeometry(ObjectBuilder& b) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
         double top = 0;
-        if (readScrollTopArg(a, top)) dom::setElementScrollTop(st->el, top);
+        if (readScrollTopArg(a, top)) {
+            if (scrollsViewport(st->el))
+                hostEngine()->scrollViewportTo(static_cast<float>(top));
+            else
+                dom::setElementScrollTop(st->el, top);
+        }
         double left = 0;
         if (readScrollLeftArg(a, left)) dom::setElementScrollLeft(st->el, left);
         return ev::undefined();
@@ -400,7 +457,13 @@ void decorateElementGeometry(ObjectBuilder& b) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
         double top = 0;
-        if (readScrollTopArg(a, top)) dom::scrollElementBy(st->el, top);
+        if (readScrollTopArg(a, top)) {
+            if (scrollsViewport(st->el))
+                hostEngine()->scrollViewportTo(
+                    hostEngine()->viewportScrollY() + static_cast<float>(top));
+            else
+                dom::scrollElementBy(st->el, top);
+        }
         double left = 0;
         if (readScrollLeftArg(a, left)) dom::scrollElementLeftBy(st->el, left);
         return ev::undefined();

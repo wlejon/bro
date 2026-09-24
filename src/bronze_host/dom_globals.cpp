@@ -699,40 +699,31 @@ void installWebHostGlobals(engine::Engine& engine) {
                 if (a.size() > 1) y = ev::toDouble(a[1]);
             }
         };
+        // The window scrolls the document's root scroller: the viewport, or
+        // <html> when that is a scroll container of its own
+        // (rootScrollerElement). scrollY reads back what scrollTo wrote.
         auto doWindowScrollTo = [](double, double y) {
-            auto* e = hostEngine();
-            if (e && e->document() && e->document()->documentElement()) {
-                e->document()->documentElement()->setScrollTopValue(static_cast<float>(y));
-            }
+            scrollRootTo(static_cast<float>(y));
         };
 
         b.accessor("scrollX", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); }, nullptr);
         b.accessor("pageXOffset", [](Value, std::span<const Value>) { return ev::fromDouble(0.0); }, nullptr);
         b.accessor("scrollY", [](Value, std::span<const Value>) {
-            auto* e = hostEngine();
-            float y = e ? e->viewportScrollY() : 0.0f;
-            if (y == 0.0f && e && e->document() && e->document()->documentElement()) {
-                y = e->document()->documentElement()->scrollTopValue();
-            }
-            return ev::fromDouble(y);
+            return ev::fromDouble(rootScrollY());
         }, nullptr);
         b.accessor("pageYOffset", [](Value, std::span<const Value>) {
-            auto* e = hostEngine();
-            float y = e ? e->viewportScrollY() : 0.0f;
-            if (y == 0.0f && e && e->document() && e->document()->documentElement()) {
-                y = e->document()->documentElement()->scrollTopValue();
-            }
-            return ev::fromDouble(y);
+            return ev::fromDouble(rootScrollY());
         }, nullptr);
 
+        // An options object without `top` leaves the vertical offset alone.
         b.def("scrollTo", 2, [parseScrollArgs, doWindowScrollTo](Value, std::span<const Value> a) {
-            double x = 0, y = 0;
+            double x = 0, y = rootScrollY();
             parseScrollArgs(a, x, y);
             doWindowScrollTo(x, y);
             return ev::undefined();
         });
         b.def("scroll", 2, [parseScrollArgs, doWindowScrollTo](Value, std::span<const Value> a) {
-            double x = 0, y = 0;
+            double x = 0, y = rootScrollY();
             parseScrollArgs(a, x, y);
             doWindowScrollTo(x, y);
             return ev::undefined();
@@ -740,12 +731,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         b.def("scrollBy", 2, [parseScrollArgs, doWindowScrollTo](Value, std::span<const Value> a) {
             double dx = 0, dy = 0;
             parseScrollArgs(a, dx, dy);
-            double curY = 0;
-            auto* e = hostEngine();
-            if (e && e->document() && e->document()->documentElement()) {
-                curY = e->document()->documentElement()->scrollTopValue();
-            }
-            doWindowScrollTo(0, curY + dy);
+            doWindowScrollTo(0, rootScrollY() + dy);
             return ev::undefined();
         });
 

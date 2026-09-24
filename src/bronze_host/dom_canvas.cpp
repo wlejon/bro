@@ -283,6 +283,7 @@ Value makeCanvasValue(dom::Element* el) {
         CanvasState* cs = canvasStateFor(el);
         if (!cs || !cs->el) return makeHostRectValue(0, 0, 0, 0);
         dom::AbsoluteRect r = borderBoxOf(cs->el);
+        r.y -= viewportScrollOf(cs->el);   // client coordinates
         ObjectBuilder bRect;
         bRect.set("left", ev::fromDouble(r.x));
         bRect.set("top", ev::fromDouble(r.y));

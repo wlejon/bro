@@ -23,6 +23,22 @@ void Engine::dispatchScrollEvent(dom::Element* el) {
     dispatchEvent(el, evt);
 }
 
+void Engine::scrollViewportTo(float y) {
+    if (!document_) return;
+    flushLayoutForRead(document_.get());
+    if (!std::isfinite(y)) y = 0.0f;
+    const float maxScroll =
+        std::max(0.0f, documentHeight_ - static_cast<float>(contentHeight()));
+    const float prev = scrollY_;
+    scrollY_ = std::clamp(y, 0.0f, maxScroll);
+    // A programmatic scroll replaces whatever a wheel gesture still had to go.
+    wheelResidualY_ = 0.0f;
+    if (scrollY_ != prev) {
+        uiDirty_ = true;
+        dispatchScrollEvent(document_->documentElement());
+    }
+}
+
 void Engine::handleWheel(float x, float y, float dx, float dy) {
     if (!document_) return;
 
