@@ -69,8 +69,15 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 glGetIntegerv(pname, v);
                 return makeNumberList(v, 2);
             }
-            // Float[2]
-            case 0x846D:    // GL_ALIASED_POINT_SIZE_RANGE
+            // Float[2]. ALIASED_POINT_SIZE_RANGE is not a core-profile enum
+            // (a strict core context — macOS — answers INVALID_ENUM and
+            // leaves the pair at 0), so it asks core's POINT_SIZE_RANGE,
+            // the same range under its core name.
+            case 0x846D: {  // GL_ALIASED_POINT_SIZE_RANGE
+                GLfloat v[2] = {0, 0};
+                glGetFloatv(0x0B12, v);  // GL_POINT_SIZE_RANGE
+                return makeNumberList(v, 2);
+            }
             case 0x846E:    // GL_ALIASED_LINE_WIDTH_RANGE
             case 0x0B70: {  // GL_DEPTH_RANGE
                 GLfloat v[2] = {0, 0};

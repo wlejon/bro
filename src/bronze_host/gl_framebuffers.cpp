@@ -144,11 +144,12 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
+    // Invalidation is a hint (ES 3.0 4.5): a driver without the GL 4.3 entry
+    // point (macOS tops out at 4.1) keeps the contents, which is always a
+    // correct answer, so the call validates and then does nothing.
     b.def("invalidateFramebuffer", 2, [c](Value, std::span<const Value> a) {
         live(c);
-        if (!glad_glInvalidateFramebuffer) {
-            return ev::throwTypeError("WebGL2RenderingContext.invalidateFramebuffer is not supported by the underlying GL driver");
-        }
+        if (!glad_glInvalidateFramebuffer) return ev::undefined();
         GLenum target = u32At(a, 0);
         std::vector<uint32_t> storage;
         const uint32_t* p = nullptr;
@@ -162,9 +163,6 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     b.def("invalidateSubFramebuffer", 6, [c](Value, std::span<const Value> a) {
         auto* ctx = live(c);
-        if (!glad_glInvalidateSubFramebuffer) {
-            return ev::throwTypeError("WebGL2RenderingContext.invalidateSubFramebuffer is not supported by the underlying GL driver");
-        }
         GLint x = i32At(a, 2);
         GLint y = i32At(a, 3);
         GLsizei width = i32At(a, 4);
@@ -173,6 +171,7 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             ctx->setSyntheticError(GL_INVALID_VALUE);
             return ev::undefined();
         }
+        if (!glad_glInvalidateSubFramebuffer) return ev::undefined();
         GLenum target = u32At(a, 0);
         std::vector<uint32_t> storage;
         const uint32_t* p = nullptr;
