@@ -525,12 +525,7 @@ bool PhysicsWorld::consumeStep() {
             return false;
     }
     // Done ⇒ the physics thread is parked in its wait; the world is ours.
-    if (listener_) {
-        bool overflowed = false;
-        contactsFront_ = listener_->drain(&overflowed);
-        contactsOverflowedFront_ = contactsOverflowedFront_ || overflowed;
-        updateAreaOverlaps(contactsFront_);
-    }
+    collectContacts();
     checkBrokenConstraints();
 
     std::lock_guard<std::mutex> lk(shared_.m);
@@ -556,13 +551,24 @@ void PhysicsWorld::stepInline() {
     capturePrevTransforms();
     updateCharacters(timeStep_);
     physicsSystem_.Update(timeStep_, 1, tempAllocator_.get(), jobSystem_.get());
-    if (listener_) {
-        bool overflowed = false;
-        contactsFront_ = listener_->drain(&overflowed);
-        contactsOverflowedFront_ = contactsOverflowedFront_ || overflowed;
-        updateAreaOverlaps(contactsFront_);
-    }
+    collectContacts();
     checkBrokenConstraints();
+}
+
+void PhysicsWorld::collectContacts() {
+    if (!listener_) return;
+    bool overflowed = false;
+    std::vector<ContactEvent> fresh = listener_->drain(&overflowed);
+    updateAreaOverlaps(fresh);
+    // Accumulate until drainContactEvents(): a caller that steps several times
+    // per read must still see every step's events. Capped at the listener's
+    // capacity so a world nobody drains does not grow without bound.
+    const size_t cap = listener_->buffer.size();
+    for (const ContactEvent& e : fresh) {
+        if (contactsFront_.size() >= cap) { overflowed = true; break; }
+        contactsFront_.push_back(e);
+    }
+    contactsOverflowedFront_ = contactsOverflowedFront_ || overflowed;
 }
 
 void PhysicsWorld::shutdown() {

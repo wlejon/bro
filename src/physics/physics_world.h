@@ -1368,9 +1368,10 @@ private:
     std::unordered_map<uint64_t, PrevTransform> prevTransforms_;
     void capturePrevTransforms();
 
-    // Holds the events drained from ListenerImpl's lock-free buffer for the
-    // last completed step, until drainContactEvents() hands them to the caller.
+    // Holds the events drained from ListenerImpl's lock-free buffer for every
+    // step since the last drainContactEvents(), which hands them to the caller.
     std::vector<ContactEvent> contactsFront_;
+    void collectContacts();
     // True when any step since the last drainContactEvents() overflowed the
     // contact buffer (events were dropped). Sticky across steps so a caller
     // polling getContacts() every few frames still sees it.
