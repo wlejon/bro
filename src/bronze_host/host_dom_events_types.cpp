@@ -202,6 +202,19 @@ void populateInputAndFormEvents(ObjectBuilder& b, dom::Event& e) {
         Value v = who ? hostElementValue(who) : ev::null();
         b.set("submitter", v);
     }
+
+    // CSS animation / transition events — what the event is about. The
+    // engine fills these in; they never reached the page before.
+    if (auto* an = dynamic_cast<dom::AnimationEvent*>(&e)) {
+        b.set("animationName", ev::fromUtf8(an->animationName()));
+        b.set("elapsedTime", ev::fromDouble(an->elapsedTime()));
+        b.set("pseudoElement", ev::fromUtf8(an->pseudoElement()));
+    }
+    if (auto* tr = dynamic_cast<dom::TransitionEvent*>(&e)) {
+        b.set("propertyName", ev::fromUtf8(tr->propertyName()));
+        b.set("elapsedTime", ev::fromDouble(tr->elapsedTime()));
+        b.set("pseudoElement", ev::fromUtf8(tr->pseudoElement()));
+    }
 }
 
 void populateClipboardEvent(ObjectBuilder& b, dom::Event& e) {
