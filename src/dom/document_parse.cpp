@@ -374,7 +374,7 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
     parent->markStructureDirty();
 }
 
-void Document::releaseChildrenPreservingElements(Node* parent) {
+void Document::releaseChildrenPreservingElements(Node* parent, std::vector<Node*>* deferFree) {
     if (!parent) return;
     // A copy: the loops below unparent and free, both of which would invalidate
     // an iterator into the live vector.
@@ -387,7 +387,36 @@ void Document::releaseChildrenPreservingElements(Node* parent) {
             if (!el->id().empty()) unregisterElementId(el->id(), el);
             continue;   // detached, not destroyed — see the header
         }
+        if (deferFree) { deferFree->push_back(child); continue; }
+        if (s_retainQuery && s_retainQuery(child)) continue;  // the host holds it
         freeNode(child);
+    }
+}
+
+void Document::replaceAllChildren(Node* parent, const std::function<void()>& fill) {
+    if (!parent) return;
+    const bool observed = hasMutationObservers();
+    std::vector<Node*> removed;
+    if (observed) removed = parent->childNodes();
+    std::vector<Node*> deferred;
+    ++muteMutationNotices_;
+    releaseChildrenPreservingElements(parent, &deferred);
+    fill();
+    --muteMutationNotices_;
+    if (observed && (!removed.empty() || !parent->childNodes().empty())) {
+        const std::vector<Node*> added = parent->childNodes();
+        MutationNotice notice;
+        notice.kind = MutationNotice::Kind::ChildList;
+        notice.target = parent;
+        notice.addedList = &added;
+        notice.removedList = &removed;
+        notifyMutation(notice);
+    }
+    // After the notice, so a record can name them: the host's registry now
+    // knows every node a record kept, and the retain query answers for it.
+    for (Node* n : deferred) {
+        if (s_retainQuery && s_retainQuery(n)) continue;
+        freeNode(n);
     }
 }
 

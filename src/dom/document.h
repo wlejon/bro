@@ -96,9 +96,24 @@ public:
     // Element children therefore become parentless roots — still owned by this
     // document, still reachable through any wrapper the program holds — with
     // their ids unregistered so a detached subtree stops answering
-    // getElementById. Everything else (text, comments) has no identity worth
-    // preserving and is freed.
-    void releaseChildrenPreservingElements(Node* parent);
+    // getElementById. Text and comment nodes are freed — unless the script
+    // host has an identity for one (setNodeRetainQuery: a wrapper the program
+    // holds, a MutationRecord naming it), in which case it is detached like an
+    // element — or, with `deferFree`, detached and handed back for the caller
+    // to free once it has reported the removal.
+    void releaseChildrenPreservingElements(Node* parent,
+                                           std::vector<Node*>* deferFree = nullptr);
+
+    // DOM "replace all" (innerHTML =, textContent =): empty `parent`, run
+    // `fill` to insert the new children, and report the whole change as ONE
+    // childList notice — every removed node and every added one — instead of
+    // a notice per inserted node (and none for the removal).
+    void replaceAllChildren(Node* parent, const std::function<void()>& fill);
+
+    // Asked before a released text/comment node is freed: true keeps it alive
+    // as a detached node. The script host installs it (its node registry).
+    using NodeRetainQuery = bool (*)(const Node*);
+    static void setNodeRetainQuery(NodeRetainQuery q) { s_retainQuery = q; }
 
     // Destroy any nodes queued by freeNode(). Caller must guarantee no
     // other thread is reading the DOM (layout + raster both idle).
@@ -490,6 +505,10 @@ public:
         // observer that wants either past its own return copies it.
         const std::string* attributeName = nullptr;  // Attributes only
         const std::string* oldValue = nullptr;       // Attributes / CharacterData
+        // ChildList, a replace-all only: every node added / removed, in
+        // order, in place of the single `added` / `removed` above.
+        const std::vector<Node*>* addedList = nullptr;
+        const std::vector<Node*>* removedList = nullptr;
     };
     using MutationObserverFn = void(*)(Document*, const MutationNotice&);
     void addMutationObserver(MutationObserverFn cb);
@@ -681,6 +700,10 @@ private:
     std::unordered_set<Range*> liveRanges_;
     std::vector<NodeObserver> nodeFreedObservers_;
     std::vector<MutationObserverFn> mutationObservers_;
+    // While above zero notifyMutation drops notices: a replace-all reports
+    // itself once, after the per-node inserts it is made of.
+    int muteMutationNotices_ = 0;
+    static NodeRetainQuery s_retainQuery;
     ElementClonedCallback elementClonedCb_ = nullptr;
 };
 

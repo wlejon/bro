@@ -33,7 +33,11 @@ std::string Element::textContent() const {
 }
 
 void Element::setTextContent(const std::string& text) {
-    if (children_.size() == 1 && children_[0]->nodeType() == NodeType::Text) {
+    // A document with MutationObservers skips the in-place rewrite: the DOM
+    // replaces the text node, and an observer is owed that childList record,
+    // not a characterData one.
+    if (children_.size() == 1 && children_[0]->nodeType() == NodeType::Text &&
+        !(document_ && document_->hasMutationObservers())) {
         auto* existing = static_cast<TextNode*>(children_[0]);
         if (existing->data() == text) return;
         // Rewriting the lone text child in place leaves the tree shape alone, so
@@ -54,16 +58,12 @@ void Element::setTextContent(const std::string& text) {
     // (Document::releaseChildrenPreservingElements says why); text and comment
     // nodes go.
     if (document_) {
-        document_->releaseChildrenPreservingElements(this);
+        document_->replaceAllChildren(this, [&] {
+            if (!text.empty()) appendChild(document_->createTextNode(text));
+        });
     } else {
         for (auto* child : children_) child->setParent(nullptr);
         children_.clear();
-    }
-
-    // Add text node
-    if (!text.empty() && document_) {
-        auto* textNode = document_->createTextNode(text);
-        appendChild(textNode);
     }
 
     markDirty();
@@ -374,11 +374,12 @@ void Element::setInnerHTML(const std::string& html) {
         if (!templateContent_) {
             setTemplateContent(document_->createElement("#DOCUMENT-FRAGMENT"));
         }
-        document_->parseInnerHTML(templateContent_, html);
+        Element* content = templateContent_;
+        document_->replaceAllChildren(content, [&] { document_->parseInnerHTML(content, html); });
         return;
     }
     if (document_) {
-        document_->parseInnerHTML(this, html);
+        document_->replaceAllChildren(this, [&] { document_->parseInnerHTML(this, html); });
         return;
     }
     auto oldKids = children_;

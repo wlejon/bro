@@ -408,6 +408,10 @@ Value makeElementHandleObject(dom::Element* el) {
 
 HostNodeState* hostNodeStateFor(dom::Node* node) { return stateFor(node); }
 
+bool hostHasNodeState(const dom::Node* node) {
+    return node && registry().live.count(node) != 0;
+}
+
 HostNodeState* hostNodeStateOfValue(Value v) { return nodeStateOf(v); }
 
 Value makePlainElementValue(dom::Element* el) {

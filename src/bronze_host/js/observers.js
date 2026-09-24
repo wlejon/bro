@@ -155,6 +155,9 @@
     // — the target itself and any subtree-watched ancestor it had at that
     // instant, which is the only time the question has a right answer (a
     // removed node has no ancestors afterwards).
+    // A node freed since its notice reads null in the raw arrays.
+    function nonNull(n) { return n !== null; }
+
     function considerRawRecord(st, raw) {
         let interested = false;
         let wantOldValue = false;
@@ -182,8 +185,8 @@
         if (!interested) return;
         st.queue.push(new MutationRecord(
             raw.type, raw.target,
-            raw.added !== null ? [raw.added] : [],
-            raw.removed !== null ? [raw.removed] : [],
+            raw.added.filter(nonNull),
+            raw.removed.filter(nonNull),
             raw.previousSibling, raw.nextSibling,
             raw.attributeName,
             wantOldValue ? raw.oldValue : null));

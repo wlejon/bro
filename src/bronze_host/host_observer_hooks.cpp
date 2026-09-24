@@ -70,8 +70,8 @@ struct Watch {
 struct RawRecord {
     dom::Document::MutationNotice::Kind kind{};
     HostNodeState* target = nullptr;
-    HostNodeState* added = nullptr;
-    HostNodeState* removed = nullptr;
+    std::vector<HostNodeState*> added;
+    std::vector<HostNodeState*> removed;
     HostNodeState* previousSibling = nullptr;
     HostNodeState* nextSibling = nullptr;
     std::string attributeName;
@@ -126,8 +126,14 @@ void onDomMutation(dom::Document*, const dom::Document::MutationNotice& notice) 
     RawRecord rec;
     rec.kind = notice.kind;
     rec.target = hostNodeStateFor(notice.target);
-    rec.added = notice.added ? hostNodeStateFor(notice.added) : nullptr;
-    rec.removed = notice.removed ? hostNodeStateFor(notice.removed) : nullptr;
+    // Registering the added / removed nodes is also what keeps a removed
+    // text node alive past a replace-all (Document::setNodeRetainQuery).
+    if (notice.added) rec.added.push_back(hostNodeStateFor(notice.added));
+    if (notice.addedList)
+        for (dom::Node* n : *notice.addedList) rec.added.push_back(hostNodeStateFor(n));
+    if (notice.removed) rec.removed.push_back(hostNodeStateFor(notice.removed));
+    if (notice.removedList)
+        for (dom::Node* n : *notice.removedList) rec.removed.push_back(hostNodeStateFor(n));
     rec.previousSibling =
         notice.previousSibling ? hostNodeStateFor(notice.previousSibling) : nullptr;
     rec.nextSibling = notice.nextSibling ? hostNodeStateFor(notice.nextSibling) : nullptr;
@@ -180,8 +186,13 @@ Value makeRawRecordValue(const RawRecord& rec) {
     ObjectBuilder b;
     b.set("type", ev::fromUtf8(kindName(rec.kind)));
     b.set("target", nodeSlot(rec.target));
-    b.set("added", nodeSlot(rec.added));
-    b.set("removed", nodeSlot(rec.removed));
+    // Arrays: a replace-all (innerHTML =, textContent =) is one record naming
+    // every node it added and removed.
+    const std::vector<HostNodeState*>& added = rec.added;
+    b.set("added", hostArrayOf(added.size(), [&added](size_t i) { return nodeSlot(added[i]); }));
+    const std::vector<HostNodeState*>& removed = rec.removed;
+    b.set("removed",
+          hostArrayOf(removed.size(), [&removed](size_t i) { return nodeSlot(removed[i]); }));
     b.set("previousSibling", nodeSlot(rec.previousSibling));
     b.set("nextSibling", nodeSlot(rec.nextSibling));
     b.set("attributeName",
@@ -258,6 +269,7 @@ Value onFrame(Value, std::span<const Value> a) {
 
 void installObserverHooks() {
     state();
+    dom::Document::setNodeRetainQuery(&hostHasNodeState);
     ObjectBuilder b;
     b.def("observeMutations", 2, observeMutations);
     b.def("unobserveMutations", 2, unobserveMutations);

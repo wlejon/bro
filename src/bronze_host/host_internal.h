@@ -457,6 +457,9 @@ Value makePerformanceValue();
 
 // The entry for `node`, created on first ask. Never null for a non-null node.
 HostNodeState* hostNodeStateFor(dom::Node* node);
+// Whether the registry already has an entry for `node` (a wrapper, a record
+// naming it). Never creates one. The DOM's node-retain query.
+bool hostHasNodeState(const dom::Node* node);
 
 // A fresh object that is already a node handle — what every wrapper in this
 // layer is built on, so hostNodeOf() can recover the dom::Node* from a value

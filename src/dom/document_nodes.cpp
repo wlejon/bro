@@ -244,7 +244,10 @@ void Document::removeMutationObserver(MutationObserverFn cb) {
         mutationObservers_.end());
 }
 
+Document::NodeRetainQuery Document::s_retainQuery = nullptr;
+
 void Document::notifyMutation(const MutationNotice& notice) {
+    if (muteMutationNotices_ > 0) return;
     // By value into a local copy of the list, not by reference into the member:
     // an observer is allowed to disconnect itself, and on the web that is the
     // FIRST thing a one-shot observer does.
