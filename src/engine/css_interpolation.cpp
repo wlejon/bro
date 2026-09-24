@@ -332,8 +332,10 @@ void applyKeyframeInterpolation(const htmlayout::css::KeyframeBlock* kf,
     if (thisIterReverse)
         localProgress = 1.0f - localProgress;
 
-    // Apply easing
-    localProgress = ccubicEase(anim.easing, localProgress);
+    // No easing here: a CSS animation's timing function applies to each
+    // keyframe INTERVAL, not to the whole iteration, so it is applied to
+    // segmentT below, once the bracketing stops are known. Easing the whole
+    // iteration made a 0% / 50% / 100% animation run one curve end to end.
 
     // Find bracketing keyframe stops. When the @keyframes omits a 0% or
     // 100% stop, CSS synthesizes an implicit endpoint from the element's
@@ -347,7 +349,8 @@ void applyKeyframeInterpolation(const htmlayout::css::KeyframeBlock* kf,
     // Union of properties this animation touches (for implicit endpoints).
     std::unordered_set<std::string> animProps;
     for (auto& stop : stops)
-        for (auto& d : stop.declarations) animProps.insert(d.property);
+        for (auto& d : stop.declarations)
+            if (d.property != "animation-timing-function") animProps.insert(d.property);
 
     // Base (un-animated) value for a property, shaped to the opposite
     // endpoint so transform identities match (rotate→rotate(0deg), etc.).
@@ -398,13 +401,26 @@ void applyKeyframeInterpolation(const htmlayout::css::KeyframeBlock* kf,
     float segmentRange = afterOffset - beforeOffset;
     float segmentT = segmentRange > 0 ? (t - beforeOffset) / segmentRange : 0.0f;
 
+    // The interval's easing: the element's animation-timing-function, unless
+    // the keyframe that starts the interval names its own. A keyframe's
+    // animation-timing-function is that interval's easing, never an animated
+    // property.
+    static const std::string kTimingProp = "animation-timing-function";
+    CubicEase segEasing = anim.easing;
+    if (beforeStop)
+        for (auto& d : beforeStop->declarations)
+            if (d.property == kTimingProp) segEasing = parseTimingFunction(d.value);
+    segmentT = ccubicEase(segEasing, segmentT);
+
     // Build property maps for the two endpoints, filling implicit endpoints
     // from the element's base value.
     std::unordered_map<std::string, std::string> beforeProps, afterProps;
     if (beforeStop)
-        for (auto& d : beforeStop->declarations) beforeProps[d.property] = d.value;
+        for (auto& d : beforeStop->declarations)
+            if (d.property != kTimingProp) beforeProps[d.property] = d.value;
     if (afterStop)
-        for (auto& d : afterStop->declarations) afterProps[d.property] = d.value;
+        for (auto& d : afterStop->declarations)
+            if (d.property != kTimingProp) afterProps[d.property] = d.value;
     if (beforeImplicit)
         for (auto& p : animProps) {
             auto aIt = afterProps.find(p);
