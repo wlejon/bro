@@ -341,18 +341,36 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     auto* activeEl = document_->activeElement();
     layout::KeyHandleResult result;
 
-    if (auto* input = getElInput(activeEl); input && input->isFocused()) {
-        result = input->handleKeyDown(activeEl, keycode, mod);
-    } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
-        result = textarea->handleKeyDown(activeEl, keycode, mod);
-    }
-
-    if (result.handled) {
-        applyKeyResult(activeEl, result);
+    // A focused form control: keydown goes to the page FIRST, and the
+    // control's default action (Space toggling a checkbox, Backspace editing,
+    // arrows stepping a range) runs only when no listener cancelled it — the
+    // web's order. It used to act first and dispatch afterwards, so
+    // preventDefault() on keydown could not stop it.
+    bool keydownDispatched = false;
+    auto focusedControl = [this](dom::Element* el) {
+        if (auto* in = getElInput(el); in && in->isFocused()) return true;
+        if (auto* ta = getElTextarea(el); ta && ta->isFocused()) return true;
+        return false;
+    };
+    if (activeEl && focusedControl(activeEl)) {
+        dom::ElementHandle handle(document_.get(), activeEl);
         auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
         evt.setIsComposing(compositionActive());
         dispatchEvent(activeEl, evt);
-        return;
+        keydownDispatched = true;
+        if (evt.defaultPrevented()) return;
+        // A listener may have moved focus or removed the control.
+        activeEl = handle.get();
+        if (!activeEl || !document_ || activeEl != document_->activeElement()) return;
+        if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+            result = input->handleKeyDown(activeEl, keycode, mod);
+        } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+            result = textarea->handleKeyDown(activeEl, keycode, mod);
+        }
+        if (result.handled) {
+            applyKeyResult(activeEl, result);
+            return;
+        }
     }
 
     if (document_) {
@@ -413,19 +431,23 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
             if (handled) {
                 markAppBaseDirty();
-                auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-                if (dom::Element* target = document_->activeElement())
-                    dispatchEvent(target, evt);
+                if (!keydownDispatched) {
+                    auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+                    if (dom::Element* target = document_->activeElement())
+                        dispatchEvent(target, evt);
+                }
                 return;
             }
         }
     }
 
-    auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-    evt.setIsComposing(compositionActive());
-    dom::Element* target = document_->activeElement();
-    if (target) {
-        dispatchEvent(target, evt);
+    if (!keydownDispatched) {
+        auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+        evt.setIsComposing(compositionActive());
+        dom::Element* target = document_->activeElement();
+        if (target) {
+            dispatchEvent(target, evt);
+        }
     }
 
     dispatchActionEventForKey(sdlKeycodeToWebKey(keycode, mod), "down", 1.0f);
