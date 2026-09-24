@@ -36,6 +36,18 @@ dom::Document* parseIntoNewDocument(const std::string& html) {
     return ptr;
 }
 
+namespace {
+// An XML document for DOMParser's XML types; a parse error leaves the
+// <parsererror> document Document::parseXml builds.
+dom::Document* parseXmlIntoNewDocument(const std::string& xml) {
+    auto doc = std::make_unique<dom::Document>();
+    dom::Document* ptr = doc.get();
+    doc->parseXml(xml);
+    s_parsedDocs.push_back(ParsedDocEntry{std::move(doc), currentRealmScope()});
+    return ptr;
+}
+}  // namespace
+
 void clearParsedDocuments() {
     for (auto& entry : s_parsedDocs) {
         if (entry.doc) {
@@ -78,7 +90,8 @@ Value parserParseFromString(Value, std::span<const Value> a) {
         return ev::throwTypeError("parseFromString: '" + mime + "' is not a supported mimeType");
     }
     const std::string html = ev::isUndefined(htmlV) ? std::string() : ev::toUtf8(htmlV);
-    dom::Document* doc = parseIntoNewDocument(html);
+    dom::Document* doc = mime == "text/html" ? parseIntoNewDocument(html)
+                                             : parseXmlIntoNewDocument(html);
     ev::Persistent docVal(hostDocumentValue(doc));
     ev::Persistent mimeStr(ev::fromUtf8(mime));
     ev::setProperty(docVal.get(), "contentType", mimeStr.get());

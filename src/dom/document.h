@@ -35,6 +35,15 @@ public:
     void parse(const std::string& html, const std::string& authorCss = {},
                const std::string& uaCss = {});
 
+    // Parse `xml` as an XML document (DOMParser's XML and SVG types) into
+    // this FRESH document: names keep their case, prefixes resolve through
+    // xmlns declarations, `<b/>` is an empty element, entities and CDATA
+    // decode. A document that is not well-formed becomes the one DOMParser
+    // hands back for it — a lone <parsererror> root in the Mozilla
+    // parsererror namespace whose text says what and where — and this
+    // returns false. document_xml.cpp.
+    bool parseXml(const std::string& xml);
+
     // Node creation — Document owns all nodes via ownedNodes_.
     Element* createElement(const std::string& tag);
     TextNode* createTextNode(const std::string& text);

@@ -1,3 +1,3 @@
-add_library(bro_dom STATIC document.cpp document_parse.cpp document_style.cpp document_gencontent.cpp document_nodes.cpp document_top_layer.cpp element.cpp element_geometry.cpp element_scroll.cpp element_serialize.cpp text_node.cpp comment_node.cpp event.cpp event_target.cpp event_dispatch.cpp style_proxy.cpp shadow_root.cpp range.cpp selection.cpp)
+add_library(bro_dom STATIC document.cpp document_parse.cpp document_xml.cpp document_style.cpp document_gencontent.cpp document_nodes.cpp document_top_layer.cpp element.cpp element_geometry.cpp element_scroll.cpp element_serialize.cpp text_node.cpp comment_node.cpp event.cpp event_target.cpp event_dispatch.cpp style_proxy.cpp shadow_root.cpp range.cpp selection.cpp)
 target_include_directories(bro_dom PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_dom PUBLIC htmlayout gumbo bro_util)
