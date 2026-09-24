@@ -1,7 +1,8 @@
-// `__bro_native.window` — behind bro.window (docs/window-api.js): the
-// platform window's state, its two flags, the three state transitions, the
+// `__bro_native.window` — behind bro.window (docs/window-api.js): the calling
+// realm's platform window (a secondary window's own, else the main one): its state, its two flags, the three state transitions, the
 // position and size limits as scalar pairs, and the display list.
 
+#include "bronze_host/bronze_host.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
 #include "engine/engine.h"
@@ -20,9 +21,19 @@ bool isHeadless() {
     return !eng || eng->displayMode() == engine::DisplayMode::Headless;
 }
 
+// The secondary window (bro.window.open) whose realm is calling, or null for
+// the main window's realm. Each realm's bro.window drives its own window.
+engine::WindowHost* childHost() {
+    auto* eng = hostEngine();
+    dom::Document* doc = currentHostDocument();
+    return eng && doc ? eng->windowHostForDocument(doc) : nullptr;
+}
+
 platform::Window* getWindow() {
     auto* eng = hostEngine();
-    return eng ? eng->window() : nullptr;
+    if (!eng) return nullptr;
+    if (auto* h = childHost()) return h->window.get();
+    return eng->window();
 }
 
 struct WindowPosition { int x = 0, y = 0; };
@@ -193,6 +204,12 @@ bool bro_window_moveToDisplay(double id) {
 void bro_window_getSize(void) {
     int w = 0, h = 0;
     auto* eng = hostEngine();
+    if (auto* child = childHost()) {
+        // A secondary window is a real (hidden, headless) OS window in both
+        // modes; its client size is tracked on the host.
+        g_size = {child->width, child->height};
+        return;
+    }
     if (!isHeadless()) {
         if (auto* win = getWindow()) win->getSize(w, h);
     } else if (eng) {
@@ -212,6 +229,14 @@ void bro_window_setSize(int32_t width, int32_t height) {
     if (width < 1 || height < 1) return;
     auto* eng = hostEngine();
     if (!eng) return;
+    if (auto* child = childHost()) {
+        // Same as the parent's handle.setSize: the host size updates now, the
+        // document's viewport and 'resize' follow at the next record.
+        child->opts.width = child->width = width;
+        child->opts.height = child->height = height;
+        if (child->window) child->window->setSize(width, height);
+        return;
+    }
     if (isHeadless()) {
         eng->handleResize(width, height);
         return;

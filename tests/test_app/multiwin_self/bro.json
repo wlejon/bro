@@ -1,0 +1,11 @@
+{
+    "title": "Self window",
+    "width": 300,
+    "height": 200,
+    "borderless": true,
+    "alwaysOnTop": true,
+    "minWidth": 210,
+    "minHeight": 110,
+    "maxWidth": 1500,
+    "maxHeight": 950
+}

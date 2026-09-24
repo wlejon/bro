@@ -6,6 +6,11 @@
  * Runtime window state control (borderless, always-on-top, position, size limits,
  * display enumeration and placement).
  *
+ * `bro.window` drives the calling realm's own window: in a secondary window's
+ * realm (bro.window.open) every read and write targets that window, so a child
+ * reads back the flags and limits its bro.json declared. (`window.close()`
+ * closes a secondary window from inside; `bro.quit()` quits the whole app.)
+ *
  * @example
  *   bro.window.borderless = true;
  *   bro.window.alwaysOnTop = true;

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><style>html, body { margin: 0; width: 100%; height: 100%; }</style></head>
+<body>
+  <!-- tests/window/test_multiwindow_self_window.js: this realm's bro.window
+       must drive THIS window. Each message runs one op on it, then the child
+       reports what its bro.window reads back. -->
+  <script>
+    function report() {
+      return {
+        borderless: bro.window.borderless,
+        alwaysOnTop: bro.window.alwaysOnTop,
+        min: bro.window.getMinSize(),
+        max: bro.window.getMaxSize(),
+        size: bro.window.getSize(),
+      };
+    }
+    window.addEventListener('message', function (ev) {
+      var op = ev.data || {};
+      if (op.op === 'minSize') bro.window.setMinSize(op.w, op.h);
+      else if (op.op === 'maxSize') bro.window.setMaxSize(op.w, op.h);
+      else if (op.op === 'borderless') bro.window.borderless = op.v;
+      else if (op.op === 'alwaysOnTop') bro.window.alwaysOnTop = op.v;
+      else if (op.op === 'size') bro.window.setSize(op.w, op.h);
+      else if (op.op === 'close') { window.close(); return; }
+      bro.window.parent.postMessage(report());
+    });
+  </script>
+</body>
+</html>
