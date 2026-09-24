@@ -208,7 +208,7 @@ public:
         // FIRST: finalize() groups clusters by walking the glyph arrays in
         // storage order and calling that visual order, which is only true once
         // the runs have been permuted into it.
-        void finish() { r_.reorderRunsVisually(); r_.finalize(); }
+        void finish() { r_.expandTabs(); r_.reorderRunsVisually(); r_.finalize(); }
 
     private:
         ShapedRun& r_;
@@ -255,6 +255,16 @@ private:
     // level, so splitting a level run into adjacent equal-level entries gives
     // the same result as reordering the unsplit run.
     void reorderRunsVisually();
+
+    // U+0009 survives only in preserved white space (pre / pre-wrap), where
+    // CSS Text 3 §4.2 makes it advance to the next tab stop: a multiple of
+    // tab-size (8) space advances. Fonts map the tab to .notdef, so each tab
+    // glyph becomes the font's space glyph with its advance stretched to the
+    // next stop. Stops are measured from this run's start: a preserved line is
+    // one run from the line's start in the common case (a code block's text
+    // node); a run that begins mid-line (after a highlighted span) measures
+    // from its own start.
+    void expandTabs();
 
     // Finish construction: derive cluster table + bounds from the flat glyph
     // arrays the shaping callback filled in.

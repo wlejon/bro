@@ -87,6 +87,33 @@ void ShapedRun::reorderRunsVisually() {
     runs_          = std::move(nr);
 }
 
+void ShapedRun::expandTabs() {
+    if (text_.find('\t') == std::string::npos || glyphs_.empty()) return;
+    constexpr float kTabSize = 8.0f;
+    float shift = 0.0f;
+    for (const auto& r : runs_) {
+        const SkGlyphID space = r.font.unicharToGlyph(' ');
+        const float spaceAdv = r.font.getWidth(space);
+        const float stop = spaceAdv * kTabSize;
+        for (std::size_t k = 0; k < r.count; ++k) {
+            const std::size_t g = r.first + k;
+            positions_[g].fX += shift;
+            const uint32_t byte = glyphClusters_[g];
+            if (byte >= text_.size() || text_[byte] != '\t' || stop <= 0.0f) continue;
+            const float x = positions_[g].fX;
+            float next = (std::floor(x / stop) + 1.0f) * stop;
+            // A tab narrower than half a space jumps to the following stop.
+            if (next - x < spaceAdv * 0.5f) next += stop;
+            const float adv = next - x;
+            shift += adv - advances_[g];
+            advances_[g] = adv;
+            glyphs_[g] = space;
+            offsets_[g] = SkPoint{0.0f, 0.0f};
+        }
+    }
+    naturalWidth_ += shift;
+}
+
 void ShapedRun::finalize() {
     clusters_.clear();
     bounds_ = SkRect::MakeEmpty();
