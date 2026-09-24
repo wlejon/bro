@@ -635,7 +635,7 @@ struct ConstraintOptions {
     // Wheel-specific (Box2D v3 surface).
     JPH::Vec3 wheelSuspensionAxis{0, 1, 0};   // suspension translation axis (world)
     JPH::Vec3 wheelHingeAxis{0, 0, 1};        // wheel rotation axis (world; 2D = +Z)
-    float wheelHertz = 2.0f;                  // suspension spring frequency (Hz); 0 disables
+    float wheelHertz = 2.0f;                  // suspension spring toward rest (Hz); 0 = free
     float wheelDampingRatio = 0.7f;           // 0 = undamped, 1 = critical
     bool  wheelHasTranslationLimits = false;
     float wheelLowerTranslation = 0.0f;

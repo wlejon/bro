@@ -1707,11 +1707,18 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& optsIn) {
         s->MakeFixedAxis(EAxis::TranslationZ);
         s->MakeFixedAxis(EAxis::RotationX);
         s->MakeFixedAxis(EAxis::RotationY);
-        // Suspension along local Y.
+        // Suspension along local Y. Jolt's spring lives on the axis limits
+        // (mLimitsSpringSettings), so a free axis has nothing for it to act
+        // on. With a spring and no travel limits, pin the axis at the rest
+        // position (0 / 0) and let the soft limit be the spring, the Box2D
+        // wheel joint's behaviour; with explicit limits the spring softens
+        // them; hertz 0 and no limits leaves the suspension free.
         if (opts.wheelHasTranslationLimits) {
             s->SetLimitedAxis(EAxis::TranslationY,
                               opts.wheelLowerTranslation,
                               opts.wheelUpperTranslation);
+        } else if (opts.wheelHertz > 0.0f) {
+            s->SetLimitedAxis(EAxis::TranslationY, 0.0f, 0.0f);
         } else {
             s->MakeFreeAxis(EAxis::TranslationY);
         }
