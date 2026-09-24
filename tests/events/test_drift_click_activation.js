@@ -18,11 +18,19 @@ function setup(html) {
     flush();
 }
 
-// --- focus ---------------------------------------------------------------
+// --- no focus ------------------------------------------------------------
+// element.click() does not move focus on the web. It used to set
+// document.activeElement without the engine's focus steps, so a checkbox
+// clicked from script read as focused and still ignored Space.
 setup('<input id="i" type="text">');
-document.getElementById('i').click();
-assert(document.activeElement === document.getElementById('i'),
-       'click() focuses the element it activates');
+{
+    let focusEvents = 0;
+    document.getElementById('i').addEventListener('focus', () => focusEvents++);
+    document.getElementById('i').click();
+    assert(document.activeElement !== document.getElementById('i'),
+           'click() does not focus the element it activates');
+    assert(focusEvents === 0, 'and fires no focus event');
+}
 
 // --- checkbox toggles and fires change ------------------------------------
 setup('<input id="cb" type="checkbox">');
@@ -105,6 +113,14 @@ setup('<label id="lb" for="tgt">tick</label><input id="tgt" type="checkbox">');
 document.getElementById('lb').click();
 assert(document.getElementById('tgt').checked === true,
        'label.click() forwards to the control it labels');
+// A label's activation focuses its control, through the real focus steps: the
+// engine knows the checkbox is focused, so Space toggles it.
+assert(document.activeElement === document.getElementById('tgt'),
+       'label.click() focuses the control it labels');
+keyDown(0x20); keyUp(0x20);
+flush();
+assert(document.getElementById('tgt').checked === false,
+       'Space toggles the checkbox the label focused');
 
 // A wrapped control must not be toggled twice.
 setup('<label id="lw"><input id="in" type="checkbox"> live</label>');

@@ -496,9 +496,10 @@ void decorateElementForms(ObjectBuilder& b) {
                },
                nullptr);
 
-    // click() is the whole activation behaviour, not a click event: focus
-    // moves, a submit button submits its form, a summary opens its details, a
-    // label forwards to its control. engine::clickElement is the one copy of
+    // click() is the whole activation behaviour, not a click event: a submit
+    // button submits its form, a summary opens its details, a label focuses
+    // and clicks its control. Focus does not move to the clicked element
+    // itself, as on the web. engine::clickElement is the one copy of
     // that, shared with the hit-tested path.
     b.def("click", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);

@@ -15,6 +15,12 @@
 #include <string>
 #include <vector>
 
+namespace bro::bronze_host {
+// element.focus()'s steps (declared in host_internal.h, which is too heavy to
+// pull into the engine layer for one function).
+void hostFocusElement(dom::Element* el);
+}  // namespace bro::bronze_host
+
 namespace bro::engine {
 
 namespace {
@@ -180,6 +186,12 @@ bool forwardLabelActivation(dom::Element* clickTarget) {
         if (el == label) break;
     }
     if (activationDisabled(control)) return false;
+    // A label's activation focuses its control before clicking it (what a
+    // browser's label does for a real click and for label.click() alike),
+    // through element.focus()'s steps, so the control is focused the way the
+    // engine means it: focus/blur events, and the control itself told, which
+    // is what makes Space toggle a checkbox afterwards.
+    bronze_host::hostFocusElement(control);
     clickElement(control);
     return true;
 }
@@ -190,7 +202,9 @@ void clickElement(dom::Element* el) {
     // click event. Matches the hit-tested path's isInDisabledControl gate.
     if (activationDisabled(el)) return;
 
-    if (dom::Document* doc = el->document()) doc->setActiveElement(el);
+    // No focus change: element.click() does not focus on the web. It used to
+    // set document.activeElement directly, which left a clicked checkbox
+    // reading as focused while the engine (and so Space) did not know it.
 
     dom::MouseEvent clickEvt("click");
     dom::dispatchDomEvent(el, clickEvt);

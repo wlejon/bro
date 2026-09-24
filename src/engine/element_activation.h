@@ -10,8 +10,9 @@
 // the QuickJS binding had a second copy of it inline. The bronze port
 // transcribed only part of that copy — label forwarding, the anchor download,
 // and the radio/checkbox/file toggles — so a programmatic click stopped
-// focusing, stopped submitting and resetting forms, and stopped opening a
-// <details>.
+// submitting and resetting forms and stopped opening a <details>. (It does
+// not focus: element.click() never moves focus on the web; only a label's
+// forward focuses the control it clicks.)
 //
 // This is that behaviour, once, at the engine layer where the hit-test path
 // already lives.
@@ -26,7 +27,7 @@ namespace bro::engine {
 void clickElement(dom::Element* el);
 
 /// The activation behaviour alone, with the click already dispatched and not
-/// cancelled: focus, form submit/reset, checkbox/radio toggle, the file
+/// cancelled: form submit/reset, checkbox/radio toggle, the file
 /// picker, the anchor download, the <details> disclosure. Safe to call for any
 /// element — it does nothing for one with no activation behaviour.
 void runActivationBehavior(dom::Element* el);
