@@ -91,9 +91,15 @@
  * @property {number} [maxLinearVelocity]
  * @property {number} [maxAngularVelocity]
  * @property {number} [userData]
- * @property {string} [dofs]
+ * @property {string} [dofs]  '2d' (translate X/Y, rotate Z) | 'all' | a comma list of
+ *   'tx,ty,tz,rx,ry,rz' naming the axes left free
  * @property {number} [layer]
- * @property {Array<number>} [points]
+ * @property {Array<number>} [points]  convexHull: flat [x,y,z,...]; chain: flat [x0,y0,x1,y1,...]
+ *   in the XY plane, extruded along Z into a static one-sided wall
+ * @property {number} [depth]  chain: total Z thickness (default 20)
+ * @property {boolean} [closed]  chain: join the last point back to the first
+ * @property {boolean} [flipNormal]  chain: collide on the right of the walking direction
+ *   instead of the left
  * @property {Array<number>} [positions]
  * @property {Array<number>} [indices]
  * @property {Array<PhysicsCompoundPart>} [parts]

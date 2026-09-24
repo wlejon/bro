@@ -416,6 +416,48 @@ inline bool readBodyOptions(Value vIn, physics::BodyOptions& out, std::string& e
     out.maxAngularVelocity = static_cast<float>(getPropNumber(v, "maxAngularVelocity", out.maxAngularVelocity));
     out.userData = getPropU64(v, "userData", 0);
 
+    // dofs: '2d' | 'plane2d' | 'all' | a comma list of tx,ty,tz,rx,ry,rz.
+    const std::string dofs = getPropString(v, "dofs");
+    if (dofs == "2d" || dofs == "plane2d" || dofs == "Plane2D") {
+        out.dofs = JPH::EAllowedDOFs::Plane2D;
+    } else if (dofs.empty() || dofs == "all") {
+        out.dofs = JPH::EAllowedDOFs::All;
+    } else {
+        out.dofs = JPH::EAllowedDOFs::None;
+        size_t i = 0;
+        while (i <= dofs.size()) {
+            const size_t j = dofs.find(',', i);
+            std::string tok = dofs.substr(i, j == std::string::npos ? std::string::npos : j - i);
+            tok.erase(0, tok.find_first_not_of(' '));
+            tok.erase(tok.find_last_not_of(' ') + 1);
+            if      (tok == "tx") out.dofs = out.dofs | JPH::EAllowedDOFs::TranslationX;
+            else if (tok == "ty") out.dofs = out.dofs | JPH::EAllowedDOFs::TranslationY;
+            else if (tok == "tz") out.dofs = out.dofs | JPH::EAllowedDOFs::TranslationZ;
+            else if (tok == "rx") out.dofs = out.dofs | JPH::EAllowedDOFs::RotationX;
+            else if (tok == "ry") out.dofs = out.dofs | JPH::EAllowedDOFs::RotationY;
+            else if (tok == "rz") out.dofs = out.dofs | JPH::EAllowedDOFs::RotationZ;
+            else { err = "dofs: unknown token '" + tok + "' (want '2d' | 'all' | tx,ty,tz,rx,ry,rz)"; return false; }
+            if (j == std::string::npos) break;
+            i = j + 1;
+        }
+        if (out.dofs == JPH::EAllowedDOFs::None) { err = "dofs: no degrees of freedom left"; return false; }
+    }
+
+    if (out.shape == physics::BodyOptions::ShapeChain) {
+        std::vector<float> pts;
+        readFloatVector(ev::getProperty(v, "points"), pts);
+        if (pts.size() < 4 || (pts.size() % 2) != 0) {
+            err = "chain requires points (flat [x0,y0,x1,y1,...]) with at least 2 points";
+            return false;
+        }
+        for (size_t i = 0; i + 1 < pts.size(); i += 2)
+            out.chainPoints.push_back(JPH::Float2(pts[i], pts[i + 1]));
+        out.chainDepth = static_cast<float>(getPropNumber(v, "depth", out.chainDepth));
+        out.chainClosed = getPropBool(v, "closed", out.chainClosed);
+        out.chainFlipNormal = getPropBool(v, "flipNormal", out.chainFlipNormal);
+        out.isStatic = true;
+    }
+
     if (out.shape == physics::BodyOptions::ShapeConvexHull) {
         Value ptsVal = ev::getProperty(v, "points");
         std::vector<float> flat;

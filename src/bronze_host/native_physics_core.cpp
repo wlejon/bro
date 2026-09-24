@@ -252,7 +252,10 @@ int32_t bro_physics_createBody(const char* config) {
 
     physics::BodyOptions opts;
     std::string err;
-    if (!readBodyOptions(res.value, opts, err, w)) return -1;
+    if (!readBodyOptions(res.value, opts, err, w)) {
+        LOG_WARN("Physics.createBody: %s", err.c_str());
+        return -1;
+    }
 
     JPH::BodyID id = w->createBody(opts);
     if (id.IsInvalid()) return -1;
