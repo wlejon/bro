@@ -115,6 +115,14 @@ public:
     using NodeRetainQuery = bool (*)(const Node*);
     static void setNodeRetainQuery(NodeRetainQuery q) { s_retainQuery = q; }
 
+    // Free a detached subtree nothing outside the DOM holds any more: what
+    // the script host has an identity for (the retain query) is kept —
+    // detached, with its own subtree — and everything else is freed. The
+    // disposal of content only the DOM ever saw: a Range's deleteContents,
+    // whose removed nodes are otherwise unreachable and were kept until
+    // teardown.
+    void freeUnlessRetained(Node* root);
+
     // Destroy any nodes queued by freeNode(). Caller must guarantee no
     // other thread is reading the DOM (layout + raster both idle).
     void drainPendingFrees();

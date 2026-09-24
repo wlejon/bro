@@ -246,6 +246,36 @@ void Document::removeMutationObserver(MutationObserverFn cb) {
 
 Document::NodeRetainQuery Document::s_retainQuery = nullptr;
 
+namespace {
+
+bool anyRetained(const Node* n, Document::NodeRetainQuery q) {
+    if (q && q(n)) return true;
+    for (const Node* c : n->childNodes())
+        if (anyRetained(c, q)) return true;
+    return false;
+}
+
+} // namespace
+
+void Document::freeUnlessRetained(Node* root) {
+    if (!root || root->parentNode()) return;
+    if (!anyRetained(root, s_retainQuery)) {
+        freeNode(root);
+        return;
+    }
+    // The host holds the root: it keeps its whole subtree.
+    if (s_retainQuery && s_retainQuery(root)) return;
+    // Something below the root is held: keep those parts, free the rest.
+    // Unparented directly, as releaseChildrenPreservingElements does — nobody
+    // observes a node the host has never seen, so there is no removal to
+    // report.
+    std::vector<Node*> kids = root->childNodes();
+    for (Node* k : kids) k->setParent(nullptr);
+    root->childNodes().clear();
+    for (Node* k : kids) freeUnlessRetained(k);
+    freeNode(root);
+}
+
 void Document::notifyMutation(const MutationNotice& notice) {
     if (muteMutationNotices_ > 0) return;
     // By value into a local copy of the list, not by reference into the member:

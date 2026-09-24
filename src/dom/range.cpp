@@ -468,14 +468,11 @@ void Range::deleteContents() {
     if (!document_ || !startContainer_ || !endContainer_ || collapsed()) return;
     // Extract into a scratch fragment: the source-tree effect of "delete" is
     // exactly extract's (trim the partial character data, detach the contained
-    // nodes, empty the partial elements' selected descendants). The detached
-    // nodes are not freed — a script may still hold them, as it may after
-    // removeChild.
+    // nodes, empty the partial elements' selected descendants). Then the
+    // scratch fragment and what it holds are freed, except the nodes a script
+    // may still hold (as it may after removeChild): those stay, detached.
     Node* scratch = extractContents();
-    if (scratch) {
-        auto kids = scratch->childNodes();
-        for (Node* k : kids) scratch->removeChild(k);
-    }
+    if (scratch) document_->freeUnlessRetained(scratch);
 }
 
 Node* Range::cloneContents() const {
@@ -579,6 +576,7 @@ Range::Error Range::surroundContents(Element* newParent) {
     if (fragment) {
         auto kids = fragment->childNodes();
         for (Node* k : kids) newParent->appendChild(k);
+        document_->freeUnlessRetained(fragment);   // the emptied scratch
     }
     selectNode(newParent);
     return Error::None;
