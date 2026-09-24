@@ -34,6 +34,9 @@
         import { bump } from "/app/module_instance.js";
         bump();
     </script>
+    <!-- tests/engine/test_page_module_script_url.js: an external module in a
+         subdirectory is its own module with its own URL. -->
+    <script type="module" src="module_sub/main.js"></script>
     <script>
         // Hide the menu bar so innerHeight matches the configured viewport.
         // (Mouse coords from getBoundingClientRect work either way thanks

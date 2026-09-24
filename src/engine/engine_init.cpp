@@ -420,14 +420,18 @@ void Engine::initAppRealm() {
                  manifest_.scripts.size(), manifest_.htmlPath.c_str());
     }
     if (!manifest_.scripts.empty() && !serverSkipsPage) {
+        // Classic scripts share one global scope, so they stay ONE unit, in
+        // document order, named for the page. Module scripts are deferred on
+        // the web — they run after the classic ones, in document order — and
+        // each is its own module with its own URL: an external one is named
+        // for its file, so import.meta.url and its relative imports resolve
+        // from where it lives rather than from index.html; an inline one is
+        // named for the page, whose URL is its base. The realm's module
+        // registry evaluates a module two scripts import once.
         std::string combinedScripts;
         for (const auto& script : manifest_.scripts) {
-            std::string code;
-            if (script.isInline()) {
-                code = script.code;
-            } else {
-                code = AppLoader::loadFile(script.path);
-            }
+            if (script.isModule) continue;
+            std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
             if (!code.empty()) {
                 if (!combinedScripts.empty()) combinedScripts += "\n;\n";
                 combinedScripts += code;
@@ -435,6 +439,15 @@ void Engine::initAppRealm() {
         }
         if (!combinedScripts.empty()) {
             if (!bro::bronze_host::evalAppScript(*this, combinedScripts, manifest_.htmlPath)) {
+                setTestFailure(true);
+            }
+        }
+        for (const auto& script : manifest_.scripts) {
+            if (!script.isModule) continue;
+            std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
+            if (code.empty()) continue;
+            const std::string& name = script.isInline() ? manifest_.htmlPath : script.path;
+            if (!bro::bronze_host::evalAppScript(*this, code, name)) {
                 setTestFailure(true);
             }
         }
