@@ -22,12 +22,35 @@
 #include "dom/shadow_root.h"
 #include "dom/text_node.h"
 #include "engine/engine.h"
+#include "layout/selection_geometry.h"
 
 #include <algorithm>
 #include <string>
 #include <vector>
 
 namespace bro::bronze_host {
+
+std::vector<dom::AbsoluteRect> clientRectsOf(dom::Element* el) {
+    std::vector<dom::AbsoluteRect> out;
+    if (!el) return out;
+    auto* eng = hostEngine();
+    eng->flushLayoutForRead(el->document());
+    const auto& style = el->computedStyle();
+    auto it = style.find("display");
+    const std::string display = it != style.end() ? it->second : std::string();
+    // No box, no rects (CSSOM).
+    if (display == "none" || display == "contents") return out;
+    if (display == "inline" && el->document() && eng->textMetrics()) {
+        for (const auto& f : layout::inlineFragmentRects(el->document(), el,
+                                                         *eng->textMetrics())) {
+            out.push_back(dom::projectRectThroughAncestors(el, f.x, f.y,
+                                                           f.width, f.height));
+        }
+        if (!out.empty()) return out;
+    }
+    out.push_back(borderBoxOf(el));
+    return out;
+}
 
 namespace {
 
@@ -209,15 +232,14 @@ void decorateElementGeometry(ObjectBuilder& b) {
         dom::AbsoluteRect r = borderBoxOf(st->el);
         return makeHostRectValue(r.x, r.y, r.width, r.height);
     });
-    // One rect, because this engine has no fragmented boxes: an inline that
-    // wraps is still one layout box here. A page that iterates getClientRects()
-    // gets the same geometry getBoundingClientRect() reports rather than
-    // nothing at all, which is what `undefined` gave it.
+    // One rect per box fragment: a wrapped inline answers one per line it
+    // occupies (clientRectsOf), everything else its border box.
     b.def("getClientRects", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        dom::AbsoluteRect r = borderBoxOf(st->el);
-        return hostArrayOf(1, [&r](size_t) {
+        std::vector<dom::AbsoluteRect> rects = clientRectsOf(st->el);
+        return hostArrayOf(rects.size(), [&rects](size_t i) {
+            const auto& r = rects[i];
             return makeHostRectValue(r.x, r.y, r.width, r.height);
         });
     });

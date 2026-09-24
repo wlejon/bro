@@ -405,6 +405,10 @@ void decorateElementMutate(ObjectBuilder& b);
 void decorateElementInteraction(ObjectBuilder& b);
 void decorateElementGeometry(ObjectBuilder& b);
 dom::AbsoluteRect borderBoxOf(dom::Element* el);
+// Element.getClientRects(): one border box per line fragment for an inline
+// element, the border box otherwise, none for display:none/contents. Same
+// coordinate space as borderBoxOf.
+std::vector<dom::AbsoluteRect> clientRectsOf(dom::Element* el);
 
 // A DOMRect-shaped plain object — x/y/width/height plus the four edges.
 Value makeHostRectValue(double x, double y, double w, double h);

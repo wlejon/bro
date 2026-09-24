@@ -48,10 +48,25 @@ void toTextBoundary(dom::Node* node, int off, bool preferLeading,
 // Per-line highlight rectangles for a (startNode/off → endNode/off) range.
 // Accepts any bro::dom::Node — Element ranges are approximated by walking
 // into the first/last descendant text node. Non-text ranges return empty.
+// `clipToOverflow`: see htmlayout::layout::getSelectionRects (true for paint,
+// false for Range geometry).
 std::vector<htmlayout::layout::Rect>
 getSelectionRects(dom::Document* doc,
                   dom::Node* startNode, int startOff,
                   dom::Node* endNode,   int endOff,
-                  htmlayout::layout::TextMetrics& metrics);
+                  htmlayout::layout::TextMetrics& metrics,
+                  bool clipToOverflow = true);
+
+// The border boxes of a `display: inline` element's fragments, one per line
+// box it occupies (CSSOM getClientRects), in document space — not projected
+// through transforms, not offset by the viewport scroll. Built from the
+// element's descendant text: each line's text extent, widened by the
+// element's vertical padding + border on every fragment and by its
+// inline-start / inline-end padding + border on the first / last one (the
+// `box-decoration-break: slice` default). Empty when the element has no laid
+// out text, which callers answer with its layout box instead.
+std::vector<htmlayout::layout::Rect>
+inlineFragmentRects(dom::Document* doc, dom::Element* el,
+                    htmlayout::layout::TextMetrics& metrics);
 
 } // namespace bro::layout
