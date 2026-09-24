@@ -180,12 +180,43 @@ nav.removeObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
 nav.setWalkable(3, -2, false);
 
 /**
- * Extra traversal cost multiplier on one cell: A* prefers cheap cells, so a
- * cost above 1 makes a route avoid it (mud, shallow water, a danger zone)
- * without making it impassable.
+ * Traversal cost of one cell, per unit of distance (1 = open ground, the
+ * default): findPath and field() prefer cheap cells, so a cost above 1 makes
+ * a route avoid it (mud, shallow water, a danger zone) without making it
+ * impassable. A cost <= 0 or >= 1e6 blocks the cell; any other cost also
+ * makes it walkable again. Path smoothing never shortcuts across ground
+ * dearer than the route it replaces.
  * @param {number} x @param {number} z @param {number} cost
  */
 nav.setCellCost(3, -2, 4.0);
+nav.cellCost(3, -2);   // 4; Infinity on a blocked or off-grid cell
+
+/**
+ * The flow field: one search for a whole crowd heading to one goal (where
+ * A* would be one search per unit). A fast-marching (eikonal) wave from the
+ * goal over every reachable cell gives each cell its cost-to-goal (close to
+ * the true straight-line distance, so a crowd descending it moves in
+ * straight rays rather than funnelling into octile lanes), and each cell a
+ * unit direction to walk. 4-connected: never cuts a wall corner. Each cell
+ * costs its cellCost (times cellSize) per step, plus opts.extraCost[i].
+ *
+ * Arrays are row-major over the grid: index = gz * nav.width + gx, where
+ * gx = floor((x - minX) / cellSize), gz = floor((z - minZ) / cellSize).
+ * A blocked or off-grid goal gives an empty field (reached 0, all Infinity).
+ *
+ * @param {number} goalX @param {number} goalZ   (or ({x, z}, opts))
+ * @param {Object} [opts]
+ * @param {ArrayLike<number>} [opts.extraCost] - width*height costs added per
+ *     cell (a threat / danger map); non-finite entries add nothing
+ * @param {ArrayLike<number>} [opts.costs] - width*height costs used in place
+ *     of the stored ones (<= 0, >= 1e6 or NaN blocks; blocked cells stay blocked)
+ * @returns {{dist: Float32Array, flowX: Float32Array, flowZ: Float32Array,
+ *     reached: number, width: number, height: number}} `dist` is Infinity on
+ *     blocked and unreached cells; flowX/flowZ are 0 there and at the goal.
+ */
+const ff = nav.field(10, 0, { extraCost: danger });
+const i = gz * nav.width + gx;
+agent.vx = ff.flowX[i] * speed; agent.vz = ff.flowZ[i] * speed;
 
 /**
  * Grid line of sight: is the straight segment free of blocked cells? A 2D
