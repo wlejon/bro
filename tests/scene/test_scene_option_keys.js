@@ -105,6 +105,14 @@ if (!scene) {
     }
     assert(m.bodyId === undefined, 'bodyId is undefined off physics nodes');
 
+    // --- ReflectionProbe.intensity ----------------------------------------------------
+    const probe = scene.createReflectionProbe({ size: 4, intensity: 0.4 });
+    if (probe) {
+        assert(near(probe.intensity, 0.4), 'probe intensity option: ' + probe.intensity);
+        probe.intensity = 1.5;
+        assert(near(probe.intensity, 1.5), 'probe intensity is live: ' + probe.intensity);
+    }
+
     const shot = scene.captureFrame();
     assert(shot && shot.width > 0, 'a frame with these nodes renders');
     console.log('scene option keys OK');

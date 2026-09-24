@@ -620,6 +620,9 @@ double bro_scene_SceneNode_intensity_get(void* self) {
     if (n && n->type() == scene::SceneNode::Type::Light) {
         return static_cast<double>(static_cast<scene::LightNode*>(n)->intensity());
     }
+    if (n && n->type() == scene::SceneNode::Type::ReflectionProbe) {
+        return static_cast<double>(static_cast<scene::ReflectionProbeNode*>(n)->intensity());
+    }
     return 1.0;
 }
 
@@ -627,6 +630,8 @@ void bro_scene_SceneNode_intensity_set(void* self, double v) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Light) {
         static_cast<scene::LightNode*>(n)->setIntensity(static_cast<float>(v));
+    } else if (n && n->type() == scene::SceneNode::Type::ReflectionProbe) {
+        static_cast<scene::ReflectionProbeNode*>(n)->setIntensity(static_cast<float>(v));
     }
 }
 
