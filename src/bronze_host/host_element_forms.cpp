@@ -363,6 +363,69 @@ void decorateElementForms(ObjectBuilder& b) {
         return ev::undefined();
     });
 
+    // setRangeText(replacement [, start, end [, selectionMode]]) — HTML's
+    // "set up the range text": replace [start, end) of the value (the current
+    // selection when only the replacement is given) and place the selection
+    // per the mode, "preserve" by default. A programmatic value change like
+    // `value =`: no input event, and the control's undo history resets.
+    b.def("setRangeText", 4, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st || !st->el) return ev::undefined();
+        dom::Element* el = st->el;
+        auto* inp = el->inputControl();
+        auto* ta = el->textareaControl();
+        if (!inp && !ta) {
+            return ev::throwValue(hostMakeDomError("InvalidStateError",
+                "setRangeText: the element has no text selection"));
+        }
+        if (a.empty()) return ev::throwTypeError("setRangeText: 1 argument required");
+        const std::string replacement = ev::toUtf8(a[0]);
+        const std::string val = layout::formValue(el);
+        const int len = static_cast<int>(val.size());
+        int oldStart = inp ? inp->selectionStart() : ta->selectionStart();
+        int oldEnd = inp ? inp->selectionEnd() : ta->selectionEnd();
+        int start = oldStart, end = oldEnd;
+        if (a.size() >= 3) {
+            const double s16 = ev::toDouble(a[1]);
+            const double e16 = ev::toDouble(a[2]);
+            if (s16 > e16) {
+                return ev::throwValue(hostMakeDomError("IndexSizeError",
+                    "setRangeText: start is after end"));
+            }
+            start = dom::utf16ToUtf8Byte(val, satCast<int>(s16));
+            end = dom::utf16ToUtf8Byte(val, satCast<int>(e16));
+        }
+        start = std::clamp(start, 0, len);
+        end = std::clamp(end, start, len);
+        std::string mode = "preserve";
+        if (a.size() >= 4 && !ev::isUndefined(a[3])) mode = ev::toUtf8(a[3]);
+        if (mode != "select" && mode != "start" && mode != "end" && mode != "preserve") {
+            return ev::throwTypeError("setRangeText: '" + mode +
+                                      "' is not a valid SelectionMode");
+        }
+
+        std::string next = val.substr(0, start) + replacement + val.substr(end);
+        layout::setFormValue(el, next);
+        const int newEnd = start + static_cast<int>(replacement.size());
+        int selStart = oldStart, selEnd = oldEnd;
+        if (mode == "select") {
+            selStart = start; selEnd = newEnd;
+        } else if (mode == "start") {
+            selStart = selEnd = start;
+        } else if (mode == "end") {
+            selStart = selEnd = newEnd;
+        } else {
+            const int delta = static_cast<int>(replacement.size()) - (end - start);
+            if (selStart > end) selStart += delta;
+            else if (selStart > start) selStart = start;
+            if (selEnd > end) selEnd += delta;
+            else if (selEnd > start) selEnd = newEnd;
+        }
+        if (inp) inp->setSelectionRange(selStart, selEnd);
+        else ta->setSelectionRange(selStart, selEnd);
+        return ev::undefined();
+    });
+
     b.accessor("selectionStart",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);
