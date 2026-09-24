@@ -75,7 +75,7 @@
  */
 
 /**
- * Every setFog call replaces the whole fog state; setFog({}) turns it off.
+ * Every setFog call replaces the whole fog state; setFog({}) (or setFog(null)) turns it off.
  * With density > 0 the fog is exponential-squared, 1 - exp(-(density*d)^2)
  * for d the camera distance past `start`; otherwise a linear start..end ramp
  * when end > 0.

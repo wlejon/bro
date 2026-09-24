@@ -657,7 +657,7 @@
         __bro_native.scene.SceneGraph_setShadowCache(this, d_opts.enabled !== undefined, d_opts.enabled === undefined ? false : d_opts.enabled, d_opts.staticResolution !== undefined, d_opts.staticResolution === undefined ? 0 : d_opts.staticResolution);
     });
     fn(SceneGraph.prototype, "setFog", function setFog(opts) {
-        const d_opts = opts === undefined ? {} : opts;
+        const d_opts = opts == null ? {} : opts;   // null, like {}, turns fog off
         const f_start = d_opts.startDistance !== undefined ? d_opts.startDistance : d_opts.start;
         __bro_native.scene.SceneGraph_setFog(this, d_opts.mode !== undefined, d_opts.mode === undefined ? '' : d_opts.mode, d_opts.color === undefined ? EMPTY_F64 : toF64(d_opts.color), d_opts.density !== undefined, d_opts.density === undefined ? 0 : d_opts.density, f_start !== undefined, f_start === undefined ? 0 : f_start, d_opts.end !== undefined, d_opts.end === undefined ? 0 : d_opts.end, d_opts.heightFalloff !== undefined, d_opts.heightFalloff === undefined ? 0 : d_opts.heightFalloff, d_opts.height !== undefined, d_opts.height === undefined ? 0 : d_opts.height);
     });

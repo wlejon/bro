@@ -112,6 +112,11 @@ if (!scene) {
     const t2 = px(80, 80);
     assert(t2.r < t0.r - 60, `legacy linear fog still fogs (r=${t2.r})`);
 
+    // --- setFog(null) turns fog off, like setFog({}) -------------------------
+    scene.setFog(null);
+    const t3 = px(80, 80);
+    assert(Math.abs(t3.r - t0.r) < 4, `setFog(null) turns fog off (r=${t3.r} vs ${t0.r})`);
+
     farT.destroy();
     flush();
 }
