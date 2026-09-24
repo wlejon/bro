@@ -316,7 +316,13 @@ const v = document.getElementById('clip');
 //   transitioning from playing.
 //
 // v.load()
-//   Re-opens the resource named by the src attribute. No-op without src.
+//   Runs the load algorithm on the src attribute: the current resource is
+//   dropped first (readyState 0, duration NaN, videoWidth/Height 0, error
+//   null, 'emptied' if anything was loaded), then the src is opened. A src
+//   that is missing or not a WebM bro can decode fires 'error' and sets
+//   v.error (code 4, MEDIA_ERR_SRC_NOT_SUPPORTED) instead of
+//   'loadedmetadata'. Without src it only resets. Assigning v.src runs the
+//   same algorithm, so `v.src = url` alone is enough.
 //
 // v.canPlayType(mimeType) → "probably" | ""
 //   "probably" for webm / vp8 / vp9 / opus / ogg-opus types, "" otherwise
@@ -447,6 +453,11 @@ v.playbackRate = 2.0;
 // v.networkState, 0 NETWORK_EMPTY (no src), 1 NETWORK_IDLE (loaded),
 //                    3 NETWORK_NO_SOURCE (src set but open failed).
 //                    2 (NETWORK_LOADING) never occurs, loads are synchronous.
+// v.error, null, or { code, message, MEDIA_ERR_* } after a load that
+//                    could not open its source (code 4,
+//                    MEDIA_ERR_SRC_NOT_SUPPORTED: missing file, or not
+//                    WebM VP8/VP9 + Opus). Cleared by the next load. While
+//                    set, play() rejects with NotSupportedError.
 //
 // Attribute-reflected flags:
 // v.autoplay, reflects the attribute only; the engine does NOT auto-start
@@ -469,6 +480,8 @@ v.playbackRate = 2.0;
 // Non-bubbling, trusted events on the element (addEventListener or on* via
 // attributes is up to the app; there are no onplay-style IDL properties):
 //
+//   emptied, a load dropped the resource that was loaded before it.
+//   error, a load could not open its source; see v.error.
 //   loadedmetadata, after a successful load; dimensions/duration readable.
 //   durationchange, alongside loadedmetadata (and if duration changes on
 //                     reload).

@@ -38,8 +38,21 @@ public:
     // shared broaudio graph. Null in contexts without an audio engine.
     void setAudioEngine(broaudio::Engine* eng) { audioEngine_ = eng; }
 
-    // Open a WebM file; returns true on success. Does not auto-play.
+    // The media element load algorithm: drop the current resource (queueing
+    // `emptied` when there was one), then open `path`, a WebM file. On
+    // success `loadedmetadata` follows; on failure error() becomes
+    // MEDIA_ERR_SRC_NOT_SUPPORTED and `error` is queued. Does not auto-play.
     bool load(const std::string& path);
+
+    // The reset half of load(): back to HAVE_NOTHING / NETWORK_EMPTY with no
+    // resource, no error, the 300x150 fallback size. Queues `emptied` if
+    // there was anything to empty.
+    void unload();
+
+    // HTMLMediaElement.error: 0 when there is none, else the MediaError code
+    // (4 = MEDIA_ERR_SRC_NOT_SUPPORTED, the only one a local file produces).
+    int errorCode() const { return errorCode_; }
+    const std::string& errorMessage() const { return errorMessage_; }
 
     void play();
     void pause();
@@ -91,8 +104,8 @@ public:
     // picture" is what a script reads these for. The element's *box* keeps the
     // 300x150 replaced-element fallback (see getContentSize), because a box of
     // zero would collapse a playing element out of the page.
-    int videoWidth() const { return hasPicture_ ? intrinsicWidth_ : 0; }
-    int videoHeight() const { return hasPicture_ ? intrinsicHeight_ : 0; }
+    int videoWidth() const { return pipeline_ && hasPicture_ ? intrinsicWidth_ : 0; }
+    int videoHeight() const { return pipeline_ && hasPicture_ ? intrinsicHeight_ : 0; }
 
     /// How far the picture is turned clockwise to be shown, in degrees:
     /// 0, 90, 180 or 270. Read-only — it comes from the container.
@@ -131,13 +144,17 @@ private:
     int intrinsicWidth_ = 300;
     int intrinsicHeight_ = 150;
     int rotation_ = 0;
-    // True until a load says otherwise, so an element with nothing loaded
-    // still reports the spec's 300x150 fallback rather than 0.
+    // Whether the loaded source has a video track. True with nothing loaded
+    // (videoWidth/Height read 0 then anyway, since there is no pipeline).
     bool hasPicture_ = true;
 
     // Event-lifecycle bookkeeping.
     bool pendingLoadedMetadata_ = false;
     bool pendingCanPlayThrough_ = false;
+    bool pendingEmptied_ = false;
+    bool pendingError_ = false;
+    int errorCode_ = 0;
+    std::string errorMessage_;
     bool endedFired_ = false;
     bool waiting_ = false;
     double lastTimeUpdateSec_ = -1.0;

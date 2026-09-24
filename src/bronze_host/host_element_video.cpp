@@ -113,6 +113,10 @@ void decorateMediaProto(ObjectBuilder& b) {
         if (src.empty()) return reject("The element has no supported sources.");
         auto* v = getVideoControl(el, true);
         if (!v) return reject("Failed to create media pipeline.");
+        // A source the last load could not open stays unplayable until the
+        // next load; retrying it here would fire a second `error`.
+        if (!v->hasPipeline() && v->errorCode() != 0)
+            return reject("The element has no supported sources.");
         if (!v->hasPipeline()) {
             if (!v->load(src)) return reject("The media resource failed to load.");
         }
@@ -141,7 +145,10 @@ void decorateMediaProto(ObjectBuilder& b) {
         auto* v = getVideoControl(el, true);
         if (!v) return ev::undefined();
         std::string src = el->getAttribute("src");
+        // Always runs the load algorithm: with no src that is just the reset
+        // (and `emptied` if something was loaded).
         if (!src.empty()) v->load(src);
+        else v->unload();
         return ev::undefined();
     });
 
@@ -173,11 +180,33 @@ void decorateMediaProto(ObjectBuilder& b) {
             auto* el = getElement(self);
             if (!el) return ev::undefined();
             std::string s = a.empty() || ev::isUndefined(a[0]) ? "" : ev::toUtf8(a[0]);
+            // Setting src always runs the load algorithm. Once the element has
+            // a control, setAttribute("src") starts it for a changed value;
+            // a control made here, or the same value again, needs telling.
+            const bool hadControl = el->videoControl() != nullptr;
+            const bool same = el->hasAttribute("src") && el->getAttribute("src") == s;
             el->setAttribute("src", s);
             auto* v = getVideoControl(el, true);
-            if (v && !s.empty()) v->load(s);
+            if (v && !s.empty() && (!hadControl || same)) v->load(s);
             return ev::undefined();
         });
+
+    // HTMLMediaElement.error: null, or a MediaError-shaped object for the
+    // source the last load could not open.
+    b.accessor("error",
+        [](Value self, std::span<const Value>) -> Value {
+            auto* el = getElement(self);
+            auto* v = el ? el->videoControl() : nullptr;
+            if (!v || v->errorCode() == 0) return ev::null();
+            ObjectBuilder err;
+            err.set("code", ev::fromDouble(v->errorCode()));
+            err.set("message", ev::fromUtf8(v->errorMessage()));
+            err.set("MEDIA_ERR_ABORTED", ev::fromDouble(1));
+            err.set("MEDIA_ERR_NETWORK", ev::fromDouble(2));
+            err.set("MEDIA_ERR_DECODE", ev::fromDouble(3));
+            err.set("MEDIA_ERR_SRC_NOT_SUPPORTED", ev::fromDouble(4));
+            return err.get();
+        }, nullptr);
 
     b.accessor("currentSrc",
         [](Value self, std::span<const Value>) -> Value {

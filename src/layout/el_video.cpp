@@ -42,18 +42,50 @@ ElVideo::~ElVideo() {
     delete pipeline_;
 }
 
-bool ElVideo::load(const std::string& path) {
-    auto* p = new bro::video::VideoPipeline();
-    const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
-    if (!p->open(resolved)) { delete p; return false; }
+void ElVideo::unload() {
+    // networkState was not NETWORK_EMPTY: there is something to empty.
+    const bool hadResource = pipeline_ != nullptr || errorCode_ != 0 || !currentSrc_.empty();
     // Setting .src twice used to leak the previous pipeline and leave the old
     // audio playing under the new video.
     closeStreamingAudio();
     stopAudioPlayback();
     audioClipId_ = -1;
     delete pipeline_;
-    pipeline_ = p;
+    pipeline_ = nullptr;
+    currentSrc_.clear();
+    hasPicture_ = true;
+    intrinsicWidth_ = 300;
+    intrinsicHeight_ = 150;
+    rotation_ = 0;
+    pendingLoadedMetadata_ = false;
+    pendingCanPlayThrough_ = false;
+    pendingError_ = false;
+    errorCode_ = 0;
+    errorMessage_.clear();
+    endedFired_ = false;
+    waiting_ = false;
+    lastTimeUpdateSec_ = -1.0;
+    lastDurationSec_ = -1.0;
+    if (hadResource) pendingEmptied_ = true;
+}
+
+bool ElVideo::load(const std::string& path) {
+    // The load algorithm starts over from HAVE_NOTHING: a source that fails
+    // to open must not leave the previous file's readyState, duration and
+    // size describing the element.
+    unload();
+    const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
     currentSrc_ = resolved;
+    auto* p = new bro::video::VideoPipeline();
+    if (!p->open(resolved)) {
+        delete p;
+        errorCode_ = 4;  // MEDIA_ERR_SRC_NOT_SUPPORTED
+        errorMessage_ = "MEDIA_ELEMENT_ERROR: cannot open '" + path +
+                        "' (missing, or not a WebM with VP8/VP9 video or Opus audio)";
+        pendingError_ = true;
+        return false;
+    }
+    pipeline_ = p;
     // displayWidth/Height rather than frameWidth/Height: a clip recorded
     // sideways is 1920x1080 in the file and 1080x1920 on the page, and the
     // intrinsic size is what the page lays out against.
@@ -750,6 +782,20 @@ const uint8_t* ElVideo::currentFrameRgba(int* outW, int* outH) {
 }
 
 void ElVideo::pumpEvents() {
+    // The load algorithm's own events, which come with or without a pipeline:
+    // `emptied` for the resource it dropped, `error` for one it could not open.
+    if (elem_ && pendingEmptied_) {
+        pendingEmptied_ = false;
+        dom::Event evt("emptied", false, false);
+        evt.setIsTrusted(true);
+        dom::dispatchDomEvent(elem_, evt);
+    }
+    if (elem_ && pendingError_) {
+        pendingError_ = false;
+        dom::Event evt("error", false, false);
+        evt.setIsTrusted(true);
+        dom::dispatchDomEvent(elem_, evt);
+    }
     if (!pipeline_) return;
     // Keep the audio ring ahead of the mixer. Deliberately before the jsCtx_
     // guard: a document with no JS listeners still has to make sound.
@@ -876,7 +922,8 @@ using bromath::cfromColor8;
 ElVideo::ElVideo(render::Renderer* renderer) : renderer_(renderer) {}
 ElVideo::~ElVideo() = default;  // pipeline_ is always null in this build
 
-bool   ElVideo::load(const std::string&) { return false; }
+bool   ElVideo::load(const std::string&) { errorCode_ = 4; return false; }
+void   ElVideo::unload() { errorCode_ = 0; }
 bool   ElVideo::openStreamingAudio(const std::string&) { return false; }
 void   ElVideo::closeStreamingAudio() {}
 void   ElVideo::pumpStreamingAudio() {}
