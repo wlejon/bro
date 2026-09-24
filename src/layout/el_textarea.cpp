@@ -38,6 +38,19 @@ void ElTextarea::armChange(dom::Element* el) {
     change_.arm(readCurrentValue(el));
 }
 
+void ElTextarea::spliceValue(dom::Element* el, const std::string& value,
+                             int selStart, int selEnd) {
+    if (!el) return;
+    const std::string before = readCurrentValue(el);
+    const TextUndoStack::Sel selBefore{sel_.anchor, sel_.caret};
+    comp_ = {};   // the script owns the value now
+    el->setAttribute("value", value);
+    setSelectionRange(selStart, selEnd);
+    undo_.record(before, selBefore, value, {sel_.anchor, sel_.caret},
+                 TextUndoStack::Kind::Discrete, util::currentTimeMs());
+    armChange(el);
+}
+
 bool ElTextarea::takeChange(dom::Element* el) {
     if (!el) return false;
     return change_.take(readCurrentValue(el));

@@ -78,6 +78,12 @@ public:
     // the preedit's recorded position is meaningless.
     void clearHistory() { undo_.clear(); comp_ = {}; }
 
+    // A script's splice of the value (setRangeText), leaving the selection at
+    // [selStart, selEnd): written as a `.value =` write is, but recorded as
+    // one discrete undo step on top of the history instead of dropping it, so
+    // an editor's formatting commands can be undone like typing.
+    void spliceValue(dom::Element* el, const std::string& value, int selStart, int selEnd);
+
     // --- The `change` event (see layout/value_change.h) --------------------
     // Text types only: a checkbox, a radio, a range and a colour all report
     // their change at the press that made it, which is the whole interaction.

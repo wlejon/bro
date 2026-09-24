@@ -61,6 +61,12 @@ public:
     // any in-progress composition state — the script owns the value now.
     void clearHistory() { undo_.clear(); comp_ = {}; }
 
+    // A script's splice of the value (setRangeText), leaving the selection at
+    // [selStart, selEnd): written as a `.value =` write is, but recorded as
+    // one discrete undo step on top of the history instead of dropping it, so
+    // an editor's formatting commands can be undone like typing.
+    void spliceValue(dom::Element* el, const std::string& value, int selStart, int selEnd);
+
     // --- The `change` event (see layout/value_change.h) --------------------
     // Only the departure, unlike ElInput's: Enter in a textarea is a newline,
     // so there is no key here that means "I mean it".

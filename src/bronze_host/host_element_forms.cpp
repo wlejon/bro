@@ -367,7 +367,9 @@ void decorateElementForms(ObjectBuilder& b) {
     // "set up the range text": replace [start, end) of the value (the current
     // selection when only the replacement is given) and place the selection
     // per the mode, "preserve" by default. A programmatic value change like
-    // `value =`: no input event, and the control's undo history resets.
+    // `value =` (no input event), except that the control keeps its undo
+    // history and records the splice as one step of it: an editor's
+    // formatting commands undo with Ctrl+Z like the typing around them.
     b.def("setRangeText", 4, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = hostNodeStateOfValue(self_);
         if (!st || !st->el) return ev::undefined();
@@ -405,7 +407,6 @@ void decorateElementForms(ObjectBuilder& b) {
         }
 
         std::string next = val.substr(0, start) + replacement + val.substr(end);
-        layout::setFormValue(el, next);
         const int newEnd = start + static_cast<int>(replacement.size());
         int selStart = oldStart, selEnd = oldEnd;
         if (mode == "select") {
@@ -421,8 +422,8 @@ void decorateElementForms(ObjectBuilder& b) {
             if (selEnd > end) selEnd += delta;
             else if (selEnd > start) selEnd = newEnd;
         }
-        if (inp) inp->setSelectionRange(selStart, selEnd);
-        else ta->setSelectionRange(selStart, selEnd);
+        if (inp) inp->spliceValue(el, next, selStart, selEnd);
+        else ta->spliceValue(el, next, selStart, selEnd);
         return ev::undefined();
     });
 

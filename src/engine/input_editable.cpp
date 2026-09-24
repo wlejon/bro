@@ -7,8 +7,13 @@
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "dom/text_node.h"
+#include "engine/replaced_elements.h"
 #include "layout/control_text.h"
+#include "layout/el_input.h"
+#include "layout/el_textarea.h"
+#include "layout/key_handle_result.h"
 #include "util/time.h"
+#include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <cctype>
@@ -465,6 +470,24 @@ bool Engine::editInsertTextAtSelection(const std::string& text) {
 }
 
 bool Engine::editHistoryStep(bool redo) {
+    // A focused <input>/<textarea> keeps its own history (typing and
+    // setRangeText both record into it); execCommand('undo'/'redo') steps
+    // that one, as primary+Z / primary+Y do.
+    if (dom::Element* active = document_ ? document_->activeElement() : nullptr) {
+        layout::KeyHandleResult r;
+        const int keycode = redo ? SDLK_Y : SDLK_Z;
+        if (auto* in = getElInput(active); in && in->isFocused())
+            r = in->handleKeyDown(active, keycode, SDL_KMOD_CTRL);
+        else if (auto* ta = getElTextarea(active); ta && ta->isFocused())
+            r = ta->handleKeyDown(active, keycode, SDL_KMOD_CTRL);
+        else
+            r.handled = false;
+        if (r.handled) {
+            const bool stepped = r.dispatchInput;
+            applyKeyResult(active, r);
+            return stepped;
+        }
+    }
     const EditCaret c = editCaretOf(document_.get());
     if (!c) return false;
     auto* stack = editUndo_.find(c.host);

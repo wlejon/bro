@@ -68,4 +68,29 @@ advanceTime(20);
 flush();
 assert(inputs === 0, 'no input event');
 
+// It is part of the control's undo history, not a reset of it: typing, then a
+// splice, then undo takes the splice back, and a second undo the typing.
+ta.value = 'milk';
+ta.focus();
+ta.setSelectionRange(4, 4);
+textInput(' eggs');
+advanceTime(20);
+assert(ta.value === 'milk eggs', 'typed (' + ta.value + ')');
+ta.setRangeText('**milk**', 0, 4, 'select');
+assert(ta.value === '**milk** eggs', 'spliced (' + ta.value + ')');
+assert(document.execCommand('undo'), 'undo runs');
+assert(ta.value === 'milk eggs', 'undo takes the splice back (' + ta.value + ')');
+assert(ta.selectionStart === 9 && ta.selectionEnd === 9,
+    'and the caret the splice found (' + ta.selectionStart + ',' + ta.selectionEnd + ')');
+assert(document.execCommand('undo'), 'a second undo runs');
+assert(ta.value === 'milk', 'the typing before it is still in the history (' + ta.value + ')');
+assert(document.execCommand('redo') && document.execCommand('redo'), 'redo twice');
+assert(ta.value === '**milk** eggs', 'redo replays both (' + ta.value + ')');
+inp.value = 'abc';
+inp.focus();
+inp.setRangeText('Z', 1, 2, 'end');
+assert(inp.value === 'aZc', 'input splice (' + inp.value + ')');
+assert(document.execCommand('undo') && inp.value === 'abc',
+    'an input undoes a splice too (' + inp.value + ')');
+
 console.log('test_set_range_text: done');
