@@ -214,7 +214,13 @@ cp.spawn(file, args?, options?);                   // → ChildProcess (non-bloc
 
 // ── cp.spawn: long-running children ──
 //
-// options: { cwd, env, stdio, encoding, highWaterMark, stdoutFile, stderrFile }
+// options: { cwd, env, stdio, encoding, highWaterMark, stdoutFile, stderrFile, detached }
+//   A child ends with the app: when bro exits, however it exits (quit,
+//   crash, killed), its children and their descendants are killed (Windows:
+//   a kill-on-close job object; Linux: PR_SET_PDEATHSIG; macOS: not yet).
+//   This diverges from Node, where children outlive the parent.
+//   detached      true: the child outlives the app (own process group /
+//                 session; leaves the app's job). For launching other apps.
 //   stdio         'pipe' to stream output and write stdin. DEFAULT IS 'ignore'
 //                 (no pipes at all) — this diverges from Node deliberately, so
 //                 an existing caller that never reads can't silently buffer,
