@@ -377,70 +377,43 @@ void AnimationManager::onStyleChange(dom::Element* elem,
     std::string durStr, timingStr, delayStr, iterStr, directionStr, fillModeStr;
     std::string playStateStr;
 
-    auto anIt = newStyle.find("animation-name");
-    if (anIt != newStyle.end() && anIt->second != "none" && !anIt->second.empty()) {
-        animName = anIt->second;
-        // Read longhand properties
-        auto it = newStyle.find("animation-duration");
-        if (it != newStyle.end()) durStr = it->second;
-        it = newStyle.find("animation-timing-function");
-        if (it != newStyle.end()) timingStr = it->second;
-        it = newStyle.find("animation-delay");
-        if (it != newStyle.end()) delayStr = it->second;
-        it = newStyle.find("animation-iteration-count");
-        if (it != newStyle.end()) iterStr = it->second;
-        it = newStyle.find("animation-direction");
-        if (it != newStyle.end()) directionStr = it->second;
-        it = newStyle.find("animation-fill-mode");
-        if (it != newStyle.end()) fillModeStr = it->second;
-        it = newStyle.find("animation-play-state");
-        if (it != newStyle.end()) playStateStr = it->second;
-    } else {
-        // Try shorthand: animation: name duration timing delay iteration direction fill
-        auto aIt = newStyle.find("animation");
-        if (aIt == newStyle.end() || aIt->second.empty() || aIt->second == "none") {
-            // animation-name has been cleared. Reset the previousName memo so
-            // that re-applying the same animation later (e.g. by re-adding a
-            // class) triggers a fresh start, per CSS Animations §4.2.
-            auto eit = elements_.find(elem);
-            if (eit != elements_.end()) eit->second.previousName.clear();
-            return;
-        }
-        // Parse shorthand
-        std::istringstream iss(aIt->second);
-        std::string tok;
-        int numIdx = 0;
-        while (iss >> tok) {
-            char* end = nullptr;
-            float numVal = std::strtof(tok.c_str(), &end);
-            bool isNumber = (end != tok.c_str());
-            std::string suffix = isNumber ? std::string(end) : "";
-            bool isTime = isNumber && (suffix == "s" || suffix == "ms");
-            bool isBareNumber = isNumber && suffix.empty();
-            if (isTime) {
-                if (numIdx == 0) { durStr = tok; ++numIdx; }
-                else { delayStr = tok; ++numIdx; }
-            } else if (isBareNumber && numVal > 0) {
-                // Bare number = iteration count (e.g. "3")
-                iterStr = tok;
-            } else if (tok == "ease" || tok == "linear" || tok == "ease-in" ||
-                       tok == "ease-out" || tok == "ease-in-out") {
-                timingStr = tok;
-            } else if (tok == "infinite") {
-                iterStr = tok;
-            } else if (tok == "alternate" || tok == "alternate-reverse" ||
-                       tok == "reverse" || tok == "normal") {
-                directionStr = tok;
-            } else if (tok == "none" || tok == "forwards" || tok == "backwards" || tok == "both") {
-                fillModeStr = tok;
-            } else if (tok == "paused" || tok == "running") {
-                playStateStr = tok;
-            } else {
-                animName = tok;
+    // The cascade expands the `animation` shorthand into its longhands
+    // (htmlayout expandShorthand), so the longhands are the whole story. Each
+    // is a comma list with one entry per animation layer; this manager runs
+    // one animation per element, the first layer's.
+    auto firstLayer = [](const std::string& s) {
+        int depth = 0;
+        for (size_t i = 0; i < s.size(); ++i) {
+            if (s[i] == '(') ++depth;
+            else if (s[i] == ')') --depth;
+            else if (s[i] == ',' && depth == 0) {
+                std::string head = s.substr(0, i);
+                while (!head.empty() && head.back() == ' ') head.pop_back();
+                return head;
             }
         }
-        if (animName.empty()) return;
+        return s;
+    };
+    auto longhand = [&](const char* prop) -> std::string {
+        auto it = newStyle.find(prop);
+        return it != newStyle.end() ? firstLayer(it->second) : std::string();
+    };
+    animName = longhand("animation-name");
+    if (animName.empty() || animName == "none") {
+        // animation-name has been cleared. Reset the previousName memo so
+        // that re-applying the same animation later (e.g. by re-adding a
+        // class) triggers a fresh start, per CSS Animations §4.2.
+        auto eit = elements_.find(elem);
+        if (eit != elements_.end()) eit->second.previousName.clear();
+        return;
     }
+    durStr = longhand("animation-duration");
+    timingStr = longhand("animation-timing-function");
+    delayStr = longhand("animation-delay");
+    iterStr = longhand("animation-iteration-count");
+    directionStr = longhand("animation-direction");
+    fillModeStr = longhand("animation-fill-mode");
+    playStateStr = longhand("animation-play-state");
 
     auto& ea = elements_[elem];
 
