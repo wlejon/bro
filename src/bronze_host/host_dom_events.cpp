@@ -285,17 +285,21 @@ Value buildEventValue(dom::Event& e, const LiveEventPtr& live) {
                 return ev::undefined();
             });
 
+        // The getter outlives the dispatch — a handler can keep the
+        // DataTransfer and read it later — so it holds copies, never the
+        // event: a `drag` captured here was read after it was freed.
+        const bool dropHasFiles = !drag->files().empty();
         dt.accessor(
             "types",
-            [drag](Value, std::span<const Value>) {
+            [dropHasFiles, dropText = drag->dataText()](Value, std::span<const Value>) {
                 std::vector<std::string> typeList;
-                if (!drag->files().empty()) typeList.push_back("Files");
+                if (dropHasFiles) typeList.push_back("Files");
                 for (const auto& [k, v] : g_dragSession.data) {
                     if (std::find(typeList.begin(), typeList.end(), k) == typeList.end()) {
                         typeList.push_back(k);
                     }
                 }
-                if (typeList.empty() && !drag->dataText().empty()) {
+                if (typeList.empty() && !dropText.empty()) {
                     typeList.push_back("text/plain");
                 }
                 return hostArrayOf(typeList.size(), [&typeList](size_t i) {
