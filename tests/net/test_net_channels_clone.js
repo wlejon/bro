@@ -146,12 +146,18 @@ expectTypeError(() => bro.net.sendClone(connA, { a: 1 }, []), 'transfer-list opt
     for (let i = 0; i < 100; i++) deep = { next: deep };
     expectTypeError(() => bro.net.sendClone(connA, deep), 'over-deep nesting');
 }
-// Circular references are not supported: the cycle re-descends until the same
-// depth cap trips, surfacing as the depth TypeError rather than a hang/crash.
+// Circular references clone as cycles (a repeated object is sent as a
+// reference), and an object reached twice arrives as one object.
 {
+    received = [];
     const a = { name: 'a' };
     a.self = a;
-    expectTypeError(() => bro.net.sendClone(connA, a), 'circular reference');
+    a.pair = [a.self, { shared: a }];
+    assert(bro.net.sendClone(connA, a) === true, 'circular clone accepted');
+    assert(waitFor(1, 5000), 'circular clone received');
+    const r = received[0].data;
+    assert(r.self === r && r.pair[0] === r && r.pair[1].shared === r,
+           'the cycle resolves to the received object');
 }
 // Depth just under the limit still round-trips (regression guard for the cap
 // being lowered accidentally).

@@ -5,9 +5,7 @@
 //
 // The serializer caps recursion at depth 64 (both writer and reader) and
 // rejects functions with a TypeError instead of silently cloning them as {}.
-// Circular references are NOT supported: the cycle re-descends until the depth
-// cap trips, so they surface as the depth TypeError — never a hang or a stack
-// overflow.
+// Circular references clone as cycles, as structuredClone's do.
 
 const workerPath = '../workers/worker_clone_errors.js';
 const w = new Worker(workerPath);
@@ -60,22 +58,16 @@ expectTypeError(() => w.postMessage({ arr: [1, { deep: () => 1 }] }), 'function 
 }
 
 // =========================================================================
-// main -> worker: circular references trip the depth cap (not supported)
+// Circular references are not errors: they clone as cycles (the memory
+// sends a repeat as a reference), and never trip the depth cap
+// (test_postmessage_object_identity covers identity in full).
 // =========================================================================
-{
-    const a = { name: 'a' };
-    a.self = a;
-    const err = expectTypeError(() => w.postMessage(a), 'self-referencing object');
-    assert(/deeply nested/.test(err.message),
-           'circular ref surfaces as the depth TypeError (' + err.message + ')');
-}
 {
     const x = { name: 'x' }, y = { name: 'y', x };
     x.y = y;  // two-object cycle
-    expectTypeError(() => w.postMessage({ x }), 'two-object cycle');
-    const arr = [1, 2];
-    arr.push(arr);
-    expectTypeError(() => w.postMessage(arr), 'self-referencing array');
+    w.postMessage({ cmd: 'echo', payload: x });
+    const r = waitReply('two-object cycle echo');
+    assert(r.echo.y.x === r.echo && r.echo.y.name === 'y', 'a two-object cycle round-trips');
 }
 
 // =========================================================================
