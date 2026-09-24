@@ -57,10 +57,9 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // before it is a style one.
     //
     // cmHeight is the largest expression in either stage. The layer stack is
-    // unrolled six ways because GL 3.3 cannot index a sampler array
-    // dynamically, and with the cubic height filter on
-    // (clipmap_cubic_height.glsl) each of those six carries eight texture
-    // fetches instead of one. Written out, these five taps were five inlined
+    // unrolled six ways, and with the cubic height filter on
+    // (clipmap_cubic_height.glsl) each of those six carries up to two 16-texel
+    // gathers instead of one fetch. Written out, these five taps were five inlined
     // copies of all of that — and the driver has to optimise and register-
     // allocate every copy. Measured on one driver, the cubic variant of this
     // program took THIRTY-TWO SECONDS to build, which a shipped app pays as a

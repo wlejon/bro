@@ -28,7 +28,7 @@ uniform float u_roughnessGrass;
 uniform vec3  u_albedoForest;  // L0 canopy albedo (linear) for the forest tint
 uniform float u_forestTint;    // 0..1 strength of the forest recolour (0 = off)
 
-// u_surface / u_surfA / u_surfB and the rest of the surface stack are declared
+// u_surfaces / u_surfA / u_surfB and the rest of the surface stack are declared
 // in clipmap_common.glsl, which is prepended to this chunk. Channels here are
 // R=biome, G=moisture, B=temperature.
 

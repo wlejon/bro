@@ -8,12 +8,18 @@
 // two stages or the surface the fragment shades stops being the surface the
 // vertex built.
 
-uniform sampler2D u_h0;   // finest layer ... u_h5 coarsest
-uniform sampler2D u_h1;
-uniform sampler2D u_h2;
-uniform sampler2D u_h3;
-uniform sampler2D u_h4;
-uniform sampler2D u_h5;
+// Every height layer is a slice of ONE texture array: slice 0 the finest, slice
+// 5 the coarsest. One sampler unit for the whole stack — a fragment stage may
+// hold as few as 16 active samplers (macOS's GL 4.1 core reports exactly that)
+// and the mesh pipeline has spent most of them before this chunk declares
+// anything; six sampler2Ds per kind did not fit.
+//
+// Slices share one shape, u_heightsSize, which is the largest layer's plus any
+// wrap padding; each layer occupies its slice's low corner at its own size
+// (u_lNb below). cmHeightCoord turns a layer's uv into the array's. What the
+// padding holds, and why: ClipmapTerrain's "Texture arrays" section.
+uniform sampler2DArray u_heights;
+uniform vec2 u_heightsSize;   // (width, height) of every slice, in texels
 
 // Per layer: a = (originX, originZ, metresPerCell), b = (width, height) in
 // texels. b.x < 0.5 marks the slot absent (its blend weight is forced to 0).
@@ -26,8 +32,8 @@ uniform vec3 u_l5a;  uniform vec2 u_l5b;
 
 // Per layer, 1 = periodic in X. A global equirectangular chart has no east-west
 // edge: column 0 continues column W-1, and the bake closes that join over a
-// 1500 km band so the two sides are the same geography. The sampler is GL_REPEAT
-// in S for such a layer, and its coverage ramp must not fade in X either — a
+// 1500 km band so the two sides are the same geography. The layer's uv wraps in
+// X (cmHeightCoord), and its coverage ramp must not fade in X either — a
 // fade there would reopen, as a hole, exactly the seam the bake closed.
 //
 // SIX layers, two names. The custom-uniform plumbing carries at most four
@@ -299,22 +305,61 @@ float cmEdge(vec2 uv, float wrapX) {
     return (wrapX > 0.5) ? v : min(v, min(uv.x, 1.0 - uv.x));
 }
 
-// One layer's height sample. `w` is its blend weight: 1 well inside the
-// layer's extent, smoothly 0 at (and outside) its edge.
-float cmLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, float cDesired,
+// A layer's uv (0..1 over its own texels) -> u_heights coordinates, for a read
+// at `lod`.
+//
+// X is where the layer's wrap mode now lives, since the array has one sampler
+// for six layers. The array is GL_REPEAT in S and its padding carries each
+// layer's own continuation (ClipmapTerrain::buildHeightSlice), so:
+//   * a periodic layer folds uv.x into [0,1) and lets the padding — or, for a
+//     layer as wide as the slice, GL_REPEAT itself — supply the texels either
+//     side of the seam. The fold is not the texel-wide discontinuity a bare
+//     fract() on a clamped texture is: the texels on both sides of it are the
+//     layer's own continuation, at every level the padding spans.
+//   * a clamped layer clamps uv.x half a texel inside its edge AT THE COARSER
+//     LEVEL THE READ BLENDS TOWARD, which is where a clamp-to-edge sampler
+//     would have pinned it; beyond that the repeat would wrap the far edge in.
+// Y is clamped the same way on every layer (latitude never wraps). The slice's
+// padding rows repeat the layer's last row, but that is not what a clamp-to-
+// edge read at level k returns past the edge — that is the last level-k texel,
+// the mean of 2^k rows, where the padding's mip is the last row's alone — so
+// the read is kept off the padding rather than trusting it.
+//
+// At a fractional lod the clamp is the coarser level's half texel, so within
+// that band of an edge the finer level is held a little further in than a
+// sampler would have held it. Every finer layer is inside its coverage ramp
+// there; the coarsest reads its own edge band either way.
+vec2 cmHeightCoord(vec2 uv, vec2 sz, float lod, float wrapX) {
+    vec2 lo = 0.5 * exp2(ceil(lod)) / sz;
+    vec2 hi = max(1.0 - lo, lo);
+    uv.y = clamp(uv.y, lo.y, hi.y);
+    uv.x = (wrapX > 0.5) ? fract(uv.x) : clamp(uv.x, lo.x, hi.x);
+    return uv * sz / u_heightsSize;
+}
+
+// The mip level a read of this layer is taken at: fractional, so the layer is
+// sampled at whatever footprint this part of the ring actually needs, clamped
+// at 0 — there is no level finer than 0 — and at the layer's OWN coarsest
+// level, floor(log2(max(w, h))), which is where GL stopped a texture of the
+// layer's size. A layer smaller than its slice has more levels than that in
+// the array, and past its own last one they average in the padding: its 1x1
+// mean would become a blend with its edge columns. Stopping where GL stopped
+// keeps the far field reading exactly the mean it always read.
+float cmLayerLod(vec3 a, vec2 sz, float cDesired) {
+    return clamp(log2(cDesired / a.z), 0.0, floor(log2(max(sz.x, sz.y))));
+}
+
+// One layer's height sample. `slice` is the layer's index; `w` is its blend
+// weight: 1 well inside the layer's extent, smoothly 0 at (and outside) its
+// edge.
+float cmLayer(float slice, vec3 a, vec2 sz, vec2 wxz, float cDesired,
               float wrapX, out float w) {
     if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return 0.0; }
     vec2 t  = (wxz - a.xy) / a.z;      // position in texels; texel 0 at origin
     vec2 uv = (t + 0.5) / sz;          // -> texel centres
-    // Fractional mip: the layer is sampled at whatever footprint this part of
-    // the ring actually needs. Clamped at 0 — there is no level finer than 0.
-    float lod = max(log2(cDesired / a.z), 0.0);
-    // uv.x is deliberately left outside [0,1] when the layer wraps. GL_REPEAT
-    // resolves it, and it does so ACROSS MIP LEVELS, which a fract() here could
-    // not: a manual wrap leaves a texel-wide discontinuity that every coarser
-    // level widens into a visible meridian.
+    float lod = cmLayerLod(a, sz, cDesired);
     w = smoothstep(0.0, CM_FADE, cmEdge(uv, wrapX));
-    return textureLod(tex, uv, lod).r;
+    return textureLod(u_heights, vec3(cmHeightCoord(uv, sz, lod, wrapX), slice), lod).r;
 }
 
 // A layer's coverage weight alone, without the texture fetch — the same ramp
@@ -372,22 +417,23 @@ float cmDataFloor(vec2 wxz, float cDesired, out float bandLimited) {
 
 // Multi-scale height. Start from the COARSEST present layer (assumed to cover
 // everything), then blend each finer layer in by its coverage weight.
-// GL 3.3 cannot index a sampler array dynamically, so this is unrolled.
+// Unrolled: each layer's parameters are uniforms of their own name, and the
+// fixed ladder is what cmDataFloor and cmSurface mirror mix for mix.
 float cmHeight(vec2 wxz, float cDesired) {
     float n = u_layerCount;
     float w = 0.0;
     float h = 0.0;
-    if      (n > 5.5) h = cmLayer(u_h5, u_l5a, u_l5b, wxz, cDesired, u_lWrapX45.y, w);
-    else if (n > 4.5) h = cmLayer(u_h4, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w);
-    else if (n > 3.5) h = cmLayer(u_h3, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w);
-    else if (n > 2.5) h = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w);
-    else if (n > 1.5) h = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w);
-    else if (n > 0.5) h = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w);
-    if (n > 5.5) { float s = cmLayer(u_h4, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w); h = mix(h, s, w * cmLayerFade(u_l4a.z, cDesired)); }
-    if (n > 4.5) { float s = cmLayer(u_h3, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w); h = mix(h, s, w * cmLayerFade(u_l3a.z, cDesired)); }
-    if (n > 3.5) { float s = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w); h = mix(h, s, w * cmLayerFade(u_l2a.z, cDesired)); }
-    if (n > 2.5) { float s = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w); h = mix(h, s, w * cmLayerFade(u_l1a.z, cDesired)); }
-    if (n > 1.5) { float s = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w); h = mix(h, s, w * cmLayerFade(u_l0a.z, cDesired)); }
+    if      (n > 5.5) h = cmLayer(5.0, u_l5a, u_l5b, wxz, cDesired, u_lWrapX45.y, w);
+    else if (n > 4.5) h = cmLayer(4.0, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w);
+    else if (n > 3.5) h = cmLayer(3.0, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w);
+    else if (n > 2.5) h = cmLayer(2.0, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w);
+    else if (n > 1.5) h = cmLayer(1.0, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w);
+    else if (n > 0.5) h = cmLayer(0.0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w);
+    if (n > 5.5) { float s = cmLayer(4.0, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w); h = mix(h, s, w * cmLayerFade(u_l4a.z, cDesired)); }
+    if (n > 4.5) { float s = cmLayer(3.0, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w); h = mix(h, s, w * cmLayerFade(u_l3a.z, cDesired)); }
+    if (n > 3.5) { float s = cmLayer(2.0, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w); h = mix(h, s, w * cmLayerFade(u_l2a.z, cDesired)); }
+    if (n > 2.5) { float s = cmLayer(1.0, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w); h = mix(h, s, w * cmLayerFade(u_l1a.z, cDesired)); }
+    if (n > 1.5) { float s = cmLayer(0.0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w); h = mix(h, s, w * cmLayerFade(u_l0a.z, cDesired)); }
     return u_seaLevel + u_heightScale * h;
 }
 
@@ -403,12 +449,12 @@ float cmHeight(vec2 wxz, float cDesired) {
 // The blend is LINEAR PER CHANNEL. That is correct for a quantity and wrong for
 // an ID — see ClipmapTerrain::setSurfaceLayer for the argument. Do not put a
 // biome index in here and expect it to survive a fade.
-uniform sampler2D u_surface;    // finest ... u_surface5 coarsest
-uniform sampler2D u_surface1;
-uniform sampler2D u_surface2;
-uniform sampler2D u_surface3;
-uniform sampler2D u_surface4;
-uniform sampler2D u_surface5;
+//
+// One texture array for the stack, like the heights: slice i is layer i, every
+// slice u_surfacesSize, each layer in its slice's low corner. No padding is
+// needed — the reads below clamp to the layer's own texel centres.
+uniform sampler2DArray u_surfaces;
+uniform vec2  u_surfacesSize;   // (width, height) of every slice, in texels
 uniform vec3  u_surfA;          // (originX, originZ, metresPerCell) per layer
 uniform vec2  u_surfB;          // (width, height) in texels
 uniform vec3  u_surf1A;
@@ -428,17 +474,17 @@ uniform float u_surfaceCount;
 // blurred hardness or moisture reads as a soft gradient, which is harmless,
 // whereas the height stack's mip choice exists to stop the DISPLACEMENT
 // aliasing and has no counterpart here.
-vec4 cmSurfLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, out float w) {
+vec4 cmSurfLayer(float slice, vec3 a, vec2 sz, vec2 wxz, out float w) {
     if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return vec4(0.0); }
     vec2 uv = ((wxz - a.xy) / a.z + 0.5) / sz;
     w = smoothstep(0.0, CM_FADE, cmEdge(uv, 0.0));
     vec2 half_ = 0.5 / sz;
-    return texture(tex, clamp(uv, half_, 1.0 - half_));
+    return texture(u_surfaces, vec3(clamp(uv, half_, 1.0 - half_) * sz / u_surfacesSize, slice));
 }
 
 // Multi-scale control channels. Same shape as cmHeight: start from the coarsest
 // present layer, blend each finer one in by its coverage weight. Unrolled for
-// the same reason — GL 3.3 cannot index a sampler array dynamically.
+// the same reason.
 //
 // `present` comes back 0 when the stack is empty, so a caller can keep its
 // existing "no surface layer" branch rather than inventing a neutral value here
@@ -454,17 +500,17 @@ vec4 cmSurface(vec2 wxz, float cDesired, out float present) {
     if (n < 0.5) return vec4(0.0);
     float w = 0.0;
     vec4 s = vec4(0.0);
-    if      (n > 5.5) s = cmSurfLayer(u_surface5, u_surf5A, u_surf5B, wxz, w);
-    else if (n > 4.5) s = cmSurfLayer(u_surface4, u_surf4A, u_surf4B, wxz, w);
-    else if (n > 3.5) s = cmSurfLayer(u_surface3, u_surf3A, u_surf3B, wxz, w);
-    else if (n > 2.5) s = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w);
-    else if (n > 1.5) s = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w);
-    else              s = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w);
-    if (n > 5.5) { vec4 f = cmSurfLayer(u_surface4, u_surf4A, u_surf4B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf4A.z, cDesired)); }
-    if (n > 4.5) { vec4 f = cmSurfLayer(u_surface3, u_surf3A, u_surf3B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf3A.z, cDesired)); }
-    if (n > 3.5) { vec4 f = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf2A.z, cDesired)); }
-    if (n > 2.5) { vec4 f = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf1A.z, cDesired)); }
-    if (n > 1.5) { vec4 f = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w * cmLayerFade(u_surfA.z, cDesired)); }
+    if      (n > 5.5) s = cmSurfLayer(5.0, u_surf5A, u_surf5B, wxz, w);
+    else if (n > 4.5) s = cmSurfLayer(4.0, u_surf4A, u_surf4B, wxz, w);
+    else if (n > 3.5) s = cmSurfLayer(3.0, u_surf3A, u_surf3B, wxz, w);
+    else if (n > 2.5) s = cmSurfLayer(2.0, u_surf2A, u_surf2B, wxz, w);
+    else if (n > 1.5) s = cmSurfLayer(1.0, u_surf1A, u_surf1B, wxz, w);
+    else              s = cmSurfLayer(0.0, u_surfA,  u_surfB,  wxz, w);
+    if (n > 5.5) { vec4 f = cmSurfLayer(4.0, u_surf4A, u_surf4B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf4A.z, cDesired)); }
+    if (n > 4.5) { vec4 f = cmSurfLayer(3.0, u_surf3A, u_surf3B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf3A.z, cDesired)); }
+    if (n > 3.5) { vec4 f = cmSurfLayer(2.0, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf2A.z, cDesired)); }
+    if (n > 2.5) { vec4 f = cmSurfLayer(1.0, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf1A.z, cDesired)); }
+    if (n > 1.5) { vec4 f = cmSurfLayer(0.0, u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w * cmLayerFade(u_surfA.z, cDesired)); }
     return s;
 }
 

@@ -127,9 +127,9 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
         // its five normal taps.
         //
         // Short version: cmSurface inlines cmHeight, cmHeight is the largest
-        // expression in either stage (six layer instantiations, because GL 3.3
-        // cannot index a sampler array dynamically, each carrying eight
-        // texture fetches instead of one when cubicHeight is on), and the three
+        // expression in either stage (six unrolled layer instantiations, each
+        // carrying up to two 16-texel gathers instead of one fetch when
+        // cubicHeight is on), and the three
         // parity cases spelled out were EIGHT such call sites — of which
         // exactly one branch ever runs, while the driver optimises and
         // register-allocates all eight regardless. This block was the single

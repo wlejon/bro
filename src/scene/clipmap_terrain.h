@@ -194,11 +194,10 @@ public:
     // Six data slots, height and surface alike. Four was the width of the
     // first world that used this; a planet-scale stack wants a fine window, a
     // regional chart, a continental chart and a global base with room left
-    // over, and GL is not the constraint — the shader's unrolled chains grow
-    // by two branches and the sampler budget (2 slots per layer on top of the
-    // mesh pipeline's 10 fixed units) is queried, not assumed. The
-    // constructor logs if the driver reports fewer combined units than the
-    // clipmap needs; every desktop driver since 2010 reports 32+.
+    // over. The layers are slices of two texture arrays (u_heights,
+    // u_surfaces), so the count costs no sampler units: the clipmap takes two
+    // on top of the mesh pipeline's fixed ones however many layers it holds,
+    // which is what keeps it under a fragment stage's 16-sampler floor.
     static constexpr int kMaxLayers = 6;
 
     /// Builds the ring mesh and installs the node + custom shader immediately.
@@ -212,9 +211,9 @@ public:
 
     /// Install (or, with data == nullptr, release) height layer `index`.
     /// Layers are finest-first and expected to be contiguous from 0; an absent
-    /// slot in the middle simply contributes zero weight. A released slot keeps
-    /// a 1x1 placeholder texture bound so the sampler is never unbound, but
-    /// drops the pixel data.
+    /// slot in the middle simply contributes zero weight. A released slot's
+    /// slice goes back to zeros (the array stays bound, so the sampler is
+    /// never unbound) and its pixel data is dropped.
     /// `wrapX` marks the layer periodic in X — a global equirectangular chart,
     /// where column 0 continues column W-1. Such a layer is sampled GL_REPEAT
     /// in S (still clamped in T, since latitude does not wrap) and its coverage
@@ -539,6 +538,16 @@ private:
     int surfaceLayerCount_ = 0;
 
     void pushSurfaceUniforms();
+
+    // Texture-array upkeep (clipmap_terrain.cpp, "Texture arrays"). `changed`
+    // is the layer whose slice must be re-staged, or -1 for none; a shape
+    // change re-stages every present layer regardless.
+    void heightArrayShape(int& W, int& H, int& depth) const;
+    void buildHeightSlice(int index, int W, int H, std::vector<float>& out) const;
+    void syncHeightArray(int changed);
+    void syncSurfaceArray(int changed);
+    int heightW_ = 0, heightH_ = 0, heightDepth_ = 0;
+    int surfW_ = 0, surfH_ = 0, surfDepth_ = 0;
 };
 
 } // namespace bro::scene

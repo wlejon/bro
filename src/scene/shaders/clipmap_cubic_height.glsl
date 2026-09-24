@@ -77,12 +77,22 @@
 //
 //     tM = uv * sM - 0.5
 //
-// and everything else — floor, fraction, the four weights, the two paired
-// fetch placements — is the level-0 derivation with sM in place of size0 and
-// textureLod(..., M) in place of texture(). Two bilinear fetches per axis,
-// four in 2D, the filter unit delivering each pair's weights exactly, and the
-// two half-sums s0, s1 bounded below by 1/6 for every fraction so neither
-// placement divides by anything near zero.
+// and everything else — floor, fraction, the four weights — is the level-0
+// derivation with sM in place of size0.
+//
+// THE FETCHES ARE A GATHER, NOT THE PAIRED-BILINEAR TRICK. The level-0 surface
+// filter (clipmap_cubic.glsl) takes two bilinear fetches per axis, placed so
+// the filter unit's own lerp delivers each pair of B-spline weights. That
+// relies on the hardware's sub-texel fraction being exact, which GL leaves to
+// the implementation (8 bits is common), and at mip levels above 0 it is not
+// close enough everywhere: on macOS the paired placement at level 1 and 2 came
+// back with jumps of 15/255 in the shaded normal, the cubic scoring 4x WORSE
+// than the bilinear it replaces (kink energy 21 vs 5), where an exact 16-tap
+// gather of the same weights is smooth. So each level reads its 4x4 texels with
+// texelFetch and weights them in the shader: sixteen unfiltered fetches, exact
+// on every implementation, and — because the indices are clamped or wrapped
+// by hand exactly as the wrap modes would have — no reliance on the sampler at
+// all.
 //
 // ---------------------------------------------------------------------------
 // THE FRACTION. lod is fractional, and a filter has to answer for the part
@@ -90,12 +100,12 @@
 //
 //   (A) FILTER AT BOTH BRACKETING LEVELS AND BLEND (what this file does).
 //       Evaluate the cubic at M = floor(lod) and at M+1, blend by the
-//       fraction. Eight fetches. It is the cubic analogue of what trilinear
+//       fraction. Two gathers. It is the cubic analogue of what trilinear
 //       already does, so it inherits trilinear's continuity in scale, and
 //       within either level it is the exact C2 reconstruction.
 //
-//   (B) FILTER AT ONE RESOLVED LEVEL — round lod, or floor it, and take four
-//       fetches there. Half the cost, and rejected: the reconstruction then
+//   (B) FILTER AT ONE RESOLVED LEVEL — round lod, or floor it, and gather
+//       there once. Half the cost, and rejected: the reconstruction then
 //       JUMPS by cubic_M - cubic_{M+1} wherever the rounding changes, which is
 //       the full difference between two mip levels — the local high-frequency
 //       energy of the height field at that scale, metres to tens of metres on
@@ -105,7 +115,7 @@
 //       the shading at once. It would reintroduce, in the name of removing a
 //       discontinuity, exactly the LOD pop that the fractional mip exists to
 //       remove. The error is not small and it is not subtle; it is the reason
-//       the eight fetches are worth paying where they are paid at all.
+//       the second gather is worth paying where it is paid at all.
 //
 //   A third option — four fetches spaced at level lod but taken with a
 //   FRACTIONAL textureLod — is worth naming because it looks like it works and
@@ -179,16 +189,16 @@
 // to the bit, so the chain below computes those weights FIRST — both are pure
 // arithmetic, cmCoverage takes no fetch — and skips the reconstruction whose
 // result it would discard. Bit-identical to computing it, and it is what bounds
-// the orbital case: two or three layers live out of six, four fetches where lod
-// is clamped at 0 and eight where it is not, instead of six layers times eight
+// the orbital case: two or three layers live out of six, one gather where lod
+// is clamped at 0 and two where it is not, instead of six layers times two
 // unconditionally.
 //
 // ---------------------------------------------------------------------------
 // EDGES. The four fetches reach from texel i-1 to i+2 at the sampled level, up
 // to two texels outside the [0.5, sM-0.5] band of texel centres, and are
 // CLAMPED into it one axis at a time — except in X on a layer marked wrapX,
-// where there is no edge to clamp to and GL_REPEAT resolves the coordinate
-// across mip levels exactly as it does for cmLayer's single fetch. So this path
+// where there is no edge to clamp to and the slice's periodic padding resolves
+// the coordinate exactly as it does for cmLayer's single fetch. So this path
 // reads no texel the bilinear path could not, on either kind of layer. Inside
 // the last texel the filter degrades continuously toward the border value; it
 // never fetches outside the layer and cannot invent data beyond it. That
@@ -238,47 +248,61 @@ float cmTexelPixels(vec2 wxz, float texel, float cDesired) {
 const float CM_CUBIC_PX_ON  = 32.0;
 const float CM_CUBIC_PX_OFF = 128.0;
 
-// One cubic-B-spline sample of a MIPMAPPED texture AT INTEGER LEVEL `lvl`, in
-// four bilinear fetches taken at that level. `size0` is the level-0 size in
-// texels; the level's own size is derived by GL's rule. `wrapX` > 0.5 leaves
-// the X coordinate unclamped for GL_REPEAT to resolve.
+// One cubic-B-spline sample of one slice of a MIPMAPPED texture array AT
+// INTEGER LEVEL `lvl`: the 4x4 texels around the point at that level, gathered
+// with texelFetch and weighted here (see THE FETCHES ARE A GATHER above). `uv`
+// is over the layer's own texels and `size0` is the layer's level-0 size; the
+// layer occupies the low corner of slices `texSize0` in size (the clipmap's
+// u_heights layout: pass u_heights, the layer index, u_lNb and u_heightsSize).
+// The level's own size is the ARRAY's, derived by GL's rule — that is the grid
+// the taps land on. Indices are clamped to the layer's own texels at that
+// level, as GL_CLAMP_TO_EDGE on a texture of the layer's size would; `wrapX`
+// > 0.5 folds X into the layer's period and wraps X indices around the slice
+// instead, where its periodic padding carries the continuation — the same
+// texels the sampler's GL_REPEAT hands cmLayer's single fetch.
 //
 // Public: an app composing its own material chunk, or thresholding on a
 // channel of its own, can put that read through this and get the same surface
 // the sheet is drawn from.
-vec4 cmCubicTapLevel(sampler2D tex, vec2 uv, vec2 size0, float lvl, float wrapX) {
-    vec2 sz = max(floor(size0 * exp2(-lvl)), vec2(1.0));
+vec4 cmCubicTapLevel(sampler2DArray tex, float slice, vec2 uv, vec2 size0,
+                     vec2 texSize0, float lvl, float wrapX) {
+    vec2 sz = max(floor(texSize0 * exp2(-lvl)), vec2(1.0));
+    vec2 k  = size0 / texSize0;          // the layer's extent, in slice uv
+    if (wrapX > 0.5) uv.x = fract(uv.x);
 
-    vec2 tc = uv * sz - 0.5;
+    vec2 tc = uv * k * sz - 0.5;
     vec2 f  = fract(tc);
-    tc = floor(tc);
+    ivec2 i0 = ivec2(floor(tc));
 
     vec2 f2 = f * f;
     vec2 f3 = f2 * f;
-    vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
-    vec2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
-    vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
-    vec2 w3 = f3 / 6.0;
+    vec2 w[4];
+    w[0] = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+    w[1] = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+    w[2] = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+    w[3] = f3 / 6.0;
 
-    vec2 s0 = w0 + w1;
-    vec2 s1 = w2 + w3;
-    vec2 t0 = (tc - 1.0 + w1 / s0 + 0.5) / sz;
-    vec2 t1 = (tc + 1.0 + w3 / s1 + 0.5) / sz;
+    // The layer's last texel at this level. k * sz is fractional when the
+    // layer's size does not divide down with the slice's; the texel that holds
+    // its edge is then partly padding, which carries the edge value anyway.
+    ivec2 last = max(ivec2(ceil(k * sz - 1e-3)) - 1, ivec2(0));
+    int period = int(sz.x);
+    int lv = int(lvl);
+    int sl = int(slice + 0.5);
 
-    // Clamped into the band of texel centres AT THIS LEVEL. X is left alone on
-    // a periodic layer — there is no east-west edge there, and cmLayer relies
-    // on GL_REPEAT resolving it across levels for the same reason.
-    vec2 lo = 0.5 / sz;
-    vec2 hi = 1.0 - lo;
-    vec2 c0 = clamp(t0, lo, hi);
-    vec2 c1 = clamp(t1, lo, hi);
-    t0 = vec2((wrapX > 0.5) ? t0.x : c0.x, c0.y);
-    t1 = vec2((wrapX > 0.5) ? t1.x : c1.x, c1.y);
-
-    return mix(mix(textureLod(tex, vec2(t0.x, t0.y), lvl),
-                   textureLod(tex, vec2(t1.x, t0.y), lvl), s1.x),
-               mix(textureLod(tex, vec2(t0.x, t1.y), lvl),
-                   textureLod(tex, vec2(t1.x, t1.y), lvl), s1.x), s1.y);
+    vec4 acc = vec4(0.0);
+    for (int j = 0; j < 4; ++j) {
+        int y = clamp(i0.y + j - 1, 0, last.y);
+        vec4 row = vec4(0.0);
+        for (int i = 0; i < 4; ++i) {
+            int x = i0.x + i - 1;
+            x = (wrapX > 0.5) ? ((x % period) + period) % period
+                              : clamp(x, 0, last.x);
+            row += w[i].x * texelFetch(tex, ivec3(x, y, sl), lv);
+        }
+        acc += w[j].y * row;
+    }
+    return acc;
 }
 
 // The same at a FRACTIONAL level: the cubic at both bracketing levels, blended
@@ -286,12 +310,12 @@ vec4 cmCubicTapLevel(sampler2D tex, vec2 uv, vec2 size0, float lvl, float wrapX)
 // as C2 within a level. At lod 0 — which is the whole of the near field, and
 // the coarsest layer at orbital altitudes where the pixel is still finer than
 // its texel — the fraction is an exact 0 and this is four fetches, not eight.
-float cmCubicHeightAt(sampler2D tex, vec2 uv, vec2 size0, float lod, float wrapX) {
+float cmCubicHeightAt(float slice, vec2 uv, vec2 size0, float lod, float wrapX) {
     float m0 = floor(lod);
     float fr = lod - m0;
-    float a  = cmCubicTapLevel(tex, uv, size0, m0, wrapX).r;
+    float a  = cmCubicTapLevel(u_heights, slice, uv, size0, u_heightsSize, m0, wrapX).r;
     if (fr <= 0.0) return a;
-    float b  = cmCubicTapLevel(tex, uv, size0, m0 + 1.0, wrapX).r;
+    float b  = cmCubicTapLevel(u_heights, slice, uv, size0, u_heightsSize, m0 + 1.0, wrapX).r;
     return mix(a, b, fr * fr * (3.0 - 2.0 * fr));
 }
 
@@ -300,20 +324,22 @@ float cmCubicHeightAt(sampler2D tex, vec2 uv, vec2 size0, float lod, float wrapX
 // expressions cmLayer uses, so where the gate is 0 this returns cmLayer's own
 // value to the bit — the off-regime is not an approximation of the old path,
 // it is the old path.
-float cmLayerCubic(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, float cDesired,
+float cmLayerCubic(float slice, vec3 a, vec2 sz, vec2 wxz, float cDesired,
                    float wrapX, out float w) {
     if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return 0.0; }
     vec2 t  = (wxz - a.xy) / a.z;
     vec2 uv = (t + 0.5) / sz;
-    float lod = max(log2(cDesired / a.z), 0.0);
+    float lod = cmLayerLod(a, sz, cDesired);
     w = smoothstep(0.0, CM_FADE, cmEdge(uv, wrapX));
 
     float g = 1.0 - smoothstep(CM_CUBIC_PX_ON, CM_CUBIC_PX_OFF,
                                cmTexelPixels(wxz, a.z, cDesired));
-    if (g <= 0.0) return textureLod(tex, uv, lod).r;
-    float cub = cmCubicHeightAt(tex, uv, sz, lod, wrapX);
+    // The bilinear half is cmLayer's own fetch, coordinate and all, so the
+    // off-regime stays the old path to the bit.
+    if (g <= 0.0) return textureLod(u_heights, vec3(cmHeightCoord(uv, sz, lod, wrapX), slice), lod).r;
+    float cub = cmCubicHeightAt(slice, uv, sz, lod, wrapX);
     if (g >= 1.0) return cub;
-    return mix(textureLod(tex, uv, lod).r, cub, g);
+    return mix(textureLod(u_heights, vec3(cmHeightCoord(uv, sz, lod, wrapX), slice), lod).r, cub, g);
 }
 
 // cmHeight's chain, layer for layer and mix for mix, reading through the cubic
@@ -334,17 +360,17 @@ float cmHeightCubic(vec2 wxz, float cDesired) {
     float n = u_layerCount;
     float w = 0.0;
     float h = 0.0;
-    if      (n > 5.5) h = cmLayerCubic(u_h5, u_l5a, u_l5b, wxz, cDesired, u_lWrapX45.y, w);
-    else if (n > 4.5) h = cmLayerCubic(u_h4, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w);
-    else if (n > 3.5) h = cmLayerCubic(u_h3, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w);
-    else if (n > 2.5) h = cmLayerCubic(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w);
-    else if (n > 1.5) h = cmLayerCubic(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w);
-    else if (n > 0.5) h = cmLayerCubic(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w);
-    if (n > 5.5 && cmCoverage(u_l4a, u_l4b, wxz, u_lWrapX45.x) * cmLayerFade(u_l4a.z, cDesired) > 0.0) { float s = cmLayerCubic(u_h4, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w); h = mix(h, s, w * cmLayerFade(u_l4a.z, cDesired)); }
-    if (n > 4.5 && cmCoverage(u_l3a, u_l3b, wxz, u_lWrapX.w) * cmLayerFade(u_l3a.z, cDesired) > 0.0) { float s = cmLayerCubic(u_h3, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w); h = mix(h, s, w * cmLayerFade(u_l3a.z, cDesired)); }
-    if (n > 3.5 && cmCoverage(u_l2a, u_l2b, wxz, u_lWrapX.z) * cmLayerFade(u_l2a.z, cDesired) > 0.0) { float s = cmLayerCubic(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w); h = mix(h, s, w * cmLayerFade(u_l2a.z, cDesired)); }
-    if (n > 2.5 && cmCoverage(u_l1a, u_l1b, wxz, u_lWrapX.y) * cmLayerFade(u_l1a.z, cDesired) > 0.0) { float s = cmLayerCubic(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w); h = mix(h, s, w * cmLayerFade(u_l1a.z, cDesired)); }
-    if (n > 1.5 && cmCoverage(u_l0a, u_l0b, wxz, u_lWrapX.x) * cmLayerFade(u_l0a.z, cDesired) > 0.0) { float s = cmLayerCubic(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w); h = mix(h, s, w * cmLayerFade(u_l0a.z, cDesired)); }
+    if      (n > 5.5) h = cmLayerCubic(5.0, u_l5a, u_l5b, wxz, cDesired, u_lWrapX45.y, w);
+    else if (n > 4.5) h = cmLayerCubic(4.0, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w);
+    else if (n > 3.5) h = cmLayerCubic(3.0, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w);
+    else if (n > 2.5) h = cmLayerCubic(2.0, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w);
+    else if (n > 1.5) h = cmLayerCubic(1.0, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w);
+    else if (n > 0.5) h = cmLayerCubic(0.0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w);
+    if (n > 5.5 && cmCoverage(u_l4a, u_l4b, wxz, u_lWrapX45.x) * cmLayerFade(u_l4a.z, cDesired) > 0.0) { float s = cmLayerCubic(4.0, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w); h = mix(h, s, w * cmLayerFade(u_l4a.z, cDesired)); }
+    if (n > 4.5 && cmCoverage(u_l3a, u_l3b, wxz, u_lWrapX.w) * cmLayerFade(u_l3a.z, cDesired) > 0.0) { float s = cmLayerCubic(3.0, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w); h = mix(h, s, w * cmLayerFade(u_l3a.z, cDesired)); }
+    if (n > 3.5 && cmCoverage(u_l2a, u_l2b, wxz, u_lWrapX.z) * cmLayerFade(u_l2a.z, cDesired) > 0.0) { float s = cmLayerCubic(2.0, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w); h = mix(h, s, w * cmLayerFade(u_l2a.z, cDesired)); }
+    if (n > 2.5 && cmCoverage(u_l1a, u_l1b, wxz, u_lWrapX.y) * cmLayerFade(u_l1a.z, cDesired) > 0.0) { float s = cmLayerCubic(1.0, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w); h = mix(h, s, w * cmLayerFade(u_l1a.z, cDesired)); }
+    if (n > 1.5 && cmCoverage(u_l0a, u_l0b, wxz, u_lWrapX.x) * cmLayerFade(u_l0a.z, cDesired) > 0.0) { float s = cmLayerCubic(0.0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w); h = mix(h, s, w * cmLayerFade(u_l0a.z, cDesired)); }
     return u_seaLevel + u_heightScale * h;
 }
 

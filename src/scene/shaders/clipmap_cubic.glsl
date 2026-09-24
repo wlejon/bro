@@ -147,8 +147,11 @@
 //     log2(metresPerCell) CONSTANTS by the same coverage weights. There is no
 //     reconstruction in it to make continuous.
 
-// One cubic-B-spline sample of a NON-MIPMAPPED texture, in four bilinear
-// fetches. `size` is the texture's dimensions in texels. Public: an app
+// One cubic-B-spline sample of one slice of a NON-MIPMAPPED texture array, in
+// four bilinear fetches. `uv` is over the layer's own texels, `size` is the
+// layer's dimensions in texels and `texSize` the array slice's, of which the
+// layer occupies the low corner (the clipmap's u_surfaces layout: pass
+// u_surfaces, the layer index, and u_surfNB / u_surfacesSize). Public: an app
 // composing its own material chunk may use it on any channel it thresholds.
 //
 // Do not hand this a texture whose sampler will minify through a mip chain —
@@ -156,7 +159,7 @@
 // inside one sampled texel and return plain trilinear. The clipmap's surface
 // layers are uploaded WITHOUT mipmaps (ClipmapTerrain::setSurfaceLayer) and
 // are sampled at level 0 by construction, which is what makes this exact here.
-vec4 cmCubicTap(sampler2D tex, vec2 uv, vec2 size) {
+vec4 cmCubicTap(sampler2DArray tex, float slice, vec2 uv, vec2 size, vec2 texSize) {
     vec2 tc = uv * size - 0.5;
     vec2 f  = fract(tc);
     tc = floor(tc);
@@ -181,24 +184,28 @@ vec4 cmCubicTap(sampler2D tex, vec2 uv, vec2 size) {
     // one could not.
     vec2 lo = 0.5 / size;
     vec2 hi = 1.0 - lo;
-    t0 = clamp(t0, lo, hi);
-    t1 = clamp(t1, lo, hi);
+    // Scaled into the slice only now: the layer's texel grid IS the slice's
+    // at level 0, so every tap lands on the texel it did in a texture of the
+    // layer's own size.
+    vec2 k = size / texSize;
+    t0 = clamp(t0, lo, hi) * k;
+    t1 = clamp(t1, lo, hi) * k;
 
-    return mix(mix(texture(tex, vec2(t0.x, t0.y)),
-                   texture(tex, vec2(t1.x, t0.y)), s1.x),
-               mix(texture(tex, vec2(t0.x, t1.y)),
-                   texture(tex, vec2(t1.x, t1.y)), s1.x), s1.y);
+    return mix(mix(texture(tex, vec3(t0.x, t0.y, slice)),
+                   texture(tex, vec3(t1.x, t0.y, slice)), s1.x),
+               mix(texture(tex, vec3(t0.x, t1.y, slice)),
+                   texture(tex, vec3(t1.x, t1.y, slice)), s1.x), s1.y);
 }
 
 // cmSurfLayer with the single bilinear fetch replaced by the four-tap cubic.
 // The coverage weight is computed by the identical expression, so the two
 // paths agree to the bit about where a layer stops — only what is read inside
 // it differs.
-vec4 cmSurfLayerCubic(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, out float w) {
+vec4 cmSurfLayerCubic(float slice, vec3 a, vec2 sz, vec2 wxz, out float w) {
     if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return vec4(0.0); }
     vec2 uv = ((wxz - a.xy) / a.z + 0.5) / sz;
     w = smoothstep(0.0, CM_FADE, cmEdge(uv, 0.0));
-    return cmCubicTap(tex, uv, sz);
+    return cmCubicTap(u_surfaces, slice, uv, sz, u_surfacesSize);
 }
 
 // cmSurface's chain, layer for layer and mix for mix, reading through the
@@ -212,17 +219,17 @@ vec4 cmSurfaceCubic(vec2 wxz, float cDesired, out float present) {
     if (n < 0.5) return vec4(0.0);
     float w = 0.0;
     vec4 s = vec4(0.0);
-    if      (n > 5.5) s = cmSurfLayerCubic(u_surface5, u_surf5A, u_surf5B, wxz, w);
-    else if (n > 4.5) s = cmSurfLayerCubic(u_surface4, u_surf4A, u_surf4B, wxz, w);
-    else if (n > 3.5) s = cmSurfLayerCubic(u_surface3, u_surf3A, u_surf3B, wxz, w);
-    else if (n > 2.5) s = cmSurfLayerCubic(u_surface2, u_surf2A, u_surf2B, wxz, w);
-    else if (n > 1.5) s = cmSurfLayerCubic(u_surface1, u_surf1A, u_surf1B, wxz, w);
-    else              s = cmSurfLayerCubic(u_surface,  u_surfA,  u_surfB,  wxz, w);
-    if (n > 5.5) { vec4 f = cmSurfLayerCubic(u_surface4, u_surf4A, u_surf4B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf4A.z, cDesired)); }
-    if (n > 4.5) { vec4 f = cmSurfLayerCubic(u_surface3, u_surf3A, u_surf3B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf3A.z, cDesired)); }
-    if (n > 3.5) { vec4 f = cmSurfLayerCubic(u_surface2, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf2A.z, cDesired)); }
-    if (n > 2.5) { vec4 f = cmSurfLayerCubic(u_surface1, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf1A.z, cDesired)); }
-    if (n > 1.5) { vec4 f = cmSurfLayerCubic(u_surface,  u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w * cmLayerFade(u_surfA.z,  cDesired)); }
+    if      (n > 5.5) s = cmSurfLayerCubic(5.0, u_surf5A, u_surf5B, wxz, w);
+    else if (n > 4.5) s = cmSurfLayerCubic(4.0, u_surf4A, u_surf4B, wxz, w);
+    else if (n > 3.5) s = cmSurfLayerCubic(3.0, u_surf3A, u_surf3B, wxz, w);
+    else if (n > 2.5) s = cmSurfLayerCubic(2.0, u_surf2A, u_surf2B, wxz, w);
+    else if (n > 1.5) s = cmSurfLayerCubic(1.0, u_surf1A, u_surf1B, wxz, w);
+    else              s = cmSurfLayerCubic(0.0, u_surfA,  u_surfB,  wxz, w);
+    if (n > 5.5) { vec4 f = cmSurfLayerCubic(4.0, u_surf4A, u_surf4B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf4A.z, cDesired)); }
+    if (n > 4.5) { vec4 f = cmSurfLayerCubic(3.0, u_surf3A, u_surf3B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf3A.z, cDesired)); }
+    if (n > 3.5) { vec4 f = cmSurfLayerCubic(2.0, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf2A.z, cDesired)); }
+    if (n > 2.5) { vec4 f = cmSurfLayerCubic(1.0, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf1A.z, cDesired)); }
+    if (n > 1.5) { vec4 f = cmSurfLayerCubic(0.0, u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w * cmLayerFade(u_surfA.z,  cDesired)); }
     return s;
 }
 

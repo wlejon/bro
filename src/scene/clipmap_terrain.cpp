@@ -27,17 +27,22 @@ const char* kLayerA[ClipmapTerrain::kMaxLayers] =
     {"u_l0a", "u_l1a", "u_l2a", "u_l3a", "u_l4a", "u_l5a"};
 const char* kLayerB[ClipmapTerrain::kMaxLayers] =
     {"u_l0b", "u_l1b", "u_l2b", "u_l3b", "u_l4b", "u_l5b"};
-const char* kLayerTex[ClipmapTerrain::kMaxLayers] =
-    {"u_h0", "u_h1", "u_h2", "u_h3", "u_h4", "u_h5"};
+// Every height layer is one slice of ONE sampler2DArray, and every surface
+// layer one slice of another — two sampler units for the whole stack. It used
+// to be a sampler2D per layer per kind, twelve units on top of the mesh
+// pipeline's own, and a fragment stage is allowed as few as 16 active
+// samplers: macOS's GL 4.1 core reports exactly 16, so the program failed to
+// link there ("fragment shader uses 23 samplers") and the terrain never drew.
+// Slice i is layer i; the per-layer uniforms below carry each layer's own
+// extent within its slice. Layout and padding: buildHeightSlice().
+const char* kHeightTex  = "u_heights";
+const char* kHeightSize = "u_heightsSize";
+const char* kSurfTex    = "u_surfaces";
+const char* kSurfSize   = "u_surfacesSize";
 
 // Surface (control-channel) layers. Layer 0 keeps the unnumbered names it has
-// always had — `u_surface`, `u_surfA`, `u_surfB` — because shaders written
-// against the single-layer API read them by name, and renaming for symmetry
-// would break every one of them to no visual end. The stack extends upward from
-// there.
-const char* kSurfTex[ClipmapTerrain::kMaxLayers] =
-    {"u_surface", "u_surface1", "u_surface2", "u_surface3", "u_surface4",
-     "u_surface5"};
+// always had — `u_surfA`, `u_surfB` — because shaders written against the
+// single-layer API read them by name. The stack extends upward from there.
 const char* kSurfA[ClipmapTerrain::kMaxLayers] =
     {"u_surfA", "u_surf1A", "u_surf2A", "u_surf3A", "u_surf4A", "u_surf5A"};
 const char* kSurfB[ClipmapTerrain::kMaxLayers] =
@@ -89,13 +94,11 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     node_->setCastsShadow(false);
     node_->setReceivesShadow(true);
 
-    // The clipmap owns two sampler slots per layer (height + surface) on top
-    // of the mesh pipeline's 10 fixed units. The budget is queried from the
-    // driver, never assumed — GL 3.3's floor is 16 combined units, desktop
-    // drivers report 32..192 — so a machine below the need is worth one loud
-    // line at construction rather than a silent black layer later.
+    // The clipmap owns two sampler slots — the height array and the surface
+    // array — on top of the mesh pipeline's fixed units. The combined budget
+    // is queried from the driver, never assumed.
     {
-        const int need = 2 * kMaxLayers;
+        const int need = 2;
         const int have = MeshNode::maxUserTextures();
         if (have > 0 && have < need) {
             LOG_WARN("clipmap: driver reports %d user sampler slots, the "
@@ -105,17 +108,12 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
         }
     }
 
-    // Every sampler slot is bound from the start with a 1x1 zero placeholder.
-    // An unbound sampler unit is undefined behaviour to read, and the shader
-    // evaluates all the branches' texture fetches on some drivers regardless
-    // of u_layerCount.
-    const float zero = 0.0f;
-    for (int i = 0; i < kMaxLayers; ++i)
-        node_->setCustomShaderTexture(kLayerTex[i], 1, 1, &zero, true);
-
-    const float zero3[3] = {0.0f, 0.0f, 0.0f};
-    for (int i = 0; i < kMaxLayers; ++i)
-        node_->setCustomShaderTexture(kSurfTex[i], 1, 1, zero3, false, false, true, 3);
+    // Both arrays are bound from the start as one 1x1 zero slice. An unbound
+    // sampler unit is undefined behaviour to read, and the shader evaluates
+    // all the branches' texture fetches on some drivers regardless of
+    // u_layerCount.
+    syncHeightArray(-1);
+    syncSurfaceArray(-1);
 
     pushStaticUniforms();
     pushLayerUniforms();
@@ -374,10 +372,9 @@ void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
     ClipmapLayer& l = layers_[index];
 
     if (!data || width <= 0 || height <= 0) {
+        // The slice goes back to zeros (or the array shrinks past it) in
+        // syncHeightArray below; the sampler itself stays bound.
         l = ClipmapLayer{};
-        // Keep the sampler bound (see the constructor) but drop the pixels.
-        const float zero = 0.0f;
-        node_->setCustomShaderTexture(kLayerTex[index], 1, 1, &zero, true);
     } else {
         l.data.assign(data, data + static_cast<size_t>(width) * height);
         l.width = width;
@@ -388,17 +385,13 @@ void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
         l.wrapX = wrapX;
         l.bandLimited = bandLimited;
         l.present = true;
-        // mipmap: true is load-bearing, not an optimisation. The shader samples
-        // at a FRACTIONAL textureLod level; without a chain GL clamps every lod
-        // to 0 and the whole distance-continuous filtering story collapses.
-        // repeat in S, clamp in T: longitude is periodic, latitude is not.
-        node_->setCustomShaderTexture(kLayerTex[index], width, height,
-                                      l.data.data(), true, wrapX, wrapX);
     }
 
     layerCount_ = 0;
     for (int i = 0; i < kMaxLayers; ++i)
         if (layers_[i].present) layerCount_ = i + 1;
+
+    syncHeightArray(index);
 
     recomputeHeightRange();
     pushLayerUniforms();
@@ -1041,8 +1034,6 @@ void ClipmapTerrain::setSurfaceLayer(int index, const float* data, int width, in
         s.data.clear();
         s.width = s.height = 0;
         s.present = false;
-        const float zero4[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        node_->setCustomShaderTexture(kSurfTex[index], 1, 1, zero4, false, false, true, 4);
     } else {
         // Stored RGBA whatever the caller supplied, so the sampler's swizzle is
         // one thing and not two. A three-channel caller gets w = 0: GL would
@@ -1063,8 +1054,6 @@ void ClipmapTerrain::setSurfaceLayer(int index, const float* data, int width, in
         s.originZ = originZ;
         s.metresPerCell = metresPerCell;
         s.present = true;
-        node_->setCustomShaderTexture(kSurfTex[index], width, height, s.data.data(),
-                                      false, false, true, 4);
     }
 
     // Contiguous run from 0, exactly like the height stack: the shader's blend
@@ -1073,6 +1062,7 @@ void ClipmapTerrain::setSurfaceLayer(int index, const float* data, int width, in
     surfaceLayerCount_ = 0;
     for (int i = 0; i < kMaxLayers && surf_[i].present; ++i) surfaceLayerCount_ = i + 1;
 
+    syncSurfaceArray(index);
     pushSurfaceUniforms();
 }
 
@@ -1096,6 +1086,161 @@ void ClipmapTerrain::pushSurfaceUniforms() {
     // stack; `u_surfaceCount` is what a multi-layer shader reads.
     const float present = surf_[0].present ? 1.0f : 0.0f;
     node_->setCustomShaderUniform("u_surfPresent", 1, &present);
+}
+
+// ---------------------------------------------------------------------------
+// Texture arrays
+// ---------------------------------------------------------------------------
+//
+// An array has ONE slice shape, and the layers do not: a fine window, a
+// regional chart and a global base are whatever sizes their data came in. So
+// every slice is the largest layer's size (plus the wrap padding below) and a
+// smaller layer occupies its slice's low corner; the shader scales each
+// layer's uv by (its size / the slice size) — see cmHeightCoord. Layers of one
+// size, the usual pyramid, cost nothing extra; a mixed stack pays for the
+// padding, which is the price of fitting under the sampler limit at all.
+//
+// WHAT THE PADDING HOLDS. The height array is mipmapped and sampled at a
+// fractional lod, so a level-k texel near a layer's edge averages 2^k base
+// texels, some of them padding — the padding therefore has to hold what the
+// old per-layer texture's wrap mode would have produced there:
+//
+//   rows      clamp in T, as before. Rows past the layer repeat its last row;
+//             rows before it are reached through GL_CLAMP_TO_EDGE.
+//   columns   the array is GL_REPEAT in S, so a column left of the layer is
+//             read from the slice's far right end. The padding's first half
+//             therefore continues the layer's RIGHT edge and its second half
+//             leads into its LEFT edge: for a periodic (wrapX) layer that is
+//             the periodic continuation both ways, for a clamped layer the
+//             edge column repeated. A clamped layer additionally clamps its
+//             uv in the shader, so nothing far outside it wraps around.
+//
+// A periodic layer as wide as the slice needs no padding at all — GL_REPEAT
+// is its own wrap, exactly as before. A narrower one needs enough
+// continuation that its footprint at the levels it is read at stays inside
+// it: wrapPad() below, an eighth of the layer's width, never under 16 texels.
+namespace {
+
+int wrapPad(int w) { return std::max(16, (w + 7) / 8); }
+
+}  // namespace
+
+void ClipmapTerrain::heightArrayShape(int& W, int& H, int& depth) const {
+    W = 1;
+    H = 1;
+    depth = std::max(layerCount_, 1);
+    for (int i = 0; i < kMaxLayers; ++i) {
+        const ClipmapLayer& l = layers_[i];
+        if (!l.present) continue;
+        W = std::max(W, l.width);
+        H = std::max(H, l.height);
+    }
+    // A periodic layer narrower than the slice needs its continuation to fit;
+    // widening the slice can then leave a periodic layer that USED to be the
+    // full width narrower than it, so run to a fixed point (at most a couple
+    // of passes: W only grows, and only to one of kMaxLayers candidates).
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (int i = 0; i < kMaxLayers; ++i) {
+            const ClipmapLayer& l = layers_[i];
+            if (!l.present || !l.wrapX || l.width == W) continue;
+            const int need = l.width + wrapPad(l.width);
+            if (need > W) { W = need; grew = true; }
+        }
+    }
+}
+
+void ClipmapTerrain::buildHeightSlice(int index, int W, int H,
+                                      std::vector<float>& out) const {
+    const ClipmapLayer& l = layers_[index];
+    out.assign(static_cast<size_t>(W) * H, 0.0f);
+    if (!l.present) return;
+    const int w = l.width, h = l.height;
+    const int pad = W - w;
+    const int firstHalf = (pad + 1) / 2;
+    // Source column for every slice column, computed once.
+    std::vector<int> col(static_cast<size_t>(W));
+    for (int x = 0; x < W; ++x) {
+        if (x < w) { col[x] = x; continue; }
+        const int k = x - w;
+        if (k < firstHalf) {
+            col[x] = l.wrapX ? (k % w) : (w - 1);            // continues the right edge
+        } else {
+            const int j = W - x;                              // 1 = the column left of 0
+            col[x] = l.wrapX ? ((w - (j % w)) % w) : 0;       // leads into the left edge
+        }
+    }
+    for (int y = 0; y < H; ++y) {
+        const float* src = l.data.data() + static_cast<size_t>(std::min(y, h - 1)) * w;
+        float* dst = out.data() + static_cast<size_t>(y) * W;
+        for (int x = 0; x < W; ++x) dst[x] = src[col[x]];
+    }
+}
+
+void ClipmapTerrain::syncHeightArray(int changed) {
+    if (!liveNode()) return;
+    int W, H, depth;
+    heightArrayShape(W, H, depth);
+    const bool realloc = W != heightW_ || H != heightH_ || depth != heightDepth_;
+    // mipmap: true is load-bearing, not an optimisation. The shader samples at
+    // a FRACTIONAL textureLod level; without a chain GL clamps every lod to 0
+    // and the whole distance-continuous filtering story collapses. Repeat in S
+    // (see the padding note above), clamp in T: latitude does not wrap.
+    node_->setCustomShaderTextureArray(kHeightTex, W, H, depth, 1,
+                                       /*mipmap=*/true, /*repeat=*/true,
+                                       /*clampT=*/true);
+    std::vector<float> slice;
+    for (int i = 0; i < depth; ++i) {
+        // A reallocation zero-fills every slice nobody stages, so only the
+        // present layers need writing then; otherwise only the one that
+        // changed does — a streamed fine window re-uploads its own slice, not
+        // the stack.
+        if (realloc ? !layers_[i].present : i != changed) continue;
+        buildHeightSlice(i, W, H, slice);
+        node_->setCustomShaderTextureArrayLayer(kHeightTex, i, slice.data());
+    }
+    heightW_ = W;
+    heightH_ = H;
+    heightDepth_ = depth;
+    const float size[2] = {static_cast<float>(W), static_cast<float>(H)};
+    node_->setCustomShaderUniform(kHeightSize, 2, size);
+}
+
+void ClipmapTerrain::syncSurfaceArray(int changed) {
+    if (!liveNode()) return;
+    // No padding here: surface layers are not mipmapped, and the shader clamps
+    // every read to the band of the layer's own texel centres (cmSurfLayer,
+    // cmCubicTap), where a bilinear fetch takes nothing from a neighbour.
+    int W = 1, H = 1, depth = 1;
+    for (int i = 0; i < kMaxLayers; ++i) {
+        const SurfaceLayer& s = surf_[i];
+        if (!s.present) continue;
+        W = std::max(W, s.width);
+        H = std::max(H, s.height);
+        depth = i + 1;
+    }
+    const bool realloc = W != surfW_ || H != surfH_ || depth != surfDepth_;
+    node_->setCustomShaderTextureArray(kSurfTex, W, H, depth, 4,
+                                       /*mipmap=*/false, /*repeat=*/false,
+                                       /*clampT=*/true);
+    std::vector<float> slice;
+    for (int i = 0; i < depth; ++i) {
+        const SurfaceLayer& s = surf_[i];
+        if (realloc ? !s.present : i != changed) continue;
+        slice.assign(static_cast<size_t>(W) * H * 4, 0.0f);
+        if (s.present) {
+            for (int y = 0; y < s.height; ++y)
+                std::copy_n(s.data.data() + static_cast<size_t>(y) * s.width * 4,
+                            static_cast<size_t>(s.width) * 4,
+                            slice.data() + static_cast<size_t>(y) * W * 4);
+        }
+        node_->setCustomShaderTextureArrayLayer(kSurfTex, i, slice.data());
+    }
+    surfW_ = W;
+    surfH_ = H;
+    surfDepth_ = depth;
+    const float size[2] = {static_cast<float>(W), static_cast<float>(H)};
+    node_->setCustomShaderUniform(kSurfSize, 2, size);
 }
 
 } // namespace bro::scene

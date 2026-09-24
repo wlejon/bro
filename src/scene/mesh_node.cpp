@@ -257,6 +257,10 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
         // is what keeps the flush order (full first, then subs) equivalent to
         // the order the setters were called in.
         t.subUpdates.clear();
+        // A 2D upload onto what was an array slot turns it back into a plain
+        // 2D slot; the flush sees the target change and recreates the name.
+        t.sliceUpdates.clear();
+        t.layers = 0;
         if (release) {
             t.data.clear();
             t.data.shrink_to_fit();
@@ -302,6 +306,11 @@ bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
     }
     for (auto& t : userTextures_) {
         if (t.name != name) continue;
+        if (t.layers > 0) {
+            LOG_WARN("updateShaderTexture('%s'): an array slot takes whole "
+                     "slices, not sub-rects (ignored)", name.c_str());
+            return false;
+        }
         // Bound against the staged extent, not the GL texture: the slot may
         // not have flushed yet, and t.w/t.h are the dimensions it WILL have.
         if (t.w <= 0 || t.h <= 0) {
@@ -327,6 +336,92 @@ bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
     return false;
 }
 
+bool MeshNode::setCustomShaderTextureArray(const std::string& name,
+                                           int width, int height, int layers,
+                                           int channels, bool mipmap,
+                                           bool repeat, bool clampT) {
+    const bool release = (width <= 0 || height <= 0 || layers <= 0);
+    if (!release && (channels < 1 || channels > 4)) return false;
+    for (auto& t : userTextures_) {
+        if (t.name != name) continue;
+        if (release) {
+            t.data.clear();
+            t.data.shrink_to_fit();
+            t.subUpdates.clear();
+            t.sliceUpdates.clear();
+            t.w = t.h = 0;
+            t.layers = 0;
+            t.channels = 1;
+            t.dirty = true;
+            bumpChangeGeneration();
+            return true;
+        }
+        const bool sameShape = t.layers == layers && t.w == width &&
+                               t.h == height && t.channels == channels &&
+                               t.mipmap == mipmap && t.repeat == repeat &&
+                               t.clampT == clampT;
+        if (sameShape) return true;   // storage and written slices survive
+        t.data.clear();
+        t.data.shrink_to_fit();
+        t.subUpdates.clear();
+        t.sliceUpdates.clear();       // written against the old shape
+        t.w = width;
+        t.h = height;
+        t.layers = layers;
+        t.channels = channels;
+        t.mipmap = mipmap;
+        t.repeat = repeat;
+        t.clampT = clampT;
+        t.dirty = true;
+        bumpChangeGeneration();
+        return true;
+    }
+    if (release) return true;
+    if ((int)userTextures_.size() >= maxUserTextures()) return false;
+    UserTexture t;
+    t.name = name;
+    t.w = width;
+    t.h = height;
+    t.layers = layers;
+    t.channels = channels;
+    t.mipmap = mipmap;
+    t.repeat = repeat;
+    t.clampT = clampT;
+    t.dirty = true;
+    userTextures_.push_back(std::move(t));
+    bumpChangeGeneration();
+    return true;
+}
+
+bool MeshNode::setCustomShaderTextureArrayLayer(const std::string& name,
+                                                int layer, const float* data) {
+    for (auto& t : userTextures_) {
+        if (t.name != name) continue;
+        if (t.layers <= 0 || !data || layer < 0 || layer >= t.layers) {
+            LOG_WARN("setShaderTextureArrayLayer('%s', %d): not an array slot "
+                     "of that depth, or no data (ignored)", name.c_str(), layer);
+            return false;
+        }
+        const size_t n = (size_t)t.w * (size_t)t.h * (size_t)t.channels;
+        // A later write to the same slice supersedes an earlier staged one.
+        for (auto& u : t.sliceUpdates) {
+            if (u.layer != layer) continue;
+            u.data.assign(data, data + n);
+            bumpChangeGeneration();
+            return true;
+        }
+        UserTexture::SliceUpdate u;
+        u.layer = layer;
+        u.data.assign(data, data + n);
+        t.sliceUpdates.push_back(std::move(u));
+        bumpChangeGeneration();
+        return true;
+    }
+    LOG_WARN("setShaderTextureArrayLayer('%s'): no such sampler slot (ignored)",
+             name.c_str());
+    return false;
+}
+
 void MeshNode::clearCustomShaderTexture(const std::string& name) {
     setCustomShaderTexture(name, 0, 0, nullptr);
 }
@@ -337,25 +432,97 @@ void MeshNode::clearCustomShaderTexture(const std::string& name) {
 // a raymarcher needs. Minification is trilinear only for mipmapped slots;
 // a mip-filtered min filter without a chain would render the texture
 // incomplete and sample black.
+static void userTexFormat(int channels, GLint& internalFormat, GLenum& format) {
+    internalFormat = GL_R32F;
+    format = GL_RED;
+    if (channels == 2) {
+        internalFormat = GL_RG32F;
+        format = GL_RG;
+    } else if (channels == 3) {
+        internalFormat = GL_RGB32F;
+        format = GL_RGB;
+    } else if (channels == 4) {
+        internalFormat = GL_RGBA32F;
+        format = GL_RGBA;
+    }
+}
+
+// The array form of flushUserTex. `dirty` (re)allocates the whole array and
+// zero-fills every slice nobody staged — reallocated storage is undefined, and
+// a sampler reading garbage from an empty slot is exactly what the clipmap's
+// placeholder slices exist to prevent.
+static void flushUserTexArray(MeshNode::UserTexture& t) {
+    if (!t.dirty && t.sliceUpdates.empty()) return;
+    if (t.w <= 0 || t.h <= 0 || t.layers <= 0) {
+        if (t.tex) glDeleteTextures(1, &t.tex);
+        t.tex = 0;
+        t.texIsArray = false;
+        t.sliceUpdates.clear();
+        t.dirty = false;
+        return;
+    }
+    GLint internalFormat;
+    GLenum format;
+    userTexFormat(t.channels, internalFormat, format);
+    if (t.dirty && t.tex) {
+        // A slot's target is fixed at its first bind; storage of a new shape
+        // (or a 2D slot turned array) needs a fresh name.
+        glDeleteTextures(1, &t.tex);
+        t.tex = 0;
+    }
+    if (!t.tex) glGenTextures(1, &t.tex);
+    t.texIsArray = true;
+    glBindTexture(GL_TEXTURE_2D_ARRAY, t.tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (t.dirty) {
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, internalFormat, t.w, t.h,
+                     t.layers, 0, format, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER,
+                        t.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        const GLint wrap = t.repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, wrap);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T,
+                        t.clampT ? GL_CLAMP_TO_EDGE : wrap);
+        std::vector<float> zeros;
+        for (int l = 0; l < t.layers; ++l) {
+            bool staged = false;
+            for (const auto& u : t.sliceUpdates) staged |= (u.layer == l);
+            if (staged) continue;
+            if (zeros.empty())
+                zeros.assign((size_t)t.w * (size_t)t.h * (size_t)t.channels, 0.0f);
+            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, l, t.w, t.h, 1,
+                            format, GL_FLOAT, zeros.data());
+        }
+    }
+    for (const auto& u : t.sliceUpdates) {
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, u.layer, t.w, t.h, 1,
+                        format, GL_FLOAT, u.data.data());
+    }
+    if (t.mipmap) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    t.sliceUpdates.clear();
+    t.dirty = false;
+}
+
 static void flushUserTex(MeshNode::UserTexture& t) {
+    if (t.layers > 0) { flushUserTexArray(t); return; }
     if (!t.dirty && t.subUpdates.empty()) return;
+    // An array slot turned back into 2D: its GL name is a 2D_ARRAY and cannot
+    // be rebound as GL_TEXTURE_2D.
+    if (t.tex && t.texIsArray) {
+        glDeleteTextures(1, &t.tex);
+        t.tex = 0;
+        t.texIsArray = false;
+    }
     if (t.w > 0 && t.h > 0 && (t.dirty ? !t.data.empty() : t.tex != 0)) {
         if (!t.tex) glGenTextures(1, &t.tex);
         glBindTexture(GL_TEXTURE_2D, t.tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-        GLint internalFormat = GL_R32F;
-        GLenum format = GL_RED;
-        if (t.channels == 2) {
-            internalFormat = GL_RG32F;
-            format = GL_RG;
-        } else if (t.channels == 3) {
-            internalFormat = GL_RGB32F;
-            format = GL_RGB;
-        } else if (t.channels == 4) {
-            internalFormat = GL_RGBA32F;
-            format = GL_RGBA;
-        }
+        GLint internalFormat;
+        GLenum format;
+        userTexFormat(t.channels, internalFormat, format);
 
         if (t.dirty) {
             glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, t.w, t.h, 0,

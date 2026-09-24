@@ -342,7 +342,7 @@ void SceneRenderer::uploadUserTextures(
         }
         if (loc < 0) { ++unit; continue; }  // not declared — silent, like GL
         glActiveTexture(GL_TEXTURE0 + unit);
-        glBindTexture(GL_TEXTURE_2D, t.tex);
+        glBindTexture(t.texIsArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D, t.tex);
         glUniform1i(loc, unit);
         ++unit;
     }

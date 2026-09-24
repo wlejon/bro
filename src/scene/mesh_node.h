@@ -392,7 +392,24 @@ public:
         // each pole. Clamping there is not an approximation — the pole rows are
         // single-valued, so the clamped value is the correct one.
         bool clampT = false;
+        // Array slots (setCustomShaderTextureArray): > 0 makes the slot a
+        // GL_TEXTURE_2D_ARRAY of `layers` slices, each w x h, bound to a
+        // sampler2DArray. One unit however many slices — which is the point:
+        // a fragment stage may hold as few as 16 active samplers (macOS GL
+        // 4.1 core reports exactly that), and ten of them are the mesh
+        // pipeline's before a node adds any.
+        int layers = 0;
+        // A staged whole-slice write (glTexSubImage3D at the next flush). An
+        // array slot never keeps a CPU image of its own; `dirty` on an array
+        // means "(re)allocate", after which every slice not staged here is
+        // zero-filled rather than left undefined.
+        struct SliceUpdate {
+            int layer = 0;
+            std::vector<float> data;
+        };
+        std::vector<SliceUpdate> sliceUpdates;
         GLuint tex = 0;
+        bool texIsArray = false;     // `tex` was created as a 2D_ARRAY
         std::vector<SubUpdate> subUpdates;
     };
 
@@ -419,6 +436,28 @@ public:
     /// checked against the CPU-side extent, which outlives the staged bytes.
     bool updateCustomShaderTexture(const std::string& name, int x, int y,
                                    int width, int height, const float* data);
+    /// Stage (or, with a zero extent or layers <= 0, release) an ARRAY
+    /// sampler slot: `layers` slices of width x height x channels floats,
+    /// read in GLSL through a sampler2DArray of the same name. Allocation
+    /// alone — the slices start as zeros; fill them with
+    /// setCustomShaderTextureArrayLayer. Calling this again with the same
+    /// shape keeps the GL storage and every slice already written; a new shape
+    /// reallocates and zeroes. `repeat` is GL_REPEAT in S, and in T too unless
+    /// `clampT`. A mipmapped slot regenerates its chain for every slice at the
+    /// flush after any slice write — GL has no per-slice regenerate.
+    /// Same budget rule as setCustomShaderTexture: false only when a NEW name
+    /// would exceed maxUserTextures().
+    bool setCustomShaderTextureArray(const std::string& name, int width,
+                                     int height, int layers, int channels,
+                                     bool mipmap = false, bool repeat = false,
+                                     bool clampT = false);
+
+    /// Stage one whole slice of an existing array slot: width*height*channels
+    /// floats at the slot's shape. Refused (false, logged) for an unknown or
+    /// non-array slot or a layer out of range. Safe off the GL thread.
+    bool setCustomShaderTextureArrayLayer(const std::string& name, int layer,
+                                          const float* data);
+
     /// Release the named slot (GL delete happens at the next flush).
     void clearCustomShaderTexture(const std::string& name);
     const std::vector<UserTexture>& customShaderTextures() const {
