@@ -216,7 +216,7 @@ void Engine::performAppReload() {
 
     document_.reset();
     documentHeight_ = 0.0f;
-    scrollY_ = 0.0f;
+    setViewportScrollY(0.0f);   // document_ is gone; nothing to mirror into
     wheelResidualY_ = 0.0f;
     selectionDragging_ = false;
     selectionPastThreshold_ = false;

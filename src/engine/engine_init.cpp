@@ -404,10 +404,7 @@ void Engine::initAppRealm() {
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(viewportWidth_),
                                  static_cast<float>(contentHeight()), *textMetrics_);
-        if (document_->documentElement()) {
-            auto& box = document_->documentElement()->layoutBox();
-            documentHeight_ = box.marginBox().height;
-        }
+        updateDocumentHeight();
         syncIframes();
     }
 

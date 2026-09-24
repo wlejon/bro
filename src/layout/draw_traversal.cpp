@@ -438,33 +438,7 @@ bool isPositioned(const htmlayout::css::ComputedStyle& s) {
     return p == "relative" || p == "absolute" || p == "fixed" || p == "sticky";
 }
 
-// Does this element become the containing block for fixed-position
-// descendants? CSS Transforms §3 and CSS Containment: a transform, a filter, a
-// backdrop-filter, a perspective, a will-change naming one of those, or paint
-// containment all take the job away from the viewport.
-bool establishesFixedContainingBlock(dom::Element* elem) {
-    if (!elem) return false;
-    auto& s = elem->computedStyle();
-    auto has = [&s](const char* prop) {
-        auto it = s.find(prop);
-        return it != s.end() && !it->second.empty() && it->second != "none";
-    };
-    if (has("transform") || has("filter") || has("backdrop-filter") ||
-        has("perspective") || has("rotate") || has("scale") || has("translate"))
-        return true;
-    auto wc = s.find("will-change");
-    if (wc != s.end() && (wc->second.find("transform") != std::string::npos ||
-                          wc->second.find("filter") != std::string::npos ||
-                          wc->second.find("perspective") != std::string::npos))
-        return true;
-    auto ct = s.find("contain");
-    if (ct != s.end() && (ct->second.find("paint") != std::string::npos ||
-                          ct->second.find("layout") != std::string::npos ||
-                          ct->second.find("strict") != std::string::npos ||
-                          ct->second.find("content") != std::string::npos))
-        return true;
-    return false;
-}
+using dom::establishesFixedContainingBlock;
 
 // The containing block an absolutely positioned box is laid out and clipped
 // against: its nearest positioned ancestor. Null means the initial containing
@@ -4046,6 +4020,15 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         if (inTopLayer) {
             topLayerOffset(elem, offX, offY);
             currentSC = &topHolder;
+        } else if (elem != root) {
+            // A fixed box against the viewport does not scroll: not with its
+            // scrolling ancestors, not with the document. It sits where
+            // layout put it, in draw space (viewport space) — the offset a
+            // fixed top-layer box gets.
+            auto posIt = style.find("position");
+            if (posIt != style.end() && posIt->second == "fixed" &&
+                !fixedContainingBlock(elem))
+                topLayerOffset(elem, offX, offY);
         }
         const std::vector<ClipRect>& inClips = inTopLayer ? kNoClips : ancestorClips;
 

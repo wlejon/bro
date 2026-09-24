@@ -144,7 +144,9 @@ dom::Element* Engine::hitTest(float x, float y) {
     // The top layer first: a modal dialog, and everything outside it inert.
     if (auto top = layout::hitTestTopLayer(document_.get(), root, x, y, scrollY_); top.handled)
         return top.element;
-    auto* node = htmlayout::layout::hitTest(root, x, y);
+    // A fixed box against the viewport is found where it paints, the
+    // viewport scroll added back (x, y already carry it).
+    auto* node = htmlayout::layout::hitTest(root, x, y, 0.0f, scrollY_);
     auto* hit = layout::LayoutNodeAdapter::elementFor(node);
     // The <html> element fills the viewport — stray clicks outside any
     // laid-out content should still resolve to the document element.

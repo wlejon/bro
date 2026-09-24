@@ -279,10 +279,7 @@ void Engine::run() {
         engineNowMs_ += scaledFrameDtMs;
 
         if (layoutPipeline_->waitForIdle()) {
-            if (document_ && document_->documentElement()) {
-                auto& box = document_->documentElement()->layoutBox();
-                documentHeight_ = box.marginBox().height;
-            }
+            updateDocumentHeight();
             for (auto& ev : transitionManager_.takePendingEvents()) {
                 dom::TransitionEvent tevt(ev.type, true, false);
                 tevt.setPropertyName(ev.name);
@@ -540,7 +537,7 @@ void Engine::flushLayoutForRead(dom::Document* doc) {
         layout::ElementRefAdapter::setHoveredElement(previousHover);
 
     if (doc == document_.get())
-        documentHeight_ = doc->documentElement()->layoutBox().marginBox().height;
+        updateDocumentHeight();
 
     doc->noteLayoutCurrent();
 }

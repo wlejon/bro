@@ -203,7 +203,8 @@ private:
     void paintBackdrop(dom::Element* elem);
     // Where a top-layer element's parent content box is in draw space: its
     // layout position, ignoring ancestor scroll, and the document scroll too
-    // when the element is position:fixed.
+    // when the element is position:fixed. Also where any fixed box whose
+    // containing block is the viewport is drawn from.
     void topLayerOffset(dom::Element* elem, float& offX, float& offY) const;
 
     // While drawElementContent walks children, it consults skipSet_ to avoid

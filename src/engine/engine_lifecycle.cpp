@@ -215,12 +215,9 @@ void Engine::handleResize(int w, int h) {
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(cw), static_cast<float>(ch), *textMetrics_);
-        if (document_->documentElement()) {
-            auto& box = document_->documentElement()->layoutBox();
-            documentHeight_ = box.marginBox().height;
-        }
+        updateDocumentHeight();
         float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(ch));
-        scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
+        setViewportScrollY(std::clamp(scrollY_, 0.0f, maxScroll));
 
         for (auto* el : document_->querySelectorAll("canvas")) {
             if (!el) continue;

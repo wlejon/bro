@@ -30,11 +30,24 @@ struct AbsoluteFrame {
     bool hasTransform = false;
 };
 
+/// Does `elem` become the containing block for fixed-position descendants?
+/// CSS Transforms §3 and CSS Containment: a transform (or an individual
+/// transform property), a filter, a backdrop-filter, a perspective, a
+/// will-change naming one of those, or layout/paint containment all take the
+/// job away from the viewport.
+bool establishesFixedContainingBlock(const Element* elem);
+
 /// Walks `el`'s layoutParent() (composed-tree) ancestor chain, accumulating
 /// each ancestor's content-box origin (matching layoutBox().contentRect,
 /// which is expressed in the parent's content-area coordinates) and
 /// composing every ancestor's CSS transform + perspective into one 4x4
 /// matrix. Returns an all-zero, untransformed frame for a null element.
+///
+/// The frame is in document space, the page unscrolled: every scrolling
+/// ancestor's offset comes off, and a fixed box whose containing block is
+/// the viewport (and all inside it) sits at its layout position plus the
+/// document's viewport scroll (Document::viewportScrollX/Y), since it stays
+/// put in the viewport while the page moves under it.
 AbsoluteFrame computeAbsoluteFrame(const Element* el);
 
 /// Absolute, transform-correct top-left of `el`'s content box. This is the

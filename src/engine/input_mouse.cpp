@@ -155,8 +155,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 viewportScrollbar_.beginDrag(y, m);
                 draggingViewportScrollbar_ = true;
             } else {
-                scrollY_ = viewportScrollbar_.scrollToPosition(y,
-                    documentHeight_, vh, m);
+                setViewportScrollY(viewportScrollbar_.scrollToPosition(y,
+                    documentHeight_, vh, m));
             }
             uiDirty_ = true;
             return;

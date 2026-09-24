@@ -957,8 +957,18 @@ private:
     EditableComposition editComp_;
     DomUndoHistories editUndo_;
 
+    // The viewport scroll. Written only through setViewportScrollY, which
+    // mirrors it into the document (Document::setViewportScroll) for the
+    // element geometry of fixed boxes.
     float scrollY_ = 0.0f;
+    void setViewportScrollY(float y);
+    // How far the root scroller can scroll: the document's scrollable
+    // overflow height (<html>'s margin box and every box that overflows it,
+    // less what an overflow clip hides and the fixed boxes, which sit in the
+    // viewport rather than the page). Refreshed by updateDocumentHeight after
+    // each layout of the app document.
     float documentHeight_ = 0.0f;
+    void updateDocumentHeight();
     float wheelResidualY_ = 0.0f;
 
     TopLayerCloseRequestFn topLayerCloseRequest_;

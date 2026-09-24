@@ -23,6 +23,23 @@ void Engine::dispatchScrollEvent(dom::Element* el) {
     dispatchEvent(el, evt);
 }
 
+void Engine::setViewportScrollY(float y) {
+    scrollY_ = y;
+    if (document_) document_->setViewportScroll(0.0f, y);
+}
+
+void Engine::updateDocumentHeight() {
+    if (!document_ || !document_->documentElement()) return;
+    const auto& box = document_->documentElement()->layoutBox();
+    float h = box.marginBox().height;
+    // The root's scrollable overflow, in the same space as its box (the
+    // parent-less root's, i.e. the page's): where content overflowing <html>
+    // ends, so the page scrolls to the last of it.
+    const auto& sb = box.scrollBounds;
+    if (sb.width >= 0.0f) h = std::max(h, sb.y + sb.height);
+    documentHeight_ = h;
+}
+
 void Engine::scrollViewportTo(float y) {
     if (!document_) return;
     flushLayoutForRead(document_.get());
@@ -30,7 +47,7 @@ void Engine::scrollViewportTo(float y) {
     const float maxScroll =
         std::max(0.0f, documentHeight_ - static_cast<float>(contentHeight()));
     const float prev = scrollY_;
-    scrollY_ = std::clamp(y, 0.0f, maxScroll);
+    setViewportScrollY(std::clamp(y, 0.0f, maxScroll));
     // A programmatic scroll replaces whatever a wheel gesture still had to go.
     wheelResidualY_ = 0.0f;
     if (scrollY_ != prev) {
@@ -146,7 +163,7 @@ void Engine::drainWheelSmoothing(float frameDtSec) {
 
     float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(contentHeight()));
     float prevScroll = scrollY_;
-    scrollY_ = std::clamp(scrollY_ + apply, 0.0f, maxScroll);
+    setViewportScrollY(std::clamp(scrollY_ + apply, 0.0f, maxScroll));
     if (scrollY_ == 0.0f || scrollY_ == maxScroll) {
         wheelResidualY_ = 0.0f;
     }

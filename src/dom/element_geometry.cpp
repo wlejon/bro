@@ -1,11 +1,36 @@
 #include "dom/element_geometry.h"
 #include "dom/element.h"
+#include "dom/document.h"
 #include <algorithm>
 #include <vector>
 
 namespace bro::dom {
 
 using htmlayout::css::Matrix3D;
+
+bool establishesFixedContainingBlock(const Element* elem) {
+    if (!elem) return false;
+    auto& s = elem->computedStyle();
+    auto has = [&s](const char* prop) {
+        auto it = s.find(prop);
+        return it != s.end() && !it->second.empty() && it->second != "none";
+    };
+    if (has("transform") || has("filter") || has("backdrop-filter") ||
+        has("perspective") || has("rotate") || has("scale") || has("translate"))
+        return true;
+    auto wc = s.find("will-change");
+    if (wc != s.end() && (wc->second.find("transform") != std::string::npos ||
+                          wc->second.find("filter") != std::string::npos ||
+                          wc->second.find("perspective") != std::string::npos))
+        return true;
+    auto ct = s.find("contain");
+    if (ct != s.end() && (ct->second.find("paint") != std::string::npos ||
+                          ct->second.find("layout") != std::string::npos ||
+                          ct->second.find("strict") != std::string::npos ||
+                          ct->second.find("content") != std::string::npos))
+        return true;
+    return false;
+}
 
 namespace {
 
@@ -15,7 +40,15 @@ struct Raw {
     float padL, padT, borL, borT;
     float fullW, fullH;
     float scrollY;         // scrollTop this element applies to its children
+    bool fixed;            // position: fixed
+    bool fixedCB;          // takes the containing-block job from the viewport
 };
+
+bool isFixedPosition(const Element* el) {
+    auto& s = el->computedStyle();
+    auto it = s.find("position");
+    return it != s.end() && it->second == "fixed";
+}
 
 struct Frame {
     const Element* el;
@@ -47,21 +80,40 @@ AbsoluteFrame computeAbsoluteFrame(const Element* el) {
                         lb.padding.left, lb.padding.top,
                         lb.border.left, lb.border.top,
                         lb.fullWidth(), lb.fullHeight(),
-                        st});
+                        st, isFixedPosition(lp),
+                        establishesFixedContainingBlock(lp)});
     }
 
     // Accumulate root-down: parent's content-area origin in absolute coords is
     // (accX, accY); element border-box = (accX + cx - padL - borL, ...).
+    //
+    // A fixed box whose containing block is the viewport does not scroll: not
+    // with its scrolling ancestors and not with the viewport. Layout placed
+    // it against the plain sum of its ancestors' content origins (plainX/Y,
+    // no scroll in it), which is viewport space; document space is that plus
+    // the viewport's scroll.
     std::vector<Frame> chain(raws.size());
     {
+        const Document* doc = el->document();
+        const float vsx = doc ? doc->viewportScrollX() : 0.0f;
+        const float vsy = doc ? doc->viewportScrollY() : 0.0f;
         float accX = 0.0f, accY = 0.0f;
+        float plainX = 0.0f, plainY = 0.0f;
+        bool underFixedCB = false;
         for (int i = static_cast<int>(raws.size()) - 1; i >= 0; --i) {
             const Raw& r = raws[i];
+            if (r.fixed && !underFixedCB) {
+                accX = plainX + vsx;
+                accY = plainY + vsy;
+            }
             float bx = accX + r.cx - r.padL - r.borL;
             float by = accY + r.cy - r.padT - r.borT;
             chain[i] = {r.el, bx, by, r.fullW, r.fullH};
             accX += r.cx;
             accY += r.cy - r.scrollY;
+            plainX += r.cx;
+            plainY += r.cy;
+            underFixedCB = underFixedCB || r.fixedCB;
         }
     }
 

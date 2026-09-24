@@ -41,10 +41,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         bool layoutClaimed = layoutPipeline_->waitClaimDone();
         layoutWaitMs = util::currentTimeMs() - tWait;
         if (layoutClaimed) {
-            if (document_ && document_->documentElement()) {
-                auto& box = document_->documentElement()->layoutBox();
-                documentHeight_ = box.marginBox().height;
-            }
+            updateDocumentHeight();
 
             if (document_ && !document_->scrollToBottomElements().empty()) {
                 auto pending = document_->scrollToBottomElements();

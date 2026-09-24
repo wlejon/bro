@@ -201,9 +201,9 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             static_cast<float>(viewportWidth_) - vs.width - vs.margin,
             ct, vh, documentHeight_, vh, scrollY_);
         float maxScroll = std::max(0.0f, documentHeight_ - vh);
-        scrollY_ = std::clamp(
+        setViewportScrollY(std::clamp(
             viewportScrollbar_.updateDrag(y, documentHeight_, vh, m),
-            0.0f, maxScroll);
+            0.0f, maxScroll));
         uiDirty_ = true;
         lastMouseX_ = x;
         lastMouseY_ = y;

@@ -406,6 +406,15 @@ public:
     NativeListenerList& windowListeners() { return windowListeners_; }
     const NativeListenerList& windowListeners() const { return windowListeners_; }
 
+    // How far the viewport (this document's root scroller, when it has one)
+    // is scrolled. Document space is the unscrolled page, so a fixed box —
+    // which stays put in the viewport — sits at its layout position plus
+    // this; element geometry reads it (computeAbsoluteFrame). The engine
+    // that owns the scroll keeps it current; 0 in a document nothing scrolls.
+    void setViewportScroll(float x, float y) { viewportScrollX_ = x; viewportScrollY_ = y; }
+    float viewportScrollX() const { return viewportScrollX_; }
+    float viewportScrollY() const { return viewportScrollY_; }
+
     // Viewport for @media evaluation. Call before parse() so stylesheets are
     // filtered against the real viewport; calling again later (window resize)
     // re-evaluates every retained sheet against the new size.
@@ -672,6 +681,8 @@ private:
     bool mediaRebuilt_ = false;
     // Bumped by setMediaViewport/setMediaColorScheme on an actual change.
     uint64_t mediaGeneration_ = 0;
+    float viewportScrollX_ = 0.0f;
+    float viewportScrollY_ = 0.0f;
 
     // One-shot restyle+relayout after layout when @container rules exist
     // (container sizes are only known post-layout). See performLayout().
