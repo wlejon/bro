@@ -20,7 +20,13 @@
  *   - CSS function lists with matching shapes (transform, filter, e.g.
  *     'rotate(0deg)' → 'rotate(360deg)', 'scale(1) translateX(0px)' →
  *     'scale(2) translateX(40px)')
- *   Anything else is non-interpolable and snaps at 50% (discrete-ish).
+ *   - `none` in transform / filter / backdrop-filter as the identity list
+ *     shaped like the other end ('none' → 'rotate(90deg)' starts at 0deg)
+ *   - visibility: visible throughout when one end is visible; display:
+ *     the non-none value throughout when one end is none
+ *   Anything else is discrete: it flips at 50%. Transform lists of different
+ *   shapes flip too (the spec's matrix interpolation is not done), as do
+ *   shadow lists the number path cannot blend.
  *   Values are not validated: they land in computed style verbatim.
  *
  * EASING: every <easing-function>, the same parser for WAAPI options,
@@ -44,9 +50,22 @@
  *     explicit offsets). An `easing` array is applied cyclically across the
  *     merged keyframes.
  *   - reverse() on an infinite animation seeks to 0 (spec throws).
- *   - Transitions start for any computed value that changes under a matching
- *     transition-property, discrete ones included (they snap at 50%);
- *     transition-behavior is not consulted.
+ *   - No @starting-style: an element coming out of display:none (or newly
+ *     inserted) has no before-change style, so nothing transitions in.
+ *
+ * TRANSITION-BEHAVIOR (CSS Transitions 2): a change whose two values only a
+ *   discrete flip can join (two keywords, `auto` and a length, any display
+ *   change) starts no transition — the new value applies at once, no
+ *   CSSTransition, no events — unless its transition-behavior is
+ *   allow-discrete (the longhand, or the keyword in the `transition`
+ *   shorthand), when it runs and flips at 50% of the eased progress.
+ *   transform, box-shadow, text-shadow and visibility pairs always
+ *   transition. `display` under allow-discrete gives the exit animation:
+ *       .panel { transition: opacity 300ms, display 300ms allow-discrete; }
+ *       .panel.closed { display: none; opacity: 0; }
+ *   Going to display:none keeps the element rendered at its old display
+ *   while opacity fades, then display:none applies when the display
+ *   transition ends (transitionend fires for 'display').
  *
  * LIFETIME:
  *   - The Animation object holds an id into an engine-side record, never a

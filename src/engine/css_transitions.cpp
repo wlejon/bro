@@ -9,6 +9,8 @@
 #include "engine/css_interpolation.h"
 #include "engine/web_animations.h"
 
+#include <css/properties.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -17,66 +19,37 @@ namespace bro::engine {
 
 namespace {
 
-// The element's transition-* lists, from the longhands or else the shorthand.
+// The element's transition-* longhand lists (the cascade expands the
+// `transition` shorthand into them, so a later longhand overrides it).
 struct TransitionLists {
-    std::vector<std::string> properties, durations, timings, delays;
+    std::vector<std::string> properties, durations, timings, delays, behaviors;
 };
 
 TransitionLists parseTransitionLists(const htmlayout::css::ComputedStyle& style) {
     TransitionLists out;
     auto tpIt = style.find("transition-property");
     auto tdIt = style.find("transition-duration");
-    if (tpIt != style.end() && tdIt != style.end() &&
-        tpIt->second != "none" && tdIt->second != "0s") {
-        out.properties = splitCSS(tpIt->second);
-        out.durations = splitCSS(tdIt->second);
-        auto tfIt = style.find("transition-timing-function");
-        if (tfIt != style.end()) out.timings = splitCSS(tfIt->second);
-        auto delIt = style.find("transition-delay");
-        if (delIt != style.end()) out.delays = splitCSS(delIt->second);
+    if (tpIt == style.end() || tdIt == style.end() || tpIt->second == "none") return out;
+    out.durations = splitCSS(tdIt->second);
+    // Every duration zero (and so every combined duration, the delays being
+    // irrelevant then): nothing can run.
+    if (std::all_of(out.durations.begin(), out.durations.end(),
+                    [](const std::string& d) { return parseDurationMs(d) <= 0.0; })) {
+        out.durations.clear();
         return out;
     }
-    // The shorthand: transition: <property> <duration> [<timing>] [<delay>], ...
-    auto trIt = style.find("transition");
-    if (trIt == style.end() || trIt->second.empty() || trIt->second == "none") return out;
-    for (auto& part : splitCSS(trIt->second)) {
-        // Tokenize respecting parentheses so cubic-bezier(...) stays intact.
-        std::vector<std::string> tokens;
-        size_t i = 0;
-        while (i < part.size()) {
-            while (i < part.size() && (part[i] == ' ' || part[i] == '\t')) ++i;
-            if (i >= part.size()) break;
-            size_t start = i;
-            int depth = 0;
-            while (i < part.size() && (depth > 0 || (part[i] != ' ' && part[i] != '\t'))) {
-                if (part[i] == '(') ++depth;
-                else if (part[i] == ')') --depth;
-                ++i;
-            }
-            tokens.push_back(part.substr(start, i - start));
-        }
-        std::string prop = "all", dur = "0s", timing = "ease", delay = "0s";
-        int numIdx = 0;
-        for (auto& tok : tokens) {
-            char* end = nullptr;
-            std::strtof(tok.c_str(), &end);
-            bool isTime = end != tok.c_str() &&
-                          (std::string(end) == "s" || std::string(end) == "ms");
-            TimingFunction tf;
-            if (isTime) {
-                (numIdx++ == 0 ? dur : delay) = tok;
-            } else if (tryParseEasing(tok, tf)) {
-                timing = tok;
-            } else {
-                prop = tok;
-            }
-        }
-        out.properties.push_back(prop);
-        out.durations.push_back(dur);
-        out.timings.push_back(timing);
-        out.delays.push_back(delay);
-    }
+    out.properties = splitCSS(tpIt->second);
+    auto tfIt = style.find("transition-timing-function");
+    if (tfIt != style.end()) out.timings = splitCSS(tfIt->second);
+    auto delIt = style.find("transition-delay");
+    if (delIt != style.end()) out.delays = splitCSS(delIt->second);
+    auto tbIt = style.find("transition-behavior");
+    if (tbIt != style.end()) out.behaviors = splitCSS(tbIt->second);
     return out;
+}
+
+bool allowsDiscrete(const TransitionLists& l, size_t i) {
+    return !l.behaviors.empty() && l.behaviors[i % l.behaviors.size()] == "allow-discrete";
 }
 
 // Does transition-property entry `shorthand` name the computed longhand?
@@ -101,8 +74,7 @@ int matchIndex(const TransitionLists& l, const std::string& prop) {
 }
 
 bool skipProperty(const std::string& prop) {
-    return prop.rfind("transition", 0) == 0 || prop.rfind("animation", 0) == 0 ||
-           prop == "display";
+    return prop.rfind("transition", 0) == 0 || prop.rfind("animation", 0) == 0;
 }
 
 bool isDisplayNone(const htmlayout::css::ComputedStyle& style) {
@@ -267,9 +239,24 @@ void TransitionManager::onStyleChange(dom::Element* elem,
     // Settle what script or the clock finished since the last look.
     eraseIf(et.running, [&](RunningTransition& r) { return advance(elem, et, r, currentTime); });
 
+    // Going to display:none under a display transition that allows discrete
+    // steps (CSS Transitions 2): the element stays rendered, its display held
+    // at the old value until that transition ends, and its other properties
+    // transition as usual — the exit animation. Every re-resolve until then
+    // sees the held value as the old style, so this holds throughout.
+    const bool newNone = isDisplayNone(newStyle);
+    const bool oldNone = isDisplayNone(oldStyle);
+    bool displayExit = false;
+    if (declared && newNone && !oldNone) {
+        const int di = matchIndex(lists, "display");
+        displayExit = di >= 0 && allowsDiscrete(lists, static_cast<size_t>(di)) &&
+                      parseDurationMs(lists.durations[static_cast<size_t>(di) %
+                                                      lists.durations.size()]) > 0;
+    }
     // Not rendered, before or after this change: nothing transitions, and
-    // what was running is cancelled (CSS Transitions §3).
-    const bool hidden = isDisplayNone(newStyle) || isDisplayNone(oldStyle) ||
+    // what was running is cancelled (CSS Transitions §3). Coming out of
+    // display:none there is no before-change style to transition from.
+    const bool hidden = (newNone && !displayExit) || oldNone ||
                         inDisplayNoneSubtree(elem->parentElement());
     if (hidden || !declared) {
         for (RunningTransition& r : et.running) cancel(elem, r, currentTime);
@@ -304,6 +291,13 @@ void TransitionManager::onStyleChange(dom::Element* elem,
                                           ? TimingFunction::ease()
                                           : parseTimingFunction(lists.timings[i % lists.timings.size()]);
         const bool canRun = duration + delay > 0 && duration > 0;
+        // A pair only a discrete flip can join (display, `auto` → a length,
+        // two keywords) transitions only under transition-behavior:
+        // allow-discrete; otherwise the value changes at once.
+        const bool discreteOk = allowsDiscrete(lists, i);
+        auto transitionable = [&](const std::string& from) {
+            return discreteOk || isInterpolable(from, newVal, prop);
+        };
 
         if (runIt != et.running.end()) {
             RunningTransition& run = *runIt;
@@ -331,7 +325,7 @@ void TransitionManager::onStyleChange(dom::Element* elem,
             const std::string adjustedStart = reversing ? run.endValue : current;
             cancel(elem, run, currentTime);
             et.running.erase(runIt);
-            if (current == newVal || !canRun) continue;
+            if (current == newVal || !canRun || !transitionable(current)) continue;
             start(elem, et, prop, current, newVal, duration * factor,
                   delay < 0 ? delay * factor : delay, timing, currentTime, adjustedStart, factor);
             newStyle[prop] = oldVal;
@@ -348,10 +342,14 @@ void TransitionManager::onStyleChange(dom::Element* elem,
         // A value an animation drives is not a style change.
         if (web_->animatesProperty(elem, prop)) continue;
         if (oldVal.empty()) {
-            // Substitute CSS initial values so transitions from "nothing" work.
+            // A property missing from the computed style is at its initial
+            // value (the cascade stores only what is set or inherited); the
+            // transform identity takes the target's shape.
             oldVal = initialValueForProperty(prop, newVal);
+            if (oldVal.empty()) oldVal = htmlayout::css::initialValue(prop);
             if (oldVal.empty() || oldVal == newVal) continue;
         }
+        if (!transitionable(oldVal)) continue;
         start(elem, et, prop, oldVal, newVal, duration, delay, timing, currentTime, oldVal, 1.0);
         // It shows its start value until the record's interpolation applies.
         newStyle[prop] = oldVal;

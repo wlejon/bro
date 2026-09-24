@@ -105,6 +105,13 @@ public:
     static std::string interpolate(const std::string& from, const std::string& to,
                                    float t, const std::string& property);
 
+    // Whether the pair is transitionable without transition-behavior:
+    // allow-discrete (CSS Transitions 2 §3): false for a discrete property
+    // (display) and for a pair only a discrete flip can join (`auto` and a
+    // length, two keywords).
+    static bool isInterpolable(const std::string& from, const std::string& to,
+                               const std::string& property);
+
     // Take all pending events (call from main thread after layout completes).
     std::vector<PendingCSSEvent> takePendingEvents() {
         return std::move(pendingEvents_);
