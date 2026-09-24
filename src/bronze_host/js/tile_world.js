@@ -27,7 +27,7 @@
 
     accessor(TileWorld.prototype, "node",
         function () {
-            return __bro_native.tile_world.TileWorld_node_get(this);
+            return __bro_native.scene.canonNode(__bro_native.tile_world.TileWorld_node_get(this));
         },
         undefined);
     accessor(TileWorld.prototype, "width",

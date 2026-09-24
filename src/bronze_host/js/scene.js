@@ -46,6 +46,31 @@
     }
     fn(mount(bro, "scene"), "SceneNode", SceneNode);
     globalThis.SceneNode = SceneNode;
+
+    // One wrapper per live node. Every native that hands out a node mints a
+    // fresh handle object; `canon` answers the wrapper the app already holds
+    // for that node id instead, so findByName(n) === findByName(n), a node
+    // is === the activeCamera it was made, and expandos stick. Node ids are
+    // process-unique and never reused. The map holds wrappers weakly: once
+    // the app drops every reference the next read mints (and keeps) a new one.
+    const liveNodes = new Map();
+    const nodeReaper = new FinalizationRegistry((id) => {
+        const ref = liveNodes.get(id);
+        if (ref && ref.deref() === undefined) liveNodes.delete(id);
+    });
+    const canon = (node) => {
+        if (!node) return node;
+        const id = __bro_native.scene.SceneNode_id_get(node);
+        if (!id) return node;
+        const ref = liveNodes.get(id);
+        const held = ref && ref.deref();
+        if (held) return held;
+        liveNodes.set(id, new WeakRef(node));
+        nodeReaper.register(node, id);
+        return node;
+    };
+    // For the sibling wrappers that also hand out nodes (tile_world.js, clipmap.js).
+    Object.defineProperty(__bro_native.scene, "canonNode", { value: canon });
     accessor(SceneNode.prototype, "id", function () { return __bro_native.scene.SceneNode_id_get(this); }, undefined);
     accessor(SceneNode.prototype, "name", function () { return __bro_native.scene.SceneNode_name_get(this); }, function (v) { __bro_native.scene.SceneNode_name_set(this, v); });
     accessor(SceneNode.prototype, "visible", function () { return __bro_native.scene.SceneNode_visible_get(this); }, function (v) { __bro_native.scene.SceneNode_visible_set(this, v); });
@@ -92,14 +117,14 @@
         });
     accessor(SceneNode.prototype, "worldPosition", function () { return Array.from(__bro_native.scene.SceneNode_worldPosition_get(this)); }, undefined);
     accessor(SceneNode.prototype, "worldMatrix", function () { return Array.from(__bro_native.scene.SceneNode_worldMatrix_get(this)); }, undefined);
-    accessor(SceneNode.prototype, "parent", function () { return this.id === 0 ? null : __bro_native.scene.SceneNode_parent_get(this); }, undefined);
+    accessor(SceneNode.prototype, "parent", function () { return this.id === 0 ? null : canon(__bro_native.scene.SceneNode_parent_get(this)); }, undefined);
 
     accessor(SceneNode.prototype, "children",
         function () {
             if (this.id === 0) return [];
             const n = __bro_native.scene.SceneNode_children_get(this);
             const out = new Array(n);
-            for (let i = 0; i < n; i++) out[i] = __bro_native.scene.SceneNode_children_get_at(i);
+            for (let i = 0; i < n; i++) out[i] = canon(__bro_native.scene.SceneNode_children_get_at(i));
             return out;
         },
         undefined);
@@ -241,7 +266,8 @@
     });
     fn(SceneNode.prototype, "setHtml", function setHtml(html) {
         if (html === undefined) throw new TypeError("bro.scene.SceneNode.prototype.setHtml: html is required");
-        return __bro_native.scene.SceneNode_setHtml(this, html);
+        __bro_native.scene.SceneNode_setHtml(this, html);
+        return this;
     });
     fn(SceneNode.prototype, "markHtmlDirty", function markHtmlDirty() { __bro_native.scene.SceneNode_markHtmlDirty(this); });
     fn(SceneNode.prototype, "burst", function burst(count) {
@@ -442,7 +468,7 @@
     }
     fn(mount(bro, "scene"), "SceneGraph", SceneGraph);
     globalThis.SceneGraph = SceneGraph;
-    accessor(SceneGraph.prototype, "root", function () { const r = __bro_native.scene.SceneGraph_root_get(this); return r || undefined; }, undefined);
+    accessor(SceneGraph.prototype, "root", function () { const r = __bro_native.scene.SceneGraph_root_get(this); return r ? canon(r) : undefined; }, undefined);
     accessor(SceneGraph.prototype, "cameraX", function () { return __bro_native.scene.SceneGraph_cameraX_get(this); }, function (v) { __bro_native.scene.SceneGraph_cameraX_set(this, v); });
     accessor(SceneGraph.prototype, "cameraY", function () { return __bro_native.scene.SceneGraph_cameraY_get(this); }, function (v) { __bro_native.scene.SceneGraph_cameraY_set(this, v); });
     accessor(SceneGraph.prototype, "cameraZoom", function () { return __bro_native.scene.SceneGraph_cameraZoom_get(this); }, function (v) { __bro_native.scene.SceneGraph_cameraZoom_set(this, v); });
@@ -451,7 +477,7 @@
     accessor(SceneGraph.prototype, "shadowCache", function () { return __bro_native.scene.SceneGraph_shadowCache_get(this); }, function (v) { __bro_native.scene.SceneGraph_shadowCache_set(this, v); });
     accessor(SceneGraph.prototype, "renderScale", function () { return __bro_native.scene.SceneGraph_renderScale_get(this); }, function (v) { __bro_native.scene.SceneGraph_renderScale_set(this, v); });
     accessor(SceneGraph.prototype, "msaa", function () { return __bro_native.scene.SceneGraph_msaa_get(this); }, function (v) { __bro_native.scene.SceneGraph_msaa_set(this, v); });
-    accessor(SceneGraph.prototype, "activeCamera", function () { return __bro_native.scene.SceneGraph_activeCamera_get(this); }, function (v) { if (v === null || v === undefined) __bro_native.scene.SceneGraph_clearActiveCamera(this); else __bro_native.scene.SceneGraph_activeCamera_set(this, v); });
+    accessor(SceneGraph.prototype, "activeCamera", function () { return canon(__bro_native.scene.SceneGraph_activeCamera_get(this)); }, function (v) { if (v === null || v === undefined) __bro_native.scene.SceneGraph_clearActiveCamera(this); else __bro_native.scene.SceneGraph_activeCamera_set(this, v); });
 
     accessor(SceneGraph.prototype, "viewMatrix",
         function () {
@@ -475,11 +501,11 @@
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;
         if (typeof opts === 'string') opts = { name: opts };
         const d_opts = opts === undefined ? {} : opts;
-        return __bro_native.scene.SceneGraph_createNode(this, d_opts.name !== undefined, d_opts.name === undefined ? '' : d_opts.name, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation), d_opts.scale === undefined ? EMPTY_F64 : toF64(d_opts.scale), d_opts.visible !== undefined, d_opts.visible === undefined ? false : d_opts.visible);
+        return canon(__bro_native.scene.SceneGraph_createNode(this, d_opts.name !== undefined, d_opts.name === undefined ? '' : d_opts.name, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation), d_opts.scale === undefined ? EMPTY_F64 : toF64(d_opts.scale), d_opts.visible !== undefined, d_opts.visible === undefined ? false : d_opts.visible));
     });
     fn(SceneGraph.prototype, "createHtmlNode", function createHtmlNode(opts) {
         const d_opts = opts === undefined ? {} : opts;
-        return __bro_native.scene.SceneGraph_createHtmlNode(this, d_opts.html !== undefined, d_opts.html === undefined ? '' : d_opts.html, d_opts.width !== undefined, d_opts.width === undefined ? 0 : d_opts.width, d_opts.height !== undefined, d_opts.height === undefined ? 0 : d_opts.height, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation), d_opts.scale === undefined ? EMPTY_F64 : toF64(d_opts.scale), d_opts.visible !== undefined, d_opts.visible === undefined ? false : d_opts.visible);
+        return canon(__bro_native.scene.SceneGraph_createHtmlNode(this, d_opts.html !== undefined, d_opts.html === undefined ? '' : d_opts.html, d_opts.width !== undefined, d_opts.width === undefined ? 0 : d_opts.width, d_opts.height !== undefined, d_opts.height === undefined ? 0 : d_opts.height, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation), d_opts.scale === undefined ? EMPTY_F64 : toF64(d_opts.scale), d_opts.visible !== undefined, d_opts.visible === undefined ? false : d_opts.visible));
     });
     fn(SceneGraph.prototype, "createLight", function createLight(opts) {
         const d_opts = opts === undefined ? {} : opts;
@@ -487,7 +513,7 @@
         const innerCone = d_opts.innerCone !== undefined ? d_opts.innerCone : d_opts.innerAngle;
         const outerCone = d_opts.outerCone !== undefined ? d_opts.outerCone : d_opts.outerAngle;
         const castShadow = d_opts.castShadow !== undefined ? d_opts.castShadow : d_opts.castsShadow;
-        const node = __bro_native.scene.SceneGraph_createLight(this,
+        const node = canon(__bro_native.scene.SceneGraph_createLight(this,
             d_opts.type !== undefined, d_opts.type === undefined ? '' : d_opts.type,
             color === undefined ? EMPTY_F64 : toF64(color),
             d_opts.intensity !== undefined, d_opts.intensity === undefined ? 0 : d_opts.intensity,
@@ -496,7 +522,7 @@
             outerCone !== undefined, outerCone === undefined ? 0 : outerCone,
             castShadow !== undefined, castShadow === undefined ? false : castShadow,
             d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position),
-            d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation));
+            d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation)));
         if (node) {
             applyNodeOpts(node, d_opts);
             if (d_opts.direction !== undefined) node.direction = d_opts.direction;
@@ -511,15 +537,15 @@
     });
 
     fn(SceneGraph.prototype, "createParticles", function createParticles(opts) {
-        return __bro_native.scene.SceneGraph_createParticles(this, opts ? JSON.stringify(opts, (k, v) =>
-            ArrayBuffer.isView(v) && !(v instanceof DataView) ? Array.from(v) : v) : "");
+        return canon(__bro_native.scene.SceneGraph_createParticles(this, opts ? JSON.stringify(opts, (k, v) =>
+            ArrayBuffer.isView(v) && !(v instanceof DataView) ? Array.from(v) : v) : ""));
     });
     fn(SceneGraph.prototype, "createDecal", function createDecal(opts) {
         const d_opts = opts === undefined ? {} : opts;
         let sz = d_opts.size;
         if (typeof sz === 'number') sz = [sz, sz, sz];
         const texStr = typeof d_opts.texture === 'string' ? d_opts.texture : '';
-        const node = __bro_native.scene.SceneGraph_createDecal(this, texStr !== '', texStr, sz === undefined ? EMPTY_F64 : toF64(sz), d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation));
+        const node = canon(__bro_native.scene.SceneGraph_createDecal(this, texStr !== '', texStr, sz === undefined ? EMPTY_F64 : toF64(sz), d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position), d_opts.rotation === undefined ? EMPTY_F64 : toF64(d_opts.rotation)));
         if (node && opts) {
             applyNodeOpts(node, d_opts);
             if (d_opts.size !== undefined) {
@@ -542,7 +568,7 @@
         const d_opts = opts === undefined ? {} : opts;
         let sz = d_opts.size;
         if (typeof sz === 'number') sz = [sz, sz, sz];
-        const node = __bro_native.scene.SceneGraph_createReflectionProbe(this, sz === undefined ? EMPTY_F64 : toF64(sz), d_opts.resolution !== undefined, d_opts.resolution === undefined ? 0 : d_opts.resolution, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position));
+        const node = canon(__bro_native.scene.SceneGraph_createReflectionProbe(this, sz === undefined ? EMPTY_F64 : toF64(sz), d_opts.resolution !== undefined, d_opts.resolution === undefined ? 0 : d_opts.resolution, d_opts.position === undefined ? EMPTY_F64 : toF64(d_opts.position)));
         if (node) {
             applyNodeOpts(node, d_opts);
             if (d_opts.size !== undefined) {
@@ -585,11 +611,11 @@
     });
     fn(SceneGraph.prototype, "findById", function findById(id) {
         if (id === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.findById: id is required");
-        return __bro_native.scene.SceneGraph_findById(this, id);
+        return canon(__bro_native.scene.SceneGraph_findById(this, id));
     });
     fn(SceneGraph.prototype, "findByName", function findByName(name) {
         if (name === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.findByName: name is required");
-        return __bro_native.scene.SceneGraph_findByName(this, name);
+        return canon(__bro_native.scene.SceneGraph_findByName(this, name));
     });
     fn(SceneGraph.prototype, "destroyNode", function destroyNode(node) {
         if (node === undefined) throw new TypeError("bro.scene.SceneGraph.prototype.destroyNode: node is required");
@@ -609,7 +635,7 @@
         // `mode` / `size`; either form reaches the native as mode/size.
         const mode = d_opts.mode !== undefined ? d_opts.mode : d_opts.projection;
         const size = d_opts.size !== undefined ? d_opts.size : d_opts.orthoHeight;
-        const cam = __bro_native.scene.SceneGraph_createCamera(this, d_opts.fov !== undefined, d_opts.fov === undefined ? 0 : d_opts.fov, d_opts.near !== undefined, d_opts.near === undefined ? 0 : d_opts.near, d_opts.far !== undefined, d_opts.far === undefined ? 0 : d_opts.far, eye === undefined ? EMPTY_F64 : toF64(eye), target === undefined ? EMPTY_F64 : toF64(target), d_opts.up === undefined ? EMPTY_F64 : toF64(d_opts.up), d_opts.aspect !== undefined, d_opts.aspect === undefined ? 0 : d_opts.aspect, d_opts.quaternion === undefined ? EMPTY_F64 : toF64(d_opts.quaternion), mode !== undefined, mode === undefined ? '' : mode, size !== undefined, size === undefined ? 0 : size);
+        const cam = canon(__bro_native.scene.SceneGraph_createCamera(this, d_opts.fov !== undefined, d_opts.fov === undefined ? 0 : d_opts.fov, d_opts.near !== undefined, d_opts.near === undefined ? 0 : d_opts.near, d_opts.far !== undefined, d_opts.far === undefined ? 0 : d_opts.far, eye === undefined ? EMPTY_F64 : toF64(eye), target === undefined ? EMPTY_F64 : toF64(target), d_opts.up === undefined ? EMPTY_F64 : toF64(d_opts.up), d_opts.aspect !== undefined, d_opts.aspect === undefined ? 0 : d_opts.aspect, d_opts.quaternion === undefined ? EMPTY_F64 : toF64(d_opts.quaternion), mode !== undefined, mode === undefined ? '' : mode, size !== undefined, size === undefined ? 0 : size));
         if (d_opts.name !== undefined) cam.name = d_opts.name;
         if (d_opts.active) this.setActiveCamera(cam);
         return cam;
@@ -752,7 +778,7 @@
         const inst = __bro_native.scene.SceneGraph_raycast_instance();
         const res = {
             hit: true,
-            node: __bro_native.scene.SceneGraph_raycast_node(),
+            node: canon(__bro_native.scene.SceneGraph_raycast_node()),
             point: Array.from(__bro_native.scene.SceneGraph_raycast_point()),
             normal: Array.from(__bro_native.scene.SceneGraph_raycast_normal()),
             distance: dist
@@ -788,28 +814,28 @@
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;
         if (typeof opts === 'string') opts = { mesh: opts };
         const meshObj = (opts && opts.mesh && typeof opts.mesh !== 'string') ? opts.mesh : null;
-        const node = __bro_native.scene.SceneGraph_createMesh(this, opts || {}, meshObj);
+        const node = canon(__bro_native.scene.SceneGraph_createMesh(this, opts || {}, meshObj));
         if (!node) return undefined;
         applyNodeOpts(node, opts);
         return node;
     });
     fn(SceneGraph.prototype, "createShape", function createShape(opts) {
-        const node = __bro_native.scene.SceneGraph_createShape(this, opts ? JSON.stringify(opts) : "");
+        const node = canon(__bro_native.scene.SceneGraph_createShape(this, opts ? JSON.stringify(opts) : ""));
         if (node) applyNodeOpts(node, opts);
         return node;
     });
     fn(SceneGraph.prototype, "createSprite", function createSprite(opts) {
-        const node = __bro_native.scene.SceneGraph_createSprite(this, opts ? JSON.stringify(opts) : "");
+        const node = canon(__bro_native.scene.SceneGraph_createSprite(this, opts ? JSON.stringify(opts) : ""));
         if (node) applyNodeOpts(node, opts);
         return node;
     });
     fn(SceneGraph.prototype, "createPhysicsNode", function createPhysicsNode(opts) {
-        const node = __bro_native.scene.SceneGraph_createPhysicsNode(this, opts ? JSON.stringify(opts) : "");
+        const node = canon(__bro_native.scene.SceneGraph_createPhysicsNode(this, opts ? JSON.stringify(opts) : ""));
         if (node) applyNodeOpts(node, opts);
         return node;
     });
     fn(SceneGraph.prototype, "createParticles3D", function createParticles3D(opts) {
-        const node = __bro_native.scene.SceneGraph_createParticles3D(this, opts ? JSON.stringify(opts) : "");
+        const node = canon(__bro_native.scene.SceneGraph_createParticles3D(this, opts ? JSON.stringify(opts) : ""));
         if (node) {
             applyNodeOpts(node, opts);
             if (opts && typeof opts.onFinished === 'function') node.onFinished = opts.onFinished;
@@ -818,7 +844,7 @@
     });
     fn(SceneGraph.prototype, "createGaussianSplat", function createGaussianSplat(opts) {
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;
-        const node = __bro_native.scene.SceneGraph_createGaussianSplat(this, "");
+        const node = canon(__bro_native.scene.SceneGraph_createGaussianSplat(this, ""));
         if (!node) return undefined;
         if (opts) {
             if (typeof opts === 'string') {
@@ -834,7 +860,7 @@
     fn(SceneGraph.prototype, "createSkinnedMesh", function createSkinnedMesh(opts) {
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;
         const meshObj = (opts && opts.mesh && typeof opts.mesh !== 'string') ? opts.mesh : null;
-        const node = __bro_native.scene.SceneGraph_createSkinnedMesh(this, opts || {}, meshObj);
+        const node = canon(__bro_native.scene.SceneGraph_createSkinnedMesh(this, opts || {}, meshObj));
         if (!node) return undefined;
         applyNodeOpts(node, opts);
         return node;
@@ -842,7 +868,7 @@
     fn(SceneGraph.prototype, "createInstancedMesh", function createInstancedMesh(opts) {
         if (!__bro_native.scene.SceneGraph_root_get(this)) return undefined;
         const meshObj = (opts && opts.mesh && typeof opts.mesh !== 'string') ? opts.mesh : null;
-        const node = __bro_native.scene.SceneGraph_createInstancedMesh(this, opts || {}, meshObj);
+        const node = canon(__bro_native.scene.SceneGraph_createInstancedMesh(this, opts || {}, meshObj));
         if (!node) return undefined;
         applyNodeOpts(node, opts);
         if (opts) {

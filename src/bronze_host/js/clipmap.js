@@ -26,7 +26,7 @@
 
     accessor(ClipmapTerrain.prototype, "node",
         function () {
-            return __bro_native.clipmap.ClipmapTerrain_node_get(this);
+            return __bro_native.scene.canonNode(__bro_native.clipmap.ClipmapTerrain_node_get(this));
         },
         undefined);
     accessor(ClipmapTerrain.prototype, "levels",
