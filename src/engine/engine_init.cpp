@@ -472,11 +472,24 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas)
         return static_cast<webgl::WebGL2RenderingContext*>(canvas->webglContext());
     }
 
+    // The drawing buffer is the canvas's width/height attributes when it has
+    // them (what syncWebGLCanvasSizes keeps it at every frame after), else
+    // its laid-out box, else the viewport. Starting from the box or viewport
+    // when the attributes say otherwise left a `canvas.width = 64` canvas
+    // with a 1920x1080 buffer until the next frame, so a draw + readPixels
+    // in the same turn saw a 64-pixel corner of a stretched image.
     int cw = viewportWidth_, ch = viewportHeight_;
     if (canvas) {
         auto& box = canvas->layoutBox();
         if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
         if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
+        const auto attrInt = [canvas](const char* name, int fallback) {
+            const std::string& v = canvas->getAttribute(name);
+            const int n = v.empty() ? 0 : std::atoi(v.c_str());
+            return n > 0 ? n : fallback;
+        };
+        cw = attrInt("width", cw);
+        ch = attrInt("height", ch);
     }
     auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch);
     auto* webglCtx = ctx2.get();

@@ -207,3 +207,19 @@ if (!gl) {
 }
 
 document.body.removeChild(canvas);
+
+// A canvas sized by script and never laid out: the drawing buffer is its
+// width/height from the moment getContext returns, not the viewport.
+{
+    const cv = document.createElement('canvas');
+    cv.width = 64; cv.height = 48;
+    const g = cv.getContext('webgl2');
+    if (g) {
+        assert(cv.width === 64 && cv.height === 48,
+            'getContext keeps the canvas size (' + cv.width + 'x' + cv.height + ')');
+        assert(g.drawingBufferWidth === 64 && g.drawingBufferHeight === 48,
+            'the drawing buffer is the attribute size (' + g.drawingBufferWidth + 'x' + g.drawingBufferHeight + ')');
+        const vp = g.getParameter(g.VIEWPORT);
+        assert(vp[2] === 64 && vp[3] === 48, 'the initial viewport covers it');
+    }
+}
