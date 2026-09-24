@@ -210,6 +210,17 @@ void WebAnimationManager::setStartTime(WebAnimation& a, double st, double now) {
 }
 
 void WebAnimationManager::setCurrentTime(WebAnimation& a, double ct, double now) {
+    // "Silently set the current time": a paused (or idle) animation keeps a
+    // HOLD time — seeking it must not start the clock again. An idle one is
+    // paused at the new time, as a seek on the web leaves it.
+    if (a.state == WebAnimState::Paused || a.state == WebAnimState::Idle) {
+        a.holdTime = ct;
+        a.hasHoldTime = true;
+        a.hasStartTime = false;
+        a.state = WebAnimState::Paused;
+        a.finishNotified = false;
+        return;
+    }
     if (a.playbackRate != 0) {
         a.startTime = now - ct / a.playbackRate;
         a.hasStartTime = true;
