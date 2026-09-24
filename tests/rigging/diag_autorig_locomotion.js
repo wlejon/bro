@@ -212,7 +212,7 @@ function runForInput(INPUT) {
 
     console.log('== bind-pose round-trip (applySkinning(bindPose) should be identity)');
     const bindPose = sk.bindPose();
-    const bindMats = bindPose.computeWorldMatrices(sk);
+    const bindMats = bindPose.computeSkinningMatrices(sk);
     const basePositions = new Float32Array(m.positions);
     m.positions = new Float32Array(basePositions);
     m.applySkinning(skin, bindMats);
@@ -272,7 +272,7 @@ function runForInput(INPUT) {
         // reset mesh to bind, evaluate anim pose, skin.
         m.positions = new Float32Array(basePositions);
         const pose = anim.evaluate(sk, t, { loop: true });
-        const mats = pose.computeWorldMatrices(sk);
+        const mats = pose.computeSkinningMatrices(sk);
         m.applySkinning(skin, mats);
 
         edgeLengths(pairs, m.positions, curLens);
@@ -321,7 +321,7 @@ function runForInput(INPUT) {
     console.log('== per-bone centroid displacement (bind → mid-anim)');
     m.positions = new Float32Array(basePositions);
     const midPose = anim.evaluate(sk, anim.duration * 0.5, { loop: true });
-    const midMats = midPose.computeWorldMatrices(sk);
+    const midMats = midPose.computeSkinningMatrices(sk);
     m.applySkinning(skin, midMats);
     const midPositions = new Float32Array(m.positions);
     let moved = 0, still = 0;

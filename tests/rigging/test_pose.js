@@ -34,6 +34,17 @@ const skel = Skeleton.fromBones([
         assert(Math.abs(skin[i] - world[i]) < 1e-5, 'skinning == world at ' + i);
 }
 
+// ── pose.data is a copy; assigning it back is how a pose is edited ──────────
+{
+    const pose = skel.bindPose();
+    pose.data[10] = 7;                       // writes into a throwaway copy
+    assert(pose.data[10] === 0, 'writing an element of pose.data leaves the pose alone');
+    const d = pose.data;
+    d[10] = 7;
+    pose.data = d;
+    assert(pose.data[10] === 7, 'assigning the edited array back takes effect');
+}
+
 // ── Blend two poses ─────────────────────────────────────────────────────────
 {
     const a = skel.bindPose();

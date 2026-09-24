@@ -24,6 +24,7 @@
 //   Quaternions are xyzw.
 //   Matrices are column-major 4x4 (16 floats), matching glTF.
 //   Pose data is one flat Float32Array, stride 10 per bone: T (3), R (4 xyzw), S (3).
+//   `pose.data` (like `mesh.positions`) hands out a copy; assign it back to edit.
 //   Bone indices in a skin or a clip refer to `skeleton.bones` order.
 //
 // A typical flow:
@@ -318,7 +319,13 @@ class Pose {
    */
   constructor(init, boneCount) {}
 
-  /** @type {Float32Array} stride 10 per bone; writable. */
+  /**
+   *  Stride 10 per bone. Reading returns a *copy*: writing its elements does
+   *  not touch the pose. Edit the copy, then assign it back:
+   *    const d = pose.data; d[13] = qx; ...; pose.data = d;
+   *  (bone 1's rotation starts at index 10 + 3 = 13).
+   * @type {Float32Array}
+   */
   data;
 
   /** @readonly @type {number} */
@@ -652,7 +659,11 @@ Rig.transferWeights = function(targetMesh, sourceMesh, sourceSkin, maxDistance) 
 /**
  *  Deform the mesh in place by `skin` and a flat array of column-major 4x4
  *  skinning matrices — exactly what `pose.computeSkinningMatrices()` returns.
- *  Fewer matrices than the skin's bone count throws.
+ *  The inverse binds are already in those matrices; the skin's own
+ *  `inverseBindMatrices` are not applied again (so passing
+ *  `computeWorldMatrices()` instead is wrong for any bone whose bind is not
+ *  the identity). Skin a fresh bind-pose copy each frame: the deformation is
+ *  in place. Fewer matrices than the skin's bone count throws.
  * @param {SkinData} skin @param {Float32Array} matrices
  * @returns {Mesh} this
  */

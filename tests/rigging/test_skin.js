@@ -114,6 +114,40 @@
     }
 }
 
+// ── applySkinning takes computeSkinningMatrices (inverse binds not re-applied) ─
+// A 2-bone column (y 0..2, bone 1 at y=1) bent 90 degrees about Z at bone 1:
+// the tip swings from (0,2,0) to (-1,1,0).
+{
+    const skel = Skeleton.fromBones([
+        { name: 'root', parent: -1 },
+        { name: 'tip',  parent:  0, localT: [0, 1, 0],
+          inverseBind: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-1,0,1] },
+    ]);
+    const m = new Mesh({
+        positions: new Float32Array([0,0,0, 0,0.5,0, 0,1.5,0, 0,2,0]),
+        indices: new Uint32Array([0,1,2, 1,2,3]),
+    });
+    const skin = new SkinData({
+        boneWeights: new Float32Array([1,0,0,0, 1,0,0,0, 1,0,0,0, 1,0,0,0]),
+        boneIndices: new Uint32Array ([0,0,0,0, 0,0,0,0, 1,0,0,0, 1,0,0,0]),
+        inverseBindMatrices: new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,
+                                               1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-1,0,1]),
+        boneCount: 2,
+    });
+    const pose = skel.bindPose();
+    const d = pose.data;
+    const h = Math.SQRT1_2;
+    d[13] = 0; d[14] = 0; d[15] = h; d[16] = h;
+    pose.data = d;
+    m.applySkinning(skin, pose.computeSkinningMatrices(skel));
+    const p = m.positions;
+    let maxAbsX = 0;
+    for (let i = 0; i < 4; i++) maxAbsX = Math.max(maxAbsX, Math.abs(p[i * 3]));
+    assert(Math.abs(maxAbsX - 1) < 1e-4, 'bent column reaches |x| = 1 (got ' + maxAbsX + ')');
+    assert(Math.abs(p[9] + 1) < 1e-4 && Math.abs(p[10] - 1) < 1e-4, 'tip lands at (-1, 1)');
+    assert(Math.abs(p[1] - 0) < 1e-4 && Math.abs(p[4] - 0.5) < 1e-4, 'root-bound vertices stay put');
+}
+
 // ── SkinData.transfer projects weights from source -> target ────────────────
 {
     const src = Mesh.box(0.5, 0.5, 0.5);
