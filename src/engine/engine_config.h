@@ -66,8 +66,9 @@ struct EngineConfig {
     GraphicsConfig graphics;
     InputConfig input;
     Scrollbar::Style viewportScrollbar;
-    Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f,
-        {255,255,255,20}, {255,255,255,100}, {255,255,255,150}, {255,255,255,180}};
+    // Colours come from the element's scheme / scrollbar-color at draw time
+    // (Scrollbar::colorsFor).
+    Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f};
     std::function<void(Engine&)> installHostBindings;
 };
 

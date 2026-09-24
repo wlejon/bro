@@ -1,4 +1,5 @@
 #include "engine/scrollbar.h"
+#include "css/color.h"
 
 #include <algorithm>
 #include <cmath>
@@ -37,23 +38,74 @@ ScrollbarMetrics Scrollbar::layout(float trackX, float trackY, float trackH,
     return m;
 }
 
-void Scrollbar::draw(render::Renderer* renderer, const ScrollbarMetrics& m) const {
-    drawWithState(renderer, m, hovered_, dragging_);
+Scrollbar::Colors Scrollbar::schemeColors(bool dark) {
+    // Alpha is coverage (0..1). The palette used to be written as 0..255
+    // bytes into these float colours, which clamped to opaque white.
+    const float v = dark ? 1.0f : 0.0f;
+    return Colors{bromath::Color{v, v, v, 0.08f},
+                  bromath::Color{v, v, v, dark ? 0.40f : 0.35f},
+                  bromath::Color{v, v, v, dark ? 0.60f : 0.50f},
+                  bromath::Color{v, v, v, dark ? 0.70f : 0.60f}};
+}
+
+Scrollbar::Colors Scrollbar::colorsFor(const htmlayout::css::ComputedStyle& style,
+                                       bool preferDark) {
+    auto csIt = style.find("color-scheme");
+    const std::string_view cs = csIt != style.end() ? std::string_view(csIt->second)
+                                                    : std::string_view("normal");
+    const bool dark = htmlayout::css::usedColorScheme(
+                          cs, preferDark ? htmlayout::css::ColorScheme::Dark
+                                         : htmlayout::css::ColorScheme::Light) ==
+                      htmlayout::css::ColorScheme::Dark;
+    Colors c = schemeColors(dark);
+
+    // scrollbar-color: <thumb-color> <track-color> (CSS Scrollbars 1).
+    auto scIt = style.find("scrollbar-color");
+    if (scIt != style.end() && scIt->second != "auto" && !scIt->second.empty()) {
+        const std::string& v = scIt->second;
+        // Split into two colour tokens at a space outside parentheses.
+        int depth = 0;
+        size_t split = std::string::npos;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (v[i] == '(') ++depth;
+            else if (v[i] == ')') --depth;
+            else if (v[i] == ' ' && depth == 0) { split = i; break; }
+        }
+        if (split != std::string::npos) {
+            htmlayout::css::Color thumb, track;
+            std::string a = v.substr(0, split), b = v.substr(split + 1);
+            while (!b.empty() && b.front() == ' ') b.erase(b.begin());
+            if (htmlayout::css::tryParseColor(a, thumb) &&
+                htmlayout::css::tryParseColor(b, track)) {
+                auto conv = [](const htmlayout::css::Color& k) {
+                    return cfromColor8({k.r, k.g, k.b, k.a});
+                };
+                c.thumb = c.thumbHover = c.thumbDrag = conv(thumb);
+                c.track = conv(track);
+            }
+        }
+    }
+    return c;
+}
+
+void Scrollbar::draw(render::Renderer* renderer, const ScrollbarMetrics& m,
+                     const Colors& colors) const {
+    drawWithState(renderer, m, hovered_, dragging_, colors);
 }
 
 void Scrollbar::drawWithState(render::Renderer* renderer, const ScrollbarMetrics& m,
-                              bool hovered, bool dragging) const {
+                              bool hovered, bool dragging, const Colors& colors) const {
     if (!m.visible || !renderer) return;
 
     // Track background
-    renderer->fillRect(m.trackX, m.trackY, m.trackW, m.trackH, style_.trackColor);
+    renderer->fillRect(m.trackX, m.trackY, m.trackW, m.trackH, colors.track);
 
     // Thumb — color depends on interaction state
-    bromath::Color thumbColor = style_.thumbColor;
+    bromath::Color thumbColor = colors.thumb;
     if (dragging) {
-        thumbColor = style_.thumbDragColor;
+        thumbColor = colors.thumbDrag;
     } else if (hovered) {
-        thumbColor = style_.thumbHoverColor;
+        thumbColor = colors.thumbHover;
     }
     renderer->fillRect(m.trackX, m.thumbY, m.trackW, m.thumbH, thumbColor);
 }

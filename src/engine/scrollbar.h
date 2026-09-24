@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/renderer.h"
+#include "css/cascade.h"
 
 namespace bro::engine {
 
@@ -16,15 +17,29 @@ struct ScrollbarMetrics {
 /// handles rendering, hit testing, and drag interaction.
 class Scrollbar {
 public:
+    /// Overlay colours (bromath::Color is 0..1 linear; alpha is coverage).
+    struct Colors {
+        bromath::Color track;
+        bromath::Color thumb;
+        bromath::Color thumbHover;
+        bromath::Color thumbDrag;
+    };
+
     struct Style {
         float width = 8.0f;
         float margin = 2.0f;
         float minThumbHeight = 24.0f;
-        bromath::Color trackColor{255, 255, 255, 32};
-        bromath::Color thumbColor{255, 255, 255, 128};
-        bromath::Color thumbHoverColor{255, 255, 255, 180};
-        bromath::Color thumbDragColor{255, 255, 255, 200};
     };
+
+    /// The overlay palette for a used colour scheme: translucent white over a
+    /// dark scheme, translucent black over a light one.
+    static Colors schemeColors(bool dark);
+
+    /// The palette for an element: CSS `scrollbar-color: <thumb> <track>`
+    /// when set, else schemeColors() of the element's used colour scheme
+    /// (its computed `color-scheme` weighed against `preferDark`, the
+    /// prefers-color-scheme setting).
+    static Colors colorsFor(const htmlayout::css::ComputedStyle& style, bool preferDark);
 
     Scrollbar();
     explicit Scrollbar(Style style);
@@ -39,11 +54,12 @@ public:
                             float scrollOffset) const;
 
     /// Draw the scrollbar (track + thumb) using the given metrics.
-    void draw(render::Renderer* renderer, const ScrollbarMetrics& m) const;
+    void draw(render::Renderer* renderer, const ScrollbarMetrics& m,
+              const Colors& colors) const;
 
     /// Draw the scrollbar with explicit hover/drag state (for per-element tracking).
     void drawWithState(render::Renderer* renderer, const ScrollbarMetrics& m,
-                       bool hovered, bool dragging) const;
+                       bool hovered, bool dragging, const Colors& colors) const;
 
     /// Returns true if (x, y) is within the scrollbar track.
     bool hitTest(float x, float y, const ScrollbarMetrics& m) const;

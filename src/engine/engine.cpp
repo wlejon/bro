@@ -529,6 +529,8 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
                                    dom::Element* root,
                                    float offsetX, float offsetY) {
     if (!renderer || !root) return;
+    const bool preferDark = root->document() &&
+        root->document()->mediaContext().colorScheme == "dark";
     std::function<void(dom::Element*, float, float)> walk;
     walk = [&](dom::Element* elem, float ox, float oy) {
         if (!elem) return;
@@ -561,7 +563,8 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
                     bx + bw - es.width - es.margin,
                     by, bh, contentH, viewH,
                     scrollTop);
-                elementScrollbar_.draw(renderer, m);
+                elementScrollbar_.draw(renderer, m,
+                                       Scrollbar::colorsFor(style, preferDark));
             }
         }
 
