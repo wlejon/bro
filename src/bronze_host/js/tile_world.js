@@ -221,9 +221,8 @@
     fn(TileWorld.prototype, "configure", function configure(opts) {
         opts = opts || {};
         const json = JSON.stringify(opts, (k, v) => {
-            if (v instanceof Float32Array || v instanceof Float64Array || v instanceof Uint8Array || v instanceof Int32Array) {
-                return Array.from(v);
-            }
+            if (ArrayBuffer.isView(v) && !(v instanceof DataView)) return Array.from(v);
+            if (v instanceof ArrayBuffer) return Array.from(new Uint8Array(v));
             return v;
         });
         __bro_native.tile_world.TileWorld_configure(this, json);

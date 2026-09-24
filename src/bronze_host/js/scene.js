@@ -570,10 +570,12 @@
     });
     fn(SceneGraph.prototype, "createTileWorld", function createTileWorld(opts) {
         opts = opts || {};
+        // Any typed-array view (a canvas's Uint8ClampedArray included) or a
+        // bare ArrayBuffer travels as a plain array; JSON would otherwise
+        // turn it into an index-keyed object the native cannot read.
         const json = JSON.stringify(opts, (k, v) => {
-            if (v instanceof Float32Array || v instanceof Float64Array || v instanceof Uint8Array || v instanceof Int32Array) {
-                return Array.from(v);
-            }
+            if (ArrayBuffer.isView(v) && !(v instanceof DataView)) return Array.from(v);
+            if (v instanceof ArrayBuffer) return Array.from(new Uint8Array(v));
             return v;
         });
         const res = __bro_native.tile_world.createTileWorldJson(this, json);

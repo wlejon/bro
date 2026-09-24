@@ -84,7 +84,8 @@ class SceneGraph {
    *        A path that does not exist or fails to decode is ignored SILENTLY,
    * no throw, no warning; the world just renders untextured. Check
    *        the atlas path first if tiles come out flat grey.
-   * @param {Uint8Array} [opts.atlasPixels] - raw RGBA8 alternative to `atlas`;
+   * @param {Uint8Array|Uint8ClampedArray} [opts.atlasPixels] - raw RGBA8 alternative to `atlas`
+   *        (any byte view, e.g. `getImageData().data`);
    *        requires `atlasWidth` + `atlasHeight`.
    * @param {number} [opts.atlasWidth] - atlas pixel width (with atlasPixels)
    * @param {number} [opts.atlasHeight] - atlas pixel height (with atlasPixels)
