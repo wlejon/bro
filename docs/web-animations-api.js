@@ -14,19 +14,29 @@
  * headless advanceTime(ms) drives them deterministically.
  *
  * PROPERTY COVERAGE: inherited from the transition interpolator:
- *   - numbers and lengths (opacity, width, top, margin-*, border-radius, …
- *     any "12px"/"0.5"-shaped value; the unit comes from the target)
- *   - colors (#hex, rgb(), rgba())
- *   - CSS function lists with matching shapes (transform, filter, e.g.
- *     'rotate(0deg)' → 'rotate(360deg)', 'scale(1) translateX(0px)' →
- *     'scale(2) translateX(40px)')
+ *   - every number, length and colour in a value, when both ends have the
+ *     same shape: opacity, width, margin-*, '0px 0px' → '100px 50px'
+ *     (background-position), 'drop-shadow(0px 0px 0px black)' →
+ *     'drop-shadow(10px 10px 4px red)'. Units must match (a unitless 0
+ *     takes the other end's); a single length of another unit ('10px' →
+ *     '2em') blends its number in the target's unit. Colours (any CSS
+ *     Color 4 form) blend premultiplied.
+ *   - CSS function lists with matching shapes (filter, e.g.
+ *     'blur(0px) brightness(1)' → 'blur(4px) brightness(2)')
+ *   - transform lists of any shapes (CSS Transforms 2): the pairs sharing a
+ *     primitive blend per function ('translateX(0px)' → 'translate(40px,
+ *     10px)' blends as translate), the rest through matrix decomposition
+ *     ('rotate(0)' → 'translateX(10px) scale(2)' is 'matrix(1.5, 0, 0, 1.5,
+ *     5, 0)' halfway; 3D lists slerp their rotation). Percentages in the
+ *     part that needs matrices flip at 50% (the value string has no box).
+ *   - box-shadow / text-shadow lists: each shadow's offsets, blur, spread
+ *     and colour; the shorter list is padded with transparent shadows.
+ *     An inset/outset pair flips.
  *   - `none` in transform / filter / backdrop-filter as the identity list
  *     shaped like the other end ('none' → 'rotate(90deg)' starts at 0deg)
  *   - visibility: visible throughout when one end is visible; display:
  *     the non-none value throughout when one end is none
- *   Anything else is discrete: it flips at 50%. Transform lists of different
- *   shapes flip too (the spec's matrix interpolation is not done), as do
- *   shadow lists the number path cannot blend.
+ *   Anything else is discrete: it flips at 50%.
  *   Values are not validated: they land in computed style verbatim.
  *
  * EASING: every <easing-function>, the same parser for WAAPI options,
@@ -50,8 +60,18 @@
  *     explicit offsets). An `easing` array is applied cyclically across the
  *     merged keyframes.
  *   - reverse() on an infinite animation seeks to 0 (spec throws).
- *   - No @starting-style: an element coming out of display:none (or newly
- *     inserted) has no before-change style, so nothing transitions in.
+ *   - A starting style inherits from the parent's style, not the parent's
+ *     starting style.
+ *
+ * @STARTING-STYLE (CSS Transitions 2): an element with no before-change
+ *   style (just inserted, or its first style after it or an ancestor left
+ *   display:none) transitions from its starting style: its style with the
+ *   @starting-style rules matching too. Top level or nested in a rule:
+ *       .toast { opacity: 1; transition: opacity 300ms; }
+ *       @starting-style { .toast { opacity: 0; } }
+ *       .panel { transform: none; transition: transform 300ms;
+ *                @starting-style { transform: translateY(20px); } }
+ *   The rules match nowhere else (getComputedStyle, ordinary changes).
  *
  * TRANSITION-BEHAVIOR (CSS Transitions 2): a change whose two values only a
  *   discrete flip can join (two keywords, `auto` and a length, any display

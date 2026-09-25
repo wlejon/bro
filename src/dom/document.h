@@ -438,6 +438,10 @@ public:
     // it on each element's style; a pseudo-element's style (::before,
     // ::selection, ...) goes through it too.
     void resolveColorSchemeValues(htmlayout::css::ComputedStyle& style) const;
+    // bro's computed-value steps after the cascade (SVG size hints, absolute
+    // font-size, colour scheme), for an element's style or starting style.
+    void finishComputedStyle(Element* elem, htmlayout::css::ComputedStyle& computed,
+                             const htmlayout::css::ComputedStyle* parentStyle);
 
     // Bumped whenever the media context actually changes (resize, scheme
     // flip). window.matchMedia re-evaluates its live MediaQueryLists when this
@@ -699,6 +703,11 @@ private:
     // the document element's style so rem units in getComputedStyle track the
     // root rather than a hardcoded 16px. Updated each resolveStyles() pass.
     float rootFontSize_ = 16.0f;
+
+    // > 0 while resolveStylesRecursive is under an element that just left
+    // display:none (on a page with @starting-style rules): the elements there
+    // have no before-change style, so they transition from their starting one.
+    int enteringRendering_ = 0;
 
     // Elements that need scroll-to-bottom after next layout
     std::unordered_set<Element*> scrollToBottomElements_;

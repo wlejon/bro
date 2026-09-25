@@ -19,6 +19,7 @@
 #include <string_view>
 #include <chrono>
 #include <cstdlib>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -247,10 +248,101 @@ std::vector<std::string> classTokens(const std::string& s) {
     while (iss >> t) out.push_back(t);
     return out;
 }
+
+bool isDisplayNone(const htmlayout::css::ComputedStyle& s) {
+    auto it = s.find("display");
+    return it != s.end() && it->second == "none";
+}
 }  // namespace
 
 void Document::resolveColorSchemeValues(htmlayout::css::ComputedStyle& style) const {
     resolveLightDarkValues(style, hasMediaContext_ ? &mediaContext_ : nullptr);
+}
+
+// The computed-value steps bro takes after the cascade: SVG size hints,
+// absolute font-size, the colour scheme. Shared by an element's style and
+// its starting style, so a transition compares values of one form.
+void Document::finishComputedStyle(Element* elem, htmlayout::css::ComputedStyle& computed,
+                                   const htmlayout::css::ComputedStyle* parentStyle) {
+    // <svg> width/height attributes are presentational hints: they map to
+    // the CSS width/height properties below author-stylesheet priority
+    // (SVG 2). When the cascade produced no value, the attribute applies
+    // directly — this is what makes `svg { width: 100% }` plus
+    // height="180" lay out 180px tall in browsers, rather than deriving
+    // the height from an intrinsic aspect ratio.
+    {
+        const std::string& tag = elem->tagName();
+        if (tag == "svg" || tag == "SVG") {
+            for (const char* prop : {"width", "height"}) {
+                if (computed.find(prop) != computed.end()) continue;
+                const std::string& v = elem->getAttribute(prop);
+                if (v.empty() || v == "auto") continue;
+                char* end = nullptr;
+                float num = std::strtof(v.c_str(), &end);
+                if (end == v.c_str() || num < 0) continue;
+                std::string rest(end);
+                if (rest.empty())
+                    computed[prop] = v + "px";
+                else if (rest == "px" || rest == "%")
+                    computed[prop] = v;
+            }
+        }
+    }
+
+    // Resolve font-size to absolute px so all consumers get a usable value.
+    // em/% are relative to the parent's (already-resolved) font-size.
+    auto fsIt = computed.find("font-size");
+    if (fsIt != computed.end() && !fsIt->second.empty()) {
+        const auto& val = fsIt->second;
+        char* end = nullptr;
+        float num = std::strtof(val.c_str(), &end);
+        if (end != val.c_str() && num > 0) {
+            std::string unit(end);
+            float resolved = num; // default: px or unitless
+            auto parentFontSize = [&]() {
+                float parentFs = 16.0f;
+                if (parentStyle) {
+                    auto pit = parentStyle->find("font-size");
+                    if (pit != parentStyle->end()) {
+                        char* pe = nullptr;
+                        float pv = std::strtof(pit->second.c_str(), &pe);
+                        if (pe != pit->second.c_str() && pv > 0) parentFs = pv;
+                    }
+                }
+                return parentFs;
+            };
+            if (unit == "em") {
+                resolved = num * parentFontSize();
+            } else if (unit == "%") {
+                resolved = num * parentFontSize() / 100.0f;
+            } else if (unit == "rem") {
+                resolved = num * rootFontSize_;
+            } else if (unit == "pt") {
+                resolved = num * 96.0f / 72.0f;
+            }
+            fsIt->second = std::to_string(resolved);
+            // The document element (<html>) defines the rem reference for
+            // every descendant. It is resolved first (parentStyle==nullptr),
+            // so capture its px font-size before children consume rem.
+            if (!parentStyle) rootFontSize_ = resolved;
+            // Clean up trailing zeros for readability (e.g. "32.000000" -> "32")
+            auto& s = fsIt->second;
+            if (s.find('.') != std::string::npos) {
+                s.erase(s.find_last_not_of('0') + 1, std::string::npos);
+                if (s.back() == '.') s.pop_back();
+            }
+            // A computed length carries its unit: getComputedStyle reports
+            // "20px", and htmlayout (a container query's em, for one)
+            // reads the value as CSS, where a bare number is not a length.
+            s += "px";
+        }
+    }
+
+    // light-dark() and the system colours: the element's used colour
+    // scheme (its color-scheme, weighed against the prefers-color-scheme
+    // setting) picks the branch or the colour, before transitions compare
+    // old and new values or children inherit.
+    resolveColorSchemeValues(computed);
 }
 
 bool Document::classChangeAffectsDescendants(const std::string& oldCls,
@@ -376,6 +468,10 @@ void Document::resolveStylesRecursive(Element* elem,
     // Set below from the style diff: can this element's re-resolve have changed
     // anything a descendant sees? Only through an inherited value.
     bool passedDownChanged = false;
+    // This element left display:none in this re-resolve, on a page with
+    // @starting-style rules: its descendants re-resolve with it, each with no
+    // before-change style (enteringRendering_).
+    bool enteredRendering = false;
 
     if (needsResolve) {
         perf_.elementsStyled++;
@@ -389,101 +485,41 @@ void Document::resolveStylesRecursive(Element* elem,
         perf_.cascadeMs += std::chrono::duration<double, std::milli>(
                                std::chrono::steady_clock::now() - cascadeT0).count();
 
-        // <svg> width/height attributes are presentational hints: they map to
-        // the CSS width/height properties below author-stylesheet priority
-        // (SVG 2). When the cascade produced no value, the attribute applies
-        // directly — this is what makes `svg { width: 100% }` plus
-        // height="180" lay out 180px tall in browsers, rather than deriving
-        // the height from an intrinsic aspect ratio.
-        {
-            const std::string& tag = elem->tagName();
-            if (tag == "svg" || tag == "SVG") {
-                for (const char* prop : {"width", "height"}) {
-                    if (computed.find(prop) != computed.end()) continue;
-                    const std::string& v = elem->getAttribute(prop);
-                    if (v.empty() || v == "auto") continue;
-                    char* end = nullptr;
-                    float num = std::strtof(v.c_str(), &end);
-                    if (end == v.c_str() || num < 0) continue;
-                    std::string rest(end);
-                    if (rest.empty())
-                        computed[prop] = v + "px";
-                    else if (rest == "px" || rest == "%")
-                        computed[prop] = v;
-                }
-            }
+        // The element has no before-change style when this is its first style,
+        // or its first since it (or an ancestor) left display:none. Then its
+        // transitions start from its starting style (CSS Transitions 2 §3.1):
+        // the same cascade with the @starting-style rules matching too.
+        std::optional<htmlayout::css::ComputedStyle> startingStyle;
+        if (transitionManager_ && cascade_.usesStartingStyle() && !isDisplayNone(computed) &&
+            (elem->computedStyle().empty() || isDisplayNone(elem->computedStyle()) ||
+             enteringRendering_ > 0)) {
+            startingStyle = cascade_.resolve(*adapter, elem->style().cssText(), parentStyle,
+                                             /*startingStyle=*/true);
+            finishComputedStyle(elem, *startingStyle, parentStyle);
         }
-
-        // Resolve font-size to absolute px so all consumers get a usable value.
-        // em/% are relative to the parent's (already-resolved) font-size.
-        auto fsIt = computed.find("font-size");
-        if (fsIt != computed.end() && !fsIt->second.empty()) {
-            const auto& val = fsIt->second;
-            char* end = nullptr;
-            float num = std::strtof(val.c_str(), &end);
-            if (end != val.c_str() && num > 0) {
-                std::string unit(end);
-                float resolved = num; // default: px or unitless
-                if (unit == "em") {
-                    float parentFs = 16.0f;
-                    if (parentStyle) {
-                        auto pit = parentStyle->find("font-size");
-                        if (pit != parentStyle->end()) {
-                            char* pe = nullptr;
-                            float pv = std::strtof(pit->second.c_str(), &pe);
-                            if (pe != pit->second.c_str() && pv > 0) parentFs = pv;
-                        }
-                    }
-                    resolved = num * parentFs;
-                } else if (unit == "%") {
-                    float parentFs = 16.0f;
-                    if (parentStyle) {
-                        auto pit = parentStyle->find("font-size");
-                        if (pit != parentStyle->end()) {
-                            char* pe = nullptr;
-                            float pv = std::strtof(pit->second.c_str(), &pe);
-                            if (pe != pit->second.c_str() && pv > 0) parentFs = pv;
-                        }
-                    }
-                    resolved = num * parentFs / 100.0f;
-                } else if (unit == "rem") {
-                    resolved = num * rootFontSize_;
-                } else if (unit == "pt") {
-                    resolved = num * 96.0f / 72.0f;
-                }
-                fsIt->second = std::to_string(resolved);
-                // The document element (<html>) defines the rem reference for
-                // every descendant. It is resolved first (parentStyle==nullptr),
-                // so capture its px font-size before children consume rem.
-                if (!parentStyle) rootFontSize_ = resolved;
-                // Clean up trailing zeros for readability (e.g. "32.000000" -> "32")
-                auto& s = fsIt->second;
-                if (s.find('.') != std::string::npos) {
-                    s.erase(s.find_last_not_of('0') + 1, std::string::npos);
-                    if (s.back() == '.') s.pop_back();
-                }
-                // A computed length carries its unit: getComputedStyle reports
-                // "20px", and htmlayout (a container query's em, for one)
-                // reads the value as CSS, where a bare number is not a length.
-                s += "px";
-            }
-        }
-
-        // light-dark() and the system colours: the element's used colour
-        // scheme (its color-scheme, weighed against the prefers-color-scheme
-        // setting) picks the branch or the colour, before transitions compare
-        // old and new values or children inherit.
-        resolveColorSchemeValues(computed);
+        finishComputedStyle(elem, computed, parentStyle);
 
         auto mgrT0 = std::chrono::steady_clock::now();
         // CSS transitions: detect property changes and start transitions
-        if (transitionManager_ && !elem->computedStyle().empty()) {
+        if (transitionManager_ && startingStyle) {
+            transitionManager_->onStyleChange(elem, *startingStyle, computed, transitionTime_);
+        } else if (transitionManager_ && !elem->computedStyle().empty()) {
             transitionManager_->onStyleChange(elem, elem->computedStyle(), computed, transitionTime_);
         }
 
         // CSS animations: detect animation-name and start animations
         if (animationManager_) {
             animationManager_->onStyleChange(elem, computed, transitionTime_);
+        }
+
+        // Transitions and animations: CSS transitions, then CSS @keyframes
+        // animations (in animation-name order), then script animations
+        // (element.animate) — one Web Animations stack, one composite order.
+        // Applied before the diff below, so an animated width relays out and
+        // an animated colour reaches the children: the diff compares the
+        // values this frame shows with the ones the last frame showed.
+        if (webAnimationManager_) {
+            webAnimationManager_->applyOverrides(elem, computed, transitionTime_);
         }
 
         // Did this re-resolve move any geometry? A hover that only repainted a
@@ -519,22 +555,13 @@ void Document::resolveStylesRecursive(Element* elem,
         // display:none flipping here takes the subtree out of (or back into)
         // the rendering without re-resolving it: the CSS animations and
         // transitions under it must hear of it in this same pass.
-        auto isNone = [](const htmlayout::css::ComputedStyle& s) {
-            auto it = s.find("display");
-            return it != s.end() && it->second == "none";
-        };
-        const bool displayFlipped = isNone(elem->computedStyle()) != isNone(computed);
+        const bool wasNone = isDisplayNone(elem->computedStyle());
+        const bool displayFlipped = wasNone != isDisplayNone(computed);
+        enteredRendering = displayFlipped && wasNone && cascade_.usesStartingStyle();
         elem->setComputedStyle(std::move(computed));
         if (displayFlipped) {
             if (transitionManager_) transitionManager_->displayToggled(elem);
             if (animationManager_) animationManager_->displayToggled(elem);
-        }
-
-        // Transitions and animations: CSS transitions, then CSS @keyframes
-        // animations (in animation-name order), then script animations
-        // (element.animate) — one Web Animations stack, one composite order.
-        if (webAnimationManager_) {
-            webAnimationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }
 
         // ::before / ::after generated content is resolved in a separate pass
@@ -559,7 +586,13 @@ void Document::resolveStylesRecursive(Element* elem,
     // property the inherited-value diff above never looks at, so give up the
     // scoping and re-resolve the subtree the way we always did.
     const bool childForce =
-        needsResolve && (selDirty || passedDownChanged || forcedInherit_);
+        needsResolve && (selDirty || passedDownChanged || forcedInherit_ || enteredRendering);
+    struct EnteringScope {
+        int& depth;
+        bool on;
+        EnteringScope(int& d, bool o) : depth(d), on(o) { if (on) ++depth; }
+        ~EnteringScope() { if (on) --depth; }
+    } entering(enteringRendering_, enteredRendering);
     // The hover scope carries all the way down: `.row:hover .cell .label` names
     // a subject several levels below the element whose :hover flipped, and the
     // levels in between re-match nothing themselves.
