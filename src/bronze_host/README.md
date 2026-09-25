@@ -486,7 +486,10 @@ would refuse to bind on a thread that registered only net — so there is no
 sibling API in a worker; those belong to the main thread and its engine.
 The worker script is compiled in-process against the worker thread's own
 registry (`registeredHostGlobals()`), so a read of `document` in a worker
-is an ordinary `ReferenceError`.
+is an ordinary `ReferenceError`. Workers running the same script share one
+compiled program (bronze `EvalOptions::shareAcrossThreads`): the program's
+module data is per thread, so each worker's run starts fresh, and a later
+worker skips the compile and runs the code earlier ones have tiered up.
 
 ## Driving a compiled app from a script
 

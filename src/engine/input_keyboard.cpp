@@ -121,7 +121,7 @@ bool Engine::handleGlobalHotkey(int keycode, int mod, bool repeat) {
         return true;
     }
     if (action == "system_reload_app") {
-        requestAppReload(AppReloadKind::Dev);
+        requestAppReload();
         return true;
     }
     return false;

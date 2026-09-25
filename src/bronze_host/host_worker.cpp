@@ -521,6 +521,11 @@ void WorkerInstance::threadFunc() {
             }
         }
         opts.retainSource = true;
+        // Every worker running this script runs one compiled program, each
+        // from fresh module data (bronze EvalOptions::shareAcrossThreads):
+        // the second worker skips the compile and starts on the code the
+        // first one has tiered up.
+        opts.shareAcrossThreads = true;
 
         auto hasAwaitStmt = [](const std::string& code) {
             size_t i = 0;

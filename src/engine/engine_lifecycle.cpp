@@ -5,6 +5,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
+#include "bronze_host/eval_jit.h"
 #include "bronze_host/host_gc.h"
 #include "api/fs_watch.h"
 
@@ -72,6 +73,10 @@ void Engine::shutdown() {
     for (auto& hook : shutdownHooks_) hook();
     shutdownHooks_.clear();
     framePumps_.clear();
+
+    // No JS compile may still be running on bronze's compile pool while the
+    // engine tears down: queued ones are dropped, running ones finish.
+    bronze_host::stopBackgroundCompiles();
 
 #if BRO_WITH_PHYSICS
     if (physicsWorld_) physicsWorld_->shutdown();

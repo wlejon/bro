@@ -32,6 +32,7 @@
 #include "physics/physics_world.h"
 #endif
 #include "bronze_host/eval.h"
+#include "bronze_host/eval_jit.h"
 #include "api/fs_watch.h"  // Engine owns unique_ptr<FsWatcher>s; the ctor's unwind deletes them
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
@@ -77,6 +78,8 @@ Engine::Engine(const EngineConfig& config)
     titleOverride_ = config.title;
     installHostBindings_ = config.installHostBindings;
     initDevLoopConfig(config);
+    // JS runs on bronze's tiered default; BRO_JIT_TIER pins a tier to debug one.
+    bronze_host::applyJitTierOverride();
     // CSS animations are Web Animations records (css_transitions.h).
     animationManager_.setWebAnimations(&webAnimationManager_);
     transitionManager_.setWebAnimations(&webAnimationManager_);

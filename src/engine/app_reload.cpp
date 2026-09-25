@@ -66,11 +66,8 @@ void Engine::unloadAppModules() {
     appModuleHandles_.clear();
 }
 
-void Engine::requestAppReload(AppReloadKind kind) {
+void Engine::requestAppReload() {
     if (displayMode_ == DisplayMode::Server) return;
-    // A Dev request outranks a Navigation one already pending: the source
-    // changed, and the page's own reload would have compiled the old text.
-    if (!pendingAppReload_ || kind == AppReloadKind::Dev) pendingAppReloadKind_ = kind;
     pendingAppReload_ = true;
     uiDirty_ = true;
 }
@@ -78,18 +75,11 @@ void Engine::requestAppReload(AppReloadKind kind) {
 bool Engine::processPendingAppReload() {
     if (!pendingAppReload_) return false;
     pendingAppReload_ = false;
-    if (pendingAppReloadKind_ == AppReloadKind::Dev) devReloaded_ = true;
     performAppReload();
     return true;
 }
 
-bool Engine::jitOptimize() const {
-    if (jitTierPin_ >= 0) return jitTierPin_ == 1;
-    return false;
-}
-
 void Engine::initDevLoopConfig(const EngineConfig& config) {
-    jitTierPin_ = envSwitch("BRO_JIT_TIER", "optimized", "baseline");
     watchSources_ = config.watchSources;
     if (const int pin = envSwitch("BRO_WATCH", "1", "0"); pin >= 0) watchSources_ = pin == 1;
 }
@@ -148,13 +138,12 @@ void Engine::pollAppWatcher(double nowMs) {
     }
     if (appWatchPending_ && nowMs - appWatchLastChangeMs_ >= kWatchSettleMs) {
         appWatchPending_ = false;
-        requestAppReload(AppReloadKind::Dev);
+        requestAppReload();
     }
 }
 
 void Engine::performAppReload() {
-    LOG_INFO("Reloading app '%s' (%s)", appDir_.c_str(),
-             jitOptimize() ? "optimized" : "baseline tier");
+    LOG_INFO("Reloading app '%s'", appDir_.c_str());
 
     exitPointerLock();
     overlayMgr_.close();

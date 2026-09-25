@@ -14,6 +14,17 @@ namespace bro::bronze_host {
 /// (e.g. BRO_DISABLE_JIT=1, BRO_EVAL_AOT=1, BRO_NO_JIT=1).
 bool isJitDisabled();
 
+/// Pins the tier every in-process compile runs at when BRO_JIT_TIER names one
+/// (bronze's parseExecutionTier: 0/interpreter, 1/baseline, 2/optimized,
+/// auto). Unset, JS runs on bronze's tiered default. A debugging switch,
+/// applied once when an Engine starts.
+void applyJitTierOverride();
+
+/// Drops every in-process program's queued background compiles (tier-ups
+/// and OSR entries) and waits out the running ones, so none is still
+/// compiling while the engine tears down.
+void stopBackgroundCompiles();
+
 /// The compile-and-run behind evalScriptJit: what the program produced — its
 /// completion value, or what it threw — with nothing logged and no failure
 /// latched. This is what a caller that has its own use for the outcome wants:

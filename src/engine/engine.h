@@ -74,13 +74,6 @@ class LayoutPipeline;
 class AudioInference;
 struct SubDocRef;
 
-/// Why an app reload was asked for. A Navigation reload is the page's own
-/// `location.reload()` and compiles the app the way boot did; a Dev reload
-/// is the edit loop — a source file changed under the app dir, or the
-/// `system_reload_app` action (F5) — and compiles in bronze's baseline tier,
-/// trading run speed for the reload landing in a fraction of a second.
-enum class AppReloadKind { Navigation, Dev };
-
 class Engine {
 public:
     explicit Engine(const EngineConfig& config);
@@ -291,15 +284,10 @@ public:
     void flushLayoutForRead(dom::Document* doc);
     void reloadIframe(dom::Element* el);
     bool reloadIframeForDocument(const dom::Document* doc);
-    void requestAppReload(AppReloadKind kind = AppReloadKind::Navigation);
+    /// Reloads the app at the next frame: the page's own `location.reload()`,
+    /// a source change the watcher saw, or the `system_reload_app` action (F5).
+    void requestAppReload();
     bool processPendingAppReload();
-    /// Whether an in-process compile (the app's `<script>` tags, `eval()`,
-    /// `new Function()`) runs bronze's optimizer. BRO_JIT_TIER=baseline or
-    /// =optimized in the environment pins it for the process; otherwise it is
-    /// on until the first Dev reload and off from then on, so a session that
-    /// has started iterating keeps every later reload fast. See
-    /// docs/hot-reload.md.
-    bool jitOptimize() const;
     std::vector<uint8_t> captureIframe(dom::Element* el, int& outW, int& outH);
 
     void onFrame(std::function<void(double dtMs)> cb) {
@@ -820,9 +808,6 @@ private:
     bool handleGlobalHotkey(int keycode, int mod, bool repeat);
 
     bool pendingAppReload_ = false;
-    AppReloadKind pendingAppReloadKind_ = AppReloadKind::Navigation;
-    bool devReloaded_ = false;
-    int jitTierPin_ = -1;  // BRO_JIT_TIER: 1 optimized, 0 baseline, -1 unpinned
     bool watchSources_ = true;
     std::vector<std::unique_ptr<brokit::api::FsWatcher>> appWatchers_;  // app dir, then /lib
     double appWatchLastChangeMs_ = 0.0;
