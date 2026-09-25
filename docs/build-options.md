@@ -184,11 +184,10 @@ Feature flags (`BRO_WITH_*`) control which optional subsystems and sibling libra
 
 ## Skia: orthogonal but required
 
-Skia is core (dom/canvas/render need it) and is **not** a `BRO_WITH_` flag. It
-used to be the worst onboarding step. `third_party/skia/{src,include,lib}` are
-gitignored, so a fresh clone had to hand-build Skia (GN + ninja + `git-sync-deps`).
+Skia is core (dom/canvas/render need it) and is **not** a `BRO_WITH_` flag.
+`third_party/skia/{src,include,lib}` are gitignored.
 
-**Now auto-fetched** (`third_party/skia/skia.cmake`): on first configure,
+**Auto-fetched** (`third_party/skia/skia.cmake`): on first configure,
 `file(DOWNLOAD)` + SHA-256-verify pulls the headers/source bundle and the Release
 library, pinned to Skia `chrome/m147`, so lib and headers always match, from
 the repo's GitHub releases, and the Release lib is used for all configs (Debug

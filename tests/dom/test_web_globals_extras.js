@@ -1,5 +1,4 @@
-// The web-platform surface the bronze port left out (docs/transition-drift.md
-// rows E3, E5–E8, E11 and H7's createEvent / initEvent):
+// Web-platform globals outside the DOM core:
 //   performance.mark / measure / getEntries* / clearMarks / clearMeasures / timeOrigin
 //   navigator.hardwareConcurrency / languages / mediaDevices / onLine / cookieEnabled / product / productSub / vendor
 //   document.hidden / visibilityState / location / URL / documentURI / implementation / createEvent

@@ -9,9 +9,8 @@
 // looking at a second instance it would see `bumps === 0` and a different
 // object.
 //
-// What the registry covers and what it does not is stated in
-// docs/transition-drift.md (C1); the live-binding note below is the one gap a
-// test is likely to meet.
+// The live-binding note below is the one gap in the module registry a test is
+// likely to meet.
 import { instance, bump } from "/app/module_instance.js";
 
 assert(

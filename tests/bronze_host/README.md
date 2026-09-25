@@ -66,10 +66,7 @@ rather than a recording of what the build happened to print. (Named rather than
 counted off the end of the list: the three.js checks sit last and are not
 among them.)
 
-This used to be seven executables — `bro-bronze-host`, `bro-bronze-host-dom`,
-one per app, each `host_main.cpp` linked against a different object file — plus
-the CMake surface that enumerated them. That is what the folder model replaced,
-and the seven scripts' identical copies of "find my binary" became one `lib.sh`.
+The scripts share one `lib.sh` for finding the binary under test.
 
 A check skips rather than fails when `bro-headless` is absent, or when the tree
 has no bronze CLI (`-DBRONZE_WITH_LLVM=OFF`) and no already-built module. Skip

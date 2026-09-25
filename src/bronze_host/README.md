@@ -62,17 +62,12 @@ ABI stamp, and runs it (`app_module.h`). The stock binaries do this. Nothing
 about bro's build knows the app exists, which is the point: "another app" is
 another folder, not another build of bro.
 
-There used to be a second way — `host_main.cpp` linked one `bro-bronze-host`
-executable per app, with the app named as an object file at bro's configure time
-(`BRO_BRONZE_APP_OBJ`, `BRO_BRONZE_APPS`). It is gone. It existed only because
-every bronze module was a **static** library while the runtime's state is
-process-wide (`rt_state.h`: heap, arena, root shapes, key registry, host-global
-registry, "owned by ONE translation unit") — so a loaded module would have got
-its own heap and its own registry, two collectors neither tracing the other's
-roots. bronze answering that with `bronze_runtime_shared` and `--emit-shared` is
-what let the link-time path be deleted rather than maintained.
-
-Which is why this layer links `bronze::runtime_shared` and must never also link
+The runtime's state is process-wide (`rt_state.h`: heap, arena, root shapes,
+key registry, host-global registry, "owned by ONE translation unit"), so a
+loaded module must share the host's runtime rather than carry its own: two
+runtimes would be two heaps and two collectors, neither tracing the other's
+roots. That is what `bronze_runtime_shared` and `--emit-shared` provide, and
+why this layer links `bronze::runtime_shared` and must never also link
 `bronze::embed` + `bronze::runtime`: the static archives would put that second
 heap right back, and the failure would not be a link error but a value quietly
 collected out from under the module. `embed` lives inside the shared image, so
@@ -198,7 +193,7 @@ only the compiled ones see no payload.
   `click` event without `applyMouseOffset`, so every listener sees 0, compiled
   and interpreted alike. `mousedown`, `mouseup`, `mousemove` and `wheel` carry
   real offsets.
-- **Listeners on arbitrary elements** are no longer a gap: `addEventListener`
+- **Listeners on arbitrary elements** work: `addEventListener`
   / `removeEventListener` / `dispatchEvent` sit on `Element.prototype`
   (`installElementEventTarget`, `host_dom_events.cpp`, reading the receiver),
   `document.createElement` takes any tag, and `querySelector` /
@@ -212,17 +207,10 @@ only the compiled ones see no payload.
 
 ## Host classes
 
-Every object this layer hands a compiled program used to be a bare cell with
-its methods closed over PER INSTANCE. That cost two things, and the second one
-is the one that shows: a copy of every method for every instance, and
-`instanceof` answering false for all of them. A dozen comments in these files
-used to say the same sentence — *bronze cannot build a value on a chosen
-prototype* — and shaped real API around it. `new CustomEvent(...)` does not
-exist because of it.
-
-That is no longer true, and `Image` (`host_element_image.cpp`) is the worked
-example.
-The class story is three calls, none of them new:
+An object this layer hands a compiled program is built on a real prototype, so
+its methods are shared rather than closed over per instance and `instanceof`
+answers true. `Image` (`host_element_image.cpp`) is the worked example.
+The class story is three calls:
 
 1. `makeFunction` for the constructor, then **read** `prototype` off it with
    `getProperty`. Reading MINTS the slot-backed object 10.2.4 describes, as an
@@ -336,8 +324,8 @@ the module is older than either the probe or the compiler.
 `--emit-shared` links the module against bronze's **shared** runtime, so host
 and module share one heap; it exports exactly three names, all derived from the
 entry: `bronze_main`, `bronze_object_abi_fingerprint` and
-`bronze_main_host_globals`. `--emit-obj` still exists for a host that links an
-app in, which bro no longer does.
+`bronze_main_host_globals`. `--emit-obj` is for a host that links an app in, which
+bro does not.
 
 `--emit-obj` is what makes step 1 stop before linking: the object is destined
 for **bro's** toolchain, and linking belongs to whoever owns the final binary.
@@ -415,9 +403,7 @@ re-entrant: brotensor's native registration `fatal()`s on a second
 registration of the same path, and the `HostClass`-based ones rebuild every
 class on each call — a new constructor, a new prototype, `Persistent`s never
 freed — so a second install hands out a second `Mesh` or `LMModel` that
-fails `instanceof` against the first. The per-subsystem `install*Module`
-shells that used to wrap them (and called brosoundml's one installer nine
-times) are gone; only bro's own compiled modules (`js/physics.js`,
+fails `instanceof` against the first. Only bro's own compiled modules (`js/physics.js`,
 `js/scene.js`, `js/net.js`, ...) keep a shell in `host_js_modules.cpp`, and
 those run after the roots (`dom_globals.cpp`). A reload re-runs
 `installSiblingApis` for the new realm; the process-wide hooks it registers
@@ -539,8 +525,7 @@ seam this rides on is `HeadlessHooks::afterEngine`, which runs the host-globals
 install and `runMain()` after the page's own `<script>` tags have run.
 
 Frame counts come from the driver — `advanceTime(n)` over the virtual clock —
-rather than from a `--frames` flag, because the retired per-app host owned its
-own main loop and bro-headless is driven from JS.
+rather than from a `--frames` flag, because bro-headless is driven from JS.
 
 ## Test Fixtures vs Real Applications
 
@@ -726,15 +711,13 @@ drops the document on the same line).
 would be left pointing into released storage), and a registry entry that can be
 released at all, which wants a finalizer able to make embed calls.
 
-**Appending a parsed node into the live tree adopts it**, and that step moved
-into `Node::appendChild` / `Node::insertBefore` (`src/dom/element.cpp`) to make
-it true here. It used to sit in `element_bindings.cpp` under the heading of
-things that "genuinely need a JS realm", which it never did — it is a document
-pointer comparison and a call to `Document::adoptNode`. A compiled program
-appends without passing through the JS bindings at all, so leaving the step
-with the callers meant the live tree held nodes the parser document still owned
-and would eventually destroy. Layout invalidation moved down for the same
-reason and the file comment now says so.
+**Appending a parsed node into the live tree adopts it**, in
+`Node::appendChild` / `Node::insertBefore` (`src/dom/element.cpp`) rather than
+in any binding: it is a document pointer comparison and a call to
+`Document::adoptNode`, and a compiled program appends without passing through
+the JS bindings at all, so a step left with the callers would let the live tree
+hold nodes the parser document still owns and will eventually destroy. Layout
+invalidation sits in the DOM for the same reason.
 
 A second document is also what turned two single-document assumptions in this
 layer into bugs, both fixed with it: the mutation hook remembered a bool
@@ -810,9 +793,8 @@ methods. The curated list survives in one place only — enumerating a computed
 declaration, where the web lists every supported property and htmlayout has no
 registry to ask for that list.
 
-The per-element cost went the right way with it: a styled element used to build
-an accessor PAIR for each of ~110 names in both spellings, and now builds four
-methods and a trap pack.
+A styled element costs four methods and a trap pack, not an accessor per
+property name.
 
 Text nodes, comments, fragments and `cloneNode` are DONE — `host_node.cpp`,
 checked by `tests/bronze_host/run_checks.sh node`. `childNodes`, `firstChild`,
