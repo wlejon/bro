@@ -477,7 +477,7 @@ gpu.interp2dBackward(dY, N, C, H_in, W_in, H_out, W_out, /*mode*/ 1, dX);
 /**
  * The corner-aligned mapping instead (torch align_corners=True), the
  * convention DPT / Depth-Anything fusion and final upsamples use. Modes 0/1/2,
- * forward only. Registered on CPU and CUDA; the Metal slot is intentionally null.
+ * forward only. Registered on CPU, CUDA and Metal.
  */
 gpu.interp2dAlignCornersForward(X, N, C, H_in, W_in, H_out, W_out, /*mode*/ 1, Y);
 

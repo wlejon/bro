@@ -15,8 +15,8 @@
  * `bro.vision.version` — the brovisionml version string.
  *
  * ── Devices ──
- * Every loader takes `opts.device`: 'cuda' (or the alias 'gpu'), 'metal', or
- * 'cpu' (case-insensitive). Omitted, it picks the best backend present —
+ * Every loader takes `opts.device`: 'cuda', 'metal', 'gpu' (the best GPU present,
+ * CUDA then Metal), or 'cpu' (case-insensitive). Omitted, it picks the best backend present —
  * CUDA, then Metal, then CPU — so a GPU machine gets the GPU without asking.
  * Anything else throws a TypeError, and asking for a backend that is not
  * available (not compiled in, or no device) throws an Error rather than
