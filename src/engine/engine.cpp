@@ -298,7 +298,7 @@ static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying,
                                 bool advancePicture, bool advanceClock) {
     if (!el) return;
     if (auto* v = el->videoControl()) {
-        if (advancePicture) v->advancePipeline();
+        if (advancePicture && v->isPlaying()) v->advancePipeline();
         v->pumpEvents(advanceClock);
         if (v->isPlaying()) anyPlaying = true;
     }
