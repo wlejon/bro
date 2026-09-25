@@ -175,6 +175,37 @@ ctx.filter = 'none';
 ctx.filter = 'drop-shadow(rgba(0, 0, 255, 1) 4px 0px)';
 assert(ctx.filter === 'drop-shadow(rgba(0, 0, 255, 1) 4px 0px)', 'drop-shadow with a leading functional color parses');
 
+// A drop-shadow() with no colour, or `currentcolor`, is the canvas element's
+// `color` at the time of the assignment (it was black). Changing `color`
+// afterwards does not recolour the filter already set.
+function shadowOf(filter) {
+    ctx.clearRect(0, 0, 20, 20);
+    ctx.filter = filter;
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 6, 6);
+    ctx.filter = 'none';
+    return px(ctx, 8, 2);
+}
+cv.style.color = 'rgb(0, 200, 0)';
+for (const f of ['drop-shadow(4px 0px 0px)', 'drop-shadow(currentcolor 4px 0px)',
+                 'drop-shadow(4px 0px currentColor)']) {
+    const s = shadowOf(f);
+    assert(s[0] < 15 && near(s[1], 200, 3) && s[2] < 15 && s[3] > 240,
+           f + ' paints the canvas colour rgb(0, 200, 0), got ' + s);
+}
+{
+    ctx.clearRect(0, 0, 20, 20);
+    ctx.filter = 'drop-shadow(4px 0px 0px)';
+    cv.style.color = 'rgb(0, 0, 255)';
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 6, 6);
+    ctx.filter = 'none';
+    const s = px(ctx, 8, 2);
+    assert(near(s[1], 200, 3) && s[2] < 15,
+           'the colour is fixed when the filter is set, got ' + s);
+    cv.style.color = '';
+}
+
 // ---------------------------------------------------------------------------
 // The filter reaches every kind of draw
 // ---------------------------------------------------------------------------

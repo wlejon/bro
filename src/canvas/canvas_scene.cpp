@@ -852,9 +852,9 @@ void CanvasScene::setImageSmoothingQuality(int q) {
     if (q >= 0 && q <= 2) state_.smoothQuality = q;
 }
 
-bool CanvasScene::setFilter(const std::string& filter) {
+bool CanvasScene::setFilter(const std::string& filter, FilterColor currentColor) {
     std::vector<render::CssFilterParams> list;
-    if (!parseCanvasFilter(filter, list)) return false;
+    if (!parseCanvasFilter(filter, list, currentColor)) return false;
     state_.filterStr = filter;
     // "none" parses to an empty list, and an empty chain is a null filter, so
     // a filter that does nothing costs a draw nothing.

@@ -329,7 +329,8 @@ std::vector<std::string> splitArgs(const std::string& s) {
 
 }  // namespace
 
-bool parseCanvasFilter(const std::string& str, std::vector<render::CssFilterParams>& out) {
+bool parseCanvasFilter(const std::string& str, std::vector<render::CssFilterParams>& out,
+                       FilterColor currentColor) {
     out.clear();
     size_t a = 0, b = str.size();
     while (a < b && isSpace(str[a])) ++a;
@@ -397,7 +398,9 @@ bool parseCanvasFilter(const std::string& str, std::vector<render::CssFilterPara
             f.kind = render::CssFilterParams::DropShadow;
             std::vector<float> lens;
             bool haveColor = false;
-            uint8_t cr = 0, cg = 0, cb = 0, ca = 255;  // currentcolor -> black
+            // No colour, or `currentcolor`, is the canvas element's colour.
+            uint8_t cr = currentColor.r, cg = currentColor.g, cb = currentColor.b,
+                    ca = currentColor.a;
             for (size_t i = 0; i < args.size() && ok; ++i) {
                 float len;
                 if (parseLength(args[i], len)) {

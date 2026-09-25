@@ -11,6 +11,8 @@
 #include "canvas/canvas2d.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
+#include "engine/engine.h"
+#include "layout/computed_style.h"
 #include "layout/el_video.h"
 #include "util/string_utils.h"
 
@@ -48,6 +50,21 @@ struct CustomStyles {
         strokeStack.clear();
     }
 };
+
+// What `currentcolor` means in a ctx.filter drop-shadow(): the canvas
+// element's computed `color` at the time of the assignment. Only a value with
+// a drop-shadow() needs it, so only that one pays for the style flush.
+canvas::FilterColor filterCurrentColor(dom::Element* el, const std::string& value) {
+    canvas::FilterColor c;
+    if (!el || util::toLower(value).find("drop-shadow") == std::string::npos) return c;
+    engine::Engine* eng = hostEngine();
+    if (!eng) return c;
+    eng->flushLayoutForRead(el->document());
+    const std::string color = layout::computedProperty(el, "color", eng->textMetrics());
+    uint8_t r, g, b, a;
+    if (canvas::parseCSSColor(color, r, g, b, a)) c = {r, g, b, a};
+    return c;
+}
 
 }  // namespace
 
@@ -482,7 +499,8 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
             if (el && el->canvasScene() && !a.empty()) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 // An unparseable value is ignored and the filter kept.
-                cs->setFilter(ev::toUtf8(a[0]));
+                const std::string value = ev::toUtf8(a[0]);
+                cs->setFilter(value, filterCurrentColor(el, value));
             }
             return ev::undefined();
         });
