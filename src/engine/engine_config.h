@@ -63,6 +63,10 @@ struct EngineConfig {
     // changes. Only ever active for a windowed app whose scripts compile
     // in-process (docs/hot-reload.md); BRO_WATCH=0|1 overrides.
     bool watchSources = true;
+    // Headless only: device px per CSS px to render at, which is also what
+    // window.devicePixelRatio and @media (resolution) report (bro-headless
+    // --device-scale-factor). A windowed engine follows its window instead.
+    float deviceScaleFactor = 1.0f;
     GraphicsConfig graphics;
     InputConfig input;
     Scrollbar::Style viewportScrollbar;

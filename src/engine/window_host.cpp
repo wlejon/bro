@@ -197,7 +197,7 @@ void Engine::processPendingWindowHosts() {
         // hosts get the scale of the display they actually opened on.
         h->displayScale = (displayMode_ == DisplayMode::Headless)
                               ? 1.0
-                              : static_cast<double>(h->window->getDisplayScale());
+                              : static_cast<double>(h->window->getDevicePixelRatio());
         h->boxW = w;
         h->boxH = ht;
         LOG_INFO("bro.window: opened secondary window id=%llu sdl=%u (%dx%d%s)",
@@ -436,7 +436,8 @@ void Engine::applyChildManifestDefaults(WindowHost& h, const std::string& appDir
 // raster-idle drain only (processPendingWindowHosts).
 void Engine::createWindowHostDoc(WindowHost& h, SubDocSource& source) {
     SubDocRef ref = windowHostSubDoc(h);
-    buildSubDocDocument(ref, source, effectiveColorScheme());
+    buildSubDocDocument(ref, source, effectiveColorScheme(),
+                        static_cast<float>(h.displayScale));
 
     runSubDocScripts(ref, source, this, /*isChild=*/true);
 

@@ -183,7 +183,14 @@ Engine::Engine(const EngineConfig& config)
 
             if (!hidden) {
                 window_->setIcon("system/icon.png");
-                displayScale_ = window_->getDisplayScale();
+                // The window may have been clamped to the display (and lost
+                // its title bar's height): lay out at the size it really is.
+                int ww = 0, wh = 0;
+                window_->getSize(ww, wh);
+                if (ww > 0 && wh > 0) {
+                    viewportWidth_ = ww;
+                    viewportHeight_ = wh;
+                }
             }
 
             gl_ = std::make_unique<render::GLContext>(*window_);
@@ -204,6 +211,13 @@ Engine::Engine(const EngineConfig& config)
     } else {
         renderer_ = std::make_unique<render::RasterRenderer>();
     }
+
+    deviceScale_.configured = config.deviceScaleFactor;
+    updateDeviceScale();
+    if (deviceScale_.render != 1.0f || deviceScale_.ratio != 1.0f)
+        LOG_INFO("Device scale %.2f (devicePixelRatio %.2f): %dx%d CSS px, drawable %dx%d",
+                 deviceScale_.render, deviceScale_.ratio, viewportWidth_, viewportHeight_,
+                 deviceScale_.drawableW, deviceScale_.drawableH);
 
     if (displayMode_ == DisplayMode::Headless) {
         virtualTime_ = util::currentTimeMs();
@@ -372,6 +386,7 @@ void Engine::initAppRealm() {
     document_->setMediaViewport(static_cast<float>(contentWidth()),
                                 static_cast<float>(contentHeight()));
     document_->setMediaColorScheme(effectiveColorScheme());
+    document_->setMediaResolution(deviceScale_.ratio);
     document_->cascade().setImportResolver([this](const std::string& url) {
         std::string path = AppLoader::resolvePath(document_->basePath(), url,
                                                   &assetMounts_);
@@ -658,6 +673,7 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
     graph->setCanvasScene(csPtr);
     graph->setPhysicsWorld(physicsWorld_.get());
     graph->setCanvasSize(cw, ch);
+    graph->setDeviceScale(deviceScale_.render);
     auto* graphPtr = graph.get();
 
     canvas->setSceneGraph(graphPtr);

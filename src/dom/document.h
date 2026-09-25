@@ -426,6 +426,10 @@ public:
     // retained sheet and marks the document dirty for restyle.
     void setMediaColorScheme(const std::string& scheme);
 
+    // Device pixel ratio (dppx) for @media (resolution) and the -webkit-
+    // device-pixel-ratio features. Same contract as setMediaViewport.
+    void setMediaResolution(float dppx);
+
     // The current media evaluation context (viewport + color scheme). Default
     // constructed (0x0, light) until setMediaViewport/setMediaColorScheme run.
     const htmlayout::css::MediaContext& mediaContext() const { return mediaContext_; }

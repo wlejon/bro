@@ -162,6 +162,19 @@ void installHeadlessGlobals(engine::Engine& engine) {
             return ev::undefined();
         }, 2, "resize"));
 
+    // 6b. setDeviceScaleFactor(scale): render as a display with `scale` device
+    // px per CSS px — devicePixelRatio, @media (resolution), layer surfaces and
+    // screenshots follow; layout and event coordinates stay in CSS px.
+    regBoth("setDeviceScaleFactor", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            if (a.empty()) return ev::throwTypeError("setDeviceScaleFactor(scale) requires a scale");
+            double s = ev::toDouble(a[0]);
+            if (!(s > 0.0)) return ev::throwRangeError("setDeviceScaleFactor: scale must be > 0");
+            engine.setDeviceScaleFactor(static_cast<float>(s));
+            engine.flush();
+            return ev::undefined();
+        }, 1, "setDeviceScaleFactor"));
+
     // 7. setDialogAnswer(accept)
     regBoth("setDialogAnswer", ev::makeFunction(
         [](Value, std::span<const Value> a) {

@@ -41,6 +41,7 @@
 
 #include <glad/gl.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -171,6 +172,7 @@ void Engine::flush() {
                 sg.graph->setCanvasSize(ew, eh);
             }
         }
+        if (sg.graph) sg.graph->setDeviceScale(deviceScale_.render);
         if (sg.graph) sg.graph->render();
     }
     if (gpuTiming) { glEndQuery(GL_TIME_ELAPSED); gpuTimerPending_ = true; }
@@ -320,7 +322,9 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia) return {};
 
+    // The frame is read back in device px: viewport × render scale.
     int w = viewportWidth_, h = viewportHeight_;
+    const int fw = deviceScale_.drawableW, fh = deviceScale_.drawableH;
 
     webgl::WebGL2RenderingContext* activeWebGL = nullptr;
     if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
@@ -335,7 +339,9 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
         if (sg.graph) sg.graph->materializeHtmlNodes(skia);
     }
     for (auto& sg : sceneGraphs_) {
-        if (sg.graph) sg.graph->render();
+        if (!sg.graph) continue;
+        sg.graph->setDeviceScale(deviceScale_.render);
+        sg.graph->render();
     }
 #endif
 
@@ -365,31 +371,33 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
                     insetTop, contentRight(), contentBottom(), scrollY_);
     recordSystemPanelLayers(sysCmds, w, h);
     recordIframeLayers();
+    skia->setDeviceScale(deviceScale_.render);
     replayAppLayers(skia, appCmds,
                     screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
-                    cw, ch, appLayers);
+                    deviceScale_.toDevice(cw), deviceScale_.toDevice(ch), appLayers);
     replaySystemPanelLayers(skia, sysCmds,
                             screenshotSystemPool_, screenshotSystemPoolW_,
                             screenshotSystemPoolH_,
-                            w, h, systemLayers);
+                            fw, fh, systemLayers);
     replayIframeLayers(skia);
+    skia->setDeviceScale(1.0f);
     skia->endFrame();
 
     GLuint compositeFBO = 0, compositeTex = 0;
     glGenFramebuffers(1, &compositeFBO);
-    compositeTex = gl_->createTexture2D(w, h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
+    compositeTex = gl_->createTexture2D(fw, fh, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
     glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, compositeTex, 0);
 
-    glViewport(0, 0, w, h);
+    glViewport(0, 0, fw, fh);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     compositeLayers(appLayers, compositeFBO, insetTop, cw, ch);
     compositeLayers(systemLayers, compositeFBO);
 
-    std::vector<uint8_t> pixels(w * h * 4);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    std::vector<uint8_t> pixels(static_cast<size_t>(fw) * fh * 4);
+    glReadPixels(0, 0, fw, fh, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &compositeFBO);
@@ -397,11 +405,11 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
 
     if (activeWebGL) activeWebGL->restoreState();
 
-    int rowBytes = w * 4;
+    size_t rowBytes = static_cast<size_t>(fw) * 4;
     std::vector<uint8_t> row(rowBytes);
-    for (int y = 0; y < h / 2; ++y) {
+    for (int y = 0; y < fh / 2; ++y) {
         uint8_t* top = pixels.data() + y * rowBytes;
-        uint8_t* bot = pixels.data() + (h - 1 - y) * rowBytes;
+        uint8_t* bot = pixels.data() + (fh - 1 - y) * rowBytes;
         memcpy(row.data(), top, rowBytes);
         memcpy(top, bot, rowBytes);
         memcpy(bot, row.data(), rowBytes);
@@ -417,8 +425,8 @@ bool Engine::screenshot(const std::string& path) {
     if (gl_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
         auto pixels = renderUnifiedToPixels();
         if (pixels.empty()) return false;
-        int w = viewportWidth_, h = viewportHeight_;
-        return broimage::encode_png_file(path, pixels.data(), w, h, 4);
+        return broimage::encode_png_file(path, pixels.data(), deviceScale_.drawableW,
+                                         deviceScale_.drawableH, 4);
     }
 
     {
@@ -536,7 +544,18 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
     auto pixels = capturePixels();
     if (pixels.empty()) return false;
 
-    int fw = viewportWidth_, fh = viewportHeight_;
+    // The rect is in CSS px; the frame is in device px.
+    int fw = deviceScale_.drawableW, fh = deviceScale_.drawableH;
+    if (fw != viewportWidth_ || fh != viewportHeight_) {
+        const float sx = static_cast<float>(fw) / static_cast<float>(viewportWidth_);
+        const float sy = static_cast<float>(fh) / static_cast<float>(viewportHeight_);
+        int x1 = static_cast<int>(std::lround((cx + cw) * sx));
+        int y1 = static_cast<int>(std::lround((cy + ch) * sy));
+        cx = static_cast<int>(std::lround(cx * sx));
+        cy = static_cast<int>(std::lround(cy * sy));
+        cw = x1 - cx;
+        ch = y1 - cy;
+    }
 
     if (cx < 0) cx = 0;
     if (cy < 0) cy = 0;
@@ -544,9 +563,9 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
     if (cy + ch > fh) ch = fh - cy;
     if (cw <= 0 || ch <= 0) return false;
 
-    std::vector<uint8_t> cropped(cw * ch * 4);
+    std::vector<uint8_t> cropped(static_cast<size_t>(cw) * ch * 4);
     for (int y = 0; y < ch; ++y) {
-        const uint8_t* src = pixels.data() + ((cy + y) * fw + cx) * 4;
+        const uint8_t* src = pixels.data() + (static_cast<size_t>(cy + y) * fw + cx) * 4;
         uint8_t* dst = cropped.data() + y * cw * 4;
         memcpy(dst, src, cw * 4);
     }

@@ -28,6 +28,7 @@ FramePresenter::Snapshot Engine::buildRasterSnapshot() const {
     s.insetRight  = contentRight();
     s.insetBottom = contentBottom();
     s.scrollY     = scrollY_;
+    s.scale       = deviceScale_.render;
     return s;
 }
 
@@ -195,7 +196,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
-    glViewport(0, 0, viewportWidth_, viewportHeight_);
+    glViewport(0, 0, deviceScale_.drawableW, deviceScale_.drawableH);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);

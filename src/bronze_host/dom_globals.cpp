@@ -484,6 +484,12 @@ void installWebHostGlobals(engine::Engine& engine) {
 
         b.accessor("devicePixelRatio",
                    [enginePtr](Value, std::span<const Value>) {
+                       // A secondary window reports the display it sits on.
+                       dom::Document* curDoc = currentHostDocument();
+                       if (curDoc && enginePtr) {
+                           if (auto* wh = enginePtr->windowHostForDocument(curDoc))
+                               return ev::fromDouble(wh->displayScale);
+                       }
                        return ev::fromDouble(enginePtr->displayScale());
                    },
                    nullptr);

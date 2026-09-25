@@ -448,6 +448,8 @@ void Engine::recordWindowHostLayers() {
         // but keep the last recording (and its texture) so a restore shows the
         // old frame until the next one paints, rather than flashing blank.
         if (h->minimized) continue;
+        if (h->window && displayMode_ == DisplayMode::Windowed)
+            h->renderScale = h->window->getPixelDensity();
         syncWindowHostBox(*h);
         recordSubDoc(windowHostSubDoc(*h), recordingRenderer_.get(),
                      drawTraversal_.get(), *textMetrics_);
@@ -461,10 +463,13 @@ void Engine::recordWindowHostLayers() {
 // the app's own layers.
 void Engine::replayWindowHostLayers(render::SkiaRenderer* renderer) {
     if (!renderer || !renderer->grContext()) return;
+    const float appScale = renderer->deviceScale();
     for (auto& h : windowHosts_) {
         if (h->pendingClose) continue;
+        renderer->setDeviceScale(h->renderScale);
         replaySubDoc(windowHostSubDoc(*h), renderer);
     }
+    renderer->setDeviceScale(appScale);
 }
 
 // Authoritative, synchronous capture of an <iframe> sub-document's pixels for
@@ -574,8 +579,23 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
     float lh = layerH >= 0 ? static_cast<float>(layerH) : vh;
     float oy = static_cast<float>(offsetY);
 
+    // Quads are in CSS px (the shader maps the CSS viewport to NDC); the
+    // framebuffer is in device px, so only the viewport and the scissor
+    // rects below see the device scale.
+    const int fbW = deviceScale_.drawableW, fbH = deviceScale_.drawableH;
+    const float sx = static_cast<float>(fbW) / vw;
+    const float sy = static_cast<float>(fbH) / vh;
+    auto scissorCss = [&](float x, float yTop, float w, float h) {
+        int x0 = static_cast<int>(std::floor(x * sx));
+        int x1 = static_cast<int>(std::ceil((x + w) * sx));
+        int y0 = static_cast<int>(std::floor(yTop * sy));
+        int y1 = static_cast<int>(std::ceil((yTop + h) * sy));
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(x0, fbH - y1, std::max(0, x1 - x0), std::max(0, y1 - y0));
+    };
+
     glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
-    glViewport(0, 0, viewportWidth_, viewportHeight_);
+    glViewport(0, 0, fbW, fbH);
 
     glUseProgram(gl_->textureProgram());
     float viewport[2] = {vw, vh};
@@ -623,14 +643,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 float cw = layer.cw, ch = layer.ch;
                 bool scissored = false;
                 if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                    float clipY = layer.clipY + oy;
-                    int sx = static_cast<int>(std::floor(layer.clipX));
-                    int sw = static_cast<int>(std::ceil(layer.clipX + layer.clipW)) - sx;
-                    int syTop = static_cast<int>(std::floor(clipY));
-                    int sh = static_cast<int>(std::ceil(clipY + layer.clipH)) - syTop;
-                    int sy = viewportHeight_ - (syTop + sh);
-                    glEnable(GL_SCISSOR_TEST);
-                    glScissor(sx, sy, std::max(0, sw), std::max(0, sh));
+                    scissorCss(layer.clipX, layer.clipY + oy, layer.clipW, layer.clipH);
                     scissored = true;
                 }
                 render::TextureVertex quad[6] = {
@@ -670,14 +683,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 // viewport height. clipW < 0 ⇒ unclipped.
                 bool scissored = false;
                 if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                    float clipY = layer.clipY + oy;
-                    int sx = static_cast<int>(std::floor(layer.clipX));
-                    int sw = static_cast<int>(std::ceil(layer.clipX + layer.clipW)) - sx;
-                    int syTop = static_cast<int>(std::floor(clipY));
-                    int sh = static_cast<int>(std::ceil(clipY + layer.clipH)) - syTop;
-                    int sy = viewportHeight_ - (syTop + sh);
-                    glEnable(GL_SCISSOR_TEST);
-                    glScissor(sx, sy, std::max(0, sw), std::max(0, sh));
+                    scissorCss(layer.clipX, layer.clipY + oy, layer.clipW, layer.clipH);
                     scissored = true;
                 }
 

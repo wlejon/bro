@@ -216,6 +216,14 @@ void Document::setMediaColorScheme(const std::string& scheme) {
     rebuildCascadeForMediaChange();
 }
 
+void Document::setMediaResolution(float dppx) {
+    if (hasMediaContext_ && mediaContext_.resolution == dppx) return;
+    hasMediaContext_ = true;
+    mediaContext_.resolution = dppx;
+    ++mediaGeneration_;
+    rebuildCascadeForMediaChange();
+}
+
 void Document::rebuildCascadeForMediaChange() {
     if (retainedSheets_.empty()) return;
     // The media context changed after sheets were added: re-evaluate every

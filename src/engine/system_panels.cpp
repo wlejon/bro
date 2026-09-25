@@ -217,6 +217,7 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         doc.document->setMediaViewport(static_cast<float>(viewportWidth_),
                                        static_cast<float>(viewportHeight_));
         doc.document->setMediaColorScheme(effectiveColorScheme());
+        doc.document->setMediaResolution(deviceScale_.ratio);
         doc.document->parse(html, authorStyles, kDefaultStyles);
 
         // Initial layout — shared engine text metrics (same renderer/fontManager
@@ -433,15 +434,18 @@ void Engine::renderSplashImmediate() {
     recordSystemPanelLayers(sysCmds, viewportWidth_, viewportHeight_);
 
     skia->beginFrame(viewportWidth_, viewportHeight_);
+    skia->setDeviceScale(deviceScale_.render);
     std::vector<UILayer> systemLayers;
     replaySystemPanelLayers(skia, sysCmds,
                             screenshotSystemPool_, screenshotSystemPoolW_,
                             screenshotSystemPoolH_,
-                            viewportWidth_, viewportHeight_,
+                            deviceScale_.toDevice(viewportWidth_),
+                            deviceScale_.toDevice(viewportHeight_),
                             systemLayers);
+    skia->setDeviceScale(1.0f);
     skia->endFrame();
 
-    glViewport(0, 0, viewportWidth_, viewportHeight_);
+    glViewport(0, 0, deviceScale_.drawableW, deviceScale_.drawableH);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);

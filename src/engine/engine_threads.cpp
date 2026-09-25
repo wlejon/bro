@@ -187,8 +187,14 @@ void Engine::rasterThreadFunc() {
 
         // App layer surfaces are content-sized (viewport minus engine
         // insets); the main thread's compositor places them at (0, insetTop).
-        int contentW = std::max(1, snap.vpWidth - snap.insetRight);
-        int contentH = std::max(1, snap.vpHeight - snap.insetTop - snap.insetBottom);
+        // Every surface is allocated in device px (CSS size × scale) and the
+        // renderer's base matrix maps the CSS-space commands onto it.
+        DeviceScale ds;
+        ds.render = snap.scale;
+        rasterRenderer->setDeviceScale(snap.scale);
+        int contentW = ds.toDevice(std::max(1, snap.vpWidth - snap.insetRight));
+        int contentH = ds.toDevice(
+            std::max(1, snap.vpHeight - snap.insetTop - snap.insetBottom));
         // Base commands come from the engine's single cross-frame cache
         // (rebuilt by main only on a real base change, always while we're idle);
         // the promoted subtree commands are this slot's fresh per-frame buffer,
@@ -204,7 +210,7 @@ void Engine::rasterThreadFunc() {
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
                                 systemSurfacePool_[back], systemSurfacePoolW_[back],
                                 systemSurfacePoolH_[back],
-                                snap.vpWidth, snap.vpHeight,
+                                ds.toDevice(snap.vpWidth), ds.toDevice(snap.vpHeight),
                                 backBuf.systemLayers);
 
         // Replay each iframe sub-document into its box-sized surface (raster
@@ -218,6 +224,7 @@ void Engine::rasterThreadFunc() {
         // the single fence below covers them exactly as it covers app layers.
         replayWindowHostLayers(rasterRenderer.get());
 
+        rasterRenderer->setDeviceScale(1.0f);
         rasterRenderer->endFrame();
 
         // GL fence — guarantees all GPU commands are visible before the main

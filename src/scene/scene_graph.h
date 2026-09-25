@@ -511,6 +511,7 @@ public:
     /// <1 trades sharpness for fill-rate, >1 supersamples.
     void  setRenderScale(float s) { renderer_.setRenderScale(s); }
     float renderScale() const { return renderer_.renderScale(); }
+    void  setDeviceScale(float s) { renderer_.setDeviceScale(s); }
 
     /// MSAA sample count for the HDR 3D passes (0/1 = off; clamped to the
     /// driver's GL_MAX_SAMPLES at allocation). Multisampled color + depth

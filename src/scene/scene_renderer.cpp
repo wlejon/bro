@@ -166,12 +166,12 @@ void SceneRenderer::ensureFallbackTextures() {
 }
 
 int SceneRenderer::targetWidth() const {
-    const int w = static_cast<int>(graph_.canvasWidth_ * renderScale_ + 0.5f);
+    const int w = static_cast<int>(graph_.canvasWidth_ * renderScale_ * deviceScale_ + 0.5f);
     return w < 1 ? 1 : w;
 }
 
 int SceneRenderer::targetHeight() const {
-    const int h = static_cast<int>(graph_.canvasHeight_ * renderScale_ + 0.5f);
+    const int h = static_cast<int>(graph_.canvasHeight_ * renderScale_ * deviceScale_ + 0.5f);
     return h < 1 ? 1 : h;
 }
 

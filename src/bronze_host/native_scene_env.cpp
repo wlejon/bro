@@ -39,6 +39,9 @@ static thread_local CullStatsSlot tl_cullStatsSlot;
 static thread_local double tl_vec3Buf[3];
 static thread_local double tl_unprojectBuf[6];
 static thread_local std::vector<uint8_t> tl_tonemapPixels;
+// The size of the last readTonemapPixels: the render target, which is the
+// canvas size × renderScale × the display's device scale.
+static thread_local int32_t tl_tonemapW = 0, tl_tonemapH = 0;
 
 struct PickFrame {
     bromath::Vec3 bx, by, bz, bt;
@@ -496,7 +499,12 @@ void bro_scene_SceneGraph_readTonemapPixels(void* self, bronze_native_buffer* ou
     if (!g) { copyBuffer<uint8_t>(nullptr, 0, out); return; }
     int w = 0, h = 0;
     tl_tonemapPixels = g->readTonemapPixelsRGBA(w, h);
+    tl_tonemapW = w;
+    tl_tonemapH = h;
     copyBuffer(tl_tonemapPixels.data(), static_cast<uint32_t>(tl_tonemapPixels.size()), out);
 }
+
+int32_t bro_scene_SceneGraph_readTonemapWidth(void) { return tl_tonemapW; }
+int32_t bro_scene_SceneGraph_readTonemapHeight(void) { return tl_tonemapH; }
 
 }  // extern "C"

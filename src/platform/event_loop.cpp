@@ -250,6 +250,7 @@ void EventLoop::pollEvents() {
                 break;
 
             case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 if (onDisplayScaleChanged) onDisplayScaleChanged(event.window.windowID);
                 break;
 

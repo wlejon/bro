@@ -421,6 +421,7 @@ void Engine::run() {
                     sg.graph->setCanvasSize(ew, eh);
                 }
             }
+            sg.graph->setDeviceScale(deviceScale_.render);
             sg.graph->render();
         }
 #endif

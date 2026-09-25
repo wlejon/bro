@@ -596,6 +596,48 @@ void Engine::ensureReplacedElements(dom::Element* elem) {
                                          audioEngine_.get());
 }
 
+physics::PhysicsWorld* Engine::physicsWorld() {
+#if BRO_WITH_PHYSICS
+    return physicsWorld_.get();
+#else
+    return nullptr;
+#endif
+}
+
+const physics::PhysicsWorld* Engine::physicsWorld() const {
+#if BRO_WITH_PHYSICS
+    return physicsWorld_.get();
+#else
+    return nullptr;
+#endif
+}
+
+net::NetService* Engine::netService() {
+#if BRO_WITH_NET
+    return netService_.get();
+#else
+    return nullptr;
+#endif
+}
+
+const net::NetService* Engine::netService() const {
+#if BRO_WITH_NET
+    return netService_.get();
+#else
+    return nullptr;
+#endif
+}
+
+canvas::CanvasScene* Engine::canvasSceneById(uint64_t id) const {
+    if (!id) return nullptr;
+    auto it = canvasSceneRegistry_.find(id);
+    return it == canvasSceneRegistry_.end() ? nullptr : it->second;
+}
+
+void Engine::fireFrameCallbacks(double dtMs) {
+    for (auto& cb : frameCallbacks_) cb(dtMs);
+}
+
 // Headless/capture API (flush, advanceTime, eval, screenshot, capturePixels,
 // querySelector, dispatchClickOn) is in headless_api.cpp.
 } // namespace bro::engine

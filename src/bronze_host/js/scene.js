@@ -1003,12 +1003,10 @@
     accessor(SceneNode.prototype, "boxProjection", function () { return __bro_native.scene.SceneNode_boxProjection_get(this); }, function (v) { __bro_native.scene.SceneNode_boxProjection_set(this, v); });
 
     fn(SceneGraph.prototype, "toImageData", function toImageData() {
-        const cw = __bro_native.scene.SceneGraph_canvasWidth(this);
-        const ch = __bro_native.scene.SceneGraph_canvasHeight(this);
         const buf = __bro_native.scene.SceneGraph_readTonemapPixels(this);
         if (!buf || buf.length === 0) return null;
-        const scale = __bro_native.scene.SceneGraph_renderScale_get(this) || 1.0;
-        const w = Math.round(cw * scale), h = Math.round(ch * scale);
+        const w = __bro_native.scene.SceneGraph_readTonemapWidth();
+        const h = __bro_native.scene.SceneGraph_readTonemapHeight();
         const data = new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
         if (typeof globalThis.ImageData !== 'undefined') {
             try { return new globalThis.ImageData(data, w, h); } catch (e) {}
@@ -1020,12 +1018,10 @@
             __bro_native.scene.SceneGraph_setCanvasSize(this, width, height);
         }
         __bro_native.scene.SceneGraph_render(this);
-        const cw = width !== undefined ? width : __bro_native.scene.SceneGraph_canvasWidth(this);
-        const ch = height !== undefined ? height : __bro_native.scene.SceneGraph_canvasHeight(this);
         const buf = __bro_native.scene.SceneGraph_readTonemapPixels(this);
         if (!buf || buf.length === 0) return null;
-        const scale = __bro_native.scene.SceneGraph_renderScale_get(this) || 1.0;
-        const w = Math.round(cw * scale), h = Math.round(ch * scale);
+        const w = __bro_native.scene.SceneGraph_readTonemapWidth();
+        const h = __bro_native.scene.SceneGraph_readTonemapHeight();
         const data = new Uint8ClampedArray(buf.buffer, buf.byteOffset, buf.byteLength);
         if (typeof globalThis.ImageData !== 'undefined') {
             try { return new globalThis.ImageData(data, w, h); } catch (e) {}

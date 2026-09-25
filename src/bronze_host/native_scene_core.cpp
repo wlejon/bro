@@ -660,6 +660,8 @@ bool registerSceneNatives(std::string* error) {
            fn("__bro_native.scene.SceneGraph_canvasHeight", (void*)&bro_scene_SceneGraph_canvasHeight, "f64", {"__bro_native.scene.SceneGraph"}, error) &&
            fn("__bro_native.scene.SceneGraph_setCanvasSize", (void*)&bro_scene_SceneGraph_setCanvasSize, "void", {"__bro_native.scene.SceneGraph", "f64", "f64"}, error) &&
            fn("__bro_native.scene.SceneGraph_readTonemapPixels", (void*)&bro_scene_SceneGraph_readTonemapPixels, "u8[]", {"__bro_native.scene.SceneGraph"}, error) &&
+           fn("__bro_native.scene.SceneGraph_readTonemapWidth", (void*)&bro_scene_SceneGraph_readTonemapWidth, "i32", {}, error) &&
+           fn("__bro_native.scene.SceneGraph_readTonemapHeight", (void*)&bro_scene_SceneGraph_readTonemapHeight, "i32", {}, error) &&
            fn("__bro_native.scene.SceneGraph_createMesh", (void*)&bro_scene_SceneGraph_createMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            fn("__bro_native.scene.SceneGraph_createSkinnedMesh", (void*)&bro_scene_SceneGraph_createSkinnedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&
            fn("__bro_native.scene.SceneGraph_createInstancedMesh", (void*)&bro_scene_SceneGraph_createInstancedMesh, "__bro_native.scene.SceneNode", {"__bro_native.scene.SceneGraph", "dynamic", "dynamic"}, error) &&

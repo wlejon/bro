@@ -97,6 +97,7 @@ Value makeHostMatchMediaObject(const std::string& rawQuery) {
         htmlayout::css::MediaContext mctx;
         mctx.viewportWidth = static_cast<float>(eng->contentWidth());
         mctx.viewportHeight = static_cast<float>(eng->contentHeight());
+        mctx.resolution = eng->displayScale();
         matches = htmlayout::css::evaluateMediaQuery(mediaStr, mctx);
     }
 

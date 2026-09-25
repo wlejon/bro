@@ -289,6 +289,9 @@ public:
         renderScale_ = s < 0.25f ? 0.25f : (s > 2.0f ? 2.0f : s);
     }
     float renderScale() const { return renderScale_; }
+    /// Device px per CSS px of the display (the engine's render scale, 2 on
+    /// Retina); multiplies renderScale in the render-target size.
+    void setDeviceScale(float s) { deviceScale_ = s > 0.0f ? s : 1.0f; }
 
     /// MSAA sample count for the HDR 3D passes. 0/1 = off; clamped to the
     /// driver's GL_MAX_SAMPLES at allocation time (the stored value is the
@@ -539,7 +542,7 @@ private:
     void ensureMeshFBO();
     void destroyMeshFBO();
 
-    // Scaled render-target size: CSS canvas size * renderScale_, min 1.
+    // Scaled render-target size: CSS canvas size * renderScale_ * deviceScale_, min 1.
     // Everything that sizes an internal FBO goes through these; the canvas
     // (CSS) size stays the contract for picking, aspect and compositing.
     int targetWidth() const;
@@ -899,6 +902,7 @@ private:
 
     // Render-target settings
     float renderScale_ = 1.0f;   // internal-resolution multiplier
+    float deviceScale_ = 1.0f;   // display device px per CSS px
     int msaaSamples_ = 0;        // requested sample count; 0/1 = off
 
     bool hasMeshContent_ = false;

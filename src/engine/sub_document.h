@@ -44,7 +44,7 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
 
 /// Parse the loaded HTML into a fresh Document whose media context is the sub-doc's own box.
 void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
-                         const std::string& colorScheme);
+                         const std::string& colorScheme, float resolution);
 
 /// Execute scripts for a sub-document.
 void runSubDocScripts(SubDocRef d, const SubDocSource& src, Engine* engine, bool isChild);

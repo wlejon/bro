@@ -66,7 +66,10 @@ public:
     std::function<void()> onSystemThemeChanged;
     // The window's display scale changed (SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED):
     // the user changed the OS scaling factor, or the window moved to a display
-    // with a different scale. Re-query via Window::getDisplayScale().
+    // with a different scale. Re-query via Window::getDisplayScale(). Also
+    // fired for SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED, since the drawable's
+    // pixel density can change without the window size changing (a Retina
+    // window dragged onto a 1x display).
     std::function<void(uint32_t windowId)> onDisplayScaleChanged;
     // Gamepad events. `instanceId` is the SDL joystick instance id; button is
     // an SDL_GamepadButton, axis an SDL_GamepadAxis. Axis values are already

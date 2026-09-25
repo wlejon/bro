@@ -16,6 +16,7 @@
 #include "layout/skia_text_metrics.h"
 #include "render/renderer.h"
 #include "render/command_buffer.h"
+#include "engine/device_scale.h"
 #include "render/command_replayer.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
@@ -86,10 +87,11 @@ SubDocSource loadSubDocSource(const std::string& basePath, const std::string& sr
 }
 
 void buildSubDocDocument(SubDocRef d, const SubDocSource& src,
-                         const std::string& colorScheme) {
+                         const std::string& colorScheme, float resolution) {
     d.document = std::make_unique<dom::Document>();
     d.document->setBasePath(src.manifest.basePath);
     d.document->setMediaColorScheme(colorScheme);
+    d.document->setMediaResolution(resolution);
     d.document->setMediaViewport(static_cast<float>(d.boxW), static_cast<float>(d.boxH));
     d.document->parse(src.html, src.authorStyles, kDefaultStyles);
 }
@@ -191,7 +193,11 @@ static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
 void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
     auto* grCtx = renderer->grContext();
     if (d.cmdBuffer.commandCount() == 0) { d.fboTexture = 0; return; }
-    int bw = std::max(1, d.boxW), bh = std::max(1, d.boxH);
+    // The surface is in device px at the renderer's current scale; the box
+    // (and the compositor quad sampling it) stay in CSS px.
+    DeviceScale ds;
+    ds.render = renderer->deviceScale();
+    int bw = ds.toDevice(std::max(1, d.boxW)), bh = ds.toDevice(std::max(1, d.boxH));
     if (!d.surface.surface || d.surfW != bw || d.surfH != bh) {
         if (d.surface.surface) renderer->destroyGPUSurface(d.surface);
         d.surface = renderer->createGPUSurface(bw, bh);
@@ -217,6 +223,9 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     grCtx->resetContext();
     render::SkiaRenderer::GPUSurface surf = skia->createGPUSurface(w, h);
     if (!surf.surface) { grCtx->resetContext(); return {}; }
+    // capture() hands back CSS-px pixels whatever the display scale.
+    const float prevScale = skia->deviceScale();
+    skia->setDeviceScale(1.0f);
     auto prev = skia->switchSurface(surf.surface);
     if (auto* c = skia->getCanvas()) c->clear(SK_ColorTRANSPARENT);
 
@@ -237,6 +246,7 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     glDeleteFramebuffers(1, &fbo);
 
     skia->switchSurface(prev);
+    skia->setDeviceScale(prevScale);
     skia->destroyGPUSurface(surf);
     grCtx->resetContext();
 

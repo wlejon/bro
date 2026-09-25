@@ -2,6 +2,7 @@
 
 #include "engine/app_loader.h"
 #include "engine/css_transitions.h"
+#include "engine/device_scale.h"
 #include "engine/dom_undo.h"
 #include "engine/engine_config.h"
 #include "engine/engine_types.h"
@@ -110,7 +111,14 @@ public:
     void run();
     void handleResize(int w, int h);
     void handleDisplayScaleChanged();
-    float displayScale() const { return displayScale_; }
+    float displayScale() const { return deviceScale_.ratio; }
+    /// Device px rasterized per CSS px, and the frame's size in device px
+    /// (what capturePixels() returns). See DeviceScale.
+    float renderScale() const { return deviceScale_.render; }
+    int framePixelWidth() const { return deviceScale_.drawableW; }
+    int framePixelHeight() const { return deviceScale_.drawableH; }
+    /// Headless: render as a display with `scale` device px per CSS px.
+    void setDeviceScaleFactor(float scale);
 
     std::string effectiveColorScheme() const;
     void applyColorScheme();
@@ -318,20 +326,8 @@ public:
     const AudioInference* audioInference() const { return audioInference_.get(); }
     steam::SteamService* steamService() { return steamService_.get(); }
     const steam::SteamService* steamService() const { return steamService_.get(); }
-    physics::PhysicsWorld* physicsWorld() {
-#if BRO_WITH_PHYSICS
-        return physicsWorld_.get();
-#else
-        return nullptr;
-#endif
-    }
-    const physics::PhysicsWorld* physicsWorld() const {
-#if BRO_WITH_PHYSICS
-        return physicsWorld_.get();
-#else
-        return nullptr;
-#endif
-    }
+    physics::PhysicsWorld* physicsWorld();
+    const physics::PhysicsWorld* physicsWorld() const;
     void dismissSplash() {
         if (splashVisible_) {
             splashVisible_ = false;
@@ -350,20 +346,8 @@ public:
     void toggleSystemPerf();
     void toggleSystemSettings();
     void showSystemPanel(const std::string& name);
-    net::NetService* netService() {
-#if BRO_WITH_NET
-        return netService_.get();
-#else
-        return nullptr;
-#endif
-    }
-    const net::NetService* netService() const {
-#if BRO_WITH_NET
-        return netService_.get();
-#else
-        return nullptr;
-#endif
-    }
+    net::NetService* netService();
+    const net::NetService* netService() const;
 
     bool isSystemVisible() const;
     Settings* settings() const { return settings_.get(); }
@@ -719,7 +703,9 @@ private:
     bool shutdownDone_ = false;
     int viewportWidth_;
     int viewportHeight_;
-    float displayScale_ = 1.0f;
+    DeviceScale deviceScale_;
+    bool updateDeviceScale();
+    void applyMediaResolution();
     std::string resolvedCursor_ = "default";
 
     AppManifest manifest_;
@@ -730,11 +716,7 @@ private:
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenesDetached_;
     std::unordered_map<uint64_t, canvas::CanvasScene*> canvasSceneRegistry_;
-    canvas::CanvasScene* canvasSceneById(uint64_t id) const {
-        if (!id) return nullptr;
-        auto it = canvasSceneRegistry_.find(id);
-        return it == canvasSceneRegistry_.end() ? nullptr : it->second;
-    }
+    canvas::CanvasScene* canvasSceneById(uint64_t id) const;
     std::unique_ptr<canvas::CanvasRasterThread> canvasRasterThread_;
 
     std::vector<WebGLEntry> webglEntries_;
@@ -774,9 +756,7 @@ private:
     std::vector<std::function<void()>> framePumps_;
     std::vector<std::function<void()>> shutdownHooks_;
     std::vector<std::function<void(double)>> frameCallbacks_;
-    void fireFrameCallbacks(double dtMs) {
-        for (auto& cb : frameCallbacks_) cb(dtMs);
-    }
+    void fireFrameCallbacks(double dtMs);
 #if BRO_WITH_PHYSICS
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
 #endif

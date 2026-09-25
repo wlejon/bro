@@ -36,7 +36,7 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
 
     setGLAttributes();
 
-    SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
+    SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(baseWindowFlags());
     if (hidden) {
         flags |= SDL_WINDOW_HIDDEN;
     } else if (resizable) {
@@ -171,7 +171,7 @@ std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
     // pixel format is compatible with the shared main context.
     setGLAttributes();
 
-    SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
+    SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(baseWindowFlags());
     if (cfg.hidden) {
         flags |= SDL_WINDOW_HIDDEN;
     } else if (cfg.resizable) {
@@ -247,6 +247,31 @@ void Window::getSizeInPixels(int& w, int& h) const {
     w = h = 0;
     if (!m_window) return;
     SDL_GetWindowSizeInPixels(m_window, &w, &h);
+}
+
+float Window::getPixelDensity() const {
+    if (!m_window) return 1.0f;
+    float density = SDL_GetWindowPixelDensity(m_window);
+    return density > 0.0f ? density : 1.0f;
+}
+
+float Window::getDevicePixelRatio() const {
+#ifdef __APPLE__
+    return getPixelDensity();
+#else
+    return getDisplayScale();
+#endif
+}
+
+uint64_t Window::baseWindowFlags() {
+    SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
+#ifdef __APPLE__
+    // Only Apple: there the backing store is the one thing that changes, and
+    // the engine renders at getPixelDensity(). Windows and X11 already hand
+    // out pixel-sized windows, and keep today's output unchanged.
+    flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#endif
+    return static_cast<uint64_t>(flags);
 }
 
 void Window::raise() {

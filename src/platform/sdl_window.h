@@ -133,6 +133,11 @@ public:
     /// Current drawable size in physical pixels (what glViewport wants).
     void getSizeInPixels(int& w, int& h) const;
 
+    /// Drawable pixels per window coordinate (SDL_GetWindowPixelDensity): 2.0
+    /// for a Retina window on macOS, 1.0 where window coordinates already
+    /// are pixels (Windows, X11). 1.0 when unavailable.
+    float getPixelDensity() const;
+
     /// Raise the window above its siblings and request input focus.
     void raise();
 
@@ -215,6 +220,18 @@ public:
     /// 1.0 when neither is available. Re-query after
     /// SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED (EventLoop::onDisplayScaleChanged).
     float getDisplayScale() const;
+
+    /// What window.devicePixelRatio reports for content in this window. On
+    /// Apple it is the pixel density (CSS px = points, rendered at the backing
+    /// scale). Elsewhere it stays getDisplayScale(), although rendering there
+    /// is 1 device px per CSS px — a known inconsistency left for a Windows /
+    /// X11 follow-up that would render at the display scale too.
+    float getDevicePixelRatio() const;
+
+    /// Window creation flags every bro window shares. On Apple platforms this
+    /// requests a full-resolution (Retina) drawable; window coordinates stay in
+    /// points, so the drawable is getPixelDensity() times the window size.
+    static uint64_t baseWindowFlags();
 
     /// Set the window icon from a PNG file (taskbar / Alt-Tab / title bar).
     /// Silently no-ops if the file is missing or malformed — a missing icon

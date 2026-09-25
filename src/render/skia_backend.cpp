@@ -1023,8 +1023,7 @@ void SkiaRenderer::beginFrame(int width, int height) {
     }
 
     canvas_ = surface_->getCanvas();
-    canvas_->clear(SK_ColorTRANSPARENT);
-    canvas_->save();
+    enterCanvas();
 
     imageCache_.beginFrame();
 }
@@ -1064,13 +1063,17 @@ sk_sp<SkSurface> SkiaRenderer::switchSurface(sk_sp<SkSurface> newSurface) {
     auto prev = surface_;
     surface_ = std::move(newSurface);
     canvas_ = surface_ ? surface_->getCanvas() : nullptr;
-
-    if (canvas_) {
-        canvas_->clear(SK_ColorTRANSPARENT);
-        canvas_->save();
-    }
+    if (canvas_) enterCanvas();
 
     return prev;
+}
+
+void SkiaRenderer::enterCanvas() {
+    canvas_->restoreToCount(1);
+    canvas_->resetMatrix();
+    canvas_->clear(SK_ColorTRANSPARENT);
+    if (deviceScale_ != 1.0f) canvas_->scale(deviceScale_, deviceScale_);
+    canvas_->save();
 }
 
 GLuint SkiaRenderer::uploadSurfaceToTexture(SkSurface* surface, GLuint existingTex) {

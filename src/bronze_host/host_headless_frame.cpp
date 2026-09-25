@@ -216,6 +216,17 @@ void buildTreeString(std::ostringstream& out, bro::dom::Element* el,
     }
 }
 
+// Byte offset in capturePixels() of the device pixel at the centre of CSS
+// pixel (x, y) — the frame is device px, viewport × the render scale.
+size_t framePixelOffset(const engine::Engine& engine, int x, int y) {
+    const int fw = engine.framePixelWidth(), fh = engine.framePixelHeight();
+    const double sx = static_cast<double>(fw) / std::max(1, engine.viewportWidth());
+    const double sy = static_cast<double>(fh) / std::max(1, engine.viewportHeight());
+    int dx = std::clamp(static_cast<int>((x + 0.5) * sx), 0, fw - 1);
+    int dy = std::clamp(static_cast<int>((y + 0.5) * sy), 0, fh - 1);
+    return (static_cast<size_t>(dy) * fw + dx) * 4;
+}
+
 } // namespace
 
 void installHeadlessFrame(engine::Engine& engine) {
@@ -229,7 +240,6 @@ void installHeadlessFrame(engine::Engine& engine) {
             auto pixels = engine.capturePixels();
             int w = engine.contentWidth();
             int h = engine.contentHeight();
-            int stride = engine.viewportWidth();
 
             ev::Persistent obj(ev::createObject());
             if (pixels.empty() || x < 0 || y < 0 || x >= w || y >= h) {
@@ -240,8 +250,8 @@ void installHeadlessFrame(engine::Engine& engine) {
                 return obj.get();
             }
 
-            size_t offset = (static_cast<size_t>(y + engine.contentTop()) * stride
-                             + (x + engine.contentLeft())) * 4;
+            size_t offset = framePixelOffset(engine, x + engine.contentLeft(),
+                                             y + engine.contentTop());
             obj.set(ev::setProperty(obj.get(), "r", ev::fromDouble(pixels[offset])));
             obj.set(ev::setProperty(obj.get(), "g", ev::fromDouble(pixels[offset + 1])));
             obj.set(ev::setProperty(obj.get(), "b", ev::fromDouble(pixels[offset + 2])));
@@ -269,7 +279,7 @@ void installHeadlessFrame(engine::Engine& engine) {
                 return obj.get();
             }
 
-            size_t offset = (static_cast<size_t>(y) * w + x) * 4;
+            size_t offset = framePixelOffset(engine, x, y);
             obj.set(ev::setProperty(obj.get(), "r", ev::fromDouble(pixels[offset])));
             obj.set(ev::setProperty(obj.get(), "g", ev::fromDouble(pixels[offset + 1])));
             obj.set(ev::setProperty(obj.get(), "b", ev::fromDouble(pixels[offset + 2])));

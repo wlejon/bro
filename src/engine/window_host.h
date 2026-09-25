@@ -74,7 +74,10 @@ struct WindowHost {
     std::string resolvedCursor = "default";
     int boxW = 0, boxH = 0;
 
-    // Render target
+    // Render target. renderScale (device px per CSS px, the window's pixel
+    // density) is written by the main thread at record time and read by the
+    // raster thread at replay, ordered by the frame handshake like boxW/boxH.
+    float renderScale = 1.0f;
     render::CommandBuffer cmdBuffer;
     render::SkiaRenderer::GPUSurface surface;
     int surfW = 0, surfH = 0;

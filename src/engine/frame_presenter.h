@@ -31,6 +31,7 @@ public:
         int insetRight = 0;
         int insetBottom = 0;
         float scrollY = 0.0f;
+        float scale = 1.0f;  // device px per CSS px to rasterize at
     };
 
     /// Stable view of the current front layer set. Returned by both
@@ -59,6 +60,7 @@ public:
         insetBottom_.store(s.insetBottom, std::memory_order_relaxed);
         scrollYBits_.store(std::bit_cast<uint32_t>(s.scrollY),
                             std::memory_order_relaxed);
+        scaleBits_.store(std::bit_cast<uint32_t>(s.scale), std::memory_order_relaxed);
         worker_.postRequest();
     }
 
@@ -108,6 +110,7 @@ public:
         s.insetBottom = insetBottom_.load(std::memory_order_relaxed);
         s.scrollY = std::bit_cast<float>(
             scrollYBits_.load(std::memory_order_relaxed));
+        s.scale = std::bit_cast<float>(scaleBits_.load(std::memory_order_relaxed));
         return s;
     }
 
@@ -160,6 +163,7 @@ private:
     std::atomic<int> insetRight_{0};
     std::atomic<int> insetBottom_{0};
     std::atomic<uint32_t> scrollYBits_{0};
+    std::atomic<uint32_t> scaleBits_{std::bit_cast<uint32_t>(1.0f)};
 
     render::FrameWorker worker_;
 };

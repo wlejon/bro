@@ -201,6 +201,8 @@ void Engine::handleResize(int w, int h) {
     h = std::clamp(h, 1, kMaxViewportSide);
     viewportWidth_ = w;
     viewportHeight_ = h;
+    updateDeviceScale();
+    applyMediaResolution();
     uiDirty_ = true;
     hasRenderedOnce_ = false;
     drawTraversal_->setViewport(contentWidth(), contentHeight(), 0);
@@ -240,10 +242,56 @@ void Engine::handleResize(int w, int h) {
 
 void Engine::handleDisplayScaleChanged() {
     if (displayMode_ != DisplayMode::Windowed || !window_) return;
-    float scale = window_->getDisplayScale();
-    if (std::fabs(scale - displayScale_) < 1e-3f) return;
-    displayScale_ = scale;
-    handleResize(viewportWidth_, viewportHeight_);
+    const int oldW = deviceScale_.drawableW, oldH = deviceScale_.drawableH;
+    // A new scale re-rasterizes everything at it and tells the realms: the
+    // resize path does both (resize event, matchMedia change listeners).
+    if (updateDeviceScale()) {
+        LOG_INFO("Device scale now %.2f (devicePixelRatio %.2f), drawable %dx%d",
+                 deviceScale_.render, deviceScale_.ratio,
+                 deviceScale_.drawableW, deviceScale_.drawableH);
+        handleResize(viewportWidth_, viewportHeight_);
+    } else if (deviceScale_.drawableW != oldW || deviceScale_.drawableH != oldH) {
+        uiDirty_ = true;
+    }
+}
+
+bool Engine::updateDeviceScale() {
+    const DeviceScale prev = deviceScale_;
+    if (displayMode_ == DisplayMode::Windowed && window_) {
+        deviceScale_.render = window_->getPixelDensity();
+        deviceScale_.ratio = window_->getDevicePixelRatio();
+    } else {
+        // Headless follows the configured factor. The CPU fallback (no GL)
+        // rasterizes 1:1 but still reports the configured ratio.
+        deviceScale_.ratio = deviceScale_.configured;
+        deviceScale_.render = gl_ ? deviceScale_.configured : 1.0f;
+    }
+    int pw = 0, ph = 0;
+    if (displayMode_ == DisplayMode::Windowed && window_)
+        window_->getSizeInPixels(pw, ph);
+    deviceScale_.drawableW = pw > 0 ? pw : deviceScale_.toDevice(viewportWidth_);
+    deviceScale_.drawableH = ph > 0 ? ph : deviceScale_.toDevice(viewportHeight_);
+    return deviceScale_.render != prev.render || deviceScale_.ratio != prev.ratio;
+}
+
+void Engine::setDeviceScaleFactor(float scale) {
+    deviceScale_.configured = std::clamp(scale, 0.25f, 8.0f);
+    if (updateDeviceScale()) handleResize(viewportWidth_, viewportHeight_);
+}
+
+void Engine::applyMediaResolution() {
+    const float dppx = deviceScale_.ratio;
+    if (document_) document_->setMediaResolution(dppx);
+    for (auto& doc : iframeDocs_) {
+        if (doc && doc->document) doc->document->setMediaResolution(dppx);
+    }
+    for (auto& doc : systemDocs_) {
+        if (doc.document) doc.document->setMediaResolution(dppx);
+    }
+    for (auto& host : windowHosts_) {
+        if (host && host->document)
+            host->document->setMediaResolution(static_cast<float>(host->displayScale));
+    }
 }
 
 std::string Engine::effectiveColorScheme() const {

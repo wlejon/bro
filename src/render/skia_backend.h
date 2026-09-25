@@ -142,6 +142,14 @@ public:
     /// Call between beginFrame() and endFrame().
     sk_sp<SkSurface> switchSurface(sk_sp<SkSurface> newSurface);
 
+    /// Device pixels per recorded (CSS) unit for the surfaces entered from
+    /// here on: beginFrame() and switchSurface() install it as the canvas's
+    /// base matrix, below the base save() that resetClip() returns to, so a
+    /// surface sized at scale × the CSS size is painted at full resolution
+    /// (crisp text on a 2x display). 1 by default.
+    void setDeviceScale(float scale) { deviceScale_ = scale > 0.0f ? scale : 1.0f; }
+    float deviceScale() const { return deviceScale_; }
+
     /// Upload any Skia raster surface to a GL texture.
     /// Reuses existingTex if size matches, otherwise creates a new one.
     GLuint uploadSurfaceToTexture(SkSurface* surface, GLuint existingTex = 0);
@@ -189,6 +197,10 @@ private:
 
     sk_sp<SkSurface> surface_;
     SkCanvas* canvas_ = nullptr;
+    float deviceScale_ = 1.0f;
+    // Clear the current canvas and set it up for a frame: base matrix at the
+    // device scale, then the base save().
+    void enterCanvas();
     bool gpuMode_ = false;      // true if GPU backend active
 
     struct FontEntry {

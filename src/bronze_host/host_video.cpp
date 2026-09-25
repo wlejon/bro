@@ -232,8 +232,9 @@ std::vector<uint8_t> viewportPixels(int wantW, int wantH, std::string& err,
         err = "addViewportFrame: no engine";
         return {};
     }
-    const int w = engine->viewportWidth();
-    const int h = engine->viewportHeight();
+    // Device px: viewport × render scale (the viewport itself at 1x).
+    const int w = engine->framePixelWidth();
+    const int h = engine->framePixelHeight();
     if (w != wantW || h != wantH) {
         kind = Refusal::Range;
         err = "addViewportFrame: viewport " + std::to_string(w) + "x" + std::to_string(h) +
