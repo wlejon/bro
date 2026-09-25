@@ -4,7 +4,6 @@
 #include "bronze_host/host_globals_internal.h"
 
 #include "embed/embed.h"
-#include "abi/bronze_abi_tls.h"
 
 #include <atomic>
 
@@ -19,15 +18,10 @@ double s_timeSinceLastGcMs = 0.0;
 bool s_collectedForCurrentIdle = false;
 std::atomic<int> s_evalDepth{0};
 
+// Compiled JS frames on the stack do not block a collection (their Values are
+// stack-map roots the collector walks to); a host eval in progress does.
 bool isExecutionStackActive() {
-    if (s_evalDepth.load(std::memory_order_relaxed) > 0) {
-        return true;
-    }
-    auto* tls = bronze_tls_block_addr();
-    if (tls && tls->frame_top != nullptr) {
-        return true;
-    }
-    return false;
+    return s_evalDepth.load(std::memory_order_relaxed) > 0;
 }
 
 }  // namespace
