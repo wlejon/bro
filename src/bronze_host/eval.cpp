@@ -92,10 +92,19 @@ std::filesystem::path getExecutableDirectory() {
         return std::filesystem::path(std::string(buf, len)).parent_path();
     }
 #elif defined(__APPLE__)
-    char buf[1024];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0) {
-        return std::filesystem::path(buf).parent_path();
+    // _NSGetExecutablePath reports the path the process was exec'd by, which
+    // can be a symlink (a bin/ link into a Bro.app or a build tree) or carry
+    // `..`; the runtime library is staged beside the REAL binary, so resolve
+    // it the way Linux's /proc/self/exe already is. `size` comes back as the
+    // length needed when the buffer is short.
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string buf(size, '\0');
+    if (size > 0 && _NSGetExecutablePath(buf.data(), &size) == 0) {
+        std::error_code ec;
+        std::filesystem::path exe(buf.c_str());
+        auto real = std::filesystem::weakly_canonical(exe, ec);
+        return (ec ? exe : real).parent_path();
     }
 #else
     char buf[4096];
@@ -151,6 +160,10 @@ void ensureSharedRuntimeEnv() {
     const char* const name = "libbronze_runtime_shared.so";
 #endif
 
+    // The library beside the running binary first: normally the runtime this
+    // process itself loaded (@loader_path / $ORIGIN / the exe's own dir), so
+    // a module linked against it matches. The build-tree guesses after it are
+    // for an embedder whose executable lives outside a bro build.
     const auto exeDir = getExecutableDirectory();
     std::vector<std::filesystem::path> bases = {
         exeDir,
