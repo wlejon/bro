@@ -28,6 +28,10 @@ struct CssLengthContext {
     float viewportH = 0.0f;
 };
 
+// One <length> token (`2px`, `1.5em`, `calc(1em + 2px)`) in px. False for
+// anything that is not a length, including a number with an unknown unit.
+bool resolveCssLength(std::string_view token, const CssLengthContext& lengths, float& out);
+
 // Parses one shadow item. Needs at least the two offsets; more than
 // `maxLengths` lengths (3 for text-shadow / drop-shadow, 4 for box-shadow)
 // or two colours is invalid.

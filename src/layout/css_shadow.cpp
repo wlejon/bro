@@ -93,6 +93,10 @@ bool parseLengthToken(std::string_view tok, const CssLengthContext& cx, float& o
 
 } // namespace
 
+bool resolveCssLength(std::string_view token, const CssLengthContext& lengths, float& out) {
+    return parseLengthToken(trim(token), lengths, out);
+}
+
 std::vector<CssShadow> parseCssShadowList(std::string_view list,
                                           const bromath::Color& currentColor, int maxLengths,
                                           const CssLengthContext& lengths) {

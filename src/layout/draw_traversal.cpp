@@ -224,8 +224,22 @@ static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& va
         bool keep = true;
 
         if (func == "blur") {
+            // blur(<length>?): the radius resolves its unit (1em is the
+            // font-size, not 1px); an empty blur() is 0.
             f.kind = render::CssFilterParams::Blur;
-            f.a = readFloat();
+            size_t argStart = pos;
+            int pdepth = 0;
+            while (pos < val.size()) {
+                char c = val[pos];
+                if (c == '(') ++pdepth;
+                else if (c == ')') { if (pdepth == 0) break; --pdepth; }
+                ++pos;
+            }
+            std::string_view arg = std::string_view(val).substr(argStart, pos - argStart);
+            f.a = 0.0f;
+            if (arg.find_first_not_of(" \t") != std::string_view::npos &&
+                (!resolveCssLength(arg, lengths, f.a) || f.a < 0.0f))
+                keep = false;
         } else if (func == "brightness") {
             f.kind = render::CssFilterParams::Brightness;
             f.a = readFloat();

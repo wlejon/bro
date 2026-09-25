@@ -18,6 +18,10 @@ document.body.innerHTML =
     box('vw', 240, 40, 'box-shadow:1.25vw 0;') +          // 24px of 1920
     box('calc', 340, 40, 'box-shadow:calc(1em + 10px) 0;') +
     box('ds', 440, 40, 'background:rgb(0,0,255);filter:drop-shadow(2em 0 0);') +
+    // blur(1em) at font-size 10px is a 10px radius: it bleeds well past the
+    // box edge, where blur(1px) would leave white.
+    box('blur', 540, 40, 'background:rgb(0,0,255);filter:blur(1em);') +
+    box('blurpx', 640, 40, 'background:rgb(0,0,255);filter:blur(1px);') +
     // Two text-shadows stacked 60px and 120px below the glyphs, and a pair on
     // the same spot where the first must be the one on top.
     `<div id="ts" style="position:absolute;left:40px;top:200px;font:bold 48px sans-serif;` +
@@ -42,6 +46,13 @@ expectAt(190, 60, RED, 'box-shadow 1rem at a 20px root is 20px');
 expectAt(290, 60, RED, 'box-shadow 1.25vw is 24px of a 1920px viewport');
 expectAt(390, 60, RED, 'box-shadow calc(1em + 10px) is 20px');
 expectAt(490, 60, RED, 'drop-shadow() 2em at font-size 10px is 20px');
+
+// 5px outside the box's right edge, halfway down.
+const bleed = getPixel(585, 60), bleedPx = getPixel(685, 60);
+assert(bleed.r < 245 && bleed.b > bleed.r + 10,
+       'blur(1em) bleeds 5px past the box, got ' + rgb(bleed));
+assert(bleedPx.r > 250 && bleedPx.g > 250,
+       'blur(1px) leaves 5px past the box white, got ' + rgb(bleedPx));
 
 // Count samples of each colour in a band of rows under an element.
 function band(id, from, to) {
