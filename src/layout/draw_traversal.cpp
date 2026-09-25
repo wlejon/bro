@@ -8,6 +8,7 @@
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
 #include "css/color.h"
+#include "layout/css_shadow.h"
 #include "layout/formatting_context.h"
 #include "layout/line_clamp.h"
 #include "dom/document.h"
@@ -155,7 +156,17 @@ htmlayout::css::Matrix3D buildElementTransform4x4(
 // Supports: blur, brightness, contrast, grayscale, sepia, saturate,
 //           hue-rotate, invert, opacity, drop-shadow
 // ---------------------------------------------------------------------------
-static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& val) {
+// The element's `color`: what `currentcolor` (and a shadow that names no
+// colour) paints with.
+static bromath::Color styleCurrentColor(const htmlayout::css::ComputedStyle& style) {
+    bromath::Color c = cfromColor8({0, 0, 0, 255});
+    auto it = style.find("color");
+    if (it != style.end()) DrawTraversal::tryParseColor(it->second, c);
+    return c;
+}
+
+static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& val,
+                                                           const bromath::Color& currentColor) {
     std::vector<render::CssFilterParams> result;
     size_t pos = 0;
     while (pos < val.size()) {
@@ -222,14 +233,11 @@ static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& va
             f.a = readFloat();
         } else if (func == "drop-shadow") {
             f.kind = render::CssFilterParams::DropShadow;
-            f.dx = readFloat();
-            f.dy = readFloat();
-            f.blur = readFloat();
-            bromath::Color sc = cfromColor8({0, 0, 0, 255});
-            size_t colorStart = pos;
             // Scan to the drop-shadow's closing paren, tracking depth so a
             // functional color — rgba()/hsl()/color() — isn't truncated at its
-            // own inner ')'.
+            // own inner ')'. The argument is `<color>? && <length>{2,3}` in
+            // either order; with no colour it is currentcolor.
+            size_t argStart = pos;
             int pdepth = 0;
             while (pos < val.size()) {
                 char c = val[pos];
@@ -237,15 +245,16 @@ static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& va
                 else if (c == ')') { if (pdepth == 0) break; --pdepth; }
                 ++pos;
             }
-            std::string colorStr = val.substr(colorStart, pos - colorStart);
-            size_t ca = colorStr.find_first_not_of(" \t");
-            if (ca != std::string::npos) {
-                colorStr = colorStr.substr(ca);
-                size_t cb = colorStr.find_last_not_of(" \t");
-                if (cb != std::string::npos) colorStr = colorStr.substr(0, cb + 1);
-                DrawTraversal::tryParseColor(colorStr, sc);
+            CssShadow s;
+            if (parseCssShadow(std::string_view(val).substr(argStart, pos - argStart),
+                               currentColor, 3, s) && !s.inset) {
+                f.dx = s.dx;
+                f.dy = s.dy;
+                f.blur = s.blur;
+                f.shadowColor = s.color;
+            } else {
+                keep = false;
             }
-            f.shadowColor = sc;
         } else {
             keep = false;
         }
@@ -935,7 +944,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (!skipWrap) {
         auto fIt = style.find("filter");
         if (fIt != style.end() && !fIt->second.empty() && fIt->second != "none") {
-            auto filters = parseCSSFilter(fIt->second);
+            auto filters = parseCSSFilter(fIt->second, styleCurrentColor(style));
             if (!filters.empty()) {
                 hasFilter = true;
                 // Use a generous bounds that includes blur/shadow overflow
@@ -971,63 +980,25 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         // Within outset/inset groups, the first shadow in the list paints on
         // top of later ones, so we draw in reverse list order.
         auto bsIt = style.find("box-shadow");
-        std::vector<std::string> shadows;
+        std::vector<CssShadow> shadows;
         render::Radii shadowRadii = {{0, 0, 0, 0}, {0, 0, 0, 0}};
         bool hasShadows = (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none");
         if (hasShadows) {
             shadowRadii = getRadii(style, bw, bh);
-
-            // Split on commas, respecting parentheses (for rgb()/rgba())
-            const auto& full = bsIt->second;
-            int depth = 0;
-            size_t start = 0;
-            for (size_t i = 0; i <= full.size(); ++i) {
-                if (i < full.size() && full[i] == '(') ++depth;
-                else if (i < full.size() && full[i] == ')') --depth;
-                else if ((i == full.size() || full[i] == ',') && depth <= 0) {
-                    std::string s = full.substr(start, i - start);
-                    size_t a = s.find_first_not_of(" \t");
-                    size_t b = s.find_last_not_of(" \t");
-                    if (a != std::string::npos)
-                        shadows.push_back(s.substr(a, b - a + 1));
-                    start = i + 1;
-                }
+            // A shadow with no colour is currentcolor.
+            const bromath::Color current = styleCurrentColor(style);
+            for (const std::string& item : splitCssShadowList(bsIt->second)) {
+                CssShadow s;
+                if (parseCssShadow(item, current, 4, s)) shadows.push_back(s);
             }
         }
 
         auto drawShadows = [&](bool wantInset) {
             for (int si = static_cast<int>(shadows.size()) - 1; si >= 0; --si) {
-                std::string val = shadows[si];
-                bool inset = false;
-                auto ipos = val.find("inset");
-                if (ipos != std::string::npos) {
-                    inset = true;
-                    val.erase(ipos, 5);
-                }
-                if (inset != wantInset) continue;
-                std::istringstream iss(val);
-                std::vector<float> nums;
-                std::string colorStr;
-                std::string token;
-                while (iss >> token) {
-                    char* end = nullptr;
-                    float v = std::strtof(token.c_str(), &end);
-                    if (end != token.c_str() && (*end == '\0' || *end == 'p'))
-                        nums.push_back(v);
-                    else {
-                        if (!colorStr.empty()) colorStr += ' ';
-                        colorStr += token;
-                    }
-                }
-                if (nums.size() >= 2) {
-                    float sdx = nums[0], sdy = nums[1];
-                    float sblur = nums.size() >= 3 ? nums[2] : 0;
-                    float sspread = nums.size() >= 4 ? nums[3] : 0;
-                    bromath::Color sc = cfromColor8({0, 0, 0, 80});
-                    if (!colorStr.empty()) tryParseColor(colorStr, sc);
-                    renderer_->drawBoxShadowRadii(bx, by, bw, bh, shadowRadii,
-                                            sdx, sdy, sblur, sspread, sc, inset);
-                }
+                const CssShadow& s = shadows[si];
+                if (s.inset != wantInset) continue;
+                renderer_->drawBoxShadowRadii(bx, by, bw, bh, shadowRadii,
+                                              s.dx, s.dy, s.blur, s.spread, s.color, s.inset);
             }
         };
 
@@ -3117,35 +3088,13 @@ std::string DrawTraversal::applyTextTransform(const std::string& text,
     return text;
 }
 
-// Parse text-shadow: offsetX offsetY [blur] color (simplified — single shadow only)
-struct TextShadow { float dx = 0, dy = 0, blur = 0; bromath::Color color = cfromColor8({0, 0, 0, 128}); };
-static bool parseTextShadow(const std::string& val, TextShadow& out) {
+// Parse text-shadow: offsetX offsetY [blur] [color], the colour defaulting to
+// the text's own (currentcolor). Simplified: only the first shadow paints.
+static bool parseTextShadow(const std::string& val, const bromath::Color& textColor,
+                            CssShadow& out) {
     if (val.empty() || val == "none") return false;
-    // Try to parse numbers and a color from the value
-    std::istringstream iss(val);
-    std::vector<float> nums;
-    std::string colorStr;
-    std::string token;
-    while (iss >> token) {
-        char* end = nullptr;
-        float v = std::strtof(token.c_str(), &end);
-        // Check if the token is a number (possibly with px suffix)
-        if (end != token.c_str() && (*end == '\0' || *end == 'p')) {
-            nums.push_back(v);
-        } else {
-            // Accumulate rest as color
-            if (!colorStr.empty()) colorStr += ' ';
-            colorStr += token;
-        }
-    }
-    if (nums.size() >= 2) {
-        out.dx = nums[0];
-        out.dy = nums[1];
-        if (nums.size() >= 3) out.blur = nums[2];
-        if (!colorStr.empty()) DrawTraversal::tryParseColor(colorStr, out.color);
-        return true;
-    }
-    return false;
+    std::vector<std::string> items = splitCssShadowList(val);
+    return !items.empty() && parseCssShadow(items[0], textColor, 3, out) && !out.inset;
 }
 
 void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
@@ -3211,10 +3160,10 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
     // Parse text-shadow
-    TextShadow shadow;
+    CssShadow shadow;
     bool hasShadow = false;
     auto tsIt = style.find("text-shadow");
-    if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, shadow);
+    if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, color, shadow);
 
     // Resolve letter-spacing for the renderer. Layout already accounts for
     // it in the text-run widths (text.cpp), so the painter must add the same
@@ -3466,10 +3415,10 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
     auto cIt = style.find("color");
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
-    TextShadow shadow;
+    CssShadow shadow;
     bool hasShadow = false;
     auto tsIt = style.find("text-shadow");
-    if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, shadow);
+    if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, color, shadow);
 
     // Resolve letter-spacing for the pseudo's own style (pseudos inherit it
     // by default but the rule may override).
@@ -4279,7 +4228,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     {
         auto fIt = rootStyle.find("filter");
         if (fIt != rootStyle.end() && !fIt->second.empty() && fIt->second != "none") {
-            auto filters = parseCSSFilter(fIt->second);
+            auto filters = parseCSSFilter(fIt->second, styleCurrentColor(rootStyle));
             if (!filters.empty()) {
                 wrappedFilter = true;
                 renderer_->saveLayerWithFilter(filters,
