@@ -120,8 +120,9 @@ public:
     // antialiasing by an amount each platform scaler picks (CoreText's pad
     // puts "Hello" 2 px below the baseline at 40 px) — which is fine for a
     // size hint and wrong for canvas TextMetrics, whose actualBoundingBox*
-    // is the ink itself. A glyph with no outline (a colour bitmap) falls back
-    // to its mask box. Computed on demand, not per shaped run.
+    // is the ink itself. A glyph with no outline (a colour bitmap) measures
+    // the rectangle its image is drawn into where the platform exposes it
+    // (CoreText), else its mask box. Computed on demand, not per shaped run.
     SkRect inkBounds() const;
 
     // --- byte-domain queries: the only sanctioned way out of glyph space ---

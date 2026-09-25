@@ -8,7 +8,13 @@
 #include <cstring>
 #include <limits>
 
+#include <include/core/SkMatrix.h>
 #include <include/core/SkTextBlob.h>
+
+#ifdef __APPLE__
+#include <CoreText/CoreText.h>
+#include <include/ports/SkTypeface_mac.h>
+#endif
 
 #if BRO_WITH_TEXT_SHAPING
 #include <modules/skshaper/include/SkShaper.h>
@@ -174,6 +180,48 @@ void ShapedRun::finalize() {
     }
 }
 
+namespace {
+
+// Ink box of a glyph with no outline (a colour bitmap: sbix, CBDT, PNG-in-
+// OpenType, or COLR layers). Skia only exposes such a glyph's MASK bounds,
+// and how far those overshoot the ink is up to the platform scaler:
+//   - CoreText rounds its bounds out to whole pixels and then outsets them by
+//     one more pixel for LCD smoothing, so Apple Color Emoji at 48 px reports
+//     a 51 px box around a 48 px bitmap. CoreText's own glyph bounds are the
+//     rectangle it draws the bitmap into, fractional and unpadded, so ask it.
+//   - FreeType (CBDT/sbix) and DirectWrite (COLR/PNG) round the scaled bitmap
+//     or layer bounds out to whole pixels but add no pad, so the mask box is
+//     within a pixel of the ink and is used as is.
+SkRect bitmapGlyphBounds(const SkFont& font, SkGlyphID glyph) {
+#ifdef __APPLE__
+    if (CTFontRef base = SkTypeface_GetCTFontRef(font.getTypeface())) {
+        CTFontRef sized = CTFontCreateCopyWithAttributes(
+            base, static_cast<CGFloat>(font.getSize()), nullptr, nullptr);
+        if (sized) {
+            const CGGlyph cg = glyph;
+            CGRect r = CTFontGetBoundingRectsForGlyphs(
+                sized, kCTFontOrientationHorizontal, &cg, nullptr, 1);
+            CFRelease(sized);
+            if (!CGRectIsEmpty(r) && !CGRectIsNull(r)) {
+                // CG is y-up from the baseline; glyph space is y-down. The
+                // horizontal scale and faux-italic skew are the same text
+                // matrix Skia hands CoreText when it draws.
+                const SkRect up = SkRect::MakeXYWH(
+                    static_cast<float>(r.origin.x),
+                    -static_cast<float>(r.origin.y + r.size.height),
+                    static_cast<float>(r.size.width),
+                    static_cast<float>(r.size.height));
+                return SkMatrix::MakeAll(font.getScaleX(), font.getSkewX(), 0,
+                                         0, 1, 0, 0, 0, 1).mapRect(up);
+            }
+        }
+    }
+#endif
+    return font.getBounds(glyph, nullptr);
+}
+
+} // namespace
+
 SkRect ShapedRun::inkBounds() const {
     struct Ctx {
         const ShapedRun* run;
@@ -197,7 +245,7 @@ SkRect ShapedRun::inkBounds() const {
                     if (path->isEmpty()) return;
                     b = mx.mapRect(path->getBounds());
                 } else {
-                    b = c.r->font.getBounds(c.run->glyphs_[gi], nullptr);
+                    b = bitmapGlyphBounds(c.r->font, c.run->glyphs_[gi]);
                 }
                 const SkPoint at = c.run->positions_[gi] + c.run->offsets_[gi];
                 c.ink.join(b.makeOffset(at.fX, at.fY));
