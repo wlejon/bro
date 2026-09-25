@@ -301,6 +301,7 @@ set(_bro_bronze_stage_stamp "${CMAKE_CURRENT_BINARY_DIR}/bronze_runtime_staged$<
 if(WIN32)
     add_custom_command(
         OUTPUT "${_bro_bronze_stage_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_bro_bronze_stage_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -312,6 +313,7 @@ if(WIN32)
 else()
     add_custom_command(
         OUTPUT "${_bro_bronze_stage_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_bro_bronze_stage_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:bronze_runtime_shared> "${_bro_bronze_stage_dir}"
         COMMAND ${CMAKE_COMMAND} -E touch "${_bro_bronze_stage_stamp}"
