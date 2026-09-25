@@ -283,6 +283,26 @@ bool parseLength(const std::string& tok, float& out) {
     return true;
 }
 
+// A filter <length>: the absolute units above, plus the relative ones
+// resolved against `cx`.
+bool parseFilterLength(const std::string& tok, const FilterLengthContext& cx, float& out) {
+    if (parseLength(tok, out)) return true;
+    double v; std::string u;
+    if (!splitDimension(tok, v, u)) return false;
+    double k;
+    const double vw = cx.viewportW, vh = cx.viewportH;
+    if (u == "em") k = cx.fontSize;
+    else if (u == "rem") k = cx.rootFontSize;
+    else if (u == "ex" || u == "ch") k = cx.fontSize * 0.5;
+    else if (u == "vw" && vw > 0) k = vw / 100.0;
+    else if (u == "vh" && vh > 0) k = vh / 100.0;
+    else if (u == "vmin" && vw > 0 && vh > 0) k = std::min(vw, vh) / 100.0;
+    else if (u == "vmax" && vw > 0 && vh > 0) k = std::max(vw, vh) / 100.0;
+    else return false;
+    out = static_cast<float>(v * k);
+    return true;
+}
+
 // <number> | <percentage>, non-negative.
 bool parseAmount(const std::string& tok, float& out) {
     double v; std::string u;
@@ -330,7 +350,7 @@ std::vector<std::string> splitArgs(const std::string& s) {
 }  // namespace
 
 bool parseCanvasFilter(const std::string& str, std::vector<render::CssFilterParams>& out,
-                       FilterColor currentColor) {
+                       FilterColor currentColor, const FilterLengthContext& lengths) {
     out.clear();
     size_t a = 0, b = str.size();
     while (a < b && isSpace(str[a])) ++a;
@@ -373,7 +393,7 @@ bool parseCanvasFilter(const std::string& str, std::vector<render::CssFilterPara
             f.kind = render::CssFilterParams::Blur;
             f.a = 0.0f;
             if (args.size() > 1) ok = false;
-            else if (args.size() == 1) ok = parseLength(args[0], f.a) && f.a >= 0.0f;
+            else if (args.size() == 1) ok = parseFilterLength(args[0], lengths, f.a) && f.a >= 0.0f;
         } else if (name == "brightness") {
             ok = amount(render::CssFilterParams::Brightness, false);
         } else if (name == "contrast") {
@@ -403,7 +423,7 @@ bool parseCanvasFilter(const std::string& str, std::vector<render::CssFilterPara
                     ca = currentColor.a;
             for (size_t i = 0; i < args.size() && ok; ++i) {
                 float len;
-                if (parseLength(args[i], len)) {
+                if (parseFilterLength(args[i], lengths, len)) {
                     lens.push_back(len);
                 } else if (!haveColor && (i == 0 || i + 1 == args.size())) {
                     // Only at either end, which keeps the lengths contiguous.

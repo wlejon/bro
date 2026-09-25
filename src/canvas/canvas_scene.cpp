@@ -852,9 +852,12 @@ void CanvasScene::setImageSmoothingQuality(int q) {
     if (q >= 0 && q <= 2) state_.smoothQuality = q;
 }
 
-bool CanvasScene::setFilter(const std::string& filter, FilterColor currentColor) {
+bool CanvasScene::setFilter(const std::string& filter, FilterColor currentColor,
+                            FilterLengthContext lengths) {
     std::vector<render::CssFilterParams> list;
-    if (!parseCanvasFilter(filter, list, currentColor)) return false;
+    // em in a filter is the context's font-size when the filter is set.
+    lengths.fontSize = parseCSSFont(state_.fontStr).size;
+    if (!parseCanvasFilter(filter, list, currentColor, lengths)) return false;
     state_.filterStr = filter;
     // "none" parses to an empty list, and an empty chain is a null filter, so
     // a filter that does nothing costs a draw nothing.

@@ -206,6 +206,59 @@ for (const f of ['drop-shadow(4px 0px 0px)', 'drop-shadow(currentcolor 4px 0px)'
     cv.style.color = '';
 }
 
+// Relative lengths in a filter: em is the context's font-size when the
+// filter is set, rem the root's (they used to make the filter invalid).
+ctx.font = '4px sans-serif';
+ctx.filter = 'drop-shadow(1em 0px 0px blue)';
+assert(ctx.filter === 'drop-shadow(1em 0px 0px blue)', 'drop-shadow with em lengths parses');
+{
+    ctx.clearRect(0, 0, 20, 20);
+    ctx.fillStyle = 'red';
+    ctx.fillRect(0, 0, 6, 6);
+    ctx.filter = 'none';
+    const shadow = px(ctx, 8, 2), outside = px(ctx, 12, 2);
+    assert(shadow[2] > 240 && shadow[3] > 240, '1em at a 4px font is a 4px offset, got ' + shadow);
+    assert(outside[3] === 0, 'the 1em offset stops at 4px, got ' + outside);
+}
+ctx.filter = 'blur(0.5em)';
+assert(ctx.filter === 'blur(0.5em)', 'blur with an em radius parses');
+ctx.filter = 'blur(0.1rem)';
+assert(ctx.filter === 'blur(0.1rem)', 'blur with a rem radius parses');
+ctx.filter = 'none';
+ctx.font = '10px sans-serif';
+
+// fillStyle / strokeStyle / shadowColor = 'currentcolor' take the canvas's
+// `color` at the time of the assignment, and read back as that colour.
+cv.style.color = 'rgb(0, 200, 0)';
+ctx.fillStyle = 'currentcolor';
+assert(ctx.fillStyle === '#00c800', 'fillStyle currentcolor reads back the canvas colour, got ' + ctx.fillStyle);
+ctx.strokeStyle = 'CurrentColor';
+assert(ctx.strokeStyle === '#00c800', 'strokeStyle currentcolor is the canvas colour, got ' + ctx.strokeStyle);
+ctx.shadowColor = ' currentColor ';
+assert(ctx.shadowColor === '#00c800', 'shadowColor currentcolor is the canvas colour, got ' + ctx.shadowColor);
+cv.style.color = 'rgb(0, 0, 255)';
+{
+    ctx.clearRect(0, 0, 20, 20);
+    ctx.fillRect(0, 0, 20, 20);
+    const p = px(ctx, 10, 10);
+    assert(p[0] < 15 && near(p[1], 200, 3) && p[2] < 15,
+           'currentcolor fills with the colour it had when assigned, got ' + p);
+}
+ctx.shadowColor = 'rgba(0, 0, 0, 0)';
+cv.style.color = '';
+{
+    // A gradient belongs to no element: its currentcolor is opaque black.
+    const g = ctx.createLinearGradient(0, 0, 20, 0);
+    g.addColorStop(0, 'currentcolor');
+    g.addColorStop(1, 'currentcolor');
+    ctx.clearRect(0, 0, 20, 20);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 20, 20);
+    const p = px(ctx, 10, 10);
+    assert(p[0] === 0 && p[1] === 0 && p[2] === 0 && p[3] === 255,
+           'addColorStop currentcolor is opaque black, got ' + p);
+}
+
 // ---------------------------------------------------------------------------
 // The filter reaches every kind of draw
 // ---------------------------------------------------------------------------

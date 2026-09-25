@@ -1,6 +1,7 @@
 #include "bronze_host/host_canvas_gradient.h"
 #include "bronze_host/gl_internal.h"
 #include "canvas/canvas2d.h"
+#include "util/string_utils.h"
 
 #include <include/core/SkColor.h>
 #include <include/core/SkPoint.h>
@@ -28,7 +29,10 @@ void decorateCanvasGradientProto(ObjectBuilder& b) {
         offset = offset < 0.0 ? 0.0 : (offset > 1.0 ? 1.0 : offset);
         std::string color = ev::toUtf8(a[1]);
         uint8_t r = 0, gc = 0, b_col = 0, a_col = 255;
-        if (!canvas::parseCSSColor(color, r, gc, b_col, a_col)) return ev::undefined();
+        // A gradient belongs to no element, so its currentcolor is opaque
+        // black (HTML, addColorStop).
+        const bool current = util::toLower(util::trim(color)) == "currentcolor";
+        if (!current && !canvas::parseCSSColor(color, r, gc, b_col, a_col)) return ev::undefined();
         uint32_t argb = (static_cast<uint32_t>(a_col) << 24) |
                         (static_cast<uint32_t>(r)     << 16) |
                         (static_cast<uint32_t>(gc)    << 8)  |

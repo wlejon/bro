@@ -51,19 +51,61 @@ struct CustomStyles {
     }
 };
 
-// What `currentcolor` means in a ctx.filter drop-shadow(): the canvas
-// element's computed `color` at the time of the assignment. Only a value with
-// a drop-shadow() needs it, so only that one pays for the style flush.
-canvas::FilterColor filterCurrentColor(dom::Element* el, const std::string& value) {
+// What `currentcolor` means to a 2D context: the canvas element's computed
+// `color` at the time the colour is assigned (not when it is drawn), opaque
+// black when there is none to read.
+canvas::FilterColor canvasCurrentColor(dom::Element* el) {
     canvas::FilterColor c;
-    if (!el || util::toLower(value).find("drop-shadow") == std::string::npos) return c;
     engine::Engine* eng = hostEngine();
-    if (!eng) return c;
+    if (!el || !eng) return c;
     eng->flushLayoutForRead(el->document());
     const std::string color = layout::computedProperty(el, "color", eng->textMetrics());
     uint8_t r, g, b, a;
     if (canvas::parseCSSColor(color, r, g, b, a)) c = {r, g, b, a};
     return c;
+}
+
+// A fillStyle / strokeStyle / shadowColor string: a colour, or currentcolor.
+bool parseStyleColor(dom::Element* el, const std::string& str, uint8_t& r, uint8_t& g,
+                     uint8_t& b, uint8_t& a) {
+    if (util::toLower(util::trim(str)) == "currentcolor") {
+        const canvas::FilterColor c = canvasCurrentColor(el);
+        r = c.r; g = c.g; b = c.b; a = c.a;
+        return true;
+    }
+    return canvas::parseCSSColor(str, r, g, b, a);
+}
+
+// ctx.filter's drop-shadow() takes currentcolor too. Only a value with a
+// drop-shadow() needs it, so only that one pays for the style flush.
+canvas::FilterColor filterCurrentColor(dom::Element* el, const std::string& value) {
+    if (util::toLower(value).find("drop-shadow") == std::string::npos) return {};
+    return canvasCurrentColor(el);
+}
+
+// The root font size (rem) and viewport (vw/vh) a ctx.filter length resolves
+// against: those of the canvas's own document, as window.innerWidth reads
+// them. The em size is the context's font, which the scene fills in.
+canvas::FilterLengthContext filterLengthContext(dom::Element* el) {
+    canvas::FilterLengthContext cx;
+    engine::Engine* eng = hostEngine();
+    dom::Document* doc = el ? el->document() : nullptr;
+    if (!eng || !doc) return cx;
+    cx.viewportW = static_cast<float>(eng->contentWidth());
+    cx.viewportH = static_cast<float>(eng->contentHeight());
+    if (auto* wh = eng->windowHostForDocument(doc)) {
+        cx.viewportW = static_cast<float>(wh->boxW);
+        cx.viewportH = static_cast<float>(wh->boxH);
+    } else if (auto* ifr = eng->iframeForDocument(doc)) {
+        cx.viewportW = static_cast<float>(ifr->boxW);
+        cx.viewportH = static_cast<float>(ifr->boxH);
+    }
+    if (dom::Element* root = doc->documentElement()) {
+        const std::string fs = layout::computedProperty(root, "font-size", eng->textMetrics());
+        const float v = std::strtof(fs.c_str(), nullptr);
+        if (v > 0) cx.rootFontSize = v;
+    }
+    return cx;
 }
 
 }  // namespace
@@ -127,7 +169,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
         }
         std::string str = ev::toUtf8(a[0]);
         uint8_t r, g, b, a_col;
-        if (canvas::parseCSSColor(str, r, g, b, a_col)) {
+        if (parseStyleColor(el, str, r, g, b, a_col)) {
             custom.set(ev::undefined());
             if (fill) cs->setFillColor(r, g, b, a_col);
             else cs->setStrokeColor(r, g, b, a_col);
@@ -444,7 +486,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 std::string s = ev::toUtf8(a[0]);
                 uint8_t r, g, b, a;
-                if (canvas::parseCSSColor(s, r, g, b, a)) {
+                if (parseStyleColor(el, s, r, g, b, a)) {
                     cs->setShadowColor(r, g, b, a);
                 }
             }
@@ -500,7 +542,7 @@ Value makeCanvas2DContextValue(Value canvasVal, dom::Element* el) {
                 auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
                 // An unparseable value is ignored and the filter kept.
                 const std::string value = ev::toUtf8(a[0]);
-                cs->setFilter(value, filterCurrentColor(el, value));
+                cs->setFilter(value, filterCurrentColor(el, value), filterLengthContext(el));
             }
             return ev::undefined();
         });

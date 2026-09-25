@@ -323,8 +323,10 @@ public:
     // the current filter when the string does not parse, which is what the
     // spec says an invalid assignment does. `currentColor` is what a
     // drop-shadow() with no colour (or `currentcolor`) paints in, fixed at the
-    // time of the assignment.
-    bool setFilter(const std::string& filter, FilterColor currentColor = {});
+    // time of the assignment. `lengths` carries the root font size and the
+    // viewport; the em size is this context's own font, also as of now.
+    bool setFilter(const std::string& filter, FilterColor currentColor = {},
+                   FilterLengthContext lengths = {});
     const std::string& filterString() const { return state_.filterStr; }
 
     void setLineDash(const std::vector<float>& segments);

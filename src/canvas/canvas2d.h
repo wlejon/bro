@@ -18,9 +18,20 @@ namespace bro::canvas {
 // A drop-shadow() that names no colour, or names `currentcolor`, takes
 // `currentColor`: the canvas element's `color` when the filter is set, black
 // for a canvas with no element (OffscreenCanvas) or none rendered.
+//
+// Relative lengths in blur() / drop-shadow() resolve against `lengths`: em
+// (and ch/ex as half an em) against the context's font size, rem against
+// the root's, the viewport units against the viewport (0 = unknown, which
+// makes them invalid).
 struct FilterColor { uint8_t r = 0, g = 0, b = 0, a = 255; };
+struct FilterLengthContext {
+    float fontSize = 10.0f;
+    float rootFontSize = 16.0f;
+    float viewportW = 0.0f;
+    float viewportH = 0.0f;
+};
 bool parseCanvasFilter(const std::string& str, std::vector<render::CssFilterParams>& out,
-                       FilterColor currentColor = {});
+                       FilterColor currentColor = {}, const FilterLengthContext& lengths = {});
 
 // Parse CSS color: "#rgb", "#rrggbb", "#rrggbbaa", "rgb(r,g,b)", "rgba(r,g,b,a)",
 // "hsl(h,s%,l%)", "hsla(h,s%,l%,a)", named colors
