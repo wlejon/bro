@@ -125,8 +125,11 @@ public:
     bool hasVertexColors() const { return hasVertexColors_; }
 
     /// Whether the per-vertex color stream tints the albedo. Tri-state:
-    /// -1 (default) auto — tint iff the mesh has a color buffer, the
-    /// historical behavior. 0/1 explicitly force it off/on. Forcing it off
+    /// -1 (default) auto — the color buffer replaces the albedo iff the mesh
+    /// has one, the historical behavior. 0 forces it off. 1 forces it on as a
+    /// true tint: albedo = node colour × vertex colour, so a mesh can carry
+    /// baked shading in its color buffer and still be recoloured by
+    /// `node.color` at runtime. Forcing it off
     /// lets a mesh carry a color buffer purely for the wind-bend channel
     /// (vertex color R, read independently by the wind VS) without the
     /// remaining channels washing the albedo — so foliage sways from wind
@@ -135,6 +138,11 @@ public:
     bool vertexColorTintEnabled() const {
         return (vertexColorTint_ < 0) ? hasVertexColors_
                                       : (vertexColorTint_ != 0 && hasVertexColors_);
+    }
+    /// Shader mode: 0 no vertex colour, 1 replace the albedo, 2 multiply it.
+    int vertexColorMode() const {
+        if (!vertexColorTintEnabled()) return 0;
+        return vertexColorTint_ > 0 ? 2 : 1;
     }
 
     /// Upload an RGBA8 baseColor texture (tightly packed, top-left origin).

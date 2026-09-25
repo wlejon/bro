@@ -394,7 +394,7 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     uni1i(L.twoSided, C.twoSided, mesh->twoSided() ? 1 : 0);
     uni1f(L.subsurface, C.subsurface, mesh->subsurface());
     uni1f(L.alphaCutoff, C.alphaCutoff, mesh->alphaCutoff());
-    uni1i(L.useVertexColor, C.useVertexColor, mesh->vertexColorTintEnabled() ? 1 : 0);
+    uni1i(L.useVertexColor, C.useVertexColor, mesh->vertexColorMode());
     uni1f(L.nearClip, C.nearClip, mesh->nearClipDist());
     uni1f(L.windMask, C.windMask, mesh->windMask());
 

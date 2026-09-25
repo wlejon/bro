@@ -417,6 +417,9 @@ void main() {
     } else if (uUseVertexColor == 1) {
         baseColor = vColor.rgb;
         baseAlpha = vColor.a;
+    } else if (uUseVertexColor == 2) {
+        baseColor = uColor.rgb * vColor.rgb;
+        baseAlpha = uColor.a * vColor.a;
     } else {
         baseColor = uColor.rgb;
         baseAlpha = uColor.a;

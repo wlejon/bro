@@ -109,7 +109,7 @@ void main() {
     vTangentW   = M3 * lTangent;   // tangents lie in the surface: plain model transform
     vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
     vUV = uv;
-    vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
+    vColor = (uUseVertexColor >= 1) ? aColor : vec4(1.0);
     vCamDist = length(worldPos.xyz);
     gl_Position = uMVP * vec4(swayedAPos, 1.0);
 }

@@ -138,7 +138,8 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  * @property {boolean} [twoSided] - `doubleSided` is accepted as the glTF spelling.
  * @property {number} [subsurface]
  * @property {number} [alphaCutoff]
- * @property {boolean} [vertexColorTint]
+ * @property {boolean} [vertexColorTint] - Unset: a mesh's `colors` replace the albedo. `true`: the albedo is
+ *   `color` × the vertex colour, so baked shading survives a runtime `node.color` change. `false`: ignore them.
  * @property {'triangles'|'lines'} [drawMode]
  * @property {number} [lineWidth]
  * @property {boolean|number} [wind] - Wind sway: true is 1, or a [0, 1] multiplier.
