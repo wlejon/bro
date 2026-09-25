@@ -8,12 +8,13 @@ name: CI
 # to someone who has just cloned and has no vcpkg. See its own comment.
 #
 # The bronze host layer (src/bronze_host) is built on all three platforms.
-# Only Linux also builds the bronze COMPILER (with brass backend): Linux is
-# the job that runs the test suite, and the tests/bronze_host checks need a
-# compiler to produce their subject — without one they report SKIP forever,
-# which is the failure mode this exists to avoid.
-# The other two get the host layer compiled and linked, which is what breaks
-# there. Nightly builds the compiler everywhere, because it ships it.
+# Linux and macOS also build the bronze COMPILER (with brass backend — x86-64
+# on Linux, its native AArch64 backend on arm64 macOS): those are the jobs
+# that run the test suite, and the tests/bronze_host checks need a compiler
+# to produce their subject — without one they report SKIP forever, which is
+# the failure mode this exists to avoid. Windows gets the host layer compiled
+# and linked, which is what breaks there. Nightly builds the compiler
+# everywhere, because it ships it.
 
 on:
   push:
@@ -46,11 +47,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # bronze_compiler: build the bronze compiler here, not only the host
-          # layer (uses brass backend).
+          # test: run tests/run_tests.sh after the build.
+          # bronze_compiler: also build the bronze CLI (the JS compiler, brass
+          # backend), not only the host layer bro links. Nothing in the
+          # default target needs it; the tests/bronze_host checks do, so it
+          # goes with test.
           - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true,  bronze_compiler: true }
           - { name: windows, os: windows-2022, triplet: x64-windows, test: false, bronze_compiler: false }
-          - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: false, bronze_compiler: false }
+          - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: true,  bronze_compiler: true }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -71,9 +75,9 @@ jobs:
       # tree at third_party/bronze and no sibling, so give it the sibling name.
       # A symlink, not a copy: one pinned tree under both names, which also
       # means the configure resolves it as the standalone checkout and the
-      # checks run in exactly the layout they were written for. (Windows and
-      # macOS get no link and so exercise the submodule branch of that
-      # resolution instead.)
+      # checks run in exactly the layout they were written for. (Windows gets
+      # no link and so exercises the submodule branch of that resolution
+      # instead.)
       - name: Link the bronze submodule as the sibling checkout
         if: matrix.test
         run: ln -s "$PWD/third_party/bronze" "$PWD/../bronze"
@@ -92,9 +96,12 @@ jobs:
             libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
+      # bash: tests/run_tests.sh needs bash 4+ and macOS ships 3.2 as
+      # /bin/bash. coreutils: GNU `gtimeout` for the per-test cap (the runner
+      # has a Perl fallback, this is just the canonical one).
       - name: Ninja and tools (macOS)
         if: runner.os == 'macOS'
-        run: brew install ninja nasm
+        run: brew install ninja nasm bash coreutils
 
       # Put cl.exe on PATH so Windows can use the Ninja generator below — the
       # default Visual Studio generator ignores CMAKE_*_COMPILER_LAUNCHER, so
@@ -204,9 +211,18 @@ jobs:
       # are the only coverage that layer has, so they run here in full rather
       # than being deferred.
       - name: Test (headless, GPU path under Xvfb)
-        if: matrix.test
+        if: matrix.test && runner.os == 'Linux'
         shell: bash
         run: xvfb-run -a ./tests/run_tests.sh
+
+      # macOS runners have a window server, so the hidden SDL window gets a
+      # real GL context (Apple's GL-over-Metal) with no Xvfb. Run under
+      # Homebrew's bash explicitly: `shell: bash` may resolve to /bin/bash 3.2.
+      - name: Test (headless, GPU path)
+        if: matrix.test && runner.os == 'macOS'
+        shell: bash
+        run: |
+          "$(brew --prefix)/bin/bash" ./tests/run_tests.sh
 
   # The onramp. `cmake -B build -DBRO_PROFILE=minimal` is what BUILDING.md tells
   # someone to run when they have just cloned and do not have vcpkg, so it is the
