@@ -103,10 +103,12 @@ fi
 ABI_HEADER="$BRONZE_DIR/src/abi/bronze_abi.h"
 [[ -f "$ABI_HEADER" ]] || skip "cannot find bronze_abi.h under $BRONZE_DIR"
 ABI_TLS_HEADER="$BRONZE_DIR/src/abi/bronze_abi_tls.h"
+# sha256sum is coreutils; macOS before 14 has only shasum.
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 if [[ -f "$ABI_TLS_HEADER" ]]; then
-    FP="$(cat "$ABI_HEADER" "$ABI_TLS_HEADER" | sha256sum | cut -c1-8)"
+    FP="$(cat "$ABI_HEADER" "$ABI_TLS_HEADER" | sha256 | cut -c1-8)"
 else
-    FP="$(sha256sum "$ABI_HEADER" | cut -c1-8)"
+    FP="$(sha256 "$ABI_HEADER" | cut -c1-8)"
 fi
 
 case "$(uname -s)" in

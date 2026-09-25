@@ -44,6 +44,15 @@
 
 set -uo pipefail
 
+# mapfile, associative arrays and `wait -n` need bash 4+. macOS ships 3.2 as
+# /bin/bash, where this script would otherwise die halfway with a syntax-shaped
+# error; say what is wrong instead.
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "ERROR: tests/run_tests.sh needs bash 4+ (this is ${BASH_VERSION})."
+    echo "       macOS: brew install bash, then run it with /opt/homebrew/bin/bash"
+    exit 1
+fi
+
 to_win_path() {
     local p="$1"
     if [[ "${BRO:-}" == *.exe ]]; then
@@ -168,18 +177,64 @@ FILTER="${1:-}"
 
 # Per-test timeout so one hung test can't wedge the whole suite (or CI).
 # Override with BRO_TEST_TIMEOUT (seconds). Uses coreutils `timeout` when
-# available (git-bash and Linux have it; stock macOS may not — fall back to
-# running the test bare there). Under BRONZE_GC_STRESS every allocation
-# collects, and a test that takes a minute normally can take several; the
-# default cap grows to 1200 s there so only a real hang trips it.
+# available (git-bash and Linux have it), else Homebrew coreutils' `gtimeout`,
+# else a Perl stand-in with the same contract (below) — stock macOS has
+# neither binary, and a suite whose hung test wedges it forever is the thing
+# the cap exists to prevent, so the cap is never silently dropped. Under
+# BRONZE_GC_STRESS every allocation collects, and a test that takes a minute
+# normally can take several; the default cap grows to 1200 s there so only a
+# real hang trips it.
 if [[ -n "${BRONZE_GC_STRESS:-}" && "${BRONZE_GC_STRESS}" != "0" ]]; then
     TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-1200}"
 else
     TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-300}"
 fi
+
+# `perl_timeout -k KILL SECS cmd args...`: GNU timeout's contract, for a box
+# with no coreutils. The command runs in its own process group (as under GNU
+# timeout) so a TERM reaches whatever it spawned — a bronze_host check is a
+# bash script driving bro-headless — and KILL follows KILL seconds later if
+# the group is still there. Exit 124 on timeout, 137 if KILL was needed,
+# otherwise the command's own status (128+N for a signal death). A TERM/INT
+# sent to the runner is passed on to the group rather than orphaning it.
+perl_timeout() {
+    perl -e '
+        use strict; use POSIX ();
+        my $kill = 0;
+        if ($ARGV[0] eq "-k") { shift; $kill = shift; }
+        my $secs = shift;
+        my $pid = fork();
+        die "fork: $!" unless defined $pid;
+        if ($pid == 0) { setpgrp(0, 0); exec { $ARGV[0] } @ARGV; exit 127; }
+        my ($timed, $killed) = (0, 0);
+        $SIG{TERM} = $SIG{INT} = sub { kill "TERM", -$pid; };
+        $SIG{ALRM} = sub {
+            if (!$timed) {
+                $timed = 1; kill "TERM", -$pid; alarm $kill if $kill;
+            } else {
+                $killed = 1; kill "KILL", -$pid;
+            }
+        };
+        alarm $secs;
+        1 while waitpid($pid, 0) == -1 && $!{EINTR};
+        my $st = $?;
+        alarm 0;
+        exit($killed ? 137 : 124) if $timed;
+        exit(128 + ($st & 127)) if $st & 127;
+        exit($st >> 8);
+    ' -- "$@"
+}
+
 TIMEOUT_BIN=""
 if command -v timeout >/dev/null 2>&1; then
     TIMEOUT_BIN="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="gtimeout"
+elif command -v perl >/dev/null 2>&1; then
+    TIMEOUT_BIN="perl_timeout"
+else
+    echo "WARNING: no timeout, gtimeout or perl on PATH — per-test timeouts are OFF;"
+    echo "         a hung test will hang the suite. (macOS: brew install coreutils)"
 fi
 
 # The JS tests run by default. BRO_TEST_JS=0 skips them (a bronze_host-only
