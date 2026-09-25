@@ -156,7 +156,7 @@ bro.vision.init();
  * @param {string} [opts.device=best available]  'cuda' | 'gpu' | 'metal' | 'cpu'
  * @returns {Sam}
  */
-const sam = bro.vision.loadSam('weights/sam-vit-base', { device: 'cuda' });
+const sam = bro.vision.loadSam('weights/sam-vit-base', { device: 'gpu' });
 sam.device;    // 'CUDA'
 sam.hasImage;  // false until setImage()
 
@@ -261,7 +261,7 @@ sam.segmentEverything(photo, {
  * @returns {DepthEstimator}
  */
 const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small',
-                                   { device: 'cuda' });
+                                   { device: 'gpu' });
 depth.device;   // 'CUDA'
 
 /**
@@ -298,7 +298,7 @@ ctx.putImageData(new ImageData(turbo.data, turbo.width, turbo.height), 0, 0);
  * @param {string} [opts.device=best available]
  * @returns {NormalEstimator}
  */
-const normals = bro.vision.loadNormal('weights/dsine', { device: 'cuda' });
+const normals = bro.vision.loadNormal('weights/dsine', { device: 'gpu' });
 
 /**
  * NormalEstimator.estimate(image, opts?)
@@ -347,7 +347,7 @@ const ny = nm.normals[nm.width * nm.height + 0];           // plane 1
  *   `edge` is the h*w FP32 response in [0, 1]; `edges` is the same plane
  *   quantized to bytes; `image` is the drawable grayscale edge map.
  */
-const hed = bro.vision.loadHed('weights/hed', { device: 'cuda' });
+const hed = bro.vision.loadHed('weights/hed', { device: 'gpu' });
 const e = hed.detect(photo);        // === hed.estimate(photo)
 ctx.drawImage(e.image, 0, 0);
 
@@ -356,7 +356,7 @@ ctx.drawImage(e.image, 0, 0);
  * @returns {{ width, height, line: Float32Array, lines: Uint8Array,
  *             image: ImageBitmap } | AsyncHandle}
  */
-const lineart = bro.vision.loadLineart('weights/lineart', { device: 'cuda' });
+const lineart = bro.vision.loadLineart('weights/lineart', { device: 'gpu' });
 const l = lineart.detect(photo);    // l.line (FP32), l.lines (bytes), l.image
 
 /**
@@ -368,7 +368,7 @@ const l = lineart.detect(photo);    // l.line (FP32), l.lines (bytes), l.image
  *             image: ImageBitmap } | AsyncHandle}
  *   `segments` and `lines` are the SAME array object under both key spellings.
  */
-const mlsd = bro.vision.loadMlsd('weights/mlsd', { device: 'cuda' });
+const mlsd = bro.vision.loadMlsd('weights/mlsd', { device: 'gpu' });
 const segs = mlsd.detect(photo);
 ctx.beginPath();
 for (const s of segs.segments) { ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); }
@@ -389,7 +389,7 @@ ctx.stroke();
  *   confidences, `totalParts` counts them; `score` is an alias of `totalScore`.
  *   `bodies` and `poses` are the SAME array under both key spellings.
  */
-const openpose = bro.vision.loadOpenpose('weights/openpose', { device: 'cuda' });
+const openpose = bro.vision.loadOpenpose('weights/openpose', { device: 'gpu' });
 const pose = openpose.detect(photo);
 for (const body of pose.bodies) {
   for (const kp of body.keypoints) {
@@ -408,7 +408,7 @@ for (const body of pose.bodies) {
  *   alias). `image` is the palette-colorized map.
  */
 const segformer = bro.vision.loadSegformer('weights/segformer-b0-ade',
-                                           { device: 'cuda' });
+                                           { device: 'gpu' });
 const sem = segformer.detect(photo, {
   onDone(r, info) { if (!info.error) ctx.drawImage(r.image, 0, 0); }
 });
@@ -437,7 +437,7 @@ const sem = segformer.detect(photo, {
  */
 const rembg = bro.vision.loadBirefnet(
   'weights/triposplat/background_removal/birefnet.safetensors',
-  { device: 'cuda', modelSize: 1024 });
+  { device: 'gpu', modelSize: 1024 });
 
 /**
  * Birefnet.removeBackground(image, opts?) — also published as `estimate()`,
@@ -498,7 +498,7 @@ rembg.dispose();
  *   `imgChannels` (3), `variant`, `zDim` (512), `wDim` (512), `numWs`, `cDim`
  */
 const gan = bro.vision.loadStyleGAN3('weights/stylegan3-r-ffhqu-256',
-  { resolution: 256, variant: 'r', device: 'cuda' });
+  { resolution: 256, variant: 'r', device: 'gpu' });
 
 /**
  * StyleGAN3.generate(opts?) — sample z, map it to W+, render.
@@ -601,7 +601,7 @@ const edited = gan.synthesize(rec.w);      // edit rec.w first, then re-render
  *   img_size, 518 for ViT-S)
  */
 const d2 = bro.vision.loadDinov2('weights/Depth-Anything-V2-Small',
-                                 { variant: 'small', device: 'cuda' });
+                                 { variant: 'small', device: 'gpu' });
 
 /**
  * Dinov2.encode(image, opts?) — run the backbone and return the DPT-stage
@@ -635,7 +635,7 @@ d2.dispose();
  */
 const d3 = bro.vision.loadDinov3(
   'weights/triposplat/clip_vision/dino_v3_vit_h.safetensors',
-  { device: 'cuda' });
+  { device: 'gpu' });
 
 /**
  * Dinov3.encode(image, opts?) — the single final hidden state (final LayerNorm
