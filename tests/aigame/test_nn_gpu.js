@@ -114,30 +114,76 @@ function runGpuTests(nn, T) {
         near(dXG.download(), dXC, 1e-5, name + 'Backward');
     }
 
-    // softmax, and the fused softmax + xent. Unmasked only: the mask is a
-    // host Float32Array that brogameagent's binding hands to brotensor as a
-    // raw pointer, which a GPU kernel cannot read (Metal throws "mask is not
-    // a Metal device pointer" or ignores it), so masked ops are CPU-only today.
+    // softmax, and the fused softmax + xent, unmasked and masked. The mask
+    // is brought to the op's device: a Float32Array mask is uploaded for a
+    // GPU op (brotensor reads it as a device pointer), and a GpuTensor mask
+    // is used in place. Masked entries come back exactly 0.
     {
         const n = 6, logH = new Float32Array([1, 2, 3, 4, -1, 0.5]);
-        const pC = new Float32Array(n);
-        nn.softmaxForward(logH, pC, null);
-        const pG = dev(n, 1);
-        nn.softmaxForward(dev(n, 1, logH), pG, null);
+        const maskH = new Float32Array([1, 0, 1, 0, 1, 1]);
+        const target = new Float32Array([0, 0, 0.25, 0, 0, 0.75]);
+        for (const [what, mask] of [['', null], [' masked', maskH], [' tensor-masked', dev(n, 1, maskH)]]) {
+            const pC = new Float32Array(n);
+            nn.softmaxForward(logH, pC, mask ? maskH : null);
+            const pG = dev(n, 1);
+            nn.softmaxForward(dev(n, 1, logH), pG, mask);
+            T.sync();
+            const pr = pG.download();
+            near(pr, pC, 1e-5, 'softmaxForward' + what);
+            let sum = 0; for (let i = 0; i < n; i++) sum += pr[i];
+            assert(Math.abs(sum - 1) < 1e-4, 'softmax' + what + ' sums to 1, got ' + sum);
+
+            const pXC = new Float32Array(n), dC = new Float32Array(n);
+            const lossC = nn.softmaxXent(logH, target, pXC, dC, mask ? maskH : null);
+            const pXG = dev(n, 1), dG = dev(n, 1);
+            const lossG = nn.softmaxXent(dev(n, 1, logH), dev(n, 1, target), pXG, dG, mask);
+            assert(close(lossG, lossC, 1e-4), 'softmaxXent' + what + ' loss gpu ' + lossG + ' vs cpu ' + lossC);
+            const pXr = pXG.download(), dr = dG.download();
+            near(pXr, pXC, 1e-5, 'softmaxXent' + what + ' probs');
+            near(dr, dC, 1e-5, 'softmaxXent' + what + ' dLogits');
+            if (mask) {
+                for (let i = 0; i < n; i++) {
+                    if (maskH[i] === 0) {
+                        assert(pr[i] === 0 && pXr[i] === 0 && dr[i] === 0,
+                               'masked entry ' + i + what + ': ' + pr[i] + ' ' + pXr[i] + ' ' + dr[i]);
+                    }
+                }
+            }
+        }
+    }
+
+    // factoredSoftmax / factoredXent over the move | attack | ability blocks,
+    // with attack and ability masks (the trailing no-op class is always legal).
+    {
+        const nM = nn.N_MOVE, nA = nn.N_ATTACK, nB = nn.N_ABILITY, total = nM + nA + nB;
+        const logH = ramp(total, 2.0, 0.3);
+        const aMask = new Float32Array(nA - 1).fill(1), bMask = new Float32Array(nB - 1).fill(1);
+        aMask[0] = 0; bMask[nB - 2] = 0;
+        const soft = (len, illegal) => {
+            const t = new Float32Array(len);
+            let s = 0;
+            for (let i = 0; i < len; i++) { t[i] = illegal.includes(i) ? 0 : i + 1; s += t[i]; }
+            return t.map(v => v / s);
+        };
+        const mT = soft(nM, []), aT = soft(nA, [0]), bT = soft(nB, [nB - 2]);
+
+        const pC = new Float32Array(total);
+        nn.factoredSoftmax(logH, pC, aMask, bMask);
+        const pG = dev(total, 1);
+        nn.factoredSoftmax(dev(total, 1, logH), pG, aMask, bMask);
         T.sync();
         const pr = pG.download();
-        near(pr, pC, 1e-5, 'softmaxForward');
-        let sum = 0; for (let i = 0; i < n; i++) sum += pr[i];
-        assert(Math.abs(sum - 1) < 1e-4, 'softmax sums to 1, got ' + sum);
+        near(pr, pC, 1e-5, 'factoredSoftmax masked');
+        assert(pr[nM] === 0 && pr[nM + nA + nB - 2] === 0, 'factoredSoftmax masked entries are 0');
 
-        const target = new Float32Array([0, 0, 0, 1, 0, 0]);
-        const pXC = new Float32Array(n), dC = new Float32Array(n);
-        const lossC = nn.softmaxXent(logH, target, pXC, dC, null);
-        const pXG = dev(n, 1), dG = dev(n, 1);
-        const lossG = nn.softmaxXent(dev(n, 1, logH), dev(n, 1, target), pXG, dG, null);
-        assert(close(lossG, lossC, 1e-4), 'softmaxXent loss gpu ' + lossG + ' vs cpu ' + lossC);
-        near(pXG.download(), pXC, 1e-5, 'softmaxXent probs');
-        near(dG.download(), dC, 1e-5, 'softmaxXent dLogits');
+        const pXC = new Float32Array(total), dC = new Float32Array(total);
+        const lossC = nn.factoredXent(logH, mT, aT, bT, pXC, dC, aMask, bMask);
+        const pXG = dev(total, 1), dG = dev(total, 1);
+        const lossG = nn.factoredXent(dev(total, 1, logH), dev(nM, 1, mT), dev(nA, 1, aT), dev(nB, 1, bT),
+                                      pXG, dG, dev(nA - 1, 1, aMask), bMask);
+        assert(close(lossG, lossC, 1e-4), 'factoredXent loss gpu ' + lossG + ' vs cpu ' + lossC);
+        near(pXG.download(), pXC, 1e-5, 'factoredXent probs');
+        near(dG.download(), dC, 1e-5, 'factoredXent dLogits');
     }
 
     // ── PolicyValueNet on the GPU matches the same weights on the CPU ───

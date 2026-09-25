@@ -42,9 +42,11 @@
 // it returns is an ordinary GpuTensor, so its shape/element API is
 // bro.tensor's, not this namespace's. One tensor type in the whole stack.
 //
-// The mask arguments (softmaxForward, factoredSoftmax, factoredXent, ...) are
-// the exception: they are read as a raw float buffer and must be
-// Float32Arrays, never tensors.
+// The mask arguments (softmaxForward, softmaxXent, factoredSoftmax,
+// factoredXent) take either too: 1 legal / 0 illegal per entry, moved to
+// wherever the op reads them, so a Float32Array mask works with GpuTensor
+// operands (it is uploaded to the GPU for the call) and a GpuTensor mask with
+// Float32Array operands.
 //
 // Quick start, a hand-wired 2-layer net trained by SGD:
 //
@@ -423,8 +425,9 @@ handle.version();
 // -----------------------------------------------------------------------------
 //
 // Every tensor argument may be a GpuTensor or a Float32Array. Every mask
-// argument must be a Float32Array (or omitted / null / undefined for "no
-// mask"). All of these write in place and throw on a shape mismatch.
+// argument may be either (or omitted / null / undefined for "no mask"); a
+// mask shorter than its logits, or not FP32, is a TypeError. All of these
+// write in place and throw on a shape mismatch.
 
 bro.ai.game.nn.linearForward(W, b, x, y);                 // y = W·x + b
 bro.ai.game.nn.linearBackward(W, x, dY, dX, dW, dB);
