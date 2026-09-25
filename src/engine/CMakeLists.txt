@@ -12,6 +12,7 @@ add_library(bro_engine STATIC
     css_animations.cpp
     css_easing.cpp
     css_interpolation.cpp
+    css_transform_interpolation.cpp
     element_activation.cpp
     web_animations.cpp
     web_animations_effect.cpp
