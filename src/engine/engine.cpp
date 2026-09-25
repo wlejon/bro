@@ -294,15 +294,16 @@ bool Engine::hasPointerCapture(const dom::Element* target, int pointerId) const 
 // Walk the document + shadow trees and pump any pending HTMLMediaElement
 // events (loadedmetadata, timeupdate, ended) on each ElVideo. Called from
 // the main thread; ElVideo::draw() runs on the raster thread.
-static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying, bool advance) {
+static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying,
+                                bool advancePicture, bool advanceClock) {
     if (!el) return;
     if (auto* v = el->videoControl()) {
-        if (advance) v->advancePipeline();
-        v->pumpEvents();
+        if (advancePicture) v->advancePipeline();
+        v->pumpEvents(advanceClock);
         if (v->isPlaying()) anyPlaying = true;
     }
     el->forEachComposedChild([&](dom::Element* c) {
-        pumpVideoEventsWalk(c, anyPlaying, advance);
+        pumpVideoEventsWalk(c, anyPlaying, advancePicture, advanceClock);
     });
 }
 void Engine::pumpVideoEvents() {
@@ -319,8 +320,14 @@ void Engine::pumpVideoEvents() {
     // pipeline forward — may never run. Drive it from here instead: a playing
     // <video> then advances across flush() the way the documentation has
     // always said it does, and there is no concurrent reader to race.
-    const bool advanceHere = (displayMode_ == DisplayMode::Headless);
-    pumpVideoEventsWalk(document_->documentElement(), anyPlaying, advanceHere);
+    //
+    // Except inside an advanceTime step once the step has moved media to its
+    // instant (`mediaHeldForStep_`): the rest of that step — its rAF, a flush()
+    // a callback makes, the step's own closing flush — is one frame and reads
+    // one position, as the windowed frame's callbacks do. Events still pump.
+    const bool hold = mediaHeldForStep_;
+    const bool advanceHere = (displayMode_ == DisplayMode::Headless) && !hold;
+    pumpVideoEventsWalk(document_->documentElement(), anyPlaying, advanceHere, !hold);
     // Playing <video> elements don't mutate the DOM, so nothing else would
     // mark the document dirty. Force a re-raster each frame while any video
     // is advancing so ElVideo::draw() keeps calling pipeline_->advance() and

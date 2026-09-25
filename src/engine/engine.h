@@ -885,6 +885,10 @@ private:
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
     bool mediaEventsArmed_ = false;
+    // Set inside a headless advanceTime step after the step has moved media to
+    // its instant; pumpVideoEvents then dispatches events without moving any
+    // media clock or picture. See Engine::advanceTime.
+    bool mediaHeldForStep_ = false;
 
     dom::ElementHandle hoveredElement_;
     scene::HtmlNode*   hoveredHtmlNode_ = nullptr;

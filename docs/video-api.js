@@ -284,10 +284,14 @@ gif.addViewportFrame();
 // after layout). Assigning `v.src = url`, or calling v.load() with a src
 // attribute set, (re)loads the same way. Loading does NOT auto-play.
 //
-// Clock behavior (matters for testing): playback advances on the host wall
-// clock, not the engine's virtual clock, headless advanceTime() does not
-// move video time (use wallSleep), and bro.time pause/timescale do not
-// affect a playing video.
+// Clock behavior (matters for testing): a video that is playing its sound
+// follows that sound, and headless advanceTime() renders the sound, so it
+// moves with virtual time. A silent or muted one advances on the host wall
+// clock, which advanceTime() does not move (use wallSleep). Headless moves
+// media once per advanceTime step, before rAF: a frame callback and the line
+// after advanceTime() read the same currentTime; a flush() outside
+// advanceTime() also advances a playing video. bro.time pause/timescale do
+// not affect a playing video.
 
 const v = document.getElementById('clip');
 

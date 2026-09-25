@@ -119,7 +119,12 @@ public:
     // Dispatch any pending HTMLMediaElement events on the element's
     // listeners. MUST be called on the main thread. draw() runs on the raster
     // thread, so the engine pumps events from its main loop instead.
-    void pumpEvents();
+    //
+    // `advanceClock` false leaves a sound-only element's position where it is
+    // (a picture's is only ever moved by draw() or advancePipeline()): the
+    // headless step's own pumps after the one that moved media to the step's
+    // instant, so every read inside the step sees that instant.
+    void pumpEvents(bool advanceClock = true);
 
     // Pull the pipeline up to its clock without drawing anything.
     //

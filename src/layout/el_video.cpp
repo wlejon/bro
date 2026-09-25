@@ -781,7 +781,7 @@ const uint8_t* ElVideo::currentFrameRgba(int* outW, int* outH) {
     return nullptr;
 }
 
-void ElVideo::pumpEvents() {
+void ElVideo::pumpEvents(bool advanceClock) {
     // The load algorithm's own events, which come with or without a pipeline:
     // `emptied` for the resource it dropped, `error` for one it could not open.
     if (elem_ && pendingEmptied_) {
@@ -807,7 +807,7 @@ void ElVideo::pumpEvents() {
     // With no picture nothing drives the clock from the draw path — there is
     // no frame to decode and draw() bows out — so walk it here. Safe on this
     // thread precisely because the raster side is not touching it.
-    if (!pipeline_->hasVideo()) pipeline_->advance();
+    if (advanceClock && !pipeline_->hasVideo()) pipeline_->advance();
     if (!elem_) return;
 
     // loadedmetadata fires once after a successful open(). HTMLMediaElement
@@ -975,7 +975,7 @@ void ElVideo::draw(render::Renderer* renderer, dom::Element* elem,
                        cfromColor8({0, 0, 0, 255}));
 }
 
-void ElVideo::pumpEvents() {}
+void ElVideo::pumpEvents(bool) {}
 
 } // namespace bro::layout
 

@@ -216,6 +216,27 @@ void Engine::advanceTime(double ms) {
 
         drainWheelSmoothing(static_cast<float>(step) / 1000.0f);
 
+        // The step's sound, then the media, then rAF — the order the windowed
+        // frame sees them in. There the device plays continuously and
+        // `pumpVideoEvents` runs before rAF, so a frame callback reads a
+        // <video>'s currentTime at the instant that frame is at.
+        //
+        // And media moves ONCE per step, here. The step's closing flush() used
+        // to pump the video again, and a headless pump advances it: the picture
+        // caught up with an audio-slaved clock, or a wall-clock one moved on by
+        // however long the callbacks took, after rAF had read it. A script that
+        // read currentTime in rAF and again after advanceTime got two answers a
+        // picture apart. So the rest of the step holds media where this put it
+        // (`mediaHeldForStep_`); a flush() outside advanceTime still advances.
+        if (audioEngine_) {
+            int audioFrames = static_cast<int>(step * audioEngine_->sampleRate() / 1000.0 + 0.5);
+            if (audioFrames > 0)
+                audioEngine_->renderBlock(audioFrames);
+        }
+        mediaHeldForStep_ = false;
+        pumpVideoEvents();
+        mediaHeldForStep_ = true;
+
         syncWebGLCanvasSizes();
         webgl::WebGL2RenderingContext::invalidateCurrent();
         if (activeWebGL) activeWebGL->bindCanvasFBO();
@@ -280,12 +301,7 @@ void Engine::advanceTime(double ms) {
 #endif
 
         flush();
-
-        if (audioEngine_) {
-            int audioFrames = static_cast<int>(step * audioEngine_->sampleRate() / 1000.0 + 0.5);
-            if (audioFrames > 0)
-                audioEngine_->renderBlock(audioFrames);
-        }
+        mediaHeldForStep_ = false;
     }
 }
 
