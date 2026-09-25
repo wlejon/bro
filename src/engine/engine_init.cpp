@@ -14,6 +14,7 @@
 #include "util/asset_path.h"
 #include "util/user_dirs.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -442,12 +443,26 @@ void Engine::initAppRealm() {
                 setTestFailure(true);
             }
         }
+        // An external module script IS the module instance for its file: it is
+        // published under its path, so a later `import` of that file — from a
+        // headless driver script, or another module script — binds the
+        // instance that ran rather than running the file again. Two tags with
+        // one src are one module, evaluated once (HTML's module map).
+        std::vector<std::string> ranModuleFiles;
         for (const auto& script : manifest_.scripts) {
             if (!script.isModule) continue;
+            if (!script.isInline()) {
+                if (std::find(ranModuleFiles.begin(), ranModuleFiles.end(), script.path) !=
+                    ranModuleFiles.end()) {
+                    continue;
+                }
+                ranModuleFiles.push_back(script.path);
+            }
             std::string code = script.isInline() ? script.code : AppLoader::loadFile(script.path);
             if (code.empty()) continue;
             const std::string& name = script.isInline() ? manifest_.htmlPath : script.path;
-            if (!bro::bronze_host::evalAppScript(*this, code, name)) {
+            if (!bro::bronze_host::evalAppScript(*this, code, name,
+                                                 /*moduleFile=*/!script.isInline())) {
                 setTestFailure(true);
             }
         }

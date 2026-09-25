@@ -37,6 +37,11 @@
     <!-- tests/engine/test_page_module_script_url.js: an external module in a
          subdirectory is its own module with its own URL. -->
     <script type="module" src="module_sub/main.js"></script>
+    <!-- tests/headless/test_module_entry_shared.js and
+         test_module_live_bindings.js: an external module ENTRY a driver
+         imports. Named twice on purpose — one src is one module, run once. -->
+    <script type="module" src="module_entry/main.js"></script>
+    <script type="module" src="module_entry/main.js"></script>
     <script>
         // Hide the menu bar so innerHeight matches the configured viewport.
         // (Mouse coords from getBoundingClientRect work either way thanks

@@ -43,8 +43,12 @@ bool evalScript(engine::Engine& engine, const std::string& code,
 /// dies with it, instead of every reload leaking the previous app's globals,
 /// closures and environments for the life of the process. A driver script or
 /// an `eval()` goes through evalScript and is nobody's to unload.
+/// `moduleFile`: `code` is the text of the module file `filename` (a
+/// `<script type="module" src>`), whose instance is then what a later
+/// `import` of that file binds — a driver script importing the app's entry
+/// gets the running app, not a second boot of it.
 bool evalAppScript(engine::Engine& engine, const std::string& code,
-                   const std::string& filename);
+                   const std::string& filename, bool moduleFile = false);
 
 /// Compile a JS file in-process using bronze CLI and run it on `engine`.
 bool evalScriptFile(engine::Engine& engine, const std::string& filePath);

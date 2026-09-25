@@ -295,10 +295,10 @@ namespace {
 // evalScript and evalAppScript are one function: the latter brackets the run
 // as a module load and hands the handle back through `moduleHandleOut`.
 bool evalScriptImpl(engine::Engine& engine, const std::string& code, const std::string& filename,
-                    ev::ModuleHandle* moduleHandleOut) {
+                    ev::ModuleHandle* moduleHandleOut, bool moduleFile = false) {
     HostEvalScope evalScope;
     if (!isJitDisabled()) {
-        return evalScriptJit(engine, code, filename, moduleHandleOut);
+        return evalScriptJit(engine, code, filename, moduleHandleOut, moduleFile);
     }
 
     ensureSharedRuntimeEnv();
@@ -437,9 +437,10 @@ bool evalScript(engine::Engine& engine, const std::string& code, const std::stri
     return evalScriptImpl(engine, code, filename, nullptr);
 }
 
-bool evalAppScript(engine::Engine& engine, const std::string& code, const std::string& filename) {
+bool evalAppScript(engine::Engine& engine, const std::string& code, const std::string& filename,
+                   bool moduleFile) {
     ev::ModuleHandle handle = 0;
-    const bool ok = evalScriptImpl(engine, code, filename, &handle);
+    const bool ok = evalScriptImpl(engine, code, filename, &handle, moduleFile);
     // Recorded on failure too: a top level that threw halfway still
     // registered its spans, and they are still the reload's to retire.
     engine.addAppModuleHandle(handle);

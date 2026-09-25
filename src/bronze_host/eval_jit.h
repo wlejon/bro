@@ -20,15 +20,21 @@ bool isJitDisabled();
 /// the `eval()` hook returns the value or rethrows, and must not fail the run
 /// on a throw the script is about to catch. `moduleHandleOut`, when set,
 /// brackets the run as a module load the host can later unload (bronze
-/// EvalOptions::moduleHandleOut).
+/// EvalOptions::moduleHandleOut). `moduleFile` says `code` is the text of the
+/// module FILE `filename` (a `<script type="module" src>`): that instance is
+/// published under the file's path, so a driver script's `import` of it binds
+/// the page's instance instead of running the file again (bronze
+/// EvalOptions::publishEntry).
 bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
                                               const std::string& filename = {},
-                                              bronze::embed::ModuleHandle* moduleHandleOut = nullptr);
+                                              bronze::embed::ModuleHandle* moduleHandleOut = nullptr,
+                                              bool moduleFile = false);
 
 /// Evaluates JavaScript code in-memory using the Brass JIT engine without disk files.
 /// Returns true on success, false on failure (and logs error / sets test failure).
 bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename = {},
-                   bronze::embed::ModuleHandle* moduleHandleOut = nullptr);
+                   bronze::embed::ModuleHandle* moduleHandleOut = nullptr,
+                   bool moduleFile = false);
 
 /// Evaluates a JavaScript file in-memory using the Brass JIT engine without disk files.
 /// Returns true on success, false on failure (and logs error / sets test failure).

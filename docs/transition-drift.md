@@ -94,7 +94,7 @@ bindings into one namespace, so a module has no runtime existence of its own.
 Compiling the same file into a second unit therefore ran its top level a second
 time. The fix gives each **realm** a registry of the module namespace objects a
 unit left behind, keyed by canonical path: a unit publishes one per non-entry
-file it evaluated, and a later unit in the same realm treats a path already
+file it evaluated (and its entry, when that is a page's module file), and a later unit in the same realm treats a path already
 published as *external* — it parses the file for its export names, emits no
 statements for it, and binds each export from the registry.
 
@@ -109,24 +109,27 @@ Covered:
   Nothing in bro passes that flag today, so a page carrying an `app.dll`
   publishes nothing and a driver against it still compiles its own copy.
 
+- **live bindings** (2026-09-24). `import { count }` and `import * as ns` of a
+  published module read the exporting module's CURRENT binding: every read of
+  an external export compiles to a read through the published namespace (a
+  getter over the exporting module's slot), so a later `count = 2` in the page
+  shows in the driver. `import * as ns` is the published namespace object
+  itself. (bronze `modules/link.cpp` `liveReads_`,
+  `tests/eval/eval_module_registry_test.cpp`; bro
+  `tests/headless/test_module_live_bindings.js`.)
+- **the page's `<script type="module" src>` entry** (2026-09-24). Each such
+  script is published under its own path (`EvalOptions::publishEntry`), so a
+  driver's `import "/app/main.js"` binds the page's instance instead of booting
+  the app a second time; two tags with one `src` run it once
+  (`tests/headless/test_module_entry_shared.js`).
+
 Not covered:
 
-- **live bindings.** An external module's exports are bound once, when the
-  importing unit evaluates: `import { count }` where the exporting module later
-  reassigns `count` reads the value as of the bind. Object identity and
-  mutation are shared (which is what a test importing an app's state needs);
-  a reassigned `let` or `var` export is not. Reading it through
-  `import * as ns` then `ns.count` is live, because a namespace member is a
-  getter over the exporting module's slot.
-- **a file bro inlined rather than imported.** bro concatenates every
-  `<script>` in the document into one entry, so `<script type="module"
-  src="/app/main.js">` makes `main.js` part of the entry rather than a module in
-  the graph. A driver that imports `/app/main.js` compiles its own copy; a
-  driver that imports what `main.js` imports gets the page's instance.
 - **across realms.** An iframe or a worker is a different realm and keeps its
   own registry, which is what a module map per context means.
-- the ENTRY of a unit is never published, so running the same driver twice runs
-  it twice.
+- a driver script, inline `<script type="module">` text, and an `-e`
+  expression are never published, so running the same driver twice runs it
+  twice.
 
 ## E. Web-platform surface gaps (runtime-confirmed on both binaries, 2026-09-19)
 

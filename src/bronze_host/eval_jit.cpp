@@ -209,7 +209,8 @@ std::string wrapAsyncIife(const std::string& code, const std::string& filename) 
 
 bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std::string& code,
                                               const std::string& filename,
-                                              bronze::embed::ModuleHandle* moduleHandleOut) {
+                                              bronze::embed::ModuleHandle* moduleHandleOut,
+                                              bool moduleFile) {
     HostEvalScope evalScope;
     if (!isWebHostGlobalsInstalled()) {
         installWebHostGlobals(engine);
@@ -236,6 +237,10 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     // is what makes the page's instances the ones a later unit binds
     // (bronze: runtime/module_registry.h).
     opts.moduleRegistry = true;
+    // A `<script type="module" src>` is itself a module instance: published
+    // too, so a driver's `import "/app/main.js"` binds it rather than booting
+    // the app a second time. Inline script text and driver scripts are not.
+    opts.publishEntry = moduleFile && !filename.empty();
 
     std::string execCode = code;
     if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
@@ -267,9 +272,9 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
 }
 
 bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::string& filename,
-                   bronze::embed::ModuleHandle* moduleHandleOut) {
+                   bronze::embed::ModuleHandle* moduleHandleOut, bool moduleFile) {
     HostEvalScope evalScope;
-    auto res = evalScriptJitResult(engine, code, filename, moduleHandleOut);
+    auto res = evalScriptJitResult(engine, code, filename, moduleHandleOut, moduleFile);
     if (!reportCallResult(engine, res, "evalScriptJit", filename)) {
         return false;
     }
