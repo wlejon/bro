@@ -53,8 +53,12 @@ bh_find_bronze() {
         [[ -x "$BRONZE" ]] && { echo "$BRONZE"; return 0; }
         return 1
     fi
-    local project_dir="$1" candidate
+    local project_dir="$1" candidate hdir=""
+    # A single-config build dir named by BRO_HEADLESS (build-arm64-app, ...)
+    # carries its own bronze; prefer it, or its modules go stale unnoticed.
+    [[ -n "${BRO_HEADLESS:-}" ]] && hdir="$(dirname "$BRO_HEADLESS")"
     for candidate in \
+        ${hdir:+"$hdir/bronze"} \
         "$project_dir/build/Release/bronze.exe" \
         "$project_dir/build/Debug/bronze.exe" \
         "$project_dir/build-release/bronze" \
@@ -71,8 +75,11 @@ bh_find_bronze() {
 # is still passed explicitly: it pins WHICH build's runtime a check links
 # against, which matters in a tree that has more than one.
 bh_find_shared_rt_lib() {
-    local project_dir="$1" candidate
+    local project_dir="$1" candidate hdir=""
+    [[ -n "${BRO_HEADLESS:-}" ]] && hdir="$(dirname "$BRO_HEADLESS")"
     for candidate in \
+        ${hdir:+"$hdir/shared/libbronze_runtime_shared.dylib"} \
+        ${hdir:+"$hdir/shared/libbronze_runtime_shared.so"} \
         "$project_dir/build/shared/Release/bronze_runtime_shared.lib" \
         "$project_dir/build/shared/Debug/bronze_runtime_shared.lib" \
         "$project_dir/build/shared/bronze_runtime_shared.lib" \
