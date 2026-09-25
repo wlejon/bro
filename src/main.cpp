@@ -27,6 +27,9 @@
 #else
 #include <unistd.h>
 #include <climits>
+#include <cstdio>
+#include <fcntl.h>
+#include <sys/file.h>
 #endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -79,9 +82,30 @@ static void redirectLogToFile() {
         SetStdHandle(STD_OUTPUT_HANDLE, h);
     }
 #else
-    FILE* f = freopen("bro.log", "w", stderr);
-    if (!f) return;
-    dup2(fileno(stderr), fileno(stdout));
+    // Same contention policy as the _SH_DENYWR open above. POSIX has no
+    // share modes, so the exclusive writer is an flock held for the life of
+    // the process (it lives on the open file description, which the dup2s
+    // below keep alive). Truncate only once the lock is ours: opening with
+    // O_TRUNC first would wipe the log of the bro that already owns it.
+    auto openLocked = [](const char* path) -> int {
+        int fd = open(path, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+        if (fd < 0) return -1;
+        if (flock(fd, LOCK_EX | LOCK_NB) != 0 || ftruncate(fd, 0) != 0) {
+            close(fd);
+            return -1;
+        }
+        return fd;
+    };
+    int fd = openLocked("bro.log");
+    if (fd < 0) {
+        char fallback[64];
+        std::snprintf(fallback, sizeof(fallback), "bro-%ld.log", static_cast<long>(getpid()));
+        fd = openLocked(fallback);
+        if (fd < 0) return;
+    }
+    dup2(fd, fileno(stderr));
+    dup2(fd, fileno(stdout));
+    close(fd);
 #endif
     setvbuf(stderr, nullptr, _IONBF, 0);
     setvbuf(stdout, nullptr, _IONBF, 0);
