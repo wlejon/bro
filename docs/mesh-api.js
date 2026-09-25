@@ -637,7 +637,13 @@ class Mesh {
   /** One mesh per connected component. @returns {Array<Mesh>} */
   splitComponents() {}
 
-  /** @returns {Mesh} a NEW convex hull */
+  /**
+   * The exact convex hull of this mesh's vertex positions (quickhull). Indices
+   * are ignored, so a bare point cloud — `new Mesh({ positions })` — works.
+   * Flat-shaded, outward normals; empty for fewer than four points or
+   * coplanar input.
+   * @returns {Mesh} a NEW convex hull
+   */
   convexHull() {}
 
   /**
