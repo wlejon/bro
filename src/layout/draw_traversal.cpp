@@ -165,8 +165,32 @@ static bromath::Color styleCurrentColor(const htmlayout::css::ComputedStyle& sty
     return c;
 }
 
+static float styleFontSizePx(const htmlayout::css::ComputedStyle& style) {
+    auto it = style.find("font-size");
+    if (it == style.end()) return 16.0f;
+    char* end = nullptr;
+    const float v = std::strtof(it->second.c_str(), &end);
+    return (end != it->second.c_str() && v > 0) ? v : 16.0f;
+}
+
+// What a shadow's em/rem/vw lengths resolve against for `elem`.
+static CssLengthContext shadowLengthContext(dom::Element* elem,
+                                            const htmlayout::css::ComputedStyle& style,
+                                            int viewportW, int viewportH) {
+    CssLengthContext cx;
+    cx.fontSize = styleFontSizePx(style);
+    if (dom::Document* doc = elem ? elem->document() : nullptr) {
+        if (dom::Element* root = doc->documentElement())
+            cx.rootFontSize = styleFontSizePx(root->computedStyle());
+    }
+    cx.viewportW = static_cast<float>(viewportW);
+    cx.viewportH = static_cast<float>(viewportH);
+    return cx;
+}
+
 static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& val,
-                                                           const bromath::Color& currentColor) {
+                                                           const bromath::Color& currentColor,
+                                                           const CssLengthContext& lengths) {
     std::vector<render::CssFilterParams> result;
     size_t pos = 0;
     while (pos < val.size()) {
@@ -247,7 +271,7 @@ static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& va
             }
             CssShadow s;
             if (parseCssShadow(std::string_view(val).substr(argStart, pos - argStart),
-                               currentColor, 3, s) && !s.inset) {
+                               currentColor, 3, lengths, s) && !s.inset) {
                 f.dx = s.dx;
                 f.dy = s.dy;
                 f.blur = s.blur;
@@ -944,7 +968,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (!skipWrap) {
         auto fIt = style.find("filter");
         if (fIt != style.end() && !fIt->second.empty() && fIt->second != "none") {
-            auto filters = parseCSSFilter(fIt->second, styleCurrentColor(style));
+            auto filters = parseCSSFilter(fIt->second, styleCurrentColor(style),
+                shadowLengthContext(elem, style, viewportW_, viewportH_));
             if (!filters.empty()) {
                 hasFilter = true;
                 // Use a generous bounds that includes blur/shadow overflow
@@ -986,11 +1011,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         if (hasShadows) {
             shadowRadii = getRadii(style, bw, bh);
             // A shadow with no colour is currentcolor.
-            const bromath::Color current = styleCurrentColor(style);
-            for (const std::string& item : splitCssShadowList(bsIt->second)) {
-                CssShadow s;
-                if (parseCssShadow(item, current, 4, s)) shadows.push_back(s);
-            }
+            shadows = parseCssShadowList(bsIt->second, styleCurrentColor(style), 4,
+                                         shadowLengthContext(elem, style, viewportW_, viewportH_));
         }
 
         auto drawShadows = [&](bool wantInset) {
@@ -3088,13 +3110,16 @@ std::string DrawTraversal::applyTextTransform(const std::string& text,
     return text;
 }
 
-// Parse text-shadow: offsetX offsetY [blur] [color], the colour defaulting to
-// the text's own (currentcolor). Simplified: only the first shadow paints.
-static bool parseTextShadow(const std::string& val, const bromath::Color& textColor,
-                            CssShadow& out) {
-    if (val.empty() || val == "none") return false;
-    std::vector<std::string> items = splitCssShadowList(val);
-    return !items.empty() && parseCssShadow(items[0], textColor, 3, out) && !out.inset;
+// Parse text-shadow: a list of `offsetX offsetY [blur] [color]`, each colour
+// defaulting to the text's own (currentcolor). The caller paints the list
+// back to front, so the first shadow ends up on top.
+static std::vector<CssShadow> parseTextShadows(const std::string& val,
+                                               const bromath::Color& textColor,
+                                               const CssLengthContext& lengths) {
+    if (val.empty() || val == "none") return {};
+    std::vector<CssShadow> out = parseCssShadowList(val, textColor, 3, lengths);
+    std::erase_if(out, [](const CssShadow& s) { return s.inset; });
+    return out;
 }
 
 void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
@@ -3160,10 +3185,11 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
     // Parse text-shadow
-    CssShadow shadow;
-    bool hasShadow = false;
+    std::vector<CssShadow> textShadows;
     auto tsIt = style.find("text-shadow");
-    if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, color, shadow);
+    if (tsIt != style.end())
+        textShadows = parseTextShadows(tsIt->second, color,
+                                       shadowLengthContext(parent, style, viewportW_, viewportH_));
 
     // Resolve letter-spacing for the renderer. Layout already accounts for
     // it in the text-run widths (text.cpp), so the painter must add the same
@@ -3242,11 +3268,11 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
 
         // Draw text shadow first (behind text). drawTextEx applies the blur
         // mask filter to the shadow paint so a non-zero blur radius produces
-        // a real Gaussian halo instead of a sharp colored copy.
-        if (hasShadow) {
-            renderer_->drawTextEx(line, lx + shadow.dx, ly + shadow.dy,
-                                  fontRef, shadow.color,
-                                  letterSpacing, shadow.blur, wordSpacing);
+        // a real Gaussian halo instead of a sharp colored copy. The list
+        // paints back to front, so its first shadow is on top.
+        for (auto s = textShadows.rbegin(); s != textShadows.rend(); ++s) {
+            renderer_->drawTextEx(line, lx + s->dx, ly + s->dy, fontRef, s->color,
+                                  letterSpacing, s->blur, wordSpacing);
         }
 
         // Draw the text. Letter/word-spacing are applied here so visible
@@ -3415,10 +3441,11 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
     auto cIt = style.find("color");
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
-    CssShadow shadow;
-    bool hasShadow = false;
+    std::vector<CssShadow> textShadows;
     auto tsIt = style.find("text-shadow");
-    if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, color, shadow);
+    if (tsIt != style.end())
+        textShadows = parseTextShadows(tsIt->second, color,
+                                       shadowLengthContext(host, style, viewportW_, viewportH_));
 
     // Resolve letter-spacing for the pseudo's own style (pseudos inherit it
     // by default but the rule may override).
@@ -3453,10 +3480,9 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
         if (run.text.empty()) continue;
         float lx = baseX + run.x;
         float ly = baseY + run.y + ascent;
-        if (hasShadow) {
-            renderer_->drawTextEx(run.text, lx + shadow.dx, ly + shadow.dy,
-                                  fontRef, shadow.color,
-                                  letterSpacing, shadow.blur, wordSpacing);
+        for (auto s = textShadows.rbegin(); s != textShadows.rend(); ++s) {
+            renderer_->drawTextEx(run.text, lx + s->dx, ly + s->dy, fontRef, s->color,
+                                  letterSpacing, s->blur, wordSpacing);
         }
         if (letterSpacing != 0.0f || wordSpacing != 0.0f) {
             renderer_->drawTextEx(run.text, lx, ly, fontRef, color,
@@ -4228,7 +4254,8 @@ void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromote
     {
         auto fIt = rootStyle.find("filter");
         if (fIt != rootStyle.end() && !fIt->second.empty() && fIt->second != "none") {
-            auto filters = parseCSSFilter(fIt->second, styleCurrentColor(rootStyle));
+            auto filters = parseCSSFilter(fIt->second, styleCurrentColor(rootStyle),
+                shadowLengthContext(sc->root, rootStyle, viewportW_, viewportH_));
             if (!filters.empty()) {
                 wrappedFilter = true;
                 renderer_->saveLayerWithFilter(filters,

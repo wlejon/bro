@@ -18,11 +18,27 @@ struct CssShadow {
     bromath::Color color;
 };
 
+// What a shadow's lengths resolve against: the element's font-size (em, and
+// the ch/ex approximations), the root's (rem) and the viewport (vw/vh/vmin/
+// vmax). A viewport dimension of 0 means unknown.
+struct CssLengthContext {
+    float fontSize = 16.0f;
+    float rootFontSize = 16.0f;
+    float viewportW = 0.0f;
+    float viewportH = 0.0f;
+};
+
 // Parses one shadow item. Needs at least the two offsets; more than
 // `maxLengths` lengths (3 for text-shadow / drop-shadow, 4 for box-shadow)
 // or two colours is invalid.
 bool parseCssShadow(std::string_view item, const bromath::Color& currentColor,
-                    int maxLengths, CssShadow& out);
+                    int maxLengths, const CssLengthContext& lengths, CssShadow& out);
+
+// Parses a whole shadow list, skipping an item that does not parse. Items
+// come back in list order, the first painting on top.
+std::vector<CssShadow> parseCssShadowList(std::string_view list,
+                                          const bromath::Color& currentColor, int maxLengths,
+                                          const CssLengthContext& lengths);
 
 // Splits a shadow list on its top-level commas (commas inside rgb()/hsl()
 // belong to the colour), trimming each item.

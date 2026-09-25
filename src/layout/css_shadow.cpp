@@ -1,6 +1,8 @@
 #include "layout/css_shadow.h"
 #include "layout/draw_traversal.h"
+#include "layout/formatting_context.h"  // htmlayout::layout::resolveLength (calc)
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 
@@ -37,10 +39,46 @@ std::vector<std::string_view> topLevelTokens(std::string_view s) {
     return out;
 }
 
-// A <length> token: a number with an optional unit (`0`, `2px`, `-1.5px`).
-// Units other than px are taken at face value, as the painter did before.
-bool parseLengthToken(std::string_view tok, float& out) {
+bool startsWithCi(std::string_view s, std::string_view prefix) {
+    if (s.size() < prefix.size()) return false;
+    for (size_t i = 0; i < prefix.size(); ++i)
+        if (std::tolower(static_cast<unsigned char>(s[i])) != prefix[i]) return false;
+    return true;
+}
+
+// A number followed by `unit`, in px.
+bool unitToPx(float v, std::string_view unit, const CssLengthContext& cx, float& out) {
+    std::string u(unit);
+    for (auto& ch : u) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const float vw = cx.viewportW, vh = cx.viewportH;
+    if (u.empty() || u == "px") out = v;
+    else if (u == "em") out = v * cx.fontSize;
+    else if (u == "rem") out = v * cx.rootFontSize;
+    else if (u == "ch" || u == "ex") out = v * cx.fontSize * 0.5f;
+    else if (u == "vw") out = v * vw / 100.0f;
+    else if (u == "vh") out = v * vh / 100.0f;
+    else if (u == "vmin") out = v * std::min(vw, vh) / 100.0f;
+    else if (u == "vmax") out = v * std::max(vw, vh) / 100.0f;
+    else if (u == "pt") out = v * 96.0f / 72.0f;
+    else if (u == "pc") out = v * 16.0f;
+    else if (u == "in") out = v * 96.0f;
+    else if (u == "cm") out = v * 96.0f / 2.54f;
+    else if (u == "mm") out = v * 96.0f / 25.4f;
+    else if (u == "q") out = v * 96.0f / 101.6f;
+    else return false;
+    return true;
+}
+
+// A <length> token: a number with a unit (`0`, `2px`, `-1.5em`), or a math
+// function (`calc(1em + 2px)`), resolved to px.
+bool parseLengthToken(std::string_view tok, const CssLengthContext& cx, float& out) {
     if (tok.empty()) return false;
+    if (startsWithCi(tok, "calc(") || startsWithCi(tok, "min(") || startsWithCi(tok, "max(") ||
+        startsWithCi(tok, "clamp(")) {
+        out = htmlayout::layout::resolveLength(std::string(tok), 0.0f, cx.fontSize,
+                                               cx.viewportW, cx.viewportH);
+        return true;
+    }
     const char c0 = tok[0];
     if (!(std::isdigit(static_cast<unsigned char>(c0)) || c0 == '.' || c0 == '-' || c0 == '+'))
         return false;
@@ -50,14 +88,24 @@ bool parseLengthToken(std::string_view tok, float& out) {
     if (end == s.c_str()) return false;
     for (const char* p = end; *p; ++p)
         if (!std::isalpha(static_cast<unsigned char>(*p))) return false;
-    out = v;
-    return true;
+    return unitToPx(v, std::string_view(end), cx, out);
 }
 
 } // namespace
 
+std::vector<CssShadow> parseCssShadowList(std::string_view list,
+                                          const bromath::Color& currentColor, int maxLengths,
+                                          const CssLengthContext& lengths) {
+    std::vector<CssShadow> out;
+    for (const std::string& item : splitCssShadowList(list)) {
+        CssShadow s;
+        if (parseCssShadow(item, currentColor, maxLengths, lengths, s)) out.push_back(s);
+    }
+    return out;
+}
+
 bool parseCssShadow(std::string_view item, const bromath::Color& currentColor, int maxLengths,
-                    CssShadow& out) {
+                    const CssLengthContext& cx, CssShadow& out) {
     out = CssShadow{};
     out.color = currentColor;
     float lengths[4] = {0, 0, 0, 0};
@@ -68,7 +116,7 @@ bool parseCssShadow(std::string_view item, const bromath::Color& currentColor, i
         if (tok == "inset") {
             if (out.inset) return false;
             out.inset = true;
-        } else if (parseLengthToken(tok, v)) {
+        } else if (parseLengthToken(tok, cx, v)) {
             if (count >= maxLengths || count >= 4) return false;
             lengths[count++] = v;
         } else {
