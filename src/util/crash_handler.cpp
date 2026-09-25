@@ -9,6 +9,7 @@
 #include "util/crash_handler.h"
 
 #include <atomic>
+#include <cstdint>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -20,6 +21,21 @@
 #include <windows.h>
 #include <dbghelp.h>
 #pragma comment(lib, "dbghelp.lib")
+#else
+#include <dlfcn.h>
+#include <signal.h>
+// <ucontext.h> is an #error on Apple without _XOPEN_SOURCE; the struct itself
+// lives in the sys/ header there.
+#ifdef __APPLE__
+#include <sys/ucontext.h>
+#else
+#include <ucontext.h>
+#endif
+#include <unistd.h>
+#if __has_include(<execinfo.h>)
+#include <execinfo.h>
+#define BRO_HAVE_EXECINFO 1
+#endif
 #endif
 
 namespace bro::util {
@@ -293,10 +309,195 @@ LONG WINAPI vectoredHandler(EXCEPTION_POINTERS* ep) {
 
 #else   // !_WIN32
 
-void walkHere() {}
+// One address as module+offset and, when the dynamic symbol table has it,
+// symbol+offset. dladdr is not on POSIX's async-signal-safe list, but it only
+// reads the loader's image list — backtrace_symbols_fd uses it the same way —
+// and a crash report that names nothing is the worse failure.
+void printAddr(const char* label, uintptr_t addr) {
+    Dl_info info;
+    std::memset(&info, 0, sizeof(info));
+    if (addr != 0 && dladdr(reinterpret_cast<void*>(addr), &info) != 0 &&
+        info.dli_fname != nullptr) {
+        const char* mod = std::strrchr(info.dli_fname, '/');
+        mod = mod ? mod + 1 : info.dli_fname;
+        const uintptr_t base = reinterpret_cast<uintptr_t>(info.dli_fbase);
+        if (info.dli_sname != nullptr) {
+            const uintptr_t sym = reinterpret_cast<uintptr_t>(info.dli_saddr);
+            std::fprintf(stderr, "  %-7s 0x%016llx %s+0x%llx (%s+0x%llx)\n",
+                         label, static_cast<unsigned long long>(addr), mod,
+                         static_cast<unsigned long long>(addr - base),
+                         info.dli_sname,
+                         static_cast<unsigned long long>(addr - sym));
+        } else {
+            std::fprintf(stderr, "  %-7s 0x%016llx %s+0x%llx\n", label,
+                         static_cast<unsigned long long>(addr), mod,
+                         static_cast<unsigned long long>(addr - base));
+        }
+        return;
+    }
+    // Not in any loaded image: JIT'd or AOT-loaded code, or a wild jump.
+    std::fprintf(stderr, "  %-7s 0x%016llx (no image)\n", label,
+                 static_cast<unsigned long long>(addr));
+}
+
+// The calling thread's stack, from a signal handler or not. backtrace() walks
+// frame pointers (always kept on arm64 macOS), so from a handler the first
+// frames are the handler's own and the kernel's trampoline, then the
+// interrupted code; the faulting pc itself is printed separately from the
+// ucontext, because a fault in a leaf never pushed a frame for it.
+void walkHere() {
+    std::fprintf(stderr, "backtrace:\n");
+#ifdef BRO_HAVE_EXECINFO
+    void* addrs[64];
+    const int n = backtrace(addrs, 64);
+    // backtrace_symbols_fd, not backtrace_symbols: it writes straight to the
+    // fd and never calls malloc, whose arena the crash may have wrecked.
+    backtrace_symbols_fd(addrs, n, STDERR_FILENO);
+#else
+    std::fprintf(stderr, "  (no execinfo on this platform)\n");
+#endif
+}
+
+const char* signalName(int sig) {
+    switch (sig) {
+        case SIGSEGV: return "SIGSEGV";
+        case SIGBUS:  return "SIGBUS";
+        case SIGABRT: return "SIGABRT";
+        case SIGILL:  return "SIGILL";
+        case SIGFPE:  return "SIGFPE";
+        default:      return "signal";
+    }
+}
+
+const char* codeName(int sig, int code) {
+    if (sig == SIGSEGV) {
+        if (code == SEGV_MAPERR) return "SEGV_MAPERR (address not mapped)";
+        if (code == SEGV_ACCERR) return "SEGV_ACCERR (permission denied)";
+    } else if (sig == SIGBUS) {
+        if (code == BUS_ADRALN) return "BUS_ADRALN (misaligned)";
+        if (code == BUS_ADRERR) return "BUS_ADRERR (nonexistent address)";
+        if (code == BUS_OBJERR) return "BUS_OBJERR (object error)";
+    } else if (sig == SIGILL) {
+        if (code == ILL_ILLOPC) return "ILL_ILLOPC (illegal opcode)";
+        if (code == ILL_ILLTRP) return "ILL_ILLTRP (illegal trap)";
+        if (code == ILL_PRVOPC) return "ILL_PRVOPC (privileged opcode)";
+    } else if (sig == SIGFPE) {
+        if (code == FPE_INTDIV) return "FPE_INTDIV (integer divide by zero)";
+        if (code == FPE_INTOVF) return "FPE_INTOVF (integer overflow)";
+    }
+    return "";
+}
+
+// The interrupted thread's registers, per platform and architecture. The pc
+// is the instruction that faulted; on arm64 the link register is where a
+// leaf would have returned to, and the fault address register is what the
+// access actually touched (si_addr carries it too, but FAR is the hardware's
+// own word for it, and ESR says what kind of access it was).
+void printRegisters(void* uctx) {
+    if (uctx == nullptr) return;
+    auto* uc = static_cast<ucontext_t*>(uctx);
+#if defined(__APPLE__) && defined(__aarch64__)
+    const auto& ss = uc->uc_mcontext->__ss;
+    const auto& es = uc->uc_mcontext->__es;
+    printAddr("pc", static_cast<uintptr_t>(__darwin_arm_thread_state64_get_pc(ss)));
+    printAddr("lr", static_cast<uintptr_t>(__darwin_arm_thread_state64_get_lr(ss)));
+    std::fprintf(stderr, "  sp      0x%016llx  fp 0x%016llx\n",
+                 static_cast<unsigned long long>(__darwin_arm_thread_state64_get_sp(ss)),
+                 static_cast<unsigned long long>(__darwin_arm_thread_state64_get_fp(ss)));
+    std::fprintf(stderr, "  far     0x%016llx  esr 0x%08x\n",
+                 static_cast<unsigned long long>(es.__far),
+                 static_cast<unsigned>(es.__esr));
+#elif defined(__APPLE__) && defined(__x86_64__)
+    const auto& ss = uc->uc_mcontext->__ss;
+    printAddr("rip", static_cast<uintptr_t>(ss.__rip));
+    std::fprintf(stderr, "  rsp     0x%016llx  rbp 0x%016llx\n",
+                 static_cast<unsigned long long>(ss.__rsp),
+                 static_cast<unsigned long long>(ss.__rbp));
+    std::fprintf(stderr, "  fault   0x%016llx\n",
+                 static_cast<unsigned long long>(uc->uc_mcontext->__es.__faultvaddr));
+#elif defined(__linux__) && defined(__x86_64__)
+    printAddr("rip", static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RIP]));
+    std::fprintf(stderr, "  rsp     0x%016llx  rbp 0x%016llx\n",
+                 static_cast<unsigned long long>(uc->uc_mcontext.gregs[REG_RSP]),
+                 static_cast<unsigned long long>(uc->uc_mcontext.gregs[REG_RBP]));
+#elif defined(__linux__) && defined(__aarch64__)
+    printAddr("pc", static_cast<uintptr_t>(uc->uc_mcontext.pc));
+    printAddr("lr", static_cast<uintptr_t>(uc->uc_mcontext.regs[30]));
+    std::fprintf(stderr, "  sp      0x%016llx  fp 0x%016llx\n",
+                 static_cast<unsigned long long>(uc->uc_mcontext.sp),
+                 static_cast<unsigned long long>(uc->uc_mcontext.regs[29]));
+    std::fprintf(stderr, "  far     0x%016llx\n",
+                 static_cast<unsigned long long>(uc->uc_mcontext.fault_address));
+#else
+    (void)uc;
+#endif
+}
+
+void signalHandler(int sig, siginfo_t* info, void* uctx) {
+    std::fflush(stdout);
+    std::fprintf(stderr, "\n=== bro-headless crash (%s) ===\n", signalName(sig));
+    if (info != nullptr && sig != SIGABRT) {
+        std::fprintf(stderr, "  code    %d %s\n", info->si_code,
+                     codeName(sig, info->si_code));
+        std::fprintf(stderr, "  address 0x%016llx\n",
+                     static_cast<unsigned long long>(
+                         reinterpret_cast<uintptr_t>(info->si_addr)));
+    }
+    if (g_context[0] != '\0') {
+        std::fprintf(stderr, "  running %s\n", g_context);
+    }
+    if (g_dumps.fetch_add(1) < kMaxDumps) {
+        printRegisters(uctx);
+        walkHere();
+    }
+    std::fprintf(stderr, "=== end crash ===\n");
+    std::fflush(stderr);
+    // SA_RESETHAND already put the default disposition back. A hardware fault
+    // re-executes the faulting instruction on return and dies of it with the
+    // status it would have had anyway; raise() covers a signal that was sent
+    // rather than caused (kill -SEGV, abort()'s own raise).
+    std::raise(sig);
+}
+
+// The alternate stack a stack overflow's SIGSEGV/SIGBUS runs on: the faulting
+// thread's own stack is the guard page it just ran into, and a handler that
+// needs stack there never runs at all. Static, because a crash handler is no
+// place to find out the heap is gone. Per-thread by POSIX, so it covers the
+// thread that installs it (main, where the JS runs); another thread that
+// overflows still dies, just without the report.
+alignas(16) char g_altStack[128 * 1024];
+
+void installSignals() {
+    stack_t ss;
+    std::memset(&ss, 0, sizeof(ss));
+    ss.ss_sp = g_altStack;
+    ss.ss_size = sizeof(g_altStack);
+    ss.ss_flags = 0;
+    sigaltstack(&ss, nullptr);
+
+#ifdef BRO_HAVE_EXECINFO
+    // glibc's first backtrace() dlopens libgcc_s, which allocates. Do it now,
+    // while allocating is still allowed.
+    void* warm[1];
+    backtrace(warm, 1);
+#endif
+
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = signalHandler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    // SIGBUS is macOS's word for most bad accesses into mapped-but-wrong
+    // memory (a JIT page without execute, a truncated mmap), so it matters as
+    // much as SIGSEGV there.
+    for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}) {
+        sigaction(sig, &sa, nullptr);
+    }
+}
 
 #endif  // _WIN32
 
+#ifdef _WIN32
 void signalHandler(int sig) {
     std::fflush(stdout);
     const char* name = sig == SIGSEGV   ? "SIGSEGV"
@@ -308,9 +509,7 @@ void signalHandler(int sig) {
     if (g_context[0] != '\0') {
         std::fprintf(stderr, "  running %s\n", g_context);
     }
-#ifdef _WIN32
     if (g_dumps.fetch_add(1) < kMaxDumps) walkHere();
-#endif
     std::fprintf(stderr, "=== end crash ===\n");
     std::fflush(stderr);
     // Re-raise through the default disposition so the process dies with the
@@ -318,6 +517,7 @@ void signalHandler(int sig) {
     std::signal(sig, SIG_DFL);
     std::raise(sig);
 }
+#endif
 
 } // namespace
 
@@ -339,12 +539,14 @@ void installCrashHandler() {
                  SEM_NOOPENFILEERRORBOX);
     SetUnhandledExceptionFilter(unhandledFilter);
     AddVectoredExceptionHandler(/*first=*/1, vectoredHandler);
-#endif
 
     std::signal(SIGSEGV, signalHandler);
     std::signal(SIGABRT, signalHandler);
     std::signal(SIGILL, signalHandler);
     std::signal(SIGFPE, signalHandler);
+#else
+    installSignals();
+#endif
 }
 
 void setCrashContext(const std::string& what) {
@@ -363,9 +565,7 @@ void dumpBacktrace(const char* reason) {
     if (g_context[0] != '\0') {
         std::fprintf(stderr, "  running %s\n", g_context);
     }
-#ifdef _WIN32
     walkHere();
-#endif
     std::fprintf(stderr, "=== end backtrace ===\n");
     std::fflush(stderr);
 }

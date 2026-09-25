@@ -24,7 +24,11 @@
 //     signal handlers for the abort()/SIGSEGV paths the CRT owns.
 //
 // The trace is symbolised through DbgHelp against the PDBs next to the
-// executable, which is why the Release configuration ships them.
+// executable, which is why the Release configuration ships them. Elsewhere
+// (macOS, Linux) it is sigaction handlers for SIGSEGV/SIGBUS/SIGILL/SIGFPE/
+// SIGABRT on an alternate stack (so a stack overflow still reports), the
+// interrupted pc/lr/fault address from the ucontext, and execinfo's
+// backtrace() named through the dynamic symbol table.
 
 #include <string>
 
