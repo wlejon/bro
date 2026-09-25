@@ -89,6 +89,11 @@ int legacyKeyCodeFor(const std::string& code, const std::string& key) {
     if (key == "Shift") return 16;
     if (key == "Control") return 17;
     if (key == "Alt") return 18;
+    if (key == "Meta") return code == "MetaRight" ? 93 : 91;
+    if (code.size() == 7 && code.rfind("Numpad", 0) == 0) {
+        char c = code[6];
+        if (c >= '0' && c <= '9') return 96 + (c - '0');
+    }
     if (key == "CapsLock") return 20;
     if (key == "NumLock") return 144;
     if (key == "ScrollLock") return 145;

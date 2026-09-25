@@ -39,6 +39,22 @@ std::string sdlKeycodeToWebKey(int32_t keycode, int mod)
         case SDLK_PAUSE:     return "Pause";
         case SDLK_PRINTSCREEN: return "PrintScreen";
         case SDLK_MENU:      return "ContextMenu";
+        case SDLK_APPLICATION: return "ContextMenu";
+        // Keypad: the character it types (the Mac keypad has no NumLock, and
+        // SDL reports these keycodes whatever the NumLock state).
+        case SDLK_KP_ENTER:    return "Enter";
+        case SDLK_KP_DIVIDE:   return "/";
+        case SDLK_KP_MULTIPLY: return "*";
+        case SDLK_KP_MINUS:    return "-";
+        case SDLK_KP_PLUS:     return "+";
+        case SDLK_KP_PERIOD:   return ".";
+        case SDLK_KP_EQUALS:   return "=";
+        case SDLK_KP_0: return "0";
+        case SDLK_KP_1: return "1"; case SDLK_KP_2: return "2";
+        case SDLK_KP_3: return "3"; case SDLK_KP_4: return "4";
+        case SDLK_KP_5: return "5"; case SDLK_KP_6: return "6";
+        case SDLK_KP_7: return "7"; case SDLK_KP_8: return "8";
+        case SDLK_KP_9: return "9";
         default: break;
     }
 
@@ -101,6 +117,7 @@ std::string sdlScancodeToWebCode(int32_t scancode)
         case 47: return "BracketLeft";
         case 48: return "BracketRight";
         case 49: return "Backslash";
+        case 50: return "Backslash";  // ISO keyboards: the key left of Enter
         case 51: return "Semicolon";
         case 52: return "Quote";
         case 53: return "Backquote";
@@ -127,12 +144,37 @@ std::string sdlScancodeToWebCode(int32_t scancode)
         case 80: return "ArrowLeft";
         case 81: return "ArrowDown";
         case 82: return "ArrowUp";
-        case 224: return "ShiftLeft";
-        case 225: return "ShiftRight";
-        case 226: return "ControlLeft";
-        case 228: return "AltLeft";
+        case 83: return "NumLock";
+        case 84: return "NumpadDivide";
+        case 85: return "NumpadMultiply";
+        case 86: return "NumpadSubtract";
+        case 87: return "NumpadAdd";
+        case 88: return "NumpadEnter";
+        case 99: return "NumpadDecimal";
+        case 100: return "IntlBackslash";
+        case 101: return "ContextMenu";
+        case 103: return "NumpadEqual";
+        // Modifiers, in SDL's (= USB HID's) order: LCTRL, LSHIFT, LALT, LGUI,
+        // then the right-hand four. GUI is the Windows key / Command (⌘),
+        // which the web calls Meta.
+        case 224: return "ControlLeft";
+        case 225: return "ShiftLeft";
+        case 226: return "AltLeft";
+        case 227: return "MetaLeft";
+        case 228: return "ControlRight";
+        case 229: return "ShiftRight";
         case 230: return "AltRight";
+        case 231: return "MetaRight";
         default: break;
+    }
+    // Numpad digits (SDL_SCANCODE_KP_1=89 through SDL_SCANCODE_KP_0=98)
+    if (scancode >= 89 && scancode <= 98) {
+        char c = (scancode == 98) ? '0' : (char)('1' + (scancode - 89));
+        return std::string("Numpad") + c;
+    }
+    // F13..F24 (SDL_SCANCODE_F13=104 through SDL_SCANCODE_F24=115)
+    if (scancode >= 104 && scancode <= 115) {
+        return "F" + std::to_string(13 + (scancode - 104));
     }
     return "Unknown" + std::to_string(scancode);
 }
