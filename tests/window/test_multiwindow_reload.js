@@ -17,7 +17,7 @@ const exeName = process.platform === 'win32' ? 'bro-headless.exe' : 'bro-headles
 const exe = path.join(process.env.BRO_EXE_DIR, exeName);
 const appDir = path.join(process.env.BRO_APP_DIR, '..', 'window', 'multiwin_reload_app');
 
-const r = cp.spawnSync(exe, [appDir], { encoding: 'utf8' });
+const r = cp.spawnSync(exe, [appDir], { encoding: 'utf8', timeout: 60000 });
 
 const out = (r.stdout || '') + (r.stderr || '');
 assert(r.status === 0,

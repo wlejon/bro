@@ -15,7 +15,7 @@ const exe = path.join(process.env.BRO_EXE_DIR, exeName);
 const appDir = path.join(process.env.BRO_APP_DIR, '..', 'window', 'manifest_app');
 const verify = path.join(appDir, 'verify.js');
 
-const r = cp.spawnSync(exe, [appDir, verify], { encoding: 'utf8' });
+const r = cp.spawnSync(exe, [appDir, verify], { encoding: 'utf8', timeout: 60000 });
 
 const out = (r.stdout || '') + (r.stderr || '');
 assert(r.status === 0,
