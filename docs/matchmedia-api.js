@@ -14,6 +14,16 @@
  *   const mql = window.matchMedia('(max-width: 600px)');
  *   console.log('Matches:', mql.matches, 'Media:', mql.media);
  *
+ * Media features: width/height (min-/max- and range syntax), orientation,
+ * prefers-color-scheme, and resolution (min-/max-, dppx / x / dpi / dpcm,
+ * plus the -webkit-(min-|max-)device-pixel-ratio spellings) against
+ * window.devicePixelRatio. A change of display scale (a window dragged
+ * between a Retina and a 1x display) delivers `change` to resolution lists.
+ *
+ * @example
+ *   const retina = matchMedia('(min-resolution: 2dppx)');
+ *   retina.addEventListener('change', (ev) => redrawCanvases(ev.matches));
+ *
  * @example
  *   const dark = matchMedia('(prefers-color-scheme: dark)');
  *   dark.addEventListener('change', (ev) => {
