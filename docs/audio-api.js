@@ -1254,18 +1254,30 @@ class AudioContext {
 
   // ── Recording & WAV ─────────────────────────────────────────────────────
 
-  /** Starts capturing the engine's mono output mix. */
-  startRecording() {}
+  /**
+   * Starts capturing the engine's final output: the master mix after the
+   * master gain and the limiter, on both the device and the headless render
+   * paths, so a headless `advanceTime` capture is what a listener would hear.
+   * `channels` 1 (default) folds to mono, 2 keeps the stereo mix interleaved.
+   * `seconds` (default 60) sizes the ring; the capture keeps the last
+   * `seconds` of output, capped at 2^27 samples in all.
+   * @param {{channels?: 1|2, seconds?: number}} [opts]
+   */
+  startRecording(opts) {}
+
+  /** Not in Web Audio. Channel count of the current or last capture. @readonly @type {number} */
+  recordingChannels;
 
   /**
-   * Stops and returns the capture: mono samples at the engine rate, at most
-   * the last 2,646,000 (60 s at 44.1 kHz).
+   * Stops and returns the capture at the engine rate: mono samples, or
+   * interleaved L/R pairs for a stereo capture.
    * @returns {Float32Array|null} null when nothing was recorded
    */
   stopRecording() {}
 
   /**
-   * Writes the last recording (call after stopRecording) as WAV.
+   * Writes the last recording (call after stopRecording) as a 16-bit WAV
+   * with the capture's channel count.
    * @param {string} path
    * @returns {boolean}
    */

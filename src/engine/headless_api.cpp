@@ -231,7 +231,9 @@ void Engine::advanceTime(double ms) {
         // picture apart. So the rest of the step holds media where this put it
         // (`mediaHeldForStep_`); a flush() outside advanceTime still advances.
         if (audioEngine_) {
-            int audioFrames = static_cast<int>(step * audioEngine_->sampleRate() / 1000.0 + 0.5);
+            audioFrameCarry_ += step * audioEngine_->sampleRate() / 1000.0;
+            int audioFrames = static_cast<int>(std::floor(audioFrameCarry_ + 1e-9));
+            audioFrameCarry_ -= audioFrames;
             if (audioFrames > 0)
                 audioEngine_->renderBlock(audioFrames);
         }

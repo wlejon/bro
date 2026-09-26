@@ -835,6 +835,7 @@ private:
     SystemDocument* systemHoverDoc_ = nullptr;
 
     double virtualTime_ = 0.0;
+    double audioFrameCarry_ = 0.0;
 
     double serverTickRate_ = 60.0;
     double serverStartTime_ = 0.0;
