@@ -382,6 +382,14 @@ bool Engine::isSystemDocVisible(const SystemDocument& doc) const {
     return false;
 }
 
+bool Engine::isSystemDocumentHidden(const dom::Document* doc) const {
+    if (!doc) return false;
+    for (const auto& d : systemDocs_) {
+        if (d.document.get() == doc) return !isSystemDocVisible(d);
+    }
+    return false;
+}
+
 bool Engine::isSystemVisible() const {
     return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible
         || inspector_.visible || splashVisible_;

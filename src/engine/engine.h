@@ -338,6 +338,11 @@ public:
     const net::NetService* netService() const;
 
     bool isSystemVisible() const;
+    // True for a system panel's document while the panel is not shown. Its
+    // requestAnimationFrame callbacks wait until it is, as a hidden page's do
+    // on the web: a panel that animates a canvas nobody rasterizes would
+    // otherwise record into it forever.
+    bool isSystemDocumentHidden(const dom::Document* doc) const;
     Settings* settings() const { return settings_.get(); }
     OverlayManager& overlays() { return overlayMgr_; }
 

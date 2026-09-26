@@ -123,8 +123,15 @@ void fireAnimationFrames() {
     g_host->rafPending.clear();
     g_host->rafActiveBatchCancelled.clear();
 
+    // A hidden system panel's callbacks wait, in order, ahead of anything
+    // registered this frame (Engine::isSystemDocumentHidden).
+    std::vector<RafEntry> waiting;
     for (RafEntry& entry : current) {
         if (g_host->rafActiveBatchCancelled.count(entry.id)) {
+            continue;
+        }
+        if (g_host->engine && g_host->engine->isSystemDocumentHidden(entry.doc)) {
+            waiting.push_back(std::move(entry));
             continue;
         }
         dom::Document* targetDoc = entry.doc;
@@ -167,6 +174,14 @@ void fireAnimationFrames() {
         }
 
         if (r.thrown) reportBronzeError("requestAnimationFrame", thrown.get());
+    }
+    if (!waiting.empty()) {
+        std::vector<RafEntry> carried;
+        for (RafEntry& entry : waiting) {
+            if (!g_host->rafActiveBatchCancelled.count(entry.id)) carried.push_back(std::move(entry));
+        }
+        for (RafEntry& entry : g_host->rafPending) carried.push_back(std::move(entry));
+        g_host->rafPending = std::move(carried);
     }
     g_host->rafActiveBatchCancelled.clear();
 }
@@ -893,7 +908,6 @@ void installWebHostGlobals(engine::Engine& engine) {
     installIntlGlobals();
     installWebAnimationGlobals();
     installVideoGlobals();
-    initHostCalleeNamer();
     // unhandledrejection / rejectionhandled at the window: bronze's
     // end-of-drain report goes to the page from here on, not to stderr.
     installMainThreadRejectionTracking();
@@ -983,8 +997,14 @@ std::vector<std::string> registeredHostGlobals() {
     return ev::hostGlobalNames();
 }
 
+// A hidden system panel's waiting callbacks are not pending work: they run only
+// once the panel shows, so they must not keep the host from counting as idle.
 bool hasPendingAnimationFrames() {
-    return g_host && !g_host->rafPending.empty();
+    if (!g_host) return false;
+    for (const RafEntry& entry : g_host->rafPending) {
+        if (!g_host->engine || !g_host->engine->isSystemDocumentHidden(entry.doc)) return true;
+    }
+    return false;
 }
 
 }  // namespace bro::bronze_host
