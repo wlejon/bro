@@ -914,6 +914,11 @@ inline bool readFloatVector(Value v, std::vector<float>& out) {
             out.assign(fp, fp + info.elementCount);
             return true;
         }
+        if (info.data && info.bytesPerElement == sizeof(double)) {
+            const double* dp = reinterpret_cast<const double*>(info.data);
+            out.assign(dp, dp + info.elementCount);
+            return true;
+        }
     }
     if (!ev::isObject(v)) return false;
     ev::Persistent root(v);
@@ -993,6 +998,3 @@ Value makeBroMediaValue();
 Value makeUnavailableNamespace(const std::string& name, const std::string& flag);
 
 }  // namespace bro::bronze_host
-
-
-

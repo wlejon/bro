@@ -149,6 +149,9 @@ bool registerNatives_physics(std::string* error) {
         fn("__bro_native.physics.castShapeRaw", p(&bro_physics_castShapeRaw), "str", {"str"}, error) &&
         fn("__bro_native.physics.castShapeClosestRaw", p(&bro_physics_castShapeClosestRaw), "str", {"str"}, error) &&
         fn("__bro_native.physics.overlapShapeRaw", p(&bro_physics_overlapShapeRaw), "i32[]", {"str"}, error) &&
+        fn("__bro_native.physics.penetrations", p(&bro_physics_penetrations), "f64[]", {"str"}, error) &&
+        fn("__bro_native.physics.setTransforms", p(&bro_physics_setTransforms), "void", {"f64[]", "i32"}, error) &&
+        fn("__bro_native.physics.setTransform", p(&bro_physics_setTransform), "void", {"i32", "f64", "f64", "f64", "f64", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.overlapSphereRaw", p(&bro_physics_overlapSphereRaw), "i32[]", {"f64", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.overlapBoxRaw", p(&bro_physics_overlapBoxRaw), "i32[]", {"f64", "f64", "f64", "f64", "f64", "f64"}, error) &&
         fn("__bro_native.physics.overlapPointRaw", p(&bro_physics_overlapPointRaw), "i32[]", {"f64", "f64", "f64", "i32"}, error) &&

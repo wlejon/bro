@@ -424,4 +424,171 @@ const char* bro_physics_getContacts(void) {
     return natives::strResult(ss.str());
 }
 
+static thread_local std::vector<double> tl_penetrationsBuf;
+
+void bro_physics_penetrations(const char* config, bronze_native_buffer* out) {
+    auto* pw = getActiveWorld();
+    auto* world = pw ? pw->getWorld() : nullptr;
+    tl_penetrationsBuf.clear();
+
+    if (!world) {
+        out->data = nullptr;
+        out->length = 0;
+        out->release = nullptr;
+        return;
+    }
+
+    physics::PhysicsWorld::PenetrationOptions opts;
+
+    if (config && *config) {
+        auto res = ev::parseJson(config);
+        if (!res.thrown && ev::isObject(res.value)) {
+            const Rooted cfg(res.value);
+
+            opts.minDepth = static_cast<float>(getPropNumber(cfg, "minDepth", -FLT_MAX));
+            opts.maxSeparation = static_cast<float>(getPropNumber(cfg, "maxSeparation", 0.0));
+
+            Value lm = ev::getProperty(cfg, "layerMask");
+            if (ev::isNumber(lm)) {
+                opts.layerMask = jsToUint32(ev::toDouble(lm));
+            }
+
+            Value bodiesVal = ev::getProperty(cfg, "bodies");
+            if (ev::isObject(bodiesVal)) {
+                const Rooted bv(bodiesVal);
+                Value lenV = ev::getProperty(bv, "length");
+                if (ev::isNumber(lenV)) {
+                    uint32_t len = satCast<uint32_t>(ev::toDouble(lenV));
+                    opts.bodies.reserve(len);
+                    for (uint32_t i = 0; i < len; ++i) {
+                        Value elem = ev::getElement(bv, i);
+                        if (ev::isNumber(elem)) {
+                            int32_t tag = static_cast<int32_t>(ev::toDouble(elem));
+                            JPH::BodyID bid = pw->bodyIdForTag(tag);
+                            if (!bid.IsInvalid()) opts.bodies.push_back(bid);
+                        }
+                    }
+                }
+            }
+
+            Value ignoreVal = ev::getProperty(cfg, "ignorePairs");
+            if (ev::isObject(ignoreVal)) {
+                const Rooted iv(ignoreVal);
+                Value lenV = ev::getProperty(iv, "length");
+                if (ev::isNumber(lenV)) {
+                    uint32_t len = satCast<uint32_t>(ev::toDouble(lenV));
+                    for (uint32_t i = 0; i < len; ++i) {
+                        Value pairElem = ev::getElement(iv, i);
+                        if (ev::isObject(pairElem)) {
+                            const Rooted pv(pairElem);
+                            Value plenV = ev::getProperty(pv, "length");
+                            uint32_t plen = ev::isNumber(plenV) ? satCast<uint32_t>(ev::toDouble(plenV)) : 0;
+                            if (plen >= 2) {
+                                Value a = ev::getElement(pv, 0);
+                                Value b = ev::getElement(pv, 1);
+                                if (ev::isNumber(a) && ev::isNumber(b)) {
+                                    JPH::BodyID bidA = pw->bodyIdForTag(static_cast<int32_t>(ev::toDouble(a)));
+                                    JPH::BodyID bidB = pw->bodyIdForTag(static_cast<int32_t>(ev::toDouble(b)));
+                                    if (!bidA.IsInvalid() && !bidB.IsInvalid()) {
+                                        opts.ignorePairs.push_back({ bidA, bidB });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    auto hits = world->penetrations(opts);
+
+    constexpr size_t stride = 8;
+    tl_penetrationsBuf.reserve(hits.size() * stride);
+
+    for (const auto& h : hits) {
+        int32_t tagA = pw->tagForBodyId(h.body1);
+        int32_t tagB = pw->tagForBodyId(h.body2);
+        uint32_t subA = h.subShape1;
+        uint32_t subB = h.subShape2;
+        if (tagA > tagB) {
+            std::swap(tagA, tagB);
+            std::swap(subA, subB);
+        }
+        tl_penetrationsBuf.push_back(static_cast<double>(tagA));
+        tl_penetrationsBuf.push_back(static_cast<double>(subA));
+        tl_penetrationsBuf.push_back(static_cast<double>(tagB));
+        tl_penetrationsBuf.push_back(static_cast<double>(subB));
+        tl_penetrationsBuf.push_back(static_cast<double>(h.depth));
+        tl_penetrationsBuf.push_back(static_cast<double>(h.position.GetX()));
+        tl_penetrationsBuf.push_back(static_cast<double>(h.position.GetY()));
+        tl_penetrationsBuf.push_back(static_cast<double>(h.position.GetZ()));
+    }
+
+    out->data = tl_penetrationsBuf.data();
+    out->length = static_cast<uint32_t>(tl_penetrationsBuf.size());
+    out->release = nullptr;
+}
+
+void bro_physics_setTransforms(const double* data, uint32_t data_len, int32_t stride) {
+    auto* pw = getActiveWorld();
+    auto* world = pw ? pw->getWorld() : nullptr;
+    if (!world || !data || data_len == 0) return;
+    if (stride != 8 && stride != 17) return;
+    if (data_len % static_cast<uint32_t>(stride) != 0) return;
+
+    if (stride == 8) {
+        std::vector<physics::PhysicsWorld::BodyTransformUpdate> updates;
+        updates.reserve(data_len / 8);
+        for (uint32_t i = 0; i < data_len; i += 8) {
+            int32_t tag = static_cast<int32_t>(data[i]);
+            JPH::BodyID bid = pw->bodyIdForTag(tag);
+            if (bid.IsInvalid()) continue;
+            JPH::RVec3 pos(data[i+1], data[i+2], data[i+3]);
+            JPH::Quat rot((float)data[i+4], (float)data[i+5], (float)data[i+6], (float)data[i+7]);
+            updates.push_back({ bid, pos, rot });
+        }
+        world->setTransforms(updates);
+    } else {
+        std::vector<physics::PhysicsWorld::BodyTransformUpdate> updates;
+        updates.reserve(data_len / 17);
+        for (uint32_t i = 0; i < data_len; i += 17) {
+            int32_t tag = static_cast<int32_t>(data[i]);
+            JPH::BodyID bid = pw->bodyIdForTag(tag);
+            if (bid.IsInvalid()) continue;
+            const double* m = &data[i + 1];
+            JPH::RVec3 pos(m[12], m[13], m[14]);
+            JPH::Vec3 c0((float)m[0], (float)m[1], (float)m[2]);
+            JPH::Vec3 c1((float)m[4], (float)m[5], (float)m[6]);
+            JPH::Vec3 c2((float)m[8], (float)m[9], (float)m[10]);
+            float l0 = c0.Length();
+            float l1 = c1.Length();
+            float l2 = c2.Length();
+            if (l0 > 1e-6f) c0 /= l0;
+            if (l1 > 1e-6f) c1 /= l1;
+            if (l2 > 1e-6f) c2 /= l2;
+            // A mirroring matrix keeps a proper rotation with the flip in scale.
+            if (c0.Cross(c1).Dot(c2) < 0.0f) { c0 = -c0; l0 = -l0; }
+            JPH::Mat44 mat(
+                JPH::Vec4(c0, 0.0f),
+                JPH::Vec4(c1, 0.0f),
+                JPH::Vec4(c2, 0.0f),
+                JPH::Vec4(0.0f, 0.0f, 0.0f, 1.0f)
+            );
+            JPH::Quat rot = mat.GetQuaternion().Normalized();
+            updates.push_back({ bid, pos, rot, JPH::Vec3(l0, l1, l2) });
+        }
+        world->setTransforms(updates);
+    }
+}
+
+void bro_physics_setTransform(int32_t tag, double px, double py, double pz, double qx, double qy, double qz, double qw) {
+    auto* pw = getActiveWorld();
+    auto* world = pw ? pw->getWorld() : nullptr;
+    if (!world) return;
+    JPH::BodyID bid = pw->bodyIdForTag(tag);
+    if (bid.IsInvalid()) return;
+    world->setTransform(bid, JPH::RVec3(px, py, pz), JPH::Quat((float)qx, (float)qy, (float)qz, (float)qw));
+}
+
 }  // extern "C"

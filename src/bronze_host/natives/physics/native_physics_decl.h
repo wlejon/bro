@@ -418,6 +418,20 @@ const char* bro_physics_castShapeClosestRaw(const char* config);
 //   result: i32[] in *out; out->release == NULL, the runtime copies
 void bro_physics_overlapShapeRaw(const char* config, bronze_native_buffer* out);
 
+// Physics.penetrations
+//   registered at __bro_native.physics.penetrations
+//   config: JSON of PhysicsPenetrationsOptions
+//   result: f64[] in *out; out->release == NULL, the runtime copies
+void bro_physics_penetrations(const char* config, bronze_native_buffer* out);
+
+// Physics.setTransforms
+//   registered at __bro_native.physics.setTransforms
+void bro_physics_setTransforms(const double* data, uint32_t data_len, int32_t stride);
+
+// Physics.setTransform
+//   registered at __bro_native.physics.setTransform
+void bro_physics_setTransform(int32_t tag, double px, double py, double pz, double qx, double qy, double qz, double qw);
+
 // Physics.overlapSphereRaw
 //   registered at __bro_native.physics.overlapSphereRaw
 //   result: i32[] in *out; out->release == NULL, the runtime copies

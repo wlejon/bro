@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cfloat>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -196,6 +197,9 @@ struct BodyOptions {
     float halfHeight = 0.5f;
     // ConvexHull
     std::vector<JPH::Vec3> hullPoints;
+    // < 0 keeps Jolt's default convex radius; 0 keeps the hull's sharp corners
+    // (exact geometry for queries on small parts).
+    float convexRadius = -1.0f;
     // Mesh (static only) / DecomposedMesh
     std::vector<JPH::Vec3> meshVertices;
     std::vector<uint32_t>  meshIndices;       // triangle list (multiple of 3)
@@ -223,6 +227,9 @@ struct BodyOptions {
     JPH::Vec3 localPosition{0, 0, 0};         // used only for compound sub-parts
     JPH::Quat localRotation = JPH::Quat::sIdentity();
 
+    enum MotionType { MotionDynamic = 0, MotionStatic = 1, MotionKinematic = 2 };
+    MotionType motionType = MotionDynamic;
+    bool isKinematic = false;
     bool isStatic = false;
     bool isSensor = false;
     // Field override installed at creation (sensors only; see AreaOverride).
@@ -1131,6 +1138,41 @@ public:
     std::vector<JPH::BodyID> overlapPoint(JPH::RVec3 point,
                                           const QueryFilter& filter = {}) const;
 
+    /// One colliding sub-shape pair result from a penetration query.
+    struct PenetrationHit {
+        JPH::BodyID body1;
+        uint32_t subShape1 = 0;
+        JPH::BodyID body2;
+        uint32_t subShape2 = 0;
+        float depth = 0.0f;
+        JPH::Vec3 position{0, 0, 0};
+    };
+
+    struct PenetrationOptions {
+        std::vector<JPH::BodyID> bodies;
+        std::vector<std::pair<JPH::BodyID, JPH::BodyID>> ignorePairs;
+        float minDepth = -FLT_MAX;      // unbounded: depth > 0 unless maxSeparation > 0
+        float maxSeparation = 0.0f;
+        int layerMask = 0;
+    };
+
+    struct BodyTransformUpdate {
+        JPH::BodyID id;
+        JPH::RVec3 position;
+        JPH::Quat rotation;
+        JPH::Vec3 scale{1, 1, 1};   // query scale, applied by penetrations() only
+    };
+
+    /// Update transforms for a batch of bodies in one operation without waking them.
+    void setTransforms(const std::vector<BodyTransformUpdate>& updates);
+
+    /// Set position and rotation together for one body without waking it.
+    void setTransform(JPH::BodyID id, JPH::RVec3 pos, JPH::Quat rot);
+
+    /// Query-only narrow-phase penetration query across a set of bodies (or all).
+    /// Returns every penetrating sub-shape pair with exact depth and contact position.
+    std::vector<PenetrationHit> penetrations(const PenetrationOptions& options = {}) const;
+
     /// Snapshot of one static body for nav-grid baking.
     struct StaticBodyInfo {
         JPH::BodyID id;
@@ -1368,6 +1410,11 @@ private:
     float renderAlpha_ = 1.0f;   // 1 = render the current stepped state
     std::unordered_map<uint64_t, PrevTransform> prevTransforms_;
     void capturePrevTransforms();
+
+    // Per-body shape scale set by setTransforms() and honoured by the
+    // penetrations() query (not by the simulation). Keyed by the body id's
+    // index+sequence; absent means unit scale.
+    std::unordered_map<uint32_t, JPH::Vec3> queryScale_;
 
     // Holds the events drained from ListenerImpl's lock-free buffer for every
     // step since the last drainContactEvents(), which hands them to the caller.

@@ -383,6 +383,21 @@ inline bool readBodyOptions(Value vIn, physics::BodyOptions& out, std::string& e
     out.halfHeight = static_cast<float>(getPropNumber(v, "halfHeight", out.halfHeight));
 
     out.isStatic = getPropBool(v, "static", out.isStatic) || getPropBool(v, "isStatic", false);
+    out.isKinematic = getPropBool(v, "kinematic", out.isKinematic) || getPropBool(v, "isKinematic", false);
+    std::string motionType = getPropString(v, "motionType");
+    if (motionType == "kinematic") {
+        out.motionType = physics::BodyOptions::MotionKinematic;
+        out.isKinematic = true;
+    } else if (motionType == "static") {
+        out.motionType = physics::BodyOptions::MotionStatic;
+        out.isStatic = true;
+    } else if (motionType == "dynamic") {
+        out.motionType = physics::BodyOptions::MotionDynamic;
+    } else if (out.isKinematic) {
+        out.motionType = physics::BodyOptions::MotionKinematic;
+    } else if (out.isStatic) {
+        out.motionType = physics::BodyOptions::MotionStatic;
+    }
     out.isSensor = getPropBool(v, "sensor", out.isSensor) || getPropBool(v, "isSensor", false);
     out.ccd = getPropBool(v, "ccd", out.ccd);
 
@@ -466,6 +481,7 @@ inline bool readBodyOptions(Value vIn, physics::BodyOptions& out, std::string& e
                 out.hullPoints.push_back(JPH::Vec3(flat[i], flat[i+1], flat[i+2]));
         }
         if (out.hullPoints.size() < 4) { err = "convexHull requires >= 4 points (flat xyz)"; return false; }
+        out.convexRadius = static_cast<float>(getPropNumber(v, "convexRadius", out.convexRadius));
     }
 
     if (out.shape == physics::BodyOptions::ShapeCompound) {

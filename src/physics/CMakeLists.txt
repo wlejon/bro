@@ -1,5 +1,6 @@
 add_library(bro_physics STATIC
     physics_decomposition.cpp
+    physics_penetration.cpp
     physics_world.cpp
 )
 

@@ -11,6 +11,7 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
@@ -675,6 +676,7 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
             pts.reserve(opts.hullPoints.size());
             for (auto& p : opts.hullPoints) pts.push_back(p);
             ConvexHullShapeSettings s(pts);
+            if (opts.convexRadius >= 0.0f) s.mMaxConvexRadius = opts.convexRadius;
             s.SetDensity(opts.density);
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
@@ -755,6 +757,17 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
         }
         case BodyOptions::ShapeCompound: {
             if (opts.compoundParts.empty()) return RefConst<Shape>();
+            if (opts.compoundParts.size() == 1) {
+                auto sub = buildShape(opts.compoundParts[0]);
+                if (!sub) return RefConst<Shape>();
+                const auto& part = opts.compoundParts[0];
+                if (part.localPosition != Vec3::sZero() || part.localRotation != Quat::sIdentity()) {
+                    RotatedTranslatedShapeSettings rts(part.localPosition, part.localRotation, sub.GetPtr());
+                    auto r = rts.Create();
+                    return r.HasError() ? RefConst<Shape>() : r.Get();
+                }
+                return sub;
+            }
             StaticCompoundShapeSettings s;
             for (auto& part : opts.compoundParts) {
                 auto sub = buildShape(part);
@@ -785,7 +798,9 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
     if (layer < 0) layer = isStatic ? 0 : 1;
     if (layer >= numLayers_) layer = numLayers_ - 1;
 
-    EMotionType motion = isStatic ? EMotionType::Static : EMotionType::Dynamic;
+    EMotionType motion = EMotionType::Dynamic;
+    if (opts.isKinematic || opts.motionType == BodyOptions::MotionKinematic) motion = EMotionType::Kinematic;
+    else if (isStatic || opts.motionType == BodyOptions::MotionStatic) motion = EMotionType::Static;
 
     BodyCreationSettings settings(shape.GetPtr(), opts.position, opts.rotation,
                                   motion, static_cast<ObjectLayer>(layer));
@@ -800,7 +815,7 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
     settings.mUserData = opts.userData;
     settings.mAllowedDOFs = opts.dofs;
     settings.mMotionQuality = opts.ccd ? EMotionQuality::LinearCast : EMotionQuality::Discrete;
-    if (!isStatic) {
+    if (motion == EMotionType::Dynamic) {
         if (opts.mass > 0.0f) {
             // Direct mass (kg) wins over density: inertia is still derived
             // from the shape, then scaled to the requested mass.
@@ -813,7 +828,7 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
     BodyID id = bi.CreateAndAddBody(settings,
-        isStatic ? EActivation::DontActivate : EActivation::Activate);
+        motion == EMotionType::Dynamic ? EActivation::Activate : EActivation::DontActivate);
 
     // Remember whether this body is a sensor. OnContactRemoved gets only a
     // BodyID — possibly of a body that no longer exists — so this table is the
@@ -913,6 +928,7 @@ void PhysicsWorld::destroyBody(BodyID id,
         BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
         if (!lock.Succeeded()) return;
     }
+    queryScale_.erase(id.GetIndexAndSequenceNumber());
 
     // A character's inner body? It is owned by the CharacterVirtual
     // (~CharacterVirtual destroys it) — destroying it here would leave the

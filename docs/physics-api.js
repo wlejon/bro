@@ -95,6 +95,8 @@
  *   'tx,ty,tz,rx,ry,rz' naming the axes left free
  * @property {number} [layer]
  * @property {Array<number>} [points]  convexHull: flat [x,y,z,...]; chain: flat [x0,y0,x1,y1,...]
+ * @property {number} [convexRadius]  convexHull: Jolt's rounding radius; 0 keeps the hull's sharp
+ *   corners (exact geometry for queries on small parts); omitted keeps Jolt's default 0.05
  *   in the XY plane, extruded along Z into a static one-sided wall
  * @property {number} [depth]  chain: total Z thickness (default 20)
  * @property {boolean} [closed]  chain: join the last point back to the first
@@ -158,6 +160,18 @@
  * @property {number} [ignoreBody]
  * @property {Array<number>} [ignoreBodies]
  * @property {Array<string>} [layers]
+ */
+
+/**
+ * @typedef {Object} PhysicsPenetrationOptions
+ * @property {Array<number>} [bodies] - Subset of body IDs to query (default: all bodies)
+ * @property {number} [minDepth] - Skip hits shallower than this depth (default: none, so every
+ *   penetration with depth > 0 is reported, plus separated pairs when maxSeparation is set)
+ * @property {number} [maxSeparation] - Also report pairs apart by up to this distance, with a
+ *   negative depth (default: 0: only pairs that actually penetrate, depth > 0)
+ * @property {number} [layerMask] - Bitmask of object layers to include
+ * @property {Array<Array<number>>} [ignorePairs] - Pairs of body tags [b1, b2] to skip
+ * @property {Float64Array|Array<number>|Array<Object>} [transforms] - Optional batch transform update before querying
  */
 
 /**
@@ -833,6 +847,27 @@ Physics.setPosition = function(tag, x, y, z) {};
 Physics.setRotation = function(tag, x, y, z, w) {};
 
 /**
+ * Set position and rotation together for one body without waking it.
+ * @param {number} tag
+ * @param {PhysicsVec3} pos
+ * @param {PhysicsQuat} [rot]
+ */
+Physics.setTransform = function(tag, pos, rot) {};
+
+/**
+ * Update transforms for a batch of bodies in one operation without waking them.
+ * Accepts Float64Array (stride 8: [tag, px, py, pz, qx, qy, qz, qw] or stride 17: [tag, m0..m15]),
+ * or an array of objects ({ body, position, rotation } / { body, matrix }).
+ * A column-major matrix may carry scale (and a mirror): its column lengths become the
+ * body's query scale, which `Physics.penetrations` applies to the body's shape; the
+ * simulation ignores it. A stride-8 update resets the query scale to 1.
+ * Pass `stride` for a flat array whose length is a multiple of both 8 and 17.
+ * @param {Float64Array|Array<number>|Array<Object>} updates
+ * @param {8|17} [stride]
+ */
+Physics.setTransforms = function(updates, stride) {};
+
+/**
  * @param {number} tag
  * @param {number} x
  * @param {number} y
@@ -935,6 +970,17 @@ Physics.castShape = function() {};
 Physics.castShapeClosest = function() {};
 
 Physics.overlapShape = function() {};
+
+/**
+ * Query-only narrow-phase penetration query across a set of bodies (or all).
+ * Runs broad phase and exact GJK/EPA narrow phase in C++ without physics simulation steps.
+ * Returns a flat Float64Array of [bodyA, subA, bodyB, subB, depth, x, y, z, ...],
+ * where bodyA < bodyB, subA/subB are sub-shape component indices, depth is the exact
+ * penetration depth, and (x, y, z) is the contact point in world coordinates.
+ * @param {PhysicsPenetrationOptions} [options]
+ * @returns {Float64Array}
+ */
+Physics.penetrations = function(options) {};
 
 Physics.overlapSphere = function() {};
 

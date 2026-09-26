@@ -50,21 +50,30 @@
                 }
                 return v;
             };
-            if (config.heights && typeof config.heights.length === 'number' && !Array.isArray(config.heights)) {
-                cfg = Object.assign({}, cfg, { heights: toArr(config.heights) });
-            }
-            if (config.positions && typeof config.positions.length === 'number' && !Array.isArray(config.positions)) {
-                cfg = Object.assign({}, cfg, { positions: toArr(config.positions) });
-            }
-            if (config.points && typeof config.points.length === 'number' && !Array.isArray(config.points)) {
-                cfg = Object.assign({}, cfg, { points: toArr(config.points) });
-            }
-            if (config.vertices && typeof config.vertices.length === 'number' && !Array.isArray(config.vertices)) {
-                cfg = Object.assign({}, cfg, { vertices: toArr(config.vertices) });
-            }
-            if (config.indices && typeof config.indices.length === 'number' && !Array.isArray(config.indices)) {
-                cfg = Object.assign({}, cfg, { indices: toArr(config.indices) });
-            }
+            const normalize = (c) => {
+                if (!c || typeof c !== 'object') return c;
+                let res = c;
+                if (c.heights && typeof c.heights.length === 'number' && !Array.isArray(c.heights)) {
+                    res = Object.assign({}, res, { heights: toArr(c.heights) });
+                }
+                if (c.positions && typeof c.positions.length === 'number' && !Array.isArray(c.positions)) {
+                    res = Object.assign({}, res, { positions: toArr(c.positions) });
+                }
+                if (c.points && typeof c.points.length === 'number' && !Array.isArray(c.points)) {
+                    res = Object.assign({}, res, { points: toArr(c.points) });
+                }
+                if (c.vertices && typeof c.vertices.length === 'number' && !Array.isArray(c.vertices)) {
+                    res = Object.assign({}, res, { vertices: toArr(c.vertices) });
+                }
+                if (c.indices && typeof c.indices.length === 'number' && !Array.isArray(c.indices)) {
+                    res = Object.assign({}, res, { indices: toArr(c.indices) });
+                }
+                if (Array.isArray(c.parts)) {
+                    res = Object.assign({}, res, { parts: c.parts.map(normalize) });
+                }
+                return res;
+            };
+            cfg = normalize(config);
         }
         return __bro_native.physics.createBody(JSON.stringify(cfg));
     });
@@ -102,6 +111,44 @@
         if (z === undefined) throw new TypeError("Physics.setRotation: z is required");
         if (w === undefined) throw new TypeError("Physics.setRotation: w is required");
         __bro_native.physics.setRotation(tag, x, y, z, w);
+    });
+    fn(ns_Physics, "setTransform", function setTransform(tag, pos, rot) {
+        if (tag === undefined) throw new TypeError("Physics.setTransform: tag is required");
+        if (!pos) throw new TypeError("Physics.setTransform: pos is required");
+        const q = rot || { x: 0, y: 0, z: 0, w: 1 };
+        __bro_native.physics.setTransform(tag, pos.x || 0, pos.y || 0, pos.z || 0, q.x || 0, q.y || 0, q.z || 0, q.w !== undefined ? q.w : 1);
+    });
+    fn(ns_Physics, "setTransforms", function setTransforms(updates, stride) {
+        if (!updates) return;
+        const strideOf = (n) => {
+            if (stride === 8 || stride === 17) return stride;
+            if (stride !== undefined) throw new TypeError("Physics.setTransforms: stride must be 8 or 17");
+            if (n % 8 === 0 && n % 17 !== 0) return 8;
+            if (n % 17 === 0 && n % 8 !== 0) return 17;
+            throw new TypeError("Physics.setTransforms: pass the stride (8 or 17); a length of " + n + " is ambiguous");
+        };
+        if (updates instanceof Float64Array) {
+            __bro_native.physics.setTransforms(updates, strideOf(updates.length));
+            return;
+        }
+        if (Array.isArray(updates) && updates.length > 0 && typeof updates[0] === 'object') {
+            const mats = [], poses = [];
+            for (const u of updates) {
+                const tag = u.body !== undefined ? u.body : u.tag;
+                if (u.matrix) {
+                    mats.push(tag);
+                    for (let k = 0; k < 16; k++) mats.push(u.matrix[k]);
+                } else {
+                    const p = u.position || u.pos || { x: 0, y: 0, z: 0 };
+                    const r = u.rotation || u.rot || { x: 0, y: 0, z: 0, w: 1 };
+                    poses.push(tag, p.x || 0, p.y || 0, p.z || 0, r.x || 0, r.y || 0, r.z || 0, r.w !== undefined ? r.w : 1);
+                }
+            }
+            if (mats.length) __bro_native.physics.setTransforms(new Float64Array(mats), 17);
+            if (poses.length) __bro_native.physics.setTransforms(new Float64Array(poses), 8);
+            return;
+        }
+        __bro_native.physics.setTransforms(new Float64Array(updates), strideOf(updates.length));
     });
     fn(ns_Physics, "setLinearVelocity", function setLinearVelocity(tag, x, y, z) {
         if (tag === undefined) throw new TypeError("Physics.setLinearVelocity: tag is required");
@@ -474,6 +521,21 @@
             if (h.userData !== undefined) h.userData = BigInt(h.userData);
         }
         return raw;
+    });
+
+    fn(ns_Physics, "penetrations", function penetrations(config) {
+        const cfg = config || {};
+        if (cfg.transforms) {
+            ns_Physics.setTransforms(cfg.transforms);
+        }
+        const opt = {
+            bodies: cfg.bodies,
+            minDepth: cfg.minDepth,
+            maxSeparation: cfg.maxSeparation,
+            layerMask: cfg.layerMask !== undefined ? cfg.layerMask : cfg.layer,
+            ignorePairs: cfg.ignorePairs,
+        };
+        return __bro_native.physics.penetrations(JSON.stringify(opt));
     });
 
     fn(ns_Physics, "overlapSphere", function overlapSphere(center, radius) {
