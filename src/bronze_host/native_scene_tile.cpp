@@ -24,6 +24,7 @@ namespace bro::bronze_host {
 
 bool registerNatives_tile_world(std::string* error);
 bool registerTileWorldOpsNatives(std::string* error);
+bool registerTileWorldObjectNatives(std::string* error);
 
 namespace {
 
@@ -319,8 +320,6 @@ double bro_tile_world_TileWorld_sampleHeight(void* self, double wx, double wz);
 const char* bro_tile_world_TileWorld_raycastCell(void* self, double ox, double oy, double oz, double dx, double dy, double dz, double maxDist);
 bool bro_tile_world_TileWorld_isWalkable(void* self, int32_t x, int32_t y, double mask);
 void bro_tile_world_TileWorld_configure(void* self, const char* configJson);
-int32_t bro_tile_world_TileWorld_addObjectKind(void* self, uint64_t meshVal, const char* styleJson);
-int32_t bro_tile_world_TileWorld_addObjectPlacement(void* self, int32_t kind, int32_t x, int32_t y, double yaw, double scale, double yOffset, double offsetX, double offsetZ, int32_t variant, const double* color, uint32_t color_len);
 void bro_tile_world_TileWorld_setShade(void* self, int32_t x, int32_t y, double v);
 void bro_tile_world_TileWorld_fillShade(void* self, int32_t x0, int32_t y0, int32_t x1, int32_t y1, double v);
 void bro_tile_world_TileWorld_setShadeMapFloat(void* self, const float* data, uint32_t count);
@@ -376,10 +375,6 @@ bool registerTileWorldNatives(std::string* error) {
              "bool", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_configure", (void*)&bro_tile_world_TileWorld_configure,
              "void", {"__bro_native.tile_world.TileWorld", "str"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_addObjectKind", (void*)&bro_tile_world_TileWorld_addObjectKind,
-             "i32", {"__bro_native.tile_world.TileWorld", "dynamic", "str"})) return false;
-    if (!reg("__bro_native.tile_world.TileWorld_addObjectPlacement", (void*)&bro_tile_world_TileWorld_addObjectPlacement,
-             "i32", {"__bro_native.tile_world.TileWorld", "i32", "i32", "i32", "f64", "f64", "f64", "f64", "f64", "i32", "f64[]"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_setShade", (void*)&bro_tile_world_TileWorld_setShade,
              "void", {"__bro_native.tile_world.TileWorld", "i32", "i32", "f64"})) return false;
     if (!reg("__bro_native.tile_world.TileWorld_fillShade", (void*)&bro_tile_world_TileWorld_fillShade,
@@ -399,7 +394,7 @@ bool registerTileWorldNatives(std::string* error) {
         "__bro_native.tile_world.createTileWorld",
         reinterpret_cast<void*>(&bro_scene_SceneGraph_createTileWorld),
         s, error)) return false;
-    return registerTileWorldOpsNatives(error);
+    return registerTileWorldOpsNatives(error) && registerTileWorldObjectNatives(error);
 }
 
 }  // namespace bro::bronze_host
@@ -880,81 +875,6 @@ void bro_tile_world_TileWorld_configure(void* self, const char* configJson) {
             c->tileWorld()->configure(std::move(cfg));
         }
     }
-}
-
-int32_t bro_tile_world_TileWorld_addObjectKind(void* self, uint64_t meshVal, const char* styleJson) {
-    auto* c = tileWorldCellOf(self);
-    if (!c || !c->tileWorld() || !meshVal) return -1;
-    auto val = bronze::Value{meshVal};
-    void* handle = bronze::embed::handleData(val);
-    auto* md = static_cast<bromesh::MeshData*>(handle);
-    if (!md) return -1;
-
-    scene::TileWorld::ObjectStyle style;
-    if (styleJson && *styleJson) {
-        auto res = ev::parseJson(styleJson);
-        if (!res.thrown && ev::isObject(res.value)) {
-            const Rooted s(res.value);
-            const Rooted col(ev::getProperty(s, "color"));
-            if (ev::isObject(col)) {
-                for (int i = 0; i < 4; ++i) {
-                    Value el = ev::getElement(col, i);
-                    if (ev::isNumber(el)) style.color[i] = static_cast<float>(ev::toDouble(el));
-                }
-            }
-            auto num = [&](const char* key, float& out) {
-                Value v = ev::getProperty(s, key);
-                if (ev::isNumber(v) && std::isfinite(ev::toDouble(v))) out = static_cast<float>(ev::toDouble(v));
-            };
-            auto flag = [&](const char* key, bool& out) {
-                Value v = ev::getProperty(s, key);
-                if (ev::isBool(v)) out = ev::toBool(v);
-                else if (ev::isNumber(v)) out = ev::toDouble(v) != 0.0;
-            };
-            auto count = [&](const char* key, int& out) {
-                Value v = ev::getProperty(s, key);
-                if (ev::isNumber(v) && ev::toDouble(v) >= 1.0) out = satCast<int>(ev::toDouble(v));
-            };
-            num("roughness", style.roughness);
-            num("metallic", style.metallic);
-            num("alphaCutoff", style.alphaCutoff);
-            flag("doubleSided", style.doubleSided);
-            flag("castsShadow", style.castsShadow);
-            count("atlasColumns", style.atlasCols);
-            count("atlasRows", style.atlasRows);
-            Value tex = ev::getProperty(s, "texture");
-            if (ev::isString(tex)) {
-                broimage::Image img;
-                std::string err;
-                if (broimage::decode_file(bro::util::resolveAssetPath(ev::toUtf8(tex)), img, &err) &&
-                    img.width > 0 && img.height > 0) {
-                    style.texWidth = img.width;
-                    style.texHeight = img.height;
-                    style.texPixels = std::move(img.pixels);
-                }
-            }
-        }
-    }
-    return c->tileWorld()->addObjectKind(bromesh::MeshData(*md), style);
-}
-
-int32_t bro_tile_world_TileWorld_addObjectPlacement(void* self, int32_t kind, int32_t x, int32_t y, double yaw, double scale, double yOffset, double offsetX, double offsetZ, int32_t variant, const double* color, uint32_t color_len) {
-    auto* c = tileWorldCellOf(self);
-    if (!c || !c->tileWorld()) return -1;
-    scene::TileWorld::ObjectPlacement p;
-    // Per-instance tint: RGB, optional alpha.
-    if (color && color_len >= 3) {
-        for (uint32_t i = 0; i < color_len && i < 4; ++i) {
-            if (std::isfinite(color[i])) p.color[i] = static_cast<float>(color[i]);
-        }
-    }
-    p.yaw = static_cast<float>(yaw);
-    p.scale = static_cast<float>(scale);
-    p.yOffset = static_cast<float>(yOffset);
-    p.offsetX = static_cast<float>(offsetX);
-    p.offsetZ = static_cast<float>(offsetZ);
-    p.variant = variant;
-    return c->tileWorld()->addObject(kind, x, y, p);
 }
 
 void bro_tile_world_TileWorld_setShade(void* self, int32_t x, int32_t y, double v) {

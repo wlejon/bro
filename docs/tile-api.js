@@ -514,6 +514,61 @@ class TileWorld {
    */
   addObject(kind, x, y, opts) {}
 
+  /**
+   * Remove one placement of `kind`. The placements after it move down one
+   * index, so a caller keyed by index shifts its own indices to match. Flushed
+   * by rebuildObjects().
+   * @param {number} kind
+   * @param {number} index - as returned by addObject()
+   * @returns {boolean} false on a dead kind or an index out of range
+   */
+  removeObject(kind, index) {}
+
+  /**
+   * Re-place one placement of `kind` on cell (x, y) with fresh `opts` (the same
+   * shape as addObject's, every field defaulted again). The index is kept.
+   * Flushed by rebuildObjects().
+   * @param {number} kind
+   * @param {number} index
+   * @param {number} x
+   * @param {number} y
+   * @param {Object} [opts]
+   * @returns {boolean} false on a dead kind, an index out of range or a bad cell
+   */
+  replaceObject(kind, index, x, y, opts) {}
+
+  /**
+   * Swap the mesh of a live kind in place, and its material when `style` is
+   * given (same shape as addObjectKind's; omitted fields take their defaults,
+   * not the old values). The kind keeps its id and every placement, so a
+   * batched layer can be re-baked without re-placing it. Takes effect on the
+   * next frame; no rebuildObjects() needed.
+   * @example
+   * const kind = world.addObjectKind(Mesh.box(1, 3, 1), { color: [0.6, 0.6, 0.6, 1] });
+   * world.addObject(kind, 4, 4);
+   * world.rebuildObjects();
+   * world.replaceObjectKind(kind, Mesh.box(1, 1, 1));   // same placement, rubble-high
+   * @param {number} kind
+   * @param {Mesh} mesh - copied; non-empty
+   * @param {Object} [style]
+   * @returns {boolean} false on a dead kind or an empty mesh
+   */
+  replaceObjectKind(kind, mesh, style) {}
+
+  /**
+   * Destroy a kind: its GPU mesh, material and placements go at once. The id
+   * is never handed out again, and every call naming it afterwards is a no-op
+   * (addObject returns -1, objectCount 0). Use it to drop geometry that is no
+   * longer wanted, or to release a whole layer when a new map is built on the
+   * same world.
+   * @param {number} kind
+   * @returns {boolean} false if `kind` was not a live kind
+   */
+  removeObjectKind(kind) {}
+
+  /** True while `kind` is a live kind (added and not removed). */
+  hasObjectKind(kind) {}
+
   /** Remove all placements of `kind` (or every kind when kind is omitted/<0). */
   clearObjects(kind) {}
 

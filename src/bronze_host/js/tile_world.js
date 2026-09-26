@@ -202,6 +202,29 @@
             opts.yaw || 0, opts.scale == null ? 1 : opts.scale, opts.yOffset || 0, opts.offsetX || 0, opts.offsetZ || 0, opts.variant || 0,
             opts.color == null ? EMPTY_F64 : Float64Array.from(opts.color));
     });
+    fn(TileWorld.prototype, "replaceObjectKind", function replaceObjectKind(kindId, mesh, style) {
+        if (kindId === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.replaceObjectKind: kind is required");
+        if (mesh == null) throw new TypeError("bro.tile_world.TileWorld.prototype.replaceObjectKind: mesh is required");
+        return __bro_native.tile_world.TileWorld_replaceObjectKind(this, kindId, mesh, style != null, style == null ? "" : JSON.stringify(style));
+    });
+    fn(TileWorld.prototype, "removeObjectKind", function removeObjectKind(kindId) {
+        if (kindId === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.removeObjectKind: kind is required");
+        return __bro_native.tile_world.TileWorld_removeObjectKind(this, kindId);
+    });
+    fn(TileWorld.prototype, "hasObjectKind", function hasObjectKind(kindId) {
+        if (kindId === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.hasObjectKind: kind is required");
+        return __bro_native.tile_world.TileWorld_hasObjectKind(this, kindId);
+    });
+    fn(TileWorld.prototype, "replaceObject", function replaceObject(kindId, index, x, y, opts) {
+        opts = opts || {};
+        return __bro_native.tile_world.TileWorld_replaceObjectPlacement(this, kindId, index, x, y,
+            opts.yaw || 0, opts.scale == null ? 1 : opts.scale, opts.yOffset || 0, opts.offsetX || 0, opts.offsetZ || 0, opts.variant || 0,
+            opts.color == null ? EMPTY_F64 : Float64Array.from(opts.color));
+    });
+    fn(TileWorld.prototype, "removeObject", function removeObject(kindId, index) {
+        if (index === undefined) throw new TypeError("bro.tile_world.TileWorld.prototype.removeObject: index is required");
+        return __bro_native.tile_world.TileWorld_removeObject(this, kindId, index);
+    });
     fn(TileWorld.prototype, "clearObjects", function clearObjects(kindId) {
         __bro_native.tile_world.TileWorld_clearObjects(this, kindId !== undefined, kindId === undefined ? 0 : kindId);
     });

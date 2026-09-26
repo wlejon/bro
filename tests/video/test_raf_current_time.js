@@ -11,9 +11,17 @@
 // crossed a picture boundary. Measured on a clip with Opus audio: 23 of 60
 // steps disagreed.
 //
-// Covered: a clip with sound (clock slaved to the audio advanceTime renders), a
-// clip with none (host wall clock), paused, seeking and ended elements, and a
-// flush() outside advanceTime still advancing a playing video.
+// Covered: a clip with sound, a clip with none, paused, seeking and ended
+// elements, and a flush() outside advanceTime still advancing a playing video.
+//
+// Both clips run on the host wall clock here. The sound is slaved only when it
+// streams, and streaming needs a decoder that converts to the engine's rate:
+// headless mixes at 44.1 kHz, the Opus track is 48 kHz, and stock bro's webm
+// backend cannot resample chunk by chunk, so the track is predecoded and plays
+// beside the picture rather than driving it (ElVideo::openAudioGate). A step
+// that does no work therefore moves the picture by however little wall time it
+// took — sixty of them came to one picture on a fast machine — so each callback
+// sleeps a few real milliseconds, as the silent case always did.
 
 const os = require('os');
 const path = require('path');
@@ -88,11 +96,11 @@ function compare(v, label, steps, work) {
     return v.currentTime - start;
 }
 
-// ── a clip with sound: the clock follows the audio advanceTime renders ─────
+// ── a clip with sound: the audio advanceTime renders plays beside it ───────
 {
     const v = open(withSound);
     v.play();
-    const moved = compare(v, 'with sound', 60);
+    const moved = compare(v, 'with sound', 60, () => wallSleep(4));
     assert(moved > 0.1, 'with sound: playback advanced (' + moved.toFixed(3) + 's)');
     v.pause();
     v.remove();

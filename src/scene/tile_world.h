@@ -280,11 +280,27 @@ public:
     // Register a prop kind from a mesh + material; returns its kind index (-1 on
     // failure). The mesh is moved in.
     int  addObjectKind(bromesh::MeshData&& mesh, const ObjectStyle& style);
+    // Ids handed out so far, removed ones included: kind ids are never reused.
     int  objectKindCount() const { return static_cast<int>(objectKinds_.size()); }
+    bool hasObjectKind(int kind) const;
+    // Destroy a kind: its node, mesh, material and placements go at once (no
+    // rebuildObjects() needed). The id stays dead — every call naming it is a
+    // no-op, and a later addObjectKind() takes a fresh id. False if `kind` is
+    // not a live kind.
+    bool removeObjectKind(int kind);
+    // Swap a live kind's mesh in place, and its material when `style` is given.
+    // Placements, and so the kind's id and draw order, are kept. False on a
+    // dead kind or an empty mesh.
+    bool replaceObjectKind(int kind, bromesh::MeshData&& mesh, const ObjectStyle* style);
 
     // Place an instance of `kind` on cell (x, y). Returns the instance index
     // within that kind, or -1 on a bad kind/cell. Marks the kind for rebuild.
     int  addObject(int kind, int x, int y, const ObjectPlacement& p);
+    // Remove one placement. The placements after it move down one index, the
+    // order an index-keyed caller has to follow. False on a bad kind/index.
+    bool removeObject(int kind, int index);
+    // Re-place one placement on cell (x, y) with `p`, keeping its index.
+    bool replaceObject(int kind, int index, int x, int y, const ObjectPlacement& p);
     // Remove all placements of `kind` (or every kind when kind < 0).
     void clearObjects(int kind = -1);
     int  objectCount(int kind) const;
@@ -421,6 +437,7 @@ private:
     };
     std::vector<ObjectKind> objectKinds_;
     void rebuildObjectKind(ObjectKind& k);
+    ObjectKind* liveKind(int kind);
 
     SceneNode* root_ = nullptr;
     int chunksX_ = 0;

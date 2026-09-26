@@ -231,6 +231,7 @@ if(BRO_WITH_3D)
         native_scene_clipmap.cpp
         native_scene_tile.cpp
         native_scene_tile_ops.cpp
+        native_scene_tile_objects.cpp
         native_scene_lighting.cpp
         native_scene_anim.cpp
         native_scene_clip.cpp
