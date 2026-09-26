@@ -61,13 +61,34 @@
  * @property {number} [repetitionPenalty]
  * @property {number} [adaptive]
  * @property {(number|bigint)} [seed] Sampling seed (a BigInt carries all 64 bits).
+ *   With `temperature > 0` the take is a function of text, voice, sampling
+ *   options and seed alone: the same request gives the same samples, byte for
+ *   byte, in any process and after any other synthesis (on one device; CPU and
+ *   CUDA takes differ from each other).
  * @property {Object<string, number>} [logitBias] `{ codeId: delta }`, additive
  *   on codebook 0.
  * @property {Float32Array} [voiceSteer]
  * @property {Float32Array} [speakerVector]
  * @property {boolean} [trace=false] Attach `stages` to the result.
+ * @property {(ParakeetModel|{model: ParakeetModel, tokenizer?: ParakeetTokenizer})} [align]
+ *   Attach `words` to the result: the take is heard back by Parakeet and the
+ *   text force-aligned to it (see `ParakeetModel.align` in stt-api.js). A
+ *   ParakeetModel loaded from a directory holding `tokenizer.json` needs no
+ *   tokenizer. Adds roughly a Parakeet encoder pass, well under a second on a
+ *   GPU. Not on the streaming form. The Parakeet model must be idle.
  * @property {Function} [onDone] `onDone(result, { cancelled, error? })`, the
  *   async forms.
+ */
+
+/**
+ * A word of the synthesized text and when it is spoken, in seconds from the
+ * start of `samples`. `text` is the word exactly as it was written between
+ * spaces, punctuation included, so `words.map(w => w.text).join(' ')` is the
+ * text with its whitespace normalised.
+ * @typedef {Object} WordTiming
+ * @property {string} text
+ * @property {number} start
+ * @property {number} end
  */
 
 /**
@@ -75,6 +96,15 @@
  * @property {Float32Array} samples
  * @property {number} sampleRate
  * @property {Array<{name: string, h: number, w: number, data: Float32Array}>} [stages]
+ * @property {Array<WordTiming>} [words] With `opts.align`: one entry per
+ *   whitespace-separated word of `text`, in order, non-overlapping.
+ *
+ * @example
+ * const pk = bro.stt.loadParakeet('weights/parakeet/0.6b-v3');
+ * const qwen = bro.tts.loadQwen('weights/qwen-tts/1.7B-voicedesign');
+ * const take = qwen.synthesize('One hex. Two legs.', {
+ *   instruct: 'A calm male narrator.', temperature: 0.45, seed: 51, align: pk });
+ * // take.words: [{ text: 'One', start: 0.03, end: 0.32 }, { text: 'hex.', ... }, ...]
  */
 
 /**

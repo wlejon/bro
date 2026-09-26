@@ -277,15 +277,54 @@ class ParakeetModel {
   /** @readonly @type {number} */ vocabSize;
   /** @readonly @type {number} */ blankTokenId;
   /** Seconds per encoder frame (multiply `tokenFrames` by it). @readonly @type {number} */ frameSeconds;
+  /**
+   * The tokenizer read from `tokenizer.json` in the model directory, or null
+   * when there is none (then pass one to `align`).
+   * @readonly @type {?ParakeetTokenizer}
+   */
+  tokenizer;
 
   /**
    * Blocks and returns a ParakeetResult; with `opts.onDone`, a background
-   * decode returning an AsyncHandle.
+   * decode returning an AsyncHandle. Audio at any rate is accepted: anything
+   * other than `sampleRate` (16 kHz) is resampled first with a windowed-sinc
+   * filter (Hann², six zero crossings, cutoff at 0.99 of the lower Nyquist),
+   * so a 24 kHz TTS take or a 44.1 / 48 kHz file goes in as it is. A bare
+   * Float32Array is taken to be 16 kHz.
    * @param {(Float32Array|SttAudioBuffer)} audio
    * @param {ParakeetTranscribeOptions} [opts]
    * @returns {(ParakeetResult|AsyncHandle)}
    */
   transcribe(audio, opts) {}
+
+  /**
+   * Forced alignment: when each word of a known `text` is spoken in `audio`.
+   * The text is split on whitespace, every word tokenized on its own, and the
+   * pieces aligned by a Viterbi pass over the TDT lattice restricted to that
+   * sequence (the joint network's own token and duration probabilities, frame
+   * by frame). A word starts at its first piece's frame and ends when its last
+   * piece's predicted duration runs out; both are then refined on the
+   * waveform at 10 ms (a word after a pause starts at the energy onset within
+   * 120 ms, an end follows the voiced audio up to the next word). Words never
+   * overlap and stay inside the clip. Resamples like `transcribe`. This is
+   * what the `align` option of `bro.tts` synthesis runs.
+   *
+   * Without `opts.onDone` it blocks; with it the alignment runs in the
+   * background and `onDone({ words, logProb }, { cancelled, error? })`.
+   *
+   * @example
+   * const pk = bro.stt.loadParakeet('weights/parakeet/0.6b-v3');
+   * const { words } = pk.align({ samples, sampleRate: 48000 }, 'Every street on the map.');
+   * // [{ text: 'Every', start: 2.56, end: 3.04 }, { text: 'street', ... }, ...]
+   *
+   * @param {(Float32Array|SttAudioBuffer)} audio
+   * @param {string} text The words expected, as they should come back.
+   * @param {{tokenizer?: ParakeetTokenizer, onDone?: Function}} [opts]
+   * @returns {({words: Array<WordTiming>, logProb: number}|AsyncHandle)}
+   *   `logProb` is the aligned path's log-probability: very low values mean
+   *   the audio does not say the text.
+   */
+  align(audio, text, opts) {}
 
   /**
    * @returns {ParakeetSession}
@@ -430,6 +469,8 @@ bro.stt.loadWhisper = function(dir, opts) {};
 bro.stt.loadTokenizer = function(opts) {};
 
 /**
+ * Loads `config.json` + `model.safetensors`, and `tokenizer.json` too when
+ * the directory has one (exposed as `model.tokenizer`, used by `align`).
  * @param {string} dir
  * @param {WhisperLoadOptions} [opts]
  * @returns {(ParakeetModel|AsyncHandle)}
