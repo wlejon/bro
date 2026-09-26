@@ -3,6 +3,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_node_sweep.h"
 
 #include "dom/element.h"
 #include "dom/style_proxy.h"
@@ -83,7 +84,8 @@ std::string styleKeyToCss(const std::string& key) {
 
 }  // namespace
 
-Value makeStyleObject(HostNodeState* st) {
+Value makeStyleObject(HostNodeState* raw) {
+    StateRef st(raw);
     ObjectBuilder b;
     b.def("setProperty", 2, [st](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0), valV = argAt(a, 1);
@@ -238,7 +240,8 @@ Value makeStyleObject(HostNodeState* st) {
 // element — so a UI that reads a width, changes a class and reads again must
 // see the second answer, and a snapshot taken at construction would hand back
 // the first.
-Value makeComputedStyleObject(HostNodeState* st) {
+Value makeComputedStyleObject(HostNodeState* raw) {
+    StateRef st(raw);
     ObjectBuilder b;
     auto resolve = [st](const std::string& css) {
         if (!st->el) return std::string();

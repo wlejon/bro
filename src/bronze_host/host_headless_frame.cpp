@@ -3,6 +3,7 @@
 #include "bronze_host/host_anchor_download.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_telemetry.h"
+#include "bronze_host/host_node_sweep.h"
 #include "engine/engine.h"
 #include "engine/capture_path.h"
 #include "canvas/canvas_scene.h"
@@ -619,6 +620,31 @@ void installHeadlessFrame(engine::Engine& engine) {
                 bnum("gcPauseNs", static_cast<double>(tel.gcPauseNs));
                 bnum("shapeTransitions", static_cast<double>(tel.shapeTransitions));
                 o.set(ev::setProperty(o.get(), "bronze", bz.get()));
+            }
+            {
+                const NodeRegistryStats rs = hostNodeRegistryStats();
+                const DomSweepStats ss = hostDomSweepStats();
+                ev::Persistent dm(ev::createObject());
+                auto dnum = [&](const char* k, double v) {
+                    dm.set(ev::setProperty(dm.get(), k, ev::fromDouble(v)));
+                };
+                dnum("nodes", static_cast<double>(ss.nodes));
+                dnum("entries", static_cast<double>(rs.entries));
+                dnum("live", static_cast<double>(rs.live));
+                dnum("wrapped", static_cast<double>(rs.wrapped));
+                dnum("passes", static_cast<double>(ss.passes));
+                dnum("collections", static_cast<double>(ss.collections));
+                dnum("treesFreed", static_cast<double>(ss.treesFreed));
+                dnum("groupsDied", static_cast<double>(ss.groupsDied));
+                dnum("groupsSurvived", static_cast<double>(ss.groupsSurvived));
+                dnum("lastPassMs", ss.lastPassMs);
+                dnum("lastCollectMs", ss.lastCollectMs);
+                dnum("lastScanMs", ss.lastScanMs);
+                dnum("lastDemoteMs", ss.lastDemoteMs);
+                dnum("lastFreeMs", ss.lastFreeMs);
+                dnum("lastGroups", static_cast<double>(ss.lastGroups));
+                o.set(ev::setProperty(o.get(), "dom", dm.get()));
+                num("processBytes", static_cast<double>(ss.processBytes));
             }
             return o.get();
         });

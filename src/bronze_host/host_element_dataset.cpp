@@ -3,6 +3,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_node_sweep.h"
 
 #include "dom/element.h"
 #include "dom/style_proxy.h"
@@ -62,7 +63,8 @@ bool datasetAttrToKey(const std::string& attr, std::string* out) {
 
 }  // namespace
 
-Value makeDatasetObject(HostNodeState* st) {
+Value makeDatasetObject(HostNodeState* raw) {
+    StateRef st(raw);
     HostProxyTraps t;
     t.get = [st](const std::string& key, Value& out) {
         if (!st->el) return false;
@@ -99,7 +101,8 @@ Value makeDatasetObject(HostNodeState* st) {
 
 // Every mutator takes a variadic list, as DOMTokenList does: `classList.add(a, b)`
 // is one call on the web and widget libraries write it that way.
-Value makeClassListObject(HostNodeState* st) {
+Value makeClassListObject(HostNodeState* raw) {
+    StateRef st(raw);
     ObjectBuilder b;
     b.def("add", 1, [st](Value, std::span<const Value> a) {
         if (!st->el) return ev::undefined();

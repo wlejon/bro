@@ -8,6 +8,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_shadow_dom.h"
 #include "bronze_host/host_window_open.h"
 
@@ -39,124 +40,9 @@ namespace bro::bronze_host {
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// The registry
-// ---------------------------------------------------------------------------
+dom::Element* s_fullscreenElement = nullptr;
 
-struct Registry {
-    // unique_ptr so an entry's address is stable: every accessor on the wrapper
-    // captures its HostNodeState*, and the map rehashes as the tree grows.
-    std::vector<std::unique_ptr<HostNodeState>> entries;
-    std::unordered_map<const dom::Node*, HostNodeState*> live;
-    // Which documents we have asked to warn us. A set rather than the single
-    // bool this was: the warning is per-document, and DOMParser makes a second
-    // document reachable. With a bool, whichever document happened to own the
-    // first node this layer ever wrapped was the only one being watched — and
-    // if that was a parsed document, which never frees anything, the LIVE
-    // document was left unwatched and every wrapper it handed out could outlive
-    // its node.
-    std::unordered_set<const dom::Document*> observed;
-};
-
-Registry& registry() {
-    static Registry r;
-    return r;
-}
-
-static dom::Element* s_fullscreenElement = nullptr;
-
-// A doomed node's wrapper must stop answering BEFORE the storage goes away.
-//
-// The entry is dropped from the live map — so nothing can reach the dead
-// Element* through us again, and an element later allocated at the same
-// address gets a fresh entry rather than inheriting this one — and its
-// Persistents are released here, which is a normal call site and therefore
-// allowed to make embed calls. What is NOT done is freeing the entry: a
-// wrapper the program still holds is a handle pointing at it, and that pointer
-// has to stay valid. What it points at is now inert.
-static void clearNodeState(HostNodeState* st) {
-    if (!st) return;
-    st->node = nullptr;
-    st->el = nullptr;
-    st->shadowRoot = nullptr;
-    st->jsObj.set(ev::undefined());
-    st->styleObj.set(ev::undefined());
-    st->classListObj.set(ev::undefined());
-    st->computedObj.set(ev::undefined());
-    st->datasetObj.set(ev::undefined());
-    st->inlineHandles.clear();
-    st->inlineFns.clear();
-    st->hasStyle = false;
-    st->hasClassList = false;
-    st->hasComputed = false;
-    st->hasDataset = false;
-}
-
-void onNodeFreed(dom::Document*, dom::Node* node) {
-    if (s_fullscreenElement == node) {
-        s_fullscreenElement = nullptr;
-    }
-    if (node && node->nodeType() == dom::NodeType::Element) {
-        auto* el = static_cast<dom::Element*>(node);
-        cleanupCanvasForElement(el);
-        clearElementListeners(el);
-    }
-    Registry& r = registry();
-    auto it = r.live.find(node);
-    if (it == r.live.end()) return;
-    clearNodeState(it->second);
-    r.live.erase(it);
-}
-
-}  // namespace
-
-void clearHostElementsForDocument(dom::Document* doc) {
-    if (!doc) return;
-    clearElementListenersForDocument(doc);
-    Registry& r = registry();
-    r.observed.erase(doc);
-    for (auto it = r.live.begin(); it != r.live.end(); ) {
-        HostNodeState* st = it->second;
-        if (st && st->node && st->node->document() == doc) {
-            if (st->el) {
-                cleanupCanvasForElement(st->el);
-            }
-            clearNodeState(st);
-            it = r.live.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-namespace {
-
-// Takes a Node rather than an Element so text nodes, comments and fragments
-// land in the SAME map as elements. One registry is what keeps identity a
-// property of the node rather than of the kind of node: `parent.childNodes[0]
-// === textNode` has to hold for the same reason `=== element` does, and a
-// second map keyed on text nodes would be a second answer to the same question.
-HostNodeState* stateFor(dom::Node* node) {
-    if (!node) return nullptr;
-    Registry& r = registry();
-    auto it = r.live.find(node);
-    if (it != r.live.end()) return it->second;
-    if (dom::Document* doc = node->document()) {
-        if (r.observed.insert(doc).second)
-            doc->addNodeFreedObserver(&onNodeFreed);
-    }
-    auto owned = std::make_unique<HostNodeState>();
-    HostNodeState* st = owned.get();
-    st->node = node;
-    st->el = node->nodeType() == dom::NodeType::Element
-                 ? static_cast<dom::Element*>(node) : nullptr;
-    if (node->nodeName() == "#shadow-root") {
-        st->shadowRoot = static_cast<dom::ShadowRoot*>(node);
-    }
-    r.entries.push_back(std::move(owned));
-    r.live.emplace(node, st);
-    return st;
-}
+HostNodeState* stateFor(dom::Node* node) { return hostNodeStateFor(node); }
 
 }  // namespace
 
@@ -236,8 +122,8 @@ void installInlineEventHandler(ObjectBuilder& b, const char* propName, const cha
             HostNodeState* st = nodeStateOf(self_);
             if (!st) return ev::null();
             auto it = st->inlineFns.find(type);
-            if (it != st->inlineFns.end() && !ev::isUndefined(it->second.get())) {
-                return it->second.get();
+            if (it != st->inlineFns.end() && !ev::isUndefined(it->second->fn.get())) {
+                return it->second->fn.get();
             }
             return ev::null();
         },
@@ -253,20 +139,21 @@ void installInlineEventHandler(ObjectBuilder& b, const char* propName, const cha
             }
             Value fn = argAt(a, 0);
             if (ev::isFunction(fn)) {
-                ev::Persistent fnP(fn);
-                ev::Persistent self(self_);
+                auto ref = std::make_shared<ListenerRef>();
+                ref->fn.set(fn);
+                ref->self.set(self_);
                 std::string origin = st->el->tagName() + " inline on" + type + " listener";
                 dom::ListenerHandle handle = st->el->addEventListener(
                     type,
-                    [fnP, self, origin](dom::Event& evt) {
-                        callBronzeListener(fnP, self, evt, origin.c_str());
+                    [ref, origin](dom::Event& evt) {
+                        callBronzeListener(ref->fn, ref->self, evt, origin.c_str());
                     });
                 if (handle) {
                     st->inlineHandles[type] = handle.id;
                     // insert_or_assign, not emplace: emplace KEEPS the existing
                     // value on a key collision, so any path that leaves a stale
                     // entry behind would hand the getter the previous function.
-                    st->inlineFns.insert_or_assign(type, fnP);
+                    st->inlineFns.insert_or_assign(type, ref);
                 }
             }
             return ev::undefined();
@@ -383,8 +270,14 @@ Value hostElementValue(dom::Element* el) {
     return v;
 }
 
+// A custom element's constructor result stands in for the handle, and it
+// reaches the entry through a plain `__bro_node_id__` number the collector
+// cannot count: such an entry is pinned until the sweep proves the object dead.
 void noteHostElementValue(dom::Element* el, Value v) {
-    if (HostNodeState* st = stateFor(el)) st->jsObj.set(v);
+    HostNodeState* st = stateFor(el);
+    if (!st) return;
+    if (ev::handleData(v) != st) st->pinned = true;
+    st->jsObj.set(v);
 }
 
 bool isCanvasTag(const std::string& tag) {
@@ -398,18 +291,14 @@ bool isImgTag(const std::string& tag) { return tag == "IMG" || tag == "img"; }
 // of all fifty-eight members — a thousand-element UI allocated fifty-eight
 // thousand function objects to say the same fifty-eight things.
 Value makeNodeHandleObject(dom::Node* node) {
-    return nodeHostClass().make(stateFor(node), [](void*) {});
+    HostNodeState* st = stateFor(node);
+    return nodeHostClass().make(st, stateHandleDtor(st));
 }
 
 Value makeElementHandleObject(dom::Element* el) {
     Value tagProto = htmlInterfaceProto(el->tagName());
-    return ev::makeHandle(stateFor(el), [](void*) {}, ev::Finalize::InSweep, tagProto);
-}
-
-HostNodeState* hostNodeStateFor(dom::Node* node) { return stateFor(node); }
-
-bool hostHasNodeState(const dom::Node* node) {
-    return node && registry().live.count(node) != 0;
+    HostNodeState* st = stateFor(el);
+    return ev::makeHandle(st, stateHandleDtor(st), ev::Finalize::InSweep, tagProto);
 }
 
 HostNodeState* hostNodeStateOfValue(Value v) { return nodeStateOf(v); }

@@ -25,6 +25,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_anchor_download.h"
 #include "bronze_host/host_event_spec.h"
 #include "bronze_host/host_realm_scope.h"
@@ -479,46 +480,54 @@ void finishProvidedEventValue(Value provided, const dom::Event& e) {
 // ---------------------------------------------------------------------------
 
 // What removeEventListener needs to find the engine handle again, given the
-// (type, function) pair the program passes. Process-lived and never freed, the
-// same convention the rest of this layer's state follows — and the elements in
-// it are the ones the Document owns for its whole life (a host canvas, the
-// document element), so a raw pointer here cannot outlive its target.
+// (type, function) pair the program passes, keyed by element. Process-lived
+// and never freed, the same convention the rest of this layer's state follows.
+// An element's entries go when the element is freed (clearElementListeners,
+// from the registry's node-freed hook), so a key never outlives its node.
+//
+// The function and receiver live in a ListenerRef shared with the engine-side
+// closure, not in Persistents captured by it: the detached-tree sweep takes
+// them off the roots while it asks whether the tree is still reachable, and a
+// copy captured in a closure would be a root nobody could take back.
 struct ElementListener {
-    dom::Element* el = nullptr;
     std::string type;
-    ev::Persistent fn;
+    std::shared_ptr<ListenerRef> ref;
     dom::ListenerHandle handle;
     bool capture = false;
     bool once = false;
 };
 
-std::vector<ElementListener>& registrations() {
-    static auto* list = new std::vector<ElementListener>();
-    return *list;
+using Registrations = std::unordered_map<dom::Element*, std::vector<ElementListener>>;
+
+Registrations& registrations() {
+    static auto* map = new Registrations();
+    return *map;
+}
+
+void dropRef(const std::shared_ptr<ListenerRef>& ref) {
+    if (!ref) return;
+    ref->fn.set(ev::undefined());
+    ref->self.set(ev::undefined());
 }
 
 } // namespace
 
 void clearElementListeners(dom::Element* el) {
     if (!el) return;
-    auto& list = registrations();
-    for (auto it = list.begin(); it != list.end(); ) {
-        if (it->el == el) {
-            it->fn.set(ev::undefined());
-            it = list.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    auto& map = registrations();
+    auto it = map.find(el);
+    if (it == map.end()) return;
+    for (ElementListener& r : it->second) dropRef(r.ref);
+    map.erase(it);
 }
 
 void clearElementListenersForDocument(dom::Document* doc) {
     if (!doc) return;
-    auto& list = registrations();
-    for (auto it = list.begin(); it != list.end(); ) {
-        if (it->el && it->el->document() == doc) {
-            it->fn.set(ev::undefined());
-            it = list.erase(it);
+    auto& map = registrations();
+    for (auto it = map.begin(); it != map.end(); ) {
+        if (it->first && it->first->document() == doc) {
+            for (ElementListener& r : it->second) dropRef(r.ref);
+            it = map.erase(it);
         } else {
             ++it;
         }
@@ -526,11 +535,24 @@ void clearElementListenersForDocument(dom::Document* doc) {
 }
 
 void clearAllElementListeners() {
-    auto& list = registrations();
-    for (auto& r : list) {
-        r.fn.set(ev::undefined());
+    auto& map = registrations();
+    for (auto& [el, list] : map) {
+        for (ElementListener& r : list) dropRef(r.ref);
     }
-    list.clear();
+    map.clear();
+}
+
+void forEachElementListenerRef(
+    dom::Element* el, const std::function<void(const std::shared_ptr<ListenerRef>&)>& fn) {
+    if (!el) return;
+    auto& map = registrations();
+    auto it = map.find(el);
+    if (it != map.end()) {
+        for (const ElementListener& r : it->second) fn(r.ref);
+    }
+    if (HostNodeState* st = hostNodeStateIfAny(el)) {
+        for (const auto& [type, ref] : st->inlineFns) fn(ref);
+    }
 }
 
 // addEventListener's third argument: `true` for capture, or an options object.
@@ -654,8 +676,9 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                                 std::span<const Value> a) {
         // thisValue is current at entry only; root it before anything below
         // allocates (embed.h's NativeFn contract).
-        ev::Persistent self(thisValue);
-        dom::Element* el = targetElement(source, thisValue);
+        auto ref = std::make_shared<ListenerRef>();
+        ref->self.set(thisValue);
+        dom::Element* el = targetElement(source, ref->self.get());
         const std::string who = targetName(source, name, el);
         Value typeV = argAt(a, 0);
         Value fn = argAt(a, 1);
@@ -666,7 +689,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
             return ev::throwTypeError(who +
                                       ".addEventListener: listener must be a function");
         }
-        ev::Persistent fnP(fn);
+        ref->fn.set(fn);
         // The type string first: readOptions reads properties, which may
         // allocate, and `typeV` is a plain copy (the `a` slots themselves
         // are what the collector updates).
@@ -683,30 +706,39 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
 
         // A repeat (type, listener, capture) triple is a no-op on the web; the engine's
         // native list has no such rule of its own, so it is applied here.
-        for (const ElementListener& r : registrations()) {
-            if (r.el == el && r.type == type && r.capture == opts.capture &&
-                ev::toBits(r.fn.get()) == ev::toBits(fnP.get())) {
+        auto& mine = registrations()[el];
+        for (const ElementListener& r : mine) {
+            if (r.type == type && r.capture == opts.capture &&
+                ev::toBits(r.ref->fn.get()) == ev::toBits(ref->fn.get())) {
                 return ev::undefined();
             }
         }
 
         std::string origin = who + " " + type + " listener";
         bool isOnce = opts.once;
+        ListenerRef* key = ref.get();
         dom::ListenerHandle handle = el->addEventListener(
             type,
-            [fnP, self, origin, el, type, isOnce](dom::Event& evt) {
+            [ref, origin, el, type, isOnce, key](dom::Event& evt) {
+                // Rooted here: the once-removal below may drop the last
+                // registration that shares this ListenerRef's roots.
+                ev::Persistent fn(ref->fn.get());
+                ev::Persistent self(ref->self.get());
                 if (isOnce) {
                     if (el) el->removeJsListener(type);
-                    auto& list = registrations();
-                    for (auto it = list.begin(); it != list.end(); ++it) {
-                        if (it->el == el && it->type == type &&
-                            ev::toBits(it->fn.get()) == ev::toBits(fnP.get())) {
-                            list.erase(it);
-                            break;
+                    auto& map = registrations();
+                    auto found = map.find(el);
+                    if (found != map.end()) {
+                        auto& list = found->second;
+                        for (auto it = list.begin(); it != list.end(); ++it) {
+                            if (it->ref.get() == key) {
+                                list.erase(it);
+                                break;
+                            }
                         }
                     }
                 }
-                callBronzeListener(fnP, self, evt, origin.c_str());
+                callBronzeListener(fn, self, evt, origin.c_str());
             },
             opts);
         if (!handle) {
@@ -714,7 +746,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
                                         "registration");
         }
         el->addJsListener(type);
-        registrations().push_back({el, std::move(type), fnP, handle, opts.capture, opts.once});
+        registrations()[el].push_back({std::move(type), ref, handle, opts.capture, opts.once});
         return ev::undefined();
     });
 
@@ -728,15 +760,18 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
         }
         std::string type = ev::toUtf8(typeV);
         dom::ListenerOptions opts = readOptions(argAt(a, 2));
-        auto& list = registrations();
+        auto& map = registrations();
+        auto found = map.find(el);
+        if (found == map.end()) return ev::undefined();
+        auto& list = found->second;
         for (auto it = list.begin(); it != list.end(); ++it) {
             // Identity by a compare of two CURRENT addresses with no
             // allocation between them — the one moment raw bits are a valid
             // identity for heap values. The listener is re-read from its
             // argument slot here, after readOptions, which may allocate.
-            if (it->el != el || it->type != type) continue;
+            if (it->type != type) continue;
             if (it->capture != opts.capture) continue;
-            if (ev::toBits(it->fn.get()) != ev::toBits(argAt(a, 1))) continue;
+            if (ev::toBits(it->ref->fn.get()) != ev::toBits(argAt(a, 1))) continue;
             if (el) {
                 el->removeEventListener(it->handle);
                 el->removeJsListener(type);
@@ -744,6 +779,7 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
             list.erase(it);
             break;
         }
+        if (list.empty()) map.erase(found);
         return ev::undefined();
     });
 

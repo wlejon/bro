@@ -26,6 +26,7 @@
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_node_sweep.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
@@ -215,7 +216,8 @@ void installImageGlobal() {
 }
 
 Value makeImageElementHandle(dom::Element* el) {
-    return g_imageClass.make(hostNodeStateFor(el), [](void*) {});
+    HostNodeState* st = hostNodeStateFor(el);
+    return g_imageClass.make(st, stateHandleDtor(st));
 }
 
 void primeImageFromMarkup(dom::Element* el) {

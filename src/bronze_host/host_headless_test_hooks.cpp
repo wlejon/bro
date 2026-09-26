@@ -2,6 +2,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
+#include "bronze_host/host_node_sweep.h"
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -404,6 +405,15 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         o.set("clientY", ev::fromDouble(g_lastEvent.clientY));
         o.set("key", ev::fromUtf8(g_lastEvent.key));
         return o.get();
+    });
+
+    // A detached-tree sweep now, collection included. Only meaningful from a
+    // frame after the one that made the sweep's weak references (see
+    // host_node_sweep.h), so a test advances time rather than calling this
+    // twice in a row.
+    host.def("domSweep", 0, [](Value, std::span<const Value>) {
+        hostDomSweepNow();
+        return ev::undefined();
     });
 
     ev::registerGlobal("__host", host.get());

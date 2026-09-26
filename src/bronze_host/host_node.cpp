@@ -37,6 +37,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
+#include "bronze_host/host_node_sweep.h"
 
 #include "engine/engine.h"
 #include "dom/comment_node.h"
@@ -504,8 +505,8 @@ Value makeCharacterDataValue(dom::Node* node) {
     if (!isCharacterData(node)) return ev::null();
     HostNodeState* st = hostNodeStateFor(node);
     Value handle = (node->nodeType() == dom::NodeType::Text)
-                       ? textHostClass().make(st, [](void*) {})
-                       : commentHostClass().make(st, [](void*) {});
+                       ? textHostClass().make(st, stateHandleDtor(st))
+                       : commentHostClass().make(st, stateHandleDtor(st));
     ObjectBuilder b(handle);
 
     b.set("nodeType",
@@ -650,7 +651,7 @@ Value makeCharacterDataValue(dom::Node* node) {
 Value makeFragmentValue(dom::Node* frag) {
     if (!frag) return ev::null();
     HostNodeState* st = hostNodeStateFor(frag);
-    Value handle = documentFragmentHostClass().make(st, [](void*) {});
+    Value handle = documentFragmentHostClass().make(st, stateHandleDtor(st));
     ObjectBuilder b(handle);
 
     b.set("nodeType", ev::fromDouble(11));

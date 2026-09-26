@@ -276,6 +276,50 @@ void Document::freeUnlessRetained(Node* root) {
     freeNode(root);
 }
 
+void Document::collectDetachedRoots(std::vector<Node*>& out) const {
+    std::unordered_set<const Node*> pointedAt;
+    for (const auto& [n, _] : ownedNodes_) {
+        const auto* el = dynamic_cast<const Element*>(n);
+        if (!el) continue;
+        if (el->templateContent()) pointedAt.insert(el->templateContent());
+        if (el->shadowRoot()) pointedAt.insert(el->shadowRoot());
+    }
+    for (const auto& [n, _] : ownedNodes_) {
+        if (n == root_ || n->parentNode()) continue;
+        if (pointedAt.count(n)) continue;
+        out.push_back(n);
+    }
+}
+
+void Document::freeDetachedTree(Node* root) {
+    if (!root || root->parentNode() || !ownsNode(root)) return;
+    // The template contents and shadow roots hang off elements by pointer,
+    // not as children, so freeNode's walk would never reach them. Collected
+    // before anything is freed, then freed as trees of their own.
+    std::vector<Node*> owned;
+    std::vector<Node*> stack{root};
+    while (!stack.empty()) {
+        Node* n = stack.back();
+        stack.pop_back();
+        for (Node* c : n->childNodes()) stack.push_back(c);
+        auto* el = dynamic_cast<Element*>(n);
+        if (!el) continue;
+        if (Element* content = el->templateContent()) {
+            el->setTemplateContent(nullptr);
+            owned.push_back(content);
+            stack.push_back(content);
+        }
+        if (ShadowRoot* sr = el->shadowRoot()) {
+            owned.push_back(sr);
+            stack.push_back(sr);
+        }
+    }
+    freeNode(root);
+    for (Node* n : owned) {
+        if (ownsNode(n)) freeNode(n);
+    }
+}
+
 void Document::notifyMutation(const MutationNotice& notice) {
     if (muteMutationNotices_ > 0) return;
     // By value into a local copy of the list, not by reference into the member:

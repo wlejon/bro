@@ -119,6 +119,8 @@ set(BRO_BRONZE_HOST_SOURCES
     host_dialog.cpp
     host_matchmedia.cpp
     host_node.cpp
+    host_node_registry.cpp
+    host_node_sweep.cpp
     host_shadow_dom.cpp
     host_range.cpp
     host_selection.cpp

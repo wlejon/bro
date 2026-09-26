@@ -123,6 +123,24 @@ public:
     // teardown.
     void freeUnlessRetained(Node* root);
 
+    // Every parentless node this document owns that nothing in the document
+    // points at: not the root, not a <template>'s content, not a shadow root.
+    // These are the trees a script host may prove unreachable and free — the
+    // only way anything leaves this document once a script has detached it.
+    void collectDetachedRoots(std::vector<Node*>& out) const;
+
+    // Free a detached tree whole: its nodes, and the template contents and
+    // shadow roots its elements own, which freeNode alone would strand as
+    // parentless nodes nothing points at any more. A no-op for a node with a
+    // parent or one this document does not own.
+    void freeDetachedTree(Node* root);
+
+    size_t ownedNodeCount() const { return ownedNodes_.size(); }
+
+    // Nodes allocated by every document, ever. A script host compares it
+    // across frames to learn that trees were built without walking them.
+    static uint64_t nodeAllocations() { return s_nodeAllocations; }
+
     // Destroy any nodes queued by freeNode(). Caller must guarantee no
     // other thread is reading the DOM (layout + raster both idle).
     void drainPendingFrees();
@@ -614,8 +632,11 @@ private:
         // retarget a subtree.
         raw->setDocument(this);
         ownedNodes_[raw] = std::move(ptr);
+        ++s_nodeAllocations;
         return raw;
     }
+
+    static inline uint64_t s_nodeAllocations = 0;
 
     // adoptNode helper: retarget a single node (see document.cpp).
     void adoptOne(Node* node, Document* src);

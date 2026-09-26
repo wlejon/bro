@@ -34,6 +34,7 @@
 #endif
 #include "bronze_host/host_headless.h"
 #include "bronze_host/host_gc.h"
+#include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_range.h"
@@ -222,6 +223,12 @@ void fireAnimationFrames() {
 //     "after layout" is what it measures. Its own callbacks' promise jobs
 //     drain at 6c.
 //
+//  7a. The detached-tree sweep (host_node_sweep.cpp). Last, after every
+//     callback and checkpoint of the frame: its pass takes wrappers off the
+//     roots for the length of one collection, which is only safe with no
+//     program code left to run, and the WeakRefs it reads groups back through
+//     rely on the checkpoint above having released what they kept.
+//
 // NOT here: broaudio's per-frame tick (audioFramePump below). Audio plays in
 // real time whether or not bro.time is paused, so its automation, `onended`
 // and mic chunks ride the engine's ungated frame pump rather than this
@@ -241,6 +248,7 @@ void hostFrame(double dtMs) {
     fireHostObserverFrame();                             // 6b
     deliverWebAnimationFinishEvents();
     ev::drainMicrotasks();                               // 6c
+    hostDomSweepFrame(dtMs);                             // 7a
     hostNotifyIdleFrame(dtMs);                           // 7
     flushHostStorage();
 }

@@ -42,6 +42,9 @@
 
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt, boolAt
+#include "bronze_host/host_node_sweep.h"
+
+#include <algorithm>
 
 #include "dom/document.h"
 #include "dom/node.h"
@@ -281,6 +284,20 @@ void installObserverHooks() {
     ev::registerGlobal("__bro_observers", b.get());
     ev::GlobalValue gt = ev::globalValue("globalThis");
     if (gt.found && ev::isObject(gt.value)) ev::setProperty(gt.value, "__bro_observers", b.get());
+}
+
+bool hostObserversHold(const HostNodeState* st) {
+    if (!g_state || !st) return false;
+    auto* key = const_cast<HostNodeState*>(st);
+    if (g_state->watches.count(key)) return true;
+    auto names = [key](const std::vector<HostNodeState*>& v) {
+        return std::find(v.begin(), v.end(), key) != v.end();
+    };
+    for (const RawRecord& rec : g_state->queue) {
+        if (rec.target == key || rec.previousSibling == key || rec.nextSibling == key) return true;
+        if (names(rec.added) || names(rec.removed) || names(rec.nodes)) return true;
+    }
+    return false;
 }
 
 void fireHostObserverFrame() {

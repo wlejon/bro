@@ -317,6 +317,8 @@ Toggle a subsystem's scene nodes `.visible` on/off across two such runs and subt
 | `reuseFailOverride` | nodes re-laid because their flex width override differed |
 | `treeRebuilds` | layout subtrees rebuilt from the DOM |
 | `scene` | 3D frustum-culling counters from the most recent frame, summed across all scene graphs: `{mesh,instanced,splat,particles,billboards,shadow}{Drawn,Culled}` (shadow counts are per caster × atlas tile), plus `shadowTilesTotal` / `shadowTilesRendered` / `shadowTilesCached`, how many shadow-atlas tiles existed, were re-rendered, and were served from cache this frame. Per-graph numbers: `scene.cullStats()`; escape hatch: `scene.setFrustumCulling(false)`. See `docs/scene-api.js`. |
+| `dom` | The detached-tree sweep (`src/bronze_host/host_node_sweep.h`), current rather than since the reset: `nodes` the live documents own, `entries` / `live` / `wrapped` in the host's node registry (all entries, those with a node, those with a JS wrapper), and the sweep's running totals `passes`, `collections`, `treesFreed`, `groupsDied`, `groupsSurvived`, and the last pass's `lastPassMs` split into `lastScanMs`, `lastDemoteMs`, `lastCollectMs`, `lastFreeMs`, with the `lastGroups` it tested. A UI that rebuilds from templates should hold `nodes` and `entries` flat. `__host.domSweep()` runs a pass now; `BRO_DOM_SWEEP=0` turns the passes off. |
+| `processBytes` | The process's private committed bytes (Windows; resident bytes on Linux). |
 
 **The counts matter more than the milliseconds.** Layout and style are both
 incremental: a change is supposed to cost time proportional to what it changed,

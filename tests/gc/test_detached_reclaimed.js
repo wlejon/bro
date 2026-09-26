@@ -14,17 +14,18 @@
 // re-insertable, and an element back in the tree keeps the listeners registered
 // on its wrapper.
 //
-// `__bro_elem_map` is the probe because an entry in it is exactly "this Element
-// is still allocated and rooted". `advanceTime` rather than `flush` because the
-// sweep and JS_RunGC are on the engine's once-a-second pass, and `flush` is
-// layout and render only.
+// `perf.stats().dom.nodes` is the probe: the nodes the live documents still
+// own, which a detached tree leaves only when the sweep in
+// src/bronze_host/host_node_sweep.h frees it. `advanceTime` in steps rather than
+// `flush` because the sweep runs from the frame seam at most once a second, and
+// `flush` is layout and render only.
 
 const root = document.getElementById('root');
-const held = () => Object.keys(globalThis.__bro_elem_map || {}).length;
+const held = () => perf.stats().dom.nodes;
 
-/// Two seconds: the sweep demotes on one pass and the GC that follows it
-/// collects, so one pass is enough — two leaves no doubt.
-const settle = () => advanceTime(2000);
+/// Three frames a little over a second apart: a pass is due on each, so a tree
+/// detached before the first is tested at least twice.
+const settle = () => { advanceTime(1100); advanceTime(1100); advanceTime(1100); };
 
 function fill(n) {
     for (let i = 0; i < n; i++) {
@@ -140,8 +141,8 @@ root.removeChild(inner);
 
 // ── 5. and keeps its listeners, which live on the wrapper ──────────────────
 //
-// This is what the sweep's second pass is for: re-rooting an element that came
-// back, before a collection can take __bro_listeners with it.
+// A group that survives a collection gets its roots back, listener closures
+// included, so a later collection cannot take them.
 
 settle();
 settle();

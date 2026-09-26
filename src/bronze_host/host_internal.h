@@ -337,28 +337,26 @@ void hostFocusElement(dom::Element* el);
 Value hostDispatchToWindowOf(dom::Document* doc, Value desc);
 
 // ---------------------------------------------------------------------------
-// The node registry (host_element.cpp owns it; host_node.cpp shares it)
+// The node registry (host_node_registry.cpp; the sweep is host_node_sweep.cpp)
 // ---------------------------------------------------------------------------
 
-// One entry per DOM node this layer has ever wrapped, and the thing every
-// accessor on a wrapper captures. It is reached from a wrapper through
+// One entry per DOM node a wrapper, a record or a lookup has named, and the
+// thing every accessor on a wrapper captures. Reached from a wrapper through
 // embed::handleData, which is why `tag` is first (see the tag note above).
-//
-// `node` is what the wrapper IS; `el` is the same pointer when that node is an
-// element and nullptr otherwise. Keeping both is what lets the element surface
-// guard on `st->el` alone: a text wrapper never has those accessors installed,
-// but a stale one that somehow did would answer inert rather than reinterpret a
-// TextNode* as an Element*.
-//
-// Both go null when the node is freed (Document::addNodeFreedObserver). The
-// entry itself is never freed while the program might still hold the wrapper —
-// it holds Persistents, and ~Persistent is an embed call, which the GC rule
-// above forbids a handle finalizer from making.
-// An <img>'s decoded pixels, defined further down with the rest of the image
-// path. Declared here because an img ELEMENT carries one: the wrapper is a
-// node like any other element's, and the decoder hangs off its state rather
-// than replacing it (host_element_image.cpp).
+// `node` is what the wrapper IS; `el` is the same pointer for an element and
+// nullptr otherwise, so the element surface guards on `st->el` alone. Both go
+// null when the node is freed (Document::addNodeFreedObserver). The entry is
+// freed only once `jsRefs` — the JS objects that reach it natively: wrapper
+// handles and the closures behind style, classList and dataset — is zero too.
 struct HostImage;
+
+// A listener's function and receiver, shared by the engine-side closure that
+// calls it and the bookkeeping that finds it again, so the detached-tree sweep
+// can take both out of the root set and put them back (host_node_sweep.cpp).
+struct ListenerRef {
+    ev::Persistent fn;
+    ev::Persistent self;
+};
 
 struct HostNodeState {
     uint32_t tag = kHostElementTag;  // must be first — see the tag note above
@@ -371,7 +369,10 @@ struct HostNodeState {
     ev::Persistent computedObj;
     ev::Persistent datasetObj;
     std::unordered_map<std::string, uint64_t> inlineHandles;
-    std::unordered_map<std::string, ev::Persistent> inlineFns;
+    std::unordered_map<std::string, std::shared_ptr<ListenerRef>> inlineFns;
+    uint32_t jsRefs = 0;
+    bool pinned = false;  // a custom-element object stands in for the handle
+    uint32_t survivedPass = 0;
     bool hasStyle = false;
     bool hasClassList = false;
     bool hasComputed = false;
@@ -383,8 +384,7 @@ struct HostNodeState {
     bool dialogModal = false;
     std::string dialogReturnValue;
     // Non-null only for an <img>: its src, its size and its RGBA. Owned here
-    // so it dies with the node's entry, which is what the registry's
-    // unique_ptr already guarantees.
+    // so it dies with the node's entry.
     std::unique_ptr<HostImage> image;
 };
 

@@ -3,6 +3,7 @@
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_globals_internal.h"
+#include "bronze_host/host_node_sweep.h"
 #include "dom/shadow_root.h"
 #include "dom/element.h"
 #include "dom/document.h"
@@ -227,7 +228,7 @@ Value hostShadowRootValue(dom::ShadowRoot* sr) {
     Value existing = st->jsObj.get();
     if (!ev::isUndefined(existing)) return existing;
 
-    Value v = shadowRootHostClass().make(st, [](void*) {});
+    Value v = shadowRootHostClass().make(st, stateHandleDtor(st));
     st->jsObj.set(v);
     return v;
 }
