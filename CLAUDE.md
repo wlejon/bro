@@ -87,6 +87,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 |------|---------|
 | `audio-api.js` | `AudioContext` Web-Audio half: nodes, params, buffers, listener, decoding, `getUserMedia`; how it maps onto broaudio |
 | `audio-engine-api.js` | `AudioContext` engine half: clips, playbacks, streams, voices, buses + effects, presets; VoiceAllocator, ModMatrix, MidiInput, Sequence |
+| `ear-api.js` | `bro.ear`: judge a finished clip offline, deterministic: `measure` (timing, LUFS, centroid/flatness, tonality, ringing partials), `compare` to a reference, labelled `spectrogram` images/PNGs; `loadClap` prompt scorer in ML builds |
 | `mesh-api.js` | `bro.mesh`: the `Mesh` container, primitives, CSG, simplify/subdivide/smooth, analysis, `MeshBVH` |
 | `mesh-io-api.js` | `bro.mesh` IO half: loaders/savers, Draco, splat clouds, isosurface + voxel statics, `PolyMesh`, `SDFGraph` |
 | `mesh-plants-api.js` | `bro.mesh` procedural half: sweeps, leaf/flower cards, branch trees, scattering, `CapsuleField`, `LSystem` |

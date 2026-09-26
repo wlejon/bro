@@ -258,6 +258,9 @@ void installSiblingApis(engine::Engine& engine) {
     broaudio::api::setPathResolver(&brokit::api::resolveAssetPath);
     broaudio::api::installAudio();
     broaudio::api::installMic();
+    // bro.ear (measure / compare / spectrogram) adds to `bro.ear` rather than
+    // replacing it; brosoundml mounts loadClap onto the same object below.
+    broaudio::api::installEar();
 #else
     (void)engine;
 #endif
@@ -399,12 +402,16 @@ void installSiblingApis(engine::Engine& engine) {
 // registry is per thread, so each call here builds the calling worker's own
 // classes over the calling worker's own `bro` root and hands out nothing
 // the main realm made. What is NOT here is everything that reaches the
-// engine: broaudio (AudioContext, bro.mic), the listen tenants of
+// engine: broaudio's AudioContext and bro.mic (bro.ear, which is pure
+// computation, is here), the listen tenants of
 // brosoundml (wake / kws / sense / gesture / listen, which tap the engine's
 // audio and inference scheduler) and the nav-mesh hooks (set once by the
 // main realm; the process-global hook slots are already filled when a
 // worker's bakeNavMesh reads them).
 void installWorkerSiblingApis() {
+#if BRO_WITH_AUDIO
+    broaudio::api::installEar();
+#endif
 #if BRO_WITH_GAMEAI
     brogameagent::api::installGameAi();
 #endif
