@@ -407,13 +407,27 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         return o.get();
     });
 
-    // A detached-tree sweep now, collection included. Only meaningful from a
-    // frame after the one that made the sweep's weak references (see
-    // host_node_sweep.h), so a test advances time rather than calling this
-    // twice in a row.
+    // The detached-tree sweep's outstanding work now, collections included
+    // (host_node_sweep.h). It clears the kept-objects list a microtask
+    // checkpoint would, so a WeakRef the calling job made may read back empty.
     host.def("domSweep", 0, [](Value, std::span<const Value>) {
         hostDomSweepNow();
         return ev::undefined();
+    });
+
+    // The process's memory by where it lives: committed regions by kind, the
+    // CRT heaps' busy and free bytes, and what sits outside every heap
+    // (host_mem_probe.cpp). `true` adds a size histogram of the busy blocks.
+    host.def("memory", 1, [](Value, std::span<const Value> a) {
+        return hostMemoryBreakdown(!a.empty() && ev::toBool(a[0]));
+    });
+
+    // Real elapsed milliseconds, where performance.now() is the simulated
+    // clock advanceTime drives: what a probe times a frame's work with.
+    host.def("wallMs", 0, [](Value, std::span<const Value>) {
+        using namespace std::chrono;
+        return ev::fromDouble(
+            duration<double, std::milli>(steady_clock::now().time_since_epoch()).count());
     });
 
     ev::registerGlobal("__host", host.get());

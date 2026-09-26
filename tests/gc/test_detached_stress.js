@@ -76,10 +76,14 @@ console.log(`  sweep: ${d1.passes} passes, ${d1.collections} collections,` +
             ` last pass ${d1.lastPassMs.toFixed(2)} ms, last collection ${d1.lastCollectMs.toFixed(1)} ms`);
 
 // Unreclaimed, these rounds cost 36000 nodes, 20000 entries and about 250 MB.
-// The private bytes are logged, not asserted: a run from the repo root loads
-// the system panels, whose frames commit memory of their own at a rate that
-// swamps anything this measures.
+// The private bytes are asserted too, with room for the allocator's own
+// high-water: memory that grows with the rounds is a leak the counts above
+// cannot see, such as every property name a host object is built with copied
+// into the immortal string arena again. (A run from the repo root loads the
+// system panels; a hidden one no longer animates, so it no longer commits
+// memory of its own while this measures.)
 assert(d1.nodes - d0.nodes < CARDS, `nodes grew by ${d1.nodes - d0.nodes} over ${built} cards`);
+assert(b0 === 0 || grew < 32, `private memory grew by ${grew.toFixed(1)} MB over ${built} cards`);
 // An entry whose last reference is a closure behind a style object goes when
 // the collector finalizes that closure, which it may do a collection or two
 // late: a round or two of cards, never the 20000 of a leak.

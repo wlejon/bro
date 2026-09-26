@@ -3,7 +3,6 @@
 #include "bronze_host/host_gc.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/host_headless.h"
-#include "bronze_host/host_callee_namer.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_pins.h"
 #include "bronze_host/host_rejection_events.h"
@@ -231,8 +230,6 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
         installWebHostGlobals(engine);
     }
 
-    initHostCalleeNamer();
-
     bronze::eval::EvalOptions opts;
     opts.filename = filename.empty() ? "<eval>" : filename;
     // Read off the registry the install above filled, not from a list kept
@@ -329,8 +326,6 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
             content.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
         }
     }
-
-    initHostCalleeNamer();
 
     bronze::eval::EvalOptions opts;
     opts.filename = absPath.string();

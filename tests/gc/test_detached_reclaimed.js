@@ -17,14 +17,16 @@
 // `perf.stats().dom.nodes` is the probe: the nodes the live documents still
 // own, which a detached tree leaves only when the sweep in
 // src/bronze_host/host_node_sweep.h frees it. `advanceTime` in steps rather than
-// `flush` because the sweep runs from the frame seam at most once a second, and
-// `flush` is layout and render only.
+// `flush` because the sweep runs from the frame seam and learns what died from
+// a collection, which an idle second of frames gives it, and `flush` is layout
+// and render only.
 
 const root = document.getElementById('root');
 const held = () => perf.stats().dom.nodes;
 
-/// Three frames a little over a second apart: a pass is due on each, so a tree
-/// detached before the first is tested at least twice.
+/// Three frames a little over a second apart: each is an idle second, so each
+/// collects for the sweep, and a tree detached before the first is tested at
+/// least twice.
 const settle = () => { advanceTime(1100); advanceTime(1100); advanceTime(1100); };
 
 function fill(n) {

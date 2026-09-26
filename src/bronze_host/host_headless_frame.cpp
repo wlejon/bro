@@ -618,6 +618,7 @@ void installHeadlessFrame(engine::Engine& engine) {
                 bnum("heapCommittedBytes", static_cast<double>(tel.heapCommittedBytes));
                 bnum("gcCollections", static_cast<double>(tel.gcCollections));
                 bnum("gcPauseNs", static_cast<double>(tel.gcPauseNs));
+                bnum("gcFullCollections", static_cast<double>(tel.gcFullCollections));
                 bnum("shapeTransitions", static_cast<double>(tel.shapeTransitions));
                 o.set(ev::setProperty(o.get(), "bronze", bz.get()));
             }
@@ -637,12 +638,13 @@ void installHeadlessFrame(engine::Engine& engine) {
                 dnum("treesFreed", static_cast<double>(ss.treesFreed));
                 dnum("groupsDied", static_cast<double>(ss.groupsDied));
                 dnum("groupsSurvived", static_cast<double>(ss.groupsSurvived));
+                dnum("groupsPromoted", static_cast<double>(ss.groupsPromoted));
                 dnum("lastPassMs", ss.lastPassMs);
+                dnum("maxPassMs", ss.maxPassMs);
                 dnum("lastCollectMs", ss.lastCollectMs);
-                dnum("lastScanMs", ss.lastScanMs);
-                dnum("lastDemoteMs", ss.lastDemoteMs);
-                dnum("lastFreeMs", ss.lastFreeMs);
-                dnum("lastGroups", static_cast<double>(ss.lastGroups));
+                dnum("demotedTrees", static_cast<double>(ss.demotedTrees));
+                dnum("groups", static_cast<double>(ss.groups));
+                dnum("queued", static_cast<double>(ss.queued));
                 o.set(ev::setProperty(o.get(), "dom", dm.get()));
                 num("processBytes", static_cast<double>(ss.processBytes));
             }

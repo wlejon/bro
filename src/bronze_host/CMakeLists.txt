@@ -87,7 +87,6 @@ set(BRO_BRONZE_HOST_SOURCES
     gl_transform_feedback.cpp
     gl_context.cpp
     gl_profile.cpp
-    host_callee_namer.cpp
     host_telemetry.cpp
     app_module.cpp
     dom_globals.cpp
@@ -150,6 +149,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_headless_input.cpp
     host_headless_frame.cpp
     host_headless_test_hooks.cpp
+    host_mem_probe.cpp
     host_touch.cpp
     eval.cpp
     eval_jit.cpp

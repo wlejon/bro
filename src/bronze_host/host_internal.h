@@ -217,6 +217,10 @@ engine::Engine* hostEngine();
 Value hostValueForElement(dom::Element* el);
 Value describeTarget(dom::Element* el);
 
+// __host.memory (host_mem_probe.cpp): committed memory by holder, and with
+// `sizes` every live heap block size with its count.
+Value hostMemoryBreakdown(bool sizes);
+
 // Milliseconds of SCALED engine time since installWebHostGlobals: the
 // accumulated Engine::onFrame deltas. This is the clock rAF timestamps and
 // performance.now() answer from, and the one timer deadlines are measured
@@ -349,6 +353,7 @@ Value hostDispatchToWindowOf(dom::Document* doc, Value desc);
 // freed only once `jsRefs` — the JS objects that reach it natively: wrapper
 // handles and the closures behind style, classList and dataset — is zero too.
 struct HostImage;
+struct SweepGroup;
 
 // A listener's function and receiver, shared by the engine-side closure that
 // calls it and the bookkeeping that finds it again, so the detached-tree sweep
@@ -372,7 +377,8 @@ struct HostNodeState {
     std::unordered_map<std::string, std::shared_ptr<ListenerRef>> inlineFns;
     uint32_t jsRefs = 0;
     bool pinned = false;  // a custom-element object stands in for the handle
-    uint32_t survivedPass = 0;
+    SweepGroup* sweepGroup = nullptr;  // demoted with this group (host_node_sweep.h)
+    bool sweepAlone = false;           // tested in a group of its own
     bool hasStyle = false;
     bool hasClassList = false;
     bool hasComputed = false;

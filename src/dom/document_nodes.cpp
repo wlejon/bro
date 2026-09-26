@@ -159,7 +159,22 @@ Node* Document::adoptNode(Node* node) {
         adoptOne(n, src);
     }
     markDirty();
+    if (!node->parentNode()) noteDetachCandidate(node);
     return node;
+}
+
+void Node::setParent(Node* p) {
+    if (!p && parent_ && document_) document_->noteDetachCandidate(this);
+    parent_ = p;
+}
+
+bool Document::isDetachedRoot(const Node* n) const {
+    if (!n || n == root_ || n->parentNode()) return false;
+    if (dynamic_cast<const ShadowRoot*>(n)) return false;
+    if (const auto* el = dynamic_cast<const Element*>(n)) {
+        if (el->templateHost()) return false;
+    }
+    return true;
 }
 
 void Document::freeNode(Node* node) {
@@ -190,6 +205,12 @@ void Document::freeNode(Node* node) {
         // the next mousemove. Engine::reapDeadInputPointers scrubs the
         // engine's own cached pointers but not this document-owned one.)
         if (elem == focusedElement_) focusedElement_ = nullptr;
+        // Its content, which is no child and is not freed with it, stops
+        // being pointed at and becomes a detached tree of its own.
+        if (Element* content = elem->templateContent()) {
+            elem->setTemplateContent(nullptr);
+            if (Document* d = content->document()) d->noteDetachCandidate(content);
+        }
         // And the top layer, which the paint and hit-test paths walk.
         if (!topLayer_.empty()) removeFromTopLayer(elem);
         // Same reasoning, one layer up: the CSS transition and animation

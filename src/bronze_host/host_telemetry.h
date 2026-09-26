@@ -11,6 +11,7 @@ struct HostTelemetry {
     size_t heapReservedBytes{0};
     uint64_t gcCollections{0};
     uint64_t gcPauseNs{0};
+    uint64_t gcFullCollections{0};
     uint64_t shapeTransitions{0};
 };
 

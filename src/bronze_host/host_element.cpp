@@ -105,11 +105,17 @@ dom::Element* siblingOf(dom::Element* el, int direction) {
 HostNodeState* nodeStateOf(Value v) {
     if (!ev::isObject(v)) return nullptr;
     auto* st = static_cast<HostNodeState*>(ev::handleData(v));
-    if (st && st->tag == kHostElementTag) return st;
+    if (st && st->tag == kHostElementTag) {
+        hostSweepTouch(st);
+        return st;
+    }
     Value idVal = ev::getProperty(v, "__bro_node_id__");
     if (ev::isNumber(idVal)) {
         auto* customSt = reinterpret_cast<HostNodeState*>(static_cast<uintptr_t>(ev::toDouble(idVal)));
-        if (customSt && customSt->tag == kHostElementTag) return customSt;
+        if (customSt && customSt->tag == kHostElementTag) {
+            hostSweepTouch(customSt);
+            return customSt;
+        }
     }
     return nullptr;
 }

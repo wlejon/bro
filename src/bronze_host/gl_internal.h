@@ -14,7 +14,6 @@
 // allocate, and never stores it.
 
 #include "bronze_host/gl_profile.h"
-#include "bronze_host/host_callee_namer.h"
 #include "bronze_host/host_numeric.h"
 #include "bronze_host/host_rooted.h"
 
@@ -358,7 +357,6 @@ struct ObjectBuilder {
         // this builder, DOM included, for the same reason hostProfileWrap's
         // comment gives: they all funnel through one place.
         ev::Persistent f(ev::makeFunction(hostProfileWrap(name, std::move(fn)), arity, name));
-        registerHostCalleeName(f.get(), name);
         obj.set(ev::setProperty(obj.get(), name, f.get()));
     }
 
@@ -372,17 +370,15 @@ struct ObjectBuilder {
         const std::string getName = "get " + std::string(name);
         const std::string setName = "set " + std::string(name);
         // The setter is rooted too: nothing between its makeFunction and
-        // defineAccessor may be assumed allocation-free, now or after a
-        // change to registerHostCalleeName.
+        // defineAccessor may be assumed allocation-free.
+        //
+        // The names are the functions' own (FunctionHeader::name), which is
+        // also what a bronze profile report names a host callee by.
         ev::Persistent g(
             ev::makeFunction(hostProfileWrap(name, std::move(getter)), 0, getName));
-        registerHostCalleeName(g.get(), getName);
         ev::Persistent s(setter ? ev::makeFunction(hostProfileWrap(name, std::move(setter)), 1,
                                                    setName)
                                 : ev::undefined());
-        if (setter) {
-            registerHostCalleeName(s.get(), setName);
-        }
         obj.set(ev::defineAccessor(obj.get(), name, g.get(), s.get(), /*enumerable=*/true));
     }
 

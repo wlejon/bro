@@ -1,23 +1,25 @@
 // The detached-tree sweep. host_node_sweep.h carries the design; this is the
-// pass, the pool of weak references it reads its groups back through, and the
-// policy that decides how often a pass may collect.
+// per-frame slice, the groups it demotes, the touch that brings one back, and
+// the policy for when the sweep may ask the heap to collect.
 
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_gc.h"
+#include "bronze_host/host_globals_internal.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include "layout/el_video.h"
-#include "util/log.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -35,10 +37,38 @@
 
 namespace bro::bronze_host {
 
+// One demotion: the trees whose wrappers moved into a group array, the entries
+// and Persistents they moved out of (in array order), and the WeakRef the
+// array is read back through. Each member is retained (jsRefs) while it is
+// here, so the Persistent pointers stay valid; a member whose node was freed
+// meanwhile is skipped on the way back.
+struct SweepGroup {
+    struct Tree {
+        dom::Document* doc = nullptr;
+        dom::Node* root = nullptr;
+    };
+    struct Slot {
+        ev::Persistent* p = nullptr;
+        uint32_t member = 0;
+    };
+    std::vector<Tree> trees;
+    std::vector<HostNodeState*> members;
+    std::vector<Slot> slots;
+    std::vector<std::shared_ptr<ListenerRef>> refs;
+    ev::Persistent weak;
+    uint64_t fullAtDemote = 0;
+    uint64_t fullSeen = 0;
+    double demotedAtMs = 0.0;
+    // Lived through a full collection: only a later full one can kill it.
+    bool old = false;
+    // Decided by a collection, taken apart in a later slice's budget.
+    enum class Pending : uint8_t { None, Died, Split } pending = Pending::None;
+    size_t nodes = 0;
+    size_t index = 0;
+};
+
 namespace {
 
-// The process's private committed memory — what a leak grows — or 0 where
-// there is no cheap way to ask. Linux answers resident pages instead.
 uint64_t processPrivateBytes() {
 #if defined(_WIN32)
     PROCESS_MEMORY_COUNTERS_EX pmc{};
@@ -63,33 +93,46 @@ uint64_t processPrivateBytes() {
 // Policy
 // ---------------------------------------------------------------------------
 
-// A pass scans every node the documents own, so it runs at most once a second
-// and only when a document has allocated since the last one; a tree detached
-// without anything being built is found by the slow pass.
-constexpr double kPassIntervalMs = 1000.0;
-constexpr double kSlowPassIntervalMs = 5000.0;
-// A pass that has groups to test collects the whole heap. It may do so once a
-// second, or less often when a collection costs more than 2% of the time
-// between them.
-constexpr double kMinCollectIntervalMs = 1000.0;
-constexpr double kCollectCostFactor = 50.0;
-constexpr uint32_t kRetestEveryPasses = 30;
-constexpr size_t kInitialPool = 64;
-constexpr size_t kMaxPool = 8192;
+// A frame's slice: a tenth of the frame, one to three milliseconds at display
+// rates. A headless step of a second or more is not a frame anyone watches,
+// and gets up to fifty so a test's few long steps finish the work.
+constexpr double kBudgetFraction = 0.1;
+constexpr double kMinBudgetMs = 1.0;
+constexpr double kMaxFrameBudgetMs = 3.0;
+constexpr double kLongStepMs = 100.0;
+constexpr double kMaxLongStepBudgetMs = 50.0;
+// Fresh trees share a group up to this many.
+constexpr size_t kBatchTrees = 256;
+// A tree something native holds, or one a touch just brought back, is looked
+// at again after this long rather than on every frame.
+constexpr double kDeferMs = 2000.0;
+constexpr double kLaterScanMs = 500.0;
+// Demoted trees wait for the heap's own full collection, which a program that
+// keeps allocating reaches on its own. The sweep asks for one itself — the one
+// hitch it may cause — only when the nodes waiting are many and have waited a
+// while, or have waited very long.
+constexpr double kForceCollectAfterMs = 10000.0;
+constexpr size_t kForceCollectNodes = 50000;
+constexpr double kForceCollectAnywayMs = 60000.0;
+// A quiet host — no rAF, microtask or brokit work pending — is not drawing
+// anything, so a collection costs it nothing anyone sees. After this long
+// quiet the sweep collects for trees demoted since its last quiet collection.
+// It is the idle GC's rule, and stands in for it where the idle GC cannot run:
+// inside a host eval, which is where a headless script steps time.
+constexpr double kQuietCollectMs = 1000.0;
 
 // ---------------------------------------------------------------------------
-// The pieces of JavaScript a pass calls
+// The pieces of JavaScript the sweep calls
 // ---------------------------------------------------------------------------
 
 // Builtins only — Object.defineProperty, Symbol, WeakRef and its deref — so
-// that no program code can run while a group is off the roots. Leaked on
-// purpose, like every process-lived Persistent in this layer.
+// that no program code runs while the sweep moves roots. Leaked on purpose,
+// like every process-lived Persistent in this layer.
 struct Intrinsics {
     ev::Persistent defineProperty;
     ev::Persistent linkKey;
     ev::Persistent weakRefCtor;
     ev::Persistent deref;
-    ev::Persistent unlinkDesc;
     bool ok = false;
 };
 
@@ -116,11 +159,6 @@ Intrinsics* intrinsics() {
     g_js->deref.set(ev::getProperty(proto.get(), "deref"));
     if (!ev::isFunction(g_js->defineProperty.get()) || !ev::isFunction(g_js->deref.get()))
         return nullptr;
-    ObjectBuilder unlink;
-    unlink.set("value", ev::undefined());
-    unlink.set("writable", ev::fromBool(true));
-    unlink.set("configurable", ev::fromBool(true));
-    g_js->unlinkDesc.set(unlink.get());
     g_js->ok = true;
     return g_js;
 }
@@ -134,32 +172,50 @@ bool defineLink(Value obj, Value desc) {
     return !r.thrown;
 }
 
+// The group array, or undefined once it has been collected.
+Value derefGroup(SweepGroup* g) {
+    Intrinsics* js = intrinsics();
+    ev::CallResult got = ev::call(js->deref.get(), g->weak.get(), {});
+    return got.thrown ? ev::undefined() : got.value;
+}
+
 // ---------------------------------------------------------------------------
-// The pool
+// State
 // ---------------------------------------------------------------------------
 
-// A group array and the WeakRef that will read it back. Made at the end of a
-// pass and used by a later one: `new WeakRef(k)` keeps `k` alive until the
-// next microtask checkpoint, so a WeakRef made inside the pass that tests it
-// would always report the group alive. The frame seam drains microtasks every
-// frame, so an entry made on an earlier frame is clear of that.
-struct PoolEntry {
-    ev::Persistent k;
-    ev::Persistent w;
-    uint64_t frame = 0;
+struct Candidate {
+    dom::Document* doc = nullptr;
+    dom::Node* node = nullptr;
+};
+
+struct Deferred {
+    dom::Document* doc = nullptr;
+    dom::Node* node = nullptr;
+    double dueMs = 0.0;
 };
 
 struct SweepState {
-    std::vector<std::unique_ptr<PoolEntry>> pool;
-    size_t poolTarget = kInitialPool;
-    uint64_t frame = 0;
-    uint32_t pass = 0;
-    uint64_t lastAllocs = 0;
-    double sincePassMs = 0.0;
-    double sinceCollectMs = 1e9;
-    // The last pass left fresh trees untested — the pool ran short or the
-    // collection was throttled — so the next pass is due on the clock alone.
-    bool pending = false;
+    std::vector<Candidate> queue;
+    size_t head = 0;
+    std::vector<Deferred> later;
+    std::unordered_set<const dom::Node*> laterSet;
+    double nextLaterScanMs = 0.0;
+    std::vector<std::unique_ptr<SweepGroup>> groups;
+    // Made this slice, stamped with the collection count once the slice has
+    // let go of its WeakRefs' targets.
+    std::vector<SweepGroup*> fresh;
+    std::unique_ptr<SweepGroup> batch;
+    std::unordered_set<const dom::Node*> batchRoots;
+    std::vector<dom::Node*> scratch;
+    size_t demotedTrees = 0;
+    size_t demotedNodes = 0;
+    double clockMs = 0.0;
+    double quietMs = 0.0;
+    double quietCollectAtMs = -1.0;
+    uint64_t seenCollections = 0;
+    uint64_t seenFull = 0;
+    // A WeakRef was made or read since the kept list was last cleared.
+    bool keptDirty = false;
     bool running = false;
     DomSweepStats stats;
 };
@@ -167,32 +223,6 @@ struct SweepState {
 SweepState& sweep() {
     static SweepState* s = new SweepState();
     return *s;
-}
-
-void topUpPool() {
-    SweepState& s = sweep();
-    Intrinsics* js = intrinsics();
-    if (!js) return;
-    while (s.pool.size() < s.poolTarget) {
-        auto e = std::make_unique<PoolEntry>();
-        e->k.set(ev::makeArray(0));
-        const Value kArg = e->k.get();
-        ev::CallResult made = ev::construct(js->weakRefCtor.get(), std::span<const Value>(&kArg, 1));
-        if (made.thrown) return;
-        e->w.set(made.value);
-        e->frame = s.frame;
-        s.pool.push_back(std::move(e));
-    }
-}
-
-// Entries are appended in frame order, so when the newest is usable every one
-// is; taking from the back keeps a pass that uses thousands of them linear.
-std::unique_ptr<PoolEntry> takePoolEntry() {
-    SweepState& s = sweep();
-    if (s.pool.empty() || s.pool.back()->frame >= s.frame) return nullptr;
-    std::unique_ptr<PoolEntry> e = std::move(s.pool.back());
-    s.pool.pop_back();
-    return e;
 }
 
 // ---------------------------------------------------------------------------
@@ -216,41 +246,9 @@ void walkTree(dom::Node* root, Fn&& fn) {
     }
 }
 
-struct Candidate {
-    dom::Document* doc = nullptr;
-    dom::Node* root = nullptr;
-    std::vector<HostNodeState*> members;
-    // Some wrapper of it has survived a test before, so it is likely held and
-    // is tested in a group of its own rather than sinking a batch.
-    bool alone = false;
-};
-
-// Every root a group takes off the root set, in the order it was stored in the
-// group array: the wrappers first, then the style / classList / dataset /
-// computed objects cached on the entries, then each listener's function and
-// receiver. The ListenerRefs are held so the Persistents stay where they are.
-//
-// A group is one tree, or a batch of trees never tested before: a rebuild
-// detaches hundreds of small trees at once and nearly all of them are garbage,
-// so one array and one weak reference answer for the batch. A batch that
-// survives is not split in the pass; its trees are marked suspect and each is
-// tested alone on the next.
-struct Group {
-    std::vector<Candidate> trees;
-    std::unique_ptr<PoolEntry> entry;
-    std::vector<ev::Persistent*> moved;
-    std::vector<std::shared_ptr<ListenerRef>> refs;
-    bool batch = false;
-};
-
-// A wrapper whose batch survived: fresh, but tested alone.
-constexpr uint32_t kSuspect = UINT32_MAX;
-constexpr size_t kBatchTrees = 256;
-
-template <typename Fn>
-void forEachMember(Group& g, Fn&& fn) {
-    for (Candidate& c : g.trees)
-        for (HostNodeState* st : c.members) fn(st);
+dom::Node* topOf(dom::Node* n) {
+    while (n->parentNode()) n = n->parentNode();
+    return n;
 }
 
 // Something outside JavaScript still needs this tree: a MutationObserver
@@ -265,245 +263,506 @@ bool heldNatively(dom::Node* n, HostNodeState* st) {
     return false;
 }
 
+void enqueue(dom::Document* doc, dom::Node* node) {
+    if (doc && node) sweep().queue.push_back({doc, node});
+}
+
+void defer(dom::Document* doc, dom::Node* node) {
+    SweepState& s = sweep();
+    if (!doc || !node || !s.laterSet.insert(node).second) return;
+    s.later.push_back({doc, node, s.clockMs + kDeferMs});
+}
+
 // ---------------------------------------------------------------------------
-// Demote, and back
+// Groups
 // ---------------------------------------------------------------------------
 
-// Move the tree's wrappers and listener roots into the entry's array and link
-// every wrapper to it. False when a link cannot be made (a frozen wrapper):
-// the group is then promoted straight back and the tree stays as it was.
-bool demote(Group& g) {
-    ev::Persistent k(g.entry->k.get());
+void addGroup(std::unique_ptr<SweepGroup> g) {
+    SweepState& s = sweep();
+    g->index = s.groups.size();
+    s.demotedTrees += g->trees.size();
+    s.demotedNodes += g->nodes;
+    s.fresh.push_back(g.get());
+    s.groups.push_back(std::move(g));
+}
+
+std::unique_ptr<SweepGroup> removeGroup(SweepGroup* g) {
+    SweepState& s = sweep();
+    const size_t i = g->index;
+    std::unique_ptr<SweepGroup> owned = std::move(s.groups[i]);
+    if (i + 1 != s.groups.size()) {
+        s.groups[i] = std::move(s.groups.back());
+        s.groups[i]->index = i;
+    }
+    s.groups.pop_back();
+    s.demotedTrees -= owned->trees.size();
+    s.demotedNodes -= owned->nodes;
+    s.fresh.erase(std::remove(s.fresh.begin(), s.fresh.end(), g), s.fresh.end());
+    return owned;
+}
+
+// Move the trees' wrappers and listener roots into a new array, link every
+// wrapper to it, and make the WeakRef. False, with nothing moved and the array
+// emptied, when a link cannot be made (a frozen wrapper).
+bool demote(SweepGroup& g) {
+    Intrinsics* js = intrinsics();
+    if (!js) return false;
+    ev::Persistent k(ev::makeArray(0));
     ev::Persistent desc(ev::createObject());
     desc.set(ev::setProperty(desc.get(), "value", k.get()));
     desc.set(ev::setProperty(desc.get(), "writable", ev::fromBool(true)));
     desc.set(ev::setProperty(desc.get(), "configurable", ev::fromBool(true)));
 
-    forEachMember(g, [&](HostNodeState* st) { g.moved.push_back(&st->jsObj); });
-    forEachMember(g, [&](HostNodeState* st) {
+    for (uint32_t m = 0; m < g.members.size(); ++m) g.slots.push_back({&g.members[m]->jsObj, m});
+    for (uint32_t m = 0; m < g.members.size(); ++m) {
+        HostNodeState* st = g.members[m];
         for (ev::Persistent* p : {&st->styleObj, &st->classListObj, &st->datasetObj,
                                   &st->computedObj}) {
-            if (!ev::isUndefined(p->get())) g.moved.push_back(p);
+            if (!ev::isUndefined(p->get())) g.slots.push_back({p, m});
         }
-        if (!st->el) return;
+        if (!st->el) continue;
         forEachElementListenerRef(st->el, [&](const std::shared_ptr<ListenerRef>& ref) {
             if (!ref) return;
             g.refs.push_back(ref);
-            g.moved.push_back(&ref->fn);
-            g.moved.push_back(&ref->self);
+            g.slots.push_back({&ref->fn, m});
+            g.slots.push_back({&ref->self, m});
         });
-    });
-    uint32_t slot = 0;
-    for (ev::Persistent* p : g.moved) k.set(ev::setElement(k.get(), slot++, p->get()));
-    bool linked = true;
-    forEachMember(g, [&](HostNodeState* st) {
-        if (linked && !defineLink(st->jsObj.get(), desc.get())) linked = false;
-    });
-    if (!linked) return false;
-    for (ev::Persistent* p : g.moved) p->set(ev::undefined());
-    g.entry->k.set(ev::undefined());
+    }
+    uint32_t i = 0;
+    for (const SweepGroup::Slot& slot : g.slots) k.set(ev::setElement(k.get(), i++, slot.p->get()));
+    bool ok = true;
+    for (HostNodeState* st : g.members) {
+        if (!defineLink(st->jsObj.get(), desc.get())) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok) {
+        const Value kArg = k.get();
+        ev::CallResult made = ev::construct(js->weakRefCtor.get(), std::span<const Value>(&kArg, 1));
+        if (made.thrown) ok = false;
+        else g.weak.set(made.value);
+    }
+    if (!ok) {
+        for (uint32_t j = 0; j < g.slots.size(); ++j) k.set(ev::setElement(k.get(), j, ev::undefined()));
+        g.slots.clear();
+        g.refs.clear();
+        return false;
+    }
+    for (const SweepGroup::Slot& slot : g.slots) slot.p->set(ev::undefined());
+    for (HostNodeState* st : g.members) {
+        st->sweepGroup = &g;
+        retainNodeState(st);
+    }
+    g.demotedAtMs = sweep().clockMs;
+    sweep().keptDirty = true;
     return true;
 }
 
-// Put everything back from `k`, and clear the links so the array can go.
-void promote(Group& g, Value kIn) {
-    Intrinsics* js = intrinsics();
+// Everything back from the array, which is left empty so a link that outlives
+// this group holds nothing.
+void restore(SweepGroup& g, Value kIn) {
     ev::Persistent k(kIn);
-    uint32_t slot = 0;
-    for (ev::Persistent* p : g.moved) p->set(ev::getElement(k.get(), slot++));
-    forEachMember(g, [&](HostNodeState* st) {
-        if (!ev::isUndefined(st->jsObj.get())) defineLink(st->jsObj.get(), js->unlinkDesc.get());
-    });
-}
-
-// The whole group is garbage: its wrappers, its listeners' functions, all of
-// it. Forget the entries and give the trees back.
-void release(Group& g) {
-    forEachMember(g, [](HostNodeState* st) {
-        st->pinned = false;
-        hostForgetNodeState(st);
-    });
-    for (const auto& ref : g.refs) {
-        ref->fn.set(ev::undefined());
-        ref->self.set(ev::undefined());
+    for (uint32_t i = 0; i < g.slots.size(); ++i) {
+        const SweepGroup::Slot& slot = g.slots[i];
+        if (g.members[slot.member]->node) slot.p->set(ev::getElement(k.get(), i));
+        k.set(ev::setElement(k.get(), i, ev::undefined()));
     }
-    for (Candidate& c : g.trees) c.doc->freeDetachedTree(c.root);
+}
+
+enum class GroupEnd { Died, Split, Touched };
+
+// Take a group apart after it died, was split, or was touched. Every tree its
+// members now sit in is looked at again: a node may have been moved out of a
+// demoted tree, or a wrapped node moved in, while it waited.
+void endGroup(SweepGroup* g, GroupEnd how, const dom::Node* touched) {
+    std::unique_ptr<SweepGroup> owned = removeGroup(g);
+    std::unordered_set<const dom::Node*> seen;
+    const dom::Node* touchedTop = touched ? topOf(const_cast<dom::Node*>(touched)) : nullptr;
+    auto requeue = [&](dom::Node* top) {
+        if (!seen.insert(top).second) return;
+        if (top == touchedTop) defer(top->document(), top);
+        else enqueue(top->document(), top);
+    };
+    for (HostNodeState* st : owned->members) {
+        if (!st->node) continue;
+        dom::Node* top = topOf(st->node);
+        if (how == GroupEnd::Split || top == touchedTop) st->sweepAlone = true;
+        requeue(top);
+    }
+    for (const SweepGroup::Tree& t : owned->trees) {
+        if (dom::Document::isLiveDocument(t.doc) && t.doc->ownsNode(t.root)) requeue(topOf(t.root));
+    }
+    for (HostNodeState* st : owned->members) {
+        st->sweepGroup = nullptr;
+        if (how == GroupEnd::Died) {
+            st->pinned = false;
+            hostForgetNodeState(st);
+        }
+        releaseNodeStateRef(st);
+    }
+    if (how == GroupEnd::Died) {
+        for (const auto& ref : owned->refs) {
+            ref->fn.set(ev::undefined());
+            ref->self.set(ev::undefined());
+        }
+    }
+    owned->weak.set(ev::undefined());
+}
+
+// A group that could not be demoted: its trees are looked at again alone.
+void demoteFailed(SweepGroup& g) {
+    for (HostNodeState* st : g.members) st->sweepAlone = true;
+    for (const SweepGroup::Tree& t : g.trees) {
+        if (g.trees.size() > 1) enqueue(t.doc, t.root);
+        else defer(t.doc, t.root);
+    }
+}
+
+void demoteOrDefer(std::unique_ptr<SweepGroup> g) {
+    if (demote(*g)) addGroup(std::move(g));
+    else demoteFailed(*g);
+}
+
+void flushBatch() {
+    SweepState& s = sweep();
+    s.batchRoots.clear();
+    if (!s.batch || s.batch->trees.empty()) return;
+    demoteOrDefer(std::move(s.batch));
+    s.batch.reset();
 }
 
 // ---------------------------------------------------------------------------
-// The pass
+// Candidates
 // ---------------------------------------------------------------------------
 
-void runPass(bool collectAllowed) {
+void examine(dom::Document* doc, dom::Node* root) {
+    SweepState& s = sweep();
+    if (!dom::Document::isLiveDocument(doc) || !doc->ownsNode(root)) return;
+    if (!doc->isDetachedRoot(root) || s.batchRoots.count(root)) return;
+    std::vector<HostNodeState*> members;
+    bool held = false;
+    bool inGroup = false;
+    bool alone = false;
+    size_t nodes = 0;
+    walkTree(root, [&](dom::Node* n) {
+        ++nodes;
+        HostNodeState* st = hostNodeStateIfAny(n);
+        if (st && st->sweepGroup) inGroup = true;
+        if (heldNatively(n, st)) held = true;
+        if (st && !ev::isUndefined(st->jsObj.get())) {
+            members.push_back(st);
+            if (st->sweepAlone) alone = true;
+        }
+    });
+    // Part of a demoted tree: its group looks at it again when it ends.
+    if (inGroup) return;
+    if (held) {
+        defer(doc, root);
+        return;
+    }
+    if (members.empty()) {
+        doc->freeDetachedTree(root);
+        ++s.stats.treesFreed;
+        return;
+    }
+    if (alone) {
+        auto g = std::make_unique<SweepGroup>();
+        g->trees.push_back({doc, root});
+        g->members = std::move(members);
+        g->nodes = nodes;
+        demoteOrDefer(std::move(g));
+        return;
+    }
+    if (!s.batch) s.batch = std::make_unique<SweepGroup>();
+    s.batch->trees.push_back({doc, root});
+    s.batch->nodes += nodes;
+    s.batch->members.insert(s.batch->members.end(), members.begin(), members.end());
+    s.batchRoots.insert(root);
+    if (s.batch->trees.size() >= kBatchTrees) flushBatch();
+}
+
+struct Deadline {
+    std::chrono::steady_clock::time_point end;
+    bool unlimited = false;
+    bool over() const { return !unlimited && std::chrono::steady_clock::now() >= end; }
+};
+
+// The documents' new candidates, a newly wrapped document's existing detached
+// trees, and the deferred trees now due.
+void gather() {
+    SweepState& s = sweep();
+    for (dom::Document* doc : hostObservedDocuments()) {
+        if (!doc->detachTracking()) {
+            doc->setDetachTracking(true);
+            s.scratch.clear();
+            doc->collectDetachedRoots(s.scratch);
+            for (dom::Node* n : s.scratch) enqueue(doc, n);
+            continue;
+        }
+        s.scratch.clear();
+        doc->takeDetachCandidates(s.scratch);
+        for (dom::Node* n : s.scratch) enqueue(doc, n);
+    }
+    if (s.clockMs < s.nextLaterScanMs || s.later.empty()) return;
+    s.nextLaterScanMs = s.clockMs + kLaterScanMs;
+    size_t kept = 0;
+    for (size_t i = 0; i < s.later.size(); ++i) {
+        const Deferred d = s.later[i];
+        if (d.dueMs <= s.clockMs) {
+            s.laterSet.erase(d.node);
+            enqueue(d.doc, d.node);
+        } else {
+            s.later[kept++] = d;
+        }
+    }
+    s.later.resize(kept);
+}
+
+void processQueue(const Deadline& dl) {
+    SweepState& s = sweep();
+    while (s.head < s.queue.size()) {
+        if (dl.over()) break;
+        const Candidate c = s.queue[s.head++];
+        examine(c.doc, c.node);
+    }
+    if (s.head == s.queue.size()) {
+        s.queue.clear();
+        s.head = 0;
+    } else if (s.head > 4096 && s.head * 2 > s.queue.size()) {
+        s.queue.erase(s.queue.begin(), s.queue.begin() + static_cast<std::ptrdiff_t>(s.head));
+        s.head = 0;
+    }
+}
+
+// Read back the groups a collection since the last look may have decided.
+void checkGroups(bool always) {
+    SweepState& s = sweep();
+    const ev::RuntimeTelemetry tel = ev::getRuntimeTelemetry();
+    if (!always && tel.gcCollections == s.seenCollections) return;
+    s.seenCollections = tel.gcCollections;
+    s.seenFull = tel.gcFullCollections;
+    for (const auto& owned : s.groups) {
+        SweepGroup* g = owned.get();
+        if (g->pending != SweepGroup::Pending::None) continue;
+        if (g->old && tel.gcFullCollections == g->fullSeen) continue;
+        const Value k = derefGroup(g);
+        s.keptDirty = true;
+        if (ev::isUndefined(k)) {
+            s.stats.treesFreed += g->trees.size();
+            ++s.stats.groupsDied;
+            g->pending = SweepGroup::Pending::Died;
+            continue;
+        }
+        if (tel.gcFullCollections <= g->fullAtDemote) continue;
+        if (!g->old) ++s.stats.groupsSurvived;
+        if (g->trees.size() > 1) {
+            g->pending = SweepGroup::Pending::Split;
+            continue;
+        }
+        g->old = true;
+        g->fullSeen = tel.gcFullCollections;
+    }
+}
+
+// Take apart the groups a collection decided, as many as the slice has time
+// for and at least one.
+void endPending(const Deadline& dl) {
+    SweepState& s = sweep();
+    bool first = true;
+    for (size_t i = s.groups.size(); i-- > 0;) {
+        if (i >= s.groups.size()) continue;
+        SweepGroup* g = s.groups[i].get();
+        if (g->pending == SweepGroup::Pending::None) continue;
+        if (!first && dl.over()) return;
+        first = false;
+        if (g->pending == SweepGroup::Pending::Died) {
+            endGroup(g, GroupEnd::Died, nullptr);
+            continue;
+        }
+        const Value k = derefGroup(g);
+        s.keptDirty = true;
+        if (ev::isUndefined(k)) {
+            s.stats.treesFreed += g->trees.size();
+            ++s.stats.groupsDied;
+            endGroup(g, GroupEnd::Died, nullptr);
+            continue;
+        }
+        restore(*g, k);
+        endGroup(g, GroupEnd::Split, nullptr);
+    }
+}
+
+// The slice's WeakRefs let go of their targets, so the next collection can
+// decide them, and the groups made in it learn which full collection they
+// wait for. Clearing the kept list is what the microtask checkpoint does; the
+// frame seam calls the sweep just after one.
+void finishSlice() {
+    SweepState& s = sweep();
+    if (s.keptDirty) {
+        ev::clearKeptObjects();
+        s.keptDirty = false;
+    }
+    if (s.fresh.empty()) return;
+    const uint64_t full = ev::getRuntimeTelemetry().gcFullCollections;
+    for (SweepGroup* g : s.fresh) g->fullAtDemote = full;
+    s.fresh.clear();
+}
+
+double oldestYoungMs() {
+    double oldest = -1.0;
+    for (const auto& g : sweep().groups) {
+        if (g->old || g->pending != SweepGroup::Pending::None) continue;
+        if (oldest < 0.0 || g->demotedAtMs < oldest) oldest = g->demotedAtMs;
+    }
+    return oldest;
+}
+
+void collectForSweep() {
+    SweepState& s = sweep();
+    const auto c0 = std::chrono::steady_clock::now();
+    // Outside an eval, through the idle GC's door, so it counts this as the
+    // idle spell's collection rather than making another one.
+    if (isHostEvaluating()) ev::collectGarbage();
+    else hostCollectGarbage();
+    s.stats.lastCollectMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
+    ++s.stats.collections;
+}
+
+bool sweepEnabled() {
+    // BRO_DOM_SWEEP=0 turns the sweep off: the before half of a leak
+    // measurement, and the switch to reach for if it is ever suspected.
+    static const bool enabled = [] {
+        const char* v = std::getenv("BRO_DOM_SWEEP");
+        return !(v && v[0] == '0');
+    }();
+    return enabled;
+}
+
+}  // namespace
+
+void hostSweepPromote(HostNodeState* st) {
+    SweepGroup* g = st ? st->sweepGroup : nullptr;
+    if (!g) return;
+    SweepState& s = sweep();
+    if (g->pending == SweepGroup::Pending::Died) {
+        endGroup(g, GroupEnd::Died, nullptr);
+        return;
+    }
+    const Value k = derefGroup(g);
+    s.keptDirty = true;
+    if (ev::isUndefined(k)) {
+        s.stats.treesFreed += g->trees.size();
+        ++s.stats.groupsDied;
+        endGroup(g, GroupEnd::Died, nullptr);
+        return;
+    }
+    const dom::Node* touched = st->node;
+    restore(*g, k);
+    ++s.stats.groupsPromoted;
+    endGroup(g, GroupEnd::Touched, touched);
+}
+
+void hostSweepTouchNode(const dom::Node* node) {
+    hostSweepTouch(hostNodeStateIfAny(node));
+}
+
+void hostDomSweepFrame(double dtMs) {
+    if (!sweepEnabled()) return;
     SweepState& s = sweep();
     if (s.running || !intrinsics()) return;
     s.running = true;
     const auto t0 = std::chrono::steady_clock::now();
-    ++s.pass;
-    ++s.stats.passes;
-    hostReapNodeStates();
+    const double dt = dtMs > 0.0 ? dtMs : 16.67;
+    s.clockMs += dt;
+    const double budget =
+        dt < kLongStepMs ? std::clamp(dt * kBudgetFraction, kMinBudgetMs, kMaxFrameBudgetMs)
+                         : std::min(dt * kBudgetFraction, kMaxLongStepBudgetMs);
+    Deadline dl{t0 + std::chrono::microseconds(static_cast<int64_t>(budget * 1000.0)), false};
 
-    std::vector<Candidate> candidates;
-    bool fresh = false;
+    auto elapsedMs = [&] {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    };
+    // The reaper frees the entries the last slice let go of; it gets half the
+    // budget first and whatever is left last.
+    hostReapNodeStates(budget * 0.5);
+    gather();
+    const size_t groupsBefore = s.groups.size();
+    const bool hadWork = s.head < s.queue.size();
+    checkGroups(false);
+    endPending(dl);
+    processQueue(dl);
+    flushBatch();
+    finishSlice();
+    hostReapNodeStates(std::max(0.0, budget - elapsedMs()));
+
+    const double oldest = oldestYoungMs();
+    const double waited = oldest >= 0.0 ? s.clockMs - oldest : 0.0;
+    const bool quiet = !ev::microtasksPending() && !hasPendingAnimationFrames() &&
+                       !brokitHasPendingWork();
+    s.quietMs = quiet ? s.quietMs + dt : 0.0;
+    const bool quietDue = s.quietMs >= kQuietCollectMs && oldest > s.quietCollectAtMs;
+    bool forced = false;
+    if (oldest >= 0.0 && (quietDue ||
+                         (waited >= kForceCollectAfterMs && s.demotedNodes >= kForceCollectNodes) ||
+                         waited >= kForceCollectAnywayMs)) {
+        collectForSweep();
+        s.quietCollectAtMs = s.clockMs;
+        forced = true;
+    }
+
+    if (hadWork || forced || s.groups.size() != groupsBefore) {
+        ++s.stats.passes;
+        s.stats.lastPassMs = elapsedMs();
+        s.stats.maxPassMs = std::max(s.stats.maxPassMs, s.stats.lastPassMs);
+    }
+    s.running = false;
+}
+
+void hostDomSweepNow() {
+    if (!sweepEnabled()) return;
+    SweepState& s = sweep();
+    if (s.running || !intrinsics()) return;
+    s.running = true;
+    const auto t0 = std::chrono::steady_clock::now();
+    const Deadline all{t0, true};
+    hostReapNodeStates();
+    gather();
     for (dom::Document* doc : hostObservedDocuments()) {
-        std::vector<dom::Node*> roots;
-        doc->collectDetachedRoots(roots);
-        for (dom::Node* root : roots) {
-            Candidate c;
-            c.doc = doc;
-            c.root = root;
-            bool held = false;
-            walkTree(root, [&](dom::Node* n) {
-                HostNodeState* st = hostNodeStateIfAny(n);
-                if (heldNatively(n, st)) held = true;
-                if (st && !ev::isUndefined(st->jsObj.get())) c.members.push_back(st);
-            });
-            if (held) {
-                for (HostNodeState* st : c.members) st->survivedPass = s.pass;
-                continue;
-            }
-            if (c.members.empty()) {
-                doc->freeDetachedTree(root);
-                ++s.stats.treesFreed;
-                continue;
-            }
-            // A tree whose every wrapper survived the previous pass was tested
-            // a second ago; it waits for a pass with new garbage, or for the
-            // periodic retest, rather than buying a collection of its own.
-            for (HostNodeState* st : c.members) {
-                if (st->survivedPass == 0 || st->survivedPass + 1 != s.pass) fresh = true;
-                if (st->survivedPass != 0) c.alone = true;
-            }
-            if (s.pass % kRetestEveryPasses == 0) fresh = true;
-            candidates.push_back(std::move(c));
-        }
+        s.scratch.clear();
+        doc->collectDetachedRoots(s.scratch);
+        for (dom::Node* n : s.scratch) enqueue(doc, n);
     }
-
-    s.stats.lastScanMs =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    const bool collect = collectAllowed && fresh && !candidates.empty() &&
-                         s.sinceCollectMs >= std::max(kMinCollectIntervalMs,
-                                                      kCollectCostFactor * s.stats.lastCollectMs);
-    std::vector<Group> groups;
-    s.pending = fresh && !candidates.empty() && !collect;
-    const auto d0 = std::chrono::steady_clock::now();
-    if (collect) {
-        std::vector<Group> planned;
-        Group batch;
-        batch.batch = true;
-        for (Candidate& c : candidates) {
-            if (c.alone) {
-                Group g;
-                g.trees.push_back(std::move(c));
-                planned.push_back(std::move(g));
-                continue;
-            }
-            batch.trees.push_back(std::move(c));
-            if (batch.trees.size() == kBatchTrees) {
-                planned.push_back(std::move(batch));
-                batch = Group();
-                batch.batch = true;
-            }
-        }
-        if (!batch.trees.empty()) planned.push_back(std::move(batch));
-
-        size_t wanted = 0;
-        for (Group& g : planned) {
-            g.entry = takePoolEntry();
-            if (!g.entry) {
-                ++wanted;
-                continue;
-            }
-            if (!demote(g)) {
-                promote(g, g.entry->k.get());
-                forEachMember(g, [&](HostNodeState* st) { st->survivedPass = s.pass; });
-                continue;
-            }
-            groups.push_back(std::move(g));
-        }
-        if (wanted) {
-            s.poolTarget = std::min(kMaxPool, std::max(s.poolTarget, s.pool.size() + wanted) * 2);
-            s.pending = true;
-        }
-    } else if (!fresh) {
-        // Every one of them survived the last test; carry that forward. A
-        // pass that could not collect for any other reason leaves them fresh.
-        for (Candidate& c : candidates)
-            for (HostNodeState* st : c.members) st->survivedPass = s.pass;
+    // Three rounds: a batch that lives is split, its trees are tested alone,
+    // and what died in either is freed.
+    for (int round = 0; round < 3; ++round) {
+        processQueue(all);
+        flushBatch();
+        finishSlice();
+        if (s.groups.empty()) break;
+        collectForSweep();
+        checkGroups(true);
+        endPending(all);
     }
-
-    if (!groups.empty()) {
-        const auto c0 = std::chrono::steady_clock::now();
-        s.stats.lastDemoteMs = std::chrono::duration<double, std::milli>(c0 - d0).count();
-        ev::collectGarbage();
-        s.stats.lastCollectMs =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
-        s.sinceCollectMs = 0.0;
-        ++s.stats.collections;
-
-        Intrinsics* js = intrinsics();
-        const auto f0 = std::chrono::steady_clock::now();
-        s.stats.lastGroups = groups.size();
-        for (Group& g : groups) {
-            const Value w = g.entry->w.get();
-            ev::CallResult got = ev::call(js->deref.get(), w, {});
-            if (got.thrown || ev::isUndefined(got.value)) {
-                release(g);
-                ++s.stats.groupsDied;
-                s.stats.treesFreed += g.trees.size();
-            } else {
-                promote(g, got.value);
-                const uint32_t mark = g.batch && g.trees.size() > 1 ? kSuspect : s.pass;
-                forEachMember(g, [&](HostNodeState* st) { st->survivedPass = mark; });
-                if (mark == kSuspect) s.pending = true;
-                ++s.stats.groupsSurvived;
-            }
-        }
-        s.stats.lastFreeMs =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - f0).count();
-    }
-
+    processQueue(all);
+    flushBatch();
+    finishSlice();
     hostReapNodeStates();
-    topUpPool();
+    ++s.stats.passes;
     s.stats.lastPassMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     s.running = false;
 }
 
-}  // namespace
-
-void hostDomSweepFrame(double dtMs) {
-    // BRO_DOM_SWEEP=0 turns the passes off: the before half of a leak
-    // measurement, and the switch to reach for if a pass is ever suspected.
-    static const bool enabled = [] {
-        const char* v = std::getenv("BRO_DOM_SWEEP");
-        return !(v && v[0] == '0');
-    }();
-    if (!enabled) return;
-    SweepState& s = sweep();
-    ++s.frame;
-    const double dt = dtMs > 0.0 ? dtMs : 16.67;
-    s.sincePassMs += dt;
-    s.sinceCollectMs += dt;
-    hostReapNodeStates();
-    if (s.frame == 1) topUpPool();
-    const uint64_t allocs = dom::Document::nodeAllocations();
-    const bool due = (s.sincePassMs >= kPassIntervalMs && (allocs != s.lastAllocs || s.pending)) ||
-                     s.sincePassMs >= kSlowPassIntervalMs;
-    if (!due) return;
-    s.sincePassMs = 0.0;
-    s.lastAllocs = allocs;
-    runPass(true);
-}
-
-void hostDomSweepNow() {
-    SweepState& s = sweep();
-    s.sinceCollectMs = 1e9;
-    runPass(true);
-}
 
 DomSweepStats hostDomSweepStats() {
-    DomSweepStats out = sweep().stats;
+    SweepState& s = sweep();
+    DomSweepStats out = s.stats;
+    s.stats.maxPassMs = 0.0;
+    out.demotedTrees = s.demotedTrees;
+    out.groups = s.groups.size();
+    out.queued = s.queue.size() - s.head;
     for (dom::Document* doc : hostObservedDocuments()) out.nodes += doc->ownedNodeCount();
     out.processBytes = processPrivateBytes();
     return out;

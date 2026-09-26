@@ -129,6 +129,22 @@ public:
     // only way anything leaves this document once a script has detached it.
     void collectDetachedRoots(std::vector<Node*>& out) const;
 
+    // The incremental form of the same question, for a script host that asks
+    // it every frame and cannot afford to walk every node it owns. Once
+    // tracking is on, every node this document allocates and every node that
+    // loses its parent is queued; the host takes the queue and filters it with
+    // isDetachedRoot. A queued pointer may since have been freed or adopted,
+    // so the host checks ownsNode before touching one. Off by default, since
+    // nothing would ever drain the queue.
+    void setDetachTracking(bool on) { trackDetached_ = on; if (!on) detachCandidates_.clear(); }
+    bool detachTracking() const { return trackDetached_; }
+    void noteDetachCandidate(Node* n) { if (trackDetached_) detachCandidates_.push_back(n); }
+    void takeDetachCandidates(std::vector<Node*>& out) { out.swap(detachCandidates_); detachCandidates_.clear(); }
+    // A parentless node nothing in the document points at: not the root, not a
+    // <template>'s content, not a shadow root. Only for a node ownsNode says
+    // is alive.
+    bool isDetachedRoot(const Node* n) const;
+
     // Free a detached tree whole: its nodes, and the template contents and
     // shadow roots its elements own, which freeNode alone would strand as
     // parentless nodes nothing points at any more. A no-op for a node with a
@@ -633,8 +649,12 @@ private:
         raw->setDocument(this);
         ownedNodes_[raw] = std::move(ptr);
         ++s_nodeAllocations;
+        if (trackDetached_) detachCandidates_.push_back(raw);
         return raw;
     }
+
+    bool trackDetached_ = false;
+    std::vector<Node*> detachCandidates_;
 
     static inline uint64_t s_nodeAllocations = 0;
 

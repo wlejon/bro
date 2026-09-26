@@ -579,6 +579,9 @@ dom::ListenerOptions readOptions(Value optV) {
 void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
                         dom::Event& evt, const char* origin,
                         dom::Document* docOverride) {
+    // A listener on a demoted tree has its function in the sweep's group;
+    // the group comes back before `fn` is read.
+    if (evt.currentTarget()) hostSweepTouchNode(evt.currentTarget());
     dom::Document* targetDoc = docOverride;
     if (!targetDoc) {
         if (evt.target()) targetDoc = evt.target()->document();
@@ -721,7 +724,9 @@ void installElementEventTarget(ObjectBuilder& b, ElementSource source,
             type,
             [ref, origin, el, type, isOnce, key](dom::Event& evt) {
                 // Rooted here: the once-removal below may drop the last
-                // registration that shares this ListenerRef's roots.
+                // registration that shares this ListenerRef's roots. The
+                // element's demoted group, if any, comes back first.
+                hostSweepTouchNode(el);
                 ev::Persistent fn(ref->fn.get());
                 ev::Persistent self(ref->self.get());
                 if (isOnce) {

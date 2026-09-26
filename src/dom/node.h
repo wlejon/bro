@@ -30,7 +30,9 @@ public:
 
     Node* parentNode() const { return parent_; }
     Element* parentElement() const;
-    void setParent(Node* p) { parent_ = p; }
+    // Losing a parent queues the node with its document as a possible detached
+    // root (Document::noteDetachCandidate). document_nodes.cpp.
+    void setParent(Node* p);
 
     std::vector<Node*>& childNodes() { return children_; }
     const std::vector<Node*>& childNodes() const { return children_; }

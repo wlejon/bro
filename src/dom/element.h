@@ -489,9 +489,19 @@ public:
     // has not been materialized yet.
     Element* templateContent() const { return templateContent_; }
     void setTemplateContent(Element* frag) {
+        if (templateContent_ && templateContent_->templateHost_ == this)
+            templateContent_->templateHost_ = nullptr;
         templateContent_ = frag;
-        if (frag) frag->isTemplateContent_ = true;
+        if (frag) {
+            frag->isTemplateContent_ = true;
+            frag->templateHost_ = this;
+        }
     }
+    // The <template> whose content this is, while it is. A clone of a
+    // template's content carries isTemplateContent (it reads as a fragment)
+    // but no host: nothing points at it, and it is an ordinary detached tree.
+    // Document::freeNode clears the link when the template goes.
+    Element* templateHost() const { return templateHost_; }
 
     // True on the fragment side of the link above. The orphan sweep frees any
     // parentless, childless #DOCUMENT-FRAGMENT it finds a wrapper for; a
@@ -541,6 +551,7 @@ private:
     std::unique_ptr<NativeListenerList> nativeListeners_;
     ShadowRoot* shadowRoot_ = nullptr;
     Element* templateContent_ = nullptr;
+    Element* templateHost_ = nullptr;
     // Namespace::Other only; heap so the common element pays 8 bytes.
     std::unique_ptr<std::string> otherNs_;
     // Only when it differs from the lower-cased tag (a camelCase SVG name, a

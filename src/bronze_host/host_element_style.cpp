@@ -309,6 +309,7 @@ Value hostComputedStyleFor(Value elValue) {
         if (candidate && candidate->tag == kHostElementTag && candidate->el)
             st = candidate;
     }
+    hostSweepTouch(st);
     if (!st) {
         // getComputedStyle(somethingElse). The web throws; bro's own bindings
         // answer an object whose every property is the empty string, and the

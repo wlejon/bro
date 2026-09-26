@@ -12,6 +12,7 @@ HostTelemetry getHostTelemetry() {
     tel.heapReservedBytes = bz.heapReservedBytes;
     tel.gcCollections = bz.gcCollections;
     tel.gcPauseNs = bz.gcPauseNs;
+    tel.gcFullCollections = bz.gcFullCollections;
     tel.shapeTransitions = bz.shapeTransitions;
     return tel;
 }

@@ -183,7 +183,7 @@ void Node::removeChild(Node* child) {
         Node* prev = it == children_.begin() ? nullptr : *(it - 1);
         Node* next = (it + 1) == children_.end() ? nullptr : *(it + 1);
         notifyChildListMutation(this, nullptr, child, prev, next);
-        (*it)->parent_ = nullptr;
+        (*it)->setParent(nullptr);
         children_.erase(it);
         notifyChildListChanged(this);
     }

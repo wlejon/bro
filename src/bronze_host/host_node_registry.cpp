@@ -12,6 +12,7 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 
+#include <chrono>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -93,7 +94,14 @@ HostNodeState* stateFor(dom::Node* node) {
     if (!node) return nullptr;
     Registry& r = registry();
     auto it = r.live.find(node);
-    if (it != r.live.end()) return it->second;
+    if (it != r.live.end()) {
+        HostNodeState* st = it->second;
+        if (!st->sweepGroup) return st;
+        // Demoted: bring the group back first, and ask again, since a group
+        // found dead leaves this node without an entry.
+        hostSweepTouch(st);
+        return stateFor(node);
+    }
     if (dom::Document* doc = node->document()) {
         if (r.observed.insert(doc).second)
             doc->addNodeFreedObserver(&onNodeFreed);
@@ -170,12 +178,21 @@ ev::HandleDestructor stateHandleDtor(HostNodeState* st) {
     return &releaseNodeStateRef;
 }
 
-void hostReapNodeStates() {
+void hostReapNodeStates(double budgetMs) {
     Registry& r = registry();
     if (r.reapQueue.empty()) return;
     std::vector<HostNodeState*> queue;
     queue.swap(r.reapQueue);
-    for (HostNodeState* st : queue) {
+    const auto end = std::chrono::steady_clock::now() +
+                     std::chrono::microseconds(static_cast<int64_t>(budgetMs * 1000.0));
+    for (size_t i = 0; i < queue.size(); ++i) {
+        // Out of time: the rest wait for the next call, in order.
+        if (budgetMs >= 0.0 && (i & 63) == 63 && std::chrono::steady_clock::now() >= end) {
+            r.reapQueue.insert(r.reapQueue.end(), queue.begin() + static_cast<std::ptrdiff_t>(i),
+                               queue.end());
+            break;
+        }
+        HostNodeState* st = queue[i];
         auto it = r.entries.find(st);
         if (it == r.entries.end()) continue;
         if (st->node || st->jsRefs != 0 || st->pinned) continue;
