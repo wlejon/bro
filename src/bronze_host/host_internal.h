@@ -181,13 +181,13 @@ struct PostMessageTarget {
     ev::Persistent transfer;
     bool deliver = true;
 };
-// False with `thrown` set to a pending SyntaxError for a bad targetOrigin.
-bool parsePostMessageArgs(std::span<const Value> args, const char* what,
-                          bool legacyTransferArray, PostMessageTarget& out, Value& thrown);
+// Throws a SyntaxError DOMException for a bad targetOrigin.
+void parsePostMessageArgs(std::span<const Value> args, const char* what,
+                          bool legacyTransferArray, PostMessageTarget& out);
 // structuredClone `message` with `transfer`; the MessagePorts in the list come
-// back as `portsOut` (an array). False with `thrown` pending on a clone error.
-bool cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& transfer,
-                         ev::Persistent& dataOut, ev::Persistent& portsOut, Value& thrown);
+// back as `portsOut` (an array). A clone error is thrown on to the caller.
+void cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& transfer,
+                         ev::Persistent& dataOut, ev::Persistent& portsOut);
 // Deliver a `message` MessageEvent at one window: the realm `scopeId` (0 =
 // main; a window host id; an iframe document's scope) whose document is
 // `doc` (ignored for 0). `onmessage` first, then that document's window

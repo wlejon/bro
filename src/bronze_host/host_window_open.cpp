@@ -83,13 +83,10 @@ static Value openerProxyFor(uint64_t hostId) {
         }
         ev::Persistent message(a[0]);
         PostMessageTarget target;
-        Value thrown = ev::undefined();
-        if (!parsePostMessageArgs(a, "Window.postMessage", false, target, thrown)) return thrown;
+        parsePostMessageArgs(a, "Window.postMessage", false, target);
         WindowMessage m;
         m.hostId = hostId;
-        if (!cloneForPostMessage(message, target.transfer, m.data, m.ports, thrown)) {
-            return thrown;
-        }
+        cloneForPostMessage(message, target.transfer, m.data, m.ports);
         if (target.deliver) s_openerInbox.push_back(std::move(m));
         return ev::undefined();
     });
@@ -290,13 +287,10 @@ static Value makeWindowHandle(std::shared_ptr<WindowHandleState> state) {
         }
         ev::Persistent message(a[0]);
         PostMessageTarget target;
-        Value thrown = ev::undefined();
-        if (!parsePostMessageArgs(a, "Window.postMessage", true, target, thrown)) return thrown;
+        parsePostMessageArgs(a, "Window.postMessage", true, target);
         WindowMessage m;
         m.hostId = id;
-        if (!cloneForPostMessage(message, target.transfer, m.data, m.ports, thrown)) {
-            return thrown;
-        }
+        cloneForPostMessage(message, target.transfer, m.data, m.ports);
         if (!target.deliver) return ev::undefined();
         auto it = s_handleStates.find(id);
         if (it != s_handleStates.end() && !it->second->closed && it->second->engine) {
@@ -570,8 +564,13 @@ void drainHostWindowMessages() {
         s_parentInbox.clear();
 
         for (auto& pm : batch) {
-            Value data = deserializeMessage(pm.msg);
-            windowHostNotifyMessage(pm.hostId, data);
+            ev::CallResult data = ev::catchThrow([&] { return deserializeMessage(pm.msg); });
+            if (data.thrown) {
+                LOG_WARN("window: dropping a message that does not deserialize: %s",
+                         thrownValueText(data.value).c_str());
+                continue;
+            }
+            windowHostNotifyMessage(pm.hostId, data.value);
         }
     }
 }

@@ -126,17 +126,13 @@ Value windowPostMessage(Value, std::span<const Value> a) {
     ev::Persistent message(a[0]);
 
     PostMessageTarget target;
-    Value thrown = ev::undefined();
-    if (!parsePostMessageArgs(a, "Window.postMessage", /*legacyTransferArray=*/false, target,
-                              thrown)) {
-        return thrown;
-    }
+    parsePostMessageArgs(a, "Window.postMessage", /*legacyTransferArray=*/false, target);
 
     // Clone NOW, at the call: the receiver must see the value as it was, and
     // an uncloneable value is the caller's DataCloneError, not a listener's.
     ev::Persistent data(ev::undefined());
     ev::Persistent ports(ev::undefined());
-    if (!cloneForPostMessage(message, target.transfer, data, ports, thrown)) return thrown;
+    cloneForPostMessage(message, target.transfer, data, ports);
     if (!target.deliver) return ev::undefined();
 
     // The window that posted is the window that receives: its realm and its
@@ -153,8 +149,8 @@ Value windowPostMessage(Value, std::span<const Value> a) {
 
 }  // namespace
 
-bool parsePostMessageArgs(std::span<const Value> a, const char* what, bool legacyTransferArray,
-                          PostMessageTarget& out, Value& thrown) {
+void parsePostMessageArgs(std::span<const Value> a, const char* what, bool legacyTransferArray,
+                          PostMessageTarget& out) {
     out.targetOrigin = "/";
     out.transfer.set(ev::undefined());
     out.deliver = true;
@@ -176,22 +172,19 @@ bool parsePostMessageArgs(std::span<const Value> a, const char* what, bool legac
     if (out.targetOrigin != "*" && out.targetOrigin != "/") {
         const std::string origin = originOf(out.targetOrigin);
         if (origin.empty()) {
-            thrown = ev::throwValue(hostMakeDomError(
+            ev::throwValue(hostMakeDomError(
                 "SyntaxError",
                 std::string(what) + ": '" + out.targetOrigin + "' is not a valid origin"));
-            return false;
         }
         out.deliver = origin == kHostPageOrigin;
     }
-    return true;
 }
 
-bool cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& transfer,
-                         ev::Persistent& dataOut, ev::Persistent& portsOut, Value& thrown) {
+void cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& transfer,
+                         ev::Persistent& dataOut, ev::Persistent& portsOut) {
     ev::GlobalValue sc = ev::globalValue("structuredClone");
     if (!sc.found || !ev::isFunction(sc.value)) {
-        thrown = ev::throwError("postMessage: structuredClone is not installed");
-        return false;
+        ev::throwError("postMessage: structuredClone is not installed");
     }
     ev::Persistent scP(sc.value);
     ev::Persistent cloneOpts(ev::undefined());
@@ -231,12 +224,8 @@ bool cloneForPostMessage(const ev::Persistent& message, const ev::Persistent& tr
     ev::CallResult cloned = ev::call(
         scP.get(), ev::undefined(),
         std::span<const Value>(cargs, ev::isUndefined(cloneOpts.get()) ? 1 : 2));
-    if (cloned.thrown) {
-        thrown = ev::throwValue(cloned.value);
-        return false;
-    }
+    if (cloned.thrown) ev::throwValue(cloned.value);
     dataOut.set(cloned.value);
-    return true;
 }
 
 void deliverWindowMessageEvent(uint64_t scopeId, dom::Document* doc, const ev::Persistent& data,

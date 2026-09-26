@@ -128,12 +128,6 @@ else()
     # don't trip narrowing-conversion errors on platforms where `char` is
     # signed (Apple clang).
     add_compile_options(-funsigned-char)
-    # A collection started from C++ finds compiled JS frames' tagged roots by
-    # walking the frame-pointer chain from the allocation back through every
-    # frame in between (bronze il2mir.md). Host code that JS calls and that
-    # allocates JS values (bro's natives, the sibling _api libraries, the
-    # engine) sits in that chain, so it must keep its frame pointer.
-    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fno-omit-frame-pointer>)
 endif()
 
 # ─── Modular build: profiles + feature flags ────────────────────────────────

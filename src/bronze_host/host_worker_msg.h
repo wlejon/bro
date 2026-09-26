@@ -43,6 +43,9 @@ struct Message {
 // (collectTransferList), because each element read can move the earlier ones,
 // and read them out (currentValues) only in the statement before the call.
 bool serializeMessage(Value val, std::span<const Value> transfers, Message& out);
+// The reader. Malformed data throws a TypeError into the program; a caller
+// outside any call from JS (an event-loop drain) catches it with
+// ev::catchThrow.
 Value deserializeMessage(const Message& msg, size_t offset = 0);
 
 // The transfer list of a postMessage call — `args[index]`, an array-like —

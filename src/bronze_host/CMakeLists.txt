@@ -356,8 +356,8 @@ endfunction()
 # bronze::runtime_shared and NOT bronze::embed + bronze::runtime, which is the
 # one link mistake this layer cannot survive: the static archives carry their
 # own copy of state bronze documents as "process-wide, owned by ONE translation
-# unit" (runtime/rt_state.h), so a process holding both has two heaps, two
-# exception cells and two key registries. A value the loaded module allocated
+# unit" (runtime/rt_state.h), so a process holding both has two heaps and two
+# key registries. A value the loaded module allocated
 # would be an address in a semispace bro's collector is free to reuse. embed is
 # INSIDE the shared image — the host↔runtime boundary is a C++ one no export
 # list could carry — so this one target supplies both halves.

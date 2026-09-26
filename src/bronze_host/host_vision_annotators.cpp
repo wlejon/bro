@@ -61,28 +61,22 @@ struct AnnotatorInput {
 };
 
 // The sibling's refusals, in its order and words (native_vision_annotators.cpp):
-// no weights, no image, an image that does not decode. Returns false with
-// `thrown` holding the pending exception to return; there is no placeholder
-// answer.
+// no weights, no image, an image that does not decode. Each one throws; there
+// is no placeholder answer.
 template <typename WrapperT, typename DetectorPtrT>
-bool fillAnnotatorInput(AnnotatorInput<WrapperT>& in, WrapperT* w, std::span<const Value> args,
-                        DetectorPtrT WrapperT::*detector, const char* name, Value& thrown) {
+void fillAnnotatorInput(AnnotatorInput<WrapperT>& in, WrapperT* w, std::span<const Value> args,
+                        DetectorPtrT WrapperT::*detector, const char* name) {
     in.w = w;
     if (!w->loaded || (w->*detector) == nullptr) {
-        thrown = ev::throwError(std::string(name) +
-                                ": detector is uninitialized or model weights not loaded");
-        return false;
+        ev::throwError(std::string(name) + ": detector is uninitialized or model weights not loaded");
     }
     if (args.empty()) {
-        thrown = ev::throwTypeError(std::string(name) + ".detect: image argument required");
-        return false;
+        ev::throwTypeError(std::string(name) + ".detect: image argument required");
     }
     std::string err;
     if (!bvm::readImageInput(args[0], in.rgba, in.inW, in.inH, err)) {
-        thrown = ev::throwTypeError(std::string(name) + ".detect: " + err);
-        return false;
+        ev::throwTypeError(std::string(name) + ".detect: " + err);
     }
-    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,10 +95,7 @@ Value hedDetect(Value thisIn, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("SoftEdgeDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<HedJob>();
-    Value thrown;
-    if (!fillAnnotatorInput(*job, w, args, &bvm::HedWrapper::detector, "Hed", thrown)) {
-        return thrown;
-    }
+    fillAnnotatorInput(*job, w, args, &bvm::HedWrapper::detector, "Hed");
 
     BRO_VISION_BEGIN(w, "detect")
     ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
@@ -137,10 +128,7 @@ Value lineartDetect(Value thisIn, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("LineartDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<LineartJob>();
-    Value thrown;
-    if (!fillAnnotatorInput(*job, w, args, &bvm::LineartWrapper::detector, "Lineart", thrown)) {
-        return thrown;
-    }
+    fillAnnotatorInput(*job, w, args, &bvm::LineartWrapper::detector, "Lineart");
 
     BRO_VISION_BEGIN(w, "detect")
     ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
@@ -172,10 +160,7 @@ Value mlsdDetect(Value thisIn, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("MLSDdetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<MlsdJob>();
-    Value thrown;
-    if (!fillAnnotatorInput(*job, w, args, &bvm::MlsdWrapper::detector, "Mlsd", thrown)) {
-        return thrown;
-    }
+    fillAnnotatorInput(*job, w, args, &bvm::MlsdWrapper::detector, "Mlsd");
 
     BRO_VISION_BEGIN(w, "detect")
     ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
@@ -237,11 +222,7 @@ Value openposeDetect(Value thisIn, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("OpenposeDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<OpenposeJob>();
-    Value thrown;
-    if (!fillAnnotatorInput(*job, w, args, &bvm::OpenposeWrapper::detector, "Openpose",
-                            thrown)) {
-        return thrown;
-    }
+    fillAnnotatorInput(*job, w, args, &bvm::OpenposeWrapper::detector, "Openpose");
 
     BRO_VISION_BEGIN(w, "detect")
     ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());
@@ -308,11 +289,7 @@ Value segformerDetect(Value thisIn, std::span<const Value> args) {
     if (!w) return ev::throwTypeError("SegformerDetector.prototype.detect: not a detector");
 
     auto job = std::make_shared<SegformerJob>();
-    Value thrown;
-    if (!fillAnnotatorInput(*job, w, args, &bvm::SegformerWrapper::detector, "Segformer",
-                            thrown)) {
-        return thrown;
-    }
+    fillAnnotatorInput(*job, w, args, &bvm::SegformerWrapper::detector, "Segformer");
 
     BRO_VISION_BEGIN(w, "detect")
     ev::Persistent optsRoot(args.size() > 1 ? args[1] : ev::undefined());

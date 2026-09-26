@@ -505,7 +505,6 @@ static Value readValue(Reader& r, const Message& msg, ObjectRoots& objs, int dep
 static Value readViewBuffer(Reader& r, const Message& msg, ObjectRoots& objs, int depth) {
     if (!r.ok(1)) return ev::throwTypeError("postMessage: truncated view buffer");
     Value ab = readValue(r, msg, objs, depth + 1);
-    if (bronze_exception_pending()) return ab;
     if (!ev::isArrayBuffer(ab)) return ev::throwTypeError("postMessage: view over a non-buffer");
     return ab;
 }
@@ -523,7 +522,7 @@ static Value readValue(Reader& r, const Message& msg, ObjectRoots& objs, int dep
     const size_t slot = objs.size();
     objs.emplace_back(ev::undefined());
     Value v = readTagged(tag, r, msg, objs, slot, depth);
-    if (!bronze_exception_pending()) objs[slot].set(v);   // no allocation
+    objs[slot].set(v);   // no allocation
     return v;
 }
 
@@ -609,7 +608,6 @@ static Value readTagged(uint8_t tag, Reader& r, const Message& msg,
         uint32_t offset = r.u32();
         uint32_t viewBytes = r.u32();
         Value ab = readViewBuffer(r, msg, objs,depth);
-        if (bronze_exception_pending()) return ab;
         uint32_t bpe = 1;
         switch (subtype) {
             case 3: // Int16
@@ -657,11 +655,9 @@ static Value readTagged(uint8_t tag, Reader& r, const Message& msg,
         ev::Persistent adder(ev::getProperty(coll.get(), isMap ? "set" : "add"));
         for (uint32_t i = 0; i < len; ++i) {
             Value aVal = readValue(r, msg, objs,depth + 1);
-            if (bronze_exception_pending()) return aVal;
             ev::Persistent a(aVal);
             if (isMap) {
                 Value bVal = readValue(r, msg, objs,depth + 1);
-                if (bronze_exception_pending()) return bVal;
                 ev::Persistent b(bVal);
                 const Value args[2] = { a.get(), b.get() };
                 auto res = ev::call(adder.get(), coll.get(), std::span<const Value>(args, 2));
@@ -705,7 +701,6 @@ static Value readTagged(uint8_t tag, Reader& r, const Message& msg,
         uint32_t off = r.u32();
         uint32_t viewBytes = r.u32();
         Value abVal = readViewBuffer(r, msg, objs,depth);
-        if (bronze_exception_pending()) return abVal;
         ev::Persistent ab(abVal);
         Value ctor = getGlobal("DataView");
         const Value args[3] = { ab.get(), ev::fromDouble(off), ev::fromDouble(viewBytes) };
@@ -720,7 +715,6 @@ static Value readTagged(uint8_t tag, Reader& r, const Message& msg,
         objs[slot].set(arr.get());
         for (uint32_t i = 0; i < len; ++i) {
             Value elemVal = readValue(r, msg, objs,depth + 1);
-            if (bronze_exception_pending()) return elemVal;
             ev::Persistent elem(elemVal);
             arr.set(ev::setElement(arr.get(), i, elem.get()));
         }
@@ -735,7 +729,6 @@ static Value readTagged(uint8_t tag, Reader& r, const Message& msg,
             std::string key;
             if (!readStr(r, key)) return ev::throwTypeError("postMessage: truncated key");
             Value propValRaw = readValue(r, msg, objs,depth + 1);
-            if (bronze_exception_pending()) return propValRaw;
             ev::Persistent propVal(propValRaw);
             obj.set(ev::setProperty(obj.get(), key, propVal.get()));
         }

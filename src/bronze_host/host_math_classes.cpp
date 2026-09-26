@@ -48,15 +48,13 @@ static Value spatialHashCtor(Value, std::span<const Value> a) {
 // An entry id: a number whose integer part fits int32. A NaN, an infinity or
 // anything outside that range would otherwise wrap (or be undefined
 // behaviour in the cast) and alias some other entry, so it is a RangeError.
-static bool spatialHashId(Value v, const char* method, int32_t& out, Value& error) {
+static int32_t spatialHashId(Value v, const char* method) {
     const double d = ev::toDouble(v);
     if (!(d > -2147483649.0 && d < 2147483648.0)) {
-        error = ev::throwRangeError(std::string("SpatialHash3D.") + method +
-                                    ": id must be a number in the int32 range");
-        return false;
+        ev::throwRangeError(std::string("SpatialHash3D.") + method +
+                            ": id must be a number in the int32 range");
     }
-    out = static_cast<int32_t>(d);
-    return true;
+    return static_cast<int32_t>(d);
 }
 
 static void decorateSpatialHashProto(ObjectBuilder& proto) {
@@ -97,10 +95,7 @@ static void decorateSpatialHashProto(ObjectBuilder& proto) {
             float x = static_cast<float>(ev::toDouble(a[0]));
             float y = static_cast<float>(ev::toDouble(a[1]));
             float z = static_cast<float>(ev::toDouble(a[2]));
-            int32_t id = 0;
-            Value err;
-            if (!spatialHashId(a[3], "insert", id, err)) return err;
-            h->sh.insert({x, y, z}, id);
+            h->sh.insert({x, y, z}, spatialHashId(a[3], "insert"));
         }
         return thisVal;
     });
@@ -113,10 +108,7 @@ static void decorateSpatialHashProto(ObjectBuilder& proto) {
             float y = static_cast<float>(ev::toDouble(a[1]));
             float z = static_cast<float>(ev::toDouble(a[2]));
             float r = static_cast<float>(ev::toDouble(a[3]));
-            int32_t id = 0;
-            Value err;
-            if (!spatialHashId(a[4], "insertSphere", id, err)) return err;
-            h->sh.insert(bromath::Sphere{{x, y, z}, r}, id);
+            h->sh.insert(bromath::Sphere{{x, y, z}, r}, spatialHashId(a[4], "insertSphere"));
         }
         return thisVal;
     });
@@ -125,10 +117,7 @@ static void decorateSpatialHashProto(ObjectBuilder& proto) {
         auto* h = getSpatialHash(thisVal);
         if (!h) return ev::throwTypeError("SpatialHash3D.remove: invalid this");
         if (!a.empty()) {
-            int32_t id = 0;
-            Value err;
-            if (!spatialHashId(a[0], "remove", id, err)) return err;
-            h->sh.remove(id);
+            h->sh.remove(spatialHashId(a[0], "remove"));
         }
         return thisVal;
     });

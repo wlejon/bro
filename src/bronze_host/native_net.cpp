@@ -113,13 +113,13 @@ net::NetSubscriber* getNetSubscriber() {
                 if (msg.data[1] == kWireClone) {
                     Message m;
                     m.data.assign(msg.data.begin() + kWireHeaderSize, msg.data.end());
-                    payloadVal = deserializeMessage(m);
-                    if (bronze_exception_pending()) {
-                        bronze_exception_take();
+                    ev::CallResult data = ev::catchThrow([&] { return deserializeMessage(m); });
+                    if (data.thrown) {
                         LOG_WARN("[net] conn %u: dropping malformed clone message (%zu bytes)",
                                  msg.connection, msg.data.size());
                         return;
                     }
+                    payloadVal = data.value;
                 } else {
                     // A raw payload arrives as an ArrayBuffer: it is what
                     // distinguishes it from a clone (`data instanceof

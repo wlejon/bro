@@ -138,7 +138,13 @@ public:
                     ev::call(lfn.get(), ev::undefined(), std::span<const Value>(&event, 1));
                 }
             } else {
-                ev::Persistent dataRoot(deserializeMessage(*msg));
+                ev::CallResult data = ev::catchThrow([&] { return deserializeMessage(*msg); });
+                if (data.thrown) {
+                    LOG_ERROR("[bronze:worker] dropping a message that does not deserialize: %s",
+                              thrownValueText(data.value).c_str());
+                    continue;
+                }
+                ev::Persistent dataRoot(data.value);
                 ev::Persistent evt(makeMessageEvent(dataRoot));
 
                 if (ev::isFunction(onmessage_.get())) {
@@ -613,7 +619,13 @@ void WorkerInstance::threadFunc() {
         }
 
         for (auto& msg : batch) {
-            ev::Persistent dataRoot(deserializeMessage(*msg));
+            ev::CallResult data = ev::catchThrow([&] { return deserializeMessage(*msg); });
+            if (data.thrown) {
+                LOG_ERROR("[bronze:worker] dropping a message that does not deserialize: %s",
+                          thrownValueText(data.value).c_str());
+                continue;
+            }
+            ev::Persistent dataRoot(data.value);
             ev::Persistent evObjRoot(makeMessageEvent(dataRoot));
 
             Value cb = workerOnmessage.get();
