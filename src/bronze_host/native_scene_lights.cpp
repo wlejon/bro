@@ -401,6 +401,8 @@ void bro_scene_SceneNode_pause(void* self) {
     if (n->type() == scene::SceneNode::Type::Mesh) {
         auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
         if (sm && sm->player()) sm->player()->pause();
+    } else if (n->type() == scene::SceneNode::Type::Particles3D) {
+        static_cast<scene::Particles3DNode*>(n)->setPaused(true);
     }
 }
 
@@ -410,6 +412,8 @@ void bro_scene_SceneNode_resume(void* self) {
     if (n->type() == scene::SceneNode::Type::Mesh) {
         auto* sm = static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
         if (sm && sm->player()) sm->player()->resume();
+    } else if (n->type() == scene::SceneNode::Type::Particles3D) {
+        static_cast<scene::Particles3DNode*>(n)->setPaused(false);
     }
 }
 

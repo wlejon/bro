@@ -349,5 +349,41 @@ if (!probe.scene) {
         document.body.removeChild(s.canvas);
     }
 
+    // ------------------------------------------------------------------
+    // emit(): per-call position, size and tint on a pooled system; paused
+    // freezes ages until resumed
+    // ------------------------------------------------------------------
+    {
+        const s = freshScene(SIZE);
+        const em = s.scene.createParticles3D({
+            seed: 5, rate: 0, maxParticles: 200, lifetime: 0.4,
+            velocity: { speed: 0 }, blend: 'additive',
+            size: { start: 0.3, end: 0.3 },
+            color: { start: '#ffffff', end: '#ffffff' },
+        });
+        em.emit({ count: 20, position: [-1.2, 0, 0], speed: 0, sizeScale: 1, tint: [1, 0, 0, 1] });
+        em.emit(new Float64Array([20, 1.2, 0, 0, 0, 1, 0, 0, 0, 0, 3, 1, 0, 0, 1, 1]));
+        assert(em.particleCount === 40, `emit adds immediately (${em.particleCount})`);
+        advanceTime(33);
+        const img = s.scene.captureFrame();
+        const half = SIZE / 2;
+        const left = channelSums({ data: img.data.filter((_, i) => ((i >> 2) % SIZE) < half) });
+        const right = channelSums({ data: img.data.filter((_, i) => ((i >> 2) % SIZE) >= half) });
+        assert(left.r > left.b * 4, `left burst tinted red (${JSON.stringify(left)})`);
+        assert(right.b > right.r * 4, `right burst tinted blue (${JSON.stringify(right)})`);
+        assert(right.b > left.r * 2, `sizeScale 3 covers more pixels (${right.b} vs ${left.r})`);
+        em.paused = true;
+        assert(em.paused === true, 'paused reads back');
+        advanceTime(800);
+        assert(em.particleCount === 40, `paused particles hold (${em.particleCount})`);
+        em.paused = false;
+        advanceTime(800);
+        assert(em.particleCount === 0, `resumed particles expire (${em.particleCount})`);
+        em.emit({ count: 5, position: [0, 0, 0], speed: 0, lifeScale: 4 });
+        advanceTime(800);
+        assert(em.particleCount === 5, `lifeScale stretches the lifetime (${em.particleCount})`);
+        document.body.removeChild(s.canvas);
+    }
+
     console.log('particles3d tests passed');
 }

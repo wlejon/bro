@@ -126,6 +126,10 @@ void Particles3DNode::burst(int n) {
     for (int i = 0; i < n; ++i) emitOne();
 }
 
+void Particles3DNode::emit(int n, const EmitOverride& o) {
+    for (int i = 0; i < n; ++i) emitOne(&o);
+}
+
 void Particles3DNode::sampleEmitter(Vec3& outPos, Vec3& outDir) {
     switch (shape_) {
     case EmitterShape::Point:
@@ -166,7 +170,7 @@ void Particles3DNode::sampleEmitter(Vec3& outPos, Vec3& outDir) {
     }
 }
 
-void Particles3DNode::emitOne() {
+void Particles3DNode::emitOne(const EmitOverride* o) {
     if (liveCount_ >= static_cast<int>(particles_.size())) return;
 
     int n = static_cast<int>(particles_.size());
@@ -179,13 +183,28 @@ void Particles3DNode::emitOne() {
     searchHead_ = (slot + 1) % n;
 
     Vec3 pos, dir;
-    sampleEmitter(pos, dir);
-    float speed = randSpread(rng_, speed_, speedSpread_);
-
-    if (space_ == SimSpace::World) {
-        const auto& wm = worldMatrix();
-        pos = transformPoint(wm, pos);
-        dir = rotateByMatrix(wm, dir);
+    float speed;
+    if (o) {
+        // Sample the shape with the override's cone in place of the
+        // configured one, then place it at the override position.
+        const Vec3 keepDir = direction_;
+        const float keepSpread = spreadDeg_;
+        float len = bromath::vlen(o->direction);
+        direction_ = len > 1e-8f ? o->direction * (1.0f / len) : Vec3{0.0f, 1.0f, 0.0f};
+        spreadDeg_ = o->spreadDeg;
+        sampleEmitter(pos, dir);
+        direction_ = keepDir;
+        spreadDeg_ = keepSpread;
+        pos = pos + o->position;
+        speed = randSpread(rng_, o->speed, o->speedSpread);
+    } else {
+        sampleEmitter(pos, dir);
+        speed = randSpread(rng_, speed_, speedSpread_);
+        if (space_ == SimSpace::World) {
+            const auto& wm = worldMatrix();
+            pos = transformPoint(wm, pos);
+            dir = rotateByMatrix(wm, dir);
+        }
     }
 
     Particle& p = particles_[slot];
@@ -194,7 +213,12 @@ void Particles3DNode::emitOne() {
     p.vel = dir * speed;
     p.maxLife = lifeMin_;
     if (lifeMax_ > lifeMin_) p.maxLife += (lifeMax_ - lifeMin_) * bromath::randFloat01(rng_);
+    if (o) p.maxLife *= o->lifeScale;
     if (p.maxLife < 1e-4f) p.maxLife = 1e-4f;
+    p.sizeScale = o ? o->sizeScale : 1.0f;
+    p.tint = o ? o->tint : Color{1.0f, 1.0f, 1.0f, 1.0f};
+    if (liveCount_ == 0) maxSizeScale_ = 1.0f;
+    if (p.sizeScale > maxSizeScale_) maxSizeScale_ = p.sizeScale;
     p.life = p.maxLife;
     p.rot = rotStartDeg_ * kPi / 180.0f;
     p.spin = randSpread(rng_, spinSpeedDeg_, spinSpreadDeg_) * kPi / 180.0f;
@@ -206,7 +230,7 @@ void Particles3DNode::emitOne() {
 }
 
 void Particles3DNode::onTick(float dtSec) {
-    if (dtSec <= 0.0f) return;
+    if (dtSec <= 0.0f || paused_) return;
 
     // Duration window: advance the emission clock, then emit by rate while
     // the window (or an endless system) is active.
@@ -268,7 +292,7 @@ void Particles3DNode::onTick(float dtSec) {
 
 bool Particles3DNode::worldBounds(bromath::AABB3& out) const {
     if (!boundsValid_ || liveCount_ <= 0) return false;
-    float pad = 0.5f * std::max(std::fabs(sizeStart_), std::fabs(sizeEnd_));
+    float pad = 0.5f * maxSizeScale_ * std::max(std::fabs(sizeStart_), std::fabs(sizeEnd_));
     bromath::AABB3 b = bounds_;
     b.min = b.min - Vec3{pad, pad, pad};
     b.max = b.max + Vec3{pad, pad, pad};
@@ -316,7 +340,8 @@ GLuint Particles3DNode::ensureTextureGL() {
     }
     glGenTextures(1, &tex_);
     glBindTexture(GL_TEXTURE_2D, tex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.width, img.height, 0,
+    // sRGB storage: the sampler returns linear texels for the linear HDR pass.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, img.width, img.height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, img.pixels.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -364,14 +389,16 @@ bool Particles3DNode::drawInstanced(GLuint quadVbo, const Vec3& camFwd) {
         out[0] = p.pos.x;
         out[1] = p.pos.y;
         out[2] = p.pos.z;
-        out[3] = sizeStart_ + (sizeEnd_ - sizeStart_) * u;
-        // Linear-interpolated color, sRGB-encoded at the GL boundary — same
-        // convention as the billboard pass (see color8 in overlays).
+        out[3] = (sizeStart_ + (sizeEnd_ - sizeStart_) * u) * p.sizeScale;
+        // Linear color straight into the linear HDR target: this pass runs
+        // before tonemap, which applies the one sRGB encode. (Billboards
+        // encode because they draw after it.) The emit() tint multiplies so
+        // rgb > 1 reaches the HDR target unclamped.
         Color c = evalColor(u);
-        out[4] = bromath::clinearToSrgb(c.r);
-        out[5] = bromath::clinearToSrgb(c.g);
-        out[6] = bromath::clinearToSrgb(c.b);
-        out[7] = c.a;
+        out[4] = c.r * p.tint.r;
+        out[5] = c.g * p.tint.g;
+        out[6] = c.b * p.tint.b;
+        out[7] = c.a * p.tint.a;
         out[8] = p.rot;
         float f = u * static_cast<float>(frames);
         out[9] = f >= static_cast<float>(frames) ? static_cast<float>(frames - 1) : f;

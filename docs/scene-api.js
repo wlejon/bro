@@ -325,10 +325,44 @@ bro.impostor.createLayer = function(scene, atlas, transforms, opts) {};
  */
 
 /**
+ * A world-space 3D particle system: camera-facing quads, soft round points
+ * unless `texture` is set, drawn into the HDR pass so additive systems bloom.
+ * Beyond `burst(n)`, `clear()`, `play()`, `stop()`, `rate` and `liveCount`,
+ * the node takes:
+ *
+ *   emit({ count, position, direction, spread, speed, speedSpread,
+ *          sizeScale, lifeScale, tint })
+ *     spawns `count` particles with per-call overrides, so one pooled system
+ *     serves every one-shot effect of its kind. `position` is world space and
+ *     replaces the node transform; `direction`/`spread` (degrees, full width)
+ *     replace the launch cone; `sizeScale` and `lifeScale` multiply the size
+ *     curve and lifetime of these particles only; `tint` [r, g, b, a]
+ *     multiplies their colour over life, and rgb above 1 pushes additive
+ *     systems past the bloom threshold. A packed Float64Array of 16 numbers
+ *     (count, position xyz, direction xyz, spread, speed, speedSpread,
+ *     sizeScale, lifeScale, tint rgba) is accepted to skip the object.
+ *   paused (boolean): freezes the simulation, ages included; emit() and
+ *     burst() still add. `pause()` / `resume()` set it.
+ *
  * @typedef {Object} Particles3DNodeOptions
  * @property {number} [maxParticles]
- * @property {string} [mode]
- * @property {Mesh} [mesh]
+ * @property {number} [seed]
+ * @property {number} [rate] - particles per second while playing
+ * @property {number} [burst] - emitted once at creation
+ * @property {number|{min:number,max:number}} [lifetime]
+ * @property {number|{start:number,end:number}} [size] - world-space diameter over life
+ * @property {{start:(string|Array<number>), end:(string|Array<number>)}} [color]
+ * @property {'normal'|'additive'} [blend]
+ * @property {'world'|'local'} [space]
+ * @property {{direction?:Array<number>, spread?:number, speed?:number, speedSpread?:number}} [velocity]
+ * @property {Array<number>} [gravity]
+ * @property {number} [drag] - per-second velocity multiplier (1 = none)
+ * @property {{start?:number, spinSpeed?:number, spinSpread?:number}} [rotation]
+ * @property {{type?:'point'|'sphere'|'hemisphere'|'box'|'cone', radius?:number}} [shape]
+ * @property {number} [softness] - soft-particle depth fade in world units
+ * @property {number} [duration]
+ * @property {boolean} [loop]
+ * @property {boolean} [autoplay]
  * @property {Array<number>} [position]
  * @property {boolean} [visible]
  */

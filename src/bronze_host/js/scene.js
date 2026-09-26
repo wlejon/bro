@@ -420,6 +420,26 @@
     accessor(SceneNode.prototype, "rate", function () { return __bro_native.scene.SceneNode_particleRate_get(this); }, function (v) { __bro_native.scene.SceneNode_particleRate_set(this, +v); });
     accessor(SceneNode.prototype, "softness", function () { return __bro_native.scene.SceneNode_softness_get(this); }, function (v) { __bro_native.scene.SceneNode_softness_set(this, +v); });
     fn(SceneNode.prototype, "burst", function (n) { __bro_native.scene.SceneNode_burst(this, n | 0); return this; });
+    fn(SceneNode.prototype, "emit", function emit(opts) {
+        if (opts instanceof Float64Array) { __bro_native.scene.SceneNode_particleEmit(this, opts); return this; }
+        if (!opts || typeof opts !== 'object') throw new TypeError("emit expects an options object or a packed Float64Array");
+        const p = opts.position || [0, 0, 0];
+        const d = opts.direction || [0, 1, 0];
+        const t = opts.tint ? parseColor(opts.tint) : [1, 1, 1, 1];
+        const packed = new Float64Array(16);
+        packed[0] = opts.count === undefined ? 1 : opts.count;
+        packed[1] = +p[0]; packed[2] = +p[1]; packed[3] = +p[2];
+        packed[4] = +d[0]; packed[5] = +d[1]; packed[6] = +d[2];
+        packed[7] = +(opts.spread || 0);
+        packed[8] = opts.speed === undefined ? 1 : +opts.speed;
+        packed[9] = +(opts.speedSpread || 0);
+        packed[10] = opts.sizeScale === undefined ? 1 : +opts.sizeScale;
+        packed[11] = opts.lifeScale === undefined ? 1 : +opts.lifeScale;
+        packed[12] = +t[0]; packed[13] = +t[1]; packed[14] = +t[2]; packed[15] = t.length > 3 ? +t[3] : 1;
+        __bro_native.scene.SceneNode_particleEmit(this, packed);
+        return this;
+    });
+    accessor(SceneNode.prototype, "paused", function () { return __bro_native.scene.SceneNode_particlePaused_get(this); }, function (v) { if (v) __bro_native.scene.SceneNode_pause(this); else __bro_native.scene.SceneNode_resume(this); });
     fn(SceneNode.prototype, "clear", function () { __bro_native.scene.SceneNode_clear(this); return this; });
     accessor(SceneNode.prototype, "onFinished", function () { return this._onFinished; }, function (v) { this._onFinished = v; __bro_native.scene.SceneNode_onFinished_set(this, typeof v === 'function' ? v : 0); });
     accessor(SceneNode.prototype, "onAnimationEnd", function () { return this._onAnimationEnd; }, function (v) { this._onAnimationEnd = v; __bro_native.scene.SceneNode_onAnimationEnd_set(this, typeof v === 'function' ? v : 0); });

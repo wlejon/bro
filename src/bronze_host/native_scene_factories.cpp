@@ -34,7 +34,8 @@ bromath::Color particleColorFromJson(const nlohmann::json& v) {
             int r = std::stoi(s.substr(1, 2), nullptr, 16);
             int g = std::stoi(s.substr(3, 2), nullptr, 16);
             int b = std::stoi(s.substr(5, 2), nullptr, 16);
-            return {r / 255.0f, g / 255.0f, b / 255.0f, 1.0f};
+            return {bromath::csrgbToLinear(r / 255.0f), bromath::csrgbToLinear(g / 255.0f),
+                    bromath::csrgbToLinear(b / 255.0f), 1.0f};
         }
     }
     return {1.0f, 1.0f, 1.0f, 1.0f};

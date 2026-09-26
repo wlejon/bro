@@ -509,6 +509,33 @@ void bro_scene_SceneNode_particleRate_set(void* self, double r) {
         static_cast<scene::ParticleNode*>(n)->setRate(static_cast<float>(r));
     }
 }
+// Particles3D emit(): a packed override so a pooled system can spawn one
+// effect per call without JSON. Layout: count, position xyz, direction xyz,
+// spreadDeg, speed, speedSpread, sizeScale, lifeScale, tint rgba.
+void bro_scene_SceneNode_particleEmit(void* self, const double* d, uint32_t len) {
+    auto* n = nodeOf(self);
+    if (!n || n->type() != scene::SceneNode::Type::Particles3D || !d || len < 16) return;
+    scene::Particles3DNode::EmitOverride o;
+    const int count = static_cast<int>(d[0]);
+    o.position = {static_cast<float>(d[1]), static_cast<float>(d[2]), static_cast<float>(d[3])};
+    o.direction = {static_cast<float>(d[4]), static_cast<float>(d[5]), static_cast<float>(d[6])};
+    o.spreadDeg = static_cast<float>(d[7]);
+    o.speed = static_cast<float>(d[8]);
+    o.speedSpread = static_cast<float>(d[9]);
+    o.sizeScale = static_cast<float>(d[10]);
+    o.lifeScale = static_cast<float>(d[11]) > 0.0f ? static_cast<float>(d[11]) : 1.0f;
+    float a = static_cast<float>(d[15]);
+    o.tint = {static_cast<float>(d[12]), static_cast<float>(d[13]), static_cast<float>(d[14]),
+              a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a)};
+    if (count > 0) static_cast<scene::Particles3DNode*>(n)->emit(count, o);
+}
+bool bro_scene_SceneNode_particlePaused_get(void* self) {
+    auto* n = nodeOf(self);
+    if (n && n->type() == scene::SceneNode::Type::Particles3D) {
+        return static_cast<scene::Particles3DNode*>(n)->paused();
+    }
+    return false;
+}
 double bro_scene_SceneNode_softness_get(void* self) {
     auto* n = nodeOf(self);
     if (n && n->type() == scene::SceneNode::Type::Particles3D) {
@@ -564,6 +591,8 @@ bool registerSceneShaderNatives(std::string* error) {
            fn("__bro_native.scene.SceneNode_particlePlaying_get", (void*)&bro_scene_SceneNode_particlePlaying_get, "bool", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_particleRate_get", (void*)&bro_scene_SceneNode_particleRate_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_particleRate_set", (void*)&bro_scene_SceneNode_particleRate_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
+           fn("__bro_native.scene.SceneNode_particleEmit", (void*)&bro_scene_SceneNode_particleEmit, "void", {"__bro_native.scene.SceneNode", "f64[]"}, error) &&
+           fn("__bro_native.scene.SceneNode_particlePaused_get", (void*)&bro_scene_SceneNode_particlePaused_get, "bool", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_softness_get", (void*)&bro_scene_SceneNode_softness_get, "f64", {"__bro_native.scene.SceneNode"}, error) &&
            fn("__bro_native.scene.SceneNode_softness_set", (void*)&bro_scene_SceneNode_softness_set, "void", {"__bro_native.scene.SceneNode", "f64"}, error) &&
            fn("__bro_native.scene.SceneNode_onFinished_set", (void*)&bro_scene_SceneNode_onFinished_set, "void", {"__bro_native.scene.SceneNode", "dynamic"}, error);

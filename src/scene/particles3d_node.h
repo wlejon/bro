@@ -147,6 +147,33 @@ public:
     /// Emit `n` particles immediately, regardless of `rate`.
     void burst(int n);
 
+    /// Per-call overrides for emit(): one pooled system serves many
+    /// one-shot effects (every impact, muzzle puff or explosion of a kind)
+    /// without reconfiguring the shared emitter. `position` is in sim space
+    /// (world for World systems) and replaces the node transform; the
+    /// emitter shape is sampled around it unrotated. `direction` and
+    /// `spreadDeg` replace the launch cone; `speed`/`speedSpread` replace
+    /// the launch speed. `sizeScale` and `lifeScale` multiply the system's
+    /// size curve and lifetime for these particles only, and `tint`
+    /// multiplies their colour over life (rgb may exceed 1 to push additive
+    /// systems past the bloom threshold).
+    struct EmitOverride {
+        bromath::Vec3 position{0.0f, 0.0f, 0.0f};
+        bromath::Vec3 direction{0.0f, 1.0f, 0.0f};
+        float spreadDeg = 0.0f;
+        float speed = 1.0f;
+        float speedSpread = 0.0f;
+        float sizeScale = 1.0f;
+        float lifeScale = 1.0f;
+        bromath::Color tint{1.0f, 1.0f, 1.0f, 1.0f};
+    };
+    void emit(int n, const EmitOverride& o);
+
+    /// Freeze the simulation: particles hold their age, place and colour
+    /// and no rate emission happens until resumed. emit()/burst() still add.
+    void setPaused(bool p) { paused_ = p; }
+    bool paused() const { return paused_; }
+
     bool isPlaying() const { return playing_; }
     int  liveCount() const { return liveCount_; }
 
@@ -181,9 +208,11 @@ private:
         float maxLife = 0;
         float rot = 0;       // radians
         float spin = 0;      // radians/sec
+        float sizeScale = 1; // emit() override, 1 for plain emission
+        bromath::Color tint{1.0f, 1.0f, 1.0f, 1.0f};
     };
 
-    void emitOne();
+    void emitOne(const EmitOverride* o = nullptr);
     /// Sample a spawn position + launch direction in emitter-local space.
     void sampleEmitter(bromath::Vec3& outPos, bromath::Vec3& outDir);
     bromath::Color evalColor(float u) const;
@@ -230,6 +259,8 @@ private:
     bool loop_ = true;
     Blend blend_ = Blend::Normal;
     float softness_ = 0.0f;
+    bool paused_ = false;
+    float maxSizeScale_ = 1.0f; // largest live sizeScale, pads worldBounds
 
     std::function<void()> onFinished_;
 
