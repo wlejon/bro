@@ -14,6 +14,13 @@
 #ifdef __APPLE__
 #include <CoreText/CoreText.h>
 #include <include/ports/SkTypeface_mac.h>
+#else
+#include <include/core/SkCanvas.h>
+#include <include/core/SkPaint.h>
+#include <include/core/SkPixmap.h>
+#include <include/core/SkSurface.h>
+#include <mutex>
+#include <unordered_map>
 #endif
 
 #if BRO_WITH_TEXT_SHAPING
@@ -190,8 +197,80 @@ namespace {
 //     a 51 px box around a 48 px bitmap. CoreText's own glyph bounds are the
 //     rectangle it draws the bitmap into, fractional and unpadded, so ask it.
 //   - FreeType (CBDT/sbix) and DirectWrite (COLR/PNG) round the scaled bitmap
-//     or layer bounds out to whole pixels but add no pad, so the mask box is
-//     within a pixel of the ink and is used as is.
+//     or layer bounds out to whole pixels, and the layer bounds of a COLR
+//     glyph (Segoe UI Emoji) are not its ink either: at 64 px the mask box
+//     stands two pixels above the drawn emoji. Nothing cheaper answers the
+//     ink there, so the glyph is drawn once into a scratch mask and the lit
+//     pixels are its box, cached per face, glyph and size.
+#ifndef __APPLE__
+struct InkKey {
+    uint32_t face;
+    SkGlyphID glyph;
+    float size, scaleX, skewX;
+    bool operator==(const InkKey& o) const {
+        return face == o.face && glyph == o.glyph && size == o.size &&
+               scaleX == o.scaleX && skewX == o.skewX;
+    }
+};
+struct InkKeyHash {
+    size_t operator()(const InkKey& k) const {
+        size_t h = std::hash<uint32_t>()(k.face) * 31u + k.glyph;
+        h = h * 31u + std::hash<float>()(k.size);
+        h = h * 31u + std::hash<float>()(k.scaleX);
+        return h * 31u + std::hash<float>()(k.skewX);
+    }
+};
+
+SkRect rasterInkBounds(const SkFont& font, SkGlyphID glyph, const SkRect& mask) {
+    if (mask.isEmpty()) return mask;
+    const InkKey key{font.getTypeface() ? font.getTypeface()->uniqueID() : 0u, glyph,
+                     font.getSize(), font.getScaleX(), font.getSkewX()};
+    static std::mutex lock;
+    static std::unordered_map<InkKey, SkRect, InkKeyHash> cache;
+    {
+        std::lock_guard<std::mutex> g(lock);
+        auto it = cache.find(key);
+        if (it != cache.end()) return it->second;
+    }
+    constexpr int kPad = 2;
+    const int left = static_cast<int>(std::floor(mask.fLeft)) - kPad;
+    const int top = static_cast<int>(std::floor(mask.fTop)) - kPad;
+    const int w = static_cast<int>(std::ceil(mask.fRight)) + kPad - left;
+    const int h = static_cast<int>(std::ceil(mask.fBottom)) + kPad - top;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return mask;
+    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(w, h));
+    if (!surface) return mask;
+    SkCanvas* canvas = surface->getCanvas();
+    canvas->clear(SK_ColorTRANSPARENT);
+    SkPaint paint;
+    paint.setColor(SK_ColorBLACK);
+    canvas->drawSimpleText(&glyph, sizeof(glyph), SkTextEncoding::kGlyphID,
+                           static_cast<float>(-left), static_cast<float>(-top), font, paint);
+    SkPixmap px;
+    if (!surface->peekPixels(&px)) return mask;
+    int x0 = w, x1 = -1, y0 = h, y1 = -1;
+    for (int y = 0; y < h; ++y) {
+        const uint32_t* row = px.addr32(0, y);
+        for (int x = 0; x < w; ++x) {
+            if ((row[x] >> 24) == 0) continue;
+            x0 = std::min(x0, x);
+            x1 = std::max(x1, x);
+            y0 = std::min(y0, y);
+            y1 = std::max(y1, y);
+        }
+    }
+    const SkRect ink = x1 < 0 ? SkRect::MakeEmpty()
+                              : SkRect::MakeLTRB(static_cast<float>(x0 + left),
+                                                 static_cast<float>(y0 + top),
+                                                 static_cast<float>(x1 + 1 + left),
+                                                 static_cast<float>(y1 + 1 + top));
+    std::lock_guard<std::mutex> g(lock);
+    if (cache.size() >= 1024) cache.clear();
+    cache.emplace(key, ink);
+    return ink;
+}
+#endif
+
 SkRect bitmapGlyphBounds(const SkFont& font, SkGlyphID glyph) {
 #ifdef __APPLE__
     if (CTFontRef base = SkTypeface_GetCTFontRef(font.getTypeface())) {
@@ -216,8 +295,10 @@ SkRect bitmapGlyphBounds(const SkFont& font, SkGlyphID glyph) {
             }
         }
     }
-#endif
     return font.getBounds(glyph, nullptr);
+#else
+    return rasterInkBounds(font, glyph, font.getBounds(glyph, nullptr));
+#endif
 }
 
 } // namespace

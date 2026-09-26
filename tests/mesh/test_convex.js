@@ -1,12 +1,17 @@
 // Convex hull and convex decomposition.
 
-// Convex hull of a box is a box (8 verts)
+// Convex hull of a box is a box: 8 corners, 12 triangles. The hull is
+// flat-shaded (each triangle has its own three vertices), so the corners are
+// counted by distinct position rather than by vertexCount.
 const box = Mesh.box();
 const hull = box.convexHull();
 assert(!hull.empty, 'convex hull non-empty');
-assert(hull.vertexCount <= box.vertexCount,
-       'hull has <= input vertices; ' + hull.vertexCount + ' vs ' + box.vertexCount);
-assert(hull.triangleCount > 0, 'hull has triangles');
+assert(hull.triangleCount === 12, 'box hull has 12 triangles; got ' + hull.triangleCount);
+const corners = new Set();
+for (let i = 0; i < hull.positions.length; i += 3) {
+    corners.add(hull.positions[i] + ',' + hull.positions[i + 1] + ',' + hull.positions[i + 2]);
+}
+assert(corners.size === 8, 'box hull has 8 corners; got ' + corners.size);
 
 // Hull of a sphere is still bounded by same bbox
 const sph = Mesh.sphere(1, 16, 12);
