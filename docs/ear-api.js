@@ -13,7 +13,7 @@
  *                                         overall and per component; lower = closer
  *   bro.ear.spectrogram(clipOrClips, opts?)  an RGBA image with labelled axes,
  *                                         several clips on one time and dB scale
- *   bro.ear.loadClap(dir)                 the CLAP text-prompt scorer (ML builds
+ *   bro.ear.loadClap(dir?)                the CLAP text-prompt scorer (ML builds
  *                                         only; see the section at the end)
  *
  * measure / compare / spectrogram live in broaudio (include/broaudio/ear/ear.h
@@ -305,20 +305,125 @@ bro.ear.spectrogram = function(clipOrClips, opts) {};
 
 // ── bro.ear.loadClap — CLAP prompt scorer (brosoundml; ML builds only) ───────
 //
-// TODO(brosoundml): this section belongs to the CLAP scorer, which brosoundml
-// mounts onto the same `bro.ear` object when the build has it
-// (`typeof bro.ear.loadClap === 'function'`). Its owner fills in the final
-// shape; what is agreed so far:
+// laion/larger_clap_general (HTSAT-base audio tower + RoBERTa text tower,
+// 512-d joint space), hand-written on brotensor in brosoundml and pinned
+// against transformers' ClapModel to ~1e-6 on embeddings (brosoundml
+// docs/clap.md). brosoundml mounts loadClap and ClapModel onto the same
+// `bro.ear` object when the build has BRO_WITH_SOUNDML; test for it with
+// `typeof bro.ear.loadClap === 'function'`. CUDA by default: ~50 ms per 10 s
+// window on the GPU, several seconds on CPU.
 //
-//   const clap = bro.ear.loadClap(dir);            // a CLAP checkpoint directory
-//   const r = clap.score(clip, ['a wooden xylophone', 'a sine wave beep']);
-//   // r: per-prompt scores in 0..1 (one per prompt, in order) plus the clip's
-//   //    audio embedding
+// Weights: brosoundml/weights/clap (scripts/download-clap.sh, then
+// scripts/convert-clap.py). With no `dir`, loadClap looks under the root
+// bro.tts.setAssetRoot set, then ../brosoundml, ./brosoundml and the CWD.
 //
-// `clip` is expected to take the same EarClip forms as the calls above.
+// Anti-prompts are the point: score a cannon against "heavy cannon firing",
+// "metal footstep" AND "xylophone", and a synthetic-sounding variant shows up
+// as mass moving onto the anti-prompt.
+//
+//   const clap = bro.ear.loadClap();
+//   const prompts = ['heavy cannon firing', 'metal footstep', 'a xylophone'];
+//   const text = clap.embedText(prompts);          // cache across a loop
+//   for (const v of variants) {
+//       const r = clap.score(v, text);             // cached embeddings in, same order
+//       if (r.scores[0] > best) { best = r.scores[0]; keep = v; }
+//   }
 
 /**
- * @param {string} dir
- * @returns {Object} a CLAP model with score(clip, prompts)
+ * A CLAP clip. Close to EarClip but not identical: a path must be a 16-bit
+ * PCM WAV (decode other formats with AudioContext.decodeAudioFile first); a
+ * bare Float32Array is at `opts.sampleRate` (default 48000). Channels are
+ * averaged and any rate is resampled to 48 kHz.
+ * @typedef {string|Float32Array|AudioBuffer|{samples: Float32Array, sampleRate: number, channels?: number}} ClapClip
  */
-bro.ear.loadClap = function(dir) {};
+
+/**
+ * A prompt: a string, or a Float32Array(512) text embedding from embedText.
+ * @typedef {string|Float32Array} ClapPrompt
+ */
+
+/**
+ * @typedef {Object} ClapClipOptions
+ * @property {number} [sampleRate=48000] -  Rate of a bare Float32Array clip.
+ * @property {'mean'|'crop'} [long='mean'] -  Clips over 10 s: 'mean' averages
+ *   the embeddings of evenly spaced 10 s windows covering head and tail
+ *   (deterministic; transformers crops at a random offset instead); 'crop'
+ *   embeds one window.
+ * @property {number} [cropAt] -  Window start in seconds for long: 'crop'
+ *   (default: centred).
+ * @property {function(*, {cancelled: boolean, error?: string})} [onDone] -
+ *   Run on a work thread and call back with the result; the call then
+ *   returns an AsyncHandle (as the other bro.tts / bro.stt async calls do)
+ *   instead of the result. Without it the call blocks. One call at a time
+ *   per model; a second while one runs throws.
+ */
+
+/**
+ * @typedef {Object} ClapScore
+ * @property {Float32Array} scores -  softmax(similarities * logitScale): one
+ *   0..1 score per prompt, in order, summing to 1 over the prompts given. It
+ *   is relative: it says which prompt the clip is closest to among THESE
+ *   prompts, so always include anti-prompts.
+ * @property {Float32Array} similarities -  Raw cosine similarity per prompt
+ *   (-1..1), comparable across calls with different prompt lists.
+ * @property {Float32Array} logits -  similarities * logitScale.
+ * @property {Float32Array} embedding -  The clip's unit-length audio
+ *   embedding (512); pass to scoreEmbedding to rescore without re-running
+ *   the audio tower.
+ * @property {number} bestIndex -  Index of the highest score.
+ * @property {string|null} best -  That prompt's text; null when it was given
+ *   as a cached embedding.
+ */
+
+class ClapModel {
+  /** @readonly @type {boolean} */ loaded;
+  /** 'CUDA' or 'CPU' (as the other bro.tts / bro.stt models report it). @readonly @type {string} */ device;
+  /** 48000. @readonly @type {number} */ sampleRate;
+  /** 512. @readonly @type {number} */ embeddingSize;
+  /** 10: the audio tower's window. @readonly @type {number} */ windowSeconds;
+  /** exp(learned logit scale), about 38.7. @readonly @type {number} */ logitScale;
+
+  /**
+   * @param {ClapClip} clip
+   * @param {ClapPrompt|Array<ClapPrompt>} prompts
+   * @param {ClapClipOptions} [opts]
+   * @returns {ClapScore}
+   */
+  score(clip, prompts, opts) {}
+
+  /**
+   * @param {ClapClip} clip
+   * @param {ClapClipOptions} [opts]
+   * @returns {Float32Array} unit-length, 512
+   */
+  embedAudio(clip, opts) {}
+
+  /**
+   * @param {string|Array<string>} prompts
+   * @returns {Float32Array|Array<Float32Array>} one embedding, or one per prompt
+   */
+  embedText(prompts) {}
+
+  /**
+   * score() for an audio embedding already in hand.
+   * @param {Float32Array} embedding
+   * @param {ClapPrompt|Array<ClapPrompt>} prompts
+   * @returns {ClapScore}
+   */
+  scoreEmbedding(embedding, prompts) {}
+
+  /** Frees the weights; the model is unusable afterwards. */
+  dispose() {}
+}
+
+/**
+ * Loads CLAP. Blocking unless `opts.onReady` is given, in which case it loads
+ * on a work thread, returns an AsyncHandle, and calls onReady(model) or
+ * onError(message).
+ * `new bro.ear.ClapModel()` throws; the class is exported for instanceof.
+ * @param {string} [dir] -  A converted checkpoint directory (model.safetensors +
+ *   tokenizer files); defaults as described above.
+ * @param {{device?: 'cuda'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
+ * @returns {ClapModel}
+ */
+bro.ear.loadClap = function(dir, opts) {};
