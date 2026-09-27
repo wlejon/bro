@@ -1149,11 +1149,13 @@ public:
     };
 
     struct PenetrationOptions {
+        PenetrationOptions()
+            : minDepth(-FLT_MAX), maxSeparation(0.0f), layerMask(0) {}
         std::vector<JPH::BodyID> bodies;
         std::vector<std::pair<JPH::BodyID, JPH::BodyID>> ignorePairs;
-        float minDepth = -FLT_MAX;      // unbounded: depth > 0 unless maxSeparation > 0
-        float maxSeparation = 0.0f;
-        int layerMask = 0;
+        float minDepth;      // unbounded: depth > 0 unless maxSeparation > 0
+        float maxSeparation;
+        int layerMask;
     };
 
     struct BodyTransformUpdate {
