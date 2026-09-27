@@ -629,8 +629,8 @@ class AudioContext {
    */
   isClipPlaying(playbackId) {}
 
-  /** Same as setPlaybackGain. @param {number} playbackId @param {number} gain */
-  setClipGain(playbackId, gain) {}
+  /** Same as setPlaybackGain. @param {number} playbackId @param {number} gain @param {number} [rampSeconds] */
+  setClipGain(playbackId, gain, rampSeconds) {}
 
   /** Same as setPlaybackPan. @param {number} playbackId @param {number} pan */
   setClipPan(playbackId, pan) {}
@@ -643,8 +643,25 @@ class AudioContext {
   /** @param {number} playbackId */
   stopPlayback(playbackId) {}
 
-  /** @param {number} playbackId @param {number} gain */
-  setPlaybackGain(playbackId, gain) {}
+  /**
+   * With `rampSeconds` > 0 the gain moves linearly from its current value and
+   * lands on `gain` exactly that long later, sample-accurate on the audio
+   * clock (a later call restarts the ramp from wherever it is). Without one
+   * the change is de-zippered (a ~5 ms one-pole), never a hard step. A ramp
+   * set before the playback's first mixed block starts from the gain it was
+   * created with, so `playClip(id, 0)` then `setPlaybackGain(pb, 1, 0.2)` is
+   * a 200 ms fade-in.
+   * @param {number} playbackId
+   * @param {number} gain
+   * @param {number} [rampSeconds]  Default 0.
+   *
+   * @example
+   *   const pb = ctx.playClip(clip, 0, true);
+   *   ctx.setPlaybackGain(pb, 1, 0.25);        // fade in over 250 ms
+   *   // ... later
+   *   ctx.setPlaybackGain(pb, 0, 1.5);         // fade out over 1.5 s
+   */
+  setPlaybackGain(playbackId, gain, rampSeconds) {}
 
   /** @param {number} playbackId @param {number} pan  -1..1 */
   setPlaybackPan(playbackId, pan) {}
@@ -693,8 +710,14 @@ class AudioContext {
   /** Route the playback to a bus (0 = master). @param {number} playbackId @param {number} busId */
   setPlaybackBus(playbackId, busId) {}
 
-  /** Aux send, amount 0..1. @param {number} playbackId @param {number} sendBusId @param {number} amount */
-  setPlaybackSend(playbackId, sendBusId, amount) {}
+  /**
+   * Aux send, amount 0..1. The send taps the playback after its whole chain
+   * (air, delay, pan, head colouring), so a convolution return hears the
+   * source as the listener does. `rampSeconds` as setPlaybackGain.
+   * @param {number} playbackId @param {number} sendBusId @param {number} amount
+   * @param {number} [rampSeconds]  Default 0.
+   */
+  setPlaybackSend(playbackId, sendBusId, amount, rampSeconds) {}
 
   /** @param {number} playbackId @param {boolean} enabled */
   setPlaybackSpatialEnabled(playbackId, enabled) {}
@@ -720,8 +743,102 @@ class AudioContext {
   /** Low-pass muffling, 0..1. @param {number} playbackId @param {number} occlusion */
   setPlaybackSpatialOcclusion(playbackId, occlusion) {}
 
-  /** Last Doppler ratio applied (1 until one was). @param {number} playbackId @returns {number} */
+  /**
+   * Last Doppler ratio applied (1 until one was). With propagation delay on,
+   * the delay line's effective ratio (1 - change in delay per sample).
+   * @param {number} playbackId @returns {number}
+   */
   getPlaybackDopplerRatio(playbackId) {}
+
+  // ── Physical distance ───────────────────────────────────────────────────
+  // Air absorption and propagation delay shape the *character* of a spatial
+  // playback (clip or stream) from its true source-listener distance in
+  // metres. Loudness stays yours: refDistance / maxDistance / rolloff are
+  // untouched, and setPlaybackSpatialRolloff(pb, 0) gives a source whose
+  // level you drive from JS while the air and the delay still follow the
+  // distance. Both are per-playback opt-ins (default off) and apply only
+  // while the playback is spatialized. Synth voices do not get them.
+  //
+  // @example
+  //   ctx.setSpatialMetresPerUnit(1);           // world units are metres
+  //   ctx.setSpatialAirConditions(15, 70);      // cool, damp evening
+  //   const pb = ctx.playClip(cannon, 1, false);
+  //   ctx.setPlaybackSpatialEnabled(pb, true);
+  //   ctx.setPlaybackSpatialRolloff(pb, 0);     // level set by the game
+  //   ctx.setPlaybackSpatialPosition(pb, 0, 0, -250);
+  //   ctx.setPlaybackSpatialAirAbsorption(pb, true);     // dull at 250 m
+  //   ctx.setPlaybackSpatialPropagationDelay(pb, true);  // heard 0.73 s late
+  //   ctx.setPlaybackGain(pb, 0.4);
+
+  /**
+   * World scale: metres per position unit, default 1. Air absorption and
+   * propagation delay measure metres; the rate Doppler of setDopplerFactor
+   * converts its speed of sound to units with it. Ignored unless > 0.
+   * @param {number} metres
+   */
+  setSpatialMetresPerUnit(metres) {}
+
+  /**
+   * Air for the absorption model (ISO 9613-1 at sea-level pressure).
+   * Temperature is clamped to -20..50 °C, humidity to 1..100 %; defaults 20
+   * and 50. Refits the filter table on the calling thread (tens of ms; the
+   * first playback that enables air fits the default table the same way)
+   * and swaps it in lock-free.
+   * @param {number} temperatureC
+   * @param {number} relativeHumidityPct
+   */
+  setSpatialAirConditions(temperatureC, relativeHumidityPct) {}
+
+  /**
+   * Multiplies the absorbing distance: 0 none, 1 physical (default), 2 twice
+   * the air. For stylising, not for loudness.
+   * @param {number} k
+   */
+  setSpatialAirAbsorptionStrength(k) {}
+
+  /**
+   * Air absorption for one playback, default off. Every block the filter for
+   * the current distance is looked up (seven fitted one-pole sections that
+   * track the ISO curve per octave band to within ~2 dB wherever it is under
+   * 30 dB) and moved smoothly across the block, so a moving source darkens
+   * without zipper. A noise source's spectral centroid at 20 °C / 50 %:
+   * ~10.1 kHz at 1 m, 5.9 kHz at 25 m, 2.9 kHz at 100 m, 1.5 kHz at 300 m.
+   * Separate from setPlaybackSpatialOcclusion, which keeps its own lowpass.
+   * @param {number} playbackId
+   * @param {boolean} enabled
+   */
+  setPlaybackSpatialAirAbsorption(playbackId, enabled) {}
+
+  /** Speed of sound for propagation delay, m/s, default 343 (minimum 1). @param {number} metresPerSecond */
+  setSpatialSpeedOfSound(metresPerSecond) {}
+
+  /**
+   * Cap on the propagation delay, seconds, default 0.5, clamped 0..10. A
+   * source further than cap x c is heard at the cap. Raising it reallocates
+   * (and restarts) the delay lines of playbacks that have the delay on.
+   * @param {number} seconds
+   */
+  setSpatialMaxPropagationDelay(seconds) {}
+
+  /**
+   * Propagation delay for one playback, default off: it is heard
+   * distance / speedOfSound later (capped). Turn it on before the playback
+   * starts sounding — switching on mid-play restarts the line (a gap of the
+   * current delay), switching off jumps to the undelayed signal.
+   *  - A one-shot's onset lands at exactly that delay, and a finished
+   *    one-shot stays alive (isClipPlaying true) until its delayed tail
+   *    has been heard.
+   *  - Loops, streams and moving sources run a continuous 4-point
+   *    interpolated delay line that follows the distance smoothly (~20 ms),
+   *    so positions stepped at frame rate never click.
+   *  - Doppler falls out of the line (1 - v/c for a source moving at v), so
+   *    for this playback the rate Doppler of setDopplerFactor is not applied
+   *    and nothing is counted twice. The line's pitch ratio is clamped to
+   *    0.5..2.
+   * @param {number} playbackId
+   * @param {boolean} enabled
+   */
+  setPlaybackSpatialPropagationDelay(playbackId, enabled) {}
 
   // ── Streams ─────────────────────────────────────────────────────────────
 
@@ -907,8 +1024,12 @@ class AudioContext {
   createBus() {}
   /** Master cannot be deleted. @param {number} busId */
   deleteBus(busId) {}
-  /** @param {number} busId @param {number} gain  0..2 */
-  setBusGain(busId, gain) {}
+  /**
+   * `rampSeconds` as setPlaybackGain: linear and landing on time, or a short
+   * de-zipper without one. getBusGain returns the target.
+   * @param {number} busId @param {number} gain  0..2 @param {number} [rampSeconds]  Default 0.
+   */
+  setBusGain(busId, gain, rampSeconds) {}
   /** @param {number} busId @returns {number} */
   getBusGain(busId) {}
   /** @param {number} busId @param {number} pan  -1..1 */
@@ -1090,15 +1211,58 @@ class AudioContext {
   getBusDistortionCrushRate(busId) {}
 
   /**
-   * Reorders a bus's effect chain. `order` lists 1..7 slot names in
+   * Reorders a bus's effect chain. `order` lists 1..8 slot names in
    * processing order: 'filter', 'delay', 'compressor', 'chorus', 'reverb',
-   * 'equalizer' (or 'eq'), 'distortion'. An unknown name keeps that
-   * position's default slot (the default order is the list above). Empty or
-   * longer lists are ignored.
+   * 'equalizer' (or 'eq'), 'distortion', 'convolution'. An unknown name
+   * keeps that position's default slot (the default order is the list
+   * above). Positions past the list are filled with the slots it did not
+   * name, in default order, so a partial list never runs an effect twice or
+   * drops one. Empty or longer lists are ignored.
    * @param {number} busId
    * @param {Array<string>} order
    */
   setBusEffectOrder(busId, order) {}
+
+  // ── Convolution reverb ──────────────────────────────────────────────────
+  // Per bus, the 'convolution' effect slot: uniformly partitioned FFT
+  // convolution (256-frame partitions, 5.8 ms latency at 44.1 kHz) of
+  // whatever reaches the bus. The natural use is a return bus fed by
+  // setPlaybackSend / voice sends / bus sends at mix 1. A 3 s stereo IR
+  // costs about 2 % of one core.
+  //
+  // @example
+  //   const ir = await ctx.createClipFromFileAsync('assets/valley_ir.wav');
+  //   const verb = ctx.createBus();
+  //   ctx.setBusConvolutionImpulse(verb, ir);
+  //   ctx.setBusConvolutionEnabled(verb, true);   // mix defaults to 1 (fully wet)
+  //   ctx.setPlaybackSend(pb, verb, 0.3);
+
+  /**
+   * Loads an impulse response from a clip (mono or stereo; a mono IR feeds
+   * both ears, a stereo one convolves L with L and R with R). The frames are
+   * copied and the partition spectra prepared on the calling thread, never
+   * the audio thread, then swapped in lock-free; the clip can be deleted
+   * afterwards. The IR is not normalised. A new IR starts with an empty
+   * history (the old tail stops). clipId -1 clears it.
+   * @param {number} busId
+   * @param {number} clipId
+   * @returns {boolean} false for an unknown bus or clip, or a streaming clip
+   */
+  setBusConvolutionImpulse(busId, clipId) {}
+  /** The clip id last loaded, -1 for none. @param {number} busId @returns {number} */
+  getBusConvolutionImpulse(busId) {}
+  /** 0 dry .. 1 fully wet, default 1; de-zippered. @param {number} busId @param {number} mix */
+  setBusConvolutionMix(busId, mix) {}
+  /** @param {number} busId @returns {number} */
+  getBusConvolutionMix(busId) {}
+  /**
+   * Default off. While on, the bus runs the interpreted effect chain (its
+   * JIT pipeline, if any, stands aside).
+   * @param {number} busId @param {boolean} enabled
+   */
+  setBusConvolutionEnabled(busId, enabled) {}
+  /** @param {number} busId @returns {boolean} */
+  getBusConvolutionEnabled(busId) {}
 
   /**
    * Runs mono samples through a copy of a bus's effect chain without
