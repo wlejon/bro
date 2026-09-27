@@ -25,7 +25,15 @@ assert(typeof bro.server.uptime === 'number', 'main bro.server.uptime is a numbe
 const w = new Worker(workerPath);
 let reply = null;
 w.onmessage = (e) => { reply = e.data; };
-w.postMessage({ cmd: 'probe' });
+const synthDesc = {
+    nodes: {
+        n: { type: 'noise', color: 'pink', gain: 'e' },
+        e: { type: 'env', attack: 0.001, decay: { value: 0.05, jitter: 0.3 }, sustain: 0, release: 0.01 },
+        f: { type: 'filter', mode: 'bandpass', input: 'n', cutoff: { value: 900, jitter: 0.2 }, q: 2 },
+    },
+    output: 'f',
+};
+w.postMessage({ cmd: 'probe', synthDesc });
 pumpUntil(() => reply !== null);
 assert(reply !== null, 'worker replied');
 assert(reply.ok === true, 'worker probe ran: ' + (reply.error || ''));
@@ -53,6 +61,16 @@ assert(r.vision, 'bro.vision in the worker');
 assert(r.motion, 'bro.motion in the worker');
 assert(r.media, 'bro.media in the worker');
 assert(r.net, 'bro.net in the worker');
+assert(r.synthGraph, 'SynthGraph in the worker');
+const mainClip = new SynthGraph(synthDesc).render({ seed: 7 });
+assert(r.synthLength === mainClip.length && r.synthLength > 0,
+    'worker render has the main render\'s length: ' + r.synthLength + ' vs ' + mainClip.length);
+const mainSamples = mainClip.getChannelData(0);
+let synthSame = true;
+for (let i = 0; i < mainSamples.length; i++) {
+    if (!Object.is(mainSamples[i], r.synthSamples[i])) { synthSame = false; break; }
+}
+assert(synthSame, 'worker render is bit-identical to the main realm render');
 
 // ---- what a worker must not have ------------------------------------------
 assert(r.noWindow, 'no bro.window in the worker');
@@ -114,8 +132,9 @@ w.terminate();
 const w2 = new Worker(workerPath);
 let reply2 = null;
 w2.onmessage = (e) => { reply2 = e.data; };
-w2.postMessage({ cmd: 'probe' });
+w2.postMessage({ cmd: 'probe', synthDesc });
 pumpUntil(() => reply2 !== null);
 assert(reply2 !== null && reply2.ok === true, 'second worker probe ran: ' + (reply2 && reply2.error || ''));
 assert(reply2.result.boxIsMesh && reply2.result.mainTagLeaked === false, 'second worker has its own Mesh');
+assert(reply2.result.synthLength === mainClip.length, 'second worker renders the same graph');
 w2.terminate();

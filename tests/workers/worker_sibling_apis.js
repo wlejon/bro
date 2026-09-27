@@ -43,6 +43,15 @@ function probe() {
     r.media = typeof bro.media === 'object';
     r.net = typeof bro.net === 'object' && typeof bro.net.connect === 'function';
 
+    // SynthGraph renders offline without an engine; the main realm renders
+    // the same graph and seed and compares the samples.
+    r.synthGraph = typeof SynthGraph === 'function';
+    if (r.synthGraph) {
+        const clip = new SynthGraph(self.__synthDesc).render({ seed: 7 });
+        r.synthLength = clip.length;
+        r.synthSamples = Array.from(clip.getChannelData(0));
+    }
+
     // Engine-bound namespaces must NOT be here.
     r.noWindow = bro.window === undefined;
     r.noSettings = bro.settings === undefined;
@@ -70,6 +79,7 @@ self.onmessage = (e) => {
     const data = e.data;
     if (data && data.cmd === 'probe') {
         try {
+            self.__synthDesc = data.synthDesc;
             self.postMessage({ ok: true, result: probe() });
         } catch (err) {
             self.postMessage({ ok: false, error: String(err && err.stack ? err.stack : err) });
