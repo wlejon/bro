@@ -13,12 +13,15 @@
  *                                         overall and per component; lower = closer
  *   bro.ear.spectrogram(clipOrClips, opts?)  an RGBA image with labelled axes,
  *                                         several clips on one time and dB scale
+ *   bro.ear.fit(graph, opts)              search a SynthGraph's parameters until
+ *                                         its render meets a target (a reference,
+ *                                         measurements, a scorer, CLAP prompts)
  *   bro.ear.loadClap(dir?)                the CLAP text-prompt scorer (ML builds
  *                                         only; see the section at the end)
  *
- * measure / compare / spectrogram live in broaudio (include/broaudio/ear/ear.h
- * holds the C++ contract) and are present in every build profile, including
- * minimal, and in Worker realms. They run synchronously on the calling thread,
+ * measure / compare / spectrogram / fit live in broaudio
+ * (include/broaudio/ear/ear.h and ear/fit.h hold the C++ contract) and are
+ * present in every build profile, including minimal, and in Worker realms. They run synchronously on the calling thread,
  * need no AudioContext and no audio device, and are DETERMINISTIC: the same
  * input gives the same numbers and the same pixels, so a loop of "generate a
  * variant, score it, keep the better one" is reproducible headless.
@@ -302,6 +305,240 @@ bro.ear.compare = function(clip, reference, opts) {};
  *   // or draw it: ctx.putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
  */
 bro.ear.spectrogram = function(clipOrClips, opts) {};
+
+// ── bro.ear.fit — search a SynthGraph's parameters against a target ─────────
+//
+// Every number in a SynthGraph description is a named parameter
+// (docs/audio-synth-graph-api.js). fit() renders the graph at candidate
+// values, scores each render against a target, and searches for the values
+// with the lowest distance. The distance is a weighted sum of
+//
+//   reference   bro.ear.compare(render, reference).score        × weights.reference (1)
+//   measures    per measure() field, a unitless distance        × its own weight (1)
+//   bands       per band, |band level - db| / 10                 × its own weight (1)
+//   scorer      your function's distance per clip               × weights.scorer (1)
+//   clap        1 - the CLAP score of prompt `index`             × weights.clap (1)
+//
+// Give at least one. They compose by plain addition, so a reference plus a
+// CLAP prompt means "sound like this recording, and like 'a wooden knock' to
+// CLAP": weigh them so neither swamps the other (compare scores sit near
+// 0.05 for a close match and 0.3+ for a different sound; a measure term is 1
+// for "clearly off": an octave, twice or half the time, 10 dB, 0.25 of a 0..1
+// fraction).
+//
+// SEARCH. CMA-ES (covariance matrix adaptation, the standard method for 1 to
+// ~30 continuous parameters with rough, non-smooth objectives) in a unit
+// cube: each parameter's range maps linearly or logarithmically onto 0..1,
+// so frequencies and times move by ratios. When a run converges or stalls
+// (under 5 % better over its last 20 + 50·n/population generations) it
+// restarts from a random point with twice the population, while budget
+// remains; the best candidate of all runs is the result. Every candidate of a
+// generation renders and is scored in parallel on native threads (the
+// renders are thread-safe and bit-identical to the live voice).
+//
+// DETERMINISM. For a given `seed` the result, its history and its clip are
+// identical bit for bit whatever `threads` is, sync or async. maxSeconds stops
+// at a generation boundary, so a timed run is a prefix of the untimed one.
+//
+// JITTER. Renders use jitter: false by default, so the objective is a plain
+// function of the parameters. With jitter: true each candidate renders once
+// per render seed (`seeds`) and scores the mean; the same seeds serve every
+// candidate, so the objective is still deterministic, and the fit prefers
+// values that sound right across the graph's shot-to-shot variation. Noise
+// nodes draw from the seed either way (seeds: 1 renders seed 1).
+//
+// EXTERNAL SCORERS. broaudio cannot link brosoundml, so CLAP joins through
+// the JS layer: `clap.model` is anything with score(clip, prompts, opts?)
+// returning {scores} (bro.ear.loadClap's ClapModel is), and embedText when
+// it has one (string prompts are embedded once, up front). A `scorer`
+// function works the same way for anything else. Both run on the JS thread,
+// once per generation, over the whole generation's clips (population × seeds
+// clips, candidate-major) — in the async form too, where the search thread
+// hands the batch over and waits. A ClapModel scores ~50 ms per clip on the
+// GPU, so a CLAP term costs about that per evaluation; keep the budget modest,
+// or fit against a reference / measures first and add CLAP for a final pass
+// started from those values (params[i].start).
+//
+// ASYNC. With opts.onDone the call returns an AsyncHandle at once and runs
+// the search on a native thread. onProgress / onDone and the scorer calls run
+// on the calling thread when the host ticks (bro's frame pump calls
+// broaudio's tickAsyncJobs) or inside handle.wait(). cancel() stops at the
+// next generation; onDone still fires, with the best result so far and
+// {cancelled: true}. Bad options throw from the call itself, as in the sync
+// form. Do not wait() on a fit from inside its own scorer or onProgress.
+//
+//   const g = new SynthGraph(knockDescription);
+//   const r = bro.ear.fit(g, {
+//     params: ['body.cutoff', 'body.decay', { name: 'res.freq', min: 200, max: 900 }],
+//     reference: 'refs/knock.wav',
+//     measures: { attackTime: 0.002 },
+//     maxEvaluations: 800,
+//   });
+//   console.log(r.distance, JSON.stringify(r.params));
+//   const buf = g.render(r.render);                 // the same samples as r.clip
+
+/**
+ * One searched parameter, the long form. Every field but `name` is optional.
+ * Defaults: scale 'auto' is 'log' when the declared value is > 0 and the
+ * graph's own range for it is non-negative and reaches at least 10
+ * (frequencies, times, ratios, q, drive), else 'linear'. A log range defaults
+ * to declared/4 .. declared×4 (two octaves either way); a linear one to the
+ * graph's whole range when that spans at most 10 (pulse width, damping,
+ * feedback), else declared ± |declared| (0 .. 2× for a positive value, so a
+ * gain keeps its sign), or -1 .. 1 around 0 — always inside the graph's
+ * range. Give ranges for anything that matters: sweep endpoints and mix
+ * weights are plain numbers to the graph and default to linear.
+ * @typedef {Object} EarFitParam
+ * @property {string} name        the parameter's name (SynthGraph.paramNames)
+ * @property {number} [min]
+ * @property {number} [max]
+ * @property {'auto'|'log'|'linear'} [scale='auto']  'log' needs min > 0
+ * @property {number} [start]     where the first run starts; default the declared
+ *                                value, clamped into the range
+ */
+
+/**
+ * A measure() field to hit. `name` (the key in `measures`) is one of
+ *   Hz, |log2(measured / target)|:            centroidHz, f0Hz (ringing.f0Hz),
+ *                                             partialHz (the strongest partial)
+ *   seconds, |log2((m + 2 ms) / (t + 2 ms))|: attackTime, onsetTime, envelopePeakTime,
+ *                                             peakTime, tailTime, t60, weightedRingTime,
+ *                                             strongestRingTime
+ *   dB/s, |log2((|m| + 1) / (|t| + 1))|:      decayRate
+ *   dB, |m - t| / 10:                         peakDb, envelopePeakDb, rmsDb, lufs
+ *   0..1, |m - t| / 0.25:                     flatness, tonality, inharmonicity,
+ *                                             ringScore, sparsity
+ * A value the render does not have (t60 of a sound that does not decay,
+ * partialHz with no partial) costs 2. Level fields (peakDb, rmsDb, lufs) read
+ * the render as it is: loudness is not normalised as compare() normalises it.
+ * @typedef {number|{value: number, weight?: number, scale?: number}} EarFitMeasure
+ *   `scale` replaces the divisor (1 octave, 1 doubling, 10 dB, 0.25).
+ */
+
+/**
+ * @typedef {Object} EarFitOptions
+ * @property {Array<string|EarFitParam>|Object<string, true|EarFitParam>} [params]
+ *   what to search (at most 64); default every parameter not in `fixed`
+ * @property {Object<string, number>|string[]} [fixed]  held at these values (an array
+ *   holds the named parameters at their declared values). A parameter neither
+ *   searched nor fixed keeps its declared value.
+ * @property {EarClip} [reference]           compare() every render against it
+ * @property {EarCompareOptions} [compare]   {align, maxShift, weights} for that comparison
+ * @property {Object<string, EarFitMeasure>} [measures]
+ * @property {{minHz: number, maxHz: number, db: number, weight?: number}[]} [bands]
+ *   a band's share of the render's power, dB (10·log10(band power / total) of the
+ *   long-term spectrum): {minHz: 2000, maxHz: 8000, db: -12} asks for a sixteenth
+ *   of the power between 2 and 8 kHz
+ * @property {function({samples: Float32Array, sampleRate: number, channels: 1}[]): ArrayLike<number>} [scorer]
+ *   one distance per clip, lower is closer; a non-finite one counts as 2
+ * @property {{model: ClapModel, prompts: ClapPrompt[], index?: number, weight?: number,
+ *             options?: ClapClipOptions}} [clap]
+ *   distance 1 - scores[index] (default 0); include anti-prompts, since CLAP's
+ *   scores are relative to the prompts given. `options` (pad, long) go to score()
+ * @property {{reference?: number, scorer?: number, clap?: number}} [weights]  default 1 each
+ * @property {number} [maxEvaluations=1000]  candidates to evaluate at most; the fit stops when
+ *   the next generation would pass it
+ * @property {number} [maxSeconds]           wall-clock budget, checked between generations
+ * @property {number} [stopAt]               stop once the best distance is at or below this
+ * @property {number} [population]           candidates per generation; default
+ *   2·(4 + floor(3·ln n)), at least 10 (14 for 3 parameters, 20 for 8)
+ * @property {number} [sigma=0.25]           the first step, as a fraction of each range
+ * @property {number} [seed=1]               the search's random seed
+ * @property {number} [threads]              render threads; default the core count (max 32)
+ * @property {boolean} [restarts=true]       restart converged runs with a bigger population
+ * @property {boolean} [jitter=false]        render with the graph's jitter
+ * @property {number|number[]} [seeds=1]     render seeds: a count (1..n) or a list; a
+ *   candidate's distance is the mean over them
+ * @property {number} [sampleRate]           render rate; default the reference's, else 48000.
+ *   Also the rate of a bare Float32Array reference
+ * @property {number} [maxDuration]          render cap, s; default 2 × the reference + 0.25,
+ *   else 10 (most voices end by themselves first)
+ * @property {boolean} [compiled=true]       render through the compiled kernels (same samples)
+ * @property {function(EarFitProgress): (boolean|void)} [onProgress]  after every generation;
+ *   in the sync form, returning false cancels
+ * @property {function(?EarFitResult, {cancelled: boolean, error?: string})} [onDone]
+ *   run asynchronously (see ASYNC above); the call returns an AsyncHandle
+ */
+
+/**
+ * @typedef {Object} EarFitProgress
+ * @property {number} generation       generations done
+ * @property {number} evaluations
+ * @property {number} restarts
+ * @property {number} best             best distance so far
+ * @property {number} generationBest   best of this generation
+ * @property {number} sigma            the step size, unit-range units
+ * @property {number} seconds
+ * @property {Object<string, number>} params  the best values so far
+ */
+
+/**
+ * @typedef {Object} EarFitResult
+ * @property {Object<string, number>} params  every value to override to reproduce `clip`:
+ *   the searched parameters' best values and the fixed ones
+ * @property {{name: string, value: number, min: number, max: number,
+ *             scale: 'log'|'linear', start: number}[]} searched   ranges as resolved
+ * @property {number} distance
+ * @property {{reference: number|null, comparison?: EarComparison,
+ *             measures: Object<string, {target: number, measured: number|null, distance: number}>,
+ *             bands: {minHz: number, maxHz: number, target: number, measured: number,
+ *                     distance: number}[],
+ *             external: number|null}} terms
+ *   the best candidate's terms, unweighted, from its render at the first seed;
+ *   `external` is the scorer + clap part as summed (weighted), averaged over the seeds
+ * @property {number} evaluations
+ * @property {number} generations
+ * @property {number} restarts
+ * @property {number} population       of the first run
+ * @property {number} seconds
+ * @property {'evaluations'|'time'|'stopAt'|'converged'|'cancelled'|'scorer'} stop
+ *   'converged': converged with no budget left for a restart (or restarts: false)
+ * @property {{generation: number, evaluations: number, best: number,
+ *             generationBest: number, sigma: number, seconds: number}[]} history
+ * @property {{samples: Float32Array, sampleRate: number, channels: 1}} clip  the best render
+ * @property {{params: Object<string, number>, seed: number, jitter: boolean,
+ *             sampleRate: number, maxDuration: number}} render
+ *   SynthGraph.render options that reproduce `clip` bit for bit
+ */
+
+/**
+ * Search `graph`'s parameters for the render closest to the target.
+ * Synchronous unless opts.onDone is given.
+ * @param {SynthGraph|Object|string} graph  an instance, or a description
+ * @param {EarFitOptions} opts
+ * @returns {EarFitResult|AsyncHandle}
+ * @throws {TypeError} for a bad option, an unknown parameter or measurement, or no target;
+ *   the message starts with "bro.ear.fit: " and the option's path
+ * @throws {RangeError} for a number out of range (an inverted range, a log range reaching 0)
+ * @throws whatever `scorer`, a CLAP model's score() or onProgress throws (sync form; the
+ *   async form reports it as onDone's `error`)
+ *
+ * @example
+ *   // Recover a pluck from a recording, then check it by ear and eye.
+ *   const g = new SynthGraph(pluckDesc);
+ *   const r = bro.ear.fit(g, { params: ['o.freq', 'o.ratio', 'ie.decay', 'ae.decay'],
+ *                              reference: 'refs/pluck.wav', maxEvaluations: 1500, stopAt: 0.01 });
+ *   bro.ear.spectrogram([r.clip, 'refs/pluck.wav'], { labels: ['fit', 'ref'], path: 'out/fit.png' });
+ *
+ * @example
+ *   // Hit measurements, keep the pitch, average over the graph's jitter.
+ *   const r = bro.ear.fit(g, { fixed: { 'o.freq': 220 }, jitter: true, seeds: 4,
+ *                              measures: { centroidHz: 1800, t60: { value: 0.6, weight: 2 } } });
+ *
+ * @example
+ *   // Let CLAP steer, asynchronously, with progress.
+ *   const clap = bro.ear.loadClap();
+ *   const h = bro.ear.fit(g, {
+ *     params: ['body.cutoff', 'body.decay', 'crack.gain'],
+ *     clap: { model: clap, prompts: ['a wooden door knock', 'a xylophone', 'static noise'],
+ *             options: { pad: 'silence' } },
+ *     measures: { tailTime: 0.25 },
+ *     maxEvaluations: 300,
+ *     onProgress: p => console.log(p.evaluations, p.best.toFixed(3)),
+ *     onDone: (r, info) => console.log(info.cancelled ? 'cancelled' : 'done', r.distance, r.params),
+ *   });
+ */
+bro.ear.fit = function(graph, opts) {};
 
 // ── bro.ear.loadClap — CLAP prompt scorer (brosoundml; ML builds only) ───────
 //
