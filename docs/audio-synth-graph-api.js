@@ -4,15 +4,17 @@
  * =============================================================================
  *
  * A synthesis graph describes a sound as a small graph of generators and
- * processors (oscillators, FM, noise, filters, envelopes, sweeps, shapers,
- * resonator banks, combs, layers) in a plain object. One description gives
- * every trigger a fresh variation (seeded per-parameter jitter), and the same
- * graph serves three uses:
+ * processors (oscillators, FM, noise, random impulses, filters, envelopes,
+ * sweeps, shapers, resonator banks, combs, layers) in a plain object. One
+ * description gives every trigger a fresh variation (seeded per-parameter
+ * jitter), and the same graph serves three uses:
  *
  *   new SynthGraph(desc)                 parse + validate (or ctx.createSynthGraph)
  *   graph.render(opts?)                  offline: a mono AudioBuffer, at once,
- *                                        no device, no file (bro.ear takes it)
- *   ctx.playSynth(graph, opts?)          live: a playback id, plain or positional
+ *                                        no device, no file (bro.ear takes it);
+ *                                        with `loop`, one period of a seamless loop
+ *   ctx.playSynth(graph, opts?)          live: a playback id, plain or positional;
+ *                                        with `loop`, it loops until released
  *   ctx.releaseSynth(id)                 note-off (envelopes move to release)
  *
  * The graph is the SOURCE STAGE of the engine's per-voice chain: a playing
@@ -73,6 +75,26 @@
  *     if (!best || d < best.d) best = { f, d };
  *   }
  *   ctx.playSynth(bar, { params: { 'res.freq': best.f } });
+ *
+ * @example
+ *   // A tank track: links clanking at a jittered rate (impulses exciting a
+ *   // resonator) over an engine drone, as a seamless 2 s loop that plays
+ *   // until the tank stops, then rings out through its release.
+ *   const track = new SynthGraph({ layers: {
+ *     links: { nodes: {
+ *       k:   { type: 'impulses', shape: 'decay', rate: 9, jitter: 0.3, length: 0.004, ampJitter: 0.5 },
+ *       res: { type: 'resonator', input: 'k', freq: 900, modes: [
+ *                { ratio: 1, decay: 0.08, gain: 0.4 }, { ratio: 2.7, decay: 0.05, gain: 0.2 }] },
+ *     }, output: 'res' },
+ *     drone: { gain: 0.4, nodes: {
+ *       s:  { type: 'osc', wave: 'saw', freq: 47, gain: 'e' },
+ *       e:  { type: 'env', attack: 0.3, decay: 0.1, sustain: 0.8, release: 0.6 },
+ *       lp: { type: 'filter', input: 's', cutoff: 400, q: 2 },
+ *     }, output: 'lp' },
+ *   } });
+ *   const id = ctx.playSynth(track, { loop: { length: 2, start: 0.5 }, position: [0, 0, -20] });
+ *   // ... later
+ *   ctx.releaseSynth(id);
  */
 
 /* =============================================================================
@@ -192,6 +214,34 @@
  *              a one-pole lowpass in the loop (damp 0 = none): plucked-string
  *              and tube resonances.
  *
+ *   impulses   { shape: 'impulse'|'rect'|'hann'|'decay', rate (signal, events
+ *                per second, 0..24000, 10), jitter (0..1, 0), length (grain
+ *                seconds, 0.0001..10, 0.005), ampJitter (0..1, 0) }
+ *              Stochastic events at a mean `rate`: rattles, clanks, track
+ *              links, crackle, rain. An event phase advances by rate / sampleRate
+ *              each sample; an event fires when it reaches a threshold that
+ *              every event redraws as 1 + jitter * u (u uniform in [-1, 1),
+ *              floored at 0.05), so jitter 0 is periodic, jitter 1 spreads the
+ *              intervals over 0.05..2x the mean, and the mean rate holds
+ *              either way. Each event draws its amplitude 1 - ampJitter * u'
+ *              (u' in [0, 1)) and starts a grain:
+ *                'impulse'  one sample at the amplitude (length unused): the
+ *                           exciter for a resonator or comb
+ *                'rect'     the amplitude for `length`, then 0: a gate
+ *                'hann'     a sin^2 window over `length`: smooth grains, a
+ *                           gate for noise (mul)
+ *                'decay'    the amplitude falling 60 dB over `length`
+ *                           (exponential, it keeps falling): clicks
+ *              A new event restarts the grain. The first event fires on the
+ *              layer's first sample (offset the layer to delay it); rate 0
+ *              gives that one event only. A wired rate (a sweep) slows or
+ *              speeds the events per sample; at most one event every other
+ *              sample. The events draw from the trigger's seed (their own
+ *              stream, independent of noise nodes), so a seed gives the same
+ *              events every time, compiled or interpreted. Output 0..1 times
+ *              gain. Its parameters fit like any other: 'k.rate', 'k.jitter',
+ *              'k.length', 'k.ampJitter'.
+ *
  *   mul        { a, b }            a * b (ring modulation, VCA).
  *
  *   mix        { inputs: [ '<id>' | number | {node: '<id>', weight} , ... ] (1..16) }
@@ -202,7 +252,54 @@
  * output then stays below -100 dBFS over a 256-sample window, or at
  * `duration`. A graph without `env` nodes and without `duration` never ends
  * by itself (render() cuts it at maxDuration; a playback plays until
- * stopClip).
+ * stopClip). A looping voice ends only after releaseSynth (or stopClip).
+ *
+ * LOOPS. `loop: { length, crossfade?, start?, snap?, curve?, releaseFade? }`
+ * on render() or playSynth() cuts a seamless loop from the voice:
+ *
+ *   length       seconds of one period (0.001..60, required)
+ *   crossfade    seconds (0..30, 0.05; clamped to length / 2)
+ *   start        seconds of the voice before the loop (0..600, 0.25): the
+ *                warm-up, past the attack and long enough for filters,
+ *                resonators and combs to settle
+ *   snap         true (default): put periodic rates on whole cycles
+ *   curve        'auto' (default) | 'power' | 'linear': the crossfade's gains
+ *   releaseFade  seconds (0..10, 0.02): a looping voice's note-off crossfade
+ *
+ * The voice renders from `start` for length + crossfade seconds, with no
+ * end (`duration`, finished envelopes and the silence floor are ignored).
+ * Loop sample i is voice sample start + i, except over the first `crossfade`
+ * of the loop, where the voice's continuation past the loop's end fades out
+ * while the loop's own start fades in. So the SEAM IS THE VOICE ITSELF: the
+ * loop's last sample and its first are two consecutive samples the voice
+ * produced, and every filter, resonator and comb state is carried across the
+ * wrap by construction (no wrapped filtering, no click); the blend sits inside
+ * the loop, between two stretches of the same sound. 'power' is equal power
+ * (right for noise), 'linear' equal gain (right for identical halves, a
+ * snapped settled tone), and 'auto' measures the two halves' correlation and
+ * corrects equal power for it (1: equal gain, 0: equal power). crossfade 0
+ * is a hard cut (the voice's frames exactly; the seam is not continuous).
+ *
+ * snap moves every constant periodic rate to a whole number of cycles per
+ * period, at least one: oscillator frequencies, FM carrier frequencies (the
+ * ratio follows so the modulator is whole too) and impulse rates. A 0.3 Hz
+ * LFO in a 0.5 s loop becomes 2 Hz; a 55.3 Hz saw becomes 56 Hz. Frequencies
+ * that are signals (a sweep, a mix) are not snapped. A snapped settled tone
+ * tiles as one continuous waveform.
+ *
+ * render({ loop }) returns exactly one period (length * sampleRate samples,
+ * rounded); maxDuration does not apply. playSynth(graph, { loop }) renders
+ * the loop, and its release tail, when called (on the calling thread; a
+ * 2 s loop is milliseconds of work) and then plays that period over and
+ * over: bit for bit what render({ loop }) returns for the same seed /
+ * params / jitter / rate, before the distance chain. Its release: the loop
+ * crossfades (equal power, releaseFade) into the voice's own release, which
+ * is the voice continued from the loop's seam with its envelopes released
+ * (capped at 10 s, faded if still sounding); a graph without an `env` node
+ * has no release and fades out over releaseFade.
+ *
+ * bro.ear.fit takes the same `loop` option, so a loop's parameters can be
+ * searched as loops.
  *
  * ERRORS. A description that does not validate throws a TypeError, or a
  * RangeError for a well-formed number outside its range. The message is
@@ -265,7 +362,10 @@ class SynthGraph {
    *                                      has not ended by then
    * @param {boolean} [opts.compiled=true]  use (and first compile, blocking) the
    *                                      kernels; false interprets. Same samples.
-   * @returns {AudioBuffer}  length = where the voice ended
+   * @param {object}  [opts.loop]         {length, crossfade, start, snap, curve,
+   *                                      releaseFade}: render one period of a
+   *                                      seamless loop (LOOPS above)
+   * @returns {AudioBuffer}  length = where the voice ended (a loop: one period)
    * @throws {TypeError|RangeError}  unknown option or parameter, bad value
    */
   render(opts) {}
@@ -302,6 +402,10 @@ class AudioContext {
    * @param {number}  [opts.bus=0]        bus id to route to
    * @param {number[]} [opts.position]    [x, y, z]: makes the voice positional
    *                                      (distance, air, delay, HRTF as clips)
+   * @param {object}  [opts.loop]         {length, crossfade, start, snap, curve,
+   *                                      releaseFade}: a looping voice, playing
+   *                                      render({loop})'s period until releaseSynth
+   *                                      (LOOPS above); rendered here, on this thread
    * @returns {number}  playback id
    * @throws {TypeError|RangeError}
    */
@@ -309,7 +413,8 @@ class AudioContext {
 
   /**
    * Note-off: every held envelope of the voice (an ADSR's sustain, a segment
-   * envelope's `hold`) moves on to its release. Unknown ids are ignored.
+   * envelope's `hold`) moves on to its release. A looping voice crossfades
+   * into its release tail and then ends. Unknown ids are ignored.
    * @param {number} id  from playSynth
    */
   releaseSynth(id) {}

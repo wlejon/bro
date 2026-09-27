@@ -160,7 +160,22 @@
  *                                     K-weighted, 400 ms blocks at 75 % overlap, -70 LUFS
  *                                     absolute and -10 LU relative gates (one block when the
  *                                     clip is shorter than 400 ms). A full-scale 1 kHz sine
- *                                     reads -3.01. null when nothing passes the absolute gate
+ *                                     reads -3.01. null when nothing passes the absolute gate.
+ *                                     Under 400 ms its one block is the clip's energy over the
+ *                                     clip's own length, so silence around the sound lowers
+ *                                     it: judge short clips by lufsShort / loudness
+ * @property {number|null} lufsShort   short-clip loudness, meaningful at any length: the
+ *                                     loudest 100 ms window of the K-weighted signal (a clip
+ *                                     under 100 ms counts as zero-padded to one window), LUFS
+ *                                     units. Independent of silence around the sound, exactly
+ *                                     +6.02 dB per doubling of level, a steady sound reads its
+ *                                     lufs (the 1 kHz sine -3.01 even at 300 ms), and clicks
+ *                                     shorter than 100 ms read by their energy (twice as long,
+ *                                     ~+3 dB), as the ear integrates them. null under -70
+ * @property {number|null} loudness    the loudness the ear judges by: lufsShort under 400 ms,
+ *                                     lufs from 800 ms, and between them a blend in dB weighted
+ *                                     by the duration (continuous in the clip's length).
+ *                                     compare() normalises by it and fit() can target it
  * @property {number} centroidHz       spectral centroid of the long-term average power
  *                                     spectrum (frames within 60 dB of the loudest)
  * @property {number} flatness         spectral flatness (geometric / arithmetic mean power,
@@ -184,8 +199,12 @@
 
 /**
  * compare() result. Both clips are brought to the lower of their two sample
- * rates (broaudio's polyphase resampler), each normalised to -23 LUFS (to
- * -23 dBFS RMS when either has no LUFS), so level never counts, and
+ * rates (broaudio's polyphase resampler), each normalised to -23 on one
+ * loudness scale for both (Measurement.loudness's blend weighted by the
+ * *shorter* clip's duration: lufsShort when either clip is under 400 ms, lufs
+ * when both are 800 ms or longer; -23 dBFS RMS when either has none), so
+ * level never counts, and a short click and the same click with silence
+ * after it are equally loud, and
  * onset-aligned (first envelope frame within 30 dB of its peak, then the
  * lag within ±maxShift with the smallest envelope distance). Lengths may
  * differ: the shorter clip counts as silence past its end, so ringing
@@ -201,7 +220,10 @@
  *                                    + 0.2·|inharmonicityDiff|
  * @property {number} sampleRate      the rate the comparison ran at
  * @property {number} offsetTime      how much later the clip starts than the reference (s)
- * @property {number} loudnessDiffDb  clip LUFS - reference LUFS, before normalisation
+ * @property {number} loudnessDiffDb  clip loudness - reference loudness on that scale, before
+ *                                    normalisation
+ * @property {'lufs'|'lufsShort'|'blend'|'rms'} loudnessScale  the scale loudnessDiffDb and the
+ *                                    normalisation used
  * @property {number} envelopeDb      mean |difference| of the two peak-relative envelopes
  *                                    (floored at -60 dB) over frames where either is above the floor
  * @property {number} spectrogramDb   mean |difference| of 40-band mel spectrograms (40 Hz ..
@@ -405,12 +427,17 @@ bro.ear.spectrogram = function(clipOrClips, opts) {};
  *                                             peakTime, tailTime, t60, weightedRingTime,
  *                                             strongestRingTime
  *   dB/s, |log2((|m| + 1) / (|t| + 1))|:      decayRate
- *   dB, |m - t| / 10:                         peakDb, envelopePeakDb, rmsDb, lufs
+ *   dB, |m - t| / 10:                         peakDb, envelopePeakDb, rmsDb, lufs,
+ *                                             lufsShort, loudness
  *   0..1, |m - t| / 0.25:                     flatness, tonality, inharmonicity,
  *                                             ringScore, sparsity
  * A value the render does not have (t60 of a sound that does not decay,
- * partialHz with no partial) costs 2. Level fields (peakDb, rmsDb, lufs) read
- * the render as it is: loudness is not normalised as compare() normalises it.
+ * partialHz with no partial) costs 2. Level fields (peakDb, rmsDb, lufs,
+ * lufsShort, loudness) read the render as it is: loudness is not normalised
+ * as compare() normalises it. For a cue that may render shorter than 400 ms
+ * (UI clicks, ticks), target `loudness` (or `lufsShort`), not `lufs`: a
+ * sub-block render's lufs is its energy over its own length, so a fit to it
+ * trades level against decay time and tail length.
  * @typedef {number|{value: number, weight?: number, scale?: number}} EarFitMeasure
  *   `scale` replaces the divisor (1 octave, 1 doubling, 10 dB, 0.25).
  */
@@ -454,6 +481,12 @@ bro.ear.spectrogram = function(clipOrClips, opts) {};
  * @property {number} [maxDuration]          render cap, s; default 2 × the reference + 0.25,
  *   else 10 (most voices end by themselves first)
  * @property {boolean} [compiled=true]       render through the compiled kernels (same samples)
+ * @property {{length: number, crossfade?: number, start?: number, snap?: boolean,
+ *             curve?: 'auto'|'power'|'linear', releaseFade?: number}} [loop]
+ *   every candidate renders one period of this seamless loop (SynthGraph.render's
+ *   `loop`, see audio-synth-graph-api.js LOOPS) instead of a one-shot; maxDuration
+ *   is unused. With snap (the default) periodic rates move to whole cycles per
+ *   period, so a searched frequency lands on the snapped grid
  * @property {function(EarFitProgress): (boolean|void)} [onProgress]  after every generation;
  *   in the sync form, returning false cancels
  * @property {function(?EarFitResult, {cancelled: boolean, error?: string})} [onDone]
@@ -497,8 +530,9 @@ bro.ear.spectrogram = function(clipOrClips, opts) {};
  *             generationBest: number, sigma: number, seconds: number}[]} history
  * @property {{samples: Float32Array, sampleRate: number, channels: 1}} clip  the best render
  * @property {{params: Object<string, number>, seed: number, jitter: boolean,
- *             sampleRate: number, maxDuration: number}} render
- *   SynthGraph.render options that reproduce `clip` bit for bit
+ *             sampleRate: number, maxDuration: number, loop?: object}} render
+ *   SynthGraph.render options that reproduce `clip` bit for bit (`loop` when the
+ *   fit rendered loops)
  */
 
 /**
