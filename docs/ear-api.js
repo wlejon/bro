@@ -351,6 +351,20 @@ bro.ear.spectrogram = function(clipOrClips, opts) {};
  *   embeds one window.
  * @property {number} [cropAt] -  Window start in seconds for long: 'crop'
  *   (default: centred).
+ * @property {'silence'|'repeat'|'auto'} [pad='auto'] -  Clips under 10 s:
+ *   how they are filled out to the 10 s window. 'repeat' is the reference
+ *   front-end (transformers' "repeatpad", the checkpoint's own
+ *   preprocessor_config): the clip is tiled as many whole times as fit, then
+ *   zeros, so a 0.3 s gunshot becomes 33 shots in a row and CLAP hears a
+ *   drum loop or a rhythm. 'silence' places the clip once at the start and
+ *   fills the rest with zeros (transformers' "pad"), so a one-shot is scored
+ *   as one event. 'auto', the default, is 'silence' for clips under 2 s
+ *   (measured at 48 kHz after resampling) and 'repeat', as the reference
+ *   does, from 2 s to 10 s. Before 'auto', every short clip was repeated.
+ *   Pass 'repeat' to get transformers' embedding of a short clip exactly.
+ *   Clips over 10 s are never padded, so the option does nothing for them.
+ *   Scores under different pads are not comparable; keep one choice across
+ *   a comparison.
  * @property {function(*, {cancelled: boolean, error?: string})} [onDone] -
  *   Run on a work thread and call back with the result; the call then
  *   returns an AsyncHandle (as the other bro.tts / bro.stt async calls do)

@@ -13,6 +13,18 @@
 //     const net = require('net');         // raw TCP client + server
 //     const dgram = require('dgram');     // raw UDP sockets
 //
+//   These are not globals, in any kind of script: a page <script>, a
+//   headless classic script, a headless ES module script (one with a
+//   top-level await), or -e. A bare `fs.readFileSync(...)` without
+//   the require line throws "ReferenceError: fs is not defined" in every one
+//   of them, so a `try { fs.mkdirSync(dir) } catch {}` swallows a missing
+//   require rather than an existing directory. require() is a global in
+//   module scripts too. `import fs from 'node:fs'` does not work: bronze
+//   resolves no builtin module specifiers, and rejects the script at compile
+//   time. The one exception is `os`, which brokit also leaves on globalThis
+//   (the same object as require('os')); prefer the require form anyway.
+//   tests/brokit/test_node_modules_{classic,module}.js pin all of this.
+//
 //   Your own files, require() also loads JS and JSON off disk, so an app's JS
 //   can be split across files instead of living in one script:
 //     const { photoFeats } = require('./photo_feats.js');  // .js optional

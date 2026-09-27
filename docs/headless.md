@@ -643,6 +643,12 @@ Virtual time starts from the wall clock at engine initialization. The timer subs
 
 ### Waiting in scripts: pump, don't await
 
+A script file with a top-level `await` runs as an ES module. It has the same
+globals as a classic script, `require` included.
+Node modules are `require('fs')` in both and never bare globals, so a bare
+`fs` is a ReferenceError in either; `import ... from 'node:fs'` is rejected
+at compile time (see docs/brokit-api.js).
+
 A script file with a top-level `await` is evaluated as an ES module, and while
 its evaluation promise is pending the runner drains **microtasks only**, no
 timers, no frame pumps. Anything delivered per-frame (`setTimeout`,
