@@ -840,6 +840,35 @@ class AudioContext {
    */
   setPlaybackSpatialPropagationDelay(playbackId, enabled) {}
 
+  // ── Compiled voice chains ───────────────────────────────────────────────
+  // Every clip playback and stream runs a per-voice chain each block: air,
+  // propagation delay, gain/pan, head shadow + occlusion, bus and send taps.
+  // The engine compiles that chain to native code with brass: air absorption
+  // runs for up to 8 voice channels at once in one SIMD kernel, and the stages
+  // after it run in one kernel per chain shape (which stages the voice has,
+  // mono or stereo, and whether its delay is settled or moving) shared by
+  // every voice of that shape. About 2x faster than the interpreted chain for
+  // moving sources, 3x for static ones. A kernel is compiled off the audio
+  // thread the first time the mixer needs it and the voice runs interpreted
+  // until then; the two paths produce the same samples bit for bit, so the
+  // switch is inaudible. Builds without a brass code generator always
+  // interpret.
+  //
+  // @example
+  //   ctx.setVoiceJitEnabled(false);   // A/B: time the interpreted chain
+  //   // ... profile ...
+  //   ctx.setVoiceJitEnabled(true);
+  //   console.log(ctx.getVoiceJitActiveVoices(), "voices ran compiled");
+
+  /** Compiled voice chains on (default) or off (interpreted, for A/B). @param {boolean} enabled */
+  setVoiceJitEnabled(enabled) {}
+  /** @returns {boolean} */
+  isVoiceJitEnabled() {}
+  /** Whether this build can compile voice chains at all. @returns {boolean} */
+  isVoiceJitAvailable() {}
+  /** Voices the last mixed block ran through a compiled kernel. @returns {number} */
+  getVoiceJitActiveVoices() {}
+
   // ── Streams ─────────────────────────────────────────────────────────────
 
   /**
