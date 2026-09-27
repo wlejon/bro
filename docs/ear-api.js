@@ -486,7 +486,14 @@ bro.ear.spectrogram = function(clipOrClips, opts) {};
  *   every candidate renders one period of this seamless loop (SynthGraph.render's
  *   `loop`, see audio-synth-graph-api.js LOOPS) instead of a one-shot; maxDuration
  *   is unused. With snap (the default) periodic rates move to whole cycles per
- *   period, so a searched frequency lands on the snapped grid
+ *   period (including one fed by a mix / mul of numbers), so a searched
+ *   frequency lands on the snapped grid. The search itself runs over the
+ *   unsnapped values (the distance is flat between grid points); with jitter
+ *   off the result reports the SNAPPED values the clip plays, in params,
+ *   searched[].value and render.params, so they round-trip:
+ *   graph.values(r.render) equals r.params, and graph.render(r.render) is r.clip.
+ *   With jitter on, the reported values are the pre-jitter, pre-snap ones
+ *   (each seed snaps its own jittered values)
  * @property {function(EarFitProgress): (boolean|void)} [onProgress]  after every generation;
  *   in the sync form, returning false cancels
  * @property {function(?EarFitResult, {cancelled: boolean, error?: string})} [onDone]

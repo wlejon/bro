@@ -13,6 +13,8 @@
  *   graph.render(opts?)                  offline: a mono AudioBuffer, at once,
  *                                        no device, no file (bro.ear takes it);
  *                                        with `loop`, one period of a seamless loop
+ *   graph.values(opts?)                  the parameter values a trigger resolves
+ *                                        to (jittered, clamped, loop-snapped)
  *   ctx.playSynth(graph, opts?)          live: a playback id, plain or positional;
  *                                        with `loop`, it loops until released
  *   ctx.releaseSynth(id)                 note-off (envelopes move to release)
@@ -277,15 +279,28 @@
  * the loop, between two stretches of the same sound. 'power' is equal power
  * (right for noise), 'linear' equal gain (right for identical halves, a
  * snapped settled tone), and 'auto' measures the two halves' correlation and
- * corrects equal power for it (1: equal gain, 0: equal power). crossfade 0
- * is a hard cut (the voice's frames exactly; the seam is not continuous).
+ * corrects equal power for it (1: equal gain, 0: equal power). The curve is
+ * chosen PER LAYER: each layer is cut and blended on its own, with its own
+ * 'auto' correlation, and the blended layers are then summed as the voice
+ * sums them. So a hum layer crossfades at equal gain and a hiss layer at
+ * equal power, and each holds its level through the crossfade (a hum-plus-
+ * hiss pair as two layers: hum +0.00 dB, hiss +0.05 dB mid-crossfade; as
+ * one layer, one compromise curve: hum +1.2 dB, hiss -1.6 dB). Put sounds of
+ * different character in different layers to get this. crossfade 0 is a
+ * hard cut (the voice's frames exactly; the seam is not continuous).
  *
  * snap moves every constant periodic rate to a whole number of cycles per
  * period, at least one: oscillator frequencies, FM carrier frequencies (the
  * ratio follows so the modulator is whole too) and impulse rates. A 0.3 Hz
- * LFO in a 0.5 s loop becomes 2 Hz; a 55.3 Hz saw becomes 56 Hz. Frequencies
- * that are signals (a sweep, a mix) are not snapped. A snapped settled tone
- * tiles as one continuous waveform.
+ * LFO in a 0.5 s loop becomes 2 Hz; a 55.3 Hz saw becomes 56 Hz. A rate fed
+ * by a `mix` or `mul` of numbers only (nested up to 8 deep) counts as a
+ * number: the chain is folded and one parameter moves to land it on the grid,
+ * a mix's first number input with a non-zero weight (its weight and gain are
+ * kept), a mul's first factor. freq: 'f' with f = mix [40, 15.3] in a 0.5 s loop
+ * plays 56 Hz as f.inputs.0 = 40.7. A rate that is a real signal (a sweep, an
+ * LFO, an envelope anywhere in the chain) is not snapped. Snapping is
+ * idempotent: already-snapped values stay put. A snapped settled tone tiles
+ * as one continuous waveform. values({ loop }) reports the snapped numbers.
  *
  * render({ loop }) returns exactly one period (length * sampleRate samples,
  * rounded); maxDuration does not apply. playSynth(graph, { loop }) renders
@@ -369,6 +384,29 @@ class SynthGraph {
    * @throws {TypeError|RangeError}  unknown option or parameter, bad value
    */
   render(opts) {}
+
+  /**
+   * The parameter values one trigger resolves to: the declared values, then
+   * `params`, then the seed's jitter, then clamping, then (with a snapping
+   * `loop`) the snap. These are the numbers render() / playSynth play for the
+   * same options, and they round-trip: render({ ...opts, params: values(opts) })
+   * with jitter false gives the same samples. Takes render()'s options, so
+   * values(fitResult.render) reads what a bro.ear.fit result plays;
+   * maxDuration and compiled are validated and ignored.
+   *
+   *   const g = new SynthGraph({ nodes: { f: { type: 'mix', inputs: [40, 15.3] },
+   *                                       s: { type: 'osc', wave: 'saw', freq: 'f' } },
+   *                              output: 's' });
+   *   g.values({ jitter: false })['f.inputs.0']                        // 40
+   *   g.values({ jitter: false, loop: { length: 0.5 } })['f.inputs.0'] // 40.7 (56 Hz)
+   *
+   * @param {object} [opts]  as render(): sampleRate, seed, params, jitter, loop
+   *                         (sampleRate matters only for snapping: a period is
+   *                         a whole number of samples)
+   * @returns {Object<string, number>}  parameter name -> value, every parameter
+   * @throws {TypeError|RangeError}  as render(), messages prefixed 'values: '
+   */
+  values(opts) {}
 }
 
 /**
