@@ -267,7 +267,9 @@ void TransitionManager::onStyleChange(dom::Element* elem,
     std::vector<std::pair<std::string, std::string>> completed = std::move(et.completed);
     et.completed.clear();
 
-    for (auto& [prop, newVal] : newStyle) {
+    for (auto& entry : newStyle) {
+        const std::string& prop = entry.first;
+        std::string& newVal = entry.second;
         if (skipProperty(prop)) continue;
         const int idx = matchIndex(lists, prop);
         auto runIt = std::find_if(et.running.begin(), et.running.end(),
