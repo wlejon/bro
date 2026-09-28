@@ -105,10 +105,25 @@ ABI_HEADER="$BRONZE_DIR/src/abi/bronze_abi.h"
 ABI_TLS_HEADER="$BRONZE_DIR/src/abi/bronze_abi_tls.h"
 # sha256sum is coreutils; macOS before 14 has only shasum.
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
+# bronze_abi.h's text is kept in parts (bronze's cmake/bronze_abi_text.cmake):
+# a part named there is put back in place of its `#include "abi/<part>"` line
+# before hashing, exactly as bronze's build reads it. The TLS header keeps its
+# include and is hashed after, on its own.
+abi_text() {
+    awk -v dir="$(dirname "$ABI_HEADER")" '
+        /^#include "abi\/bronze_abi_(functions|layout)\.h"$/ {
+            part = $0; sub(/^#include "abi\//, "", part); sub(/"$/, "", part)
+            f = dir "/" part
+            while ((getline l < f) > 0) print l
+            close(f)
+            next
+        }
+        { print }' "$ABI_HEADER"
+}
 if [[ -f "$ABI_TLS_HEADER" ]]; then
-    FP="$(cat "$ABI_HEADER" "$ABI_TLS_HEADER" | sha256 | cut -c1-8)"
+    FP="$( { abi_text; cat "$ABI_TLS_HEADER"; } | sha256 | cut -c1-8)"
 else
-    FP="$(sha256 "$ABI_HEADER" | cut -c1-8)"
+    FP="$(abi_text | sha256 | cut -c1-8)"
 fi
 
 case "$(uname -s)" in
