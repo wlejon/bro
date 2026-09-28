@@ -74,6 +74,11 @@ struct EngineConfig {
     // (Scrollbar::colorsFor).
     Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f};
     std::function<void(Engine&)> installHostBindings;
+    // Called on each Worker thread after its `bro` root is in, so an embedder
+    // can put its own namespace (bro.<app>) into workers as well. Runs on the
+    // worker's thread with that thread's registry: any native state it binds
+    // must be per thread.
+    std::function<void()> installWorkerHostBindings;
 };
 
 } // namespace bro::engine

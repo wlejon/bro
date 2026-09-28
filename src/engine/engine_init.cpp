@@ -77,6 +77,7 @@ Engine::Engine(const EngineConfig& config)
     appDir_ = config.appDir;
     titleOverride_ = config.title;
     installHostBindings_ = config.installHostBindings;
+    installWorkerHostBindings_ = config.installWorkerHostBindings;
     initDevLoopConfig(config);
     // JS runs on bronze's tiered default; BRO_JIT_TIER pins a tier to debug one.
     bronze_host::applyJitTierOverride();

@@ -288,6 +288,7 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         config.hostProvidesCompiledApp =
             hooks.providesCompiledApp && hooks.providesCompiledApp(config.appDir);
         config.installHostBindings = hooks.installHostBindings;
+        config.installWorkerHostBindings = hooks.installWorkerHostBindings;
 
         if (hooks.beforeEngine) hooks.beforeEngine();
 

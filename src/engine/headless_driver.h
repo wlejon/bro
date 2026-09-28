@@ -23,6 +23,9 @@ struct HeadlessHooks {
     /// Host bindings to register when bronze web host globals are installed.
     std::function<void(Engine&)> installHostBindings;
 
+    /// Per-thread host bindings for each Worker (EngineConfig::installWorkerHostBindings).
+    std::function<void()> installWorkerHostBindings;
+
     /// Asked once the app directory is resolved and before the Engine is
     /// constructed: is `afterEngine` going to run compiled logic for THIS app?
     /// Forwarded to EngineConfig::hostProvidesCompiledApp, which is what lets
