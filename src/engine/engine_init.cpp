@@ -630,6 +630,10 @@ canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
     return csPtr;
 }
 
+#if BRO_WITH_3D
+static void severSceneGraphLink(dom::Element* el);
+#endif
+
 scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
 #if !BRO_WITH_3D
     (void)canvas;
@@ -637,60 +641,95 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
 #else
     if (!gl_) return nullptr;
 
+    // A CanvasScene for `canvas` — the 2D layer a graph's sprites and shapes
+    // draw into — registered with the compositor and linked to the element.
+    auto bindSceneCanvas = [this](dom::Element* canvas) -> canvas::CanvasScene* {
+        auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+        canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
+            auto* elem = static_cast<dom::Element*>(ud);
+            if (!elem->parentNode()) {
+                ox = oy = ow = oh = 0;
+                return;
+            }
+            dom::AbsoluteRect r = dom::absoluteContentBox(elem);
+            ox = r.x; oy = r.y; ow = r.width; oh = r.height;
+        }, canvas);
+        canvasScene->setDetachedCallback([](void* ud) -> bool {
+            auto* n = static_cast<dom::Element*>(ud);
+            while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+            return n->tagName() != "html" && n->tagName() != "HTML";
+        }, canvas);
+        canvasScene->setLiveCheck([](void* doc, void* node) -> bool {
+            return static_cast<dom::Document*>(doc)->isNodeLive(
+                static_cast<dom::Element*>(node));
+        }, canvas->document());
+        auto* csPtr = canvasScene.get();
+        canvas->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
+        addCanvasScene(std::move(canvasScene));
+        return csPtr;
+    };
+
     if (canvas && canvas->sceneGraph()) {
         if (auto* existing = sceneGraphForElement(canvas)) return existing;
     }
     if (!canvas) return nullptr;
 
-    auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
-    canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
-        auto* elem = static_cast<dom::Element*>(ud);
-        if (!elem->parentNode()) {
-            ox = oy = ow = oh = 0;
-            return;
-        }
-        dom::AbsoluteRect r = dom::absoluteContentBox(elem);
-        ox = r.x; oy = r.y; ow = r.width; oh = r.height;
-    }, canvas);
-    canvasScene->setDetachedCallback([](void* ud) -> bool {
-        auto* n = static_cast<dom::Element*>(ud);
-        while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
-        return n->tagName() != "html" && n->tagName() != "HTML";
-    }, canvas);
-    canvasScene->setLiveCheck([](void* doc, void* node) -> bool {
-        return static_cast<dom::Document*>(doc)->isNodeLive(
-            static_cast<dom::Element*>(node));
-    }, canvas->document());
-
-    auto* csPtr = canvasScene.get();
-    canvas->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
-    addCanvasScene(std::move(canvasScene));
-
-    int cw = viewportWidth_, ch = viewportHeight_;
-    {
-        auto& box = canvas->layoutBox();
-        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
-        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
-    }
-
     auto graph = std::make_unique<scene::SceneGraph>();
-    graph->setCanvasScene(csPtr);
     graph->setPhysicsWorld(physicsWorld_.get());
-    graph->setCanvasSize(cw, ch);
+    graph->setCanvasSize(viewportWidth_, viewportHeight_);
     graph->setDeviceScale(deviceScale_.render);
     auto* graphPtr = graph.get();
-
-    canvas->setSceneGraph(graphPtr);
-    graphPtr->setFBOTextureCallback([canvas](unsigned int tex) {
-        canvas->setSceneGraphFBOTexture(tex);
-    });
     graphPtr->setGizmoProvider([this](scene::SceneGraph* g) {
         return gizmo_ ? gizmo_->meshesForRender(g)
                       : std::vector<scene::MeshNode*>{};
     });
+    // The one path that binds a graph to a canvas — at creation below, and
+    // for SceneGraph.attachTo / detach / keepAlive afterwards.
+    graphPtr->setCanvasRebinder([this, graphPtr, bindSceneCanvas](void* targetPtr) -> bool {
+        auto* target = static_cast<dom::Element*>(targetPtr);
+        auto it = std::find_if(sceneGraphs_.begin(), sceneGraphs_.end(),
+            [graphPtr](const SceneGraphEntry& e) { return e.graph.get() == graphPtr; });
+        if (it == sceneGraphs_.end()) return false;
+        dom::Element* old = liveElementOf(*it);
+        if (target && target == old && !graphPtr->parked()) return true;
+        if (target && target->sceneGraph()) return false;  // another graph's canvas
 
-    sceneGraphs_.push_back({std::move(graph), canvas,
-                            canvas->document(), canvas->nodeId()});
+        // Unbind: the old canvas stops compositing the graph, and the old
+        // CanvasScene is retired (the frame loop's detached sweep drops it).
+        // Nothing the nodes hold on the GPU is touched.
+        severSceneGraphLink(old);
+        if (auto* oldCs = graphPtr->canvasScene()) {
+            if (old && old->canvasScene() == oldCs) old->setCanvasScene(nullptr);
+            oldCs->onElementFinalized();
+        }
+        graphPtr->setCanvasScene(nullptr);
+        graphPtr->setFBOTextureCallback([](unsigned int) {});
+        it->element = nullptr;
+        it->document = nullptr;
+        it->elementId = 0;
+        graphPtr->setParked(true);
+        if (!target) return true;
+
+        auto* csPtr = bindSceneCanvas(target);
+        graphPtr->setCanvasScene(csPtr);
+        int cw = graphPtr->canvasWidth(), ch = graphPtr->canvasHeight();
+        const auto& box = target->layoutBox();
+        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
+        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
+        graphPtr->setCanvasSize(cw, ch);
+        target->setSceneGraph(graphPtr);
+        graphPtr->setFBOTextureCallback([target](unsigned int tex) {
+            target->setSceneGraphFBOTexture(tex);
+        });
+        it->element = target;
+        it->document = target->document();
+        it->elementId = target->nodeId();
+        graphPtr->setParked(false);
+        return true;
+    });
+    sceneGraphs_.push_back({std::move(graph), nullptr, nullptr, 0});
+    graphPtr->setParked(true);
+    graphPtr->rebindCanvas(canvas);
     return graphPtr;
 #endif  // BRO_WITH_3D
 }
@@ -718,6 +757,20 @@ static void severSceneGraphLink(dom::Element* el) {
 }
 
 void Engine::pruneDetachedSceneGraphs() {
+    // A keepAlive graph whose canvas left the DOM (or died) is parked, not
+    // destroyed: its GPU state waits for SceneGraph.attachTo on a new canvas.
+    // Parked entries have no element, which the sweep below skips.
+    for (auto& sg : sceneGraphs_) {
+        if (!sg.element || !sg.graph || !sg.graph->keepAlive()) continue;
+        dom::Element* el = liveElementOf(sg);
+        bool detached = !el;
+        if (el) {
+            auto* n = el;
+            while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+            detached = n->tagName() != "html" && n->tagName() != "HTML";
+        }
+        if (detached) sg.graph->rebindCanvas(nullptr);
+    }
     sceneGraphs_.erase(
         std::remove_if(sceneGraphs_.begin(), sceneGraphs_.end(),
             [this](SceneGraphEntry& sg) {

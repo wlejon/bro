@@ -472,4 +472,21 @@ Value makeCanvasElementValue(dom::Element* el) {
     return makeCanvasValue(el);
 }
 
+#if BRO_WITH_3D
+// SceneGraph.attachTo's half on the canvas (native_scene_attach.cpp): the
+// canvas enters 'scene' mode and getContext('scene') answers `scene` from now
+// on. An empty string when that is allowed; else why not (the canvas already
+// holds another kind of context). Both values must be current at the call.
+std::string adoptSceneContext(dom::Element* el, Value canvasValue, Value scene) {
+    CanvasState* cs = canvasStateFor(el);
+    if (!cs || !cs->el) return "the element is not a canvas";
+    if (!cs->contextType.empty() && cs->contextType != "scene") {
+        return "the canvas already has a '" + cs->contextType + "' context";
+    }
+    cs->contextType = "scene";
+    ev::setProperty(canvasValue, "__bro_scene__", scene);
+    return "";
+}
+#endif
+
 }  // namespace bro::bronze_host

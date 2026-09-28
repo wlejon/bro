@@ -450,8 +450,11 @@ bool bro_scene_SceneNode_isTube(void* self) {
 
 namespace bro::bronze_host {
 
+bool registerSceneAttachNatives(std::string* error);  // native_scene_attach.cpp
+
 bool registerSceneExtraNatives(std::string* error) {
     using natives::fn;
+    if (!registerSceneAttachNatives(error)) return false;
     static const char* const N = "__bro_native.scene.SceneNode";
     return fn("__bro_native.scene.SceneNode_alphaCutoff_get", (void*)&bro_scene_SceneNode_alphaCutoff_get, "f64", {N}, error) &&
            fn("__bro_native.scene.SceneNode_alphaCutoff_set", (void*)&bro_scene_SceneNode_alphaCutoff_set, "void", {N, "f64"}, error) &&

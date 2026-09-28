@@ -40,8 +40,15 @@ class Worker {
   onmessageerror;
 
   /**
+   * Structured clone. Cost is roughly proportional to the bytes sent:
+   * objects sharing a shape send their keys once per message (a Map of 10k
+   * small records clones in ~2 ms and rebuilds in ~4 ms). ArrayBuffer bytes
+   * of 4 KB or more are copied ONCE, out of band, and the receiver adopts
+   * that block without a second copy; a buffer in `transfer` is copied once
+   * the same way and detached on the sender. Transferring an ImageBitmap
+   * moves its pixels; a Mesh must be transferred (it moves by pointer).
    * @param {*} message
-   * @param {Array<Object>} [transfer]
+   * @param {Array<Object>} [transfer]  ArrayBuffers, ImageBitmaps, Meshes
    */
   postMessage(message, transfer) {}
 

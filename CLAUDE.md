@@ -147,6 +147,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `dialogs-api.js` | native file/folder dialogs (blocking, so never trigger them in tests) |
 | `menu-api.js` | `bro.menu`: native menu bar |
 | `time-api.js` | `bro.time`: global pause + timescale over one engine-owned scaled clock |
+| `profiler-api.js` | `bro.profiler`: bronze's sampling profiler from script: `start({hz, threads})` / `stop({callers, report})` → per-function self/total + tier (interpreter / tier 1 / tier 2 / aot / native), caller edges, text; zero cost while stopped |
 | `gizmo-api.js` | `bro.gizmo`: 3D transform handles |
 | `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis, `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |

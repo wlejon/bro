@@ -3,16 +3,19 @@
 #include "bronze_host/gl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_node_sweep.h"
+#include "bronze_host/host_worker_msg.h"
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
 
+#include <chrono>
 #include <vector>
 #include <string>
 
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#include "scene/gpu_upload_stats.h"
 #endif
 
 #if BRO_WITH_VISION
@@ -310,6 +313,21 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         return out.get();
     });
 
+    // The scene's GPU upload counters (scene/gpu_upload_stats.h), process-wide
+    // and monotonic: a test diffs two reads.
+    host.def("sceneUploadStats", 0, [](Value, std::span<const Value>) {
+        ObjectBuilder out;
+#if BRO_WITH_3D
+        auto& s = scene::gpuUploadStats();
+        out.set("meshUploads", ev::fromDouble(double(s.meshUploads.load())));
+        out.set("meshBytes", ev::fromDouble(double(s.meshBytes.load())));
+        out.set("textureUploads", ev::fromDouble(double(s.textureUploads.load())));
+        out.set("textureBytes", ev::fromDouble(double(s.textureBytes.load())));
+        out.set("sceneContexts", ev::fromDouble(double(hostEngine() ? hostEngine()->sceneContextCount() : 0)));
+#endif
+        return out.get();
+    });
+
     host.def("hasJsListener", 2, [](Value, std::span<const Value> a) {
         if (a.size() < 2) return ev::throwTypeError("__host.hasJsListener(element, type)");
         auto* el = hostElementOf(a[0]);
@@ -428,6 +446,28 @@ void installHeadlessTestHooks(engine::Engine& engine) {
         using namespace std::chrono;
         return ev::fromDouble(
             duration<double, std::milli>(steady_clock::now().time_since_epoch()).count());
+    });
+
+    // The structured clone a postMessage crosses as (host_worker_msg.cpp),
+    // both halves in this realm and timed apart: {serializeMs, deserializeMs,
+    // bytes, value}. What tests/workers/test_clone_bench.js measures.
+    host.def("cloneBench", 2, [](Value, std::span<const Value> a) -> Value {
+        if (a.empty()) return ev::throwTypeError("__host.cloneBench(value, transfer?)");
+        using clock = std::chrono::steady_clock;
+        std::vector<ev::Persistent> transfers = collectTransferList(a);
+        Message msg;
+        const std::vector<Value> transferVals = currentValues(transfers);
+        const auto t0 = clock::now();
+        if (!serializeMessage(a[0], transferVals, msg)) return ev::undefined();
+        const auto t1 = clock::now();
+        ev::Persistent out(deserializeMessage(msg));
+        const auto t2 = clock::now();
+        ObjectBuilder res;
+        res.set("serializeMs", ev::fromDouble(std::chrono::duration<double, std::milli>(t1 - t0).count()));
+        res.set("deserializeMs", ev::fromDouble(std::chrono::duration<double, std::milli>(t2 - t1).count()));
+        res.set("bytes", ev::fromDouble(static_cast<double>(msg.data.size())));
+        res.set("value", out.get());
+        return res.get();
     });
 
     ev::registerGlobal("__host", host.get());

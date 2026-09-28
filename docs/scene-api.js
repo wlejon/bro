@@ -1114,6 +1114,62 @@ class SceneGraph {
    */
   root;
 
+  // ── Moving a scene to another canvas ──────────────────────────────────────
+  //
+  // A scene belongs to the canvas that created it, and by default dies with
+  // it: when that canvas leaves the DOM the engine reclaims the graph and
+  // everything it uploaded. To rebuild a page around a live world (swap the
+  // canvas element, re-render a panel) without re-authoring and re-uploading
+  // it, move the scene instead:
+  //
+  //     scene.keepAlive = true;          // survive the old canvas leaving the DOM
+  //     oldCanvas.remove();              // ... the page rebuilds ...
+  //     scene.attachTo(newCanvas);       // same nodes, same GPU buffers/textures
+  //
+  // or, with both canvases live, just `scene.attachTo(newCanvas)`. Meshes,
+  // textures, instance buffers, materials, lights, camera and animation state
+  // all stay; nothing is re-uploaded (tests/scene/test_scene_attach.js checks
+  // the upload counters). Only the canvas binding changes: the new canvas
+  // composites the scene from its next frame, its size drives the aspect as
+  // usual, and `newCanvas.getContext('scene')` answers this scene.
+
+  /**
+   * Show this scene on `canvas` (a <canvas> of the main document with no
+   * other context, or none yet). The canvas it was on stops showing it and
+   * may take a new scene of its own. Returns the scene. TypeError for a
+   * non-canvas, a canvas with a 2d/webgl context, or one already showing
+   * another scene.
+   *
+   * @param {HTMLCanvasElement} canvas
+   * @returns {SceneGraph}
+   */
+  attachTo(canvas) {}
+
+  /**
+   * Park the scene on no canvas: it is not rendered (and costs no GPU time)
+   * until attachTo, and it is not reclaimed with a canvas. A parked scene
+   * lives until it is attached again or the page unloads — drop the last
+   * reference to one and its GPU memory stays held until then.
+   *
+   * @returns {SceneGraph}
+   */
+  detach() {}
+
+  /**
+   * Whether the scene is on a canvas (false while parked).
+   * @readonly
+   * @type {boolean}
+   */
+  attached;
+
+  /**
+   * When true, the scene is parked (see detach) instead of destroyed when
+   * its canvas leaves the DOM or is collected, ready for attachTo. Default
+   * false: the scene is reclaimed with its canvas.
+   * @type {boolean}
+   */
+  keepAlive;
+
   /**
    * @type {number}
    */

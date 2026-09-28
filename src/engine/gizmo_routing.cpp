@@ -123,7 +123,7 @@ bool Engine::gizmoHandleMouseMove(float x, float y) {
     // with a valid camera.
     if (!g) {
         for (auto& entry : sceneGraphs_) {
-            if (entry.graph && entry.graph->canvasWidth() > 0) {
+            if (entry.graph && entry.element && entry.graph->canvasWidth() > 0) {
                 g = entry.graph.get();
                 float ex, ey, ew, eh;
                 if (elementAbsoluteBox(entry.element, ex, ey, ew, eh)) {

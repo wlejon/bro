@@ -1,5 +1,6 @@
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
+#include "scene/gpu_upload_stats.h"
 #include "render/gl_context.h"
 #include "util/log.h"
 
@@ -230,6 +231,7 @@ static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
                      p.w, p.h, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, p.data.data());
+        noteTextureUpload(p.data.size());
         glGenerateMipmap(GL_TEXTURE_2D);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -527,6 +529,7 @@ static void flushUserTex(MeshNode::UserTexture& t) {
         if (t.dirty) {
             glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, t.w, t.h, 0,
                          format, GL_FLOAT, t.data.data());
+            noteTextureUpload(t.data.size() * sizeof(t.data[0]));
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                             t.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -686,6 +689,7 @@ static void uploadInterleavedMesh(const bromesh::MeshData& mesh,
                  mesh.indices.size() * sizeof(uint32_t),
                  mesh.indices.data(), GL_STATIC_DRAW);
     indexCount = (GLsizei)mesh.indices.size();
+    noteMeshUpload(interleaved.size() * sizeof(float) + mesh.indices.size() * sizeof(uint32_t));
 
     glBindVertexArray(0);
 }

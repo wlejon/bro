@@ -557,6 +557,9 @@ void SceneGraph::syncAgents(float dt) {
     }
 }
 void SceneGraph::render() {
+    // Parked (no canvas): nothing to draw into, and nothing is lost by not
+    // drawing — the next attach renders the current state.
+    if (parked_) return;
     // Re-derive the view from the active camera node (a JS transform write
     // between tick and render must land this frame), then run the per-frame
     // camera-distance pass that drives visibility-range gates + LOD chains.

@@ -246,6 +246,7 @@ private:
 
 void WorkerInstance::threadFunc() {
     ensureSharedRuntimeEnv();
+    const ProfilerThreadScope profiled(scriptPath_);  // bro.profiler {threads: 'workers'}
 
     installImageBitmapGlobals();
     installNoiseGlobals();

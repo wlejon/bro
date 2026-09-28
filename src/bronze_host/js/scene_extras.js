@@ -220,4 +220,20 @@
     };
     ['createMesh', 'createInstancedMesh', 'createShape', 'createSprite',
      'createPhysicsNode', 'createReflectionProbe', 'createHtmlNode'].forEach(wrapFactory);
+
+    // Moving a scene between canvases with everything it has uploaded
+    // (native_scene_attach.cpp).
+    fn(SceneGraph.prototype, 'attachTo', function (canvas) {
+        __bro_native.scene.SceneGraph_attachTo(this, canvas);
+        return this;
+    });
+    fn(SceneGraph.prototype, 'detach', function () {
+        __bro_native.scene.SceneGraph_detach(this);
+        return this;
+    });
+    accessor(SceneGraph.prototype, 'attached',
+        function () { return __bro_native.scene.SceneGraph_attached_get(this); }, undefined);
+    accessor(SceneGraph.prototype, 'keepAlive',
+        function () { return __bro_native.scene.SceneGraph_keepAlive_get(this); },
+        function (v) { __bro_native.scene.SceneGraph_keepAlive_set(this, !!v); });
 })();

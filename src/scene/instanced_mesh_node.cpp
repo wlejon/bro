@@ -1,5 +1,6 @@
 #include "scene/instanced_mesh_node.h"
 #include "scene/scene_graph.h"
+#include "scene/gpu_upload_stats.h"
 #include "util/log.h"
 
 #include <bromesh/manipulation/normals.h>
@@ -288,6 +289,7 @@ static void flushTex(InstancedMeshNode::PendingTex& p, GLuint& glTex) {
         glBindTexture(GL_TEXTURE_2D, glTex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         uploadAlphaCoverageMipmaps(p.w, p.h, p.data.data());
+        noteTextureUpload(p.data.size());
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -466,6 +468,7 @@ void InstancedMeshNode::uploadMeshToGPU() {
                  M.indices.size() * sizeof(uint32_t),
                  M.indices.data(), GL_STATIC_DRAW);
     indexCount_ = (GLsizei)M.indices.size();
+    noteMeshUpload(interleaved.size() * sizeof(float) + M.indices.size() * sizeof(uint32_t));
 
     // Re-bind the instance buffer's attributes (locations 8..11) into this
     // VAO. The instance VBO itself may not be uploaded yet; the bindings are

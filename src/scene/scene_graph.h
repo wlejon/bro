@@ -168,6 +168,20 @@ public:
     void setCanvasScene(canvas::CanvasScene* scene) { canvasScene_ = scene; }
     canvas::CanvasScene* canvasScene() const { return canvasScene_; }
 
+    /// Moving the graph to another canvas element, or parking it on none
+    /// (nullptr): installed by the engine that owns the graph's registry
+    /// entry (Engine::createSceneContext). Every GPU resource the nodes hold
+    /// stays where it is; only the canvas binding changes. A parked graph is
+    /// not rendered and is not reclaimed when its old canvas leaves the DOM.
+    using CanvasRebinder = std::function<bool(void* canvasElement)>;
+    void setCanvasRebinder(CanvasRebinder fn) { rebinder_ = std::move(fn); }
+    bool rebindCanvas(void* canvasElement) { return rebinder_ ? rebinder_(canvasElement) : false; }
+    bool parked() const { return parked_; }
+    void setParked(bool p) { parked_ = p; }
+    /// Park instead of being destroyed when the canvas leaves the DOM.
+    bool keepAlive() const { return keepAlive_; }
+    void setKeepAlive(bool k) { keepAlive_ = k; }
+
     /// Set canvas dimensions (needed for FBO sizing).
     void setCanvasSize(int w, int h);
     int canvasWidth() const { return canvasWidth_; }
@@ -625,6 +639,9 @@ private:
     std::vector<uint32_t> clipPlayerIdScratch_;
 
     canvas::CanvasScene* canvasScene_ = nullptr;
+    CanvasRebinder rebinder_;
+    bool parked_ = false;
+    bool keepAlive_ = false;
     physics::PhysicsWorld* physicsWorld_ = nullptr;
 
     // 3D camera matrices

@@ -123,6 +123,20 @@ bool registerSceneNatives(std::string* error);
 inline bool registerLmNatives(std::string*) { return true; }
 inline bool registerRaveNatives(std::string*) { return true; }
 bool registerMotionNatives(std::string* error);
+// bro.profiler (native_profiler.cpp, natives/profiler/): bronze's sampling
+// profiler over the threads registered with it — the main thread by
+// registerProfilerMainThread as its realm is built, each Worker's for the
+// life of a ProfilerThreadScope on that thread.
+bool registerProfilerNatives(std::string* error);
+void registerProfilerMainThread();
+// js/profiler.js: bro.profiler over those natives (host_js_modules.cpp).
+void installProfilerModule();
+struct ProfilerThreadScope {
+    explicit ProfilerThreadScope(const std::string& name);
+    ~ProfilerThreadScope();
+    ProfilerThreadScope(const ProfilerThreadScope&) = delete;
+    ProfilerThreadScope& operator=(const ProfilerThreadScope&) = delete;
+};
 inline bool registerMicNatives(std::string*) { return true; }
 inline bool registerSenseNatives(std::string*) { return true; }
 inline bool registerGestureNatives(std::string*) { return true; }

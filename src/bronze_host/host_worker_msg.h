@@ -18,9 +18,29 @@ struct SerializedImage {
     std::vector<uint8_t> pixels;
 };
 
+// A malloc'd block of ArrayBuffer bytes the message owns until a reader
+// adopts it: the receiving realm wraps it as an external ArrayBuffer
+// (createExternalArrayBuffer) with no copy, and bronze frees it when that
+// buffer is collected. Move-only.
+struct ByteBlock {
+    uint8_t* data = nullptr;
+    uint32_t size = 0;
+
+    ByteBlock() = default;
+    ByteBlock(const uint8_t* src, uint32_t n);  // copies n bytes
+    ByteBlock(ByteBlock&& o) noexcept : data(o.data), size(o.size) { o.data = nullptr; o.size = 0; }
+    ByteBlock& operator=(ByteBlock&& o) noexcept;
+    ByteBlock(const ByteBlock&) = delete;
+    ByteBlock& operator=(const ByteBlock&) = delete;
+    ~ByteBlock();
+};
+
 struct Message {
     std::vector<uint8_t> data;
-    std::vector<std::vector<uint8_t>> transferredBuffers;
+    // Out-of-band ArrayBuffer bytes: every transferred buffer, and a copied
+    // one past the inline threshold (CloneTarget::Local only). Consumed by
+    // deserializeMessage, one-shot like a transfer — hence mutable.
+    mutable std::vector<ByteBlock> buffers;
     std::vector<SerializedImage> transferredImages;
     bool isError = false;
     std::string errorMessage;
@@ -42,7 +62,13 @@ struct Message {
 // transfer list itself must keep the entries in Persistents while it does
 // (collectTransferList), because each element read can move the earlier ones,
 // and read them out (currentValues) only in the statement before the call.
-bool serializeMessage(Value val, std::span<const Value> transfers, Message& out);
+//
+// `target` Local (a Worker, a window, anything read back in this process)
+// may move ArrayBuffer bytes out of band; Wire (bro.net) keeps every byte in
+// `data`, so the message is self-contained, and refuses transfers.
+enum class CloneTarget { Local, Wire };
+bool serializeMessage(Value val, std::span<const Value> transfers, Message& out,
+                      CloneTarget target = CloneTarget::Local);
 // The reader. Malformed data throws a TypeError into the program; a caller
 // outside any call from JS (an event-loop drain) catches it with
 // ev::catchThrow.

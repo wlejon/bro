@@ -278,12 +278,12 @@ bool bro_net_sendCloneRaw(int32_t peerId, uint64_t valBits, uint64_t optsBits) {
     if (!parseSendOptions(optsBits, opts, "sendClone")) return false;
     std::vector<uint8_t> framed;
     Message msg;
-    if (!serializeMessage(val, {}, msg)) {
+    if (!serializeMessage(val, {}, msg, CloneTarget::Wire)) {
         // serializeMessage has already thrown the TypeError naming the
         // offending value; a second throw would replace it with a vaguer one.
         return false;
     }
-    if (!msg.transferredBuffers.empty() || !msg.transferredImages.empty()) {
+    if (!msg.buffers.empty() || !msg.transferredImages.empty()) {
         ev::throwTypeError("sendClone: cannot transfer buffers or images across network");
         return false;
     }
@@ -303,8 +303,8 @@ void bro_net_broadcastCloneRaw(uint64_t valBits, uint64_t optsBits) {
     if (!parseSendOptions(optsBits, opts, "broadcastClone")) return;
     std::vector<uint8_t> framed;
     Message msg;
-    if (!serializeMessage(val, {}, msg)) return;  // it threw the TypeError
-    if (!msg.transferredBuffers.empty() || !msg.transferredImages.empty()) {
+    if (!serializeMessage(val, {}, msg, CloneTarget::Wire)) return;  // it threw the TypeError
+    if (!msg.buffers.empty() || !msg.transferredImages.empty()) {
         ev::throwTypeError("broadcastClone: cannot transfer buffers or images across network");
         return;
     }

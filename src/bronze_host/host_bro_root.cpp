@@ -89,6 +89,7 @@ bool registerBroNatives(std::string* error) {
               registerLmNatives(error) &&
               registerRaveNatives(error) &&
               registerMotionNatives(error) &&
+              registerProfilerNatives(error) &&
               registerMicNatives(error) &&
               registerSenseNatives(error) &&
               registerGestureNatives(error) &&
@@ -173,7 +174,7 @@ void installBroRoots(engine::Engine& engine) {
                                              "scene", "terrain", "clipmap", "tile_world", "lighting", "animation", "lm",
                                              "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                                              "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                                             "flora", "tensor", "impostor"}));
+                                             "flora", "tensor", "impostor", "profiler"}));
     auto* dunder = new ev::Persistent(
         makeRoot({"splash", "viewport", "perf", "bronze", "menu", "settingsUI", "inspector"}));
     auto* native = new ev::Persistent(
@@ -182,7 +183,7 @@ void installBroRoots(engine::Engine& engine) {
                    "animation", "terrain", "clipmap", "tile_world", "lighting", "gizmo", "scene", "lm",
                    "rave", "motion", "mic", "sense", "gesture", "wake", "kws", "listen",
                    "triposplat", "diffusion", "vision", "diar", "stt", "tts",
-                   "flora", "tensor"}));
+                   "flora", "tensor", "profiler"}));
     auto* physicsRoot = new ev::Persistent(ev::createObject());
 #if BRO_WITH_3D
     {
@@ -315,6 +316,8 @@ void installBroRoots(engine::Engine& engine) {
     }
     installSettingsObserver(engine);
     installBroCoreModule();
+    installProfilerModule();
+    registerProfilerMainThread();
 }
 
 // `bro.<ns>.available` on every feature-gated namespace: the compiled-out

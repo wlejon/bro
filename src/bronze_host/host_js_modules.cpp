@@ -42,6 +42,7 @@ extern "C" void bro_scene_extras_main();
 extern "C" void bro_motion_main();
 extern "C" void bro_server_main();
 extern "C" void bro_impostor_main();
+extern "C" void bro_profiler_main();
 
 namespace bro::bronze_host {
 
@@ -188,6 +189,12 @@ void installServerModule() {
 // an impostor is built, never at load.
 void installImpostorModule() {
     bronze::embed::runEntry(bro_impostor_main);
+}
+
+// js/profiler.js mounts bro.profiler over __bro_native.profiler; main realm
+// only (installBroRoots).
+void installProfilerModule() {
+    bronze::embed::runEntry(bro_profiler_main);
 }
 
 }  // namespace bro::bronze_host
