@@ -109,11 +109,21 @@ public:
     };
 
     void drainMessagesToMain() {
+        // Read BEFORE the swap: alive_ drops after the thread's last
+        // postToMain, so a thread seen gone here has nothing left to post
+        // beyond the batch taken below, and once that is dispatched the
+        // wrapper no longer needs to outlive its last JS reference.
+        const bool threadDone = !alive_.load(std::memory_order_acquire);
         std::deque<std::unique_ptr<Message>> batch;
         {
             std::lock_guard<std::mutex> lock(toMainMutex_);
             batch.swap(toMainQueue_);
         }
+        struct UnpinAfter {
+            WorkerInstance* w;
+            bool done;
+            ~UnpinAfter() { if (done) w->unpinWrapper(); }
+        } unpinAfter{this, threadDone};
         if (batch.empty()) return;
 
         for (auto& msg : batch) {
@@ -169,6 +179,19 @@ public:
 
     bool isAlive() const { return alive_.load(std::memory_order_acquire); }
 
+    // A running worker keeps its Worker object alive, as the web's does: the
+    // page commonly drops its last reference right after postMessage and
+    // waits on onmessage. Without the root the wrapper is collected, its
+    // finalizer terminates the worker — joining the thread on the main
+    // thread, a stall as long as whatever the worker is in the middle of —
+    // and the reply is deleted with the instance. Main thread only: set when
+    // the wrapper is made, cleared by terminate() from JS, by the drain once
+    // the thread has ended by itself (close(), bro.server.stop()) and its
+    // last messages are delivered, and at engine shutdown.
+    void pinWrapper(Value wrapper) { self_.set(wrapper); }
+    void unpinWrapper() { self_.set(ev::undefined()); }
+    Value pinnedWrapper() const { return self_.get(); }
+
     void setOnMessage(Value cb) { onmessage_.set(cb); }
     Value getOnMessage() const { return onmessage_.get(); }
     void setOnError(Value cb) { onerror_.set(cb); }
@@ -217,6 +240,7 @@ private:
 
     ev::Persistent onmessage_;
     ev::Persistent onerror_;
+    ev::Persistent self_;
     std::vector<Listener> listeners_;
 };
 
@@ -812,9 +836,16 @@ void drainWorkerMessages() {
         workers = s_activeWorkers;
     }
     for (auto* w : workers) {
-        if (w) {
-            w->drainMessagesToMain();
+        // A callback run by an earlier worker's drain can collect a later
+        // one whose wrapper is no longer pinned; its finalizer took it out
+        // of the list, so the snapshot's pointer is checked before use.
+        {
+            std::lock_guard<std::mutex> lock(s_workersMutex);
+            if (std::find(s_activeWorkers.begin(), s_activeWorkers.end(), w) == s_activeWorkers.end()) {
+                continue;
+            }
         }
+        w->drainMessagesToMain();
     }
 }
 
@@ -827,6 +858,7 @@ void terminateAllWorkers() {
     for (auto* w : workers) {
         if (w) {
             w->terminate();
+            w->unpinWrapper();
         }
     }
 }
@@ -857,7 +889,8 @@ void installWorkerGlobals(engine::Engine& engine) {
                 s_activeWorkers.push_back(w);
             }
             w->start();
-            return g_workerClass.make(w, hostWorkerDtor);
+            w->pinWrapper(g_workerClass.make(w, hostWorkerDtor));
+            return w->pinnedWrapper();
         },
         [](ObjectBuilder& proto) {
             proto.accessor("onmessage",
@@ -919,6 +952,7 @@ void installWorkerGlobals(engine::Engine& engine) {
             proto.def("terminate", 0, [](Value thisVal, std::span<const Value>) -> Value {
                 if (auto* w = getWorker(thisVal)) {
                     w->terminate();
+                    w->unpinWrapper();
                 }
                 return ev::undefined();
             });
