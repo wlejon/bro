@@ -535,6 +535,9 @@ void WorkerInstance::threadFunc() {
         // the second worker skips the compile and starts on the code the
         // first one has tiered up.
         opts.shareAcrossThreads = true;
+        // And across launches: a worker's module graph is served from the
+        // on-disk code cache like the page's.
+        applyCodeCacheOptions(opts);
 
         auto hasAwaitStmt = [](const std::string& code) {
             size_t i = 0;

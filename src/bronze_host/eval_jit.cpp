@@ -9,12 +9,15 @@
 #include "engine/engine.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include "util/user_dirs.h"
 
 #include "eval/eval.h"
 #include "embed/embed.h"
 #include "modules/modules.h"
 
+#include <atomic>
 #include <chrono>
+#include <memory>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -181,26 +184,85 @@ void awaitScriptCompletion(engine::Engine& engine, const std::string& filename) 
     }
 }
 
-template <typename Fn>
-auto compileWithPumping(engine::Engine& engine, Fn&& compileFn) {
-    if (engine.displayMode() == engine::DisplayMode::Windowed && engine.window()) {
-        engine.setAppCompiling(true);
-        auto future = std::async(std::launch::async, std::forward<Fn>(compileFn));
-        while (future.wait_for(std::chrono::milliseconds(16)) != std::future_status::ready) {
-            if (engine.splashVisible()) {
-                engine.pumpSplashFrame(16.67);
-            } else {
-                engine.pumpEventsOnly();
-            }
+// The on-disk code cache (bronze src/eval/code_cache.h, docs/code-cache.md):
+// in the per-user cache directory unless BRO_CODE_CACHE=0 turns it off;
+// BRO_CODE_CACHE_DIR moves it and BRO_CODE_CACHE_MAX_MB bounds it.
+void configureCodeCache(bronze::eval::EvalOptions& opts) {
+    static const std::string dir = [] {
+        const char* off = std::getenv("BRO_CODE_CACHE");
+        if (off && (std::strcmp(off, "0") == 0 || std::strcmp(off, "false") == 0)) return std::string();
+        if (const char* d = std::getenv("BRO_CODE_CACHE_DIR"); d && *d) return std::string(d);
+        return util::userCacheDir() + "/code-cache";
+    }();
+    static const uint64_t maxBytes = [] {
+        if (const char* mb = std::getenv("BRO_CODE_CACHE_MAX_MB")) {
+            const long long v = std::atoll(mb);
+            if (v > 0) return static_cast<uint64_t>(v) << 20;
         }
-        engine.setAppCompiling(false);
-        return future.get();
-    } else {
-        return compileFn();
+        return uint64_t{512} << 20;
+    }();
+    opts.codeCacheDir = dir;
+    opts.codeCacheMaxBytes = maxBytes;
+}
+
+const char* cacheStatusName(bronze::eval::CodeCacheStatus s) {
+    switch (s) {
+        case bronze::eval::CodeCacheStatus::Hit: return "hit";
+        case bronze::eval::CodeCacheStatus::Miss: return "miss";
+        default: return "off";
     }
 }
 
+// Compiles `code`. In a windowed run the compile goes to another thread
+// (bronze compiles against inputs captured here, on the thread that will run
+// the program) and this thread keeps the window alive: events pumped, the
+// page's static markup drawn with the compile's progress published on <html>
+// (Engine::pumpCompileFrame, docs/compile-progress.md). Headless compiles
+// inline, which is what keeps a test run deterministic.
+std::unique_ptr<bronze::eval::CompiledScript> compileWithPumping(engine::Engine& engine,
+                                                                 bronze::eval::EvalOptions& opts,
+                                                                 const std::string& code) {
+    const auto start = std::chrono::steady_clock::now();
+    std::unique_ptr<bronze::eval::CompiledScript> compiled;
+    if (engine.displayMode() == engine::DisplayMode::Windowed && engine.window()) {
+        // Captured fresh for every compile: a retry after a failed run sees
+        // the modules that run published.
+        opts.externalModules.clear();
+        opts.externalModulesCaptured = false;
+        opts.nativeManifestJson.reset();
+        bronze::eval::captureThreadInputs(opts);
+        auto progress = std::make_shared<std::atomic<double>>(0.0);
+        opts.onProgress = [progress](const bronze::eval::CompileProgress& p) {
+            progress->store(p.fraction, std::memory_order_relaxed);
+        };
+        engine.setAppCompiling(true);
+        auto future = std::async(std::launch::async, [&opts, &code] {
+            return bronze::eval::compileScript(code, opts);
+        });
+        while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            engine.pumpCompileFrame(progress->load(std::memory_order_relaxed));
+        }
+        engine.setAppCompiling(false);
+        engine.setCompileProgress(false, 1.0);
+        opts.onProgress = nullptr;
+        compiled = future.get();
+    } else {
+        compiled = bronze::eval::compileScript(code, opts);
+    }
+    if (compiled && compiled->cacheStatus != bronze::eval::CodeCacheStatus::Off) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        LOG_INFO("compiled %s in %.0f ms (code cache %s%s%s)", opts.filename.c_str(), ms,
+                 cacheStatusName(compiled->cacheStatus), compiled->cacheNote.empty() ? "" : ": ",
+                 compiled->cacheNote.c_str());
+    }
+    return compiled;
+}
+
 } // namespace
+
+void applyCodeCacheOptions(bronze::eval::EvalOptions& opts) {
+    configureCodeCache(opts);
+}
 
 std::string wrapAsyncIife(const std::string& code, const std::string& filename) {
     // The filename as a JS string literal: backslashes (Windows paths) and
@@ -252,15 +314,14 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
     // too, so a driver's `import "/app/main.js"` binds it rather than booting
     // the app a second time. Inline script text and driver scripts are not.
     opts.publishEntry = moduleFile && !filename.empty();
+    configureCodeCache(opts);
 
     std::string execCode = code;
     if (hasAwaitStmt(execCode) && !hasImportStmt(execCode)) {
         execCode = wrapAsyncIife(execCode, filename);
     }
 
-    auto compiled = compileWithPumping(engine, [&]() {
-        return bronze::eval::compileScript(execCode, opts);
-    });
+    auto compiled = compileWithPumping(engine, opts, execCode);
     auto res = bronze::eval::runCompiledScript(std::move(compiled), opts);
 
     if (res.thrown && execCode == code && !hasImportStmt(code)) {
@@ -273,9 +334,7 @@ bronze::embed::CallResult evalScriptJitResult(engine::Engine& engine, const std:
             // The failed attempt is off the stack and superseded: its handle
             // is retired here so the one written below is the run's only one.
             if (moduleHandleOut && *moduleHandleOut) bronze::embed::unloadModule(*moduleHandleOut);
-            auto retryCompiled = compileWithPumping(engine, [&]() {
-                return bronze::eval::compileScript(wrapAsyncIife(code, filename), opts);
-            });
+            auto retryCompiled = compileWithPumping(engine, opts, wrapAsyncIife(code, filename));
             res = bronze::eval::runCompiledScript(std::move(retryCompiled), opts);
         }
     }
@@ -340,6 +399,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
     // second copy of it into this unit. The driver's OWN file is the entry and
     // is never published, so running the same driver twice runs it twice.
     opts.moduleRegistry = true;
+    configureCodeCache(opts);
 
     // The script's last statement records that it RAN to its end. A script
     // suspended at a top-level `await` (the async-IIFE form, or a module's
@@ -351,14 +411,10 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
 
     bronze::embed::CallResult res;
     if (hasAwaitStmt(content) && !hasImportStmt(content)) {
-        auto compiled = compileWithPumping(engine, [&]() {
-            return bronze::eval::compileScript(wrapAsyncIife(source, absPath.string()), opts);
-        });
+        auto compiled = compileWithPumping(engine, opts, wrapAsyncIife(source, absPath.string()));
         res = bronze::eval::runCompiledScript(std::move(compiled), opts);
     } else {
-        auto compiled = compileWithPumping(engine, [&]() {
-            return bronze::eval::compileScript(source, opts);
-        });
+        auto compiled = compileWithPumping(engine, opts, source);
         res = bronze::eval::runCompiledScript(std::move(compiled), opts);
         if (res.thrown) {
             // Rooted across the allocating toUtf8, as in evalScriptJitResult.
@@ -366,9 +422,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
             std::string errStr = bronze::embed::toUtf8(thrownRoot.get());
             res.value = thrownRoot.get();
             if (errStr.find("await") != std::string::npos && !hasImportStmt(content)) {
-                auto retryCompiled = compileWithPumping(engine, [&]() {
-                    return bronze::eval::compileScript(wrapAsyncIife(source, absPath.string()), opts);
-                });
+                auto retryCompiled = compileWithPumping(engine, opts, wrapAsyncIife(source, absPath.string()));
                 res = bronze::eval::runCompiledScript(std::move(retryCompiled), opts);
             }
         }

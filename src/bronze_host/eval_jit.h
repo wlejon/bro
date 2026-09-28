@@ -1,6 +1,7 @@
 #pragma once
 
 #include "embed/embed.h"
+#include "eval/eval.h"
 
 #include <string>
 
@@ -24,6 +25,10 @@ void applyJitTierOverride();
 /// and OSR entries) and waits out the running ones, so none is still
 /// compiling while the engine tears down.
 void stopBackgroundCompiles();
+
+/// Points `opts` at the on-disk code cache (docs/code-cache.md): the per-user
+/// cache directory, or BRO_CODE_CACHE_DIR; nothing when BRO_CODE_CACHE=0.
+void applyCodeCacheOptions(bronze::eval::EvalOptions& opts);
 
 /// The compile-and-run behind evalScriptJit: what the program produced — its
 /// completion value, or what it threw — with nothing logged and no failure

@@ -47,6 +47,12 @@ baseline-compiled up front), `2` (the whole program optimized before it
 runs) or `auto` (the default). It applies to every `bro` executable and to
 programs that embed `bro_engine`.
 
+Each script unit a reload compiles consults the on-disk code cache
+(`docs/code-cache.md`): a unit whose files did not change is loaded, not
+compiled, and the one you edited is recompiled whole (bronze infers types over
+a unit's entire module graph). While a unit compiles, the window keeps drawing
+the page's static markup (`docs/compile-progress.md`).
+
 ## Turning the watcher off
 
 - `"watch": false` in the app's `bro.json`.

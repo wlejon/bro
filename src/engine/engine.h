@@ -328,6 +328,10 @@ public:
     void setAppCompiling(bool val) { appCompiling_ = val; }
     void pumpSplashFrame(double dtMs = 16.67);
     void pumpEventsOnly();
+    /// Off-thread page compile (engine_compile_frame.cpp, docs/compile-progress.md):
+    /// one live frame, and the `bro-compiling` / `--bro-compile-progress` state on <html>.
+    void pumpCompileFrame(double progress);
+    void setCompileProgress(bool compiling, double progress);
     const std::vector<SystemDocument>& systemDocs() const { return systemDocs_; }
     std::vector<SystemDocument>& systemDocs() { return systemDocs_; }
     const std::string& systemActivePanel() const { return systemActivePanel_; }

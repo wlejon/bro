@@ -25,4 +25,11 @@ std::string userDataDir();
 /// should come into existence (the JS binding creates it on first read).
 std::string appUserDataDir(const std::string& appDir);
 
+/// The per-user directory for data bro can always rebuild — the compiled-code
+/// cache — and so the one place that should neither roam with a Windows
+/// profile nor be backed up: `%LOCALAPPDATA%\bro` on Windows,
+/// `~/Library/Caches/bro` on macOS, `$XDG_CACHE_HOME/bro` (or `~/.cache/bro`)
+/// elsewhere. Falls back to userDataDir() when none of those is known.
+std::string userCacheDir();
+
 } // namespace bro::util
