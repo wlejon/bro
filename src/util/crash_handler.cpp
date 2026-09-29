@@ -9,6 +9,7 @@
 #include "util/crash_handler.h"
 
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <csignal>
 #include <cstdio>
@@ -340,6 +341,53 @@ void printAddr(const char* label, uintptr_t addr) {
                  static_cast<unsigned long long>(addr));
 }
 
+// Walk the interrupted thread's stack directly from the ucontext registers
+// (always frame-pointer linked on Apple Silicon ARM64 and SysV x86_64).
+// When the signal handler runs on an alternate stack (sigaltstack), backtrace()
+// starts from the alt stack and cannot cross back into the interrupted thread;
+// walking from the ucontext recovers the real faulting call chain.
+void walkThreadState(void* uctx) {
+    if (uctx == nullptr) return;
+#if defined(__APPLE__) && defined(__aarch64__)
+    auto* uc = static_cast<ucontext_t*>(uctx);
+    const auto& ss = uc->uc_mcontext->__ss;
+    uintptr_t fp = static_cast<uintptr_t>(__darwin_arm_thread_state64_get_fp(ss));
+    uintptr_t sp = static_cast<uintptr_t>(__darwin_arm_thread_state64_get_sp(ss));
+    std::fprintf(stderr, "thread stack:\n");
+    for (unsigned frame = 0; frame < 32 && fp != 0 && (fp % 8) == 0 && fp >= sp; ++frame) {
+        if (write(-1, reinterpret_cast<const void*>(fp), 16) < 0 && errno == EFAULT) break;
+        const auto* rec = reinterpret_cast<const uintptr_t*>(fp);
+        uintptr_t next_fp = rec[0];
+        uintptr_t lr = rec[1] & ((uintptr_t{1} << 48) - 1);
+        if (lr == 0) break;
+        char label[16];
+        std::snprintf(label, sizeof(label), "  #%02u", frame);
+        printAddr(label, lr);
+        if (next_fp <= fp) break;
+        sp = fp + 16;
+        fp = next_fp;
+    }
+#elif defined(__linux__) && defined(__x86_64__)
+    auto* uc = static_cast<ucontext_t*>(uctx);
+    uintptr_t rbp = static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RBP]);
+    uintptr_t rsp = static_cast<uintptr_t>(uc->uc_mcontext.gregs[REG_RSP]);
+    std::fprintf(stderr, "thread stack:\n");
+    for (unsigned frame = 0; frame < 32 && rbp != 0 && (rbp % 8) == 0 && rbp >= rsp; ++frame) {
+        if (write(-1, reinterpret_cast<const void*>(rbp), 16) < 0 && errno == EFAULT) break;
+        const auto* rec = reinterpret_cast<const uintptr_t*>(rbp);
+        uintptr_t next_rbp = rec[0];
+        uintptr_t ret_ip = rec[1];
+        if (ret_ip == 0) break;
+        char label[16];
+        std::snprintf(label, sizeof(label), "  #%02u", frame);
+        printAddr(label, ret_ip);
+        if (next_rbp <= rbp) break;
+        rsp = rbp + 16;
+        rbp = next_rbp;
+    }
+#endif
+}
+
 // The calling thread's stack, from a signal handler or not. backtrace() walks
 // frame pointers (always kept on arm64 macOS), so from a handler the first
 // frames are the handler's own and the kernel's trampoline, then the
@@ -449,6 +497,7 @@ void signalHandler(int sig, siginfo_t* info, void* uctx) {
     }
     if (g_dumps.fetch_add(1) < kMaxDumps) {
         printRegisters(uctx);
+        walkThreadState(uctx);
         walkHere();
     }
     std::fprintf(stderr, "=== end crash ===\n");

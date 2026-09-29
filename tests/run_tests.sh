@@ -339,7 +339,7 @@ run_one_test() {
 
     if [[ "$OUTPUT" == *"=== bro-headless crash"* ]]; then
         echo "  FAIL  $REL  (CRASH)"
-        echo "$OUTPUT" | grep -A 60 "=== bro-headless crash" | head -70 | sed 's/^/        /'
+        echo "$OUTPUT" | grep -B 25 -A 80 "=== bro-headless crash" | head -120 | sed 's/^/        /'
         return 1
     fi
 
