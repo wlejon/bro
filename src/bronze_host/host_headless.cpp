@@ -93,7 +93,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
             broaudio::api::drainMicChunks();
 #endif
             pumpBrokitTicks();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
+            drainMicrotasksAndLocalFetches();
             return ev::undefined();
         }, 1, "advanceTime"));
 
@@ -110,7 +110,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
             pumpBrokitTicks();
             pollNet();
             fireHostObserverFrame();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
+            drainMicrotasksAndLocalFetches();
             return ev::undefined();
         }, 0, "flush"));
 
@@ -123,7 +123,7 @@ void installHeadlessGlobals(engine::Engine& engine) {
             broaudio::api::drainMicChunks();
 #endif
             pumpBrokitTicks();
-            if (ev::microtasksPending()) ev::drainMicrotasks();
+            drainMicrotasksAndLocalFetches();
             return ev::undefined();
         }, 1, "sleep"));
 

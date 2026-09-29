@@ -52,6 +52,7 @@
 
 #include "api/api.h"
 
+#include <chrono>
 #include <memory>
 
 namespace bro::bronze_host {
@@ -251,6 +252,23 @@ void pumpBrokitTicks() {
     callTick(g_pumps->wsTick, "__brokit_ws_tick");
     callTick(g_pumps->netTick, "__brokit_net_tick");
     callTick(g_pumps->fsWatchTick, "__brokit_fs_watch_tick");
+}
+
+void drainMicrotasksAndLocalFetches(bool always) {
+    // A turn's local-fetch settling stops after this long, or this many
+    // rounds (each round is a task whose reactions may issue more fetches);
+    // whatever is still parked settles at the next pump instead.
+    constexpr double kBudgetMs = 8.0;
+    constexpr int kMaxRounds = 64;
+    const auto start = std::chrono::steady_clock::now();
+    for (int round = 0;; ++round) {
+        if ((always && round == 0) || ev::microtasksPending()) ev::drainMicrotasks();
+        if (!g_pumps || round >= kMaxRounds) return;
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - start).count();
+        if (ms >= kBudgetMs && round > 0) return;
+        if (brokit::api::settleLocalFetches() == 0) return;
+    }
 }
 
 bool brokitHasPendingWork() {

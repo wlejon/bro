@@ -27,6 +27,7 @@
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "render/bidi.h"
+#include "render/system_font_mgr.h"
 
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
@@ -70,6 +71,11 @@ Engine::Engine(const EngineConfig& config)
     , viewportScrollbar_(config.viewportScrollbar)
     , elementScrollbar_(config.elementScrollbar)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
+
+    // The system font collection can take most of a second to build on some
+    // machines; start it now so it overlaps window creation and page compile
+    // rather than stalling the first layout (render/system_font_mgr.h).
+    if (displayMode_ != DisplayMode::Server) render::prewarmSystemFontMgr();
 
     splashEnabled_ = config.showSplash;
     compiledApp_ = config.compiledApp;

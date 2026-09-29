@@ -249,7 +249,7 @@ void fireAnimationFrames() {
 // and mic chunks ride the engine's ungated frame pump rather than this
 // pause-gated seam.
 void hostFrame(double dtMs) {
-    if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
+    drainMicrotasksAndLocalFetches();                    // 1
     g_host->clockMs += dtMs;                             // 2
     drainHostTasks();                                    // 3
     pumpBrokitTicks();                                   // 3b
@@ -259,10 +259,10 @@ void hostFrame(double dtMs) {
     drainHostWindowMessages();                           // 3f
     fireHostTimers(g_host->clockMs);                     // 4
     fireAnimationFrames();                               // 5
-    ev::drainMicrotasks();                               // 6
+    drainMicrotasksAndLocalFetches(/*always=*/true);     // 6
     fireHostObserverFrame();                             // 6b
     deliverWebAnimationFinishEvents();
-    ev::drainMicrotasks();                               // 6c
+    drainMicrotasksAndLocalFetches(/*always=*/true);     // 6c
     hostDomSweepFrame(dtMs);                             // 7a
     hostNotifyIdleFrame(dtMs);                           // 7
     flushHostStorage();

@@ -349,9 +349,7 @@ bool evalScriptJit(engine::Engine& engine, const std::string& code, const std::s
         return false;
     }
 
-    if (bronze::embed::microtasksPending()) {
-        bronze::embed::drainMicrotasks();
-    }
+    drainMicrotasksAndLocalFetches();
     settleRejections();
     std::fflush(stdout);
 
@@ -432,9 +430,7 @@ bool evalScriptFileJit(engine::Engine& engine, const std::string& filePath) {
         return false;
     }
 
-    if (bronze::embed::microtasksPending()) {
-        bronze::embed::drainMicrotasks();
-    }
+    drainMicrotasksAndLocalFetches();
     awaitScriptCompletion(engine, absPath.string());
     settleRejections();
     std::fflush(stdout);

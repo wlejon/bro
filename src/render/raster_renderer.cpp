@@ -1,6 +1,7 @@
 #include "render/raster_renderer.h"
 #include "render/filter_chain.h"
 #include "render/font_family.h"
+#include "render/system_font_mgr.h"
 #include "svg/svg_renderer.h"
 
 #include <include/core/SkBitmap.h>
@@ -270,13 +271,7 @@ TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font,
 
 SkFontMgr* RasterRenderer::ensureFontMgr() {
     if (fontMgr_) return fontMgr_.get();
-#ifdef _WIN32
-    fontMgr_ = SkFontMgr_New_DirectWrite();
-#elif defined(__APPLE__)
-    fontMgr_ = SkFontMgr_New_CoreText(nullptr);
-#else
-    fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
+    fontMgr_ = sk_ref_sp(systemFontMgr());
     return fontMgr_.get();
 }
 

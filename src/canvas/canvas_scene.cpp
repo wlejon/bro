@@ -4,6 +4,7 @@
 #include "render/filter_chain.h"
 #include "render/gl_context.h"
 #include "render/skia_backend.h"
+#include "render/system_font_mgr.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -871,13 +872,7 @@ bool CanvasScene::setFilter(const std::string& filter, FilterColor currentColor,
 
 SkFontMgr* CanvasScene::ensureFontMgr() {
     if (fontMgr_) return fontMgr_.get();
-#ifdef _WIN32
-    fontMgr_ = SkFontMgr_New_DirectWrite();
-#elif defined(__APPLE__)
-    fontMgr_ = SkFontMgr_New_CoreText(nullptr);
-#else
-    fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
+    fontMgr_ = sk_ref_sp(render::systemFontMgr());
     return fontMgr_.get();
 }
 

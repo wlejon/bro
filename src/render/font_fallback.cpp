@@ -1,4 +1,7 @@
 #include "render/font_fallback.h"
+#include "render/system_font_mgr.h"
+
+#include <chrono>
 
 #include <include/core/SkString.h>
 
@@ -149,8 +152,12 @@ std::vector<TextRun> splitTextForFallback(std::string_view utf8,
             if (primaryTypeface->unicharToGlyph(cp) != 0) {
                 face = primaryTypeface;
             } else if (fontMgr) {
+                const auto t0 = std::chrono::steady_clock::now();
                 face = sk_sp<SkTypeface>(fontMgr->matchFamilyStyleCharacter(
                     hintFamily.c_str(), primaryStyle, nullptr, 0, cp));
+                noteFontLookup("fallback", hintFamily.c_str(), cp,
+                               std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - t0).count());
                 if (!face) face = primaryTypeface;  // no system coverage → tofu
             } else {
                 face = primaryTypeface;

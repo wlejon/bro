@@ -23,6 +23,7 @@ add_library(bro_render STATIC
     raster_renderer.cpp
     font_fallback.cpp
     font_family.cpp
+    system_font_mgr.cpp
     shaped_run.cpp
     filter_chain.cpp
     recording_renderer.cpp

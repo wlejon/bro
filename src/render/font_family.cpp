@@ -1,5 +1,7 @@
 #include "render/font_family.h"
+#include "render/system_font_mgr.h"
 
+#include <chrono>
 #include <sstream>
 #include <string>
 
@@ -52,7 +54,11 @@ sk_sp<SkTypeface> resolveFontFamilyList(std::string_view cssFamily,
         if (const char* resolved = resolveGenericFamily(name)) {
             if (auto tf = sk_sp<SkTypeface>(mgr->matchFamilyStyle(resolved, style))) return tf;
         }
-        if (auto tf = sk_sp<SkTypeface>(mgr->matchFamilyStyle(name.c_str(), style))) return tf;
+        const auto t0 = std::chrono::steady_clock::now();
+        auto tf = sk_sp<SkTypeface>(mgr->matchFamilyStyle(name.c_str(), style));
+        noteFontLookup("matchFamilyStyle", name.c_str(), -1,
+                       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        if (tf) return tf;
     }
     return sk_sp<SkTypeface>(mgr->matchFamilyStyle(nullptr, style));
 }

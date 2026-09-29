@@ -1,6 +1,7 @@
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "render/filter_chain.h"
+#include "render/system_font_mgr.h"
 #include "svg/svg_renderer.h"
 #include "util/log.h"
 
@@ -225,13 +226,7 @@ TextMetrics SkiaRenderer::measureText(std::string_view text, FontRef font,
 
 SkFontMgr* SkiaRenderer::ensureFontMgr() {
     if (fontMgr_) return fontMgr_.get();
-#ifdef _WIN32
-    fontMgr_ = SkFontMgr_New_DirectWrite();
-#elif defined(__APPLE__)
-    fontMgr_ = SkFontMgr_New_CoreText(nullptr);
-#else
-    fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
+    fontMgr_ = sk_ref_sp(systemFontMgr());
     return fontMgr_.get();
 }
 
@@ -659,15 +654,7 @@ bool SkiaRenderer::registerCustomFont(const std::string& family,
     auto skData = SkData::MakeWithCopy(data, len);
     auto typeface = SkFontMgr::RefEmpty()->makeFromData(skData);
     if (!typeface) {
-        // Try with platform font manager
-#ifdef _WIN32
-        auto mgr = SkFontMgr_New_DirectWrite();
-#elif defined(__APPLE__)
-        auto mgr = SkFontMgr_New_CoreText(nullptr);
-#else
-        auto mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
-        typeface = mgr->makeFromData(skData);
+        typeface = ensureFontMgr()->makeFromData(skData);
     }
     if (!typeface) return false;
     customFonts_.push_back({family, weight, italic, typeface});

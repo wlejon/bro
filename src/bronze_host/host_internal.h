@@ -790,6 +790,17 @@ Value makeFileOrDescriptorFromPath(const std::string& path);
 // flush run it so a pending fetch resolves inside the call a test makes.
 void pumpBrokitTicks();
 
+// A microtask checkpoint that also runs, as the tasks that follow the current
+// one, the local fetches (file:, data:, blob:) whose responses are already
+// built: drain microtasks, settle those, drain again, until none are left or
+// the turn's budget is spent. So a `fetch('templates/x.html')` a script makes
+// resolves before the frame instead of at the next frame's brokit pump, while
+// a long chain of them still yields to the frame (the pump settles the rest).
+// `always` drains even with no microtask queued: bronze reports unhandled
+// rejections at the end of a drain, so the frame's own checkpoints (hostFrame
+// 6 and 6c) must run one every frame or a bare Promise.reject is never heard.
+void drainMicrotasksAndLocalFetches(bool always = false);
+
 // Whether brokit still has a fetch, socket or watcher in flight — the realm is
 // not idle while it does (host_gc.cpp).
 bool brokitHasPendingWork();
