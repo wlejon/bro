@@ -1,0 +1,20 @@
+{
+  "boot_cold_ms": 1173,
+  "boot_warm_ms": 986,
+  "cpu_nbody_ms": 239,
+  "cpu_strings_ms": 46,
+  "cpu_toplevel_ms": 117,
+  "cpu_total_ms": 403,
+  "gc_1500000_avg_ms": 2.73,
+  "gc_1500000_worst_ms": 6,
+  "gc_20000_avg_ms": 2.77,
+  "gc_20000_worst_ms": 7,
+  "gc_500000_avg_ms": 2.79,
+  "gc_500000_worst_ms": 13,
+  "page_compile_cold_ms": 215,
+  "page_compile_warm_ms": 42,
+  "tats_boot_ms": 484,
+  "tats_lab_battle_ms": 3862,
+  "tats_mission_launch_ms": 5671,
+  "tats_world_entry_ms": 4341
+}
