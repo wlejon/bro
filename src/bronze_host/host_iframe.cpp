@@ -286,6 +286,8 @@ namespace {
 // the property read (a getter may allocate) so the call's receiver is current.
 void callRealmHook(dom::Document* doc, const char* hook) {
     if (!doc) return;
+    dom::Document* prevHostDoc = currentHostDocument();
+    setCurrentHostDocument(doc);
     uint64_t scopeId = scopeIdForDocument(doc);
     enterRealmScope(scopeId);
     ev::GlobalValue gt = ev::globalValue("globalThis");
@@ -297,6 +299,7 @@ void callRealmHook(dom::Document* doc, const char* hook) {
         }
     }
     exitRealmScope();
+    setCurrentHostDocument(prevHostDoc);
 }
 }  // namespace
 
