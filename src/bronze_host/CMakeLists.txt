@@ -284,7 +284,9 @@ target_include_directories(bro_bronze_host PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/lighting
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/animation
     ${CMAKE_CURRENT_SOURCE_DIR}/natives/gizmo
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/bromesh/third_party/tinygltf
+    # tinygltf's json.hpp, from whichever bromesh third_party/CMakeLists.txt
+    # resolved (standalone ../bromesh or the submodule), not the submodule path.
+    $<$<TARGET_EXISTS:bromesh>:$<TARGET_PROPERTY:bromesh,SOURCE_DIR>/third_party/tinygltf>
 )
 
 # The runtime is a DLL now, and bronze builds it into its own output directory

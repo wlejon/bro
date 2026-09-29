@@ -4,6 +4,7 @@
 #include "scene/scene_node.h"
 #include <bromesh/mesh_data.h>
 
+#include <climits>
 #include <cstdint>
 #include <functional>
 #include <memory>
