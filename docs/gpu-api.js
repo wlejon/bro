@@ -70,7 +70,7 @@ bro.gpu.available;
 
 /**
  * The default compute device: what a freshly-loaded model lands on.
- * One of 'cuda' | 'metal' | 'cpu' (best available: CUDA > Metal > CPU).
+ * One of 'hip' | 'cuda' | 'metal' | 'cpu' (best available: HIP > CUDA > Metal > CPU).
  * @readonly
  * @type {string}
  */
@@ -78,10 +78,10 @@ bro.gpu.backend;
 
 /**
  * Every backend registered in this binary at runtime, e.g. ['cpu'] on a
- * CPU-only build or ['cpu', 'cuda'] when a CUDA device is present. CPU is
+ * CPU-only build or ['cpu', 'hip'] when a HIP/ROCm device is present. CPU is
  * always included. One entry per BACKEND, not per card: a two-GPU box still
- * reports ['cpu', 'cuda'] — see `deviceCount()` for how many cards, and the
- * 'cuda:N' argument form for addressing a specific one.
+ * reports ['cpu', 'hip'] — see `deviceCount()` for how many cards, and the
+ * 'hip:N' / 'cuda:N' argument form for addressing a specific one.
  * @readonly
  * @type {Array<string>}
  */
@@ -89,12 +89,12 @@ bro.gpu.devices;
 
 /**
  * The tensor backends COMPILED INTO this binary: a static build-time fact from
- * the BRO_WITH_TENSOR_CUDA / _METAL flags, independent of whether a matching GPU
- * is present. 'cpu' is always included; 'cuda'/'metal' appear when built in.
+ * the BRO_WITH_TENSOR_HIP / _CUDA / _METAL flags, independent of whether a matching GPU
+ * is present. 'cpu' is always included; 'hip'/'cuda'/'metal' appear when built in.
  *
  * This is distinct from `devices` (and `backend`/`available`): those report the
  * runtime device and read ['cpu']/'cpu'/false on a machine with no GPU driver
- * even for a CUDA-capable binary. `compiledBackends` answers "can this build
+ * even for a GPU-capable binary. `compiledBackends` answers "can this build
  * EVER use a GPU," so it's the right signal for build/packaging checks, e.g. a
  * CI smoke test verifying a release binary actually ships the GPU backend on a
  * GPU-less runner, where the runtime probes can't tell.

@@ -112,6 +112,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots.
 |---|:--|:--:|---|
 | `BRO_WITH_TENSOR` | brotensor (CPU); `bro.gpu`, and `bro.tensor` only with a GPU backend (below) | on | none |
 | `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend | **off** | `TENSOR` + CUDA toolkit |
+| `BRO_WITH_TENSOR_HIP` | brotensor HIP backend (AMD GPU / ROCm) | **auto/on** (Linux + ROCm) | `TENSOR` + ROCm / HIP |
 | `BRO_WITH_TENSOR_METAL` | brotensor Metal backend | **off** | `TENSOR` + macOS |
 | `BRO_WITH_LM` | brolm | on | `TENSOR` |
 | `BRO_WITH_DIFFUSION` | brodiffusion | on | `LM` (text encoder) |
@@ -124,10 +125,12 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots.
 and is the single biggest build-time cost. It maps to the existing
 `BROTENSOR_WITH_CUDA` (see the forwarding block in the top-level `CMakeLists.txt`)
 and is turned on explicitly, orthogonal to the feature flags.
+On Linux systems with ROCm installed at `/opt/rocm`, `BRO_WITH_TENSOR_HIP` is
+auto-detected and enabled when the AI tower is requested.
 
-**`bro.tensor` needs one of those two backends, and `bro.gpu` does not.** The
+**`bro.tensor` needs one of those GPU backends, and `bro.gpu` does not.** The
 tensor surface is built on brotensor's GPU tensor type, which only exists with
-CUDA or Metal compiled in, so `BRO_WITH_TENSOR=ON` on its own gives you
+HIP, CUDA, or Metal compiled in, so `BRO_WITH_TENSOR=ON` on its own gives you
 `bro.tensor.available === false` and the usual unavailable-namespace error
 naming the backend rather than the flag. `bro.gpu` is the runtime probe and
 stays real either way, answering `cpu`. Everything else in the tower —

@@ -214,6 +214,7 @@ option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${
 # Tier 2 — the AI tower (brotensor is the base).
 option(BRO_WITH_TENSOR       "brotensor tensor ops (ML backbone)"            ${_d_ai})
 option(BRO_WITH_TENSOR_CUDA  "brotensor CUDA backend (needs CUDA toolkit)"   OFF)
+option(BRO_WITH_TENSOR_HIP   "brotensor HIP backend (needs ROCm / AMD GPU)"  OFF)
 option(BRO_WITH_TENSOR_METAL "brotensor Metal backend (macOS)"              OFF)
 option(BRO_WITH_LM           "Language models (brolm)"                       ${_d_ai})
 option(BRO_WITH_DIFFUSION    "Diffusion models (brodiffusion)"               ${_d_ai})
@@ -221,6 +222,14 @@ option(BRO_WITH_VISION       "Vision models (brovisionml)"                   ${_
 option(BRO_WITH_SOUNDML      "Audio ML: stt/tts/diar/wake/kws (brosoundml)"  ${_d_ai})
 option(BRO_WITH_TRIPOSPLAT   "Image -> 3D gaussian-splat pipeline"           ${_d_ai})
 option(BRO_WITH_GAMEAI_NN    "brogameagent neural/learning layer"            ${_d_ai})
+
+# Auto-detect HIP backend on Linux when ROCm is installed and no other GPU backend was requested
+if(BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_CUDA AND NOT BRO_WITH_TENSOR_METAL AND NOT BRO_WITH_TENSOR_HIP)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND (EXISTS "/opt/rocm" OR DEFINED ENV{ROCM_PATH}))
+        message(STATUS "bro: auto-detected ROCm; enabling BRO_WITH_TENSOR_HIP")
+        set(BRO_WITH_TENSOR_HIP ON CACHE BOOL "brotensor HIP backend (needs ROCm / AMD GPU)" FORCE)
+    endif()
+endif()
 
 # Auto-enable prerequisites (a feature forces on what it needs). Ordered
 # top-down through the dependency DAG so a single pass resolves everything.
@@ -231,6 +240,7 @@ function(_bro_require flag dep)
     endif()
 endfunction()
 _bro_require(BRO_WITH_TENSOR_CUDA  BRO_WITH_TENSOR)
+_bro_require(BRO_WITH_TENSOR_HIP   BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_TENSOR_METAL BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_VISION)
 _bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_DIFFUSION)
@@ -269,14 +279,34 @@ if(BRO_WITH_GAMEAI)
 else()
     set(BROGAMEAGENT_WITH_NAVMESH OFF CACHE BOOL "" FORCE)
 endif()
-if(BRO_WITH_TENSOR_CUDA)
+if(BRO_WITH_TENSOR_HIP)
+    set(BROTENSOR_WITH_HIP     ON  CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_CUDA    OFF CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL   OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_HIP  ON  CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_CUDA OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_METAL OFF CACHE BOOL "" FORCE)
+elseif(BRO_WITH_TENSOR_CUDA)
+    set(BROTENSOR_WITH_HIP     OFF CACHE BOOL "" FORCE)
     set(BROTENSOR_WITH_CUDA    ON  CACHE BOOL "" FORCE)
     set(BROTENSOR_WITH_METAL   OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_HIP  OFF CACHE BOOL "" FORCE)
     set(BROGAMEAGENT_WITH_CUDA ON  CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_METAL OFF CACHE BOOL "" FORCE)
 elseif(BRO_WITH_TENSOR_METAL)
+    set(BROTENSOR_WITH_HIP     OFF CACHE BOOL "" FORCE)
     set(BROTENSOR_WITH_CUDA    OFF CACHE BOOL "" FORCE)
     set(BROTENSOR_WITH_METAL   ON  CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_HIP  OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_CUDA OFF CACHE BOOL "" FORCE)
     set(BROGAMEAGENT_WITH_METAL ON CACHE BOOL "" FORCE)
+else()
+    set(BROTENSOR_WITH_HIP     OFF CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_CUDA    OFF CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL   OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_HIP  OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_CUDA OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_METAL OFF CACHE BOOL "" FORCE)
 endif()
 
 # Forward Bronze API library enable flags to sibling libraries
@@ -296,7 +326,7 @@ set(BROVISIONML_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brovi
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
     NET VIDEO STEAM
-    TENSOR TENSOR_CUDA TENSOR_METAL LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
+    TENSOR TENSOR_CUDA TENSOR_HIP TENSOR_METAL LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)
     foreach(_f IN LISTS BRO_FEATURE_FLAGS)

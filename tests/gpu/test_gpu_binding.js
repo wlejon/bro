@@ -9,13 +9,13 @@
 assert(typeof bro === 'object', 'bro global exists');
 assert(bro.gpu !== undefined && bro.gpu !== null, 'bro.gpu namespace exists');
 
-const KNOWN = ['cuda', 'metal', 'cpu'];
+const KNOWN = ['hip', 'cuda', 'metal', 'cpu'];
 
 {
     assert(typeof bro.gpu.available === 'boolean', 'available is a boolean');
     assert(typeof bro.gpu.backend === 'string', 'backend is a string');
     assert(KNOWN.includes(bro.gpu.backend),
-           'backend is one of cuda/metal/cpu: ' + bro.gpu.backend);
+           'backend is one of hip/cuda/metal/cpu: ' + bro.gpu.backend);
 
     const devices = bro.gpu.devices;
     assert(Array.isArray(devices), 'devices is an array');

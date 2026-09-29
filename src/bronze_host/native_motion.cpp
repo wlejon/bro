@@ -114,6 +114,7 @@ std::vector<float> loadNpyF64AsF32(const std::string& path, int n) {
 }
 
 bt::Device autoDevice() {
+    if (bt::is_available(bt::Device::HIP))   return bt::Device::HIP;
     if (bt::is_available(bt::Device::CUDA))  return bt::Device::CUDA;
     if (bt::is_available(bt::Device::Metal)) return bt::Device::Metal;
     return bt::Device::CPU;
@@ -121,6 +122,7 @@ bt::Device autoDevice() {
 
 const char* deviceName(bt::Device d) {
     switch (d.type) {
+        case bt::DeviceType::HIP:   return "HIP";
         case bt::DeviceType::CUDA:  return "CUDA";
         case bt::DeviceType::Metal: return "Metal";
         default:                    return "CPU";
@@ -147,9 +149,10 @@ std::unique_ptr<BroArdyMotionPipelineImpl> loadPipeline(const std::string& ckpt,
                                                         const std::string& dev) {
     bt::init();
     bt::Device device = autoDevice();
-    if (dev == "cpu")        device = bt::Device::CPU;
-    else if (dev == "cuda")  device = bt::Device::CUDA;
-    else if (dev == "metal") device = bt::Device::Metal;
+    if (dev == "cpu")                       device = bt::Device::CPU;
+    else if (dev == "hip" || dev == "rocm") device = bt::Device::HIP;
+    else if (dev == "cuda")                 device = bt::Device::CUDA;
+    else if (dev == "metal")                device = bt::Device::Metal;
     bt::set_default_device(device);
 
     auto w = std::make_unique<BroArdyMotionPipelineImpl>();
