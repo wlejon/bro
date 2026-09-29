@@ -1433,6 +1433,7 @@ void PhysicsWorld::refreshBodiesTouchingArea(uint32_t areaKey) {
         if (!touches) continue;
         sortBodyAreas(st);
         applyAreaDamping(BodyID(bodyKey), st);
+        physicsSystem_.GetBodyInterface().ActivateBody(BodyID(bodyKey));
     }
 }
 

@@ -34,6 +34,7 @@ if (!scene) {
     scene.createInstancedMesh({ mesh: 'box' }).setInstances(new Float32Array(16 * 3).map((_, k) => (k % 5 === 0 ? 1 : 0)));
     flush();
     flush();
+    scene.captureFrame();
     const built = __host.sceneUploadStats();
     const meshUploads = built.meshUploads - before.meshUploads;
     const texUploads = built.textureUploads - before.textureUploads;
@@ -81,6 +82,7 @@ if (!scene) {
     // The scene is still the same live world: a new node uploads once, on c3.
     scene.createMesh({ mesh: 'box', color: 'green' });
     flush();
+    scene.captureFrame();
     assert(__host.sceneUploadStats().meshUploads === now.meshUploads + 1, 'a node added after the move uploads once');
 
     // ---- detach / errors ---------------------------------------------------

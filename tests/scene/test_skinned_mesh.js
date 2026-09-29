@@ -65,6 +65,8 @@ if (!scene) {
     // sx = 128 + x*k, sy = 128 - (y-1)*k with k = 128 / (8 * tan(fov/2)).
     const FOV = 40, EYE = [0, 1, 8];
     scene.setCamera({ fov: FOV, near: 0.1, far: 100, position: EYE, target: [0, 1, 0] });
+    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+    scene.setAmbient([0.3, 0.3, 0.3]);
     function project(x, y, z) {
         const d = EYE[2] - z;
         const k = 128 / (d * Math.tan((FOV / 2) * Math.PI / 180));

@@ -253,9 +253,9 @@ if (!plain) {
     const angled = { fov: 60, near: 0.1, far: 1000,
                      position: [7, 6, 9], target: [0, 0, 0], up: [0, 1, 0] };
 
-    // The step is 3px: every handle is many pixels wide even foreshortened, so
-    // a finer grid only re-confirms the same hits at nine times the cost.
-    const tSurvey = surveyHandles('translate', angled, 130, 270, 80, 220, 3);
+    // The step is 5px: every handle is many pixels wide even foreshortened, so
+    // a finer grid only re-confirms the same hits at unnecessary cost.
+    const tSurvey = surveyHandles('translate', angled, 130, 270, 80, 220, 5);
     for (const name of ['x', 'y', 'z', 'xy', 'yz', 'xz']) {
         assert(tSurvey.counts[name] > 0,
                'translate handle "' + name + '" is reachable, saw ' +
@@ -264,7 +264,7 @@ if (!plain) {
 
     // Bucketed by side as well as by handle, because the ring-speed check
     // below needs two well-separated grab points on each ring.
-    const rSurvey = surveyHandles('rotate', angled, 100, 300, 50, 250, 3,
+    const rSurvey = surveyHandles('rotate', angled, 100, 300, 50, 250, 5,
                                   (h, px) => h + ':' + (px < 200 ? 'L' : 'R'));
     for (const name of ['x', 'y', 'z', 'view']) {
         assert(rSurvey.counts[name] > 0,

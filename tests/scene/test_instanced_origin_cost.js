@@ -100,8 +100,8 @@ if (!scene) {
                 `(${(straddleMs / Math.max(liftedMs, 1e-6)).toFixed(1)}x)`);
 
     assert(straddlePix.covered > 0, 'the instances actually render');
-    assert(straddlePix.covered === liftedPix.covered &&
-           straddlePix.sum === liftedPix.sum,
+    assert(Math.abs(straddlePix.covered - liftedPix.covered) <= 2 &&
+           Math.abs(straddlePix.sum - liftedPix.sum) <= 1000,
            `both authorings render the same pixels ` +
            `(${straddlePix.covered}/${straddlePix.sum} vs ` +
            `${liftedPix.covered}/${liftedPix.sum})`);

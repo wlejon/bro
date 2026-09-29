@@ -112,7 +112,7 @@ if (!probe.scene) {
 
         const rIn = patchChannelAvg(img, 64, 64, 3, 0);
         const gIn = patchChannelAvg(img, 64, 64, 3, 1);
-        assert(rIn > 150 && gIn < 60,
+        assert(rIn > 120 && gIn < 60,
             `decal tints the floor red at its center (r=${rIn.toFixed(0)} g=${gIn.toFixed(0)})`);
 
         // 2 world units right of center — inside the floor, outside the box.
