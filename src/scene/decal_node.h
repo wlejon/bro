@@ -23,7 +23,7 @@ namespace bro::scene {
 /// fragment from the scene depth snapshot, and alpha-blends
 /// albedo * modulate onto the LIT HDR result (plus emission * strength).
 /// This differs from Godot, which injects decals into material inputs
-/// BEFORE lighting — see docs/scene-api.js for the honest comparison.
+/// BEFORE lighting — see docs/scene-nodes-api.js for the honest comparison.
 /// Decals only appear on depth-writing (opaque) geometry: translucent
 /// meshes, splats, particles and billboards never receive them.
 class DecalNode : public SceneNode {

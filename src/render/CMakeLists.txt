@@ -19,6 +19,8 @@ endif()
 # --- Render library (OpenGL backend) ---
 add_library(bro_render STATIC
     skia_backend.cpp
+    skia_backend_gpu.cpp
+    skia_backend_gradient.cpp
     gl_context.cpp
     raster_renderer.cpp
     font_fallback.cpp

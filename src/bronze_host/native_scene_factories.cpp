@@ -42,7 +42,7 @@ bromath::Color particleColorFromJson(const nlohmann::json& v) {
 }
 
 // The material half of the createMesh / createSkinnedMesh option surface
-// (see SceneGraph.createMesh in docs/scene-api.js). Transform keys (x/y/z,
+// (see MeshNodeOptions in docs/scene-nodes-api.js). Transform keys (x/y/z,
 // scale, rx/ry/rz, name, visible) are applied by the JS wrapper's
 // applyNodeOpts through the node attributes.
 void applyMeshMaterialOpts(scene::MeshNode* node, Value optsIn) {

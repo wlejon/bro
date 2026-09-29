@@ -5,8 +5,10 @@
 #include "engine/device_scale.h"
 #include "engine/dom_undo.h"
 #include "engine/engine_config.h"
+#include "engine/engine_fwd.h"
 #include "engine/engine_types.h"
 #include "engine/frame_presenter.h"
+#include "engine/frame_stats.h"
 #include "engine/gamepad.h"
 #include "engine/iframe.h"
 #include "engine/inspector_state.h"
@@ -45,34 +47,7 @@
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
-typedef struct SDL_GLContextState* SDL_GLContext;
-
-namespace bro::layout { struct KeyHandleResult; }
-namespace bro::render {
-    class GLContext;
-    class RasterRenderer;
-    class RecordingRenderer;
-    class CommandReplayer;
-    class CommandBuffer;
-    class Renderer;
-}
-namespace bro::webgl { class WebGL2RenderingContext; }
-namespace broaudio { class Engine; }
-namespace bro::physics { class PhysicsWorld; }
-namespace bro::net { class NetService; }
-namespace bro::steam { class SteamService; }
-namespace bro::scene { class SceneGraph; class HtmlNode; struct CullStats; }
-namespace bro::canvas { class CanvasScene; class CanvasRasterThread; }
-namespace bro::platform { class Window; class EventLoop; }
-namespace bro::dom { class Document; class Element; class Event; class TextNode; }
-namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }
-namespace brokit::api { class FsWatcher; }
-
 namespace bro::engine {
-
-class LayoutPipeline;
-class AudioInference;
-struct SubDocRef;
 
 class Engine {
 public:
@@ -459,13 +434,13 @@ public:
     /// The 500 ms rolling frame statistics the perf HUD shows: frames per
     /// second, mean wall time per frame, and the mean per-phase times. Read
     /// by `__bro.perf`; the engine writes no panel DOM itself.
-    double perfFps() const { return statsFps_; }
-    double perfFrameTimeMs() const { return statsFrameTimeMs_; }
-    double perfJsMs() const { return phaseJsMs_; }
-    double perfLayoutMs() const { return phaseLayoutMs_; }
-    double perfRasterMs() const { return phaseRasterMs_; }
-    double perfGpuMs() const { return phaseGpuMs_; }
-    double perfDrawMs() const { return phaseDrawMs_; }
+    double perfFps() const { return frameStats_.statsFps; }
+    double perfFrameTimeMs() const { return frameStats_.statsFrameTimeMs; }
+    double perfJsMs() const { return frameStats_.phaseJsMs; }
+    double perfLayoutMs() const { return frameStats_.phaseLayoutMs; }
+    double perfRasterMs() const { return frameStats_.phaseRasterMs; }
+    double perfGpuMs() const { return frameStats_.phaseGpuMs; }
+    double perfDrawMs() const { return frameStats_.phaseDrawMs; }
 
     /// Every secondary window (bro.window.open), live or pending, in
     /// creation order. The perf HUD lists them.
@@ -852,13 +827,7 @@ private:
     double serverStartTime_ = 0.0;
     bool serverStopRequested_ = false;
 
-    double statsAccumMs_ = 0.0;
-    int statsFrameCount_ = 0;
-    double statsFps_ = 0.0;
-    double statsFrameTimeMs_ = 0.0;
-    double statsMinFrameMs_ = 999.0;
-    double statsMaxFrameMs_ = 0.0;
-    double totalFrameMs_ = 0.0;
+    FrameStats frameStats_;
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
     bool mediaEventsArmed_ = false;
@@ -974,21 +943,6 @@ private:
     unsigned int gpuTimerQuery_ = 0;
     bool gpuTimerPending_ = false;
     double lastGpuFrameMs_ = -1.0;
-
-    double phaseJsMs_ = 0.0;
-    double phaseLayoutMs_ = 0.0;
-    double phaseRasterMs_ = 0.0;
-    double phaseGpuMs_ = 0.0;
-    double phaseGlStateMs_ = 0.0;
-    double phaseDrawMs_ = 0.0;
-    double phaseUploadMs_ = 0.0;
-    double accumJsMs_ = 0.0;
-    double accumLayoutMs_ = 0.0;
-    double accumRasterMs_ = 0.0;
-    double accumGpuMs_ = 0.0;
-    double accumGlStateMs_ = 0.0;
-    double accumDrawMs_ = 0.0;
-    double accumUploadMs_ = 0.0;
 
     unsigned int uiQuadVAO_ = 0;
     unsigned int uiQuadVBO_ = 0;

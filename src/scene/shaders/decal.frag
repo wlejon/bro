@@ -11,7 +11,7 @@
 // (uAmbient + dominant-directional NdotL/PI — the same magnitudes the mesh
 // shader's flat-ambient + Lambert diffuse produce) so decals darken with
 // scene lighting instead of glowing in the dark. No shadows, no IBL, no
-// point/spot contribution — documented in scene-api.js.
+// point/spot contribution — documented in scene-nodes-api.js.
 //
 // The surface normal is reconstructed from screen-space derivatives of the
 // reconstructed position: exact on planar surfaces, faceted on curved ones,

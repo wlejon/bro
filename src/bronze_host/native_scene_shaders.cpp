@@ -168,7 +168,7 @@ void bro_scene_SceneNode_setLodMeshes(void* self, const char* jsonLods) {
     mn->setLodMeshes(std::move(levels));
 }
 
-// SceneNode.updateMesh (docs/scene-api.js): swap a MeshNode's geometry
+// SceneNode.updateMesh (docs/scene-nodes-api.js): swap a MeshNode's geometry
 // without touching the node. `mesh` is either a Mesh handle or a
 // {positions, indices, normals?, uvs?, colors?, tangents?} object, which is
 // the shape createMesh reads; normals are computed when absent or when

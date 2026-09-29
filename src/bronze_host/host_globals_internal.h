@@ -81,6 +81,12 @@ void installPlatformExtensions(engine::Engine& engine);
 Value makeSessionStorageValue();
 
 // ---------------------------------------------------------------------------
+// window (dom_window.cpp)
+// ---------------------------------------------------------------------------
+void installWindowGlobal(engine::Engine* engine);
+void clearWindowListeners();
+
+// ---------------------------------------------------------------------------
 // Element cloning hook & document tracking
 // ---------------------------------------------------------------------------
 void fireElementCloned(dom::Document* doc, dom::Element* src, dom::Element* clone);

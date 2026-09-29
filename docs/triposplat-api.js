@@ -17,7 +17,7 @@
  * upright and facing +Z (the image's left on -x, as a camera on +Z sees it) —
  * the sampler works Z-up facing +X and the binding rotates positions and
  * quaternions on the way out — so it feeds scene.createGaussianSplat({ cloud })
- * directly (EWA splatting, see docs/scene-api.js). exportPLY/exportSplat
+ * directly (EWA splatting, see docs/scene-nodes-api.js). exportPLY/exportSplat
  * write the same scene-space cloud.
  *
  * GPU by default (FP16), like every bro ML namespace: gate the load on

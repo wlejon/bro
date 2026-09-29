@@ -172,8 +172,8 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             cs->consumeFence();
     }
 
-    accumRasterMs_ += (util::currentTimeMs() - tRaster) - layoutWaitMs;
-    accumLayoutMs_ += layoutWaitMs;
+    frameStats_.accumRasterMs += (util::currentTimeMs() - tRaster) - layoutWaitMs;
+    frameStats_.accumLayoutMs += layoutWaitMs;
 
     double tGpu = util::currentTimeMs();
 
@@ -211,7 +211,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     webgl::WebGL2RenderingContext::invalidateCurrent();
 
-    accumGpuMs_ += util::currentTimeMs() - tGpu;
+    frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 
     if (window_) window_->swapWindow();
 
@@ -229,29 +229,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
-    totalFrameMs_ = util::currentTimeMs() - frameStart;
-    double totalFrameMs = totalFrameMs_;
-    statsAccumMs_ += totalFrameMs;
-    statsFrameCount_++;
-    if (totalFrameMs < statsMinFrameMs_) statsMinFrameMs_ = totalFrameMs;
-    if (totalFrameMs > statsMaxFrameMs_) statsMaxFrameMs_ = totalFrameMs;
-    if (statsAccumMs_ >= 500.0) {
-        statsFps_ = statsFrameCount_ / (statsAccumMs_ / 1000.0);
-        statsFrameTimeMs_ = statsAccumMs_ / statsFrameCount_;
-        double n = statsFrameCount_;
-        phaseJsMs_      = accumJsMs_      / n;
-        phaseLayoutMs_  = accumLayoutMs_  / n;
-        phaseRasterMs_  = accumRasterMs_  / n;
-        phaseGpuMs_     = accumGpuMs_     / n;
-        phaseGlStateMs_ = accumGlStateMs_ / n;
-        phaseDrawMs_    = accumDrawMs_    / n;
-        phaseUploadMs_  = accumUploadMs_  / n;
-        accumJsMs_ = accumLayoutMs_ = accumRasterMs_ = accumGpuMs_ = accumGlStateMs_ = 0.0;
-        accumDrawMs_ = accumUploadMs_ = 0.0;
-        statsAccumMs_ = 0.0;
-        statsFrameCount_ = 0;
-        statsMinFrameMs_ = 999.0;
-        statsMaxFrameMs_ = 0.0;
+    if (frameStats_.addFrame(util::currentTimeMs() - frameStart)) {
         uiDirty_ = true;
     }
 }

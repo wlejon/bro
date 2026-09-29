@@ -90,6 +90,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_telemetry.cpp
     app_module.cpp
     dom_globals.cpp
+    dom_window.cpp
     dom_globals_webgl.cpp
     host_gc.cpp
     dom_canvas.cpp

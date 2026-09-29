@@ -1,5 +1,5 @@
 // native_scene_particles.cpp — SceneGraph.createParticles: the 2D ParticleNode
-// and its emitter options (docs/scene-api.js ParticleNodeOptions). The wrapper
+// and its emitter options (docs/scene-nodes-api.js ParticleNodeOptions). The wrapper
 // hands the options over as JSON, as createParticles3D does.
 
 #include "bronze_host/native_scene_internal.h"
