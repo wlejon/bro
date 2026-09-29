@@ -337,6 +337,12 @@ run_one_test() {
         return 1
     fi
 
+    if [[ "$OUTPUT" == *"=== bro-headless crash"* ]]; then
+        echo "  FAIL  $REL  (CRASH)"
+        echo "$OUTPUT" | grep -A 60 "=== bro-headless crash" | head -70 | sed 's/^/        /'
+        return 1
+    fi
+
     if [[ $STATUS -eq 0 ]]; then
         echo "  PASS  $REL"
         return 0

@@ -457,7 +457,9 @@ void signalHandler(int sig, siginfo_t* info, void* uctx) {
     // re-executes the faulting instruction on return and dies of it with the
     // status it would have had anyway; raise() covers a signal that was sent
     // rather than caused (kill -SEGV, abort()'s own raise).
+    std::signal(sig, SIG_DFL);
     std::raise(sig);
+    _exit(128 + sig);
 }
 
 // The alternate stack a stack overflow's SIGSEGV/SIGBUS runs on: the faulting
