@@ -365,6 +365,7 @@ const char* signalName(int sig) {
         case SIGABRT: return "SIGABRT";
         case SIGILL:  return "SIGILL";
         case SIGFPE:  return "SIGFPE";
+        case SIGTRAP: return "SIGTRAP";
         default:      return "signal";
     }
 }
@@ -490,7 +491,7 @@ void installSignals() {
     // SIGBUS is macOS's word for most bad accesses into mapped-but-wrong
     // memory (a JIT page without execute, a truncated mmap), so it matters as
     // much as SIGSEGV there.
-    for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}) {
+    for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP}) {
         sigaction(sig, &sa, nullptr);
     }
 }

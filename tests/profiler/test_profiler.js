@@ -37,6 +37,14 @@ function burn(ms) {
 }
 
 // ---- main thread -----------------------------------------------------------
+if (process.platform !== 'win32') {
+    let unsupported = false;
+    try { bro.profiler.start({ hz: 2000 }); } catch (e) {
+        unsupported = /supported on Windows x64 only/.test(String(e.message));
+    }
+    assert(unsupported, 'start() on non-Windows reports unsupported');
+    console.log('bro.profiler: supported on Windows x64 only; non-Windows behaviour verified');
+} else {
 bro.profiler.start({ hz: 2000 });
 assert(bro.profiler.running === true, 'running after start');
 
@@ -106,3 +114,4 @@ assert(workerThreads.length >= 1 && workerThreads[0].samples > 20,
 assert(pw.threads.every((t) => t.kind === 'worker'), 'the main thread was not sampled');
 assert(pw.functions.some((f) => f.name.indexOf('workerSpin') >= 0),
        'the worker\'s busy function is in the profile; top: ' + pw.functions.slice(0, 6).map((f) => f.name).join(', '));
+}
