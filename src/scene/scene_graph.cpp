@@ -24,6 +24,15 @@ SceneGraph::SceneGraph() {
     root_ = std::make_unique<SceneNode>("__root__");
     liveToken_ = std::make_shared<LivenessToken>();
     liveToken_->graph = this;
+
+    // A scene nobody gave a camera draws through the default intrinsics: an
+    // eye at the origin looking down -Z. The matrix has to be built here, not
+    // left to syncProjectionToDepthPolicy(), which rebuilds only when the
+    // convention changed: with reversed-Z that happened to produce it on the
+    // first frame, and without clip control (macOS) the identity matrix stayed
+    // and culled everything outside a unit cube.
+    projectionMatrix_ = makePerspective(cameraFovY_, cameraAspect_, cameraNearZ_, cameraFarZ_);
+    projectionBuiltReversed_ = gReversedZ;
 }
 
 
