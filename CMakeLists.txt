@@ -223,11 +223,28 @@ option(BRO_WITH_SOUNDML      "Audio ML: stt/tts/diar/wake/kws (brosoundml)"  ${_
 option(BRO_WITH_TRIPOSPLAT   "Image -> 3D gaussian-splat pipeline"           ${_d_ai})
 option(BRO_WITH_GAMEAI_NN    "brogameagent neural/learning layer"            ${_d_ai})
 
-# Auto-detect HIP backend on Linux when ROCm is installed and no other GPU backend was requested
-if(BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_CUDA AND NOT BRO_WITH_TENSOR_METAL AND NOT BRO_WITH_TENSOR_HIP)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND (EXISTS "/opt/rocm" OR DEFINED ENV{ROCM_PATH}))
-        message(STATUS "bro: auto-detected ROCm; enabling BRO_WITH_TENSOR_HIP")
-        set(BRO_WITH_TENSOR_HIP ON CACHE BOOL "brotensor HIP backend (needs ROCm / AMD GPU)" FORCE)
+# Auto-detect the HIP backend on Linux when no other GPU backend was requested.
+# Same rule brotensor builds by (its cmake/BrotensorHip.cmake): ROCm at
+# ROCM_PATH (-D or environment, else /opt/rocm), and either a supported AMD GPU
+# (RDNA 3+: gfx11xx / gfx12xx) reported by rocm_agent_enumerator or an explicit
+# CMAKE_HIP_ARCHITECTURES. ROCm installed with no such GPU stays CPU-only
+# rather than enabling a backend brotensor would refuse to configure.
+if(BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_CUDA AND NOT BRO_WITH_TENSOR_METAL AND NOT BRO_WITH_TENSOR_HIP
+   AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_bro_brotensor_hip_cmake "")
+    foreach(_d "${BROTENSOR_DIR}" "${CMAKE_SOURCE_DIR}/../brotensor" "${CMAKE_SOURCE_DIR}/third_party/brotensor")
+        if(_d AND EXISTS "${_d}/cmake/BrotensorHip.cmake")
+            set(_bro_brotensor_hip_cmake "${_d}/cmake/BrotensorHip.cmake")
+            break()
+        endif()
+    endforeach()
+    if(_bro_brotensor_hip_cmake)
+        include("${_bro_brotensor_hip_cmake}")
+        brotensor_hip_detect_gpus(_bro_amd_gpus)
+        if(_bro_amd_gpus OR CMAKE_HIP_ARCHITECTURES)
+            message(STATUS "bro: ROCm with a supported AMD GPU target; enabling BRO_WITH_TENSOR_HIP")
+            set(BRO_WITH_TENSOR_HIP ON CACHE BOOL "brotensor HIP backend (needs ROCm / AMD GPU)" FORCE)
+        endif()
     endif()
 endif()
 
