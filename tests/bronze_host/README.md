@@ -1,12 +1,10 @@
 # bronze_host integration checks
 
-Twenty-four checks, one manifest. `tests/run_tests.sh` enumerates them
+Twenty-three checks, one manifest. `tests/run_tests.sh` enumerates them
 (`run_checks.sh --list`) and runs each with the rest of the suite — exit 77
 counts as SKIP there, and `BRO_TEST_BRONZE=0` leaves them out. Individual
 checks drop out with `BRO_TEST_BRONZE_SKIP=<names>` (space- or comma-separated,
-filtered before `--list` reports them): CI sets `BRO_TEST_BRONZE_SKIP=pixi`,
-because that module takes longer to compile on a runner than the suite's 900 s
-per-check timeout allows — run `pixi` locally instead. By hand:
+filtered before `--list` reports them). By hand:
 
 ```bash
 tests/bronze_host/run_checks.sh           # run all, with a summary
@@ -46,9 +44,12 @@ four synthetic C modules to hit every refusal branch.
 | `ai` | navmesh, nav grid, agents |
 | `aigame` | `bro.ai.game` from compiled code: HexNav over a hand-derived table, an ORCA world |
 | `net` | bro.net over GNS, WebSocket, remote HTTP transport |
-| `wild` | wild three.js scene + OrbitControls |
-| `instanced` | instanced mesh under load (2,500 instances) |
-| `pixi` | pixi.js v8: WebGL sprites + pixel readback |
+
+Three more are defined in `run_checks.sh` but left out of the manifest, so
+neither `--list` nor a name runs them: `wild` (a wild three.js scene with
+OrbitControls), `instanced` (an instanced mesh, 2,500 instances) and `pixi`
+(pixi.js v8 sprites with pixel readback). They are library mega-compiles, and
+that coverage belongs to bronze's oracle suite (`oracle-threejs`, `oracle-pixi`).
 
 **All of them run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
@@ -69,7 +70,7 @@ among them.)
 The scripts share one `lib.sh` for finding the binary under test.
 
 A check skips rather than fails when `bro-headless` is absent, or when the tree
-has no bronze CLI (`-DBRONZE_WITH_LLVM=OFF`) and no already-built module. Skip
+has no bronze CLI (the `bronze-cli` target was not built) and no already-built module. Skip
 stays distinct from failure on purpose: "this tree cannot build the subject" and
 "the subject is broken" must never read the same.
 
@@ -81,9 +82,9 @@ the driver scripts here script is the *engine's* realm beside it. So each
 check is a shell script, and `run_tests.sh` runs it as a process and reads its
 exit code instead. What is conditional is not the binary (every build's
 `bro-headless` can load a module) but the bronze CLI that PRODUCES one: a tree
-configured `-DBRONZE_WITH_LLVM=OFF` has no way to build the subject, and exits
-77 so that "this tree cannot build the subject" never reads as "the subject is
-broken".
+that never built the `bronze-cli` target has no way to build the subject, and
+exits 77 so that "this tree cannot build the subject" never reads as "the
+subject is broken".
 
 ## What it actually proves
 
@@ -182,7 +183,5 @@ files in the tree, so they are regenerated for every build rather than kept.
 `shared/` beside and above the CLI, and MSBuild writes the import library one
 level deeper, in `shared/<Config>/`.
 
-Two of the probes are slow to compile — `instanced_mesh_probe.js` takes minutes
-and gigabytes, and `pixi_sprites_probe.js` more of both, while `dom_probe.js`
-takes about three seconds. The modules are build output and are not committed,
-so a first run of those two checks pays that cost.
+`dom_probe.js` takes about three seconds to compile. The modules are build
+output and are not committed, so a first run of each check pays its compile.

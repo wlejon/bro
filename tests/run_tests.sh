@@ -12,7 +12,7 @@
 # app rather than a script a JS realm could evaluate, so each is a shell check
 # rather than a test_*.js. Each runs the same bro-headless and reports its own
 # PASS/FAIL lines; exit 77 (the automake convention) counts as SKIP, which a
-# tree without the bronze CLI (-DBRONZE_WITH_LLVM=OFF) uses so that "this tree
+# tree without the bronze CLI (the bronze-cli target not built) uses so that "this tree
 # cannot build the subject" never reads as "the subject is broken".
 # BRO_TEST_BRONZE=0 leaves them out entirely, BRO_TEST_BRONZE_SKIP=<names>
 # leaves out the ones it names; their per-check timeout is

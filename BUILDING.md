@@ -99,11 +99,11 @@ its compiler — so building the compiler means naming it, as above. Name
 `bronze-cli` and not `bronze`: it builds the same binary and is the one name
 that works under every generator, because Visual Studio leaves an
 `EXCLUDE_FROM_ALL` subdirectory's targets out of the `.sln` and answers
-`--target bronze` with "Project file does not exist". It needs
-LLVM (`-DBRONZE_WITH_LLVM`, defaulted ON for a fresh cache, autodetected from
-the usual install locations or `$LLVM_DIR`); `-DBRONZE_WITH_LLVM=OFF` gives a
-tree that runs pre-built compiled apps without being able to build new ones.
-`tests/bronze_host/run_checks.sh` skips rather than fails in that case.
+`--target bronze` with "Project file does not exist". It needs nothing beyond
+brass, which bro already builds from source as bronze's only backend. A tree
+where the target was never built runs pre-built compiled apps without being
+able to build new ones, and `tests/bronze_host/run_checks.sh` skips rather than
+fails in that case.
 
 A compiled module carries the ABI fingerprint of the bronze that emitted it and
 the host refuses any module whose fingerprint is not its own, so rebuilding

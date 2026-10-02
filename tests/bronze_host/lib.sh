@@ -46,8 +46,9 @@ bh_find_bro_headless() {
 
 # The bronze CLI that compiles an app into the module its folder carries.
 # Separate from the runtime on purpose: bro NEEDS the runtime and only WANTS
-# the compiler, so a tree configured -DBRONZE_WITH_LLVM=OFF has a working
-# bro-headless and no way to build an app. That tree skips.
+# the compiler, so a tree whose bronze-cli target was never built (it is
+# EXCLUDE_FROM_ALL) has a working bro-headless and no way to build an app.
+# That tree skips.
 bh_find_bronze() {
     if [[ -n "${BRONZE:-}" ]]; then
         [[ -x "$BRONZE" ]] && { echo "$BRONZE"; return 0; }
@@ -284,7 +285,7 @@ bh_run_check() {
     case $? in
         0)  ;;
         77) echo "  SKIP  $name  (no bronze CLI in this tree)"
-            echo "        Configure with -DBRONZE_WITH_LLVM=ON to build one."
+            echo "        Build the bronze-cli target to get one."
             return 77 ;;
         *)  echo "  FAIL  $name  ($(basename "$probe") did not compile)"
             return 1 ;;
