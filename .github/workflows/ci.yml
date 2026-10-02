@@ -54,7 +54,7 @@ jobs:
           # goes with test.
           - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true,  bronze_compiler: true }
           - { name: windows, os: windows-2022, triplet: x64-windows, test: false, bronze_compiler: false }
-          - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: true,  bronze_compiler: true }
+          - { name: macos,   os: macos-15,     triplet: arm64-osx,   test: true,  bronze_compiler: true }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -255,7 +255,7 @@ jobs:
           # a document is not what "it just works" means.
           - { name: linux,   os: ubuntu-24.04, smoke: true  }
           - { name: windows, os: windows-2022, smoke: false }
-          - { name: macos,   os: macos-14,     smoke: false }
+          - { name: macos,   os: macos-15,     smoke: false }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
