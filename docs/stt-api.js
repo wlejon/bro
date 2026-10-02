@@ -2,9 +2,9 @@
 
 /**
  * @typedef {Object} WhisperLoadOptions
- * @property {string} [device] `'cuda'` | `'metal'` | `'cpu'`; defaults to CUDA,
- *   then Metal, when available, else CPU. (Shared by loadParakeet / loadQwenAsr /
- *   loadParakeetTokenizer.)
+ * @property {string} [device] `'cuda'` | `'hip'` (alias `'rocm'`) | `'metal'` |
+ *   `'cpu'`; defaults to the GPU (HIP, CUDA or Metal, whichever is present), else
+ *   CPU. (Shared by loadParakeet / loadQwenAsr / loadParakeetTokenizer.)
  * @property {Function} [onReady] `onReady(model)`: when given, the load runs on
  *   a background thread and the loader returns an AsyncHandle instead of the model.
  * @property {Function} [onError] `onError(message)`, the async load's failure.
@@ -180,7 +180,7 @@ class WhisperTokenizer {
 }
 
 /**
- * Config getters: `loaded`, `device` (`'CUDA'` | `'Metal'` | `'CPU'`),
+ * Config getters: `loaded`, `device` (`'CUDA'` | `'HIP'` | `'Metal'` | `'CPU'`),
  * `sampleRate`, `numMelBins`, `dModel`, `maxSourcePositions`,
  * `maxTargetPositions`, `vocabSize`, `eosTokenId`, `decoderStartTokenId`.
  */

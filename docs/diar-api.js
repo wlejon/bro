@@ -3,7 +3,7 @@
 class Sortformer {
 
   /**
-   * Active execution device ('CPU', 'CUDA', or 'Metal').
+   * Active execution device ('CPU', 'CUDA', 'HIP', or 'Metal').
    * @readonly
    * @type {string}
    */

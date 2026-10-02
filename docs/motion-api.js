@@ -32,7 +32,7 @@
  * @typedef {Object} MotionLoadOptions
  * @property {string} [checkpoint] -  Path to ARDY g152 weights directory (denoiser, tokenizer, stats)
  * @property {string} [textEncoder] -  Path to merged LLM2Vec Llama-3-8B text encoder weights directory
- * @property {string} [device] -  Optional target device ('cuda', 'metal', or 'cpu')
+ * @property {string} [device] -  Optional target device ('cuda', 'hip', 'metal', or 'cpu'); defaults to the GPU (HIP, CUDA, then Metal), else CPU
  */
 
 /**
@@ -64,7 +64,7 @@
 class ArdyMotionPipeline {
 
   /**
-   *  Execution device ('CUDA', 'Metal', or 'CPU')
+   *  Execution device ('CUDA', 'HIP', 'Metal', or 'CPU')
    * @readonly
    * @type {string}
    */

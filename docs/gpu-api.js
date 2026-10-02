@@ -10,7 +10,7 @@
  *
  * Why this is separate from `bro.tensor`:
  *   - `bro.tensor` is the GPU tensor/op surface. It compiles OUT to a stub
- *     `{ available: false }` when no GPU backend (CUDA/Metal) is built in, and
+ *     `{ available: false }` when no GPU backend (CUDA/HIP/Metal) is built in, and
  *     `bro.tensor.available` reflects that *compile-time* decision.
  *   - `bro.gpu` is ALWAYS present (brotensor's CPU backend is always linked)
  *     and reflects *runtime* reality: a CUDA build still reports CPU here when
@@ -18,7 +18,7 @@
  *     loaders (bro.lm / bro.stt / bro.tts / bro.vision / bro.diffusion) default
  *     to, so it is the honest signal for "will this be slow."
  *
- * The properties are lazy getters: the CUDA/Metal driver probe runs on first
+ * The properties are lazy getters: the HIP/CUDA/Metal driver probe runs on first
  * access, not at startup, so an app that never touches ML pays nothing.
  *
  * @example
@@ -31,7 +31,7 @@
  * @example
  *   // Drive a backend badge honestly in any build:
  *   const badge = document.querySelector('#backend');
- *   badge.textContent = bro.gpu.backend.toUpperCase();      // 'CUDA' | 'METAL' | 'CPU'
+ *   badge.textContent = bro.gpu.backend.toUpperCase();      // 'HIP' | 'CUDA' | 'METAL' | 'CPU'
  *   badge.className = 'badge ' + (bro.gpu.available ? 'ok' : 'bad');
  *
  * @example
@@ -109,7 +109,7 @@ bro.gpu.compiledBackends;
  * The valid indices for the 'cuda:N' form accepted by `memoryInfo`,
  * `deviceName`, and `trim` are 0 .. deviceCount('cuda') - 1.
  *
- * @param {string} [device] - 'cuda' | 'metal' | 'cpu'
+ * @param {string} [device] - 'hip' (alias 'rocm') | 'cuda' | 'metal' | 'cpu'
  * @returns {number} Device count for the specified backend
  * @example
  * for (let i = 0; i < bro.gpu.deviceCount('cuda'); i++) {
@@ -128,7 +128,7 @@ bro.gpu.deviceCount = function(device) {};
  * or gate a large model load on available headroom. Returns `null` when the
  * backend isn't registered or can't report: always `null` for 'cpu'.
  *
- * @param {string} [device] - 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @param {string} [device] - 'hip' (alias 'rocm') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
  * @returns {GpuMemoryInfo|null} Free and total VRAM in bytes, or null
  * @example
  * const mem = bro.gpu.memoryInfo();
@@ -144,7 +144,7 @@ bro.gpu.memoryInfo = function(device) {};
  * isn't registered or can't report: always `null` for 'cpu'. Pair with
  * `memoryInfo()` to label a VRAM budget line with the actual card.
  *
- * @param {string} [device] - 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @param {string} [device] - 'hip' (alias 'rocm') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
  * @returns {string|null} Device name string or null
  * @example
  * const card = bro.gpu.deviceName() || bro.gpu.backend.toUpperCase();
@@ -168,7 +168,7 @@ bro.gpu.deviceName = function(device) {};
  * weight read into PCIe traffic. Returns `false` when the backend isn't
  * registered or has no trimmable allocator: always `false` for 'cpu'.
  *
- * @param {string} [device] - 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @param {string} [device] - 'hip' (alias 'rocm') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
  * @param {number} [keepBytes] - bytes to keep cached
  * @returns {boolean} Whether trim succeeded
  * @example

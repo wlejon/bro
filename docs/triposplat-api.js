@@ -106,7 +106,7 @@
 class TripoSplatPipeline {
 
   /**
-   * Device the models run on: 'CUDA' | 'Metal' | 'CPU'.
+   * Device the models run on: 'CUDA' | 'HIP' | 'Metal' | 'CPU'.
    * @readonly
    * @type {string}
    */
@@ -189,7 +189,7 @@ class TripoSplatPipeline {
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
 /**
- * Initialize the brotensor runtime (probe CUDA/Metal, register backends).
+ * Initialize the brotensor runtime (probe HIP/CUDA/Metal, register backends).
  * Idempotent; load() calls it too. Exposed so a Worker can warm up before its
  * first message.
  * @returns {undefined}
@@ -211,8 +211,8 @@ bro.triposplat.init = function() {};
  * @param {string} paths.decoder  octree Gaussian decoder safetensors (brodiffusion weights)
  * @param {string} [paths.birefnet] optional BiRefNet (Swin-L) matte safetensors
  *        (brovisionml weights); enables background removal in generate().
- * @param {string} [paths.device] 'cuda' | 'metal' | 'cpu'. Default: the best backend
- *        brotensor reports available.
+ * @param {string} [paths.device] 'cuda' | 'hip' | 'metal' | 'cpu'. Default: brotensor's
+ *        default device, the GPU (HIP, CUDA or Metal) when there is one.
  * @returns {TripoSplatPipeline}
  */
 bro.triposplat.load = function(paths) {};

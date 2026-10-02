@@ -65,7 +65,8 @@ if (typeof bro.ear.loadClap !== 'function') {
 
     const clap = bro.ear.loadClap(CLAP_DIR);
     assert(clap instanceof bro.ear.ClapModel, 'loadClap returns a ClapModel');
-    assert(clap.loaded && clap.device === 'CUDA', 'loaded on CUDA, got ' + clap.device);
+    assert(clap.loaded && clap.device.toLowerCase() === bro.gpu.backend,
+           'loaded on the default GPU (' + bro.gpu.backend + '), got ' + clap.device);
     assert(clap.sampleRate === 48000 && clap.embeddingSize === 512, 'CLAP shape');
 
     const prompts = ['a xylophone', 'static noise', 'a dog barking'];

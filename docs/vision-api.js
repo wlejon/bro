@@ -15,9 +15,10 @@
  * `bro.vision.version` — the brovisionml version string.
  *
  * ── Devices ──
- * Every loader takes `opts.device`: 'cuda', 'metal', 'gpu' (the best GPU present,
- * CUDA then Metal), or 'cpu' (case-insensitive). Omitted, it picks the best backend present —
- * CUDA, then Metal, then CPU — so a GPU machine gets the GPU without asking.
+ * Every loader takes `opts.device`: 'cuda', 'hip' (alias 'rocm'), 'metal', 'gpu'
+ * (the best GPU present, whichever backend it is), or 'cpu' (case-insensitive).
+ * Omitted, it picks brotensor's default device — the GPU (HIP, CUDA or Metal)
+ * when there is one, else CPU — so a GPU machine gets the GPU without asking.
  * Anything else throws a TypeError, and asking for a backend that is not
  * available (not compiled in, or no device) throws an Error rather than
  * falling back to CPU, which for these models means minutes instead of
@@ -25,8 +26,8 @@
  * see what you got.
  *
  *   if (!bro.gpu.available) return;                     // no GPU, don't bother
- *   const depth = bro.vision.loadDepth(dir);            // CUDA/Metal when present
- *   console.log(depth.device);                          // 'CUDA' | 'Metal' | 'CPU'
+ *   const depth = bro.vision.loadDepth(dir);            // the GPU when present
+ *   console.log(depth.device);                          // 'CUDA' | 'HIP' | 'Metal' | 'CPU'
  *   bro.vision.loadDepth(dir, { device: 'tpu' });       // TypeError
  *
  * A loader throws when its path is missing, not a directory/file it can read,
@@ -153,11 +154,11 @@ bro.vision.init();
  * checkpoint is read as ViT-B.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device=best available]  'cuda' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'gpu' | 'metal' | 'cpu'
  * @returns {Sam}
  */
 const sam = bro.vision.loadSam('weights/sam-vit-base', { device: 'gpu' });
-sam.device;    // 'CUDA'
+sam.device;    // 'CUDA' (or 'HIP' / 'Metal')
 sam.hasImage;  // false until setImage()
 
 /**
@@ -257,12 +258,12 @@ sam.segmentEverything(photo, {
  * a directory holding model.safetensors, or the file itself.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device=best available]  'cuda' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'gpu' | 'metal' | 'cpu'
  * @returns {DepthEstimator}
  */
 const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small',
                                    { device: 'gpu' });
-depth.device;   // 'CUDA'
+depth.device;   // 'CUDA' (or 'HIP' / 'Metal')
 
 /**
  * DepthEstimator.estimate(image, opts?)

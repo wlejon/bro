@@ -33,7 +33,7 @@
  *                            re-aimed per denoise step, a VAE encode/decode
  *                            seam, and a releasable text encoder.
  *
- * Like the rest of the ML namespaces this is CUDA-by-default; gate real model
+ * Like the rest of the ML namespaces this is GPU-by-default; gate real model
  * loads on `bro.gpu`. Sections 2, 4, 5 and 7 move only small tensors across the
  * boundary (directions, attention maps, taps, modulation rows), so they are
  * cheap to drive from JS every step.

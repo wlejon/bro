@@ -81,7 +81,7 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 
 ## JS API Documentation (docs/)
 
-Annotated `.js` files with JSDoc + examples. Read the file before using or changing an API; don't invent shapes from this table. ML namespaces (`bro.lm/stt/tts/diar/rave/vision/diffusion/tensor/triposplat/motion`) are CUDA-by-default; gate big loads on `bro.gpu`.
+Annotated `.js` files with JSDoc + examples. Read the file before using or changing an API; don't invent shapes from this table. ML namespaces (`bro.lm/stt/tts/diar/rave/vision/diffusion/tensor/triposplat/motion`) are GPU-by-default (HIP, CUDA or Metal); gate big loads on `bro.gpu`.
 
 | File | Surface |
 |------|---------|

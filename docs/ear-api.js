@@ -588,7 +588,7 @@ bro.ear.fit = function(graph, opts) {};
 // against transformers' ClapModel to ~1e-6 on embeddings (brosoundml
 // docs/clap.md). brosoundml mounts loadClap and ClapModel onto the same
 // `bro.ear` object when the build has BRO_WITH_SOUNDML; test for it with
-// `typeof bro.ear.loadClap === 'function'`. CUDA by default: ~50 ms per 10 s
+// `typeof bro.ear.loadClap === 'function'`. GPU by default: ~50 ms per 10 s
 // window on the GPU, several seconds on CPU.
 //
 // Weights: brosoundml/weights/clap (scripts/download-clap.sh, then
@@ -669,7 +669,7 @@ bro.ear.fit = function(graph, opts) {};
 
 class ClapModel {
   /** @readonly @type {boolean} */ loaded;
-  /** 'CUDA' or 'CPU' (as the other bro.tts / bro.stt models report it). @readonly @type {string} */ device;
+  /** 'CUDA', 'HIP', 'Metal' or 'CPU' (as the other bro.tts / bro.stt models report it). @readonly @type {string} */ device;
   /** 48000. @readonly @type {number} */ sampleRate;
   /** 512. @readonly @type {number} */ embeddingSize;
   /** 10: the audio tower's window. @readonly @type {number} */ windowSeconds;
@@ -715,7 +715,7 @@ class ClapModel {
  * `new bro.ear.ClapModel()` throws; the class is exported for instanceof.
  * @param {string} [dir] -  A converted checkpoint directory (model.safetensors +
  *   tokenizer files); defaults as described above.
- * @param {{device?: 'cuda'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
+ * @param {{device?: 'cuda'|'hip'|'metal'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
  * @returns {ClapModel}
  */
 bro.ear.loadClap = function(dir, opts) {};
