@@ -114,6 +114,7 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots.
 | `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend | **off** | `TENSOR` + CUDA toolkit |
 | `BRO_WITH_TENSOR_HIP` | brotensor HIP backend (AMD GPU / ROCm) | **auto/on** (Linux + ROCm) | `TENSOR` + ROCm / HIP |
 | `BRO_WITH_TENSOR_METAL` | brotensor Metal backend | **off** | `TENSOR` + macOS |
+| `BRO_WITH_TENSOR_VULKAN` | brotensor Vulkan compute backend (hand-written GLSL); coexists with HIP | **auto/on** (Linux + glslc + Vulkan headers + loader) | `TENSOR` + glslc (shaderc) + Vulkan headers |
 | `BRO_WITH_LM` | brolm | on | `TENSOR` |
 | `BRO_WITH_DIFFUSION` | brodiffusion | on | `LM` (text encoder) |
 | `BRO_WITH_VISION` | brovisionml | on | `TENSOR` |
@@ -128,9 +129,25 @@ and is turned on explicitly, orthogonal to the feature flags.
 On Linux systems with ROCm installed at `/opt/rocm`, `BRO_WITH_TENSOR_HIP` is
 auto-detected and enabled when the AI tower is requested.
 
+`BRO_WITH_TENSOR_VULKAN` is not part of the CUDA / HIP / Metal either-or: it
+is added beside whichever of those is on (on an AMD machine, HIP). On Linux
+it is auto-detected the first time a build directory is configured, when
+`glslc`, the Vulkan headers and the Vulkan loader are present (brotensor's
+`brotensor_vulkan_detect`); `-DBRO_WITH_TENSOR_VULKAN=ON/OFF` decides it
+explicitly. It forwards `BROTENSOR_WITH_VULKAN` (which brodiffusion and
+brovisionml read for their own GLSL kernels) and `BROGAMEAGENT_WITH_VULKAN`.
+With HIP and Vulkan both in the build, brotensor's default device is Vulkan
+(`bro.gpu.backend === "vulkan"`), the faster of the two on the same AMD GPU
+for every model measured; `BROTENSOR_PREFER_HIP=1` (or
+`BROTENSOR_DEFAULT_DEVICE=hip`) at run time makes HIP the default again, and
+every ML loader also takes `{ device: 'hip' }` / `{ device: 'vulkan' }`.
+Vulkan implements brotensor's inference ops but not every training backward
+(brotensor `docs/vulkan-coverage.md`), so training code that needs one of
+those names HIP.
+
 **`bro.tensor` needs one of those GPU backends, and `bro.gpu` does not.** The
 tensor surface is built on brotensor's GPU tensor type, which only exists with
-HIP, CUDA, or Metal compiled in, so `BRO_WITH_TENSOR=ON` on its own gives you
+HIP, CUDA, Metal or Vulkan compiled in, so `BRO_WITH_TENSOR=ON` on its own gives you
 `bro.tensor.available === false` and the usual unavailable-namespace error
 naming the backend rather than the flag. `bro.gpu` is the runtime probe and
 stays real either way, answering `cpu`. Everything else in the tower —

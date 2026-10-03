@@ -2,8 +2,9 @@
 
 /**
  * @typedef {Object} WhisperLoadOptions
- * @property {string} [device] `'cuda'` | `'hip'` (alias `'rocm'`) | `'metal'` |
- *   `'cpu'`; defaults to the GPU (HIP, CUDA or Metal, whichever is present), else
+ * @property {string} [device] `'cuda'` | `'hip'` (alias `'rocm'`) | `'vulkan'`
+ *   (alias `'vk'`) | `'metal'` | `'cpu'`; defaults to the GPU (brotensor's default
+ *   device: Vulkan, HIP, CUDA or Metal, whichever is present), else
  *   CPU. (Shared by loadParakeet / loadQwenAsr / loadParakeetTokenizer.)
  * @property {Function} [onReady] `onReady(model)`: when given, the load runs on
  *   a background thread and the loader returns an AsyncHandle instead of the model.

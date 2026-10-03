@@ -23,7 +23,7 @@
 //
 // Availability:
 //   bro.tensor.available   // boolean
-//   bro.tensor.backend     // "cpu" | "cuda" | "hip" | "metal" (lowercased device
+//   bro.tensor.backend     // "cpu" | "cuda" | "hip" | "vulkan" | "metal" (lowercased device
 //                          //  name, "cuda:1" on a non-default CUDA device)
 //
 // `available` is true whenever bro was built with BRO_WITH_TENSOR (the `full`
@@ -88,7 +88,7 @@ const gpu = bro.tensor;
  */
 gpu.available;
 
-/** Active device, lowercased: "cpu" | "cuda" | "hip" | "metal" | "cuda:<n>" | "hip:<n>". */
+/** Active device, lowercased: "cpu" | "cuda" | "hip" | "vulkan" | "metal" | "cuda:<n>" | "hip:<n>" | "vulkan:<n>". */
 gpu.backend;
 
 /**

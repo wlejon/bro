@@ -15,9 +15,10 @@
  * `bro.vision.version` — the brovisionml version string.
  *
  * ── Devices ──
- * Every loader takes `opts.device`: 'cuda', 'hip' (alias 'rocm'), 'metal', 'gpu'
+ * Every loader takes `opts.device`: 'cuda', 'hip' (alias 'rocm'), 'vulkan' (alias
+ * 'vk'), 'metal', 'gpu'
  * (the best GPU present, whichever backend it is), or 'cpu' (case-insensitive).
- * Omitted, it picks brotensor's default device — the GPU (HIP, CUDA or Metal)
+ * Omitted, it picks brotensor's default device — the GPU (Vulkan, HIP, CUDA or Metal)
  * when there is one, else CPU — so a GPU machine gets the GPU without asking.
  * Anything else throws a TypeError, and asking for a backend that is not
  * available (not compiled in, or no device) throws an Error rather than
@@ -154,7 +155,7 @@ bro.vision.init();
  * checkpoint is read as ViT-B.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'vulkan' | 'gpu' | 'metal' | 'cpu'
  * @returns {Sam}
  */
 const sam = bro.vision.loadSam('weights/sam-vit-base', { device: 'gpu' });
@@ -258,7 +259,7 @@ sam.segmentEverything(photo, {
  * a directory holding model.safetensors, or the file itself.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'vulkan' | 'gpu' | 'metal' | 'cpu'
  * @returns {DepthEstimator}
  */
 const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small',

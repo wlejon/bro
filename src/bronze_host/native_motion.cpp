@@ -113,10 +113,13 @@ std::vector<float> loadNpyF64AsF32(const std::string& path, int n) {
     return v;
 }
 
+// brotensor's default device when it is a GPU (Vulkan before HIP on an AMD
+// build unless BROTENSOR_PREFER_HIP=1), else the first GPU registered.
 bt::Device autoDevice() {
-    if (bt::is_available(bt::Device::HIP))   return bt::Device::HIP;
-    if (bt::is_available(bt::Device::CUDA))  return bt::Device::CUDA;
-    if (bt::is_available(bt::Device::Metal)) return bt::Device::Metal;
+    if (bt::default_device().is_gpu()) return bt::default_device();
+    for (bt::Device d : {bt::Device::HIP, bt::Device::CUDA, bt::Device::Metal, bt::Device::VULKAN}) {
+        if (bt::is_available(d)) return d;
+    }
     return bt::Device::CPU;
 }
 
@@ -125,6 +128,7 @@ const char* deviceName(bt::Device d) {
         case bt::DeviceType::HIP:   return "HIP";
         case bt::DeviceType::CUDA:  return "CUDA";
         case bt::DeviceType::Metal: return "Metal";
+        case bt::DeviceType::VULKAN: return "Vulkan";
         default:                    return "CPU";
     }
 }
@@ -153,6 +157,7 @@ std::unique_ptr<BroArdyMotionPipelineImpl> loadPipeline(const std::string& ckpt,
     else if (dev == "hip" || dev == "rocm") device = bt::Device::HIP;
     else if (dev == "cuda")                 device = bt::Device::CUDA;
     else if (dev == "metal")                device = bt::Device::Metal;
+    else if (dev == "vulkan" || dev == "vk") device = bt::Device::VULKAN;
     bt::set_default_device(device);
 
     auto w = std::make_unique<BroArdyMotionPipelineImpl>();

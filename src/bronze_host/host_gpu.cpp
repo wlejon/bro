@@ -35,13 +35,14 @@ const char* backendName(brotensor::Device d) {
         case brotensor::DeviceType::CUDA:  return "cuda";
         case brotensor::DeviceType::HIP:   return "hip";
         case brotensor::DeviceType::Metal: return "metal";
+        case brotensor::DeviceType::VULKAN: return "vulkan";
         case brotensor::DeviceType::CPU:   return "cpu";
     }
     return "cpu";
 }
 
-// "cuda", "cuda:1", "metal", "cpu" — a backend name with an optional card
-// index. Anything that is not a string (or names no backend) is the DEFAULT
+// "cuda", "cuda:1", "hip", "vulkan" (or "vk"), "metal", "cpu" — a backend
+// name with an optional card index. Anything that is not a string (or names no backend) is the DEFAULT
 // device: the probe methods never throw over their argument, so a badge can
 // call `memoryInfo(whatever)` and get null rather than a stack.
 brotensor::Device deviceArg(std::span<const Value> a, size_t idx) {
@@ -57,6 +58,7 @@ brotensor::Device deviceArg(std::span<const Value> a, size_t idx) {
     }
     if (spec == "cuda")                       d = brotensor::Device::cuda(index);
     else if (spec == "hip" || spec == "rocm") d = brotensor::Device::hip(index);
+    else if (spec == "vulkan" || spec == "vk") d = brotensor::Device::vulkan(index);
     else if (spec == "metal")                 d = brotensor::Device::metal(index);
     else if (spec == "cpu")                   d = brotensor::Device::cpu();
     return d;
@@ -114,6 +116,9 @@ Value makeBroGpuValue() {
 #endif
 #if BRO_WITH_TENSOR_METAL
         names.push_back("metal");
+#endif
+#if BRO_WITH_TENSOR_VULKAN
+        names.push_back("vulkan");
 #endif
         return stringArray(names);
     }, nullptr);

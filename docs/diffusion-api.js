@@ -48,7 +48,7 @@
  * bro.diffusion is installed in the main realm AND in every Worker realm (each
  * realm gets its own class objects, so a Pipeline handle never crosses
  * postMessage). Like every bro ML namespace it is GPU-by-default: brotensor
- * picks HIP/CUDA/Metal FP16 when a GPU build has one and falls back to CPU FP32,
+ * picks Vulkan/HIP/CUDA/Metal FP16 when a GPU build has one and falls back to CPU FP32,
  * where a single image takes minutes. Gate any real model load on `bro.gpu`.
  *
  * Weights are not bundled. Each model is a diffusers-format export:
@@ -689,7 +689,7 @@ class PipelineState {
 bro.diffusion.version;
 
 /**
- * Initialize the brotensor runtime (probe HIP/CUDA/Metal, register backends).
+ * Initialize the brotensor runtime (probe HIP/CUDA/Metal/Vulkan, register backends).
  * Idempotent and thread-safe; loadModel() and createPipeline() both call it.
  * Exposed so a Worker can warm up before its first message.
  * @returns {undefined}

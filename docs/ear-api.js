@@ -715,7 +715,7 @@ class ClapModel {
  * `new bro.ear.ClapModel()` throws; the class is exported for instanceof.
  * @param {string} [dir] -  A converted checkpoint directory (model.safetensors +
  *   tokenizer files); defaults as described above.
- * @param {{device?: 'cuda'|'hip'|'metal'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
+ * @param {{device?: 'cuda'|'hip'|'vulkan'|'metal'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
  * @returns {ClapModel}
  */
 bro.ear.loadClap = function(dir, opts) {};

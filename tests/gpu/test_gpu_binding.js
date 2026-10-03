@@ -9,21 +9,38 @@
 assert(typeof bro === 'object', 'bro global exists');
 assert(bro.gpu !== undefined && bro.gpu !== null, 'bro.gpu namespace exists');
 
-const KNOWN = ['hip', 'cuda', 'metal', 'cpu'];
+const KNOWN = ['hip', 'cuda', 'metal', 'vulkan', 'cpu'];
 
 {
     assert(typeof bro.gpu.available === 'boolean', 'available is a boolean');
     assert(typeof bro.gpu.backend === 'string', 'backend is a string');
     assert(KNOWN.includes(bro.gpu.backend),
-           'backend is one of hip/cuda/metal/cpu: ' + bro.gpu.backend);
+           'backend is one of hip/cuda/metal/vulkan/cpu: ' + bro.gpu.backend);
 
     const devices = bro.gpu.devices;
     assert(Array.isArray(devices), 'devices is an array');
     assert(devices.includes('cpu'), 'devices always includes cpu');
     for (const d of devices) {
-        assert(KNOWN.includes(d), 'device name is one of cuda/metal/cpu: ' + d);
+        assert(KNOWN.includes(d), 'device name is one of hip/cuda/metal/vulkan/cpu: ' + d);
     }
     assert(devices.includes(bro.gpu.backend), 'default backend is a registered device');
+
+    // Every registered backend was compiled in (the build's answer bounds the
+    // driver's); with HIP and Vulkan both registered, Vulkan is the default
+    // unless the run asked for HIP (BROTENSOR_PREFER_HIP=1 or
+    // BROTENSOR_DEFAULT_DEVICE=hip; the env is invisible here, so only the
+    // two-way consistency is checked).
+    const compiled = bro.gpu.compiledBackends;
+    assert(Array.isArray(compiled) && compiled.includes('cpu'), 'compiledBackends includes cpu');
+    for (const d of devices) {
+        assert(compiled.includes(d), 'registered backend ' + d + ' is in compiledBackends');
+    }
+    if (devices.includes('hip') && devices.includes('vulkan')) {
+        assert(bro.gpu.backend === 'vulkan' || bro.gpu.backend === 'hip',
+               'an AMD build with both backends defaults to one of them: ' + bro.gpu.backend);
+    }
+    // 'vk' is an alias of 'vulkan'.
+    assert(bro.gpu.deviceCount('vk') === bro.gpu.deviceCount('vulkan'), "deviceCount('vk') matches 'vulkan'");
 
     // available means "the default device is a GPU" — consistent with backend.
     assert(bro.gpu.available === (bro.gpu.backend !== 'cpu'),

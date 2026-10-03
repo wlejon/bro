@@ -211,8 +211,8 @@ bro.triposplat.init = function() {};
  * @param {string} paths.decoder  octree Gaussian decoder safetensors (brodiffusion weights)
  * @param {string} [paths.birefnet] optional BiRefNet (Swin-L) matte safetensors
  *        (brovisionml weights); enables background removal in generate().
- * @param {string} [paths.device] 'cuda' | 'hip' | 'metal' | 'cpu'. Default: brotensor's
- *        default device, the GPU (HIP, CUDA or Metal) when there is one.
+ * @param {string} [paths.device] 'cuda' | 'hip' | 'vulkan' | 'metal' | 'cpu'. Default: brotensor's
+ *        default device, the GPU (Vulkan, HIP, CUDA or Metal) when there is one.
  * @returns {TripoSplatPipeline}
  */
 bro.triposplat.load = function(paths) {};

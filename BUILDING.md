@@ -57,7 +57,10 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
   would be surprising, so they're in the default.
 - **`full`** adds the AI tower. The CUDA GPU backend stays **opt-in even here**
   (`-DBRO_WITH_TENSOR_CUDA=ON`, needs the CUDA toolkit), since it's the single largest
-  build-time cost.
+  build-time cost. On Linux the AMD backends are auto-detected: HIP when ROCm and
+  a supported AMD GPU are present, and Vulkan (`BRO_WITH_TENSOR_VULKAN`, beside
+  HIP) when `glslc` and the Vulkan headers and loader are. With both, Vulkan is
+  the default device; `BROTENSOR_PREFER_HIP=1` at run time picks HIP.
 
 Enabling a flag force-enables its prerequisites (e.g. `-DBRO_WITH_DIFFUSION=ON`
 pulls in `LM` → `TENSOR`), so inconsistent combinations are impossible. See
@@ -69,6 +72,7 @@ cmake -B build                                        # app (default)
 cmake -B build -DBRO_PROFILE=minimal                  # 2D/canvas/WebGL floor, no vcpkg
 cmake -B build -DBRO_PROFILE=full                     # + AI tower (CPU)
 cmake -B build -DBRO_PROFILE=full -DBRO_WITH_TENSOR_CUDA=ON   # + AI tower on CUDA
+cmake -B build -DBRO_PROFILE=full -DBRO_WITH_TENSOR_VULKAN=ON # + AI tower on Vulkan (any Vulkan 1.2+ GPU)
 cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + the 3D scene graph (forces PHYSICS + GAMEAI on)
 ```
 
@@ -138,6 +142,10 @@ matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
 - **vcpkg**, only for `app`/`full` (networking + video). The video dep
   (libvpx) assembles with **`nasm`**, so `sudo apt-get install nasm` (vcpkg
   auto-acquires it on Windows/macOS, but refuses to on Linux).
+- For the AI tower's Vulkan backend (`full`, auto-detected): `glslc` and the
+  Vulkan headers, `sudo apt-get install glslc libvulkan-dev` (Arch: `shaderc
+  vulkan-headers vulkan-icd-loader`). Nothing links libvulkan; it is loaded at
+  run time, so the binary still starts where there is no Vulkan driver.
 
 **macOS (12+, arm64 or x86_64):**
 - **Xcode Command Line Tools** (`xcode-select --install`), Apple clang 17+

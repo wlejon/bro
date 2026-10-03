@@ -3,9 +3,8 @@
 /**
  * Every bro.tts loader takes these (paths go through the asset-path resolver).
  * @typedef {Object} KokoroLoadOptions
- * @property {string} [device] `'cuda'` | `'hip'` (alias `'rocm'`) | `'metal'` |
- *   `'cpu'`; defaults to the GPU (HIP, CUDA or Metal, whichever is present), else
- *   CPU.
+ * @property {string} [device] `'cuda'` | `'hip'` (`'rocm'`) | `'vulkan'` (`'vk'`) | `'metal'`
+ *   | `'cpu'`; defaults to the GPU (brotensor's default device), else CPU.
  * @property {Function} [onReady] `onReady(model)`: load on a background thread;
  *   the loader then returns an AsyncHandle instead of the model.
  * @property {Function} [onError] `onError(message)` for the async load.
@@ -143,10 +142,10 @@
  * model picks a voice.
  *
  * @typedef {Object} OmniVoiceLoadOptions
- * @property {string} [device] 'cuda' | 'hip' | 'metal' | 'cpu'. Defaults to the GPU.
+ * @property {string} [device] 'cuda' | 'hip' | 'vulkan' | 'metal' | 'cpu'. Defaults to the GPU.
  *   Every diffusion step is a full 0.6B-parameter forward, so when the resolved
  *   device is the CPU the load is refused unless 'cpu' is passed explicitly.
- * @property {string} [precision] 'bf16' (default on CUDA and HIP: tensor-core
+ * @property {string} [precision] 'bf16' (default on CUDA, HIP and Vulkan: tensor-core
  *   GEMMs + fused attention, ~6x faster than fp32 with the same transcript) or
  *   'fp32' (bit-exact against the upstream fixtures; the default on Metal and CPU).
  * @property {boolean} [decoderOnly=false] Skip the codec encoder + HuBERT.

@@ -216,12 +216,43 @@ option(BRO_WITH_TENSOR       "brotensor tensor ops (ML backbone)"            ${_
 option(BRO_WITH_TENSOR_CUDA  "brotensor CUDA backend (needs CUDA toolkit)"   OFF)
 option(BRO_WITH_TENSOR_HIP   "brotensor HIP backend (needs ROCm / AMD GPU)"  OFF)
 option(BRO_WITH_TENSOR_METAL "brotensor Metal backend (macOS)"              OFF)
+# BRO_WITH_TENSOR_VULKAN is declared below, after its auto-detection.
 option(BRO_WITH_LM           "Language models (brolm)"                       ${_d_ai})
 option(BRO_WITH_DIFFUSION    "Diffusion models (brodiffusion)"               ${_d_ai})
 option(BRO_WITH_VISION       "Vision models (brovisionml)"                   ${_d_ai})
 option(BRO_WITH_SOUNDML      "Audio ML: stt/tts/diar/wake/kws (brosoundml)"  ${_d_ai})
 option(BRO_WITH_TRIPOSPLAT   "Image -> 3D gaussian-splat pipeline"           ${_d_ai})
 option(BRO_WITH_GAMEAI_NN    "brogameagent neural/learning layer"            ${_d_ai})
+
+# brotensor's cmake helpers (BrotensorHip.cmake / BrotensorVulkan.cmake) for the
+# auto-detection below, from the brotensor bro will add.
+set(_bro_brotensor_cmake_dir "")
+foreach(_d "${BROTENSOR_DIR}" "${CMAKE_SOURCE_DIR}/../brotensor" "${CMAKE_SOURCE_DIR}/third_party/brotensor")
+    if(_d AND EXISTS "${_d}/cmake/BrotensorHip.cmake")
+        set(_bro_brotensor_cmake_dir "${_d}/cmake")
+        break()
+    endif()
+endforeach()
+
+# The Vulkan compute backend (brotensor docs/vulkan.md: hand-written GLSL on any
+# Vulkan 1.2+ driver). Unlike CUDA / HIP / Metal it is additive: it coexists
+# with HIP, and with both in the build brotensor makes Vulkan the default device
+# (BROTENSOR_PREFER_HIP=1 at run time gives HIP back). Auto-detected on Linux,
+# the first time this build directory is configured, when glslc, the Vulkan
+# headers and the Vulkan loader are all present (brotensor_vulkan_detect);
+# -DBRO_WITH_TENSOR_VULKAN=ON/OFF decides it explicitly.
+set(_bro_vulkan_default OFF)
+if(NOT DEFINED CACHE{BRO_WITH_TENSOR_VULKAN} AND BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_METAL
+   AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND _bro_brotensor_cmake_dir
+   AND EXISTS "${_bro_brotensor_cmake_dir}/BrotensorVulkan.cmake")
+    include("${_bro_brotensor_cmake_dir}/BrotensorVulkan.cmake")
+    brotensor_vulkan_detect(_bro_vulkan_ok)
+    if(_bro_vulkan_ok)
+        message(STATUS "bro: glslc, Vulkan headers and loader found; enabling BRO_WITH_TENSOR_VULKAN")
+        set(_bro_vulkan_default ON)
+    endif()
+endif()
+option(BRO_WITH_TENSOR_VULKAN "brotensor Vulkan backend (glslc + Vulkan headers; coexists with HIP)" ${_bro_vulkan_default})
 
 # Auto-detect the HIP backend on Linux when no other GPU backend was requested.
 # Same rule brotensor builds by (its cmake/BrotensorHip.cmake): ROCm at
@@ -231,15 +262,8 @@ option(BRO_WITH_GAMEAI_NN    "brogameagent neural/learning layer"            ${_
 # rather than enabling a backend brotensor would refuse to configure.
 if(BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_CUDA AND NOT BRO_WITH_TENSOR_METAL AND NOT BRO_WITH_TENSOR_HIP
    AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(_bro_brotensor_hip_cmake "")
-    foreach(_d "${BROTENSOR_DIR}" "${CMAKE_SOURCE_DIR}/../brotensor" "${CMAKE_SOURCE_DIR}/third_party/brotensor")
-        if(_d AND EXISTS "${_d}/cmake/BrotensorHip.cmake")
-            set(_bro_brotensor_hip_cmake "${_d}/cmake/BrotensorHip.cmake")
-            break()
-        endif()
-    endforeach()
-    if(_bro_brotensor_hip_cmake)
-        include("${_bro_brotensor_hip_cmake}")
+    if(_bro_brotensor_cmake_dir)
+        include("${_bro_brotensor_cmake_dir}/BrotensorHip.cmake")
         brotensor_hip_detect_gpus(_bro_amd_gpus)
         if(_bro_amd_gpus OR CMAKE_HIP_ARCHITECTURES)
             message(STATUS "bro: ROCm with a supported AMD GPU target; enabling BRO_WITH_TENSOR_HIP")
@@ -259,6 +283,7 @@ endfunction()
 _bro_require(BRO_WITH_TENSOR_CUDA  BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_TENSOR_HIP   BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_TENSOR_METAL BRO_WITH_TENSOR)
+_bro_require(BRO_WITH_TENSOR_VULKAN BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_VISION)
 _bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_DIFFUSION)
 _bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_3D)
@@ -325,6 +350,16 @@ else()
     set(BROGAMEAGENT_WITH_CUDA OFF CACHE BOOL "" FORCE)
     set(BROGAMEAGENT_WITH_METAL OFF CACHE BOOL "" FORCE)
 endif()
+# Vulkan sits beside whichever backend the chain above picked (in practice
+# HIP). brodiffusion and brovisionml read BROTENSOR_WITH_VULKAN for their GLSL
+# kernels; brolm and brosoundml need none.
+if(BRO_WITH_TENSOR_VULKAN)
+    set(BROTENSOR_WITH_VULKAN     ON  CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_VULKAN  ON  CACHE BOOL "" FORCE)
+else()
+    set(BROTENSOR_WITH_VULKAN     OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_VULKAN  OFF CACHE BOOL "" FORCE)
+endif()
 
 # Forward Bronze API library enable flags to sibling libraries
 set(BROAUDIO_ENABLE_API     ON CACHE BOOL "Build Bronze JavaScript API for broaudio" FORCE)
@@ -343,7 +378,7 @@ set(BROVISIONML_ENABLE_API  ON CACHE BOOL "Build Bronze JavaScript API for brovi
 set(BRO_FEATURE_FLAGS
     3D PHYSICS AUDIO GAMEAI FLORA
     NET VIDEO STEAM
-    TENSOR TENSOR_CUDA TENSOR_HIP TENSOR_METAL LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
+    TENSOR TENSOR_CUDA TENSOR_HIP TENSOR_METAL TENSOR_VULKAN LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN
     BRONZE)
 function(bro_apply_feature_defs target)
     foreach(_f IN LISTS BRO_FEATURE_FLAGS)
