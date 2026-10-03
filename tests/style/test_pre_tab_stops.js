@@ -21,9 +21,16 @@ assert(Math.abs(w('two') - w('sp2')) < 1,
 const r = document.getElementById('tab').getBoundingClientRect();
 const ch = r.width / 9;
 let inked = 0;
+// One getPixels() read of the element rather than a composite per sample.
+const gapX = Math.floor(r.left), gapY = Math.floor(r.top);
+const gap = getPixels(gapX, gapY, Math.ceil(r.right) - gapX, Math.ceil(r.bottom) - gapY);
+const at = (x, y) => {
+    const i = ((y - gapY) * gap.width + (x - gapX)) * 4;
+    return { r: gap.data[i], g: gap.data[i + 1], b: gap.data[i + 2] };
+};
 for (let x = Math.ceil(r.left + ch * 1.3); x < r.left + ch * 7.7; x += 1) {
     for (let y = Math.ceil(r.top + 2); y < r.bottom - 2; y += 2) {
-        const p = getPixel(x, y);
+        const p = at(x, y);
         if (p.r < 200 || p.g < 200 || p.b < 200) inked++;
     }
 }

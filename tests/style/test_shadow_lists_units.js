@@ -55,12 +55,17 @@ assert(bleedPx.r > 250 && bleedPx.g > 250,
        'blur(1px) leaves 5px past the box white, got ' + rgb(bleedPx));
 
 // Count samples of each colour in a band of rows under an element.
+// One getPixels() read for the band: a getPixel() per sample composites the
+// whole window each time, thousands of times over.
 function band(id, from, to) {
     const r = document.getElementById(id).getBoundingClientRect();
     const counts = { red: 0, blue: 0, green: 0 };
-    for (let y = Math.round(r.top) + from; y < Math.round(r.top) + to; y += 2) {
-        for (let x = Math.round(r.left); x < Math.round(r.right); x += 2) {
-            const p = getPixel(x, y);
+    const x0 = Math.round(r.left), y0 = Math.round(r.top) + from;
+    const img = getPixels(x0, y0, Math.round(r.right) - x0, to - from);
+    for (let y = 0; y < img.height; y += 2) {
+        for (let x = 0; x < img.width; x += 2) {
+            const i = (y * img.width + x) * 4;
+            const p = { r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] };
             if (near(p, 255, 0, 0, 40)) counts.red++;
             else if (near(p, 0, 0, 255, 40)) counts.blue++;
             else if (near(p, 0, 255, 0, 40)) counts.green++;

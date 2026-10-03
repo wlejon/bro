@@ -20,13 +20,13 @@ const box = document.getElementById('box').getBoundingClientRect();
 assert(Math.round(box.height) === 24,
        'the container ends after the first line, height ' + box.height);
 
+// One getPixels() read per region rather than a composite per pixel.
 function brightIn(x0, y0, x1, y1) {
+    x0 = Math.round(x0); y0 = Math.round(y0);
+    const img = getPixels(x0, y0, Math.round(x1) - x0, Math.round(y1) - y0);
     let n = 0;
-    for (let y = Math.round(y0); y < Math.round(y1); y++) {
-        for (let x = Math.round(x0); x < Math.round(x1); x++) {
-            const p = getPixel(x, y);
-            if (p.r > 128 && p.g > 128 && p.b > 128) n++;
-        }
+    for (let i = 0; i < img.data.length; i += 4) {
+        if (img.data[i] > 128 && img.data[i + 1] > 128 && img.data[i + 2] > 128) n++;
     }
     return n;
 }

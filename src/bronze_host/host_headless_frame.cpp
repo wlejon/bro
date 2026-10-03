@@ -20,6 +20,7 @@
 #include "util/log.h"
 
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -259,6 +260,54 @@ void installHeadlessFrame(engine::Engine& engine) {
             obj.set(ev::setProperty(obj.get(), "a", ev::fromDouble(pixels[offset + 3])));
             return obj.get();
         }, 2, "getPixel"));
+
+    // getPixels(x, y, w, h) -> { width, height, data: Uint8ClampedArray }
+    //
+    // A block of getPixel() probes from ONE composite. getPixel renders and
+    // reads back the whole frame per call, which is what a single probe
+    // wants and what a scan does not: a test sampling a band of a few
+    // thousand pixels paid a few thousand full-window composites (24 s on an
+    // M2, minutes on a CI VM's software GL). Same space and sampling as
+    // getPixel: document CSS px, each texel the device pixel at its centre,
+    // and texels outside the document read as zeroes.
+    ev::registerGlobal("getPixels", ev::makeFunction(
+        [&engine](Value, std::span<const Value> a) -> Value {
+            if (a.size() < 4)
+                return ev::throwTypeError("getPixels(x, y, w, h) requires x, y, w and h");
+            const int x0 = satCast<int>(ev::toDouble(a[0]));
+            const int y0 = satCast<int>(ev::toDouble(a[1]));
+            const int w = satCast<int>(ev::toDouble(a[2]));
+            const int h = satCast<int>(ev::toDouble(a[3]));
+            if (w <= 0 || h <= 0 || w > 16384 || h > 16384)
+                return ev::throwRangeError("getPixels: w and h must be in 1..16384");
+
+            auto pixels = engine.capturePixels();
+            const int cw = engine.contentWidth(), ch = engine.contentHeight();
+            std::vector<uint8_t> out(static_cast<size_t>(w) * h * 4, 0);
+            if (!pixels.empty()) {
+                for (int j = 0; j < h; ++j) {
+                    const int y = y0 + j;
+                    if (y < 0 || y >= ch) continue;
+                    for (int i = 0; i < w; ++i) {
+                        const int x = x0 + i;
+                        if (x < 0 || x >= cw) continue;
+                        const size_t src = framePixelOffset(engine, x + engine.contentLeft(),
+                                                            y + engine.contentTop());
+                        std::memcpy(&out[(static_cast<size_t>(j) * w + i) * 4],
+                                    &pixels[src], 4);
+                    }
+                }
+            }
+
+            ObjectBuilder res;
+            res.set("width", ev::fromDouble(w));
+            res.set("height", ev::fromDouble(h));
+            Value data = ev::createTypedArray(ev::elements::Uint8Clamped,
+                                              static_cast<uint32_t>(out.size()));
+            ev::fillTypedArray(data, std::span<const uint8_t>(out.data(), out.size()));
+            res.set("data", data);
+            return res.get();
+        }, 4, "getPixels"));
 
     // getFramePixel(x, y)
     ev::registerGlobal("getFramePixel", ev::makeFunction(

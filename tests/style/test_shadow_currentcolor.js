@@ -60,9 +60,13 @@ expectAt(60, 160, RED, 'the drop-shadowed box itself still paints');
 // text colour, and no grey (the old rgba(0,0,0,.5) default on white).
 const ts = document.getElementById('ts').getBoundingClientRect();
 let red = 0, grey = 0;
-for (let y = Math.round(ts.top) + 60; y < Math.round(ts.top) + 120; y += 2) {
-    for (let x = Math.round(ts.left); x < Math.round(ts.right); x += 2) {
-        const p = getPixel(x, y);
+// One getPixels() read for the whole band rather than a composite per sample.
+const tsX = Math.round(ts.left), tsY = Math.round(ts.top) + 60;
+const tsImg = getPixels(tsX, tsY, Math.round(ts.right) - tsX, 60);
+for (let y = 0; y < tsImg.height; y += 2) {
+    for (let x = 0; x < tsImg.width; x += 2) {
+        const i = (y * tsImg.width + x) * 4;
+        const p = { r: tsImg.data[i], g: tsImg.data[i + 1], b: tsImg.data[i + 2] };
         if (near(p, 255, 0, 0, 40)) red++;
         else if (Math.abs(p.r - p.g) < 12 && Math.abs(p.g - p.b) < 12 && p.r < 200) grey++;
     }
