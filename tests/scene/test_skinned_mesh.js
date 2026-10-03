@@ -83,9 +83,13 @@ if (!scene) {
         color: [1, 1, 1], intensity: 1.5,
     });
 
-    // Ground plane (shadow receiver).
-    scene.createMesh({ mesh: 'plane', halfW: 5, halfD: 5, color: 'white',
-                       castsShadow: false, y: 0 });
+    // Ground plane (shadow receiver). Subdivided: Apple's Software Renderer
+    // (the only GL a GitHub macOS runner has) silently drops a triangle this
+    // large at this distance, so a two-triangle ground never drew there and
+    // both patches read 0 -- no shadow to compare. Same surface, same pixels
+    // on any GL that draws the big pair.
+    scene.createMesh({ mesh: 'plane', halfW: 5, halfD: 5, subdivX: 8, subdivZ: 8,
+                       color: 'white', castsShadow: false, y: 0 });
 
     // ------------------------------------------------------------------
     // Procedural 2-bone strip geometry
