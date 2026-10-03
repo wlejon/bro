@@ -75,6 +75,8 @@ embed_shader(clipmap.vert.glsl     kClipmapVertSrc)
 embed_shader(clipmap.frag.glsl     kClipmapFragSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
+find_package(Vulkan REQUIRED)
+
 add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
@@ -115,6 +117,11 @@ add_library(bro_scene STATIC
     tile_world_objects.cpp
     agent_binding.cpp
     ai_world_ticker.cpp
+    vulkan/scene_vk_device.cpp
+    vulkan/scene_vk_allocator.cpp
+    vulkan/scene_vk_pipeline.cpp
+    vulkan/scene_vk_descriptors.cpp
+    vulkan/scene_vk_target.cpp
     ${GENERATED_HEADERS}
 )
 
@@ -123,10 +130,17 @@ target_include_directories(bro_scene PRIVATE ${GEN_DIR})
 # bro_scene is only built when BRO_WITH_3D is on, and 3D forces PHYSICS + GAMEAI
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.
-target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh glad FastNoise brogameagent bro_dom bro_render bro_layout bro_tile)
+target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh glad FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)
 
 if(MSVC)
     target_compile_options(bro_scene PRIVATE /MP /permissive- /utf-8)
 endif()
+
+if(BRO_BUILD_TESTS)
+    add_executable(bro_vulkan_scene_test tests/test_vulkan_scene_core.cpp)
+    target_link_libraries(bro_vulkan_scene_test PRIVATE bro_scene bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_vulkan_scene_test PRIVATE ${bro_SOURCE_DIR}/src)
+endif()
+

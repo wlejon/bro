@@ -153,7 +153,14 @@ bool VulkanContext::createInstance() {
     appInfo.applicationVersion = VK_MAKE_VERSION(0, 1, 0);
     appInfo.pEngineName = "BroEngine";
     appInfo.engineVersion = VK_MAKE_VERSION(0, 1, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_2;
+
+    uint32_t instanceApiVersion = VK_API_VERSION_1_2;
+    auto enumerateInstanceVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+        vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"));
+    if (enumerateInstanceVersion) {
+        enumerateInstanceVersion(&instanceApiVersion);
+    }
+    appInfo.apiVersion = (instanceApiVersion >= VK_API_VERSION_1_3) ? VK_API_VERSION_1_3 : VK_API_VERSION_1_2;
 
     std::vector<const char*> extensions;
 
@@ -417,11 +424,42 @@ bool VulkanContext::createLogicalDevice() {
         enabledExtensions.push_back(ext.c_str());
     }
 
+    VkPhysicalDeviceVulkan13Features vulkan13Features{};
+    vulkan13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    vulkan13Features.dynamicRendering = VK_TRUE;
+    vulkan13Features.synchronization2 = VK_TRUE;
+
+    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynFeaturesKHR{};
+    dynFeaturesKHR.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR;
+    dynFeaturesKHR.dynamicRendering = VK_TRUE;
+
+    void* pNextChain = nullptr;
+    if (config_.enableDynamicRendering) {
+        if (deviceProperties_.apiVersion >= VK_API_VERSION_1_3) {
+            vulkan13Features.pNext = pNextChain;
+            pNextChain = &vulkan13Features;
+        } else {
+            bool hasDynExt = false;
+            for (const char* ext : enabledExtensions) {
+                if (strcmp(ext, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) == 0) {
+                    hasDynExt = true;
+                    break;
+                }
+            }
+            if (!hasDynExt) {
+                enabledExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+            }
+            dynFeaturesKHR.pNext = pNextChain;
+            pNextChain = &dynFeaturesKHR;
+        }
+    }
+
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = deviceFeatures_.samplerAnisotropy;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pNext = pNextChain;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;

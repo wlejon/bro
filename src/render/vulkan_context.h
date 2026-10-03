@@ -27,6 +27,7 @@ struct VulkanContextConfig {
     int preferredDeviceIndex = -1; // -1 = auto-select best GPU
     std::vector<std::string> extraInstanceExtensions;
     std::vector<std::string> extraDeviceExtensions;
+    bool enableDynamicRendering = true;
 };
 
 /// Vulkan instance, physical device, logical device, and queue management.
