@@ -130,9 +130,15 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
             " (update the GPU driver, or run bro-headless with --no-gpu for CPU rendering)");
     }
 
-    LOG_INFO("Created window \"%s\" (%ux%u) with OpenGL %d.%d",
+    // The renderer string names the device behind the context ("Apple M2 Pro",
+    // "llvmpipe (LLVM 19.1.7, 256 bits)", "Apple Paravirtual device", "Apple
+    // Software Renderer"): a CI log that runs slowly or renders differently
+    // says which GL it ran on without anyone reproducing it.
+    const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    LOG_INFO("Created window \"%s\" (%ux%u) with OpenGL %d.%d (%s)",
              title.c_str(), width, height,
-             GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
+             GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version),
+             glRenderer ? glRenderer : "unknown renderer");
 
     // VSync: adaptive (-1) preferred, standard (1) fallback, or disabled (0).
     if (!hidden) {
