@@ -3,6 +3,7 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 #include <glad/gl.h>
 #include "broimage/decode.h"
 #include <algorithm>
@@ -25,8 +26,9 @@ void Window::setGLAttributes() {
 }
 
 Window::Window(const std::string& title, uint32_t width, uint32_t height,
-               bool hidden, bool resizable, bool vsync, bool borderless)
-    : m_width(width), m_height(height), m_vsyncPref(vsync)
+               bool hidden, bool resizable, bool vsync, bool borderless,
+               GraphicsBackend backend)
+    : m_width(width), m_height(height), m_vsyncPref(vsync), m_backend(backend)
 {
     // SDL library lifetime is refcounted across all windows (SdlRuntime);
     // this primary window holds one reference like any other.
@@ -34,9 +36,11 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
     }
 
-    setGLAttributes();
+    if (m_backend == GraphicsBackend::OpenGL) {
+        setGLAttributes();
+    }
 
-    SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(baseWindowFlags());
+    SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(baseWindowFlags(m_backend));
     if (hidden) {
         flags |= SDL_WINDOW_HIDDEN;
     } else if (resizable) {
@@ -85,70 +89,75 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         }
     }
 
-    // Create OpenGL context. Primary-only: secondary windows (createSecondary)
-    // never create a context — the engine points this context at their
-    // drawables instead.
-    m_glContext = SDL_GL_CreateContext(m_window);
-    if (!m_glContext) {
-        LOG_ERROR("Failed to create GL context: %s", SDL_GetError());
-        SDL_DestroyWindow(m_window);
-        m_window = nullptr;
-        SdlRuntime::release();
-        throw std::runtime_error(std::string("SDL_GL_CreateContext failed: ") + SDL_GetError());
-    }
-
-    // Load OpenGL functions via glad. On the failure paths below, tear down
-    // what this constructor built and drop the SDL refcount — the thrown
-    // exception means ~Window will never run (headless catches this and falls
-    // back to CPU raster; the balanced release keeps SdlRuntime consistent).
-    auto failCleanup = [this]() {
-        SDL_GL_DestroyContext(m_glContext);
-        m_glContext = nullptr;
-        SDL_DestroyWindow(m_window);
-        m_window = nullptr;
-        SdlRuntime::release();
-    };
-    int version = gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress);
-    if (!version) {
-        failCleanup();
-        throw std::runtime_error("Failed to load OpenGL functions via glad");
-    }
-
-    // A driver with no real GL support (headless server, a CI runner with only
-    // software GDI GL 1.1) can hand back a context below what we requested:
-    // SDL_GL_CreateContext succeeds and glad loads the 1.x entry points fine, so
-    // neither check above fires — then the first 3.3-core call (VAOs, etc.) hits
-    // a null function pointer and segfaults. Reject it here with a clear message
-    // instead. Callers that can fall back to CPU raster (headless) catch this.
-    int glMajor = GLAD_VERSION_MAJOR(version);
-    int glMinor = GLAD_VERSION_MINOR(version);
-    if (glMajor < 3 || (glMajor == 3 && glMinor < 3)) {
-        failCleanup();
-        throw std::runtime_error(
-            "OpenGL 3.3 core required, but this system provides only OpenGL " +
-            std::to_string(glMajor) + "." + std::to_string(glMinor) +
-            " (update the GPU driver, or run bro-headless with --no-gpu for CPU rendering)");
-    }
-
-    // The renderer string names the device behind the context ("Apple M2 Pro",
-    // "llvmpipe (LLVM 19.1.7, 256 bits)", "Apple Paravirtual device", "Apple
-    // Software Renderer"): a CI log that runs slowly or renders differently
-    // says which GL it ran on without anyone reproducing it.
-    const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-    LOG_INFO("Created window \"%s\" (%ux%u) with OpenGL %d.%d (%s)",
-             title.c_str(), width, height,
-             GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version),
-             glRenderer ? glRenderer : "unknown renderer");
-
-    // VSync: adaptive (-1) preferred, standard (1) fallback, or disabled (0).
-    if (!hidden) {
-        if (vsync) {
-            if (!SDL_GL_SetSwapInterval(-1)) {
-                SDL_GL_SetSwapInterval(1);
-            }
-        } else {
-            SDL_GL_SetSwapInterval(0);
+    if (m_backend == GraphicsBackend::OpenGL) {
+        // Create OpenGL context. Primary-only: secondary windows (createSecondary)
+        // never create a context — the engine points this context at their
+        // drawables instead.
+        m_glContext = SDL_GL_CreateContext(m_window);
+        if (!m_glContext) {
+            LOG_ERROR("Failed to create GL context: %s", SDL_GetError());
+            SDL_DestroyWindow(m_window);
+            m_window = nullptr;
+            SdlRuntime::release();
+            throw std::runtime_error(std::string("SDL_GL_CreateContext failed: ") + SDL_GetError());
         }
+
+        // Load OpenGL functions via glad. On the failure paths below, tear down
+        // what this constructor built and drop the SDL refcount — the thrown
+        // exception means ~Window will never run (headless catches this and falls
+        // back to CPU raster; the balanced release keeps SdlRuntime consistent).
+        auto failCleanup = [this]() {
+            SDL_GL_DestroyContext(m_glContext);
+            m_glContext = nullptr;
+            SDL_DestroyWindow(m_window);
+            m_window = nullptr;
+            SdlRuntime::release();
+        };
+        int version = gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress);
+        if (!version) {
+            failCleanup();
+            throw std::runtime_error("Failed to load OpenGL functions via glad");
+        }
+
+        // A driver with no real GL support (headless server, a CI runner with only
+        // software GDI GL 1.1) can hand back a context below what we requested:
+        // SDL_GL_CreateContext succeeds and glad loads the 1.x entry points fine, so
+        // neither check above fires — then the first 3.3-core call (VAOs, etc.) hits
+        // a null function pointer and segfaults. Reject it here with a clear message
+        // instead. Callers that can fall back to CPU raster (headless) catch this.
+        int glMajor = GLAD_VERSION_MAJOR(version);
+        int glMinor = GLAD_VERSION_MINOR(version);
+        if (glMajor < 3 || (glMajor == 3 && glMinor < 3)) {
+            failCleanup();
+            throw std::runtime_error(
+                "OpenGL 3.3 core required, but this system provides only OpenGL " +
+                std::to_string(glMajor) + "." + std::to_string(glMinor) +
+                " (update the GPU driver, or run bro-headless with --no-gpu for CPU rendering)");
+        }
+
+        // The renderer string names the device behind the context ("Apple M2 Pro",
+        // "llvmpipe (LLVM 19.1.7, 256 bits)", "Apple Paravirtual device", "Apple
+        // Software Renderer"): a CI log that runs slowly or renders differently
+        // says which GL it ran on without anyone reproducing it.
+        const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        LOG_INFO("Created window \"%s\" (%ux%u) with OpenGL %d.%d (%s)",
+                 title.c_str(), width, height,
+                 GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version),
+                 glRenderer ? glRenderer : "unknown renderer");
+
+        // VSync: adaptive (-1) preferred, standard (1) fallback, or disabled (0).
+        if (!hidden) {
+            if (vsync) {
+                if (!SDL_GL_SetSwapInterval(-1)) {
+                    SDL_GL_SetSwapInterval(1);
+                }
+            } else {
+                SDL_GL_SetSwapInterval(0);
+            }
+        }
+    } else {
+        LOG_INFO("Created window \"%s\" (%ux%u) with Vulkan",
+                 title.c_str(), width, height);
     }
 }
 
@@ -173,11 +182,13 @@ Window::~Window() {
 std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
     if (!SdlRuntime::acquire()) return nullptr;
 
-    // Same attribute set as the primary so this SDL_WINDOW_OPENGL surface's
-    // pixel format is compatible with the shared main context.
-    setGLAttributes();
+    if (cfg.backend == GraphicsBackend::OpenGL) {
+        // Same attribute set as the primary so this SDL_WINDOW_OPENGL surface's
+        // pixel format is compatible with the shared main context.
+        setGLAttributes();
+    }
 
-    SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(baseWindowFlags());
+    SDL_WindowFlags flags = static_cast<SDL_WindowFlags>(baseWindowFlags(cfg.backend));
     if (cfg.hidden) {
         flags |= SDL_WINDOW_HIDDEN;
     } else if (cfg.resizable) {
@@ -202,6 +213,7 @@ std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
     win->m_width = cfg.width;
     win->m_height = cfg.height;
     win->m_vsyncPref = false;  // secondary swaps run at interval 0 by policy
+    win->m_backend = cfg.backend;
 
     // Placement: explicit position wins; else center on the requested
     // display; else leave it to the OS. Skipped for hidden windows — where a
@@ -225,7 +237,7 @@ uint32_t Window::windowId() const {
 }
 
 bool Window::makeGLCurrent(SDL_GLContext ctx) {
-    if (!m_window) return false;
+    if (!m_window || m_backend != GraphicsBackend::OpenGL) return false;
     if (!SDL_GL_MakeCurrent(m_window, ctx)) {
         LOG_ERROR("SDL_GL_MakeCurrent failed: %s", SDL_GetError());
         return false;
@@ -234,6 +246,7 @@ bool Window::makeGLCurrent(SDL_GLContext ctx) {
 }
 
 void Window::applySwapIntervalPreference() {
+    if (m_backend != GraphicsBackend::OpenGL) return;
     if (m_vsyncPref) {
         if (!SDL_GL_SetSwapInterval(-1)) {
             SDL_GL_SetSwapInterval(1);
@@ -269,8 +282,10 @@ float Window::getDevicePixelRatio() const {
 #endif
 }
 
-uint64_t Window::baseWindowFlags() {
-    SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
+uint64_t Window::baseWindowFlags(GraphicsBackend backend) {
+    SDL_WindowFlags flags = (backend == GraphicsBackend::Vulkan)
+        ? SDL_WINDOW_VULKAN
+        : SDL_WINDOW_OPENGL;
 #ifdef __APPLE__
     // Only Apple: there the backing store is the one thing that changes, and
     // the engine renders at getPixelDensity(). Windows and X11 already hand
@@ -288,7 +303,9 @@ void Window::raise() {
 }
 
 void Window::swapWindow() {
-    SDL_GL_SwapWindow(m_window);
+    if (m_backend == GraphicsBackend::OpenGL) {
+        SDL_GL_SwapWindow(m_window);
+    }
 }
 
 void Window::setTitle(const std::string& title) {
@@ -306,12 +323,14 @@ void Window::setFullscreen(bool fullscreen) {
 
 void Window::setVSync(bool enabled) {
     m_vsyncPref = enabled;
-    if (enabled) {
-        if (!SDL_GL_SetSwapInterval(-1)) {
-            SDL_GL_SetSwapInterval(1);
+    if (m_backend == GraphicsBackend::OpenGL) {
+        if (enabled) {
+            if (!SDL_GL_SetSwapInterval(-1)) {
+                SDL_GL_SetSwapInterval(1);
+            }
+        } else {
+            SDL_GL_SetSwapInterval(0);
         }
-    } else {
-        SDL_GL_SetSwapInterval(0);
     }
 }
 
@@ -596,6 +615,10 @@ void Window::setIcon(const std::string& pngPath) {
 }
 
 SDL_GLContext Window::createSharedContext() {
+    if (m_backend != GraphicsBackend::OpenGL) {
+        LOG_WARN("createSharedContext called on non-OpenGL window");
+        return nullptr;
+    }
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
     SDL_GLContext shared = SDL_GL_CreateContext(m_window);
     if (!shared) {

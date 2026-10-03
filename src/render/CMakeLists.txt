@@ -16,12 +16,17 @@ else()
     target_compile_definitions(bro_bidi PRIVATE BRO_WITH_ICU_BIDI=0)
 endif()
 
-# --- Render library (OpenGL backend) ---
+# --- Render library (OpenGL and Vulkan backends) ---
+find_package(Vulkan REQUIRED)
+
 add_library(bro_render STATIC
     skia_backend.cpp
     skia_backend_gpu.cpp
     skia_backend_gradient.cpp
     gl_context.cpp
+    vulkan_context.cpp
+    vulkan_swapchain.cpp
+    vulkan_presenter.cpp
     raster_renderer.cpp
     font_fallback.cpp
     font_family.cpp
@@ -33,7 +38,7 @@ add_library(bro_render STATIC
     image_cache.cpp
 )
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi glad broimage::broimage)
+target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi glad broimage::broimage Vulkan::Vulkan)
 
 # WebP decoding. Its own small library rather than a part of bro_render,
 # because bro has two independent image entry points that must agree — the
@@ -61,4 +66,10 @@ target_link_libraries(bro_render PUBLIC OpenGL::GL)
 if(UNIX AND NOT APPLE)
     target_link_options(bro_render INTERFACE
         "LINKER:--no-as-needed,-lGL,--as-needed")
+endif()
+
+if(BRO_BUILD_TESTS)
+    add_executable(bro_vulkan_test tests/test_vulkan.cpp)
+    target_link_libraries(bro_vulkan_test PRIVATE bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_vulkan_test PRIVATE ${bro_SOURCE_DIR}/src)
 endif()

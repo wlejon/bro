@@ -54,13 +54,19 @@ enum class CursorShape {
     Count_  // sentinel — cache array size, not a real shape
 };
 
+/// Target graphics API for window creation.
+enum class GraphicsBackend {
+    OpenGL,
+    Vulkan,
+};
+
 /// One OS window. Two kinds share this class:
 ///
-/// - The PRIMARY window (public constructor): owns THE OpenGL context — the
-///   main context every other context in the process shares resources with —
-///   and loads the GL function pointers. Exactly one per process. SDL library
-///   lifetime is refcounted through SdlRuntime (acquired per Window), so the
-///   primary no longer single-handedly owns SDL_Init/SDL_Quit.
+/// - The PRIMARY window (public constructor): owns THE OpenGL context (or Vulkan
+///   surface) — the main context every other context in the process shares
+///   resources with — and loads the GL function pointers. Exactly one per process.
+///   SDL library lifetime is refcounted through SdlRuntime (acquired per Window),
+///   so the primary no longer single-handedly owns SDL_Init/SDL_Quit.
 ///
 /// - SECONDARY windows (createSecondary): SDL_WINDOW_OPENGL surfaces created
 ///   with the same GL attribute set as the primary but NO GL context of their
@@ -71,7 +77,7 @@ class Window {
 public:
     Window(const std::string& title, uint32_t width, uint32_t height,
            bool hidden = false, bool resizable = true, bool vsync = true,
-           bool borderless = false);
+           bool borderless = false, GraphicsBackend backend = GraphicsBackend::OpenGL);
     ~Window();
 
     Window(const Window&) = delete;
@@ -92,6 +98,7 @@ public:
         int x = kPosUnset;
         int y = kPosUnset;
         uint32_t displayId = 0;
+        GraphicsBackend backend = GraphicsBackend::OpenGL;
     };
 
     /// Create a secondary window (see class comment): SDL_WINDOW_OPENGL with
@@ -109,6 +116,11 @@ public:
     /// SDL window id — the key SDL events carry (event.window.windowID etc.),
     /// used to route events to the window they happened on. 0 on failure.
     uint32_t windowId() const;
+
+    /// Graphics backend used by this window.
+    GraphicsBackend backend() const { return m_backend; }
+    bool isVulkan() const { return m_backend == GraphicsBackend::Vulkan; }
+    bool vsyncPreference() const { return m_vsyncPref; }
 
     /// True for the primary window (owns the process's main GL context).
     bool ownsGLContext() const { return m_glContext != nullptr; }
@@ -231,7 +243,7 @@ public:
     /// Window creation flags every bro window shares. On Apple platforms this
     /// requests a full-resolution (Retina) drawable; window coordinates stay in
     /// points, so the drawable is getPixelDensity() times the window size.
-    static uint64_t baseWindowFlags();
+    static uint64_t baseWindowFlags(GraphicsBackend backend = GraphicsBackend::OpenGL);
 
     /// Set the window icon from a PNG file (taskbar / Alt-Tab / title bar).
     /// Silently no-ops if the file is missing or malformed — a missing icon
@@ -260,6 +272,7 @@ private:
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     bool m_vsyncPref = true;
+    GraphicsBackend m_backend = GraphicsBackend::OpenGL;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;
 };
