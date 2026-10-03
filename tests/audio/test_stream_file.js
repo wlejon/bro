@@ -63,11 +63,20 @@ assert(ctx.saveWav(wavPath, tone, 1, sr), 'wrote streaming fixture WAV');
     ctx.setPlaybackGain(id, 1.0);
 
     ctx.startRecording();
-    // Render the whole file: 0.1 s virtual gulps, real pauses for the worker.
+    // Render the whole file: 0.1 s virtual gulps, each one taken only once
+    // the worker has a gulp's worth buffered (or has decoded the whole file).
+    // A fixed real pause per gulp assumed the worker always got scheduled
+    // within it; on a loaded 3-vCPU CI VM it did not, the mixer drained the
+    // ring, and the test measured the runner instead of the stream. Waiting
+    // on the ring itself keeps the claim this checks: a fed ring plays clean
+    // through many refills.
+    const gulp = Math.ceil(sr / 10);
+    const totalFrames = sr * fileSec;
     const steps = (fileSec + 1) * 10;
     for (let i = 0; i < steps; i++) {
+        waitForStats(id, s => s.bufferedFrames >= gulp + 1024 ||
+                              s.decodedFrames >= totalFrames, 10000);
         sleep(100);
-        realWait(12);
     }
     const rec = ctx.stopRecording();
 
