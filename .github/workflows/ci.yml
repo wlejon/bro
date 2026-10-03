@@ -215,9 +215,14 @@ jobs:
         shell: bash
         run: xvfb-run -a ./tests/run_tests.sh
 
-      # macOS runners have a window server, so the hidden SDL window gets a
-      # real GL context (Apple's GL-over-Metal) with no Xvfb. Run under
-      # Homebrew's bash explicitly: `shell: bash` may resolve to /bin/bash 3.2.
+      # macOS runners have a window server, so the hidden SDL window gets a GL
+      # context with no Xvfb -- but the arm64 runner VM has no GPU, and that
+      # context is Apple's Software Renderer (the engine logs GL_RENDERER on
+      # "Created window"). On it the 3D scene group alone took ~37 of this
+      # step's ~50 minutes, so run_tests.sh detects the renderer and runs only
+      # a scene smoke subset there, printing SKIP and the reason for the rest;
+      # the Linux job runs the full group on llvmpipe. Run under Homebrew's
+      # bash explicitly: `shell: bash` may resolve to /bin/bash 3.2.
       - name: Test (headless, GPU path)
         if: matrix.test && runner.os == 'macOS'
         shell: bash

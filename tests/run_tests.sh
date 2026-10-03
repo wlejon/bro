@@ -247,6 +247,45 @@ else
     echo "         a hung test will hang the suite. (macOS: brew install coreutils)"
 fi
 
+# --- Apple Software Renderer: scene group cut to a smoke subset -------------
+# A macOS VM with no GPU (GitHub's macos-15 arm64 runners) gives every GL
+# context Apple's Software Renderer, and the 3D scene group on it costs ~35
+# minutes against ~5 on a real Mac: its shaders are JIT-compiled by one
+# system-wide CVMCompiler, so a scene test's compile runs on after it exits
+# and the NEXT process stalls in context creation until it finishes (10-100 s
+# per test, whatever that test does), and each frame is shaded on the CPU. It
+# is also wrong in ways no driver bro supports is: it drops large triangles
+# outright. So on that renderer only the scene tests named below run — they
+# still compile the mesh, instanced, skinned, shadow, terrain and post-fx
+# programs through Apple's GLSL front end, which is the macOS-specific thing
+# worth catching there — and the rest report SKIP with the reason. llvmpipe
+# (the Linux job) runs the whole group; a real Mac runs it in minutes.
+# BRO_TEST_SOFTWARE_GL_SCENE=all runs the whole group anyway. Darwin only:
+# nothing else has this renderer, and Linux pays no probe.
+SOFTWARE_GL_SCENE_SMOKE=" scene/test_scene_basic.js scene/test_lighting.js
+    scene/test_skinned_mesh.js scene/test_clipmap.js scene/test_terrain.js
+    scene/test_particles3d.js scene/test_instanced_raycast.js scene/test_ssao.js
+    scene/test_fxaa.js scene/test_camera_node.js scene/test_translucent_order.js
+    scene/test_tile_atlas_pixels.js scene/test_animation_clips.js "
+SOFTWARE_GL_RENDERER=""
+if [[ "$(uname -s)" == "Darwin" && "${BRO_TEST_SOFTWARE_GL_SCENE:-}" != "all" ]]; then
+    # The engine logs "Created window ... with OpenGL X.Y (<GL_RENDERER>)".
+    # Captured first: `| grep -q` under pipefail would fail on the SIGPIPE.
+    GL_PROBE_OUTPUT=$("$BRO" "$TEST_APP" -e "0" 2>&1)
+    if [[ "$GL_PROBE_OUTPUT" == *"(Apple Software Renderer)"* ]]; then
+        SOFTWARE_GL_RENDERER="Apple Software Renderer"
+        echo "  GL: Apple Software Renderer (no GPU) — scene/ runs its smoke subset only;"
+        echo "      BRO_TEST_SOFTWARE_GL_SCENE=all runs every scene test (see run_tests.sh)."
+    fi
+fi
+
+# Echoes the reason when this run skips the test, nothing when it runs it.
+software_gl_skip_reason() {
+    [[ -z "$SOFTWARE_GL_RENDERER" || "$1" != scene/* ]] && return 0
+    [[ "$SOFTWARE_GL_SCENE_SMOKE" == *[[:space:]]"$1"[[:space:]]* ]] && return 0
+    echo "$SOFTWARE_GL_RENDERER: scene group runs its smoke subset only"
+}
+
 # The JS tests run by default. BRO_TEST_JS=0 skips them (a bronze_host-only
 # run); a filter that names a .js file or a test_* stem overrides that, because
 # such a filter can match nothing else.
@@ -300,6 +339,13 @@ run_one_test() {
                 return 2 ;;
             *)  return 1 ;;
         esac
+    fi
+
+    local SKIP_REASON
+    SKIP_REASON=$(software_gl_skip_reason "$REL")
+    if [[ -n "$SKIP_REASON" ]]; then
+        echo "  SKIP  $REL  ($SKIP_REASON)"
+        return 3
     fi
 
     if [[ -n "$TIMEOUT_BIN" ]]; then
