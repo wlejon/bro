@@ -74,6 +74,40 @@ embed_shader(clipmap_cubic_height.glsl kClipmapCubicHeightSrc)
 embed_shader(clipmap.vert.glsl     kClipmapVertSrc)
 embed_shader(clipmap.frag.glsl     kClipmapFragSrc)
 
+## ── Vulkan SPIR-V shader compilation ──────────────────────────────────────────
+find_program(GLSLC_EXECUTABLE glslc REQUIRED)
+
+set(VK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_vk")
+file(MAKE_DIRECTORY "${VK_GEN_DIR}")
+
+function(compile_vk_shader_header SHADER_FILE STAGE)
+    set(INPUT "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
+    set(OUTPUT "${VK_GEN_DIR}/${SHADER_FILE}.spv.h")
+    add_custom_command(
+        OUTPUT "${OUTPUT}"
+        COMMAND ${GLSLC_EXECUTABLE} -fshader-stage=${STAGE} -mfmt=c "${INPUT}" -o "${OUTPUT}"
+        DEPENDS "${INPUT}"
+        COMMENT "Compiling SPIR-V vulkan/shaders/${SHADER_FILE} -> ${SHADER_FILE}.spv.h"
+    )
+    list(APPEND VK_GENERATED_HEADERS "${OUTPUT}")
+    set(VK_GENERATED_HEADERS "${VK_GENERATED_HEADERS}" PARENT_SCOPE)
+endfunction()
+
+compile_vk_shader_header(mesh.vert vertex)
+compile_vk_shader_header(mesh_instanced.vert vertex)
+compile_vk_shader_header(mesh_skinned.vert vertex)
+compile_vk_shader_header(mesh.frag fragment)
+compile_vk_shader_header(shadow.vert vertex)
+compile_vk_shader_header(shadow_instanced.vert vertex)
+compile_vk_shader_header(shadow_skinned.vert vertex)
+compile_vk_shader_header(shadow.frag fragment)
+compile_vk_shader_header(skybox.vert vertex)
+compile_vk_shader_header(environment.frag fragment)
+compile_vk_shader_header(postfx.vert vertex)
+compile_vk_shader_header(tonemap.frag fragment)
+compile_vk_shader_header(bloom.frag fragment)
+compile_vk_shader_header(fxaa.frag fragment)
+
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
 
@@ -122,11 +156,17 @@ add_library(bro_scene STATIC
     vulkan/scene_vk_pipeline.cpp
     vulkan/scene_vk_descriptors.cpp
     vulkan/scene_vk_target.cpp
+    vulkan/scene_vk_shader_compiler.cpp
+    vulkan/pass_mesh.cpp
+    vulkan/pass_shadow.cpp
+    vulkan/pass_environment.cpp
+    vulkan/pass_postfx.cpp
     ${GENERATED_HEADERS}
+    ${VK_GENERATED_HEADERS}
 )
 
 target_include_directories(bro_scene PUBLIC ${bro_SOURCE_DIR}/src)
-target_include_directories(bro_scene PRIVATE ${GEN_DIR})
+target_include_directories(bro_scene PRIVATE ${GEN_DIR} ${VK_GEN_DIR})
 # bro_scene is only built when BRO_WITH_3D is on, and 3D forces PHYSICS + GAMEAI
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.
@@ -141,6 +181,11 @@ endif()
 if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_scene_test tests/test_vulkan_scene_core.cpp)
     target_link_libraries(bro_vulkan_scene_test PRIVATE bro_scene bro_render bro_platform bro_util skia Vulkan::Vulkan)
-    target_include_directories(bro_vulkan_scene_test PRIVATE ${bro_SOURCE_DIR}/src)
+    target_include_directories(bro_vulkan_scene_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
+
+    add_executable(bro_vulkan_scene_passes_test tests/test_vulkan_scene_passes.cpp)
+    target_link_libraries(bro_vulkan_scene_passes_test PRIVATE bro_scene bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    target_include_directories(bro_vulkan_scene_passes_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()
+
 
