@@ -10,7 +10,7 @@
  *
  * Why this is separate from `bro.tensor`:
  *   - `bro.tensor` is the GPU tensor/op surface. It compiles OUT to a stub
- *     `{ available: false }` when no GPU backend (CUDA/Vulkan/HIP/Metal) is built in, and
+ *     `{ available: false }` when no GPU backend (CUDA/Vulkan/Metal) is built in, and
  *     `bro.tensor.available` reflects that *compile-time* decision.
  *   - `bro.gpu` is ALWAYS present (brotensor's CPU backend is always linked)
  *     and reflects *runtime* reality: a CUDA build still reports CPU here when
@@ -18,7 +18,7 @@
  *     loaders (bro.lm / bro.stt / bro.tts / bro.vision / bro.diffusion) default
  *     to, so it is the honest signal for "will this be slow."
  *
- * The properties are lazy getters: the CUDA/Metal/Vulkan/HIP driver probe runs on first
+ * The properties are lazy getters: the CUDA/Metal/Vulkan driver probe runs on first
  * access, not at startup, so an app that never touches ML pays nothing.
  *
  * @example
@@ -31,7 +31,7 @@
  * @example
  *   // Drive a backend badge honestly in any build:
  *   const badge = document.querySelector('#backend');
- *   badge.textContent = bro.gpu.backend.toUpperCase();      // 'VULKAN' | 'HIP' | 'CUDA' | 'METAL' | 'CPU'
+ *   badge.textContent = bro.gpu.backend.toUpperCase();      // 'VULKAN' | 'CUDA' | 'METAL' | 'CPU'
  *   badge.className = 'badge ' + (bro.gpu.available ? 'ok' : 'bad');
  *
  * @example
@@ -70,9 +70,8 @@ bro.gpu.available;
 
 /**
  * The default compute device: what a freshly-loaded model lands on.
- * One of 'vulkan' | 'hip' | 'cuda' | 'metal' | 'cpu' (best available: CUDA >
- * Metal > Vulkan > HIP > CPU; with both AMD backends built in, Vulkan is the
- * default and BROTENSOR_PREFER_HIP=1 in the environment makes it HIP).
+ * One of 'vulkan' | 'cuda' | 'metal' | 'cpu' (best available: CUDA >
+ * Metal > Vulkan > CPU; BROTENSOR_DEFAULT_DEVICE in the environment overrides it).
  * @readonly
  * @type {string}
  */
@@ -80,9 +79,8 @@ bro.gpu.backend;
 
 /**
  * Every backend registered in this binary at runtime, e.g. ['cpu'] on a
- * CPU-only build, ['cpu', 'vulkan'] on a Vulkan-only AMD build, or
- * ['cpu', 'hip', 'vulkan'] on an AMD build with both backends (Vulkan is the
- * AMD backend of choice; HIP stays as the comparison backend). CPU is
+ * CPU-only build, ['cpu', 'vulkan'] on an AMD (or any Vulkan 1.2+) build, or
+ * ['cpu', 'cuda', 'vulkan'] on an NVIDIA build with both backends. CPU is
  * always included. One entry per BACKEND, not per card: a two-GPU box still
  * reports one entry per backend — see `deviceCount()` for how many cards, and the
  * 'vulkan:N' / 'cuda:N' argument form for addressing a specific one.
@@ -93,8 +91,8 @@ bro.gpu.devices;
 
 /**
  * The tensor backends COMPILED INTO this binary: a static build-time fact from
- * the BRO_WITH_TENSOR_HIP / _CUDA / _METAL / _VULKAN flags, independent of whether a
- * matching GPU is present. 'cpu' is always included; 'hip'/'cuda'/'metal'/'vulkan'
+ * the BRO_WITH_TENSOR_CUDA / _METAL / _VULKAN flags, independent of whether a
+ * matching GPU is present. 'cpu' is always included; 'cuda'/'metal'/'vulkan'
  * appear when built in.
  *
  * This is distinct from `devices` (and `backend`/`available`): those report the
@@ -114,7 +112,7 @@ bro.gpu.compiledBackends;
  * The valid indices for the 'cuda:N' form accepted by `memoryInfo`,
  * `deviceName`, and `trim` are 0 .. deviceCount('cuda') - 1.
  *
- * @param {string} [device] - 'hip' (alias 'rocm') | 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu'
+ * @param {string} [device] - 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu'
  * @returns {number} Device count for the specified backend
  * @example
  * for (let i = 0; i < bro.gpu.deviceCount('cuda'); i++) {
@@ -133,7 +131,7 @@ bro.gpu.deviceCount = function(device) {};
  * or gate a large model load on available headroom. Returns `null` when the
  * backend isn't registered or can't report: always `null` for 'cpu'.
  *
- * @param {string} [device] - 'hip' (alias 'rocm') | 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @param {string} [device] - 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
  * @returns {GpuMemoryInfo|null} Free and total VRAM in bytes, or null
  * @example
  * const mem = bro.gpu.memoryInfo();
@@ -149,7 +147,7 @@ bro.gpu.memoryInfo = function(device) {};
  * isn't registered or can't report: always `null` for 'cpu'. Pair with
  * `memoryInfo()` to label a VRAM budget line with the actual card.
  *
- * @param {string} [device] - 'hip' (alias 'rocm') | 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @param {string} [device] - 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
  * @returns {string|null} Device name string or null
  * @example
  * const card = bro.gpu.deviceName() || bro.gpu.backend.toUpperCase();
@@ -173,7 +171,7 @@ bro.gpu.deviceName = function(device) {};
  * weight read into PCIe traffic. Returns `false` when the backend isn't
  * registered or has no trimmable allocator: always `false` for 'cpu'.
  *
- * @param {string} [device] - 'hip' (alias 'rocm') | 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
+ * @param {string} [device] - 'vulkan' (alias 'vk') | 'cuda' | 'metal' | 'cpu', optionally with a card index on a multi-GPU box: 'cuda:1'
  * @param {number} [keepBytes] - bytes to keep cached
  * @returns {boolean} Whether trim succeeded
  * @example

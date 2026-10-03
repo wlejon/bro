@@ -37,7 +37,7 @@ function setStatus(text, kind) {
 function probeGpu() {
     const badge = document.getElementById('gpu-badge');
     const detail = document.getElementById('gpu-detail');
-    badge.textContent = bro.gpu.backend.toUpperCase();   // 'VULKAN' | 'HIP' | 'CUDA' | 'METAL' | 'CPU'
+    badge.textContent = bro.gpu.backend.toUpperCase();   // 'VULKAN' | 'CUDA' | 'METAL' | 'CPU'
     badge.className = 'badge ' + (bro.gpu.available ? 'ok' : 'warn');
 
     const bits = [];

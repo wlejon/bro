@@ -331,11 +331,10 @@ pvnet.load(pvnet.save());
  * to("gpu") on a build with no GPU backend THROWS rather than quietly
  * staying on the CPU, so a training loop cannot silently run 100x slow.
  * "gpu" is brotensor's default device (`bro.gpu.backend`); a backend can also
- * be named: "cuda", "hip" (alias "rocm"), "vulkan" (alias "vk"), "metal" —
- * naming one that is not there throws. Vulkan runs inference and most of
- * training, but not the attention / MHA backward (brotensor's Vulkan null
- * slots), so a transformer net trains on "hip" on an AMD machine.
- * @param {"cpu"|"gpu"|"cuda"|"hip"|"vulkan"|"metal"} device
+ * be named: "cuda", "vulkan" (alias "vk"), "metal" —
+ * naming one that is not there throws. Vulkan (the AMD GPU path) runs
+ * inference and training, the attention / MHA backward included.
+ * @param {"cpu"|"gpu"|"cuda"|"vulkan"|"metal"} device
  */
 pvnet.to("gpu");
 

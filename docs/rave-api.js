@@ -58,7 +58,7 @@
 /**
  * Options for loading a RAVE model.
  * @typedef {Object} RaveLoadOptions
- * @property {string} [device] -  Target device ('cuda', 'hip', 'vulkan', 'metal', or 'cpu'); defaults to the GPU, else CPU
+ * @property {string} [device] -  Target device ('cuda', 'vulkan', 'metal', or 'cpu'); defaults to the GPU, else CPU
  * @property {Function} [onReady] -  Async load success callback
  * @property {Function} [onError] -  Async load error callback
  */

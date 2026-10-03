@@ -15,10 +15,10 @@
  * `bro.vision.version` — the brovisionml version string.
  *
  * ── Devices ──
- * Every loader takes `opts.device`: 'cuda', 'hip' (alias 'rocm'), 'vulkan' (alias
+ * Every loader takes `opts.device`: 'cuda', 'vulkan' (alias
  * 'vk'), 'metal', 'gpu'
  * (the best GPU present, whichever backend it is), or 'cpu' (case-insensitive).
- * Omitted, it picks brotensor's default device — the GPU (Vulkan, HIP, CUDA or Metal)
+ * Omitted, it picks brotensor's default device — the GPU (Vulkan, CUDA or Metal)
  * when there is one, else CPU — so a GPU machine gets the GPU without asking.
  * Anything else throws a TypeError, and asking for a backend that is not
  * available (not compiled in, or no device) throws an Error rather than
@@ -28,7 +28,7 @@
  *
  *   if (!bro.gpu.available) return;                     // no GPU, don't bother
  *   const depth = bro.vision.loadDepth(dir);            // the GPU when present
- *   console.log(depth.device);                          // 'CUDA' | 'Vulkan' | 'HIP' | 'Metal' | 'CPU'
+ *   console.log(depth.device);                          // 'CUDA' | 'Vulkan' | 'Metal' | 'CPU'
  *   bro.vision.loadDepth(dir, { device: 'tpu' });       // TypeError
  *
  * A loader throws when its path is missing, not a directory/file it can read,
@@ -155,11 +155,11 @@ bro.vision.init();
  * checkpoint is read as ViT-B.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'vulkan' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'vulkan' | 'gpu' | 'metal' | 'cpu'
  * @returns {Sam}
  */
 const sam = bro.vision.loadSam('weights/sam-vit-base', { device: 'gpu' });
-sam.device;    // 'CUDA' (or 'Vulkan' / 'HIP' / 'Metal')
+sam.device;    // 'CUDA' (or 'Vulkan' / 'Metal')
 sam.hasImage;  // false until setImage()
 
 /**
@@ -259,12 +259,12 @@ sam.segmentEverything(photo, {
  * a directory holding model.safetensors, or the file itself.
  * @param {string} path
  * @param {Object} [opts]
- * @param {string} [opts.device=best available]  'cuda' | 'hip' | 'vulkan' | 'gpu' | 'metal' | 'cpu'
+ * @param {string} [opts.device=best available]  'cuda' | 'vulkan' | 'gpu' | 'metal' | 'cpu'
  * @returns {DepthEstimator}
  */
 const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small',
                                    { device: 'gpu' });
-depth.device;   // 'CUDA' (or 'Vulkan' / 'HIP' / 'Metal')
+depth.device;   // 'CUDA' (or 'Vulkan' / 'Metal')
 
 /**
  * DepthEstimator.estimate(image, opts?)

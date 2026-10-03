@@ -33,7 +33,6 @@ namespace {
 const char* backendName(brotensor::Device d) {
     switch (d.type) {
         case brotensor::DeviceType::CUDA:  return "cuda";
-        case brotensor::DeviceType::HIP:   return "hip";
         case brotensor::DeviceType::Metal: return "metal";
         case brotensor::DeviceType::VULKAN: return "vulkan";
         case brotensor::DeviceType::CPU:   return "cpu";
@@ -41,7 +40,7 @@ const char* backendName(brotensor::Device d) {
     return "cpu";
 }
 
-// "cuda", "cuda:1", "hip", "vulkan" (or "vk"), "metal", "cpu" — a backend
+// "cuda", "cuda:1", "vulkan" (or "vk"), "metal", "cpu" — a backend
 // name with an optional card index. Anything that is not a string (or names no backend) is the DEFAULT
 // device: the probe methods never throw over their argument, so a badge can
 // call `memoryInfo(whatever)` and get null rather than a stack.
@@ -57,7 +56,6 @@ brotensor::Device deviceArg(std::span<const Value> a, size_t idx) {
         spec.resize(colon);
     }
     if (spec == "cuda")                       d = brotensor::Device::cuda(index);
-    else if (spec == "hip" || spec == "rocm") d = brotensor::Device::hip(index);
     else if (spec == "vulkan" || spec == "vk") d = brotensor::Device::vulkan(index);
     else if (spec == "metal")                 d = brotensor::Device::metal(index);
     else if (spec == "cpu")                   d = brotensor::Device::cpu();
@@ -108,9 +106,6 @@ Value makeBroGpuValue() {
     // The build's answer, not the driver's: what this binary COULD register.
     gpu.accessor("compiledBackends", [](Value, std::span<const Value>) {
         std::vector<const char*> names{"cpu"};
-#if BRO_WITH_TENSOR_HIP
-        names.push_back("hip");
-#endif
 #if BRO_WITH_TENSOR_CUDA
         names.push_back("cuda");
 #endif

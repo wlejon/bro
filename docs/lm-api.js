@@ -4,7 +4,7 @@
  * =============================================================================
  *
  * Backed by brolm (tokenizers + transformer text models) on top of brotensor.
- * Defaults to the best GPU (brotensor's default device: CUDA, Metal, then Vulkan before HIP), else CPU; pass { device: 'cpu' }
+ * Defaults to the best GPU (brotensor's default device: CUDA, Metal, then Vulkan), else CPU; pass { device: 'cpu' }
  * to force the CPU backend.
  *
  * Generation model families (plus the NLLB-200 translator and CLIP/T5 encoders):
@@ -208,7 +208,7 @@
  * Model loading options for causal LM backends. Relative paths resolve
  * against the app directory.
  * @typedef {Object} LoadModelOptions
- * @property {string} [device] - 'cuda' | 'hip' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU (Vulkan before HIP on an AMD build), else CPU
+ * @property {string} [device] - 'cuda' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU, else CPU
  * @property {string} [tokenizerPath]
  * @property {number} [maxSeqLen=4096] - Qwen3.5 / Qwen3-VL KV/state capacity
  * @property {Function} [onReady] - When given, the load runs on a worker
@@ -239,7 +239,7 @@
  * @property {string} [textPrefix="text_model."]
  * @property {string} [visionPrefix="vision_model."]
  * @property {string} [projectionPrefix=""]
- * @property {string} [device] - 'cuda' | 'hip' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU (Vulkan before HIP on an AMD build), else CPU
+ * @property {string} [device] - 'cuda' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU, else CPU
  */
 
 /**
@@ -264,7 +264,7 @@
  * @property {number} [maxLength=512]
  * @property {boolean} [quantizeWeights=false]
  * @property {T5Config} [config]
- * @property {string} [device] - 'cuda' | 'hip' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU (Vulkan before HIP on an AMD build), else CPU
+ * @property {string} [device] - 'cuda' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU, else CPU
  */
 
 /**
@@ -286,7 +286,7 @@
  * ModernBERT loading options. Relative paths resolve against the app
  * directory; each path defaults to the Hugging Face layout, then the Laya one.
  * @typedef {Object} LoadModernBertOptions
- * @property {string} [device] - 'cuda' | 'hip' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU (Vulkan before HIP on an AMD build), else CPU
+ * @property {string} [device] - 'cuda' | 'vulkan' | 'metal' | 'cpu'; default brotensor's default device when it is a GPU, else CPU
  * @property {string} [configPath] - Default `<dir>/config.json`, else `<dir>/encoder/config.json`
  * @property {string} [tokenizerPath] - Default `<dir>/tokenizer.json`, else `<dir>/tokenizer/tokenizer.json`
  *   (a tokenizer_config.json beside it names the [CLS]/[SEP]/[PAD]/[MASK] roles)

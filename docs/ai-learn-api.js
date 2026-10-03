@@ -261,7 +261,7 @@ gtrainer.setWeightsHandle(handle);
 
 /**
  * Same keys as ExItTrainer.setConfig, plus one:
- * @param {"cpu"|"gpu"|"cuda"|"hip"|"vulkan"|"metal"} [cfg.device] - where the
+ * @param {"cpu"|"gpu"|"cuda"|"vulkan"|"metal"} [cfg.device] - where the
  *     SGD runs (a backend name as in pvnet.to()). Requires `net.to(...)` onto
  *     the same device first. Unlike the net's own to(), an unavailable GPU
  *     here does NOT throw: the trainer silently falls back to the CPU, so

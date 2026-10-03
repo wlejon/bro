@@ -32,7 +32,7 @@
  * @typedef {Object} MotionLoadOptions
  * @property {string} [checkpoint] -  Path to ARDY g152 weights directory (denoiser, tokenizer, stats)
  * @property {string} [textEncoder] -  Path to merged LLM2Vec Llama-3-8B text encoder weights directory
- * @property {string} [device] -  Optional target device ('cuda', 'hip', 'vulkan', 'metal', or 'cpu'); defaults to the GPU (brotensor's default device: Vulkan before HIP on an AMD build), else CPU
+ * @property {string} [device] -  Optional target device ('cuda', 'vulkan', 'metal', or 'cpu'); defaults to the GPU (brotensor's default device), else CPU
  */
 
 /**
@@ -64,7 +64,7 @@
 class ArdyMotionPipeline {
 
   /**
-   *  Execution device ('CUDA', 'Vulkan', 'HIP', 'Metal', or 'CPU')
+   *  Execution device ('CUDA', 'Vulkan', 'Metal', or 'CPU')
    * @readonly
    * @type {string}
    */

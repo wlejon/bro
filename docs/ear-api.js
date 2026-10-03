@@ -669,7 +669,7 @@ bro.ear.fit = function(graph, opts) {};
 
 class ClapModel {
   /** @readonly @type {boolean} */ loaded;
-  /** 'CUDA', 'Vulkan', 'HIP', 'Metal' or 'CPU' (as the other bro.tts / bro.stt models report it). @readonly @type {string} */ device;
+  /** 'CUDA', 'Vulkan', 'Metal' or 'CPU' (as the other bro.tts / bro.stt models report it). @readonly @type {string} */ device;
   /** 48000. @readonly @type {number} */ sampleRate;
   /** 512. @readonly @type {number} */ embeddingSize;
   /** 10: the audio tower's window. @readonly @type {number} */ windowSeconds;
@@ -715,7 +715,7 @@ class ClapModel {
  * `new bro.ear.ClapModel()` throws; the class is exported for instanceof.
  * @param {string} [dir] -  A converted checkpoint directory (model.safetensors +
  *   tokenizer files); defaults as described above.
- * @param {{device?: 'cuda'|'hip'|'vulkan'|'metal'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
+ * @param {{device?: 'cuda'|'vulkan'|'metal'|'cpu', onReady?: function(ClapModel), onError?: function(string)}} [opts]
  * @returns {ClapModel}
  */
 bro.ear.loadClap = function(dir, opts) {};

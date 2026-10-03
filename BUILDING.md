@@ -57,11 +57,9 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
   would be surprising, so they're in the default.
 - **`full`** adds the AI tower. The CUDA GPU backend stays **opt-in even here**
   (`-DBRO_WITH_TENSOR_CUDA=ON`, needs the CUDA toolkit), since it's the single largest
-  build-time cost. On Linux the AMD backends are auto-detected: HIP when ROCm and
-  a supported AMD GPU are present, and Vulkan (`BRO_WITH_TENSOR_VULKAN`, beside
-  HIP) when `glslc` and the Vulkan headers and loader are. With both, Vulkan is
-  the default device (the AMD backend of choice; HIP is kept as the comparison
-  backend); `BROTENSOR_PREFER_HIP=1` at run time picks HIP.
+  build-time cost. On Linux the Vulkan backend (`BRO_WITH_TENSOR_VULKAN`, the
+  AMD GPU path, and any other Vulkan 1.2+ GPU) is auto-detected when `glslc` and
+  the Vulkan headers and loader are present.
 
 Enabling a flag force-enables its prerequisites (e.g. `-DBRO_WITH_DIFFUSION=ON`
 pulls in `LM` → `TENSOR`), so inconsistent combinations are impossible. See

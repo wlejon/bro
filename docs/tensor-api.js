@@ -1,12 +1,12 @@
 // =============================================================================
-// bro.tensor, GPU tensor + ops (brotensor: CUDA, Vulkan, HIP, Metal or CPU)
+// bro.tensor, GPU tensor + ops (brotensor: CUDA, Vulkan, Metal or CPU)
 // =============================================================================
 //
 // Wraps the brotensor sibling library. brotensor exposes one unified tensor
 // type with a runtime Device tag and device-neutral ops; bro.tensor is the
 // device-resident face of it. The op surface is identical across the CUDA
-// (NVIDIA), Vulkan (AMD's backend of choice; any Vulkan 1.2+ GPU), HIP (AMD
-// ROCm, kept as the comparison backend), Metal (Apple) and CPU backends, so code written against
+// (NVIDIA), Vulkan (the AMD GPU path; any Vulkan 1.2+ GPU), Metal (Apple)
+// and CPU backends, so code written against
 // bro.tensor runs unchanged on any of them; a handful of FP16 / INT8 fast
 // paths are GPU-only and say so.
 //
@@ -24,7 +24,7 @@
 //
 // Availability:
 //   bro.tensor.available   // boolean
-//   bro.tensor.backend     // "cpu" | "cuda" | "hip" | "vulkan" | "metal" (lowercased device
+//   bro.tensor.backend     // "cpu" | "cuda" | "vulkan" | "metal" (lowercased device
 //                          //  name, "cuda:1" on a non-default CUDA device)
 //
 // `available` is true whenever bro was built with BRO_WITH_TENSOR (the `full`
@@ -89,7 +89,7 @@ const gpu = bro.tensor;
  */
 gpu.available;
 
-/** Active device, lowercased: "cpu" | "cuda" | "hip" | "vulkan" | "metal" | "cuda:<n>" | "hip:<n>" | "vulkan:<n>". */
+/** Active device, lowercased: "cpu" | "cuda" | "vulkan" | "metal" | "cuda:<n>" | "vulkan:<n>". */
 gpu.backend;
 
 /**
