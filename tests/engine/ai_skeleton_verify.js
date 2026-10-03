@@ -19,7 +19,7 @@ assert(document.querySelector('#send-btn').disabled === true,
        'send button disabled without a model');
 
 const badge = document.querySelector('#gpu-badge').textContent;
-assert(badge === 'HIP' || badge === 'CUDA' || badge === 'METAL' || badge === 'CPU',
+assert(badge === 'VULKAN' || badge === 'HIP' || badge === 'CUDA' || badge === 'METAL' || badge === 'CPU',
        'bro.gpu probe rendered a backend badge, got: ' + badge);
 assert(document.querySelector('#gpu-detail').textContent.indexOf('compiled:') !== -1,
        'probe detail lists compiledBackends');

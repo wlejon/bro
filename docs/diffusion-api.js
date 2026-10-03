@@ -689,7 +689,7 @@ class PipelineState {
 bro.diffusion.version;
 
 /**
- * Initialize the brotensor runtime (probe HIP/CUDA/Metal/Vulkan, register backends).
+ * Initialize the brotensor runtime (probe CUDA/Metal/Vulkan/HIP, register backends).
  * Idempotent and thread-safe; loadModel() and createPipeline() both call it.
  * Exposed so a Worker can warm up before its first message.
  * @returns {undefined}

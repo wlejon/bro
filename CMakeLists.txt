@@ -214,6 +214,11 @@ option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${
 # Tier 2 — the AI tower (brotensor is the base).
 option(BRO_WITH_TENSOR       "brotensor tensor ops (ML backbone)"            ${_d_ai})
 option(BRO_WITH_TENSOR_CUDA  "brotensor CUDA backend (needs CUDA toolkit)"   OFF)
+# The HIP auto-detect below only fills in a value nobody set (an explicit
+# -DBRO_WITH_TENSOR_HIP=OFF on a ROCm machine stays off).
+if(NOT DEFINED CACHE{BRO_WITH_TENSOR_HIP})
+    set(_bro_hip_unset TRUE)
+endif()
 option(BRO_WITH_TENSOR_HIP   "brotensor HIP backend (needs ROCm / AMD GPU)"  OFF)
 option(BRO_WITH_TENSOR_METAL "brotensor Metal backend (macOS)"              OFF)
 # BRO_WITH_TENSOR_VULKAN is declared below, after its auto-detection.
@@ -254,13 +259,14 @@ if(NOT DEFINED CACHE{BRO_WITH_TENSOR_VULKAN} AND BRO_WITH_TENSOR AND NOT BRO_WIT
 endif()
 option(BRO_WITH_TENSOR_VULKAN "brotensor Vulkan backend (glslc + Vulkan headers; coexists with HIP)" ${_bro_vulkan_default})
 
-# Auto-detect the HIP backend on Linux when no other GPU backend was requested.
+# Auto-detect the HIP backend on Linux when no other GPU backend was requested
+# and BRO_WITH_TENSOR_HIP was not set.
 # Same rule brotensor builds by (its cmake/BrotensorHip.cmake): ROCm at
 # ROCM_PATH (-D or environment, else /opt/rocm), and either a supported AMD GPU
 # (RDNA 3+: gfx11xx / gfx12xx) reported by rocm_agent_enumerator or an explicit
 # CMAKE_HIP_ARCHITECTURES. ROCm installed with no such GPU stays CPU-only
 # rather than enabling a backend brotensor would refuse to configure.
-if(BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_CUDA AND NOT BRO_WITH_TENSOR_METAL AND NOT BRO_WITH_TENSOR_HIP
+if(_bro_hip_unset AND BRO_WITH_TENSOR AND NOT BRO_WITH_TENSOR_CUDA AND NOT BRO_WITH_TENSOR_METAL
    AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(_bro_brotensor_cmake_dir)
         include("${_bro_brotensor_cmake_dir}/BrotensorHip.cmake")

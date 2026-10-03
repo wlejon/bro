@@ -181,7 +181,7 @@ class WhisperTokenizer {
 }
 
 /**
- * Config getters: `loaded`, `device` (`'CUDA'` | `'HIP'` | `'Metal'` | `'CPU'`),
+ * Config getters: `loaded`, `device` (`'CUDA'` | `'Vulkan'` | `'HIP'` | `'Metal'` | `'CPU'`),
  * `sampleRate`, `numMelBins`, `dModel`, `maxSourcePositions`,
  * `maxTargetPositions`, `vocabSize`, `eosTokenId`, `decoderStartTokenId`.
  */

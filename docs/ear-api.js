@@ -669,7 +669,7 @@ bro.ear.fit = function(graph, opts) {};
 
 class ClapModel {
   /** @readonly @type {boolean} */ loaded;
-  /** 'CUDA', 'HIP', 'Metal' or 'CPU' (as the other bro.tts / bro.stt models report it). @readonly @type {string} */ device;
+  /** 'CUDA', 'Vulkan', 'HIP', 'Metal' or 'CPU' (as the other bro.tts / bro.stt models report it). @readonly @type {string} */ device;
   /** 48000. @readonly @type {number} */ sampleRate;
   /** 512. @readonly @type {number} */ embeddingSize;
   /** 10: the audio tower's window. @readonly @type {number} */ windowSeconds;

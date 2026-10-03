@@ -106,7 +106,7 @@
 class TripoSplatPipeline {
 
   /**
-   * Device the models run on: 'CUDA' | 'HIP' | 'Metal' | 'CPU'.
+   * Device the models run on: 'CUDA' | 'Vulkan' | 'HIP' | 'Metal' | 'CPU'.
    * @readonly
    * @type {string}
    */
@@ -189,7 +189,7 @@ class TripoSplatPipeline {
 // ── Namespaces ───────────────────────────────────────────────────────────────
 
 /**
- * Initialize the brotensor runtime (probe HIP/CUDA/Metal, register backends).
+ * Initialize the brotensor runtime (probe CUDA/Metal/Vulkan/HIP, register backends).
  * Idempotent; load() calls it too. Exposed so a Worker can warm up before its
  * first message.
  * @returns {undefined}

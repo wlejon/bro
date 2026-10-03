@@ -126,8 +126,12 @@ HTML/CSS + Canvas2D + WebGL runtime with working screenshots.
 and is the single biggest build-time cost. It maps to the existing
 `BROTENSOR_WITH_CUDA` (see the forwarding block in the top-level `CMakeLists.txt`)
 and is turned on explicitly, orthogonal to the feature flags.
-On Linux systems with ROCm installed at `/opt/rocm`, `BRO_WITH_TENSOR_HIP` is
-auto-detected and enabled when the AI tower is requested.
+On Linux systems with ROCm installed (`ROCM_PATH`, default `/opt/rocm`) and a GPU
+brotensor's HIP backend supports (RDNA 3+, or `CMAKE_HIP_ARCHITECTURES`),
+`BRO_WITH_TENSOR_HIP` is auto-detected and enabled when the AI tower is requested
+and the build directory has no `BRO_WITH_TENSOR_HIP` yet (`-DBRO_WITH_TENSOR_HIP=OFF`
+keeps it off).
+HIP is the comparison backend on AMD; Vulkan (below) is the one to use.
 
 `BRO_WITH_TENSOR_VULKAN` is not part of the CUDA / HIP / Metal either-or: it
 is added beside whichever of those is on (on an AMD machine, HIP). On Linux
@@ -138,7 +142,8 @@ explicitly. It forwards `BROTENSOR_WITH_VULKAN` (which brodiffusion and
 brovisionml read for their own GLSL kernels) and `BROGAMEAGENT_WITH_VULKAN`.
 With HIP and Vulkan both in the build, brotensor's default device is Vulkan
 (`bro.gpu.backend === "vulkan"`), the faster of the two on the same AMD GPU
-for every model measured; `BROTENSOR_PREFER_HIP=1` (or
+for every model measured except the T5-XXL encode (brotensor `docs/vulkan-perf.md`),
+so it is the AMD backend of choice and HIP is kept as the comparison backend; `BROTENSOR_PREFER_HIP=1` (or
 `BROTENSOR_DEFAULT_DEVICE=hip`) at run time makes HIP the default again, and
 every ML loader also takes `{ device: 'hip' }` / `{ device: 'vulkan' }`.
 Vulkan implements brotensor's inference ops but not every training backward

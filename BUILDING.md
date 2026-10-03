@@ -60,7 +60,8 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
   build-time cost. On Linux the AMD backends are auto-detected: HIP when ROCm and
   a supported AMD GPU are present, and Vulkan (`BRO_WITH_TENSOR_VULKAN`, beside
   HIP) when `glslc` and the Vulkan headers and loader are. With both, Vulkan is
-  the default device; `BROTENSOR_PREFER_HIP=1` at run time picks HIP.
+  the default device (the AMD backend of choice; HIP is kept as the comparison
+  backend); `BROTENSOR_PREFER_HIP=1` at run time picks HIP.
 
 Enabling a flag force-enables its prerequisites (e.g. `-DBRO_WITH_DIFFUSION=ON`
 pulls in `LM` → `TENSOR`), so inconsistent combinations are impossible. See

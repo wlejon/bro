@@ -64,7 +64,7 @@
 class ArdyMotionPipeline {
 
   /**
-   *  Execution device ('CUDA', 'HIP', 'Metal', or 'CPU')
+   *  Execution device ('CUDA', 'Vulkan', 'HIP', 'Metal', or 'CPU')
    * @readonly
    * @type {string}
    */

@@ -28,7 +28,7 @@
  *
  *   if (!bro.gpu.available) return;                     // no GPU, don't bother
  *   const depth = bro.vision.loadDepth(dir);            // the GPU when present
- *   console.log(depth.device);                          // 'CUDA' | 'HIP' | 'Metal' | 'CPU'
+ *   console.log(depth.device);                          // 'CUDA' | 'Vulkan' | 'HIP' | 'Metal' | 'CPU'
  *   bro.vision.loadDepth(dir, { device: 'tpu' });       // TypeError
  *
  * A loader throws when its path is missing, not a directory/file it can read,
@@ -159,7 +159,7 @@ bro.vision.init();
  * @returns {Sam}
  */
 const sam = bro.vision.loadSam('weights/sam-vit-base', { device: 'gpu' });
-sam.device;    // 'CUDA' (or 'HIP' / 'Metal')
+sam.device;    // 'CUDA' (or 'Vulkan' / 'HIP' / 'Metal')
 sam.hasImage;  // false until setImage()
 
 /**
@@ -264,7 +264,7 @@ sam.segmentEverything(photo, {
  */
 const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small',
                                    { device: 'gpu' });
-depth.device;   // 'CUDA' (or 'HIP' / 'Metal')
+depth.device;   // 'CUDA' (or 'Vulkan' / 'HIP' / 'Metal')
 
 /**
  * DepthEstimator.estimate(image, opts?)

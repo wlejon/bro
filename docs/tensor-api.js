@@ -1,11 +1,12 @@
 // =============================================================================
-// bro.tensor, GPU tensor + ops (brotensor: CUDA, HIP, Metal or CPU)
+// bro.tensor, GPU tensor + ops (brotensor: CUDA, Vulkan, HIP, Metal or CPU)
 // =============================================================================
 //
 // Wraps the brotensor sibling library. brotensor exposes one unified tensor
 // type with a runtime Device tag and device-neutral ops; bro.tensor is the
 // device-resident face of it. The op surface is identical across the CUDA
-// (NVIDIA), HIP (AMD ROCm), Metal (Apple) and CPU backends, so code written against
+// (NVIDIA), Vulkan (AMD's backend of choice; any Vulkan 1.2+ GPU), HIP (AMD
+// ROCm, kept as the comparison backend), Metal (Apple) and CPU backends, so code written against
 // bro.tensor runs unchanged on any of them; a handful of FP16 / INT8 fast
 // paths are GPU-only and say so.
 //

@@ -330,7 +330,7 @@
  * @property {number} hiddenSize
  * @property {number} numLayers
  * @property {string} precision 'bf16' | 'fp32'
- * @property {string} device 'CUDA' | 'HIP' | 'Metal' | 'CPU'
+ * @property {string} device 'CUDA' | 'Vulkan' | 'HIP' | 'Metal' | 'CPU'
  * @property {boolean} decoderOnly
  */
 
@@ -674,7 +674,7 @@ class OmniVoice {
   loaded;
 
   /**
-   * 'CUDA' | 'HIP' | 'Metal' | 'CPU'
+   * 'CUDA' | 'Vulkan' | 'HIP' | 'Metal' | 'CPU'
    * @readonly
    * @type {string}
    */

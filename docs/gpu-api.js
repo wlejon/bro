@@ -10,7 +10,7 @@
  *
  * Why this is separate from `bro.tensor`:
  *   - `bro.tensor` is the GPU tensor/op surface. It compiles OUT to a stub
- *     `{ available: false }` when no GPU backend (CUDA/HIP/Metal) is built in, and
+ *     `{ available: false }` when no GPU backend (CUDA/Vulkan/HIP/Metal) is built in, and
  *     `bro.tensor.available` reflects that *compile-time* decision.
  *   - `bro.gpu` is ALWAYS present (brotensor's CPU backend is always linked)
  *     and reflects *runtime* reality: a CUDA build still reports CPU here when
@@ -18,7 +18,7 @@
  *     loaders (bro.lm / bro.stt / bro.tts / bro.vision / bro.diffusion) default
  *     to, so it is the honest signal for "will this be slow."
  *
- * The properties are lazy getters: the HIP/CUDA/Metal driver probe runs on first
+ * The properties are lazy getters: the CUDA/Metal/Vulkan/HIP driver probe runs on first
  * access, not at startup, so an app that never touches ML pays nothing.
  *
  * @example
@@ -31,7 +31,7 @@
  * @example
  *   // Drive a backend badge honestly in any build:
  *   const badge = document.querySelector('#backend');
- *   badge.textContent = bro.gpu.backend.toUpperCase();      // 'HIP' | 'CUDA' | 'METAL' | 'CPU'
+ *   badge.textContent = bro.gpu.backend.toUpperCase();      // 'VULKAN' | 'HIP' | 'CUDA' | 'METAL' | 'CPU'
  *   badge.className = 'badge ' + (bro.gpu.available ? 'ok' : 'bad');
  *
  * @example
@@ -80,11 +80,12 @@ bro.gpu.backend;
 
 /**
  * Every backend registered in this binary at runtime, e.g. ['cpu'] on a
- * CPU-only build, ['cpu', 'hip'] when a HIP/ROCm device is present, or
- * ['cpu', 'hip', 'vulkan'] on an AMD build with both backends. CPU is
+ * CPU-only build, ['cpu', 'vulkan'] on a Vulkan-only AMD build, or
+ * ['cpu', 'hip', 'vulkan'] on an AMD build with both backends (Vulkan is the
+ * AMD backend of choice; HIP stays as the comparison backend). CPU is
  * always included. One entry per BACKEND, not per card: a two-GPU box still
- * reports ['cpu', 'hip'] — see `deviceCount()` for how many cards, and the
- * 'hip:N' / 'cuda:N' argument form for addressing a specific one.
+ * reports one entry per backend — see `deviceCount()` for how many cards, and the
+ * 'vulkan:N' / 'cuda:N' argument form for addressing a specific one.
  * @readonly
  * @type {Array<string>}
  */
