@@ -224,6 +224,9 @@ target_include_directories(bro_scene PRIVATE ${GEN_DIR} ${VK_GEN_DIR})
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.
 target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util broimage::broimage bromesh FastNoise brogameagent bro_dom bro_render bro_layout bro_tile Vulkan::Vulkan)
+if(BRO_HAS_SHADERC)
+    target_link_libraries(bro_scene PUBLIC ${BRO_SHADERC_TARGET})
+endif()
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 bro_apply_feature_defs(bro_scene)
 

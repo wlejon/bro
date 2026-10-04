@@ -19,6 +19,9 @@ add_library(bro_webgl STATIC
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_webgl PUBLIC bro_render bro_util Vulkan::Vulkan)
+if(BRO_HAS_SHADERC)
+    target_link_libraries(bro_webgl PUBLIC ${BRO_SHADERC_TARGET})
+endif()
 
 if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_webgl_test tests/test_webgl_vulkan.cpp)

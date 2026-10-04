@@ -82,18 +82,18 @@ jobs:
         if: matrix.test
         run: ln -s "$PWD/third_party/bronze" "$PWD/../bronze"
 
-      # SDL3 builds from third_party/SDL. Linux also gets xvfb + mesa so the
-      # headless test suite can run its GPU (GL) path against llvmpipe software
-      # rendering — the same code that ships, not the --no-gpu raster fallback.
+      # SDL3 builds from third_party/SDL. Linux gets Vulkan dev libraries,
+      # glslc, Lavapipe software Vulkan (mesa-vulkan-drivers), and libshaderc-dev
+      # for in-process GLSL compilation. Headless tests run directly on Vulkan/Lavapipe.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm xvfb libgl1-mesa-dri \
-            libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            ninja-build nasm libvulkan-dev glslc mesa-vulkan-drivers libshaderc-dev libgl1-mesa-dri \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
-            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
+            libasound2-dev libpulse-dev libudev-dev \
             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
       # bash: tests/run_tests.sh needs bash 4+ and macOS ships 3.2 as
@@ -210,10 +210,10 @@ jobs:
       # each check's app module with the compiler built above. Those checks
       # are the only coverage that layer has, so they run here in full rather
       # than being deferred.
-      - name: Test (headless, GPU path under Xvfb)
+      - name: Test (headless Vulkan / Lavapipe)
         if: matrix.test && runner.os == 'Linux'
         shell: bash
-        run: xvfb-run -a ./tests/run_tests.sh
+        run: ./tests/run_tests.sh
 
       # macOS runners have a window server, so the hidden SDL window gets a GL
       # context with no Xvfb -- but the arm64 runner VM has no GPU, and that
@@ -269,14 +269,18 @@ jobs:
         with:
           submodules: recursive
 
-      # The same list the app job installs, minus nothing: minimal still wants a
-      # window, fonts and audio. Xvfb + mesa so the smoke run below exercises the
-      # GL path that ships rather than a raster fallback.
+      # Minimal profile Linux build dependencies: Vulkan dev, glslc, Lavapipe,
+      # libshaderc-dev, windowing, fonts and audio.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             ninja-build nasm xvfb libgl1-mesa-dri             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev             libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build nasm libvulkan-dev glslc mesa-vulkan-drivers libshaderc-dev libgl1-mesa-dri \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
+            libasound2-dev libpulse-dev libudev-dev \
+            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
       - name: Ninja and tools (macOS)
         if: runner.os == 'macOS'
@@ -333,7 +337,7 @@ jobs:
       # have. This asserts the floor minimal promises (HTML parses, layout
       # measures, Canvas2D draws) and then that every gated `bro.*` namespace is
       # still present and says why it is unavailable.
-      - name: Smoke (headless, GPU path under Xvfb)
+      - name: Smoke (headless Vulkan / Lavapipe)
         if: matrix.smoke
         shell: bash
-        run: xvfb-run -a ./build/bro-headless tests/_smoke_app tests/_smoke_app/minimal_smoke.js
+        run: ./build/bro-headless tests/_smoke_app tests/_smoke_app/minimal_smoke.js

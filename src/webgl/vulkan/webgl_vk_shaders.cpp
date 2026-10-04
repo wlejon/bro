@@ -1,12 +1,16 @@
 #include "webgl/vulkan/webgl_vk_shaders.h"
 #include "util/log.h"
 
+#include "util/subprocess.h"
+
 #include <sstream>
 #include <regex>
 #include <cstring>
-#include <unistd.h>
-#include <sys/wait.h>
 #include <mutex>
+
+#if BRO_HAS_SHADERC
+#include <shaderc/shaderc.hpp>
+#endif
 
 namespace bro::webgl::vk {
 
@@ -75,83 +79,53 @@ std::vector<uint32_t> WebGLVkShaderCompiler::compileToSpirv(const std::string& s
         return it->second;
     }
 
-    int inPipe[2];
-    int outPipe[2];
-    int errPipe[2];
-    if (pipe(inPipe) != 0 || pipe(outPipe) != 0 || pipe(errPipe) != 0) {
-        LOG_ERROR("WebGLVkShaderCompiler: pipe() failed");
+#if BRO_HAS_SHADERC
+    shaderc::Compiler compiler;
+    if (compiler.IsValid()) {
+        shaderc::CompileOptions options;
+        options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_0);
+        shaderc_shader_kind kind = (stage == VK_SHADER_STAGE_VERTEX_BIT) ? shaderc_vertex_shader : shaderc_fragment_shader;
+        auto result = compiler.CompileGlslToSpv(source.c_str(), source.size(), kind, "webgl_shader", "main", options);
+        if (result.GetCompilationStatus() == shaderc_compilation_status_success) {
+            std::vector<uint32_t> spirv(result.cbegin(), result.cend());
+            if (!spirv.empty() && spirv[0] == 0x07230203) {
+                s_spirvCache[cacheKey] = spirv;
+                return spirv;
+            }
+        } else {
+            std::string errStr = result.GetErrorMessage();
+            if (outLog) *outLog = errStr;
+            LOG_ERROR("WebGLVkShaderCompiler: Compilation failed for %s shader:\n%s\nErrors:\n%s",
+                      stageStr.c_str(), source.c_str(), errStr.c_str());
+            return {};
+        }
+    }
+#endif
+
+    if (!util::hasExecutableOnPath("glslc")) {
+        std::string errStr = "glslc not found on system PATH";
+        if (outLog) *outLog = errStr;
+        LOG_ERROR("WebGLVkShaderCompiler: %s", errStr.c_str());
         return {};
     }
 
-    pid_t pid = fork();
-    if (pid == -1) {
-        LOG_ERROR("WebGLVkShaderCompiler: fork() failed");
-        close(inPipe[0]); close(inPipe[1]);
-        close(outPipe[0]); close(outPipe[1]);
-        close(errPipe[0]); close(errPipe[1]);
-        return {};
-    }
-
-    if (pid == 0) {
-        dup2(inPipe[0], STDIN_FILENO);
-        dup2(outPipe[1], STDOUT_FILENO);
-        dup2(errPipe[1], STDERR_FILENO);
-
-        close(inPipe[0]); close(inPipe[1]);
-        close(outPipe[0]); close(outPipe[1]);
-        close(errPipe[0]); close(errPipe[1]);
-
-        std::string stageArg = "-fshader-stage=" + stageStr;
-        execlp("glslc", "glslc", stageArg.c_str(), "-", "-o", "-", nullptr);
-        _exit(127);
-    }
-
-    close(inPipe[0]);
-    close(outPipe[1]);
-    close(errPipe[1]);
-
-    // Write source to glslc stdin
-    size_t totalWritten = 0;
-    while (totalWritten < source.size()) {
-        ssize_t written = write(inPipe[1], source.data() + totalWritten, source.size() - totalWritten);
-        if (written <= 0) break;
-        totalWritten += written;
-    }
-    close(inPipe[1]);
-
-    // Read SPIR-V binary from stdout
-    std::vector<uint8_t> spvBytes;
-    uint8_t buf[4096];
-    ssize_t bytesRead = 0;
-    while ((bytesRead = read(outPipe[0], buf, sizeof(buf))) > 0) {
-        spvBytes.insert(spvBytes.end(), buf, buf + bytesRead);
-    }
-    close(outPipe[0]);
-
-    // Read compiler error/warnings from stderr
-    std::string errStr;
-    char errBuf[1024];
-    ssize_t errBytesRead = 0;
-    while ((errBytesRead = read(errPipe[0], errBuf, sizeof(errBuf))) > 0) {
-        errStr.append(errBuf, errBytesRead);
-    }
-    close(errPipe[0]);
-
-    int status = 0;
-    waitpid(pid, &status, 0);
-
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0 && !spvBytes.empty()) {
-        std::vector<uint32_t> spirv(spvBytes.size() / 4);
-        std::memcpy(spirv.data(), spvBytes.data(), spvBytes.size());
-        s_spirvCache[cacheKey] = spirv;
-        return spirv;
+    std::vector<std::string> args = { "glslc", "-fshader-stage=" + stageStr, "-", "-o", "-" };
+    auto res = util::runSubprocess(args, source);
+    if (res.success && res.stdOut.size() >= 4 && (res.stdOut.size() % 4 == 0)) {
+        size_t wordCount = res.stdOut.size() / 4;
+        std::vector<uint32_t> spirv(wordCount);
+        std::memcpy(spirv.data(), res.stdOut.data(), res.stdOut.size());
+        if (spirv[0] == 0x07230203) {
+            s_spirvCache[cacheKey] = spirv;
+            return spirv;
+        }
     }
 
     if (outLog) {
-        *outLog = errStr;
+        *outLog = res.stdErr;
     }
     LOG_ERROR("WebGLVkShaderCompiler: Compilation failed for %s shader:\n%s\nErrors:\n%s",
-              stageStr.c_str(), source.c_str(), errStr.c_str());
+              stageStr.c_str(), source.c_str(), res.stdErr.c_str());
     return {};
 }
 

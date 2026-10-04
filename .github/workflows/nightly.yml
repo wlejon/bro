@@ -83,18 +83,18 @@ jobs:
           submodules: recursive
           fetch-depth: 0        # tags needed for package-release.sh's version fallback
 
-      # SDL3 is built from third_party/SDL; on Linux it needs the X11/Wayland/GL
-      # and audio dev headers to configure. Ninja is the single-config generator
-      # used on Linux/macOS.
+      # SDL3 is built from third_party/SDL. Linux gets Vulkan dev libraries,
+      # glslc, Lavapipe software Vulkan (mesa-vulkan-drivers), and libshaderc-dev
+      # for in-process GLSL compilation. Headless operations run on Vulkan/Lavapipe directly.
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm xvfb libgl1-mesa-dri \
-            libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            ninja-build nasm libvulkan-dev glslc mesa-vulkan-drivers libshaderc-dev libgl1-mesa-dri \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
-            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
+            libasound2-dev libpulse-dev libudev-dev \
             libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
       - name: Ninja (macOS)
@@ -264,17 +264,9 @@ jobs:
           # the compiled-in set.
           APP=system/skeletons/blank
           PROBE="if(!bro.gpu||!bro.gpu.backend)throw new Error('bro.gpu backend missing');if(!(bro.gpu.compiledBackends||[]).includes('$EXPECT'))throw new Error('GPU backend $EXPECT NOT compiled in; compiledBackends='+JSON.stringify(bro.gpu.compiledBackends));console.log('backend='+bro.gpu.backend+' available='+bro.gpu.available+' compiledBackends='+JSON.stringify(bro.gpu.compiledBackends))"
-          # GPU-headless renders through a hidden GL context — the same code that
-          # ships. Linux gets a virtual display + software GL (xvfb + mesa-dri),
-          # matching the CI job; macOS provides GL directly. The windows-2022
-          # runner has no OpenGL 3.3, but the engine now detects that and falls
-          # back to CPU raster (instead of crashing), so the probe runs uniformly
-          # everywhere and this exercises that fallback path.
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            xvfb-run -a "$BH" "$APP" -e "$PROBE"
-          else
-            "$BH" "$APP" -e "$PROBE"
-          fi
+          # Headless renderer runs with Vulkan directly (or Lavapipe software Vulkan
+          # on Linux headless runners).
+          "$BH" "$APP" -e "$PROBE"
 
       - name: Package
         shell: bash
@@ -321,11 +313,7 @@ jobs:
           ./bronze/bronze$EXE build smokeapp/main.js -o "smokeapp/app$MOD" \
             --emit-shared --host-globals bronze/web_host.globals
           [ -f "smokeapp/app$MOD" ]
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            OUT="$(xvfb-run -a ./bro-headless smokeapp -e 'advanceTime(64)' || true)"
-          else
-            OUT="$(./bro-headless smokeapp -e 'advanceTime(64)' || true)"
-          fi
+          OUT="$(./bro-headless smokeapp -e 'advanceTime(64)' || true)"
           echo "$OUT"
           echo "$OUT" | grep -q 'APP ok=4096'
           # Leave nothing behind: the zip is cut from this directory.
