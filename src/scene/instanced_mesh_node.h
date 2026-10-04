@@ -79,6 +79,8 @@ public:
         return true;
     }
 
+    const std::vector<float>& instanceData() const { return instanceData_; }
+
     /// Lazily-built, cached BVH over the instance mesh — one BVH shared by every
     /// instance, since they all draw the same geometry. Mirrors MeshNode::bvh().
     const bromesh::MeshBVH& bvh() const;

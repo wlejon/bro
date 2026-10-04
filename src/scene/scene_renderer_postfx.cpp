@@ -1,6 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
+#include "scene/vulkan/scene_vk_bridge.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
@@ -112,6 +113,10 @@ void SceneRenderer::destroyTonemapFBO() {
 }
 
 std::vector<uint8_t> SceneRenderer::readTonemapPixelsRGBA(int& outW, int& outH) {
+    if (vkBridge_) {
+        return vkBridge_->readTonemapPixelsRGBA(outW, outH);
+    }
+
     // Read the same texture the compositor shows this frame: FXAA output
     // when that pass ran (always last), else tilt-shift output, else the
     // raw tonemap output. Mirrors finalColorTex().

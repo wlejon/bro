@@ -224,10 +224,10 @@ bool SceneRenderer::compileCustomShader(CustomShaderTarget target,
                                         const std::string& fragmentChunk,
                                         std::string& errOut) {
     if (!glFunctionsLoaded()) {
-        // glad not loaded — no GL context (CPU raster path). The scene
-        // canvas context is unavailable there too, so this is belt-and-
-        // braces rather than a reachable path.
-        errOut = "custom shaders require GPU rendering (no GL context)";
+        if (defaultVulkanContext_) {
+            return true;
+        }
+        errOut = "custom shaders require GPU rendering (no GL or Vulkan context)";
         return false;
     }
     if (!ensureCustomProgram(target, key, vertexChunk, fragmentChunk, &errOut))

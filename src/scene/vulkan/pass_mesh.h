@@ -89,12 +89,15 @@ public:
 
     /// Draw a static mesh.
     void drawStatic(VkCommandBuffer cmd, const MeshDrawCall& draw);
+    void drawStaticTranslucent(VkCommandBuffer cmd, const MeshDrawCall& draw);
 
     /// Draw an instanced mesh batch.
     void drawInstanced(VkCommandBuffer cmd, const InstancedMeshDrawCall& draw);
+    void drawInstancedTranslucent(VkCommandBuffer cmd, const InstancedMeshDrawCall& draw);
 
     /// Draw a skinned mesh.
     void drawSkinned(VkCommandBuffer cmd, const SkinnedMeshDrawCall& draw);
+    void drawSkinnedTranslucent(VkCommandBuffer cmd, const SkinnedMeshDrawCall& draw);
 
     // Layout accessors
     VkPipelineLayout pipelineLayout() const { return pipelineLayout_; }
@@ -103,6 +106,10 @@ public:
     VkDescriptorSetLayout materialLayout() const { return materialLayout_; }
     VkDescriptorSetLayout bonePaletteLayout() const { return bonePaletteLayout_; }
     VkDescriptorSet defaultMaterialSet() const { return defaultMaterialSet_; }
+    VkImageView dummyWhiteView() const { return dummyWhiteImage_.view; }
+    VkImageView dummyNormalView() const { return dummyNormalImage_.view; }
+    VkImageView dummyBlackView() const { return dummyBlackImage_.view; }
+    VkSampler defaultSampler() const { return defaultSampler_; }
 
 private:
     bool createDescriptorLayouts(VkDevice device);
@@ -119,6 +126,10 @@ private:
     VkPipeline pipelineStatic_ = VK_NULL_HANDLE;
     VkPipeline pipelineInstanced_ = VK_NULL_HANDLE;
     VkPipeline pipelineSkinned_ = VK_NULL_HANDLE;
+
+    VkPipeline pipelineStaticTranslucent_ = VK_NULL_HANDLE;
+    VkPipeline pipelineInstancedTranslucent_ = VK_NULL_HANDLE;
+    VkPipeline pipelineSkinnedTranslucent_ = VK_NULL_HANDLE;
 
     // Default dummy material resources (1x1 white, 1x1 flat normal, 1x1 white MR, 1x1 black emissive)
     SceneVkImage dummyWhiteImage_;

@@ -21,13 +21,19 @@ layout(set = 0, binding = 0) uniform CameraUBO {
     vec4 fogColor;
 } camera;
 
+struct PointLight {
+    vec4 position; // xyz = position, w = range
+    vec4 color;    // rgb = color, a = intensity
+};
+
 layout(set = 1, binding = 0) uniform LightingUBO {
     vec4 sunDirection;
     vec4 sunColor;
     vec4 ambientColor;
     vec4 shadowSplits;
     mat4 shadowCascadeProj;
-    vec4 numLights;
+    vec4 numLights; // x: sun count, y: point light count, z: hasShadow, w: pad
+    PointLight pointLights[16];
 } lighting;
 
 layout(set = 1, binding = 1) uniform sampler2DArrayShadow shadowMapArray;
@@ -69,6 +75,27 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+float fogFactorFor(float camDist, float worldY) {
+    float fogStart = camera.fogParams.x;
+    float fogEnd = camera.fogParams.y;
+    float fogDensity = camera.fogParams.z;
+    float fogStartDist = camera.fogParams.w;
+    float fogHeightFalloff = camera.fogColor.a;
+
+    if (fogDensity > 0.0) {
+        float d = max(camDist - fogStartDist, 0.0);
+        float dens = fogDensity;
+        if (fogHeightFalloff > 0.0) dens *= exp(-fogHeightFalloff * worldY);
+        float x = dens * d;
+        return 1.0 - exp(-x * x);
+    }
+    if (fogEnd > 0.0) {
+        float f = clamp((camDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+        return f * f;
+    }
+    return 0.0;
 }
 
 void main() {
@@ -137,8 +164,41 @@ void main() {
         }
     }
 
-    vec3 radiance = lighting.sunColor.rgb * lighting.sunColor.a;
-    vec3 direct = (diffuse + specular) * radiance * NdotL * shadow;
+    vec3 direct = vec3(0.0);
+    if (lighting.numLights.x > 0.5) {
+        vec3 radiance = lighting.sunColor.rgb * lighting.sunColor.a;
+        direct += (diffuse + specular) * radiance * NdotL * shadow;
+    }
+
+    int pointCount = int(lighting.numLights.y);
+    for (int i = 0; i < pointCount && i < 16; ++i) {
+        vec3 toLight = lighting.pointLights[i].position.xyz - inWorldPos;
+        float d = length(toLight);
+        if (d > 1e-4) {
+            vec3 pL = toLight / d;
+            float range = lighting.pointLights[i].position.w;
+            float atten = 1.0;
+            if (range > 0.0) {
+                float t = d / range;
+                float t4 = t * t * t * t;
+                float win = clamp(1.0 - t4, 0.0, 1.0);
+                win = win * win;
+                atten = win / (d * d + 1.0);
+            }
+            float pNdotL = max(dot(N, pL), 0.0);
+            if (pNdotL > 0.0 && atten > 0.0) {
+                vec3 pH = normalize(V + pL);
+                float pNDF = distributionGGX(N, pH, roughness);
+                float pG = geometrySmith(N, V, pL, roughness);
+                vec3 pF = fresnelSchlick(max(dot(pH, V), 0.0), F0);
+                vec3 pSpec = (pNDF * pG * pF) / (4.0 * NdotV * pNdotL + 0.0001);
+                vec3 pkD = (vec3(1.0) - pF) * (1.0 - metallic);
+                vec3 pDiff = (pkD * albedo.rgb) / PI;
+                vec3 pRadiance = lighting.pointLights[i].color.rgb * (lighting.pointLights[i].color.a * atten);
+                direct += (pDiff + pSpec) * pRadiance * pNdotL;
+            }
+        }
+    }
 
     // Ambient lighting
     vec3 ambient = lighting.ambientColor.rgb * lighting.ambientColor.a * albedo.rgb;
@@ -150,5 +210,15 @@ void main() {
     }
 
     vec3 color = ambient + direct + emissive;
+    if ((flags & 16u) != 0u) {
+        color = albedo.rgb + emissive;
+    }
+
+    float camDist = length(camera.eyePos.xyz - inWorldPos);
+    float fogFactor = fogFactorFor(camDist, inWorldPos.y);
+    if (fogFactor > 0.0) {
+        color = mix(color, camera.fogColor.rgb, fogFactor);
+    }
+
     outColor = vec4(color, albedo.a);
 }

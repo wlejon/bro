@@ -600,6 +600,7 @@ private:
     // The renderer walks nodes/camera state directly through its graph
     // back-reference; it is the only class with private access.
     friend class SceneRenderer;
+    friend class vk::SceneVkBridge;
 
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
 

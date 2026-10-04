@@ -161,6 +161,7 @@ add_library(bro_scene STATIC
     vulkan/pass_shadow.cpp
     vulkan/pass_environment.cpp
     vulkan/pass_postfx.cpp
+    vulkan/scene_vk_bridge.cpp
     ${GENERATED_HEADERS}
     ${VK_GENERATED_HEADERS}
 )

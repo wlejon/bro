@@ -14,7 +14,8 @@ float rgb2luma(vec3 rgb) {
 }
 
 void main() {
-    vec3 rgbM = texture(texSource, inUV).rgb;
+    vec4 srcM = texture(texSource, inUV);
+    vec3 rgbM = srcM.rgb;
     vec3 rgbNW = texture(texSource, inUV + vec2(-push.texelSize.x, -push.texelSize.y)).rgb;
     vec3 rgbNE = texture(texSource, inUV + vec2( push.texelSize.x, -push.texelSize.y)).rgb;
     vec3 rgbSW = texture(texSource, inUV + vec2(-push.texelSize.x,  push.texelSize.y)).rgb;
@@ -30,7 +31,7 @@ void main() {
     float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
 
     if (lumaMax - lumaMin < max(0.05, lumaMax * 0.125)) {
-        outColor = vec4(rgbM, 1.0);
+        outColor = vec4(rgbM, srcM.a);
         return;
     }
 
@@ -53,8 +54,8 @@ void main() {
 
     float lumaB = rgb2luma(rgbB);
     if (lumaB < lumaMin || lumaB > lumaMax) {
-        outColor = vec4(rgbA, 1.0);
+        outColor = vec4(rgbA, srcM.a);
     } else {
-        outColor = vec4(rgbB, 1.0);
+        outColor = vec4(rgbB, srcM.a);
     }
 }

@@ -48,7 +48,7 @@ public:
     struct Config {
         Config() = default;
         VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
-        VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
+        VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
         float depthBiasConstant = 1.25f;
         float depthBiasSlope = 1.75f;
         float depthBiasClamp = 0.0f;

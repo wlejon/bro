@@ -108,6 +108,16 @@ public:
     /// holding the old level's silhouette re-render.
     void selectLodByDistance(float d);
 
+    /// Active mesh: returns the selected LOD level's mesh if a LOD chain is
+    /// present and non-empty, otherwise returns base mesh().
+    const bromesh::MeshData& currentMesh() const {
+        if (!lods_.empty() && lodSelected_ >= 0 && static_cast<size_t>(lodSelected_) < lods_.size()) {
+            const auto& lodMesh = lods_[static_cast<size_t>(lodSelected_)].mesh;
+            if (!lodMesh.empty()) return lodMesh;
+        }
+        return mesh_;
+    }
+
     /// True when drawRaw can emit geometry: a non-empty base mesh or a LOD
     /// chain. Pass gathers use this instead of mesh().empty() so chain-only
     /// nodes aren't skipped.
@@ -514,6 +524,7 @@ public:
         int h = 0;
         bool dirty = false;
     };
+    const PendingTex& pendingBaseTexture() const { return pendingBase_; }
 
 protected:
     /// Interleave + upload the vertex/index buffers (GL thread, called from

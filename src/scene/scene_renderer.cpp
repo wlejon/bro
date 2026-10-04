@@ -4,6 +4,7 @@
 #include "scene/gl_available.h"
 #include "scene/skinned_mesh_node.h"
 #include "scene/decal_node.h"
+#include "scene/vulkan/scene_vk_bridge.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
@@ -421,10 +422,30 @@ void SceneRenderer::render3D() {
     // built a SceneGraph directly; warn once and leave the 2D overlay path in
     // SceneGraph::render() to carry on.
     if (!glFunctionsLoaded()) {
+        if (defaultVulkanContext_) {
+            if (!vkBridge_) {
+                vkBridge_ = std::make_unique<vk::SceneVkBridge>(*defaultVulkanContext_);
+                if (!vkBridge_->init()) {
+                    vkBridge_.reset();
+                }
+            }
+            if (vkBridge_) {
+                initDepthPolicy();
+                graph_.syncProjectionToDepthPolicy();
+                cullingActive_ = frustumCullingEnabled_;
+                if (cullingActive_) {
+                    cameraFrustum_ = makeFrustum(
+                        bromath::mmul(graph_.projectionMatrix_, graph_.viewMatrix_));
+                }
+                vkBridge_->render3D(graph_, *this);
+                hasMeshContent_ = vkBridge_->hasMeshContent();
+                return;
+            }
+        }
         static bool warned = false;
         if (!warned) {
             warned = true;
-            LOG_WARN("scene: no GL context — the 3D pass is disabled for this "
+            LOG_WARN("scene: no GL or Vulkan context — the 3D pass is disabled for this "
                      "process (CPU raster path). 2D canvas content still draws.");
         }
         return;

@@ -42,6 +42,7 @@
 #include "steam/steam_service.h"
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#include "scene/scene_renderer.h"
 #endif
 #include <broaudio/engine.h>
 #include "canvas/canvas_scene.h"
@@ -177,6 +178,9 @@ Engine::Engine(const EngineConfig& config)
                     vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_);
                     vulkanPresenter_->init();
                     webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
+#if BRO_WITH_3D
+                    scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
+#endif
                     LOG_INFO("Engine: Headless Vulkan initialized successfully");
                 }
             } catch (const std::exception& e) {
@@ -235,6 +239,9 @@ Engine::Engine(const EngineConfig& config)
                         vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_, *vulkanSwapchain_);
                         vulkanPresenter_->init();
                         webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
+#if BRO_WITH_3D
+                        scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
+#endif
                     }
                 }
             } catch (const std::exception& vkErr) {

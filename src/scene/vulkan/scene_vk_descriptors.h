@@ -19,6 +19,11 @@ struct alignas(16) SceneCameraUniforms {
     alignas(16) float fogColor[4];   // rgb = color, a = heightFalloff
 };
 
+struct alignas(16) ScenePointLight {
+    alignas(16) float position[4]; // xyz = position, w = range
+    alignas(16) float color[4];    // rgb = color, a = intensity
+};
+
 /// Global directional/ambient lighting uniform block structure matching GLSL std140 layout.
 struct alignas(16) SceneLightingUniforms {
     alignas(16) float sunDirection[4];       // xyz = normalized light vector, w = enabled
@@ -26,7 +31,8 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float ambientColor[4];       // rgb = ambient color, a = sky irradiance factor
     alignas(16) float shadowSplits[4];       // x,y,z,w = split distances for 4 cascades
     alignas(16) float shadowCascadeProj[16]; // cascade 0 projection (or atlas transform)
-    alignas(16) float numLights[4];          // x = point light count, y = spot count, z = shadow enabled
+    alignas(16) float numLights[4];          // x = sun count, y = point light count, z = shadow enabled, w = pad
+    ScenePointLight pointLights[16];
 };
 
 /// Utility for constructing VkDescriptorSetLayouts with arbitrary bindings.

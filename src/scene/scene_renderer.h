@@ -10,13 +10,18 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+namespace bro::render { class VulkanContext; }
+
 namespace bro::scene {
+
+namespace vk { class SceneVkBridge; }
 
 class SceneGraph;
 class SceneNode;
@@ -63,6 +68,8 @@ struct CullStats {
 /// touches GL.
 class SceneRenderer {
 public:
+    friend class vk::SceneVkBridge;
+
     explicit SceneRenderer(SceneGraph& graph);
     ~SceneRenderer();
 
@@ -85,9 +92,28 @@ public:
     // FXAA output when that pass ran (always last), else the tilt-shift
     // output when it ran, else the raw tonemap output.
     GLuint finalColorTex() const {
+        if (vkBridge_ && hasMeshContent_) return 1;
         if (fxaaActive_ && fxaaColorTex_) return fxaaColorTex_;
         return (tiltActive_ && postColorTex_) ? postColorTex_ : tonemapColorTex_;
     }
+
+    static void setDefaultVulkanContext(render::VulkanContext* ctx) { defaultVulkanContext_ = ctx; }
+    static render::VulkanContext* defaultVulkanContext() { return defaultVulkanContext_; }
+    vk::SceneVkBridge* vkBridge() const { return vkBridge_.get(); }
+
+    float fogStart() const { return fogStart_; }
+    float fogEnd() const { return fogEnd_; }
+    const float* fogColor() const { return fogColor_; }
+    float fogDensity() const { return fogDensity_; }
+    float fogHeightFalloff() const { return fogHeightFalloff_; }
+    float fogStartDist() const { return fogStartDist_; }
+    float gamma() const { return gamma_; }
+    bool bloomActive() const { return bloomActive_; }
+    float bloomIntensity() const { return bloomIntensity_; }
+    bool fxaaActive() const { return fxaaActive_; }
+    const std::string& envPath() const { return envPath_; }
+    void setCullStats(const CullStats& s) { cullStats_ = s; }
+    void setCullingActive(bool active) { cullingActive_ = active; }
 
     /// Read RGBA8 pixels from the post-tonemap LDR FBO (top-down row order).
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
@@ -948,6 +974,10 @@ private:
     bool cullingActive_ = false;
     bromath::Frustum cameraFrustum_;
     CullStats cullStats_;
+
+    // Vulkan bridge for modern Vulkan rendering
+    std::unique_ptr<vk::SceneVkBridge> vkBridge_;
+    static inline render::VulkanContext* defaultVulkanContext_ = nullptr;
 
     // Tonemap FBO (LDR output, consumed by the compositor)
     GLuint tonemapFBO_ = 0;

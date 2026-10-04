@@ -87,6 +87,9 @@ public:
     /// GPU upload happens on the next render. Returns the number of matrices
     /// staged. Callable every frame from the JS thread; cheap memcpy.
     int setSkinningMatrices(const float* mats, size_t count);
+    const std::vector<float>& skinWeights() const { return weights_; }
+    const std::vector<uint16_t>& skinJoints() const { return joints_; }
+    const std::vector<float>& skinPalette() const { return palette_; }
 
     // --- Animation player ---
 
