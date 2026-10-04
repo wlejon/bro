@@ -206,8 +206,11 @@ void WebGLVkContext::cleanupVulkanResources() {
 
     // Destroy buffers
     for (auto& [id, buf] : buffers_) {
-        if (buf.buffer != VK_NULL_HANDLE) vkDestroyBuffer(dev, buf.buffer, nullptr);
-        if (buf.memory != VK_NULL_HANDLE) vkFreeMemory(dev, buf.memory, nullptr);
+        if (buf.allocId != 0) context_.destroyBuffer(buf.buffer, buf.allocId);
+        else {
+            if (buf.buffer != VK_NULL_HANDLE) vkDestroyBuffer(dev, buf.buffer, nullptr);
+            if (buf.memory != VK_NULL_HANDLE) vkFreeMemory(dev, buf.memory, nullptr);
+        }
     }
     buffers_.clear();
 
@@ -215,8 +218,11 @@ void WebGLVkContext::cleanupVulkanResources() {
     for (auto& [id, tex] : textures_) {
         if (tex.sampler != VK_NULL_HANDLE) vkDestroySampler(dev, tex.sampler, nullptr);
         if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(dev, tex.view, nullptr);
-        if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
-        if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
+        if (tex.allocId != 0) context_.destroyImage(tex.image, tex.allocId);
+        else {
+            if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
+            if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
+        }
     }
     textures_.clear();
 

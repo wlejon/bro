@@ -116,6 +116,7 @@ bool VulkanContext::init(VkSurfaceKHR compatibleSurface) {
 void VulkanContext::cleanup() {
     if (device_ != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(device_);
+        memoryPool_.cleanup(device_);
     }
 
     if (commandPool_ != VK_NULL_HANDLE) {
@@ -540,6 +541,130 @@ uint32_t VulkanContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlag
     }
     LOG_ERROR("Vulkan: Failed to find suitable memory type for flags 0x%x", properties);
     return 0;
+}
+
+bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                                 VkMemoryPropertyFlags properties,
+                                 VkBuffer& buffer, VkDeviceMemory& memory,
+                                 VkDeviceSize& outOffset, uint64_t& outAllocId,
+                                 void*& outMappedData) {
+    if (size == 0) return false;
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(device_, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+        LOG_ERROR("VulkanContext: Failed to create buffer of size %zu", static_cast<size_t>(size));
+        return false;
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device_, buffer, &memRequirements);
+
+    uint32_t memType = findMemoryType(memRequirements.memoryTypeBits, properties);
+
+    if (!memoryPool_.allocate(device_, memRequirements.size, memRequirements.alignment,
+                              memType, properties, /*isImage=*/false,
+                              outAllocId, memory, outOffset, outMappedData)) {
+        LOG_ERROR("VulkanContext: Failed to allocate pooled memory for buffer (%zu bytes)", static_cast<size_t>(memRequirements.size));
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+        return false;
+    }
+
+    if (vkBindBufferMemory(device_, buffer, memory, outOffset) != VK_SUCCESS) {
+        LOG_ERROR("VulkanContext: Failed to bind buffer memory at offset %zu", static_cast<size_t>(outOffset));
+        vkDestroyBuffer(device_, buffer, nullptr);
+        buffer = VK_NULL_HANDLE;
+        memoryPool_.free(device_, outAllocId);
+        outAllocId = 0;
+        memory = VK_NULL_HANDLE;
+        outOffset = 0;
+        outMappedData = nullptr;
+        return false;
+    }
+
+    return true;
+}
+
+void VulkanContext::destroyBuffer(VkBuffer buffer, uint64_t allocId) {
+    if (buffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device_, buffer, nullptr);
+    }
+    if (allocId != 0) {
+        memoryPool_.free(device_, allocId);
+    }
+}
+
+bool VulkanContext::createImage(uint32_t width, uint32_t height, VkFormat format,
+                                VkImageTiling tiling, VkImageUsageFlags usage,
+                                VkMemoryPropertyFlags properties,
+                                VkImage& image, VkDeviceMemory& memory,
+                                VkDeviceSize& outOffset, uint64_t& outAllocId,
+                                uint32_t mipLevels, uint32_t arrayLayers,
+                                VkImageCreateFlags flags) {
+    if (width == 0 || height == 0 || arrayLayers == 0) return false;
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.flags = flags;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = width;
+    imageInfo.extent.height = height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.arrayLayers = arrayLayers;
+    imageInfo.format = format;
+    imageInfo.tiling = tiling;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = usage;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(device_, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+        LOG_ERROR("VulkanContext: Failed to create image (%ux%u)", width, height);
+        return false;
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(device_, image, &memRequirements);
+
+    uint32_t memType = findMemoryType(memRequirements.memoryTypeBits, properties);
+    void* dummyMapped = nullptr;
+
+    if (!memoryPool_.allocate(device_, memRequirements.size, memRequirements.alignment,
+                              memType, properties, /*isImage=*/true,
+                              outAllocId, memory, outOffset, dummyMapped)) {
+        LOG_ERROR("VulkanContext: Failed to allocate pooled memory for image");
+        vkDestroyImage(device_, image, nullptr);
+        image = VK_NULL_HANDLE;
+        return false;
+    }
+
+    if (vkBindImageMemory(device_, image, memory, outOffset) != VK_SUCCESS) {
+        LOG_ERROR("VulkanContext: Failed to bind image memory at offset %zu", static_cast<size_t>(outOffset));
+        vkDestroyImage(device_, image, nullptr);
+        image = VK_NULL_HANDLE;
+        memoryPool_.free(device_, outAllocId);
+        outAllocId = 0;
+        memory = VK_NULL_HANDLE;
+        outOffset = 0;
+        return false;
+    }
+
+    return true;
+}
+
+void VulkanContext::destroyImage(VkImage image, uint64_t allocId) {
+    if (image != VK_NULL_HANDLE) {
+        vkDestroyImage(device_, image, nullptr);
+    }
+    if (allocId != 0) {
+        memoryPool_.free(device_, allocId);
+    }
 }
 
 bool VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,

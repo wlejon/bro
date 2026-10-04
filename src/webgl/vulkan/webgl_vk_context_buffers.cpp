@@ -14,10 +14,14 @@ WebGLBuffer WebGLVkContext::createBuffer() {
 void WebGLVkContext::deleteBuffer(WebGLBuffer buf) {
     auto it = buffers_.find(buf.id);
     if (it != buffers_.end()) {
-        VkDevice dev = context_.device();
         submitAndFlush();
-        if (it->second.buffer != VK_NULL_HANDLE) vkDestroyBuffer(dev, it->second.buffer, nullptr);
-        if (it->second.memory != VK_NULL_HANDLE) vkFreeMemory(dev, it->second.memory, nullptr);
+        if (it->second.allocId != 0) {
+            context_.destroyBuffer(it->second.buffer, it->second.allocId);
+        } else {
+            VkDevice dev = context_.device();
+            if (it->second.buffer != VK_NULL_HANDLE) vkDestroyBuffer(dev, it->second.buffer, nullptr);
+            if (it->second.memory != VK_NULL_HANDLE) vkFreeMemory(dev, it->second.memory, nullptr);
+        }
         buffers_.erase(it);
     }
     if (boundArrayBuffer_ == buf.id) boundArrayBuffer_ = 0;
@@ -119,10 +123,17 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
 
     if (res.buffer != VK_NULL_HANDLE) {
         submitAndFlush();
-        vkDestroyBuffer(dev, res.buffer, nullptr);
-        vkFreeMemory(dev, res.memory, nullptr);
+        if (res.allocId != 0) {
+            context_.destroyBuffer(res.buffer, res.allocId);
+        } else {
+            vkDestroyBuffer(dev, res.buffer, nullptr);
+            vkFreeMemory(dev, res.memory, nullptr);
+        }
         res.buffer = VK_NULL_HANDLE;
         res.memory = VK_NULL_HANDLE;
+        res.allocId = 0;
+        res.offset = 0;
+        res.poolMappedData = nullptr;
     }
 
     if (size <= 0) {
@@ -146,15 +157,19 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
 
     if (!context_.createBuffer(res.size, vkUsage,
                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                               res.buffer, res.memory)) {
+                               res.buffer, res.memory, res.offset, res.allocId, res.poolMappedData)) {
         LOG_ERROR("WebGLVkContext: Failed to allocate VkBuffer (%zu bytes)", size);
         return;
     }
 
-    void* mapped = nullptr;
-    if (vkMapMemory(dev, res.memory, 0, res.size, 0, &mapped) == VK_SUCCESS) {
-        std::memcpy(mapped, res.shadowData.data(), size);
-        vkUnmapMemory(dev, res.memory);
+    if (res.poolMappedData) {
+        std::memcpy(res.poolMappedData, res.shadowData.data(), size);
+    } else {
+        void* mapped = nullptr;
+        if (vkMapMemory(dev, res.memory, res.offset, res.size, 0, &mapped) == VK_SUCCESS) {
+            std::memcpy(mapped, res.shadowData.data(), size);
+            vkUnmapMemory(dev, res.memory);
+        }
     }
 }
 
@@ -177,10 +192,14 @@ void WebGLVkContext::bufferSubData(GLenum target, GLintptr offset, GLsizeiptr si
 
     std::memcpy(res.shadowData.data() + offset, data, size);
 
-    void* mapped = nullptr;
-    if (vkMapMemory(context_.device(), res.memory, offset, size, 0, &mapped) == VK_SUCCESS) {
-        std::memcpy(mapped, data, size);
-        vkUnmapMemory(context_.device(), res.memory);
+    if (res.poolMappedData) {
+        std::memcpy(static_cast<char*>(res.poolMappedData) + offset, data, size);
+    } else {
+        void* mapped = nullptr;
+        if (vkMapMemory(context_.device(), res.memory, res.offset + offset, size, 0, &mapped) == VK_SUCCESS) {
+            std::memcpy(mapped, data, size);
+            vkUnmapMemory(context_.device(), res.memory);
+        }
     }
 }
 
@@ -231,10 +250,14 @@ void WebGLVkContext::copyBufferSubData(GLenum readTarget, GLenum writeTarget,
                 readRes.shadowData.data() + readOffset, size);
 
     if (writeRes.buffer != VK_NULL_HANDLE) {
-        void* mapped = nullptr;
-        if (vkMapMemory(context_.device(), writeRes.memory, writeOffset, size, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, writeRes.shadowData.data() + writeOffset, size);
-            vkUnmapMemory(context_.device(), writeRes.memory);
+        if (writeRes.poolMappedData) {
+            std::memcpy(static_cast<char*>(writeRes.poolMappedData) + writeOffset, writeRes.shadowData.data() + writeOffset, size);
+        } else {
+            void* mapped = nullptr;
+            if (vkMapMemory(context_.device(), writeRes.memory, writeRes.offset + writeOffset, size, 0, &mapped) == VK_SUCCESS) {
+                std::memcpy(mapped, writeRes.shadowData.data() + writeOffset, size);
+                vkUnmapMemory(context_.device(), writeRes.memory);
+            }
         }
     }
 }
@@ -289,10 +312,14 @@ bool WebGLVkContext::unmapBuffer(GLenum target) {
     }
 
     if (res.buffer != VK_NULL_HANDLE && res.memory != VK_NULL_HANDLE) {
-        void* mapped = nullptr;
-        if (vkMapMemory(context_.device(), res.memory, 0, res.size, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, res.shadowData.data(), res.size);
-            vkUnmapMemory(context_.device(), res.memory);
+        if (res.poolMappedData) {
+            std::memcpy(res.poolMappedData, res.shadowData.data(), res.size);
+        } else {
+            void* mapped = nullptr;
+            if (vkMapMemory(context_.device(), res.memory, res.offset, res.size, 0, &mapped) == VK_SUCCESS) {
+                std::memcpy(mapped, res.shadowData.data(), res.size);
+                vkUnmapMemory(context_.device(), res.memory);
+            }
         }
     }
 
@@ -313,10 +340,14 @@ void WebGLVkContext::flushMappedBufferRange(GLenum target, GLintptr offset, GLsi
         return;
     }
     if (res.buffer != VK_NULL_HANDLE && res.memory != VK_NULL_HANDLE && length > 0) {
-        void* mapped = nullptr;
-        if (vkMapMemory(context_.device(), res.memory, offset, length, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, res.shadowData.data() + offset, length);
-            vkUnmapMemory(context_.device(), res.memory);
+        if (res.poolMappedData) {
+            std::memcpy(static_cast<char*>(res.poolMappedData) + offset, res.shadowData.data() + offset, length);
+        } else {
+            void* mapped = nullptr;
+            if (vkMapMemory(context_.device(), res.memory, res.offset + offset, length, 0, &mapped) == VK_SUCCESS) {
+                std::memcpy(mapped, res.shadowData.data() + offset, length);
+                vkUnmapMemory(context_.device(), res.memory);
+            }
         }
     }
 }

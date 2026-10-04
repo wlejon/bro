@@ -291,9 +291,12 @@ void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
 
         VkBuffer readbackBuf = VK_NULL_HANDLE;
         VkDeviceMemory readbackMem = VK_NULL_HANDLE;
+        VkDeviceSize readbackOffset = 0;
+        uint64_t readbackAllocId = 0;
+        void* readbackMapped = nullptr;
         context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              readbackBuf, readbackMem);
+                              readbackBuf, readbackMem, readbackOffset, readbackAllocId, readbackMapped);
 
         VkCommandBuffer cmd = context_.beginSingleTimeCommands();
         context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
@@ -310,8 +313,11 @@ void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                                        tex.currentLayout, cmd);
         context_.endSingleTimeCommands(cmd);
 
-        void* mapped = nullptr;
-        if (vkMapMemory(dev, readbackMem, 0, imgSize, 0, &mapped) == VK_SUCCESS) {
+        void* mapped = readbackMapped;
+        if (!mapped) {
+            vkMapMemory(dev, readbackMem, readbackOffset, imgSize, 0, &mapped);
+        }
+        if (mapped) {
             const uint8_t* srcData = static_cast<const uint8_t*>(mapped);
             uint8_t* dst = static_cast<uint8_t*>(pixels);
             GLsizei pixelBytes = (type == GL_FLOAT) ? 16 : static_cast<GLsizei>(tex.bytesPerPixel);
@@ -326,11 +332,12 @@ void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                     }
                 }
             }
-            vkUnmapMemory(dev, readbackMem);
+            if (!readbackMapped) {
+                vkUnmapMemory(dev, readbackMem);
+            }
         }
 
-        vkDestroyBuffer(dev, readbackBuf, nullptr);
-        vkFreeMemory(dev, readbackMem, nullptr);
+        context_.destroyBuffer(readbackBuf, readbackAllocId);
     }
 }
 

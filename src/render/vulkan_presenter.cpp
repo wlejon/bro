@@ -61,38 +61,46 @@ void VulkanPresenter::cleanup() {
         commandBuffers_.clear();
     }
 
-    if (stagingBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, stagingBuffer_, nullptr);
-        stagingBuffer_ = VK_NULL_HANDLE;
+    if (stagingAllocId_ != 0) {
+        context_.destroyBuffer(stagingBuffer_, stagingAllocId_);
+    } else {
+        if (stagingBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, stagingBuffer_, nullptr);
+        if (stagingMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, stagingMemory_, nullptr);
     }
-    if (stagingMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, stagingMemory_, nullptr);
-        stagingMemory_ = VK_NULL_HANDLE;
-    }
+    stagingBuffer_ = VK_NULL_HANDLE;
+    stagingMemory_ = VK_NULL_HANDLE;
+    stagingAllocId_ = 0;
+    stagingOffset_ = 0;
+    stagingMapped_ = nullptr;
     stagingBufferSize_ = 0;
 
-    if (readbackBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, readbackBuffer_, nullptr);
-        readbackBuffer_ = VK_NULL_HANDLE;
+    if (readbackAllocId_ != 0) {
+        context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
+    } else {
+        if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, readbackBuffer_, nullptr);
+        if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, readbackMemory_, nullptr);
     }
-    if (readbackMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, readbackMemory_, nullptr);
-        readbackMemory_ = VK_NULL_HANDLE;
-    }
+    readbackBuffer_ = VK_NULL_HANDLE;
+    readbackMemory_ = VK_NULL_HANDLE;
+    readbackAllocId_ = 0;
+    readbackOffset_ = 0;
+    readbackMapped_ = nullptr;
     readbackBufferSize_ = 0;
 
     if (offscreenView_ != VK_NULL_HANDLE) {
         vkDestroyImageView(device, offscreenView_, nullptr);
         offscreenView_ = VK_NULL_HANDLE;
     }
-    if (offscreenImage_ != VK_NULL_HANDLE) {
-        vkDestroyImage(device, offscreenImage_, nullptr);
-        offscreenImage_ = VK_NULL_HANDLE;
+    if (offscreenAllocId_ != 0) {
+        context_.destroyImage(offscreenImage_, offscreenAllocId_);
+    } else {
+        if (offscreenImage_ != VK_NULL_HANDLE) vkDestroyImage(device, offscreenImage_, nullptr);
+        if (offscreenMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, offscreenMemory_, nullptr);
     }
-    if (offscreenMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, offscreenMemory_, nullptr);
-        offscreenMemory_ = VK_NULL_HANDLE;
-    }
+    offscreenImage_ = VK_NULL_HANDLE;
+    offscreenMemory_ = VK_NULL_HANDLE;
+    offscreenAllocId_ = 0;
+    offscreenOffset_ = 0;
 }
 
 bool VulkanPresenter::ensureStagingBuffer(VkDeviceSize requiredSize) {
@@ -101,20 +109,24 @@ bool VulkanPresenter::ensureStagingBuffer(VkDeviceSize requiredSize) {
     }
 
     VkDevice device = context_.device();
-    if (stagingBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, stagingBuffer_, nullptr);
-        stagingBuffer_ = VK_NULL_HANDLE;
+    if (stagingAllocId_ != 0) {
+        context_.destroyBuffer(stagingBuffer_, stagingAllocId_);
+    } else {
+        if (stagingBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, stagingBuffer_, nullptr);
+        if (stagingMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, stagingMemory_, nullptr);
     }
-    if (stagingMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, stagingMemory_, nullptr);
-        stagingMemory_ = VK_NULL_HANDLE;
-    }
+    stagingBuffer_ = VK_NULL_HANDLE;
+    stagingMemory_ = VK_NULL_HANDLE;
+    stagingAllocId_ = 0;
+    stagingOffset_ = 0;
+    stagingMapped_ = nullptr;
 
     stagingBufferSize_ = requiredSize * 2; // allocate some headroom
     return context_.createBuffer(stagingBufferSize_,
                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                 stagingBuffer_, stagingMemory_);
+                                 stagingBuffer_, stagingMemory_,
+                                 stagingOffset_, stagingAllocId_, stagingMapped_);
 }
 
 bool VulkanPresenter::ensureOffscreenImage(uint32_t width, uint32_t height) {
@@ -131,14 +143,16 @@ bool VulkanPresenter::ensureOffscreenImage(uint32_t width, uint32_t height) {
         vkDestroyImageView(device, offscreenView_, nullptr);
         offscreenView_ = VK_NULL_HANDLE;
     }
-    if (offscreenImage_ != VK_NULL_HANDLE) {
-        vkDestroyImage(device, offscreenImage_, nullptr);
-        offscreenImage_ = VK_NULL_HANDLE;
+    if (offscreenAllocId_ != 0) {
+        context_.destroyImage(offscreenImage_, offscreenAllocId_);
+    } else {
+        if (offscreenImage_ != VK_NULL_HANDLE) vkDestroyImage(device, offscreenImage_, nullptr);
+        if (offscreenMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, offscreenMemory_, nullptr);
     }
-    if (offscreenMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, offscreenMemory_, nullptr);
-        offscreenMemory_ = VK_NULL_HANDLE;
-    }
+    offscreenImage_ = VK_NULL_HANDLE;
+    offscreenMemory_ = VK_NULL_HANDLE;
+    offscreenAllocId_ = 0;
+    offscreenOffset_ = 0;
 
     width_ = width;
     height_ = height;
@@ -151,7 +165,8 @@ bool VulkanPresenter::ensureOffscreenImage(uint32_t width, uint32_t height) {
     if (!context_.createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM,
                               VK_IMAGE_TILING_OPTIMAL, usage,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                              offscreenImage_, offscreenMemory_)) {
+                              offscreenImage_, offscreenMemory_,
+                              offscreenOffset_, offscreenAllocId_)) {
         LOG_ERROR("VulkanPresenter: Failed to create offscreen VkImage");
         return false;
     }
@@ -209,10 +224,12 @@ bool VulkanPresenter::presentPixels(const void* pixels, uint32_t width, uint32_t
 
     uint32_t srcStride = (stride > 0) ? stride : (width * 4);
 
-    void* mapped = nullptr;
-    if (vkMapMemory(context_.device(), stagingMemory_, 0, imageBytes, 0, &mapped) != VK_SUCCESS) {
-        LOG_ERROR("VulkanPresenter: Failed to map staging memory");
-        return false;
+    void* mapped = stagingMapped_;
+    if (!mapped) {
+        if (vkMapMemory(context_.device(), stagingMemory_, stagingOffset_, imageBytes, 0, &mapped) != VK_SUCCESS) {
+            LOG_ERROR("VulkanPresenter: Failed to map staging memory");
+            return false;
+        }
     }
 
     const uint8_t* srcBytes = reinterpret_cast<const uint8_t*>(pixels);
@@ -239,7 +256,9 @@ bool VulkanPresenter::presentPixels(const void* pixels, uint32_t width, uint32_t
         }
     }
 
-    vkUnmapMemory(context_.device(), stagingMemory_);
+    if (!stagingMapped_) {
+        vkUnmapMemory(context_.device(), stagingMemory_);
+    }
 
     // Headless / Offscreen presentation
     if (!swapchain_) {
@@ -341,19 +360,24 @@ bool VulkanPresenter::readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& 
     VkDevice device = context_.device();
 
     if (readbackBuffer_ == VK_NULL_HANDLE || readbackBufferSize_ < requiredSize) {
-        if (readbackBuffer_ != VK_NULL_HANDLE) {
-            vkDestroyBuffer(device, readbackBuffer_, nullptr);
-            readbackBuffer_ = VK_NULL_HANDLE;
+        if (readbackAllocId_ != 0) {
+            context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
+        } else {
+            if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, readbackBuffer_, nullptr);
+            if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, readbackMemory_, nullptr);
         }
-        if (readbackMemory_ != VK_NULL_HANDLE) {
-            vkFreeMemory(device, readbackMemory_, nullptr);
-            readbackMemory_ = VK_NULL_HANDLE;
-        }
+        readbackBuffer_ = VK_NULL_HANDLE;
+        readbackMemory_ = VK_NULL_HANDLE;
+        readbackAllocId_ = 0;
+        readbackOffset_ = 0;
+        readbackMapped_ = nullptr;
+
         readbackBufferSize_ = requiredSize * 2;
         if (!context_.createBuffer(readbackBufferSize_,
                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                   readbackBuffer_, readbackMemory_)) {
+                                   readbackBuffer_, readbackMemory_,
+                                   readbackOffset_, readbackAllocId_, readbackMapped_)) {
             LOG_ERROR("VulkanPresenter: Failed to create readback buffer");
             return false;
         }
@@ -363,15 +387,19 @@ bool VulkanPresenter::readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& 
     context_.copyImageToBuffer(offscreenImage_, readbackBuffer_, width_, height_, cmd);
     context_.endSingleTimeCommands(cmd);
 
-    void* mapped = nullptr;
-    if (vkMapMemory(device, readbackMemory_, 0, requiredSize, 0, &mapped) != VK_SUCCESS) {
-        LOG_ERROR("VulkanPresenter: Failed to map readback memory");
-        return false;
+    if (readbackMapped_) {
+        outPixels.resize(requiredSize);
+        std::memcpy(outPixels.data(), readbackMapped_, requiredSize);
+    } else {
+        void* mapped = nullptr;
+        if (vkMapMemory(device, readbackMemory_, readbackOffset_, requiredSize, 0, &mapped) != VK_SUCCESS) {
+            LOG_ERROR("VulkanPresenter: Failed to map readback memory");
+            return false;
+        }
+        outPixels.resize(requiredSize);
+        std::memcpy(outPixels.data(), mapped, requiredSize);
+        vkUnmapMemory(device, readbackMemory_);
     }
-
-    outPixels.resize(requiredSize);
-    std::memcpy(outPixels.data(), mapped, requiredSize);
-    vkUnmapMemory(device, readbackMemory_);
 
     outWidth = width_;
     outHeight = height_;

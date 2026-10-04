@@ -19,6 +19,9 @@ struct VkBufferResource {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0;
+    VkDeviceSize offset = 0;
+    uint64_t allocId = 0;
+    void* poolMappedData = nullptr;
     VkBufferUsageFlags usage = 0;
     std::vector<uint8_t> shadowData;
     bool isMapped = false;
@@ -26,11 +29,14 @@ struct VkBufferResource {
 
     bool isValid() const { return buffer != VK_NULL_HANDLE; }
 };
+using WebGLBufferResource = VkBufferResource;
 
 /// 2D Texture object backed by Vulkan image, view, and sampler.
 struct VkTextureResource {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    uint64_t allocId = 0;
     VkImageView view = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
     uint32_t width = 0;
@@ -50,6 +56,7 @@ struct VkTextureResource {
 
     bool isValid() const { return image != VK_NULL_HANDLE; }
 };
+using WebGLTextureResource = VkTextureResource;
 
 /// Sampler object backed by Vulkan sampler.
 struct VkSamplerResource {

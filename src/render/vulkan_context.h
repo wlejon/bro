@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/vulkan_memory_pool.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <memory>
@@ -58,6 +59,9 @@ public:
 
     VkCommandPool commandPool() const { return commandPool_; }
 
+    VulkanMemoryPool& memoryPool() { return memoryPool_; }
+    const VulkanMemoryPool& memoryPool() const { return memoryPool_; }
+
     /// Single-use command buffer helpers for transfers and layout transitions.
     VkCommandBuffer beginSingleTimeCommands() const;
     void endSingleTimeCommands(VkCommandBuffer commandBuffer) const;
@@ -65,6 +69,26 @@ public:
     /// Memory and resource allocation helpers.
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
 
+    /// Pooled memory allocation methods (using VulkanMemoryPool)
+    bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags properties,
+                      VkBuffer& buffer, VkDeviceMemory& memory,
+                      VkDeviceSize& outOffset, uint64_t& outAllocId,
+                      void*& outMappedData);
+
+    void destroyBuffer(VkBuffer buffer, uint64_t allocId);
+
+    bool createImage(uint32_t width, uint32_t height, VkFormat format,
+                     VkImageTiling tiling, VkImageUsageFlags usage,
+                     VkMemoryPropertyFlags properties,
+                     VkImage& image, VkDeviceMemory& memory,
+                     VkDeviceSize& outOffset, uint64_t& outAllocId,
+                     uint32_t mipLevels = 1, uint32_t arrayLayers = 1,
+                     VkImageCreateFlags flags = 0);
+
+    void destroyImage(VkImage image, uint64_t allocId);
+
+    /// Legacy dedicated memory allocation helpers (allocates dedicated VkDeviceMemory)
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags properties,
                       VkBuffer& buffer, VkDeviceMemory& bufferMemory) const;
@@ -126,6 +150,7 @@ private:
     VkPhysicalDeviceFeatures deviceFeatures_{};
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
+    mutable VulkanMemoryPool memoryPool_;
 };
 
 } // namespace bro::render

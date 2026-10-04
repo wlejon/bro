@@ -24,6 +24,7 @@ add_library(bro_render STATIC
     skia_backend_gpu.cpp
     skia_backend_gradient.cpp
     vulkan_context.cpp
+    vulkan_memory_pool.cpp
     vulkan_swapchain.cpp
     vulkan_presenter.cpp
     vulkan_presenter_composite.cpp

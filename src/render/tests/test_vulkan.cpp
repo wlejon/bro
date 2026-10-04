@@ -69,6 +69,29 @@ int main() {
         vkDestroyBuffer(context.device(), buffer, nullptr);
         vkFreeMemory(context.device(), mem, nullptr);
         std::cout << "PASSED" << std::endl;
+
+        // Test pooled buffer & image allocation
+        std::cout << "[Test 2b] VulkanContext Pooled Buffer & Image Creation... " << std::flush;
+        VkBuffer pooledBuf = VK_NULL_HANDLE;
+        VkDeviceMemory pooledMem = VK_NULL_HANDLE;
+        VkDeviceSize pooledOffset = 0;
+        uint64_t pooledAllocId = 0;
+        void* pooledMapped = nullptr;
+        bool pooledOk = context.createBuffer(2048,
+                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                             pooledBuf, pooledMem, pooledOffset, pooledAllocId, pooledMapped);
+        assert(pooledOk);
+        assert(pooledBuf != VK_NULL_HANDLE);
+        assert(pooledMem != VK_NULL_HANDLE);
+        assert(pooledAllocId != 0);
+        assert(pooledMapped != nullptr);
+
+        auto stats = context.memoryPool().stats();
+        assert(stats.activeAllocationCount >= 1);
+
+        context.destroyBuffer(pooledBuf, pooledAllocId);
+        std::cout << "PASSED" << std::endl;
     }
 
     // 2. Test VulkanPresenter Offscreen Headless Rendering & Readback

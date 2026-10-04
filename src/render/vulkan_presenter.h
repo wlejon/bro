@@ -76,6 +76,9 @@ private:
     // Staging buffer for uploading CPU pixels to GPU
     VkBuffer stagingBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory stagingMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize stagingOffset_ = 0;
+    uint64_t stagingAllocId_ = 0;
+    void* stagingMapped_ = nullptr;
     VkDeviceSize stagingBufferSize_ = 0;
 
     // Windowed mode command buffers (one per flight frame)
@@ -84,16 +87,23 @@ private:
     // Offscreen mode resources
     VkImage offscreenImage_ = VK_NULL_HANDLE;
     VkDeviceMemory offscreenMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize offscreenOffset_ = 0;
+    uint64_t offscreenAllocId_ = 0;
     VkImageView offscreenView_ = VK_NULL_HANDLE;
 
     // Readback buffer for headless captures
     VkBuffer readbackBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize readbackOffset_ = 0;
+    uint64_t readbackAllocId_ = 0;
+    void* readbackMapped_ = nullptr;
     VkDeviceSize readbackBufferSize_ = 0;
 
     // Overlay compositing resources
     VkImage overlayImage_ = VK_NULL_HANDLE;
     VkDeviceMemory overlayMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize overlayOffset_ = 0;
+    uint64_t overlayAllocId_ = 0;
     VkImageView overlayView_ = VK_NULL_HANDLE;
     uint32_t overlayW_ = 0;
     uint32_t overlayH_ = 0;

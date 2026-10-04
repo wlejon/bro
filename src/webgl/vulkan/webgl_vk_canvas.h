@@ -75,12 +75,16 @@ private:
 
     VkImage colorImage_ = VK_NULL_HANDLE;
     VkDeviceMemory colorMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize colorOffset_ = 0;
+    uint64_t colorAllocId_ = 0;
     VkImageView colorView_ = VK_NULL_HANDLE;
     VkFormat colorFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
     VkImageLayout colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VkImage depthImage_ = VK_NULL_HANDLE;
     VkDeviceMemory depthMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize depthOffset_ = 0;
+    uint64_t depthAllocId_ = 0;
     VkImageView depthView_ = VK_NULL_HANDLE;
     VkFormat depthFormat_ = VK_FORMAT_D24_UNORM_S8_UINT;
     VkImageLayout depthLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -88,6 +92,9 @@ private:
     // Readback staging resources
     VkBuffer readbackBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize readbackOffset_ = 0;
+    uint64_t readbackAllocId_ = 0;
+    void* readbackMapped_ = nullptr;
     VkDeviceSize readbackBufferSize_ = 0;
 };
 

@@ -65,14 +65,16 @@ void VulkanPresenter::cleanupOverlay() {
         vkDestroyImageView(device, overlayView_, nullptr);
         overlayView_ = VK_NULL_HANDLE;
     }
-    if (overlayImage_ != VK_NULL_HANDLE) {
-        vkDestroyImage(device, overlayImage_, nullptr);
-        overlayImage_ = VK_NULL_HANDLE;
+    if (overlayAllocId_ != 0) {
+        context_.destroyImage(overlayImage_, overlayAllocId_);
+    } else {
+        if (overlayImage_ != VK_NULL_HANDLE) vkDestroyImage(device, overlayImage_, nullptr);
+        if (overlayMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, overlayMemory_, nullptr);
     }
-    if (overlayMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, overlayMemory_, nullptr);
-        overlayMemory_ = VK_NULL_HANDLE;
-    }
+    overlayImage_ = VK_NULL_HANDLE;
+    overlayMemory_ = VK_NULL_HANDLE;
+    overlayAllocId_ = 0;
+    overlayOffset_ = 0;
     overlayW_ = 0;
     overlayH_ = 0;
 }
@@ -87,14 +89,16 @@ bool VulkanPresenter::ensureOverlayImage(uint32_t width, uint32_t height) {
         vkDestroyImageView(device, overlayView_, nullptr);
         overlayView_ = VK_NULL_HANDLE;
     }
-    if (overlayImage_ != VK_NULL_HANDLE) {
-        vkDestroyImage(device, overlayImage_, nullptr);
-        overlayImage_ = VK_NULL_HANDLE;
+    if (overlayAllocId_ != 0) {
+        context_.destroyImage(overlayImage_, overlayAllocId_);
+    } else {
+        if (overlayImage_ != VK_NULL_HANDLE) vkDestroyImage(device, overlayImage_, nullptr);
+        if (overlayMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, overlayMemory_, nullptr);
     }
-    if (overlayMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(device, overlayMemory_, nullptr);
-        overlayMemory_ = VK_NULL_HANDLE;
-    }
+    overlayImage_ = VK_NULL_HANDLE;
+    overlayMemory_ = VK_NULL_HANDLE;
+    overlayAllocId_ = 0;
+    overlayOffset_ = 0;
 
     overlayW_ = width;
     overlayH_ = height;
@@ -103,7 +107,8 @@ bool VulkanPresenter::ensureOverlayImage(uint32_t width, uint32_t height) {
     if (!context_.createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM,
                               VK_IMAGE_TILING_OPTIMAL, usage,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                              overlayImage_, overlayMemory_)) {
+                              overlayImage_, overlayMemory_,
+                              overlayOffset_, overlayAllocId_)) {
         LOG_ERROR("VulkanPresenter: Failed to create overlay image");
         return false;
     }
@@ -159,9 +164,11 @@ bool VulkanPresenter::uploadOverlaySurface(SkSurface* surface, VkCommandBuffer c
     VkDeviceSize imageBytes = static_cast<VkDeviceSize>(w) * h * 4;
     if (!ensureStagingBuffer(imageBytes)) return false;
 
-    void* mapped = nullptr;
-    if (vkMapMemory(context_.device(), stagingMemory_, 0, imageBytes, 0, &mapped) != VK_SUCCESS) {
-        return false;
+    void* mapped = stagingMapped_;
+    if (!mapped) {
+        if (vkMapMemory(context_.device(), stagingMemory_, stagingOffset_, imageBytes, 0, &mapped) != VK_SUCCESS) {
+            return false;
+        }
     }
 
     bool isBgra = (pixmap.colorType() == kBGRA_8888_SkColorType);
@@ -191,7 +198,9 @@ bool VulkanPresenter::uploadOverlaySurface(SkSurface* surface, VkCommandBuffer c
         }
     }
 
-    vkUnmapMemory(context_.device(), stagingMemory_);
+    if (!stagingMapped_) {
+        vkUnmapMemory(context_.device(), stagingMemory_);
+    }
 
     context_.transitionImageLayout(overlayImage_, VK_FORMAT_R8G8B8A8_UNORM,
                                    VK_IMAGE_LAYOUT_UNDEFINED,

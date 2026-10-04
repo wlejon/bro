@@ -73,38 +73,45 @@ void WebGLVkCanvas::cleanup() {
         vkDestroyImageView(dev, colorView_, nullptr);
         colorView_ = VK_NULL_HANDLE;
     }
-    if (colorImage_ != VK_NULL_HANDLE) {
-        vkDestroyImage(dev, colorImage_, nullptr);
-        colorImage_ = VK_NULL_HANDLE;
+    if (colorAllocId_ != 0) {
+        context_.destroyImage(colorImage_, colorAllocId_);
+    } else {
+        if (colorImage_ != VK_NULL_HANDLE) vkDestroyImage(dev, colorImage_, nullptr);
+        if (colorMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, colorMemory_, nullptr);
     }
-    if (colorMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(dev, colorMemory_, nullptr);
-        colorMemory_ = VK_NULL_HANDLE;
-    }
+    colorImage_ = VK_NULL_HANDLE;
+    colorMemory_ = VK_NULL_HANDLE;
+    colorAllocId_ = 0;
+    colorOffset_ = 0;
     colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
     if (depthView_ != VK_NULL_HANDLE) {
         vkDestroyImageView(dev, depthView_, nullptr);
         depthView_ = VK_NULL_HANDLE;
     }
-    if (depthImage_ != VK_NULL_HANDLE) {
-        vkDestroyImage(dev, depthImage_, nullptr);
-        depthImage_ = VK_NULL_HANDLE;
+    if (depthAllocId_ != 0) {
+        context_.destroyImage(depthImage_, depthAllocId_);
+    } else {
+        if (depthImage_ != VK_NULL_HANDLE) vkDestroyImage(dev, depthImage_, nullptr);
+        if (depthMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, depthMemory_, nullptr);
     }
-    if (depthMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(dev, depthMemory_, nullptr);
-        depthMemory_ = VK_NULL_HANDLE;
-    }
+    depthImage_ = VK_NULL_HANDLE;
+    depthMemory_ = VK_NULL_HANDLE;
+    depthAllocId_ = 0;
+    depthOffset_ = 0;
     depthLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    if (readbackBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(dev, readbackBuffer_, nullptr);
-        readbackBuffer_ = VK_NULL_HANDLE;
+    if (readbackAllocId_ != 0) {
+        context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
+    } else {
+        if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(dev, readbackBuffer_, nullptr);
+        if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, readbackMemory_, nullptr);
     }
-    if (readbackMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(dev, readbackMemory_, nullptr);
-        readbackMemory_ = VK_NULL_HANDLE;
-    }
+    readbackBuffer_ = VK_NULL_HANDLE;
+    readbackMemory_ = VK_NULL_HANDLE;
+    readbackAllocId_ = 0;
+    readbackOffset_ = 0;
+    readbackMapped_ = nullptr;
     readbackBufferSize_ = 0;
 }
 
@@ -120,7 +127,8 @@ bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
     if (!context_.createImage(width, height, colorFormat_,
                               VK_IMAGE_TILING_OPTIMAL, usage,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                              colorImage_, colorMemory_)) {
+                              colorImage_, colorMemory_,
+                              colorOffset_, colorAllocId_)) {
         return false;
     }
 
@@ -161,7 +169,8 @@ bool WebGLVkCanvas::createDepthAttachment(uint32_t width, uint32_t height) {
     if (!context_.createImage(width, height, depthFormat_,
                               VK_IMAGE_TILING_OPTIMAL, usage,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                              depthImage_, depthMemory_)) {
+                              depthImage_, depthMemory_,
+                              depthOffset_, depthAllocId_)) {
         return false;
     }
 
@@ -215,20 +224,24 @@ bool WebGLVkCanvas::readCanvasPixels(std::vector<uint8_t>& out) {
     VkDeviceSize requiredSize = static_cast<VkDeviceSize>(width_) * height_ * 4;
 
     if (readbackBuffer_ == VK_NULL_HANDLE || readbackBufferSize_ < requiredSize) {
-        if (readbackBuffer_ != VK_NULL_HANDLE) {
-            vkDestroyBuffer(dev, readbackBuffer_, nullptr);
-            readbackBuffer_ = VK_NULL_HANDLE;
+        if (readbackAllocId_ != 0) {
+            context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
+        } else {
+            if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(dev, readbackBuffer_, nullptr);
+            if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, readbackMemory_, nullptr);
         }
-        if (readbackMemory_ != VK_NULL_HANDLE) {
-            vkFreeMemory(dev, readbackMemory_, nullptr);
-            readbackMemory_ = VK_NULL_HANDLE;
-        }
+        readbackBuffer_ = VK_NULL_HANDLE;
+        readbackMemory_ = VK_NULL_HANDLE;
+        readbackAllocId_ = 0;
+        readbackOffset_ = 0;
+        readbackMapped_ = nullptr;
 
         readbackBufferSize_ = requiredSize * 2;
         if (!context_.createBuffer(readbackBufferSize_,
                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                   readbackBuffer_, readbackMemory_)) {
+                                   readbackBuffer_, readbackMemory_,
+                                   readbackOffset_, readbackAllocId_, readbackMapped_)) {
             LOG_ERROR("WebGLVkCanvas: Failed to allocate readback staging buffer");
             return false;
         }
@@ -261,15 +274,19 @@ bool WebGLVkCanvas::readCanvasPixels(std::vector<uint8_t>& out) {
 
     context_.waitIdle();
 
-    void* mapped = nullptr;
-    if (vkMapMemory(dev, readbackMemory_, 0, requiredSize, 0, &mapped) != VK_SUCCESS) {
-        LOG_ERROR("WebGLVkCanvas: Failed to map readback buffer memory");
-        return false;
+    if (readbackMapped_) {
+        out.resize(requiredSize);
+        std::memcpy(out.data(), readbackMapped_, requiredSize);
+    } else {
+        void* mapped = nullptr;
+        if (vkMapMemory(dev, readbackMemory_, readbackOffset_, requiredSize, 0, &mapped) != VK_SUCCESS) {
+            LOG_ERROR("WebGLVkCanvas: Failed to map readback buffer memory");
+            return false;
+        }
+        out.resize(requiredSize);
+        std::memcpy(out.data(), mapped, requiredSize);
+        vkUnmapMemory(dev, readbackMemory_);
     }
-
-    out.resize(requiredSize);
-    std::memcpy(out.data(), mapped, requiredSize);
-    vkUnmapMemory(dev, readbackMemory_);
 
     return true;
 }

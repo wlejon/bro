@@ -72,10 +72,17 @@ void WebGLVkContext::deleteTexture(WebGLTexture tex) {
     auto it = textures_.find(tex.id);
     if (it != textures_.end()) {
         VkDevice dev = context_.device();
-        if (it->second.sampler != VK_NULL_HANDLE) vkDestroySampler(dev, it->second.sampler, nullptr);
-        if (it->second.view != VK_NULL_HANDLE) vkDestroyImageView(dev, it->second.view, nullptr);
-        if (it->second.image != VK_NULL_HANDLE) vkDestroyImage(dev, it->second.image, nullptr);
-        if (it->second.memory != VK_NULL_HANDLE) vkFreeMemory(dev, it->second.memory, nullptr);
+        if (it->second.sampler != VK_NULL_HANDLE) { vkDestroySampler(dev, it->second.sampler, nullptr); it->second.sampler = VK_NULL_HANDLE; }
+        if (it->second.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, it->second.view, nullptr); it->second.view = VK_NULL_HANDLE; }
+        if (it->second.allocId != 0) {
+            context_.destroyImage(it->second.image, it->second.allocId);
+        } else {
+            if (it->second.image != VK_NULL_HANDLE) vkDestroyImage(dev, it->second.image, nullptr);
+            if (it->second.memory != VK_NULL_HANDLE) vkFreeMemory(dev, it->second.memory, nullptr);
+        }
+        it->second.image = VK_NULL_HANDLE;
+        it->second.memory = VK_NULL_HANDLE;
+        it->second.allocId = 0;
         textures_.erase(it);
     }
 }
@@ -186,8 +193,16 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
         tex.target = 0x8513;
         if (tex.image == VK_NULL_HANDLE || tex.width != static_cast<uint32_t>(width) || tex.height != static_cast<uint32_t>(height)) {
             if (tex.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, tex.view, nullptr); tex.view = VK_NULL_HANDLE; }
-            if (tex.image != VK_NULL_HANDLE) { vkDestroyImage(dev, tex.image, nullptr); tex.image = VK_NULL_HANDLE; }
-            if (tex.memory != VK_NULL_HANDLE) { vkFreeMemory(dev, tex.memory, nullptr); tex.memory = VK_NULL_HANDLE; }
+            if (tex.allocId != 0) {
+                context_.destroyImage(tex.image, tex.allocId);
+            } else {
+                if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
+                if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
+            }
+            tex.image = VK_NULL_HANDLE;
+            tex.memory = VK_NULL_HANDLE;
+            tex.allocId = 0;
+            tex.offset = 0;
 
             tex.width = width;
             tex.height = height;
@@ -197,6 +212,7 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
 
             context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
+                                 tex.offset, tex.allocId,
                                  1, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
 
             VkImageViewCreateInfo viewInfo{};
@@ -222,15 +238,23 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
             VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * bpp;
             VkBuffer stagingBuf = VK_NULL_HANDLE;
             VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+            VkDeviceSize stagingOffset = 0;
+            uint64_t stagingAllocId = 0;
+            void* stagingMapped = nullptr;
             context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                  stagingBuf, stagingMem);
+                                  stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
 
-            void* mapped = nullptr;
-            vkMapMemory(dev, stagingMem, 0, imgSize, 0, &mapped);
-            copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                                 unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-            vkUnmapMemory(dev, stagingMem);
+            if (stagingMapped) {
+                copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
+                                     unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+            } else {
+                void* mapped = nullptr;
+                vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped);
+                copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
+                                     unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+                vkUnmapMemory(dev, stagingMem);
+            }
 
             VkCommandBuffer cmd = context_.beginSingleTimeCommands();
             context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -240,8 +264,7 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, 0, 1, faceIndex);
             context_.endSingleTimeCommands(cmd);
 
-            vkDestroyBuffer(dev, stagingBuf, nullptr);
-            vkFreeMemory(dev, stagingMem, nullptr);
+            context_.destroyBuffer(stagingBuf, stagingAllocId);
         }
         return;
     }
@@ -252,8 +275,16 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
 
     if (level == 0 || tex.image == VK_NULL_HANDLE) {
         if (tex.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, tex.view, nullptr); tex.view = VK_NULL_HANDLE; }
-        if (tex.image != VK_NULL_HANDLE) { vkDestroyImage(dev, tex.image, nullptr); tex.image = VK_NULL_HANDLE; }
-        if (tex.memory != VK_NULL_HANDLE) { vkFreeMemory(dev, tex.memory, nullptr); tex.memory = VK_NULL_HANDLE; }
+        if (tex.allocId != 0) {
+            context_.destroyImage(tex.image, tex.allocId);
+        } else {
+            if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
+            if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
+        }
+        tex.image = VK_NULL_HANDLE;
+        tex.memory = VK_NULL_HANDLE;
+        tex.allocId = 0;
+        tex.offset = 0;
 
         tex.width = width;
         tex.height = height;
@@ -263,6 +294,7 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
 
         context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
+                             tex.offset, tex.allocId,
                              numLevels, 1, 0);
 
         VkImageViewCreateInfo viewInfo{};
@@ -290,15 +322,23 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
         VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * bpp;
         VkBuffer stagingBuf = VK_NULL_HANDLE;
         VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+        VkDeviceSize stagingOffset = 0;
+        uint64_t stagingAllocId = 0;
+        void* stagingMapped = nullptr;
         context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              stagingBuf, stagingMem);
+                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
 
-        void* mapped = nullptr;
-        vkMapMemory(dev, stagingMem, 0, imgSize, 0, &mapped);
-        copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                             unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-        vkUnmapMemory(dev, stagingMem);
+        if (stagingMapped) {
+            copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
+                                 unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+        } else {
+            void* mapped = nullptr;
+            vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped);
+            copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
+                                 unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+            vkUnmapMemory(dev, stagingMem);
+        }
 
         VkCommandBuffer cmd = context_.beginSingleTimeCommands();
         context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
@@ -309,8 +349,7 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
         context_.endSingleTimeCommands(cmd);
         tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        vkDestroyBuffer(dev, stagingBuf, nullptr);
-        vkFreeMemory(dev, stagingMem, nullptr);
+        context_.destroyBuffer(stagingBuf, stagingAllocId);
     }
 }
 
@@ -344,17 +383,25 @@ void WebGLVkContext::texSubImage2D(GLenum /*target*/, GLint level, GLint xoffset
     VkDeviceSize uploadSize = static_cast<VkDeviceSize>(width) * height * bpp;
     VkBuffer stagingBuf = VK_NULL_HANDLE;
     VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    VkDeviceSize stagingOffset = 0;
+    uint64_t stagingAllocId = 0;
+    void* stagingMapped = nullptr;
     VkDevice dev = context_.device();
 
     context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingBuf, stagingMem);
+                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
 
-    void* mapped = nullptr;
-    vkMapMemory(dev, stagingMem, 0, uploadSize, 0, &mapped);
-    copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                         unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-    vkUnmapMemory(dev, stagingMem);
+    if (stagingMapped) {
+        copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
+                             unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+    } else {
+        void* mapped = nullptr;
+        vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped);
+        copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
+                             unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+        vkUnmapMemory(dev, stagingMem);
+    }
 
     VkCommandBuffer cmd = context_.beginSingleTimeCommands();
     context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
@@ -378,8 +425,7 @@ void WebGLVkContext::texSubImage2D(GLenum /*target*/, GLint level, GLint xoffset
     context_.endSingleTimeCommands(cmd);
     tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    vkDestroyBuffer(dev, stagingBuf, nullptr);
-    vkFreeMemory(dev, stagingMem, nullptr);
+    context_.destroyBuffer(stagingBuf, stagingAllocId);
 }
 
 void WebGLVkContext::generateMipmap(GLenum target) {
@@ -477,8 +523,16 @@ void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalform
     VkDevice dev = context_.device();
 
     if (tex.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, tex.view, nullptr); tex.view = VK_NULL_HANDLE; }
-    if (tex.image != VK_NULL_HANDLE) { vkDestroyImage(dev, tex.image, nullptr); tex.image = VK_NULL_HANDLE; }
-    if (tex.memory != VK_NULL_HANDLE) { vkFreeMemory(dev, tex.memory, nullptr); tex.memory = VK_NULL_HANDLE; }
+    if (tex.allocId != 0) {
+        context_.destroyImage(tex.image, tex.allocId);
+    } else {
+        if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
+        if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
+    }
+    tex.image = VK_NULL_HANDLE;
+    tex.memory = VK_NULL_HANDLE;
+    tex.allocId = 0;
+    tex.offset = 0;
 
     tex.width = width;
     tex.height = height;
@@ -492,6 +546,7 @@ void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalform
                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
+                         tex.offset, tex.allocId,
                          1, depth, 0);
 
     VkImageViewCreateInfo viewInfo{};
@@ -510,14 +565,21 @@ void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalform
         VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * depth * tex.bytesPerPixel;
         VkBuffer stagingBuf = VK_NULL_HANDLE;
         VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+        VkDeviceSize stagingOffset = 0;
+        uint64_t stagingAllocId = 0;
+        void* stagingMapped = nullptr;
         context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              stagingBuf, stagingMem);
+                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
 
-        void* mapped = nullptr;
-        vkMapMemory(dev, stagingMem, 0, imgSize, 0, &mapped);
-        std::memcpy(mapped, pixels, imgSize);
-        vkUnmapMemory(dev, stagingMem);
+        if (stagingMapped) {
+            std::memcpy(stagingMapped, pixels, imgSize);
+        } else {
+            void* mapped = nullptr;
+            vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped);
+            std::memcpy(mapped, pixels, imgSize);
+            vkUnmapMemory(dev, stagingMem);
+        }
 
         VkCommandBuffer cmd = context_.beginSingleTimeCommands();
         context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -528,8 +590,7 @@ void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalform
         context_.endSingleTimeCommands(cmd);
         tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        vkDestroyBuffer(dev, stagingBuf, nullptr);
-        vkFreeMemory(dev, stagingMem, nullptr);
+        context_.destroyBuffer(stagingBuf, stagingAllocId);
     } else {
         VkCommandBuffer cmd = context_.beginSingleTimeCommands();
         context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -559,14 +620,21 @@ void WebGLVkContext::texSubImage3D(GLenum /*target*/, GLint level,
     VkDeviceSize uploadSize = static_cast<VkDeviceSize>(width) * height * depth * tex.bytesPerPixel;
     VkBuffer stagingBuf = VK_NULL_HANDLE;
     VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    VkDeviceSize stagingOffset = 0;
+    uint64_t stagingAllocId = 0;
+    void* stagingMapped = nullptr;
     context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingBuf, stagingMem);
+                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
 
-    void* mapped = nullptr;
-    vkMapMemory(dev, stagingMem, 0, uploadSize, 0, &mapped);
-    std::memcpy(mapped, pixels, uploadSize);
-    vkUnmapMemory(dev, stagingMem);
+    if (stagingMapped) {
+        std::memcpy(stagingMapped, pixels, uploadSize);
+    } else {
+        void* mapped = nullptr;
+        vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped);
+        std::memcpy(mapped, pixels, uploadSize);
+        vkUnmapMemory(dev, stagingMem);
+    }
 
     VkCommandBuffer cmd = context_.beginSingleTimeCommands();
     context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
@@ -589,8 +657,7 @@ void WebGLVkContext::texSubImage3D(GLenum /*target*/, GLint level,
     context_.endSingleTimeCommands(cmd);
     tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    vkDestroyBuffer(dev, stagingBuf, nullptr);
-    vkFreeMemory(dev, stagingMem, nullptr);
+    context_.destroyBuffer(stagingBuf, stagingAllocId);
 }
 
 void WebGLVkContext::updateSamplerObject(VkSamplerResource& smp) {

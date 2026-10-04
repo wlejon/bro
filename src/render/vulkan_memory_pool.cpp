@@ -1,11 +1,11 @@
-#include "scene/vulkan/scene_vk_memory_pool.h"
+#include "render/vulkan_memory_pool.h"
 #include "util/log.h"
 
 #include <algorithm>
 
-namespace bro::scene::vk {
+namespace bro::render {
 
-void SceneVkMemoryPool::cleanup(VkDevice device) {
+void VulkanMemoryPool::cleanup(VkDevice device) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Free all active dedicated allocations
@@ -37,8 +37,8 @@ void SceneVkMemoryPool::cleanup(VkDevice device) {
     pools_.clear();
 }
 
-SceneVkAllocatorStats SceneVkMemoryPool::stats() const {
-    SceneVkAllocatorStats s{};
+VulkanAllocatorStats VulkanMemoryPool::stats() const {
+    VulkanAllocatorStats s{};
     std::lock_guard<std::mutex> lock(mutex_);
     s.activeAllocationCount = allocations_.size();
     for (const auto& [id, record] : allocations_) {
@@ -53,10 +53,10 @@ SceneVkAllocatorStats SceneVkMemoryPool::stats() const {
     return s;
 }
 
-bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize alignment,
-                                 uint32_t memoryTypeIndex, VkMemoryPropertyFlags properties, bool isImage,
-                                 uint64_t& outId, VkDeviceMemory& outMemory,
-                                 VkDeviceSize& outOffset, void*& outMappedData) {
+bool VulkanMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSize alignment,
+                                uint32_t memoryTypeIndex, VkMemoryPropertyFlags properties, bool isImage,
+                                uint64_t& outId, VkDeviceMemory& outMemory,
+                                VkDeviceSize& outOffset, void*& outMappedData) {
     if (size == 0) return false;
     if (alignment < 1) alignment = 1;
 
@@ -71,7 +71,7 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
 
         VkDeviceMemory mem = VK_NULL_HANDLE;
         if (vkAllocateMemory(device, &allocInfo, nullptr, &mem) != VK_SUCCESS) {
-            LOG_ERROR("SceneVkMemoryPool: Failed dedicated allocation of %zu bytes", static_cast<size_t>(size));
+            LOG_ERROR("VulkanMemoryPool: Failed dedicated allocation of %zu bytes", static_cast<size_t>(size));
             return false;
         }
 
@@ -79,13 +79,13 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
         bool isHostVis = (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
         if (isHostVis) {
             if (vkMapMemory(device, mem, 0, size, 0, &mapped) != VK_SUCCESS) {
-                LOG_WARN("SceneVkMemoryPool: Failed to map host-visible dedicated memory");
+                LOG_WARN("VulkanMemoryPool: Failed to map host-visible dedicated memory");
                 mapped = nullptr;
             }
         }
 
         uint64_t id = ++nextAllocId_;
-        AllocRecord record{};
+        VulkanAllocRecord record{};
         record.id = id;
         record.memory = mem;
         record.offset = 0;
@@ -103,9 +103,9 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
     }
 
     uint32_t poolKey = (memoryTypeIndex << 1) | (isImage ? 1 : 0);
-    BlockPool& p = pools_[poolKey];
+    VulkanBlockPool& p = pools_[poolKey];
 
-    MemoryBlock* targetBlock = nullptr;
+    VulkanMemoryBlock* targetBlock = nullptr;
     size_t targetRangeIdx = 0;
     VkDeviceSize targetAlignedOffset = 0;
 
@@ -132,11 +132,11 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
 
         VkDeviceMemory mem = VK_NULL_HANDLE;
         if (vkAllocateMemory(device, &allocInfo, nullptr, &mem) != VK_SUCCESS) {
-            LOG_ERROR("SceneVkMemoryPool: Failed to allocate pooled block of %zu bytes", static_cast<size_t>(blockSize));
+            LOG_ERROR("VulkanMemoryPool: Failed to allocate pooled block of %zu bytes", static_cast<size_t>(blockSize));
             return false;
         }
 
-        auto newBlock = std::make_unique<MemoryBlock>();
+        auto newBlock = std::make_unique<VulkanMemoryBlock>();
         newBlock->memory = mem;
         newBlock->size = blockSize;
         newBlock->memoryTypeIndex = memoryTypeIndex;
@@ -144,7 +144,7 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
         newBlock->isHostVisible = (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
         if (newBlock->isHostVisible) {
             if (vkMapMemory(device, mem, 0, blockSize, 0, &newBlock->mappedBase) != VK_SUCCESS) {
-                LOG_WARN("SceneVkMemoryPool: Failed to map host-visible memory block");
+                LOG_WARN("VulkanMemoryPool: Failed to map host-visible memory block");
                 newBlock->mappedBase = nullptr;
             }
         }
@@ -156,7 +156,7 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
         p.blocks.push_back(std::move(newBlock));
     }
 
-    FreeRange origRange = targetBlock->freeRanges[targetRangeIdx];
+    VulkanFreeRange origRange = targetBlock->freeRanges[targetRangeIdx];
     targetBlock->freeRanges.erase(targetBlock->freeRanges.begin() + targetRangeIdx);
 
     // Free space before aligned sub-range
@@ -186,7 +186,7 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
     }
 
     uint64_t id = ++nextAllocId_;
-    AllocRecord record{};
+    VulkanAllocRecord record{};
     record.id = id;
     record.memory = targetBlock->memory;
     record.offset = targetAlignedOffset;
@@ -205,7 +205,7 @@ bool SceneVkMemoryPool::allocate(VkDevice device, VkDeviceSize size, VkDeviceSiz
     return true;
 }
 
-void SceneVkMemoryPool::free(VkDevice device, uint64_t allocId) {
+void VulkanMemoryPool::free(VkDevice device, uint64_t allocId) {
     if (allocId == 0) return;
 
     std::lock_guard<std::mutex> lock(mutex_);
@@ -213,7 +213,7 @@ void SceneVkMemoryPool::free(VkDevice device, uint64_t allocId) {
     auto it = allocations_.find(allocId);
     if (it == allocations_.end()) return;
 
-    const AllocRecord& record = it->second;
+    const VulkanAllocRecord& record = it->second;
     if (record.isDedicated) {
         if (record.mappedData) {
             vkUnmapMemory(device, record.memory);
@@ -223,13 +223,13 @@ void SceneVkMemoryPool::free(VkDevice device, uint64_t allocId) {
         return;
     }
 
-    MemoryBlock* block = record.blockPtr;
+    VulkanMemoryBlock* block = record.blockPtr;
     if (block) {
         // Insert range maintaining sorted order
-        FreeRange newRange{record.offset, record.size};
+        VulkanFreeRange newRange{record.offset, record.size};
         auto insertPos = std::lower_bound(
             block->freeRanges.begin(), block->freeRanges.end(), newRange,
-            [](const FreeRange& a, const FreeRange& b) { return a.offset < b.offset; }
+            [](const VulkanFreeRange& a, const VulkanFreeRange& b) { return a.offset < b.offset; }
         );
         block->freeRanges.insert(insertPos, newRange);
 
@@ -276,4 +276,4 @@ void SceneVkMemoryPool::free(VkDevice device, uint64_t allocId) {
     allocations_.erase(it);
 }
 
-} // namespace bro::scene::vk
+} // namespace bro::render
