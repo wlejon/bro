@@ -28,7 +28,7 @@ Scripts and `-e` expressions are compiled in-process by bronze and run against t
 | `--print-host-globals` | Install the host globals exactly as a run would, print bronze's host-global registry to stdout one name per line, and exit: the `--host-globals` manifest for `bronze build` of an app that will run on this binary. |
 | `--print-native-manifest <path>` | The other half of the same contract: write the native registry — the `__bro_native.*` entry points and signatures behind `bro.time`, `bro.settings`, `bro.window` and the panels' `__bro.*` — as the JSON `--native-manifest` for the same compile, and exit. Combines with `--print-host-globals` in one run; `tests/bronze_host/lib.sh` asks for both that way. |
 
-By default, headless uses a hidden SDL window with a full OpenGL context, the same rendering pipeline as windowed mode, including GPU-accelerated Skia, WebGL2, and Canvas 2D scene layers.
+By default, headless uses headless offscreen Vulkan rendering directly on the GPU without requiring Xvfb on Linux, running the same rendering pipeline as windowed mode, including GPU-accelerated Skia, WebGL2, and 3D scene layers.
 
 ## Headless globals
 
@@ -473,17 +473,17 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 
 ### GPU mode (default)
 
-- Creates a hidden SDL window (`SDL_WINDOW_HIDDEN`) for a real OpenGL 3.3 context
-- Uses `SkiaRenderer`: same GPU-accelerated Skia backend as windowed mode
-- WebGL2 support: Three.js, raw WebGL, and other GL frameworks work (see the support matrix below for the exact API surface)
-- Canvas 2D uses GL scene layers, composited in the screenshot pipeline
-- Screenshots replicate the windowed compositing pass: scene layers rendered to an offscreen FBO, UI overlay composited on top with premultiplied alpha, then read back via `glReadPixels`
+- Uses headless Vulkan 1.3 Core with Dynamic Rendering (`VK_KHR_dynamic_rendering`) directly via `VulkanContext` and `VulkanPresenter` without requiring an X11 server, window, or Xvfb on Linux
+- Uses `SkiaRenderer`: same Skia rasterization backend as windowed mode
+- WebGL2 support: Three.js, raw WebGL, and other GL frameworks work via native Vulkan translation (`WebGLVkContext`, `WebGLVkCanvas`)
+- 3D scene graph runs Vulkan render passes with build-time and runtime SPIR-V shader compilation via `glslc`
+- Screenshots replicate the windowed compositing pass: scene layers rendered to offscreen Vulkan render targets, UI overlay composited on top with zero-copy texture presentation, then read back directly via Vulkan transfer buffers
 - Text metrics use Skia with platform-native fonts (DirectWrite on Windows, FreeType/fontconfig on Linux), pixel-identical to windowed rendering
 
 ### WebGL2 support matrix
 
 The `webgl2` context (src/webgl/) maps WebGL2 onto
-raw OpenGL 3.3 core. Behavioral tests live in `tests/webgl/`.
+a native Vulkan backend (`WebGLVkContext`). Behavioral tests live in `tests/webgl/`.
 
 **Implemented:** context state + `getParameter`/`getError` (including
 WebGL-only pixel-store pnames and synthetic errors); buffers with all
@@ -617,11 +617,11 @@ undefined; this layer passes calls through and does not police it.
 
 ### CPU mode (`--no-gpu`)
 
-- No window, no SDL video subsystem, no OpenGL context
+- No window, no SDL video subsystem, no Vulkan device
 - Uses `RasterRenderer`: CPU-only Skia with real platform-native fonts
 - Canvas 2D rendered via software command replay
 - No WebGL support (apps fall back gracefully)
-- No 3D scene: `canvas.getContext('scene')` returns `null`, so branch on it (`const s = canvas.getContext('scene'); if (!s) { /* 2D fallback */ }`). The 3D renderer is OpenGL end to end and there is no GL context here. Note that `bro.gpu.available` is **not** the gate — it reports the ML/compute backend (Vulkan/CUDA/Metal), which is unrelated to whether a GL context exists.
+- No 3D scene: `canvas.getContext('scene')` returns `null`, so branch on it (`const s = canvas.getContext('scene'); if (!s) { /* 2D fallback */ }`). The 3D renderer is Vulkan end to end and requires a GPU device. Note that `bro.gpu.available` reports the ML/compute backend (Vulkan/CUDA/Metal).
 - The same applies when a headless boot *tries* for GPU and fails: if SDL can't open a video device the engine logs `falling back to CPU raster rendering` and behaves exactly as `--no-gpu` from then on
 - Screenshots captured directly from the Skia raster surface
 - Input simulation (click, mouseDown, etc.) works fully, hit testing, event dispatch, focus management all function without a GPU

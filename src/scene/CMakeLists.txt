@@ -153,6 +153,7 @@ add_library(bro_scene STATIC
     ai_world_ticker.cpp
     vulkan/scene_vk_device.cpp
     vulkan/scene_vk_allocator.cpp
+    vulkan/scene_vk_memory_pool.cpp
     vulkan/scene_vk_pipeline.cpp
     vulkan/scene_vk_descriptors.cpp
     vulkan/scene_vk_target.cpp

@@ -1,4 +1,5 @@
 #include "scene/vulkan/scene_vk_allocator.h"
+#include "scene/vulkan/scene_vk_memory_pool.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -9,11 +10,22 @@
 namespace bro::scene::vk {
 
 SceneVkAllocator::SceneVkAllocator(SceneVkDevice& device)
-    : device_(device)
+    : pool_(std::make_unique<SceneVkMemoryPool>()),
+      device_(device)
 {
 }
 
 SceneVkAllocator::~SceneVkAllocator() {
+    if (pool_) {
+        pool_->cleanup(device_.device());
+    }
+}
+
+SceneVkAllocatorStats SceneVkAllocator::stats() const {
+    if (pool_) {
+        return pool_->stats();
+    }
+    return {};
 }
 
 uint32_t SceneVkAllocator::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const {
@@ -27,8 +39,24 @@ uint32_t SceneVkAllocator::findMemoryType(uint32_t typeFilter, VkMemoryPropertyF
     return 0;
 }
 
+bool SceneVkAllocator::allocateMemory(VkDeviceSize size, VkDeviceSize alignment, uint32_t memoryTypeIndex,
+                                      VkMemoryPropertyFlags properties, bool isImage,
+                                      uint64_t& outId, VkDeviceMemory& outMemory,
+                                      VkDeviceSize& outOffset, void*& outMappedData) {
+    if (!pool_) return false;
+    return pool_->allocate(device_.device(), size, alignment, memoryTypeIndex, properties, isImage,
+                           outId, outMemory, outOffset, outMappedData);
+}
+
+void SceneVkAllocator::freeMemory(uint64_t allocId) {
+    if (pool_ && allocId != 0) {
+        pool_->free(device_.device(), allocId);
+    }
+}
+
 bool SceneVkAllocator::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                                      VkMemoryPropertyFlags memProps, SceneVkBuffer& outBuffer) {
+    if (size == 0) return false;
     VkDevice dev = device_.device();
 
     VkBufferCreateInfo bufInfo{};
@@ -45,28 +73,36 @@ bool SceneVkAllocator::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryRequirements memReqs;
     vkGetBufferMemoryRequirements(dev, outBuffer.buffer, &memReqs);
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, memProps);
+    uint32_t memType = findMemoryType(memReqs.memoryTypeBits, memProps);
 
-    if (vkAllocateMemory(dev, &allocInfo, nullptr, &outBuffer.memory) != VK_SUCCESS) {
+    uint64_t allocId = 0;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    void* mappedData = nullptr;
+
+    if (!allocateMemory(memReqs.size, memReqs.alignment, memType, memProps, /*isImage=*/false,
+                        allocId, memory, offset, mappedData)) {
         LOG_ERROR("SceneVkAllocator: Failed to allocate %zu bytes for buffer", static_cast<size_t>(memReqs.size));
         vkDestroyBuffer(dev, outBuffer.buffer, nullptr);
         outBuffer.buffer = VK_NULL_HANDLE;
         return false;
     }
 
-    if (vkBindBufferMemory(dev, outBuffer.buffer, outBuffer.memory, 0) != VK_SUCCESS) {
+    if (vkBindBufferMemory(dev, outBuffer.buffer, memory, offset) != VK_SUCCESS) {
         LOG_ERROR("SceneVkAllocator: Failed to bind buffer memory");
-        destroyBuffer(outBuffer);
+        vkDestroyBuffer(dev, outBuffer.buffer, nullptr);
+        outBuffer.buffer = VK_NULL_HANDLE;
+        freeMemory(allocId);
         return false;
     }
 
+    outBuffer.memory = memory;
     outBuffer.size = size;
+    outBuffer.offset = offset;
     outBuffer.usage = usage;
     outBuffer.memoryProperties = memProps;
-    outBuffer.mappedData = nullptr;
+    outBuffer.mappedData = mappedData;
+    outBuffer.allocId = allocId;
 
     return true;
 }
@@ -104,11 +140,13 @@ bool SceneVkAllocator::createUniformBuffer(VkDeviceSize size, SceneVkBuffer& out
                            outBuffer);
     if (!ok) return false;
 
-    VkResult res = vkMapMemory(device_.device(), outBuffer.memory, 0, size, 0, &outBuffer.mappedData);
-    if (res != VK_SUCCESS) {
-        LOG_ERROR("SceneVkAllocator: Failed to map uniform buffer memory");
-        destroyBuffer(outBuffer);
-        return false;
+    if (!outBuffer.mappedData) {
+        VkResult res = vkMapMemory(device_.device(), outBuffer.memory, outBuffer.offset, size, 0, &outBuffer.mappedData);
+        if (res != VK_SUCCESS) {
+            LOG_ERROR("SceneVkAllocator: Failed to map uniform buffer memory");
+            destroyBuffer(outBuffer);
+            return false;
+        }
     }
     return true;
 }
@@ -124,7 +162,7 @@ bool SceneVkAllocator::updateUniformBuffer(SceneVkBuffer& buffer, const void* da
     }
 
     void* mapped = nullptr;
-    if (vkMapMemory(device_.device(), buffer.memory, offset, size, 0, &mapped) == VK_SUCCESS) {
+    if (vkMapMemory(device_.device(), buffer.memory, buffer.offset + offset, size, 0, &mapped) == VK_SUCCESS) {
         std::memcpy(mapped, data, size);
         vkUnmapMemory(device_.device(), buffer.memory);
         return true;
@@ -136,19 +174,23 @@ void SceneVkAllocator::destroyBuffer(SceneVkBuffer& buffer) {
     if (!buffer.isValid()) return;
     VkDevice dev = device_.device();
 
-    if (buffer.mappedData) {
-        vkUnmapMemory(dev, buffer.memory);
-        buffer.mappedData = nullptr;
-    }
     if (buffer.buffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(dev, buffer.buffer, nullptr);
         buffer.buffer = VK_NULL_HANDLE;
     }
-    if (buffer.memory != VK_NULL_HANDLE) {
+    if (buffer.allocId != 0) {
+        freeMemory(buffer.allocId);
+        buffer.allocId = 0;
+    } else if (buffer.memory != VK_NULL_HANDLE) {
+        if (buffer.mappedData) {
+            vkUnmapMemory(dev, buffer.memory);
+        }
         vkFreeMemory(dev, buffer.memory, nullptr);
-        buffer.memory = VK_NULL_HANDLE;
     }
+    buffer.memory = VK_NULL_HANDLE;
+    buffer.mappedData = nullptr;
     buffer.size = 0;
+    buffer.offset = 0;
 }
 
 bool SceneVkAllocator::stageAndUploadBuffer(VkBuffer dstBuffer, const void* data, VkDeviceSize size, VkDeviceSize dstOffset) {
@@ -161,13 +203,17 @@ bool SceneVkAllocator::stageAndUploadBuffer(VkBuffer dstBuffer, const void* data
                            staging);
     if (!ok) return false;
 
-    void* mapped = nullptr;
-    if (vkMapMemory(device_.device(), staging.memory, 0, size, 0, &mapped) != VK_SUCCESS) {
-        destroyBuffer(staging);
-        return false;
+    if (staging.mappedData) {
+        std::memcpy(staging.mappedData, data, size);
+    } else {
+        void* mapped = nullptr;
+        if (vkMapMemory(device_.device(), staging.memory, staging.offset, size, 0, &mapped) != VK_SUCCESS) {
+            destroyBuffer(staging);
+            return false;
+        }
+        std::memcpy(mapped, data, size);
+        vkUnmapMemory(device_.device(), staging.memory);
     }
-    std::memcpy(mapped, data, size);
-    vkUnmapMemory(device_.device(), staging.memory);
 
     device_.executeImmediate([&](VkCommandBuffer cmd) {
         VkBufferCopy copyRegion{};
@@ -192,13 +238,17 @@ bool SceneVkAllocator::stageAndUploadImage(VkImage dstImage, uint32_t width, uin
                            staging);
     if (!ok) return false;
 
-    void* mapped = nullptr;
-    if (vkMapMemory(device_.device(), staging.memory, 0, size, 0, &mapped) != VK_SUCCESS) {
-        destroyBuffer(staging);
-        return false;
+    if (staging.mappedData) {
+        std::memcpy(staging.mappedData, data, size);
+    } else {
+        void* mapped = nullptr;
+        if (vkMapMemory(device_.device(), staging.memory, staging.offset, size, 0, &mapped) != VK_SUCCESS) {
+            destroyBuffer(staging);
+            return false;
+        }
+        std::memcpy(mapped, data, size);
+        vkUnmapMemory(device_.device(), staging.memory);
     }
-    std::memcpy(mapped, data, size);
-    vkUnmapMemory(device_.device(), staging.memory);
 
     device_.executeImmediate([&](VkCommandBuffer cmd) {
         transitionImageLayout(cmd, dstImage, VK_FORMAT_R8G8B8A8_UNORM,
@@ -227,17 +277,20 @@ bool SceneVkAllocator::stageAndUploadImage(VkImage dstImage, uint32_t width, uin
 bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat format,
                                    VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
                                    SceneVkImage& outImage, uint32_t mipLevels,
-                                   VkSampleCountFlagBits samples, VkImageAspectFlags aspectMask) {
+                                   VkSampleCountFlagBits samples, VkImageAspectFlags aspectMask,
+                                   uint32_t arrayLayers, VkImageCreateFlags createFlags) {
+    if (width == 0 || height == 0 || arrayLayers == 0) return false;
     VkDevice dev = device_.device();
 
     VkImageCreateInfo imgInfo{};
     imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imgInfo.flags = createFlags;
     imgInfo.imageType = VK_IMAGE_TYPE_2D;
     imgInfo.extent.width = width;
     imgInfo.extent.height = height;
     imgInfo.extent.depth = 1;
     imgInfo.mipLevels = mipLevels;
-    imgInfo.arrayLayers = 1;
+    imgInfo.arrayLayers = arrayLayers;
     imgInfo.format = format;
     imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -253,34 +306,41 @@ bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat for
     VkMemoryRequirements memReqs;
     vkGetImageMemoryRequirements(dev, outImage.image, &memReqs);
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, memProps);
+    uint32_t memType = findMemoryType(memReqs.memoryTypeBits, memProps);
 
-    if (vkAllocateMemory(dev, &allocInfo, nullptr, &outImage.memory) != VK_SUCCESS) {
+    uint64_t allocId = 0;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    void* mappedData = nullptr;
+
+    if (!allocateMemory(memReqs.size, memReqs.alignment, memType, memProps, /*isImage=*/true,
+                        allocId, memory, offset, mappedData)) {
         LOG_ERROR("SceneVkAllocator: Failed to allocate memory for VkImage");
         vkDestroyImage(dev, outImage.image, nullptr);
         outImage.image = VK_NULL_HANDLE;
         return false;
     }
 
-    if (vkBindImageMemory(dev, outImage.image, outImage.memory, 0) != VK_SUCCESS) {
+    if (vkBindImageMemory(dev, outImage.image, memory, offset) != VK_SUCCESS) {
         LOG_ERROR("SceneVkAllocator: Failed to bind VkImage memory");
-        destroyImage(outImage);
+        vkDestroyImage(dev, outImage.image, nullptr);
+        outImage.image = VK_NULL_HANDLE;
+        freeMemory(allocId);
         return false;
     }
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = outImage.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = (createFlags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
+        ? VK_IMAGE_VIEW_TYPE_CUBE
+        : (arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D);
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspectMask;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    viewInfo.subresourceRange.layerCount = arrayLayers;
 
     if (vkCreateImageView(dev, &viewInfo, nullptr, &outImage.view) != VK_SUCCESS) {
         LOG_ERROR("SceneVkAllocator: Failed to create VkImageView");
@@ -288,6 +348,9 @@ bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat for
         return false;
     }
 
+    outImage.memory = memory;
+    outImage.offset = offset;
+    outImage.allocId = allocId;
     outImage.format = format;
     outImage.width = width;
     outImage.height = height;
@@ -542,10 +605,14 @@ void SceneVkAllocator::destroyImage(SceneVkImage& image) {
         vkDestroyImage(dev, image.image, nullptr);
         image.image = VK_NULL_HANDLE;
     }
-    if (image.memory != VK_NULL_HANDLE) {
+    if (image.allocId != 0) {
+        freeMemory(image.allocId);
+        image.allocId = 0;
+    } else if (image.memory != VK_NULL_HANDLE) {
         vkFreeMemory(dev, image.memory, nullptr);
-        image.memory = VK_NULL_HANDLE;
     }
+    image.memory = VK_NULL_HANDLE;
+    image.offset = 0;
     image.width = 0;
     image.height = 0;
     image.mipLevels = 1;

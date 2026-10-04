@@ -242,69 +242,14 @@ bool SceneVkShadowCascadeTarget::init(SceneVkAllocator& allocator, uint32_t reso
 
     VkDevice dev = allocator.device().device();
 
-    // 1. Create 2D Array Image for Cascades
-    VkImageCreateInfo imgInfo{};
-    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imgInfo.imageType = VK_IMAGE_TYPE_2D;
-    imgInfo.extent.width = resolution_;
-    imgInfo.extent.height = resolution_;
-    imgInfo.extent.depth = 1;
-    imgInfo.mipLevels = 1;
-    imgInfo.arrayLayers = cascadeCount_;
-    imgInfo.format = format_;
-    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imgInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    if (vkCreateImage(dev, &imgInfo, nullptr, &shadowImage_.image) != VK_SUCCESS) {
+    // 1. Create 2D Array Image and View for Cascades via allocator
+    bool ok = allocator.createImage(resolution_, resolution_, format_,
+                                   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                   shadowImage_, 1, VK_SAMPLE_COUNT_1_BIT,
+                                   VK_IMAGE_ASPECT_DEPTH_BIT, cascadeCount_);
+    if (!ok) {
         LOG_ERROR("SceneVkShadowCascadeTarget: Failed to create shadow cascade array image");
-        return false;
-    }
-
-    VkMemoryRequirements memReqs;
-    vkGetImageMemoryRequirements(dev, shadowImage_.image, &memReqs);
-
-    const VkPhysicalDeviceMemoryProperties& memProps = allocator.device().context().memoryProperties();
-    uint32_t memType = 0;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
-        if ((memReqs.memoryTypeBits & (1 << i)) &&
-            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-            memType = i;
-            break;
-        }
-    }
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = memType;
-
-    if (vkAllocateMemory(dev, &allocInfo, nullptr, &shadowImage_.memory) != VK_SUCCESS) {
-        LOG_ERROR("SceneVkShadowCascadeTarget: Failed to allocate memory for shadow image");
-        vkDestroyImage(dev, shadowImage_.image, nullptr);
-        shadowImage_.image = VK_NULL_HANDLE;
-        return false;
-    }
-
-    vkBindImageMemory(dev, shadowImage_.image, shadowImage_.memory, 0);
-
-    // 2. Full array image view for lighting shader sampling
-    VkImageViewCreateInfo arrayViewInfo{};
-    arrayViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    arrayViewInfo.image = shadowImage_.image;
-    arrayViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    arrayViewInfo.format = format_;
-    arrayViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    arrayViewInfo.subresourceRange.baseMipLevel = 0;
-    arrayViewInfo.subresourceRange.levelCount = 1;
-    arrayViewInfo.subresourceRange.baseArrayLayer = 0;
-    arrayViewInfo.subresourceRange.layerCount = cascadeCount_;
-
-    if (vkCreateImageView(dev, &arrayViewInfo, nullptr, &shadowImage_.view) != VK_SUCCESS) {
-        LOG_ERROR("SceneVkShadowCascadeTarget: Failed to create array image view");
-        cleanup(allocator);
         return false;
     }
 

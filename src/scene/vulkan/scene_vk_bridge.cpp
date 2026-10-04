@@ -844,13 +844,17 @@ std::vector<uint8_t> SceneVkBridge::readTonemapPixelsRGBA(int& outW, int& outH) 
     size_t size = static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4;
 
     std::vector<uint8_t> result(size);
-    void* mapped = nullptr;
-    if (vkMapMemory(device_.device(), readbackBuffer_.memory, 0, size, 0, &mapped) == VK_SUCCESS) {
-        std::memcpy(result.data(), mapped, size);
-        vkUnmapMemory(device_.device(), readbackBuffer_.memory);
+    if (readbackBuffer_.mappedData) {
+        std::memcpy(result.data(), readbackBuffer_.mappedData, size);
     } else {
-        outW = outH = 0;
-        return {};
+        void* mapped = nullptr;
+        if (vkMapMemory(device_.device(), readbackBuffer_.memory, readbackBuffer_.offset, size, 0, &mapped) == VK_SUCCESS) {
+            std::memcpy(result.data(), mapped, size);
+            vkUnmapMemory(device_.device(), readbackBuffer_.memory);
+        } else {
+            outW = outH = 0;
+            return {};
+        }
     }
 
     return result;

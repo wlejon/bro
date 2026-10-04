@@ -6,7 +6,7 @@
 [![Download nightly](https://img.shields.io/github/v/release/wlejon/bro?label=download%20nightly)](https://github.com/wlejon/bro/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, audio, and on-device AI, in one native process. Custom layout engine, Skia, and OpenGL. Windows, Mac, and Linux.
+Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, audio, and on-device AI, in one native process. Custom layout engine, Skia, and Vulkan 1.3 Core. Windows, Mac, and Linux.
 
 ** this is pre-alpha **
 
@@ -105,10 +105,11 @@ The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc r
 - **broimage.** Image decode/encode (stb) plus composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric ops, alpha-correct compositing, color/HSV/sRGB, normalization presets, and NHWC/NCHW preproc. Backs `bro.image` and host-side preprocessing in brolm/brodiffusion. See [broimage](https://github.com/wlejon/broimage).
 - **bronze & brass.** Ahead-of-time compiler and runtime that turns JavaScript into native machine code (backed by brass). Powers JavaScript execution in bro via `src/bronze_host`. See [bronze](https://github.com/wlejon/bronze) and [brass](https://github.com/wlejon/brass).
 - **Jolt Physics.** Rigid body physics with contact listeners, integrated into the scene graph.
-- **Skia.** 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs. Text runs through HarfBuzz shaping and Skia's UAX#9 bidi subset, both compiled from the Skia source bundle and on in every build profile, so ligatures, cursive joining, and RTL reordering are the one text path rather than an optional upgrade.
-- **SDL3.** Windowing, input events, and OpenGL contexts. All GPU work is OpenGL 3.3 Core (via glad) on SDL_GL contexts; there is no SDL_GPU, D3D12, or Metal path. The Skia-rasterized UI texture (Ganesh-GL) and the 3D scene layer are composited together as textured quads in the main GL context.
+- **Skia.** 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to textures and composited directly via the Vulkan presentation engine, with a CPU raster fallback for `--no-gpu` headless runs. Text runs through HarfBuzz shaping and Skia's UAX#9 bidi subset, both compiled from the Skia source bundle and on in every build profile, so ligatures, cursive joining, and RTL reordering are the one text path rather than an optional upgrade.
+- **SDL3.** Windowing, input events, and window surfaces (`SDL_WINDOW_VULKAN`).
+- **Vulkan 1.3 Core.** Graphics and presentation engine built with Dynamic Rendering (`VK_KHR_dynamic_rendering`). Managed by `VulkanContext`, `VulkanSwapchain`, and `VulkanPresenter`. Passes use SPIR-V shaders compiled with `glslc`. Composites Skia UI, WebGL2 native layer, and the 3D scene graph with zero-copy presentation and headless offscreen rendering without Xvfb on Linux.
 
-Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), **glad** (OpenGL 3.3 Core loader), and **FastNoise2** (via brokit).
+Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), the **Vulkan SDK**, and **FastNoise2** (via brokit).
 
 C++20 under `src/`. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless scripting and testing), and `bro-server` (dedicated game server with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 

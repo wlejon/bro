@@ -461,10 +461,15 @@ int main() {
     // -------------------------------------------------------------------------
     // Verification: Inspect pixel output
     // -------------------------------------------------------------------------
-    void* mapped = nullptr;
-    vkMapMemory(device.device(), readbackBuffer.memory, 0, readbackSize, 0, &mapped);
-    assert(mapped != nullptr);
-    const uint8_t* pixels = static_cast<const uint8_t*>(mapped);
+    const uint8_t* pixels = nullptr;
+    if (readbackBuffer.mappedData) {
+        pixels = static_cast<const uint8_t*>(readbackBuffer.mappedData);
+    } else {
+        void* mapped = nullptr;
+        vkMapMemory(device.device(), readbackBuffer.memory, readbackBuffer.offset, readbackSize, 0, &mapped);
+        assert(mapped != nullptr);
+        pixels = static_cast<const uint8_t*>(mapped);
+    }
 
     // Sample center pixel (where quad geometry is rendered)
     uint32_t centerIndex = (kHeight / 2 * kWidth + kWidth / 2) * 4;
@@ -500,7 +505,9 @@ int main() {
     assert(rSky > 0 || gSky > 0 || bSky > 0);
     assert(aSky == 255);
 
-    vkUnmapMemory(device.device(), readbackBuffer.memory);
+    if (!readbackBuffer.mappedData) {
+        vkUnmapMemory(device.device(), readbackBuffer.memory);
+    }
     allocator.destroyBuffer(readbackBuffer);
 
     std::cout << "  -> Pixel verification PASSED!" << std::endl;

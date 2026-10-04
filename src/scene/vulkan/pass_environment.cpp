@@ -85,73 +85,16 @@ void PassEnvironment::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator
 bool PassEnvironment::createDefaultCubemap(SceneVkDevice& device, SceneVkAllocator& allocator) {
     VkDevice dev = device.device();
 
-    // 1x1x6 cube map image
-    VkImageCreateInfo imgInfo{};
-    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imgInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-    imgInfo.imageType = VK_IMAGE_TYPE_2D;
-    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    imgInfo.extent = {1, 1, 1};
-    imgInfo.mipLevels = 1;
-    imgInfo.arrayLayers = 6;
-    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imgInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (vkCreateImage(dev, &imgInfo, nullptr, &dummyCubemapImage_.image) != VK_SUCCESS) {
-        LOG_ERROR("PassEnvironment: Failed creating dummy cubemap VkImage");
+    bool ok = allocator.createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                   dummyCubemapImage_, 1, VK_SAMPLE_COUNT_1_BIT,
+                                   VK_IMAGE_ASPECT_COLOR_BIT, 6,
+                                   VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
+    if (!ok) {
+        LOG_ERROR("PassEnvironment: Failed creating dummy cubemap image");
         return false;
     }
-
-    VkMemoryRequirements memReq;
-    vkGetImageMemoryRequirements(dev, dummyCubemapImage_.image, &memReq);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReq.size;
-
-    // Find device local memory type
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(device.physicalDevice(), &memProperties);
-    uint32_t memTypeIndex = 0;
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
-        if ((memReq.memoryTypeBits & (1 << i)) &&
-            (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-            memTypeIndex = i;
-            break;
-        }
-    }
-    allocInfo.memoryTypeIndex = memTypeIndex;
-
-    if (vkAllocateMemory(dev, &allocInfo, nullptr, &dummyCubemapImage_.memory) != VK_SUCCESS) {
-        LOG_ERROR("PassEnvironment: Failed allocating dummy cubemap memory");
-        return false;
-    }
-
-    vkBindImageMemory(dev, dummyCubemapImage_.image, dummyCubemapImage_.memory, 0);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = dummyCubemapImage_.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 6;
-
-    if (vkCreateImageView(dev, &viewInfo, nullptr, &dummyCubemapImage_.view) != VK_SUCCESS) {
-        LOG_ERROR("PassEnvironment: Failed creating dummy cubemap view");
-        return false;
-    }
-
-    dummyCubemapImage_.format = VK_FORMAT_R8G8B8A8_UNORM;
-    dummyCubemapImage_.width = 1;
-    dummyCubemapImage_.height = 1;
-    dummyCubemapImage_.mipLevels = 1;
 
     // Transition image layout to SHADER_READ_ONLY_OPTIMAL
     device.executeImmediate([&](VkCommandBuffer cmd) {

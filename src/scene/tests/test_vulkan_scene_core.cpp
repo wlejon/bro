@@ -217,7 +217,27 @@ int main() {
     assert(texture.sampler != VK_NULL_HANDLE);
     assert(texture.currentLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    std::cout << "PASSED (Mip levels: " << texture.mipLevels << ")" << std::endl;
+    // Test pooled chunk sub-allocation: create 100 buffers and verify they are sub-allocated in blocks
+    std::vector<SceneVkBuffer> pooledBuffers(100);
+    for (int i = 0; i < 100; ++i) {
+        bool ok = allocator.createBuffer(1024, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                         pooledBuffers[i]);
+        assert(ok);
+        assert(pooledBuffers[i].isValid());
+        assert(pooledBuffers[i].allocId != 0);
+    }
+    SceneVkAllocatorStats statsAfter100 = allocator.stats();
+    assert(statsAfter100.activeAllocationCount >= 100);
+    // 100 allocations of 1KB must be pooled into 1-2 blocks, NOT 100 separate VkDeviceMemory handles!
+    assert(statsAfter100.activeBlockCount < 5);
+
+    for (int i = 0; i < 100; ++i) {
+        allocator.destroyBuffer(pooledBuffers[i]);
+    }
+
+    std::cout << "PASSED (Mip levels: " << texture.mipLevels << ", Block sub-allocation verified: 100 buffers in "
+              << statsAfter100.activeBlockCount << " chunk(s))" << std::endl;
 
     // 3. Test Descriptors
     std::cout << "[Test 3] SceneVkDescriptors (Layouts, Pools, Cache & Updates)... " << std::flush;
@@ -368,11 +388,15 @@ int main() {
     device.waitIdle();
 
     // Verify readback pixels
-    void* mappedPixels = nullptr;
-    vkMapMemory(device.device(), readbackBuffer.memory, 0, readbackSize, 0, &mappedPixels);
-    assert(mappedPixels != nullptr);
-
-    const uint8_t* pixels = static_cast<const uint8_t*>(mappedPixels);
+    const uint8_t* pixels = nullptr;
+    if (readbackBuffer.mappedData) {
+        pixels = static_cast<const uint8_t*>(readbackBuffer.mappedData);
+    } else {
+        void* mappedPixels = nullptr;
+        vkMapMemory(device.device(), readbackBuffer.memory, readbackBuffer.offset, readbackSize, 0, &mappedPixels);
+        assert(mappedPixels != nullptr);
+        pixels = static_cast<const uint8_t*>(mappedPixels);
+    }
 
     // Center pixel (32, 32) is inside the triangle -> Should be GREEN (R=0, G=255, B=0, A=255)
     size_t centerIdx = (32 * renderW + 32) * 4;
@@ -395,7 +419,9 @@ int main() {
     assert(bBg == 0);
     assert(aBg == 255);
 
-    vkUnmapMemory(device.device(), readbackBuffer.memory);
+    if (!readbackBuffer.mappedData) {
+        vkUnmapMemory(device.device(), readbackBuffer.memory);
+    }
     allocator.destroyBuffer(readbackBuffer);
     std::cout << "PASSED (Triangle & background pixels verified)" << std::endl;
 

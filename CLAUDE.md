@@ -30,9 +30,9 @@ macOS: `tests/run_tests.sh` needs bash 4+ (`brew install bash`); system bash is 
 
 ## Architecture
 
-Lightweight app runtime: HTML/CSS apps, GPU-accelerated. C++20 under `src/`. Stack: brokit + htmlayout + broaudio + bromesh + Jolt + Skia (Ganesh-GL on GPU, CPU raster otherwise) + SDL3. All GPU work is OpenGL 3.3 core via glad; there is no SDL_GPU, D3D12, or Metal path.
+Lightweight app runtime: HTML/CSS apps, GPU-accelerated. C++20 under `src/`. Stack: brokit + htmlayout + broaudio + bromesh + Jolt + Skia + SDL3 + Vulkan 1.3 Core (`VK_KHR_dynamic_rendering`). Native Vulkan graphics stack: `VulkanContext`, `VulkanSwapchain`, `VulkanPresenter`, SPIR-V compilation via `glslc`, headless offscreen rendering without Xvfb on Linux, 3D scene Vulkan passes, and WebGL2 on Vulkan backend.
 
-Three executables, one `Engine` (via `EngineConfig.displayMode`): `bro` (windowed), `bro-headless` (GPU by default through a hidden SDL window, same pipeline including WebGL), and `bro-server` (`bro-server <appdir>`, a dedicated game server running with `bro.net`/`bro.physics`/`bro.mesh`/`FastNoise`, no window or renderer). Headless functions: `screenshot()`, `advanceTime(ms)` (virtual time, for deterministic tests), `flush()`, `sleep()`, `assert()`; all standard DOM APIs work. Full reference: [docs/headless.md](docs/headless.md).
+Three executables, one `Engine` (via `EngineConfig.displayMode`): `bro` (windowed), `bro-headless` (GPU offscreen via Vulkan without Xvfb, same pipeline including WebGL), and `bro-server` (`bro-server <appdir>`, a dedicated game server running with `bro.net`/`bro.physics`/`bro.mesh`/`FastNoise`, no window or renderer). Headless functions: `screenshot()`, `advanceTime(ms)` (virtual time, for deterministic tests), `flush()`, `sleep()`, `assert()`; all standard DOM APIs work. Full reference: [docs/headless.md](docs/headless.md).
 
 Module layering (each names only layers left of it):
 ```
@@ -44,7 +44,7 @@ util → platform (SDL3, event loop) → render (Renderer iface) → svg → lay
 
 Key patterns:
 - **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
-- **GPU rendering: three GL contexts, one share group, three threads.** The main context composites and runs WebGL + the 3D scene. The raster thread replays the frame's recorded `CommandBuffer` (from `RecordingRenderer`, which never reads the DOM) into FBO layer surfaces with its own `GrDirectContext`. One shared canvas worker rasterizes all `CanvasScene` surfaces serially (per-canvas contexts crashed on Windows/NVIDIA; see `canvas_scene.h`). Handoff = GLsync fences + the lock-free `FrameWorker` CAS machine (`render/frame_worker.h`). The compositor (`engine_compositor.cpp`) draws DOM-ordered quads: HTML segments interleaved with canvas/WebGL/scene textures at `LayerBreak` points.
+- **GPU rendering & presentation (Vulkan):** The engine graphics architecture is Vulkan 1.3 Core with Dynamic Rendering (`VK_KHR_dynamic_rendering`), managed via `VulkanContext`, `VulkanSwapchain`, and `VulkanPresenter`. The 3D scene graph runs multi-pass rendering (shadow cascades, sky/environment, PBR mesh, and post-fx tonemapping/bloom) directly into Vulkan render targets using SPIR-V pipelines compiled ahead of time or at build time with `glslc`. WebGL2 runs on a native Vulkan backend (`WebGLVkContext`, `WebGLVkCanvas`). Skia UI, WebGL2, and 3D scene layers are composited and presented via `VulkanPresenter` with zero-copy texture handoff and hardware synchronization. Headless offscreen rendering runs directly on the Vulkan device without requiring Xvfb on Linux.
 - **HiDPI:** CSS px are window coordinates everywhere (layout, hit testing, events). `DeviceScale` (`engine/device_scale.h`) carries the render scale (the window's pixel density: 2 on Retina, 1 on Windows/X11) that sizes layer surfaces, the compositor framebuffer and 3D scene targets, while `SkiaRenderer::setDeviceScale` maps CSS-space commands onto them; `devicePixelRatio` / `@media (resolution)` follow it on Apple and in headless (`setDeviceScaleFactor`). Canvas/WebGL backing stays `canvas.width`.
 - **Threading policy: data plane lock-free, control plane may lock.** Per-frame handoffs and RT-audio rings use atomics/snapshots, never a lock on an RT audio thread. Cold control paths (service command queues, physics phase handshake, canvas sync RPC) use mutex+condvar.
 - **Renderer abstraction:** `bro::render::Renderer` is a CSS-shaped 2D interface implemented by `SkiaRenderer`, `RasterRenderer` (pure CPU, used for headless `--no-gpu` and layout-thread text metrics), and `RecordingRenderer`. Native font backends (DirectWrite on Windows, FreeType+fontconfig elsewhere). The 3D scene, WebGL, and compositing bypass it.
@@ -76,7 +76,7 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |
 | SDL3 | `SDL3::SDL3` | windowing, input (static) |
 | Skia | `skia` (imported) | pre-built 2D rasterization |
-| glad | `glad` | OpenGL 3.3 core loader |
+| Vulkan SDK | `Vulkan::Vulkan` | Vulkan 1.3 Core graphics & compute loader |
 | stb_image / FastNoise2 | `stb_image` / `FastNoise` | image IO / SIMD noise |
 
 ## JS API Documentation (docs/)

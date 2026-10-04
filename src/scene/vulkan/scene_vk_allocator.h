@@ -1,9 +1,11 @@
 #pragma once
 
 #include "scene/vulkan/scene_vk_device.h"
+#include "scene/vulkan/scene_vk_memory_pool.h"
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
+#include <memory>
 
 namespace bro::scene::vk {
 
@@ -12,9 +14,11 @@ struct SceneVkBuffer {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0;
+    VkDeviceSize offset = 0;
     VkBufferUsageFlags usage = 0;
     VkMemoryPropertyFlags memoryProperties = 0;
     void* mappedData = nullptr;
+    uint64_t allocId = 0;
 
     bool isValid() const { return buffer != VK_NULL_HANDLE; }
 };
@@ -30,6 +34,8 @@ struct SceneVkImage {
     uint32_t height = 0;
     uint32_t mipLevels = 1;
     VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkDeviceSize offset = 0;
+    uint64_t allocId = 0;
 
     bool isValid() const { return image != VK_NULL_HANDLE; }
 };
@@ -79,7 +85,9 @@ public:
                      VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
                      SceneVkImage& outImage, uint32_t mipLevels = 1,
                      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
-                     VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT);
+                     VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                     uint32_t arrayLayers = 1,
+                     VkImageCreateFlags createFlags = 0);
 
     bool createTexture2D(const void* pixelData, const TextureDesc& desc, SceneVkImage& outImage);
     void destroyImage(SceneVkImage& image);
@@ -93,11 +101,22 @@ public:
     void generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFormat format,
                          int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
 
+    // Memory stats inspection
+    SceneVkAllocatorStats stats() const;
+
     SceneVkDevice& device() { return device_; }
     const SceneVkDevice& device() const { return device_; }
 
 private:
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
+
+    bool allocateMemory(VkDeviceSize size, VkDeviceSize alignment, uint32_t memoryTypeIndex,
+                        VkMemoryPropertyFlags properties, bool isImage,
+                        uint64_t& outId, VkDeviceMemory& outMemory,
+                        VkDeviceSize& outOffset, void*& outMappedData);
+    void freeMemory(uint64_t allocId);
+
+    std::unique_ptr<SceneVkMemoryPool> pool_;
 
     SceneVkDevice& device_;
 };

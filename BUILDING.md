@@ -141,10 +141,7 @@ matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
 - **vcpkg**, only for `app`/`full` (networking + video). The video dep
   (libvpx) assembles with **`nasm`**, so `sudo apt-get install nasm` (vcpkg
   auto-acquires it on Windows/macOS, but refuses to on Linux).
-- For the AI tower's Vulkan backend (`full`, auto-detected): `glslc` and the
-  Vulkan headers, `sudo apt-get install glslc libvulkan-dev` (Arch: `shaderc
-  vulkan-headers vulkan-icd-loader`). Nothing links libvulkan; it is loaded at
-  run time, so the binary still starts where there is no Vulkan driver.
+- **Vulkan 1.3 Core & SPIR-V shader compiler**: `glslc` and the Vulkan SDK / loader headers (`sudo apt-get install glslc libvulkan-dev`, Arch: `shaderc vulkan-headers vulkan-icd-loader`). Vulkan 1.3 powers the graphics presentation stack (`VulkanContext`, `VulkanPresenter`, 3D scenes, WebGL2) and the on-device compute backend.
 
 **macOS (12+, arm64 or x86_64):**
 - **Xcode Command Line Tools** (`xcode-select --install`), Apple clang 17+
