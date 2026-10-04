@@ -10,4 +10,4 @@ Dockerfile* text eol=lf
 # would change the embedded bytes and, worse, break the `\n` substring anchors
 # that makeMeshInstancedFragSrc uses to derive the instanced shader from
 # mesh.frag (silently dropping per-instance tinting on a CRLF checkout).
-src/scene/shaders/* text eol=lf
+src/scene/vulkan/shaders/* text eol=lf

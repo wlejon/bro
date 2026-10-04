@@ -1,78 +1,5 @@
-## ── Embed GLSL shaders as C++ headers at build time ──────────────────────────
-## Each shaders/<file>.glsl becomes
-## generated/<file>.h holding `static const char <VAR>[]` (a null-terminated byte
-## array — dodges MSVC's ~16KB single-literal limit that mesh.frag exceeds).
 set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
-set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-file(MAKE_DIRECTORY "${GEN_DIR}")
 
-function(embed_shader SHADER_FILE VAR_NAME)
-    set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${SHADER_FILE}")
-    set(OUTPUT "${GEN_DIR}/${SHADER_FILE}.h")
-    add_custom_command(
-        OUTPUT  "${OUTPUT}"
-        COMMAND ${CMAKE_COMMAND}
-                -DINPUT="${INPUT}"
-                -DOUTPUT="${OUTPUT}"
-                -DVAR_NAME="${VAR_NAME}"
-                -P "${EMBED_SCRIPT}"
-        DEPENDS "${INPUT}" "${EMBED_SCRIPT}"
-        COMMENT "Embedding shaders/${SHADER_FILE} -> ${SHADER_FILE}.h"
-    )
-    list(APPEND GENERATED_HEADERS "${OUTPUT}")
-    set(GENERATED_HEADERS "${GENERATED_HEADERS}" PARENT_SCOPE)
-endfunction()
-
-embed_shader(mesh.vert             kMeshVertSrc)
-embed_shader(mesh.frag             kMeshFragSrc)
-embed_shader(mesh_instanced.vert   kMeshInstancedVertSrc)
-embed_shader(foliage_scatter.vert  kFoliageScatterVertSrc)
-embed_shader(branch_tube.vert      kBranchTubeVertSrc)
-embed_shader(tonemap.vert          kTonemapVertSrc)
-embed_shader(tonemap.frag          kTonemapFragSrc)
-embed_shader(post.vert             kPostVertSrc)
-embed_shader(blur.frag             kBlurFragSrc)
-embed_shader(tilt_composite.frag   kTiltCompositeFragSrc)
-embed_shader(bloom_bright.frag     kBloomBrightFragSrc)
-embed_shader(ssao.frag             kSSAOFragSrc)
-embed_shader(ssr.frag              kSSRFragSrc)
-embed_shader(dof_composite.frag    kDoFCompositeFragSrc)
-embed_shader(fxaa.frag             kFXAAFragSrc)
-embed_shader(env_convert.vert      kEnvConvertVertSrc)
-embed_shader(env_convert.frag      kEnvConvertFragSrc)
-embed_shader(irradiance.frag       kIrradianceFragSrc)
-embed_shader(prefilter.frag        kPrefilterFragSrc)
-embed_shader(brdf_lut.frag         kBRDFLUTFragSrc)
-embed_shader(skybox.vert           kSkyboxVertSrc)
-embed_shader(skybox.frag           kSkyboxFragSrc)
-embed_shader(starfield.frag        kStarfieldFragSrc)
-embed_shader(shadow.vert           kShadowVertSrc)
-embed_shader(shadow.frag           kShadowFragSrc)
-embed_shader(shadow_instanced.vert kShadowInstancedVertSrc)
-embed_shader(billboard.vert        kBillboardVertSrc)
-embed_shader(billboard.frag        kBillboardFragSrc)
-embed_shader(particles3d.vert      kParticles3DVertSrc)
-embed_shader(particles3d.frag      kParticles3DFragSrc)
-embed_shader(decal.vert            kDecalVertSrc)
-embed_shader(decal.frag            kDecalFragSrc)
-# Clipmap-terrain user chunks — spliced into mesh.vert / mesh.frag at the
-# //__USER_CHUNK__ markers via MeshNode::setCustomShader, not compiled alone.
-embed_shader(clipmap_common.glsl   kClipmapCommonSrc)
-embed_shader(atmosphere.glsl       kAtmosphereSrc)
-embed_shader(sky_atmosphere.frag   kSkyAtmosphereFragSrc)
-embed_shader(clipmap_detail.glsl   kClipmapDetailSrc)
-embed_shader(clipmap_material.glsl kClipmapMaterialSrc)
-# Opt-in only (ClipmapConfig::cubicSurface). Spliced between the shared chunks
-# and the material chunk when the flag is on, and not appended at all when it
-# is off — which is what keeps the default source byte-identical.
-embed_shader(clipmap_cubic.glsl    kClipmapCubicSrc)
-# Opt-in only (ClipmapConfig::cubicHeight). The same idiom one field over, and
-# spliced into BOTH stages rather than the fragment alone: it reconstructs the
-# HEIGHT the vertex stage displaces with and the fragment stage shades from, and
-# those two have to be the same surface.
-embed_shader(clipmap_cubic_height.glsl kClipmapCubicHeightSrc)
-embed_shader(clipmap.vert.glsl     kClipmapVertSrc)
-embed_shader(clipmap.frag.glsl     kClipmapFragSrc)
 
 ## ── Vulkan SPIR-V shader compilation ──────────────────────────────────────────
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
@@ -145,6 +72,13 @@ embed_vk_shader(mesh_instanced.vert   kVkMeshInstancedVertSrc)
 embed_vk_shader(mesh_skinned.vert     kVkMeshSkinnedVertSrc)
 embed_vk_shader(shadow.vert           kVkShadowVertSrc)
 embed_vk_shader(shadow_skinned.vert   kVkShadowSkinnedVertSrc)
+embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
+embed_vk_shader(clipmap_detail.glsl       kClipmapDetailSrc)
+embed_vk_shader(clipmap_material.glsl     kClipmapMaterialSrc)
+embed_vk_shader(clipmap_cubic.glsl        kClipmapCubicSrc)
+embed_vk_shader(clipmap_cubic_height.glsl kClipmapCubicHeightSrc)
+embed_vk_shader(clipmap.vert.glsl         kClipmapVertSrc)
+embed_vk_shader(clipmap.frag.glsl         kClipmapFragSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -184,6 +118,7 @@ add_library(bro_scene STATIC
     reflection_probe_node.cpp
     terrain_manager.cpp
     clipmap_terrain.cpp
+    clipmap_terrain_elevation.cpp
     tile_world.cpp
     tile_world_mesh.cpp
     tile_world_objects.cpp
@@ -213,12 +148,11 @@ add_library(bro_scene STATIC
     vulkan/scene_vk_bridge.cpp
     vulkan/scene_vk_bridge_resources.cpp
     vulkan/scene_vk_bridge_passes.cpp
-    ${GENERATED_HEADERS}
     ${VK_GENERATED_HEADERS}
 )
 
 target_include_directories(bro_scene PUBLIC ${bro_SOURCE_DIR}/src)
-target_include_directories(bro_scene PRIVATE ${GEN_DIR} ${VK_GEN_DIR})
+target_include_directories(bro_scene PRIVATE ${VK_GEN_DIR})
 # bro_scene is only built when BRO_WITH_3D is on, and 3D forces PHYSICS + GAMEAI
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.

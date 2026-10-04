@@ -4,13 +4,13 @@
 #include "scene/mesh_node.h"
 #include "util/log.h"
 
-#include "clipmap_common.glsl.h"
-#include "clipmap_detail.glsl.h"
-#include "clipmap_cubic_height.glsl.h"
-#include "clipmap_cubic.glsl.h"
-#include "clipmap_material.glsl.h"
-#include "clipmap.vert.glsl.h"
-#include "clipmap.frag.glsl.h"
+#include "clipmap_common.glsl.src.h"
+#include "clipmap_detail.glsl.src.h"
+#include "clipmap_cubic_height.glsl.src.h"
+#include "clipmap_cubic.glsl.src.h"
+#include "clipmap_material.glsl.src.h"
+#include "clipmap.vert.glsl.src.h"
+#include "clipmap.frag.glsl.src.h"
 
 #include <cmath>
 #include <cstring>
