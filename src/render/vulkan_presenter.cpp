@@ -371,4 +371,153 @@ bool VulkanPresenter::readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& 
     return true;
 }
 
+bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t height,
+                                   VkImageLayout currentLayout)
+{
+    if (srcImage == VK_NULL_HANDLE || width == 0 || height == 0) return false;
+
+    // Headless / Offscreen presentation
+    if (!swapchain_) {
+        if (!ensureOffscreenImage(width, height)) {
+            return false;
+        }
+
+        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
+        if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+            context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
+                                           currentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                           cmd);
+        }
+        context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
+                                       VK_IMAGE_LAYOUT_UNDEFINED,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       cmd);
+
+        VkImageCopy copyRegion{};
+        copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.srcSubresource.layerCount = 1;
+        copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.dstSubresource.layerCount = 1;
+        copyRegion.extent.width = width;
+        copyRegion.extent.height = height;
+        copyRegion.extent.depth = 1;
+
+        vkCmdCopyImage(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       offscreenImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &copyRegion);
+
+        context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       cmd);
+        if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+            context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
+                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout,
+                                           cmd);
+        }
+        context_.endSingleTimeCommands(cmd);
+        width_ = width;
+        height_ = height;
+        return true;
+    }
+
+    // Windowed presentation via swapchain
+    if (swapchain_->extent().width != width || swapchain_->extent().height != height) {
+        swapchain_->resize(width, height);
+    }
+
+    uint32_t imageIndex = 0;
+    SwapchainResult acqResult = swapchain_->acquireNextImage(imageIndex);
+    if (acqResult == SwapchainResult::OutOfDate) {
+        swapchain_->resize(width, height);
+        acqResult = swapchain_->acquireNextImage(imageIndex);
+        if (acqResult != SwapchainResult::Success && acqResult != SwapchainResult::Suboptimal) {
+            return false;
+        }
+    } else if (acqResult == SwapchainResult::Error) {
+        return false;
+    }
+
+    size_t frameIndex = swapchain_->currentFrame();
+    VkCommandBuffer cmd = commandBuffers_[frameIndex];
+    vkResetCommandBuffer(cmd, 0);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImage swapImage = swapchain_->image(imageIndex);
+
+    if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+        context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
+                                       currentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                       cmd);
+    }
+    context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
+                                   VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   cmd);
+
+    VkImageBlit blitRegion{};
+    blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blitRegion.srcSubresource.layerCount = 1;
+    blitRegion.srcOffsets[0] = {0, 0, 0};
+    blitRegion.srcOffsets[1] = {static_cast<int32_t>(width), static_cast<int32_t>(height), 1};
+    blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blitRegion.dstSubresource.layerCount = 1;
+    blitRegion.dstOffsets[0] = {0, 0, 0};
+    blitRegion.dstOffsets[1] = {static_cast<int32_t>(swapchain_->extent().width),
+                                static_cast<int32_t>(swapchain_->extent().height), 1};
+
+    vkCmdBlitImage(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &blitRegion, VK_FILTER_LINEAR);
+
+    context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                   cmd);
+    if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
+        context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout,
+                                       cmd);
+    }
+
+    vkEndCommandBuffer(cmd);
+
+    VkSemaphore waitSem = swapchain_->currentImageAvailableSemaphore();
+    VkSemaphore signalSem = swapchain_->currentRenderFinishedSemaphore();
+    VkFence inFlightFence = swapchain_->currentInFlightFence();
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_TRANSFER_BIT };
+    if (waitSem != VK_NULL_HANDLE) {
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = &waitSem;
+        submitInfo.pWaitDstStageMask = waitStages;
+    }
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    if (signalSem != VK_NULL_HANDLE) {
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = &signalSem;
+    }
+
+    if (vkQueueSubmit(context_.graphicsQueue(), 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+        LOG_ERROR("VulkanPresenter: Queue submit failed during image presentation");
+        return false;
+    }
+
+    SwapchainResult presResult = swapchain_->present(imageIndex);
+    if (presResult == SwapchainResult::OutOfDate || presResult == SwapchainResult::Suboptimal) {
+        swapchain_->resize(width, height);
+    }
+
+    width_ = width;
+    height_ = height;
+    return true;
+}
+
 } // namespace bro::render

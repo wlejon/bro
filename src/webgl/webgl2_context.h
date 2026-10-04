@@ -10,17 +10,30 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
+
+namespace bro::render { class VulkanContext; }
+namespace bro::webgl::vk { class WebGLVkContext; }
 
 namespace bro::webgl {
 
-/// WebGL2RenderingContext — maps WebGL2 API calls to raw OpenGL 3.3.
+GLint translateInternalFormat(GLint internalformat, GLenum type);
+int bytesPerPixel(GLenum format, GLenum type);
+
+/// WebGL2RenderingContext — maps WebGL2 API calls to raw OpenGL 3.3 or Vulkan.
 ///
-/// Owns a dedicated FBO that serves as the WebGL canvas. The rendered result
-/// (color texture) is composited into the window by WebGLScene.
+/// Owns a dedicated FBO (OpenGL) or offscreen VkImage (Vulkan) that serves as the WebGL canvas.
+/// The rendered result is composited into the window by WebGLScene or VulkanPresenter.
 class WebGL2RenderingContext {
 public:
-    WebGL2RenderingContext(int width, int height);
+    WebGL2RenderingContext(int width, int height, render::VulkanContext* vkContext = nullptr);
     ~WebGL2RenderingContext();
+
+    static void setDefaultVulkanContext(render::VulkanContext* ctx) { defaultVulkanContext_ = ctx; }
+    static render::VulkanContext* defaultVulkanContext() { return defaultVulkanContext_; }
+
+    vk::WebGLVkContext* vkContext() const { return vkCtx_.get(); }
+    bool isVulkanBackend() const { return vkCtx_ != nullptr; }
 
     WebGL2RenderingContext(const WebGL2RenderingContext&) = delete;
     WebGL2RenderingContext& operator=(const WebGL2RenderingContext&) = delete;
@@ -556,6 +569,8 @@ private:
     bool sRasterizerDiscard_ = false;
 
     std::vector<TeardownCallback> teardownCallbacks_;
+    std::unique_ptr<vk::WebGLVkContext> vkCtx_;
+    inline static render::VulkanContext* defaultVulkanContext_ = nullptr;
 };
 
 } // namespace bro::webgl

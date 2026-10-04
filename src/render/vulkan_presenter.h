@@ -41,6 +41,10 @@ public:
     /// Offscreen headless readback: captures pixels from the offscreen VkImage into host memory.
     bool readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
 
+    /// Present an existing GPU VkImage directly without CPU roundtrips (zero-copy UI compositing).
+    bool presentImage(VkImage image, uint32_t width, uint32_t height,
+                      VkImageLayout currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
     bool isHeadless() const { return swapchain_ == nullptr; }
 
     uint32_t width() const { return width_; }
