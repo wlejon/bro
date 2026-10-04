@@ -410,9 +410,11 @@ void WebGLVkContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei he
 
     readPixels(x, y, width, height, format, type, pbo.shadowData.data() + offset);
 
-    if (pbo.buffer != VK_NULL_HANDLE && pbo.memory != VK_NULL_HANDLE) {
+    if (pbo.poolMappedData) {
+        std::memcpy(static_cast<char*>(pbo.poolMappedData) + offset, pbo.shadowData.data() + offset, byteCount);
+    } else if (pbo.buffer != VK_NULL_HANDLE && pbo.memory != VK_NULL_HANDLE) {
         void* mapped = nullptr;
-        if (vkMapMemory(context_.device(), pbo.memory, offset, byteCount, 0, &mapped) == VK_SUCCESS) {
+        if (vkMapMemory(context_.device(), pbo.memory, pbo.offset + offset, byteCount, 0, &mapped) == VK_SUCCESS) {
             std::memcpy(mapped, pbo.shadowData.data() + offset, byteCount);
             vkUnmapMemory(context_.device(), pbo.memory);
         }

@@ -489,7 +489,7 @@ std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& out
     if (!el) return {};
 
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-    if (!skia || !skia->grContext() || !recordingRenderer_ || !drawTraversal_) {
+    if (!skia || !recordingRenderer_ || !drawTraversal_) {
         // No main-thread GPU Skia (e.g. --no-gpu CPU renderer): fall back to the
         // last raster-produced texture, if any.
         IframeDoc* d = iframeDocForElement(el);
@@ -517,7 +517,7 @@ std::vector<uint8_t> Engine::captureWindowHost(uint64_t id, int& outW, int& outH
     if (!h || !h->document) return {};
 
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-    if (!skia || !skia->grContext() || !recordingRenderer_ || !drawTraversal_)
+    if (!skia || !recordingRenderer_ || !drawTraversal_)
         return readbackSubDocTexture(h->fboTexture, h->surfW, h->surfH, outW, outH);
 
     quiesceRasterForCapture();
@@ -644,7 +644,14 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
             if (targetGraph && targetGraph->renderer().hasMeshContent()) {
                 auto& r = targetGraph->renderer();
                 VkImage vkImg = r.vkOutputImage();
-                if (pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ && vkImg != VK_NULL_HANDLE &&
+                float cx = layer.cx * sx;
+                float cy = (layer.cy + oy) * sy;
+                float cw = layer.cw * sx;
+                float ch = layer.ch * sy;
+                bool isFullViewport = (cx <= 1.0f && cy <= 1.0f &&
+                                       std::abs(cw - fbW) <= 2.0f &&
+                                       std::abs(ch - fbH) <= 2.0f);
+                if (isFullViewport && pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ && vkImg != VK_NULL_HANDLE &&
                     r.vkOutputWidth() > 0 && r.vkOutputHeight() > 0) {
                     pendingVkImage_ = vkImg;
                     pendingVkImageLayout_ = r.vkOutputLayout();
@@ -658,11 +665,6 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
                         sk_sp<SkData> data = SkData::MakeWithCopy(px.data(), px.size());
                         auto img = SkImages::RasterFromData(info, data, outW * 4);
                         if (img) {
-                            float cx = layer.cx * sx;
-                            float cy = (layer.cy + oy) * sy;
-                            float cw = layer.cw * sx;
-                            float ch = layer.ch * sy;
-
                             canvas->save();
                             if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
                                 SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
@@ -680,22 +682,51 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
             }
 #endif
         } else if (layer.type == UILayer::WebGL) {
-            if (pendingVkImage_ == VK_NULL_HANDLE) {
-                webgl::WebGL2RenderingContext* wctx = nullptr;
-                for (auto& entry : webglEntries_) {
-                    if (entry.context && (layer.canvasSceneId == 0 || (entry.element && entry.element->nodeId() == layer.canvasSceneId))) {
-                        wctx = entry.context.get();
-                        break;
-                    }
+            webgl::WebGL2RenderingContext* wctx = nullptr;
+            for (auto& entry : webglEntries_) {
+                if (entry.context && (layer.canvasSceneId == 0 || (entry.element && entry.element->nodeId() == layer.canvasSceneId))) {
+                    wctx = entry.context.get();
+                    break;
                 }
-                if (!wctx && !webglEntries_.empty()) {
-                    wctx = webglEntries_[0].context.get();
-                }
-                if (wctx && wctx->vkColorImage() != VK_NULL_HANDLE) {
+            }
+            if (!wctx && !webglEntries_.empty()) {
+                wctx = webglEntries_[0].context.get();
+            }
+            if (wctx) {
+                float cx = layer.cx * sx;
+                float cy = (layer.cy + oy) * sy;
+                float cw = layer.cw * sx;
+                float ch = layer.ch * sy;
+                bool isFullViewport = (cx <= 1.0f && cy <= 1.0f &&
+                                       std::abs(cw - fbW) <= 2.0f &&
+                                       std::abs(ch - fbH) <= 2.0f);
+                if (isFullViewport && pendingVkImage_ == VK_NULL_HANDLE && wctx->vkColorImage() != VK_NULL_HANDLE) {
                     pendingVkImage_ = wctx->vkColorImage();
                     pendingVkImageLayout_ = wctx->vkColorLayout();
                     pendingVkImageW_ = wctx->canvasWidth();
                     pendingVkImageH_ = wctx->canvasHeight();
+                } else {
+                    std::vector<uint8_t> px;
+                    if (wctx->readCanvasPixels(px) && !px.empty()) {
+                        int w = wctx->canvasWidth();
+                        int h = wctx->canvasHeight();
+                        SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+                        sk_sp<SkData> data = SkData::MakeWithCopy(px.data(), px.size());
+                        auto img = SkImages::RasterFromData(info, data, w * 4);
+                        if (img) {
+                            canvas->save();
+                            if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                                SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
+                                                                   (layer.clipY + oy) * sy,
+                                                                   layer.clipW * sx,
+                                                                   layer.clipH * sy);
+                                canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
+                            }
+                            SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
+                            canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
+                            canvas->restore();
+                        }
+                    }
                 }
             }
         }

@@ -113,6 +113,7 @@ std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
     win->m_height = cfg.height;
     win->m_vsyncPref = false;  // secondary swaps run at interval 0 by policy
     win->m_backend = cfg.backend;
+    win->m_alwaysOnTop = cfg.alwaysOnTop;
 
     // Placement: explicit position wins; else center on the requested
     // display; else leave it to the OS. Skipped for hidden windows — where a
@@ -248,6 +249,7 @@ bool Window::isBorderless() const {
 
 void Window::setAlwaysOnTop(bool onTop) {
     if (!m_window) return;
+    m_alwaysOnTop = onTop;
     if (!SDL_SetWindowAlwaysOnTop(m_window, onTop)) {
         LOG_ERROR("Failed to set always-on-top: %s", SDL_GetError());
     }
@@ -255,7 +257,7 @@ void Window::setAlwaysOnTop(bool onTop) {
 
 bool Window::isAlwaysOnTop() const {
     if (!m_window) return false;
-    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_ALWAYS_ON_TOP) != 0;
+    return m_alwaysOnTop;
 }
 
 void Window::setMinimumSize(int w, int h) {

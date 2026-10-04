@@ -216,6 +216,8 @@ void SceneRenderer::render3D() {
             const auto& activeLights = lights.empty() ? fallback : lights;
 
             updateSunIrradiance(activeLights);
+            prepareShadows(activeLights);
+            renderShadowPass();
 
             vkBridge_->render3D(graph_, *this);
             hasMeshContent_ = vkBridge_->hasMeshContent();

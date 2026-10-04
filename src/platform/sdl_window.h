@@ -220,6 +220,7 @@ private:
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     bool m_vsyncPref = true;
+    bool m_alwaysOnTop = false;
     GraphicsBackend m_backend = GraphicsBackend::Vulkan;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;

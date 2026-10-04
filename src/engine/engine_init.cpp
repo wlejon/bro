@@ -167,6 +167,23 @@ Engine::Engine(const EngineConfig& config)
     // - Windowed: create platform::Window, GLContext stub, SkiaRenderer, and VulkanPresenter.
     // - Server: never initializes graphics.
     if (displayMode_ == DisplayMode::Headless) {
+        try {
+            window_ = std::make_unique<platform::Window>("Bro",
+                static_cast<uint32_t>(gfx.width),
+                static_cast<uint32_t>(gfx.height), /*hidden=*/true,
+                gfx.resizable, gfx.vsync, config.graphics.borderless);
+
+            const auto& wcfg = config.graphics;
+            if (wcfg.alwaysOnTop) window_->setAlwaysOnTop(true);
+            if (wcfg.minWidth > 0 || wcfg.minHeight > 0)
+                window_->setMinimumSize(wcfg.minWidth, wcfg.minHeight);
+            if (wcfg.maxWidth > 0 || wcfg.maxHeight > 0)
+                window_->setMaximumSize(wcfg.maxWidth, wcfg.maxHeight);
+        } catch (const std::exception& e) {
+            LOG_INFO("Headless window creation skipped: %s", e.what());
+            window_.reset();
+        }
+
         if (config.graphics.useGPU) {
             try {
                 render::VulkanContextConfig vkCfg;

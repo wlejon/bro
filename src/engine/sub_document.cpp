@@ -219,9 +219,9 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     int w = std::max(1, d.boxW), h = std::max(1, d.boxH);
 
     auto* grCtx = skia->grContext();
-    grCtx->resetContext();
+    if (grCtx) grCtx->resetContext();
     render::SkiaRenderer::GPUSurface surf = skia->createGPUSurface(w, h);
-    if (!surf.surface) { grCtx->resetContext(); return {}; }
+    if (!surf.surface) { if (grCtx) grCtx->resetContext(); return {}; }
     // capture() hands back CSS-px pixels whatever the display scale.
     const float prevScale = skia->deviceScale();
     skia->setDeviceScale(1.0f);
@@ -229,7 +229,7 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     if (auto* c = skia->getCanvas()) c->clear(SK_ColorTRANSPARENT);
 
     replayBufferWithInlineCanvas(skia, grCtx, d.cmdBuffer);
-    grCtx->flush(surf.surface.get());
+    if (grCtx) grCtx->flush(surf.surface.get());
 
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
     SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
@@ -240,7 +240,7 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     skia->switchSurface(prev);
     skia->setDeviceScale(prevScale);
     skia->destroyGPUSurface(surf);
-    grCtx->resetContext();
+    if (grCtx) grCtx->resetContext();
 
     if (pixels.empty()) return {};
     outW = w;
