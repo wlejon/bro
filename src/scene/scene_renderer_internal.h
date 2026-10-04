@@ -91,6 +91,7 @@ inline GLuint compileShader(GLenum type, const char* src) {
         gReversedZ ? insertAfterVersion(src ? src : "", "#define REVERSED_Z 1\n")
                    : std::string(src ? src : "");
     const char* finalSrc = withPolicy.c_str();
+    if (!glFunctionsLoaded()) return 0;
 
     GLuint s = glCreateShader(type);
     glShaderSource(s, 1, &finalSrc, nullptr);

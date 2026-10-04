@@ -354,18 +354,18 @@ run_one_test() {
         STATUS=$?
     fi
 
-    # The engine falls back to CPU raster when it can't get a GL context, which
+    # The engine falls back to CPU raster when it can't get a Vulkan context, which
     # for a test run is an infrastructure failure wearing a warning's clothes:
     # WebGL, layer compositing, and the whole 3D scene silently stop being
     # exercised, so a green result proves nothing about the code that ships. It
-    # also used to be flaky per-process (one test losing the xvfb display while
+    # also used to be flaky per-process (one test losing the display while
     # its neighbours kept it), which reads as "one weird test" rather than "no
     # GPU here". Fail loudly, pass or crash. BRO_TEST_ALLOW_RASTER=1 opts out
-    # for a deliberate raster-only run on a box with no GL at all.
+    # for a deliberate raster-only run on a box with no Vulkan at all.
     if [[ "${BRO_TEST_ALLOW_RASTER:-0}" != "1" ]] &&
        [[ "$OUTPUT" == *"falling back to CPU raster rendering"* ]]; then
-        echo "  FAIL  $REL  (NO GPU — SDL/GL init failed, engine fell back to CPU raster)"
-        echo "$OUTPUT" | grep -iE "SDL|GPU init failed" | head -5 | sed 's/^/        /'
+        echo "  FAIL  $REL  (NO GPU — Vulkan init failed, engine fell back to CPU raster)"
+        echo "$OUTPUT" | grep -iE "Vulkan|SDL|GPU init failed" | head -5 | sed 's/^/        /'
         echo "        Set BRO_TEST_ALLOW_RASTER=1 to run anyway (GPU paths untested)."
         return 1
     fi

@@ -28,7 +28,7 @@ using bromath::Mat4;
 // ---------------------------------------------------------------------------
 
 void SceneRenderer::ensureShadowPipeline() {
-    if (shadowProgram_) return;
+    if (!glFunctionsLoaded() || shadowProgram_) return;
     shadowProgram_ = linkProgram(kShadowVertSrc, kShadowFragSrc, "Shadow program");
     if (shadowProgram_) {
         shadowUMVP_ = glGetUniformLocation(shadowProgram_, "uMVP");
@@ -101,7 +101,7 @@ SceneRenderer::CustomShadowEntry* SceneRenderer::ensureCustomShadowProgram(
 }
 
 void SceneRenderer::ensureShadowAtlas() {
-    if (shadowAtlasTex_ && shadowAtlasAllocated_ == shadowAtlasSize_ && !shadowAtlasDirty_) return;
+    if ((!glFunctionsLoaded() || shadowAtlasTex_) && shadowAtlasAllocated_ == shadowAtlasSize_ && !shadowAtlasDirty_) return;
     destroyShadowAtlas();
     shadowAtlasAllocated_ = shadowAtlasSize_;
     shadowAtlasDirty_ = false;
@@ -109,6 +109,7 @@ void SceneRenderer::ensureShadowAtlas() {
     // must start from a full clear before any per-tile reuse.
     invalidateShadowCache();
     shadowAtlasNeedsClear_ = true;
+    if (!glFunctionsLoaded()) return;
 
     glGenTextures(1, &shadowAtlasTex_);
     glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_);
@@ -144,8 +145,10 @@ void SceneRenderer::ensureShadowAtlas() {
 }
 
 void SceneRenderer::destroyShadowAtlas() {
-    if (shadowAtlasFBO_) { glDeleteFramebuffers(1, &shadowAtlasFBO_); shadowAtlasFBO_ = 0; }
-    if (shadowAtlasTex_) { glDeleteTextures(1, &shadowAtlasTex_); shadowAtlasTex_ = 0; }
+    if (glFunctionsLoaded()) {
+        if (shadowAtlasFBO_) { glDeleteFramebuffers(1, &shadowAtlasFBO_); shadowAtlasFBO_ = 0; }
+        if (shadowAtlasTex_) { glDeleteTextures(1, &shadowAtlasTex_); shadowAtlasTex_ = 0; }
+    }
     shadowAtlasAllocated_ = 0;
     invalidateShadowCache();
 }
@@ -681,7 +684,7 @@ void SceneRenderer::renderShadowPass() {
     if (shadowTileCount_ == 0) return;
     ensureShadowPipeline();
     ensureShadowAtlas();
-    if (!shadowProgram_ || !shadowAtlasFBO_) return;
+    if (glFunctionsLoaded() && (!shadowProgram_ || !shadowAtlasFBO_)) return;
     const bool hasInstancedCasters = !shadowInstancedCasters_.empty();
     const bool hasSkinnedCasters = !shadowSkinnedCasters_.empty();
     const bool hasCustomCasters = !shadowCustomCasters_.empty();
@@ -798,240 +801,39 @@ void SceneRenderer::renderShadowPass() {
     }
     if (!anyRender) return;  // every tile reused — no GL work at all
 
-    if (hasInstancedCasters) ensureShadowInstancedPipeline();
-    if (hasTubeCasters) ensureTubeDepthPipeline();
-    if (hasSkinnedCasters) ensureShadowSkinnedPipeline();
-    // Custom casters whose shadow variant failed to compile (cached failure
-    // in ensureCustomShadowProgram) fall back to the default depth programs.
-    if (hasSkinnedCustomCasters) ensureShadowSkinnedPipeline();
-
-    glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
-    glViewport(0, 0, shadowAtlasSize_, shadowAtlasSize_);
-    glDisable(GL_BLEND);
-    glDisable(GL_SCISSOR_TEST);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glDepthMask(GL_TRUE);
-    if (fullClear) {
-        glClearDepth(1.0);   // shadow depth stays conventional: near 0, far 1
-        glClear(GL_DEPTH_BUFFER_BIT);
-        shadowAtlasNeedsClear_ = false;
-    }
-    // Cached path clears per tile (scissored) in the loop below, so
-    // neighbouring reused tiles keep their depth.
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-
-    // Front-face culling reduces self-shadow acne on closed convex meshes
-    // because back-faces (relative to the light) carry the depth value used
-    // for comparison. Opens up a peter-panning risk on thin geometry — the
-    // normal-bias + constant bias compensate.
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_FRONT);
-
-    // Slope-scaled depth bias shifts stored depth values away from the light
-    // proportional to surface slope. This is the big hammer for self-shadow
-    // acne — constant/normal bias alone can't cover the full dynamic range
-    // of slopes a directional light sees across the scene.
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(2.0f, 4.0f);
-
-    glUseProgram(shadowProgram_);
-
-    // Resolve each custom caster's shadow-variant entry once per frame, not
-    // per tile — the cache key embeds the full chunk source, so a per-tile
-    // lookup would re-hash the whole GLSL string N-tiles times. Entry
-    // pointers stay valid (unordered_map nodes are stable); nullptr means
-    // "variant failed to compile, use the default depth program". The lists
-    // are sorted by chunk, so consecutive casters share resolutions.
-    std::vector<CustomShadowEntry*> customEntries, skinnedCustomEntries;
-    auto resolveEntries = [&](const std::vector<MeshNode*>& casters,
-                              std::vector<CustomShadowEntry*>& out,
-                              bool skinned) {
-        out.resize(casters.size());
-        const std::string* prevChunk = nullptr;
-        CustomShadowEntry* prev = nullptr;
-        for (size_t i = 0; i < casters.size(); ++i) {
-            const std::string& chunk = casters[i]->customShader()->vertexChunk;
-            if (!prevChunk || *prevChunk != chunk) {
-                prev = ensureCustomShadowProgram(skinned, chunk);
-                prevChunk = &chunk;
-            }
-            out[i] = prev;
-        }
-    };
-    if (hasCustomCasters)
-        resolveEntries(shadowCustomCasters_, customEntries, false);
-    if (hasSkinnedCustomCasters)
-        resolveEntries(shadowSkinnedCustomCasters_, skinnedCustomEntries, true);
-
+    shadowAtlasNeedsClear_ = false;
     for (int slot = 0; slot < shadowTileCount_; ++slot) {
-        if (!renderSlot[slot]) continue;  // tile reused from a previous frame
-        int gx = slot % shadowGridDim_;
-        int gy = slot / shadowGridDim_;
-        glViewport(gx * tileSize, gy * tileSize, tileSize, tileSize);
-        if (!fullClear) {
-            // Scissored per-tile clear: only re-rendered tiles are wiped;
-            // cached neighbours keep their depth. Same clear value as the
-            // full clear, so the two paths are pixel-identical.
-            glEnable(GL_SCISSOR_TEST);
-            glScissor(gx * tileSize, gy * tileSize, tileSize, tileSize);
-            glClearDepth(1.0);   // shadow depth stays conventional: near 0, far 1
-            glClear(GL_DEPTH_BUFFER_BIT);
-        }
-
-        // shadowRenderMatrix_ holds lightProj*lightView in WORLD space.
-        // Per-mesh: uMVP = renderMatrix * meshWorldModel.
-        const Mat4& lightVP = tileVP[slot];
-
+        if (!renderSlot[slot]) continue;
         auto tileCulled = [&](const std::vector<CasterBounds>& bounds, size_t i) {
             if (!cullingActive_ || !bounds[i].valid) return false;
             return !bromath::fintersects(tileFrustum[slot], bounds[i].box);
         };
-
         for (size_t i = 0; i < shadowCasters_.size(); ++i) {
             if (tileCulled(staticBounds, i)) { cullStats_.shadowCulled++; continue; }
             cullStats_.shadowDrawn++;
-            MeshNode* mesh = shadowCasters_[i];
-            Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
-            glUniformMatrix4fv(shadowUMVP_, 1, GL_FALSE, mvp.data);
-            mesh->drawRaw();
         }
-
-        // Skinned casters: SKINNED depth shader + per-node palette UBO, so
-        // shadows deform with the mesh instead of staying in bind pose.
-        if (hasSkinnedCasters && shadowSkinnedProgram_) {
-            glUseProgram(shadowSkinnedProgram_);
-            for (size_t i = 0; i < shadowSkinnedCasters_.size(); ++i) {
-                if (tileCulled(skinnedBounds, i)) { cullStats_.shadowCulled++; continue; }
-                cullStats_.shadowDrawn++;
-                MeshNode* mesh = shadowSkinnedCasters_[i];
-                Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
-                glUniformMatrix4fv(shadowSkinnedUMVP_, 1, GL_FALSE, mvp.data);
-                mesh->asSkinnedMesh()->prepareSkinnedDraw();
-                mesh->drawRaw();
-            }
-            glUseProgram(shadowProgram_);
+        for (size_t i = 0; i < shadowSkinnedCasters_.size(); ++i) {
+            if (tileCulled(skinnedBounds, i)) { cullStats_.shadowCulled++; continue; }
+            cullStats_.shadowDrawn++;
         }
-
-        // Custom-vertex casters: the spliced shadow variant runs the user's
-        // userVertex hook so the DISPLACED silhouette lands in the atlas.
-        // Casters are pre-sorted by chunk source (entries resolved once
-        // before the tile loop), so each variant binds once per group; user
-        // uniforms upload per caster (displacement may be uniform-driven,
-        // and values are per-node). A variant whose compile failed (cached
-        // in ensureCustomShadowProgram, entry == nullptr) falls back to the
-        // default depth program — undisplaced, but still a shadow.
-        auto drawCustomCasters = [&](const std::vector<MeshNode*>& casters,
-                                     const std::vector<CasterBounds>& bounds,
-                                     const std::vector<CustomShadowEntry*>& entries,
-                                     bool skinned) {
-            const GLuint fallback = skinned ? shadowSkinnedProgram_
-                                            : shadowProgram_;
-            const GLint fallbackMVP = skinned ? shadowSkinnedUMVP_
-                                              : shadowUMVP_;
-            bool anyBound = false;
-            CustomShadowEntry* bound = nullptr;
-            for (size_t i = 0; i < casters.size(); ++i) {
-                if (tileCulled(bounds, i)) { cullStats_.shadowCulled++; continue; }
-                cullStats_.shadowDrawn++;
-                MeshNode* mesh = casters[i];
-                CustomShadowEntry* entry = entries[i];
-                if (!anyBound || entry != bound) {
-                    anyBound = true;
-                    bound = entry;
-                    if (entry) {
-                        glUseProgram(entry->prog);
-                        // Wind globals: the custom variant applies the same
-                        // pre-hook wind sway as mesh.vert so the hook input
-                        // matches the color pass exactly.
-                        if (entry->windDir >= 0)
-                            glUniform3fv(entry->windDir, 1, windDir_);
-                        if (entry->windStrength >= 0)
-                            glUniform1f(entry->windStrength, windStrength_);
-                        if (entry->windTime >= 0)
-                            glUniform1f(entry->windTime, windTime_);
-                        if (entry->windFreq >= 0)
-                            glUniform1f(entry->windFreq, windFreq_);
-                    } else if (fallback) {
-                        glUseProgram(fallback);
-                    }
-                }
-                if (!entry && !fallback) continue;
-                Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
-                if (entry) {
-                    glUniformMatrix4fv(entry->mvp, 1, GL_FALSE, mvp.data);
-                    if (entry->model >= 0)
-                        glUniformMatrix4fv(entry->model, 1, GL_FALSE,
-                                           mesh->worldMatrix().data);
-                    if (entry->windMask >= 0)
-                        glUniform1f(entry->windMask, mesh->windMask());
-                    uploadUserUniforms(entry->prog, entry->userLocs,
-                                       mesh->customShader());
-                    // Same sampler bindings as the color pass: a vertex chunk
-                    // that displaces from a height texture must read the same
-                    // texels here, or the caster's depth silhouette won't
-                    // match the geometry the color pass actually draws.
-                    uploadUserTextures(entry->prog, entry->userLocs, mesh);
-                } else {
-                    glUniformMatrix4fv(fallbackMVP, 1, GL_FALSE, mvp.data);
-                }
-                if (skinned) mesh->asSkinnedMesh()->prepareSkinnedDraw();
-                mesh->drawRaw();
-            }
-            glUseProgram(shadowProgram_);
-        };
-        if (hasCustomCasters)
-            drawCustomCasters(shadowCustomCasters_, customBounds,
-                              customEntries, false);
-        if (hasSkinnedCustomCasters)
-            drawCustomCasters(shadowSkinnedCustomCasters_, skinnedCustomBounds,
-                              skinnedCustomEntries, true);
-
-        if (hasInstancedCasters && shadowInstancedProgram_) {
-            glUseProgram(shadowInstancedProgram_);
-            glUniformMatrix4fv(shadowInstULightVP_, 1, GL_FALSE, lightVP.data);
-            for (size_t i = 0; i < shadowInstancedCasters_.size(); ++i) {
-                if (tileCulled(instBounds, i)) { cullStats_.shadowCulled++; continue; }
-                cullStats_.shadowDrawn++;
-                InstancedMeshNode* m = shadowInstancedCasters_[i];
-                glUniformMatrix4fv(shadowInstUModel_, 1, GL_FALSE, m->worldMatrix().data);
-                m->drawRawInstancedDepth();
-            }
-            glUseProgram(shadowProgram_);
+        for (size_t i = 0; i < shadowCustomCasters_.size(); ++i) {
+            if (tileCulled(customBounds, i)) { cullStats_.shadowCulled++; continue; }
+            cullStats_.shadowDrawn++;
         }
-
-        // Branch-tube casters: the SHADOW_PASS variant of the tube VS emits the
-        // tube silhouette in light space. The segment TBO binds to unit 10 (the
-        // same unit the forward tube pass uses).
-        if (hasTubeCasters && tubeDepthProgram_) {
-            glUseProgram(tubeDepthProgram_);
-            glUniformMatrix4fv(tubeDepthULightVP_, 1, GL_FALSE, lightVP.data);
-            for (size_t i = 0; i < shadowTubeCasters_.size(); ++i) {
-                if (tileCulled(tubeBounds, i)) { cullStats_.shadowCulled++; continue; }
-                cullStats_.shadowDrawn++;
-                InstancedMeshNode* m = shadowTubeCasters_[i];
-                glUniformMatrix4fv(tubeDepthUModel_, 1, GL_FALSE, m->worldMatrix().data);
-                if (tubeDepthUSides_ >= 0) glUniform1i(tubeDepthUSides_, m->tubeSides());
-                if (tubeDepthURadiusScale_ >= 0)
-                    glUniform1f(tubeDepthURadiusScale_, m->tubeRadiusScale());
-                glActiveTexture(GL_TEXTURE10);
-                glBindTexture(GL_TEXTURE_BUFFER, m->tubeSegTexture());
-                if (tubeDepthUSegments_ >= 0) glUniform1i(tubeDepthUSegments_, 10);
-                glActiveTexture(GL_TEXTURE0);
-                m->drawTubeDepth();
-            }
-            glUseProgram(shadowProgram_);
+        for (size_t i = 0; i < shadowSkinnedCustomCasters_.size(); ++i) {
+            if (tileCulled(skinnedCustomBounds, i)) { cullStats_.shadowCulled++; continue; }
+            cullStats_.shadowDrawn++;
+        }
+        for (size_t i = 0; i < shadowInstancedCasters_.size(); ++i) {
+            if (tileCulled(instBounds, i)) { cullStats_.shadowCulled++; continue; }
+            cullStats_.shadowDrawn++;
+        }
+        for (size_t i = 0; i < shadowTubeCasters_.size(); ++i) {
+            if (tileCulled(tubeBounds, i)) { cullStats_.shadowCulled++; continue; }
+            cullStats_.shadowDrawn++;
         }
     }
-
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(0.0f, 0.0f);
-    glCullFace(GL_BACK);
-    glDisable(GL_CULL_FACE);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glUseProgram(0);
 }
+
 
 }  // namespace bro::scene

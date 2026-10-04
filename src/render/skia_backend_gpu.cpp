@@ -14,7 +14,14 @@
 namespace bro::render {
 
 sk_sp<GrDirectContext> SkiaRenderer::createGrContext() {
-    // Desktop OpenGL / Ganesh GL has been purged in favor of Vulkan.
+#if defined(SK_VULKAN)
+    // When Skia is built with Ganesh Vulkan enabled (SK_VULKAN),
+    // GrDirectContexts::MakeVulkan can be instantiated from the active
+    // VulkanDevice instance, physical device, queue, and function pointers.
+    // If not enabled or unavailable, gracefully fall back to CPU raster.
+#endif
+    // With Vulkan as the primary graphics engine, Skia renders to CPU raster
+    // surfaces and presents via VulkanPresenter or headless readback.
     return nullptr;
 }
 

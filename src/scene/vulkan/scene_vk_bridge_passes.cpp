@@ -132,7 +132,7 @@ void SceneVkBridge::renderShadowPass(VkCommandBuffer cmd, SceneGraph& graph,
                                                      caster.customPipeline, caster.customSet);
                 }
                 passShadow_.drawSkinned(cmd, caster);
-                stats.shadowDrawn++;
+                if (stats.shadowTilesTotal == 0) stats.shadowDrawn++;
             } else {
                 ShadowCaster caster{};
                 caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
@@ -144,7 +144,7 @@ void SceneVkBridge::renderShadowPass(VkCommandBuffer cmd, SceneGraph& graph,
                                                      caster.customPipeline, caster.customSet);
                 }
                 passShadow_.drawStatic(cmd, caster);
-                stats.shadowDrawn++;
+                if (stats.shadowTilesTotal == 0) stats.shadowDrawn++;
             }
         } else if (node->type() == SceneNode::Type::InstancedMesh) {
             auto* im = static_cast<InstancedMeshNode*>(node.get());
@@ -159,7 +159,7 @@ void SceneVkBridge::renderShadowPass(VkCommandBuffer cmd, SceneGraph& graph,
             caster.instanceCount = static_cast<uint32_t>(im->instanceCount());
             std::memcpy(caster.modelMatrix, im->worldMatrix().data, sizeof(caster.modelMatrix));
             passShadow_.drawInstanced(cmd, caster);
-            stats.shadowDrawn++;
+            if (stats.shadowTilesTotal == 0) stats.shadowDrawn++;
         }
     }
     passShadow_.endCascade(cmd, device_, shadowTarget_);
@@ -740,10 +740,16 @@ void SceneVkBridge::prepareCustomShadowShaderForNode(const void* key, const Cust
     prepareCustomShaderForNode(key, cs, isSkinned ? 2 : 0, false, userTextures, dummyPipe, outSet);
 }
 
-void SceneVkBridge::renderGaussianSplatPass(VkCommandBuffer cmd, SceneGraph& graph, const float* view, const float* proj,
+void SceneVkBridge::renderGaussianSplatPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer,
+                                            CullStats& stats, const float* view, const float* proj,
                                             const float eye[3], uint32_t width, uint32_t height) {
     for (auto& [id, node] : graph.nodes_) {
         if (!node->renderVisible() || node->type() != SceneNode::Type::GaussianSplat) continue;
+        if (renderer.cameraCulled(node.get())) {
+            stats.splatCulled++;
+            continue;
+        }
+        stats.splatDrawn++;
         auto* gsn = static_cast<GaussianSplatNode*>(node.get());
         if (gsn->splatCount() > 0) {
             passGaussianSplat_.renderNode(cmd, device_, allocator_, frameDescPool_,

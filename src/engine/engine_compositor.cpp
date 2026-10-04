@@ -26,6 +26,7 @@
 #endif
 
 #include <include/core/SkCanvas.h>
+#include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
@@ -637,13 +638,38 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
             }
         } else if (layer.type == UILayer::Scene3D) {
 #if BRO_WITH_3D
+            scene::SceneGraph* targetGraph = nullptr;
             for (auto& sg : sceneGraphs_) {
-                if (sg.graph && sg.graph->renderer().hasMeshContent()) {
-                    pendingVkImage_ = sg.graph->renderer().vkOutputImage();
-                    pendingVkImageLayout_ = sg.graph->renderer().vkOutputLayout();
-                    pendingVkImageW_ = sg.graph->renderer().vkOutputWidth();
-                    pendingVkImageH_ = sg.graph->renderer().vkOutputHeight();
+                if (sg.graph && (layer.texture == 0 || sg.elementId == layer.texture)) {
+                    targetGraph = sg.graph.get();
                     break;
+                }
+            }
+            if (targetGraph && targetGraph->renderer().hasMeshContent()) {
+                int outW = 0, outH = 0;
+                auto px = targetGraph->readTonemapPixelsRGBA(outW, outH);
+                if (!px.empty() && outW > 0 && outH > 0) {
+                    SkImageInfo info = SkImageInfo::Make(outW, outH, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+                    sk_sp<SkData> data = SkData::MakeWithCopy(px.data(), px.size());
+                    auto img = SkImages::RasterFromData(info, data, outW * 4);
+                    if (img) {
+                        float cx = layer.cx * sx;
+                        float cy = (layer.cy + oy) * sy;
+                        float cw = layer.cw * sx;
+                        float ch = layer.ch * sy;
+
+                        canvas->save();
+                        if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                            SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
+                                                               (layer.clipY + oy) * sy,
+                                                               layer.clipW * sx,
+                                                               layer.clipH * sy);
+                            canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
+                        }
+                        SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
+                        canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
+                        canvas->restore();
+                    }
                 }
             }
 #endif

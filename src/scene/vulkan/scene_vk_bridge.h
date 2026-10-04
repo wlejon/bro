@@ -182,7 +182,8 @@ private:
     void prepareCustomShadowShaderForNode(const void* key, const CustomShaderState* cs, bool isSkinned,
                                           std::vector<MeshNode::UserTexture>& userTextures,
                                           VkPipeline& outPipeline, VkDescriptorSet& outSet);
-    void renderGaussianSplatPass(VkCommandBuffer cmd, SceneGraph& graph, const float* view, const float* proj,
+    void renderGaussianSplatPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer,
+                                 CullStats& stats, const float* view, const float* proj,
                                  const float eye[3], uint32_t width, uint32_t height);
     void renderPostProcessing(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer,
                               uint32_t width, uint32_t height);

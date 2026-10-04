@@ -1363,7 +1363,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         // 3D mesh FBO layer (texture ID stored on element by scene graph render)
         unsigned int fboTex = elem->sceneGraphFBOTexture();
         if (fboTex && layerBreakCb_) {
-            layerBreakCb_(render::Cmd_LayerBreak::Scene3D, nullptr, fboTex, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
+            layerBreakCb_(render::Cmd_LayerBreak::Scene3D, nullptr, elem->nodeId(), x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
         // 2D canvas layer (for ShapeNode/SpriteNode content)
         if (elem->canvasScene() && layerBreakCb_) {

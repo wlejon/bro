@@ -254,6 +254,13 @@ void installHeadlessFrame(engine::Engine& engine) {
 
             size_t offset = framePixelOffset(engine, x + engine.contentLeft(),
                                              y + engine.contentTop());
+            if (offset + 3 >= pixels.size()) {
+                obj.set(ev::setProperty(obj.get(), "r", ev::fromDouble(0)));
+                obj.set(ev::setProperty(obj.get(), "g", ev::fromDouble(0)));
+                obj.set(ev::setProperty(obj.get(), "b", ev::fromDouble(0)));
+                obj.set(ev::setProperty(obj.get(), "a", ev::fromDouble(0)));
+                return obj.get();
+            }
             obj.set(ev::setProperty(obj.get(), "r", ev::fromDouble(pixels[offset])));
             obj.set(ev::setProperty(obj.get(), "g", ev::fromDouble(pixels[offset + 1])));
             obj.set(ev::setProperty(obj.get(), "b", ev::fromDouble(pixels[offset + 2])));
@@ -293,8 +300,10 @@ void installHeadlessFrame(engine::Engine& engine) {
                         if (x < 0 || x >= cw) continue;
                         const size_t src = framePixelOffset(engine, x + engine.contentLeft(),
                                                             y + engine.contentTop());
-                        std::memcpy(&out[(static_cast<size_t>(j) * w + i) * 4],
-                                    &pixels[src], 4);
+                        if (src + 3 < pixels.size()) {
+                            std::memcpy(&out[(static_cast<size_t>(j) * w + i) * 4],
+                                        &pixels[src], 4);
+                        }
                     }
                 }
             }

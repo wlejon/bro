@@ -288,7 +288,7 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
             } else {
                 otherLights.push_back(l);
             }
-        } else if (l->kind() == LightNode::Kind::Point) {
+        } else if (l->kind() == LightNode::Kind::Point || l->kind() == LightNode::Kind::Spot) {
             otherLights.push_back(l);
         }
     }
@@ -496,7 +496,7 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
 
     allocator_.updateUniformBuffer(lightingUbo_, &lightUniforms, sizeof(lightUniforms));
 
-    CullStats stats{};
+    CullStats stats = renderer.cullStats();
     bool hasDrawnMeshes = false;
 
     prepareDynamicBuffers(graph);
@@ -816,7 +816,7 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     // Gaussian Splatting Pass
     const auto& eye = graph.cameraEye();
     float eyeArr[3] = {eye.x, eye.y, eye.z};
-    renderGaussianSplatPass(cmd, graph, graph.viewMatrix().data, camUniforms.proj, eyeArr, width, height);
+    renderGaussianSplatPass(cmd, graph, renderer, stats, graph.viewMatrix().data, camUniforms.proj, eyeArr, width, height);
 
     if (graph.gizmoProvider_) {
         auto gizmoMeshes = graph.gizmoProvider_(&graph);
