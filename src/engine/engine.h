@@ -48,6 +48,7 @@
 #include <vulkan/vulkan.h>
 
 namespace bro::render {
+struct PresentFrame;
 class VulkanContext;
 class VulkanSwapchain;
 class VulkanPresenter;
@@ -548,10 +549,17 @@ private:
                                     dom::Element* relatedTarget = nullptr);
     void advanceFocus(bool reverse);
     void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
-    void drawTexturedQuad(uint32_t tex, float x, float y, float w, float h);
+    // Frame composition (engine_frame_composite.cpp). Each frame:
+    // beginGpuFrame() before any GPU work, beginFrameComposite(), then
+    // compositeLayers() per layer set, then presentCurrentFrame() (windowed)
+    // or readCompositedFrame() (headless capture).
+    void beginGpuFrame();
+    void beginFrameComposite();
     void compositeLayers(const std::vector<UILayer>& layers, uint32_t targetFBO = 0,
                          int offsetY = 0, int layerW = -1, int layerH = -1);
     void presentCurrentFrame();
+    std::vector<uint8_t> readCompositedFrame();
+    render::PresentFrame describeCompositedFrame();
     FramePresenter::Snapshot buildRasterSnapshot() const;
     void renderAndPresentFrame(double frameStart, double now, double wallFrameDtMs,
                                bool layoutSignaled, bool baseWasDirty);
@@ -629,8 +637,7 @@ private:
     SubDocRef iframeSubDoc(IframeDoc& d);
     SubDocRef windowHostSubDoc(WindowHost& h);
     void quiesceRasterForCapture();
-    std::vector<uint8_t> readbackSubDocTexture(unsigned int tex, int w, int h,
-                                               int& outW, int& outH);
+    std::vector<uint8_t> readPublishedFrame(const PublishedFrame& frame, int& outW, int& outH);
     void queueIframeSurfaceFree(render::SkiaRenderer::GPUSurface&& surf);
     void drainIframeSurfaceFrees(render::SkiaRenderer* renderer);
 
@@ -772,6 +779,7 @@ private:
     uint64_t focusedHostId_ = 0;
     void applyChildManifestDefaults(WindowHost& h, const std::string& appDir);
     void compositeWindowHosts();
+    void createWindowHostPresenter(WindowHost& h);
     void createWindowHostDoc(WindowHost& h, struct SubDocSource& source);
     void teardownWindowHostDoc(WindowHost& h);
     void syncWindowHostBox(WindowHost& h);
@@ -957,7 +965,13 @@ private:
 
     bool testFailure_ = false;
 
+    // The frame's CPU composite. Layers composite into frameCompositeSurface_
+    // until one claims the frame's GPU base image (pendingVkImage_, a full-
+    // viewport scene or WebGL canvas); the layers after it go to
+    // frameAboveSurface_, which the presenter blends over that image.
     sk_sp<SkSurface> frameCompositeSurface_;
+    sk_sp<SkSurface> frameAboveSurface_;
+    bool frameAboveActive_ = false;
     int frameCompositeW_ = 0, frameCompositeH_ = 0;
     VkImage pendingVkImage_ = VK_NULL_HANDLE;
     VkImageLayout pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;

@@ -1,8 +1,12 @@
 #include "render/vulkan_debug.h"
 #include "util/log.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <mutex>
+#include <set>
 #include <string>
 
 namespace bro::render {
@@ -14,7 +18,42 @@ const std::vector<const char*> kCandidateValidationLayers = {
     "VK_LAYER_KHR_validation"
 };
 
+std::atomic<uint32_t> gErrorCount{0};
+std::atomic<uint32_t> gKnownErrorCount{0};
+
+// Message ids listed in $BRO_VK_VALIDATION_KNOWN, read once.
+const std::set<std::string>& knownMessageIds() {
+    static std::set<std::string> ids;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const char* path = std::getenv("BRO_VK_VALIDATION_KNOWN");
+        if (!path || !*path) return;
+        std::ifstream in(path);
+        if (!in) {
+            LOG_WARN("BRO_VK_VALIDATION_KNOWN: cannot read %s", path);
+            return;
+        }
+        std::string line;
+        while (std::getline(in, line)) {
+            const size_t hash = line.find('#');
+            if (hash != std::string::npos) line.resize(hash);
+            const size_t b = line.find_first_not_of(" \t\r");
+            const size_t e = line.find_last_not_of(" \t\r");
+            if (b != std::string::npos) ids.insert(line.substr(b, e - b + 1));
+        }
+    });
+    return ids;
+}
+
 } // namespace
+
+uint32_t vulkanValidationErrorCount() {
+    return gErrorCount.load(std::memory_order_relaxed);
+}
+
+uint32_t vulkanKnownValidationErrorCount() {
+    return gKnownErrorCount.load(std::memory_order_relaxed);
+}
 
 bool checkValidationLayerSupport(const std::vector<const char*>& requestedLayers) {
     if (requestedLayers.empty()) return false;
@@ -77,6 +116,12 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     const char* msg = (callbackData && callbackData->pMessage) ? callbackData->pMessage : "";
 
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        if (knownMessageIds().count(msgId)) {
+            gKnownErrorCount.fetch_add(1, std::memory_order_relaxed);
+            LOG_WARN("[Vulkan %s KNOWN] [%s] %s", typeStr, msgId, msg);
+            return VK_FALSE;
+        }
+        gErrorCount.fetch_add(1, std::memory_order_relaxed);
         LOG_ERROR("[Vulkan %s ERROR] [%s] %s", typeStr, msgId, msg);
     } else if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         LOG_WARN("[Vulkan %s WARNING] [%s] %s", typeStr, msgId, msg);

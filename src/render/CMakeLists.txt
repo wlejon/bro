@@ -24,11 +24,16 @@ add_library(bro_render STATIC
     skia_backend_gpu.cpp
     skia_backend_gradient.cpp
     vulkan_context.cpp
+    vulkan_context_resources.cpp
     vulkan_debug.cpp
+    vulkan_frames.cpp
     vulkan_memory_pool.cpp
+    vulkan_queue.cpp
     vulkan_swapchain.cpp
     vulkan_presenter.cpp
-    vulkan_presenter_composite.cpp
+    vulkan_presenter_blend.cpp
+    vulkan_util.cpp
+    pixel_convert.cpp
     raster_renderer.cpp
     font_fallback.cpp
     font_family.cpp

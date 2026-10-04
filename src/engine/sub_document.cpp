@@ -42,13 +42,13 @@ namespace bro::engine {
 SubDocRef Engine::iframeSubDoc(IframeDoc& d) {
     return SubDocRef{d.canvasScenes, d.document,
                      d.hoveredElement, d.boxW, d.boxH, d.cmdBuffer,
-                     d.surface, d.surfW, d.surfH, d.fboTexture};
+                     d.surface, d.surfW, d.surfH, d.published};
 }
 
 SubDocRef Engine::windowHostSubDoc(WindowHost& h) {
     return SubDocRef{h.canvasScenes, h.document,
                      h.hoveredElement, h.boxW, h.boxH, h.cmdBuffer,
-                     h.surface, h.surfW, h.surfH, h.fboTexture};
+                     h.surface, h.surfW, h.surfH, h.published};
 }
 
 SubDocSource loadSubDocSource(const std::string& basePath, const std::string& srcAttr,
@@ -191,7 +191,7 @@ static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
 
 void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
     auto* grCtx = renderer->grContext();
-    if (d.cmdBuffer.commandCount() == 0) { d.fboTexture = 0; return; }
+    if (d.cmdBuffer.commandCount() == 0) { d.published.clear(); return; }
     // The surface is in device px at the renderer's current scale; the box
     // (and the compositor quad sampling it) stay in CSS px.
     DeviceScale ds;
@@ -202,12 +202,13 @@ void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
         d.surface = renderer->createGPUSurface(bw, bh);
         d.surfW = bw; d.surfH = bh;
     }
-    renderer->rewrapGPUSurface(d.surface, bw, bh);
+    if (!d.surface.surface) { d.published.clear(); return; }
     auto prev = renderer->switchSurface(d.surface.surface);
     if (auto* c = renderer->getCanvas()) c->clear(SK_ColorTRANSPARENT);
     replayBufferWithInlineCanvas(renderer, grCtx, d.cmdBuffer);
     if (grCtx) grCtx->flush(d.surface.surface.get());
-    d.fboTexture = d.surface.texture;
+    // The compositor reads this snapshot, never the surface itself.
+    d.published.publish(d.surface.surface->makeImageSnapshot());
     renderer->switchSurface(prev);
 }
 

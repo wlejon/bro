@@ -3,6 +3,7 @@ add_library(bro_engine STATIC
     engine.cpp
     scene_audio_sync.cpp
     engine_compositor.cpp
+    engine_frame_composite.cpp
     engine_compile_frame.cpp
     engine_init.cpp
     engine_lifecycle.cpp

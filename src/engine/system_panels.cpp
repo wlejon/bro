@@ -439,6 +439,7 @@ void Engine::renderSplashImmediate() {
     render::CommandBuffer sysCmds;
     recordSystemPanelLayers(sysCmds, viewportWidth_, viewportHeight_);
 
+    beginGpuFrame();
     skia->beginFrame(viewportWidth_, viewportHeight_);
     skia->setDeviceScale(deviceScale_.render);
     std::vector<UILayer> systemLayers;
@@ -451,9 +452,9 @@ void Engine::renderSplashImmediate() {
     skia->setDeviceScale(1.0f);
     skia->endFrame();
 
+    beginFrameComposite();
     compositeLayers(systemLayers);
-
-    window_->swapWindow();
+    presentCurrentFrame();
     SDL_PumpEvents();
 }
 

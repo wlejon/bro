@@ -15,8 +15,8 @@
 #include "render/command_buffer.h"
 #include "render/command_replayer.h"
 #include "render/recording_renderer.h"
+#include "render/pixel_convert.h"
 #include "render/skia_backend.h"
-#include "render/vulkan_presenter.h"
 #include "webgl/webgl2_context.h"
 
 #if BRO_WITH_3D
@@ -62,10 +62,6 @@ void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     }
     if (scene) canvasSceneRegistry_[scene->sceneId()] = scene.get();
     canvasScenes_.push_back(std::move(scene));
-}
-
-void Engine::drawTexturedQuad(uint32_t /*tex*/, float /*x*/, float /*y*/, float /*w*/, float /*h*/) {
-    // Legacy OpenGL draw quad stub - presentation is handled via VulkanPresenter
 }
 
 void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
@@ -186,7 +182,6 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              std::vector<UILayer>& outLayers,
                              const render::CommandBuffer* promotedBuffer) {
     if (!renderer) return;
-    if (!renderer->grContext() && !vulkanPresenter_) return;
 
     // surfW/surfH are the *content* dimensions (viewport minus engine-reserved
     // insets) — app layer surfaces are content-sized. The pool compare below
@@ -330,7 +325,6 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
                                      int vpW, int vpH,
                                      std::vector<UILayer>& outLayers) {
     if (!renderer) return;
-    if (!renderer->grContext() && !vulkanPresenter_) return;
     if (buffer.commandCount() == 0) return;
 
     if (poolW != vpW || poolH != vpH) {
@@ -427,7 +421,6 @@ void Engine::recordIframeLayers() {
 // app compositor to draw at the <iframe> element's box.
 void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
     if (!renderer) return;
-    if (!renderer->grContext() && !vulkanPresenter_) return;
     // Whoever replays the sub-docs OWNS their surfaces — the raster thread
     // windowed, the main thread headless (screenshot() replays inline, there
     // being no raster thread). So this is exactly the right place to destroy the
@@ -457,14 +450,11 @@ void Engine::recordWindowHostLayers() {
     }
 }
 
-// Raster thread: replay each host document into its window-sized GPU surface ->
-// WindowHost::fboTexture, which compositeWindowHosts() draws as a fullscreen
-// quad on that host's drawable. One texture per host (no layer lists), so the
-// frame's single GLsync fence covers every host's sampling exactly as it covers
-// the app's own layers.
+// Raster thread: replay each host document into its window-sized surface ->
+// WindowHost::published, which compositeWindowHosts() presents on that host's
+// window.
 void Engine::replayWindowHostLayers(render::SkiaRenderer* renderer) {
     if (!renderer) return;
-    if (!renderer->grContext() && !vulkanPresenter_) return;
     const float appScale = renderer->deviceScale();
     for (auto& h : windowHosts_) {
         if (h->pendingClose) continue;
@@ -476,7 +466,7 @@ void Engine::replayWindowHostLayers(render::SkiaRenderer* renderer) {
 
 // Authoritative, synchronous capture of an <iframe> sub-document's pixels for
 // iframe.capture() (the maker-agent's "look"). Rather than sampling whatever the
-// async raster thread last produced into fboTexture — which lags a reload() by a
+// async raster thread last published — which lags a reload() by a
 // frame or two, so the first look after a write returns the OLD view — this
 // brings the sub-doc fully current on the calling (main) thread: quiesce the
 // raster worker, apply any queued reload(), re-record at the element's CURRENT
@@ -490,11 +480,11 @@ std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& out
 
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia || !recordingRenderer_ || !drawTraversal_) {
-        // No main-thread GPU Skia (e.g. --no-gpu CPU renderer): fall back to the
-        // last raster-produced texture, if any.
+        // No main-thread Skia renderer (e.g. --no-gpu CPU renderer): fall back
+        // to the frame the raster thread last published, if any.
         IframeDoc* d = iframeDocForElement(el);
         if (!d) return {};
-        return readbackSubDocTexture(d->fboTexture, d->surfW, d->surfH, outW, outH);
+        return readPublishedFrame(d->published, outW, outH);
     }
 
     quiesceRasterForCapture();
@@ -518,7 +508,7 @@ std::vector<uint8_t> Engine::captureWindowHost(uint64_t id, int& outW, int& outH
 
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia || !recordingRenderer_ || !drawTraversal_)
-        return readbackSubDocTexture(h->fboTexture, h->surfW, h->surfH, outW, outH);
+        return readPublishedFrame(h->published, outW, outH);
 
     quiesceRasterForCapture();
     syncWindowHostBox(*h);
@@ -538,223 +528,19 @@ void Engine::quiesceRasterForCapture() {
         std::this_thread::yield();
 }
 
-// CPU-renderer fallback shared by both capture paths: read back whatever the
-// last replay published into `tex`, with no re-record.
-std::vector<uint8_t> Engine::readbackSubDocTexture(unsigned int /*tex*/, int /*w*/, int /*h*/,
-                                                   int& outW, int& outH) {
+// Fallback shared by both capture paths: the frame the last replay published,
+// with no re-record.
+std::vector<uint8_t> Engine::readPublishedFrame(const PublishedFrame& frame, int& outW, int& outH) {
     outW = 0;
     outH = 0;
-    return {};
-}
-
-void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targetFBO*/,
-                             int offsetY, int /*layerW*/, int /*layerH*/) {
-    if (layers.empty()) return;
-
-    int fbW = deviceScale_.drawableW;
-    int fbH = deviceScale_.drawableH;
-    if (fbW <= 0) fbW = viewportWidth_;
-    if (fbH <= 0) fbH = viewportHeight_;
-
-    if (!frameCompositeSurface_ || frameCompositeW_ != fbW || frameCompositeH_ != fbH) {
-        frameCompositeSurface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(fbW, fbH));
-        frameCompositeW_ = fbW;
-        frameCompositeH_ = fbH;
-        if (frameCompositeSurface_) {
-            frameCompositeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
-        }
-    }
-
-    if (!frameCompositeSurface_) return;
-
-    SkCanvas* canvas = frameCompositeSurface_->getCanvas();
-    float vw = static_cast<float>(viewportWidth_);
-    float vh = static_cast<float>(viewportHeight_);
-    float sx = static_cast<float>(fbW) / (vw > 0.0f ? vw : 1.0f);
-    float sy = static_cast<float>(fbH) / (vh > 0.0f ? vh : 1.0f);
-    float oy = static_cast<float>(offsetY);
-
-    for (const auto& layer : layers) {
-        if (layer.type == UILayer::HTML) {
-            if (layer.surface) {
-                auto img = layer.surface->makeImageSnapshot();
-                if (img) {
-                    SkPaint paint;
-                    paint.setBlendMode(SkBlendMode::kSrcOver);
-                    canvas->drawImage(img, 0.0f, oy * sy, SkSamplingOptions(), &paint);
-                }
-            }
-        } else if (layer.type == UILayer::Iframe) {
-            if (auto* d = iframeDocById(layer.canvasSceneId)) {
-                if (d->surface.surface) {
-                    auto img = d->surface.surface->makeImageSnapshot();
-                    if (img) {
-                        float cx = layer.cx * sx;
-                        float cy = (layer.cy + oy) * sy;
-                        float cw = layer.cw * sx;
-                        float ch = layer.ch * sy;
-
-                        canvas->save();
-                        if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                            SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
-                                                               (layer.clipY + oy) * sy,
-                                                               layer.clipW * sx,
-                                                               layer.clipH * sy);
-                            canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
-                        }
-                        SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
-                        canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
-                        canvas->restore();
-                    }
-                }
-            }
-        } else if (layer.type == UILayer::Canvas) {
-            if (auto* cs = canvasSceneById(layer.canvasSceneId)) {
-                if (cs->surface()) {
-                    auto img = cs->surface()->makeImageSnapshot();
-                    if (img) {
-                        float cx = layer.cx * sx;
-                        float cy = (layer.cy + oy) * sy;
-                        float cw = layer.cw * sx;
-                        float ch = layer.ch * sy;
-
-                        canvas->save();
-                        if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                            SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
-                                                               (layer.clipY + oy) * sy,
-                                                               layer.clipW * sx,
-                                                               layer.clipH * sy);
-                            canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
-                        }
-                        SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
-                        canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
-                        canvas->restore();
-                    }
-                }
-            }
-        } else if (layer.type == UILayer::Scene3D) {
-#if BRO_WITH_3D
-            scene::SceneGraph* targetGraph = nullptr;
-            for (auto& sg : sceneGraphs_) {
-                if (sg.graph && (layer.texture == 0 || sg.elementId == layer.texture)) {
-                    targetGraph = sg.graph.get();
-                    break;
-                }
-            }
-            if (targetGraph && targetGraph->renderer().hasMeshContent()) {
-                auto& r = targetGraph->renderer();
-                VkImage vkImg = r.vkOutputImage();
-                float cx = layer.cx * sx;
-                float cy = (layer.cy + oy) * sy;
-                float cw = layer.cw * sx;
-                float ch = layer.ch * sy;
-                bool isFullViewport = (cx <= 1.0f && cy <= 1.0f &&
-                                       std::abs(cw - fbW) <= 2.0f &&
-                                       std::abs(ch - fbH) <= 2.0f);
-                if (isFullViewport && pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ && vkImg != VK_NULL_HANDLE &&
-                    r.vkOutputWidth() > 0 && r.vkOutputHeight() > 0) {
-                    pendingVkImage_ = vkImg;
-                    pendingVkImageLayout_ = r.vkOutputLayout();
-                    pendingVkImageW_ = r.vkOutputWidth();
-                    pendingVkImageH_ = r.vkOutputHeight();
-                } else {
-                    int outW = 0, outH = 0;
-                    auto px = targetGraph->readTonemapPixelsRGBA(outW, outH);
-                    if (!px.empty() && outW > 0 && outH > 0) {
-                        SkImageInfo info = SkImageInfo::Make(outW, outH, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-                        sk_sp<SkData> data = SkData::MakeWithCopy(px.data(), px.size());
-                        auto img = SkImages::RasterFromData(info, data, outW * 4);
-                        if (img) {
-                            canvas->save();
-                            if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                                SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
-                                                                   (layer.clipY + oy) * sy,
-                                                                   layer.clipW * sx,
-                                                                   layer.clipH * sy);
-                                canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
-                            }
-                            SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
-                            canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
-                            canvas->restore();
-                        }
-                    }
-                }
-            }
-#endif
-        } else if (layer.type == UILayer::WebGL) {
-            webgl::WebGL2RenderingContext* wctx = nullptr;
-            for (auto& entry : webglEntries_) {
-                if (entry.context && (layer.canvasSceneId == 0 || (entry.element && entry.element->nodeId() == layer.canvasSceneId))) {
-                    wctx = entry.context.get();
-                    break;
-                }
-            }
-            if (!wctx && !webglEntries_.empty()) {
-                wctx = webglEntries_[0].context.get();
-            }
-            if (wctx) {
-                float cx = layer.cx * sx;
-                float cy = (layer.cy + oy) * sy;
-                float cw = layer.cw * sx;
-                float ch = layer.ch * sy;
-                bool isFullViewport = (cx <= 1.0f && cy <= 1.0f &&
-                                       std::abs(cw - fbW) <= 2.0f &&
-                                       std::abs(ch - fbH) <= 2.0f);
-                if (isFullViewport && pendingVkImage_ == VK_NULL_HANDLE && wctx->vkColorImage() != VK_NULL_HANDLE) {
-                    pendingVkImage_ = wctx->vkColorImage();
-                    pendingVkImageLayout_ = wctx->vkColorLayout();
-                    pendingVkImageW_ = wctx->canvasWidth();
-                    pendingVkImageH_ = wctx->canvasHeight();
-                } else {
-                    std::vector<uint8_t> px;
-                    if (wctx->readCanvasPixels(px) && !px.empty()) {
-                        int w = wctx->canvasWidth();
-                        int h = wctx->canvasHeight();
-                        SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-                        sk_sp<SkData> data = SkData::MakeWithCopy(px.data(), px.size());
-                        auto img = SkImages::RasterFromData(info, data, w * 4);
-                        if (img) {
-                            canvas->save();
-                            if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                                SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
-                                                                   (layer.clipY + oy) * sy,
-                                                                   layer.clipW * sx,
-                                                                   layer.clipH * sy);
-                                canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
-                            }
-                            SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
-                            canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
-                            canvas->restore();
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-void Engine::presentCurrentFrame() {
-    if (!vulkanPresenter_) return;
-
-    if (pendingVkImage_ != VK_NULL_HANDLE && pendingVkImageW_ > 0 && pendingVkImageH_ > 0) {
-        VkImageLayout layout = (pendingVkImageLayout_ != VK_IMAGE_LAYOUT_UNDEFINED)
-                                   ? pendingVkImageLayout_
-                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vulkanPresenter_->presentImage(pendingVkImage_, pendingVkImageW_, pendingVkImageH_,
-                                       layout,
-                                       frameCompositeSurface_.get());
-        pendingVkImage_ = VK_NULL_HANDLE;
-        pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        pendingVkImageW_ = 0;
-        pendingVkImageH_ = 0;
-        return;
-    }
-
-    if (frameCompositeSurface_) {
-        vulkanPresenter_->presentSurface(frameCompositeSurface_.get());
-    } else if (renderer_ && renderer_->surface()) {
-        vulkanPresenter_->presentSurface(renderer_->surface());
-    }
+    sk_sp<SkImage> img = frame.get();
+    SkPixmap pixmap;
+    if (!img || !img->peekPixels(&pixmap)) return {};
+    auto pixels = render::pixmapToRgba(pixmap);
+    if (pixels.empty()) return {};
+    outW = pixmap.width();
+    outH = pixmap.height();
+    return pixels;
 }
 
 } // namespace bro::engine

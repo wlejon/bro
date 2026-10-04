@@ -131,6 +131,8 @@ static void printUsage() {
         "\n"
         "CLI flags:\n"
         "  --no-splash / --splash  Disable or force the startup splash screen.\n"
+        "  --no-gpu                Run without Vulkan: CPU-rendered frames shown in a\n"
+        "                          software window (no 3D scenes or WebGL).\n"
         "\n"
         "Additional bro.json options:\n"
         "  vsync (bool), resizable (bool), maxFps (number),\n"
@@ -185,10 +187,12 @@ int main(int argc, char* argv[]) {
     // purpose, and --no-splash wins as a final override applied after).
     bool cliNoSplash = false;
     bool cliSplash   = false;
+    bool cliNoGpu    = false;
     std::vector<const char*> posArgs;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-splash") == 0)     cliNoSplash = true;
         else if (strcmp(argv[i], "--splash") == 0)   cliSplash   = true;
+        else if (strcmp(argv[i], "--no-gpu") == 0)   cliNoGpu    = true;
         else posArgs.push_back(argv[i]);
     }
 
@@ -210,6 +214,7 @@ int main(int argc, char* argv[]) {
     // CLI splash overrides — applied last so they win over bro.json.
     if (cliNoSplash) config.showSplash = false;
     if (cliSplash)   config.showSplash = true;
+    if (cliNoGpu)    config.graphics.useGPU = false;
 
     // Does this app directory carry a compiled module? Asked BEFORE the Engine
     // is constructed because engine init uses the answer: it is what

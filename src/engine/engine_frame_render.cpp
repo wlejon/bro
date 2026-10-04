@@ -195,10 +195,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
-    if (frameCompositeSurface_) {
-        frameCompositeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
-    }
-
+    beginFrameComposite();
     compositeLayers(layers.appLayers, 0,
                     layers.appInsetTop, layers.appContentW,
                     layers.appContentH);
@@ -211,11 +208,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 
-    if (window_) {
-        window_->swapWindow();
-    } else {
-        presentCurrentFrame();
-    }
+    presentCurrentFrame();
 
     {
         double capMs = frameCapIntervalMs_;

@@ -1,18 +1,18 @@
 // Secondary window hosts — the engine side of secondary windows.
 //
-// Each host owns a real OS window (platform::Window::createSecondary —
-// SDL_WINDOW_OPENGL, NO GL context) AND the isolated document rendered
+// Each host owns a real OS window (platform::Window::createSecondary, with
+// the primary window's graphics backend) AND the isolated document rendered
 // into it: its own DOM tree and 2D canvas scenes, built from
 // `opts.src` by the shared sub-document core (engine/sub_document.h) that also
 // backs <iframe>. Per frame the host document records on the main thread,
-// replays into a window-sized GPU surface on the raster thread, and composites
-// as one fullscreen quad on its own drawable.
+// replays into a window-sized surface on the raster thread, which publishes
+// a snapshot of it (WindowHost::published).
 //
-// GL: there is exactly ONE GL context. compositeWindowHosts() makes it current
-// on each host's drawable in turn, draws that host's single texture, and swaps
-// at interval 0 — the main window keeps the frame's one pacing swap. Because
-// each host publishes exactly ONE texture (no layer lists), the frame's single
-// GLsync fence covers every host's sampling with no extra handshake.
+// Presentation: every host has its own VulkanSwapchain + VulkanPresenter on
+// the one shared VulkanContext. compositeWindowHosts() draws the published
+// frame over the host's clear color and presents it, without vsync — the main
+// window keeps the frame's one paced present. All of them submit through the
+// context's queue owner within the same frame of its frame ring.
 //
 // Lifecycle discipline: creation and destruction are QUEUED and drained at
 // the raster-idle point (processPendingWindowHosts — beside
@@ -32,15 +32,26 @@
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "render/command_buffer.h"
+#include "render/vulkan_context.h"
+#include "render/vulkan_presenter.h"
+#include "render/vulkan_swapchain.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
 
+#include <include/core/SkCanvas.h>
+#include <include/core/SkColor.h>
+#include <include/core/SkPixmap.h>
+#include <include/core/SkSurface.h>
+
 #include <algorithm>
 #include <cstddef>
 
 namespace bro::engine {
+
+WindowHost::WindowHost() = default;
+WindowHost::~WindowHost() = default;
 
 Engine::WindowHost* Engine::windowHostById(uint64_t id) {
     for (auto& h : windowHosts_)
@@ -128,8 +139,10 @@ void Engine::processPendingWindowHosts() {
         teardownWindowHostDoc(*h);
         queueIframeSurfaceFree(std::move(h->surface));
         h->surfW = h->surfH = 0;
-        h->fboTexture = 0;
-        h->window.reset();  // destroys the SDL window (no GL context to touch)
+        h->published.clear();
+        h->presenter.reset();  // the swapchain's surface must go before its window
+        h->swapchain.reset();
+        h->window.reset();
         windowHosts_.erase(windowHosts_.begin() + static_cast<ptrdiff_t>(i));
         bro::bronze_host::windowHostNotifyClosed(id);
     }
@@ -163,6 +176,7 @@ void Engine::processPendingWindowHosts() {
         cfg.alwaysOnTop = h->opts.alwaysOnTop;
         cfg.x = h->opts.x;  // kWindowPosUnset == SecondaryConfig::kPosUnset (INT_MIN)
         cfg.y = h->opts.y;
+        cfg.backend = window_->backend();
         if (h->opts.display >= 0 && window_) {
             auto displays = window_->getDisplays();
             if (h->opts.display < static_cast<int>(displays.size())) {
@@ -198,6 +212,7 @@ void Engine::processPendingWindowHosts() {
                               : static_cast<double>(h->window->getDevicePixelRatio());
         h->boxW = w;
         h->boxH = ht;
+        createWindowHostPresenter(*h);
         LOG_INFO("bro.window: opened secondary window id=%llu sdl=%u (%dx%d%s)",
                  static_cast<unsigned long long>(h->id), h->sdlId, w, ht,
                  h->opts.hidden ? ", hidden" : "");
@@ -217,13 +232,61 @@ void Engine::processPendingWindowHosts() {
     }
 }
 
+// A windowed host on the Vulkan context gets its own swapchain and presenter.
+// Headless hosts are never presented (capture() renders them on demand), and
+// a software-backend host presents through its window's framebuffer.
+void Engine::createWindowHostPresenter(WindowHost& h) {
+    if (displayMode_ != DisplayMode::Windowed || !vulkanContext_ || !h.window ||
+        h.window->backend() != platform::GraphicsBackend::Vulkan)
+        return;
+    auto swapchain = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, h.window->getSDLWindow(),
+                                                               /*vsync=*/false);
+    if (!swapchain->init()) {
+        LOG_ERROR("bro.window: no swapchain for secondary window id=%llu; it will stay blank",
+                  static_cast<unsigned long long>(h.id));
+        return;
+    }
+    auto presenter = std::make_unique<render::VulkanPresenter>(*vulkanContext_, *swapchain);
+    if (!presenter->init()) {
+        LOG_ERROR("bro.window: no presenter for secondary window id=%llu; it will stay blank",
+                  static_cast<unsigned long long>(h.id));
+        return;
+    }
+    h.swapchain = std::move(swapchain);
+    h.presenter = std::move(presenter);
+}
+
+// Present each host's last published frame over its clear color. Runs on the
+// main thread after the frame's raster handshake; the published snapshot is
+// the only thing it reads of the raster thread's work.
 void Engine::compositeWindowHosts() {
-    if (!window_) return;
+    if (!window_ || displayMode_ != DisplayMode::Windowed) return;
     if (!anyPresentableWindowHosts()) return;
 
     for (auto& h : windowHosts_) {
         if (!h->window || h->pendingClose || h->minimized) continue;
-        h->window->swapWindow();
+        if (!h->presenter && h->window->backend() != platform::GraphicsBackend::Software) continue;
+        int pw = 0, ph = 0;
+        h->window->getSizeInPixels(pw, ph);
+        if (pw <= 0 || ph <= 0) continue;
+        if (!h->presentSurface || h->presentSurface->width() != pw || h->presentSurface->height() != ph)
+            h->presentSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(pw, ph));
+        if (!h->presentSurface) continue;
+
+        SkCanvas* canvas = h->presentSurface->getCanvas();
+        canvas->clear(SkColor4f{h->clearColor[0], h->clearColor[1], h->clearColor[2], h->clearColor[3]});
+        // The published frame is in device px at the host's render scale,
+        // like the drawable: drawn 1:1.
+        if (sk_sp<SkImage> frame = h->published.get()) canvas->drawImage(frame, 0.0f, 0.0f);
+
+        if (h->presenter) {
+            h->presenter->presentSurface(h->presentSurface.get());
+        } else {
+            SkPixmap pm;
+            if (h->presentSurface->peekPixels(&pm))
+                h->window->presentPixels(pm.addr(), pm.width(), pm.height(), static_cast<int>(pm.rowBytes()),
+                                         pm.colorType() == kBGRA_8888_SkColorType);
+        }
     }
 }
 
@@ -234,10 +297,10 @@ void Engine::destroyAllWindowHosts() {
         teardownWindowHostDoc(*h);
         queueIframeSurfaceFree(std::move(h->surface));
         h->surfW = h->surfH = 0;
-        h->fboTexture = 0;
+        h->published.clear();
         bro::bronze_host::windowHostNotifyClosed(id);
     }
-    windowHosts_.clear();  // destroys the SDL windows
+    windowHosts_.clear();  // destroys each host's presenter, swapchain, then SDL window
     focusedHostId_ = 0;
 }
 

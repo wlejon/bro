@@ -1,8 +1,14 @@
+// bro_vulkan_test: the shared GPU frame/submission core (VulkanQueue,
+// VulkanFrames), the presenter's offscreen composite + readback, and — where a
+// display is available — the swapchain following its window. Run with
+// BRO_VK_VALIDATION=1 to also fail on any validation error.
+
 #include "render/vulkan_context.h"
-#include "render/vulkan_swapchain.h"
+#include "render/vulkan_debug.h"
 #include "render/vulkan_presenter.h"
+#include "render/vulkan_swapchain.h"
+#include "render/vulkan_util.h"
 #include "platform/sdl_window.h"
-#include "util/log.h"
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColor.h>
@@ -10,203 +16,277 @@
 #include <include/core/SkRect.h>
 #include <include/core/SkSurface.h>
 
-#include <cassert>
+#include <SDL3/SDL.h>
+
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
 using namespace bro;
 
-int main() {
-    std::cout << "=== Running Vulkan Chunk 1 Tests ===" << std::endl;
+namespace {
 
-    // 1. Test VulkanContext initialization (Headless)
-    std::cout << "[Test 1] VulkanContext Headless Init... " << std::flush;
+int gFailures = 0;
+
+#define CHECK(cond)                                                                   \
+    do {                                                                              \
+        if (!(cond)) {                                                                \
+            std::cerr << "  FAIL: " #cond " (line " << __LINE__ << ")" << std::endl;  \
+            ++gFailures;                                                              \
+        }                                                                             \
+    } while (0)
+
+bool near(int a, int b, int tol = 2) { return std::abs(a - b) <= tol; }
+
+const uint8_t* px(const std::vector<uint8_t>& p, uint32_t w, uint32_t x, uint32_t y) {
+    return p.data() + (static_cast<size_t>(y) * w + x) * 4;
+}
+
+void testQueueAndFrames(render::VulkanContext& ctx) {
+    std::cout << "[queue/frames] tickets, immediate submits, arenas, deferred destruction" << std::endl;
+    auto& queue = ctx.queue();
+    auto& frames = ctx.frames();
+
+    // An immediate submit waits for its own ticket: the fill is visible after.
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkDeviceSize off = 0;
+    uint64_t id = 0;
+    void* mapped = nullptr;
+    CHECK(ctx.createBuffer(256, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           buf, mem, off, id, mapped));
+    const uint64_t before = queue.lastSubmittedTicket();
+    CHECK(queue.submitImmediate([&](VkCommandBuffer cmd) { vkCmdFillBuffer(cmd, buf, 0, 256, 0xA5A5A5A5u); }));
+    CHECK(queue.lastSubmittedTicket() == before + 1);
+    CHECK(queue.completedTicket() >= before + 1);
+    CHECK(mapped && static_cast<uint8_t*>(mapped)[255] == 0xA5);
+
+    // Frame ring: upload slices are aligned, survive the frame, and the arena
+    // grows past one chunk.
+    frames.beginFrame();
+    const uint64_t serial = frames.frameSerial();
+    render::UploadSlice a = frames.allocUpload(100, 256);
+    render::UploadSlice b = frames.allocUpload(12ull * 1024 * 1024);  // bigger than a chunk
+    CHECK(a && b && a.offset % 256 == 0);
+    std::memset(b.mapped, 0x5A, b.size);
+    CHECK(static_cast<uint8_t*>(b.mapped)[b.size - 1] == 0x5A);
+
+    // Descriptor arena: more sets than one pool holds.
+    VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr};
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0, 1, &binding};
+    VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+    vkCreateDescriptorSetLayout(ctx.device(), &li, nullptr, &layout);
+    bool allSets = true;
+    for (int i = 0; i < 600; ++i) allSets = allSets && frames.allocDescriptorSet(layout) != VK_NULL_HANDLE;
+    CHECK(allSets);
+
+    // A frame command buffer, and something it uses destroyed through defer().
+    VkCommandBuffer cmd = frames.beginCommands();
+    vkCmdFillBuffer(cmd, buf, 0, 256, 0x11111111u);
+    const uint64_t t = frames.submit(cmd);
+    CHECK(t > 0);
+    int destroyed = 0;
+    frames.defer([&] { ++destroyed; ctx.destroyBuffer(buf, id); });
+    frames.beginFrame();  // frame `serial` closes; its slot is not reused yet
+    CHECK(destroyed == 0);
+    frames.beginFrame();  // the slot comes round: its submissions are complete
+    CHECK(destroyed == 1);
+    CHECK(queue.isComplete(t));
+    CHECK(frames.frameSerial() == serial + 2);
+    vkDestroyDescriptorSetLayout(ctx.device(), layout, nullptr);
+}
+
+// An RGBA8 image cleared to `color` and left in SHADER_READ_ONLY_OPTIMAL.
+struct TestImage {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkDeviceSize off = 0;
+    uint64_t id = 0;
+};
+TestImage makeClearedImage(render::VulkanContext& ctx, uint32_t w, uint32_t h, VkClearColorValue color) {
+    TestImage t;
+    ctx.createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, t.image, t.mem, t.off, t.id);
+    ctx.queue().submitImmediate([&](VkCommandBuffer cmd) {
+        const VkImageSubresourceRange range = render::colorRange();
+        render::cmdTransitionImage(cmd, t.image, range, VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        vkCmdClearColorImage(cmd, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+        render::cmdTransitionImage(cmd, t.image, range, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    });
+    return t;
+}
+
+void testPresenterOffscreen(render::VulkanContext& ctx) {
+    std::cout << "[presenter] offscreen composite + readback" << std::endl;
+    render::VulkanPresenter presenter(ctx);
+    CHECK(presenter.init());
+    std::vector<uint8_t> out;
+    uint32_t w = 0, h = 0;
+    CHECK(!presenter.readbackPixels(out, w, h));  // nothing presented yet
+
+    // CPU pixels only, N32 (BGRA): red with a green top-left quarter.
+    ctx.frames().beginFrame();
+    auto surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(64, 64));
+    surface->getCanvas()->clear(SK_ColorRED);
+    SkPaint green;
+    green.setColor(SK_ColorGREEN);
+    surface->getCanvas()->drawRect(SkRect::MakeXYWH(0, 0, 32, 32), green);
+    CHECK(presenter.presentSurface(surface.get()));
+    CHECK(presenter.readbackPixels(out, w, h));
+    CHECK(w == 64 && h == 64);
+    if (w == 64 && h == 64) {
+        const uint8_t* tl = px(out, w, 0, 0);
+        const uint8_t* br = px(out, w, 63, 63);
+        CHECK(tl[0] == 0 && tl[1] == 255 && tl[2] == 0 && tl[3] == 255);
+        CHECK(br[0] == 255 && br[1] == 0 && br[2] == 0 && br[3] == 255);
+    }
+
+    // A GPU image (blue, 48x48) under a larger UI layer above (64x64): a
+    // half-transparent red premultiplied pixel blends; the rest of the layer
+    // is transparent; outside the image is the clear color.
+    TestImage blue = makeClearedImage(ctx, 48, 48, {{0.0f, 0.0f, 1.0f, 1.0f}});
+    auto above = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(64, 64));
+    above->getCanvas()->clear(SK_ColorTRANSPARENT);
+    SkPaint halfRed;
+    halfRed.setColor(SkColorSetARGB(128, 255, 0, 0));
+    halfRed.setBlendMode(SkBlendMode::kSrc);
+    above->getCanvas()->drawRect(SkRect::MakeXYWH(0, 0, 8, 8), halfRed);
+
+    // Present twice in one frame: the second must not reuse (and overwrite)
+    // the first's in-flight layer texture.
+    ctx.frames().beginFrame();
+    render::PresentFrame frame;
+    frame.image = blue.image;
+    frame.imageWidth = frame.imageHeight = 48;
+    frame.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    frame.above = render::VulkanPresenter::surfaceLayer(above.get());
+    frame.clearColor[0] = 0.0f; frame.clearColor[1] = 1.0f; frame.clearColor[2] = 0.0f; frame.clearColor[3] = 1.0f;
+    CHECK(presenter.present(frame));
+    CHECK(presenter.present(frame));
+    CHECK(presenter.readbackPixels(out, w, h));
+    CHECK(w == 64 && h == 64);
+    if (w == 64 && h == 64) {
+        const uint8_t* blended = px(out, w, 2, 2);  // 50% red over blue
+        CHECK(near(blended[0], 128) && blended[1] == 0 && near(blended[2], 127) && blended[3] == 255);
+        const uint8_t* image = px(out, w, 40, 40);  // blue image, transparent layer above
+        CHECK(image[0] == 0 && image[1] == 0 && image[2] == 255);
+        const uint8_t* clear = px(out, w, 60, 60);  // beyond the image: clear color
+        CHECK(clear[0] == 0 && clear[1] == 255 && clear[2] == 0);
+    }
+
+    // All three layers: a half-transparent (premultiplied) image blends over
+    // the opaque white layer below it, and the layer above over both.
+    TestImage halfBlue = makeClearedImage(ctx, 48, 48, {{0.0f, 0.0f, 0.5f, 0.5f}});
+    auto below = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(64, 64));
+    below->getCanvas()->clear(SK_ColorWHITE);
+    ctx.frames().beginFrame();
+    frame.image = halfBlue.image;
+    frame.below = render::VulkanPresenter::surfaceLayer(below.get());
+    CHECK(presenter.present(frame));
+    CHECK(presenter.readbackPixels(out, w, h));
+    if (w == 64 && h == 64) {
+        const uint8_t* mid = px(out, w, 40, 40);  // half blue over white
+        CHECK(near(mid[0], 128) && near(mid[1], 128) && mid[2] == 255 && mid[3] == 255);
+        const uint8_t* top = px(out, w, 2, 2);    // half red over that
+        CHECK(near(top[0], 191) && near(top[1], 64) && near(top[2], 128));
+        const uint8_t* outside = px(out, w, 60, 60);  // only the layer below
+        CHECK(outside[0] == 255 && outside[1] == 255 && outside[2] == 255);
+    }
+    ctx.queue().waitIdle();
+    ctx.destroyImage(halfBlue.image, halfBlue.id);
+    ctx.queue().waitIdle();
+    ctx.destroyImage(blue.image, blue.id);
+}
+
+// A real window: the swapchain follows its size, minimizing presents nothing,
+// and the vsync preference switches the present mode.
+void testSwapchain() {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        std::cout << "[swapchain] SKIPPED (no video: " << SDL_GetError() << ")" << std::endl;
+        return;
+    }
+    const char* driver = SDL_GetCurrentVideoDriver();
+    if (!driver || std::strcmp(driver, "dummy") == 0 || std::strcmp(driver, "offscreen") == 0) {
+        std::cout << "[swapchain] SKIPPED (no display)" << std::endl;
+        return;
+    }
+    std::cout << "[swapchain] presentation on a " << driver << " window" << std::endl;
+    platform::Window window("bro_vulkan_test", 160, 120, /*hidden=*/false, /*resizable=*/true);
+    render::VulkanContextConfig cfg;
+    render::VulkanContext ctx(cfg);
+    CHECK(ctx.init(window.getSDLWindow()));
+    if (!ctx.isValid()) return;
+    render::VulkanSwapchain swapchain(ctx, window.getSDLWindow(), /*vsync=*/true);
+    CHECK(swapchain.init());
+    render::VulkanPresenter presenter(ctx, swapchain);
+    CHECK(presenter.init());
+
+    auto presentFrame = [&](uint32_t w, uint32_t h) {
+        ctx.frames().beginFrame();
+        std::vector<uint32_t> pixels(static_cast<size_t>(w) * h, 0xFF336699u);
+        return presenter.presentPixels(pixels.data(), w, h);
+    };
+    for (int i = 0; i < 4; ++i) CHECK(presentFrame(160, 120));
+    CHECK(swapchain.presentMode() == VK_PRESENT_MODE_FIFO_KHR);
+
+    // Resize: the swapchain follows the window, whatever size the frame is.
+    SDL_SetWindowSize(window.getSDLWindow(), 220, 170);
+    SDL_SyncWindow(window.getSDLWindow());
+    for (int i = 0; i < 4; ++i) {
+        SDL_PumpEvents();
+        CHECK(presentFrame(160, 120));
+    }
+    int pw = 0, ph = 0;
+    SDL_GetWindowSizeInPixels(window.getSDLWindow(), &pw, &ph);
+    CHECK(swapchain.extent().width == static_cast<uint32_t>(pw));
+    CHECK(swapchain.extent().height == static_cast<uint32_t>(ph));
+
+    swapchain.setVSync(false);
+    CHECK(presentFrame(160, 120));
+    std::cout << "  vsync off -> present mode " << swapchain.presentMode() << std::endl;
+
+    // Hidden: nothing to present, and nothing fails.
+    SDL_HideWindow(window.getSDLWindow());
+    SDL_SyncWindow(window.getSDLWindow());
+    CHECK(presentFrame(160, 120));
+    SDL_ShowWindow(window.getSDLWindow());
+    SDL_SyncWindow(window.getSDLWindow());
+    for (int i = 0; i < 3; ++i) CHECK(presentFrame(160, 120));
+    ctx.queue().waitIdle();
+}
+
+} // namespace
+
+int main() {
     {
         render::VulkanContextConfig cfg;
         cfg.headless = true;
-        cfg.enableValidation = false;
-
-        render::VulkanContext context(cfg);
-        bool ok = context.init();
-        if (!ok || !context.isValid()) {
-            std::cerr << "FAILED: Failed to initialize headless VulkanContext" << std::endl;
+        render::VulkanContext ctx(cfg);
+        if (!ctx.init()) {
+            std::cerr << "FAILED: headless VulkanContext init" << std::endl;
             return 1;
         }
-
-        assert(context.instance() != VK_NULL_HANDLE);
-        assert(context.physicalDevice() != VK_NULL_HANDLE);
-        assert(context.device() != VK_NULL_HANDLE);
-        assert(context.graphicsQueue() != VK_NULL_HANDLE);
-        assert(context.commandPool() != VK_NULL_HANDLE);
-        assert(context.queueFamilies().graphicsFamily >= 0);
-
-        std::cout << "PASSED (" << context.deviceProperties().deviceName << ")" << std::endl;
-
-        // Test buffer allocation & memory helper
-        std::cout << "[Test 2] VulkanContext Buffer Creation & Transfer... " << std::flush;
-        VkBuffer buffer = VK_NULL_HANDLE;
-        VkDeviceMemory mem = VK_NULL_HANDLE;
-        bool bufOk = context.createBuffer(1024,
-                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                          buffer, mem);
-        assert(bufOk);
-        assert(buffer != VK_NULL_HANDLE);
-        assert(mem != VK_NULL_HANDLE);
-
-        void* mapped = nullptr;
-        vkMapMemory(context.device(), mem, 0, 1024, 0, &mapped);
-        assert(mapped != nullptr);
-        const char testMsg[] = "Bro Vulkan Context Buffer Test";
-        std::memcpy(mapped, testMsg, sizeof(testMsg));
-        vkUnmapMemory(context.device(), mem);
-
-        mapped = nullptr;
-        vkMapMemory(context.device(), mem, 0, 1024, 0, &mapped);
-        assert(std::memcmp(mapped, testMsg, sizeof(testMsg)) == 0);
-        vkUnmapMemory(context.device(), mem);
-
-        vkDestroyBuffer(context.device(), buffer, nullptr);
-        vkFreeMemory(context.device(), mem, nullptr);
-        std::cout << "PASSED" << std::endl;
-
-        // Test pooled buffer & image allocation
-        std::cout << "[Test 2b] VulkanContext Pooled Buffer & Image Creation... " << std::flush;
-        VkBuffer pooledBuf = VK_NULL_HANDLE;
-        VkDeviceMemory pooledMem = VK_NULL_HANDLE;
-        VkDeviceSize pooledOffset = 0;
-        uint64_t pooledAllocId = 0;
-        void* pooledMapped = nullptr;
-        bool pooledOk = context.createBuffer(2048,
-                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                             pooledBuf, pooledMem, pooledOffset, pooledAllocId, pooledMapped);
-        assert(pooledOk);
-        assert(pooledBuf != VK_NULL_HANDLE);
-        assert(pooledMem != VK_NULL_HANDLE);
-        assert(pooledAllocId != 0);
-        assert(pooledMapped != nullptr);
-
-        auto stats = context.memoryPool().stats();
-        assert(stats.activeAllocationCount >= 1);
-
-        context.destroyBuffer(pooledBuf, pooledAllocId);
-        std::cout << "PASSED" << std::endl;
+        std::cout << "Device: " << ctx.deviceProperties().deviceName << std::endl;
+        testQueueAndFrames(ctx);
+        testPresenterOffscreen(ctx);
     }
+    testSwapchain();
+    SDL_Quit();
 
-    // 2. Test VulkanPresenter Offscreen Headless Rendering & Readback
-    std::cout << "[Test 3] VulkanPresenter Offscreen Headless Render & Readback... " << std::flush;
-    {
-        render::VulkanContextConfig cfg;
-        cfg.headless = true;
-        render::VulkanContext context(cfg);
-        bool ok = context.init();
-        assert(ok);
-
-        render::VulkanPresenter presenter(context);
-        bool presOk = presenter.init();
-        assert(presOk);
-        assert(presenter.isHeadless());
-
-        // Create a 64x64 Skia surface and draw content
-        const int W = 64;
-        const int H = 64;
-        auto info = SkImageInfo::Make(W, H, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-        sk_sp<SkSurface> surface = SkSurfaces::Raster(info);
-        assert(surface != nullptr);
-
-        SkCanvas* canvas = surface->getCanvas();
-        // Clear background with solid red (0xFFFF0000)
-        canvas->clear(SK_ColorRED);
-
-        // Draw a solid green rect in top-left 32x32
-        SkPaint paint;
-        paint.setColor(SK_ColorGREEN);
-        canvas->drawRect(SkRect::MakeXYWH(0, 0, 32, 32), paint);
-
-        // Present to offscreen VkImage
-        bool presented = presenter.presentSurface(surface.get());
-        assert(presented);
-        assert(presenter.offscreenImage() != VK_NULL_HANDLE);
-
-        // Readback pixels from the offscreen VkImage
-        std::vector<uint8_t> pixels;
-        uint32_t outW = 0, outH = 0;
-        bool readOk = presenter.readbackPixels(pixels, outW, outH);
-        assert(readOk);
-        assert(outW == W);
-        assert(outH == H);
-        assert(pixels.size() == static_cast<size_t>(W * H * 4));
-
-        // Check top-left (inside green rect: R=0, G=255, B=0, A=255)
-        uint8_t rGreen = pixels[0];
-        uint8_t gGreen = pixels[1];
-        uint8_t bGreen = pixels[2];
-        uint8_t aGreen = pixels[3];
-        assert(gGreen == 255);
-        assert(rGreen == 0);
-        assert(bGreen == 0);
-        assert(aGreen == 255);
-
-        // Check bottom-right (inside red background: R=255, G=0, B=0, A=255)
-        size_t brIdx = ((H - 1) * W + (W - 1)) * 4;
-        uint8_t rRed = pixels[brIdx + 0];
-        uint8_t gRed = pixels[brIdx + 1];
-        uint8_t bRed = pixels[brIdx + 2];
-        uint8_t aRed = pixels[brIdx + 3];
-        assert(rRed == 255);
-        assert(gRed == 0);
-        assert(bRed == 0);
-        assert(aRed == 255);
-
-        std::cout << "PASSED" << std::endl;
+    const uint32_t validationErrors = render::vulkanValidationErrorCount();
+    if (validationErrors > 0) {
+        std::cerr << "FAILED: " << validationErrors << " Vulkan validation error(s)" << std::endl;
+        return 1;
     }
-
-    // 3. Test SDL_WINDOW_VULKAN window creation
-    std::cout << "[Test 4] SDL_WINDOW_VULKAN Window Creation... " << std::flush;
-    {
-        try {
-            platform::Window window("Vulkan Window Test", 128, 128,
-                                    true /* hidden */, false /* resizable */,
-                                    true /* vsync */, false /* borderless */,
-                                    platform::GraphicsBackend::Vulkan);
-
-            assert(window.isVulkan());
-            assert(window.backend() == platform::GraphicsBackend::Vulkan);
-            assert(window.getSDLWindow() != nullptr);
-
-            // Test swapWindow is safe and doesn't crash on Vulkan window
-            window.swapWindow();
-
-            // Try creating swapchain on this window if display connection permits
-            render::VulkanContextConfig cfg;
-            cfg.headless = false;
-            render::VulkanContext context(cfg);
-            if (context.init()) {
-                render::VulkanSwapchain swapchain(context, window.getSDLWindow(), true);
-                if (swapchain.init()) {
-                    assert(swapchain.imageCount() >= 2);
-                    assert(swapchain.extent().width > 0);
-                    assert(swapchain.extent().height > 0);
-
-                    render::VulkanPresenter presenter(context, swapchain);
-                    assert(presenter.init());
-
-                    // Present a test frame
-                    std::vector<uint32_t> testPixels(swapchain.extent().width * swapchain.extent().height, 0xFF0000FF);
-                    bool pOk = presenter.presentPixels(testPixels.data(), swapchain.extent().width, swapchain.extent().height);
-                    if (pOk) {
-                        std::cout << "(Swapchain verified) ";
-                    }
-                }
-            }
-
-            std::cout << "PASSED" << std::endl;
-        } catch (const std::exception& e) {
-            std::cout << "SKIPPED (" << e.what() << ")" << std::endl;
-        }
+    if (gFailures > 0) {
+        std::cerr << "FAILED: " << gFailures << " check(s)" << std::endl;
+        return 1;
     }
-
-    std::cout << "=== All Vulkan Chunk 1 Tests Passed Successfully! ===" << std::endl;
+    std::cout << "bro_vulkan_test: all checks passed" << std::endl;
     return 0;
 }

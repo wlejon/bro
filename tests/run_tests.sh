@@ -24,6 +24,14 @@
 # test whose engine silently fell back to raster is reported as a FAIL for that
 # reason (see run_one_test); BRO_TEST_ALLOW_RASTER=1 permits it.
 #
+# Vulkan validation: where the Khronos validation layer is installed, every
+# test runs with BRO_VK_VALIDATION=1 and a validation error FAILS the test
+# (bro-headless exits nonzero and reports "Vulkan validation: N error(s)").
+# Message ids listed in tests/vk_validation_known.txt — errors owned by work
+# still in progress — are reported as KNOWN warnings instead; delete a line
+# there once its errors are fixed. BRO_TEST_VK_VALIDATION=0 turns validation
+# off (faster runs); =1 insists on it (the run stops if the layer is missing).
+#
 # Parallelism: tests run serially (1 job at a time) by default to prevent OOM
 # on memory-constrained systems where multiple headless instances with Skia/GL/Audio
 # saturate RAM. Control with BRO_TEST_JOBS (default: 1). Pass BRO_TEST_PARALLEL=1
@@ -266,6 +274,23 @@ else
     fi
 fi
 
+# --- Vulkan validation --------------------------------------------------------
+BRO_TEST_VK_VALIDATION="${BRO_TEST_VK_VALIDATION:-auto}"
+if [[ "$BRO_TEST_VK_VALIDATION" != "0" && -n "$VK_DEVICE" ]]; then
+    VK_VAL_PROBE=$(BRO_VK_VALIDATION=1 "$BRO" "$TEST_APP" -e "0" 2>&1)
+    if [[ "$VK_VAL_PROBE" == *"Validation layers requested, but not available"* ]]; then
+        if [[ "$BRO_TEST_VK_VALIDATION" == "1" ]]; then
+            echo "ERROR: BRO_TEST_VK_VALIDATION=1 but the Vulkan validation layer is not installed."
+            exit 1
+        fi
+        echo "  Vulkan validation: layer not installed — validation off"
+    else
+        export BRO_VK_VALIDATION=1
+        export BRO_VK_VALIDATION_KNOWN="$(to_win_path "$SCRIPT_DIR/vk_validation_known.txt")"
+        echo "  Vulkan validation: on (errors fail tests; known ids: tests/vk_validation_known.txt)"
+    fi
+fi
+
 # The JS tests run by default. BRO_TEST_JS=0 skips them (a bronze_host-only
 # run); a filter that names a .js file or a test_* stem overrides that, because
 # such a filter can match nothing else.
@@ -357,6 +382,12 @@ run_one_test() {
     if [[ $STATUS -eq 0 && "$OUTPUT" == *"Unhandled promise rejection:"* ]]; then
         echo "  FAIL  $REL  (unhandled promise rejection)"
         echo "$OUTPUT" | grep -A3 "Unhandled promise rejection:" | head -12 | sed 's/^/        /'
+        return 1
+    fi
+
+    if [[ "$OUTPUT" =~ Vulkan\ validation:\ ([0-9]+)\ error ]]; then
+        echo "  FAIL  $REL  (${BASH_REMATCH[1]} Vulkan validation error(s))"
+        echo "$OUTPUT" | grep -A2 "\[Vulkan .* ERROR\]" | head -24 | sed 's/^/        /'
         return 1
     fi
 

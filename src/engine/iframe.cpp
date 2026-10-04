@@ -251,18 +251,18 @@ void Engine::processPendingIframeReloads() {
         // raster renderer's GL context, so recreating it would leak the old one
         // (and destroying it here would be the wrong context). Hand it to the
         // rebuilt sub-doc; replayIframeLayers resizes it if the box changed, and
-        // keeping its fboTexture means the preview shows the old frame until the
-        // new one paints instead of flashing blank.
+        // keeping its published frame means the preview shows the old frame
+        // until the new one paints instead of flashing blank.
         render::SkiaRenderer::GPUSurface salvaged;
         int salvagedW = 0, salvagedH = 0;
-        unsigned int salvagedTex = 0;
+        sk_sp<SkImage> salvagedFrame;
         bool haveSalvage = false;
         for (auto it = iframeDocs_.begin(); it != iframeDocs_.end(); ++it) {
             if ((*it)->element == el) {
                 salvaged = std::move((*it)->surface);
                 salvagedW = (*it)->surfW;
                 salvagedH = (*it)->surfH;
-                salvagedTex = (*it)->fboTexture;
+                salvagedFrame = (*it)->published.get();
                 haveSalvage = true;
                 teardownIframeDoc(it->get());
                 iframeDocs_.erase(it);
@@ -284,7 +284,7 @@ void Engine::processPendingIframeReloads() {
             nd->surface = std::move(salvaged);
             nd->surfW = salvagedW;
             nd->surfH = salvagedH;
-            nd->fboTexture = salvagedTex;
+            nd->published.publish(std::move(salvagedFrame));
         } else {
             queueIframeSurfaceFree(std::move(salvaged));
         }
@@ -313,7 +313,7 @@ void Engine::drainIframeSurfaceFrees(render::SkiaRenderer* renderer) {
 // and report whether any sub-document needs (re)recording this frame. Iframe
 // activity has no other path to uiDirty_ (the host document may be idle while a
 // preview animates or was just reloaded), so surface it here — otherwise the
-// compositor never records the sub-doc and its fboTexture stays 0, giving a
+// compositor never records the sub-doc and it publishes no frame, giving a
 // blank preview and a null iframe.capture().
 bool Engine::tickIframes(double nowMs) {
     if (iframeDocs_.empty()) return false;

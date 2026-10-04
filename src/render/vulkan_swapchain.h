@@ -16,6 +16,7 @@ enum class SwapchainResult {
     Success,
     Suboptimal,
     OutOfDate,
+    Minimized,  // the window is minimized, hidden or empty: nothing to present this frame
     Error,
 };
 
@@ -26,57 +27,71 @@ struct SwapchainSupportDetails {
     std::vector<VkPresentModeKHR> presentModes;
 };
 
-/// Vulkan swapchain management: surface creation, image views, double/triple buffering, semaphores and fences.
+/// The swapchain of one SDL window.
+///
+/// The swapchain follows the window: acquire() recreates it when the window's
+/// pixel size, the surface, or the vsync preference changed, and reports
+/// Minimized (presenting nothing) while the window is minimized, hidden or
+/// has no pixels. Old
+/// swapchains, views and semaphores are retired through the context's frame
+/// ring rather than a device wait.
+///
+/// Synchronisation: each acquire uses a semaphore from a small ring, reused
+/// once the submission that waited on it (its ticket, given to present()) has
+/// completed; the semaphore a submission signals for presentation belongs to
+/// the swapchain image, so it is only reused once that image is acquired again.
+/// CPU/GPU frame pacing is VulkanFrames' job, so there are no fences here.
 class VulkanSwapchain {
 public:
-    static constexpr size_t kMaxFramesInFlight = 2; // double buffering for frame pacing
-
     VulkanSwapchain(VulkanContext& context, SDL_Window* window, bool vsync = true);
     ~VulkanSwapchain();
 
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
 
-    /// Initialize the surface, swapchain, image views, and sync objects.
+    /// Create the surface and the first swapchain.
     bool init();
 
-    /// Recreate swapchain on window resize or when suboptimal/out-of-date.
-    bool resize(uint32_t width, uint32_t height);
+    /// FIFO when true; MAILBOX (or IMMEDIATE) when false. Applied at the next acquire.
+    void setVSync(bool vsync) { wantVsync_ = vsync; }
+    bool vsync() const { return wantVsync_; }
 
-    /// Change vsync mode and recreate swapchain if needed.
-    void setVSync(bool vsync);
-    bool vsync() const { return vsync_; }
+    /// Acquire the next image. On Success/Suboptimal, `outImageIndex` is valid
+    /// and acquireSemaphore() is the semaphore the acquisition signals; the
+    /// caller must submit work that waits on it and then call present().
+    SwapchainResult acquire(uint32_t& outImageIndex);
+    VkSemaphore acquireSemaphore() const { return acquireSlots_[acquireCursor_].semaphore; }
 
-    /// Acquire the next available image from the swapchain for the current in-flight frame.
-    /// Waits on the in-flight fence and signals imageAvailableSemaphore.
-    SwapchainResult acquireNextImage(uint32_t& outImageIndex, uint64_t timeoutNs = UINT64_MAX);
+    /// The semaphore the submission rendering image `imageIndex` signals and
+    /// present() waits on.
+    VkSemaphore presentSemaphore(uint32_t imageIndex) const { return presentSemaphores_[imageIndex]; }
 
-    /// Present the given swapchain image index after rendering/transfer completes.
-    /// Waits on renderFinishedSemaphore and submits to the present queue.
-    SwapchainResult present(uint32_t imageIndex);
+    /// Present `imageIndex`. `ticket` is the queue ticket of the submission that
+    /// waited on acquireSemaphore() and signalled presentSemaphore(imageIndex).
+    SwapchainResult present(uint32_t imageIndex, uint64_t ticket);
 
     VkSurfaceKHR surface() const { return surface_; }
     VkSwapchainKHR swapchain() const { return swapchain_; }
     VkExtent2D extent() const { return extent_; }
     VkFormat imageFormat() const { return imageFormat_; }
     uint32_t imageCount() const { return static_cast<uint32_t>(images_.size()); }
+    VkPresentModeKHR presentMode() const { return presentMode_; }
 
     VkImage image(uint32_t index) const { return images_[index]; }
     VkImageView imageView(uint32_t index) const { return imageViews_[index]; }
 
-    size_t currentFrame() const { return currentFrame_; }
-    VkSemaphore currentImageAvailableSemaphore() const { return imageAvailableSemaphores_[currentFrame_]; }
-    VkSemaphore currentRenderFinishedSemaphore() const { return renderFinishedSemaphores_[currentFrame_]; }
-    VkFence currentInFlightFence() const { return inFlightFences_[currentFrame_]; }
-
     static SwapchainSupportDetails querySwapchainSupport(VkPhysicalDevice device, VkSurfaceKHR surface);
 
 private:
+    struct AcquireSlot {
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        uint64_t ticket = 0;  // submission that waited on it; reusable once complete
+    };
+
     bool createSurface();
-    bool createSwapchain(uint32_t width, uint32_t height);
-    bool createImageViews();
-    bool createSyncObjects();
-    void cleanupSwapchain();
+    bool recreate();
+    bool windowPixelSize(uint32_t& w, uint32_t& h) const;
+    void retireSwapchainObjects();
     void cleanup();
 
     VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
@@ -85,21 +100,22 @@ private:
 
     VulkanContext& context_;
     SDL_Window* window_ = nullptr;
-    bool vsync_ = true;
+    bool wantVsync_ = true;
+    bool vsync_ = true;          // the mode the current swapchain was made with
+    bool needsRecreate_ = false;
 
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat imageFormat_ = VK_FORMAT_UNDEFINED;
+    VkPresentModeKHR presentMode_ = VK_PRESENT_MODE_FIFO_KHR;
     VkExtent2D extent_{};
 
     std::vector<VkImage> images_;
     std::vector<VkImageView> imageViews_;
+    std::vector<VkSemaphore> presentSemaphores_;  // one per image
 
-    std::vector<VkSemaphore> imageAvailableSemaphores_;
-    std::vector<VkSemaphore> renderFinishedSemaphores_;
-    std::vector<VkFence> inFlightFences_;
-
-    size_t currentFrame_ = 0;
+    std::vector<AcquireSlot> acquireSlots_;
+    size_t acquireCursor_ = 0;
 };
 
 } // namespace bro::render

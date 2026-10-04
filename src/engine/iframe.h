@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/published_frame.h"
 #include "engine/replaced_elements.h"
 #include "dom/document.h"
 #include "canvas/canvas_scene.h"
@@ -27,9 +28,9 @@ struct IframeDoc {
     dom::Element* hoveredElement = nullptr; // sub-doc :hover target (non-owning)
     int boxW = 0, boxH = 0;           // last content-box size laid out
     render::CommandBuffer cmdBuffer;
-    render::SkiaRenderer::GPUSurface surface;
+    render::SkiaRenderer::GPUSurface surface;  // raster thread only
     int surfW = 0, surfH = 0;
-    unsigned int fboTexture = 0;
+    PublishedFrame published;                  // what the compositor draws
 };
 
 } // namespace bro::engine

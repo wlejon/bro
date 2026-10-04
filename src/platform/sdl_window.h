@@ -54,12 +54,13 @@ enum class CursorShape {
     Count_  // sentinel — cache array size, not a real shape
 };
 
-/// Target graphics API for window creation.
+/// How a window's frames reach the screen.
 enum class GraphicsBackend {
-    Vulkan,
+    Vulkan,    // SDL_WINDOW_VULKAN: a VulkanSwapchain presents to it
+    Software,  // no GPU: CPU frames go through presentPixels (SDL's window framebuffer)
 };
 
-/// One OS window created with SDL_WINDOW_VULKAN for Vulkan rendering.
+/// One OS window: a Vulkan surface target, or a software-presented window.
 class Window {
 public:
     Window(const std::string& title, uint32_t width, uint32_t height,
@@ -97,10 +98,7 @@ public:
 
     /// Graphics backend used by this window.
     GraphicsBackend backend() const { return m_backend; }
-    bool isVulkan() const { return true; }
     bool vsyncPreference() const { return m_vsyncPref; }
-
-    void applySwapIntervalPreference() {}
 
     /// Current client-area size in window coordinates (SDL points), queried
     /// live from SDL — unlike getWidth()/getHeight(), which only track sizes
@@ -120,17 +118,19 @@ public:
 
     void setSize(uint32_t width, uint32_t height) { m_width = width; m_height = height; }
     void setTitle(const std::string& title);
-    void swapWindow();
 
-    using SwapCallback = std::function<void()>;
-    void setSwapCallback(SwapCallback cb) { m_swapCallback = std::move(cb); }
+    /// Software backend: copy a frame of 32-bit pixels to the window's
+    /// framebuffer and show it, clipped to the window. False on failure or
+    /// for a Vulkan window.
+    bool presentPixels(const void* pixels, int width, int height, int stride, bool bgra);
 
     // --- Runtime settings ---
 
     /// Toggle fullscreen mode.
     void setFullscreen(bool fullscreen);
 
-    /// Change vsync mode. Requires GL context to be current.
+    /// Record the vsync preference; the engine applies it to the window's
+    /// swapchain (present mode).
     void setVSync(bool enabled);
 
     /// Change whether the window is resizable.
@@ -224,7 +224,6 @@ private:
     GraphicsBackend m_backend = GraphicsBackend::Vulkan;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;
-    SwapCallback m_swapCallback;
 };
 
 } // namespace bro::platform

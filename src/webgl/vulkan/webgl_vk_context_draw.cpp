@@ -197,13 +197,11 @@ void WebGLVkContext::submitAndFlush() {
     if (currentCmd_ != VK_NULL_HANDLE) {
         vkEndCommandBuffer(currentCmd_);
 
-        VkSubmitInfo submitInfo{};
-        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &currentCmd_;
-
-        vkQueueSubmit(context_.graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
-        context_.waitIdle();
+        // Through the queue owner, waiting for this submission only.
+        render::QueueSubmit batch;
+        batch.commandBuffers.push_back(currentCmd_);
+        const uint64_t ticket = context_.queue().submit(batch);
+        if (ticket != 0) context_.queue().wait(ticket);
 
         vkFreeCommandBuffers(context_.device(), commandPool_, 1, &currentCmd_);
         currentCmd_ = VK_NULL_HANDLE;

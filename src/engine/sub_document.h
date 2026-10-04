@@ -24,7 +24,7 @@ struct SubDocRef {
     render::SkiaRenderer::GPUSurface& surface;
     int& surfW;
     int& surfH;
-    unsigned int& fboTexture;
+    PublishedFrame& published;
 };
 
 /// A sub-app loaded off disk.
@@ -65,7 +65,7 @@ bool tickSubDoc(SubDocRef d, double nowMs);
 void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
                   layout::DrawTraversal* traversal, layout::SkiaTextMetrics& metrics);
 
-/// Raster thread: replay `cmdBuffer` into a box-sized GPU surface.
+/// Raster thread: replay `cmdBuffer` into a box-sized surface and publish it.
 void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer);
 
 /// Synchronous main-thread capture: replay `cmdBuffer` into a throwaway surface.

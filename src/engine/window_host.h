@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/engine_config.h"
+#include "engine/published_frame.h"
 #include "engine/replaced_elements.h"
 #include "dom/node_handle.h"
 #include "render/command_buffer.h"
@@ -12,6 +13,7 @@
 #include <vector>
 
 namespace bro::platform { class Window; }
+namespace bro::render { class VulkanSwapchain; class VulkanPresenter; }
 namespace bro::dom { class Document; class Element; }
 namespace bro::canvas { class CanvasScene; }
 
@@ -79,9 +81,19 @@ struct WindowHost {
     // raster thread at replay, ordered by the frame handshake like boxW/boxH.
     float renderScale = 1.0f;
     render::CommandBuffer cmdBuffer;
-    render::SkiaRenderer::GPUSurface surface;
+    render::SkiaRenderer::GPUSurface surface;  // raster thread only
     int surfW = 0, surfH = 0;
-    unsigned int fboTexture = 0;
+    PublishedFrame published;                  // what compositeWindowHosts presents
+
+    // Presentation (windowed with Vulkan): the window's own swapchain, and a
+    // window-sized surface the published frame is drawn onto over clearColor.
+    // Declared after `window` so they are destroyed before it.
+    std::unique_ptr<render::VulkanSwapchain> swapchain;
+    std::unique_ptr<render::VulkanPresenter> presenter;
+    sk_sp<SkSurface> presentSurface;
+
+    WindowHost();
+    ~WindowHost();
 };
 
 } // namespace bro::engine

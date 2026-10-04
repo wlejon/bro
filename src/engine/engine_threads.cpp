@@ -203,12 +203,12 @@ void Engine::rasterThreadFunc() {
                                 backBuf.systemLayers);
 
         // Replay each iframe sub-document into its box-sized surface (raster
-        // thread) → IframeDoc::fboTexture, which the compositor samples for the
+        // thread) → IframeDoc::published, which the compositor draws for the
         // UILayer::Iframe quads recorded during the app pass.
         replayIframeLayers(rasterRenderer.get());
 
         // And each secondary window's document into its window-sized surface →
-        // WindowHost::fboTexture, which the main thread composites onto that
+        // WindowHost::published, which the main thread composites onto that
         // window's drawable after the frame's fence. One texture per host, so
         // the single fence below covers them exactly as it covers app layers.
         replayWindowHostLayers(rasterRenderer.get());
@@ -237,7 +237,7 @@ void Engine::rasterThreadFunc() {
         if (!d) continue;
         rasterRenderer->destroyGPUSurface(d->surface);
         d->surfW = d->surfH = 0;
-        d->fboTexture = 0;
+        d->published.clear();
     }
     // Secondary-window host surfaces live on this context for the same reason
     // and must go out the same door: shutdown() destroys the hosts on the main
@@ -248,7 +248,7 @@ void Engine::rasterThreadFunc() {
         if (!h) continue;
         rasterRenderer->destroyGPUSurface(h->surface);
         h->surfW = h->surfH = 0;
-        h->fboTexture = 0;
+        h->published.clear();
     }
     drainIframeSurfaceFrees(rasterRenderer.get());
 

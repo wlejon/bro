@@ -46,7 +46,7 @@ void Engine::setCompileProgress(bool compiling, double progress) {
 
 void Engine::pumpCompileFrame(double progress) {
     setCompileProgress(true, progress);
-    if (displayMode_ != DisplayMode::Windowed || !window_ || !renderer_ || (!vulkanPresenter_ && !vulkanContext_)) {
+    if (displayMode_ != DisplayMode::Windowed || !window_ || !renderer_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
         return;
     }
@@ -101,6 +101,7 @@ void Engine::pumpCompileFrame(double progress) {
     recordAppLayers(appCmds, w, h, insetTop, contentRight(), contentBottom(), scrollY_);
     recordSystemPanelLayers(sysCmds, w, h);
 
+    beginGpuFrame();
     skia->beginFrame(w, h);
     skia->setDeviceScale(deviceScale_.render);
     replayAppLayers(skia, appCmds, screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
@@ -110,9 +111,10 @@ void Engine::pumpCompileFrame(double progress) {
     skia->setDeviceScale(1.0f);
     skia->endFrame();
 
+    beginFrameComposite();
     compositeLayers(appLayers, 0, insetTop, cw, ch);
     compositeLayers(systemLayers);
-    window_->swapWindow();
+    presentCurrentFrame();
 
     // About one frame per display refresh; the compile is on another core.
     const double spent = util::currentTimeMs() - frameStart;

@@ -4,6 +4,7 @@
 
 #include "render/skia_backend.h"
 #include "broimage/encode.h"
+#include "render/pixel_convert.h"
 
 #include <include/core/SkBitmap.h>
 #include <include/core/SkColorSpace.h>
@@ -91,20 +92,9 @@ bool SkiaRenderer::saveScreenshot(const std::string& path) {
     SkPixmap pixmap;
     if (!surface_->peekPixels(&pixmap)) return false;
 
-    int w = pixmap.width(), h = pixmap.height();
-
-    // Convert from N32 (BGRA premultiplied on little endian) to RGBA for PNG
-    std::vector<uint8_t> rgba(w * h * 4);
-    for (int y = 0; y < h; ++y) {
-        const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr32(0, y));
-        uint8_t* dst = rgba.data() + y * w * 4;
-        for (int x = 0; x < w; ++x) {
-            dst[x * 4 + 0] = src[x * 4 + 2]; // R <- B
-            dst[x * 4 + 1] = src[x * 4 + 1]; // G
-            dst[x * 4 + 2] = src[x * 4 + 0]; // B <- R
-            dst[x * 4 + 3] = src[x * 4 + 3]; // A
-        }
-    }
+    const int w = pixmap.width(), h = pixmap.height();
+    std::vector<uint8_t> rgba = pixmapToRgba(pixmap);
+    if (rgba.empty()) return false;
 
     return broimage::encode_png_file(path, rgba.data(), w, h, 4);
 }
@@ -115,19 +105,7 @@ std::vector<uint8_t> SkiaRenderer::capturePixels() {
     SkPixmap pixmap;
     if (!surface_->peekPixels(&pixmap)) return {};
 
-    int w = pixmap.width(), h = pixmap.height();
-    std::vector<uint8_t> rgba(w * h * 4);
-    for (int y = 0; y < h; ++y) {
-        const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr32(0, y));
-        uint8_t* dst = rgba.data() + y * w * 4;
-        for (int x = 0; x < w; ++x) {
-            dst[x * 4 + 0] = src[x * 4 + 2]; // R <- B
-            dst[x * 4 + 1] = src[x * 4 + 1]; // G
-            dst[x * 4 + 2] = src[x * 4 + 0]; // B <- R
-            dst[x * 4 + 3] = src[x * 4 + 3]; // A
-        }
-    }
-    return rgba;
+    return pixmapToRgba(pixmap);
 }
 
 } // namespace bro::render

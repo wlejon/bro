@@ -21,6 +21,7 @@
 #include "render/recording_renderer.h"
 #if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#include "scene/scene_renderer.h"
 #endif
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
@@ -127,7 +128,7 @@ Engine::~Engine() {
             if (!d) continue;
             skia->destroyGPUSurface(d->surface);
             d->surfW = d->surfH = 0;
-            d->fboTexture = 0;
+            d->published.clear();
         }
         drainIframeSurfaceFrees(skia);
     }
@@ -168,10 +169,6 @@ Engine::~Engine() {
             systemSurfacePool_[i].clear();
         }
     }
-    vulkanPresenter_.reset();
-    vulkanSwapchain_.reset();
-    vulkanContext_.reset();
-
     drawTraversal_.reset();
 
 #if BRO_WITH_3D
@@ -191,6 +188,17 @@ Engine::~Engine() {
 
     unloadAppModules();
     bro::bronze_host::hostCollectGarbage();
+
+    // The Vulkan device goes last: scene graphs, WebGL contexts and anything
+    // a final GC finalized above release their Vulkan objects into it. Then
+    // nothing may reach it through the default-context pointers any more.
+    vulkanPresenter_.reset();
+    vulkanSwapchain_.reset();
+    vulkanContext_.reset();
+    webgl::WebGL2RenderingContext::setDefaultVulkanContext(nullptr);
+#if BRO_WITH_3D
+    scene::SceneRenderer::setDefaultVulkanContext(nullptr);
+#endif
 }
 
 void Engine::handleResize(int w, int h) {

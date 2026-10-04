@@ -163,8 +163,10 @@ Engine::Engine(const EngineConfig& config)
     }
 
     // Graphics initialization.
-    // - Headless: initialize offscreen VulkanContext directly without requiring SDL window/X11.
-    // - Windowed: create platform::Window, GLContext stub, SkiaRenderer, and VulkanPresenter.
+    // - Headless: an offscreen VulkanContext + presenter (no surface, no X11).
+    // - Windowed: a platform::Window and SkiaRenderer, presented through a
+    //   VulkanSwapchain + VulkanPresenter; without the GPU (useGPU = false)
+    //   the window is a software one and frames are blitted to it on the CPU.
     // - Server: never initializes graphics.
     if (displayMode_ == DisplayMode::Headless) {
         try {
@@ -208,10 +210,12 @@ Engine::Engine(const EngineConfig& config)
         }
     } else if (displayMode_ == DisplayMode::Windowed) {
         try {
+            const auto backend = config.graphics.useGPU ? platform::GraphicsBackend::Vulkan
+                                                        : platform::GraphicsBackend::Software;
             window_ = std::make_unique<platform::Window>("Bro",
                 static_cast<uint32_t>(gfx.width),
                 static_cast<uint32_t>(gfx.height), false,
-                gfx.resizable, gfx.vsync, config.graphics.borderless);
+                gfx.resizable, gfx.vsync, config.graphics.borderless, backend);
 
             const auto& wcfg = config.graphics;
             if (wcfg.alwaysOnTop) window_->setAlwaysOnTop(true);
@@ -248,7 +252,7 @@ Engine::Engine(const EngineConfig& config)
                 render::VulkanContextConfig vkCfg;
                 vkCfg.headless = false;
                 vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
-                if (!vulkanContext_->init() || !window_->getSDLWindow()) {
+                if (!window_->getSDLWindow() || !vulkanContext_->init(window_->getSDLWindow())) {
                     throw std::runtime_error("Windowed Vulkan context initialization failed");
                 }
                 vulkanSwapchain_ = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, window_->getSDLWindow(), gfx.vsync);
@@ -259,9 +263,6 @@ Engine::Engine(const EngineConfig& config)
                 if (!vulkanPresenter_->init()) {
                     throw std::runtime_error("Windowed Vulkan presenter initialization failed");
                 }
-                window_->setSwapCallback([this]() {
-                    presentCurrentFrame();
-                });
                 webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
 #if BRO_WITH_3D
                 scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
@@ -313,8 +314,10 @@ Engine::Engine(const EngineConfig& config)
                 window_->setFullscreen(g.fullscreen);
                 setFullscreenState(g.fullscreen);
             }
-            if ((key == "vsync" || key == "*") && window_)
+            if ((key == "vsync" || key == "*") && window_) {
                 window_->setVSync(g.vsync);
+                if (vulkanSwapchain_) vulkanSwapchain_->setVSync(g.vsync);
+            }
             if ((key == "width" || key == "height" || key == "*") && window_ && !g.fullscreen)
                 window_->setWindowSize(static_cast<uint32_t>(g.width),
                                        static_cast<uint32_t>(g.height));

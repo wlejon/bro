@@ -66,8 +66,9 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         }
     }
 
-    LOG_INFO("Created window \"%s\" (%ux%u) with Vulkan",
-             title.c_str(), width, height);
+    LOG_INFO("Created window \"%s\" (%ux%u) with %s",
+             title.c_str(), width, height,
+             m_backend == GraphicsBackend::Vulkan ? "Vulkan" : "software presentation");
 }
 
 Window::~Window() {
@@ -162,8 +163,8 @@ float Window::getDevicePixelRatio() const {
 #endif
 }
 
-uint64_t Window::baseWindowFlags(GraphicsBackend /*backend*/) {
-    SDL_WindowFlags flags = SDL_WINDOW_VULKAN;
+uint64_t Window::baseWindowFlags(GraphicsBackend backend) {
+    SDL_WindowFlags flags = backend == GraphicsBackend::Vulkan ? SDL_WINDOW_VULKAN : 0;
 #ifdef __APPLE__
     flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #endif
@@ -177,10 +178,27 @@ void Window::raise() {
     }
 }
 
-void Window::swapWindow() {
-    if (m_swapCallback) {
-        m_swapCallback();
+bool Window::presentPixels(const void* pixels, int width, int height, int stride, bool bgra) {
+    if (!m_window || m_backend != GraphicsBackend::Software || !pixels) return false;
+    SDL_Surface* target = SDL_GetWindowSurface(m_window);
+    if (!target) {
+        LOG_ERROR("SDL_GetWindowSurface failed: %s", SDL_GetError());
+        return false;
     }
+    SDL_Surface* src = SDL_CreateSurfaceFrom(width, height,
+                                             bgra ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_ABGR8888,
+                                             const_cast<void*>(pixels), stride);
+    if (!src) {
+        LOG_ERROR("SDL_CreateSurfaceFrom failed: %s", SDL_GetError());
+        return false;
+    }
+    // The frame is premultiplied UI over nothing: copy, don't blend.
+    SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
+    SDL_FillSurfaceRect(target, nullptr, SDL_MapSurfaceRGB(target, 0, 0, 0));
+    const bool ok = SDL_BlitSurface(src, nullptr, target, nullptr) && SDL_UpdateWindowSurface(m_window);
+    if (!ok) LOG_ERROR("Software present failed: %s", SDL_GetError());
+    SDL_DestroySurface(src);
+    return ok;
 }
 
 void Window::setTitle(const std::string& title) {

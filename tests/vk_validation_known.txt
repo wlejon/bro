@@ -1,0 +1,45 @@
+# Vulkan validation message ids that do not fail tests yet (see run_tests.sh).
+# One VUID per line; '#' starts a comment. Delete a line once the code that
+# triggers it is fixed — from then on the error fails whichever test hits it.
+#
+# All of these belong to the 3D scene and WebGL backends (migration chunk 2,
+# "move scene + WebGL onto the frame core"); none comes from src/render.
+
+# Scene: sampled images (shadow maps, depth, scene textures) not in the layout
+# the descriptor declares when drawn (shadow cascades UNDEFINED, ...).
+VUID-vkCmdDraw-None-09600
+VUID-vkCmdDrawIndexed-None-08114
+# Scene: a custom-shader recompile destroys pipeline/descriptor objects bound
+# to the frame command buffer while it is recording (custom_shader_variants,
+# shader_texture_mips).
+VUID-vkCmdPipelineBarrier-commandBuffer-recording
+VUID-vkCmdBindDescriptorSets-commandBuffer-recording
+VUID-vkCmdPushConstants-commandBuffer-recording
+VUID-vkCmdEndRendering-commandBuffer-recording
+VUID-vkCmdBindPipeline-commandBuffer-recording
+VUID-vkCmdSetViewport-commandBuffer-recording
+VUID-vkCmdSetScissor-commandBuffer-recording
+VUID-vkCmdDrawIndexed-commandBuffer-recording
+VUID-vkCmdBindVertexBuffers-commandBuffer-recording
+VUID-vkCmdBindIndexBuffer-commandBuffer-recording
+VUID-vkCmdBeginRendering-commandBuffer-recording
+VUID-vkCmdDraw-commandBuffer-recording
+VUID-vkCmdCopyImageToBuffer-commandBuffer-recording
+VUID-vkCmdCopyImage-commandBuffer-recording
+VUID-vkEndCommandBuffer-commandBuffer-00059
+# Scene: descriptor set updated after its layout was destroyed (fxaa, render_target).
+VUID-VkWriteDescriptorSet-dstSet-00320
+# Scene: render-target pass with mismatched attachment sample counts (render_target).
+VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285
+VUID-vkCmdDraw-multisampledRenderToSingleSampled-07286
+
+# WebGL: framebuffer-attached texture mips not in COLOR_ATTACHMENT_OPTIMAL at
+# vkCmdBeginRendering (webgl_fbo, webgl_textures, resource_init, image_gpu_*).
+VUID-vkCmdBeginRendering-pRenderingInfo-09592
+# WebGL: texture layout tracking out of sync on canvas uploads (webgl_canvas_texture).
+VUID-VkImageMemoryBarrier-oldLayout-01197
+# WebGL: push-constant block larger than the pipeline layout's range (webgl_shaders).
+VUID-VkGraphicsPipelineCreateInfo-layout-10069
+VUID-vkCmdPushConstants-offset-01795
+# WebGL: a dedicated buffer + memory never freed before the device (webgl_draw).
+VUID-vkDestroyDevice-device-05137

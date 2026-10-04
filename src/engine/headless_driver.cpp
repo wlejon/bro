@@ -6,6 +6,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/host_headless.h"
+#include "render/vulkan_debug.h"
 
 using bro::engine::parseConfig;
 using bro::engine::findAncestorProjectRoot;
@@ -366,6 +367,16 @@ int runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
         delete engine;
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
+        exitCode = 1;
+    }
+
+    // A Vulkan validation error (BRO_VK_VALIDATION=1) fails the run, the
+    // device teardown included; known ones (BRO_VK_VALIDATION_KNOWN) are only
+    // counted.
+    if (const uint32_t known = bro::render::vulkanKnownValidationErrorCount())
+        fprintf(stderr, "Vulkan validation: %u known error(s) (BRO_VK_VALIDATION_KNOWN)\n", known);
+    if (const uint32_t errors = bro::render::vulkanValidationErrorCount()) {
+        fprintf(stderr, "Vulkan validation: %u error(s)\n", errors);
         exitCode = 1;
     }
 

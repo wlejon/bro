@@ -204,6 +204,7 @@ void Engine::advanceTime(double ms) {
         double step = std::min(remaining, 16.0);
         virtualTime_ += step;
         remaining -= step;
+        beginGpuFrame();
 
         double scaledStep = step * effectiveTimeScale();
         engineNowMs_ += scaledStep;
@@ -316,6 +317,8 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia) return {};
 
+    beginGpuFrame();
+
     // The frame is read back in device px: viewport × render scale.
     int w = viewportWidth_, h = viewportHeight_;
     const int fw = deviceScale_.drawableW, fh = deviceScale_.drawableH;
@@ -377,50 +380,13 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     skia->setDeviceScale(1.0f);
     skia->endFrame();
 
-    if (frameCompositeSurface_) {
-        frameCompositeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
-    }
-
+    beginFrameComposite();
     compositeLayers(appLayers, 0, insetTop, cw, ch);
     compositeLayers(systemLayers);
-
-    presentCurrentFrame();
+    std::vector<uint8_t> pixels = readCompositedFrame();
 
     if (activeWebGL) activeWebGL->restoreState();
-
-    if (vulkanPresenter_) {
-        std::vector<uint8_t> pixels;
-        uint32_t outW = 0, outH = 0;
-        if (vulkanPresenter_->readbackPixels(pixels, outW, outH)) {
-            return pixels;
-        }
-    }
-
-    if (frameCompositeSurface_) {
-        SkPixmap pixmap;
-        if (frameCompositeSurface_->peekPixels(&pixmap)) {
-            size_t pxBytes = static_cast<size_t>(pixmap.width()) * pixmap.height() * 4;
-            std::vector<uint8_t> pixels(pxBytes);
-            const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr());
-            bool isBgra = (pixmap.colorType() == kBGRA_8888_SkColorType);
-            if (isBgra) {
-                for (int y = 0; y < pixmap.height(); ++y) {
-                    for (int x = 0; x < pixmap.width(); ++x) {
-                        size_t idx = (y * pixmap.width() + x) * 4;
-                        pixels[idx + 0] = src[idx + 2];
-                        pixels[idx + 1] = src[idx + 1];
-                        pixels[idx + 2] = src[idx + 0];
-                        pixels[idx + 3] = src[idx + 3];
-                    }
-                }
-            } else {
-                std::memcpy(pixels.data(), src, pxBytes);
-            }
-            return pixels;
-        }
-    }
-
-    return {};
+    return pixels;
 }
 
 bool Engine::screenshot(const std::string& path) {
@@ -546,14 +512,6 @@ std::vector<uint8_t> Engine::capturePixels() {
     }
 
     renderer_->endFrame();
-    if (vulkanPresenter_) {
-        vulkanPresenter_->presentSurface(renderer_->surface());
-        std::vector<uint8_t> vkPixels;
-        uint32_t pw = 0, ph = 0;
-        if (vulkanPresenter_->readbackPixels(vkPixels, pw, ph)) {
-            return vkPixels;
-        }
-    }
     return renderer_->capturePixels();
 }
 

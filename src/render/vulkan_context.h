@@ -1,11 +1,16 @@
 #pragma once
 
+#include "render/vulkan_frames.h"
 #include "render/vulkan_memory_pool.h"
+#include "render/vulkan_queue.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+
+struct SDL_Window;
 
 namespace bro::render {
 
@@ -31,7 +36,13 @@ struct VulkanContextConfig {
     bool enableDynamicRendering = true;
 };
 
-/// Vulkan instance, physical device, logical device, and queue management.
+/// Vulkan instance, physical device and logical device, plus the two pieces
+/// every GPU consumer shares: the VulkanQueue that owns all submission and
+/// presentation, and the VulkanFrames ring of frames in flight.
+///
+/// bro needs Vulkan 1.3 with dynamic rendering and timeline semaphores; a
+/// device without them is skipped at selection. synchronization2 is enabled
+/// when the device has it (hasSynchronization2()).
 class VulkanContext {
 public:
     explicit VulkanContext(const VulkanContextConfig& config = {});
@@ -40,9 +51,11 @@ public:
     VulkanContext(const VulkanContext&) = delete;
     VulkanContext& operator=(const VulkanContext&) = delete;
 
-    /// Initialize the Vulkan instance, physical device, logical device, queues, and command pool.
-    /// If compatibleSurface is provided (e.g. from an SDL window), present queue support will be verified on it.
-    bool init(VkSurfaceKHR compatibleSurface = VK_NULL_HANDLE);
+    /// Create the instance, pick a physical device, create the logical device,
+    /// the queue owner and the frame ring. With `presentTarget` (windowed), the
+    /// chosen device and present queue family must be able to present to a
+    /// surface on that window.
+    bool init(SDL_Window* presentTarget = nullptr);
 
     VkInstance instance() const { return instance_; }
     VkPhysicalDevice physicalDevice() const { return physicalDevice_; }
@@ -57,16 +70,28 @@ public:
     const VkPhysicalDeviceProperties& deviceProperties() const { return deviceProperties_; }
     const VkPhysicalDeviceMemoryProperties& memoryProperties() const { return memoryProperties_; }
 
+    /// The effective API version: the lower of what the instance asked for
+    /// (1.3) and what the device supports.
+    uint32_t apiVersion() const { return apiVersion_; }
+    bool hasSynchronization2() const { return synchronization2_; }
+
+    VulkanQueue& queue() { return queue_; }
+    VulkanFrames& frames() { return frames_; }
+
     VkCommandPool commandPool() const { return commandPool_; }
 
     VulkanMemoryPool& memoryPool() { return memoryPool_; }
     const VulkanMemoryPool& memoryPool() const { return memoryPool_; }
 
     /// Single-use command buffer helpers for transfers and layout transitions.
+    /// endSingleTimeCommands submits through the queue owner and waits for
+    /// that submission only (not the device). Main thread.
     VkCommandBuffer beginSingleTimeCommands() const;
     void endSingleTimeCommands(VkCommandBuffer commandBuffer) const;
 
-    /// Memory and resource allocation helpers.
+    /// Memory type index for `typeFilter` with all of `properties`, or
+    /// kNoMemoryType (logged) when the device has none.
+    static constexpr uint32_t kNoMemoryType = UINT32_MAX;
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
 
     /// Pooled memory allocation methods (using VulkanMemoryPool)
@@ -111,12 +136,15 @@ public:
                            uint32_t width, uint32_t height,
                            VkCommandBuffer cmd = VK_NULL_HANDLE) const;
 
+    /// Layout transition with stage/access masks derived from the two layouts
+    /// (render::cmdTransitionImage); the aspect follows from `format`.
     void transitionImageLayout(VkImage image, VkFormat format,
                                VkImageLayout oldLayout, VkImageLayout newLayout,
                                VkCommandBuffer cmd = VK_NULL_HANDLE,
                                uint32_t mipLevels = 1, uint32_t baseMipLevel = 0,
                                uint32_t layerCount = 1, uint32_t baseArrayLayer = 0) const;
 
+    /// Wait for everything submitted through the queue owner so far.
     void waitIdle() const;
 
     bool isHeadless() const { return config_.headless; }
@@ -125,10 +153,15 @@ public:
     /// Enumerate available queue families for a physical device, testing presentation against `surface` if provided.
     static VulkanQueueFamilyIndices findQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface = VK_NULL_HANDLE);
 
+    /// Whether the present queue family can present to `surface` (a surface
+    /// on a window other than the one the device was chosen for).
+    bool canPresentTo(VkSurfaceKHR surface) const;
+
 private:
     bool createInstance();
     bool setupDebugMessenger();
     bool selectPhysicalDevice(VkSurfaceKHR compatibleSurface);
+    bool deviceMeetsRequirements(VkPhysicalDevice dev, const VkPhysicalDeviceProperties& props) const;
     bool createLogicalDevice();
     bool createCommandPool();
     void cleanup();
@@ -149,8 +182,16 @@ private:
     VkPhysicalDeviceMemoryProperties memoryProperties_{};
     VkPhysicalDeviceFeatures deviceFeatures_{};
 
-    VkCommandPool commandPool_ = VK_NULL_HANDLE;
+    uint32_t apiVersion_ = 0;
+    bool synchronization2_ = false;
+
+    VkCommandPool commandPool_ = VK_NULL_HANDLE;  // single-time commands, guarded below
+    mutable std::mutex commandPoolMutex_;
     mutable VulkanMemoryPool memoryPool_;
+    // Declared after the memory pool: destroyed before it (frames free their
+    // upload chunks back into the pool).
+    mutable VulkanQueue queue_;  // thread-safe; const helpers submit through it
+    VulkanFrames frames_;
 };
 
 } // namespace bro::render

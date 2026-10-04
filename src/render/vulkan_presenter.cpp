@@ -1,14 +1,63 @@
 #include "render/vulkan_presenter.h"
-#include "render/vulkan_presenter_shaders.h"
+#include "render/pixel_convert.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <include/core/SkColorType.h>
 #include <include/core/SkPixmap.h>
 #include <include/core/SkSurface.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace bro::render {
+
+namespace {
+
+// Clip `layer` to the target and stage it in the target's byte order.
+bool stageLayer(VulkanFrames& frames, const PresentPixels& layer, uint32_t targetW, uint32_t targetH,
+                bool targetBgra, VkBuffer& buffer, VkBufferImageCopy& region) {
+    const uint32_t w = std::min(layer.width, targetW);
+    const uint32_t h = std::min(layer.height, targetH);
+    UploadSlice staging = frames.allocUpload(static_cast<VkDeviceSize>(w) * h * 4);
+    if (!staging) return false;
+    copyPixels32(staging.mapped, static_cast<size_t>(w) * 4, layer.pixels,
+                 layer.stride ? layer.stride : static_cast<size_t>(layer.width) * 4,
+                 w, h, layer.bgra != targetBgra);
+    buffer = staging.buffer;
+    region = VkBufferImageCopy{};
+    region.bufferOffset = staging.offset;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    return true;
+}
+
+void transferWriteBarrier(VkCommandBuffer cmd, VkImage image) {
+    ImageBarrier waw;
+    waw.image = image;
+    waw.oldLayout = waw.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    waw.srcStages = waw.dstStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    waw.srcAccess = waw.dstAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
+    cmdImageBarrier(cmd, waw);
+}
+
+} // namespace
+
+PresentPixels VulkanPresenter::surfaceLayer(SkSurface* surface) {
+    PresentPixels layer;
+    SkPixmap pixmap;
+    if (!surface || !surface->peekPixels(&pixmap)) return layer;
+    if (pixmap.colorType() != kBGRA_8888_SkColorType && pixmap.colorType() != kRGBA_8888_SkColorType) {
+        LOG_ERROR("VulkanPresenter: unsupported surface color type %d", pixmap.colorType());
+        return layer;
+    }
+    layer.pixels = pixmap.addr();
+    layer.width = static_cast<uint32_t>(pixmap.width());
+    layer.height = static_cast<uint32_t>(pixmap.height());
+    layer.stride = static_cast<uint32_t>(pixmap.rowBytes());
+    layer.bgra = pixmap.colorType() == kBGRA_8888_SkColorType;
+    return layer;
+}
 
 VulkanPresenter::VulkanPresenter(VulkanContext& context, VulkanSwapchain& swapchain)
     : context_(context), swapchain_(&swapchain)
@@ -26,578 +75,298 @@ VulkanPresenter::~VulkanPresenter() {
 
 bool VulkanPresenter::init() {
     if (swapchain_) {
-        // Allocate command buffers matching swapchain frames in flight
-        commandBuffers_.resize(VulkanSwapchain::kMaxFramesInFlight);
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = context_.commandPool();
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers_.size());
-
-        if (vkAllocateCommandBuffers(context_.device(), &allocInfo, commandBuffers_.data()) != VK_SUCCESS) {
-            LOG_ERROR("VulkanPresenter: Failed to allocate command buffers");
-            return false;
-        }
-
         width_ = swapchain_->extent().width;
         height_ = swapchain_->extent().height;
     }
-
-    return true;
+    return initBlendResources();
 }
 
 void VulkanPresenter::cleanup() {
-    VkDevice device = context_.device();
-    if (device == VK_NULL_HANDLE) return;
-
-    vkDeviceWaitIdle(device);
-
-    cleanupOverlay();
-
-    if (!commandBuffers_.empty() && context_.commandPool() != VK_NULL_HANDLE) {
-        vkFreeCommandBuffers(device, context_.commandPool(),
-                             static_cast<uint32_t>(commandBuffers_.size()),
-                             commandBuffers_.data());
-        commandBuffers_.clear();
-    }
-
-    if (stagingAllocId_ != 0) {
-        context_.destroyBuffer(stagingBuffer_, stagingAllocId_);
-    } else {
-        if (stagingBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, stagingBuffer_, nullptr);
-        if (stagingMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, stagingMemory_, nullptr);
-    }
-    stagingBuffer_ = VK_NULL_HANDLE;
-    stagingMemory_ = VK_NULL_HANDLE;
-    stagingAllocId_ = 0;
-    stagingOffset_ = 0;
-    stagingMapped_ = nullptr;
-    stagingBufferSize_ = 0;
-
-    if (readbackAllocId_ != 0) {
-        context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
-    } else {
-        if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, readbackBuffer_, nullptr);
-        if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, readbackMemory_, nullptr);
-    }
+    if (context_.device() == VK_NULL_HANDLE) return;
+    context_.queue().waitIdle();
+    destroyBlendResources();
+    destroyImageNow(offscreen_);
+    if (readbackBuffer_ != VK_NULL_HANDLE) context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
     readbackBuffer_ = VK_NULL_HANDLE;
-    readbackMemory_ = VK_NULL_HANDLE;
     readbackAllocId_ = 0;
-    readbackOffset_ = 0;
     readbackMapped_ = nullptr;
-    readbackBufferSize_ = 0;
-
-    if (offscreenView_ != VK_NULL_HANDLE) {
-        vkDestroyImageView(device, offscreenView_, nullptr);
-        offscreenView_ = VK_NULL_HANDLE;
-    }
-    if (offscreenAllocId_ != 0) {
-        context_.destroyImage(offscreenImage_, offscreenAllocId_);
-    } else {
-        if (offscreenImage_ != VK_NULL_HANDLE) vkDestroyImage(device, offscreenImage_, nullptr);
-        if (offscreenMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, offscreenMemory_, nullptr);
-    }
-    offscreenImage_ = VK_NULL_HANDLE;
-    offscreenMemory_ = VK_NULL_HANDLE;
-    offscreenAllocId_ = 0;
-    offscreenOffset_ = 0;
+    readbackSize_ = 0;
+    readbackTicket_ = 0;
 }
 
-bool VulkanPresenter::ensureStagingBuffer(VkDeviceSize requiredSize) {
-    if (stagingBuffer_ != VK_NULL_HANDLE && stagingBufferSize_ >= requiredSize) {
+bool VulkanPresenter::ensureImage(Image& img, uint32_t width, uint32_t height, VkFormat format,
+                                  VkImageUsageFlags usage) {
+    if (img.image != VK_NULL_HANDLE && img.width == width && img.height == height && img.format == format)
         return true;
-    }
+    retireImage(img);
 
-    VkDevice device = context_.device();
-    if (stagingAllocId_ != 0) {
-        context_.destroyBuffer(stagingBuffer_, stagingAllocId_);
-    } else {
-        if (stagingBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, stagingBuffer_, nullptr);
-        if (stagingMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, stagingMemory_, nullptr);
-    }
-    stagingBuffer_ = VK_NULL_HANDLE;
-    stagingMemory_ = VK_NULL_HANDLE;
-    stagingAllocId_ = 0;
-    stagingOffset_ = 0;
-    stagingMapped_ = nullptr;
-
-    stagingBufferSize_ = requiredSize * 2; // allocate some headroom
-    return context_.createBuffer(stagingBufferSize_,
-                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                 stagingBuffer_, stagingMemory_,
-                                 stagingOffset_, stagingAllocId_, stagingMapped_);
-}
-
-bool VulkanPresenter::ensureOffscreenImage(uint32_t width, uint32_t height) {
-    if (offscreenImage_ != VK_NULL_HANDLE && width_ == width && height_ == height) {
-        return true;
-    }
-
-    VkDevice device = context_.device();
-    if (overlayFramebufferOffscreen_ != VK_NULL_HANDLE) {
-        vkDestroyFramebuffer(device, overlayFramebufferOffscreen_, nullptr);
-        overlayFramebufferOffscreen_ = VK_NULL_HANDLE;
-    }
-    if (offscreenView_ != VK_NULL_HANDLE) {
-        vkDestroyImageView(device, offscreenView_, nullptr);
-        offscreenView_ = VK_NULL_HANDLE;
-    }
-    if (offscreenAllocId_ != 0) {
-        context_.destroyImage(offscreenImage_, offscreenAllocId_);
-    } else {
-        if (offscreenImage_ != VK_NULL_HANDLE) vkDestroyImage(device, offscreenImage_, nullptr);
-        if (offscreenMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, offscreenMemory_, nullptr);
-    }
-    offscreenImage_ = VK_NULL_HANDLE;
-    offscreenMemory_ = VK_NULL_HANDLE;
-    offscreenAllocId_ = 0;
-    offscreenOffset_ = 0;
-
-    width_ = width;
-    height_ = height;
-
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT |
-                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    if (!context_.createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM,
-                              VK_IMAGE_TILING_OPTIMAL, usage,
+    if (!context_.createImage(width, height, format, VK_IMAGE_TILING_OPTIMAL, usage,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                              offscreenImage_, offscreenMemory_,
-                              offscreenOffset_, offscreenAllocId_)) {
-        LOG_ERROR("VulkanPresenter: Failed to create offscreen VkImage");
+                              img.image, img.memory, img.offset, img.allocId)) {
+        LOG_ERROR("VulkanPresenter: failed to create a %ux%u image", width, height);
         return false;
     }
-
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = offscreenImage_;
+    viewInfo.image = img.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    if (vkCreateImageView(device, &viewInfo, nullptr, &offscreenView_) != VK_SUCCESS) {
-        LOG_ERROR("VulkanPresenter: Failed to create offscreen VkImageView");
+    viewInfo.format = format;
+    viewInfo.subresourceRange = colorRange();
+    if (vkCreateImageView(context_.device(), &viewInfo, nullptr, &img.view) != VK_SUCCESS) {
+        LOG_ERROR("VulkanPresenter: failed to create an image view");
+        destroyImageNow(img);
         return false;
     }
-
+    img.format = format;
+    img.width = width;
+    img.height = height;
+    img.lastUseSerial = 0;
     return true;
 }
 
-bool VulkanPresenter::presentSurface(SkSurface* surface) {
-    if (!surface) return false;
-
-    SkPixmap pixmap;
-    if (!surface->peekPixels(&pixmap)) {
-        LOG_ERROR("VulkanPresenter: Failed to peek pixels from SkSurface");
-        return false;
-    }
-
-    bool isBgra = (pixmap.colorType() == kBGRA_8888_SkColorType);
-    return presentPixels(pixmap.addr(),
-                         static_cast<uint32_t>(pixmap.width()),
-                         static_cast<uint32_t>(pixmap.height()),
-                         static_cast<uint32_t>(pixmap.rowBytes()),
-                         isBgra);
+// Release an image the GPU may still be using: destroyed once the frames
+// submitted so far have completed.
+void VulkanPresenter::retireImage(Image& img) {
+    if (img.image == VK_NULL_HANDLE && img.view == VK_NULL_HANDLE) return;
+    VulkanContext* ctx = &context_;
+    Image dead = img;
+    context_.frames().defer([ctx, dead]() {
+        if (dead.view != VK_NULL_HANDLE) vkDestroyImageView(ctx->device(), dead.view, nullptr);
+        ctx->destroyImage(dead.image, dead.allocId);
+    });
+    img = Image{};
 }
 
-bool VulkanPresenter::presentPixels(const void* pixels, uint32_t width, uint32_t height,
-                                    uint32_t stride, bool isBgra)
-{
-    if (!pixels || width == 0 || height == 0) return false;
+void VulkanPresenter::destroyImageNow(Image& img) {
+    if (img.view != VK_NULL_HANDLE) vkDestroyImageView(context_.device(), img.view, nullptr);
+    if (img.image != VK_NULL_HANDLE || img.allocId != 0) context_.destroyImage(img.image, img.allocId);
+    img = Image{};
+}
 
-    VkDeviceSize imageBytes = static_cast<VkDeviceSize>(width) * height * 4;
-    if (!ensureStagingBuffer(imageBytes)) {
-        LOG_ERROR("VulkanPresenter: Failed to ensure staging buffer");
+bool VulkanPresenter::ensureReadbackBuffer(VkDeviceSize size) {
+    if (readbackBuffer_ != VK_NULL_HANDLE && readbackSize_ >= size) return true;
+    if (readbackBuffer_ != VK_NULL_HANDLE) {
+        VulkanContext* ctx = &context_;
+        VkBuffer buf = readbackBuffer_;
+        uint64_t id = readbackAllocId_;
+        context_.frames().defer([ctx, buf, id]() { ctx->destroyBuffer(buf, id); });
+    }
+    readbackBuffer_ = VK_NULL_HANDLE;
+    readbackAllocId_ = 0;
+    readbackMapped_ = nullptr;
+    readbackSize_ = size;
+    if (!context_.createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               readbackBuffer_, readbackMemory_, readbackOffset_, readbackAllocId_,
+                               readbackMapped_) || !readbackMapped_) {
+        LOG_ERROR("VulkanPresenter: failed to create the readback buffer");
+        readbackSize_ = 0;
         return false;
     }
+    return true;
+}
 
-    VkFormat targetFormat = swapchain_ ? swapchain_->imageFormat() : VK_FORMAT_R8G8B8A8_UNORM;
-    bool targetIsBgra = (targetFormat == VK_FORMAT_B8G8R8A8_UNORM || targetFormat == VK_FORMAT_B8G8R8A8_SRGB);
-    bool needSwizzle = (isBgra != targetIsBgra);
+bool VulkanPresenter::present(const PresentFrame& frame) {
+    if (!frame.below && !frame.hasImage() && !frame.above) return false;
+    return swapchain_ ? presentToSwapchain(frame) : presentOffscreen(frame);
+}
 
-    uint32_t srcStride = (stride > 0) ? stride : (width * 4);
+// Record the frame into `target`, reporting the layout it is left in
+// (TRANSFER_DST, or COLOR_ATTACHMENT after blending) for the caller to move
+// on from — also when recording fails part-way. `acquireStages` are the stages
+// a prior user of the target (the swapchain acquire, the last readback) is
+// ordered against.
+bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame, const Target& target,
+                                  VkPipelineStageFlags acquireStages, VkImageLayout& targetLayout) {
+    ImageBarrier toDst;
+    toDst.image = target.image;
+    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcStages = acquireStages;
+    toDst.dstStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    toDst.dstAccess = VK_ACCESS_TRANSFER_WRITE_BIT;
+    cmdImageBarrier(cmd, toDst);
+    targetLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-    void* mapped = stagingMapped_;
-    if (!mapped) {
-        if (vkMapMemory(context_.device(), stagingMemory_, stagingOffset_, imageBytes, 0, &mapped) != VK_SUCCESS) {
-            LOG_ERROR("VulkanPresenter: Failed to map staging memory");
+    // The base is the layer below, or else the image copied straight in.
+    const bool imageIsBase = !frame.below && frame.hasImage();
+    const uint32_t baseW = frame.below ? frame.below.width : imageIsBase ? frame.imageWidth : 0;
+    const uint32_t baseH = frame.below ? frame.below.height : imageIsBase ? frame.imageHeight : 0;
+    if (baseW < target.width || baseH < target.height) {
+        VkClearColorValue clear{};
+        std::memcpy(clear.float32, frame.clearColor, sizeof(clear.float32));
+        const VkImageSubresourceRange range = colorRange();
+        vkCmdClearColorImage(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+        transferWriteBarrier(cmd, target.image);
+    }
+
+    if (frame.below) {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkBufferImageCopy region{};
+        if (!stageLayer(context_.frames(), frame.below, target.width, target.height,
+                        isBgraFormat(target.format), buffer, region))
             return false;
-        }
+        vkCmdCopyBufferToImage(cmd, buffer, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     }
 
-    const uint8_t* srcBytes = reinterpret_cast<const uint8_t*>(pixels);
-    uint8_t* dstBytes = reinterpret_cast<uint8_t*>(mapped);
-
-    if (needSwizzle) {
-        for (uint32_t y = 0; y < height; ++y) {
-            const uint8_t* rowSrc = srcBytes + y * srcStride;
-            uint8_t* rowDst = dstBytes + y * width * 4;
-            for (uint32_t x = 0; x < width; ++x) {
-                rowDst[x * 4 + 0] = rowSrc[x * 4 + 2]; // swap R and B
-                rowDst[x * 4 + 1] = rowSrc[x * 4 + 1];
-                rowDst[x * 4 + 2] = rowSrc[x * 4 + 0];
-                rowDst[x * 4 + 3] = rowSrc[x * 4 + 3];
-            }
-        }
-    } else {
-        if (srcStride == width * 4) {
-            std::memcpy(dstBytes, srcBytes, imageBytes);
-        } else {
-            for (uint32_t y = 0; y < height; ++y) {
-                std::memcpy(dstBytes + y * width * 4, srcBytes + y * srcStride, width * 4);
-            }
-        }
+    if (imageIsBase) {
+        const uint32_t w = std::min(frame.imageWidth, target.width);
+        const uint32_t h = std::min(frame.imageHeight, target.height);
+        const bool toSrc = frame.imageLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        if (toSrc)
+            cmdTransitionImage(cmd, frame.image, colorRange(), frame.imageLayout,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.srcOffsets[1] = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.dstOffsets[1] = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
+        vkCmdBlitImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+        if (toSrc)
+            cmdTransitionImage(cmd, frame.image, colorRange(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               frame.imageLayout);
     }
 
-    if (!stagingMapped_) {
-        vkUnmapMemory(context_.device(), stagingMemory_);
+    // Blended layers: the image over the layer below, then the layer above.
+    BlendDraw draws[2];
+    size_t drawCount = 0;
+    if (frame.hasImage() && !imageIsBase) {
+        if (!copyImageTexture(cmd, frame, draws[drawCount++])) return false;
     }
-
-    // Headless / Offscreen presentation
-    if (!swapchain_) {
-        if (!ensureOffscreenImage(width, height)) {
-            return false;
-        }
-
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                       VK_IMAGE_LAYOUT_UNDEFINED,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       cmd);
-        context_.copyBufferToImage(stagingBuffer_, offscreenImage_, width, height, cmd);
-        context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                       cmd);
-        context_.endSingleTimeCommands(cmd);
-        return true;
+    if (frame.above) {
+        if (!uploadLayerTexture(cmd, frame.above, draws[drawCount++])) return false;
     }
+    if (drawCount == 0) return true;
 
-    // Windowed presentation via swapchain
-    if (swapchain_->extent().width != width || swapchain_->extent().height != height) {
-        swapchain_->resize(width, height);
-    }
+    // Blending reads what the transfers above wrote.
+    cmdTransitionImage(cmd, target.image, colorRange(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    targetLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    recordBlendDraws(cmd, target, draws, drawCount);
+    return true;
+}
+
+bool VulkanPresenter::presentToSwapchain(const PresentFrame& frame) {
+    auto& frames = context_.frames();
+    frames.ensureFrame();
 
     uint32_t imageIndex = 0;
-    SwapchainResult acqResult = swapchain_->acquireNextImage(imageIndex);
-    if (acqResult == SwapchainResult::OutOfDate) {
-        swapchain_->resize(width, height);
-        acqResult = swapchain_->acquireNextImage(imageIndex);
-        if (acqResult != SwapchainResult::Success && acqResult != SwapchainResult::Suboptimal) {
-            return false;
-        }
-    } else if (acqResult == SwapchainResult::Error) {
-        return false;
-    }
+    SwapchainResult acquired = swapchain_->acquire(imageIndex);
+    if (acquired == SwapchainResult::Minimized) return true;
+    if (acquired != SwapchainResult::Success && acquired != SwapchainResult::Suboptimal) return false;
 
-    size_t frameIndex = swapchain_->currentFrame();
-    VkCommandBuffer cmd = commandBuffers_[frameIndex];
-    vkResetCommandBuffer(cmd, 0);
+    width_ = swapchain_->extent().width;
+    height_ = swapchain_->extent().height;
+    const Target target{swapchain_->image(imageIndex), swapchain_->imageView(imageIndex),
+                        swapchain_->imageFormat(), width_, height_};
 
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &beginInfo);
+    // The acquire semaphore is waited on at the first stage that touches the
+    // image; the layout transition is ordered after it through the same stages.
+    constexpr VkPipelineStageFlags kAcquireStages =
+        VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-    VkImage swapImage = swapchain_->image(imageIndex);
+    VkCommandBuffer cmd = frames.beginCommands();
+    if (cmd == VK_NULL_HANDLE) return false;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    const bool recorded = recordFrame(cmd, frame, target, kAcquireStages, layout);
 
-    context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
-                                   VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   cmd);
+    // Whatever the recording left the image in, it ends ready to present: a
+    // failed recording is still submitted, to consume the acquire semaphore.
+    cmdTransitionImage(cmd, target.image, colorRange(), layout, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-    context_.copyBufferToImage(stagingBuffer_, swapImage, width, height, cmd);
+    const uint64_t ticket = frames.submit(
+        cmd, {{swapchain_->acquireSemaphore(), kAcquireStages, 0}},
+        {{swapchain_->presentSemaphore(imageIndex), 0}});
+    if (ticket == 0) return false;
+    const SwapchainResult presented = swapchain_->present(imageIndex, ticket);
+    return recorded && presented != SwapchainResult::Error;
+}
 
-    context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                   cmd);
+bool VulkanPresenter::presentOffscreen(const PresentFrame& frame) {
+    auto& frames = context_.frames();
+    frames.ensureFrame();
 
-    vkEndCommandBuffer(cmd);
+    // The target covers every layer.
+    const uint32_t w = std::max({frame.below ? frame.below.width : 0u,
+                                 frame.hasImage() ? frame.imageWidth : 0u,
+                                 frame.above ? frame.above.width : 0u});
+    const uint32_t h = std::max({frame.below ? frame.below.height : 0u,
+                                 frame.hasImage() ? frame.imageHeight : 0u,
+                                 frame.above ? frame.above.height : 0u});
+    constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    readbackTicket_ = 0;
+    if (!ensureImage(offscreen_, w, h, VK_FORMAT_R8G8B8A8_UNORM, kUsage)) return false;
+    const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4;
+    if (!ensureReadbackBuffer(bytes)) return false;
+    width_ = w;
+    height_ = h;
+    const Target target{offscreen_.image, offscreen_.view, offscreen_.format, w, h};
 
-    VkSemaphore waitSem = swapchain_->currentImageAvailableSemaphore();
-    VkSemaphore signalSem = swapchain_->currentRenderFinishedSemaphore();
-    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_TRANSFER_BIT };
+    VkCommandBuffer cmd = frames.beginCommands();
+    if (cmd == VK_NULL_HANDLE) return false;
+    // The previous present's readback copy read this image (TRANSFER).
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    const bool recorded = recordFrame(cmd, frame, target, VK_PIPELINE_STAGE_TRANSFER_BIT, layout);
+    cmdTransitionImage(cmd, target.image, colorRange(), layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = &waitSem;
-    submitInfo.pWaitDstStageMask = waitStages;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &signalSem;
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {w, h, 1};
+    vkCmdCopyImageToBuffer(cmd, target.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readbackBuffer_, 1, &region);
 
-    if (vkQueueSubmit(context_.graphicsQueue(), 1, &submitInfo, swapchain_->currentInFlightFence()) != VK_SUCCESS) {
-        LOG_ERROR("VulkanPresenter: vkQueueSubmit failed");
-        return false;
-    }
+    VkBufferMemoryBarrier toHost{};
+    toHost.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    toHost.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toHost.buffer = readbackBuffer_;
+    toHost.size = bytes;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
+                         0, nullptr, 1, &toHost, 0, nullptr);
 
-    SwapchainResult presResult = swapchain_->present(imageIndex);
-    if (presResult == SwapchainResult::OutOfDate || presResult == SwapchainResult::Suboptimal) {
-        swapchain_->resize(width, height);
-    }
-
-    width_ = width;
-    height_ = height;
+    const uint64_t ticket = frames.submit(cmd);
+    if (ticket == 0 || !recorded) return false;
+    readbackTicket_ = ticket;
     return true;
 }
 
 bool VulkanPresenter::readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight) {
-    if (offscreenImage_ == VK_NULL_HANDLE || width_ == 0 || height_ == 0) {
-        return false;
-    }
-
-    VkDeviceSize requiredSize = static_cast<VkDeviceSize>(width_) * height_ * 4;
-    VkDevice device = context_.device();
-
-    if (readbackBuffer_ == VK_NULL_HANDLE || readbackBufferSize_ < requiredSize) {
-        if (readbackAllocId_ != 0) {
-            context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
-        } else {
-            if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(device, readbackBuffer_, nullptr);
-            if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(device, readbackMemory_, nullptr);
-        }
-        readbackBuffer_ = VK_NULL_HANDLE;
-        readbackMemory_ = VK_NULL_HANDLE;
-        readbackAllocId_ = 0;
-        readbackOffset_ = 0;
-        readbackMapped_ = nullptr;
-
-        readbackBufferSize_ = requiredSize * 2;
-        if (!context_.createBuffer(readbackBufferSize_,
-                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                   readbackBuffer_, readbackMemory_,
-                                   readbackOffset_, readbackAllocId_, readbackMapped_)) {
-            LOG_ERROR("VulkanPresenter: Failed to create readback buffer");
-            return false;
-        }
-    }
-
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-    context_.copyImageToBuffer(offscreenImage_, readbackBuffer_, width_, height_, cmd);
-    context_.endSingleTimeCommands(cmd);
-
-    if (readbackMapped_) {
-        outPixels.resize(requiredSize);
-        std::memcpy(outPixels.data(), readbackMapped_, requiredSize);
-    } else {
-        void* mapped = nullptr;
-        if (vkMapMemory(device, readbackMemory_, readbackOffset_, requiredSize, 0, &mapped) != VK_SUCCESS) {
-            LOG_ERROR("VulkanPresenter: Failed to map readback memory");
-            return false;
-        }
-        outPixels.resize(requiredSize);
-        std::memcpy(outPixels.data(), mapped, requiredSize);
-        vkUnmapMemory(device, readbackMemory_);
-    }
-
+    if (swapchain_ || readbackTicket_ == 0 || !readbackMapped_) return false;
+    if (!context_.queue().wait(readbackTicket_)) return false;
+    const size_t bytes = static_cast<size_t>(width_) * height_ * 4;
+    outPixels.resize(bytes);
+    std::memcpy(outPixels.data(), readbackMapped_, bytes);
     outWidth = width_;
     outHeight = height_;
     return true;
 }
 
-bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t height,
-                                   VkImageLayout currentLayout,
-                                   SkSurface* overlaySurface)
-{
-    if (srcImage == VK_NULL_HANDLE || width == 0 || height == 0) return false;
+bool VulkanPresenter::presentSurface(SkSurface* surface) {
+    PresentFrame frame;
+    frame.below = surfaceLayer(surface);
+    return present(frame);
+}
 
-    // Headless / Offscreen presentation
-    if (!swapchain_) {
-        if (!ensureOffscreenImage(width, height)) {
-            return false;
-        }
+bool VulkanPresenter::presentPixels(const void* pixels, uint32_t width, uint32_t height,
+                                    uint32_t stride, bool isBgra) {
+    PresentFrame frame;
+    frame.below = PresentPixels{pixels, width, height, stride, isBgra};
+    return present(frame);
+}
 
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
-            context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
-                                           currentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                           cmd);
-        }
-        context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                       VK_IMAGE_LAYOUT_UNDEFINED,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       cmd);
-
-        VkImageCopy copyRegion{};
-        copyRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegion.srcSubresource.layerCount = 1;
-        copyRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegion.dstSubresource.layerCount = 1;
-        copyRegion.extent.width = width;
-        copyRegion.extent.height = height;
-        copyRegion.extent.depth = 1;
-
-        vkCmdCopyImage(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       offscreenImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       1, &copyRegion);
-
-        if (overlaySurface) {
-            uploadOverlaySurface(overlaySurface, cmd);
-            initOverlayPipeline(VK_FORMAT_R8G8B8A8_UNORM, overlayRenderPassOffscreen_, overlayPipelineOffscreen_);
-            recordOverlayPass(cmd, offscreenImage_, offscreenView_,
-                              overlayRenderPassOffscreen_, overlayPipelineOffscreen_,
-                              overlayFramebufferOffscreen_, width, height,
-                              VK_FORMAT_R8G8B8A8_UNORM);
-            context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                           cmd);
-        } else {
-            context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                           cmd);
-        }
-
-        if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
-            context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
-                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout,
-                                           cmd);
-        }
-        context_.endSingleTimeCommands(cmd);
-        width_ = width;
-        height_ = height;
-        return true;
-    }
-
-    // Windowed presentation via swapchain
-    if (swapchain_->extent().width != width || swapchain_->extent().height != height) {
-        swapchain_->resize(width, height);
-        for (auto fb : overlayFramebuffersSwapchain_) {
-            if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(context_.device(), fb, nullptr);
-        }
-        overlayFramebuffersSwapchain_.clear();
-    }
-
-    uint32_t imageIndex = 0;
-    SwapchainResult acqResult = swapchain_->acquireNextImage(imageIndex);
-    if (acqResult == SwapchainResult::OutOfDate) {
-        swapchain_->resize(width, height);
-        for (auto fb : overlayFramebuffersSwapchain_) {
-            if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(context_.device(), fb, nullptr);
-        }
-        overlayFramebuffersSwapchain_.clear();
-        acqResult = swapchain_->acquireNextImage(imageIndex);
-        if (acqResult != SwapchainResult::Success && acqResult != SwapchainResult::Suboptimal) {
-            return false;
-        }
-    } else if (acqResult == SwapchainResult::Error) {
-        return false;
-    }
-
-    size_t frameIndex = swapchain_->currentFrame();
-    VkCommandBuffer cmd = commandBuffers_[frameIndex];
-    vkResetCommandBuffer(cmd, 0);
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &beginInfo);
-
-    VkImage swapImage = swapchain_->image(imageIndex);
-
-    if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
-        context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
-                                           currentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                           cmd);
-    }
-    context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
-                                   VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   cmd);
-
-    VkImageBlit blitRegion{};
-    blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    blitRegion.srcSubresource.layerCount = 1;
-    blitRegion.srcOffsets[0] = {0, 0, 0};
-    blitRegion.srcOffsets[1] = {static_cast<int32_t>(width), static_cast<int32_t>(height), 1};
-    blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    blitRegion.dstSubresource.layerCount = 1;
-    blitRegion.dstOffsets[0] = {0, 0, 0};
-    blitRegion.dstOffsets[1] = {static_cast<int32_t>(swapchain_->extent().width),
-                                static_cast<int32_t>(swapchain_->extent().height), 1};
-
-    vkCmdBlitImage(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                   1, &blitRegion, VK_FILTER_LINEAR);
-
-    if (overlaySurface) {
-        uploadOverlaySurface(overlaySurface, cmd);
-        initOverlayPipeline(swapchain_->imageFormat(), overlayRenderPassSwapchain_, overlayPipelineSwapchain_);
-        if (overlayFramebuffersSwapchain_.size() <= imageIndex) {
-            overlayFramebuffersSwapchain_.resize(swapchain_->imageCount(), VK_NULL_HANDLE);
-        }
-        recordOverlayPass(cmd, swapImage, swapchain_->imageView(imageIndex),
-                          overlayRenderPassSwapchain_, overlayPipelineSwapchain_,
-                          overlayFramebuffersSwapchain_[imageIndex],
-                          swapchain_->extent().width, swapchain_->extent().height,
-                          swapchain_->imageFormat());
-        context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
-                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                       cmd);
-    } else {
-        context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                       cmd);
-    }
-
-    if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
-        context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
-                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout,
-                                       cmd);
-    }
-
-    vkEndCommandBuffer(cmd);
-
-    VkSemaphore waitSem = swapchain_->currentImageAvailableSemaphore();
-    VkSemaphore signalSem = swapchain_->currentRenderFinishedSemaphore();
-    VkFence inFlightFence = swapchain_->currentInFlightFence();
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    if (waitSem != VK_NULL_HANDLE) {
-        submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = &waitSem;
-        submitInfo.pWaitDstStageMask = waitStages;
-    }
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
-    if (signalSem != VK_NULL_HANDLE) {
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &signalSem;
-    }
-
-    if (vkQueueSubmit(context_.graphicsQueue(), 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
-        LOG_ERROR("VulkanPresenter: Queue submit failed during image presentation");
-        return false;
-    }
-
-    SwapchainResult presResult = swapchain_->present(imageIndex);
-    if (presResult == SwapchainResult::OutOfDate || presResult == SwapchainResult::Suboptimal) {
-        swapchain_->resize(width, height);
-        for (auto fb : overlayFramebuffersSwapchain_) {
-            if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(context_.device(), fb, nullptr);
-        }
-        overlayFramebuffersSwapchain_.clear();
-    }
-
-    width_ = width;
-    height_ = height;
-    return true;
+bool VulkanPresenter::presentImage(VkImage image, uint32_t width, uint32_t height,
+                                   VkImageLayout currentLayout, SkSurface* overlaySurface) {
+    PresentFrame frame;
+    frame.image = image;
+    frame.imageLayout = currentLayout;
+    frame.imageWidth = width;
+    frame.imageHeight = height;
+    if (overlaySurface) frame.above = surfaceLayer(overlaySurface);
+    return present(frame);
 }
 
 } // namespace bro::render

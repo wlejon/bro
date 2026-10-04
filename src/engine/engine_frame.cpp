@@ -309,6 +309,7 @@ void Engine::run() {
             running_ = false;
             break;
         }
+        beginGpuFrame();
 
 #if BRO_WITH_PHYSICS
         if (physicsWorld_) {
