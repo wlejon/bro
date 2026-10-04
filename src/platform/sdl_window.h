@@ -9,7 +9,6 @@
 
 struct SDL_Window;
 struct SDL_Cursor;
-typedef struct SDL_GLContextState* SDL_GLContext;
 
 namespace bro::platform {
 
@@ -90,7 +89,6 @@ public:
     static std::unique_ptr<Window> createSecondary(const SecondaryConfig& cfg);
 
     SDL_Window* getSDLWindow() const { return m_window; }
-    SDL_GLContext getGLContext() const { return nullptr; }
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
 
@@ -102,9 +100,6 @@ public:
     bool isVulkan() const { return true; }
     bool vsyncPreference() const { return m_vsyncPref; }
 
-    /// Legacy GL context queries (OpenGL has been purged in favor of Vulkan).
-    bool ownsGLContext() const { return false; }
-    bool makeGLCurrent(SDL_GLContext) { return false; }
     void applySwapIntervalPreference() {}
 
     /// Current client-area size in window coordinates (SDL points), queried
@@ -129,8 +124,6 @@ public:
 
     using SwapCallback = std::function<void()>;
     void setSwapCallback(SwapCallback cb) { m_swapCallback = std::move(cb); }
-
-    SDL_GLContext createSharedContext() { return nullptr; }
 
     // --- Runtime settings ---
 

@@ -4,7 +4,6 @@
 // canvas_scene.cpp and canvas_scene_state.cpp.
 
 #include "canvas/canvas_scene.h"
-#include "render/gl_context.h"
 #include "render/skia_backend.h"
 #include "util/log.h"
 
@@ -156,17 +155,13 @@ void CanvasScene::flushSync() {
 // CanvasRasterThread — one persistent canvas-raster worker (shared by scenes)
 // ---------------------------------------------------------------------------
 
-void CanvasRasterThread::start(SDL_GLContext glCtx, SDL_Window* win) {
-    if (started_ || !glCtx || !win) return;
-    glCtx_ = glCtx;
+void CanvasRasterThread::start(SDL_Window* win) {
+    if (started_ || !win) return;
     started_ = true;
     ready_ = false;
     shutdown_ = false;
     hasJob_ = false;
     thread_ = std::thread(&CanvasRasterThread::threadFunc, this, win);
-    // Block until the worker has MakeCurrent'd its context — the Windows/NVIDIA
-    // "no concurrent wgl*Context against the same HDC" serialization. Created
-    // once here, while quiescent, so it never overlaps the raster thread.
     std::unique_lock<std::mutex> lk(m_);
     cv_.wait(lk, [this] { return ready_; });
 }
@@ -179,10 +174,6 @@ void CanvasRasterThread::stop() {
     }
     cv_.notify_all();
     if (thread_.joinable()) thread_.join();
-    if (glCtx_) {
-        SDL_GL_DestroyContext(glCtx_);
-        glCtx_ = nullptr;
-    }
     started_ = false;
 }
 
@@ -501,8 +492,7 @@ void CanvasScene::flushCommands() {
 // Compositing — upload raster pixels to GL texture
 // ---------------------------------------------------------------------------
 
-void CanvasScene::rasterize(render::GLContext* gl) {
-    (void)gl;
+void CanvasScene::rasterize() {
 
     // Check if element was removed from the DOM. See note in prepareAndSignal.
     if (detachedCb_) {

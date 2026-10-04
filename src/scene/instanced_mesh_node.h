@@ -7,7 +7,7 @@
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bbox.h>
 #include <bromesh/analysis/bvh.h>
-#include "scene/gl_available.h"
+#include "webgl/webgl_types.h"
 
 #include <vector>
 #include <cstdint>

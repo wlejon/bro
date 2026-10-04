@@ -3,11 +3,8 @@
 // Forward declarations of the collaborators Engine holds by pointer or names
 // in its interface, so engine.h does not have to pull in their headers.
 
-typedef struct SDL_GLContextState* SDL_GLContext;
-
 namespace bro::layout { struct KeyHandleResult; }
 namespace bro::render {
-    class GLContext;
     class RasterRenderer;
     class RecordingRenderer;
     class CommandReplayer;

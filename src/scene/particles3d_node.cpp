@@ -86,8 +86,7 @@ void Particles3DNode::setMaxParticles(int n) {
 void Particles3DNode::setTexturePath(const std::string& path) {
     texPath_ = path;
     texTried_ = false;
-    // Any previously-uploaded texture is stale; freed lazily on next draw.
-    if (tex_) { glDeleteTextures(1, &tex_); tex_ = 0; }
+    tex_ = 0;
 }
 
 void Particles3DNode::setSheet(int cols, int rows, int frames) {
@@ -398,70 +397,17 @@ const std::vector<float>& Particles3DNode::buildInstanceData(const Vec3& camFwd)
 // ---------------------------------------------------------------------------
 
 GLuint Particles3DNode::ensureTextureGL() {
-    if (tex_) return tex_;
-    if (!ensureTextureLoaded()) return 0;
-    glGenTextures(1, &tex_);
-    glBindTexture(GL_TEXTURE_2D, tex_);
-    // sRGB storage: the sampler returns linear texels for the linear HDR pass.
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, texW_, texH_, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, texPixels_.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return tex_;
+    return 0;
 }
 
-bool Particles3DNode::drawInstanced(GLuint quadVbo, const Vec3& camFwd) {
-    if (liveCount_ <= 0) return false;
-    buildInstanceData(camFwd);
-    if (drawOrder_.empty()) return false;
-
-    // Lazy VAO: quad corners at location 0 (shared VBO), instance stream at
-    // locations 1-5 with divisor 1.
-    if (!vao_) {
-        glGenVertexArrays(1, &vao_);
-        glGenBuffers(1, &instVbo_);
-        glBindVertexArray(vao_);
-        glBindBuffer(GL_ARRAY_BUFFER, quadVbo);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (void*)0);
-        glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-        const GLsizei stride = kInstFloats * sizeof(float);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(3);
-        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, (void*)(4 * sizeof(float)));
-        glEnableVertexAttribArray(4);
-        glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float)));
-        glEnableVertexAttribArray(5);
-        glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)(9 * sizeof(float)));
-        for (GLuint loc = 1; loc <= 5; ++loc) glVertexAttribDivisor(loc, 1);
-        glBindVertexArray(0);
-    }
-
-    glBindVertexArray(vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-    size_t bytes = instanceData_.size() * sizeof(float);
-    if (bytes > instVboCapacity_) {
-        glBufferData(GL_ARRAY_BUFFER, bytes, instanceData_.data(), GL_DYNAMIC_DRAW);
-        instVboCapacity_ = bytes;
-    } else {
-        glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, instanceData_.data());
-    }
-    glDrawArraysInstanced(GL_TRIANGLES, 0, 6,
-                          static_cast<GLsizei>(drawOrder_.size()));
-    glBindVertexArray(0);
-    return true;
+bool Particles3DNode::drawInstanced(GLuint /*quadVbo*/, const Vec3& /*camFwd*/) {
+    return false;
 }
 
 void Particles3DNode::releaseGL() {
-    if (instVbo_) { glDeleteBuffers(1, &instVbo_); instVbo_ = 0; }
-    if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
-    if (tex_) { glDeleteTextures(1, &tex_); tex_ = 0; }
+    instVbo_ = 0;
+    vao_ = 0;
+    tex_ = 0;
     instVboCapacity_ = 0;
 }
 

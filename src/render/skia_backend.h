@@ -23,20 +23,16 @@ namespace bro::render {
 
 using GLuint = uint32_t;
 
-class GLContext;
-
 // ---------------------------------------------------------------------------
-// SkiaRenderer -- Skia raster UI + OpenGL display
+// SkiaRenderer -- Skia raster UI + Vulkan display
 //
-// The UI (HTML/CSS) is rendered to a CPU-side Skia surface with transparency,
-// uploaded to an OpenGL texture, and composited over GPU-rendered scene
-// content via the texture pipeline.
+// The UI (HTML/CSS) is rendered to a CPU-side Skia surface with transparency
+// and composited over GPU-rendered scene content via VulkanPresenter.
 // ---------------------------------------------------------------------------
 
 class SkiaRenderer final : public Renderer {
 public:
-    explicit SkiaRenderer(GLContext* gl = nullptr);
-    explicit SkiaRenderer(GLContext& gl) : SkiaRenderer(&gl) {}
+    explicit SkiaRenderer();
     ~SkiaRenderer() override;
 
     /// Create a standalone Ganesh GL GrDirectContext for the current thread's GL context.
@@ -151,10 +147,6 @@ public:
     void setDeviceScale(float scale) { deviceScale_ = scale > 0.0f ? scale : 1.0f; }
     float deviceScale() const { return deviceScale_; }
 
-    /// Upload any Skia raster surface to a GL texture.
-    /// Reuses existingTex if size matches, otherwise creates a new one.
-    GLuint uploadSurfaceToTexture(SkSurface* surface, GLuint existingTex = 0);
-
     /// GPU-backed Skia surface (Ganesh) with its own FBO + GL texture.
     /// Used for HTML compositing layers so rendering goes directly to GPU
     /// with no CPU→GPU upload.
@@ -177,8 +169,6 @@ public:
     /// Access the UI overlay GL texture (BGRA8, premultiplied alpha).
     GLuint getUITexture() const { return uiTexture_; }
 
-    GLContext* gl() const { return gl_; }
-
     SkCanvas* getCanvas() const override { return canvas_; }
     SkSurface* surface() const override { return surface_.get(); }
     bool saveScreenshot(const std::string& path) override;
@@ -187,7 +177,6 @@ public:
 private:
     SkColor toSkColor(bromath::Color c) const;
 
-    GLContext* gl_ = nullptr;
     GLuint uiTexture_ = 0;
     int textureWidth_ = 0;
     int textureHeight_ = 0;
@@ -273,6 +262,6 @@ private:
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(GLContext* gl);
+std::unique_ptr<Renderer> createRenderer();
 
 } // namespace bro::render

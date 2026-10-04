@@ -6,7 +6,7 @@
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bvh.h>
-#include "scene/gl_available.h"
+#include "webgl/webgl_types.h"
 
 #include <functional>
 #include <memory>
@@ -374,9 +374,7 @@ public:
     // feature that needs a sampler is then blocked by a number the hardware
     // never imposed.
     //
-    // The floor is unchanged: render::GLCaps clamps up to 16 and returns 16
-    // before the latch, so nothing that worked under the old constant can stop
-    // working under this. See render/gl_context.h.
+    // The floor is unchanged at 16 slots.
     static constexpr int kUserTextureUnitBase = 10;
     static int userTextureUnitLimit();
     static int maxUserTextures();

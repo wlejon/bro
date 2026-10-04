@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene/scene_node.h"
-#include "scene/gl_available.h"
+#include "webgl/webgl_types.h"
 
 #include <cstdint>
 #include <vector>

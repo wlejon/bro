@@ -57,22 +57,7 @@ void DecalNode::clearEmissionTexture() {
 void DecalNode::flushSlot(PendingTex& slot, GLuint& tex) {
     if (!slot.dirty) return;
     slot.dirty = false;
-    if (slot.data.empty()) {
-        if (tex) { glDeleteTextures(1, &tex); tex = 0; }
-        return;
-    }
-    if (!tex) glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, slot.w, slot.h, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, slot.data.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    slot.data.clear();
-    slot.data.shrink_to_fit();
+    tex = 0;
 }
 
 void DecalNode::flushPendingTextures() {
@@ -81,8 +66,8 @@ void DecalNode::flushPendingTextures() {
 }
 
 void DecalNode::releaseGL() {
-    if (albedoTex_) { glDeleteTextures(1, &albedoTex_); albedoTex_ = 0; }
-    if (emissionTex_) { glDeleteTextures(1, &emissionTex_); emissionTex_ = 0; }
+    albedoTex_ = 0;
+    emissionTex_ = 0;
 }
 
 } // namespace bro::scene

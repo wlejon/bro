@@ -19,7 +19,6 @@
 #include "render/renderer.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
-#include "render/gl_compat.h"
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -433,7 +432,7 @@ void Engine::showSystemPanel(const std::string& name) {
 // ---------------------------------------------------------------------------
 
 void Engine::renderSplashImmediate() {
-    if (!renderer_ || !gl_ || !window_) return;
+    if (!renderer_ || !window_) return;
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia) return;
 
@@ -459,7 +458,7 @@ void Engine::renderSplashImmediate() {
 }
 
 void Engine::pumpSplashFrame(double dtMs) {
-    if (displayMode_ != DisplayMode::Windowed || !window_ || !renderer_ || !gl_) {
+    if (displayMode_ != DisplayMode::Windowed || !window_ || !renderer_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
         return;
     }

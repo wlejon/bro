@@ -18,7 +18,6 @@
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
-#include "render/gl_context.h"
 
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"

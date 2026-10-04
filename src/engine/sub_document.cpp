@@ -32,7 +32,6 @@
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
-#include "render/gl_compat.h"
 #include <algorithm>
 #include <filesystem>
 
@@ -233,17 +232,10 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     grCtx->flush(surf.surface.get());
 
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
-    GLuint fbo = 0;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, surf.texture, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    if (surf.surface && !surf.surface->readPixels(info, pixels.data(), w * 4, 0, 0)) {
         pixels.clear();
-    else
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
+    }
 
     skia->switchSurface(prev);
     skia->setDeviceScale(prevScale);

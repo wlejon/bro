@@ -156,22 +156,22 @@ void InstancedMeshNode::setTubeSegments(const float* segData, size_t segCount,
 }
 
 void InstancedMeshNode::releaseGL() {
-    if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
-    if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
-    if (ibo_) { glDeleteBuffers(1, &ibo_); ibo_ = 0; }
-    if (instVbo_) { glDeleteBuffers(1, &instVbo_); instVbo_ = 0; }
-    if (segTex_) { glDeleteTextures(1, &segTex_); segTex_ = 0; }
-    if (segBuf_) { glDeleteBuffers(1, &segBuf_); segBuf_ = 0; }
-    if (instSegTex_) { glDeleteTextures(1, &instSegTex_); instSegTex_ = 0; }
-    if (instSegBuf_) { glDeleteBuffers(1, &instSegBuf_); instSegBuf_ = 0; }
-    if (tubeTex_) { glDeleteTextures(1, &tubeTex_); tubeTex_ = 0; }
-    if (tubeBuf_) { glDeleteBuffers(1, &tubeBuf_); tubeBuf_ = 0; }
-    if (tubeVao_) { glDeleteVertexArrays(1, &tubeVao_); tubeVao_ = 0; }
-    if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
-    if (normalTex_) { glDeleteTextures(1, &normalTex_); normalTex_ = 0; }
-    if (mrTex_) { glDeleteTextures(1, &mrTex_); mrTex_ = 0; }
-    if (aoTex_) { glDeleteTextures(1, &aoTex_); aoTex_ = 0; }
-    if (emissiveTex_) { glDeleteTextures(1, &emissiveTex_); emissiveTex_ = 0; }
+    vao_ = 0;
+    vbo_ = 0;
+    ibo_ = 0;
+    instVbo_ = 0;
+    segTex_ = 0;
+    segBuf_ = 0;
+    instSegTex_ = 0;
+    instSegBuf_ = 0;
+    tubeTex_ = 0;
+    tubeBuf_ = 0;
+    tubeVao_ = 0;
+    texture_ = 0;
+    normalTex_ = 0;
+    mrTex_ = 0;
+    aoTex_ = 0;
+    emissiveTex_ = 0;
     indexCount_ = 0;
     instVboCapacity_ = 0;
 }
@@ -207,102 +207,11 @@ void InstancedMeshNode::clearEmissiveTexture() { stage(pendingEmissive_, 0, 0, n
 // entirely. Castano's technique: pick a per-level alpha scale so each
 // mip's coverage at cutoff 0.5 matches level 0's. For fully-opaque
 // textures this collapses to scale = 1, so it's a safe default for all
-// RGBA inputs.
-static void uploadAlphaCoverageMipmaps(int w0, int h0, const uint8_t* base) {
-    constexpr float kCutoff = 0.5f * 255.0f;
-    auto coverage = [&](const std::vector<uint8_t>& lvl, int w, int h, float scale) {
-        size_t over = 0;
-        const size_t n = (size_t)w * (size_t)h;
-        for (size_t i = 0; i < n; ++i) {
-            float a = (float)lvl[i * 4 + 3] * scale;
-            if (a >= kCutoff) ++over;
-        }
-        return (float)over / (float)n;
-    };
-
-    std::vector<uint8_t> lvl(base, base + (size_t)w0 * (size_t)h0 * 4);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w0, h0, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, lvl.data());
-    const float baseCov = coverage(lvl, w0, h0, 1.0f);
-
-    int w = w0, h = h0, mip = 0;
-    std::vector<uint8_t> next, scaled;
-    while (w > 1 || h > 1) {
-        const int nw = std::max(1, w / 2);
-        const int nh = std::max(1, h / 2);
-        next.resize((size_t)nw * (size_t)nh * 4);
-        for (int y = 0; y < nh; ++y) {
-            const int sy0 = std::min(y * 2, h - 1);
-            const int sy1 = std::min(y * 2 + 1, h - 1);
-            for (int x = 0; x < nw; ++x) {
-                const int sx0 = std::min(x * 2, w - 1);
-                const int sx1 = std::min(x * 2 + 1, w - 1);
-                for (int c = 0; c < 4; ++c) {
-                    int s = lvl[(sy0 * w + sx0) * 4 + c]
-                          + lvl[(sy0 * w + sx1) * 4 + c]
-                          + lvl[(sy1 * w + sx0) * 4 + c]
-                          + lvl[(sy1 * w + sx1) * 4 + c];
-                    next[(y * nw + x) * 4 + c] = (uint8_t)((s + 2) / 4);
-                }
-            }
-        }
-        // Binary-search scale that matches base coverage (only meaningful
-        // when 0 < baseCov < 1; otherwise scale stays at 1).
-        float scale = 1.0f;
-        if (baseCov > 0.0f && baseCov < 1.0f) {
-            // Upper bound generous enough for sparse atlases where deep
-            // mips average alpha well below the cutoff (4 was too tight
-            // for foliage cards — small leaves washed out at distance).
-            float lo = 0.0f, hi = 64.0f;
-            for (int it = 0; it < 18; ++it) {
-                const float mid = (lo + hi) * 0.5f;
-                if (coverage(next, nw, nh, mid) > baseCov) hi = mid;
-                else lo = mid;
-            }
-            scale = (lo + hi) * 0.5f;
-        }
-        scaled = next;
-        if (scale != 1.0f) {
-            const size_t n = (size_t)nw * (size_t)nh;
-            for (size_t i = 0; i < n; ++i) {
-                float a = (float)scaled[i * 4 + 3] * scale;
-                if (a > 255.0f) a = 255.0f;
-                scaled[i * 4 + 3] = (uint8_t)a;
-            }
-        }
-        ++mip;
-        glTexImage2D(GL_TEXTURE_2D, mip, GL_RGBA8, nw, nh, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, scaled.data());
-        // Continue downsampling from the un-scaled chain so each level's
-        // alpha derives from the original base rather than compounding.
-        lvl = std::move(next);
-        w = nw; h = nh;
-    }
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip);
-}
-
 static void flushTex(InstancedMeshNode::PendingTex& p, GLuint& glTex) {
-    if (!p.dirty) return;
-    if (p.w > 0 && p.h > 0 && !p.data.empty()) {
-        if (!glTex) glGenTextures(1, &glTex);
-        glBindTexture(GL_TEXTURE_2D, glTex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        uploadAlphaCoverageMipmaps(p.w, p.h, p.data.data());
-        noteTextureUpload(p.data.size());
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        p.data.clear();
-        p.data.shrink_to_fit();
-    } else if (glTex) {
-        glDeleteTextures(1, &glTex);
-        glTex = 0;
-    }
+    (void)glTex;
     p.dirty = false;
 }
+
 
 // Bake mesh_ + instanceData_ into batchMesh_: one copy of the mesh per
 // instance, transformed into node space, with the instance RGB tint folded
@@ -369,132 +278,10 @@ void InstancedMeshNode::rebuildStaticBatch() {
 }
 
 void InstancedMeshNode::uploadMeshToGPU() {
-    // Static batch uploads the merged geometry; otherwise the authored mesh.
     const bromesh::MeshData& M = renderingBatched() ? batchMesh_ : mesh_;
     if (M.empty()) return;
-
-    if (!vao_) glGenVertexArrays(1, &vao_);
-    if (!vbo_) glGenBuffers(1, &vbo_);
-    if (!ibo_) glGenBuffers(1, &ibo_);
-
-    glBindVertexArray(vao_);
-
-    size_t vertCount = M.vertexCount();
-    bool hasNormals = M.hasNormals();
-    bool hasUVs = M.hasUVs();
-    bool hasColors = M.hasColors();
-    bool hasTangents = M.hasTangents();
-    hasVertexColors_ = hasColors;
-
-    size_t stride = 3;
-    if (hasNormals) stride += 3;
-    if (hasUVs) stride += 2;
-    if (hasColors) stride += 4;
-    if (hasTangents) stride += 4;
-
-    std::vector<float> interleaved(vertCount * stride);
-    for (size_t i = 0; i < vertCount; i++) {
-        size_t off = i * stride;
-        interleaved[off + 0] = M.positions[i * 3 + 0];
-        interleaved[off + 1] = M.positions[i * 3 + 1];
-        interleaved[off + 2] = M.positions[i * 3 + 2];
-        size_t at = 3;
-        if (hasNormals) {
-            interleaved[off + at + 0] = M.normals[i * 3 + 0];
-            interleaved[off + at + 1] = M.normals[i * 3 + 1];
-            interleaved[off + at + 2] = M.normals[i * 3 + 2];
-            at += 3;
-        }
-        if (hasUVs) {
-            interleaved[off + at + 0] = M.uvs[i * 2 + 0];
-            interleaved[off + at + 1] = M.uvs[i * 2 + 1];
-            at += 2;
-        }
-        if (hasColors) {
-            interleaved[off + at + 0] = M.colors[i * 4 + 0];
-            interleaved[off + at + 1] = M.colors[i * 4 + 1];
-            interleaved[off + at + 2] = M.colors[i * 4 + 2];
-            interleaved[off + at + 3] = M.colors[i * 4 + 3];
-            at += 4;
-        }
-        if (hasTangents) {
-            interleaved[off + at + 0] = M.tangents[i * 4 + 0];
-            interleaved[off + at + 1] = M.tangents[i * 4 + 1];
-            interleaved[off + at + 2] = M.tangents[i * 4 + 2];
-            interleaved[off + at + 3] = M.tangents[i * 4 + 3];
-        }
-    }
-
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER,
-                 interleaved.size() * sizeof(float),
-                 interleaved.data(), GL_STATIC_DRAW);
-
-    GLsizei byteStride = (GLsizei)(stride * sizeof(float));
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, byteStride, (void*)0);
-
-    if (hasNormals) {
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, byteStride, (void*)(3 * sizeof(float)));
-    } else {
-        glDisableVertexAttribArray(1);
-    }
-    if (hasUVs) {
-        size_t uvOffset = 3 + (hasNormals ? 3 : 0);
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, byteStride, (void*)(uvOffset * sizeof(float)));
-    } else {
-        glDisableVertexAttribArray(2);
-    }
-    if (hasColors) {
-        size_t colorOffset = 3 + (hasNormals ? 3 : 0) + (hasUVs ? 2 : 0);
-        glEnableVertexAttribArray(3);
-        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, byteStride, (void*)(colorOffset * sizeof(float)));
-    } else {
-        glDisableVertexAttribArray(3);
-    }
-    if (hasTangents) {
-        size_t tanOffset = 3 + (hasNormals ? 3 : 0) + (hasUVs ? 2 : 0) + (hasColors ? 4 : 0);
-        glEnableVertexAttribArray(4);
-        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, byteStride, (void*)(tanOffset * sizeof(float)));
-    } else {
-        glDisableVertexAttribArray(4);
-    }
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 M.indices.size() * sizeof(uint32_t),
-                 M.indices.data(), GL_STATIC_DRAW);
+    hasVertexColors_ = M.hasColors();
     indexCount_ = (GLsizei)M.indices.size();
-    noteMeshUpload(interleaved.size() * sizeof(float) + M.indices.size() * sizeof(uint32_t));
-
-    // Re-bind the instance buffer's attributes (locations 8..11) into this
-    // VAO. The instance VBO itself may not be uploaded yet; the bindings are
-    // valid even with an empty buffer and become live once we glBufferData
-    // into instVbo_ during uploadInstancesToGPU().
-    //
-    // Scatter mode has NO instance buffer (the VS synthesises transforms from
-    // gl_InstanceID). Leaving 8..11 enabled here would point them at the empty
-    // instVbo_ with divisor 1, so a scatter draw of N instances reads N*64
-    // bytes past a zero-size buffer — an out-of-bounds fetch that segfaults the
-    // driver. Keep them disabled (a fresh VAO defaults to disabled).
-    if (!scatterMode_) {
-        if (!instVbo_) glGenBuffers(1, &instVbo_);
-        glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-        GLsizei instStride = (GLsizei)(16 * sizeof(float));
-        for (int loc = 8; loc <= 11; ++loc) {
-            glEnableVertexAttribArray(loc);
-            glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, instStride,
-                                  (void*)((loc - 8) * 4 * sizeof(float)));
-            glVertexAttribDivisor(loc, 1);
-        }
-    } else {
-        for (int loc = 8; loc <= 11; ++loc) glDisableVertexAttribArray(loc);
-    }
-
-    glBindVertexArray(0);
     meshDirty_ = false;
 
     flushTex(pendingBase_,     texture_);
@@ -505,125 +292,35 @@ void InstancedMeshNode::uploadMeshToGPU() {
 }
 
 void InstancedMeshNode::uploadInstancesToGPU() {
-    // A batched draw is one identity instance (white tint — per-instance colour
-    // is already baked into the merged mesh's vertex colours).
-    static const float kIdentityInst[16] = {
-        1, 0, 0, 0,   0, 1, 0, 0,   0, 0, 1, 0,   1, 1, 1, 1,
-    };
-    const bool batched = renderingBatched();
-    const float* src = batched ? kIdentityInst : instanceData_.data();
-    const size_t floats = batched ? 16 : instanceData_.size();
-
-    if (!instVbo_) glGenBuffers(1, &instVbo_);
-    glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-    size_t bytes = floats * sizeof(float);
-    if (bytes > instVboCapacity_) {
-        glBufferData(GL_ARRAY_BUFFER, bytes, src, GL_DYNAMIC_DRAW);
-        instVboCapacity_ = bytes;
-    } else if (bytes > 0) {
-        glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, src);
-    }
     instancesDirty_ = false;
 }
 
-// Upload the packed segment records into a texture buffer the scatter VS
-// samples (RGBA32F, 2 texels per segment). Only re-run when the segment set
-// changes (the sim grows) — never per frame.
 void InstancedMeshNode::uploadScatterToGPU() {
-    // Segment records (RGBA32F, 2 texels each).
-    if (!segBuf_) glGenBuffers(1, &segBuf_);
-    glBindBuffer(GL_TEXTURE_BUFFER, segBuf_);
-    glBufferData(GL_TEXTURE_BUFFER,
-                 scatterData_.size() * sizeof(float),
-                 scatterData_.data(), GL_DYNAMIC_DRAW);
-    if (!segTex_) glGenTextures(1, &segTex_);
-    glBindTexture(GL_TEXTURE_BUFFER, segTex_);
-    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, segBuf_);
-
-    // Per-leaf segment index (R32F, one texel each).
-    if (!instSegBuf_) glGenBuffers(1, &instSegBuf_);
-    glBindBuffer(GL_TEXTURE_BUFFER, instSegBuf_);
-    glBufferData(GL_TEXTURE_BUFFER,
-                 scatterInstSeg_.size() * sizeof(float),
-                 scatterInstSeg_.data(), GL_DYNAMIC_DRAW);
-    if (!instSegTex_) glGenTextures(1, &instSegTex_);
-    glBindTexture(GL_TEXTURE_BUFFER, instSegTex_);
-    glTexBuffer(GL_TEXTURE_BUFFER, GL_R32F, instSegBuf_);
-
-    glBindTexture(GL_TEXTURE_BUFFER, 0);
-    glBindBuffer(GL_TEXTURE_BUFFER, 0);
     scatterDirty_ = false;
 }
 
 bool InstancedMeshNode::drawScatter() {
-    if (mesh_.empty() || scatterSegCount_ == 0 || scatterInstCount_ == 0) return false;
-    if (meshDirty_) uploadMeshToGPU();       // uploads the leaf card + its VAO
-    if (scatterDirty_) uploadScatterToGPU();
-    if (!vao_ || indexCount_ == 0) return false;
-    const size_t inst = scatterInstCount_;
-    if (inst == 0) return false;
-    // The scatter VS reads only the mesh attributes + gl_InstanceID + the
-    // segment TBO (bound by the renderer); no instance VBO is needed.
-    glBindVertexArray(vao_);
-    glDrawElementsInstanced(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr,
-                            (GLsizei)inst);
-    glBindVertexArray(0);
-    return true;
+    return false;
 }
 
-// Upload the packed tube segment records into a texture buffer the tube VS
-// samples (RGBA32F, 2 texels per segment). Re-run only when the segment set
-// changes (the skeleton grows) — never per frame.
 void InstancedMeshNode::uploadTubeToGPU() {
-    if (!tubeBuf_) glGenBuffers(1, &tubeBuf_);
-    glBindBuffer(GL_TEXTURE_BUFFER, tubeBuf_);
-    glBufferData(GL_TEXTURE_BUFFER,
-                 tubeData_.size() * sizeof(float),
-                 tubeData_.data(), GL_DYNAMIC_DRAW);
-    if (!tubeTex_) glGenTextures(1, &tubeTex_);
-    glBindTexture(GL_TEXTURE_BUFFER, tubeTex_);
-    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, tubeBuf_);
-    glBindTexture(GL_TEXTURE_BUFFER, 0);
-    glBindBuffer(GL_TEXTURE_BUFFER, 0);
     tubeDirty_ = false;
 }
 
 bool InstancedMeshNode::drawTube() {
-    if (tubeSegCount_ == 0) return false;
-    if (tubeDirty_) uploadTubeToGPU();
-    // Attribute-less draw: gl_VertexID + the segment TBO carry everything.
-    // Core profile still requires a VAO bound, so keep a dedicated empty one.
-    if (!tubeVao_) glGenVertexArrays(1, &tubeVao_);
-    glBindVertexArray(tubeVao_);
-    glDrawArrays(GL_TRIANGLES, 0, tubeVertexCount());
-    glBindVertexArray(0);
-    return true;
+    return false;
 }
 
 bool InstancedMeshNode::drawTubeDepth() {
-    // Same geometry, different program (uLightVP, shadow frag) bound by caller.
-    return drawTube();
+    return false;
 }
 
 void InstancedMeshNode::onRender(SceneGraph& graph) {
     (void)graph;
-    drawRawInstanced();
 }
 
 bool InstancedMeshNode::drawRawInstanced() {
-    if (scatterMode_) return drawScatter();
-    if (tubeMode_) return drawTube();
-    if (mesh_.empty() || instanceCount_ == 0) return false;
-    if (renderingBatched() && batchDirty_) rebuildStaticBatch();
-    if (meshDirty_) uploadMeshToGPU();
-    if (instancesDirty_) uploadInstancesToGPU();
-    if (!vao_ || indexCount_ == 0) return false;
-
-    glBindVertexArray(vao_);
-    glDrawElementsInstanced(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr,
-                            (GLsizei)(renderingBatched() ? 1 : instanceCount_));
-    glBindVertexArray(0);
-    return true;
+    return false;
 }
 
 bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax[3]) const {

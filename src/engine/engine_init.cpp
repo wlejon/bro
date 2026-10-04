@@ -25,7 +25,6 @@
 #include "render/raster_renderer.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
-#include "render/gl_context.h"
 #include "render/bidi.h"
 #include "render/system_font_mgr.h"
 
@@ -56,7 +55,6 @@
 #include "util/log.h"
 #include "util/time.h"
 
-#include "render/gl_compat.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_swapchain.h"
 #include "render/vulkan_presenter.h"
@@ -227,8 +225,7 @@ Engine::Engine(const EngineConfig& config)
                 viewportHeight_ = wh;
             }
 
-            gl_ = std::make_unique<render::GLContext>(*window_);
-            renderer_ = render::createRenderer(gl_.get());
+            renderer_ = render::createRenderer();
             if (!renderer_) {
                 throw std::runtime_error("Failed to create renderer");
             }
@@ -353,11 +350,6 @@ Engine::Engine(const EngineConfig& config)
     platform::Dialogs::setWindow(window_ ? window_->getSDLWindow() : nullptr);
     platform::Dialogs::setInteractive(displayMode_ == DisplayMode::Windowed);
     platform::Dialogs::setTickCallback([this]() { tickTimersOnly(); });
-
-    if (gl_) {
-        glGenVertexArrays(1, &uiQuadVAO_);
-        glGenBuffers(1, &uiQuadVBO_);
-    }
 
     manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
     util::setAssetPathContext(manifest_.basePath, &assetMounts_);
@@ -558,7 +550,7 @@ void Engine::dispatchDocumentReadyEvents() {
 }
 
 webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas) {
-    if (!gl_ && !vulkanContext_) return nullptr;
+    if (!vulkanContext_) return nullptr;
 
     if (canvas && canvas->webglContext()) {
         return static_cast<webgl::WebGL2RenderingContext*>(canvas->webglContext());
@@ -638,7 +630,7 @@ canvas::CanvasScene* Engine::createCanvasContext(dom::Element* canvas) {
     dom::Document* doc = canvas->document();
     if (doc) {
         auto parkInSubDoc = [&](std::vector<std::unique_ptr<canvas::CanvasScene>>& list) {
-            canvasScene->init(nullptr);
+            canvasScene->init();
             canvasSceneRegistry_[canvasScene->sceneId()] = csPtr;
             list.push_back(std::move(canvasScene));
         };
@@ -684,7 +676,7 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
     (void)canvas;
     return nullptr;
 #else
-    if (!gl_ && !vulkanContext_) return nullptr;
+    if (!vulkanContext_) return nullptr;
 
     // A CanvasScene for `canvas` — the 2D layer a graph's sprites and shapes
     // draw into — registered with the compositor and linked to the element.

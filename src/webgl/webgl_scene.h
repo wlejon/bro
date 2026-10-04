@@ -17,16 +17,15 @@ public:
     explicit WebGLScene(WebGL2RenderingContext* ctx);
     ~WebGLScene() override;
 
-    void onInit(render::GLContext* gl, int width, int height) override;
+    void onInit(int width, int height) override;
     void onResize(int width, int height) override;
-    void onRender(render::GLContext* gl, int width, int height, double deltaTimeMs) override;
+    void onRender(int width, int height, double deltaTimeMs) override;
     void onCleanup() override;
 
     WebGL2RenderingContext* webglContext() const { return ctx_; }
 
 private:
     WebGL2RenderingContext* ctx_;
-    render::GLContext* gl_ = nullptr;
     GLuint quadVAO_ = 0;
     GLuint quadVBO_ = 0;
 };

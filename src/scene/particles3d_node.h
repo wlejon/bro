@@ -3,7 +3,7 @@
 #include "scene/scene_node.h"
 #include <bromath/aabb.h>
 #include <bromath/color.h>
-#include "scene/gl_available.h"
+#include "webgl/webgl_types.h"
 
 #include <cstdint>
 #include <functional>

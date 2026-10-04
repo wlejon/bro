@@ -1,5 +1,4 @@
 #include "render/skia_backend.h"
-#include "render/gl_context.h"
 #include "render/filter_chain.h"
 #include "render/system_font_mgr.h"
 #include "svg/svg_renderer.h"
@@ -48,14 +47,11 @@ using bromath::Color;
 // surfaces and pixel readback are in skia_backend_gpu.cpp; gradient fills and
 // SVG paint servers are in skia_backend_gradient.cpp.
 
-SkiaRenderer::SkiaRenderer(GLContext* gl) : gl_(gl) {
-    // Try to create Skia GPU (Ganesh GL) context
-    if (gl_) {
-        grContext_ = createGrContext();
-    }
+SkiaRenderer::SkiaRenderer() {
+    grContext_ = createGrContext();
     if (grContext_) {
         gpuMode_ = true;
-        LOG_INFO("SkiaRenderer created (GPU-accelerated Ganesh GL backend)");
+        LOG_INFO("SkiaRenderer created (GPU-accelerated Ganesh backend)");
     } else {
         LOG_INFO("SkiaRenderer created (CPU raster fallback)");
     }
@@ -66,7 +62,6 @@ SkiaRenderer::~SkiaRenderer() {
     shaper_.clear();
     fonts_.clear();
     surface_.reset();
-    if (uiTexture_ && gl_) gl_->deleteTexture(uiTexture_);
 }
 
 SkColor SkiaRenderer::toSkColor(Color c) const {
@@ -701,9 +696,9 @@ void SkiaRenderer::setClipPolygon(std::span<const render::PointF> points) {
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(GLContext* gl) {
-    LOG_INFO("Creating SkiaRenderer (Skia raster%s)", gl ? " + OpenGL display" : "");
-    return std::make_unique<SkiaRenderer>(gl);
+std::unique_ptr<Renderer> createRenderer() {
+    LOG_INFO("Creating SkiaRenderer (Skia raster)");
+    return std::make_unique<SkiaRenderer>();
 }
 
 } // namespace bro::render

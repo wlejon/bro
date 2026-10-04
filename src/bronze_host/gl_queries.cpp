@@ -200,10 +200,9 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 return ev::null();
             }
             case 0x8E25: {  // TRANSFORM_FEEDBACK_BINDING
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isTransformFeedback({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::TransformFeedback, static_cast<GLuint>(val));
+                GLuint val = gl->boundTransformFeedback().id;
+                if (val != 0 && gl->isTransformFeedback({val})) {
+                    return wrapGlObj(GlCell::TransformFeedback, val);
                 }
                 return ev::null();
             }

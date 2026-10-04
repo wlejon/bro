@@ -22,7 +22,7 @@
 #include "scene/tween.h"
 #include "scene/clip_player.h"
 
-#include "scene/gl_available.h"
+#include "webgl/webgl_types.h"
 
 #include <functional>
 #include <memory>

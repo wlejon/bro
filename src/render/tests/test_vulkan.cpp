@@ -150,8 +150,6 @@ int main() {
 
             assert(window.isVulkan());
             assert(window.backend() == platform::GraphicsBackend::Vulkan);
-            assert(!window.ownsGLContext());
-            assert(window.getGLContext() == nullptr);
             assert(window.getSDLWindow() != nullptr);
 
             // Test swapWindow is safe and doesn't crash on Vulkan window

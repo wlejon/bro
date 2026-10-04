@@ -115,17 +115,6 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer) {
         return;
     }
 
-    if (!texture_) glGenTextures(1, &texture_);
-    glBindTexture(GL_TEXTURE_2D, texture_);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
     pixels_ = std::move(buf);
     textureDirty_ = true;
     texW_ = w;
@@ -135,7 +124,7 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer) {
 }
 
 void HtmlNode::releaseGL() {
-    if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
+    texture_ = 0;
     texW_ = 0;
     texH_ = 0;
 }

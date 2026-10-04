@@ -480,6 +480,7 @@ public:
     WebGLVertexArrayObject currentVertexArray() const { return {sVAO_}; }
     WebGLTexture boundTexture(GLenum target) const;
     WebGLSampler boundSampler(GLuint unit) const;
+    WebGLTransformFeedback boundTransformFeedback() const { return {sTransformFeedback_}; }
     GLuint activeTextureUnit() const {
         return (sActiveTex_ >= GL_TEXTURE0 && sActiveTex_ < GL_TEXTURE0 + 32) ? (sActiveTex_ - GL_TEXTURE0) : 0;
     }

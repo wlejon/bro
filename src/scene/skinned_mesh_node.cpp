@@ -92,68 +92,17 @@ void SkinnedMeshNode::uploadToGPU() {
 }
 
 void SkinnedMeshNode::uploadSkinAttribs() {
-    if (!vao_) return;
     skinVboDirty_ = false;
-    if (!skinReady()) {
-        // Mesh/skin mismatch — leave attributes 5/6 disabled; the renderer
-        // draws this node through the static pipeline (skinReady() gates it).
-        glBindVertexArray(vao_);
-        glDisableVertexAttribArray(5);
-        glDisableVertexAttribArray(6);
-        glBindVertexArray(0);
-        return;
-    }
-
-    // Interleave joints (4 x u16, 8 bytes) + weights (4 x float, 16 bytes):
-    // 24-byte stride, weights 4-byte aligned at offset 8.
-    size_t vertCount = weights_.size() / 4;
-    std::vector<uint8_t> buf(vertCount * 24);
-    for (size_t v = 0; v < vertCount; ++v) {
-        uint8_t* dst = buf.data() + v * 24;
-        std::memcpy(dst,     &joints_[v * 4],  4 * sizeof(uint16_t));
-        std::memcpy(dst + 8, &weights_[v * 4], 4 * sizeof(float));
-    }
-
-    if (!skinVbo_) glGenBuffers(1, &skinVbo_);
-    glBindVertexArray(vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, skinVbo_);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)buf.size(), buf.data(),
-                 GL_STATIC_DRAW);
-    glEnableVertexAttribArray(5);
-    glVertexAttribIPointer(5, 4, GL_UNSIGNED_SHORT, 24, (void*)0);
-    glEnableVertexAttribArray(6);
-    glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, 24, (void*)8);
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void SkinnedMeshNode::prepareSkinnedDraw() {
-    // Skin VBO changed after the mesh was already uploaded (setSkin on a
-    // live node). If the mesh itself is dirty, drawRaw's uploadToGPU covers
-    // this instead (vao_ may not even exist yet).
-    if (skinVboDirty_ && vao_) uploadSkinAttribs();
-
-    // Palette UBO: allocate at full cap once, sub-update the live range.
-    if (!paletteUbo_) {
-        glGenBuffers(1, &paletteUbo_);
-        glBindBuffer(GL_UNIFORM_BUFFER, paletteUbo_);
-        glBufferData(GL_UNIFORM_BUFFER, kMaxBones * 16 * sizeof(float),
-                     nullptr, GL_DYNAMIC_DRAW);
-        paletteDirty_ = true;
-    }
-    if (paletteDirty_ && !palette_.empty()) {
-        glBindBuffer(GL_UNIFORM_BUFFER, paletteUbo_);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0,
-                        (GLsizeiptr)(palette_.size() * sizeof(float)),
-                        palette_.data());
-        paletteDirty_ = false;
-    }
-    glBindBufferBase(GL_UNIFORM_BUFFER, kPaletteBinding, paletteUbo_);
+    skinVboDirty_ = false;
+    paletteDirty_ = false;
 }
 
 void SkinnedMeshNode::releaseGL() {
-    if (skinVbo_)    { glDeleteBuffers(1, &skinVbo_);    skinVbo_ = 0; }
-    if (paletteUbo_) { glDeleteBuffers(1, &paletteUbo_); paletteUbo_ = 0; }
+    skinVbo_ = 0;
+    paletteUbo_ = 0;
     skinVboDirty_ = true;
     paletteDirty_ = true;
     MeshNode::releaseGL();

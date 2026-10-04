@@ -35,9 +35,6 @@ using GLsync = void*;
 
 class GrDirectContext;
 struct SDL_Window;
-typedef struct SDL_GLContextState* SDL_GLContext;
-
-namespace bro::render { class GLContext; }
 
 namespace bro::canvas {
 
@@ -167,7 +164,7 @@ public:
     using LiveCheckCallback = bool(*)(void* doc, void* node);
     void setLiveCheck(LiveCheckCallback cb, void* doc) { liveCb_ = cb; liveUd_ = doc; }
 
-    void init(render::GLContext* gl) { gl_ = gl; }
+    void init() {}
 
     /// Set Ganesh GPU context for GPU-accelerated canvas rendering.
     /// If set, Skia draws directly to GPU (no CPU raster + upload).
@@ -435,7 +432,7 @@ public:
 
     /// Ensure the backing surface matches the layout size and upload to GL.
     /// Call once per frame before compositing.
-    void rasterize(render::GLContext* gl);
+    void rasterize();
 
     GLuint texture() const { return glTexture_; }
 
@@ -565,7 +562,6 @@ private:
     uint64_t sceneId_ = nextSceneId();
 
     render::Renderer* renderer_;
-    render::GLContext* gl_ = nullptr;
     GrDirectContext* grContext_ = nullptr;  // GPU Skia context (null = CPU fallback)
     GLuint gpuFBO_ = 0;                    // FBO for GPU-backed canvas surface
     LayoutCallback layoutCb_ = nullptr;
@@ -711,9 +707,9 @@ public:
     /// spin the worker. Blocks until the worker has SDL_GL_MakeCurrent'd it and
     /// built its GrContext (the Windows/NVIDIA "no concurrent wgl*Context"
     /// guarantee — the context is created once here, while quiescent).
-    void start(SDL_GLContext glCtx, SDL_Window* win);
+    void start(SDL_Window* win);
 
-    /// Main thread: stop + join the worker and destroy its GL context. Every
+    /// Main thread: stop + join the worker. Every
     /// scene bound to this worker must have been released (releaseScene) first.
     void stop();
 
@@ -736,7 +732,6 @@ private:
     void submitJob(CanvasScene* scene, int w, int h, JobKind kind);
 
     std::thread thread_;
-    SDL_GLContext glCtx_ = nullptr;
     sk_sp<GrDirectContext> grContext_;
     bool started_ = false;
 

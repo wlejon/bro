@@ -656,7 +656,6 @@ private:
 
     DisplayMode displayMode_;
     std::unique_ptr<platform::Window> window_;
-    std::unique_ptr<render::GLContext> gl_;
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<render::VulkanContext> vulkanContext_;
     std::unique_ptr<render::VulkanSwapchain> vulkanSwapchain_;
@@ -715,7 +714,6 @@ private:
     std::atomic<bool> rasterReady_{false};
     std::thread       rasterThread_;
     std::thread       layoutThread_;
-    SDL_GLContext     rasterGLContext_ = nullptr;
 
     std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_[2];
     int htmlSurfacePoolW_[2] = {0, 0}, htmlSurfacePoolH_[2] = {0, 0};
@@ -957,8 +955,6 @@ private:
     bool gpuTimerPending_ = false;
     double lastGpuFrameMs_ = -1.0;
 
-    unsigned int uiQuadVAO_ = 0;
-    unsigned int uiQuadVBO_ = 0;
     bool testFailure_ = false;
 
     sk_sp<SkSurface> frameCompositeSurface_;

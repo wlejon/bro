@@ -14,7 +14,6 @@
 #include "platform/sdl_window.h"
 #include "render/command_buffer.h"
 #include "render/command_replayer.h"
-#include "render/gl_context.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "render/vulkan_presenter.h"
@@ -32,8 +31,6 @@
 #include <include/core/SkRect.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
-
-#include "render/gl_compat.h"
 #include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <algorithm>
@@ -46,7 +43,7 @@ namespace bro::engine {
 
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     if (scene) {
-        scene->init(gl_.get());
+        scene->init();
         // Windowed GPU mode: bind to the shared canvas-raster worker. No GL
         // context is created here — the worker's context was created once at
         // run() start — so registering a canvas never races the raster thread.
@@ -489,7 +486,7 @@ void Engine::replayWindowHostLayers(render::SkiaRenderer* renderer) {
 std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& outH) {
     outW = 0;
     outH = 0;
-    if (!el || !gl_) return {};
+    if (!el) return {};
 
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia || !skia->grContext() || !recordingRenderer_ || !drawTraversal_) {
@@ -516,7 +513,6 @@ std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& out
 std::vector<uint8_t> Engine::captureWindowHost(uint64_t id, int& outW, int& outH) {
     outW = 0;
     outH = 0;
-    if (!gl_) return {};
     WindowHost* h = windowHostById(id);
     if (!h || !h->document) return {};
 

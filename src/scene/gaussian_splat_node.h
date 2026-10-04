@@ -3,7 +3,7 @@
 #include "scene/scene_node.h"
 #include <bromath/aabb.h>
 #include <bromesh/gaussian_splat.h>
-#include "scene/gl_available.h"
+
 
 #include <cstdint>
 #include <vector>
@@ -62,28 +62,12 @@ public:
                 const bromath::Mat4& model);
 
 private:
-    void releaseGL();
-    void ensureProgram();
-    void uploadGeometry();           // static per-splat attributes -> GPU order buffer
-    void resortAndUpload(const float* view16, const float eye[3],
-                         const bromath::Mat4& model);
-
     void refreshBounds();
 
     bromesh::GaussianSplatCloud cloud_;
     bromath::AABB3 bounds_{};
     float maxSigma_ = 0.0f;
     bool cloudDirty_ = false;
-
-    // GL program (lazily compiled, shared shape but per-node owned for now).
-    GLuint program_ = 0;
-    GLint uModel_ = -1, uView_ = -1, uProj_ = -1, uFocal_ = -1, uViewport_ = -1;
-
-    // Geometry: a unit quad (4 corners) drawn instanced once per splat.
-    GLuint vao_ = 0;
-    GLuint quadVbo_ = 0;
-    GLuint instVbo_ = 0;
-    size_t instVboCapacity_ = 0; // bytes
 
     // Per-splat instance record uploaded in sorted order:
     //   center.xyz (3) | scale.xyz (3) | quat.xyzw (4) | rgba (4) = 14 floats.

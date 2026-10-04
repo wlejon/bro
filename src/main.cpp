@@ -118,7 +118,7 @@ static void printUsage() {
         "Usage: bro <app-directory>\n"
         "\n"
         "Loads index.html from the given directory and runs it in a\n"
-        "GPU-accelerated window (Skia + OpenGL via SDL3).\n"
+        "GPU-accelerated window (Skia + Vulkan via SDL3).\n"
         "\n"
         "Alternatively, place a bro.json config file or index.html\n"
         "next to the executable to run without arguments.\n"

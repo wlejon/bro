@@ -13,7 +13,6 @@
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
-#include "render/gl_context.h"
 #include "render/command_buffer.h"
 #include "render/vulkan_presenter.h"
 #if BRO_WITH_NET
@@ -40,7 +39,6 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkSurface.h>
 
-#include "render/gl_compat.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -157,12 +155,6 @@ void Engine::flush() {
             if (sg.graph) sg.graph->materializeHtmlNodes(skia);
         }
     }
-    const bool gpuTiming = gl_ && !sceneGraphs_.empty() &&
-                           dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-    if (gpuTiming) {
-        if (gpuTimerQuery_ == 0) glGenQueries(1, &gpuTimerQuery_);
-        glBeginQuery(GL_TIME_ELAPSED, gpuTimerQuery_);
-    }
     for (auto& sg : sceneGraphs_) {
         if (sg.element) {
             auto& box = sg.element->layoutBox();
@@ -176,7 +168,6 @@ void Engine::flush() {
         if (sg.graph) sg.graph->setDeviceScale(deviceScale_.render);
         if (sg.graph) sg.graph->render();
     }
-    if (gpuTiming) { glEndQuery(GL_TIME_ELAPSED); gpuTimerPending_ = true; }
 
     pruneDetachedSceneGraphs();
 #endif  // BRO_WITH_3D
@@ -192,7 +183,7 @@ void Engine::flush() {
         webglEntries_.end());
 
     for (auto& cs : canvasScenes_) {
-        cs->rasterize(gl_.get());
+        cs->rasterize();
         if (!cs->isDetached()) continue;
         canvasSceneRegistry_.erase(cs->sceneId());
         if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
@@ -321,7 +312,7 @@ std::string Engine::eval(const std::string& code) {
 }
 
 std::vector<uint8_t> Engine::renderUnifiedToPixels() {
-    if (!document_ || (!gl_ && !vulkanPresenter_)) return {};
+    if (!document_ || !vulkanPresenter_) return {};
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia) return {};
 
@@ -350,7 +341,7 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
 
     for (auto& cs : canvasScenes_) {
         cs->setViewportScroll(scrollY_);
-        cs->rasterize(gl_.get());
+        cs->rasterize();
     }
     canvasScenes_.erase(
         std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
@@ -436,7 +427,7 @@ bool Engine::screenshot(const std::string& path) {
     if (!document_) return false;
     if (!ensureParentDir(path)) return false;
 
-    if ((gl_ || vulkanPresenter_) && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+    if (vulkanPresenter_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
         auto pixels = renderUnifiedToPixels();
         if (pixels.empty()) return false;
         return broimage::encode_png_file(path, pixels.data(), deviceScale_.drawableW,
@@ -501,7 +492,7 @@ bool Engine::screenshot(const std::string& path) {
 std::vector<uint8_t> Engine::capturePixels() {
     if (!document_) return {};
 
-    if ((gl_ || vulkanPresenter_) && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+    if (vulkanPresenter_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
         return renderUnifiedToPixels();
     }
 
@@ -601,11 +592,6 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
 }
 
 double Engine::gpuFrameMs() {
-    if (gpuTimerQuery_ == 0 || !gpuTimerPending_) return lastGpuFrameMs_;
-    GLuint64 elapsedNs = 0;
-    glGetQueryObjectui64v(gpuTimerQuery_, GL_QUERY_RESULT, &elapsedNs);
-    gpuTimerPending_ = false;
-    lastGpuFrameMs_ = static_cast<double>(elapsedNs) / 1.0e6;
     return lastGpuFrameMs_;
 }
 

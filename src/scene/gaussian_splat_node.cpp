@@ -7,134 +7,9 @@
 
 namespace bro::scene {
 
-// ---------------------------------------------------------------------------
-// Shaders. EWA splatting: the vertex shader projects each splat's 3D
-// covariance to a 2D screen-space conic and expands the instanced quad along
-// the conic's principal axes; the fragment shader evaluates the anisotropic
-// Gaussian and outputs premultiplied color.
-// ---------------------------------------------------------------------------
 
-static const char* kVert = R"GLSL(#version 330 core
-layout(location = 0) in vec2 aCorner;   // quad corner in [-1,1]^2
-layout(location = 1) in vec3 aCenter;   // node-local splat center
-layout(location = 2) in vec3 aScale;    // linear std-dev along local axes
-layout(location = 3) in vec4 aQuat;     // orientation, xyzw
-layout(location = 4) in vec4 aColor;    // rgb (view-evaluated) + opacity
 
-// Node world matrix. Rigid transforms + UNIFORM scale only: mat3(uModel)
-// rotates the splat orientation/covariance and scales sigma by the uniform
-// factor. Non-uniform scale is NOT supported for splats — the CPU back-to-
-// front sort and the frustum-cull bounds both assume the transform preserves
-// distance ordering / isotropic sigma padding.
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProj;
-uniform vec2 uFocal;     // focal length in pixels (fx, fy)
-uniform vec2 uViewport;  // target size in pixels
 
-out vec2 vPos;           // position in std-dev units along principal axes
-out vec4 vColor;
-
-const float kSigma = 3.0; // quad covers +/- 3 std
-
-mat3 quatToMat3(vec4 q) {
-    float x = q.x, y = q.y, z = q.z, w = q.w;
-    float xx = x*x, yy = y*y, zz = z*z;
-    float xy = x*y, xz = x*z, yz = y*z;
-    float wx = w*x, wy = w*y, wz = w*z;
-    return mat3(
-        1.0-2.0*(yy+zz), 2.0*(xy+wz),     2.0*(xz-wy),     // col 0
-        2.0*(xy-wz),     1.0-2.0*(xx+zz), 2.0*(yz+wx),     // col 1
-        2.0*(xz+wy),     2.0*(yz-wx),     1.0-2.0*(xx+yy)); // col 2
-}
-
-void main() {
-    vec4 cam = uView * (uModel * vec4(aCenter, 1.0));
-    vec4 clip = uProj * cam;
-    // Cull splats behind the camera (GL view space looks down -z).
-    if (cam.z > -0.01 || clip.w <= 0.0) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // offscreen
-        return;
-    }
-
-    // 3D covariance in world space: Sigma = (Rm R S)(Rm R S)^T where
-    // Rm = mat3(uModel) is the node rotation * uniform scale.
-    mat3 R = quatToMat3(aQuat);
-    mat3 S = mat3(aScale.x, 0.0, 0.0,
-                  0.0, aScale.y, 0.0,
-                  0.0, 0.0, aScale.z);
-    mat3 M = mat3(uModel) * (R * S);
-    mat3 Sigma = M * transpose(M);
-
-    // Jacobian of the perspective projection at the view-space center.
-    float zz = cam.z * cam.z;
-    mat3 J = mat3(
-        uFocal.x / cam.z, 0.0, 0.0,                                  // col 0
-        0.0, uFocal.y / cam.z, 0.0,                                  // col 1
-        -(uFocal.x * cam.x) / zz, -(uFocal.y * cam.y) / zz, 0.0);    // col 2
-
-    mat3 W = mat3(uView);          // world->view rotation
-    mat3 T = J * W;
-    mat3 cov = T * Sigma * transpose(T);
-
-    // 2x2 screen covariance + low-pass dilation (keeps sub-pixel splats visible).
-    float a = cov[0][0] + 0.3;
-    float b = cov[1][0];
-    float d = cov[1][1] + 0.3;
-    float det = a * d - b * b;
-    if (det <= 0.0) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-        return;
-    }
-
-    // Eigen-decompose to get the principal-axis std-devs (in pixels).
-    float mid = 0.5 * (a + d);
-    float disc = sqrt(max(0.0, mid * mid - det));
-    float l1 = mid + disc;
-    float l2 = mid - disc;
-    // Eigenvector of [[a,b],[b,d]] for l1, taken from whichever row of
-    // (Sigma - l1*I) is better conditioned: row 0 gives (b, l1 - a), row 1
-    // gives (l1 - d, b). When the major axis is near the x-axis l1 ~ a and
-    // (l1 - a) suffers catastrophic cancellation — for an elongated splat
-    // with tiny-but-nonzero b the axis can rotate arbitrarily (up to an
-    // effective axis swap), so pick the row with the larger residual.
-    // When the screen covariance is isotropic (b == 0, a == d) rounding can
-    // still make the chosen row the zero vector — normalize() would return
-    // NaN and the splat would silently vanish. Fall back to the
-    // axis-aligned eigenvectors in that case.
-    vec2 ev = abs(l1 - a) >= abs(l1 - d) ? vec2(b, l1 - a) : vec2(l1 - d, b);
-    vec2 e1 = dot(ev, ev) > 0.0 ? normalize(ev)
-                                : (a >= d ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
-    vec2 e2 = vec2(-e1.y, e1.x);
-    vec2 axisMajor = e1 * (kSigma * sqrt(l1));
-    vec2 axisMinor = e2 * (kSigma * sqrt(max(0.0, l2)));
-
-    // Pixel offset -> NDC offset (NDC spans 2 units across the viewport).
-    vec2 offsetPx = aCorner.x * axisMajor + aCorner.y * axisMinor;
-    vec2 offsetNdc = offsetPx * 2.0 / uViewport;
-
-    vec3 ndc = clip.xyz / clip.w;
-    gl_Position = vec4(ndc.xy + offsetNdc, ndc.z, 1.0);
-
-    vPos = aCorner * kSigma;
-    vColor = aColor;
-}
-)GLSL";
-
-static const char* kFrag = R"GLSL(#version 330 core
-in vec2 vPos;
-in vec4 vColor;
-out vec4 fragColor;
-
-void main() {
-    // Anisotropic Gaussian falloff: vPos is already in std-dev units.
-    float power = -0.5 * dot(vPos, vPos);
-    float alpha = exp(power) * vColor.a;
-    if (alpha < (1.0 / 255.0)) discard;
-    // Premultiplied "over" to match the billboard/Skia composite path.
-    fragColor = vec4(vColor.rgb * alpha, alpha);
-}
-)GLSL";
 
 // ---------------------------------------------------------------------------
 // Spherical-harmonic evaluation (real SH up to degree 3), INRIA convention.
@@ -156,7 +31,7 @@ constexpr float C3[7] = {-0.5900435899266435f, 2.890611442640554f,
 
 GaussianSplatNode::GaussianSplatNode(const std::string& name) : SceneNode(name) {}
 
-GaussianSplatNode::~GaussianSplatNode() { releaseGL(); }
+GaussianSplatNode::~GaussianSplatNode() = default;
 
 void GaussianSplatNode::setCloud(const bromesh::GaussianSplatCloud& cloud) {
     cloud_ = cloud;
@@ -178,94 +53,6 @@ void GaussianSplatNode::refreshBounds() {
     for (float s : cloud_.scales) {
         maxSigma_ = std::max(maxSigma_, std::fabs(s));
     }
-}
-
-void GaussianSplatNode::releaseGL() {
-    if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
-    if (quadVbo_) { glDeleteBuffers(1, &quadVbo_); quadVbo_ = 0; }
-    if (instVbo_) { glDeleteBuffers(1, &instVbo_); instVbo_ = 0; }
-    if (program_) { glDeleteProgram(program_); program_ = 0; }
-    instVboCapacity_ = 0;
-}
-
-static GLuint compileSplatShader(GLenum stage, const char* src) {
-    GLuint s = glCreateShader(stage);
-    glShaderSource(s, 1, &src, nullptr);
-    glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        glGetShaderInfoLog(s, sizeof(log), nullptr, log);
-        LOG_ERROR("GaussianSplatNode shader compile failed: %s", log);
-        glDeleteShader(s);
-        return 0;
-    }
-    return s;
-}
-
-void GaussianSplatNode::ensureProgram() {
-    if (program_) return;
-    GLuint vs = compileSplatShader(GL_VERTEX_SHADER, kVert);
-    GLuint fs = compileSplatShader(GL_FRAGMENT_SHADER, kFrag);
-    if (!vs || !fs) { if (vs) glDeleteShader(vs); if (fs) glDeleteShader(fs); return; }
-    program_ = glCreateProgram();
-    glAttachShader(program_, vs);
-    glAttachShader(program_, fs);
-    glLinkProgram(program_);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    GLint ok = 0;
-    glGetProgramiv(program_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        glGetProgramInfoLog(program_, sizeof(log), nullptr, log);
-        LOG_ERROR("GaussianSplatNode link failed: %s", log);
-        glDeleteProgram(program_);
-        program_ = 0;
-        return;
-    }
-    uModel_ = glGetUniformLocation(program_, "uModel");
-    uView_ = glGetUniformLocation(program_, "uView");
-    uProj_ = glGetUniformLocation(program_, "uProj");
-    uFocal_ = glGetUniformLocation(program_, "uFocal");
-    uViewport_ = glGetUniformLocation(program_, "uViewport");
-}
-
-void GaussianSplatNode::uploadGeometry() {
-    if (!vao_) glGenVertexArrays(1, &vao_);
-    if (!quadVbo_) glGenBuffers(1, &quadVbo_);
-    if (!instVbo_) glGenBuffers(1, &instVbo_);
-
-    glBindVertexArray(vao_);
-
-    // Static unit quad as a triangle strip: corners in [-1,1]^2.
-    static const float quad[8] = {
-        -1.0f, -1.0f,  1.0f, -1.0f,  -1.0f, 1.0f,  1.0f, 1.0f,
-    };
-    glBindBuffer(GL_ARRAY_BUFFER, quadVbo_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
-
-    // Per-splat instance attributes (locations 1..4), divisor 1.
-    glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-    GLsizei stride = kInstFloats * sizeof(float);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(0 * sizeof(float)));
-    glVertexAttribDivisor(1, 1);
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
-    glVertexAttribDivisor(2, 1);
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
-    glVertexAttribDivisor(3, 1);
-    glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, stride, (void*)(10 * sizeof(float)));
-    glVertexAttribDivisor(4, 1);
-
-    glBindVertexArray(0);
-    cloudDirty_ = false;
 }
 
 bool GaussianSplatNode::needsResort(const float* view16, const float eye[3],
@@ -380,46 +167,9 @@ void GaussianSplatNode::resort(const float* view16, const float eye[3],
     sorted_ = true;
 }
 
-void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3],
-                                        const bromath::Mat4& model) {
-    resort(view16, eye, model);
-    if (!glFunctionsLoaded()) return;
-
-    glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-    size_t bytes = instanceData_.size() * sizeof(float);
-    if (bytes > instVboCapacity_) {
-        glBufferData(GL_ARRAY_BUFFER, bytes, instanceData_.data(), GL_DYNAMIC_DRAW);
-        instVboCapacity_ = bytes;
-    } else {
-        glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, instanceData_.data());
-    }
-}
-
-bool GaussianSplatNode::draw(const float* view16, const float* proj16,
-                             const float eye[3], int vpW, int vpH) {
-    if (cloud_.empty() || vpW <= 0 || vpH <= 0) return false;
-    ensureProgram();
-    if (!program_) return false;
-    if (cloudDirty_ || !vao_) uploadGeometry();
-    const bromath::Mat4& model = worldMatrix();
-    if (needsResort(view16, eye, model)) resortAndUpload(view16, eye, model);
-    if (instanceData_.empty()) return false;
-
-    glUseProgram(program_);
-    glUniformMatrix4fv(uModel_, 1, GL_FALSE, model.data);
-    glUniformMatrix4fv(uView_, 1, GL_FALSE, view16);
-    glUniformMatrix4fv(uProj_, 1, GL_FALSE, proj16);
-    // Focal length in pixels from the projection's (0,0)/(1,1) (col-major).
-    float fx = 0.5f * static_cast<float>(vpW) * proj16[0];
-    float fy = 0.5f * static_cast<float>(vpH) * proj16[5];
-    glUniform2f(uFocal_, fx, fy);
-    glUniform2f(uViewport_, static_cast<float>(vpW), static_cast<float>(vpH));
-
-    glBindVertexArray(vao_);
-    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4,
-                          static_cast<GLsizei>(cloud_.count()));
-    glBindVertexArray(0);
-    return true;
+bool GaussianSplatNode::draw(const float*, const float*,
+                             const float*, int, int) {
+    return false;
 }
 
 } // namespace bro::scene

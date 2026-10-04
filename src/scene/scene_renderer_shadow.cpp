@@ -13,9 +13,7 @@
 #include <functional>
 #include <vector>
 
-#include "shadow.vert.h"
-#include "shadow.frag.h"
-#include "shadow_instanced.vert.h"
+
 
 namespace bro::scene {
 
@@ -28,127 +26,23 @@ using bromath::Mat4;
 // ---------------------------------------------------------------------------
 
 void SceneRenderer::ensureShadowPipeline() {
-    if (!glFunctionsLoaded() || shadowProgram_) return;
-    shadowProgram_ = linkProgram(kShadowVertSrc, kShadowFragSrc, "Shadow program");
-    if (shadowProgram_) {
-        shadowUMVP_ = glGetUniformLocation(shadowProgram_, "uMVP");
-    }
 }
 
 void SceneRenderer::ensureShadowInstancedPipeline() {
-    if (shadowInstancedProgram_) return;
-    shadowInstancedProgram_ = linkProgram(kShadowInstancedVertSrc, kShadowFragSrc, "Instanced shadow program");
-    if (shadowInstancedProgram_) {
-        shadowInstULightVP_ = glGetUniformLocation(shadowInstancedProgram_, "uLightVP");
-        shadowInstUModel_   = glGetUniformLocation(shadowInstancedProgram_, "uModel");
-    }
 }
 
 void SceneRenderer::ensureShadowSkinnedPipeline() {
-    if (shadowSkinnedProgram_) return;
-    std::string vsSrc = withSkinnedDefine(kShadowVertSrc);
-    shadowSkinnedProgram_ =
-        linkProgram(vsSrc.c_str(), kShadowFragSrc, "Skinned shadow program");
-    if (shadowSkinnedProgram_) {
-        shadowSkinnedUMVP_ = glGetUniformLocation(shadowSkinnedProgram_, "uMVP");
-        GLuint bi = glGetUniformBlockIndex(shadowSkinnedProgram_, "BonePalette");
-        if (bi != GL_INVALID_INDEX) {
-            glUniformBlockBinding(shadowSkinnedProgram_, bi,
-                                  SkinnedMeshNode::kPaletteBinding);
-        }
-    }
 }
 
 SceneRenderer::CustomShadowEntry* SceneRenderer::ensureCustomShadowProgram(
-        bool skinned, const std::string& vertexChunk) {
-    std::string cacheKey = (skinned ? "S\x1f" : "M\x1f") + vertexChunk;
-    auto it = customShadowPrograms_.find(cacheKey);
-    if (it != customShadowPrograms_.end())
-        return it->second.prog ? &it->second : nullptr;
-
-    std::string vsSrc = skinned ? withSkinnedDefine(kShadowVertSrc)
-                                : std::string(kShadowVertSrc);
-    vsSrc = withUserChunk(vsSrc.c_str(), vertexChunk, "CUSTOM_VERTEX");
-    std::string err;
-    GLuint prog = linkProgramCapture(vsSrc.c_str(), kShadowFragSrc, &err);
-
-    // Cache failures too (prog stays 0): the chunk may reference symbols
-    // that exist only in the mesh pass (e.g. a custom varying it writes) —
-    // the caster then keeps the default shadow program (undisplaced
-    // silhouette) instead of retrying the compile every frame.
-    CustomShadowEntry& e = customShadowPrograms_[cacheKey];
-    e.prog = prog;
-    if (!prog) {
-        LOG_WARN("Custom vertex chunk failed to compile against the "
-                 "shadow shader — the mesh casts its undisplaced "
-                 "silhouette: %s", err.c_str());
-        return nullptr;
-    }
-    e.mvp          = glGetUniformLocation(prog, "uMVP");
-    e.model        = glGetUniformLocation(prog, "uModel");
-    e.windDir      = glGetUniformLocation(prog, "uWindDir");
-    e.windStrength = glGetUniformLocation(prog, "uWindStrength");
-    e.windTime     = glGetUniformLocation(prog, "uWindTime");
-    e.windFreq     = glGetUniformLocation(prog, "uWindFreq");
-    e.windMask     = glGetUniformLocation(prog, "uWindMask");
-    if (skinned) {
-        GLuint bi = glGetUniformBlockIndex(prog, "BonePalette");
-        if (bi != GL_INVALID_INDEX) {
-            glUniformBlockBinding(prog, bi, SkinnedMeshNode::kPaletteBinding);
-        }
-    }
-    return &e;
+        bool /*skinned*/, const std::string& /*vertexChunk*/) {
+    return nullptr;
 }
 
 void SceneRenderer::ensureShadowAtlas() {
-    if ((!glFunctionsLoaded() || shadowAtlasTex_) && shadowAtlasAllocated_ == shadowAtlasSize_ && !shadowAtlasDirty_) return;
-    destroyShadowAtlas();
-    shadowAtlasAllocated_ = shadowAtlasSize_;
-    shadowAtlasDirty_ = false;
-    // Fresh texture = garbage texels; nothing cached survives, and the pass
-    // must start from a full clear before any per-tile reuse.
-    invalidateShadowCache();
-    shadowAtlasNeedsClear_ = true;
-    if (!glFunctionsLoaded()) return;
-
-    glGenTextures(1, &shadowAtlasTex_);
-    glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
-                 shadowAtlasSize_, shadowAtlasSize_, 0,
-                 GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // Hardware PCF: sampler2DShadow returns a [0,1] comparison result and
-    // bilinearly filters between neighbouring texels — much cheaper than
-    // four manual texture() lookups, and visually identical for 2x2 PCF.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-    // Atlas-edge sampling reads "infinitely far" depth, i.e. lit. Combined
-    // with the in-tile clamp in sampleShadow() this avoids cross-tile bleed.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    float border[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
-
-    glGenFramebuffers(1, &shadowAtlasFBO_);
-    glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                           GL_TEXTURE_2D, shadowAtlasTex_, 0);
-    // No color buffer — depth-only.
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        LOG_ERROR("Shadow atlas FBO incomplete: 0x%x", status);
-    }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void SceneRenderer::destroyShadowAtlas() {
-    if (glFunctionsLoaded()) {
-        if (shadowAtlasFBO_) { glDeleteFramebuffers(1, &shadowAtlasFBO_); shadowAtlasFBO_ = 0; }
-        if (shadowAtlasTex_) { glDeleteTextures(1, &shadowAtlasTex_); shadowAtlasTex_ = 0; }
-    }
     shadowAtlasAllocated_ = 0;
     invalidateShadowCache();
 }
@@ -682,11 +576,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
 
 void SceneRenderer::renderShadowPass() {
     if (shadowTileCount_ == 0) return;
-    ensureShadowPipeline();
-    ensureShadowAtlas();
-    if (glFunctionsLoaded() && (!shadowProgram_ || !shadowAtlasFBO_)) return;
     const bool hasInstancedCasters = !shadowInstancedCasters_.empty();
-    const bool hasSkinnedCasters = !shadowSkinnedCasters_.empty();
     const bool hasCustomCasters = !shadowCustomCasters_.empty();
     const bool hasSkinnedCustomCasters = !shadowSkinnedCustomCasters_.empty();
     const bool hasTubeCasters = !shadowTubeCasters_.empty();

@@ -17,7 +17,7 @@
 #include "bronze_host/host_numeric.h"
 #include "bronze_host/host_rooted.h"
 
-#include "render/gl_compat.h"
+#include "webgl/webgl_types.h"
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_objects.h"
 #include "embed/embed.h"

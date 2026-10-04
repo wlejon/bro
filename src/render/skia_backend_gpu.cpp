@@ -3,7 +3,6 @@
 // via CPU raster surfaces and presents through VulkanPresenter.
 
 #include "render/skia_backend.h"
-#include "render/gl_context.h"
 #include "broimage/encode.h"
 
 #include <include/core/SkBitmap.h>
@@ -68,10 +67,6 @@ void SkiaRenderer::enterCanvas() {
     canvas_->clear(SK_ColorTRANSPARENT);
     if (deviceScale_ != 1.0f) canvas_->scale(deviceScale_, deviceScale_);
     canvas_->save();
-}
-
-GLuint SkiaRenderer::uploadSurfaceToTexture(SkSurface* /*surface*/, GLuint existingTex) {
-    return existingTex;
 }
 
 SkiaRenderer::GPUSurface SkiaRenderer::createGPUSurface(int width, int height) {

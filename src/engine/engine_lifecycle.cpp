@@ -35,7 +35,6 @@
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "render/renderer.h"
-#include "render/gl_context.h"
 #include "layout/draw_traversal.h"
 #if BRO_WITH_3D
 #include "engine/gizmo.h"
@@ -48,7 +47,6 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
-#include "render/gl_compat.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_swapchain.h"
 #include "render/vulkan_presenter.h"
@@ -90,11 +88,6 @@ void Engine::shutdown() {
 
     if (framePresenter_) framePresenter_->postShutdown();
     if (rasterThread_.joinable()) rasterThread_.join();
-
-    if (rasterGLContext_) {
-        SDL_GL_DestroyContext(rasterGLContext_);
-        rasterGLContext_ = nullptr;
-    }
 
     if (canvasRasterThread_ && canvasRasterThread_->started()) {
         for (auto& cs : canvasScenes_) {
@@ -175,8 +168,6 @@ Engine::~Engine() {
             systemSurfacePool_[i].clear();
         }
     }
-    if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
-    if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
     vulkanPresenter_.reset();
     vulkanSwapchain_.reset();
     vulkanContext_.reset();
@@ -281,7 +272,7 @@ bool Engine::updateDeviceScale() {
         // Headless follows the configured factor. The CPU fallback (no GL or Vulkan)
         // rasterizes 1:1 but still reports the configured ratio.
         deviceScale_.ratio = deviceScale_.configured;
-        deviceScale_.render = (gl_ || vulkanPresenter_ || vulkanContext_) ? deviceScale_.configured : 1.0f;
+        deviceScale_.render = (vulkanPresenter_ || vulkanContext_) ? deviceScale_.configured : 1.0f;
     }
     int pw = 0, ph = 0;
     if (displayMode_ == DisplayMode::Windowed && window_)

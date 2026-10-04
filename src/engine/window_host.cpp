@@ -32,12 +32,10 @@
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "render/command_buffer.h"
-#include "render/gl_context.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
-#include "render/gl_compat.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -220,72 +218,12 @@ void Engine::processPendingWindowHosts() {
 }
 
 void Engine::compositeWindowHosts() {
-    if (!window_ || !gl_) return;
+    if (!window_) return;
     if (!anyPresentableWindowHosts()) return;
 
-    SDL_GLContext mainCtx = window_->getGLContext();
-    bool switched = false;
     for (auto& h : windowHosts_) {
         if (!h->window || h->pendingClose || h->minimized) continue;
-        if (!h->window->makeGLCurrent(mainCtx)) continue;
-        switched = true;
-        // Secondary swaps must never block the frame: interval 0 for every
-        // one of them; the main swap (last, below in the frame loop) is the
-        // frame's single pacing swap. Re-set after every MakeCurrent — the
-        // interval is per-context state on WGL but per-drawable on GLX, and
-        // the call is cheap.
-        SDL_GL_SetSwapInterval(0);
-        int pw = 0, ph = 0;
-        h->window->getSizeInPixels(pw, ph);
-        if (pw <= 0 || ph <= 0) continue;
-        glViewport(0, 0, pw, ph);
-        glDisable(GL_SCISSOR_TEST);
-        glClearColor(h->clearColor[0], h->clearColor[1],
-                     h->clearColor[2], h->clearColor[3]);
-        glClear(GL_COLOR_BUFFER_BIT);
-        // The host document, as one fullscreen quad. The surface is a top-down
-        // Skia GPU surface (V=0 at top), like the iframe layers in
-        // compositeLayers. Quad coordinates are in the host's WINDOW units and
-        // the shader's viewport uniform matches, so a HiDPI drawable simply
-        // scales — v1 keeps host surfaces at window-size units.
-        if (h->fboTexture) {
-            float qw = static_cast<float>(std::max(1, h->boxW));
-            float qh = static_cast<float>(std::max(1, h->boxH));
-            glUseProgram(gl_->textureProgram());
-            float vp[2] = {qw, qh};
-            glUniform2fv(gl_->textureViewportLoc(), 1, vp);
-            glUniform1i(gl_->textureSamplerLoc(), 0);
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_CULL_FACE);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-            glBindVertexArray(uiQuadVAO_);
-            glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE,
-                                  sizeof(render::TextureVertex), (void*)0);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
-                                  sizeof(render::TextureVertex),
-                                  (void*)offsetof(render::TextureVertex, u));
-            glActiveTexture(GL_TEXTURE0);
-            render::TextureVertex quad[6] = {
-                {0,  0,  0, 0}, {qw, 0,  1, 0}, {qw, qh, 1, 1},
-                {0,  0,  0, 0}, {qw, qh, 1, 1}, {0,  qh, 0, 1},
-            };
-            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-            glBindTexture(GL_TEXTURE_2D, h->fboTexture);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-        }
         h->window->swapWindow();
-    }
-    if (switched) {
-        // Back to the main drawable with the configured vsync interval; the
-        // frame loop's WebGL restoreState + main swap follow. Our GL state
-        // touches above (viewport/clear color/scissor) are re-established by
-        // the next frame's composite setup and by restoreState for WebGL apps.
-        window_->makeGLCurrent(mainCtx);
-        window_->applySwapIntervalPreference();
     }
 }
 

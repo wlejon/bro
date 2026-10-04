@@ -1,7 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
-#include "scene/gl_available.h"
+#include "webgl/webgl_types.h"
 #include "scene/skinned_mesh_node.h"
 #include "scene/decal_node.h"
 #include "scene/vulkan/scene_vk_bridge.h"
@@ -36,134 +36,24 @@ SceneRenderer::SceneRenderer(SceneGraph& graph) : graph_(graph) {
 }
 
 SceneRenderer::~SceneRenderer() {
-    // Destroy GL resources
-    if (fallback2D_) { glDeleteTextures(1, &fallback2D_); fallback2D_ = 0; }
-    if (fallbackCube_) { glDeleteTextures(1, &fallbackCube_); fallbackCube_ = 0; }
-    if (fallbackShadow_) { glDeleteTextures(1, &fallbackShadow_); fallbackShadow_ = 0; }
-    if (fallback3D_) { glDeleteTextures(1, &fallback3D_); fallback3D_ = 0; }
     clearColorLUT();
     destroyMeshFBO();
     destroyMSAAFBO();
     destroySceneDepthCopy();
     destroyTonemapFBO();
-    if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
-    for (auto& [key, entry] : customPrograms_) {
-        if (entry.prog) glDeleteProgram(entry.prog);
-    }
     customPrograms_.clear();
-    for (auto& [key, entry] : customShadowPrograms_) {
-        if (entry.prog) glDeleteProgram(entry.prog);
-    }
     customShadowPrograms_.clear();
-    if (meshSkinnedProgram_) { glDeleteProgram(meshSkinnedProgram_); meshSkinnedProgram_ = 0; }
-    if (meshInstancedProgram_) { glDeleteProgram(meshInstancedProgram_); meshInstancedProgram_ = 0; }
-    if (foliageScatterProgram_) { glDeleteProgram(foliageScatterProgram_); foliageScatterProgram_ = 0; }
-    if (tubeProgram_) { glDeleteProgram(tubeProgram_); tubeProgram_ = 0; }
-    if (tubeDepthProgram_) { glDeleteProgram(tubeDepthProgram_); tubeDepthProgram_ = 0; }
-    if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
-    if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
-    if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
-    if (particleProgram_) { glDeleteProgram(particleProgram_); particleProgram_ = 0; }
-    if (particleQuadVBO_) { glDeleteBuffers(1, &particleQuadVBO_); particleQuadVBO_ = 0; }
-    if (decalProgram_) { glDeleteProgram(decalProgram_); decalProgram_ = 0; }
-    if (decalVBO_) { glDeleteBuffers(1, &decalVBO_); decalVBO_ = 0; }
-    if (decalVAO_) { glDeleteVertexArrays(1, &decalVAO_); decalVAO_ = 0; }
-    if (tonemapProgram_) { glDeleteProgram(tonemapProgram_); tonemapProgram_ = 0; }
-    if (tonemapVBO_) { glDeleteBuffers(1, &tonemapVBO_); tonemapVBO_ = 0; }
-    if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
     destroyTiltShiftFBOs();
-    if (blurProgram_) { glDeleteProgram(blurProgram_); blurProgram_ = 0; }
-    if (tiltProgram_) { glDeleteProgram(tiltProgram_); tiltProgram_ = 0; }
     destroyBloomFBOs();
-    if (bloomBrightProgram_) { glDeleteProgram(bloomBrightProgram_); bloomBrightProgram_ = 0; }
     destroySSAOFBOs();
-    if (ssaoProgram_) { glDeleteProgram(ssaoProgram_); ssaoProgram_ = 0; }
-    if (ssaoNoiseTex_) { glDeleteTextures(1, &ssaoNoiseTex_); ssaoNoiseTex_ = 0; }
     destroySSRFBO();
-    if (ssrProgram_) { glDeleteProgram(ssrProgram_); ssrProgram_ = 0; }
     destroyDoFFBOs();
-    if (dofProgram_) { glDeleteProgram(dofProgram_); dofProgram_ = 0; }
     destroyFXAAFBO();
-    if (fxaaProgram_) { glDeleteProgram(fxaaProgram_); fxaaProgram_ = 0; }
-    if (probeCaptureFBO_) { glDeleteFramebuffers(1, &probeCaptureFBO_); probeCaptureFBO_ = 0; }
-    if (probeDepthRBO_) { glDeleteRenderbuffers(1, &probeDepthRBO_); probeDepthRBO_ = 0; }
     destroyShadowAtlas();
-    if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
-    if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }
-    if (shadowSkinnedProgram_) { glDeleteProgram(shadowSkinnedProgram_); shadowSkinnedProgram_ = 0; }
     clearEnvironment();
-    if (envConvertProgram_) { glDeleteProgram(envConvertProgram_); envConvertProgram_ = 0; }
-    if (envConvertVBO_) { glDeleteBuffers(1, &envConvertVBO_); envConvertVBO_ = 0; }
-    if (envConvertVAO_) { glDeleteVertexArrays(1, &envConvertVAO_); envConvertVAO_ = 0; }
-    if (envConvertFBO_) { glDeleteFramebuffers(1, &envConvertFBO_); envConvertFBO_ = 0; }
-    if (atmProgram_) { glDeleteProgram(atmProgram_); atmProgram_ = 0; }
-    if (skyboxProgram_) { glDeleteProgram(skyboxProgram_); skyboxProgram_ = 0; }
-    if (skyboxVBO_) { glDeleteBuffers(1, &skyboxVBO_); skyboxVBO_ = 0; }
-    if (skyboxVAO_) { glDeleteVertexArrays(1, &skyboxVAO_); skyboxVAO_ = 0; }
-    if (irrConvProgram_) { glDeleteProgram(irrConvProgram_); irrConvProgram_ = 0; }
-    if (prefilterProgram_) { glDeleteProgram(prefilterProgram_); prefilterProgram_ = 0; }
-    if (brdfLUTProgram_) { glDeleteProgram(brdfLUTProgram_); brdfLUTProgram_ = 0; }
-    if (brdfLUT_) { glDeleteTextures(1, &brdfLUT_); brdfLUT_ = 0; }}
+}
 
 void SceneRenderer::ensureFallbackTextures() {
-    if (fallback2D_ && fallbackCube_ && fallbackShadow_ && fallback3D_) return;
-
-    if (!fallback3D_) {
-        glGenTextures(1, &fallback3D_);
-        glBindTexture(GL_TEXTURE_3D, fallback3D_);
-        uint8_t white[4] = {255, 255, 255, 255};
-        glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 1, 1, 1, 0, GL_RGBA,
-                     GL_UNSIGNED_BYTE, white);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_3D, 0);
-    }
-
-    if (!fallback2D_) {
-        glGenTextures(1, &fallback2D_);
-        glBindTexture(GL_TEXTURE_2D, fallback2D_);
-        uint8_t white[4] = {255, 255, 255, 255};
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    }
-
-    if (!fallbackCube_) {
-        glGenTextures(1, &fallbackCube_);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, fallbackCube_);
-        uint8_t white[4] = {255, 255, 255, 255};
-        for (int f = 0; f < 6; ++f) {
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA8, 1, 1, 0,
-                         GL_RGBA, GL_UNSIGNED_BYTE, white);
-        }
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-    }
-
-    if (!fallbackShadow_) {
-        glGenTextures(1, &fallbackShadow_);
-        glBindTexture(GL_TEXTURE_2D, fallbackShadow_);
-        float one = 1.0f; // depth = far, comparison always passes (ref <= 1)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 1, 1, 0,
-                     GL_DEPTH_COMPONENT, GL_FLOAT, &one);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-    }
-
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 }
 
 int SceneRenderer::targetWidth() const {
@@ -177,143 +67,30 @@ int SceneRenderer::targetHeight() const {
 }
 
 void SceneRenderer::ensureMeshFBO() {
-    if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
-    const int tw = targetWidth();
-    const int th = targetHeight();
-    if (meshFBO_ && meshFBOWidth_ == tw && meshFBOHeight_ == th) return;
-
-    destroyMeshFBO();
-
-    meshFBOWidth_ = tw;
-    meshFBOHeight_ = th;
-
-    glGenFramebuffers(1, &meshFBO_);
-    glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
-
-    // HDR color attachment — RGBA16F so lighting can exceed 1.0 before
-    // tonemap. The LDR output texture consumed by the compositor is a
-    // separate RGBA8 texture owned by the tonemap FBO.
-    glGenTextures(1, &meshColorTex_);
-    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, meshFBOWidth_, meshFBOHeight_, 0,
-                 GL_RGBA, GL_HALF_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, meshColorTex_, 0);
-
-    // Depth-stencil texture (not an RBO): the soft-particle pass samples it
-    // (via the sceneDepthCopy blit) and the tonemap FBO re-attaches it for
-    // the post-tonemap unlit overlay's depth test.
-    glGenTextures(1, &meshDepthTex_);
-    glBindTexture(GL_TEXTURE_2D, meshDepthTex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, depthStencilInternalFormat(),
-                 meshFBOWidth_, meshFBOHeight_, 0,
-                 GL_DEPTH_STENCIL, depthStencilType(), nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-                           GL_TEXTURE_2D, meshDepthTex_, 0);
-
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        LOG_ERROR("Mesh FBO incomplete: 0x%x", status);
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void SceneRenderer::destroyMeshFBO() {
-    if (meshDepthTex_) { glDeleteTextures(1, &meshDepthTex_); meshDepthTex_ = 0; }
-    if (meshColorTex_) { glDeleteTextures(1, &meshColorTex_); meshColorTex_ = 0; }
-    if (meshFBO_) { glDeleteFramebuffers(1, &meshFBO_); meshFBO_ = 0; }
+    meshDepthTex_ = 0;
+    meshColorTex_ = 0;
+    meshFBO_ = 0;
     meshFBOWidth_ = 0;
     meshFBOHeight_ = 0;
 }
 
-// Multisampled HDR target (color RGBA16F + depth-stencil renderbuffers) at
-// the mesh FBO size. Recreated when the size or sample count changes; torn
-// down when MSAA is turned off. Sets msaaActive_ for the frame — false on
-// any allocation failure so rendering falls back to the single-sampled path.
 void SceneRenderer::ensureMSAAFBO() {
     msaaActive_ = false;
-    if (msaaSamples_ < 2 || !meshFBO_) {
-        destroyMSAAFBO();
-        return;
-    }
-
-    GLint maxSamples = 1;
-    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
-    const int samples = msaaSamples_ > maxSamples ? static_cast<int>(maxSamples)
-                                                  : msaaSamples_;
-    if (samples < 2) {
-        destroyMSAAFBO();
-        return;
-    }
-
-    if (!msaaFBO_ || msaaWidth_ != meshFBOWidth_ || msaaHeight_ != meshFBOHeight_ ||
-        msaaSamplesAllocated_ != samples) {
-        destroyMSAAFBO();
-
-        glGenRenderbuffers(1, &msaaColorRBO_);
-        glBindRenderbuffer(GL_RENDERBUFFER, msaaColorRBO_);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA16F,
-                                         meshFBOWidth_, meshFBOHeight_);
-        glGenRenderbuffers(1, &msaaDepthRBO_);
-        glBindRenderbuffer(GL_RENDERBUFFER, msaaDepthRBO_);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, depthStencilInternalFormat(),
-                                         meshFBOWidth_, meshFBOHeight_);
-        glBindRenderbuffer(GL_RENDERBUFFER, 0);
-
-        glGenFramebuffers(1, &msaaFBO_);
-        glBindFramebuffer(GL_FRAMEBUFFER, msaaFBO_);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                  GL_RENDERBUFFER, msaaColorRBO_);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-                                  GL_RENDERBUFFER, msaaDepthRBO_);
-        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("MSAA FBO incomplete (%d samples): 0x%x", samples, status);
-            destroyMSAAFBO();
-            return;
-        }
-        msaaWidth_ = meshFBOWidth_;
-        msaaHeight_ = meshFBOHeight_;
-        msaaSamplesAllocated_ = samples;
-    }
-
-    msaaActive_ = true;
 }
 
 void SceneRenderer::destroyMSAAFBO() {
-    if (msaaColorRBO_) { glDeleteRenderbuffers(1, &msaaColorRBO_); msaaColorRBO_ = 0; }
-    if (msaaDepthRBO_) { glDeleteRenderbuffers(1, &msaaDepthRBO_); msaaDepthRBO_ = 0; }
-    if (msaaFBO_) { glDeleteFramebuffers(1, &msaaFBO_); msaaFBO_ = 0; }
+    msaaColorRBO_ = 0;
+    msaaDepthRBO_ = 0;
+    msaaFBO_ = 0;
     msaaWidth_ = msaaHeight_ = 0;
     msaaSamplesAllocated_ = 0;
     msaaActive_ = false;
 }
 
-void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
-    glUniform1f(L.fogStart, fogStart_);
-    glUniform1f(L.fogEnd, fogEnd_);
-    glUniform3f(L.fogColor, fogColor_[0], fogColor_[1], fogColor_[2]);
-    glUniform1f(L.fogDensity, fogDensity_);
-    glUniform1f(L.fogHeightFalloff, fogHeightFalloff_);
-    glUniform1f(L.fogStartDist, fogStartDist_);
-    glUniform1f(L.fogCamY, graph_.cameraEye_.y);
-    uploadAtmLocs(L.atm);
-    glUniform3f(L.ambient, effectiveAmbient()[0], effectiveAmbient()[1], effectiveAmbient()[2]);
-    if (L.windDir      >= 0) glUniform3fv(L.windDir, 1, windDir_);
-    if (L.windStrength >= 0) glUniform1f(L.windStrength, windStrength_);
-    if (L.windTime     >= 0) glUniform1f(L.windTime, windTime_);
-    if (L.windFreq     >= 0) glUniform1f(L.windFreq, windFreq_);
-    // SSR mask phase: opaque draws write the reflectance mask into alpha
-    // (see render3D — cleared before any pass that blends against alpha).
-    if (L.ssrMask      >= 0) glUniform1i(L.ssrMask, ssrMaskActive_ ? 1 : 0);
+void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& /*L*/) {
 }
 
 // Conservative world-space bounds per cullable node type. The contract is
@@ -439,8 +216,6 @@ void SceneRenderer::render3D() {
             const auto& activeLights = lights.empty() ? fallback : lights;
 
             updateSunIrradiance(activeLights);
-            prepareShadows(activeLights);
-            renderShadowPass();
 
             vkBridge_->render3D(graph_, *this);
             hasMeshContent_ = vkBridge_->hasMeshContent();

@@ -22,7 +22,6 @@
 #include "audio_inference/audio_inference.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
-#include "render/gl_context.h"
 #include "render/skia_backend.h"
 
 #include <broaudio/engine.h>
@@ -234,24 +233,6 @@ void Engine::run() {
     windowFocused_ =
         (SDL_GetWindowFlags(window_->getSDLWindow()) & SDL_WINDOW_INPUT_FOCUS) != 0;
 
-    {
-        auto ctx = window_->createSharedContext();
-        if (ctx) {
-            canvasRasterThread_ = std::make_unique<canvas::CanvasRasterThread>();
-            canvasRasterThread_->start(ctx, window_->getSDLWindow());
-        }
-    }
-    if (canvasRasterThread_ && canvasRasterThread_->started()) {
-        for (auto& cs : canvasScenes_) {
-            if (cs && !cs->isThreaded()) cs->bindRasterThread(canvasRasterThread_.get());
-        }
-    }
-
-    rasterGLContext_ = window_->createSharedContext();
-    if (!rasterGLContext_) {
-        LOG_ERROR("Failed to create shared GL context for raster thread");
-        return;
-    }
     rasterReady_.store(false, std::memory_order_relaxed);
 
     framePresenter_ = std::make_unique<FramePresenter>();

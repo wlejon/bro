@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scene/gl_available.h"
+#include "webgl/webgl_types.h"
 
 #include <bromath/frustum.h>
 

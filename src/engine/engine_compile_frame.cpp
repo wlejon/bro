@@ -46,7 +46,7 @@ void Engine::setCompileProgress(bool compiling, double progress) {
 
 void Engine::pumpCompileFrame(double progress) {
     setCompileProgress(true, progress);
-    if (displayMode_ != DisplayMode::Windowed || !window_ || !renderer_ || !gl_) {
+    if (displayMode_ != DisplayMode::Windowed || !window_ || !renderer_ || (!vulkanPresenter_ && !vulkanContext_)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
         return;
     }

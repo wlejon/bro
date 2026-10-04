@@ -10,7 +10,6 @@
 #include "platform/sdl_window.h"
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
-#include "render/gl_context.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -144,20 +143,11 @@ void Engine::layoutThreadFunc() {
 // ---------------------------------------------------------------------------
 
 void Engine::rasterThreadFunc() {
-    // Main thread already created rasterGLContext_ (macOS/AppKit requirement);
-    // we MakeCurrent it here, which is a thread-local GL operation. Main is
-    // parked in run() on rasterReady_ so no other wgl*Context call can overlap
-    // with this one (Windows/NVIDIA requirement).
-    SDL_GL_MakeCurrent(window_->getSDLWindow(), rasterGLContext_);
     rasterReady_.store(true, std::memory_order_release);
     rasterReady_.notify_one();
 
-    // Per-thread Skia + Ganesh context. Skia GPU contexts aren't thread-safe.
-    auto rasterRenderer = std::make_unique<render::SkiaRenderer>(*gl_);
-    if (!rasterRenderer->grContext()) {
-        LOG_ERROR("Raster thread: SkiaRenderer failed to create GrDirectContext");
-        return;
-    }
+    // Per-thread Skia renderer.
+    auto rasterRenderer = std::make_unique<render::SkiaRenderer>();
     for (auto& font : loadedFonts_) {
         rasterRenderer->registerCustomFont(font.family, font.data.data(),
                                            font.data.size(), font.weight, font.italic);
@@ -181,7 +171,7 @@ void Engine::rasterThreadFunc() {
         backBuf.appLayers.clear();
         backBuf.systemLayers.clear();
 
-        rasterRenderer->grContext()->resetContext();
+        if (rasterRenderer->grContext()) rasterRenderer->grContext()->resetContext();
         rasterRenderer->beginFrame(snap.vpWidth, snap.vpHeight);
 
         // App layer surfaces are content-sized (viewport minus engine
@@ -263,7 +253,6 @@ void Engine::rasterThreadFunc() {
     drainIframeSurfaceFrees(rasterRenderer.get());
 
     rasterRenderer.reset();
-    SDL_GL_MakeCurrent(window_->getSDLWindow(), nullptr);
     LOG_INFO("Raster thread stopped");
 }
 
