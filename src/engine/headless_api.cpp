@@ -321,7 +321,7 @@ std::string Engine::eval(const std::string& code) {
 }
 
 std::vector<uint8_t> Engine::renderUnifiedToPixels() {
-    if (!document_ || !gl_) return {};
+    if (!document_ || (!gl_ && !vulkanPresenter_)) return {};
     auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
     if (!skia) return {};
 
@@ -385,6 +385,10 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     replayIframeLayers(skia);
     skia->setDeviceScale(1.0f);
     skia->endFrame();
+
+    if (frameCompositeSurface_) {
+        frameCompositeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
+    }
 
     compositeLayers(appLayers, 0, insetTop, cw, ch);
     compositeLayers(systemLayers);

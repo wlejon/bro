@@ -301,8 +301,8 @@ VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int hei
 }
 
 void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
-    uint32_t width = static_cast<uint32_t>(graph.canvasWidth());
-    uint32_t height = static_cast<uint32_t>(graph.canvasHeight());
+    uint32_t width = static_cast<uint32_t>(renderer.targetWidth());
+    uint32_t height = static_cast<uint32_t>(renderer.targetHeight());
     if (width == 0 || height == 0) return;
 
     if (!ensureTargets(width, height)) return;

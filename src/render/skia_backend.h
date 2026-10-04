@@ -35,7 +35,8 @@ class GLContext;
 
 class SkiaRenderer final : public Renderer {
 public:
-    explicit SkiaRenderer(GLContext& gl);
+    explicit SkiaRenderer(GLContext* gl = nullptr);
+    explicit SkiaRenderer(GLContext& gl) : SkiaRenderer(&gl) {}
     ~SkiaRenderer() override;
 
     /// Create a standalone Ganesh GL GrDirectContext for the current thread's GL context.

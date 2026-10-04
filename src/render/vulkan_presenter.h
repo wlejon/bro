@@ -42,8 +42,10 @@ public:
     bool readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
 
     /// Present an existing GPU VkImage directly without CPU roundtrips (zero-copy UI compositing).
+    /// If overlaySurface is non-null, it is alpha-blended over the image on GPU before presentation.
     bool presentImage(VkImage image, uint32_t width, uint32_t height,
-                      VkImageLayout currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                      VkImageLayout currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                      SkSurface* overlaySurface = nullptr);
 
     bool isHeadless() const { return swapchain_ == nullptr; }
 
@@ -56,6 +58,13 @@ public:
 private:
     bool ensureStagingBuffer(VkDeviceSize requiredSize);
     bool ensureOffscreenImage(uint32_t width, uint32_t height);
+    bool ensureOverlayImage(uint32_t width, uint32_t height);
+    bool uploadOverlaySurface(SkSurface* surface, VkCommandBuffer cmd);
+    bool initOverlayPipeline(VkFormat targetFormat, VkRenderPass& outRenderPass, VkPipeline& outPipeline);
+    bool recordOverlayPass(VkCommandBuffer cmd, VkImage targetImage, VkImageView targetView,
+                           VkRenderPass renderPass, VkPipeline pipeline, VkFramebuffer& framebuffer,
+                           uint32_t targetWidth, uint32_t targetHeight, VkFormat targetFormat);
+    void cleanupOverlay();
     void cleanup();
 
     VulkanContext& context_;
@@ -81,6 +90,27 @@ private:
     VkBuffer readbackBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
     VkDeviceSize readbackBufferSize_ = 0;
+
+    // Overlay compositing resources
+    VkImage overlayImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory overlayMemory_ = VK_NULL_HANDLE;
+    VkImageView overlayView_ = VK_NULL_HANDLE;
+    uint32_t overlayW_ = 0;
+    uint32_t overlayH_ = 0;
+
+    VkSampler overlaySampler_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout overlayDescriptorSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool overlayDescriptorPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet overlayDescriptorSet_ = VK_NULL_HANDLE;
+    VkPipelineLayout overlayPipelineLayout_ = VK_NULL_HANDLE;
+
+    VkRenderPass overlayRenderPassOffscreen_ = VK_NULL_HANDLE;
+    VkPipeline overlayPipelineOffscreen_ = VK_NULL_HANDLE;
+    VkFramebuffer overlayFramebufferOffscreen_ = VK_NULL_HANDLE;
+
+    VkRenderPass overlayRenderPassSwapchain_ = VK_NULL_HANDLE;
+    VkPipeline overlayPipelineSwapchain_ = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> overlayFramebuffersSwapchain_;
 };
 
 } // namespace bro::render

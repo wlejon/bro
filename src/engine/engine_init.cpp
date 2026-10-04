@@ -189,7 +189,11 @@ Engine::Engine(const EngineConfig& config)
                 vulkanPresenter_.reset();
             }
         }
-        renderer_ = std::make_unique<render::RasterRenderer>();
+        if (vulkanPresenter_) {
+            renderer_ = std::make_unique<render::SkiaRenderer>();
+        } else {
+            renderer_ = std::make_unique<render::RasterRenderer>();
+        }
     } else if (displayMode_ == DisplayMode::Windowed) {
         try {
             window_ = std::make_unique<platform::Window>("Bro",

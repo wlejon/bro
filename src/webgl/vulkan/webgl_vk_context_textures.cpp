@@ -56,7 +56,8 @@ void WebGLVkContext::updateTextureSampler(VkTextureResource& tex) {
     info.addressModeV = toAddressMode(tex.wrapT);
     info.addressModeW = toAddressMode(tex.wrapS);
     info.minLod = 0.0f;
-    info.maxLod = (tex.mipLevels > 1) ? static_cast<float>(tex.mipLevels) : 1.0f;
+    bool hasMipmaps = (tex.minFilter != GL_NEAREST && tex.minFilter != GL_LINEAR);
+    info.maxLod = (hasMipmaps && tex.mipLevels > 1) ? static_cast<float>(tex.mipLevels - 1) : 0.0f;
     vkCreateSampler(dev, &info, nullptr, &tex.sampler);
     tex.samplerDirty = false;
 }
@@ -147,6 +148,15 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
     } else if (internalformat == GL_RGBA32F || (format == GL_RGBA && type == GL_FLOAT)) {
         vkFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
         bpp = 16;
+    } else if (internalformat == GL_R16F || (format == GL_RED && type == GL_HALF_FLOAT)) {
+        vkFormat = VK_FORMAT_R16_SFLOAT;
+        bpp = 2;
+    } else if (internalformat == GL_RG16F || (format == GL_RG && type == GL_HALF_FLOAT)) {
+        vkFormat = VK_FORMAT_R16G16_SFLOAT;
+        bpp = 4;
+    } else if (internalformat == GL_RGBA16F || (format == GL_RGBA && type == GL_HALF_FLOAT)) {
+        vkFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+        bpp = 8;
     } else if (internalformat == GL_R8 || format == GL_RED) {
         vkFormat = VK_FORMAT_R8_UNORM;
         bpp = 1;
@@ -321,6 +331,10 @@ void WebGLVkContext::texSubImage2D(GLenum /*target*/, GLint level, GLint xoffset
         if (format == GL_RED) bpp = 4;
         else if (format == GL_RG) bpp = 8;
         else if (format == GL_RGBA) bpp = 16;
+    } else if (type == GL_HALF_FLOAT) {
+        if (format == GL_RED) bpp = 2;
+        else if (format == GL_RG) bpp = 4;
+        else if (format == GL_RGBA) bpp = 8;
     } else if (type == GL_UNSIGNED_BYTE) {
         if (format == GL_RED) bpp = 1;
         else if (format == GL_RG) bpp = 2;
@@ -599,8 +613,9 @@ void WebGLVkContext::updateSamplerObject(VkSamplerResource& smp) {
     info.addressModeU = toAddressMode(smp.wrapS);
     info.addressModeV = toAddressMode(smp.wrapT);
     info.addressModeW = toAddressMode(smp.wrapR);
+    bool hasMipmaps = (smp.minFilter != GL_NEAREST && smp.minFilter != GL_LINEAR);
     info.minLod = std::max(0.0f, smp.minLod);
-    info.maxLod = std::max(0.0f, smp.maxLod);
+    info.maxLod = hasMipmaps ? std::max(0.0f, smp.maxLod) : 0.0f;
     if (smp.compareMode == GL_COMPARE_REF_TO_TEXTURE) {
         info.compareEnable = VK_TRUE;
         info.compareOp = glCompareOpToVk(smp.compareFunc);

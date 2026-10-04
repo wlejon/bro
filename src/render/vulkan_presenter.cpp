@@ -1,4 +1,5 @@
 #include "render/vulkan_presenter.h"
+#include "render/vulkan_presenter_shaders.h"
 #include "util/log.h"
 
 #include <include/core/SkColorType.h>
@@ -50,6 +51,8 @@ void VulkanPresenter::cleanup() {
     if (device == VK_NULL_HANDLE) return;
 
     vkDeviceWaitIdle(device);
+
+    cleanupOverlay();
 
     if (!commandBuffers_.empty() && context_.commandPool() != VK_NULL_HANDLE) {
         vkFreeCommandBuffers(device, context_.commandPool(),
@@ -120,6 +123,10 @@ bool VulkanPresenter::ensureOffscreenImage(uint32_t width, uint32_t height) {
     }
 
     VkDevice device = context_.device();
+    if (overlayFramebufferOffscreen_ != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device, overlayFramebufferOffscreen_, nullptr);
+        overlayFramebufferOffscreen_ = VK_NULL_HANDLE;
+    }
     if (offscreenView_ != VK_NULL_HANDLE) {
         vkDestroyImageView(device, offscreenView_, nullptr);
         offscreenView_ = VK_NULL_HANDLE;
@@ -372,7 +379,8 @@ bool VulkanPresenter::readbackPixels(std::vector<uint8_t>& outPixels, uint32_t& 
 }
 
 bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t height,
-                                   VkImageLayout currentLayout)
+                                   VkImageLayout currentLayout,
+                                   SkSurface* overlaySurface)
 {
     if (srcImage == VK_NULL_HANDLE || width == 0 || height == 0) return false;
 
@@ -406,10 +414,24 @@ bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t he
                        offscreenImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &copyRegion);
 
-        context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                       cmd);
+        if (overlaySurface) {
+            uploadOverlaySurface(overlaySurface, cmd);
+            initOverlayPipeline(VK_FORMAT_R8G8B8A8_UNORM, overlayRenderPassOffscreen_, overlayPipelineOffscreen_);
+            recordOverlayPass(cmd, offscreenImage_, offscreenView_,
+                              overlayRenderPassOffscreen_, overlayPipelineOffscreen_,
+                              overlayFramebufferOffscreen_, width, height,
+                              VK_FORMAT_R8G8B8A8_UNORM);
+            context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
+                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                           cmd);
+        } else {
+            context_.transitionImageLayout(offscreenImage_, VK_FORMAT_R8G8B8A8_UNORM,
+                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                           cmd);
+        }
+
         if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
             context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
                                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout,
@@ -424,12 +446,20 @@ bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t he
     // Windowed presentation via swapchain
     if (swapchain_->extent().width != width || swapchain_->extent().height != height) {
         swapchain_->resize(width, height);
+        for (auto fb : overlayFramebuffersSwapchain_) {
+            if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(context_.device(), fb, nullptr);
+        }
+        overlayFramebuffersSwapchain_.clear();
     }
 
     uint32_t imageIndex = 0;
     SwapchainResult acqResult = swapchain_->acquireNextImage(imageIndex);
     if (acqResult == SwapchainResult::OutOfDate) {
         swapchain_->resize(width, height);
+        for (auto fb : overlayFramebuffersSwapchain_) {
+            if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(context_.device(), fb, nullptr);
+        }
+        overlayFramebuffersSwapchain_.clear();
         acqResult = swapchain_->acquireNextImage(imageIndex);
         if (acqResult != SwapchainResult::Success && acqResult != SwapchainResult::Suboptimal) {
             return false;
@@ -451,8 +481,8 @@ bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t he
 
     if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
         context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
-                                       currentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                       cmd);
+                                           currentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                           cmd);
     }
     context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
                                    VK_IMAGE_LAYOUT_UNDEFINED,
@@ -474,10 +504,28 @@ bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t he
                    swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    1, &blitRegion, VK_FILTER_LINEAR);
 
-    context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                   cmd);
+    if (overlaySurface) {
+        uploadOverlaySurface(overlaySurface, cmd);
+        initOverlayPipeline(swapchain_->imageFormat(), overlayRenderPassSwapchain_, overlayPipelineSwapchain_);
+        if (overlayFramebuffersSwapchain_.size() <= imageIndex) {
+            overlayFramebuffersSwapchain_.resize(swapchain_->imageCount(), VK_NULL_HANDLE);
+        }
+        recordOverlayPass(cmd, swapImage, swapchain_->imageView(imageIndex),
+                          overlayRenderPassSwapchain_, overlayPipelineSwapchain_,
+                          overlayFramebuffersSwapchain_[imageIndex],
+                          swapchain_->extent().width, swapchain_->extent().height,
+                          swapchain_->imageFormat());
+        context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
+                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                       cmd);
+    } else {
+        context_.transitionImageLayout(swapImage, swapchain_->imageFormat(),
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                       cmd);
+    }
+
     if (currentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL) {
         context_.transitionImageLayout(srcImage, VK_FORMAT_R8G8B8A8_UNORM,
                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentLayout,
@@ -492,7 +540,7 @@ bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t he
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_TRANSFER_BIT };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
     if (waitSem != VK_NULL_HANDLE) {
         submitInfo.waitSemaphoreCount = 1;
         submitInfo.pWaitSemaphores = &waitSem;
@@ -513,6 +561,10 @@ bool VulkanPresenter::presentImage(VkImage srcImage, uint32_t width, uint32_t he
     SwapchainResult presResult = swapchain_->present(imageIndex);
     if (presResult == SwapchainResult::OutOfDate || presResult == SwapchainResult::Suboptimal) {
         swapchain_->resize(width, height);
+        for (auto fb : overlayFramebuffersSwapchain_) {
+            if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(context_.device(), fb, nullptr);
+        }
+        overlayFramebuffersSwapchain_.clear();
     }
 
     width_ = width;

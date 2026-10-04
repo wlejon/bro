@@ -564,7 +564,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
         frameCompositeW_ = fbW;
         frameCompositeH_ = fbH;
         if (frameCompositeSurface_) {
-            frameCompositeSurface_->getCanvas()->clear(SK_ColorBLACK);
+            frameCompositeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
         }
     }
 
@@ -666,7 +666,8 @@ void Engine::presentCurrentFrame() {
 
     if (pendingVkImage_ != VK_NULL_HANDLE && pendingVkImageW_ > 0 && pendingVkImageH_ > 0) {
         vulkanPresenter_->presentImage(pendingVkImage_, pendingVkImageW_, pendingVkImageH_,
-                                       pendingVkImageLayout_);
+                                       pendingVkImageLayout_,
+                                       frameCompositeSurface_.get());
         pendingVkImage_ = VK_NULL_HANDLE;
         pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         pendingVkImageW_ = 0;

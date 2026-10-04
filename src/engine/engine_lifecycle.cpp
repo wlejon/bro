@@ -243,6 +243,12 @@ void Engine::handleResize(int w, int h) {
             cs->reset();
         }
 
+#if BRO_WITH_3D
+        for (auto& sg : sceneGraphs_) {
+            if (sg.graph) sg.graph->setDeviceScale(deviceScale_.render);
+        }
+#endif
+
         dom::Event resizeEvt("resize", /*bubbles=*/false, /*cancelable=*/false);
         resizeEvt.setIsTrusted(true);
         dom::dispatchWindowEvent(document_.get(), resizeEvt);
@@ -272,10 +278,10 @@ bool Engine::updateDeviceScale() {
         deviceScale_.render = window_->getPixelDensity();
         deviceScale_.ratio = window_->getDevicePixelRatio();
     } else {
-        // Headless follows the configured factor. The CPU fallback (no GL)
+        // Headless follows the configured factor. The CPU fallback (no GL or Vulkan)
         // rasterizes 1:1 but still reports the configured ratio.
         deviceScale_.ratio = deviceScale_.configured;
-        deviceScale_.render = gl_ ? deviceScale_.configured : 1.0f;
+        deviceScale_.render = (gl_ || vulkanPresenter_ || vulkanContext_) ? deviceScale_.configured : 1.0f;
     }
     int pw = 0, ph = 0;
     if (displayMode_ == DisplayMode::Windowed && window_)

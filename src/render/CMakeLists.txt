@@ -27,6 +27,7 @@ add_library(bro_render STATIC
     vulkan_context.cpp
     vulkan_swapchain.cpp
     vulkan_presenter.cpp
+    vulkan_presenter_composite.cpp
     raster_renderer.cpp
     font_fallback.cpp
     font_family.cpp

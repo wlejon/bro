@@ -196,6 +196,10 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
+    if (frameCompositeSurface_) {
+        frameCompositeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
+    }
+
     compositeLayers(layers.appLayers, 0,
                     layers.appInsetTop, layers.appContentW,
                     layers.appContentH);
