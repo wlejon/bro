@@ -368,26 +368,36 @@ bool SceneRenderer::loadColorLUT(const std::string& path, int size,
     clearColorLUT();
     lutSize_   = n;
     lutAmount_ = amount < 0.0f ? 0.0f : amount;
-    glGenTextures(1, &lutTex_);
-    glBindTexture(GL_TEXTURE_3D, lutTex_);
-    GLint prevUnpack = 4;
-    glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevUnpack);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, n, n, n, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, vox.data());
-    glPixelStorei(GL_UNPACK_ALIGNMENT, prevUnpack);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_3D, 0);
+    lutVoxels_ = std::move(vox);
+    lutDirty_  = true;
+
+    if (glFunctionsLoaded()) {
+        glGenTextures(1, &lutTex_);
+        glBindTexture(GL_TEXTURE_3D, lutTex_);
+        GLint prevUnpack = 4;
+        glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevUnpack);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, n, n, n, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, lutVoxels_.data());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, prevUnpack);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_3D, 0);
+    }
     return true;
 }
 
 void SceneRenderer::clearColorLUT() {
-    if (lutTex_) { glDeleteTextures(1, &lutTex_); lutTex_ = 0; }
+    if (lutTex_) {
+        if (glFunctionsLoaded()) glDeleteTextures(1, &lutTex_);
+        lutTex_ = 0;
+    }
     lutSize_ = 0;
+    lutVoxels_.clear();
+    lutDirty_ = true;
 }
 
 // ---------------------------------------------------------------------------

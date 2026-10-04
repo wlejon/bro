@@ -3,6 +3,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bro::scene::vk {
@@ -232,6 +233,153 @@ std::vector<uint8_t> SceneVkBridge::readTonemapPixelsRGBA(int& outW, int& outH) 
     }
 
     return result;
+}
+
+bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height, VkSampleCountFlagBits sampleCount) {
+    if (width == 0 || height == 0) return false;
+
+    if (!shadowTarget_.isValid()) {
+        if (!shadowTarget_.init(allocator_, 1024, 4, VK_FORMAT_D32_SFLOAT)) {
+            LOG_ERROR("SceneVkBridge: Failed initializing shadow target");
+            return false;
+        }
+        SceneVkDescriptorWriter lightWriter;
+        lightWriter.writeBuffer(0, lightingUbo_.buffer, sizeof(SceneLightingUniforms));
+        lightWriter.writeImage(1, shadowTarget_.arrayView(), shadowTarget_.shadowSampler());
+        lightWriter.writeImage(2, passReflectionProbe_.dummyCubemapView(), passReflectionProbe_.activeCubemapSampler());
+        lightWriter.writeImage(3, dummyShadeMap_.view, dummyShadeMap_.sampler);
+        lightWriter.updateSet(device_.device(), lightingSet_);
+    }
+
+    if (currentWidth_ == width && currentHeight_ == height && currentSampleCount_ == sampleCount && hdrTarget_.isValid()) {
+        return true;
+    }
+
+    currentWidth_ = width;
+    currentHeight_ = height;
+
+    if (currentSampleCount_ != sampleCount) {
+        currentSampleCount_ = sampleCount;
+        passMesh_.cleanup(device_, allocator_);
+        PassMesh::Config meshCfg{};
+        meshCfg.samples = sampleCount;
+        passMesh_.init(device_, allocator_, meshCfg);
+        passTerrain_.setSampleCount(sampleCount);
+    }
+
+    hdrTarget_.cleanup(allocator_);
+    SceneVkRenderTargetDesc hdrDesc{};
+    hdrDesc.width = width;
+    hdrDesc.height = height;
+    hdrDesc.colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    hdrDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
+    hdrDesc.sampleCount = sampleCount;
+    hdrDesc.hasColor = true;
+    hdrDesc.hasDepth = true;
+    if (!hdrTarget_.init(allocator_, hdrDesc)) {
+        LOG_ERROR("SceneVkBridge: Failed creating HDR render target (%ux%u)", width, height);
+        return false;
+    }
+
+    allocator_.destroyImage(depthCopyImage_);
+    VkImageUsageFlags depthCopyUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!allocator_.createImage(width, height, VK_FORMAT_D32_SFLOAT, depthCopyUsage,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthCopyImage_,
+                               1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        LOG_ERROR("SceneVkBridge: Failed creating depth copy image (%ux%u)", width, height);
+        return false;
+    }
+
+    VkSamplerCreateInfo sampInfo{};
+    sampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampInfo.magFilter = VK_FILTER_NEAREST;
+    sampInfo.minFilter = VK_FILTER_NEAREST;
+    sampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(device_.device(), &sampInfo, nullptr, &depthCopyImage_.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkBridge: Failed creating sampler for depth copy image");
+        return false;
+    }
+
+    allocator_.destroyImage(ldrPresentationImage_);
+    VkImageUsageFlags ldrUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                VK_IMAGE_USAGE_SAMPLED_BIT |
+                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    if (!allocator_.createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM, ldrUsage,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ldrPresentationImage_)) {
+        LOG_ERROR("SceneVkBridge: Failed creating LDR presentation image (%ux%u)", width, height);
+        return false;
+    }
+
+    VkSamplerCreateInfo ldrSampInfo{};
+    ldrSampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ldrSampInfo.magFilter = VK_FILTER_LINEAR;
+    ldrSampInfo.minFilter = VK_FILTER_LINEAR;
+    ldrSampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    ldrSampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ldrSampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ldrSampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(device_.device(), &ldrSampInfo, nullptr, &ldrPresentationImage_.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkBridge: Failed creating sampler for LDR presentation image");
+        return false;
+    }
+
+    allocator_.destroyImage(ssrColorSnapshot_);
+    VkImageUsageFlags ssrUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!allocator_.createImage(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, ssrUsage,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ssrColorSnapshot_)) {
+        LOG_ERROR("SceneVkBridge: Failed creating SSR color snapshot image (%ux%u)", width, height);
+        return false;
+    }
+    if (vkCreateSampler(device_.device(), &ldrSampInfo, nullptr, &ssrColorSnapshot_.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkBridge: Failed creating sampler for SSR color snapshot image");
+        return false;
+    }
+
+    allocator_.destroyImage(dofHdrImage_);
+    VkImageUsageFlags dofUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!allocator_.createImage(width, height, VK_FORMAT_R16G16B16A16_SFLOAT, dofUsage,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dofHdrImage_)) {
+        LOG_ERROR("SceneVkBridge: Failed creating DoF HDR image (%ux%u)", width, height);
+        return false;
+    }
+    if (vkCreateSampler(device_.device(), &ldrSampInfo, nullptr, &dofHdrImage_.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkBridge: Failed creating sampler for DoF HDR image");
+        return false;
+    }
+
+    allocator_.destroyImage(postLdrImage_);
+    VkImageUsageFlags postLdrUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!allocator_.createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM, postLdrUsage,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, postLdrImage_)) {
+        LOG_ERROR("SceneVkBridge: Failed creating Post LDR image (%ux%u)", width, height);
+        return false;
+    }
+    if (vkCreateSampler(device_.device(), &ldrSampInfo, nullptr, &postLdrImage_.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkBridge: Failed creating sampler for Post LDR image");
+        return false;
+    }
+
+    passSSAO_.resize(device_, allocator_, width, height);
+    passDoF_.resize(device_, allocator_, width, height);
+
+    passPostFx_.cleanup(device_, allocator_);
+    if (!passPostFx_.init(device_, allocator_, width, height)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassPostFx");
+        return false;
+    }
+
+    allocator_.destroyBuffer(readbackBuffer_);
+    if (!allocator_.createBuffer(width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                readbackBuffer_)) {
+        LOG_ERROR("SceneVkBridge: Failed creating readback buffer");
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace bro::scene::vk

@@ -16,6 +16,7 @@ bool PassMesh::init(SceneVkDevice& device, SceneVkAllocator& allocator) {
 }
 
 bool PassMesh::init(SceneVkDevice& device, SceneVkAllocator& allocator, const Config& config) {
+    config_ = config;
     VkDevice dev = device.device();
 
     if (!createDescriptorLayouts(dev)) {
@@ -92,6 +93,10 @@ void PassMesh::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
         vkDestroyDescriptorSetLayout(dev, bonePaletteLayout_, nullptr);
         bonePaletteLayout_ = VK_NULL_HANDLE;
     }
+    if (customLayout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(dev, customLayout_, nullptr);
+        customLayout_ = VK_NULL_HANDLE;
+    }
 }
 
 bool PassMesh::createDescriptorLayouts(VkDevice device) {
@@ -125,14 +130,23 @@ bool PassMesh::createDescriptorLayouts(VkDevice device) {
     bonePaletteLayout_ = boneBuilder.build(device);
     if (!bonePaletteLayout_) return false;
 
+    // Set 4: Custom Shader Layout (binding 0: UBO, bindings 1..8: combined image samplers)
+    SceneVkDescriptorLayoutBuilder customBuilder;
+    customBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    for (uint32_t i = 1; i <= 8; ++i) {
+        customBuilder.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    }
+    customLayout_ = customBuilder.build(device);
+    if (!customLayout_) return false;
+
     // Push constant range: 112 bytes
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRange.offset = 0;
     pushRange.size = sizeof(MeshPushConstants);
 
-    std::array<VkDescriptorSetLayout, 4> layouts = {
-        cameraLayout_, lightingLayout_, materialLayout_, bonePaletteLayout_
+    std::array<VkDescriptorSetLayout, 5> layouts = {
+        cameraLayout_, lightingLayout_, materialLayout_, bonePaletteLayout_, customLayout_
     };
 
     VkPipelineLayoutCreateInfo layoutInfo{};
@@ -307,6 +321,71 @@ bool PassMesh::createPipelines(VkDevice device, const Config& config) {
             pipelineSkinnedTranslucent_ != VK_NULL_HANDLE);
 }
 
+VkPipeline PassMesh::createCustomPipeline(VkDevice device,
+                                          VkShaderModule vs,
+                                          VkShaderModule fs,
+                                          uint32_t target,
+                                          bool translucent) {
+    VkVertexInputBindingDescription staticBinding{};
+    staticBinding.binding = 0;
+    staticBinding.stride = 64;
+    staticBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::vector<VkVertexInputAttributeDescription> staticAttributes = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},    // pos
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},   // normal
+        {2, 0, VK_FORMAT_R32G32_SFLOAT, 24},      // uv
+        {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32},// color
+        {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 48} // tangent
+    };
+
+    SceneVkPipelineBuilder builder;
+    builder.setShaderStages(vs, fs)
+           .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+           .setPolygonMode(VK_POLYGON_MODE_FILL)
+           .setCullMode(config_.cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+           .setMultisampling(config_.samples)
+           .setDynamicRendering({config_.colorFormat}, config_.depthFormat);
+
+    if (translucent) {
+        builder.enableAlphaBlending(1)
+               .enableDepthTest(false, config_.depthCompareOp);
+    } else {
+        builder.disableBlending(1)
+               .enableDepthTest(config_.depthWrite, config_.depthCompareOp);
+    }
+
+    if (target == 1 /* Instanced */) {
+        VkVertexInputBindingDescription instBinding{};
+        instBinding.binding = 1;
+        instBinding.stride = 64;
+        instBinding.inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+
+        std::vector<VkVertexInputBindingDescription> instBindings = {staticBinding, instBinding};
+        std::vector<VkVertexInputAttributeDescription> instAttributes = staticAttributes;
+        instAttributes.push_back({8,  1, VK_FORMAT_R32G32B32A32_SFLOAT, 0});  // row0
+        instAttributes.push_back({9,  1, VK_FORMAT_R32G32B32A32_SFLOAT, 16}); // row1
+        instAttributes.push_back({10, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32}); // row2
+        instAttributes.push_back({11, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48}); // color
+        builder.setVertexInput(instBindings, instAttributes);
+    } else if (target == 2 /* Skinned */) {
+        VkVertexInputBindingDescription skinBinding{};
+        skinBinding.binding = 1;
+        skinBinding.stride = 24;
+        skinBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        std::vector<VkVertexInputBindingDescription> skinBindings = {staticBinding, skinBinding};
+        std::vector<VkVertexInputAttributeDescription> skinAttributes = staticAttributes;
+        skinAttributes.push_back({5, 1, VK_FORMAT_R16G16B16A16_UINT, 0});
+        skinAttributes.push_back({6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 8});
+        builder.setVertexInput(skinBindings, skinAttributes);
+    } else {
+        builder.setVertexInput({staticBinding}, staticAttributes);
+    }
+
+    return builder.build(device, pipelineLayout_);
+}
+
 void PassMesh::begin(VkCommandBuffer cmd,
                      VkDescriptorSet cameraSet,
                      VkDescriptorSet lightingSet,
@@ -333,7 +412,8 @@ void PassMesh::begin(VkCommandBuffer cmd,
 }
 
 void PassMesh::drawStatic(VkCommandBuffer cmd, const MeshDrawCall& draw) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineStatic_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      draw.customPipeline ? draw.customPipeline : pipelineStatic_);
 
     // Bind Camera (Set 0) and Lighting (Set 1)
     VkDescriptorSet sets[2] = {activeCameraSet_, activeLightingSet_};
@@ -342,6 +422,10 @@ void PassMesh::drawStatic(VkCommandBuffer cmd, const MeshDrawCall& draw) {
     // Bind Material (Set 2)
     VkDescriptorSet matSet = draw.materialSet ? draw.materialSet : defaultMaterialSet_;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 2, 1, &matSet, 0, nullptr);
+
+    if (draw.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &draw.customSet, 0, nullptr);
+    }
 
     // Upload Push Constants
     MeshPushConstants push{};
@@ -370,13 +454,18 @@ void PassMesh::drawStatic(VkCommandBuffer cmd, const MeshDrawCall& draw) {
 void PassMesh::drawInstanced(VkCommandBuffer cmd, const InstancedMeshDrawCall& draw) {
     if (draw.instanceCount == 0) return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineInstanced_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      draw.customPipeline ? draw.customPipeline : pipelineInstanced_);
 
     VkDescriptorSet sets[2] = {activeCameraSet_, activeLightingSet_};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
 
     VkDescriptorSet matSet = draw.materialSet ? draw.materialSet : defaultMaterialSet_;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 2, 1, &matSet, 0, nullptr);
+
+    if (draw.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &draw.customSet, 0, nullptr);
+    }
 
     MeshPushConstants push{};
     std::memcpy(push.model, draw.modelMatrix, sizeof(push.model));
@@ -403,7 +492,8 @@ void PassMesh::drawInstanced(VkCommandBuffer cmd, const InstancedMeshDrawCall& d
 }
 
 void PassMesh::drawSkinned(VkCommandBuffer cmd, const SkinnedMeshDrawCall& draw) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineSkinned_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      draw.customPipeline ? draw.customPipeline : pipelineSkinned_);
 
     VkDescriptorSet sets[2] = {activeCameraSet_, activeLightingSet_};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
@@ -414,6 +504,10 @@ void PassMesh::drawSkinned(VkCommandBuffer cmd, const SkinnedMeshDrawCall& draw)
     if (draw.bonePaletteSet) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 3, 1,
                                &draw.bonePaletteSet, 0, nullptr);
+    }
+
+    if (draw.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &draw.customSet, 0, nullptr);
     }
 
     MeshPushConstants push{};
@@ -441,13 +535,18 @@ void PassMesh::drawSkinned(VkCommandBuffer cmd, const SkinnedMeshDrawCall& draw)
 }
 
 void PassMesh::drawStaticTranslucent(VkCommandBuffer cmd, const MeshDrawCall& draw) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineStaticTranslucent_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      draw.customPipeline ? draw.customPipeline : pipelineStaticTranslucent_);
 
     VkDescriptorSet sets[2] = {activeCameraSet_, activeLightingSet_};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
 
     VkDescriptorSet matSet = draw.materialSet ? draw.materialSet : defaultMaterialSet_;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 2, 1, &matSet, 0, nullptr);
+
+    if (draw.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &draw.customSet, 0, nullptr);
+    }
 
     MeshPushConstants push{};
     std::memcpy(push.model, draw.modelMatrix, sizeof(push.model));
@@ -474,13 +573,18 @@ void PassMesh::drawStaticTranslucent(VkCommandBuffer cmd, const MeshDrawCall& dr
 void PassMesh::drawInstancedTranslucent(VkCommandBuffer cmd, const InstancedMeshDrawCall& draw) {
     if (draw.instanceCount == 0) return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineInstancedTranslucent_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      draw.customPipeline ? draw.customPipeline : pipelineInstancedTranslucent_);
 
     VkDescriptorSet sets[2] = {activeCameraSet_, activeLightingSet_};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
 
     VkDescriptorSet matSet = draw.materialSet ? draw.materialSet : defaultMaterialSet_;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 2, 1, &matSet, 0, nullptr);
+
+    if (draw.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &draw.customSet, 0, nullptr);
+    }
 
     MeshPushConstants push{};
     std::memcpy(push.model, draw.modelMatrix, sizeof(push.model));
@@ -507,7 +611,8 @@ void PassMesh::drawInstancedTranslucent(VkCommandBuffer cmd, const InstancedMesh
 }
 
 void PassMesh::drawSkinnedTranslucent(VkCommandBuffer cmd, const SkinnedMeshDrawCall& draw) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineSkinnedTranslucent_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      draw.customPipeline ? draw.customPipeline : pipelineSkinnedTranslucent_);
 
     VkDescriptorSet sets[2] = {activeCameraSet_, activeLightingSet_};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 2, sets, 0, nullptr);
@@ -518,6 +623,10 @@ void PassMesh::drawSkinnedTranslucent(VkCommandBuffer cmd, const SkinnedMeshDraw
     if (draw.bonePaletteSet) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 3, 1,
                                &draw.bonePaletteSet, 0, nullptr);
+    }
+
+    if (draw.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &draw.customSet, 0, nullptr);
     }
 
     MeshPushConstants push{};

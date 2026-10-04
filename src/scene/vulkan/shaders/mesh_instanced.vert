@@ -38,7 +38,18 @@ layout(push_constant) uniform MeshPushConstants {
     vec4 pbrParams; // x: metallic, y: roughness, z: alphaCutoff, w: flags
 } push;
 
+const float uWindTime = 0.0;
+
+//__USER_CHUNK__
+
 void main() {
+    vec3 pos = inPos;
+    vec3 normal = inNormal;
+    vec2 uv = inUV;
+#ifdef CUSTOM_VERTEX
+    userVertex(pos, normal, uv);
+#endif
+
     mat4 instModel = mat4(
         vec4(inInstRow0.x, inInstRow1.x, inInstRow2.x, 0.0),
         vec4(inInstRow0.y, inInstRow1.y, inInstRow2.y, 0.0),
@@ -46,7 +57,7 @@ void main() {
         vec4(inInstRow0.w, inInstRow1.w, inInstRow2.w, 1.0)
     );
 
-    vec4 localPos = instModel * vec4(inPos, 1.0);
+    vec4 localPos = instModel * vec4(pos, 1.0);
     vec4 worldPos = push.model * localPos;
     outWorldPos = worldPos.xyz;
     gl_Position = camera.viewProj * worldPos;
@@ -57,13 +68,13 @@ void main() {
         vec3(inInstRow0.z, inInstRow1.z, inInstRow2.z)
     );
     mat3 normalMatrix = transpose(inverse(totalModelRot));
-    vec3 N = normalize(normalMatrix * inNormal);
+    vec3 N = normalize(normalMatrix * normal);
     vec3 T = normalize(normalMatrix * inTangent.xyz);
     vec3 B = cross(N, T) * inTangent.w;
 
     outNormal = N;
     outTangent = T;
     outBitangent = B;
-    outUV = inUV;
+    outUV = uv;
     outColor = inColor * inInstColor * push.baseColor;
 }

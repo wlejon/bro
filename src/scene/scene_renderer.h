@@ -203,6 +203,9 @@ public:
         ssaoBias_      = bias;
     }
     bool ssaoEnabled() const { return ssaoEnabled_; }
+    float ssaoRadius() const { return ssaoRadius_; }
+    float ssaoIntensity() const { return ssaoIntensity_; }
+    float ssaoBias() const { return ssaoBias_; }
 
     /// Screen-space reflections on opaque surfaces. Runs right after the
     /// opaque + decal passes (before translucents/particles/billboards):
@@ -227,6 +230,11 @@ public:
                             ? 0.0f : (edgeFade > 0.5f ? 0.5f : edgeFade);
     }
     bool ssrEnabled() const { return ssrEnabled_; }
+    float ssrMaxDistance() const { return ssrMaxDistance_; }
+    int ssrSteps() const { return ssrSteps_; }
+    float ssrThickness() const { return ssrThickness_; }
+    float ssrIntensity() const { return ssrIntensity_; }
+    float ssrEdgeFade() const { return ssrEdgeFade_; }
 
     /// Depth-based depth-of-field, applied on the HDR image before bloom +
     /// tonemap. Geometry within focusDistance +/- focusRange (eye-space
@@ -241,6 +249,9 @@ public:
         dofMaxBlur_       = maxBlur > 0.0f ? maxBlur : 4.0f;
     }
     bool depthOfFieldEnabled() const { return dofEnabled_; }
+    float depthOfFieldFocusDistance() const { return dofFocusDistance_; }
+    float depthOfFieldFocusRange() const { return dofFocusRange_; }
+    float depthOfFieldMaxBlur() const { return dofMaxBlur_; }
 
     /// Load a 3D color-grading LUT from a horizontal strip image (`size`
     /// tiles of size x size laid out left to right; tile index = blue,
@@ -253,8 +264,13 @@ public:
     /// or layout failure. GL thread only.
     bool loadColorLUT(const std::string& path, int size, float amount);
     void clearColorLUT();
-    bool hasColorLUT() const { return lutTex_ != 0; }
+    bool hasColorLUT() const { return lutTex_ != 0 || (lutSize_ > 0 && !lutVoxels_.empty()); }
     void setColorLUTAmount(float a) { lutAmount_ = a < 0.0f ? 0.0f : a; }
+    int colorLUTSize() const { return lutSize_; }
+    float colorLUTAmount() const { return lutAmount_; }
+    const std::vector<uint8_t>& colorLUTVoxels() const { return lutVoxels_; }
+    bool isColorLUTDirty() const { return lutDirty_; }
+    void setColorLUTClean() { lutDirty_ = false; }
 
     /// FXAA 3.11 (quality preset) on the final LDR image — always the last
     /// pass in the post stack. Complements MSAA: MSAA resolves geometry
@@ -1087,6 +1103,8 @@ private:
     GLuint lutTex_    = 0;     // size^3 RGBA8 3D texture, trilinear
     int    lutSize_   = 0;
     float  lutAmount_ = 1.0f;
+    std::vector<uint8_t> lutVoxels_;
+    bool   lutDirty_  = false;
     GLint  tmULUTTex_    = -1;
     GLint  tmULUTAmount_ = -1;
     GLint  tmULUTScale_  = -1;

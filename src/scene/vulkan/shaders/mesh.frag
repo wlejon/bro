@@ -155,14 +155,13 @@ float fogFactorFor(float camDist, float worldY) {
     return 0.0;
 }
 
+//__USER_CHUNK__
+
 void main() {
     uint flags = uint(push.pbrParams.w);
     vec4 albedo = inColor;
     if ((flags & 1u) != 0u) {
         albedo *= texture(texAlbedo, inUV);
-    }
-    if (albedo.a < push.pbrParams.z) {
-        discard;
     }
 
     vec3 N = normalize(inNormal);
@@ -179,6 +178,25 @@ void main() {
         roughness *= mr.g;
         metallic *= mr.b;
     }
+
+    vec3 emissive = push.emissive.rgb * push.emissive.a;
+    if ((flags & 8u) != 0u) {
+        emissive *= texture(texEmissive, inUV).rgb;
+    }
+
+    vec3 baseColor = albedo.rgb;
+    float alpha = albedo.a;
+
+#ifdef CUSTOM_FRAGMENT
+    userFragment(baseColor, N, metallic, roughness, emissive, alpha);
+#endif
+
+    if (alpha < push.pbrParams.z) {
+        discard;
+    }
+
+    albedo.rgb = baseColor;
+    albedo.a = alpha;
     roughness = clamp(roughness, 0.04, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
 
@@ -229,12 +247,16 @@ void main() {
 
     int pointCount = int(lighting.numLights.y);
     for (int i = 0; i < pointCount && i < 16; ++i) {
-        vec3 toLight = lighting.pointLights[i].position.xyz - inWorldPos;
-        float d = length(toLight);
-        if (d > 1e-4) {
-            vec3 pL = toLight / d;
-            float range = lighting.pointLights[i].position.w;
-            float atten = 1.0;
+        float range = lighting.pointLights[i].position.w;
+        vec3 pL;
+        float atten = 1.0;
+        if (range < 0.0) {
+            pL = normalize(-lighting.pointLights[i].position.xyz);
+        } else {
+            vec3 toLight = lighting.pointLights[i].position.xyz - inWorldPos;
+            float d = length(toLight);
+            if (d < 1e-4) continue;
+            pL = toLight / d;
             if (range > 0.0) {
                 float t = d / range;
                 float t4 = t * t * t * t;
@@ -242,9 +264,10 @@ void main() {
                 win = win * win;
                 atten = win / (d * d + 1.0);
             }
-            float pNdotL = max(dot(N, pL), 0.0);
-            if (pNdotL > 0.0 && atten > 0.0) {
-                vec3 pH = normalize(V + pL);
+        }
+        float pNdotL = max(dot(N, pL), 0.0);
+        if (pNdotL > 0.0 && atten > 0.0) {
+            vec3 pH = normalize(V + pL);
                 float pNDF = distributionGGX(N, pH, roughness);
                 float pG = geometrySmith(N, V, pL, roughness);
                 vec3 pF = fresnelSchlick(max(dot(pH, V), 0.0), F0);
@@ -255,21 +278,17 @@ void main() {
                 direct += (pDiff + pSpec) * pRadiance * pNdotL;
             }
         }
-    }
 
     // Ambient lighting
     vec3 ambient = lighting.ambientColor.rgb * lighting.ambientColor.a * albedo.rgb;
 
-    // Emissive
-    vec3 emissive = push.emissive.rgb * push.emissive.a;
-    if ((flags & 8u) != 0u) {
-        emissive *= texture(texEmissive, inUV).rgb;
-    }
-
     vec3 color = ambient + direct + emissive;
+#ifndef CUSTOM_FRAGMENT
     if ((flags & 16u) != 0u) {
         color = albedo.rgb + emissive;
-    } else if (lighting.probePos.w > 0.5) {
+    } else
+#endif
+    if (lighting.probePos.w > 0.5) {
         float probeW = 0.0;
         vec3 R_p = reflect(-V, N);
         vec3 F_p = fresnelSchlick(max(dot(N, V), 0.0), F0);
@@ -282,11 +301,23 @@ void main() {
         color *= cellShade();
     }
 
+    float outAlpha = albedo.a;
+    if ((flags & 64u) != 0u) {
+        if ((flags & 16u) != 0u) {
+            outAlpha = 0.0;
+        } else {
+            outAlpha = dot(F0, vec3(0.2126, 0.7152, 0.0722)) * (1.0 - roughness) * (1.0 - roughness);
+        }
+    }
+
     float camDist = length(camera.eyePos.xyz - inWorldPos);
     float fogFactor = fogFactorFor(camDist, inWorldPos.y);
     if (fogFactor > 0.0) {
         color = mix(color, camera.fogColor.rgb, fogFactor);
+        if ((flags & 64u) != 0u) {
+            outAlpha = mix(outAlpha, 0.0, fogFactor);
+        }
     }
 
-    outColor = vec4(color, albedo.a);
+    outColor = vec4(color, outAlpha);
 }

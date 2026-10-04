@@ -39,6 +39,8 @@ struct MeshDrawCall {
     uint32_t flags = 0;
 
     VkDescriptorSet materialSet = VK_NULL_HANDLE; // Set 2 (if null, default dummy textures are used)
+    VkPipeline customPipeline = VK_NULL_HANDLE;
+    VkDescriptorSet customSet = VK_NULL_HANDLE;   // Set 4 (if null, unused)
 };
 
 /// Parameters for issuing an instanced mesh draw call.
@@ -106,21 +108,30 @@ public:
     VkDescriptorSetLayout lightingLayout() const { return lightingLayout_; }
     VkDescriptorSetLayout materialLayout() const { return materialLayout_; }
     VkDescriptorSetLayout bonePaletteLayout() const { return bonePaletteLayout_; }
+    VkDescriptorSetLayout customLayout() const { return customLayout_; }
     VkDescriptorSet defaultMaterialSet() const { return defaultMaterialSet_; }
     VkImageView dummyWhiteView() const { return dummyWhiteImage_.view; }
     VkImageView dummyNormalView() const { return dummyNormalImage_.view; }
     VkImageView dummyBlackView() const { return dummyBlackImage_.view; }
     VkSampler defaultSampler() const { return defaultSampler_; }
 
+    VkPipeline createCustomPipeline(VkDevice device,
+                                    VkShaderModule vs,
+                                    VkShaderModule fs,
+                                    uint32_t target,
+                                    bool translucent);
+
 private:
     bool createDescriptorLayouts(VkDevice device);
     bool createPipelines(VkDevice device, const Config& config);
     bool createDefaultTextures(SceneVkDevice& device, SceneVkAllocator& allocator);
 
+    Config config_{};
     VkDescriptorSetLayout cameraLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout bonePaletteLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout customLayout_ = VK_NULL_HANDLE;
 
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 

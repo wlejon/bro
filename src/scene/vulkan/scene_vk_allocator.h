@@ -95,6 +95,7 @@ public:
                      VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM);
 
     bool createTexture2D(const void* pixelData, const TextureDesc& desc, SceneVkImage& outImage);
+    bool createTexture3D(const void* voxelData, uint32_t size, VkFormat format, SceneVkImage& outImage);
     void destroyImage(SceneVkImage& image);
 
     // Image layout transition and mipmap generation

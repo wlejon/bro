@@ -15,6 +15,13 @@
 #include "scene/vulkan/pass_decal.h"
 #include "scene/vulkan/pass_reflection_probe.h"
 #include "scene/vulkan/pass_terrain.h"
+#include "scene/vulkan/pass_color_lut.h"
+#include "scene/vulkan/pass_ssao.h"
+#include "scene/vulkan/pass_ssr.h"
+#include "scene/vulkan/pass_dof.h"
+#include "scene/vulkan/pass_gaussian_splat.h"
+#include "scene/vulkan/scene_vk_custom_shader.h"
+#include "scene/mesh_node.h"
 #include <bromesh/mesh_data.h>
 
 #include <memory>
@@ -33,6 +40,8 @@ class Particles3DNode;
 class HtmlNode;
 class SpriteNode;
 class ShapeNode;
+class GaussianSplatNode;
+struct CustomShaderState;
 struct CullStats;
 }
 
@@ -115,10 +124,18 @@ private:
     PassDecal passDecal_;
     PassReflectionProbe passReflectionProbe_;
     PassTerrain passTerrain_;
+    PassColorLut passColorLut_;
+    PassSSAO passSSAO_;
+    PassSSR passSSR_;
+    PassDoF passDoF_;
+    PassGaussianSplat passGaussianSplat_;
 
     SceneVkShadowCascadeTarget shadowTarget_;
     SceneVkRenderTarget hdrTarget_;
     SceneVkImage depthCopyImage_;
+    SceneVkImage ssrColorSnapshot_;
+    SceneVkImage dofHdrImage_;
+    SceneVkImage postLdrImage_;
     SceneVkImage ldrPresentationImage_;
     SceneVkBuffer readbackBuffer_;
 
@@ -142,6 +159,33 @@ private:
     std::unordered_map<const void*, CachedMeshBuffer> meshCache_;
     std::unordered_map<const void*, NodeDynamicBuffers> dynamicBufferCache_;
     std::unordered_map<const void*, CachedTexture> textureCache_;
+
+    struct CustomPipelineEntry {
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        std::vector<std::string> samplerNames;
+        std::vector<std::pair<std::string, uint32_t>> uniformOffsets;
+        uint32_t uboSize = 0;
+    };
+    std::unordered_map<std::string, CustomPipelineEntry> customMeshPipelines_;
+    std::unordered_map<std::string, VkPipeline> customShadowPipelines_;
+
+    struct NodeCustomBuffers {
+        SceneVkBuffer ubo;
+        VkDescriptorSet descSet = VK_NULL_HANDLE;
+    };
+    std::unordered_map<const void*, NodeCustomBuffers> customNodeBufferCache_;
+    std::unordered_map<std::string, CachedTexture> userTextureCache_;
+
+    void prepareCustomShaderForNode(const void* key, const CustomShaderState* cs, uint32_t target, bool translucent,
+                                    std::vector<MeshNode::UserTexture>& userTextures,
+                                    VkPipeline& outPipeline, VkDescriptorSet& outSet);
+    void prepareCustomShadowShaderForNode(const void* key, const CustomShaderState* cs, bool isSkinned,
+                                          std::vector<MeshNode::UserTexture>& userTextures,
+                                          VkPipeline& outPipeline, VkDescriptorSet& outSet);
+    void renderGaussianSplatPass(VkCommandBuffer cmd, SceneGraph& graph, const float* view, const float* proj,
+                                 const float eye[3], uint32_t width, uint32_t height);
+    void renderPostProcessing(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer,
+                              uint32_t width, uint32_t height);
 
     uint32_t currentWidth_ = 0;
     uint32_t currentHeight_ = 0;

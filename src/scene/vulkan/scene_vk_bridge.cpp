@@ -50,9 +50,38 @@ SceneVkBridge::~SceneVkBridge() {
     dynamicDescPool_.destroy();
     mainDescPool_.destroy();
 
+    for (auto& [k, pipe] : customMeshPipelines_) {
+        if (pipe.pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device_.device(), pipe.pipeline, nullptr);
+        }
+    }
+    customMeshPipelines_.clear();
+
+    for (auto& [k, pipe] : customShadowPipelines_) {
+        if (pipe != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device_.device(), pipe, nullptr);
+        }
+    }
+    customShadowPipelines_.clear();
+
+    for (auto& [k, buf] : customNodeBufferCache_) {
+        allocator_.destroyBuffer(buf.ubo);
+    }
+    customNodeBufferCache_.clear();
+
+    for (auto& [k, tex] : userTextureCache_) {
+        if (tex.owned) {
+            allocator_.destroyImage(tex.image);
+        }
+    }
+    userTextureCache_.clear();
+
     allocator_.destroyBuffer(cameraUbo_);
     allocator_.destroyBuffer(lightingUbo_);
     allocator_.destroyBuffer(readbackBuffer_);
+    allocator_.destroyImage(ssrColorSnapshot_);
+    allocator_.destroyImage(dofHdrImage_);
+    allocator_.destroyImage(postLdrImage_);
     allocator_.destroyImage(ldrPresentationImage_);
     allocator_.destroyImage(depthCopyImage_);
     allocator_.destroyImage(dummyShadeMap_);
@@ -61,6 +90,11 @@ SceneVkBridge::~SceneVkBridge() {
     hdrTarget_.cleanup(allocator_);
     shadowTarget_.cleanup(allocator_);
 
+    passColorLut_.cleanup(device_, allocator_);
+    passSSAO_.cleanup(device_, allocator_);
+    passSSR_.cleanup(device_, allocator_);
+    passDoF_.cleanup(device_, allocator_);
+    passGaussianSplat_.cleanup(device_, allocator_);
     passTerrain_.cleanup(device_, allocator_);
     passReflectionProbe_.cleanup(device_, allocator_);
     passBillboard_.cleanup(device_, allocator_);
@@ -118,6 +152,31 @@ bool SceneVkBridge::init() {
         return false;
     }
 
+    if (!passColorLut_.init(device_, allocator_)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassColorLut");
+        return false;
+    }
+
+    if (!passSSAO_.init(device_, allocator_, 1, 1)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassSSAO");
+        return false;
+    }
+
+    if (!passSSR_.init(device_, allocator_)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassSSR");
+        return false;
+    }
+
+    if (!passDoF_.init(device_, allocator_, 1, 1)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassDoF");
+        return false;
+    }
+
+    if (!passGaussianSplat_.init(device_, allocator_)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassGaussianSplat");
+        return false;
+    }
+
     uint8_t whitePixel[4] = {255, 255, 255, 255};
     TextureDesc whiteDesc{};
     whiteDesc.width = 1;
@@ -152,113 +211,6 @@ bool SceneVkBridge::init() {
     return true;
 }
 
-bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height, VkSampleCountFlagBits sampleCount) {
-    if (width == 0 || height == 0) return false;
-
-    if (!shadowTarget_.isValid()) {
-        if (!shadowTarget_.init(allocator_, 1024, 4, VK_FORMAT_D32_SFLOAT)) {
-            LOG_ERROR("SceneVkBridge: Failed initializing shadow target");
-            return false;
-        }
-        SceneVkDescriptorWriter lightWriter;
-        lightWriter.writeBuffer(0, lightingUbo_.buffer, sizeof(SceneLightingUniforms));
-        lightWriter.writeImage(1, shadowTarget_.arrayView(), shadowTarget_.shadowSampler());
-        lightWriter.writeImage(2, passReflectionProbe_.dummyCubemapView(), passReflectionProbe_.activeCubemapSampler());
-        lightWriter.writeImage(3, dummyShadeMap_.view, dummyShadeMap_.sampler);
-        lightWriter.updateSet(device_.device(), lightingSet_);
-    }
-
-    if (currentWidth_ == width && currentHeight_ == height && currentSampleCount_ == sampleCount && hdrTarget_.isValid()) {
-        return true;
-    }
-
-    currentWidth_ = width;
-    currentHeight_ = height;
-
-    if (currentSampleCount_ != sampleCount) {
-        currentSampleCount_ = sampleCount;
-        passMesh_.cleanup(device_, allocator_);
-        PassMesh::Config meshCfg{};
-        meshCfg.samples = sampleCount;
-        passMesh_.init(device_, allocator_, meshCfg);
-        passTerrain_.setSampleCount(sampleCount);
-    }
-
-    hdrTarget_.cleanup(allocator_);
-    SceneVkRenderTargetDesc hdrDesc{};
-    hdrDesc.width = width;
-    hdrDesc.height = height;
-    hdrDesc.colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-    hdrDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
-    hdrDesc.sampleCount = sampleCount;
-    hdrDesc.hasColor = true;
-    hdrDesc.hasDepth = true;
-    if (!hdrTarget_.init(allocator_, hdrDesc)) {
-        LOG_ERROR("SceneVkBridge: Failed creating HDR render target (%ux%u)", width, height);
-        return false;
-    }
-
-    allocator_.destroyImage(depthCopyImage_);
-    VkImageUsageFlags depthCopyUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    if (!allocator_.createImage(width, height, VK_FORMAT_D32_SFLOAT, depthCopyUsage,
-                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthCopyImage_,
-                               1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) {
-        LOG_ERROR("SceneVkBridge: Failed creating depth copy image (%ux%u)", width, height);
-        return false;
-    }
-
-    VkSamplerCreateInfo sampInfo{};
-    sampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sampInfo.magFilter = VK_FILTER_NEAREST;
-    sampInfo.minFilter = VK_FILTER_NEAREST;
-    sampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (vkCreateSampler(device_.device(), &sampInfo, nullptr, &depthCopyImage_.sampler) != VK_SUCCESS) {
-        LOG_ERROR("SceneVkBridge: Failed creating sampler for depth copy image");
-        return false;
-    }
-
-    allocator_.destroyImage(ldrPresentationImage_);
-    VkImageUsageFlags ldrUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                VK_IMAGE_USAGE_SAMPLED_BIT |
-                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    if (!allocator_.createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM, ldrUsage,
-                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ldrPresentationImage_)) {
-        LOG_ERROR("SceneVkBridge: Failed creating LDR presentation image (%ux%u)", width, height);
-        return false;
-    }
-
-    VkSamplerCreateInfo ldrSampInfo{};
-    ldrSampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    ldrSampInfo.magFilter = VK_FILTER_LINEAR;
-    ldrSampInfo.minFilter = VK_FILTER_LINEAR;
-    ldrSampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    ldrSampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ldrSampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    ldrSampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    if (vkCreateSampler(device_.device(), &ldrSampInfo, nullptr, &ldrPresentationImage_.sampler) != VK_SUCCESS) {
-        LOG_ERROR("SceneVkBridge: Failed creating sampler for LDR presentation image");
-        return false;
-    }
-
-    passPostFx_.cleanup(device_, allocator_);
-    if (!passPostFx_.init(device_, allocator_, width, height)) {
-        LOG_ERROR("SceneVkBridge: Failed initializing PassPostFx");
-        return false;
-    }
-
-    allocator_.destroyBuffer(readbackBuffer_);
-    if (!allocator_.createBuffer(width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                readbackBuffer_)) {
-        LOG_ERROR("SceneVkBridge: Failed creating readback buffer");
-        return false;
-    }
-
-    return true;
-}
 
 void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     uint32_t width = static_cast<uint32_t>(renderer.targetWidth());
@@ -323,18 +275,21 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     // 2. Lighting UBO setup
     SceneLightingUniforms lightUniforms{};
     LightNode* sunLight = nullptr;
-    std::vector<LightNode*> pointLights;
+    std::vector<LightNode*> otherLights;
     for (auto& [id, node] : graph.nodes_) {
         if (!node->renderVisible() || node->type() != SceneNode::Type::Light) continue;
         auto* l = static_cast<LightNode*>(node.get());
         if (l->kind() == LightNode::Kind::Directional) {
-            if (!sunLight || l->castsShadow()) {
+            if (!sunLight) {
                 sunLight = l;
+            } else if (l->castsShadow() && !sunLight->castsShadow()) {
+                otherLights.push_back(sunLight);
+                sunLight = l;
+            } else {
+                otherLights.push_back(l);
             }
         } else if (l->kind() == LightNode::Kind::Point) {
-            if (pointLights.size() < 16) {
-                pointLights.push_back(l);
-            }
+            otherLights.push_back(l);
         }
     }
 
@@ -354,7 +309,7 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
         if (sunLight->castsShadow()) {
             lightUniforms.numLights[2] = 1.0f;
         }
-    } else if (pointLights.empty()) {
+    } else if (otherLights.empty()) {
         lightUniforms.sunDirection[0] = -0.3f;
         lightUniforms.sunDirection[1] = -1.0f;
         lightUniforms.sunDirection[2] = -0.5f;
@@ -373,20 +328,29 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
         lightUniforms.numLights[0] = 0.0f;
     }
 
-    lightUniforms.numLights[1] = static_cast<float>(pointLights.size());
-    for (size_t i = 0; i < pointLights.size(); ++i) {
-        LightNode* pl = pointLights[i];
-        const auto& M = pl->worldMatrix();
-        lightUniforms.pointLights[i].position[0] = M.at(0, 3);
-        lightUniforms.pointLights[i].position[1] = M.at(1, 3);
-        lightUniforms.pointLights[i].position[2] = M.at(2, 3);
-        lightUniforms.pointLights[i].position[3] = pl->range();
+    size_t count = std::min(otherLights.size(), size_t(16));
+    lightUniforms.numLights[1] = static_cast<float>(count);
+    for (size_t i = 0; i < count; ++i) {
+        LightNode* l = otherLights[i];
+        if (l->kind() == LightNode::Kind::Directional) {
+            bromath::Vec3 dir = bromath::vnorm(l->direction());
+            lightUniforms.pointLights[i].position[0] = dir.x;
+            lightUniforms.pointLights[i].position[1] = dir.y;
+            lightUniforms.pointLights[i].position[2] = dir.z;
+            lightUniforms.pointLights[i].position[3] = -1.0f;
+        } else {
+            const auto& M = l->worldMatrix();
+            lightUniforms.pointLights[i].position[0] = M.at(0, 3);
+            lightUniforms.pointLights[i].position[1] = M.at(1, 3);
+            lightUniforms.pointLights[i].position[2] = M.at(2, 3);
+            lightUniforms.pointLights[i].position[3] = l->range();
+        }
 
-        const auto& c = pl->color();
+        const auto& c = l->color();
         lightUniforms.pointLights[i].color[0] = c.x;
         lightUniforms.pointLights[i].color[1] = c.y;
         lightUniforms.pointLights[i].color[2] = c.z;
-        lightUniforms.pointLights[i].color[3] = pl->intensity();
+        lightUniforms.pointLights[i].color[3] = l->intensity();
     }
 
     const float* amb = renderer.effectiveAmbient();
@@ -626,7 +590,13 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                     draw.roughness = sm->roughness();
                     draw.alphaCutoff = sm->alphaCutoff();
                     draw.flags = 0;
-                    if (sm->effectiveUnlit()) draw.flags |= 16u;
+                    if (renderer.ssrEnabled()) draw.flags |= 64u;
+                    if (sm->hasCustomShader()) {
+                        prepareCustomShaderForNode(sm, sm->customShader(), 2, sm->color()[3] < 1.0f,
+                                                   sm->customShaderTextures(), draw.customPipeline, draw.customSet);
+                    } else {
+                        if (sm->effectiveUnlit()) draw.flags |= 16u;
+                    }
                     if (sm->shadeMap()) draw.flags |= 32u;
 
                     if (sm->color()[3] < 1.0f) {
@@ -656,7 +626,13 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                     draw.roughness = mn->roughness();
                     draw.alphaCutoff = mn->alphaCutoff();
                     draw.flags = 0;
-                    if (mn->effectiveUnlit()) draw.flags |= 16u;
+                    if (renderer.ssrEnabled()) draw.flags |= 64u;
+                    if (mn->hasCustomShader()) {
+                        prepareCustomShaderForNode(mn, mn->customShader(), 0, mn->color()[3] < 1.0f,
+                                                   mn->customShaderTextures(), draw.customPipeline, draw.customSet);
+                    } else {
+                        if (mn->effectiveUnlit()) draw.flags |= 16u;
+                    }
                     if (mn->shadeMap()) draw.flags |= 32u;
 
                     const auto& pTex = mn->pendingBaseTexture();
@@ -709,7 +685,14 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                 draw.roughness = im->roughness();
                 draw.alphaCutoff = im->alphaCutoff();
                 draw.flags = 0;
-                if (im->effectiveUnlit()) draw.flags |= 16u;
+                if (renderer.ssrEnabled()) draw.flags |= 64u;
+                if (im->hasCustomShader()) {
+                    static std::vector<MeshNode::UserTexture> sEmptyTextures;
+                    prepareCustomShaderForNode(im, im->customShader(), 1, im->color()[3] < 1.0f,
+                                               sEmptyTextures, draw.customPipeline, draw.customSet);
+                } else {
+                    if (im->effectiveUnlit()) draw.flags |= 16u;
+                }
                 if (im->shadeMap()) draw.flags |= 32u;
 
                 if (im->color()[3] < 1.0f) {
@@ -756,6 +739,48 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                                      1, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
     depthCopyImage_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+    if (renderer.ssrEnabled() && ssrColorSnapshot_.isValid()) {
+        allocator_.transitionImageLayout(cmd, hdrTarget_.colorImage().image, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        allocator_.transitionImageLayout(cmd, ssrColorSnapshot_.image, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                         ssrColorSnapshot_.currentLayout,
+                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkImageCopy colorCopy{};
+        colorCopy.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        colorCopy.srcSubresource.layerCount = 1;
+        colorCopy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        colorCopy.dstSubresource.layerCount = 1;
+        colorCopy.extent = {width, height, 1};
+        vkCmdCopyImage(cmd,
+                       hdrTarget_.colorImage().image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       ssrColorSnapshot_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &colorCopy);
+
+        allocator_.transitionImageLayout(cmd, hdrTarget_.colorImage().image, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+        allocator_.transitionImageLayout(cmd, ssrColorSnapshot_.image, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        ssrColorSnapshot_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        SSRParams ssrParams{};
+        ssrParams.isPerspective = graph.cameraIsPerspective_;
+        ssrParams.maxDistance = renderer.ssrMaxDistance();
+        ssrParams.steps = renderer.ssrSteps();
+        ssrParams.thickness = renderer.ssrThickness();
+        ssrParams.intensity = renderer.ssrIntensity();
+        ssrParams.edgeFade = renderer.ssrEdgeFade();
+
+        passSSR_.render(cmd, device_, allocator_, frameDescPool_,
+                        ssrColorSnapshot_, depthCopyImage_, hdrTarget_.colorImage().view,
+                        width, height, camUniforms.proj, camUniforms.invProj, ssrParams);
+    }
+
     hdrTarget_.beginRendering(cmd, device_,
                              VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,
                              {{0.0f, 0.0f, 0.0f, 0.0f}},
@@ -788,6 +813,11 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     // Billboard & WorldQuad Pass
     renderBillboardsPass(cmd, graph, renderer, stats, hasDrawnMeshes);
 
+    // Gaussian Splatting Pass
+    const auto& eye = graph.cameraEye();
+    float eyeArr[3] = {eye.x, eye.y, eye.z};
+    renderGaussianSplatPass(cmd, graph, graph.viewMatrix().data, camUniforms.proj, eyeArr, width, height);
+
     if (graph.gizmoProvider_) {
         auto gizmoMeshes = graph.gizmoProvider_(&graph);
         for (auto* gm : gizmoMeshes) {
@@ -810,27 +840,21 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     }
 
     hdrTarget_.endRendering(cmd, device_);
+
+    // SSAO Pass
+    if (renderer.ssaoEnabled()) {
+        passSSAO_.render(cmd, device_, allocator_, frameDescPool_,
+                         depthCopyImage_, camUniforms.proj, camUniforms.invProj,
+                         renderer.ssaoRadius(), renderer.ssaoBias());
+        passSSAO_.applyAO(cmd, device_, allocator_, frameDescPool_,
+                          hdrTarget_.colorImage().view, width, height,
+                          renderer.ssaoIntensity());
+    }
+
     hdrTarget_.transitionColorToShaderRead(cmd, allocator_);
 
-    // PostFx Pass
-    allocator_.transitionImageLayout(cmd, ldrPresentationImage_.image, VK_FORMAT_R8G8B8A8_UNORM,
-                                   ldrPresentationImage_.currentLayout,
-                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    ldrPresentationImage_.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    PostFxParams postFx{};
-    postFx.exposure = renderer.exposure();
-    postFx.gamma = renderer.gamma();
-    postFx.tonemapMode = static_cast<TonemapMode>(renderer.toneMap());
-    postFx.enableBloom = renderer.bloomEnabled();
-    postFx.bloomIntensity = renderer.bloomIntensity();
-    postFx.enableFxaa = renderer.fxaaEnabled();
-
-    passPostFx_.render(cmd, device_, allocator_,
-                      hdrTarget_.colorImage(),
-                      ldrPresentationImage_.view,
-                      VK_FORMAT_R8G8B8A8_UNORM,
-                      width, height, postFx);
+    // Post processing & LUT Pass
+    renderPostProcessing(cmd, graph, renderer, width, height);
 
     allocator_.transitionImageLayout(cmd, ldrPresentationImage_.image, VK_FORMAT_R8G8B8A8_UNORM,
                                    ldrPresentationImage_.currentLayout,

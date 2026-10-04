@@ -38,15 +38,31 @@ bool PassShadow::init(SceneVkDevice& device, const Config& config) {
     bonePaletteLayout_ = boneBuilder.build(dev);
     if (!bonePaletteLayout_) return false;
 
+    SceneVkDescriptorLayoutBuilder emptyBuilder;
+    emptyLayout_ = emptyBuilder.build(dev);
+    if (!emptyLayout_) return false;
+
+    SceneVkDescriptorLayoutBuilder customBuilder;
+    customBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    for (uint32_t i = 1; i <= 8; ++i) {
+        customBuilder.addBinding(i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+    }
+    customLayout_ = customBuilder.build(dev);
+    if (!customLayout_) return false;
+
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushRange.offset = 0;
     pushRange.size = sizeof(ShadowPushConstants);
 
+    std::array<VkDescriptorSetLayout, 5> layouts = {
+        bonePaletteLayout_, emptyLayout_, emptyLayout_, emptyLayout_, customLayout_
+    };
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &bonePaletteLayout_;
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(layouts.size());
+    layoutInfo.pSetLayouts = layouts.data();
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
 
@@ -85,6 +101,14 @@ void PassShadow::cleanup(SceneVkDevice& device) {
     if (bonePaletteLayout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(dev, bonePaletteLayout_, nullptr);
         bonePaletteLayout_ = VK_NULL_HANDLE;
+    }
+    if (emptyLayout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(dev, emptyLayout_, nullptr);
+        emptyLayout_ = VK_NULL_HANDLE;
+    }
+    if (customLayout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(dev, customLayout_, nullptr);
+        customLayout_ = VK_NULL_HANDLE;
     }
 }
 
@@ -195,6 +219,57 @@ bool PassShadow::createPipelines(VkDevice device, const Config& config) {
             pipelineSkinned_ != VK_NULL_HANDLE);
 }
 
+VkPipeline PassShadow::createCustomPipeline(VkDevice device, VkShaderModule vs, bool isSkinned) {
+    VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(device, BuiltinSceneShader::ShadowFrag);
+
+    VkVertexInputBindingDescription staticBinding{};
+    staticBinding.binding = 0;
+    staticBinding.stride = 64;
+    staticBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::vector<VkVertexInputAttributeDescription> staticAttributes = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},    // inPos
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},   // inNormal
+        {2, 0, VK_FORMAT_R32G32_SFLOAT, 24},      // inUV
+        {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32},// inColor
+        {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 48} // inTangent
+    };
+
+    SceneVkPipelineBuilder b;
+    b.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vs);
+    if (fs) {
+        b.addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fs);
+    }
+    b.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+     .setPolygonMode(VK_POLYGON_MODE_FILL)
+     .setCullMode(config_.cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+     .setMultisamplingNone()
+     .disableBlending(0)
+     .enableDepthTest(true, VK_COMPARE_OP_LESS_OR_EQUAL)
+     .setDynamicRendering({}, config_.depthFormat);
+
+    if (isSkinned) {
+        VkVertexInputBindingDescription skinBinding{};
+        skinBinding.binding = 1;
+        skinBinding.stride = 24;
+        skinBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        std::vector<VkVertexInputBindingDescription> skinBindings = {staticBinding, skinBinding};
+        std::vector<VkVertexInputAttributeDescription> skinAttributes = staticAttributes;
+        skinAttributes.push_back({5, 1, VK_FORMAT_R16G16B16A16_UINT, 0});
+        skinAttributes.push_back({6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 8});
+        b.setVertexInput(skinBindings, skinAttributes);
+    } else {
+        b.setVertexInput({staticBinding}, staticAttributes);
+    }
+
+    VkPipeline pipeline = b.build(device, pipelineLayout_);
+    if (fs) {
+        SceneVkShaderCompiler::destroyModule(device, fs);
+    }
+    return pipeline;
+}
+
 void PassShadow::beginCascade(VkCommandBuffer cmd, SceneVkDevice& device,
                              SceneVkShadowCascadeTarget& target,
                              uint32_t cascadeIndex,
@@ -222,7 +297,12 @@ void PassShadow::beginCascade(VkCommandBuffer cmd, SceneVkDevice& device,
 }
 
 void PassShadow::drawStatic(VkCommandBuffer cmd, const ShadowCaster& caster) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineStatic_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      caster.customPipeline ? caster.customPipeline : pipelineStatic_);
+
+    if (caster.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &caster.customSet, 0, nullptr);
+    }
 
     ShadowPushConstants push{};
     mat4Multiply(activeLightVP_, caster.modelMatrix, push.lightMVP);
@@ -237,7 +317,12 @@ void PassShadow::drawStatic(VkCommandBuffer cmd, const ShadowCaster& caster) {
 void PassShadow::drawInstanced(VkCommandBuffer cmd, const InstancedShadowCaster& caster) {
     if (caster.instanceCount == 0) return;
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineInstanced_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      caster.customPipeline ? caster.customPipeline : pipelineInstanced_);
+
+    if (caster.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &caster.customSet, 0, nullptr);
+    }
 
     ShadowPushConstants push{};
     mat4Multiply(activeLightVP_, caster.modelMatrix, push.lightMVP);
@@ -252,11 +337,16 @@ void PassShadow::drawInstanced(VkCommandBuffer cmd, const InstancedShadowCaster&
 }
 
 void PassShadow::drawSkinned(VkCommandBuffer cmd, const SkinnedShadowCaster& caster) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineSkinned_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      caster.customPipeline ? caster.customPipeline : pipelineSkinned_);
 
     if (caster.bonePaletteSet) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
                                &caster.bonePaletteSet, 0, nullptr);
+    }
+
+    if (caster.customSet) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 4, 1, &caster.customSet, 0, nullptr);
     }
 
     ShadowPushConstants push{};

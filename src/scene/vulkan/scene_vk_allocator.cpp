@@ -491,6 +491,153 @@ bool SceneVkAllocator::createTexture2D(const void* pixelData, const TextureDesc&
     return true;
 }
 
+bool SceneVkAllocator::createTexture3D(const void* voxelData, uint32_t size, VkFormat format, SceneVkImage& outImage) {
+    if (size == 0) return false;
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_3D;
+    imageInfo.extent.width = size;
+    imageInfo.extent.height = size;
+    imageInfo.extent.depth = size;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = format;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    if (vkCreateImage(device_.device(), &imageInfo, nullptr, &outImage.image) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkAllocator: Failed creating 3D image");
+        return false;
+    }
+
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(device_.device(), outImage.image, &memReqs);
+
+    uint32_t memType = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    uint64_t allocId = 0;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    void* mappedData = nullptr;
+
+    if (!allocateMemory(memReqs.size, memReqs.alignment, memType,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, true,
+                        allocId, memory, offset, mappedData)) {
+        LOG_ERROR("SceneVkAllocator: Failed allocating memory for 3D image");
+        vkDestroyImage(device_.device(), outImage.image, nullptr);
+        outImage.image = VK_NULL_HANDLE;
+        return false;
+    }
+
+    if (vkBindImageMemory(device_.device(), outImage.image, memory, offset) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkAllocator: Failed to bind 3D image memory");
+        vkDestroyImage(device_.device(), outImage.image, nullptr);
+        outImage.image = VK_NULL_HANDLE;
+        freeMemory(allocId);
+        return false;
+    }
+
+    outImage.memory = memory;
+    outImage.offset = offset;
+    outImage.allocId = allocId;
+    outImage.width = size;
+    outImage.height = size;
+    outImage.mipLevels = 1;
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = outImage.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device_.device(), &viewInfo, nullptr, &outImage.view) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkAllocator: Failed creating image view for 3D image");
+        destroyImage(outImage);
+        return false;
+    }
+
+    outImage.format = format;
+    outImage.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (voxelData) {
+        VkDeviceSize dataSize = static_cast<VkDeviceSize>(size) * size * size * 4;
+        SceneVkBuffer staging;
+        if (!createBuffer(dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          staging)) {
+            destroyImage(outImage);
+            return false;
+        }
+
+        if (staging.mappedData) {
+            std::memcpy(staging.mappedData, voxelData, dataSize);
+        } else {
+            void* mapped = nullptr;
+            if (vkMapMemory(device_.device(), staging.memory, staging.offset, dataSize, 0, &mapped) == VK_SUCCESS) {
+                std::memcpy(mapped, voxelData, dataSize);
+                vkUnmapMemory(device_.device(), staging.memory);
+            }
+        }
+
+        device_.executeImmediate([&](VkCommandBuffer cmd) {
+            transitionImageLayout(cmd, outImage.image, format,
+                                  VK_IMAGE_LAYOUT_UNDEFINED,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  1, 0, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
+
+            VkBufferImageCopy region{};
+            region.bufferOffset = 0;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = 0;
+            region.imageSubresource.baseArrayLayer = 0;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = {0, 0, 0};
+            region.imageExtent = {size, size, size};
+
+            vkCmdCopyBufferToImage(cmd, staging.buffer, outImage.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   1, &region);
+
+            transitionImageLayout(cmd, outImage.image, format,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  1, 0, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
+        });
+
+        destroyBuffer(staging);
+        outImage.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
+
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
+
+    if (vkCreateSampler(device_.device(), &samplerInfo, nullptr, &outImage.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkAllocator: Failed creating sampler for 3D image");
+        destroyImage(outImage);
+        return false;
+    }
+
+    return true;
+}
+
 void SceneVkAllocator::generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFormat format,
                                       int32_t texWidth, int32_t texHeight, uint32_t mipLevels,
                                       uint32_t baseArrayLayer, uint32_t layerCount) {

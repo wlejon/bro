@@ -26,6 +26,8 @@ struct ShadowCaster {
     uint32_t indexCount = 0;
     VkIndexType indexType = VK_INDEX_TYPE_UINT32;
     float modelMatrix[16];
+    VkPipeline customPipeline = VK_NULL_HANDLE;
+    VkDescriptorSet customSet = VK_NULL_HANDLE; // Set 4
 };
 
 /// Parameters for issuing a shadow caster instanced draw call.
@@ -88,12 +90,17 @@ public:
 
     VkPipelineLayout pipelineLayout() const { return pipelineLayout_; }
     VkDescriptorSetLayout bonePaletteLayout() const { return bonePaletteLayout_; }
+    VkDescriptorSetLayout customLayout() const { return customLayout_; }
+
+    VkPipeline createCustomPipeline(VkDevice device, VkShaderModule vs, bool isSkinned);
 
 private:
     bool createPipelines(VkDevice device, const Config& config);
 
     Config config_{};
     VkDescriptorSetLayout bonePaletteLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout emptyLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout customLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 
     VkPipeline pipelineStatic_ = VK_NULL_HANDLE;

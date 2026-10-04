@@ -75,6 +75,30 @@ static const uint32_t kSpvDecalVert[] =
 static const uint32_t kSpvDecalFrag[] =
 #include "decal.frag.spv.h"
 ;
+static const uint32_t kSpvBlurFrag[] =
+#include "blur.frag.spv.h"
+;
+static const uint32_t kSpvColorLutFrag[] =
+#include "color_lut.frag.spv.h"
+;
+static const uint32_t kSpvSsaoFrag[] =
+#include "ssao.frag.spv.h"
+;
+static const uint32_t kSpvSsrFrag[] =
+#include "ssr.frag.spv.h"
+;
+static const uint32_t kSpvDofFrag[] =
+#include "dof.frag.spv.h"
+;
+static const uint32_t kSpvApplyAoFrag[] =
+#include "apply_ao.frag.spv.h"
+;
+static const uint32_t kSpvGaussianSplatVert[] =
+#include "gaussian_splat.vert.spv.h"
+;
+static const uint32_t kSpvGaussianSplatFrag[] =
+#include "gaussian_splat.frag.spv.h"
+;
 
 std::mutex s_compilerMutex;
 
@@ -99,7 +123,8 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(
     const std::string& glslSource,
     VkShaderStageFlagBits stage,
     const std::string& entryPoint,
-    const std::vector<std::string>& defines) {
+    const std::vector<std::string>& defines,
+    std::string* errOut) {
 
     std::lock_guard<std::mutex> lock(s_compilerMutex);
 
@@ -126,12 +151,14 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(
 
     if (!hasGlslc()) {
         LOG_ERROR("SceneVkShaderCompiler: glslc not found on system PATH");
+        if (errOut) *errOut = "glslc not found on system PATH";
         return {};
     }
 
     int inPipe[2];
     int outPipe[2];
-    if (pipe(inPipe) != 0 || pipe(outPipe) != 0) {
+    int errPipe[2];
+    if (pipe(inPipe) != 0 || pipe(outPipe) != 0 || pipe(errPipe) != 0) {
         LOG_ERROR("SceneVkShaderCompiler: pipe() failed");
         return {};
     }
@@ -141,6 +168,7 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(
         LOG_ERROR("SceneVkShaderCompiler: fork() failed");
         close(inPipe[0]); close(inPipe[1]);
         close(outPipe[0]); close(outPipe[1]);
+        close(errPipe[0]); close(errPipe[1]);
         return {};
     }
 
@@ -148,9 +176,11 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(
         // Child process
         dup2(inPipe[0], STDIN_FILENO);
         dup2(outPipe[1], STDOUT_FILENO);
+        dup2(errPipe[1], STDERR_FILENO);
 
         close(inPipe[0]); close(inPipe[1]);
         close(outPipe[0]); close(outPipe[1]);
+        close(errPipe[0]); close(errPipe[1]);
 
         std::vector<const char*> args;
         args.push_back("glslc");
@@ -177,6 +207,7 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(
     // Parent process
     close(inPipe[0]);
     close(outPipe[1]);
+    close(errPipe[1]);
 
     // Feed GLSL to child stdin
     size_t totalWritten = 0;
@@ -197,6 +228,13 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(
     }
     close(outPipe[0]);
 
+    // Read stderr from child
+    std::string errStr;
+    while ((bytesRead = read(errPipe[0], buffer, sizeof(buffer))) > 0) {
+        errStr.append(reinterpret_cast<char*>(buffer), bytesRead);
+    }
+    close(errPipe[0]);
+
     int status = 0;
     waitpid(pid, &status, 0);
 
@@ -210,9 +248,11 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(
             return spirv;
         } else {
             LOG_ERROR("SceneVkShaderCompiler: Invalid SPIR-V magic number");
+            if (errOut) *errOut = "Invalid SPIR-V magic number";
         }
     } else {
-        LOG_ERROR("SceneVkShaderCompiler: glslc execution failed (status=%d)", status);
+        LOG_ERROR("SceneVkShaderCompiler: glslc execution failed (status=%d): %s", status, errStr.c_str());
+        if (errOut) *errOut = errStr;
     }
 
     return {};
@@ -239,6 +279,14 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_particlesFrag = arrayToVector(kSpvParticlesFrag);
     static const std::vector<uint32_t> s_decalVert = arrayToVector(kSpvDecalVert);
     static const std::vector<uint32_t> s_decalFrag = arrayToVector(kSpvDecalFrag);
+    static const std::vector<uint32_t> s_blurFrag = arrayToVector(kSpvBlurFrag);
+    static const std::vector<uint32_t> s_colorLutFrag = arrayToVector(kSpvColorLutFrag);
+    static const std::vector<uint32_t> s_ssaoFrag = arrayToVector(kSpvSsaoFrag);
+    static const std::vector<uint32_t> s_ssrFrag = arrayToVector(kSpvSsrFrag);
+    static const std::vector<uint32_t> s_dofFrag = arrayToVector(kSpvDofFrag);
+    static const std::vector<uint32_t> s_applyAoFrag = arrayToVector(kSpvApplyAoFrag);
+    static const std::vector<uint32_t> s_gaussianSplatVert = arrayToVector(kSpvGaussianSplatVert);
+    static const std::vector<uint32_t> s_gaussianSplatFrag = arrayToVector(kSpvGaussianSplatFrag);
     static const std::vector<uint32_t> s_empty;
 
     switch (shader) {
@@ -262,6 +310,14 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::ParticlesFrag:     return s_particlesFrag;
         case BuiltinSceneShader::DecalVert:         return s_decalVert;
         case BuiltinSceneShader::DecalFrag:         return s_decalFrag;
+        case BuiltinSceneShader::BlurFrag:          return s_blurFrag;
+        case BuiltinSceneShader::ColorLutFrag:      return s_colorLutFrag;
+        case BuiltinSceneShader::SsaoFrag:          return s_ssaoFrag;
+        case BuiltinSceneShader::SsrFrag:           return s_ssrFrag;
+        case BuiltinSceneShader::DofFrag:           return s_dofFrag;
+        case BuiltinSceneShader::ApplyAoFrag:       return s_applyAoFrag;
+        case BuiltinSceneShader::GaussianSplatVert: return s_gaussianSplatVert;
+        case BuiltinSceneShader::GaussianSplatFrag: return s_gaussianSplatFrag;
         default: return s_empty;
     }
 }

@@ -55,14 +55,18 @@ public:
     bool draw(const float* view16, const float* proj16,
               const float eye[3], int vpW, int vpH);
 
+    const std::vector<float>& instanceData() const { return instanceData_; }
+    bool needsResort(const float* view16, const float eye[3],
+                     const bromath::Mat4& model) const;
+    void resort(const float* view16, const float eye[3],
+                const bromath::Mat4& model);
+
 private:
     void releaseGL();
     void ensureProgram();
     void uploadGeometry();           // static per-splat attributes -> GPU order buffer
     void resortAndUpload(const float* view16, const float eye[3],
                          const bromath::Mat4& model);
-    bool needsResort(const float* view16, const float eye[3],
-                     const bromath::Mat4& model) const;
 
     void refreshBounds();
 

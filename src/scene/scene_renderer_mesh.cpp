@@ -4,6 +4,7 @@
 #include "scene/gl_available.h"
 #include "scene/skinned_mesh_node.h"
 #include "canvas/canvas_scene.h"
+#include "scene/vulkan/scene_vk_custom_shader.h"
 #include "util/log.h"
 
 #include "broimage/decode.h"
@@ -225,7 +226,7 @@ bool SceneRenderer::compileCustomShader(CustomShaderTarget target,
                                         std::string& errOut) {
     if (!glFunctionsLoaded()) {
         if (defaultVulkanContext_) {
-            return true;
+            return vk::SceneVkCustomShader::validateCustomShader(target, vertexChunk, fragmentChunk, errOut);
         }
         errOut = "custom shaders require GPU rendering (no GL or Vulkan context)";
         return false;

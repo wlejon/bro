@@ -284,8 +284,8 @@ bool GaussianSplatNode::needsResort(const float* view16, const float eye[3],
     return de > 1e-6f || df > 1e-8f;
 }
 
-void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3],
-                                        const bromath::Mat4& model) {
+void GaussianSplatNode::resort(const float* view16, const float eye[3],
+                                const bromath::Mat4& model) {
     const size_t n = cloud_.count();
     if (n == 0) return;
 
@@ -374,6 +374,17 @@ void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3],
         o[10] = rgb[0]; o[11] = rgb[1]; o[12] = rgb[2]; o[13] = cloud_.opacities[i];
     }
 
+    std::memcpy(lastEye_, eye, sizeof(lastEye_));
+    lastFwd_[0] = view16[2]; lastFwd_[1] = view16[6]; lastFwd_[2] = view16[10];
+    std::memcpy(lastModel_, model.data, sizeof(lastModel_));
+    sorted_ = true;
+}
+
+void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3],
+                                        const bromath::Mat4& model) {
+    resort(view16, eye, model);
+    if (!glFunctionsLoaded()) return;
+
     glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
     size_t bytes = instanceData_.size() * sizeof(float);
     if (bytes > instVboCapacity_) {
@@ -382,11 +393,6 @@ void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3],
     } else {
         glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, instanceData_.data());
     }
-
-    std::memcpy(lastEye_, eye, sizeof(lastEye_));
-    lastFwd_[0] = view16[2]; lastFwd_[1] = view16[6]; lastFwd_[2] = view16[10];
-    std::memcpy(lastModel_, model.data, sizeof(lastModel_));
-    sorted_ = true;
 }
 
 bool GaussianSplatNode::draw(const float* view16, const float* proj16,

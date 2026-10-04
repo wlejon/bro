@@ -24,6 +24,13 @@ public:
     /// Reset all state to default values.
     SceneVkPipelineBuilder& reset();
 
+    /// Attach vertex and fragment shader stages.
+    SceneVkPipelineBuilder& setShaderStages(VkShaderModule vs, VkShaderModule fs) {
+        addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vs);
+        addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fs);
+        return *this;
+    }
+
     /// Attach a shader stage module.
     SceneVkPipelineBuilder& addShaderStage(VkShaderStageFlagBits stage,
                                           VkShaderModule module,

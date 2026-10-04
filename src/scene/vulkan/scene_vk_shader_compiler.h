@@ -29,7 +29,15 @@ enum class BuiltinSceneShader {
     ParticlesVert,
     ParticlesFrag,
     DecalVert,
-    DecalFrag
+    DecalFrag,
+    BlurFrag,
+    ColorLutFrag,
+    SsaoFrag,
+    SsrFrag,
+    DofFrag,
+    ApplyAoFrag,
+    GaussianSplatVert,
+    GaussianSplatFrag
 };
 
 /// SPIR-V shader compilation manager supporting both runtime glslc compilation
@@ -45,7 +53,8 @@ public:
         const std::string& glslSource,
         VkShaderStageFlagBits stage,
         const std::string& entryPoint = "main",
-        const std::vector<std::string>& defines = {});
+        const std::vector<std::string>& defines = {},
+        std::string* errOut = nullptr);
 
     /// Retrieve the precompiled SPIR-V bytecode for a built-in shader.
     static const std::vector<uint32_t>& getBuiltinSpirv(BuiltinSceneShader shader);

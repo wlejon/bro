@@ -113,6 +113,38 @@ compile_vk_shader_header(particles.vert vertex)
 compile_vk_shader_header(particles.frag fragment)
 compile_vk_shader_header(decal.vert vertex)
 compile_vk_shader_header(decal.frag fragment)
+compile_vk_shader_header(blur.frag fragment)
+compile_vk_shader_header(color_lut.frag fragment)
+compile_vk_shader_header(ssao.frag fragment)
+compile_vk_shader_header(ssr.frag fragment)
+compile_vk_shader_header(dof.frag fragment)
+compile_vk_shader_header(apply_ao.frag fragment)
+compile_vk_shader_header(gaussian_splat.vert vertex)
+compile_vk_shader_header(gaussian_splat.frag fragment)
+
+function(embed_vk_shader SHADER_FILE VAR_NAME)
+    set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
+    set(OUTPUT "${VK_GEN_DIR}/${SHADER_FILE}.src.h")
+    add_custom_command(
+        OUTPUT  "${OUTPUT}"
+        COMMAND ${CMAKE_COMMAND}
+                -DINPUT="${INPUT}"
+                -DOUTPUT="${OUTPUT}"
+                -DVAR_NAME="${VAR_NAME}"
+                -P "${EMBED_SCRIPT}"
+        DEPENDS "${INPUT}" "${EMBED_SCRIPT}"
+        COMMENT "Embedding vulkan/shaders/${SHADER_FILE} -> ${SHADER_FILE}.src.h"
+    )
+    list(APPEND VK_GENERATED_HEADERS "${OUTPUT}")
+    set(VK_GENERATED_HEADERS "${VK_GENERATED_HEADERS}" PARENT_SCOPE)
+endfunction()
+
+embed_vk_shader(mesh.vert             kVkMeshVertSrc)
+embed_vk_shader(mesh.frag             kVkMeshFragSrc)
+embed_vk_shader(mesh_instanced.vert   kVkMeshInstancedVertSrc)
+embed_vk_shader(mesh_skinned.vert     kVkMeshSkinnedVertSrc)
+embed_vk_shader(shadow.vert           kVkShadowVertSrc)
+embed_vk_shader(shadow_skinned.vert   kVkShadowSkinnedVertSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -164,6 +196,7 @@ add_library(bro_scene STATIC
     vulkan/scene_vk_descriptors.cpp
     vulkan/scene_vk_target.cpp
     vulkan/scene_vk_shader_compiler.cpp
+    vulkan/scene_vk_custom_shader.cpp
     vulkan/pass_mesh.cpp
     vulkan/pass_shadow.cpp
     vulkan/pass_environment.cpp
@@ -173,6 +206,11 @@ add_library(bro_scene STATIC
     vulkan/pass_decal.cpp
     vulkan/pass_reflection_probe.cpp
     vulkan/pass_terrain.cpp
+    vulkan/pass_ssao.cpp
+    vulkan/pass_ssr.cpp
+    vulkan/pass_dof.cpp
+    vulkan/pass_color_lut.cpp
+    vulkan/pass_gaussian_splat.cpp
     vulkan/scene_vk_bridge.cpp
     vulkan/scene_vk_bridge_resources.cpp
     vulkan/scene_vk_bridge_passes.cpp
