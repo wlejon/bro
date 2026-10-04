@@ -18,11 +18,20 @@ bool PipelineKey::operator==(const PipelineKey& o) const {
     if (vertShader != o.vertShader || fragShader != o.fragShader || topology != o.topology) return false;
     if (cullMode != o.cullMode || frontFace != o.frontFace || cullFaceEnable != o.cullFaceEnable) return false;
     if (depthTestEnable != o.depthTestEnable || depthWriteEnable != o.depthWriteEnable || depthCompareOp != o.depthCompareOp) return false;
+    if (stencilTestEnable != o.stencilTestEnable) return false;
+    if (stencilTestEnable) {
+        if (std::memcmp(&stencilFront, &o.stencilFront, sizeof(VkStencilOpState)) != 0 ||
+            std::memcmp(&stencilBack, &o.stencilBack, sizeof(VkStencilOpState)) != 0) return false;
+    }
     if (blendEnable != o.blendEnable) return false;
     if (srcColorBlendFactor != o.srcColorBlendFactor || dstColorBlendFactor != o.dstColorBlendFactor || colorBlendOp != o.colorBlendOp) return false;
     if (srcAlphaBlendFactor != o.srcAlphaBlendFactor || dstAlphaBlendFactor != o.dstAlphaBlendFactor || alphaBlendOp != o.alphaBlendOp) return false;
     if (colorWriteMask != o.colorWriteMask) return false;
-    if (colorAttachmentFormat != o.colorAttachmentFormat || depthAttachmentFormat != o.depthAttachmentFormat) return false;
+    if (colorAttachmentCount != o.colorAttachmentCount) return false;
+    for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
+        if (colorAttachmentFormats[i] != o.colorAttachmentFormats[i]) return false;
+    }
+    if (depthAttachmentFormat != o.depthAttachmentFormat) return false;
     if (attributeCount != o.attributeCount || bindingCount != o.bindingCount) return false;
 
     for (uint32_t i = 0; i < attributeCount; ++i) {
@@ -56,11 +65,21 @@ size_t PipelineKeyHasher::operator()(const PipelineKey& k) const {
     hashCombine(seed, std::hash<uint32_t>()(k.depthTestEnable));
     hashCombine(seed, std::hash<uint32_t>()(k.depthWriteEnable));
     hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.depthCompareOp)));
+    hashCombine(seed, std::hash<uint32_t>()(k.stencilTestEnable));
+    if (k.stencilTestEnable) {
+        hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.stencilFront.compareOp)));
+        hashCombine(seed, std::hash<uint32_t>()(k.stencilFront.reference));
+        hashCombine(seed, std::hash<uint32_t>()(k.stencilFront.compareMask));
+        hashCombine(seed, std::hash<uint32_t>()(k.stencilFront.writeMask));
+    }
     hashCombine(seed, std::hash<uint32_t>()(k.blendEnable));
     hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.srcColorBlendFactor)));
     hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.dstColorBlendFactor)));
     hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.colorWriteMask)));
-    hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.colorAttachmentFormat)));
+    hashCombine(seed, std::hash<uint32_t>()(k.colorAttachmentCount));
+    for (uint32_t i = 0; i < k.colorAttachmentCount; ++i) {
+        hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.colorAttachmentFormats[i])));
+    }
     hashCombine(seed, std::hash<uint32_t>()(k.attributeCount));
     hashCombine(seed, std::hash<uint32_t>()(k.bindingCount));
     for (uint32_t i = 0; i < k.attributeCount; ++i) {
@@ -156,7 +175,9 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     depthStencil.depthWriteEnable = key.depthWriteEnable;
     depthStencil.depthCompareOp = key.depthCompareOp;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.stencilTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = key.stencilTestEnable;
+    depthStencil.front = key.stencilFront;
+    depthStencil.back = key.stencilBack;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = key.colorWriteMask;
@@ -168,11 +189,17 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     colorBlendAttachment.dstAlphaBlendFactor = key.dstAlphaBlendFactor;
     colorBlendAttachment.alphaBlendOp = key.alphaBlendOp;
 
+    uint32_t attCount = std::max(1u, std::min(8u, key.colorAttachmentCount));
+    VkPipelineColorBlendAttachmentState colorBlendAttachments[8]{};
+    for (uint32_t i = 0; i < attCount; ++i) {
+        colorBlendAttachments[i] = colorBlendAttachment;
+    }
+
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount = attCount;
+    colorBlending.pAttachments = colorBlendAttachments;
 
     VkDynamicState dynamicStates[] = {
         VK_DYNAMIC_STATE_VIEWPORT,
@@ -186,8 +213,8 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     // Dynamic Rendering configuration
     VkPipelineRenderingCreateInfoKHR renderingCreateInfo{};
     renderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
-    renderingCreateInfo.colorAttachmentCount = 1;
-    renderingCreateInfo.pColorAttachmentFormats = &key.colorAttachmentFormat;
+    renderingCreateInfo.colorAttachmentCount = attCount;
+    renderingCreateInfo.pColorAttachmentFormats = key.colorAttachmentFormats;
     renderingCreateInfo.depthAttachmentFormat = key.depthAttachmentFormat;
     if (key.depthAttachmentFormat == VK_FORMAT_D32_SFLOAT_S8_UINT ||
         key.depthAttachmentFormat == VK_FORMAT_D24_UNORM_S8_UINT) {

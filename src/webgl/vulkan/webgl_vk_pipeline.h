@@ -24,6 +24,10 @@ struct PipelineKey {
     VkBool32 depthWriteEnable = VK_TRUE;
     VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
 
+    VkBool32 stencilTestEnable = VK_FALSE;
+    VkStencilOpState stencilFront{};
+    VkStencilOpState stencilBack{};
+
     VkBool32 blendEnable = VK_FALSE;
     VkBlendFactor srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
     VkBlendFactor dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
@@ -35,6 +39,8 @@ struct PipelineKey {
     VkColorComponentFlags colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
+    uint32_t colorAttachmentCount = 1;
+    VkFormat colorAttachmentFormats[8]{VK_FORMAT_R8G8B8A8_UNORM};
     VkFormat colorAttachmentFormat = VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED;
 

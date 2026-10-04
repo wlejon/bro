@@ -7,10 +7,14 @@ add_library(bro_webgl STATIC
     webgl2_context_render.cpp
     glsl_translator.cpp
     vulkan/webgl_vk_canvas.cpp
+    vulkan/webgl_vk_shaders_parser.cpp
     vulkan/webgl_vk_shaders.cpp
     vulkan/webgl_vk_pipeline.cpp
     vulkan/webgl_vk_context.cpp
+    vulkan/webgl_vk_context_buffers.cpp
+    vulkan/webgl_vk_context_uniforms.cpp
     vulkan/webgl_vk_context_textures.cpp
+    vulkan/webgl_vk_context_fbo.cpp
     vulkan/webgl_vk_context_draw.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)

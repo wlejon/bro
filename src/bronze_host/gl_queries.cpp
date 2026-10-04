@@ -60,13 +60,13 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x0BA2:    // GL_VIEWPORT
             case 0x0C10: {  // GL_SCISSOR_BOX
                 GLint v[4] = {0, 0, 0, 0};
-                glGetIntegerv(pname, v);
+                gl->getParameterInt4(pname, v);
                 return makeNumberList(v, 4);
             }
             // Int[2] — two ints; the scalar default path would smash the stack.
             case 0x0D3A: {  // GL_MAX_VIEWPORT_DIMS
                 GLint v[2] = {0, 0};
-                glGetIntegerv(pname, v);
+                gl->getParameterInt2(pname, v);
                 return makeNumberList(v, 2);
             }
             // Float[2]. ALIASED_POINT_SIZE_RANGE is not a core-profile enum
@@ -75,26 +75,26 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             // the same range under its core name.
             case 0x846D: {  // GL_ALIASED_POINT_SIZE_RANGE
                 GLfloat v[2] = {0, 0};
-                glGetFloatv(0x0B12, v);  // GL_POINT_SIZE_RANGE
+                gl->getParameterFloat2(0x0B12, v);  // GL_POINT_SIZE_RANGE
                 return makeNumberList(v, 2);
             }
             case 0x846E:    // GL_ALIASED_LINE_WIDTH_RANGE
             case 0x0B70: {  // GL_DEPTH_RANGE
                 GLfloat v[2] = {0, 0};
-                glGetFloatv(pname, v);
+                gl->getParameterFloat2(pname, v);
                 return makeNumberList(v, 2);
             }
             // Float[4]
             case 0x0C22:    // GL_COLOR_CLEAR_VALUE
             case 0x8005: {  // GL_BLEND_COLOR
                 GLfloat v[4] = {0, 0, 0, 0};
-                glGetFloatv(pname, v);
+                gl->getParameterFloat4(pname, v);
                 return makeNumberList(v, 4);
             }
             // Boolean[4]
             case 0x0C23: {  // GL_COLOR_WRITEMASK
                 GLboolean v[4] = {0, 0, 0, 0};
-                glGetBooleanv(pname, v);
+                gl->getParameterBool4(pname, v);
                 return hostArrayOf(4, [v](size_t i) {
                     return ev::fromBool(v[i] != GL_FALSE);
                 });
@@ -109,71 +109,94 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 return ev::fromDouble(gl->unpackColorspaceConversion());
 
             // Object-binding queries:
-            case 0x8894:  // ARRAY_BUFFER_BINDING
-            case 0x8895:  // ELEMENT_ARRAY_BUFFER_BINDING
-            case 0x88ED:  // PIXEL_PACK_BUFFER_BINDING
-            case 0x88EF:  // PIXEL_UNPACK_BUFFER_BINDING
-            case 0x8A28:  // UNIFORM_BUFFER_BINDING
-            case 0x8C8F:  // TRANSFORM_FEEDBACK_BUFFER_BINDING
-            case 0x8F36:  // COPY_READ_BUFFER_BINDING
+            case 0x8894: { // ARRAY_BUFFER_BINDING
+                GLuint val = gl->boundBuffer(GL_ARRAY_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
+                return ev::null();
+            }
+            case 0x8895: { // ELEMENT_ARRAY_BUFFER_BINDING
+                GLuint val = gl->boundBuffer(GL_ELEMENT_ARRAY_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
+                return ev::null();
+            }
+            case 0x88ED: { // PIXEL_PACK_BUFFER_BINDING
+                GLuint val = gl->boundBuffer(GL_PIXEL_PACK_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
+                return ev::null();
+            }
+            case 0x88EF: { // PIXEL_UNPACK_BUFFER_BINDING
+                GLuint val = gl->boundBuffer(GL_PIXEL_UNPACK_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
+                return ev::null();
+            }
+            case 0x8A28: { // UNIFORM_BUFFER_BINDING
+                GLuint val = gl->boundBuffer(GL_UNIFORM_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
+                return ev::null();
+            }
+            case 0x8C8F: { // TRANSFORM_FEEDBACK_BUFFER_BINDING
+                GLuint val = gl->boundBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
+                return ev::null();
+            }
+            case 0x8F36: { // COPY_READ_BUFFER_BINDING
+                GLuint val = gl->boundBuffer(GL_COPY_READ_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
+                return ev::null();
+            }
             case 0x8F37: { // COPY_WRITE_BUFFER_BINDING
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isBuffer({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::Buffer, static_cast<GLuint>(val));
-                }
+                GLuint val = gl->boundBuffer(GL_COPY_WRITE_BUFFER);
+                if (val != 0 && gl->isBuffer({val})) return wrapGlObj(GlCell::Buffer, val);
                 return ev::null();
             }
-            case 0x8B8D: {  // CURRENT_PROGRAM
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isProgram({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::Program, static_cast<GLuint>(val));
-                }
+            case 0x8B8D: { // CURRENT_PROGRAM
+                GLuint val = gl->currentProgram().id;
+                if (val != 0 && gl->isProgram({val})) return wrapGlObj(GlCell::Program, val);
                 return ev::null();
             }
-            case 0x8CA6:  // FRAMEBUFFER_BINDING / DRAW_FRAMEBUFFER_BINDING
+            case 0x8CA6: { // FRAMEBUFFER_BINDING / DRAW_FRAMEBUFFER_BINDING
+                GLuint val = gl->currentDrawFramebuffer().id;
+                if (val != 0 && gl->isFramebuffer({val})) return wrapGlObj(GlCell::Framebuffer, val);
+                return ev::null();
+            }
             case 0x8CAA: { // READ_FRAMEBUFFER_BINDING
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isFramebuffer({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::Framebuffer, static_cast<GLuint>(val));
-                }
+                GLuint val = gl->currentReadFramebuffer().id;
+                if (val != 0 && gl->isFramebuffer({val})) return wrapGlObj(GlCell::Framebuffer, val);
                 return ev::null();
             }
-            case 0x8CA7: {  // RENDERBUFFER_BINDING
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isRenderbuffer({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::Renderbuffer, static_cast<GLuint>(val));
-                }
+            case 0x8CA7: { // RENDERBUFFER_BINDING
+                GLuint val = gl->currentRenderbuffer().id;
+                if (val != 0 && gl->isRenderbuffer({val})) return wrapGlObj(GlCell::Renderbuffer, val);
                 return ev::null();
             }
-            case 0x8069:  // TEXTURE_BINDING_2D
-            case 0x8514:  // TEXTURE_BINDING_CUBE_MAP
-            case 0x806A:  // TEXTURE_BINDING_3D
+            case 0x8069: { // TEXTURE_BINDING_2D
+                GLuint val = gl->boundTexture(GL_TEXTURE_2D).id;
+                if (val != 0 && gl->isTexture({val})) return wrapGlObj(GlCell::Texture, val);
+                return ev::null();
+            }
+            case 0x8514: { // TEXTURE_BINDING_CUBE_MAP
+                GLuint val = gl->boundTexture(GL_TEXTURE_CUBE_MAP).id;
+                if (val != 0 && gl->isTexture({val})) return wrapGlObj(GlCell::Texture, val);
+                return ev::null();
+            }
+            case 0x806A: { // TEXTURE_BINDING_3D
+                GLuint val = gl->boundTexture(GL_TEXTURE_3D).id;
+                if (val != 0 && gl->isTexture({val})) return wrapGlObj(GlCell::Texture, val);
+                return ev::null();
+            }
             case 0x8C1D: { // TEXTURE_BINDING_2D_ARRAY
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isTexture({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::Texture, static_cast<GLuint>(val));
-                }
+                GLuint val = gl->boundTexture(GL_TEXTURE_2D_ARRAY).id;
+                if (val != 0 && gl->isTexture({val})) return wrapGlObj(GlCell::Texture, val);
                 return ev::null();
             }
-            case 0x85B5: {  // VERTEX_ARRAY_BINDING
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isVertexArray({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::VertexArray, static_cast<GLuint>(val));
-                }
+            case 0x85B5: { // VERTEX_ARRAY_BINDING
+                GLuint val = gl->currentVertexArray().id;
+                if (val != 0 && gl->isVertexArray({val})) return wrapGlObj(GlCell::VertexArray, val);
                 return ev::null();
             }
-            case 0x8919: {  // SAMPLER_BINDING
-                GLint val = 0;
-                glGetIntegerv(pname, &val);
-                if (val != 0 && gl->isSampler({static_cast<GLuint>(val)})) {
-                    return wrapGlObj(GlCell::Sampler, static_cast<GLuint>(val));
-                }
+            case 0x8919: { // SAMPLER_BINDING
+                GLuint val = gl->boundSampler(gl->activeTextureUnit()).id;
+                if (val != 0 && gl->isSampler({val})) return wrapGlObj(GlCell::Sampler, val);
                 return ev::null();
             }
             case 0x8E25: {  // TRANSFORM_FEEDBACK_BINDING

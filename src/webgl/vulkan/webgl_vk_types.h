@@ -43,10 +43,35 @@ struct VkTextureResource {
     GLenum magFilter = GL_LINEAR;
     GLenum wrapS = GL_REPEAT;
     GLenum wrapT = GL_REPEAT;
+    GLenum target = 0x0DE1 /* GL_TEXTURE_2D */;
+    uint32_t depth = 1;
     bool samplerDirty = true;
     uint32_t bytesPerPixel = 4;
 
     bool isValid() const { return image != VK_NULL_HANDLE; }
+};
+
+/// Sampler object backed by Vulkan sampler.
+struct VkSamplerResource {
+    VkSampler sampler = VK_NULL_HANDLE;
+    GLenum minFilter = GL_NEAREST_MIPMAP_LINEAR;
+    GLenum magFilter = GL_LINEAR;
+    GLenum wrapS = GL_REPEAT;
+    GLenum wrapT = GL_REPEAT;
+    GLenum wrapR = GL_REPEAT;
+    GLfloat minLod = -1000.0f;
+    GLfloat maxLod = 1000.0f;
+    GLenum compareMode = GL_NONE;
+    GLenum compareFunc = GL_LEQUAL;
+    bool samplerDirty = true;
+};
+
+/// Attribute metadata tracked in a linked program.
+struct VkAttribInfo {
+    std::string name;
+    GLenum type = GL_FLOAT_VEC4;
+    GLint size = 1;
+    GLint location = -1;
 };
 
 /// Vertex attribute specification within a Vertex Array Object (VAO).
@@ -55,6 +80,7 @@ struct VkVertexAttribute {
     GLint size = 4; // 1, 2, 3, 4
     GLenum type = GL_FLOAT;
     GLboolean normalized = GL_FALSE;
+    bool isInteger = false;
     GLsizei stride = 0;
     uintptr_t offset = 0;
     GLuint bufferId = 0;
@@ -91,6 +117,22 @@ struct VkUniformInfo {
     uint32_t offset = 0; // byte offset in push constants / uniform block
     uint32_t size = 0;   // byte size
     GLint count = 1;     // array count
+    GLint blockIndex = -1; // -1 if default/push_constant, >=0 if UBO member
+    GLint matrixStride = 0;
+    GLint arrayStride = 0;
+    GLboolean isRowMajor = GL_FALSE;
+};
+
+/// Uniform block metadata tracked in a linked program.
+struct VkUniformBlockInfo {
+    std::string name;
+    GLuint index = 0;
+    GLuint binding = 0;
+    GLuint descriptorBinding = 8;
+    uint32_t dataSize = 0;
+    std::vector<GLuint> activeUniformIndices;
+    bool referencedByVertex = false;
+    bool referencedByFragment = false;
 };
 
 /// WebGL Program linking vertex and fragment shaders.
@@ -100,15 +142,23 @@ struct VkProgramResource {
     VkShaderModule vertModule = VK_NULL_HANDLE;
     VkShaderModule fragModule = VK_NULL_HANDLE;
     bool linkStatus = false;
+    bool deleteStatus = false;
     std::string infoLog;
 
     std::vector<VkUniformInfo> uniforms;
     std::unordered_map<std::string, GLint> uniformLocations;
     std::vector<uint8_t> uniformBytes;
 
+    std::vector<VkAttribInfo> activeAttribs;
     std::unordered_map<std::string, GLint> attribLocations;
+    std::unordered_map<std::string, GLuint> boundAttribLocations;
+    std::unordered_map<std::string, GLint> fragDataLocations;
+    std::vector<VkUniformBlockInfo> uniformBlocks;
+    std::unordered_map<std::string, GLuint> uniformBlockIndices;
+    std::unordered_map<GLuint, GLuint> uniformBlockBindings;
     std::unordered_map<GLint, uint32_t> samplerLocToBinding;
     std::unordered_map<uint32_t, uint32_t> samplerBindings; // descriptor binding -> texture unit
+    std::unordered_map<uint32_t, GLenum> samplerTypes; // descriptor binding -> GL_SAMPLER_2D, GL_SAMPLER_CUBE, etc.
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
     bool isValid() const { return linkStatus; }
@@ -116,16 +166,74 @@ struct VkProgramResource {
 
 /// Framebuffer object.
 struct VkFramebufferResource {
+    std::array<GLuint, 8> colorAttachments{};
     GLuint colorAttachmentTex = 0;
     GLuint depthAttachmentTex = 0;
+    std::vector<GLenum> drawBuffers{0x8CE0 /* GL_COLOR_ATTACHMENT0 */};
+    GLenum readBuffer = 0x8CE0;
     bool isComplete = true;
+};
+
+/// Renderbuffer object.
+struct VkRenderbufferResource {
+    GLuint textureId = 0;
+    GLenum internalformat = 0;
+    GLsizei width = 0;
+    GLsizei height = 0;
+    GLsizei samples = 0;
+    bool isValid() const { return textureId != 0; }
 };
 
 // ---------------------------------------------------------------------------
 // Format and State Translation Helpers
 // ---------------------------------------------------------------------------
 
-inline VkFormat glTypeToVkFormat(GLenum type, GLint size, GLboolean normalized) {
+inline VkFormat glTypeToVkFormat(GLenum type, GLint size, GLboolean normalized, bool isInteger = false) {
+    if (isInteger || type == GL_INT || type == GL_UNSIGNED_INT) {
+        if (type == GL_INT) {
+            switch (size) {
+                case 1: return VK_FORMAT_R32_SINT;
+                case 2: return VK_FORMAT_R32G32_SINT;
+                case 3: return VK_FORMAT_R32G32B32_SINT;
+                case 4: return VK_FORMAT_R32G32B32A32_SINT;
+            }
+        } else if (type == GL_UNSIGNED_INT) {
+            switch (size) {
+                case 1: return VK_FORMAT_R32_UINT;
+                case 2: return VK_FORMAT_R32G32_UINT;
+                case 3: return VK_FORMAT_R32G32B32_UINT;
+                case 4: return VK_FORMAT_R32G32B32A32_UINT;
+            }
+        } else if (type == GL_SHORT) {
+            switch (size) {
+                case 1: return VK_FORMAT_R16_SINT;
+                case 2: return VK_FORMAT_R16G16_SINT;
+                case 3: return VK_FORMAT_R16G16B16_SINT;
+                case 4: return VK_FORMAT_R16G16B16A16_SINT;
+            }
+        } else if (type == GL_UNSIGNED_SHORT) {
+            switch (size) {
+                case 1: return VK_FORMAT_R16_UINT;
+                case 2: return VK_FORMAT_R16G16_UINT;
+                case 3: return VK_FORMAT_R16G16B16_UINT;
+                case 4: return VK_FORMAT_R16G16B16A16_UINT;
+            }
+        } else if (type == GL_BYTE) {
+            switch (size) {
+                case 1: return VK_FORMAT_R8_SINT;
+                case 2: return VK_FORMAT_R8G8_SINT;
+                case 3: return VK_FORMAT_R8G8B8_SINT;
+                case 4: return VK_FORMAT_R8G8B8A8_SINT;
+            }
+        } else if (type == GL_UNSIGNED_BYTE) {
+            switch (size) {
+                case 1: return VK_FORMAT_R8_UINT;
+                case 2: return VK_FORMAT_R8G8_UINT;
+                case 3: return VK_FORMAT_R8G8B8_UINT;
+                case 4: return VK_FORMAT_R8G8B8A8_UINT;
+            }
+        }
+    }
     if (type == GL_FLOAT) {
         switch (size) {
             case 1: return VK_FORMAT_R32_SFLOAT;
@@ -256,6 +364,20 @@ inline VkCompareOp glCompareOpToVk(GLenum func) {
         case GL_GEQUAL: return VK_COMPARE_OP_GREATER_OR_EQUAL;
         case GL_ALWAYS: return VK_COMPARE_OP_ALWAYS;
         default: return VK_COMPARE_OP_LESS;
+    }
+}
+
+inline VkStencilOp glStencilOpToVk(GLenum op) {
+    switch (op) {
+        case GL_KEEP: return VK_STENCIL_OP_KEEP;
+        case GL_ZERO: return VK_STENCIL_OP_ZERO;
+        case GL_REPLACE: return VK_STENCIL_OP_REPLACE;
+        case GL_INCR: return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+        case GL_INCR_WRAP: return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+        case GL_DECR: return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+        case GL_DECR_WRAP: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+        case GL_INVERT: return VK_STENCIL_OP_INVERT;
+        default: return VK_STENCIL_OP_KEEP;
     }
 }
 

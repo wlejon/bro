@@ -298,18 +298,18 @@ public:
     void enableVertexAttribArray(GLuint index);
     void disableVertexAttribArray(GLuint index);
     void vertexAttribDivisor(GLuint index, GLuint divisor);
-    void vertexAttribI4i(GLuint /*index*/, GLint /*x*/, GLint /*y*/, GLint /*z*/, GLint /*w*/) {}
-    void vertexAttribI4ui(GLuint /*index*/, GLuint /*x*/, GLuint /*y*/, GLuint /*z*/, GLuint /*w*/) {}
-    void vertexAttribI4iv(GLuint /*index*/, const GLint* /*v*/) {}
-    void vertexAttribI4uiv(GLuint /*index*/, const GLuint* /*v*/) {}
-    void vertexAttrib1f(GLuint /*index*/, float /*x*/) {}
-    void vertexAttrib2f(GLuint /*index*/, float /*x*/, float /*y*/) {}
-    void vertexAttrib3f(GLuint /*index*/, float /*x*/, float /*y*/, float /*z*/) {}
-    void vertexAttrib4f(GLuint /*index*/, float /*x*/, float /*y*/, float /*z*/, float /*w*/) {}
-    void vertexAttrib1fv(GLuint /*index*/, const float* /*v*/) {}
-    void vertexAttrib2fv(GLuint /*index*/, const float* /*v*/) {}
-    void vertexAttrib3fv(GLuint /*index*/, const float* /*v*/) {}
-    void vertexAttrib4fv(GLuint /*index*/, const float* /*v*/) {}
+    void vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w);
+    void vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w);
+    void vertexAttribI4iv(GLuint index, const GLint* v);
+    void vertexAttribI4uiv(GLuint index, const GLuint* v);
+    void vertexAttrib1f(GLuint index, float x);
+    void vertexAttrib2f(GLuint index, float x, float y);
+    void vertexAttrib3f(GLuint index, float x, float y, float z);
+    void vertexAttrib4f(GLuint index, float x, float y, float z, float w);
+    void vertexAttrib1fv(GLuint index, const float* v);
+    void vertexAttrib2fv(GLuint index, const float* v);
+    void vertexAttrib3fv(GLuint index, const float* v);
+    void vertexAttrib4fv(GLuint index, const float* v);
 
     // --- Shaders ---
     WebGLShader createShader(GLenum type);
@@ -459,10 +459,26 @@ public:
     GLint getParameterInt(GLenum pname);
     GLfloat getParameterFloat(GLenum pname);
     GLboolean getParameterBool(GLenum pname);
+    void getParameterInt2(GLenum pname, GLint* out);
+    void getParameterInt4(GLenum pname, GLint* out);
+    void getParameterFloat2(GLenum pname, GLfloat* out);
+    void getParameterFloat4(GLenum pname, GLfloat* out);
+    void getParameterBool4(GLenum pname, GLboolean* out);
     std::string getParameterString(GLenum pname);
     std::string getShadingLanguageVersion();
     std::vector<std::string> getSupportedExtensions();
     bool getExtension(const std::string& name);
+
+    WebGLProgram currentProgram() const { return {sProgram_}; }
+    WebGLFramebuffer currentDrawFramebuffer() const { return {sFBO_}; }
+    WebGLFramebuffer currentReadFramebuffer() const { return {sFBO_}; }
+    WebGLRenderbuffer currentRenderbuffer() const { return {0}; }
+    WebGLVertexArrayObject currentVertexArray() const { return {sVAO_}; }
+    WebGLTexture boundTexture(GLenum target) const;
+    WebGLSampler boundSampler(GLuint unit) const;
+    GLuint activeTextureUnit() const {
+        return (sActiveTex_ >= GL_TEXTURE0 && sActiveTex_ < GL_TEXTURE0 + 32) ? (sActiveTex_ - GL_TEXTURE0) : 0;
+    }
 
     // --- Object predicates (WebGL is* semantics: false for deleted names,
     //     false before first bind for gen-style objects — matches GL) ---
@@ -506,7 +522,9 @@ private:
     GLuint initFbo_ = 0;
     std::unordered_set<GLuint> validVAOs_;
     std::unordered_set<GLuint> validSamplers_;
+    std::unordered_set<GLuint> createdQueries_;
     std::unordered_set<GLuint> validQueries_;
+    std::unordered_set<GLuint> deletedQueries_;
     std::unordered_set<GLsync> validSyncs_;
     std::unordered_set<GLuint> validTransformFeedbacks_;
 
@@ -549,6 +567,7 @@ private:
     // Tracked by our wrapper methods — no glGet* queries needed
     GLfloat sClearR_ = 0, sClearG_ = 0, sClearB_ = 0, sClearA_ = 0;
     GLint sViewport_[4] = {0, 0, 0, 0};
+    GLint sScissorBox_[4] = {0, 0, 0, 0};
     GLuint sProgram_ = 0;
     GLuint sVAO_ = 0;
     GLuint sArrayBuf_ = 0;

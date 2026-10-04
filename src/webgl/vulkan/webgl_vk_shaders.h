@@ -1,6 +1,7 @@
 #pragma once
 
 #include "webgl/vulkan/webgl_vk_types.h"
+#include "webgl/vulkan/webgl_vk_shaders_parser.h"
 
 #include <vulkan/vulkan.h>
 #include "webgl/webgl_types.h"
@@ -27,6 +28,10 @@ public:
 
     /// Translate WebGL GLSL source (ES 1.00 or ES 3.00) to Vulkan GLSL (#version 450).
     static TranslatedShader translateToVulkanGLSL(const std::string& glslSource, GLenum shaderType);
+
+    /// Link vertex and fragment shader sources, verifying interface and unifying layout.
+    static ProgramLinkResult linkShaders(const std::string& vsSource, const std::string& fsSource,
+                                         const std::unordered_map<std::string, GLuint>& boundAttribs);
 
     /// Compile Vulkan GLSL source string to SPIR-V using glslc.
     static std::vector<uint32_t> compileToSpirv(const std::string& source,

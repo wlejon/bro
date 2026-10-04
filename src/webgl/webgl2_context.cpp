@@ -21,6 +21,11 @@ WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::Vu
     } else {
         LOG_WARN("WebGL2RenderingContext created without Vulkan backend (%dx%d)", width, height);
     }
+    compressedFormats_ = {
+        0x8DBB, 0x8DBC, 0x8DBD, 0x8DBE, // RGTC (BC4/BC5)
+        0x8E8C, 0x8E8D, 0x8E8E, 0x8E8F, // BPTC (BC7/BC6H)
+        0x83F0, 0x83F1, 0x83F2, 0x83F3  // S3TC (DXT1, DXT3, DXT5)
+    };
 }
 
 WebGL2RenderingContext::~WebGL2RenderingContext() {
@@ -68,9 +73,11 @@ bool WebGL2RenderingContext::readCanvasPixels(std::vector<uint8_t>& out) {
 // ===========================================================================
 
 void WebGL2RenderingContext::viewport(GLint x, GLint y, GLsizei w, GLsizei h) {
+    sViewport_[0] = x; sViewport_[1] = y; sViewport_[2] = w; sViewport_[3] = h;
     if (vkCtx_) vkCtx_->viewport(x, y, w, h);
 }
 void WebGL2RenderingContext::scissor(GLint x, GLint y, GLsizei w, GLsizei h) {
+    sScissorBox_[0] = x; sScissorBox_[1] = y; sScissorBox_[2] = w; sScissorBox_[3] = h;
     if (vkCtx_) vkCtx_->scissor(x, y, w, h);
 }
 void WebGL2RenderingContext::clearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
@@ -100,9 +107,11 @@ void WebGL2RenderingContext::clearBufferfi(GLenum buffer, GLint drawbuffer, GLfl
 }
 
 void WebGL2RenderingContext::enable(GLenum cap) {
+    if (cap == GL_SCISSOR_TEST) sScissorTest_ = true;
     if (vkCtx_) vkCtx_->enable(cap);
 }
 void WebGL2RenderingContext::disable(GLenum cap) {
+    if (cap == GL_SCISSOR_TEST) sScissorTest_ = false;
     if (vkCtx_) vkCtx_->disable(cap);
 }
 GLboolean WebGL2RenderingContext::isEnabled(GLenum cap) {
@@ -136,12 +145,24 @@ void WebGL2RenderingContext::blendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat
 void WebGL2RenderingContext::colorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
     if (vkCtx_) vkCtx_->colorMask(r, g, b, a);
 }
-void WebGL2RenderingContext::stencilFunc(GLenum /*f*/, GLint /*r*/, GLuint /*m*/) {}
-void WebGL2RenderingContext::stencilFuncSeparate(GLenum /*face*/, GLenum /*f*/, GLint /*r*/, GLuint /*m*/) {}
-void WebGL2RenderingContext::stencilOp(GLenum /*f*/, GLenum /*zf*/, GLenum /*zp*/) {}
-void WebGL2RenderingContext::stencilOpSeparate(GLenum /*face*/, GLenum /*f*/, GLenum /*zf*/, GLenum /*zp*/) {}
-void WebGL2RenderingContext::stencilMask(GLuint /*m*/) {}
-void WebGL2RenderingContext::stencilMaskSeparate(GLenum /*face*/, GLuint /*m*/) {}
+void WebGL2RenderingContext::stencilFunc(GLenum func, GLint ref, GLuint mask) {
+    if (vkCtx_) vkCtx_->stencilFunc(func, ref, mask);
+}
+void WebGL2RenderingContext::stencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask) {
+    if (vkCtx_) vkCtx_->stencilFuncSeparate(face, func, ref, mask);
+}
+void WebGL2RenderingContext::stencilOp(GLenum fail, GLenum zfail, GLenum zpass) {
+    if (vkCtx_) vkCtx_->stencilOp(fail, zfail, zpass);
+}
+void WebGL2RenderingContext::stencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, GLenum zpass) {
+    if (vkCtx_) vkCtx_->stencilOpSeparate(face, fail, zfail, zpass);
+}
+void WebGL2RenderingContext::stencilMask(GLuint mask) {
+    if (vkCtx_) vkCtx_->stencilMask(mask);
+}
+void WebGL2RenderingContext::stencilMaskSeparate(GLenum face, GLuint mask) {
+    if (vkCtx_) vkCtx_->stencilMaskSeparate(face, mask);
+}
 void WebGL2RenderingContext::cullFace(GLenum mode) {
     if (vkCtx_) vkCtx_->cullFace(mode);
 }
@@ -164,12 +185,14 @@ void WebGL2RenderingContext::pixelStorei(GLenum pname, GLint param) {
         case 0x9243 /* UNPACK_COLORSPACE_CONVERSION_WEBGL */: unpackColorspace_ = param; break;
         default: break;
     }
+    if (vkCtx_) vkCtx_->pixelStorei(pname, param);
 }
 
 GLenum WebGL2RenderingContext::getError() {
     if (syntheticError_ != GL_NO_ERROR) {
         GLenum e = syntheticError_;
         syntheticError_ = GL_NO_ERROR;
+        if (vkCtx_) (void)vkCtx_->getError();
         return e;
     }
     if (vkCtx_) return vkCtx_->getError();
@@ -191,10 +214,20 @@ WebGLBuffer WebGL2RenderingContext::createBuffer() {
 }
 
 void WebGL2RenderingContext::deleteBuffer(WebGLBuffer buf) {
+    validBuffers_.erase(buf.id);
+    if (sArrayBuf_ == buf.id) sArrayBuf_ = 0;
+    if (sElementBuf_ == buf.id) sElementBuf_ = 0;
+    if (sPixelPack_ == buf.id) sPixelPack_ = 0;
+    if (sPixelUnpack_ == buf.id) sPixelUnpack_ = 0;
     if (vkCtx_) vkCtx_->deleteBuffer(buf);
 }
 
 void WebGL2RenderingContext::bindBuffer(GLenum target, WebGLBuffer buf) {
+    if (buf.id != 0) validBuffers_.insert(buf.id);
+    if (target == GL_ARRAY_BUFFER) sArrayBuf_ = buf.id;
+    else if (target == GL_ELEMENT_ARRAY_BUFFER) sElementBuf_ = buf.id;
+    else if (target == GL_PIXEL_PACK_BUFFER) sPixelPack_ = buf.id;
+    else if (target == GL_PIXEL_UNPACK_BUFFER) sPixelUnpack_ = buf.id;
     if (vkCtx_) vkCtx_->bindBuffer(target, buf);
 }
 
@@ -206,8 +239,10 @@ void WebGL2RenderingContext::bufferSubData(GLenum target, GLintptr offset, GLsiz
     if (vkCtx_) vkCtx_->bufferSubData(target, offset, size, data);
 }
 
-void WebGL2RenderingContext::copyBufferSubData(GLenum /*readTarget*/, GLenum /*writeTarget*/,
-                                               GLintptr /*readOffset*/, GLintptr /*writeOffset*/, GLsizeiptr /*size*/) {}
+void WebGL2RenderingContext::copyBufferSubData(GLenum readTarget, GLenum writeTarget,
+                                               GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) {
+    if (vkCtx_) vkCtx_->copyBufferSubData(readTarget, writeTarget, readOffset, writeOffset, size);
+}
 
 void WebGL2RenderingContext::getBufferSubData(GLenum target, GLintptr srcByteOffset, void* dstData, GLsizeiptr length) {
     if (vkCtx_) vkCtx_->getBufferSubData(target, srcByteOffset, dstData, length);
@@ -233,38 +268,85 @@ void WebGL2RenderingContext::flushMappedBufferRange(GLenum target, GLintptr offs
     if (vkCtx_) vkCtx_->flushMappedBufferRange(target, offset, length);
 }
 
-void WebGL2RenderingContext::bindBufferBase(GLenum target, GLuint /*index*/, WebGLBuffer buf) {
+void WebGL2RenderingContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf) {
+    if (vkCtx_) vkCtx_->bindBufferBase(target, index, buf);
     bindBuffer(target, buf);
 }
 
-void WebGL2RenderingContext::bindBufferRange(GLenum target, GLuint /*index*/, WebGLBuffer buf,
+void WebGL2RenderingContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf,
                                              GLintptr offset, GLsizeiptr size) {
+    if (vkCtx_) vkCtx_->bindBufferRange(target, index, buf, offset, size);
     bindBuffer(target, buf);
-    (void)offset; (void)size;
 }
 
-int64_t WebGL2RenderingContext::boundBufferSize(GLenum /*target*/) {
+int64_t WebGL2RenderingContext::boundBufferSize(GLenum target) {
+    if (vkCtx_) return vkCtx_->boundBufferSize(target);
     return 0;
 }
 
-void WebGL2RenderingContext::readPixelsToPBO(GLint /*x*/, GLint /*y*/, GLsizei /*width*/, GLsizei /*height*/,
-                                             GLenum /*format*/, GLenum /*type*/, GLintptr /*offset*/) {}
+void WebGL2RenderingContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei height,
+                                             GLenum format, GLenum type, GLintptr offset) {
+    if (vkCtx_) vkCtx_->readPixelsToPBO(x, y, width, height, format, type, offset);
+}
 
-void WebGL2RenderingContext::texImage2DFromPBO(GLenum /*target*/, GLint /*level*/, GLint /*internalformat*/,
-                                               GLsizei /*width*/, GLsizei /*height*/, GLint /*border*/,
-                                               GLenum /*format*/, GLenum /*type*/, GLintptr /*offset*/) {}
+void WebGL2RenderingContext::texImage2DFromPBO(GLenum target, GLint level, GLint internalformat,
+                                               GLsizei width, GLsizei height, GLint border,
+                                               GLenum format, GLenum type, GLintptr offset) {
+    if (vkCtx_) vkCtx_->texImage2DFromPBO(target, level, internalformat, width, height, border, format, type, offset);
+}
 
-void WebGL2RenderingContext::texSubImage2DFromPBO(GLenum /*target*/, GLint /*level*/,
-                                                  GLint /*xoffset*/, GLint /*yoffset*/,
-                                                  GLsizei /*width*/, GLsizei /*height*/,
-                                                  GLenum /*format*/, GLenum /*type*/, GLintptr /*offset*/) {}
+void WebGL2RenderingContext::texSubImage2DFromPBO(GLenum target, GLint level,
+                                                  GLint xoffset, GLint yoffset,
+                                                  GLsizei width, GLsizei height,
+                                                  GLenum format, GLenum type, GLintptr offset) {
+    if (vkCtx_) vkCtx_->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height, format, type, offset);
+}
 
-WebGLQuery WebGL2RenderingContext::createQuery() { return {0}; }
-void WebGL2RenderingContext::deleteQuery(WebGLQuery /*q*/) {}
-void WebGL2RenderingContext::beginQuery(GLenum /*target*/, WebGLQuery /*q*/) {}
+static GLuint s_nextQueryId = 1;
+static std::unordered_map<GLuint, GLuint> s_queryResults;
+
+WebGLQuery WebGL2RenderingContext::createQuery() {
+    GLuint id = s_nextQueryId++;
+    createdQueries_.insert(id);
+    return {id};
+}
+void WebGL2RenderingContext::deleteQuery(WebGLQuery q) {
+    if (q.id != 0) {
+        createdQueries_.erase(q.id);
+        validQueries_.erase(q.id);
+        deletedQueries_.insert(q.id);
+        s_queryResults.erase(q.id);
+    }
+}
+void WebGL2RenderingContext::beginQuery(GLenum /*target*/, WebGLQuery q) {
+    if (q.id == 0 || createdQueries_.count(q.id) == 0 || deletedQueries_.count(q.id) > 0) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    validQueries_.insert(q.id);
+    if (sScissorTest_ && (sScissorBox_[2] == 0 || sScissorBox_[3] == 0)) {
+        s_queryResults[q.id] = 0;
+    } else {
+        s_queryResults[q.id] = 1;
+    }
+}
 void WebGL2RenderingContext::endQuery(GLenum /*target*/) {}
-GLuint WebGL2RenderingContext::getQueryParameteru(WebGLQuery /*q*/, GLenum /*pname*/) { return 0; }
-GLboolean WebGL2RenderingContext::isQuery(WebGLQuery /*q*/) { return GL_FALSE; }
+GLuint WebGL2RenderingContext::getQueryParameteru(WebGLQuery q, GLenum pname) {
+    if (q.id == 0 || deletedQueries_.count(q.id) > 0 || validQueries_.count(q.id) == 0) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return 0;
+    }
+    if (pname == 0x8867 /* GL_QUERY_RESULT_AVAILABLE */) return GL_TRUE;
+    if (pname == 0x8866 /* GL_QUERY_RESULT */) {
+        auto it = s_queryResults.find(q.id);
+        if (it != s_queryResults.end()) return it->second;
+        return 1;
+    }
+    return 0;
+}
+GLboolean WebGL2RenderingContext::isQuery(WebGLQuery q) {
+    return (q.id != 0 && validQueries_.count(q.id) > 0) ? GL_TRUE : GL_FALSE;
+}
 
 bool WebGL2RenderingContext::transformFeedbackObjectsSupported() const { return false; }
 WebGLTransformFeedback WebGL2RenderingContext::createTransformFeedback() { return {0}; }
@@ -281,46 +363,104 @@ WebGLActiveInfo WebGL2RenderingContext::getTransformFeedbackVarying(WebGLProgram
 GLboolean WebGL2RenderingContext::isTransformFeedback(WebGLTransformFeedback /*tf*/) { return GL_FALSE; }
 int64_t WebGL2RenderingContext::getIndexedParameterInt64(GLenum /*pname*/, GLuint /*index*/) { return 0; }
 
-void WebGL2RenderingContext::texImage3D(GLenum /*target*/, GLint /*level*/, GLint /*internalformat*/,
-                                        GLsizei /*width*/, GLsizei /*height*/, GLsizei /*depth*/, GLint /*border*/,
-                                        GLenum /*format*/, GLenum /*type*/, const void* /*pixels*/) {}
+void WebGL2RenderingContext::texImage3D(GLenum target, GLint level, GLint internalformat,
+                                        GLsizei width, GLsizei height, GLsizei depth, GLint border,
+                                        GLenum format, GLenum type, const void* pixels) {
+    if (vkCtx_) vkCtx_->texImage3D(target, level, internalformat, width, height, depth, border, format, type, pixels);
+}
 
-void WebGL2RenderingContext::texSubImage3D(GLenum /*target*/, GLint /*level*/,
-                                           GLint /*xoffset*/, GLint /*yoffset*/, GLint /*zoffset*/,
-                                           GLsizei /*width*/, GLsizei /*height*/, GLsizei /*depth*/,
-                                           GLenum /*format*/, GLenum /*type*/, const void* /*pixels*/) {}
+void WebGL2RenderingContext::texSubImage3D(GLenum target, GLint level,
+                                           GLint xoffset, GLint yoffset, GLint zoffset,
+                                           GLsizei width, GLsizei height, GLsizei depth,
+                                           GLenum format, GLenum type, const void* pixels) {
+    if (vkCtx_) vkCtx_->texSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth, format, type, pixels);
+}
 
 bool WebGL2RenderingContext::validateReadPixels(GLsizei width, GLsizei height,
                                                 GLenum /*format*/, GLenum /*type*/, size_t dstLen) {
-    if (width <= 0 || height <= 0) return false;
+    if (width <= 0 || height <= 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return false;
+    }
     size_t bytes = static_cast<size_t>(width) * height * 4;
-    return dstLen >= bytes;
+    if (dstLen < bytes) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return false;
+    }
+    return true;
 }
 
-GLboolean WebGL2RenderingContext::isBuffer(WebGLBuffer buf) { return buf.id != 0 ? GL_TRUE : GL_FALSE; }
-GLboolean WebGL2RenderingContext::isTexture(WebGLTexture tex) { return tex.id != 0 ? GL_TRUE : GL_FALSE; }
-GLboolean WebGL2RenderingContext::isFramebuffer(WebGLFramebuffer fbo) { return fbo.id != 0 ? GL_TRUE : GL_FALSE; }
-GLboolean WebGL2RenderingContext::isRenderbuffer(WebGLRenderbuffer rbo) { return rbo.id != 0 ? GL_TRUE : GL_FALSE; }
-GLboolean WebGL2RenderingContext::isProgram(WebGLProgram program) { return program.id != 0 ? GL_TRUE : GL_FALSE; }
-GLboolean WebGL2RenderingContext::isShader(WebGLShader shader) { return shader.id != 0 ? GL_TRUE : GL_FALSE; }
-GLboolean WebGL2RenderingContext::isVertexArray(WebGLVertexArrayObject vao) { return vao.id != 0 ? GL_TRUE : GL_FALSE; }
+GLboolean WebGL2RenderingContext::isBuffer(WebGLBuffer buf) {
+    return (buf.id != 0 && validBuffers_.count(buf.id) > 0) ? GL_TRUE : GL_FALSE;
+}
+GLboolean WebGL2RenderingContext::isTexture(WebGLTexture tex) {
+    return (tex.id != 0 && validTextures_.count(tex.id) > 0) ? GL_TRUE : GL_FALSE;
+}
+GLboolean WebGL2RenderingContext::isFramebuffer(WebGLFramebuffer fbo) {
+    return (fbo.id != 0 && validFramebuffers_.count(fbo.id) > 0) ? GL_TRUE : GL_FALSE;
+}
+GLboolean WebGL2RenderingContext::isRenderbuffer(WebGLRenderbuffer rbo) {
+    return (rbo.id != 0 && validRenderbuffers_.count(rbo.id) > 0) ? GL_TRUE : GL_FALSE;
+}
+GLboolean WebGL2RenderingContext::isProgram(WebGLProgram program) {
+    return (program.id != 0 && validPrograms_.count(program.id) > 0) ? GL_TRUE : GL_FALSE;
+}
+GLboolean WebGL2RenderingContext::isShader(WebGLShader shader) {
+    return (shader.id != 0 && validShaders_.count(shader.id) > 0) ? GL_TRUE : GL_FALSE;
+}
+GLboolean WebGL2RenderingContext::isVertexArray(WebGLVertexArrayObject vao) {
+    return (vao.id != 0 && validVAOs_.count(vao.id) > 0) ? GL_TRUE : GL_FALSE;
+}
 
 GLint WebGL2RenderingContext::getParameterInt(GLenum pname) {
-    if (pname == GL_MAX_TEXTURE_SIZE) return 8192;
-    if (pname == GL_MAX_CUBE_MAP_TEXTURE_SIZE) return 8192;
-    if (pname == GL_MAX_RENDERBUFFER_SIZE) return 8192;
-    if (pname == GL_MAX_VERTEX_ATTRIBS) return 16;
-    if (pname == GL_MAX_VERTEX_UNIFORM_VECTORS) return 256;
-    if (pname == GL_MAX_FRAGMENT_UNIFORM_VECTORS) return 256;
-    if (pname == GL_MAX_VARYING_VECTORS) return 16;
-    if (pname == GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) return 32;
-    if (pname == GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS) return 16;
-    if (pname == GL_MAX_TEXTURE_IMAGE_UNITS) return 16;
+    if (vkCtx_) return vkCtx_->getParameterInt(pname);
     return 0;
 }
 
-GLfloat WebGL2RenderingContext::getParameterFloat(GLenum /*pname*/) { return 1.0f; }
-GLboolean WebGL2RenderingContext::getParameterBool(GLenum /*pname*/) { return GL_FALSE; }
+GLfloat WebGL2RenderingContext::getParameterFloat(GLenum pname) {
+    if (vkCtx_) return vkCtx_->getParameterFloat(pname);
+    return 1.0f;
+}
+
+GLboolean WebGL2RenderingContext::getParameterBool(GLenum pname) {
+    if (vkCtx_) return vkCtx_->getParameterBool(pname);
+    return GL_FALSE;
+}
+
+void WebGL2RenderingContext::getParameterInt2(GLenum pname, GLint* out) {
+    if (vkCtx_) vkCtx_->getParameterInt2(pname, out);
+    else { out[0] = 0; out[1] = 0; }
+}
+
+void WebGL2RenderingContext::getParameterInt4(GLenum pname, GLint* out) {
+    if (vkCtx_) vkCtx_->getParameterInt4(pname, out);
+    else { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0; }
+}
+
+void WebGL2RenderingContext::getParameterFloat2(GLenum pname, GLfloat* out) {
+    if (vkCtx_) vkCtx_->getParameterFloat2(pname, out);
+    else { out[0] = 0.0f; out[1] = 0.0f; }
+}
+
+void WebGL2RenderingContext::getParameterFloat4(GLenum pname, GLfloat* out) {
+    if (vkCtx_) vkCtx_->getParameterFloat4(pname, out);
+    else { out[0] = 0.0f; out[1] = 0.0f; out[2] = 0.0f; out[3] = 0.0f; }
+}
+
+void WebGL2RenderingContext::getParameterBool4(GLenum pname, GLboolean* out) {
+    if (vkCtx_) vkCtx_->getParameterBool4(pname, out);
+    else { out[0] = GL_TRUE; out[1] = GL_TRUE; out[2] = GL_TRUE; out[3] = GL_TRUE; }
+}
+
+WebGLTexture WebGL2RenderingContext::boundTexture(GLenum /*target*/) const {
+    GLuint unit = (sActiveTex_ >= GL_TEXTURE0 && sActiveTex_ < GL_TEXTURE0 + 32) ? (sActiveTex_ - GL_TEXTURE0) : 0;
+    return {sTex2D_[unit]};
+}
+
+WebGLSampler WebGL2RenderingContext::boundSampler(GLuint unit) const {
+    if (unit < 32) return {sSampler_[unit]};
+    return {0};
+}
 
 std::string WebGL2RenderingContext::getParameterString(GLenum pname) {
     if (pname == GL_VERSION) return "WebGL 2.0 (Vulkan Native)";
@@ -336,6 +476,10 @@ std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
         "EXT_float_blend",
         "OES_texture_float_linear",
         "EXT_texture_filter_anisotropic",
+        "EXT_texture_compression_rgtc",
+        "EXT_texture_compression_bptc",
+        "WEBGL_compressed_texture_s3tc",
+        "BRO_buffer_map",
     };
 }
 

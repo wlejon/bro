@@ -33,33 +33,83 @@ void WebGLVkContext::beginRendering() {
 
     if (currentFboId_ != 0) {
         auto itFbo = framebuffers_.find(currentFboId_);
-        if (itFbo == framebuffers_.end() || itFbo->second.colorAttachmentTex == 0) return;
-        auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
-        if (itTex == textures_.end() || !itTex->second.isValid()) return;
+        if (itFbo == framebuffers_.end()) return;
+        VkFramebufferResource& fbo = itFbo->second;
 
-        VkTextureResource& colorTex = itTex->second;
-        if (colorTex.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-            context_.transitionImageLayout(colorTex.image, colorTex.format,
-                                           colorTex.currentLayout,
-                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                           currentCmd_);
-            colorTex.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        std::vector<VkRenderingAttachmentInfoKHR> colorAttachments;
+        uint32_t fboWidth = 0;
+        uint32_t fboHeight = 0;
+
+        for (GLenum db : fbo.drawBuffers) {
+            GLuint texId = 0;
+            if (db >= 0x8CE0 && db <= 0x8CE7) {
+                uint32_t idx = db - 0x8CE0;
+                if (idx < fbo.colorAttachments.size()) texId = fbo.colorAttachments[idx];
+                if (texId == 0 && idx == 0) texId = fbo.colorAttachmentTex;
+            }
+            if (texId != 0) {
+                auto itTex = textures_.find(texId);
+                if (itTex != textures_.end() && itTex->second.isValid()) {
+                    VkTextureResource& colorTex = itTex->second;
+                    fboWidth = colorTex.width;
+                    fboHeight = colorTex.height;
+                    if (colorTex.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                        context_.transitionImageLayout(colorTex.image, colorTex.format,
+                                                       colorTex.currentLayout,
+                                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                       currentCmd_);
+                        colorTex.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    }
+
+                    VkRenderingAttachmentInfoKHR colorAttachment{};
+                    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+                    colorAttachment.imageView = colorTex.view;
+                    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    colorAttachments.push_back(colorAttachment);
+                    continue;
+                }
+            }
+            VkRenderingAttachmentInfoKHR nullAtt{};
+            nullAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+            nullAtt.imageView = VK_NULL_HANDLE;
+            colorAttachments.push_back(nullAtt);
         }
 
-        VkRenderingAttachmentInfoKHR colorAttachment{};
-        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
-        colorAttachment.imageView = colorTex.view;
-        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        if (colorAttachments.empty()) {
+            GLuint singleTexId = (fbo.colorAttachments[0] != 0) ? fbo.colorAttachments[0] : fbo.colorAttachmentTex;
+            if (singleTexId != 0) {
+                auto itTex = textures_.find(singleTexId);
+                if (itTex != textures_.end() && itTex->second.isValid()) {
+                    VkTextureResource& colorTex = itTex->second;
+                    fboWidth = colorTex.width;
+                    fboHeight = colorTex.height;
+                    if (colorTex.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                        context_.transitionImageLayout(colorTex.image, colorTex.format,
+                                                       colorTex.currentLayout,
+                                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                       currentCmd_);
+                        colorTex.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    }
+                    VkRenderingAttachmentInfoKHR colorAttachment{};
+                    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+                    colorAttachment.imageView = colorTex.view;
+                    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    colorAttachments.push_back(colorAttachment);
+                }
+            }
+        }
 
         VkRenderingInfoKHR renderingInfo{};
         renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR;
         renderingInfo.renderArea.offset = {0, 0};
-        renderingInfo.renderArea.extent = {colorTex.width, colorTex.height};
+        renderingInfo.renderArea.extent = {fboWidth, fboHeight};
         renderingInfo.layerCount = 1;
-        renderingInfo.colorAttachmentCount = 1;
-        renderingInfo.pColorAttachments = &colorAttachment;
+        renderingInfo.colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size());
+        renderingInfo.pColorAttachments = colorAttachments.data();
         renderingInfo.pDepthAttachment = nullptr;
         renderingInfo.pStencilAttachment = nullptr;
 
@@ -121,15 +171,21 @@ void WebGLVkContext::endRendering() {
 
         if (currentFboId_ != 0) {
             auto itFbo = framebuffers_.find(currentFboId_);
-            if (itFbo != framebuffers_.end() && itFbo->second.colorAttachmentTex != 0) {
-                auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
-                if (itTex != textures_.end() && itTex->second.isValid()) {
-                    context_.transitionImageLayout(itTex->second.image, itTex->second.format,
-                                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                   currentCmd_);
-                    itTex->second.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                }
+            if (itFbo != framebuffers_.end()) {
+                auto transitionTex = [&](GLuint texId) {
+                    if (texId == 0) return;
+                    auto itTex = textures_.find(texId);
+                    if (itTex != textures_.end() && itTex->second.isValid() &&
+                        itTex->second.currentLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                        context_.transitionImageLayout(itTex->second.image, itTex->second.format,
+                                                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                       currentCmd_);
+                        itTex->second.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    }
+                };
+                for (GLuint tid : itFbo->second.colorAttachments) transitionTex(tid);
+                transitionTex(itFbo->second.colorAttachmentTex);
             }
         }
     }
@@ -189,6 +245,15 @@ void WebGLVkContext::clear(GLbitfield mask) {
         } else {
             clearRect.rect.offset = {0, 0};
             clearRect.rect.extent = {canvas_.width(), canvas_.height()};
+            if (currentFboId_ != 0) {
+                auto itFbo = framebuffers_.find(currentFboId_);
+                if (itFbo != framebuffers_.end() && itFbo->second.colorAttachmentTex != 0) {
+                    auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
+                    if (itTex != textures_.end() && itTex->second.isValid()) {
+                        clearRect.rect.extent = {itTex->second.width, itTex->second.height};
+                    }
+                }
+            }
         }
         clearRect.baseArrayLayer = 0;
         clearRect.layerCount = 1;
@@ -225,6 +290,23 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
     key.depthWriteEnable = depthMask_ ? VK_TRUE : VK_FALSE;
     key.depthCompareOp = glCompareOpToVk(depthFunc_);
 
+    key.stencilTestEnable = stencilTestEnabled_ ? VK_TRUE : VK_FALSE;
+    key.stencilFront.failOp = glStencilOpToVk(stencilFailFront_);
+    key.stencilFront.passOp = glStencilOpToVk(stencilPassDepthPassFront_);
+    key.stencilFront.depthFailOp = glStencilOpToVk(stencilPassDepthFailFront_);
+    key.stencilFront.compareOp = glCompareOpToVk(stencilFuncFront_);
+    key.stencilFront.compareMask = stencilValueMaskFront_;
+    key.stencilFront.writeMask = stencilWriteMaskFront_;
+    key.stencilFront.reference = stencilRefFront_;
+
+    key.stencilBack.failOp = glStencilOpToVk(stencilFailBack_);
+    key.stencilBack.passOp = glStencilOpToVk(stencilPassDepthPassBack_);
+    key.stencilBack.depthFailOp = glStencilOpToVk(stencilPassDepthFailBack_);
+    key.stencilBack.compareOp = glCompareOpToVk(stencilFuncBack_);
+    key.stencilBack.compareMask = stencilValueMaskBack_;
+    key.stencilBack.writeMask = stencilWriteMaskBack_;
+    key.stencilBack.reference = stencilRefBack_;
+
     key.blendEnable = blendEnabled_ ? VK_TRUE : VK_FALSE;
     key.srcColorBlendFactor = glBlendFactorToVk(blendSrcRGB_);
     key.dstColorBlendFactor = glBlendFactorToVk(blendDstRGB_);
@@ -243,19 +325,57 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
     VkFormat targetDepthFormat = canvas_.depthFormat();
     VkExtent2D targetExtent = {canvas_.width(), canvas_.height()};
 
+    key.colorAttachmentCount = 1;
+    key.colorAttachmentFormats[0] = targetColorFormat;
+
     if (currentFboId_ != 0) {
         auto itFbo = framebuffers_.find(currentFboId_);
-        if (itFbo != framebuffers_.end() && itFbo->second.colorAttachmentTex != 0) {
-            auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
-            if (itTex != textures_.end() && itTex->second.isValid()) {
-                targetColorFormat = itTex->second.format;
-                targetDepthFormat = VK_FORMAT_UNDEFINED;
-                targetExtent = {itTex->second.width, itTex->second.height};
+        if (itFbo != framebuffers_.end()) {
+            const VkFramebufferResource& fbo = itFbo->second;
+            uint32_t count = 0;
+            for (GLenum db : fbo.drawBuffers) {
+                GLuint texId = 0;
+                if (db >= 0x8CE0 && db <= 0x8CE7) {
+                    uint32_t idx = db - 0x8CE0;
+                    if (idx < fbo.colorAttachments.size()) texId = fbo.colorAttachments[idx];
+                    if (texId == 0 && idx == 0) texId = fbo.colorAttachmentTex;
+                }
+                VkFormat fmt = VK_FORMAT_UNDEFINED;
+                if (texId != 0) {
+                    auto itTex = textures_.find(texId);
+                    if (itTex != textures_.end() && itTex->second.isValid()) {
+                        fmt = itTex->second.format;
+                        targetExtent = {itTex->second.width, itTex->second.height};
+                    }
+                }
+                if (count < 8) {
+                    key.colorAttachmentFormats[count] = fmt;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                key.colorAttachmentCount = count;
+                key.colorAttachmentFormat = key.colorAttachmentFormats[0];
+            } else if (fbo.colorAttachmentTex != 0) {
+                auto itTex = textures_.find(fbo.colorAttachmentTex);
+                if (itTex != textures_.end() && itTex->second.isValid()) {
+                    targetColorFormat = itTex->second.format;
+                    targetExtent = {itTex->second.width, itTex->second.height};
+                    key.colorAttachmentFormats[0] = targetColorFormat;
+                    key.colorAttachmentFormat = targetColorFormat;
+                }
+            }
+            targetDepthFormat = VK_FORMAT_UNDEFINED;
+            if (fbo.depthAttachmentTex != 0) {
+                auto itD = textures_.find(fbo.depthAttachmentTex);
+                if (itD != textures_.end() && itD->second.isValid()) {
+                    targetDepthFormat = itD->second.format;
+                }
             }
         }
+    } else {
+        key.colorAttachmentFormat = targetColorFormat;
     }
-
-    key.colorAttachmentFormat = targetColorFormat;
     key.depthAttachmentFormat = targetDepthFormat;
 
     // Map vertex attributes and bindings from active VAO
@@ -264,16 +384,18 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
     std::vector<VkBuffer> boundVBOs;
     std::vector<VkDeviceSize> boundOffsets;
 
-    for (uint32_t i = 0; i < 16; ++i) {
+    for (const auto& aInfo : prog.activeAttribs) {
+        uint32_t i = static_cast<uint32_t>(aInfo.location);
+        if (i >= 16) continue;
         const VkVertexAttribute& attr = vao.attributes[i];
+        uint32_t bindingIdx = activeAttrCount;
+
         if (attr.enabled && attr.bufferId != 0) {
             auto bIt = buffers_.find(attr.bufferId);
             if (bIt != buffers_.end() && bIt->second.isValid()) {
-                uint32_t bindingIdx = activeAttrCount;
-
                 key.attributes[activeAttrCount].location = i;
                 key.attributes[activeAttrCount].binding = bindingIdx;
-                key.attributes[activeAttrCount].format = glTypeToVkFormat(attr.type, attr.size, attr.normalized);
+                key.attributes[activeAttrCount].format = glTypeToVkFormat(attr.type, attr.size, attr.normalized, attr.isInteger);
                 key.attributes[activeAttrCount].offset = 0;
 
                 key.bindings[activeAttrCount].binding = bindingIdx;
@@ -286,6 +408,25 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
                 boundOffsets.push_back(attr.offset);
                 activeAttrCount++;
             }
+        } else if (fallbackConstantBuffer_ != VK_NULL_HANDLE) {
+            bool isInt = (aInfo.type == GL_INT || aInfo.type == GL_UNSIGNED_INT ||
+                          aInfo.type == GL_INT_VEC2 || aInfo.type == GL_UNSIGNED_INT_VEC2 ||
+                          aInfo.type == GL_INT_VEC3 || aInfo.type == GL_UNSIGNED_INT_VEC3 ||
+                          aInfo.type == GL_INT_VEC4 || aInfo.type == GL_UNSIGNED_INT_VEC4);
+            key.attributes[activeAttrCount].location = i;
+            key.attributes[activeAttrCount].binding = bindingIdx;
+            key.attributes[activeAttrCount].format = isInt
+                ? VK_FORMAT_R32G32B32A32_UINT
+                : VK_FORMAT_R32G32B32A32_SFLOAT;
+            key.attributes[activeAttrCount].offset = 0;
+
+            key.bindings[activeAttrCount].binding = bindingIdx;
+            key.bindings[activeAttrCount].stride = 0;
+            key.bindings[activeAttrCount].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            boundVBOs.push_back(fallbackConstantBuffer_);
+            boundOffsets.push_back(i * 16);
+            activeAttrCount++;
         }
     }
     key.attributeCount = activeAttrCount;
@@ -302,7 +443,7 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
     // Negative viewport height for OpenGL NDC compatibility
     VkViewport vp{};
     vp.x = viewport_.x;
-    vp.y = viewport_.y + viewport_.height;
+    vp.y = static_cast<float>(targetExtent.height) - viewport_.y;
     vp.width = viewport_.width;
     vp.height = -viewport_.height;
     vp.minDepth = 0.0f;
@@ -311,7 +452,9 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
 
     VkRect2D sc{};
     if (scissorTest_) {
-        sc = scissor_;
+        sc.offset.x = scissor_.offset.x;
+        sc.offset.y = static_cast<int32_t>(targetExtent.height) - (scissor_.offset.y + static_cast<int32_t>(scissor_.extent.height));
+        sc.extent = scissor_.extent;
     } else {
         sc.offset = {0, 0};
         sc.extent = targetExtent;
@@ -331,7 +474,21 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
             if (sIt != prog.samplerBindings.end()) {
                 texUnit = sIt->second;
             }
-            GLuint texId = (texUnit < boundTextures2D_.size()) ? boundTextures2D_[texUnit] : 0;
+            GLenum sampType = GL_SAMPLER_2D;
+            auto typeIt = prog.samplerTypes.find(binding);
+            if (typeIt != prog.samplerTypes.end()) {
+                sampType = typeIt->second;
+            }
+            GLuint texId = 0;
+            if (sampType == GL_SAMPLER_CUBE || sampType == 0x8DC5) {
+                if (texUnit < boundTexturesCubeMap_.size()) texId = boundTexturesCubeMap_[texUnit];
+            } else if (sampType == 0x8DC1 || sampType == 0x8DC4) {
+                if (texUnit < boundTextures2DArray_.size()) texId = boundTextures2DArray_[texUnit];
+            } else if (sampType == 0x8B5F) {
+                if (texUnit < boundTextures3D_.size()) texId = boundTextures3D_[texUnit];
+            } else {
+                if (texUnit < boundTextures2D_.size()) texId = boundTextures2D_[texUnit];
+            }
             VkImageView view = dummyView_;
             VkSampler sampler = dummySampler_;
 
@@ -341,6 +498,14 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
                     updateTextureSampler(tIt->second);
                     view = tIt->second.view;
                     sampler = tIt->second.sampler;
+                }
+            }
+
+            if (texUnit < boundSamplers_.size() && boundSamplers_[texUnit] != 0) {
+                auto smpIt = samplers_.find(boundSamplers_[texUnit]);
+                if (smpIt != samplers_.end()) {
+                    updateSamplerObject(smpIt->second);
+                    sampler = smpIt->second.sampler;
                 }
             }
 
@@ -358,6 +523,49 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.descriptorCount = 1;
             write.pImageInfo = &imageInfos.back();
+            writes.push_back(write);
+        }
+
+        std::vector<VkDescriptorBufferInfo> bufferInfos;
+        bufferInfos.reserve(8);
+        for (uint32_t binding = 8; binding < 16; ++binding) {
+            VkDescriptorBufferInfo bufInfo{};
+            bufInfo.buffer = dummyUniformBuffer_;
+            bufInfo.offset = 0;
+            bufInfo.range = 256;
+
+            for (const auto& ub : prog.uniformBlocks) {
+                if (ub.descriptorBinding == binding) {
+                    GLuint blockIdx = ub.index;
+                    GLuint bindingPoint = ub.binding;
+                    auto itBind = prog.uniformBlockBindings.find(blockIdx);
+                    if (itBind != prog.uniformBlockBindings.end()) {
+                        bindingPoint = itBind->second;
+                    }
+                    if (bindingPoint < boundUniformBuffers_.size()) {
+                        GLuint bufId = boundUniformBuffers_[bindingPoint];
+                        if (bufId != 0) {
+                            auto bIt = buffers_.find(bufId);
+                            if (bIt != buffers_.end() && bIt->second.buffer != VK_NULL_HANDLE) {
+                                bufInfo.buffer = bIt->second.buffer;
+                                bufInfo.offset = 0;
+                                bufInfo.range = (bIt->second.size > 0) ? bIt->second.size : 256;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            bufferInfos.push_back(bufInfo);
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = prog.descriptorSet;
+            write.dstBinding = binding;
+            write.dstArrayElement = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            write.descriptorCount = 1;
+            write.pBufferInfo = &bufferInfos.back();
             writes.push_back(write);
         }
 
@@ -417,6 +625,23 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     key.depthWriteEnable = depthMask_ ? VK_TRUE : VK_FALSE;
     key.depthCompareOp = glCompareOpToVk(depthFunc_);
 
+    key.stencilTestEnable = stencilTestEnabled_ ? VK_TRUE : VK_FALSE;
+    key.stencilFront.failOp = glStencilOpToVk(stencilFailFront_);
+    key.stencilFront.passOp = glStencilOpToVk(stencilPassDepthPassFront_);
+    key.stencilFront.depthFailOp = glStencilOpToVk(stencilPassDepthFailFront_);
+    key.stencilFront.compareOp = glCompareOpToVk(stencilFuncFront_);
+    key.stencilFront.compareMask = stencilValueMaskFront_;
+    key.stencilFront.writeMask = stencilWriteMaskFront_;
+    key.stencilFront.reference = stencilRefFront_;
+
+    key.stencilBack.failOp = glStencilOpToVk(stencilFailBack_);
+    key.stencilBack.passOp = glStencilOpToVk(stencilPassDepthPassBack_);
+    key.stencilBack.depthFailOp = glStencilOpToVk(stencilPassDepthFailBack_);
+    key.stencilBack.compareOp = glCompareOpToVk(stencilFuncBack_);
+    key.stencilBack.compareMask = stencilValueMaskBack_;
+    key.stencilBack.writeMask = stencilWriteMaskBack_;
+    key.stencilBack.reference = stencilRefBack_;
+
     key.blendEnable = blendEnabled_ ? VK_TRUE : VK_FALSE;
     key.srcColorBlendFactor = glBlendFactorToVk(blendSrcRGB_);
     key.dstColorBlendFactor = glBlendFactorToVk(blendDstRGB_);
@@ -435,19 +660,57 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     VkFormat targetDepthFormat = canvas_.depthFormat();
     VkExtent2D targetExtent = {canvas_.width(), canvas_.height()};
 
+    key.colorAttachmentCount = 1;
+    key.colorAttachmentFormats[0] = targetColorFormat;
+
     if (currentFboId_ != 0) {
         auto itFbo = framebuffers_.find(currentFboId_);
-        if (itFbo != framebuffers_.end() && itFbo->second.colorAttachmentTex != 0) {
-            auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
-            if (itTex != textures_.end() && itTex->second.isValid()) {
-                targetColorFormat = itTex->second.format;
-                targetDepthFormat = VK_FORMAT_UNDEFINED;
-                targetExtent = {itTex->second.width, itTex->second.height};
+        if (itFbo != framebuffers_.end()) {
+            const VkFramebufferResource& fbo = itFbo->second;
+            uint32_t count = 0;
+            for (GLenum db : fbo.drawBuffers) {
+                GLuint texId = 0;
+                if (db >= 0x8CE0 && db <= 0x8CE7) {
+                    uint32_t idx = db - 0x8CE0;
+                    if (idx < fbo.colorAttachments.size()) texId = fbo.colorAttachments[idx];
+                    if (texId == 0 && idx == 0) texId = fbo.colorAttachmentTex;
+                }
+                VkFormat fmt = VK_FORMAT_UNDEFINED;
+                if (texId != 0) {
+                    auto itTex = textures_.find(texId);
+                    if (itTex != textures_.end() && itTex->second.isValid()) {
+                        fmt = itTex->second.format;
+                        targetExtent = {itTex->second.width, itTex->second.height};
+                    }
+                }
+                if (count < 8) {
+                    key.colorAttachmentFormats[count] = fmt;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                key.colorAttachmentCount = count;
+                key.colorAttachmentFormat = key.colorAttachmentFormats[0];
+            } else if (fbo.colorAttachmentTex != 0) {
+                auto itTex = textures_.find(fbo.colorAttachmentTex);
+                if (itTex != textures_.end() && itTex->second.isValid()) {
+                    targetColorFormat = itTex->second.format;
+                    targetExtent = {itTex->second.width, itTex->second.height};
+                    key.colorAttachmentFormats[0] = targetColorFormat;
+                    key.colorAttachmentFormat = targetColorFormat;
+                }
+            }
+            targetDepthFormat = VK_FORMAT_UNDEFINED;
+            if (fbo.depthAttachmentTex != 0) {
+                auto itD = textures_.find(fbo.depthAttachmentTex);
+                if (itD != textures_.end() && itD->second.isValid()) {
+                    targetDepthFormat = itD->second.format;
+                }
             }
         }
+    } else {
+        key.colorAttachmentFormat = targetColorFormat;
     }
-
-    key.colorAttachmentFormat = targetColorFormat;
     key.depthAttachmentFormat = targetDepthFormat;
 
     VkVAOResource& vao = vaos_[currentVaoId_];
@@ -455,16 +718,18 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     std::vector<VkBuffer> boundVBOs;
     std::vector<VkDeviceSize> boundOffsets;
 
-    for (uint32_t i = 0; i < 16; ++i) {
+    for (const auto& aInfo : prog.activeAttribs) {
+        uint32_t i = static_cast<uint32_t>(aInfo.location);
+        if (i >= 16) continue;
         const VkVertexAttribute& attr = vao.attributes[i];
+        uint32_t bindingIdx = activeAttrCount;
+
         if (attr.enabled && attr.bufferId != 0) {
             auto bIt = buffers_.find(attr.bufferId);
             if (bIt != buffers_.end() && bIt->second.isValid()) {
-                uint32_t bindingIdx = activeAttrCount;
-
                 key.attributes[activeAttrCount].location = i;
                 key.attributes[activeAttrCount].binding = bindingIdx;
-                key.attributes[activeAttrCount].format = glTypeToVkFormat(attr.type, attr.size, attr.normalized);
+                key.attributes[activeAttrCount].format = glTypeToVkFormat(attr.type, attr.size, attr.normalized, attr.isInteger);
                 key.attributes[activeAttrCount].offset = 0;
 
                 key.bindings[activeAttrCount].binding = bindingIdx;
@@ -477,6 +742,25 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
                 boundOffsets.push_back(attr.offset);
                 activeAttrCount++;
             }
+        } else if (fallbackConstantBuffer_ != VK_NULL_HANDLE) {
+            bool isInt = (aInfo.type == GL_INT || aInfo.type == GL_UNSIGNED_INT ||
+                          aInfo.type == GL_INT_VEC2 || aInfo.type == GL_UNSIGNED_INT_VEC2 ||
+                          aInfo.type == GL_INT_VEC3 || aInfo.type == GL_UNSIGNED_INT_VEC3 ||
+                          aInfo.type == GL_INT_VEC4 || aInfo.type == GL_UNSIGNED_INT_VEC4);
+            key.attributes[activeAttrCount].location = i;
+            key.attributes[activeAttrCount].binding = bindingIdx;
+            key.attributes[activeAttrCount].format = isInt
+                ? VK_FORMAT_R32G32B32A32_UINT
+                : VK_FORMAT_R32G32B32A32_SFLOAT;
+            key.attributes[activeAttrCount].offset = 0;
+
+            key.bindings[activeAttrCount].binding = bindingIdx;
+            key.bindings[activeAttrCount].stride = 0;
+            key.bindings[activeAttrCount].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+            boundVBOs.push_back(fallbackConstantBuffer_);
+            boundOffsets.push_back(i * 16);
+            activeAttrCount++;
         }
     }
     key.attributeCount = activeAttrCount;
@@ -492,7 +776,7 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
 
     VkViewport vp{};
     vp.x = viewport_.x;
-    vp.y = viewport_.y + viewport_.height;
+    vp.y = static_cast<float>(targetExtent.height) - viewport_.y;
     vp.width = viewport_.width;
     vp.height = -viewport_.height;
     vp.minDepth = 0.0f;
@@ -501,7 +785,9 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
 
     VkRect2D sc{};
     if (scissorTest_) {
-        sc = scissor_;
+        sc.offset.x = scissor_.offset.x;
+        sc.offset.y = static_cast<int32_t>(targetExtent.height) - (scissor_.offset.y + static_cast<int32_t>(scissor_.extent.height));
+        sc.extent = scissor_.extent;
     } else {
         sc.offset = {0, 0};
         sc.extent = targetExtent;
@@ -521,7 +807,21 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
             if (sIt != prog.samplerBindings.end()) {
                 texUnit = sIt->second;
             }
-            GLuint texId = (texUnit < boundTextures2D_.size()) ? boundTextures2D_[texUnit] : 0;
+            GLenum sampType = GL_SAMPLER_2D;
+            auto typeIt = prog.samplerTypes.find(binding);
+            if (typeIt != prog.samplerTypes.end()) {
+                sampType = typeIt->second;
+            }
+            GLuint texId = 0;
+            if (sampType == GL_SAMPLER_CUBE || sampType == 0x8DC5) {
+                if (texUnit < boundTexturesCubeMap_.size()) texId = boundTexturesCubeMap_[texUnit];
+            } else if (sampType == 0x8DC1 || sampType == 0x8DC4) {
+                if (texUnit < boundTextures2DArray_.size()) texId = boundTextures2DArray_[texUnit];
+            } else if (sampType == 0x8B5F) {
+                if (texUnit < boundTextures3D_.size()) texId = boundTextures3D_[texUnit];
+            } else {
+                if (texUnit < boundTextures2D_.size()) texId = boundTextures2D_[texUnit];
+            }
             VkImageView view = dummyView_;
             VkSampler sampler = dummySampler_;
 
@@ -531,6 +831,14 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
                     updateTextureSampler(tIt->second);
                     view = tIt->second.view;
                     sampler = tIt->second.sampler;
+                }
+            }
+
+            if (texUnit < boundSamplers_.size() && boundSamplers_[texUnit] != 0) {
+                auto smpIt = samplers_.find(boundSamplers_[texUnit]);
+                if (smpIt != samplers_.end()) {
+                    updateSamplerObject(smpIt->second);
+                    sampler = smpIt->second.sampler;
                 }
             }
 
@@ -551,6 +859,49 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
             writes.push_back(write);
         }
 
+        std::vector<VkDescriptorBufferInfo> bufferInfos;
+        bufferInfos.reserve(8);
+        for (uint32_t binding = 8; binding < 16; ++binding) {
+            VkDescriptorBufferInfo bufInfo{};
+            bufInfo.buffer = dummyUniformBuffer_;
+            bufInfo.offset = 0;
+            bufInfo.range = 256;
+
+            for (const auto& ub : prog.uniformBlocks) {
+                if (ub.descriptorBinding == binding) {
+                    GLuint blockIdx = ub.index;
+                    GLuint bindingPoint = ub.binding;
+                    auto itBind = prog.uniformBlockBindings.find(blockIdx);
+                    if (itBind != prog.uniformBlockBindings.end()) {
+                        bindingPoint = itBind->second;
+                    }
+                    if (bindingPoint < boundUniformBuffers_.size()) {
+                        GLuint bufId = boundUniformBuffers_[bindingPoint];
+                        if (bufId != 0) {
+                            auto bIt = buffers_.find(bufId);
+                            if (bIt != buffers_.end() && bIt->second.buffer != VK_NULL_HANDLE) {
+                                bufInfo.buffer = bIt->second.buffer;
+                                bufInfo.offset = 0;
+                                bufInfo.range = (bIt->second.size > 0) ? bIt->second.size : 256;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            bufferInfos.push_back(bufInfo);
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = prog.descriptorSet;
+            write.dstBinding = binding;
+            write.dstArrayElement = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            write.descriptorCount = 1;
+            write.pBufferInfo = &bufferInfos.back();
+            writes.push_back(write);
+        }
+
         vkUpdateDescriptorSets(context_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         vkCmdBindDescriptorSets(currentCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
                                 0, 1, &prog.descriptorSet, 0, nullptr);
@@ -567,8 +918,28 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
         vkCmdBindVertexBuffers(currentCmd_, b, 1, &boundVBOs[b], &boundOffsets[b]);
     }
 
-    VkIndexType idxType = (type == GL_UNSIGNED_SHORT) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-    vkCmdBindIndexBuffer(currentCmd_, iboIt->second.buffer, offset, idxType);
+    VkBuffer indexBuf = iboIt->second.buffer;
+    VkDeviceSize indexOffset = offset;
+    VkIndexType idxType;
+
+    if (type == GL_UNSIGNED_BYTE) {
+        const auto& shadow = iboIt->second.shadowData;
+        if (offset + count > shadow.size()) return;
+        std::vector<uint16_t> expanded(count);
+        for (GLsizei i = 0; i < count; ++i) {
+            expanded[i] = static_cast<uint16_t>(shadow[offset + i]);
+        }
+        uploadScratchIndexBuffer(expanded.data(), count * sizeof(uint16_t));
+        indexBuf = scratchIndexBuffer_;
+        indexOffset = 0;
+        idxType = VK_INDEX_TYPE_UINT16;
+    } else {
+        idxType = (type == GL_UNSIGNED_SHORT) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+    }
+
+    if (indexBuf == VK_NULL_HANDLE) return;
+
+    vkCmdBindIndexBuffer(currentCmd_, indexBuf, indexOffset, idxType);
 
     vkCmdDrawIndexed(currentCmd_, static_cast<uint32_t>(count), static_cast<uint32_t>(instanceCount), 0, 0, 0);
 }

@@ -14,247 +14,51 @@ namespace {
 
 std::mutex s_compilerMutex;
 
-uint32_t alignTo(uint32_t offset, uint32_t alignment) {
-    return (offset + alignment - 1) & ~(alignment - 1);
-}
-
-std::pair<uint32_t, uint32_t> getUniformSizeAndAlign(const std::string& type) {
-    if (type == "float" || type == "int" || type == "uint" || type == "bool") {
-        return {4, 4};
-    } else if (type == "vec2" || type == "ivec2" || type == "uvec2" || type == "bvec2") {
-        return {8, 8};
-    } else if (type == "vec3" || type == "ivec3" || type == "uvec3" || type == "bvec3") {
-        return {12, 16};
-    } else if (type == "vec4" || type == "ivec4" || type == "uvec4" || type == "bvec4") {
-        return {16, 16};
-    } else if (type == "mat2") {
-        return {32, 16}; // 2 vec4s in std140
-    } else if (type == "mat3") {
-        return {48, 16}; // 3 vec4s in std140
-    } else if (type == "mat4") {
-        return {64, 16}; // 4 vec4s in std140
-    }
-    return {16, 16};
-}
-
-GLenum typeStringToGLenum(const std::string& type) {
-    if (type == "float") return GL_FLOAT;
-    if (type == "vec2") return GL_FLOAT_VEC2;
-    if (type == "vec3") return GL_FLOAT_VEC3;
-    if (type == "vec4") return GL_FLOAT_VEC4;
-    if (type == "int") return GL_INT;
-    if (type == "ivec2") return GL_INT_VEC2;
-    if (type == "ivec3") return GL_INT_VEC3;
-    if (type == "ivec4") return GL_INT_VEC4;
-    if (type == "bool") return GL_BOOL;
-    if (type == "mat2") return GL_FLOAT_MAT2;
-    if (type == "mat3") return GL_FLOAT_MAT3;
-    if (type == "mat4") return GL_FLOAT_MAT4;
-    if (type == "sampler2D") return GL_SAMPLER_2D;
-    if (type == "samplerCube") return GL_SAMPLER_CUBE;
-    return GL_FLOAT;
-}
-
 } // namespace
 
 std::unordered_map<std::string, std::vector<uint32_t>> WebGLVkShaderCompiler::s_spirvCache;
 
 TranslatedShader WebGLVkShaderCompiler::translateToVulkanGLSL(const std::string& glslSource, GLenum shaderType) {
+    ParsedShader parsed = WebGLVkShaderParser::parse(glslSource, shaderType);
     TranslatedShader result;
-    std::istringstream input(glslSource);
-    std::ostringstream output;
-    std::string line;
+    result.source = WebGLVkShaderParser::generateStandaloneVulkanGLSL(parsed);
 
-    bool isVertex = (shaderType == GL_VERTEX_SHADER);
-    bool hasVersion = (glslSource.find("#version") != std::string::npos);
-
-    // Prepend Vulkan GLSL #version 450
-    output << "#version 450\n";
-
-    if (!isVertex) {
-        output << "#define texture2D texture\n";
-        output << "#define textureCube texture\n";
+    int nextLoc = 0;
+    for (const auto& attr : parsed.attributes) {
+        int loc = (attr.location >= 0) ? attr.location : nextLoc;
+        nextLoc = std::max(nextLoc, loc + 1);
+        result.attributeLocations[attr.name] = loc;
     }
-
-    uint32_t nextAttrLoc = 0;
-    uint32_t nextVaryingLoc = 0;
-    uint32_t nextSamplerBinding = 0;
-
-    std::vector<std::string> pushConstantMembers;
+    int nextBinding = 0;
+    for (const auto& s : parsed.samplers) {
+        result.samplerBindings[s.name] = nextBinding++;
+    }
     uint32_t currentOffset = 0;
-    int nextUniformLoc = 0;
-
-    bool hasFragColorOut = false;
-
-    while (std::getline(input, line)) {
-        // Strip #version line if present in source
-        if (line.find("#version") != std::string::npos) {
-            continue;
-        }
-
-        // Strip standalone precision statements
-        {
-            auto trimmed = line;
-            auto pos = trimmed.find_first_not_of(" \t");
-            if (pos != std::string::npos) trimmed = trimmed.substr(pos);
-            if (trimmed.rfind("precision ", 0) == 0 && trimmed.find(';') != std::string::npos) {
-                continue;
-            }
-        }
-
-        // Strip inline precision qualifiers: highp, mediump, lowp
-        {
-            std::string stripped;
-            stripped.reserve(line.size());
-            size_t i = 0;
-            while (i < line.size()) {
-                bool replaced = false;
-                for (const char* q : {"highp ", "mediump ", "lowp "}) {
-                    size_t len = strlen(q);
-                    if (line.compare(i, len, q) == 0) {
-                        if (i == 0 || line[i-1] == ' ' || line[i-1] == '\t' ||
-                            line[i-1] == '(' || line[i-1] == ',') {
-                            i += len;
-                            replaced = true;
-                            break;
-                        }
-                    }
-                }
-                if (!replaced) {
-                    stripped += line[i++];
-                }
-            }
-            line = stripped;
-        }
-
-        // Check for attributes / inputs: attribute / in
-        std::regex attrRegex(R"(^\s*(?:attribute|in)\s+(\w+)\s+(\w+)\s*;)");
-        std::smatch match;
-        if (isVertex && std::regex_search(line, match, attrRegex)) {
-            std::string type = match[1].str();
-            std::string name = match[2].str();
-            uint32_t loc = nextAttrLoc++;
-            result.attributeLocations[name] = loc;
-            output << "layout(location = " << loc << ") in " << type << " " << name << ";\n";
-            continue;
-        }
-
-        // Check for varyings
-        std::regex varyingRegex(R"(^\s*varying\s+(\w+)\s+(\w+)\s*;)");
-        if (std::regex_search(line, match, varyingRegex)) {
-            std::string type = match[1].str();
-            std::string name = match[2].str();
-            uint32_t loc = nextVaryingLoc++;
-            if (isVertex) {
-                output << "layout(location = " << loc << ") out " << type << " " << name << ";\n";
-            } else {
-                output << "layout(location = " << loc << ") in " << type << " " << name << ";\n";
-            }
-            continue;
-        }
-
-        // Check for WebGL2 vertex out or fragment in: out/in without layout
-        if (isVertex) {
-            std::regex outRegex(R"(^\s*out\s+(\w+)\s+(\w+)\s*;)");
-            if (std::regex_search(line, match, outRegex)) {
-                std::string type = match[1].str();
-                std::string name = match[2].str();
-                uint32_t loc = nextVaryingLoc++;
-                output << "layout(location = " << loc << ") out " << type << " " << name << ";\n";
-                continue;
-            }
-        } else {
-            std::regex inRegex(R"(^\s*in\s+(\w+)\s+(\w+)\s*;)");
-            if (std::regex_search(line, match, inRegex)) {
-                std::string type = match[1].str();
-                std::string name = match[2].str();
-                uint32_t loc = nextVaryingLoc++;
-                output << "layout(location = " << loc << ") in " << type << " " << name << ";\n";
-                continue;
-            }
-
-            std::regex fragOutRegex(R"(^\s*out\s+(\w+)\s+(\w+)\s*;)");
-            if (std::regex_search(line, match, fragOutRegex)) {
-                std::string type = match[1].str();
-                std::string name = match[2].str();
-                output << "layout(location = 0) out " << type << " " << name << ";\n";
-                hasFragColorOut = true;
-                continue;
-            }
-        }
-
-        // Check for uniforms
-        std::regex uniformRegex(R"(^\s*uniform\s+(\w+)\s+(\w+)\s*;)");
-        if (std::regex_search(line, match, uniformRegex)) {
-            std::string type = match[1].str();
-            std::string name = match[2].str();
-
-            if (type == "sampler2D" || type == "samplerCube") {
-                uint32_t binding = nextSamplerBinding++;
-                result.samplerBindings[name] = binding;
-                output << "layout(binding = " << binding << ") uniform " << type << " " << name << ";\n";
-
-                VkUniformInfo uinfo;
-                uinfo.name = name;
-                uinfo.location = nextUniformLoc++;
-                uinfo.type = typeStringToGLenum(type);
-                uinfo.offset = 0;
-                uinfo.size = 0;
-                uinfo.count = 1;
-                result.uniforms.push_back(uinfo);
-            } else {
-                auto [size, align] = getUniformSizeAndAlign(type);
-                currentOffset = alignTo(currentOffset, align);
-
-                VkUniformInfo uinfo;
-                uinfo.name = name;
-                uinfo.location = nextUniformLoc++;
-                uinfo.type = typeStringToGLenum(type);
-                uinfo.offset = currentOffset;
-                uinfo.size = size;
-                uinfo.count = 1;
-                result.uniforms.push_back(uinfo);
-
-                pushConstantMembers.push_back("    " + type + " " + name + ";\n");
-                currentOffset += size;
-            }
-            continue;
-        }
-
-        output << line << "\n";
+    int nextUniLoc = 0;
+    for (const auto& u : parsed.uniforms) {
+        auto [baseSize, align] = WebGLVkShaderParser::getUniformSizeAndAlign(u.type);
+        uint32_t totalSize = u.isArray ? (u.arraySize * WebGLVkShaderParser::alignTo(baseSize, 16)) : baseSize;
+        currentOffset = WebGLVkShaderParser::alignTo(currentOffset, align);
+        VkUniformInfo info;
+        info.name = u.name + (u.isArray ? "[0]" : "");
+        info.location = nextUniLoc++;
+        info.type = WebGLVkShaderParser::typeStringToGLenum(u.type);
+        info.offset = currentOffset;
+        info.size = totalSize;
+        info.count = u.arraySize;
+        result.uniforms.push_back(info);
+        currentOffset += totalSize;
     }
-
-    if (!isVertex && !hasFragColorOut) {
-        // ES 1.00 gl_FragColor support
-        output << "layout(location = 0) out vec4 bro_FragColor;\n";
-        output << "#define gl_FragColor bro_FragColor\n";
-    }
-
-    // Insert Push Constants uniform block if any non-sampler uniforms exist
-    if (!pushConstantMembers.empty()) {
-        currentOffset = alignTo(currentOffset, 16);
-        result.pushConstantSize = currentOffset;
-
-        std::string uniformBlock = "layout(push_constant) uniform WebGLUniforms {\n";
-        for (const auto& member : pushConstantMembers) {
-            uniformBlock += member;
-        }
-        uniformBlock += "};\n";
-
-        // Insert uniform block right after #version
-        std::string fullSource = output.str();
-        size_t verPos = fullSource.find('\n');
-        if (verPos != std::string::npos) {
-            fullSource.insert(verPos + 1, uniformBlock);
-        } else {
-            fullSource = uniformBlock + fullSource;
-        }
-        result.source = fullSource;
-    } else {
-        result.source = output.str();
-    }
-
+    result.pushConstantSize = WebGLVkShaderParser::alignTo(currentOffset, 16);
     return result;
+}
+
+ProgramLinkResult WebGLVkShaderCompiler::linkShaders(const std::string& vsSource, const std::string& fsSource,
+                                                     const std::unordered_map<std::string, GLuint>& boundAttribs)
+{
+    ParsedShader vsParsed = WebGLVkShaderParser::parse(vsSource, GL_VERTEX_SHADER);
+    ParsedShader fsParsed = WebGLVkShaderParser::parse(fsSource, GL_FRAGMENT_SHADER);
+    return WebGLVkShaderParser::linkAndGenerateVulkanGLSL(vsParsed, fsParsed, boundAttribs);
 }
 
 std::vector<uint32_t> WebGLVkShaderCompiler::compileToSpirv(const std::string& source,

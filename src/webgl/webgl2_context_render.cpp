@@ -13,15 +13,20 @@ namespace bro::webgl {
 // ===========================================================================
 
 WebGLFramebuffer WebGL2RenderingContext::createFramebuffer() {
-    if (vkCtx_) return vkCtx_->createFramebuffer();
-    return {0};
+    WebGLFramebuffer fbo{0};
+    if (vkCtx_) fbo = vkCtx_->createFramebuffer();
+    return fbo;
 }
 
 void WebGL2RenderingContext::deleteFramebuffer(WebGLFramebuffer fbo) {
+    validFramebuffers_.erase(fbo.id);
+    if (sFBO_ == fbo.id) sFBO_ = 0;
     if (vkCtx_) vkCtx_->deleteFramebuffer(fbo);
 }
 
 void WebGL2RenderingContext::bindFramebuffer(GLenum target, WebGLFramebuffer fbo) {
+    if (fbo.id != 0) validFramebuffers_.insert(fbo.id);
+    sFBO_ = fbo.id;
     if (vkCtx_) vkCtx_->bindFramebuffer(target, fbo);
 }
 
@@ -30,8 +35,10 @@ void WebGL2RenderingContext::framebufferTexture2D(GLenum target, GLenum attachme
     if (vkCtx_) vkCtx_->framebufferTexture2D(target, attachment, textarget, tex, level);
 }
 
-void WebGL2RenderingContext::framebufferRenderbuffer(GLenum /*target*/, GLenum /*attachment*/,
-                                                      GLenum /*renderbuffertarget*/, WebGLRenderbuffer /*rbo*/) {}
+void WebGL2RenderingContext::framebufferRenderbuffer(GLenum target, GLenum attachment,
+                                                      GLenum renderbuffertarget, WebGLRenderbuffer rbo) {
+    if (vkCtx_) vkCtx_->framebufferRenderbuffer(target, attachment, renderbuffertarget, rbo);
+}
 
 GLenum WebGL2RenderingContext::checkFramebufferStatus(GLenum target) {
     if (vkCtx_) return vkCtx_->checkFramebufferStatus(target);
@@ -43,25 +50,49 @@ void WebGL2RenderingContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei
     if (vkCtx_) vkCtx_->readPixels(x, y, width, height, format, type, pixels);
 }
 
-void WebGL2RenderingContext::drawBuffers(GLsizei /*n*/, const GLenum* /*bufs*/) {}
-void WebGL2RenderingContext::readBuffer(GLenum /*src*/) {}
+void WebGL2RenderingContext::drawBuffers(GLsizei n, const GLenum* bufs) {
+    if (vkCtx_) vkCtx_->drawBuffers(n, bufs);
+}
+void WebGL2RenderingContext::readBuffer(GLenum src) {
+    if (vkCtx_) vkCtx_->readBuffer(src);
+}
 
-void WebGL2RenderingContext::blitFramebuffer(GLint /*srcX0*/, GLint /*srcY0*/, GLint /*srcX1*/, GLint /*srcY1*/,
-                                             GLint /*dstX0*/, GLint /*dstY0*/, GLint /*dstX1*/, GLint /*dstY1*/,
-                                             GLbitfield /*mask*/, GLenum /*filter*/) {}
+void WebGL2RenderingContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                                             GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                                             GLbitfield mask, GLenum filter) {
+    if (vkCtx_) vkCtx_->blitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
 
 // ===========================================================================
 // Renderbuffers
 // ===========================================================================
 
-WebGLRenderbuffer WebGL2RenderingContext::createRenderbuffer() { return {0}; }
-void WebGL2RenderingContext::deleteRenderbuffer(WebGLRenderbuffer /*rbo*/) {}
-void WebGL2RenderingContext::bindRenderbuffer(GLenum /*target*/, WebGLRenderbuffer /*rbo*/) {}
-void WebGL2RenderingContext::renderbufferStorage(GLenum /*target*/, GLenum /*internalformat*/,
-                                                 GLsizei /*width*/, GLsizei /*height*/) {}
-void WebGL2RenderingContext::renderbufferStorageMultisample(GLenum /*target*/, GLsizei /*samples*/,
-                                                            GLenum /*internalformat*/,
-                                                            GLsizei /*width*/, GLsizei /*height*/) {}
+WebGLRenderbuffer WebGL2RenderingContext::createRenderbuffer() {
+    WebGLRenderbuffer rbo{0};
+    if (vkCtx_) rbo = vkCtx_->createRenderbuffer();
+    else {
+        static GLuint s_nextRboId = 1;
+        rbo = {s_nextRboId++};
+    }
+    return rbo;
+}
+void WebGL2RenderingContext::deleteRenderbuffer(WebGLRenderbuffer rbo) {
+    validRenderbuffers_.erase(rbo.id);
+    if (vkCtx_) vkCtx_->deleteRenderbuffer(rbo);
+}
+void WebGL2RenderingContext::bindRenderbuffer(GLenum target, WebGLRenderbuffer rbo) {
+    if (rbo.id != 0) validRenderbuffers_.insert(rbo.id);
+    if (vkCtx_) vkCtx_->bindRenderbuffer(target, rbo);
+}
+void WebGL2RenderingContext::renderbufferStorage(GLenum target, GLenum internalformat,
+                                                 GLsizei width, GLsizei height) {
+    if (vkCtx_) vkCtx_->renderbufferStorage(target, internalformat, width, height);
+}
+void WebGL2RenderingContext::renderbufferStorageMultisample(GLenum target, GLsizei samples,
+                                                            GLenum internalformat,
+                                                            GLsizei width, GLsizei height) {
+    if (vkCtx_) vkCtx_->renderbufferStorageMultisample(target, samples, internalformat, width, height);
+}
 
 // ===========================================================================
 // Drawing
@@ -101,12 +132,72 @@ void WebGL2RenderingContext::finish() {
 // Sync
 // ===========================================================================
 
-WebGLSync WebGL2RenderingContext::fenceSync(GLenum /*condition*/, GLbitfield /*flags*/) { return {nullptr}; }
-void WebGL2RenderingContext::deleteSync(WebGLSync /*s*/) {}
-GLenum WebGL2RenderingContext::clientWaitSync(WebGLSync /*s*/, GLbitfield /*flags*/, double /*timeoutNs*/) { return 0x911A; /* GL_ALREADY_SIGNALED */ }
-void WebGL2RenderingContext::waitSync(WebGLSync /*s*/, GLbitfield /*flags*/, double /*timeoutNs*/) {}
-GLint WebGL2RenderingContext::getSyncParameter(WebGLSync /*s*/, GLenum /*pname*/) { return 0x9118; /* GL_SIGNALED */ }
-GLboolean WebGL2RenderingContext::isSync(WebGLSync /*s*/) { return GL_FALSE; }
+WebGLSync WebGL2RenderingContext::fenceSync(GLenum condition, GLbitfield flags) {
+    if (condition != 0x9117 /* GL_SYNC_GPU_COMMANDS_COMPLETE */ || flags != 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return {nullptr};
+    }
+    GLsync sync = reinterpret_cast<GLsync>(new uint64_t(1));
+    validSyncs_.insert(sync);
+    return {sync};
+}
+
+void WebGL2RenderingContext::deleteSync(WebGLSync s) {
+    if (!s.sync) return;
+    auto it = validSyncs_.find(s.sync);
+    if (it != validSyncs_.end()) {
+        validSyncs_.erase(it);
+        delete reinterpret_cast<uint64_t*>(s.sync);
+    }
+}
+
+GLenum WebGL2RenderingContext::clientWaitSync(WebGLSync s, GLbitfield flags, double timeoutNs) {
+    if (timeoutNs < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return 0x911D; /* GL_WAIT_FAILED */
+    }
+    if (timeoutNs > kMaxClientWaitTimeoutNs) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return 0x911D; /* GL_WAIT_FAILED */
+    }
+    if (!s.sync || validSyncs_.count(s.sync) == 0) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return 0x911D; /* GL_WAIT_FAILED */
+    }
+    if (flags & 0x00000001 /* GL_SYNC_FLUSH_COMMANDS_BIT */) {
+        flush();
+    }
+    return 0x911A; /* GL_ALREADY_SIGNALED */
+}
+
+void WebGL2RenderingContext::waitSync(WebGLSync s, GLbitfield flags, double timeoutNs) {
+    if (flags != 0 || (timeoutNs != -1.0 && static_cast<int64_t>(timeoutNs) != -1)) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    if (!s.sync || validSyncs_.count(s.sync) == 0) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+}
+
+GLint WebGL2RenderingContext::getSyncParameter(WebGLSync s, GLenum pname) {
+    if (!s.sync || validSyncs_.count(s.sync) == 0) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return 0;
+    }
+    switch (pname) {
+        case 0x9112: /* GL_OBJECT_TYPE */ return 0x9116; /* GL_SYNC_FENCE */
+        case 0x9113: /* GL_SYNC_CONDITION */ return 0x9117; /* GL_SYNC_GPU_COMMANDS_COMPLETE */
+        case 0x9115: /* GL_SYNC_FLAGS */ return 0;
+        case 0x9114: /* GL_SYNC_STATUS */ return 0x9119; /* GL_SIGNALED */
+        default: return 0;
+    }
+}
+
+GLboolean WebGL2RenderingContext::isSync(WebGLSync s) {
+    return (s.sync != nullptr && validSyncs_.count(s.sync) > 0) ? GL_TRUE : GL_FALSE;
+}
 
 void WebGL2RenderingContext::restoreState() {}
 

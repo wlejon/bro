@@ -72,11 +72,16 @@ public:
     bool createImage(uint32_t width, uint32_t height, VkFormat format,
                      VkImageTiling tiling, VkImageUsageFlags usage,
                      VkMemoryPropertyFlags properties,
-                     VkImage& image, VkDeviceMemory& imageMemory) const;
+                     VkImage& image, VkDeviceMemory& imageMemory,
+                     uint32_t mipLevels = 1, uint32_t arrayLayers = 1,
+                     VkImageCreateFlags flags = 0) const;
 
     void copyBufferToImage(VkBuffer buffer, VkImage image,
                            uint32_t width, uint32_t height,
-                           VkCommandBuffer cmd = VK_NULL_HANDLE) const;
+                           VkCommandBuffer cmd = VK_NULL_HANDLE,
+                           uint32_t mipLevel = 0,
+                           uint32_t baseArrayLayer = 0,
+                           uint32_t layerCount = 1) const;
 
     void copyImageToBuffer(VkImage image, VkBuffer buffer,
                            uint32_t width, uint32_t height,
@@ -84,7 +89,9 @@ public:
 
     void transitionImageLayout(VkImage image, VkFormat format,
                                VkImageLayout oldLayout, VkImageLayout newLayout,
-                               VkCommandBuffer cmd = VK_NULL_HANDLE) const;
+                               VkCommandBuffer cmd = VK_NULL_HANDLE,
+                               uint32_t mipLevels = 1, uint32_t baseMipLevel = 0,
+                               uint32_t layerCount = 1, uint32_t baseArrayLayer = 0) const;
 
     void waitIdle() const;
 
