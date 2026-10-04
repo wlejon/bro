@@ -185,24 +185,21 @@ Engine::Engine(const EngineConfig& config)
         }
 
         if (config.graphics.useGPU) {
-            try {
-                render::VulkanContextConfig vkCfg;
-                vkCfg.headless = true;
-                vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
-                if (vulkanContext_->init()) {
-                    vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_);
-                    vulkanPresenter_->init();
-                    webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
-#if BRO_WITH_3D
-                    scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
-#endif
-                    LOG_INFO("Engine: Headless Vulkan initialized successfully");
-                }
-            } catch (const std::exception& e) {
-                LOG_WARN("Headless Vulkan init failed (%s); continuing with CPU raster fallback", e.what());
-                vulkanContext_.reset();
-                vulkanPresenter_.reset();
+            render::VulkanContextConfig vkCfg;
+            vkCfg.headless = true;
+            vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
+            if (!vulkanContext_->init()) {
+                throw std::runtime_error("Headless Vulkan initialization failed (render::VulkanContext::init returned false)");
             }
+            vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_);
+            if (!vulkanPresenter_->init()) {
+                throw std::runtime_error("Headless VulkanPresenter initialization failed (render::VulkanPresenter::init returned false)");
+            }
+            webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
+#if BRO_WITH_3D
+            scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
+#endif
+            LOG_INFO("Engine: Headless Vulkan initialized successfully");
         }
         if (vulkanPresenter_) {
             renderer_ = std::make_unique<render::SkiaRenderer>();
@@ -247,26 +244,28 @@ Engine::Engine(const EngineConfig& config)
                 throw std::runtime_error("Failed to create renderer");
             }
 
-            try {
+            if (config.graphics.useGPU) {
                 render::VulkanContextConfig vkCfg;
                 vkCfg.headless = false;
                 vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
-                if (vulkanContext_->init() && window_->getSDLWindow()) {
-                    vulkanSwapchain_ = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, window_->getSDLWindow(), gfx.vsync);
-                    if (vulkanSwapchain_->init()) {
-                        vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_, *vulkanSwapchain_);
-                        vulkanPresenter_->init();
-                        window_->setSwapCallback([this]() {
-                            presentCurrentFrame();
-                        });
-                        webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
-#if BRO_WITH_3D
-                        scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
-#endif
-                    }
+                if (!vulkanContext_->init() || !window_->getSDLWindow()) {
+                    throw std::runtime_error("Windowed Vulkan context initialization failed");
                 }
-            } catch (const std::exception& vkErr) {
-                LOG_WARN("Windowed Vulkan init failed (%s)", vkErr.what());
+                vulkanSwapchain_ = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, window_->getSDLWindow(), gfx.vsync);
+                if (!vulkanSwapchain_->init()) {
+                    throw std::runtime_error("Windowed Vulkan swapchain initialization failed");
+                }
+                vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_, *vulkanSwapchain_);
+                if (!vulkanPresenter_->init()) {
+                    throw std::runtime_error("Windowed Vulkan presenter initialization failed");
+                }
+                window_->setSwapCallback([this]() {
+                    presentCurrentFrame();
+                });
+                webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
+#if BRO_WITH_3D
+                scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
+#endif
             }
         } catch (const std::exception& e) {
             throw;

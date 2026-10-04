@@ -97,14 +97,20 @@ SceneVkBridge::CachedMeshBuffer& SceneVkBridge::uploadMesh(const bromesh::MeshDa
         }
     }
 
-    allocator_.createVertexBuffer(vc * sizeof(PackedVertex), vertices.data(), entry.vertexBuffer);
+    if (!allocator_.createVertexBuffer(vc * sizeof(PackedVertex), vertices.data(), entry.vertexBuffer)) {
+        LOG_ERROR("SceneVkBridge: Failed to allocate vertex buffer for mesh (%zu vertices)", vc);
+    }
 
+    bool idxOk = false;
     if (!mesh.indices.empty()) {
-        allocator_.createIndexBuffer(mesh.indices.size() * sizeof(uint32_t), mesh.indices.data(), entry.indexBuffer);
+        idxOk = allocator_.createIndexBuffer(mesh.indices.size() * sizeof(uint32_t), mesh.indices.data(), entry.indexBuffer);
     } else {
         std::vector<uint32_t> seq(vc);
         for (uint32_t i = 0; i < vc; ++i) seq[i] = i;
-        allocator_.createIndexBuffer(seq.size() * sizeof(uint32_t), seq.data(), entry.indexBuffer);
+        idxOk = allocator_.createIndexBuffer(seq.size() * sizeof(uint32_t), seq.data(), entry.indexBuffer);
+    }
+    if (!idxOk) {
+        LOG_ERROR("SceneVkBridge: Failed to allocate index buffer for mesh (%zu indices)", ic);
     }
 
     entry.vertexCount = vc;
@@ -148,6 +154,7 @@ VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int hei
     desc.format = VK_FORMAT_R8G8B8A8_UNORM;
     desc.generateMipmaps = true;
     if (!allocator_.createTexture2D(rgba, desc, tex.image)) {
+        LOG_ERROR("SceneVkBridge: Failed to allocate 2D texture (%dx%d)", width, height);
         return VK_NULL_HANDLE;
     }
     tex.width = width;
@@ -156,7 +163,10 @@ VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int hei
     noteTextureUpload(static_cast<size_t>(width) * height * 4);
 
     tex.descSet = dynamicDescPool_.allocate(passMesh_.materialLayout());
-    if (!tex.descSet) return VK_NULL_HANDLE;
+    if (!tex.descSet) {
+        LOG_ERROR("SceneVkBridge: Failed to allocate descriptor set for texture (%dx%d)", width, height);
+        return VK_NULL_HANDLE;
+    }
 
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, tex.image.view, tex.image.sampler);
@@ -196,7 +206,10 @@ VkDescriptorSet SceneVkBridge::uploadExternalSceneTexture(SceneVkBridge* srcBrid
     if (tex.descSet == VK_NULL_HANDLE) {
         tex.descSet = dynamicDescPool_.allocate(passMesh_.materialLayout());
     }
-    if (!tex.descSet) return VK_NULL_HANDLE;
+    if (!tex.descSet) {
+        LOG_ERROR("SceneVkBridge: Failed to allocate descriptor set for external scene texture");
+        return VK_NULL_HANDLE;
+    }
 
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, srcBridge->ldrPresentationImage_.view, srcBridge->ldrPresentationImage_.sampler);

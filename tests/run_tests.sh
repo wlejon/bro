@@ -259,7 +259,7 @@ else
     if [[ "${BRO_TEST_ALLOW_RASTER:-0}" != "1" ]]; then
         echo "ERROR: Vulkan initialization failed or no Vulkan device found."
         echo "       Vulkan is required for tests. To allow CPU raster fallback, set BRO_TEST_ALLOW_RASTER=1."
-        echo "$VK_PROBE_OUTPUT" | grep -iE "Vulkan|SDL|failed|error" | head -10 | sed 's/^/       /'
+        echo "$VK_PROBE_OUTPUT" | grep -iE "Vulkan|SDL|failed|error|Fatal" | head -10 | sed 's/^/       /'
         exit 1
     else
         echo "  Vulkan: initialization failed — continuing with CPU raster fallback (BRO_TEST_ALLOW_RASTER=1)"
@@ -321,28 +321,30 @@ run_one_test() {
         esac
     fi
 
+    local EXTRA_TEST_ARGS=()
+    if [[ "${BRO_TEST_ALLOW_RASTER:-0}" == "1" ]]; then
+        EXTRA_TEST_ARGS+=( "--no-gpu" )
+    fi
+
     if [[ -n "$TIMEOUT_BIN" ]]; then
-        OUTPUT=$("$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "$TEST_APP" "$TEST_FILE" 2>&1)
+        OUTPUT=$("$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP" "$TEST_FILE" 2>&1)
         STATUS=$?
     else
-        OUTPUT=$("$BRO" "$TEST_APP" "$TEST_FILE" 2>&1)
+        OUTPUT=$("$BRO" "${EXTRA_TEST_ARGS[@]}" "$TEST_APP" "$TEST_FILE" 2>&1)
         STATUS=$?
     fi
 
-    # The engine falls back to CPU raster when it can't get a Vulkan context, which
-    # for a test run is an infrastructure failure wearing a warning's clothes:
-    # WebGL, layer compositing, and the whole 3D scene silently stop being
-    # exercised, so a green result proves nothing about the code that ships. It
-    # also used to be flaky per-process (one test losing the display while
-    # its neighbours kept it), which reads as "one weird test" rather than "no
-    # GPU here". Fail loudly, pass or crash. BRO_TEST_ALLOW_RASTER=1 opts out
-    # for a deliberate raster-only run on a box with no Vulkan at all.
+    # The engine fails fast or throws if Vulkan initialization fails when GPU is configured.
+    # Catch any Vulkan failure and fail loud and clear.
+    # BRO_TEST_ALLOW_RASTER=1 opts out for a deliberate raster-only run on a box with no Vulkan at all.
     if [[ "${BRO_TEST_ALLOW_RASTER:-0}" != "1" ]] &&
        [[ "$OUTPUT" == *"continuing with CPU raster fallback"* ||
           "$OUTPUT" == *"falling back to CPU raster rendering"* ||
-          "$OUTPUT" == *"Headless Vulkan init failed"* ]]; then
-        echo "  FAIL  $REL  (NO GPU — Vulkan init failed, engine fell back to CPU raster)"
-        echo "$OUTPUT" | grep -iE "Vulkan|SDL|GPU init failed" | head -5 | sed 's/^/        /'
+          "$OUTPUT" == *"Headless Vulkan init failed"* ||
+          "$OUTPUT" == *"Headless Vulkan initialization failed"* ||
+          "$OUTPUT" == *"Vulkan initialization failed"* ]]; then
+        echo "  FAIL  $REL  (NO GPU — Vulkan init failed)"
+        echo "$OUTPUT" | grep -iE "Vulkan|SDL|GPU init failed|Fatal" | head -5 | sed 's/^/        /'
         echo "        Set BRO_TEST_ALLOW_RASTER=1 to run anyway (GPU paths untested)."
         return 1
     fi

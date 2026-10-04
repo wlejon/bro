@@ -210,10 +210,14 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
             tex.bytesPerPixel = bpp;
             tex.mipLevels = 1;
 
-            context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
+            if (!context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
                                  tex.offset, tex.allocId,
-                                 1, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
+                                 1, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)) {
+                LOG_ERROR("WebGLVkContext: Failed to allocate VkImage for cubemap (%dx%d)", width, height);
+                setSyntheticError(GL_OUT_OF_MEMORY);
+                return;
+            }
 
             VkImageViewCreateInfo viewInfo{};
             viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -225,7 +229,11 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
             viewInfo.subresourceRange.levelCount = 1;
             viewInfo.subresourceRange.baseArrayLayer = 0;
             viewInfo.subresourceRange.layerCount = 6;
-            vkCreateImageView(dev, &viewInfo, nullptr, &tex.view);
+            if (vkCreateImageView(dev, &viewInfo, nullptr, &tex.view) != VK_SUCCESS) {
+                LOG_ERROR("WebGLVkContext: Failed to create image view for cubemap (%dx%d)", width, height);
+                setSyntheticError(GL_OUT_OF_MEMORY);
+                return;
+            }
 
             VkCommandBuffer cmd = context_.beginSingleTimeCommands();
             context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -241,19 +249,29 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
             VkDeviceSize stagingOffset = 0;
             uint64_t stagingAllocId = 0;
             void* stagingMapped = nullptr;
-            context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            if (!context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                  stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
+                                  stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
+                LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for cubemap upload (%zu bytes)", imgSize);
+                setSyntheticError(GL_OUT_OF_MEMORY);
+                return;
+            }
 
             if (stagingMapped) {
                 copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
                                      unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
             } else {
                 void* mapped = nullptr;
-                vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped);
-                copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                                     unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-                vkUnmapMemory(dev, stagingMem);
+                if (vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped) == VK_SUCCESS) {
+                    copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
+                                         unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+                    vkUnmapMemory(dev, stagingMem);
+                } else {
+                    LOG_ERROR("WebGLVkContext: Failed to map staging memory for cubemap upload");
+                    context_.destroyBuffer(stagingBuf, stagingAllocId);
+                    setSyntheticError(GL_OUT_OF_MEMORY);
+                    return;
+                }
             }
 
             VkCommandBuffer cmd = context_.beginSingleTimeCommands();
@@ -292,10 +310,14 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
         tex.bytesPerPixel = bpp;
         tex.mipLevels = numLevels;
 
-        context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
+        if (!context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
                              tex.offset, tex.allocId,
-                             numLevels, 1, 0);
+                             numLevels, 1, 0)) {
+            LOG_ERROR("WebGLVkContext: Failed to allocate VkImage (%dx%d)", width, height);
+            setSyntheticError(GL_OUT_OF_MEMORY);
+            return;
+        }
 
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -308,7 +330,11 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
         viewInfo.subresourceRange.levelCount = numLevels;
         viewInfo.subresourceRange.baseArrayLayer = 0;
         viewInfo.subresourceRange.layerCount = 1;
-        vkCreateImageView(dev, &viewInfo, nullptr, &tex.view);
+        if (vkCreateImageView(dev, &viewInfo, nullptr, &tex.view) != VK_SUCCESS) {
+            LOG_ERROR("WebGLVkContext: Failed to create image view (%dx%d)", width, height);
+            setSyntheticError(GL_OUT_OF_MEMORY);
+            return;
+        }
 
         VkCommandBuffer cmd = context_.beginSingleTimeCommands();
         VkImageLayout initialLayout = isDepth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -325,19 +351,29 @@ void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat
         VkDeviceSize stagingOffset = 0;
         uint64_t stagingAllocId = 0;
         void* stagingMapped = nullptr;
-        context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        if (!context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
+                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
+            LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for texture upload (%zu bytes)", imgSize);
+            setSyntheticError(GL_OUT_OF_MEMORY);
+            return;
+        }
 
         if (stagingMapped) {
             copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
                                  unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
         } else {
             void* mapped = nullptr;
-            vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped);
-            copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                                 unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-            vkUnmapMemory(dev, stagingMem);
+            if (vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped) == VK_SUCCESS) {
+                copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
+                                     unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+                vkUnmapMemory(dev, stagingMem);
+            } else {
+                LOG_ERROR("WebGLVkContext: Failed to map staging memory for texture upload");
+                context_.destroyBuffer(stagingBuf, stagingAllocId);
+                setSyntheticError(GL_OUT_OF_MEMORY);
+                return;
+            }
         }
 
         VkCommandBuffer cmd = context_.beginSingleTimeCommands();
@@ -388,19 +424,29 @@ void WebGLVkContext::texSubImage2D(GLenum /*target*/, GLint level, GLint xoffset
     void* stagingMapped = nullptr;
     VkDevice dev = context_.device();
 
-    context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    if (!context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
+                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
+        LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for texSubImage2D (%zu bytes)", uploadSize);
+        setSyntheticError(GL_OUT_OF_MEMORY);
+        return;
+    }
 
     if (stagingMapped) {
         copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
                              unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
     } else {
         void* mapped = nullptr;
-        vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped);
-        copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                             unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-        vkUnmapMemory(dev, stagingMem);
+        if (vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped) == VK_SUCCESS) {
+            copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
+                                 unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
+            vkUnmapMemory(dev, stagingMem);
+        } else {
+            LOG_ERROR("WebGLVkContext: Failed to map staging memory for texSubImage2D");
+            context_.destroyBuffer(stagingBuf, stagingAllocId);
+            setSyntheticError(GL_OUT_OF_MEMORY);
+            return;
+        }
     }
 
     VkCommandBuffer cmd = context_.beginSingleTimeCommands();
@@ -544,10 +590,14 @@ void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalform
 
     VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
+    if (!context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
                          tex.offset, tex.allocId,
-                         1, depth, 0);
+                         1, depth, 0)) {
+        LOG_ERROR("WebGLVkContext: Failed to allocate VkImage for 3D texture (%dx%dx%d)", width, height, depth);
+        setSyntheticError(GL_OUT_OF_MEMORY);
+        return;
+    }
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -559,7 +609,11 @@ void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalform
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = depth;
-    vkCreateImageView(dev, &viewInfo, nullptr, &tex.view);
+    if (vkCreateImageView(dev, &viewInfo, nullptr, &tex.view) != VK_SUCCESS) {
+        LOG_ERROR("WebGLVkContext: Failed to create image view for 3D texture (%dx%dx%d)", width, height, depth);
+        setSyntheticError(GL_OUT_OF_MEMORY);
+        return;
+    }
 
     if (pixels) {
         VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * depth * tex.bytesPerPixel;
@@ -568,17 +622,27 @@ void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalform
         VkDeviceSize stagingOffset = 0;
         uint64_t stagingAllocId = 0;
         void* stagingMapped = nullptr;
-        context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        if (!context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
+                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
+            LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for 3D texture upload (%zu bytes)", imgSize);
+            setSyntheticError(GL_OUT_OF_MEMORY);
+            return;
+        }
 
         if (stagingMapped) {
             std::memcpy(stagingMapped, pixels, imgSize);
         } else {
             void* mapped = nullptr;
-            vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped);
-            std::memcpy(mapped, pixels, imgSize);
-            vkUnmapMemory(dev, stagingMem);
+            if (vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped) == VK_SUCCESS) {
+                std::memcpy(mapped, pixels, imgSize);
+                vkUnmapMemory(dev, stagingMem);
+            } else {
+                LOG_ERROR("WebGLVkContext: Failed to map staging memory for 3D texture upload");
+                context_.destroyBuffer(stagingBuf, stagingAllocId);
+                setSyntheticError(GL_OUT_OF_MEMORY);
+                return;
+            }
         }
 
         VkCommandBuffer cmd = context_.beginSingleTimeCommands();
@@ -623,17 +687,27 @@ void WebGLVkContext::texSubImage3D(GLenum /*target*/, GLint level,
     VkDeviceSize stagingOffset = 0;
     uint64_t stagingAllocId = 0;
     void* stagingMapped = nullptr;
-    context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    if (!context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped);
+                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
+        LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for texSubImage3D (%zu bytes)", uploadSize);
+        setSyntheticError(GL_OUT_OF_MEMORY);
+        return;
+    }
 
     if (stagingMapped) {
         std::memcpy(stagingMapped, pixels, uploadSize);
     } else {
         void* mapped = nullptr;
-        vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped);
-        std::memcpy(mapped, pixels, uploadSize);
-        vkUnmapMemory(dev, stagingMem);
+        if (vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped) == VK_SUCCESS) {
+            std::memcpy(mapped, pixels, uploadSize);
+            vkUnmapMemory(dev, stagingMem);
+        } else {
+            LOG_ERROR("WebGLVkContext: Failed to map staging memory for texSubImage3D");
+            context_.destroyBuffer(stagingBuf, stagingAllocId);
+            setSyntheticError(GL_OUT_OF_MEMORY);
+            return;
+        }
     }
 
     VkCommandBuffer cmd = context_.beginSingleTimeCommands();

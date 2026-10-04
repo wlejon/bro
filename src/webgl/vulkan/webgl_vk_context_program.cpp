@@ -214,7 +214,14 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
         allocInfo.descriptorPool = descriptorPool_;
         allocInfo.descriptorSetCount = 1;
         allocInfo.pSetLayouts = &descriptorSetLayout_;
-        vkAllocateDescriptorSets(dev, &allocInfo, &prog.descriptorSet);
+        VkResult res = vkAllocateDescriptorSets(dev, &allocInfo, &prog.descriptorSet);
+        if (res != VK_SUCCESS) {
+            LOG_ERROR("WebGLVkContext: Failed to allocate descriptor set for program (%d)", res);
+            prog.descriptorSet = VK_NULL_HANDLE;
+            prog.linkStatus = false;
+            prog.infoLog = "Descriptor set allocation failed";
+            return;
+        }
     }
 
     uint32_t pushSize = std::max(128u, linkRes.pushConstantSize);

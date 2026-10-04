@@ -581,8 +581,15 @@ void SceneVkBridge::prepareCustomShaderForNode(const void* key, const CustomShad
         if (nodeBuf.ubo.isValid()) {
             allocator_.destroyBuffer(nodeBuf.ubo);
         }
-        allocator_.createUniformBuffer(entry.uboSize, nodeBuf.ubo);
+        if (!allocator_.createUniformBuffer(entry.uboSize, nodeBuf.ubo)) {
+            LOG_ERROR("SceneVkBridge: Failed to allocate uniform buffer for custom shader (%u bytes)", entry.uboSize);
+            return;
+        }
         nodeBuf.descSet = dynamicDescPool_.allocate(passMesh_.customLayout());
+        if (!nodeBuf.descSet) {
+            LOG_ERROR("SceneVkBridge: Failed to allocate descriptor set for custom shader");
+            return;
+        }
     }
 
     std::vector<uint8_t> uboData(entry.uboSize, 0);
@@ -641,7 +648,9 @@ void SceneVkBridge::prepareCustomShaderForNode(const void* key, const CustomShad
             tDesc.addressModeU = ut.repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             tDesc.addressModeV = (ut.repeat && !ut.clampT) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             tDesc.enableAnisotropy = false;
-            allocator_.createTexture2D(srcPixels, tDesc, cachedTex.image);
+            if (!allocator_.createTexture2D(srcPixels, tDesc, cachedTex.image)) {
+                LOG_ERROR("SceneVkBridge: Failed to allocate custom user texture %s (%dx%d)", ut.name.c_str(), ut.w, ut.h);
+            }
             ut.dirty = false;
         }
 

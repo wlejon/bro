@@ -267,11 +267,20 @@ void WebGLVkContext::drawArrays(GLenum mode, GLint first, GLsizei count) {
 }
 
 void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instanceCount) {
+    if (count <= 0 || instanceCount <= 0) return;
     auto itProg = programs_.find(currentProgramId_);
-    if (itProg == programs_.end() || !itProg->second.linkStatus || count <= 0 || instanceCount <= 0) return;
+    if (itProg == programs_.end() || !itProg->second.linkStatus) {
+        LOG_ERROR("WebGLVkContext: drawArrays called with unlinked program (%u)", currentProgramId_);
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
 
     VkProgramResource& prog = itProg->second;
-    if (prog.vertModule == VK_NULL_HANDLE || prog.fragModule == VK_NULL_HANDLE) return;
+    if (prog.vertModule == VK_NULL_HANDLE || prog.fragModule == VK_NULL_HANDLE) {
+        LOG_ERROR("WebGLVkContext: Program %u missing valid shader module", currentProgramId_);
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
 
     beginRendering();
     if (!inRenderPass_ || currentCmd_ == VK_NULL_HANDLE) return;
@@ -435,6 +444,7 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
     VkPipeline pipeline = pipelineCache_.getOrCreatePipeline(key, pipelineLayout_);
     if (pipeline == VK_NULL_HANDLE) {
         LOG_ERROR("WebGLVkContext: Failed to obtain graphics pipeline for drawArrays");
+        setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
 
@@ -597,17 +607,37 @@ void WebGLVkContext::drawElements(GLenum mode, GLsizei count, GLenum type, uintp
 
 void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
                                           uintptr_t offset, GLsizei instanceCount) {
-    if (currentProgramId_ == 0 || count <= 0 || instanceCount <= 0) return;
+    if (count <= 0 || instanceCount <= 0) return;
+    if (currentProgramId_ == 0) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
 
     GLuint iboId = vaos_[currentVaoId_].elementArrayBufferId;
-    if (iboId == 0) return;
+    if (iboId == 0) {
+        LOG_ERROR("WebGLVkContext: drawElements called with no element array buffer bound");
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
     auto iboIt = buffers_.find(iboId);
-    if (iboIt == buffers_.end() || !iboIt->second.isValid()) return;
+    if (iboIt == buffers_.end() || !iboIt->second.isValid()) {
+        LOG_ERROR("WebGLVkContext: Bound element array buffer %u is invalid", iboId);
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
 
     auto itProg = programs_.find(currentProgramId_);
-    if (itProg == programs_.end() || !itProg->second.linkStatus) return;
+    if (itProg == programs_.end() || !itProg->second.linkStatus) {
+        LOG_ERROR("WebGLVkContext: drawElements called with unlinked program (%u)", currentProgramId_);
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
     VkProgramResource& prog = itProg->second;
-    if (prog.vertModule == VK_NULL_HANDLE || prog.fragModule == VK_NULL_HANDLE) return;
+    if (prog.vertModule == VK_NULL_HANDLE || prog.fragModule == VK_NULL_HANDLE) {
+        LOG_ERROR("WebGLVkContext: Program %u missing valid shader module", currentProgramId_);
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
 
     beginRendering();
     if (!inRenderPass_ || currentCmd_ == VK_NULL_HANDLE) return;
@@ -769,6 +799,7 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     VkPipeline pipeline = pipelineCache_.getOrCreatePipeline(key, pipelineLayout_);
     if (pipeline == VK_NULL_HANDLE) {
         LOG_ERROR("WebGLVkContext: Failed to obtain graphics pipeline for drawElements");
+        setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
 

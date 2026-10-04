@@ -112,55 +112,68 @@ void WebGLVkContext::initVulkanResources() {
     }
 
     // 6. Dummy 1x1 fallback texture & sampler
-    context_.createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dummyImage_, dummyMemory_);
+    if (!context_.createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+                              VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dummyImage_, dummyMemory_)) {
+        LOG_ERROR("WebGLVkContext: Failed to create dummy fallback 1x1 image");
+    }
 
-    VkImageViewCreateInfo dummyViewInfo{};
-    dummyViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    dummyViewInfo.image = dummyImage_;
-    dummyViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    dummyViewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    dummyViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    dummyViewInfo.subresourceRange.levelCount = 1;
-    dummyViewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(dev, &dummyViewInfo, nullptr, &dummyView_);
+    if (dummyImage_ != VK_NULL_HANDLE) {
+        VkImageViewCreateInfo dummyViewInfo{};
+        dummyViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        dummyViewInfo.image = dummyImage_;
+        dummyViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        dummyViewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        dummyViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        dummyViewInfo.subresourceRange.levelCount = 1;
+        dummyViewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(dev, &dummyViewInfo, nullptr, &dummyView_) != VK_SUCCESS) {
+            LOG_ERROR("WebGLVkContext: Failed to create dummy fallback image view");
+        }
 
-    VkSamplerCreateInfo dummySampInfo{};
-    dummySampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    dummySampInfo.magFilter = VK_FILTER_LINEAR;
-    dummySampInfo.minFilter = VK_FILTER_LINEAR;
-    dummySampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    dummySampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    dummySampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(dev, &dummySampInfo, nullptr, &dummySampler_);
+        VkSamplerCreateInfo dummySampInfo{};
+        dummySampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        dummySampInfo.magFilter = VK_FILTER_LINEAR;
+        dummySampInfo.minFilter = VK_FILTER_LINEAR;
+        dummySampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        dummySampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        dummySampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (vkCreateSampler(dev, &dummySampInfo, nullptr, &dummySampler_) != VK_SUCCESS) {
+            LOG_ERROR("WebGLVkContext: Failed to create dummy fallback sampler");
+        }
 
-    VkCommandBuffer dummyCmd = context_.beginSingleTimeCommands();
-    context_.transitionImageLayout(dummyImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                   VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, dummyCmd);
-    context_.endSingleTimeCommands(dummyCmd);
+        VkCommandBuffer dummyCmd = context_.beginSingleTimeCommands();
+        context_.transitionImageLayout(dummyImage_, VK_FORMAT_R8G8B8A8_UNORM,
+                                       VK_IMAGE_LAYOUT_UNDEFINED,
+                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, dummyCmd);
+        context_.endSingleTimeCommands(dummyCmd);
+    }
 
     // 7. Generic fallback attribute buffer (16 vec4 attributes = 256 bytes)
     for (uint32_t i = 0; i < 16; ++i) {
         float* f = reinterpret_cast<float*>(genericAttribs_[i].data());
         f[0] = 0.0f; f[1] = 0.0f; f[2] = 0.0f; f[3] = 1.0f;
     }
-    context_.createBuffer(sizeof(genericAttribs_),
-                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          fallbackConstantBuffer_, fallbackConstantMemory_);
-    void* mapped = nullptr;
-    if (fallbackConstantMemory_ != VK_NULL_HANDLE &&
-        vkMapMemory(dev, fallbackConstantMemory_, 0, sizeof(genericAttribs_), 0, &mapped) == VK_SUCCESS) {
-        std::memcpy(mapped, genericAttribs_.data(), sizeof(genericAttribs_));
-        vkUnmapMemory(dev, fallbackConstantMemory_);
+    if (!context_.createBuffer(sizeof(genericAttribs_),
+                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               fallbackConstantBuffer_, fallbackConstantMemory_)) {
+        LOG_ERROR("WebGLVkContext: Failed to create generic fallback attribute buffer");
+    } else {
+        void* mapped = nullptr;
+        if (fallbackConstantMemory_ != VK_NULL_HANDLE &&
+            vkMapMemory(dev, fallbackConstantMemory_, 0, sizeof(genericAttribs_), 0, &mapped) == VK_SUCCESS) {
+            std::memcpy(mapped, genericAttribs_.data(), sizeof(genericAttribs_));
+            vkUnmapMemory(dev, fallbackConstantMemory_);
+        }
     }
 
     // 8. Dummy UBO buffer (256 bytes)
-    context_.createBuffer(256, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          dummyUniformBuffer_, dummyUniformMemory_);
+    if (!context_.createBuffer(256, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               dummyUniformBuffer_, dummyUniformMemory_)) {
+        LOG_ERROR("WebGLVkContext: Failed to create dummy UBO buffer");
+    }
 }
 
 void WebGLVkContext::cleanupVulkanResources() {

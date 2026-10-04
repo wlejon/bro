@@ -225,7 +225,13 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
 
     outVs = SceneVkShaderModule::create(device, vsSpirv);
     outFs = SceneVkShaderModule::create(device, fsSpirv);
-    return outVs != VK_NULL_HANDLE && outFs != VK_NULL_HANDLE;
+    if (outVs == VK_NULL_HANDLE || outFs == VK_NULL_HANDLE) {
+        if (outVs != VK_NULL_HANDLE) { SceneVkShaderModule::destroy(device, outVs); outVs = VK_NULL_HANDLE; }
+        if (outFs != VK_NULL_HANDLE) { SceneVkShaderModule::destroy(device, outFs); outFs = VK_NULL_HANDLE; }
+        errOut = "Failed to create VkShaderModule";
+        return false;
+    }
+    return true;
 }
 
 bool SceneVkCustomShader::compileCustomShadowShaderModule(VkDevice device,

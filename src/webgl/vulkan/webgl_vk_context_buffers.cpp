@@ -159,6 +159,7 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                res.buffer, res.memory, res.offset, res.allocId, res.poolMappedData)) {
         LOG_ERROR("WebGLVkContext: Failed to allocate VkBuffer (%zu bytes)", size);
+        setSyntheticError(GL_OUT_OF_MEMORY);
         return;
     }
 
@@ -169,6 +170,9 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
         if (vkMapMemory(dev, res.memory, res.offset, res.size, 0, &mapped) == VK_SUCCESS) {
             std::memcpy(mapped, res.shadowData.data(), size);
             vkUnmapMemory(dev, res.memory);
+        } else {
+            LOG_ERROR("WebGLVkContext: Failed to map memory for buffer data (%zu bytes)", size);
+            setSyntheticError(GL_OUT_OF_MEMORY);
         }
     }
 }
@@ -199,6 +203,9 @@ void WebGLVkContext::bufferSubData(GLenum target, GLintptr offset, GLsizeiptr si
         if (vkMapMemory(context_.device(), res.memory, res.offset + offset, size, 0, &mapped) == VK_SUCCESS) {
             std::memcpy(mapped, data, size);
             vkUnmapMemory(context_.device(), res.memory);
+        } else {
+            LOG_ERROR("WebGLVkContext: Failed to map memory for bufferSubData (offset %ld, size %zu)", static_cast<long>(offset), static_cast<size_t>(size));
+            setSyntheticError(GL_OUT_OF_MEMORY);
         }
     }
 }
@@ -257,6 +264,9 @@ void WebGLVkContext::copyBufferSubData(GLenum readTarget, GLenum writeTarget,
             if (vkMapMemory(context_.device(), writeRes.memory, writeRes.offset + writeOffset, size, 0, &mapped) == VK_SUCCESS) {
                 std::memcpy(mapped, writeRes.shadowData.data() + writeOffset, size);
                 vkUnmapMemory(context_.device(), writeRes.memory);
+            } else {
+                LOG_ERROR("WebGLVkContext: Failed to map memory for copyBufferSubData");
+                setSyntheticError(GL_OUT_OF_MEMORY);
             }
         }
     }
@@ -417,6 +427,9 @@ void WebGLVkContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei he
         if (vkMapMemory(context_.device(), pbo.memory, pbo.offset + offset, byteCount, 0, &mapped) == VK_SUCCESS) {
             std::memcpy(mapped, pbo.shadowData.data() + offset, byteCount);
             vkUnmapMemory(context_.device(), pbo.memory);
+        } else {
+            LOG_ERROR("WebGLVkContext: Failed to map memory for readPixelsToPBO");
+            setSyntheticError(GL_OUT_OF_MEMORY);
         }
     }
 }
