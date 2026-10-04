@@ -18,6 +18,7 @@ struct SceneVkRenderTargetDesc {
     bool hasDepth = true;
     bool colorSampled = true;
     bool depthSampled = true;
+    VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
 };
 
 /// Offscreen render target abstraction encapsulating HDR color, depth/stencil buffers,
@@ -64,12 +65,15 @@ public:
     uint32_t height() const { return height_; }
     VkFormat colorFormat() const { return desc_.colorFormat; }
     VkFormat depthFormat() const { return desc_.depthFormat; }
+    VkSampleCountFlagBits sampleCount() const { return desc_.sampleCount; }
     bool isValid() const { return (!desc_.hasColor || colorImage_.isValid()) && (!desc_.hasDepth || depthImage_.isValid()); }
 
 private:
     SceneVkRenderTargetDesc desc_{};
     SceneVkImage colorImage_;
     SceneVkImage depthImage_;
+    SceneVkImage msaaColorImage_;
+    SceneVkImage msaaDepthImage_;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
 };

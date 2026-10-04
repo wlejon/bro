@@ -40,7 +40,9 @@ SceneVkBridge::~SceneVkBridge() {
     dynamicBufferCache_.clear();
 
     for (auto& [k, tex] : textureCache_) {
-        allocator_.destroyImage(tex.image);
+        if (tex.owned) {
+            allocator_.destroyImage(tex.image);
+        }
     }
     textureCache_.clear();
 
@@ -53,10 +55,14 @@ SceneVkBridge::~SceneVkBridge() {
     allocator_.destroyBuffer(readbackBuffer_);
     allocator_.destroyImage(ldrPresentationImage_);
     allocator_.destroyImage(depthCopyImage_);
+    allocator_.destroyImage(dummyShadeMap_);
+    allocator_.destroyImage(shadeMapImage_);
 
     hdrTarget_.cleanup(allocator_);
     shadowTarget_.cleanup(allocator_);
 
+    passTerrain_.cleanup(device_, allocator_);
+    passReflectionProbe_.cleanup(device_, allocator_);
     passBillboard_.cleanup(device_, allocator_);
     passParticles_.cleanup(device_, allocator_);
     passDecal_.cleanup(device_, allocator_);
@@ -102,6 +108,27 @@ bool SceneVkBridge::init() {
         return false;
     }
 
+    if (!passReflectionProbe_.init(device_, allocator_)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassReflectionProbe");
+        return false;
+    }
+
+    if (!passTerrain_.init(device_, allocator_, passMesh_.cameraLayout(), passMesh_.lightingLayout())) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassTerrain");
+        return false;
+    }
+
+    uint8_t whitePixel[4] = {255, 255, 255, 255};
+    TextureDesc whiteDesc{};
+    whiteDesc.width = 1;
+    whiteDesc.height = 1;
+    whiteDesc.format = VK_FORMAT_R8G8B8A8_UNORM;
+    whiteDesc.generateMipmaps = false;
+    if (!allocator_.createTexture2D(whitePixel, whiteDesc, dummyShadeMap_)) {
+        LOG_ERROR("SceneVkBridge: Failed creating dummy shade map");
+        return false;
+    }
+
     if (!allocator_.createUniformBuffer(sizeof(SceneCameraUniforms), cameraUbo_) ||
         !allocator_.createUniformBuffer(sizeof(SceneLightingUniforms), lightingUbo_)) {
         LOG_ERROR("SceneVkBridge: Failed allocating camera/lighting uniform buffers");
@@ -125,7 +152,7 @@ bool SceneVkBridge::init() {
     return true;
 }
 
-bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height) {
+bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height, VkSampleCountFlagBits sampleCount) {
     if (width == 0 || height == 0) return false;
 
     if (!shadowTarget_.isValid()) {
@@ -136,15 +163,26 @@ bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height) {
         SceneVkDescriptorWriter lightWriter;
         lightWriter.writeBuffer(0, lightingUbo_.buffer, sizeof(SceneLightingUniforms));
         lightWriter.writeImage(1, shadowTarget_.arrayView(), shadowTarget_.shadowSampler());
+        lightWriter.writeImage(2, passReflectionProbe_.dummyCubemapView(), passReflectionProbe_.activeCubemapSampler());
+        lightWriter.writeImage(3, dummyShadeMap_.view, dummyShadeMap_.sampler);
         lightWriter.updateSet(device_.device(), lightingSet_);
     }
 
-    if (currentWidth_ == width && currentHeight_ == height && hdrTarget_.isValid()) {
+    if (currentWidth_ == width && currentHeight_ == height && currentSampleCount_ == sampleCount && hdrTarget_.isValid()) {
         return true;
     }
 
     currentWidth_ = width;
     currentHeight_ = height;
+
+    if (currentSampleCount_ != sampleCount) {
+        currentSampleCount_ = sampleCount;
+        passMesh_.cleanup(device_, allocator_);
+        PassMesh::Config meshCfg{};
+        meshCfg.samples = sampleCount;
+        passMesh_.init(device_, allocator_, meshCfg);
+        passTerrain_.setSampleCount(sampleCount);
+    }
 
     hdrTarget_.cleanup(allocator_);
     SceneVkRenderTargetDesc hdrDesc{};
@@ -152,6 +190,7 @@ bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height) {
     hdrDesc.height = height;
     hdrDesc.colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     hdrDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
+    hdrDesc.sampleCount = sampleCount;
     hdrDesc.hasColor = true;
     hdrDesc.hasDepth = true;
     if (!hdrTarget_.init(allocator_, hdrDesc)) {
@@ -191,6 +230,19 @@ bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height) {
         return false;
     }
 
+    VkSamplerCreateInfo ldrSampInfo{};
+    ldrSampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ldrSampInfo.magFilter = VK_FILTER_LINEAR;
+    ldrSampInfo.minFilter = VK_FILTER_LINEAR;
+    ldrSampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    ldrSampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ldrSampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ldrSampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(device_.device(), &ldrSampInfo, nullptr, &ldrPresentationImage_.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkBridge: Failed creating sampler for LDR presentation image");
+        return false;
+    }
+
     passPostFx_.cleanup(device_, allocator_);
     if (!passPostFx_.init(device_, allocator_, width, height)) {
         LOG_ERROR("SceneVkBridge: Failed initializing PassPostFx");
@@ -213,7 +265,12 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     uint32_t height = static_cast<uint32_t>(renderer.targetHeight());
     if (width == 0 || height == 0) return;
 
-    if (!ensureTargets(width, height)) return;
+    VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT;
+    if (renderer.msaaSamples() >= 8) sampleCount = VK_SAMPLE_COUNT_8_BIT;
+    else if (renderer.msaaSamples() >= 4) sampleCount = VK_SAMPLE_COUNT_4_BIT;
+    else if (renderer.msaaSamples() >= 2) sampleCount = VK_SAMPLE_COUNT_2_BIT;
+
+    if (!ensureTargets(width, height, sampleCount)) return;
 
     renderer.setCullingActive(renderer.frustumCullingEnabled());
     if (renderer.cullingActive_) {
@@ -367,141 +424,119 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     // 3. Command Recording
     VkCommandBuffer cmd = device_.beginFrame();
 
-    CullStats stats{};
-    bool hasDrawnMeshes = false;
+    // Reflection probes update
+    passReflectionProbe_.updateProbes(cmd, graph, renderer, passMesh_, allocator_, device_, *this);
 
-    // Prepare dynamic buffers before any pass (used by both shadow & mesh passes)
+    if (passReflectionProbe_.hasActiveProbe()) {
+        const auto* probe = passReflectionProbe_.activeProbe();
+        const auto& pw = probe->worldMatrix();
+        bromath::Mat4 invPw = bromath::minverse(pw);
+        std::memcpy(lightUniforms.probeWorldToLocal, invPw.data, sizeof(lightUniforms.probeWorldToLocal));
+        std::memcpy(lightUniforms.probeLocalToWorld, pw.data, sizeof(lightUniforms.probeLocalToWorld));
+
+        lightUniforms.probePos[0] = pw.at(0, 3);
+        lightUniforms.probePos[1] = pw.at(1, 3);
+        lightUniforms.probePos[2] = pw.at(2, 3);
+        lightUniforms.probePos[3] = 1.0f;
+
+        float sx = std::sqrt(pw.at(0, 0)*pw.at(0, 0) + pw.at(1, 0)*pw.at(1, 0) + pw.at(2, 0)*pw.at(2, 0));
+        float sy = std::sqrt(pw.at(0, 1)*pw.at(0, 1) + pw.at(1, 1)*pw.at(1, 1) + pw.at(2, 1)*pw.at(2, 1));
+        float sz = std::sqrt(pw.at(0, 2)*pw.at(0, 2) + pw.at(1, 2)*pw.at(1, 2) + pw.at(2, 2)*pw.at(2, 2));
+        lightUniforms.probeBoxSize[0] = sx;
+        lightUniforms.probeBoxSize[1] = sy;
+        lightUniforms.probeBoxSize[2] = sz;
+        lightUniforms.probeBoxSize[3] = probe->boxProjection() ? 1.0f : 0.0f;
+
+        uint32_t mips = static_cast<uint32_t>(std::floor(std::log2(probe->resolution()))) + 1;
+        lightUniforms.probeParams[0] = probe->intensity();
+        lightUniforms.probeParams[1] = probe->interior();
+        lightUniforms.probeParams[2] = static_cast<float>(mips > 0 ? mips - 1 : 0);
+        lightUniforms.probeParams[3] = 0.0f;
+
+        SceneVkDescriptorWriter writer;
+        writer.writeImage(2, passReflectionProbe_.activeCubemapView(), passReflectionProbe_.activeCubemapSampler());
+        writer.updateSet(device_.device(), lightingSet_);
+    } else {
+        lightUniforms.probePos[3] = 0.0f;
+
+        SceneVkDescriptorWriter writer;
+        writer.writeImage(2, passReflectionProbe_.dummyCubemapView(), passReflectionProbe_.activeCubemapSampler());
+        writer.updateSet(device_.device(), lightingSet_);
+    }
+
+    // Check for tile shade map across nodes
+    ShadeMapBinding shadeB{};
+    bool hasShade = false;
     for (auto& [id, node] : graph.nodes_) {
         if (!node->renderVisible()) continue;
         if (node->type() == SceneNode::Type::Mesh) {
             auto* mn = static_cast<MeshNode*>(node.get());
-            if (mn->asSkinnedMesh()) {
-                auto* sm = mn->asSkinnedMesh();
-                if (!sm->currentMesh().empty()) {
-                    uploadMesh(sm->currentMesh(), sm);
-                    auto& dynBuf = getDynamicBuffers(sm);
-                    size_t skinVc = sm->currentMesh().vertexCount();
-                    size_t skinByteSize = skinVc * 24;
-                    if (dynBuf.skinAttribCapacity < skinByteSize) {
-                        allocator_.destroyBuffer(dynBuf.skinAttribBuffer);
-                        std::vector<uint8_t> skinBytes(skinByteSize, 0);
-                        const auto& j = sm->skinJoints();
-                        const auto& w = sm->skinWeights();
-                        for (size_t vi = 0; vi < skinVc; ++vi) {
-                            uint16_t* dstJ = reinterpret_cast<uint16_t*>(skinBytes.data() + vi * 24);
-                            float* dstW = reinterpret_cast<float*>(skinBytes.data() + vi * 24 + 8);
-                            if (vi * 4 + 3 < j.size()) {
-                                dstJ[0] = j[vi * 4 + 0]; dstJ[1] = j[vi * 4 + 1];
-                                dstJ[2] = j[vi * 4 + 2]; dstJ[3] = j[vi * 4 + 3];
-                            }
-                            if (vi * 4 + 3 < w.size()) {
-                                dstW[0] = w[vi * 4 + 0]; dstW[1] = w[vi * 4 + 1];
-                                dstW[2] = w[vi * 4 + 2]; dstW[3] = w[vi * 4 + 3];
-                            } else {
-                                dstW[0] = 1.0f;
-                            }
-                        }
-                        allocator_.createVertexBuffer(skinByteSize, skinBytes.data(), dynBuf.skinAttribBuffer);
-                        dynBuf.skinAttribCapacity = skinByteSize;
-                    }
-
-                    if (!dynBuf.boneUbo.isValid()) {
-                        allocator_.createUniformBuffer(256 * 16 * sizeof(float), dynBuf.boneUbo);
-                        dynBuf.boneSet = dynamicDescPool_.allocate(passMesh_.bonePaletteLayout());
-                        SceneVkDescriptorWriter writer;
-                        writer.writeBuffer(0, dynBuf.boneUbo.buffer, 256 * 16 * sizeof(float));
-                        writer.updateSet(device_.device(), dynBuf.boneSet);
-
-                        dynBuf.boneSetShadow = dynamicDescPool_.allocate(passShadow_.bonePaletteLayout());
-                        SceneVkDescriptorWriter writerShadow;
-                        writerShadow.writeBuffer(0, dynBuf.boneUbo.buffer, 256 * 16 * sizeof(float));
-                        writerShadow.updateSet(device_.device(), dynBuf.boneSetShadow);
-                    }
-                    std::vector<float> boneData(256 * 16, 0.0f);
-                    for (int b = 0; b < 256; ++b) {
-                        boneData[b * 16 + 0] = 1.0f;
-                        boneData[b * 16 + 5] = 1.0f;
-                        boneData[b * 16 + 10] = 1.0f;
-                        boneData[b * 16 + 15] = 1.0f;
-                    }
-                    const auto& pal = sm->skinPalette();
-                    if (!pal.empty()) {
-                        size_t copyCount = std::min(pal.size(), boneData.size());
-                        std::memcpy(boneData.data(), pal.data(), copyCount * sizeof(float));
-                    }
-                    allocator_.updateUniformBuffer(dynBuf.boneUbo, boneData.data(), boneData.size() * sizeof(float));
-                }
-            } else {
-                if (!mn->currentMesh().empty()) {
-                    uploadMesh(mn->currentMesh(), mn);
-                }
+            if (mn->shadeMap() && (*mn->shadeMap())(shadeB) && shadeB.pixels && shadeB.width > 0 && shadeB.height > 0) {
+                hasShade = true;
+                break;
             }
         } else if (node->type() == SceneNode::Type::InstancedMesh) {
             auto* im = static_cast<InstancedMeshNode*>(node.get());
-            if (!im->mesh().empty() && im->instanceCount() > 0) {
-                uploadMesh(im->mesh(), im);
-                auto& dynBuf = getDynamicBuffers(im);
-                size_t instByteSize = im->instanceCount() * 16 * sizeof(float);
-                if (dynBuf.instanceCapacity < instByteSize) {
-                    allocator_.destroyBuffer(dynBuf.instanceBuffer);
-                    allocator_.createVertexBuffer(instByteSize, im->instanceData().data(), dynBuf.instanceBuffer);
-                    dynBuf.instanceCapacity = instByteSize;
-                } else {
-                    allocator_.stageAndUploadBuffer(dynBuf.instanceBuffer.buffer, im->instanceData().data(), instByteSize);
-                }
+            if (im->shadeMap() && (*im->shadeMap())(shadeB) && shadeB.pixels && shadeB.width > 0 && shadeB.height > 0) {
+                hasShade = true;
+                break;
             }
         }
     }
 
-    // Shadow pass
-    if (lightUniforms.numLights[2] > 0.5f) {
-        passShadow_.beginCascade(cmd, device_, shadowTarget_, 0, lightUniforms.shadowCascadeProj);
-        for (auto& [id, node] : graph.nodes_) {
-            if (!node->renderVisible()) continue;
-            if (node->type() == SceneNode::Type::Mesh) {
-                auto* mn = static_cast<MeshNode*>(node.get());
-                if (!mn->castsShadow() || mn->currentMesh().empty()) continue;
-                auto& meshBuf = uploadMesh(mn->currentMesh(), mn);
-                if (mn->asSkinnedMesh()) {
-                    auto* sm = mn->asSkinnedMesh();
-                    auto& dynBuf = getDynamicBuffers(sm);
-                    SkinnedShadowCaster caster{};
-                    caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
-                    caster.indexBuffer = meshBuf.indexBuffer.buffer;
-                    caster.indexCount = meshBuf.indexCount;
-                    caster.skinAttribBuffer = dynBuf.skinAttribBuffer.buffer;
-                    caster.bonePaletteSet = dynBuf.boneSetShadow;
-                    std::memcpy(caster.modelMatrix, sm->worldMatrix().data, sizeof(caster.modelMatrix));
-                    passShadow_.drawSkinned(cmd, caster);
-                    stats.shadowDrawn++;
-                } else {
-                    ShadowCaster caster{};
-                    caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
-                    caster.indexBuffer = meshBuf.indexBuffer.buffer;
-                    caster.indexCount = meshBuf.indexCount;
-                    std::memcpy(caster.modelMatrix, mn->worldMatrix().data, sizeof(caster.modelMatrix));
-                    passShadow_.drawStatic(cmd, caster);
-                    stats.shadowDrawn++;
-                }
-            } else if (node->type() == SceneNode::Type::InstancedMesh) {
-                auto* im = static_cast<InstancedMeshNode*>(node.get());
-                if (!im->castsShadow() || im->mesh().empty() || im->instanceCount() == 0) continue;
-                auto& meshBuf = uploadMesh(im->mesh(), im);
-                auto& dynBuf = getDynamicBuffers(im);
-                InstancedShadowCaster caster{};
-                caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
-                caster.indexBuffer = meshBuf.indexBuffer.buffer;
-                caster.indexCount = meshBuf.indexCount;
-                caster.instanceBuffer = dynBuf.instanceBuffer.buffer;
-                caster.instanceCount = static_cast<uint32_t>(im->instanceCount());
-                std::memcpy(caster.modelMatrix, im->worldMatrix().data, sizeof(caster.modelMatrix));
-                passShadow_.drawInstanced(cmd, caster);
-                stats.shadowDrawn++;
-            }
+    if (hasShade) {
+        uint64_t hash = 14695981039346656037ULL;
+        size_t pixelCount = static_cast<size_t>(shadeB.width) * shadeB.height;
+        for (size_t i = 0; i < pixelCount; ++i) {
+            hash ^= shadeB.pixels[i];
+            hash *= 1099511628211ULL;
         }
-        passShadow_.endCascade(cmd, device_, shadowTarget_);
-        shadowTarget_.transitionToShaderRead(cmd, allocator_);
+
+        if (!shadeMapImage_.isValid() || shadeMapW_ != shadeB.width || shadeMapH_ != shadeB.height || shadeMapHash_ != hash) {
+            allocator_.destroyImage(shadeMapImage_);
+            TextureDesc sDesc{};
+            sDesc.width = shadeB.width;
+            sDesc.height = shadeB.height;
+            sDesc.format = VK_FORMAT_R8_UNORM;
+            sDesc.magFilter = VK_FILTER_NEAREST;
+            sDesc.minFilter = VK_FILTER_NEAREST;
+            sDesc.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sDesc.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sDesc.generateMipmaps = false;
+            allocator_.createTexture2D(shadeB.pixels, sDesc, shadeMapImage_);
+            shadeMapW_ = shadeB.width;
+            shadeMapH_ = shadeB.height;
+            shadeMapHash_ = hash;
+        }
+
+        SceneVkDescriptorWriter writer;
+        writer.writeImage(3, shadeMapImage_.view, shadeMapImage_.sampler);
+        writer.updateSet(device_.device(), lightingSet_);
+
+        lightUniforms.shadeOrigin[0] = shadeB.origin.x;
+        lightUniforms.shadeOrigin[1] = shadeB.origin.y;
+        lightUniforms.shadeOrigin[2] = shadeB.origin.z;
+        lightUniforms.shadeOrigin[3] = 1.0f;
+
+        lightUniforms.shadeParams[0] = shadeB.cellSize;
+        lightUniforms.shadeParams[1] = shadeB.hex ? 1.0f : 0.0f;
+        lightUniforms.shadeParams[2] = static_cast<float>(shadeB.width);
+        lightUniforms.shadeParams[3] = static_cast<float>(shadeB.height);
+    } else {
+        SceneVkDescriptorWriter writer;
+        writer.writeImage(3, dummyShadeMap_.view, dummyShadeMap_.sampler);
+        writer.updateSet(device_.device(), lightingSet_);
+
+        lightUniforms.shadeOrigin[3] = 0.0f;
     }
+
+    allocator_.updateUniformBuffer(lightingUbo_, &lightUniforms, sizeof(lightUniforms));
+
+    CullStats stats{};
+    bool hasDrawnMeshes = false;
+
+    prepareDynamicBuffers(graph);
+    renderShadowPass(cmd, graph, lightUniforms, stats);
 
     // HDR mesh pass
     hdrTarget_.beginRendering(cmd, device_,
@@ -551,6 +586,20 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
 
         if (node->type() == SceneNode::Type::Mesh) {
             auto* mn = static_cast<MeshNode*>(node.get());
+            if (mn->name() == "clipmapTerrain" && mn->hasCustomShader()) {
+                if (renderer.cameraCulled(mn)) {
+                    stats.meshCulled++;
+                    continue;
+                }
+                stats.meshDrawn++;
+                hasDrawnMeshes = true;
+                if (!mn->currentMesh().empty()) {
+                    auto& meshBuf = uploadMesh(mn->currentMesh(), mn);
+                    passTerrain_.render(cmd, mn, cameraSet_, lightingSet_, width, height,
+                                        meshBuf.vertexBuffer.buffer, meshBuf.indexBuffer.buffer, meshBuf.indexCount);
+                }
+                continue;
+            }
             if (mn->asSkinnedMesh()) {
                 auto* sm = mn->asSkinnedMesh();
                 if (renderer.cameraCulled(sm)) {
@@ -578,6 +627,7 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                     draw.alphaCutoff = sm->alphaCutoff();
                     draw.flags = 0;
                     if (sm->effectiveUnlit()) draw.flags |= 16u;
+                    if (sm->shadeMap()) draw.flags |= 32u;
 
                     if (sm->color()[3] < 1.0f) {
                         translucentDraws.push_back({TranslucentDraw::Type::Skinned, {}, {}, draw, getDepth(sm)});
@@ -607,11 +657,24 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                     draw.alphaCutoff = mn->alphaCutoff();
                     draw.flags = 0;
                     if (mn->effectiveUnlit()) draw.flags |= 16u;
+                    if (mn->shadeMap()) draw.flags |= 32u;
 
                     const auto& pTex = mn->pendingBaseTexture();
                     if (pTex.w > 0 && pTex.h > 0 && !pTex.data.empty()) {
                         draw.materialSet = uploadTexture(mn, pTex.w, pTex.h, pTex.data.data());
                         if (draw.materialSet != VK_NULL_HANDLE) draw.flags |= 1u;
+                    } else if (mn->hasExternalBaseColorTexture()) {
+                        SceneGraph* extGraph = mn->externalSceneGraph();
+                        if (extGraph && extGraph != &graph) {
+                            auto* extBridge = extGraph->renderer().vkBridge();
+                            if (extBridge && extBridge->ldrImage() != VK_NULL_HANDLE && extBridge->hasMeshContent()) {
+                                VkDescriptorSet extSet = uploadExternalSceneTexture(extBridge, mn);
+                                if (extSet != VK_NULL_HANDLE) {
+                                    draw.materialSet = extSet;
+                                    draw.flags |= 1u;
+                                }
+                            }
+                        }
                     }
                     if (mn->color()[3] < 1.0f) {
                         translucentDraws.push_back({TranslucentDraw::Type::Static, draw, {}, {}, getDepth(mn)});
@@ -647,6 +710,7 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                 draw.alphaCutoff = im->alphaCutoff();
                 draw.flags = 0;
                 if (im->effectiveUnlit()) draw.flags |= 16u;
+                if (im->shadeMap()) draw.flags |= 32u;
 
                 if (im->color()[3] < 1.0f) {
                     translucentDraws.push_back({TranslucentDraw::Type::Instanced, {}, draw, {}, getDepth(im)});
@@ -787,6 +851,11 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     vkCmdCopyImageToBuffer(cmd, ldrPresentationImage_.image,
                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            readbackBuffer_.buffer, 1, &copyRegion);
+
+    allocator_.transitionImageLayout(cmd, ldrPresentationImage_.image, VK_FORMAT_R8G8B8A8_UNORM,
+                                   ldrPresentationImage_.currentLayout,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ldrPresentationImage_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     device_.endFrame();
     device_.submitFrame();

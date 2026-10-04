@@ -181,6 +181,14 @@ public:
         return externalBaseColorTex_ != nullptr;
     }
 
+    using ExternalSceneProvider = std::function<SceneGraph*()>;
+    void setExternalSceneProvider(ExternalSceneProvider provider) {
+        externalSceneProvider_ = std::move(provider);
+    }
+    SceneGraph* externalSceneGraph() const {
+        return externalSceneProvider_ ? externalSceneProvider_() : nullptr;
+    }
+
     /// Draw-time baseColor resolution: the external provider when set (may
     /// return 0 — see above), else the owned texture (0 if none).
     GLuint resolvedBaseColorTextureId() const {
@@ -481,6 +489,9 @@ public:
     const std::vector<UserTexture>& customShaderTextures() const {
         return userTextures_;
     }
+    std::vector<UserTexture>& customShaderTextures() {
+        return userTextures_;
+    }
 
     // --- Culling margin ---
     // Extra world-space padding (in units) added to this node's frustum- and
@@ -604,6 +615,7 @@ private:
     // Live-linked external baseColor source (see setExternalBaseColorTexture).
     // Never a GL name we own — releaseGL must not (and cannot) delete it.
     ExternalTextureProvider externalBaseColorTex_;
+    ExternalSceneProvider externalSceneProvider_;
 
     PendingTex pendingBase_;
     PendingTex pendingNormal_;

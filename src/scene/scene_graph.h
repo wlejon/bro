@@ -36,6 +36,11 @@ namespace brogameagent { class World; }
 
 namespace bro::scene {
 
+namespace vk {
+class SceneVkBridge;
+class PassReflectionProbe;
+}
+
 /// Per-canvas scene graph. Owns all nodes and manages update/render traversal.
 /// GL rendering (pipelines, FBOs, shadows, IBL, post stack) lives in the
 /// SceneRenderer this graph owns; the render-config API below forwards to it.
@@ -604,6 +609,7 @@ private:
     // back-reference; it is the only class with private access.
     friend class SceneRenderer;
     friend class vk::SceneVkBridge;
+    friend class vk::PassReflectionProbe;
 
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
 

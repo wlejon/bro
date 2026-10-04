@@ -65,6 +65,7 @@ public:
         VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
         bool depthWrite = true;
         VkCompareOp depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // Reversed-Z
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     };
 
     PassMesh() = default;

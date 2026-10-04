@@ -46,6 +46,9 @@ public:
     /// Configure single-sample multisampling (disabled MSAA).
     SceneVkPipelineBuilder& setMultisamplingNone();
 
+    /// Configure multisampling with specified sample count.
+    SceneVkPipelineBuilder& setMultisampling(VkSampleCountFlagBits samples);
+
     /// Configure color blending to disabled (overwrite).
     SceneVkPipelineBuilder& disableBlending(uint32_t colorAttachmentCount = 1);
 

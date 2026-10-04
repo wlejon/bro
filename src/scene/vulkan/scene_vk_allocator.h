@@ -79,6 +79,10 @@ public:
     bool stageAndUploadBuffer(VkBuffer dstBuffer, const void* data, VkDeviceSize size, VkDeviceSize dstOffset = 0);
     bool stageAndUploadImage(VkImage dstImage, uint32_t width, uint32_t height,
                              const void* data, VkDeviceSize size, uint32_t mipLevels = 1);
+    bool stageAndUploadImageLayer(VkImage dstImage, VkFormat format,
+                                  uint32_t width, uint32_t height,
+                                  uint32_t layer, uint32_t mipLevel,
+                                  const void* data, VkDeviceSize size);
 
     // Image & Texture management
     bool createImage(uint32_t width, uint32_t height, VkFormat format,
@@ -87,7 +91,8 @@ public:
                      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
                      VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                      uint32_t arrayLayers = 1,
-                     VkImageCreateFlags createFlags = 0);
+                     VkImageCreateFlags createFlags = 0,
+                     VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM);
 
     bool createTexture2D(const void* pixelData, const TextureDesc& desc, SceneVkImage& outImage);
     void destroyImage(SceneVkImage& image);
@@ -96,10 +101,12 @@ public:
     void transitionImageLayout(VkCommandBuffer cmd, VkImage image, VkFormat format,
                                VkImageLayout oldLayout, VkImageLayout newLayout,
                                uint32_t mipLevels = 1, uint32_t baseMipLevel = 0,
-                               VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT);
+                               VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                               uint32_t layerCount = 1, uint32_t baseArrayLayer = 0);
 
     void generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFormat format,
-                         int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
+                         int32_t texWidth, int32_t texHeight, uint32_t mipLevels,
+                         uint32_t baseArrayLayer = 0, uint32_t layerCount = 1);
 
     // Memory stats inspection
     SceneVkAllocatorStats stats() const;

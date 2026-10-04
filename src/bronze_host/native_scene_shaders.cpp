@@ -262,6 +262,10 @@ void bro_scene_SceneNode_setBaseColorTextureFromScene(void* self, void* sourceSc
         if (!locked || !locked->graph) return 0;
         return locked->graph->outputColorTexture();
     });
+    mn->setExternalSceneProvider([weak]() -> scene::SceneGraph* {
+        auto locked = weak.lock();
+        return locked ? locked->graph : nullptr;
+    });
 }
 
 bool bro_scene_SceneNode_setShaderTexture(void* self, const char* name, int32_t x, int32_t y,

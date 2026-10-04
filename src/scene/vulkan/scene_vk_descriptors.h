@@ -33,6 +33,13 @@ struct alignas(16) SceneLightingUniforms {
     alignas(16) float shadowCascadeProj[16]; // cascade 0 projection (or atlas transform)
     alignas(16) float numLights[4];          // x = sun count, y = point light count, z = shadow enabled, w = pad
     ScenePointLight pointLights[16];
+    alignas(16) float probeWorldToLocal[16];
+    alignas(16) float probeLocalToWorld[16];
+    alignas(16) float probePos[4];           // xyz = pos, w = enabled (1 or 0)
+    alignas(16) float probeBoxSize[4];       // xyz = box size, w = boxProjection (1 or 0)
+    alignas(16) float probeParams[4];        // x = intensity, y = blendDist, z = maxLOD, w = pad
+    alignas(16) float shadeOrigin[4];        // xyz = origin, w = hasShadeMap (1 or 0)
+    alignas(16) float shadeParams[4];        // x = cellSize, y = hex, z = width, w = height
 };
 
 /// Utility for constructing VkDescriptorSetLayouts with arbitrary bindings.

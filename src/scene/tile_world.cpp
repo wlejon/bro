@@ -467,35 +467,37 @@ float TileWorld::shadeAt(int x, int y) const {
 
 bool TileWorld::shadeBinding(ShadeMapBinding& out) {
     if (!shadeUsed_ || shade_.empty() || !root_) return false;
-    if (!glFunctionsLoaded()) return false;
     const int w = config_.width, h = config_.height;
-    if (shadeTex_ && (shadeTexW_ != w || shadeTexH_ != h)) releaseShadeTexture();
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    if (!shadeTex_) {
-        GLuint tex = 0;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, shade_.data());
-        shadeTex_ = tex;
-        shadeTexW_ = w;
-        shadeTexH_ = h;
-        shadeDirtyY1_ = -1;
-        shadeDirtyY0_ = 0;
-    } else if (shadeDirtyY1_ >= shadeDirtyY0_) {
-        const int y0 = std::max(0, shadeDirtyY0_), y1 = std::min(h - 1, shadeDirtyY1_);
-        glBindTexture(GL_TEXTURE_2D, shadeTex_);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, GL_RED, GL_UNSIGNED_BYTE,
-                        shade_.data() + static_cast<size_t>(y0) * w);
-        shadeDirtyY1_ = -1;
-        shadeDirtyY0_ = 0;
+    if (glFunctionsLoaded()) {
+        if (shadeTex_ && (shadeTexW_ != w || shadeTexH_ != h)) releaseShadeTexture();
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        if (!shadeTex_) {
+            GLuint tex = 0;
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, shade_.data());
+            shadeTex_ = tex;
+            shadeTexW_ = w;
+            shadeTexH_ = h;
+            shadeDirtyY1_ = -1;
+            shadeDirtyY0_ = 0;
+        } else if (shadeDirtyY1_ >= shadeDirtyY0_) {
+            const int y0 = std::max(0, shadeDirtyY0_), y1 = std::min(h - 1, shadeDirtyY1_);
+            glBindTexture(GL_TEXTURE_2D, shadeTex_);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, w, y1 - y0 + 1, GL_RED, GL_UNSIGNED_BYTE,
+                            shade_.data() + static_cast<size_t>(y0) * w);
+            shadeDirtyY1_ = -1;
+            shadeDirtyY0_ = 0;
+        }
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     }
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     const bromath::Mat4& m = root_->worldMatrix();
     out.tex = shadeTex_;
+    out.pixels = shade_.data();
     out.origin = Vec3{m.at(0, 3), m.at(1, 3), m.at(2, 3)};
     out.cellSize = config_.cellSize;
     out.hex = grid_ && grid_->topology() == tile::Topology::Hex;

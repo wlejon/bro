@@ -1,4 +1,5 @@
 #include "scene/vulkan/scene_vk_bridge.h"
+#include "scene/gpu_upload_stats.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -107,6 +108,7 @@ SceneVkBridge::CachedMeshBuffer& SceneVkBridge::uploadMesh(const bromesh::MeshDa
 
     entry.vertexCount = vc;
     entry.indexCount = static_cast<uint32_t>(ic);
+    noteMeshUpload(vc * sizeof(PackedVertex) + ic * sizeof(uint32_t));
     return entry;
 }
 
@@ -133,9 +135,11 @@ VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int hei
         return tex.descSet;
     }
 
-    if (tex.image.isValid()) {
+    if (tex.image.isValid() && tex.owned) {
         allocator_.destroyImage(tex.image);
     }
+    tex.image = {};
+    tex.owned = true;
 
     TextureDesc desc{};
     desc.width = width;
@@ -148,12 +152,53 @@ VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int hei
     tex.width = width;
     tex.height = height;
     tex.hash = hash;
+    noteTextureUpload(static_cast<size_t>(width) * height * 4);
 
     tex.descSet = dynamicDescPool_.allocate(passMesh_.materialLayout());
     if (!tex.descSet) return VK_NULL_HANDLE;
 
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, tex.image.view, tex.image.sampler);
+    writer.writeImage(1, passMesh_.dummyNormalView(), passMesh_.defaultSampler());
+    writer.writeImage(2, passMesh_.dummyWhiteView(), passMesh_.defaultSampler());
+    writer.writeImage(3, passMesh_.dummyBlackView(), passMesh_.defaultSampler());
+    writer.updateSet(device_.device(), tex.descSet);
+
+    return tex.descSet;
+}
+
+VkDescriptorSet SceneVkBridge::uploadExternalSceneTexture(SceneVkBridge* srcBridge, const void* key) {
+    if (!srcBridge || srcBridge->ldrPresentationImage_.view == VK_NULL_HANDLE) {
+        return VK_NULL_HANDLE;
+    }
+
+    auto& tex = textureCache_[key];
+    if (tex.descSet != VK_NULL_HANDLE &&
+        !tex.owned &&
+        tex.image.image == srcBridge->ldrPresentationImage_.image &&
+        tex.width == static_cast<int>(srcBridge->currentWidth_) &&
+        tex.height == static_cast<int>(srcBridge->currentHeight_)) {
+        return tex.descSet;
+    }
+
+    if (tex.image.isValid() && tex.owned) {
+        allocator_.destroyImage(tex.image);
+        tex.image = {};
+    }
+    tex.owned = false;
+    tex.image.image = srcBridge->ldrPresentationImage_.image;
+    tex.image.view = srcBridge->ldrPresentationImage_.view;
+    tex.image.sampler = srcBridge->ldrPresentationImage_.sampler;
+    tex.width = static_cast<int>(srcBridge->currentWidth_);
+    tex.height = static_cast<int>(srcBridge->currentHeight_);
+
+    if (tex.descSet == VK_NULL_HANDLE) {
+        tex.descSet = dynamicDescPool_.allocate(passMesh_.materialLayout());
+    }
+    if (!tex.descSet) return VK_NULL_HANDLE;
+
+    SceneVkDescriptorWriter writer;
+    writer.writeImage(0, srcBridge->ldrPresentationImage_.view, srcBridge->ldrPresentationImage_.sampler);
     writer.writeImage(1, passMesh_.dummyNormalView(), passMesh_.defaultSampler());
     writer.writeImage(2, passMesh_.dummyWhiteView(), passMesh_.defaultSampler());
     writer.writeImage(3, passMesh_.dummyBlackView(), passMesh_.defaultSampler());

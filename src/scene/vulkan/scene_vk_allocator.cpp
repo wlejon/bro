@@ -274,11 +274,64 @@ bool SceneVkAllocator::stageAndUploadImage(VkImage dstImage, uint32_t width, uin
     return true;
 }
 
+bool SceneVkAllocator::stageAndUploadImageLayer(VkImage dstImage, VkFormat format,
+                                                uint32_t width, uint32_t height,
+                                                uint32_t layer, uint32_t mipLevel,
+                                                const void* data, VkDeviceSize size) {
+    if (!data || size == 0 || width == 0 || height == 0) return false;
+    SceneVkBuffer staging;
+    bool ok = createBuffer(size,
+                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           staging);
+    if (!ok) return false;
+
+    if (staging.mappedData) {
+        std::memcpy(staging.mappedData, data, size);
+    } else {
+        void* mapped = nullptr;
+        if (vkMapMemory(device_.device(), staging.memory, staging.offset, size, 0, &mapped) != VK_SUCCESS) {
+            destroyBuffer(staging);
+            return false;
+        }
+        std::memcpy(mapped, data, size);
+        vkUnmapMemory(device_.device(), staging.memory);
+    }
+
+    device_.executeImmediate([&](VkCommandBuffer cmd) {
+        transitionImageLayout(cmd, dstImage, format,
+                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              1, mipLevel, VK_IMAGE_ASPECT_COLOR_BIT, 1, layer);
+
+        VkBufferImageCopy region{};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = mipLevel;
+        region.imageSubresource.baseArrayLayer = layer;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {width, height, 1};
+
+        vkCmdCopyBufferToImage(cmd, staging.buffer, dstImage,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        transitionImageLayout(cmd, dstImage, format,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              1, mipLevel, VK_IMAGE_ASPECT_COLOR_BIT, 1, layer);
+    });
+
+    destroyBuffer(staging);
+    return true;
+}
+
 bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat format,
                                    VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
                                    SceneVkImage& outImage, uint32_t mipLevels,
                                    VkSampleCountFlagBits samples, VkImageAspectFlags aspectMask,
-                                   uint32_t arrayLayers, VkImageCreateFlags createFlags) {
+                                   uint32_t arrayLayers, VkImageCreateFlags createFlags,
+                                   VkImageViewType viewType) {
     if (width == 0 || height == 0 || arrayLayers == 0) return false;
     VkDevice dev = device_.device();
 
@@ -332,9 +385,13 @@ bool SceneVkAllocator::createImage(uint32_t width, uint32_t height, VkFormat for
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = outImage.image;
-    viewInfo.viewType = (createFlags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
-        ? VK_IMAGE_VIEW_TYPE_CUBE
-        : (arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D);
+    if (viewType != VK_IMAGE_VIEW_TYPE_MAX_ENUM) {
+        viewInfo.viewType = viewType;
+    } else {
+        viewInfo.viewType = (createFlags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
+            ? VK_IMAGE_VIEW_TYPE_CUBE
+            : (arrayLayers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D);
+    }
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspectMask;
     viewInfo.subresourceRange.baseMipLevel = 0;
@@ -379,7 +436,12 @@ bool SceneVkAllocator::createTexture2D(const void* pixelData, const TextureDesc&
     if (!ok) return false;
 
     if (pixelData) {
-        VkDeviceSize imageSize = static_cast<VkDeviceSize>(desc.width) * desc.height * 4;
+        uint32_t bpp = 4;
+        if (desc.format == VK_FORMAT_R8_UNORM) bpp = 1;
+        else if (desc.format == VK_FORMAT_R32_SFLOAT) bpp = 4;
+        else if (desc.format == VK_FORMAT_R16G16B16A16_SFLOAT) bpp = 8;
+        else if (desc.format == VK_FORMAT_R32G32B32A32_SFLOAT) bpp = 16;
+        VkDeviceSize imageSize = static_cast<VkDeviceSize>(desc.width) * desc.height * bpp;
         if (!stageAndUploadImage(outImage.image, desc.width, desc.height, pixelData, imageSize, mipLevels)) {
             destroyImage(outImage);
             return false;
@@ -430,7 +492,8 @@ bool SceneVkAllocator::createTexture2D(const void* pixelData, const TextureDesc&
 }
 
 void SceneVkAllocator::generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFormat format,
-                                      int32_t texWidth, int32_t texHeight, uint32_t mipLevels) {
+                                      int32_t texWidth, int32_t texHeight, uint32_t mipLevels,
+                                      uint32_t baseArrayLayer, uint32_t layerCount) {
     // Check linear blitting support
     VkFormatProperties formatProperties;
     vkGetPhysicalDeviceFormatProperties(device_.physicalDevice(), format, &formatProperties);
@@ -445,8 +508,8 @@ void SceneVkAllocator::generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFor
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.baseArrayLayer = baseArrayLayer;
+    barrier.subresourceRange.layerCount = layerCount;
     barrier.subresourceRange.levelCount = 1;
 
     int32_t mipWidth = texWidth;
@@ -470,14 +533,14 @@ void SceneVkAllocator::generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFor
         blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
         blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.srcSubresource.mipLevel = i - 1;
-        blit.srcSubresource.baseArrayLayer = 0;
-        blit.srcSubresource.layerCount = 1;
+        blit.srcSubresource.baseArrayLayer = baseArrayLayer;
+        blit.srcSubresource.layerCount = layerCount;
         blit.dstOffsets[0] = {0, 0, 0};
         blit.dstOffsets[1] = {mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1};
         blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.dstSubresource.mipLevel = i;
-        blit.dstSubresource.baseArrayLayer = 0;
-        blit.dstSubresource.layerCount = 1;
+        blit.dstSubresource.baseArrayLayer = baseArrayLayer;
+        blit.dstSubresource.layerCount = layerCount;
 
         vkCmdBlitImage(cmd,
                        image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -516,7 +579,8 @@ void SceneVkAllocator::generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFor
 void SceneVkAllocator::transitionImageLayout(VkCommandBuffer cmd, VkImage image, VkFormat format,
                                             VkImageLayout oldLayout, VkImageLayout newLayout,
                                             uint32_t mipLevels, uint32_t baseMipLevel,
-                                            VkImageAspectFlags aspectMask) {
+                                            VkImageAspectFlags aspectMask,
+                                            uint32_t layerCount, uint32_t baseArrayLayer) {
     (void)format;
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -528,8 +592,8 @@ void SceneVkAllocator::transitionImageLayout(VkCommandBuffer cmd, VkImage image,
     barrier.subresourceRange.aspectMask = aspectMask;
     barrier.subresourceRange.baseMipLevel = baseMipLevel;
     barrier.subresourceRange.levelCount = mipLevels;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.baseArrayLayer = baseArrayLayer;
+    barrier.subresourceRange.layerCount = layerCount;
 
     VkPipelineStageFlags sourceStage;
     VkPipelineStageFlags destinationStage;

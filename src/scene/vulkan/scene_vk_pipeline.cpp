@@ -128,6 +128,12 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setMultisamplingNone() {
     return *this;
 }
 
+SceneVkPipelineBuilder& SceneVkPipelineBuilder::setMultisampling(VkSampleCountFlagBits samples) {
+    multisampling_.sampleShadingEnable = VK_FALSE;
+    multisampling_.rasterizationSamples = samples;
+    return *this;
+}
+
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::disableBlending(uint32_t colorAttachmentCount) {
     colorBlendAttachments_.clear();
     for (uint32_t i = 0; i < colorAttachmentCount; ++i) {

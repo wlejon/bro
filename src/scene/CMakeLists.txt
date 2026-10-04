@@ -171,6 +171,8 @@ add_library(bro_scene STATIC
     vulkan/pass_billboard.cpp
     vulkan/pass_particles.cpp
     vulkan/pass_decal.cpp
+    vulkan/pass_reflection_probe.cpp
+    vulkan/pass_terrain.cpp
     vulkan/scene_vk_bridge.cpp
     vulkan/scene_vk_bridge_resources.cpp
     vulkan/scene_vk_bridge_passes.cpp

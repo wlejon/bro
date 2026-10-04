@@ -21,6 +21,7 @@ namespace bro::scene {
 
 struct ShadeMapBinding {
     GLuint tex = 0;                 // R8 texture, one texel per cell
+    const uint8_t* pixels = nullptr;// raw R8 data if available
     bromath::Vec3 origin;           // world position of cell (0, 0)'s grid origin
     float cellSize = 1.0f;          // world units per cell (hex: circumradius)
     bool hex = false;               // pointy-top odd-r hex grid, else square

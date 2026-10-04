@@ -34,9 +34,66 @@ layout(set = 1, binding = 0) uniform LightingUBO {
     mat4 shadowCascadeProj;
     vec4 numLights; // x: sun count, y: point light count, z: hasShadow, w: pad
     PointLight pointLights[16];
+    mat4 probeWorldToLocal;
+    mat4 probeLocalToWorld;
+    vec4 probePos;     // xyz = pos, w = enabled (1 or 0)
+    vec4 probeBoxSize; // xyz = box size, w = boxProjection (1 or 0)
+    vec4 probeParams;  // x = intensity, y = blendDist, z = maxLOD, w = pad
+    vec4 shadeOrigin;  // xyz = origin, w = hasShadeMap (1 or 0)
+    vec4 shadeParams;  // x = cellSize, y = hex, z = width, w = height
 } lighting;
 
 layout(set = 1, binding = 1) uniform sampler2DArrayShadow shadowMapArray;
+layout(set = 1, binding = 2) uniform samplerCube texReflectionProbe;
+layout(set = 1, binding = 3) uniform sampler2D texShadeMap;
+
+float cellShade() {
+    float R = max(lighting.shadeParams.x, 1e-6);
+    vec3 nudged = inWorldPos - normalize(inNormal) * (0.05 * R);
+    vec2 p = nudged.xz - lighting.shadeOrigin.xz;
+    int cx, cy;
+    if (lighting.shadeParams.y > 0.5) {
+        float r = p.y / (1.5 * R);
+        float q = p.x / (1.7320508 * R) - r * 0.5;
+        float x = q, z = r, y = -x - z;
+        float rx = floor(x + 0.5), ry = floor(y + 0.5), rz = floor(z + 0.5);
+        float dx = abs(rx - x), dy = abs(ry - y), dz = abs(rz - z);
+        if (dx > dy && dx > dz) rx = -ry - rz;
+        else if (dy > dz)       ry = -rx - rz;
+        else                    rz = -rx - ry;
+        int hq = int(rx), hr = int(rz);
+        cy = hr;
+        cx = hq + (hr - (hr & 1)) / 2;
+    } else {
+        cx = int(floor(p.x / R));
+        cy = int(floor(p.y / R));
+    }
+    if (cx < 0 || cy < 0 || cx >= int(lighting.shadeParams.z) || cy >= int(lighting.shadeParams.w))
+        return 1.0;
+    return texelFetch(texShadeMap, ivec2(cx, cy), 0).r;
+}
+
+vec3 probeRadiance(vec3 R, float rough, out float w) {
+    vec3 lp = (lighting.probeWorldToLocal * vec4(inWorldPos, 1.0)).xyz;
+    vec3 edgeDist = (vec3(0.5) - abs(lp)) * lighting.probeBoxSize.xyz;
+    float dmin = min(min(edgeDist.x, edgeDist.y), edgeDist.z);
+    float blendDist = lighting.probeParams.y;
+    w = (blendDist > 0.0) ? clamp(dmin / blendDist, 0.0, 1.0) : step(0.0, dmin);
+    vec3 dir = R;
+    if (lighting.probeBoxSize.w > 0.5) {
+        vec3 ld = mat3(lighting.probeWorldToLocal) * R;
+        ld = mix(ld, vec3(1e-6), vec3(lessThan(abs(ld), vec3(1e-6))));
+        vec3 invD = 1.0 / ld;
+        vec3 t1 = (vec3(-0.5) - lp) * invD;
+        vec3 t2 = (vec3( 0.5) - lp) * invD;
+        vec3 tm = max(t1, t2);
+        float tHit = min(min(tm.x, tm.y), tm.z);
+        vec3 hit = (lighting.probeLocalToWorld * vec4(lp + ld * tHit, 1.0)).xyz;
+        vec3 d2 = hit - lighting.probePos.xyz;
+        if (dot(d2, d2) > 1e-8) dir = d2;
+    }
+    return textureLod(texReflectionProbe, dir, rough * lighting.probeParams.z).rgb;
+}
 
 layout(set = 2, binding = 0) uniform sampler2D texAlbedo;
 layout(set = 2, binding = 1) uniform sampler2D texNormal;
@@ -212,6 +269,17 @@ void main() {
     vec3 color = ambient + direct + emissive;
     if ((flags & 16u) != 0u) {
         color = albedo.rgb + emissive;
+    } else if (lighting.probePos.w > 0.5) {
+        float probeW = 0.0;
+        vec3 R_p = reflect(-V, N);
+        vec3 F_p = fresnelSchlick(max(dot(N, V), 0.0), F0);
+        vec3 raw = probeRadiance(R_p, roughness, probeW);
+        vec3 probeSpec = raw * F_p * lighting.probeParams.x;
+        color += probeSpec * probeW;
+    }
+
+    if ((flags & 32u) != 0u && lighting.shadeOrigin.w > 0.5) {
+        color *= cellShade();
     }
 
     float camDist = length(camera.eyePos.xyz - inWorldPos);

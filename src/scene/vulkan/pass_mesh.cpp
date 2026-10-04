@@ -102,10 +102,12 @@ bool PassMesh::createDescriptorLayouts(VkDevice device) {
     cameraLayout_ = camBuilder.build(device);
     if (!cameraLayout_) return false;
 
-    // Set 1: Lighting Layout (UBO + Shadow Cascade Array)
+    // Set 1: Lighting Layout (UBO + Shadow Cascade Array + Reflection Probe Cubemap + Tile Shade Map)
     SceneVkDescriptorLayoutBuilder lightBuilder;
     lightBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     lightBuilder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    lightBuilder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
+    lightBuilder.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     lightingLayout_ = lightBuilder.build(device);
     if (!lightingLayout_) return false;
 
@@ -218,7 +220,7 @@ bool PassMesh::createPipelines(VkDevice device, const Config& config) {
            .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
            .setPolygonMode(VK_POLYGON_MODE_FILL)
            .setCullMode(config.cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-           .setMultisamplingNone()
+           .setMultisampling(config.samples)
            .disableBlending(1)
            .enableDepthTest(config.depthWrite, config.depthCompareOp)
            .setDynamicRendering({config.colorFormat}, config.depthFormat);
@@ -250,7 +252,7 @@ bool PassMesh::createPipelines(VkDevice device, const Config& config) {
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(config.cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-         .setMultisamplingNone()
+         .setMultisampling(config.samples)
          .disableBlending(1)
          .enableDepthTest(config.depthWrite, config.depthCompareOp)
          .setDynamicRendering({config.colorFormat}, config.depthFormat);
@@ -280,7 +282,7 @@ bool PassMesh::createPipelines(VkDevice device, const Config& config) {
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(config.cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-         .setMultisamplingNone()
+         .setMultisampling(config.samples)
          .disableBlending(1)
          .enableDepthTest(config.depthWrite, config.depthCompareOp)
          .setDynamicRendering({config.colorFormat}, config.depthFormat);

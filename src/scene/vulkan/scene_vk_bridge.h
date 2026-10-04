@@ -13,6 +13,8 @@
 #include "scene/vulkan/pass_billboard.h"
 #include "scene/vulkan/pass_particles.h"
 #include "scene/vulkan/pass_decal.h"
+#include "scene/vulkan/pass_reflection_probe.h"
+#include "scene/vulkan/pass_terrain.h"
 #include <bromesh/mesh_data.h>
 
 #include <memory>
@@ -59,7 +61,8 @@ public:
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
 
 private:
-    bool ensureTargets(uint32_t width, uint32_t height);
+    friend class PassReflectionProbe;
+    bool ensureTargets(uint32_t width, uint32_t height, VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT);
 
     struct CachedMeshBuffer {
         SceneVkBuffer vertexBuffer;
@@ -89,9 +92,12 @@ private:
         int width = 0;
         int height = 0;
         uint64_t hash = 0;
+        bool owned = true;
     };
     VkDescriptorSet uploadTexture(const void* key, int width, int height, const uint8_t* rgba);
 
+    void prepareDynamicBuffers(SceneGraph& graph);
+    void renderShadowPass(VkCommandBuffer cmd, SceneGraph& graph, const SceneLightingUniforms& lightUniforms, CullStats& stats);
     void renderDecalsPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer, CullStats& stats, bool& hasDrawnMeshes);
     void renderParticlesPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer, CullStats& stats, bool& hasDrawnMeshes);
     void renderBillboardsPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer, CullStats& stats, bool& hasDrawnMeshes);
@@ -107,12 +113,22 @@ private:
     PassBillboard passBillboard_;
     PassParticles passParticles_;
     PassDecal passDecal_;
+    PassReflectionProbe passReflectionProbe_;
+    PassTerrain passTerrain_;
 
     SceneVkShadowCascadeTarget shadowTarget_;
     SceneVkRenderTarget hdrTarget_;
     SceneVkImage depthCopyImage_;
     SceneVkImage ldrPresentationImage_;
     SceneVkBuffer readbackBuffer_;
+
+    SceneVkImage dummyShadeMap_;
+    SceneVkImage shadeMapImage_;
+    int shadeMapW_ = 0;
+    int shadeMapH_ = 0;
+    uint64_t shadeMapHash_ = 0;
+
+    VkDescriptorSet uploadExternalSceneTexture(SceneVkBridge* srcBridge, const void* key);
 
     SceneVkBuffer cameraUbo_;
     SceneVkBuffer lightingUbo_;
@@ -129,6 +145,7 @@ private:
 
     uint32_t currentWidth_ = 0;
     uint32_t currentHeight_ = 0;
+    VkSampleCountFlagBits currentSampleCount_ = VK_SAMPLE_COUNT_1_BIT;
     bool hasMeshContent_ = false;
     uint32_t finalColorTextureId_ = 1;
 };

@@ -16,6 +16,142 @@
 
 namespace bro::scene::vk {
 
+void SceneVkBridge::prepareDynamicBuffers(SceneGraph& graph) {
+    for (auto& [id, node] : graph.nodes_) {
+        if (!node->renderVisible()) continue;
+        if (node->type() == SceneNode::Type::Mesh) {
+            auto* mn = static_cast<MeshNode*>(node.get());
+            if (mn->asSkinnedMesh()) {
+                auto* sm = mn->asSkinnedMesh();
+                if (!sm->currentMesh().empty()) {
+                    uploadMesh(sm->currentMesh(), sm);
+                    auto& dynBuf = getDynamicBuffers(sm);
+                    size_t skinVc = sm->currentMesh().vertexCount();
+                    size_t skinByteSize = skinVc * 24;
+                    if (dynBuf.skinAttribCapacity < skinByteSize) {
+                        allocator_.destroyBuffer(dynBuf.skinAttribBuffer);
+                        std::vector<uint8_t> skinBytes(skinByteSize, 0);
+                        const auto& j = sm->skinJoints();
+                        const auto& w = sm->skinWeights();
+                        for (size_t vi = 0; vi < skinVc; ++vi) {
+                            uint16_t* dstJ = reinterpret_cast<uint16_t*>(skinBytes.data() + vi * 24);
+                            float* dstW = reinterpret_cast<float*>(skinBytes.data() + vi * 24 + 8);
+                            if (vi * 4 + 3 < j.size()) {
+                                dstJ[0] = j[vi * 4 + 0]; dstJ[1] = j[vi * 4 + 1];
+                                dstJ[2] = j[vi * 4 + 2]; dstJ[3] = j[vi * 4 + 3];
+                            }
+                            if (vi * 4 + 3 < w.size()) {
+                                dstW[0] = w[vi * 4 + 0]; dstW[1] = w[vi * 4 + 1];
+                                dstW[2] = w[vi * 4 + 2]; dstW[3] = w[vi * 4 + 3];
+                            } else {
+                                dstW[0] = 1.0f;
+                            }
+                        }
+                        allocator_.createVertexBuffer(skinByteSize, skinBytes.data(), dynBuf.skinAttribBuffer);
+                        dynBuf.skinAttribCapacity = skinByteSize;
+                    }
+
+                    if (!dynBuf.boneUbo.isValid()) {
+                        allocator_.createUniformBuffer(256 * 16 * sizeof(float), dynBuf.boneUbo);
+                        dynBuf.boneSet = dynamicDescPool_.allocate(passMesh_.bonePaletteLayout());
+                        SceneVkDescriptorWriter writer;
+                        writer.writeBuffer(0, dynBuf.boneUbo.buffer, 256 * 16 * sizeof(float));
+                        writer.updateSet(device_.device(), dynBuf.boneSet);
+
+                        dynBuf.boneSetShadow = dynamicDescPool_.allocate(passShadow_.bonePaletteLayout());
+                        SceneVkDescriptorWriter writerShadow;
+                        writerShadow.writeBuffer(0, dynBuf.boneUbo.buffer, 256 * 16 * sizeof(float));
+                        writerShadow.updateSet(device_.device(), dynBuf.boneSetShadow);
+                    }
+                    std::vector<float> boneData(256 * 16, 0.0f);
+                    for (int b = 0; b < 256; ++b) {
+                        boneData[b * 16 + 0] = 1.0f;
+                        boneData[b * 16 + 5] = 1.0f;
+                        boneData[b * 16 + 10] = 1.0f;
+                        boneData[b * 16 + 15] = 1.0f;
+                    }
+                    const auto& pal = sm->skinPalette();
+                    if (!pal.empty()) {
+                        size_t copyCount = std::min(pal.size(), boneData.size());
+                        std::memcpy(boneData.data(), pal.data(), copyCount * sizeof(float));
+                    }
+                    allocator_.updateUniformBuffer(dynBuf.boneUbo, boneData.data(), boneData.size() * sizeof(float));
+                }
+            } else {
+                if (!mn->currentMesh().empty()) {
+                    uploadMesh(mn->currentMesh(), mn);
+                }
+            }
+        } else if (node->type() == SceneNode::Type::InstancedMesh) {
+            auto* im = static_cast<InstancedMeshNode*>(node.get());
+            if (!im->mesh().empty() && im->instanceCount() > 0) {
+                uploadMesh(im->mesh(), im);
+                auto& dynBuf = getDynamicBuffers(im);
+                size_t instByteSize = im->instanceCount() * 16 * sizeof(float);
+                if (dynBuf.instanceCapacity < instByteSize) {
+                    allocator_.destroyBuffer(dynBuf.instanceBuffer);
+                    allocator_.createVertexBuffer(instByteSize, im->instanceData().data(), dynBuf.instanceBuffer);
+                    dynBuf.instanceCapacity = instByteSize;
+                } else {
+                    allocator_.stageAndUploadBuffer(dynBuf.instanceBuffer.buffer, im->instanceData().data(), instByteSize);
+                }
+            }
+        }
+    }
+}
+
+void SceneVkBridge::renderShadowPass(VkCommandBuffer cmd, SceneGraph& graph,
+                                     const SceneLightingUniforms& lightUniforms, CullStats& stats) {
+    if (lightUniforms.numLights[2] <= 0.5f) return;
+
+    passShadow_.beginCascade(cmd, device_, shadowTarget_, 0, lightUniforms.shadowCascadeProj);
+    for (auto& [id, node] : graph.nodes_) {
+        if (!node->renderVisible()) continue;
+        if (node->type() == SceneNode::Type::Mesh) {
+            auto* mn = static_cast<MeshNode*>(node.get());
+            if (!mn->castsShadow() || mn->currentMesh().empty()) continue;
+            auto& meshBuf = uploadMesh(mn->currentMesh(), mn);
+            if (mn->asSkinnedMesh()) {
+                auto* sm = mn->asSkinnedMesh();
+                auto& dynBuf = getDynamicBuffers(sm);
+                SkinnedShadowCaster caster{};
+                caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
+                caster.indexBuffer = meshBuf.indexBuffer.buffer;
+                caster.indexCount = meshBuf.indexCount;
+                caster.skinAttribBuffer = dynBuf.skinAttribBuffer.buffer;
+                caster.bonePaletteSet = dynBuf.boneSetShadow;
+                std::memcpy(caster.modelMatrix, sm->worldMatrix().data, sizeof(caster.modelMatrix));
+                passShadow_.drawSkinned(cmd, caster);
+                stats.shadowDrawn++;
+            } else {
+                ShadowCaster caster{};
+                caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
+                caster.indexBuffer = meshBuf.indexBuffer.buffer;
+                caster.indexCount = meshBuf.indexCount;
+                std::memcpy(caster.modelMatrix, mn->worldMatrix().data, sizeof(caster.modelMatrix));
+                passShadow_.drawStatic(cmd, caster);
+                stats.shadowDrawn++;
+            }
+        } else if (node->type() == SceneNode::Type::InstancedMesh) {
+            auto* im = static_cast<InstancedMeshNode*>(node.get());
+            if (!im->castsShadow() || im->mesh().empty() || im->instanceCount() == 0) continue;
+            auto& meshBuf = uploadMesh(im->mesh(), im);
+            auto& dynBuf = getDynamicBuffers(im);
+            InstancedShadowCaster caster{};
+            caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
+            caster.indexBuffer = meshBuf.indexBuffer.buffer;
+            caster.indexCount = meshBuf.indexCount;
+            caster.instanceBuffer = dynBuf.instanceBuffer.buffer;
+            caster.instanceCount = static_cast<uint32_t>(im->instanceCount());
+            std::memcpy(caster.modelMatrix, im->worldMatrix().data, sizeof(caster.modelMatrix));
+            passShadow_.drawInstanced(cmd, caster);
+            stats.shadowDrawn++;
+        }
+    }
+    passShadow_.endCascade(cmd, device_, shadowTarget_);
+    shadowTarget_.transitionToShaderRead(cmd, allocator_);
+}
+
 void SceneVkBridge::renderDecalsPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer,
                                      CullStats& stats, bool& hasDrawnMeshes) {
     std::vector<DecalNode*> decals;

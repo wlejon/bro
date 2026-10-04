@@ -185,10 +185,12 @@ static void stage(MeshNode::PendingTex& p, int w, int h, const uint8_t* rgba) {
 
 void MeshNode::setBaseColorTexture(int width, int height, const uint8_t* rgba) {
     externalBaseColorTex_ = nullptr;  // owned bytes win; drop the live link
+    externalSceneProvider_ = nullptr;
     stage(pendingBase_, width, height, rgba);
 }
 void MeshNode::clearBaseColorTexture() {
     externalBaseColorTex_ = nullptr;
+    externalSceneProvider_ = nullptr;
     stage(pendingBase_, 0, 0, nullptr);
 }
 

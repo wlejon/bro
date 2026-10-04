@@ -102,6 +102,38 @@ bool SceneVkRenderTarget::init(SceneVkAllocator& allocator, const SceneVkRenderT
         }
     }
 
+    // 3. Create MSAA color and depth buffers if sampleCount > 1
+    if (desc_.sampleCount > VK_SAMPLE_COUNT_1_BIT) {
+        if (desc_.hasColor) {
+            bool ok = allocator.createImage(width_, height_, desc_.colorFormat,
+                                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                           msaaColorImage_, 1, desc_.sampleCount,
+                                           VK_IMAGE_ASPECT_COLOR_BIT);
+            if (!ok) {
+                LOG_ERROR("SceneVkRenderTarget: Failed creating MSAA color image");
+                cleanup(allocator);
+                return false;
+            }
+        }
+        if (desc_.hasDepth) {
+            VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            if (desc_.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT || desc_.depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+                aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+            bool ok = allocator.createImage(width_, height_, desc_.depthFormat,
+                                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                           msaaDepthImage_, 1, desc_.sampleCount,
+                                           aspectMask);
+            if (!ok) {
+                LOG_ERROR("SceneVkRenderTarget: Failed creating MSAA depth image");
+                cleanup(allocator);
+                return false;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -114,6 +146,12 @@ bool SceneVkRenderTarget::resize(SceneVkAllocator& allocator, uint32_t width, ui
 }
 
 void SceneVkRenderTarget::cleanup(SceneVkAllocator& allocator) {
+    if (msaaColorImage_.isValid()) {
+        allocator.destroyImage(msaaColorImage_);
+    }
+    if (msaaDepthImage_.isValid()) {
+        allocator.destroyImage(msaaDepthImage_);
+    }
     if (colorImage_.isValid()) {
         allocator.destroyImage(colorImage_);
     }
@@ -135,44 +173,94 @@ void SceneVkRenderTarget::beginRendering(VkCommandBuffer cmd, SceneVkDevice& dev
 
     VkRenderingAttachmentInfoKHR colorAttachment{};
     if (desc_.hasColor) {
-        if (colorImage_.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
-            SceneVkAllocator allocator(device);
-            allocator.transitionImageLayout(cmd, colorImage_.image, desc_.colorFormat,
-                                           colorImage_.currentLayout,
-                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            colorImage_.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        SceneVkAllocator allocator(device);
+        if (desc_.sampleCount > VK_SAMPLE_COUNT_1_BIT) {
+            if (msaaColorImage_.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                allocator.transitionImageLayout(cmd, msaaColorImage_.image, desc_.colorFormat,
+                                               msaaColorImage_.currentLayout,
+                                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                msaaColorImage_.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
+            if (colorImage_.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                allocator.transitionImageLayout(cmd, colorImage_.image, desc_.colorFormat,
+                                               colorImage_.currentLayout,
+                                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                colorImage_.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
+            colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+            colorAttachment.imageView = msaaColorImage_.view;
+            colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAttachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            colorAttachment.resolveImageView = colorImage_.view;
+            colorAttachment.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAttachment.loadOp = colorLoadOp;
+            colorAttachment.storeOp = colorStoreOp;
+            colorAttachment.clearValue.color = clearColor;
+        } else {
+            if (colorImage_.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+                allocator.transitionImageLayout(cmd, colorImage_.image, desc_.colorFormat,
+                                               colorImage_.currentLayout,
+                                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                colorImage_.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
+            colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+            colorAttachment.imageView = colorImage_.view;
+            colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            colorAttachment.loadOp = colorLoadOp;
+            colorAttachment.storeOp = colorStoreOp;
+            colorAttachment.clearValue.color = clearColor;
         }
-
-        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
-        colorAttachment.imageView = colorImage_.view;
-        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorAttachment.loadOp = colorLoadOp;
-        colorAttachment.storeOp = colorStoreOp;
-        colorAttachment.clearValue.color = clearColor;
     }
 
     VkRenderingAttachmentInfoKHR depthAttachment{};
     if (desc_.hasDepth) {
-        if (depthImage_.currentLayout != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) {
-            SceneVkAllocator allocator(device);
-            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-            if (desc_.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT || desc_.depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
-                aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
-            }
-            allocator.transitionImageLayout(cmd, depthImage_.image, desc_.depthFormat,
-                                           depthImage_.currentLayout,
-                                           VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                                           1, 0, aspect);
-            depthImage_.currentLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        SceneVkAllocator allocator(device);
+        VkImageAspectFlags aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (desc_.depthFormat == VK_FORMAT_D24_UNORM_S8_UINT || desc_.depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
+            aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
         }
 
-        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
-        depthAttachment.imageView = depthImage_.view;
-        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depthAttachment.loadOp = depthLoadOp;
-        depthAttachment.storeOp = depthStoreOp;
-        depthAttachment.clearValue.depthStencil.depth = clearDepth;
-        depthAttachment.clearValue.depthStencil.stencil = 0;
+        if (desc_.sampleCount > VK_SAMPLE_COUNT_1_BIT) {
+            if (msaaDepthImage_.currentLayout != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) {
+                allocator.transitionImageLayout(cmd, msaaDepthImage_.image, desc_.depthFormat,
+                                               msaaDepthImage_.currentLayout,
+                                               VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                               1, 0, aspect);
+                msaaDepthImage_.currentLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            }
+            if (depthImage_.currentLayout != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) {
+                allocator.transitionImageLayout(cmd, depthImage_.image, desc_.depthFormat,
+                                               depthImage_.currentLayout,
+                                               VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                               1, 0, aspect);
+                depthImage_.currentLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            }
+            depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+            depthAttachment.imageView = msaaDepthImage_.view;
+            depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depthAttachment.resolveMode = VK_RESOLVE_MODE_MIN_BIT;
+            depthAttachment.resolveImageView = depthImage_.view;
+            depthAttachment.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depthAttachment.loadOp = depthLoadOp;
+            depthAttachment.storeOp = depthStoreOp;
+            depthAttachment.clearValue.depthStencil.depth = clearDepth;
+            depthAttachment.clearValue.depthStencil.stencil = 0;
+        } else {
+            if (depthImage_.currentLayout != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) {
+                allocator.transitionImageLayout(cmd, depthImage_.image, desc_.depthFormat,
+                                               depthImage_.currentLayout,
+                                               VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                               1, 0, aspect);
+                depthImage_.currentLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            }
+            depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+            depthAttachment.imageView = depthImage_.view;
+            depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+            depthAttachment.loadOp = depthLoadOp;
+            depthAttachment.storeOp = depthStoreOp;
+            depthAttachment.clearValue.depthStencil.depth = clearDepth;
+            depthAttachment.clearValue.depthStencil.stencil = 0;
+        }
     }
 
     VkRenderingInfoKHR renderingInfo{};
