@@ -8,6 +8,7 @@
 #include "scene/vulkan/pass_shadow.h"
 #include "scene/vulkan/pass_environment.h"
 #include "scene/vulkan/pass_postfx.h"
+#include "scene/vulkan/pass_reflection_probe.h"
 #include "render/vulkan_context.h"
 #include "util/log.h"
 
@@ -157,6 +158,10 @@ int main() {
     PassPostFx passPostFx;
     bool postfxOk = passPostFx.init(device, allocator, kWidth, kHeight);
     assert(postfxOk);
+
+    PassReflectionProbe passProbe;
+    bool probeOk = passProbe.init(device, allocator);
+    assert(probeOk);
 
     std::cout << "PASSED" << std::endl;
 
@@ -331,6 +336,8 @@ int main() {
     SceneVkDescriptorWriter lightWriter;
     lightWriter.writeBuffer(0, lightUbo.buffer, sizeof(lightUniforms));
     lightWriter.writeImage(1, shadowTarget.arrayView(), shadowTarget.shadowSampler());
+    lightWriter.writeImage(2, passProbe.dummyCubemapView(), passProbe.activeCubemapSampler());
+    lightWriter.writeImage(3, passMesh.dummyBlackView(), passMesh.defaultSampler());
     lightWriter.updateSet(device.device(), lightSet);
 
     // -------------------------------------------------------------------------
@@ -532,6 +539,7 @@ int main() {
     passMesh.cleanup(device, allocator);
     passEnv.cleanup(device, allocator);
     passShadow.cleanup(device);
+    passProbe.cleanup(device, allocator);
 
     device.shutdown();
 

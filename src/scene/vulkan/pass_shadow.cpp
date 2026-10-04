@@ -135,11 +135,17 @@ bool PassShadow::createPipelines(VkDevice device, const Config& config) {
     posAttr.format = VK_FORMAT_R32G32B32_SFLOAT;
     posAttr.offset = 0;
 
+    std::vector<VkVertexInputAttributeDescription> staticAttributes = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},    // inPos
+        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},   // inNormal
+        {2, 0, VK_FORMAT_R32G32_SFLOAT, 24}       // inUV
+    };
+
     // 1. Static shadow pipeline
     SceneVkPipelineBuilder bStatic;
     bStatic.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsStatic)
            .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fs)
-           .setVertexInput({staticBinding}, {posAttr})
+           .setVertexInput({staticBinding}, staticAttributes)
            .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
            .setPolygonMode(VK_POLYGON_MODE_FILL)
            .setCullMode(config.cullMode, VK_FRONT_FACE_COUNTER_CLOCKWISE)
@@ -188,11 +194,9 @@ bool PassShadow::createPipelines(VkDevice device, const Config& config) {
     skinBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
     std::vector<VkVertexInputBindingDescription> skinBindings = {staticBinding, skinBinding};
-    std::vector<VkVertexInputAttributeDescription> skinAttrs = {
-        posAttr,
-        {5, 1, VK_FORMAT_R16G16B16A16_UINT, 0},
-        {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 8}
-    };
+    std::vector<VkVertexInputAttributeDescription> skinAttrs = staticAttributes;
+    skinAttrs.push_back({5, 1, VK_FORMAT_R16G16B16A16_UINT, 0});
+    skinAttrs.push_back({6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 8});
 
     SceneVkPipelineBuilder bSkin;
     bSkin.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsSkin)

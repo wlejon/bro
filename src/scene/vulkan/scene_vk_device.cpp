@@ -234,8 +234,6 @@ bool SceneVkDevice::submitFrame(VkSemaphore waitSemaphore,
     if (signalSemaphore != VK_NULL_HANDLE) {
         signalSemaphores.push_back(signalSemaphore);
     }
-    // Also signal frame's render semaphore for consumers
-    signalSemaphores.push_back(frame.renderSemaphore);
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -249,14 +247,26 @@ bool SceneVkDevice::submitFrame(VkSemaphore waitSemaphore,
 
     // Timeline synchronization if available
     VkTimelineSemaphoreSubmitInfo timelineInfo{};
-    uint64_t waitVal = timelineValue_;
     uint64_t signalVal = timelineValue_ + 1;
+    std::vector<uint64_t> signalValues;
+    std::vector<uint64_t> waitValues;
+
     if (timelineSemaphore_ != VK_NULL_HANDLE) {
-        timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
-        timelineInfo.signalSemaphoreValueCount = 1;
-        timelineInfo.pSignalSemaphoreValues = &signalVal;
-        submitInfo.pNext = &timelineInfo;
         signalSemaphores.push_back(timelineSemaphore_);
+        signalValues.resize(signalSemaphores.size(), 0);
+        signalValues.back() = signalVal;
+
+        timelineInfo.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        timelineInfo.signalSemaphoreValueCount = static_cast<uint32_t>(signalValues.size());
+        timelineInfo.pSignalSemaphoreValues = signalValues.data();
+
+        if (!waitSemaphores.empty()) {
+            waitValues.resize(waitSemaphores.size(), 0);
+            timelineInfo.waitSemaphoreValueCount = static_cast<uint32_t>(waitValues.size());
+            timelineInfo.pWaitSemaphoreValues = waitValues.data();
+        }
+
+        submitInfo.pNext = &timelineInfo;
         submitInfo.signalSemaphoreCount = static_cast<uint32_t>(signalSemaphores.size());
         submitInfo.pSignalSemaphores = signalSemaphores.data();
     }

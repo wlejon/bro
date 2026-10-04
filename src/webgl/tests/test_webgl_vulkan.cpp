@@ -286,7 +286,7 @@ int main() {
         assert(presenter.init());
 
         // Zero-copy: Pass canvas VkImage directly to presenter without CPU host transfers!
-        assert(presenter.presentImage(ctx.canvas().colorImage(), w, h));
+        assert(presenter.presentImage(ctx.canvas().colorImage(), w, h, ctx.canvas().colorLayout()));
 
         std::vector<uint8_t> presenterPixels;
         uint32_t pw = 0, ph = 0;

@@ -12,6 +12,7 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_pipeline.cpp
     vulkan/webgl_vk_context.cpp
     vulkan/webgl_vk_context_buffers.cpp
+    vulkan/webgl_vk_context_program.cpp
     vulkan/webgl_vk_context_uniforms.cpp
     vulkan/webgl_vk_context_textures.cpp
     vulkan/webgl_vk_context_fbo.cpp
