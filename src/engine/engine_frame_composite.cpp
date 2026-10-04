@@ -161,6 +161,9 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
             }
             if (!wctx && !webglEntries_.empty()) wctx = webglEntries_[0].context.get();
             if (!wctx) continue;
+            // The canvas's recorded work must be submitted before the
+            // presenter's submission samples it (queue order does the rest).
+            wctx->flush();
             if (coversFrame(layer) && pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ &&
                 wctx->vkColorImage() != VK_NULL_HANDLE) {
                 claimFrameImage(wctx->vkColorImage(), wctx->vkColorLayout(),

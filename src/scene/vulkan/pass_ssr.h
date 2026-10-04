@@ -37,7 +37,6 @@ public:
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
 
     void render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                SceneVkDescriptorPool& descPool,
                 const SceneVkImage& colorSnapshot,
                 const SceneVkImage& depthImage,
                 VkImageView outputTargetView,
@@ -53,7 +52,6 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 
-    SceneVkBuffer ssrUbo_;
     VkSampler sampler_ = VK_NULL_HANDLE;
 };
 

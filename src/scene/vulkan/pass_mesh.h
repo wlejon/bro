@@ -83,6 +83,10 @@ public:
     /// Clean up pipelines, layouts, and dummy textures.
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
 
+    /// Rebuild the pipelines for a new render-target sample count (the
+    /// caller makes sure no in-flight frame still uses the old ones).
+    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
+
     /// Begin mesh rendering pass recording in command buffer.
     void begin(VkCommandBuffer cmd,
                VkDescriptorSet cameraSet,
@@ -124,6 +128,7 @@ public:
 private:
     bool createDescriptorLayouts(VkDevice device);
     bool createPipelines(VkDevice device, const Config& config);
+    void destroyPipelines(VkDevice device);
     bool createDefaultTextures(SceneVkDevice& device, SceneVkAllocator& allocator);
 
     Config config_{};

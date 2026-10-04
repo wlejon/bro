@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -11,6 +12,7 @@ WebGLVkContext::WebGLVkContext(int width, int height, render::VulkanContext& con
 {
     canvas_.init(width, height);
     initVulkanResources();
+    canvas_.recordInit(commands());
 
     // Default viewport and scissor match canvas
     viewport(0, 0, width, height);
@@ -28,58 +30,15 @@ WebGLVkContext::~WebGLVkContext() {
 void WebGLVkContext::initVulkanResources() {
     VkDevice dev = context_.device();
 
-    // 1. Dynamic rendering dispatch
-    pfnCmdBeginRendering_ = reinterpret_cast<PFN_vkCmdBeginRendering>(vkGetDeviceProcAddr(dev, "vkCmdBeginRendering"));
-    if (!pfnCmdBeginRendering_) {
-        pfnCmdBeginRendering_ = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"));
-    }
-    pfnCmdEndRendering_ = reinterpret_cast<PFN_vkCmdEndRendering>(vkGetDeviceProcAddr(dev, "vkCmdEndRendering"));
-    if (!pfnCmdEndRendering_) {
-        pfnCmdEndRendering_ = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"));
-    }
+    frameEndHook_ = context_.frames().addFrameEndHook([this] { flushCommands(); });
 
-    // 2. Command pool
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = context_.queueFamilies().graphicsFamily;
-
-    if (vkCreateCommandPool(dev, &poolInfo, nullptr, &commandPool_) != VK_SUCCESS) {
-        LOG_ERROR("WebGLVkContext: Failed to create command pool");
-    }
-
-    // 3. Descriptor pool
-    VkDescriptorPoolSize poolSizes[2]{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = 512;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = 512;
-
-    VkDescriptorPoolCreateInfo descPoolInfo{};
-    descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    descPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    descPoolInfo.maxSets = 128;
-    descPoolInfo.poolSizeCount = 2;
-    descPoolInfo.pPoolSizes = poolSizes;
-
-    if (vkCreateDescriptorPool(dev, &descPoolInfo, nullptr, &descriptorPool_) != VK_SUCCESS) {
-        LOG_ERROR("WebGLVkContext: Failed to create descriptor pool");
-    }
-
-    // 4. Descriptor set layout for samplers (0..7) and uniform blocks (8..15)
+    // Samplers (0..7), uniform blocks (8..15), default-block uniforms (16).
     std::vector<VkDescriptorSetLayoutBinding> bindings;
-    for (uint32_t i = 0; i < 8; ++i) {
+    for (uint32_t i = 0; i <= kDefaultUniformBinding; ++i) {
         VkDescriptorSetLayoutBinding b{};
         b.binding = i;
-        b.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        b.descriptorCount = 1;
-        b.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
-        bindings.push_back(b);
-    }
-    for (uint32_t i = 8; i < 16; ++i) {
-        VkDescriptorSetLayoutBinding b{};
-        b.binding = i;
-        b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        b.descriptorType = i < kFirstUniformBlockBinding ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                                                         : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         b.descriptorCount = 1;
         b.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
         bindings.push_back(b);
@@ -89,29 +48,19 @@ void WebGLVkContext::initVulkanResources() {
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
     layoutInfo.pBindings = bindings.data();
-
     if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr, &descriptorSetLayout_) != VK_SUCCESS) {
         LOG_ERROR("WebGLVkContext: Failed to create descriptor set layout");
     }
-
-    // 5. Pipeline layout with Push Constants
-    VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushConstantRange.offset = 0;
-    pushConstantRange.size = 128; // Standard 128-byte push constants
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout_;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-
     if (vkCreatePipelineLayout(dev, &pipelineLayoutInfo, nullptr, &pipelineLayout_) != VK_SUCCESS) {
         LOG_ERROR("WebGLVkContext: Failed to create pipeline layout");
     }
 
-    // 6. Dummy 1x1 fallback texture & sampler
+    // Dummy 1x1 texture (transparent black) and sampler for unbound sampler slots.
     if (!context_.createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
                               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dummyImage_, dummyMemory_)) {
@@ -142,35 +91,24 @@ void WebGLVkContext::initVulkanResources() {
             LOG_ERROR("WebGLVkContext: Failed to create dummy fallback sampler");
         }
 
-        VkCommandBuffer dummyCmd = context_.beginSingleTimeCommands();
-        context_.transitionImageLayout(dummyImage_, VK_FORMAT_R8G8B8A8_UNORM,
-                                       VK_IMAGE_LAYOUT_UNDEFINED,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, dummyCmd);
-        context_.endSingleTimeCommands(dummyCmd);
+        VkCommandBuffer cmd = commands();
+        const VkImageSubresourceRange range = render::colorRange();
+        render::cmdTransitionImage(cmd, dummyImage_, range, VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkClearColorValue black{};
+        vkCmdClearColorImage(cmd, dummyImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+        render::cmdTransitionImage(cmd, dummyImage_, range, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
-    // 7. Generic fallback attribute buffer (16 vec4 attributes = 256 bytes)
     for (uint32_t i = 0; i < 16; ++i) {
         float* f = reinterpret_cast<float*>(genericAttribs_[i].data());
         f[0] = 0.0f; f[1] = 0.0f; f[2] = 0.0f; f[3] = 1.0f;
     }
-    if (!context_.createBuffer(sizeof(genericAttribs_),
-                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                               fallbackConstantBuffer_, fallbackConstantMemory_)) {
-        LOG_ERROR("WebGLVkContext: Failed to create generic fallback attribute buffer");
-    } else {
-        void* mapped = nullptr;
-        if (fallbackConstantMemory_ != VK_NULL_HANDLE &&
-            vkMapMemory(dev, fallbackConstantMemory_, 0, sizeof(genericAttribs_), 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, genericAttribs_.data(), sizeof(genericAttribs_));
-            vkUnmapMemory(dev, fallbackConstantMemory_);
-        }
-    }
 
-    // 8. Dummy UBO buffer (256 bytes)
+    // Bound to uniform-block bindings no buffer is attached to; never written.
     if (!context_.createBuffer(256, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                dummyUniformBuffer_, dummyUniformMemory_)) {
         LOG_ERROR("WebGLVkContext: Failed to create dummy UBO buffer");
     }
@@ -180,92 +118,46 @@ void WebGLVkContext::cleanupVulkanResources() {
     VkDevice dev = context_.device();
     if (dev == VK_NULL_HANDLE) return;
 
-    submitAndFlush();
-
-    if (dummyUniformBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(dev, dummyUniformBuffer_, nullptr);
-        dummyUniformBuffer_ = VK_NULL_HANDLE;
-    }
-    if (dummyUniformMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(dev, dummyUniformMemory_, nullptr);
-        dummyUniformMemory_ = VK_NULL_HANDLE;
+    flushCommands();
+    if (frameEndHook_ != 0) {
+        context_.frames().removeFrameEndHook(frameEndHook_);
+        frameEndHook_ = 0;
     }
 
-    if (fallbackConstantBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(dev, fallbackConstantBuffer_, nullptr);
-        fallbackConstantBuffer_ = VK_NULL_HANDLE;
-    }
-    if (fallbackConstantMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(dev, fallbackConstantMemory_, nullptr);
-        fallbackConstantMemory_ = VK_NULL_HANDLE;
-    }
-
-    if (dummySampler_ != VK_NULL_HANDLE) {
-        vkDestroySampler(dev, dummySampler_, nullptr);
-        dummySampler_ = VK_NULL_HANDLE;
-    }
-    if (dummyView_ != VK_NULL_HANDLE) {
-        vkDestroyImageView(dev, dummyView_, nullptr);
-        dummyView_ = VK_NULL_HANDLE;
-    }
-    if (dummyImage_ != VK_NULL_HANDLE) {
-        vkDestroyImage(dev, dummyImage_, nullptr);
-        dummyImage_ = VK_NULL_HANDLE;
-    }
-    if (dummyMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(dev, dummyMemory_, nullptr);
-        dummyMemory_ = VK_NULL_HANDLE;
-    }
-
-    // Destroy buffers
-    for (auto& [id, buf] : buffers_) {
-        if (buf.allocId != 0) context_.destroyBuffer(buf.buffer, buf.allocId);
-        else {
-            if (buf.buffer != VK_NULL_HANDLE) vkDestroyBuffer(dev, buf.buffer, nullptr);
-            if (buf.memory != VK_NULL_HANDLE) vkFreeMemory(dev, buf.memory, nullptr);
-        }
-    }
+    for (auto& [id, buf] : buffers_) releaseBuffer(buf);
     buffers_.clear();
-
-    // Destroy textures
-    for (auto& [id, tex] : textures_) {
-        if (tex.sampler != VK_NULL_HANDLE) vkDestroySampler(dev, tex.sampler, nullptr);
-        if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(dev, tex.view, nullptr);
-        if (tex.allocId != 0) context_.destroyImage(tex.image, tex.allocId);
-        else {
-            if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
-            if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
-        }
-    }
+    for (auto& [id, tex] : textures_) releaseTexture(tex);
     textures_.clear();
-
-    // Destroy samplers
-    for (auto& [id, smp] : samplers_) {
-        if (smp.sampler != VK_NULL_HANDLE) vkDestroySampler(dev, smp.sampler, nullptr);
-    }
+    for (auto& [id, smp] : samplers_) releaseSampler(smp.sampler);
     samplers_.clear();
 
-    // Destroy shaders
+    // Everything below is either never referenced by a recorded command
+    // (shader modules) or shared by all of them, so the context waits for its
+    // own work before destroying it.
+    context_.queue().wait(lastTicket_);
+
+    if (readback_.buffer != VK_NULL_HANDLE) context_.destroyBuffer(readback_.buffer, readback_.allocId);
+    readback_ = Readback{};
+    if (dummyUniformBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(dev, dummyUniformBuffer_, nullptr);
+    if (dummyUniformMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, dummyUniformMemory_, nullptr);
+    dummyUniformBuffer_ = VK_NULL_HANDLE;
+    dummyUniformMemory_ = VK_NULL_HANDLE;
+    if (dummySampler_ != VK_NULL_HANDLE) vkDestroySampler(dev, dummySampler_, nullptr);
+    if (dummyView_ != VK_NULL_HANDLE) vkDestroyImageView(dev, dummyView_, nullptr);
+    if (dummyImage_ != VK_NULL_HANDLE) vkDestroyImage(dev, dummyImage_, nullptr);
+    if (dummyMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, dummyMemory_, nullptr);
+    dummySampler_ = VK_NULL_HANDLE;
+    dummyView_ = VK_NULL_HANDLE;
+    dummyImage_ = VK_NULL_HANDLE;
+    dummyMemory_ = VK_NULL_HANDLE;
+
     for (auto& [id, sh] : shaders_) {
-        if (sh.module != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(dev, sh.module, nullptr);
-        }
+        if (sh.module != VK_NULL_HANDLE) vkDestroyShaderModule(dev, sh.module, nullptr);
     }
     shaders_.clear();
-
     for (auto& [id, prog] : programs_) {
-        if (prog.descriptorSet != VK_NULL_HANDLE && descriptorPool_ != VK_NULL_HANDLE) {
-            vkFreeDescriptorSets(dev, descriptorPool_, 1, &prog.descriptorSet);
-            prog.descriptorSet = VK_NULL_HANDLE;
-        }
-        if (prog.vertModule != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(dev, prog.vertModule, nullptr);
-            prog.vertModule = VK_NULL_HANDLE;
-        }
-        if (prog.fragModule != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(dev, prog.fragModule, nullptr);
-            prog.fragModule = VK_NULL_HANDLE;
-        }
+        if (prog.vertModule != VK_NULL_HANDLE) vkDestroyShaderModule(dev, prog.vertModule, nullptr);
+        if (prog.fragModule != VK_NULL_HANDLE) vkDestroyShaderModule(dev, prog.fragModule, nullptr);
     }
     programs_.clear();
     vaos_.clear();
@@ -281,21 +173,14 @@ void WebGLVkContext::cleanupVulkanResources() {
         vkDestroyDescriptorSetLayout(dev, descriptorSetLayout_, nullptr);
         descriptorSetLayout_ = VK_NULL_HANDLE;
     }
-    if (descriptorPool_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(dev, descriptorPool_, nullptr);
-        descriptorPool_ = VK_NULL_HANDLE;
-    }
-    if (commandPool_ != VK_NULL_HANDLE) {
-        vkDestroyCommandPool(dev, commandPool_, nullptr);
-        commandPool_ = VK_NULL_HANDLE;
-    }
 
     canvas_.cleanup();
 }
 
 void WebGLVkContext::resize(int width, int height) {
-    submitAndFlush();
+    endRendering();
     canvas_.resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    canvas_.recordInit(commands());
     viewport(0, 0, width, height);
     scissor(0, 0, width, height);
 }
@@ -305,21 +190,41 @@ void WebGLVkContext::bindCanvasFBO() {
 }
 
 void WebGLVkContext::unbindCanvasFBO() {
-    submitAndFlush();
+    flushCommands();
 }
 
 bool WebGLVkContext::readCanvasPixels(std::vector<uint8_t>& out) {
-    submitAndFlush();
-    return canvas_.readCanvasPixels(out);
+    const VkDeviceSize size = static_cast<VkDeviceSize>(canvas_.width()) * canvas_.height() * 4;
+    void* mapped = readbackMemory(size);
+    if (!mapped) return false;
+    VkCommandBuffer cmd = transferCommands();
+    if (!canvas_.recordCopy(cmd, readback_.buffer)) return false;
+    render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+    if (!waitForCommands()) return false;
+    out.assign(static_cast<const uint8_t*>(mapped), static_cast<const uint8_t*>(mapped) + size);
+    return true;
 }
 
 void WebGLVkContext::flush() {
-    submitAndFlush();
+    flushCommands();
 }
 
 void WebGLVkContext::finish() {
-    submitAndFlush();
-    context_.waitIdle();
+    waitForCommands();
+}
+
+uint64_t WebGLVkContext::insertFence() {
+    flushCommands();
+    return lastTicket_;
+}
+
+bool WebGLVkContext::isFenceSignaled(uint64_t ticket) const {
+    return context_.queue().isComplete(ticket);
+}
+
+bool WebGLVkContext::waitFence(uint64_t ticket, uint64_t timeoutNs) {
+    return context_.queue().wait(ticket, timeoutNs);
 }
 
 GLenum WebGLVkContext::getError() {
@@ -678,44 +583,6 @@ void WebGLVkContext::getParameterBool4(GLenum pname, GLboolean* out) {
         out[0] = GL_TRUE; out[1] = GL_TRUE; out[2] = GL_TRUE; out[3] = GL_TRUE;
     }
 }
-
-void WebGLVkContext::updateFallbackConstantBuffer() {
-    void* mapped = nullptr;
-    if (fallbackConstantMemory_ != VK_NULL_HANDLE &&
-        vkMapMemory(context_.device(), fallbackConstantMemory_, 0, sizeof(genericAttribs_), 0, &mapped) == VK_SUCCESS) {
-        std::memcpy(mapped, genericAttribs_.data(), sizeof(genericAttribs_));
-        vkUnmapMemory(context_.device(), fallbackConstantMemory_);
-    }
-}
-
-void WebGLVkContext::ensureScratchIndexBufferSize(size_t size) {
-    if (scratchIndexSize_ >= size && scratchIndexBuffer_ != VK_NULL_HANDLE) return;
-    VkDevice dev = context_.device();
-    if (scratchIndexBuffer_ != VK_NULL_HANDLE) {
-        vkDestroyBuffer(dev, scratchIndexBuffer_, nullptr);
-        scratchIndexBuffer_ = VK_NULL_HANDLE;
-    }
-    if (scratchIndexMemory_ != VK_NULL_HANDLE) {
-        vkFreeMemory(dev, scratchIndexMemory_, nullptr);
-        scratchIndexMemory_ = VK_NULL_HANDLE;
-    }
-    scratchIndexSize_ = std::max(size, static_cast<size_t>(1024));
-    context_.createBuffer(scratchIndexSize_, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          scratchIndexBuffer_, scratchIndexMemory_);
-}
-
-void WebGLVkContext::uploadScratchIndexBuffer(const void* data, size_t size) {
-    ensureScratchIndexBufferSize(size);
-    void* mapped = nullptr;
-    if (scratchIndexMemory_ != VK_NULL_HANDLE &&
-        vkMapMemory(context_.device(), scratchIndexMemory_, 0, size, 0, &mapped) == VK_SUCCESS) {
-        std::memcpy(mapped, data, size);
-        vkUnmapMemory(context_.device(), scratchIndexMemory_);
-    }
-}
-
-
 
 // ---------------------------------------------------------------------------
 // Vertex Arrays (VAO)

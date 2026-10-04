@@ -33,7 +33,18 @@ bool PassBillboard::init(SceneVkDevice& device, SceneVkAllocator& allocator,
         return false;
     }
 
-    // Pipeline
+    return createPipeline(dev);
+}
+
+bool PassBillboard::setSampleCount(VkDevice dev, VkSampleCountFlagBits samples) {
+    if (samples_ == samples) return true;
+    if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(dev, pipeline_, nullptr);
+    pipeline_ = VK_NULL_HANDLE;
+    samples_ = samples;
+    return createPipeline(dev);
+}
+
+bool PassBillboard::createPipeline(VkDevice dev) {
     VkShaderModule vertMod = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BillboardVert);
     VkShaderModule fragMod = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::BillboardFrag);
     if (!vertMod || !fragMod) {
@@ -47,7 +58,7 @@ bool PassBillboard::init(SceneVkDevice& device, SceneVkAllocator& allocator,
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
      .setCullMode(VK_CULL_MODE_NONE)
-     .setMultisamplingNone();
+     .setMultisampling(samples_);
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |

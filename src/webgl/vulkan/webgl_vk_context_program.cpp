@@ -80,10 +80,7 @@ void WebGLVkContext::deleteProgram(WebGLProgram p) {
     auto it = programs_.find(p.id);
     if (it != programs_.end()) {
         VkDevice dev = context_.device();
-        if (it->second.descriptorSet != VK_NULL_HANDLE && descriptorPool_ != VK_NULL_HANDLE) {
-            vkFreeDescriptorSets(dev, descriptorPool_, 1, &it->second.descriptorSet);
-            it->second.descriptorSet = VK_NULL_HANDLE;
-        }
+        pipelineCache_.evictShaders(it->second.vertModule, it->second.fragModule);
         if (it->second.vertModule != VK_NULL_HANDLE) {
             vkDestroyShaderModule(dev, it->second.vertModule, nullptr);
             it->second.vertModule = VK_NULL_HANDLE;
@@ -165,6 +162,7 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
     }
 
     VkDevice dev = context_.device();
+    pipelineCache_.evictShaders(prog.vertModule, prog.fragModule);
     if (prog.vertModule != VK_NULL_HANDLE) {
         vkDestroyShaderModule(dev, prog.vertModule, nullptr);
         prog.vertModule = VK_NULL_HANDLE;
@@ -208,24 +206,8 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
         }
     }
 
-    if (descriptorPool_ != VK_NULL_HANDLE && descriptorSetLayout_ != VK_NULL_HANDLE && prog.descriptorSet == VK_NULL_HANDLE) {
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = descriptorPool_;
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.pSetLayouts = &descriptorSetLayout_;
-        VkResult res = vkAllocateDescriptorSets(dev, &allocInfo, &prog.descriptorSet);
-        if (res != VK_SUCCESS) {
-            LOG_ERROR("WebGLVkContext: Failed to allocate descriptor set for program (%d)", res);
-            prog.descriptorSet = VK_NULL_HANDLE;
-            prog.linkStatus = false;
-            prog.infoLog = "Descriptor set allocation failed";
-            return;
-        }
-    }
-
-    uint32_t pushSize = std::max(128u, linkRes.pushConstantSize);
-    prog.uniformBytes.assign(pushSize, 0);
+    prog.uniformBytes.assign(std::max(16u, linkRes.defaultUniformSize), 0);
+    prog.drawFrameSerial = 0;
     prog.linkStatus = true;
     prog.infoLog = "";
 }

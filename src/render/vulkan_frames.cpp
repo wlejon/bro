@@ -46,6 +46,7 @@ void VulkanFrames::shutdown() {
     if (!context_) return;
     VkDevice device = context_->device();
     queue().waitIdle();
+    frameEndHooks_.clear();
     for (auto& fn : pending_) fn();
     pending_.clear();
     for (auto& slot : slots_) {
@@ -70,6 +71,10 @@ VulkanQueue& VulkanFrames::queue() {
 
 void VulkanFrames::beginFrame() {
     if (serial_ > 0) {
+        // Hooks submit work still open in the closing frame. Iterate a copy: a
+        // hook may remove itself (or another) while running.
+        auto hooks = frameEndHooks_;
+        for (auto& [id, hook] : hooks) hook();
         Slot& closing = slots_[frameIndex()];
         if (closing.openCommandBuffers > 0) {
             LOG_ERROR("VulkanFrames: frame %llu ended with %u command buffer(s) never submitted",
@@ -245,6 +250,18 @@ VkDescriptorSet VulkanFrames::allocDescriptorSet(VkDescriptorSetLayout layout) {
 
 void VulkanFrames::defer(std::function<void()> destroy) {
     pending_.push_back(std::move(destroy));
+}
+
+VulkanFrames::HookId VulkanFrames::addFrameEndHook(std::function<void()> hook) {
+    const HookId id = nextHookId_++;
+    frameEndHooks_.emplace_back(id, std::move(hook));
+    return id;
+}
+
+void VulkanFrames::removeFrameEndHook(HookId id) {
+    frameEndHooks_.erase(std::remove_if(frameEndHooks_.begin(), frameEndHooks_.end(),
+                                        [id](const auto& h) { return h.first == id; }),
+                         frameEndHooks_.end());
 }
 
 } // namespace bro::render

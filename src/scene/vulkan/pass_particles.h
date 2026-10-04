@@ -28,22 +28,26 @@ public:
     bool init(SceneVkDevice& device, SceneVkAllocator& allocator,
               VkDescriptorSetLayout cameraLayout);
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
+    /// Rebuild the pipelines for the HDR target's sample count.
+    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
 
     void begin(VkCommandBuffer cmd, VkDescriptorSet cameraSet);
 
     void draw(VkCommandBuffer cmd, bool additive,
-              VkBuffer instanceBuffer, uint32_t instanceCount,
+              VkBuffer instanceBuffer, VkDeviceSize instanceOffset, uint32_t instanceCount,
               const ParticlePushConstants& push,
               VkDescriptorSet materialSet);
 
     VkDescriptorSetLayout materialLayout() const { return materialLayout_; }
     VkDescriptorSet defaultMaterialSet() const { return defaultMaterialSet_; }
 
-    VkDescriptorSet createParticleMaterialSet(VkImageView imageView, VkSampler sampler,
-                                              VkImageView depthView, VkSampler depthSampler,
-                                              SceneVkDescriptorPool& pool);
+    VkDescriptorSet createParticleMaterialSet(SceneVkDevice& device, VkImageView imageView, VkSampler sampler,
+                                              VkImageView depthView, VkSampler depthSampler);
 
 private:
+    bool createPipelines(VkDevice dev);
+
+    VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
     VkDescriptorSetLayout cameraLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

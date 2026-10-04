@@ -183,29 +183,4 @@ void SceneVkDescriptorPool::reset() {
     }
 }
 
-SceneVkDescriptorCache::SceneVkDescriptorCache(VkDevice device)
-    : device_(device)
-{
-}
-
-SceneVkDescriptorCache::~SceneVkDescriptorCache() {
-    destroy();
-}
-
-bool SceneVkDescriptorCache::init(uint32_t maxSetsPerFrame) {
-    return pool_.init(device_, maxSetsPerFrame);
-}
-
-void SceneVkDescriptorCache::destroy() {
-    pool_.destroy();
-}
-
-VkDescriptorSet SceneVkDescriptorCache::allocate(VkDescriptorSetLayout layout) {
-    return pool_.allocate(layout);
-}
-
-void SceneVkDescriptorCache::reset() {
-    pool_.reset();
-}
-
 } // namespace bro::scene::vk

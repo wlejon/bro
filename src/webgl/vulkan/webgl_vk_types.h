@@ -14,15 +14,25 @@
 
 namespace bro::webgl::vk {
 
-/// Buffer object backed by Vulkan buffer and host-side copy.
+/// Descriptor bindings every translated program uses: samplers from 0, uniform
+/// blocks from kFirstUniformBlockBinding, and the default-block (non-block)
+/// uniforms as one std140 uniform buffer at kDefaultUniformBinding.
+constexpr uint32_t kMaxSamplerBindings = 8;
+constexpr uint32_t kFirstUniformBlockBinding = 8;
+constexpr uint32_t kMaxUniformBlockBindings = 8;
+constexpr uint32_t kDefaultUniformBinding = 16;
+
+/// Buffer object: a device-local VkBuffer usable for every GL binding target
+/// (WebGL lets one buffer be rebound to any target but ELEMENT_ARRAY), written
+/// only by copies recorded in the context's command stream, plus the
+/// authoritative host-side copy that reads (getBufferSubData, 8-bit indices,
+/// PBO sources) are served from.
 struct VkBufferResource {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0;
     VkDeviceSize offset = 0;
     uint64_t allocId = 0;
-    void* poolMappedData = nullptr;
-    VkBufferUsageFlags usage = 0;
     std::vector<uint8_t> shadowData;
     bool isMapped = false;
     void* mappedPtr = nullptr;
@@ -38,12 +48,14 @@ struct VkTextureResource {
     VkDeviceSize offset = 0;
     uint64_t allocId = 0;
     VkImageView view = VK_NULL_HANDLE;
+    VkImageView attachmentView = VK_NULL_HANDLE;  // mip 0 / layer 0, for framebuffer use
     VkSampler sampler = VK_NULL_HANDLE;
     uint32_t width = 0;
     uint32_t height = 0;
     VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
-    VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // of every mip and layer
     uint32_t mipLevels = 1;
+    uint32_t arrayLayers = 1;
 
     GLenum minFilter = GL_NEAREST_MIPMAP_LINEAR;
     GLenum magFilter = GL_LINEAR;
@@ -166,7 +178,15 @@ struct VkProgramResource {
     std::unordered_map<GLint, uint32_t> samplerLocToBinding;
     std::unordered_map<uint32_t, uint32_t> samplerBindings; // descriptor binding -> texture unit
     std::unordered_map<uint32_t, GLenum> samplerTypes; // descriptor binding -> GL_SAMPLER_2D, GL_SAMPLER_CUBE, etc.
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+
+    // What the last draw bound, reused by the next draw in the same frame when
+    // nothing changed (webgl_vk_context_draw.cpp). Descriptor sets and the
+    // uniform slice come from the frame's arenas, so they never outlive it.
+    uint64_t drawFrameSerial = 0;
+    std::vector<uint8_t> drawUniformBytes;
+    VkDescriptorBufferInfo drawUniforms{};
+    std::vector<uint64_t> drawBindingKey;
+    VkDescriptorSet drawSet = VK_NULL_HANDLE;
 
     bool isValid() const { return linkStatus; }
 };

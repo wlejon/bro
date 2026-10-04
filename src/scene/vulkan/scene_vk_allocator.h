@@ -1,13 +1,14 @@
 #pragma once
 
 #include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_memory_pool.h"
+#include "render/vulkan_memory_pool.h"
 
 #include <vulkan/vulkan.h>
 #include <cstdint>
-#include <memory>
 
 namespace bro::scene::vk {
+
+using SceneVkAllocatorStats = render::VulkanAllocatorStats;
 
 /// Encapsulates an allocated Vulkan buffer and its backing memory.
 struct SceneVkBuffer {
@@ -24,6 +25,8 @@ struct SceneVkBuffer {
 };
 
 /// Encapsulates an allocated Vulkan image, its view, sampler, and state.
+/// `currentLayout` is the layout of every subresource as of the end of the
+/// commands recorded so far (uploads included).
 struct SceneVkImage {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -32,7 +35,9 @@ struct SceneVkImage {
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t width = 0;
     uint32_t height = 0;
+    uint32_t depth = 1;
     uint32_t mipLevels = 1;
+    uint32_t arrayLayers = 1;
     VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VkDeviceSize offset = 0;
     uint64_t allocId = 0;
@@ -55,11 +60,27 @@ struct TextureDesc {
     float maxAnisotropy = 16.0f;
 };
 
-/// Allocator and resource manager for 3D scene buffers, images, mipmaps, and transfers.
+/// A rectangle of one or more layers of mip 0, for uploads. A zero width or
+/// height means the whole level.
+struct ImageRegion {
+    uint32_t layer = 0;
+    uint32_t layerCount = 1;
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+/// Buffers, images and uploads for the 3D scene, on the context's memory pool.
+///
+/// Uploads go through the device's upload stream (staging in the frame's
+/// upload memory, copies in the upload command buffer) and never wait.
+/// Destruction is deferred until the GPU is done with the resource, so a
+/// resource can be replaced while frames that use it are in flight.
 class SceneVkAllocator {
 public:
     explicit SceneVkAllocator(SceneVkDevice& device);
-    ~SceneVkAllocator();
+    ~SceneVkAllocator() = default;
 
     SceneVkAllocator(const SceneVkAllocator&) = delete;
     SceneVkAllocator& operator=(const SceneVkAllocator&) = delete;
@@ -67,24 +88,18 @@ public:
     // Buffer management
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags memProps, SceneVkBuffer& outBuffer);
-
+    /// Device-local vertex / index buffers, filled through the upload stream.
     bool createVertexBuffer(VkDeviceSize size, const void* initialData, SceneVkBuffer& outBuffer);
     bool createIndexBuffer(VkDeviceSize size, const void* initialData, SceneVkBuffer& outBuffer);
-    bool createUniformBuffer(VkDeviceSize size, SceneVkBuffer& outBuffer);
-
-    bool updateUniformBuffer(SceneVkBuffer& buffer, const void* data, VkDeviceSize size, VkDeviceSize offset = 0);
     void destroyBuffer(SceneVkBuffer& buffer);
 
-    // Staging and transfers
+    /// Record a copy of `data` into `dstBuffer` at `dstOffset`.
     bool stageAndUploadBuffer(VkBuffer dstBuffer, const void* data, VkDeviceSize size, VkDeviceSize dstOffset = 0);
-    bool stageAndUploadImage(VkImage dstImage, uint32_t width, uint32_t height,
-                             const void* data, VkDeviceSize size, uint32_t mipLevels = 1);
-    bool stageAndUploadImageLayer(VkImage dstImage, VkFormat format,
-                                  uint32_t width, uint32_t height,
-                                  uint32_t layer, uint32_t mipLevel,
-                                  const void* data, VkDeviceSize size);
 
     // Image & Texture management
+    /// Create an image and its view. A sampled image starts out (once the
+    /// upload stream runs) in SHADER_READ_ONLY_OPTIMAL, cleared to zero, so it
+    /// is valid to bind before anything renders into it.
     bool createImage(uint32_t width, uint32_t height, VkFormat format,
                      VkImageUsageFlags usage, VkMemoryPropertyFlags memProps,
                      SceneVkImage& outImage, uint32_t mipLevels = 1,
@@ -96,36 +111,36 @@ public:
 
     bool createTexture2D(const void* pixelData, const TextureDesc& desc, SceneVkImage& outImage);
     bool createTexture3D(const void* voxelData, uint32_t size, VkFormat format, SceneVkImage& outImage);
+
+    /// Record an upload of `size` bytes of tightly packed texels into
+    /// `region` of mip 0 of a sampled image; with `regenerateMips` the rest of
+    /// the mip chain of those layers is rebuilt from it. The image is
+    /// sampleable afterwards.
+    bool uploadImage(SceneVkImage& image, const void* data, VkDeviceSize size,
+                     const ImageRegion& region = {}, bool regenerateMips = false);
+
     void destroyImage(SceneVkImage& image);
 
-    // Image layout transition and mipmap generation
+    /// Layout transition with masks derived from the layouts (render::cmdTransitionImage).
     void transitionImageLayout(VkCommandBuffer cmd, VkImage image, VkFormat format,
                                VkImageLayout oldLayout, VkImageLayout newLayout,
                                uint32_t mipLevels = 1, uint32_t baseMipLevel = 0,
                                VkImageAspectFlags aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                uint32_t layerCount = 1, uint32_t baseArrayLayer = 0);
 
+    /// Build mips 1..mipLevels-1 of the given layers from mip 0. Every level
+    /// must be in TRANSFER_DST_OPTIMAL (mip 0 holding the source); all end in
+    /// SHADER_READ_ONLY_OPTIMAL.
     void generateMipmaps(VkCommandBuffer cmd, VkImage image, VkFormat format,
                          int32_t texWidth, int32_t texHeight, uint32_t mipLevels,
                          uint32_t baseArrayLayer = 0, uint32_t layerCount = 1);
 
-    // Memory stats inspection
     SceneVkAllocatorStats stats() const;
 
     SceneVkDevice& device() { return device_; }
     const SceneVkDevice& device() const { return device_; }
 
 private:
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
-
-    bool allocateMemory(VkDeviceSize size, VkDeviceSize alignment, uint32_t memoryTypeIndex,
-                        VkMemoryPropertyFlags properties, bool isImage,
-                        uint64_t& outId, VkDeviceMemory& outMemory,
-                        VkDeviceSize& outOffset, void*& outMappedData);
-    void freeMemory(uint64_t allocId);
-
-    std::unique_ptr<SceneVkMemoryPool> pool_;
-
     SceneVkDevice& device_;
 };
 

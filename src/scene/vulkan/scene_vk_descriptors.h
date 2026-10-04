@@ -79,7 +79,9 @@ private:
     std::vector<VkWriteDescriptorSet> writes_;
 };
 
-/// Manages descriptor set allocation from a Vulkan descriptor pool.
+/// A fixed descriptor pool for sets that are written once and never change
+/// while in use (default material sets). Per-frame sets come from
+/// SceneVkDevice::frameSet().
 class SceneVkDescriptorPool {
 public:
     SceneVkDescriptorPool() = default;
@@ -98,24 +100,6 @@ public:
 private:
     VkDevice device_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
-};
-
-/// Per-frame dynamic descriptor allocator and cache to allow allocating
-/// descriptors on the fly each frame and resetting them efficiently.
-class SceneVkDescriptorCache {
-public:
-    explicit SceneVkDescriptorCache(VkDevice device);
-    ~SceneVkDescriptorCache();
-
-    bool init(uint32_t maxSetsPerFrame = 256);
-    void destroy();
-
-    VkDescriptorSet allocate(VkDescriptorSetLayout layout);
-    void reset();
-
-private:
-    VkDevice device_ = VK_NULL_HANDLE;
-    SceneVkDescriptorPool pool_;
 };
 
 } // namespace bro::scene::vk

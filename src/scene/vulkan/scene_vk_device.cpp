@@ -1,7 +1,7 @@
 #include "scene/vulkan/scene_vk_device.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
-#include <cassert>
 #include <cstring>
 
 namespace bro::scene::vk {
@@ -21,99 +21,17 @@ bool SceneVkDevice::init() {
         LOG_ERROR("SceneVkDevice: VulkanContext is not valid");
         return false;
     }
-
-    if (!initFrameData()) {
-        LOG_ERROR("SceneVkDevice: Failed to initialize frame resources");
-        shutdown();
-        return false;
-    }
-
-    loadDynamicRenderingProcs();
-
+    frameEndHook_ = context_.frames().addFrameEndHook([this] { flushUploads(); });
     initialized_ = true;
     return true;
 }
 
-bool SceneVkDevice::initFrameData() {
-    VkDevice dev = context_.device();
-    uint32_t queueFamily = context_.queueFamilies().graphicsFamily;
-
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = queueFamily;
-
-    for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
-        if (vkCreateCommandPool(dev, &poolInfo, nullptr, &frames_[i].commandPool) != VK_SUCCESS) {
-            LOG_ERROR("SceneVkDevice: Failed to create command pool for frame %u", i);
-            return false;
-        }
-
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = frames_[i].commandPool;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
-
-        if (vkAllocateCommandBuffers(dev, &allocInfo, &frames_[i].commandBuffer) != VK_SUCCESS) {
-            LOG_ERROR("SceneVkDevice: Failed to allocate command buffer for frame %u", i);
-            return false;
-        }
-    }
-
-    // Immediate submission resources
-    if (vkCreateCommandPool(dev, &poolInfo, nullptr, &immediateCommandPool_) != VK_SUCCESS) {
-        LOG_ERROR("SceneVkDevice: Failed to create immediate command pool");
-        return false;
-    }
-
-    return true;
-}
-
-void SceneVkDevice::loadDynamicRenderingProcs() {
-    VkDevice dev = context_.device();
-
-    pfnCmdBeginRendering_ = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
-        vkGetDeviceProcAddr(dev, "vkCmdBeginRendering"));
-    if (!pfnCmdBeginRendering_) {
-        pfnCmdBeginRendering_ = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(
-            vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"));
-    }
-
-    pfnCmdEndRendering_ = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
-        vkGetDeviceProcAddr(dev, "vkCmdEndRendering"));
-    if (!pfnCmdEndRendering_) {
-        pfnCmdEndRendering_ = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(
-            vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"));
-    }
-
-    if (!pfnCmdBeginRendering_ || !pfnCmdEndRendering_) {
-        LOG_WARN("SceneVkDevice: Dynamic rendering function pointers could not be resolved");
-    }
-}
-
 void SceneVkDevice::shutdown() {
-    if (!context_.isValid()) return;
-    waitIdle();
-
-    VkDevice dev = context_.device();
-
-    if (immediateCommandPool_ != VK_NULL_HANDLE) {
-        vkDestroyCommandPool(dev, immediateCommandPool_, nullptr);
-        immediateCommandPool_ = VK_NULL_HANDLE;
-    }
-
-    for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
-        frames_[i].ticket = 0;
-        if (frames_[i].commandPool != VK_NULL_HANDLE) {
-            vkDestroyCommandPool(dev, frames_[i].commandPool, nullptr);
-            frames_[i].commandPool = VK_NULL_HANDLE;
-        }
-        frames_[i].commandBuffer = VK_NULL_HANDLE;
-    }
-
+    if (!initialized_) return;
+    flushUploads();
+    context_.frames().removeFrameEndHook(frameEndHook_);
+    frameEndHook_ = 0;
     initialized_ = false;
-    frameActive_ = false;
 }
 
 void SceneVkDevice::waitIdle() const {
@@ -121,106 +39,68 @@ void SceneVkDevice::waitIdle() const {
 }
 
 VkCommandBuffer SceneVkDevice::beginFrame() {
-    assert(initialized_);
-    assert(!frameActive_);
-
-    VkDevice dev = context_.device();
-    SceneVkFrameData& frame = frames_[frameIndex_];
-
-    // Wait for the prior execution of this in-flight frame slot
-    context_.queue().wait(frame.ticket);
-
-    vkResetCommandPool(dev, frame.commandPool, 0);
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    VkResult res = vkBeginCommandBuffer(frame.commandBuffer, &beginInfo);
-    assert(res == VK_SUCCESS);
-    (void)res;
-
-    frameActive_ = true;
-    return frame.commandBuffer;
+    return context_.frames().beginCommands();
 }
 
-void SceneVkDevice::endFrame() {
-    assert(frameActive_);
-    VkResult res = vkEndCommandBuffer(frames_[frameIndex_].commandBuffer);
-    assert(res == VK_SUCCESS);
-    (void)res;
-    frameActive_ = false;
-}
-
-bool SceneVkDevice::submitFrame(VkSemaphore waitSemaphore,
-                               VkPipelineStageFlags waitStage,
-                               VkSemaphore signalSemaphore) {
-    assert(!frameActive_);
-    SceneVkFrameData& frame = frames_[frameIndex_];
-
-    render::QueueSubmit batch;
-    batch.commandBuffers.push_back(frame.commandBuffer);
-    if (waitSemaphore != VK_NULL_HANDLE) batch.waits.push_back({waitSemaphore, waitStage, 0});
-    if (signalSemaphore != VK_NULL_HANDLE) batch.signals.push_back({signalSemaphore, 0});
-
-    const uint64_t ticket = context_.queue().submit(batch);
+bool SceneVkDevice::submitFrame(VkCommandBuffer cmd) {
+    flushUploads();
+    const uint64_t ticket = context_.frames().submit(cmd);
     if (ticket == 0) {
-        LOG_ERROR("SceneVkDevice: Failed to submit command buffer");
+        LOG_ERROR("SceneVkDevice: Failed to submit the frame command buffer");
         return false;
     }
-    frame.ticket = ticket;
-
-    frameIndex_ = (frameIndex_ + 1) % kMaxFramesInFlight;
-    frameNumber_++;
+    lastFrameTicket_ = ticket;
     return true;
 }
 
-void SceneVkDevice::executeImmediate(const std::function<void(VkCommandBuffer)>& func) {
-    assert(initialized_);
-    VkDevice dev = context_.device();
-
-    vkResetCommandPool(dev, immediateCommandPool_, 0);
-
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = immediateCommandPool_;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    vkAllocateCommandBuffers(dev, &allocInfo, &cmd);
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &beginInfo);
-
-    func(cmd);
-
-    vkEndCommandBuffer(cmd);
-
-    render::QueueSubmit batch;
-    batch.commandBuffers.push_back(cmd);
-    const uint64_t ticket = context_.queue().submit(batch);
-    if (ticket != 0) context_.queue().wait(ticket);
-
-    vkFreeCommandBuffers(dev, immediateCommandPool_, 1, &cmd);
+VkCommandBuffer SceneVkDevice::uploadCommands() {
+    if (uploadCmd_ != VK_NULL_HANDLE) return uploadCmd_;
+    uploadCmd_ = context_.frames().beginCommands();
+    // Copies into resources earlier submissions still read or wrote.
+    render::cmdMemoryBarrier(uploadCmd_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+    return uploadCmd_;
 }
 
-void SceneVkDevice::cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfoKHR* renderingInfo) const {
-    if (pfnCmdBeginRendering_) {
-        pfnCmdBeginRendering_(cmd, renderingInfo);
-    } else {
-        LOG_ERROR("SceneVkDevice: vkCmdBeginRendering not available");
-    }
+void SceneVkDevice::flushUploads() {
+    if (uploadCmd_ == VK_NULL_HANDLE) return;
+    // Uploaded data is visible to every later reader.
+    render::cmdMemoryBarrier(uploadCmd_, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_READ_BIT);
+    if (context_.frames().submit(uploadCmd_) == 0)
+        LOG_ERROR("SceneVkDevice: Failed to submit scene uploads");
+    uploadCmd_ = VK_NULL_HANDLE;
+}
+
+render::UploadSlice SceneVkDevice::frameUpload(VkDeviceSize size, VkDeviceSize alignment) {
+    render::UploadSlice slice = context_.frames().allocUpload(size, alignment);
+    if (!slice) LOG_ERROR("SceneVkDevice: out of frame upload memory (%llu bytes)",
+                          static_cast<unsigned long long>(size));
+    return slice;
+}
+
+VkDescriptorBufferInfo SceneVkDevice::frameUniform(const void* data, VkDeviceSize size) {
+    render::UploadSlice slice = frameUpload(size, context_.deviceProperties().limits.minUniformBufferOffsetAlignment);
+    if (!slice) return {};
+    std::memcpy(slice.mapped, data, static_cast<size_t>(size));
+    return {slice.buffer, slice.offset, size};
+}
+
+VkDescriptorSet SceneVkDevice::frameSet(VkDescriptorSetLayout layout) {
+    return context_.frames().allocDescriptorSet(layout);
+}
+
+void SceneVkDevice::defer(std::function<void()> destroy) {
+    context_.frames().defer(std::move(destroy));
+}
+
+void SceneVkDevice::cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* renderingInfo) const {
+    vkCmdBeginRendering(cmd, renderingInfo);
 }
 
 void SceneVkDevice::cmdEndRendering(VkCommandBuffer cmd) const {
-    if (pfnCmdEndRendering_) {
-        pfnCmdEndRendering_(cmd);
-    } else {
-        LOG_ERROR("SceneVkDevice: vkCmdEndRendering not available");
-    }
+    vkCmdEndRendering(cmd);
 }
 
 } // namespace bro::scene::vk

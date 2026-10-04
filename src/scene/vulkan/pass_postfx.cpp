@@ -111,17 +111,7 @@ bool PassPostFx::init(SceneVkDevice& device, SceneVkAllocator& allocator,
         return false;
     }
 
-    // 5. Create descriptor pool & sets
-    if (!descPool_.init(dev, 8)) {
-        LOG_ERROR("PassPostFx: Failed creating descriptor pool");
-        return false;
-    }
-    bloomExtractSet_ = descPool_.allocate(singleTexDescLayout_);
-    bloomBlurSet_    = descPool_.allocate(singleTexDescLayout_);
-    tonemapSet_      = descPool_.allocate(tonemapDescLayout_);
-    fxaaSet_         = descPool_.allocate(singleTexDescLayout_);
-
-    // 6. Create pipelines
+    // 5. Create pipelines (descriptor sets come from the frame each render)
     if (!createPipelines(dev, config)) {
         LOG_ERROR("PassPostFx: Failed creating pipelines");
         return false;
@@ -279,8 +269,6 @@ void PassPostFx::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
         tonemapLayout_ = VK_NULL_HANDLE;
     }
 
-    descPool_.destroy();
-
     if (linearSampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(dev, linearSampler_, nullptr);
         linearSampler_ = VK_NULL_HANDLE;
@@ -319,10 +307,10 @@ void PassPostFx::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAlloc
                                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         bloomExtractImage_.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-        // Bind HDR scene image to bloomExtractSet_
+        VkDescriptorSet bloomExtractSet = device.frameSet(singleTexDescLayout_);
         SceneVkDescriptorWriter writer;
         writer.writeImage(0, hdrSceneImage.view, linearSampler_);
-        writer.updateSet(dev, bloomExtractSet_);
+        writer.updateSet(dev, bloomExtractSet);
 
         VkRenderingAttachmentInfoKHR colorAttach{};
         colorAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
@@ -341,7 +329,7 @@ void PassPostFx::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAlloc
         device.cmdBeginRendering(cmd, &renderInfo);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineBloomExtract_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, singleTexLayout_, 0, 1, &bloomExtractSet_, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, singleTexLayout_, 0, 1, &bloomExtractSet, 0, nullptr);
 
         VkViewport vp{0.0f, 0.0f, static_cast<float>(halfW), static_cast<float>(halfH), 0.0f, 1.0f};
         vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -373,13 +361,14 @@ void PassPostFx::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAlloc
         // Blur pass
         SceneVkDescriptorWriter blurWriter;
         blurWriter.writeImage(0, bloomExtractImage_.view, linearSampler_);
-        blurWriter.updateSet(dev, bloomBlurSet_);
+        VkDescriptorSet bloomBlurSet = device.frameSet(singleTexDescLayout_);
+        blurWriter.updateSet(dev, bloomBlurSet);
 
         colorAttach.imageView = bloomBlurImage_.view;
         device.cmdBeginRendering(cmd, &renderInfo);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineBloomBlur_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, singleTexLayout_, 0, 1, &bloomBlurSet_, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, singleTexLayout_, 0, 1, &bloomBlurSet, 0, nullptr);
 
         bloomPush.blurRadius = 1.0f / static_cast<float>(halfW);
         bloomPush.passType = 1; // gaussian blur
@@ -412,7 +401,8 @@ void PassPostFx::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAlloc
     SceneVkDescriptorWriter tmWriter;
     tmWriter.writeImage(0, hdrSceneImage.view, linearSampler_);
     tmWriter.writeImage(1, bloomView, linearSampler_);
-    tmWriter.updateSet(dev, tonemapSet_);
+    VkDescriptorSet tonemapSet = device.frameSet(tonemapDescLayout_);
+    tmWriter.updateSet(dev, tonemapSet);
 
     VkRenderingAttachmentInfoKHR tmColorAttach{};
     tmColorAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
@@ -431,7 +421,7 @@ void PassPostFx::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAlloc
     device.cmdBeginRendering(cmd, &tmRenderInfo);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineTonemap_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemapLayout_, 0, 1, &tonemapSet_, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemapLayout_, 0, 1, &tonemapSet, 0, nullptr);
 
     VkViewport fullVp{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
     vkCmdSetViewport(cmd, 0, 1, &fullVp);
@@ -460,7 +450,8 @@ void PassPostFx::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAlloc
 
         SceneVkDescriptorWriter fxaaWriter;
         fxaaWriter.writeImage(0, intermediateLdrImage_.view, linearSampler_);
-        fxaaWriter.updateSet(dev, fxaaSet_);
+        VkDescriptorSet fxaaSet = device.frameSet(singleTexDescLayout_);
+        fxaaWriter.updateSet(dev, fxaaSet);
 
         VkRenderingAttachmentInfoKHR fxaaAttach{};
         fxaaAttach.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
@@ -479,7 +470,7 @@ void PassPostFx::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAlloc
         device.cmdBeginRendering(cmd, &fxaaRenderInfo);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineFxaa_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, singleTexLayout_, 0, 1, &fxaaSet_, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, singleTexLayout_, 0, 1, &fxaaSet, 0, nullptr);
 
         vkCmdSetViewport(cmd, 0, 1, &fullVp);
         vkCmdSetScissor(cmd, 0, 1, &fullSc);

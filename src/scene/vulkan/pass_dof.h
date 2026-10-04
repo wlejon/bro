@@ -32,7 +32,6 @@ public:
     bool resize(SceneVkDevice& device, SceneVkAllocator& allocator, uint32_t width, uint32_t height);
 
     void render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                SceneVkDescriptorPool& descPool,
                 const SceneVkImage& sharpHdrImage,
                 const SceneVkImage& depthImage,
                 VkImageView outputTargetView,

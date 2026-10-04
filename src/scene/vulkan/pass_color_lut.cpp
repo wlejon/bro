@@ -100,7 +100,6 @@ void PassColorLut::clearLut(SceneVkAllocator& allocator) {
 }
 
 void PassColorLut::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                          SceneVkDescriptorPool& descPool,
                           const SceneVkImage& inputImage,
                           VkImageView outputTargetView,
                           VkFormat outputFormat,
@@ -109,7 +108,7 @@ void PassColorLut::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAll
     (void)allocator;
     if (!lutImage_.isValid() || lutSize_ <= 1 || amount <= 0.0f) return;
 
-    VkDescriptorSet dSet = descPool.allocate(descLayout_);
+    VkDescriptorSet dSet = device.frameSet(descLayout_);
     if (dSet == VK_NULL_HANDLE) return;
 
     SceneVkDescriptorWriter writer;

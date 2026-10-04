@@ -14,7 +14,17 @@ bool PassGaussianSplat::init(SceneVkDevice& device, SceneVkAllocator& allocator,
         LOG_ERROR("PassGaussianSplat: Failed creating quad vertex buffer");
         return false;
     }
+    colorFormat_ = colorFormat;
+    depthFormat_ = depthFormat;
+    samples_ = samples;
     return createPipelines(device.device(), colorFormat, depthFormat, samples);
+}
+
+bool PassGaussianSplat::setSampleCount(VkDevice dev, VkSampleCountFlagBits samples) {
+    if (samples_ == samples) return true;
+    destroyPipelines(dev);
+    samples_ = samples;
+    return createPipelines(dev, colorFormat_, depthFormat_, samples_);
 }
 
 void PassGaussianSplat::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
@@ -22,11 +32,12 @@ void PassGaussianSplat::cleanup(SceneVkDevice& device, SceneVkAllocator& allocat
 
     for (auto& [key, data] : nodeCache_) {
         allocator.destroyBuffer(data.instanceBuffer);
-        allocator.destroyBuffer(data.ubo);
     }
     nodeCache_.clear();
+    destroyPipelines(device.device());
+}
 
-    VkDevice dev = device.device();
+void PassGaussianSplat::destroyPipelines(VkDevice dev) {
     if (pipeline_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(dev, pipeline_, nullptr);
         pipeline_ = VK_NULL_HANDLE;
@@ -148,7 +159,6 @@ bool PassGaussianSplat::createPipelines(VkDevice device, VkFormat colorFormat, V
 }
 
 void PassGaussianSplat::renderNode(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                                  SceneVkDescriptorPool& descPool,
                                   GaussianSplatNode* node,
                                   const float* viewMatrix,
                                   const float* projMatrix,
@@ -157,30 +167,28 @@ void PassGaussianSplat::renderNode(VkCommandBuffer cmd, SceneVkDevice& device, S
     if (!node || node->splatCount() == 0 || width == 0 || height == 0) return;
 
     const bromath::Mat4& model = node->worldMatrix();
-    if (node->needsResort(viewMatrix, eye, model)) {
-        node->resort(viewMatrix, eye, model);
-    }
+    const bool resorted = node->needsResort(viewMatrix, eye, model);
+    if (resorted) node->resort(viewMatrix, eye, model);
     const auto& instData = node->instanceData();
     if (instData.empty()) return;
 
+    // The instance data only changes when the splats are re-sorted; it lives
+    // in a device-local buffer that the upload stream rewrites then.
     NodeGpuData& gpuData = nodeCache_[node];
-    size_t reqBytes = instData.size() * sizeof(float);
+    const size_t reqBytes = instData.size() * sizeof(float);
+    bool upload = resorted;
     if (!gpuData.instanceBuffer.buffer || gpuData.capacityBytes < reqBytes) {
         allocator.destroyBuffer(gpuData.instanceBuffer);
         gpuData.capacityBytes = reqBytes * 2;
-        allocator.createBuffer(gpuData.capacityBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              gpuData.instanceBuffer);
+        if (!allocator.createBuffer(gpuData.capacityBytes,
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gpuData.instanceBuffer)) {
+            gpuData.capacityBytes = 0;
+            return;
+        }
+        upload = true;
     }
-    if (gpuData.instanceBuffer.mappedData) {
-        std::memcpy(gpuData.instanceBuffer.mappedData, instData.data(), reqBytes);
-    } else {
-        allocator.stageAndUploadBuffer(gpuData.instanceBuffer.buffer, instData.data(), reqBytes);
-    }
-
-    if (!gpuData.ubo.buffer) {
-        allocator.createUniformBuffer(sizeof(SplatUBOData), gpuData.ubo);
-    }
+    if (upload) allocator.stageAndUploadBuffer(gpuData.instanceBuffer.buffer, instData.data(), reqBytes);
 
     SplatUBOData ubo{};
     std::memcpy(ubo.model, model.data, sizeof(ubo.model));
@@ -190,11 +198,11 @@ void PassGaussianSplat::renderNode(VkCommandBuffer cmd, SceneVkDevice& device, S
     ubo.focal[1] = 0.5f * static_cast<float>(height) * std::fabs(projMatrix[5]);
     ubo.viewport[0] = static_cast<float>(width);
     ubo.viewport[1] = static_cast<float>(height);
-    allocator.updateUniformBuffer(gpuData.ubo, &ubo, sizeof(ubo));
+    const VkDescriptorBufferInfo uboInfo = device.frameUniform(&ubo, sizeof(ubo));
 
-    VkDescriptorSet dSet = descPool.allocate(descLayout_);
+    VkDescriptorSet dSet = device.frameSet(descLayout_);
     SceneVkDescriptorWriter writer;
-    writer.writeBuffer(0, gpuData.ubo.buffer, sizeof(SplatUBOData));
+    writer.writeBuffer(0, uboInfo.buffer, uboInfo.range, uboInfo.offset);
     writer.updateSet(device.device(), dSet);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);

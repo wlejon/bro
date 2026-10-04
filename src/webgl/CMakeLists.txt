@@ -15,7 +15,9 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_context_program.cpp
     vulkan/webgl_vk_context_uniforms.cpp
     vulkan/webgl_vk_context_textures.cpp
+    vulkan/webgl_vk_context_samplers.cpp
     vulkan/webgl_vk_context_fbo.cpp
+    vulkan/webgl_vk_context_commands.cpp
     vulkan/webgl_vk_context_draw.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)

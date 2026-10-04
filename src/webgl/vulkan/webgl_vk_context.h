@@ -269,8 +269,17 @@ public:
     void readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                     GLenum format, GLenum type, void* pixels);
 
+    /// Submit everything recorded so far. Never waits.
     void flush();
+    /// Submit and wait for this context's work (its own ticket, not the device).
     void finish();
+
+    /// Fence for WebGL sync objects: submits the recorded work and returns the
+    /// ticket whose completion means it all finished.
+    uint64_t insertFence();
+    bool isFenceSignaled(uint64_t ticket) const;
+    /// Wait up to `timeoutNs` for `ticket`; true once it has completed.
+    bool waitFence(uint64_t ticket, uint64_t timeoutNs);
 
     void bindCanvasFBO();
     void unbindCanvasFBO();
@@ -278,25 +287,72 @@ public:
 private:
     void initVulkanResources();
     void cleanupVulkanResources();
-    void ensureCommandBuffer();
+
+    // Command stream (webgl_vk_context_commands.cpp). All GPU work — draws,
+    // clears, uploads, copies, blits, layout changes — is recorded in API order
+    // into one command buffer from the frame ring, so ordering between, say, a
+    // bufferSubData and the draws around it is the command stream's. A flush
+    // submits it without waiting; only readbacks and client waits block, on
+    // this context's own ticket. Open work is submitted at frame end at the
+    // latest (a VulkanFrames frame-end hook).
+    VkCommandBuffer commands();
+    VkCommandBuffer transferCommands();  // commands() outside dynamic rendering
     void beginRendering();
     void endRendering();
-    void submitAndFlush();
+    void flushCommands();
+    bool waitForCommands();
+    /// Copy `size` bytes into this frame's upload ring.
+    render::UploadSlice stage(const void* data, VkDeviceSize size, VkDeviceSize alignment = 16);
+    /// Record a copy of `data` into `res` at `offset`, ordered after earlier
+    /// GPU use of the buffer and before later use.
+    void uploadToBuffer(VkBufferResource& res, VkDeviceSize offset, const void* data, VkDeviceSize size);
+    /// Record a transition of every mip and layer of `tex` to `layout`.
+    void transitionTexture(VkCommandBuffer cmd, VkTextureResource& tex, VkImageLayout layout);
+    /// Destroy GPU objects once the GPU is done with them.
+    void releaseBuffer(VkBufferResource& res);
+    void releaseTexture(VkTextureResource& tex);
+    void releaseSampler(VkSampler& sampler);
+    /// Host-visible memory of at least `size` bytes that a copy recorded into
+    /// the command stream can land in, for readbacks (valid until the next).
+    void* readbackMemory(VkDeviceSize size);
+    struct Readback {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        uint64_t allocId = 0;
+        void* mapped = nullptr;
+        VkDeviceSize size = 0;
+    };
+    Readback readback_;
+
+    // Texture storage and uploads (webgl_vk_context_textures.cpp)
+    bool allocateTexture(VkTextureResource& tex, uint32_t width, uint32_t height, VkFormat format,
+                         uint32_t bpp, uint32_t mipLevels, uint32_t layers, bool cube);
+    void uploadTexture(VkTextureResource& tex, uint32_t level, uint32_t layer, uint32_t layerCount,
+                       int32_t x, int32_t y, uint32_t width, uint32_t height, uint32_t bpp,
+                       const void* pixels, bool unpack);
+
+    // Drawing (webgl_vk_context_draw.cpp)
+    bool prepareDraw(GLenum mode, VkProgramResource& prog);
+    void buildPipelineKey(GLenum mode, const VkProgramResource& prog, PipelineKey& key,
+                          VkExtent2D& extent);
+    bool bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog);
+    void bindVertexInputs(const VkProgramResource& prog, PipelineKey& key,
+                          std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets);
+    VkProgramResource* drawProgram(const char* what);
 
     render::VulkanContext& context_;
     WebGLVkCanvas canvas_;
     WebGLVkPipelineCache pipelineCache_;
 
-    // Command recording & dynamic rendering dispatch
-    VkCommandPool commandPool_ = VK_NULL_HANDLE;
     VkCommandBuffer currentCmd_ = VK_NULL_HANDLE;
     bool inRenderPass_ = false;
+    uint64_t lastTicket_ = 0;
+    render::VulkanFrames::HookId frameEndHook_ = 0;
 
-    PFN_vkCmdBeginRenderingKHR pfnCmdBeginRendering_ = nullptr;
-    PFN_vkCmdEndRenderingKHR pfnCmdEndRendering_ = nullptr;
-
-    // Descriptors and Layout
-    VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
+    // One set layout for every program: samplers at 0..7, uniform blocks at
+    // 8..15, the default-block uniforms at 16. Sets come from the frame's
+    // descriptor arena, a fresh one per draw whose bindings changed.
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
 
@@ -348,13 +404,6 @@ private:
     GLenum stencilPassDepthPassBack_ = GL_KEEP;
     GLuint stencilWriteMaskBack_ = 0xFFFFFFFF;
 
-    void updateFallbackConstantBuffer();
-    void ensureScratchIndexBufferSize(size_t size);
-    void uploadScratchIndexBuffer(const void* data, size_t size);
-    VkBuffer scratchIndexBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory scratchIndexMemory_ = VK_NULL_HANDLE;
-    size_t scratchIndexSize_ = 0;
-
     GLenum pendingError_ = GL_NO_ERROR;
 
     // Resource registries
@@ -403,10 +452,14 @@ private:
     bool sampleAlphaToCoverageEnabled_ = false;
     bool sampleCoverageEnabled_ = false;
 
+    // Constant values of disabled vertex attributes, bound as a zero-stride
+    // vertex buffer from the upload ring (re-staged whenever they change).
     std::array<std::array<uint32_t, 4>, 16> genericAttribs_{};
+    render::UploadSlice genericAttribSlice_;
+    uint64_t genericAttribSerial_ = 0;
+    void genericAttribsChanged() { genericAttribSerial_ = 0; }
+
     std::array<GLuint, 32> boundUniformBuffers_{};
-    VkBuffer fallbackConstantBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory fallbackConstantMemory_ = VK_NULL_HANDLE;
 
     GLuint activeTextureUnit_ = 0;
     std::array<GLuint, 32> boundTextures2D_{};

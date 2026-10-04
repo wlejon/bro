@@ -14,14 +14,7 @@ WebGLBuffer WebGLVkContext::createBuffer() {
 void WebGLVkContext::deleteBuffer(WebGLBuffer buf) {
     auto it = buffers_.find(buf.id);
     if (it != buffers_.end()) {
-        submitAndFlush();
-        if (it->second.allocId != 0) {
-            context_.destroyBuffer(it->second.buffer, it->second.allocId);
-        } else {
-            VkDevice dev = context_.device();
-            if (it->second.buffer != VK_NULL_HANDLE) vkDestroyBuffer(dev, it->second.buffer, nullptr);
-            if (it->second.memory != VK_NULL_HANDLE) vkFreeMemory(dev, it->second.memory, nullptr);
-        }
+        releaseBuffer(it->second);
         buffers_.erase(it);
     }
     if (boundArrayBuffer_ == buf.id) boundArrayBuffer_ = 0;
@@ -119,62 +112,31 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
     }
 
     VkBufferResource& res = buffers_[bufId];
-    VkDevice dev = context_.device();
+    const VkDeviceSize newSize = static_cast<VkDeviceSize>(size);
+    // Re-specifying at the same size keeps the VkBuffer: the new contents are
+    // a copy ordered after the draws that read the old ones. A new size gets a
+    // new buffer; the old one lives until the GPU is done with it.
+    if (res.isValid() && res.size != newSize) releaseBuffer(res);
 
-    if (res.buffer != VK_NULL_HANDLE) {
-        submitAndFlush();
-        if (res.allocId != 0) {
-            context_.destroyBuffer(res.buffer, res.allocId);
-        } else {
-            vkDestroyBuffer(dev, res.buffer, nullptr);
-            vkFreeMemory(dev, res.memory, nullptr);
-        }
-        res.buffer = VK_NULL_HANDLE;
-        res.memory = VK_NULL_HANDLE;
-        res.allocId = 0;
-        res.offset = 0;
-        res.poolMappedData = nullptr;
-    }
+    res.size = newSize;
+    res.shadowData.assign(static_cast<size_t>(size), 0);
+    if (data && size > 0) std::memcpy(res.shadowData.data(), data, static_cast<size_t>(size));
+    if (size == 0) return;
 
-    if (size <= 0) {
-        res.size = 0;
-        res.shadowData.clear();
-        return;
-    }
-
-    res.size = static_cast<VkDeviceSize>(size);
-    res.shadowData.resize(size);
-    if (data) {
-        std::memcpy(res.shadowData.data(), data, size);
-    } else {
-        std::memset(res.shadowData.data(), 0, size);
-    }
-
-    VkBufferUsageFlags vkUsage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    if (target == GL_ARRAY_BUFFER) vkUsage |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    else if (target == GL_ELEMENT_ARRAY_BUFFER) vkUsage |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    else if (target == GL_UNIFORM_BUFFER) vkUsage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-
-    if (!context_.createBuffer(res.size, vkUsage,
-                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                               res.buffer, res.memory, res.offset, res.allocId, res.poolMappedData)) {
-        LOG_ERROR("WebGLVkContext: Failed to allocate VkBuffer (%zu bytes)", size);
-        setSyntheticError(GL_OUT_OF_MEMORY);
-        return;
-    }
-
-    if (res.poolMappedData) {
-        std::memcpy(res.poolMappedData, res.shadowData.data(), size);
-    } else {
+    if (!res.isValid()) {
+        const VkBufferUsageFlags usage =
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         void* mapped = nullptr;
-        if (vkMapMemory(dev, res.memory, res.offset, res.size, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, res.shadowData.data(), size);
-            vkUnmapMemory(dev, res.memory);
-        } else {
-            LOG_ERROR("WebGLVkContext: Failed to map memory for buffer data (%zu bytes)", size);
+        if (!context_.createBuffer(res.size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                   res.buffer, res.memory, res.offset, res.allocId, mapped)) {
+            LOG_ERROR("WebGLVkContext: Failed to allocate VkBuffer (%zu bytes)", static_cast<size_t>(size));
             setSyntheticError(GL_OUT_OF_MEMORY);
+            return;
         }
     }
+    uploadToBuffer(res, 0, res.shadowData.data(), res.size);
 }
 
 void WebGLVkContext::bufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data) {
@@ -195,19 +157,7 @@ void WebGLVkContext::bufferSubData(GLenum target, GLintptr offset, GLsizeiptr si
     if (!data || size == 0) return;
 
     std::memcpy(res.shadowData.data() + offset, data, size);
-
-    if (res.poolMappedData) {
-        std::memcpy(static_cast<char*>(res.poolMappedData) + offset, data, size);
-    } else {
-        void* mapped = nullptr;
-        if (vkMapMemory(context_.device(), res.memory, res.offset + offset, size, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, data, size);
-            vkUnmapMemory(context_.device(), res.memory);
-        } else {
-            LOG_ERROR("WebGLVkContext: Failed to map memory for bufferSubData (offset %ld, size %zu)", static_cast<long>(offset), static_cast<size_t>(size));
-            setSyntheticError(GL_OUT_OF_MEMORY);
-        }
-    }
+    uploadToBuffer(res, static_cast<VkDeviceSize>(offset), data, static_cast<VkDeviceSize>(size));
 }
 
 void WebGLVkContext::getBufferSubData(GLenum target, GLintptr srcByteOffset, void* dstData, GLsizeiptr length) {
@@ -253,23 +203,10 @@ void WebGLVkContext::copyBufferSubData(GLenum readTarget, GLenum writeTarget,
     }
     if (size == 0) return;
 
-    std::memcpy(writeRes.shadowData.data() + writeOffset,
-                readRes.shadowData.data() + readOffset, size);
-
-    if (writeRes.buffer != VK_NULL_HANDLE) {
-        if (writeRes.poolMappedData) {
-            std::memcpy(static_cast<char*>(writeRes.poolMappedData) + writeOffset, writeRes.shadowData.data() + writeOffset, size);
-        } else {
-            void* mapped = nullptr;
-            if (vkMapMemory(context_.device(), writeRes.memory, writeRes.offset + writeOffset, size, 0, &mapped) == VK_SUCCESS) {
-                std::memcpy(mapped, writeRes.shadowData.data() + writeOffset, size);
-                vkUnmapMemory(context_.device(), writeRes.memory);
-            } else {
-                LOG_ERROR("WebGLVkContext: Failed to map memory for copyBufferSubData");
-                setSyntheticError(GL_OUT_OF_MEMORY);
-            }
-        }
-    }
+    std::memmove(writeRes.shadowData.data() + writeOffset,
+                 readRes.shadowData.data() + readOffset, size);
+    uploadToBuffer(writeRes, static_cast<VkDeviceSize>(writeOffset),
+                   writeRes.shadowData.data() + writeOffset, static_cast<VkDeviceSize>(size));
 }
 
 void* WebGLVkContext::mapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) {
@@ -321,17 +258,7 @@ bool WebGLVkContext::unmapBuffer(GLenum target) {
         return false;
     }
 
-    if (res.buffer != VK_NULL_HANDLE && res.memory != VK_NULL_HANDLE) {
-        if (res.poolMappedData) {
-            std::memcpy(res.poolMappedData, res.shadowData.data(), res.size);
-        } else {
-            void* mapped = nullptr;
-            if (vkMapMemory(context_.device(), res.memory, res.offset, res.size, 0, &mapped) == VK_SUCCESS) {
-                std::memcpy(mapped, res.shadowData.data(), res.size);
-                vkUnmapMemory(context_.device(), res.memory);
-            }
-        }
-    }
+    uploadToBuffer(res, 0, res.shadowData.data(), res.size);
 
     res.isMapped = false;
     res.mappedPtr = nullptr;
@@ -349,16 +276,9 @@ void WebGLVkContext::flushMappedBufferRange(GLenum target, GLintptr offset, GLsi
         setSyntheticError(GL_INVALID_VALUE);
         return;
     }
-    if (res.buffer != VK_NULL_HANDLE && res.memory != VK_NULL_HANDLE && length > 0) {
-        if (res.poolMappedData) {
-            std::memcpy(static_cast<char*>(res.poolMappedData) + offset, res.shadowData.data() + offset, length);
-        } else {
-            void* mapped = nullptr;
-            if (vkMapMemory(context_.device(), res.memory, res.offset + offset, length, 0, &mapped) == VK_SUCCESS) {
-                std::memcpy(mapped, res.shadowData.data() + offset, length);
-                vkUnmapMemory(context_.device(), res.memory);
-            }
-        }
+    if (length > 0) {
+        uploadToBuffer(res, static_cast<VkDeviceSize>(offset), res.shadowData.data() + offset,
+                       static_cast<VkDeviceSize>(length));
     }
 }
 
@@ -419,19 +339,7 @@ void WebGLVkContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei he
     }
 
     readPixels(x, y, width, height, format, type, pbo.shadowData.data() + offset);
-
-    if (pbo.poolMappedData) {
-        std::memcpy(static_cast<char*>(pbo.poolMappedData) + offset, pbo.shadowData.data() + offset, byteCount);
-    } else if (pbo.buffer != VK_NULL_HANDLE && pbo.memory != VK_NULL_HANDLE) {
-        void* mapped = nullptr;
-        if (vkMapMemory(context_.device(), pbo.memory, pbo.offset + offset, byteCount, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, pbo.shadowData.data() + offset, byteCount);
-            vkUnmapMemory(context_.device(), pbo.memory);
-        } else {
-            LOG_ERROR("WebGLVkContext: Failed to map memory for readPixelsToPBO");
-            setSyntheticError(GL_OUT_OF_MEMORY);
-        }
-    }
+    uploadToBuffer(pbo, static_cast<VkDeviceSize>(offset), pbo.shadowData.data() + offset, byteCount);
 }
 
 } // namespace bro::webgl::vk

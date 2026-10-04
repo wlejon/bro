@@ -74,6 +74,20 @@ bool PassParticles::init(SceneVkDevice& device, SceneVkAllocator& allocator,
         return false;
     }
 
+    return createPipelines(dev);
+}
+
+bool PassParticles::setSampleCount(VkDevice dev, VkSampleCountFlagBits samples) {
+    if (samples_ == samples) return true;
+    if (pipelineNormal_ != VK_NULL_HANDLE) vkDestroyPipeline(dev, pipelineNormal_, nullptr);
+    if (pipelineAdditive_ != VK_NULL_HANDLE) vkDestroyPipeline(dev, pipelineAdditive_, nullptr);
+    pipelineNormal_ = VK_NULL_HANDLE;
+    pipelineAdditive_ = VK_NULL_HANDLE;
+    samples_ = samples;
+    return createPipelines(dev);
+}
+
+bool PassParticles::createPipelines(VkDevice dev) {
     // Vertex input description for instanced particles
     VkVertexInputBindingDescription bindingDesc{};
     bindingDesc.binding = 0;
@@ -134,7 +148,7 @@ bool PassParticles::init(SceneVkDevice& device, SceneVkAllocator& allocator,
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(VK_CULL_MODE_NONE)
-         .setMultisamplingNone()
+         .setMultisampling(samples_)
          .setColorBlendAttachment(0, blendAttachment)
          .enableDepthTest(false, VK_COMPARE_OP_GREATER_OR_EQUAL) // Reversed-Z
          .setDynamicRendering({VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_D32_SFLOAT);
@@ -161,7 +175,7 @@ bool PassParticles::init(SceneVkDevice& device, SceneVkAllocator& allocator,
          .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
          .setPolygonMode(VK_POLYGON_MODE_FILL)
          .setCullMode(VK_CULL_MODE_NONE)
-         .setMultisamplingNone()
+         .setMultisampling(samples_)
          .setColorBlendAttachment(0, addBlend)
          .enableDepthTest(false, VK_COMPARE_OP_GREATER_OR_EQUAL)
          .setDynamicRendering({VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_D32_SFLOAT);
@@ -204,13 +218,12 @@ void PassParticles::begin(VkCommandBuffer cmd, VkDescriptorSet cameraSet) {
     activeCameraSet_ = cameraSet;
 }
 
-VkDescriptorSet PassParticles::createParticleMaterialSet(VkImageView imageView, VkSampler sampler,
-                                                         VkImageView depthView, VkSampler depthSampler,
-                                                         SceneVkDescriptorPool& pool) {
-    VkDescriptorSet set = pool.allocate(materialLayout_);
+VkDescriptorSet PassParticles::createParticleMaterialSet(SceneVkDevice& device, VkImageView imageView, VkSampler sampler,
+                                                         VkImageView depthView, VkSampler depthSampler) {
+    VkDescriptorSet set = device.frameSet(materialLayout_);
     if (!set) return defaultMaterialSet_;
 
-    VkDevice dev = pool.device();
+    VkDevice dev = device.device();
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, imageView ? imageView : dummyWhiteImage_.view,
                          sampler ? sampler : defaultSampler_);
@@ -221,7 +234,7 @@ VkDescriptorSet PassParticles::createParticleMaterialSet(VkImageView imageView, 
 }
 
 void PassParticles::draw(VkCommandBuffer cmd, bool additive,
-                         VkBuffer instanceBuffer, uint32_t instanceCount,
+                         VkBuffer instanceBuffer, VkDeviceSize instanceOffset, uint32_t instanceCount,
                          const ParticlePushConstants& push,
                          VkDescriptorSet materialSet) {
     if (instanceCount == 0 || instanceBuffer == VK_NULL_HANDLE) return;
@@ -237,8 +250,7 @@ void PassParticles::draw(VkCommandBuffer cmd, bool additive,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(push), &push);
 
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &instanceBuffer, &offset);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &instanceBuffer, &instanceOffset);
     vkCmdDraw(cmd, 6, instanceCount, 0, 0);
 }
 

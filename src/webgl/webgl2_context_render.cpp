@@ -137,7 +137,9 @@ WebGLSync WebGL2RenderingContext::fenceSync(GLenum condition, GLbitfield flags) 
         setSyntheticError(GL_INVALID_VALUE);
         return {nullptr};
     }
-    GLsync sync = reinterpret_cast<GLsync>(new uint64_t(1));
+    // The sync object holds the queue ticket its fence completes with.
+    const uint64_t ticket = vkCtx_ ? vkCtx_->insertFence() : 0;
+    GLsync sync = reinterpret_cast<GLsync>(new uint64_t(ticket));
     validSyncs_.insert(sync);
     return {sync};
 }
@@ -167,7 +169,12 @@ GLenum WebGL2RenderingContext::clientWaitSync(WebGLSync s, GLbitfield flags, dou
     if (flags & 0x00000001 /* GL_SYNC_FLUSH_COMMANDS_BIT */) {
         flush();
     }
-    return 0x911A; /* GL_ALREADY_SIGNALED */
+    const uint64_t ticket = *reinterpret_cast<uint64_t*>(s.sync);
+    if (!vkCtx_ || vkCtx_->isFenceSignaled(ticket)) return 0x911A; /* GL_ALREADY_SIGNALED */
+    if (timeoutNs == 0) return 0x911B; /* GL_TIMEOUT_EXPIRED */
+    return vkCtx_->waitFence(ticket, static_cast<uint64_t>(timeoutNs))
+               ? 0x911C  /* GL_CONDITION_SATISFIED */
+               : 0x911B; /* GL_TIMEOUT_EXPIRED */
 }
 
 void WebGL2RenderingContext::waitSync(WebGLSync s, GLbitfield flags, double timeoutNs) {
@@ -190,7 +197,10 @@ GLint WebGL2RenderingContext::getSyncParameter(WebGLSync s, GLenum pname) {
         case 0x9112: /* GL_OBJECT_TYPE */ return 0x9116; /* GL_SYNC_FENCE */
         case 0x9113: /* GL_SYNC_CONDITION */ return 0x9117; /* GL_SYNC_GPU_COMMANDS_COMPLETE */
         case 0x9115: /* GL_SYNC_FLAGS */ return 0;
-        case 0x9114: /* GL_SYNC_STATUS */ return 0x9119; /* GL_SIGNALED */
+        case 0x9114: /* GL_SYNC_STATUS */
+            return (!vkCtx_ || vkCtx_->isFenceSignaled(*reinterpret_cast<uint64_t*>(s.sync)))
+                       ? 0x9119   /* GL_SIGNALED */
+                       : 0x9118;  /* GL_UNSIGNALED */
         default: return 0;
     }
 }

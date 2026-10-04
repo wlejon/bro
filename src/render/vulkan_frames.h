@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace bro::render {
@@ -83,6 +84,15 @@ public:
     /// the end of the current frame.
     void defer(std::function<void()> destroy);
 
+    /// Register `hook` to run when the current frame closes (at the next
+    /// beginFrame, before the closing frame's ticket is taken). Consumers that
+    /// record into frame command buffers across calls — WebGL, the scene's
+    /// upload stream — submit their open work here, so no command buffer or
+    /// upload slice outlives its frame. Returns an id for removeFrameEndHook.
+    using HookId = uint64_t;
+    HookId addFrameEndHook(std::function<void()> hook);
+    void removeFrameEndHook(HookId id);
+
     VulkanQueue& queue();
 
 private:
@@ -116,6 +126,8 @@ private:
     Slot slots_[kFramesInFlight];
     uint64_t serial_ = 0;
     std::vector<std::function<void()>> pending_;  // deferred during the open frame
+    std::vector<std::pair<HookId, std::function<void()>>> frameEndHooks_;
+    HookId nextHookId_ = 1;
     VkDeviceSize minUploadAlignment_ = 16;
 };
 

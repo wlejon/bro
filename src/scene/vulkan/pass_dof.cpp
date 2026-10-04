@@ -172,7 +172,6 @@ void PassDoF::destroyIntermediateTargets(SceneVkAllocator& allocator) {
 }
 
 void PassDoF::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                     SceneVkDescriptorPool& descPool,
                      const SceneVkImage& sharpHdrImage,
                      const SceneVkImage& depthImage,
                      VkImageView outputTargetView,
@@ -212,7 +211,7 @@ void PassDoF::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocato
                                    blurTex_[1].currentLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     blurTex_[1].currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkDescriptorSet setH = descPool.allocate(singleTexDescLayout_);
+    VkDescriptorSet setH = device.frameSet(singleTexDescLayout_);
     SceneVkDescriptorWriter writerH;
     writerH.writeImage(0, blurTex_[0].view, linearClampSampler_);
     writerH.updateSet(device.device(), setH);
@@ -253,7 +252,7 @@ void PassDoF::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocato
                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     blurTex_[0].currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkDescriptorSet setV = descPool.allocate(singleTexDescLayout_);
+    VkDescriptorSet setV = device.frameSet(singleTexDescLayout_);
     SceneVkDescriptorWriter writerV;
     writerV.writeImage(0, blurTex_[1].view, linearClampSampler_);
     writerV.updateSet(device.device(), setV);
@@ -274,7 +273,7 @@ void PassDoF::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocato
     blurTex_[0].currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     // 4. DoF composite pass
-    VkDescriptorSet dofSet = descPool.allocate(dofDescLayout_);
+    VkDescriptorSet dofSet = device.frameSet(dofDescLayout_);
     SceneVkDescriptorWriter dofWriter;
     dofWriter.writeImage(0, sharpHdrImage.view, linearClampSampler_);
     dofWriter.writeImage(1, blurTex_[0].view, linearClampSampler_);

@@ -49,27 +49,6 @@ bool PassReflectionProbe::init(SceneVkDevice& device, SceneVkAllocator& allocato
         return false;
     }
 
-    device.executeImmediate([&](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = dummyCubemap_.image;
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 6;
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &barrier);
-    });
-    dummyCubemap_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     // 3. Face Camera & Lighting descriptor layouts & buffers
     SceneVkDescriptorLayoutBuilder camBuilder;
@@ -84,39 +63,13 @@ bool PassReflectionProbe::init(SceneVkDevice& device, SceneVkAllocator& allocato
     lightBuilder.addBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
     faceLightingLayout_ = lightBuilder.build(dev);
 
-    for (int f = 0; f < 6; ++f) {
-        allocator.createUniformBuffer(sizeof(SceneCameraUniforms), faceCameraUbos_[f]);
-    }
-    allocator.createUniformBuffer(sizeof(SceneLightingUniforms), faceLightingUbo_);
-
-    faceDescPool_.init(dev, 16, {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16}
-    });
-
-    for (int f = 0; f < 6; ++f) {
-        faceCameraSets_[f] = faceDescPool_.allocate(faceCameraLayout_);
-        SceneVkDescriptorWriter camWriter;
-        camWriter.writeBuffer(0, faceCameraUbos_[f].buffer, sizeof(SceneCameraUniforms));
-        camWriter.updateSet(dev, faceCameraSets_[f]);
-    }
-    faceLightingSet_ = faceDescPool_.allocate(faceLightingLayout_);
-
-    SceneVkDescriptorWriter lightWriter;
-    lightWriter.writeBuffer(0, faceLightingUbo_.buffer, sizeof(SceneLightingUniforms));
-    lightWriter.writeImage(2, dummyCubemap_.view, cubemapSampler_);
-    lightWriter.updateSet(dev, faceLightingSet_);
-
     return true;
 }
 
 void PassReflectionProbe::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     VkDevice dev = device.device();
     for (auto& [probe, data] : probeCache_) {
-        for (auto view : data.faceViews) {
-            if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
-        }
-        data.faceViews.clear();
+        releaseFaceViews(device, data);
         allocator.destroyImage(data.cubemap);
         allocator.destroyImage(data.depthImage);
     }
@@ -131,13 +84,6 @@ void PassReflectionProbe::cleanup(SceneVkDevice& device, SceneVkAllocator& alloc
         vkDestroySampler(dev, cubemapSampler_, nullptr);
         cubemapSampler_ = VK_NULL_HANDLE;
     }
-    for (int f = 0; f < 6; ++f) {
-        allocator.destroyBuffer(faceCameraUbos_[f]);
-        faceCameraSets_[f] = VK_NULL_HANDLE;
-    }
-    allocator.destroyBuffer(faceLightingUbo_);
-
-    faceDescPool_.destroy();
     if (faceCameraLayout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(dev, faceCameraLayout_, nullptr);
         faceCameraLayout_ = VK_NULL_HANDLE;
@@ -160,10 +106,7 @@ bool PassReflectionProbe::ensureProbeGpu(ReflectionProbeNode* probe, SceneVkAllo
     }
 
     VkDevice dev = device.device();
-    for (auto view : data.faceViews) {
-        if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
-    }
-    data.faceViews.clear();
+    releaseFaceViews(device, data);
     allocator.destroyImage(data.cubemap);
     allocator.destroyImage(data.depthImage);
 
@@ -264,7 +207,23 @@ void PassReflectionProbe::renderFace(VkCommandBuffer cmd, ReflectionProbeNode* p
     camUniforms.viewport[2] = nearZ;
     camUniforms.viewport[3] = farZ;
 
-    allocator.updateUniformBuffer(faceCameraUbos_[face], &camUniforms, sizeof(camUniforms));
+    // The face renders with its own camera and an unlit, shadowless lighting
+    // block; both sets are this frame's.
+    const VkDescriptorBufferInfo camInfo = device.frameUniform(&camUniforms, sizeof(camUniforms));
+    VkDescriptorSet cameraSet = device.frameSet(faceCameraLayout_);
+    SceneVkDescriptorWriter camWriter;
+    camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
+    camWriter.updateSet(device.device(), cameraSet);
+
+    const SceneLightingUniforms noLights{};
+    const VkDescriptorBufferInfo lightInfo = device.frameUniform(&noLights, sizeof(noLights));
+    VkDescriptorSet lightingSet = device.frameSet(faceLightingLayout_);
+    SceneVkDescriptorWriter lightWriter;
+    lightWriter.writeBuffer(0, lightInfo.buffer, lightInfo.range, lightInfo.offset);
+    lightWriter.writeImage(1, bridge.shadowTarget_.arrayView(), bridge.shadowTarget_.shadowSampler());
+    lightWriter.writeImage(2, dummyCubemap_.view, cubemapSampler_);
+    lightWriter.writeImage(3, bridge.dummyShadeMap_.view, bridge.dummyShadeMap_.sampler);
+    lightWriter.updateSet(device.device(), lightingSet);
 
     // Dynamic rendering into face
     allocator.transitionImageLayout(cmd, data.cubemap.image, VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -305,7 +264,7 @@ void PassReflectionProbe::renderFace(VkCommandBuffer cmd, ReflectionProbeNode* p
 
     vkCmdBeginRendering(cmd, &renderingInfo);
 
-    passMesh.begin(cmd, faceCameraSets_[face], faceLightingSet_, res, res);
+    passMesh.begin(cmd, cameraSet, lightingSet, res, res);
 
     for (auto& [id, node] : graph.nodes_) {
         if (!node->renderVisible()) continue;
@@ -434,6 +393,18 @@ void PassReflectionProbe::updateProbes(VkCommandBuffer cmd, SceneGraph& graph, S
             activeProbe_ = p;
         }
     }
+}
+
+void PassReflectionProbe::releaseFaceViews(SceneVkDevice& device, ProbeGpuData& data) {
+    if (!data.faceViews.empty()) {
+        VkDevice dev = device.device();
+        device.defer([dev, views = data.faceViews] {
+            for (VkImageView view : views) {
+                if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
+            }
+        });
+    }
+    data.faceViews.clear();
 }
 
 VkImageView PassReflectionProbe::activeCubemapView() const {

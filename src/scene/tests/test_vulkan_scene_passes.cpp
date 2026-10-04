@@ -245,15 +245,11 @@ int main() {
     for (size_t b = 0; b < 256; ++b) {
         setIdentity(&boneMatrices[b * 16]);
     }
-    SceneVkBuffer boneUbo;
-    allocator.createUniformBuffer(boneMatrices.size() * sizeof(float), boneUbo);
-    allocator.updateUniformBuffer(boneUbo, boneMatrices.data(), boneMatrices.size() * sizeof(float));
-
-    SceneVkDescriptorPool boneDescPool;
-    boneDescPool.init(device.device(), 2);
-    VkDescriptorSet boneSet = boneDescPool.allocate(passMesh.bonePaletteLayout());
+    const VkDescriptorBufferInfo boneUbo =
+        device.frameUniform(boneMatrices.data(), boneMatrices.size() * sizeof(float));
+    VkDescriptorSet boneSet = device.frameSet(passMesh.bonePaletteLayout());
     SceneVkDescriptorWriter boneWriter;
-    boneWriter.writeBuffer(0, boneUbo.buffer, boneMatrices.size() * sizeof(float));
+    boneWriter.writeBuffer(0, boneUbo.buffer, boneUbo.range, boneUbo.offset);
     boneWriter.updateSet(device.device(), boneSet);
 
     // 5. Camera & Lighting Uniforms
@@ -283,9 +279,7 @@ int main() {
     camUniforms.viewport[2] = 0.1f;
     camUniforms.viewport[3] = 1000.0f;
 
-    SceneVkBuffer cameraUbo;
-    allocator.createUniformBuffer(sizeof(camUniforms), cameraUbo);
-    allocator.updateUniformBuffer(cameraUbo, &camUniforms, sizeof(camUniforms));
+    const VkDescriptorBufferInfo cameraUbo = device.frameUniform(&camUniforms, sizeof(camUniforms));
 
     SceneLightingUniforms lightUniforms{};
     lightUniforms.sunDirection[0] = 0.577f;
@@ -320,21 +314,16 @@ int main() {
         }
     }
 
-    SceneVkBuffer lightUbo;
-    allocator.createUniformBuffer(sizeof(lightUniforms), lightUbo);
-    allocator.updateUniformBuffer(lightUbo, &lightUniforms, sizeof(lightUniforms));
+    const VkDescriptorBufferInfo lightUbo = device.frameUniform(&lightUniforms, sizeof(lightUniforms));
 
-    SceneVkDescriptorPool mainDescPool;
-    mainDescPool.init(device.device(), 8);
-
-    VkDescriptorSet camSet = mainDescPool.allocate(passMesh.cameraLayout());
+    VkDescriptorSet camSet = device.frameSet(passMesh.cameraLayout());
     SceneVkDescriptorWriter camWriter;
-    camWriter.writeBuffer(0, cameraUbo.buffer, sizeof(camUniforms));
+    camWriter.writeBuffer(0, cameraUbo.buffer, cameraUbo.range, cameraUbo.offset);
     camWriter.updateSet(device.device(), camSet);
 
-    VkDescriptorSet lightSet = mainDescPool.allocate(passMesh.lightingLayout());
+    VkDescriptorSet lightSet = device.frameSet(passMesh.lightingLayout());
     SceneVkDescriptorWriter lightWriter;
-    lightWriter.writeBuffer(0, lightUbo.buffer, sizeof(lightUniforms));
+    lightWriter.writeBuffer(0, lightUbo.buffer, lightUbo.range, lightUbo.offset);
     lightWriter.writeImage(1, shadowTarget.arrayView(), shadowTarget.shadowSampler());
     lightWriter.writeImage(2, passProbe.dummyCubemapView(), passProbe.activeCubemapSampler());
     lightWriter.writeImage(3, passMesh.dummyBlackView(), passMesh.defaultSampler());
@@ -461,8 +450,7 @@ int main() {
                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            readbackBuffer.buffer, 1, &copyRegion);
 
-    device.endFrame();
-    assert(device.submitFrame());
+    assert(device.submitFrame(cmd));
     device.waitIdle();
 
     // -------------------------------------------------------------------------
@@ -528,12 +516,6 @@ int main() {
     allocator.destroyBuffer(indexBuffer);
     allocator.destroyBuffer(instanceBuffer);
     allocator.destroyBuffer(skinAttribBuffer);
-    allocator.destroyBuffer(boneUbo);
-    allocator.destroyBuffer(cameraUbo);
-    allocator.destroyBuffer(lightUbo);
-
-    boneDescPool.destroy();
-    mainDescPool.destroy();
 
     passPostFx.cleanup(device, allocator);
     passMesh.cleanup(device, allocator);

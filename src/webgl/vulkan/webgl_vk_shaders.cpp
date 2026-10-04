@@ -53,7 +53,7 @@ TranslatedShader WebGLVkShaderCompiler::translateToVulkanGLSL(const std::string&
         result.uniforms.push_back(info);
         currentOffset += totalSize;
     }
-    result.pushConstantSize = WebGLVkShaderParser::alignTo(currentOffset, 16);
+    result.defaultUniformSize = WebGLVkShaderParser::alignTo(currentOffset, 16);
     return result;
 }
 

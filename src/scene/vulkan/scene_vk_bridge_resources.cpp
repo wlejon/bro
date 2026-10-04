@@ -123,6 +123,25 @@ SceneVkBridge::NodeDynamicBuffers& SceneVkBridge::getDynamicBuffers(const void* 
     return dynamicBufferCache_[key];
 }
 
+VkDescriptorSet SceneVkBridge::materialSetFor(CachedTexture& tex, VkImageView view, VkSampler sampler) {
+    const uint64_t serial = device_.frames().frameSerial();
+    if (tex.frameSet != VK_NULL_HANDLE && tex.frameSerial == serial) return tex.frameSet;
+    VkDescriptorSet set = device_.frameSet(passMesh_.materialLayout());
+    if (set == VK_NULL_HANDLE) {
+        LOG_ERROR("SceneVkBridge: Failed to allocate a material descriptor set");
+        return VK_NULL_HANDLE;
+    }
+    SceneVkDescriptorWriter writer;
+    writer.writeImage(0, view, sampler);
+    writer.writeImage(1, passMesh_.dummyNormalView(), passMesh_.defaultSampler());
+    writer.writeImage(2, passMesh_.dummyWhiteView(), passMesh_.defaultSampler());
+    writer.writeImage(3, passMesh_.dummyBlackView(), passMesh_.defaultSampler());
+    writer.updateSet(device_.device(), set);
+    tex.frameSet = set;
+    tex.frameSerial = serial;
+    return set;
+}
+
 VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int height, const uint8_t* rgba) {
     auto& tex = textureCache_[key];
     uint64_t hash = 0;
@@ -138,130 +157,52 @@ VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int hei
         }
     }
 
-    if (tex.image.isValid() && tex.width == width && tex.height == height && tex.hash == hash) {
-        return tex.descSet;
+    if (!(tex.image.isValid() && tex.owned && tex.width == width && tex.height == height && tex.hash == hash)) {
+        if (tex.owned) allocator_.destroyImage(tex.image);
+        tex.image = {};
+        tex.owned = true;
+        tex.frameSet = VK_NULL_HANDLE;
+
+        TextureDesc desc{};
+        desc.width = width;
+        desc.height = height;
+        desc.format = VK_FORMAT_R8G8B8A8_UNORM;
+        desc.generateMipmaps = true;
+        if (!allocator_.createTexture2D(rgba, desc, tex.image)) {
+            LOG_ERROR("SceneVkBridge: Failed to allocate 2D texture (%dx%d)", width, height);
+            return VK_NULL_HANDLE;
+        }
+        tex.width = width;
+        tex.height = height;
+        tex.hash = hash;
+        noteTextureUpload(static_cast<size_t>(width) * height * 4);
     }
-
-    if (tex.image.isValid() && tex.owned) {
-        allocator_.destroyImage(tex.image);
-    }
-    tex.image = {};
-    tex.owned = true;
-
-    TextureDesc desc{};
-    desc.width = width;
-    desc.height = height;
-    desc.format = VK_FORMAT_R8G8B8A8_UNORM;
-    desc.generateMipmaps = true;
-    if (!allocator_.createTexture2D(rgba, desc, tex.image)) {
-        LOG_ERROR("SceneVkBridge: Failed to allocate 2D texture (%dx%d)", width, height);
-        return VK_NULL_HANDLE;
-    }
-    tex.width = width;
-    tex.height = height;
-    tex.hash = hash;
-    noteTextureUpload(static_cast<size_t>(width) * height * 4);
-
-    tex.descSet = dynamicDescPool_.allocate(passMesh_.materialLayout());
-    if (!tex.descSet) {
-        LOG_ERROR("SceneVkBridge: Failed to allocate descriptor set for texture (%dx%d)", width, height);
-        return VK_NULL_HANDLE;
-    }
-
-    SceneVkDescriptorWriter writer;
-    writer.writeImage(0, tex.image.view, tex.image.sampler);
-    writer.writeImage(1, passMesh_.dummyNormalView(), passMesh_.defaultSampler());
-    writer.writeImage(2, passMesh_.dummyWhiteView(), passMesh_.defaultSampler());
-    writer.writeImage(3, passMesh_.dummyBlackView(), passMesh_.defaultSampler());
-    writer.updateSet(device_.device(), tex.descSet);
-
-    return tex.descSet;
+    return materialSetFor(tex, tex.image.view, tex.image.sampler);
 }
 
+// Another scene's tonemapped output as this mesh's base colour: sampled in
+// place (that scene rendered earlier in the frame, in queue order).
 VkDescriptorSet SceneVkBridge::uploadExternalSceneTexture(SceneVkBridge* srcBridge, const void* key) {
-    if (!srcBridge || srcBridge->ldrPresentationImage_.view == VK_NULL_HANDLE) {
-        return VK_NULL_HANDLE;
-    }
-
+    if (!srcBridge || srcBridge->ldrPresentationImage_.view == VK_NULL_HANDLE) return VK_NULL_HANDLE;
     auto& tex = textureCache_[key];
-    if (tex.descSet != VK_NULL_HANDLE &&
-        !tex.owned &&
-        tex.image.image == srcBridge->ldrPresentationImage_.image &&
-        tex.width == static_cast<int>(srcBridge->currentWidth_) &&
-        tex.height == static_cast<int>(srcBridge->currentHeight_)) {
-        return tex.descSet;
-    }
-
-    if (tex.image.isValid() && tex.owned) {
-        allocator_.destroyImage(tex.image);
+    if (tex.owned || tex.image.image != srcBridge->ldrPresentationImage_.image) {
+        if (tex.owned) allocator_.destroyImage(tex.image);
+        tex.owned = false;
         tex.image = {};
+        tex.image.image = srcBridge->ldrPresentationImage_.image;
+        tex.frameSet = VK_NULL_HANDLE;
     }
-    tex.owned = false;
-    tex.image.image = srcBridge->ldrPresentationImage_.image;
-    tex.image.view = srcBridge->ldrPresentationImage_.view;
-    tex.image.sampler = srcBridge->ldrPresentationImage_.sampler;
     tex.width = static_cast<int>(srcBridge->currentWidth_);
     tex.height = static_cast<int>(srcBridge->currentHeight_);
-
-    if (tex.descSet == VK_NULL_HANDLE) {
-        tex.descSet = dynamicDescPool_.allocate(passMesh_.materialLayout());
-    }
-    if (!tex.descSet) {
-        LOG_ERROR("SceneVkBridge: Failed to allocate descriptor set for external scene texture");
-        return VK_NULL_HANDLE;
-    }
-
-    SceneVkDescriptorWriter writer;
-    writer.writeImage(0, srcBridge->ldrPresentationImage_.view, srcBridge->ldrPresentationImage_.sampler);
-    writer.writeImage(1, passMesh_.dummyNormalView(), passMesh_.defaultSampler());
-    writer.writeImage(2, passMesh_.dummyWhiteView(), passMesh_.defaultSampler());
-    writer.writeImage(3, passMesh_.dummyBlackView(), passMesh_.defaultSampler());
-    writer.updateSet(device_.device(), tex.descSet);
-
-    return tex.descSet;
-}
-
-std::vector<uint8_t> SceneVkBridge::readTonemapPixelsRGBA(int& outW, int& outH) {
-    if (!readbackBuffer_.isValid() || currentWidth_ == 0 || currentHeight_ == 0) {
-        outW = outH = 0;
-        return {};
-    }
-
-    outW = static_cast<int>(currentWidth_);
-    outH = static_cast<int>(currentHeight_);
-    size_t size = static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4;
-
-    std::vector<uint8_t> result(size);
-    if (readbackBuffer_.mappedData) {
-        std::memcpy(result.data(), readbackBuffer_.mappedData, size);
-    } else {
-        void* mapped = nullptr;
-        if (vkMapMemory(device_.device(), readbackBuffer_.memory, readbackBuffer_.offset, size, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(result.data(), mapped, size);
-            vkUnmapMemory(device_.device(), readbackBuffer_.memory);
-        } else {
-            outW = outH = 0;
-            return {};
-        }
-    }
-
-    return result;
+    return materialSetFor(tex, srcBridge->ldrPresentationImage_.view, srcBridge->ldrPresentationImage_.sampler);
 }
 
 bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height, VkSampleCountFlagBits sampleCount) {
     if (width == 0 || height == 0) return false;
 
-    if (!shadowTarget_.isValid()) {
-        if (!shadowTarget_.init(allocator_, 1024, 4, VK_FORMAT_D32_SFLOAT)) {
-            LOG_ERROR("SceneVkBridge: Failed initializing shadow target");
-            return false;
-        }
-        SceneVkDescriptorWriter lightWriter;
-        lightWriter.writeBuffer(0, lightingUbo_.buffer, sizeof(SceneLightingUniforms));
-        lightWriter.writeImage(1, shadowTarget_.arrayView(), shadowTarget_.shadowSampler());
-        lightWriter.writeImage(2, passReflectionProbe_.dummyCubemapView(), passReflectionProbe_.activeCubemapSampler());
-        lightWriter.writeImage(3, dummyShadeMap_.view, dummyShadeMap_.sampler);
-        lightWriter.updateSet(device_.device(), lightingSet_);
+    if (!shadowTarget_.isValid() && !shadowTarget_.init(allocator_, 1024, 4, VK_FORMAT_D32_SFLOAT)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing shadow target");
+        return false;
     }
 
     if (currentWidth_ == width && currentHeight_ == height && currentSampleCount_ == sampleCount && hdrTarget_.isValid()) {
@@ -272,12 +213,23 @@ bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height, VkSampleCount
     currentHeight_ = height;
 
     if (currentSampleCount_ != sampleCount) {
+        // Rebuilding the HDR passes' pipelines for a new sample count is rare:
+        // wait for the frames that still use the old ones instead of tracking them.
+        device_.waitIdle();
         currentSampleCount_ = sampleCount;
-        passMesh_.cleanup(device_, allocator_);
-        PassMesh::Config meshCfg{};
-        meshCfg.samples = sampleCount;
-        passMesh_.init(device_, allocator_, meshCfg);
+        VkDevice dev = device_.device();
+        bool ok = passMesh_.setSampleCount(dev, sampleCount) && passEnv_.setSampleCount(dev, sampleCount) &&
+                  passBillboard_.setSampleCount(dev, sampleCount) && passParticles_.setSampleCount(dev, sampleCount) &&
+                  passDecal_.setSampleCount(dev, sampleCount) && passGaussianSplat_.setSampleCount(dev, sampleCount);
         passTerrain_.setSampleCount(sampleCount);
+        for (auto& [key, entry] : customMeshPipelines_) {
+            if (entry.pipeline != VK_NULL_HANDLE) vkDestroyPipeline(dev, entry.pipeline, nullptr);
+        }
+        customMeshPipelines_.clear();
+        if (!ok) {
+            LOG_ERROR("SceneVkBridge: Failed rebuilding pipelines for %d samples", static_cast<int>(sampleCount));
+            return false;
+        }
     }
 
     hdrTarget_.cleanup(allocator_);
@@ -377,21 +329,6 @@ bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height, VkSampleCount
 
     passSSAO_.resize(device_, allocator_, width, height);
     passDoF_.resize(device_, allocator_, width, height);
-
-    passPostFx_.cleanup(device_, allocator_);
-    if (!passPostFx_.init(device_, allocator_, width, height)) {
-        LOG_ERROR("SceneVkBridge: Failed initializing PassPostFx");
-        return false;
-    }
-
-    allocator_.destroyBuffer(readbackBuffer_);
-    if (!allocator_.createBuffer(width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                readbackBuffer_)) {
-        LOG_ERROR("SceneVkBridge: Failed creating readback buffer");
-        return false;
-    }
-
     return true;
 }
 

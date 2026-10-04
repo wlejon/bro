@@ -51,7 +51,7 @@ struct ProgramLinkResult {
     std::unordered_map<std::string, GLint> samplerBindings;
     std::vector<VkUniformBlockInfo> uniformBlocks;
     std::unordered_map<std::string, GLuint> uniformBlockIndices;
-    uint32_t pushConstantSize = 0;
+    uint32_t defaultUniformSize = 0;
 };
 
 class WebGLVkShaderParser {

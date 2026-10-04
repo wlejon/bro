@@ -94,15 +94,6 @@ void WebGLVkContext::vertexAttribIPointer(GLuint index, GLint size, GLenum type,
     attr.bufferId = boundArrayBuffer_;
 }
 
-static void updateFallbackBuffer(VkDevice dev, VkDeviceMemory mem, const void* data, size_t size) {
-    if (mem == VK_NULL_HANDLE || !data || size == 0) return;
-    void* mapped = nullptr;
-    if (vkMapMemory(dev, mem, 0, size, 0, &mapped) == VK_SUCCESS) {
-        std::memcpy(mapped, data, size);
-        vkUnmapMemory(dev, mem);
-    }
-}
-
 void WebGLVkContext::vertexAttrib1f(GLuint index, GLfloat x) { vertexAttrib4f(index, x, 0.0f, 0.0f, 1.0f); }
 void WebGLVkContext::vertexAttrib2f(GLuint index, GLfloat x, GLfloat y) { vertexAttrib4f(index, x, y, 0.0f, 1.0f); }
 void WebGLVkContext::vertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z) { vertexAttrib4f(index, x, y, z, 1.0f); }
@@ -112,7 +103,7 @@ void WebGLVkContext::vertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat 
     float* dst = reinterpret_cast<float*>(genericAttribs_[index].data());
     dst[0] = x; dst[1] = y; dst[2] = z; dst[3] = w;
     vaos_[currentVaoId_].attributes[index].isInteger = false;
-    updateFallbackBuffer(context_.device(), fallbackConstantMemory_, genericAttribs_.data(), sizeof(genericAttribs_));
+    genericAttribsChanged();
 }
 
 void WebGLVkContext::vertexAttrib1fv(GLuint index, const GLfloat* v) { if (v) vertexAttrib1f(index, v[0]); }
@@ -125,7 +116,7 @@ void WebGLVkContext::vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GL
     int32_t* dst = reinterpret_cast<int32_t*>(genericAttribs_[index].data());
     dst[0] = x; dst[1] = y; dst[2] = z; dst[3] = w;
     vaos_[currentVaoId_].attributes[index].isInteger = true;
-    updateFallbackBuffer(context_.device(), fallbackConstantMemory_, genericAttribs_.data(), sizeof(genericAttribs_));
+    genericAttribsChanged();
 }
 
 void WebGLVkContext::vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w) {
@@ -133,7 +124,7 @@ void WebGLVkContext::vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z
     uint32_t* dst = genericAttribs_[index].data();
     dst[0] = x; dst[1] = y; dst[2] = z; dst[3] = w;
     vaos_[currentVaoId_].attributes[index].isInteger = true;
-    updateFallbackBuffer(context_.device(), fallbackConstantMemory_, genericAttribs_.data(), sizeof(genericAttribs_));
+    genericAttribsChanged();
 }
 
 void WebGLVkContext::vertexAttribI4iv(GLuint index, const GLint* v) {

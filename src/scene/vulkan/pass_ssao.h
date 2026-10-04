@@ -31,14 +31,12 @@ public:
     bool resize(SceneVkDevice& device, SceneVkAllocator& allocator, uint32_t width, uint32_t height);
 
     void render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                SceneVkDescriptorPool& descPool,
                 const SceneVkImage& depthImage,
                 const float* projMatrix,
                 const float* invProjMatrix,
                 float radius, float bias);
 
     void applyAO(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                 SceneVkDescriptorPool& descPool,
                  VkImageView hdrTargetView,
                  uint32_t width, uint32_t height,
                  float intensity);
@@ -68,7 +66,6 @@ private:
     VkPipelineLayout applyAoPipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline applyAoPipeline_ = VK_NULL_HANDLE;
 
-    SceneVkBuffer ssaoUbo_;
     SceneVkImage noiseTex_;
     SceneVkImage ssaoTex_[2]; // Half-res ping-pong textures
     VkSampler pointClampSampler_ = VK_NULL_HANDLE;

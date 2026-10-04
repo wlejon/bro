@@ -396,14 +396,14 @@ std::string WebGLVkShaderParser::generateStandaloneVulkanGLSL(const ParsedShader
         out << ";\n";
     }
 
-    int nextUboBinding = 8;
+    int nextUboBinding = kFirstUniformBlockBinding;
     for (const auto& ub : parsed.uniformBlocks) {
         int b = nextUboBinding++;
         out << "layout(binding = " << b << ", std140) uniform " << ub.name << " " << ub.body << "\n";
     }
 
     if (!parsed.uniforms.empty()) {
-        out << "layout(std140, push_constant) uniform WebGLUniforms {\n";
+        out << "layout(binding = " << kDefaultUniformBinding << ", std140) uniform WebGLUniforms {\n";
         for (const auto& u : parsed.uniforms) {
             out << "    " << u.type << " " << u.name;
             if (u.isArray) out << "[" << u.arraySize << "]";
@@ -534,10 +534,10 @@ ProgramLinkResult WebGLVkShaderParser::linkAndGenerateVulkanGLSL(
     for (const auto& u : vs.uniforms) addUniform(u);
     for (const auto& u : fs.uniforms) addUniform(u);
 
-    // Compute push constant layout
+    // Compute the std140 layout of the default uniform block
     uint32_t currentOffset = 0;
     int nextUniLoc = 0;
-    std::string pushBlockMembers;
+    std::string defaultBlockMembers;
 
     for (const auto& u : unifiedUniforms) {
         auto [baseSize, align] = getUniformSizeAndAlign(u.type);
@@ -560,13 +560,13 @@ ProgramLinkResult WebGLVkShaderParser::linkAndGenerateVulkanGLSL(
         if (u.isArray) res.uniformLocations[info.name] = info.location;
         res.uniforms.push_back(info);
 
-        pushBlockMembers += "    " + u.type + " " + u.name;
-        if (u.isArray) pushBlockMembers += "[" + std::to_string(u.arraySize) + "]";
-        pushBlockMembers += ";\n";
+        defaultBlockMembers += "    " + u.type + " " + u.name;
+        if (u.isArray) defaultBlockMembers += "[" + std::to_string(u.arraySize) + "]";
+        defaultBlockMembers += ";\n";
 
         currentOffset += totalSize;
     }
-    res.pushConstantSize = alignTo(currentOffset, 16);
+    res.defaultUniformSize = alignTo(currentOffset, 16);
 
     // 6. Map Samplers
     std::vector<ParsedVar> unifiedSamplers;
@@ -616,7 +616,7 @@ ProgramLinkResult WebGLVkShaderParser::linkAndGenerateVulkanGLSL(
     for (const auto& ub : fs.uniformBlocks) addUbo(ub);
 
     std::string uboDecls;
-    int nextUboBinding = 8;
+    int nextUboBinding = kFirstUniformBlockBinding;
     GLuint blockIdx = 0;
     for (const auto& ub : unifiedUBOs) {
         int b = nextUboBinding++;
@@ -673,9 +673,10 @@ ProgramLinkResult WebGLVkShaderParser::linkAndGenerateVulkanGLSL(
     }
 
     // Common preamble
-    std::string pushBlock;
-    if (!pushBlockMembers.empty()) {
-        pushBlock = "layout(std140, push_constant) uniform WebGLUniforms {\n" + pushBlockMembers + "};\n";
+    std::string defaultBlock;
+    if (!defaultBlockMembers.empty()) {
+        defaultBlock = "layout(binding = " + std::to_string(kDefaultUniformBinding) +
+                    ", std140) uniform WebGLUniforms {\n" + defaultBlockMembers + "};\n";
     }
 
     // Build Vertex Vulkan GLSL
@@ -701,7 +702,7 @@ ProgramLinkResult WebGLVkShaderParser::linkAndGenerateVulkanGLSL(
         }
         vout << samplerDecls;
         vout << uboDecls;
-        vout << pushBlock;
+        vout << defaultBlock;
 
         // Wrap main() to adjust gl_Position.z from OpenGL [-1, 1] to Vulkan [0, 1]
         std::string vSource = vs.cleanedSource;
@@ -746,7 +747,7 @@ ProgramLinkResult WebGLVkShaderParser::linkAndGenerateVulkanGLSL(
         }
         fout << samplerDecls;
         fout << uboDecls;
-        fout << pushBlock;
+        fout << defaultBlock;
         fout << fs.cleanedSource;
         res.fsVulkanSource = fout.str();
     }

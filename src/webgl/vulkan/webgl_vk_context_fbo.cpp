@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -14,6 +15,7 @@ WebGLFramebuffer WebGLVkContext::createFramebuffer() {
 }
 
 void WebGLVkContext::deleteFramebuffer(WebGLFramebuffer fb) {
+    if (currentFboId_ == fb.id) endRendering();
     framebuffers_.erase(fb.id);
     if (currentFboId_ == fb.id) currentFboId_ = 0;
     if (readFboId_ == fb.id) readFboId_ = 0;
@@ -33,7 +35,7 @@ void WebGLVkContext::bindFramebuffer(GLenum target, WebGLFramebuffer fb) {
     readFboId_ = fb.id;
     drawFboId_ = fb.id;
     if (currentFboId_ != fb.id) {
-        submitAndFlush();
+        endRendering();
         currentFboId_ = fb.id;
     }
 }
@@ -142,22 +144,17 @@ void WebGLVkContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLin
     VkTextureResource& dstTex = itDstTex->second;
     if (!srcTex.isValid() || !dstTex.isValid()) return;
 
-    submitAndFlush();
+    if (&srcTex == &dstTex) return;  // overlapping self-blit is undefined in GL
 
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-    context_.transitionImageLayout(srcTex.image, srcTex.format, srcTex.currentLayout,
-                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cmd);
-    context_.transitionImageLayout(dstTex.image, dstTex.format, dstTex.currentLayout,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cmd);
+    VkCommandBuffer cmd = transferCommands();
+    transitionTexture(cmd, srcTex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    transitionTexture(cmd, dstTex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     VkImageBlit blitRegion{};
-    blitRegion.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    blitRegion.srcSubresource.layerCount = 1;
+    blitRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     blitRegion.srcOffsets[0] = {srcX0, srcY0, 0};
     blitRegion.srcOffsets[1] = {srcX1, srcY1, 1};
-
-    blitRegion.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    blitRegion.dstSubresource.layerCount = 1;
+    blitRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     blitRegion.dstOffsets[0] = {dstX0, dstY0, 0};
     blitRegion.dstOffsets[1] = {dstX1, dstY1, 1};
 
@@ -166,11 +163,8 @@ void WebGLVkContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLin
                    dstTex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    1, &blitRegion, vkFilter);
 
-    context_.transitionImageLayout(srcTex.image, srcTex.format, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   srcTex.currentLayout, cmd);
-    context_.transitionImageLayout(dstTex.image, dstTex.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   dstTex.currentLayout, cmd);
-    context_.endSingleTimeCommands(cmd);
+    transitionTexture(cmd, srcTex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionTexture(cmd, dstTex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 WebGLRenderbuffer WebGLVkContext::createRenderbuffer() {
@@ -246,12 +240,10 @@ void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                                 GLenum /*format*/, GLenum type, void* pixels) {
     if (!pixels || width <= 0 || height <= 0) return;
 
-    submitAndFlush();
-
     GLuint fboId = (readFboId_ != 0) ? readFboId_ : currentFboId_;
     if (fboId == 0) {
         std::vector<uint8_t> canvasData;
-        if (!canvas_.readCanvasPixels(canvasData)) return;
+        if (!readCanvasPixels(canvasData)) return;
 
         size_t canvasW = canvas_.width();
         size_t canvasH = canvas_.height();
@@ -286,58 +278,37 @@ void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
         if (itTex == textures_.end() || !itTex->second.isValid()) return;
 
         VkTextureResource& tex = itTex->second;
-        VkDevice dev = context_.device();
-        VkDeviceSize imgSize = static_cast<VkDeviceSize>(tex.width) * tex.height * tex.bytesPerPixel;
+        if (render::imageAspectFor(tex.format) != VK_IMAGE_ASPECT_COLOR_BIT) return;
+        const VkDeviceSize imgSize = static_cast<VkDeviceSize>(tex.width) * tex.height * tex.bytesPerPixel;
+        void* mapped = readbackMemory(imgSize);
+        if (!mapped) return;
 
-        VkBuffer readbackBuf = VK_NULL_HANDLE;
-        VkDeviceMemory readbackMem = VK_NULL_HANDLE;
-        VkDeviceSize readbackOffset = 0;
-        uint64_t readbackAllocId = 0;
-        void* readbackMapped = nullptr;
-        context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              readbackBuf, readbackMem, readbackOffset, readbackAllocId, readbackMapped);
-
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
-                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cmd);
-
+        VkCommandBuffer cmd = transferCommands();
+        transitionTexture(cmd, tex, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         VkBufferImageCopy copyRegion{};
-        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copyRegion.imageExtent = {tex.width, tex.height, 1};
         vkCmdCopyImageToBuffer(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               readbackBuf, 1, &copyRegion);
+                               readback_.buffer, 1, &copyRegion);
+        render::cmdMemoryBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+        transitionTexture(cmd, tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (!waitForCommands()) return;
 
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                       tex.currentLayout, cmd);
-        context_.endSingleTimeCommands(cmd);
-
-        void* mapped = readbackMapped;
-        if (!mapped) {
-            vkMapMemory(dev, readbackMem, readbackOffset, imgSize, 0, &mapped);
-        }
-        if (mapped) {
-            const uint8_t* srcData = static_cast<const uint8_t*>(mapped);
-            uint8_t* dst = static_cast<uint8_t*>(pixels);
-            GLsizei pixelBytes = (type == GL_FLOAT) ? 16 : static_cast<GLsizei>(tex.bytesPerPixel);
-            for (GLsizei row = 0; row < height; ++row) {
-                GLint srcY = y + row;
-                if (srcY >= 0 && static_cast<size_t>(srcY) < tex.height) {
-                    GLint srcX = std::max(0, x);
-                    GLsizei copyW = std::min(width, static_cast<GLsizei>(tex.width - srcX));
-                    if (copyW > 0) {
-                        const uint8_t* srcRow = srcData + (srcY * tex.width + srcX) * tex.bytesPerPixel;
-                        std::memcpy(dst + row * width * pixelBytes, srcRow, copyW * pixelBytes);
-                    }
+        const uint8_t* srcData = static_cast<const uint8_t*>(mapped);
+        uint8_t* dst = static_cast<uint8_t*>(pixels);
+        GLsizei pixelBytes = (type == GL_FLOAT) ? 16 : static_cast<GLsizei>(tex.bytesPerPixel);
+        for (GLsizei row = 0; row < height; ++row) {
+            GLint srcY = y + row;
+            if (srcY >= 0 && static_cast<size_t>(srcY) < tex.height) {
+                GLint srcX = std::max(0, x);
+                GLsizei copyW = std::min(width, static_cast<GLsizei>(tex.width - srcX));
+                if (copyW > 0) {
+                    const uint8_t* srcRow = srcData + (srcY * tex.width + srcX) * tex.bytesPerPixel;
+                    std::memcpy(dst + row * width * pixelBytes, srcRow, copyW * pixelBytes);
                 }
             }
-            if (!readbackMapped) {
-                vkUnmapMemory(dev, readbackMem);
-            }
         }
-
-        context_.destroyBuffer(readbackBuf, readbackAllocId);
     }
 }
 

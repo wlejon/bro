@@ -8,11 +8,6 @@ namespace bro::scene::vk {
 PassSSR::~PassSSR() = default;
 
 bool PassSSR::init(SceneVkDevice& device, SceneVkAllocator& allocator) {
-    if (!allocator.createUniformBuffer(sizeof(SSRUBOData), ssrUbo_)) {
-        LOG_ERROR("PassSSR: Failed creating uniform buffer");
-        return false;
-    }
-
     VkSamplerCreateInfo sampInfo{};
     sampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sampInfo.magFilter = VK_FILTER_LINEAR;
@@ -29,8 +24,6 @@ bool PassSSR::init(SceneVkDevice& device, SceneVkAllocator& allocator) {
 }
 
 void PassSSR::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
-    allocator.destroyBuffer(ssrUbo_);
-
     VkDevice dev = device.device();
     if (sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(dev, sampler_, nullptr);
@@ -88,7 +81,6 @@ bool PassSSR::createPipeline(VkDevice device) {
 }
 
 void PassSSR::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                     SceneVkDescriptorPool& descPool,
                      const SceneVkImage& colorSnapshot,
                      const SceneVkImage& depthImage,
                      VkImageView outputTargetView,
@@ -107,13 +99,13 @@ void PassSSR::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocato
     uboData.params1[3] = params.thickness;
     uboData.params2[0] = params.intensity;
     uboData.params2[1] = params.edgeFade;
-    allocator.updateUniformBuffer(ssrUbo_, &uboData, sizeof(uboData));
+    const VkDescriptorBufferInfo ubo = device.frameUniform(&uboData, sizeof(uboData));
 
-    VkDescriptorSet dSet = descPool.allocate(descLayout_);
+    VkDescriptorSet dSet = device.frameSet(descLayout_);
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, colorSnapshot.view, sampler_);
     writer.writeImage(1, depthImage.view, sampler_);
-    writer.writeBuffer(2, ssrUbo_.buffer, sizeof(SSRUBOData));
+    writer.writeBuffer(2, ubo.buffer, ubo.range, ubo.offset);
     writer.updateSet(device.device(), dSet);
 
     VkRenderingAttachmentInfo attInfo{};

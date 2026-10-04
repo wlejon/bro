@@ -33,9 +33,7 @@ SceneVkBridge::~SceneVkBridge() {
     meshCache_.clear();
 
     for (auto& [k, dyn] : dynamicBufferCache_) {
-        allocator_.destroyBuffer(dyn.instanceBuffer);
         allocator_.destroyBuffer(dyn.skinAttribBuffer);
-        allocator_.destroyBuffer(dyn.boneUbo);
     }
     dynamicBufferCache_.clear();
 
@@ -45,10 +43,6 @@ SceneVkBridge::~SceneVkBridge() {
         }
     }
     textureCache_.clear();
-
-    frameDescPool_.destroy();
-    dynamicDescPool_.destroy();
-    mainDescPool_.destroy();
 
     for (auto& [k, pipe] : customMeshPipelines_) {
         if (pipe.pipeline != VK_NULL_HANDLE) {
@@ -64,11 +58,6 @@ SceneVkBridge::~SceneVkBridge() {
     }
     customShadowPipelines_.clear();
 
-    for (auto& [k, buf] : customNodeBufferCache_) {
-        allocator_.destroyBuffer(buf.ubo);
-    }
-    customNodeBufferCache_.clear();
-
     for (auto& [k, tex] : userTextureCache_) {
         if (tex.owned) {
             allocator_.destroyImage(tex.image);
@@ -76,8 +65,6 @@ SceneVkBridge::~SceneVkBridge() {
     }
     userTextureCache_.clear();
 
-    allocator_.destroyBuffer(cameraUbo_);
-    allocator_.destroyBuffer(lightingUbo_);
     allocator_.destroyBuffer(readbackBuffer_);
     allocator_.destroyImage(ssrColorSnapshot_);
     allocator_.destroyImage(dofHdrImage_);
@@ -104,6 +91,7 @@ SceneVkBridge::~SceneVkBridge() {
     passMesh_.cleanup(device_, allocator_);
     passEnv_.cleanup(device_, allocator_);
     passShadow_.cleanup(device_);
+    device_.shutdown();
 }
 
 bool SceneVkBridge::init() {
@@ -177,6 +165,12 @@ bool SceneVkBridge::init() {
         return false;
     }
 
+    // Sized to the target by its first render.
+    if (!passPostFx_.init(device_, allocator_, 1, 1)) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassPostFx");
+        return false;
+    }
+
     uint8_t whitePixel[4] = {255, 255, 255, 255};
     TextureDesc whiteDesc{};
     whiteDesc.width = 1;
@@ -187,26 +181,6 @@ bool SceneVkBridge::init() {
         LOG_ERROR("SceneVkBridge: Failed creating dummy shade map");
         return false;
     }
-
-    if (!allocator_.createUniformBuffer(sizeof(SceneCameraUniforms), cameraUbo_) ||
-        !allocator_.createUniformBuffer(sizeof(SceneLightingUniforms), lightingUbo_)) {
-        LOG_ERROR("SceneVkBridge: Failed allocating camera/lighting uniform buffers");
-        return false;
-    }
-
-    if (!mainDescPool_.init(device_.device(), 16) ||
-        !dynamicDescPool_.init(device_.device(), 1024) ||
-        !frameDescPool_.init(device_.device(), 512)) {
-        LOG_ERROR("SceneVkBridge: Failed creating descriptor pools");
-        return false;
-    }
-
-    cameraSet_ = mainDescPool_.allocate(passMesh_.cameraLayout());
-    lightingSet_ = mainDescPool_.allocate(passMesh_.lightingLayout());
-
-    SceneVkDescriptorWriter camWriter;
-    camWriter.writeBuffer(0, cameraUbo_.buffer, sizeof(SceneCameraUniforms));
-    camWriter.updateSet(device_.device(), cameraSet_);
 
     return true;
 }
@@ -230,271 +204,20 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
             bromath::mmul(graph.projectionMatrix(), graph.viewMatrix()));
     }
 
-    // 1. Camera UBO setup
-    SceneCameraUniforms camUniforms{};
-    std::memcpy(camUniforms.view, graph.viewMatrix().data, sizeof(camUniforms.view));
+    ++renderSerial_;
+    const bool recordReadbackInline = readSinceRender_;
+    readSinceRender_ = false;
 
-    bromath::Mat4 proj = graph.projectionMatrix();
-    proj.at(1, 0) *= -1.0f;
-    proj.at(1, 1) *= -1.0f;
-    proj.at(1, 2) *= -1.0f;
-    proj.at(1, 3) *= -1.0f;
-    std::memcpy(camUniforms.proj, proj.data, sizeof(camUniforms.proj));
+    const SceneCameraUniforms camUniforms = buildCameraUniforms(graph, renderer, width, height);
+    SceneLightingUniforms lightUniforms = buildLightingUniforms(graph, renderer);
 
-    bromath::Mat4 vp = bromath::mmul(proj, graph.viewMatrix());
-    std::memcpy(camUniforms.viewProj, vp.data, sizeof(camUniforms.viewProj));
-
-    bromath::Mat4 invView = bromath::minverse(graph.viewMatrix());
-    std::memcpy(camUniforms.invView, invView.data, sizeof(camUniforms.invView));
-
-    bromath::Mat4 invProj = bromath::minverse(proj);
-    std::memcpy(camUniforms.invProj, invProj.data, sizeof(camUniforms.invProj));
-
-    camUniforms.eyePos[0] = graph.cameraEye().x;
-    camUniforms.eyePos[1] = graph.cameraEye().y;
-    camUniforms.eyePos[2] = graph.cameraEye().z;
-    camUniforms.eyePos[3] = 0.0f;
-
-    camUniforms.viewport[0] = static_cast<float>(width);
-    camUniforms.viewport[1] = static_cast<float>(height);
-    camUniforms.viewport[2] = graph.cameraNearZ_;
-    camUniforms.viewport[3] = graph.cameraFarZ_;
-
-    camUniforms.fogParams[0] = renderer.fogStart();
-    camUniforms.fogParams[1] = renderer.fogEnd();
-    camUniforms.fogParams[2] = renderer.fogDensity();
-    camUniforms.fogParams[3] = renderer.fogStartDist();
-
-    camUniforms.fogColor[0] = renderer.fogColor()[0];
-    camUniforms.fogColor[1] = renderer.fogColor()[1];
-    camUniforms.fogColor[2] = renderer.fogColor()[2];
-    camUniforms.fogColor[3] = renderer.fogHeightFalloff();
-
-    allocator_.updateUniformBuffer(cameraUbo_, &camUniforms, sizeof(camUniforms));
-
-    // 2. Lighting UBO setup
-    SceneLightingUniforms lightUniforms{};
-    LightNode* sunLight = nullptr;
-    std::vector<LightNode*> otherLights;
-    for (auto& [id, node] : graph.nodes_) {
-        if (!node->renderVisible() || node->type() != SceneNode::Type::Light) continue;
-        auto* l = static_cast<LightNode*>(node.get());
-        if (l->kind() == LightNode::Kind::Directional) {
-            if (!sunLight) {
-                sunLight = l;
-            } else if (l->castsShadow() && !sunLight->castsShadow()) {
-                otherLights.push_back(sunLight);
-                sunLight = l;
-            } else {
-                otherLights.push_back(l);
-            }
-        } else if (l->kind() == LightNode::Kind::Point || l->kind() == LightNode::Kind::Spot) {
-            otherLights.push_back(l);
-        }
-    }
-
-    if (sunLight) {
-        bromath::Vec3 dir = bromath::vnorm(sunLight->direction());
-        lightUniforms.sunDirection[0] = dir.x;
-        lightUniforms.sunDirection[1] = dir.y;
-        lightUniforms.sunDirection[2] = dir.z;
-        lightUniforms.sunDirection[3] = 1.0f;
-
-        const auto& col = sunLight->color();
-        lightUniforms.sunColor[0] = col.x;
-        lightUniforms.sunColor[1] = col.y;
-        lightUniforms.sunColor[2] = col.z;
-        lightUniforms.sunColor[3] = sunLight->intensity();
-        lightUniforms.numLights[0] = 1.0f;
-        if (sunLight->castsShadow()) {
-            lightUniforms.numLights[2] = 1.0f;
-        }
-    } else if (otherLights.empty()) {
-        lightUniforms.sunDirection[0] = -0.3f;
-        lightUniforms.sunDirection[1] = -1.0f;
-        lightUniforms.sunDirection[2] = -0.5f;
-        float dLen = std::sqrt(0.09f + 1.0f + 0.25f);
-        lightUniforms.sunDirection[0] /= dLen;
-        lightUniforms.sunDirection[1] /= dLen;
-        lightUniforms.sunDirection[2] /= dLen;
-        lightUniforms.sunDirection[3] = 1.0f;
-
-        lightUniforms.sunColor[0] = 1.0f;
-        lightUniforms.sunColor[1] = 0.98f;
-        lightUniforms.sunColor[2] = 0.95f;
-        lightUniforms.sunColor[3] = 3.0f;
-        lightUniforms.numLights[0] = 1.0f;
-    } else {
-        lightUniforms.numLights[0] = 0.0f;
-    }
-
-    size_t count = std::min(otherLights.size(), size_t(16));
-    lightUniforms.numLights[1] = static_cast<float>(count);
-    for (size_t i = 0; i < count; ++i) {
-        LightNode* l = otherLights[i];
-        if (l->kind() == LightNode::Kind::Directional) {
-            bromath::Vec3 dir = bromath::vnorm(l->direction());
-            lightUniforms.pointLights[i].position[0] = dir.x;
-            lightUniforms.pointLights[i].position[1] = dir.y;
-            lightUniforms.pointLights[i].position[2] = dir.z;
-            lightUniforms.pointLights[i].position[3] = -1.0f;
-        } else {
-            const auto& M = l->worldMatrix();
-            lightUniforms.pointLights[i].position[0] = M.at(0, 3);
-            lightUniforms.pointLights[i].position[1] = M.at(1, 3);
-            lightUniforms.pointLights[i].position[2] = M.at(2, 3);
-            lightUniforms.pointLights[i].position[3] = l->range();
-        }
-
-        const auto& c = l->color();
-        lightUniforms.pointLights[i].color[0] = c.x;
-        lightUniforms.pointLights[i].color[1] = c.y;
-        lightUniforms.pointLights[i].color[2] = c.z;
-        lightUniforms.pointLights[i].color[3] = l->intensity();
-    }
-
-    const float* amb = renderer.effectiveAmbient();
-    lightUniforms.ambientColor[0] = amb[0];
-    lightUniforms.ambientColor[1] = amb[1];
-    lightUniforms.ambientColor[2] = amb[2];
-    lightUniforms.ambientColor[3] = 1.0f;
-
-    bromath::Vec3 lightDir = {lightUniforms.sunDirection[0], lightUniforms.sunDirection[1], lightUniforms.sunDirection[2]};
-    bromath::Vec3 fwd = {-graph.viewMatrix().at(2, 0),
-                         -graph.viewMatrix().at(2, 1),
-                         -graph.viewMatrix().at(2, 2)};
-    bromath::Vec3 sceneCenter = graph.cameraEye() + fwd * 8.0f;
-    bromath::Vec3 lightEye = sceneCenter - lightDir * 25.0f;
-    bromath::Vec3 lightTarget = sceneCenter;
-    bromath::Vec3 lightUp = (std::abs(lightDir.y) > 0.99f) ? bromath::Vec3{0, 0, 1} : bromath::Vec3{0, 1, 0};
-    bromath::Mat4 lightView = bromath::mlookAt(lightEye, lightTarget, lightUp);
-
-    float orthoSize = 12.0f;
-    float znear = 1.0f;
-    float zfar = 50.0f;
-    bromath::Mat4 lightProj = bromath::midentity();
-    for (int i = 0; i < 16; ++i) lightProj.data[i] = 0.0f;
-    lightProj.at(0, 0) = 1.0f / orthoSize;
-    lightProj.at(1, 1) = -1.0f / orthoSize; // Vulkan Y-flip
-    lightProj.at(2, 2) = -1.0f / (zfar - znear);
-    lightProj.at(2, 3) = -znear / (zfar - znear);
-    lightProj.at(3, 3) = 1.0f;
-
-    bromath::Mat4 lightVP = bromath::mmul(lightProj, lightView);
-    std::memcpy(lightUniforms.shadowCascadeProj, lightVP.data, sizeof(lightUniforms.shadowCascadeProj));
-
-    allocator_.updateUniformBuffer(lightingUbo_, &lightUniforms, sizeof(lightUniforms));
-
-    // 3. Command Recording
     VkCommandBuffer cmd = device_.beginFrame();
 
-    // Reflection probes update
+    // Probes capture first (their faces have their own camera and lighting);
+    // the scene's lighting set then points at the active probe.
     passReflectionProbe_.updateProbes(cmd, graph, renderer, passMesh_, allocator_, device_, *this);
-
-    if (passReflectionProbe_.hasActiveProbe()) {
-        const auto* probe = passReflectionProbe_.activeProbe();
-        const auto& pw = probe->worldMatrix();
-        bromath::Mat4 invPw = bromath::minverse(pw);
-        std::memcpy(lightUniforms.probeWorldToLocal, invPw.data, sizeof(lightUniforms.probeWorldToLocal));
-        std::memcpy(lightUniforms.probeLocalToWorld, pw.data, sizeof(lightUniforms.probeLocalToWorld));
-
-        lightUniforms.probePos[0] = pw.at(0, 3);
-        lightUniforms.probePos[1] = pw.at(1, 3);
-        lightUniforms.probePos[2] = pw.at(2, 3);
-        lightUniforms.probePos[3] = 1.0f;
-
-        float sx = std::sqrt(pw.at(0, 0)*pw.at(0, 0) + pw.at(1, 0)*pw.at(1, 0) + pw.at(2, 0)*pw.at(2, 0));
-        float sy = std::sqrt(pw.at(0, 1)*pw.at(0, 1) + pw.at(1, 1)*pw.at(1, 1) + pw.at(2, 1)*pw.at(2, 1));
-        float sz = std::sqrt(pw.at(0, 2)*pw.at(0, 2) + pw.at(1, 2)*pw.at(1, 2) + pw.at(2, 2)*pw.at(2, 2));
-        lightUniforms.probeBoxSize[0] = sx;
-        lightUniforms.probeBoxSize[1] = sy;
-        lightUniforms.probeBoxSize[2] = sz;
-        lightUniforms.probeBoxSize[3] = probe->boxProjection() ? 1.0f : 0.0f;
-
-        uint32_t mips = static_cast<uint32_t>(std::floor(std::log2(probe->resolution()))) + 1;
-        lightUniforms.probeParams[0] = probe->intensity();
-        lightUniforms.probeParams[1] = probe->interior();
-        lightUniforms.probeParams[2] = static_cast<float>(mips > 0 ? mips - 1 : 0);
-        lightUniforms.probeParams[3] = 0.0f;
-
-        SceneVkDescriptorWriter writer;
-        writer.writeImage(2, passReflectionProbe_.activeCubemapView(), passReflectionProbe_.activeCubemapSampler());
-        writer.updateSet(device_.device(), lightingSet_);
-    } else {
-        lightUniforms.probePos[3] = 0.0f;
-
-        SceneVkDescriptorWriter writer;
-        writer.writeImage(2, passReflectionProbe_.dummyCubemapView(), passReflectionProbe_.activeCubemapSampler());
-        writer.updateSet(device_.device(), lightingSet_);
-    }
-
-    // Check for tile shade map across nodes
-    ShadeMapBinding shadeB{};
-    bool hasShade = false;
-    for (auto& [id, node] : graph.nodes_) {
-        if (!node->renderVisible()) continue;
-        if (node->type() == SceneNode::Type::Mesh) {
-            auto* mn = static_cast<MeshNode*>(node.get());
-            if (mn->shadeMap() && (*mn->shadeMap())(shadeB) && shadeB.pixels && shadeB.width > 0 && shadeB.height > 0) {
-                hasShade = true;
-                break;
-            }
-        } else if (node->type() == SceneNode::Type::InstancedMesh) {
-            auto* im = static_cast<InstancedMeshNode*>(node.get());
-            if (im->shadeMap() && (*im->shadeMap())(shadeB) && shadeB.pixels && shadeB.width > 0 && shadeB.height > 0) {
-                hasShade = true;
-                break;
-            }
-        }
-    }
-
-    if (hasShade) {
-        uint64_t hash = 14695981039346656037ULL;
-        size_t pixelCount = static_cast<size_t>(shadeB.width) * shadeB.height;
-        for (size_t i = 0; i < pixelCount; ++i) {
-            hash ^= shadeB.pixels[i];
-            hash *= 1099511628211ULL;
-        }
-
-        if (!shadeMapImage_.isValid() || shadeMapW_ != shadeB.width || shadeMapH_ != shadeB.height || shadeMapHash_ != hash) {
-            allocator_.destroyImage(shadeMapImage_);
-            TextureDesc sDesc{};
-            sDesc.width = shadeB.width;
-            sDesc.height = shadeB.height;
-            sDesc.format = VK_FORMAT_R8_UNORM;
-            sDesc.magFilter = VK_FILTER_NEAREST;
-            sDesc.minFilter = VK_FILTER_NEAREST;
-            sDesc.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            sDesc.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            sDesc.generateMipmaps = false;
-            allocator_.createTexture2D(shadeB.pixels, sDesc, shadeMapImage_);
-            shadeMapW_ = shadeB.width;
-            shadeMapH_ = shadeB.height;
-            shadeMapHash_ = hash;
-        }
-
-        SceneVkDescriptorWriter writer;
-        writer.writeImage(3, shadeMapImage_.view, shadeMapImage_.sampler);
-        writer.updateSet(device_.device(), lightingSet_);
-
-        lightUniforms.shadeOrigin[0] = shadeB.origin.x;
-        lightUniforms.shadeOrigin[1] = shadeB.origin.y;
-        lightUniforms.shadeOrigin[2] = shadeB.origin.z;
-        lightUniforms.shadeOrigin[3] = 1.0f;
-
-        lightUniforms.shadeParams[0] = shadeB.cellSize;
-        lightUniforms.shadeParams[1] = shadeB.hex ? 1.0f : 0.0f;
-        lightUniforms.shadeParams[2] = static_cast<float>(shadeB.width);
-        lightUniforms.shadeParams[3] = static_cast<float>(shadeB.height);
-    } else {
-        SceneVkDescriptorWriter writer;
-        writer.writeImage(3, dummyShadeMap_.view, dummyShadeMap_.sampler);
-        writer.updateSet(device_.device(), lightingSet_);
-
-        lightUniforms.shadeOrigin[3] = 0.0f;
-    }
-
-    allocator_.updateUniformBuffer(lightingUbo_, &lightUniforms, sizeof(lightUniforms));
+    finishLightingUniforms(graph, lightUniforms);
+    writeFrameSets(camUniforms, lightUniforms);
 
     CullStats stats = renderer.cullStats();
     bool hasDrawnMeshes = false;
@@ -511,7 +234,9 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
 
     if (renderer.atmosphere().enabled || !renderer.envPath().empty()) {
         EnvironmentParams envParams{};
-        bromath::Mat4 invVP = bromath::minverse(vp);
+        bromath::Mat4 flippedVP;
+        std::memcpy(flippedVP.data, camUniforms.viewProj, sizeof(camUniforms.viewProj));
+        bromath::Mat4 invVP = bromath::minverse(flippedVP);
         std::memcpy(envParams.invViewProj, invVP.data, sizeof(envParams.invViewProj));
         envParams.sunDirection[0] = lightUniforms.sunDirection[0];
         envParams.sunDirection[1] = lightUniforms.sunDirection[1];
@@ -675,7 +400,9 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
                 draw.vertexBuffer = meshBuf.vertexBuffer.buffer;
                 draw.indexBuffer = meshBuf.indexBuffer.buffer;
                 draw.indexCount = meshBuf.indexCount;
-                draw.instanceBuffer = dynBuf.instanceBuffer.buffer;
+                if (!dynBuf.instances) continue;
+                draw.instanceBuffer = dynBuf.instances.buffer;
+                draw.instanceOffset = dynBuf.instances.offset;
                 draw.instanceCount = static_cast<uint32_t>(im->instanceCount());
                 std::memcpy(draw.modelMatrix, im->worldMatrix().data, sizeof(draw.modelMatrix));
                 std::memcpy(draw.baseColor, im->color(), sizeof(draw.baseColor));
@@ -776,7 +503,7 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
         ssrParams.intensity = renderer.ssrIntensity();
         ssrParams.edgeFade = renderer.ssrEdgeFade();
 
-        passSSR_.render(cmd, device_, allocator_, frameDescPool_,
+        passSSR_.render(cmd, device_, allocator_,
                         ssrColorSnapshot_, depthCopyImage_, hdrTarget_.colorImage().view,
                         width, height, camUniforms.proj, camUniforms.invProj, ssrParams);
     }
@@ -843,10 +570,10 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
 
     // SSAO Pass
     if (renderer.ssaoEnabled()) {
-        passSSAO_.render(cmd, device_, allocator_, frameDescPool_,
+        passSSAO_.render(cmd, device_, allocator_,
                          depthCopyImage_, camUniforms.proj, camUniforms.invProj,
                          renderer.ssaoRadius(), renderer.ssaoBias());
-        passSSAO_.applyAO(cmd, device_, allocator_, frameDescPool_,
+        passSSAO_.applyAO(cmd, device_, allocator_,
                           hdrTarget_.colorImage().view, width, height,
                           renderer.ssaoIntensity());
     }
@@ -856,36 +583,21 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     // Post processing & LUT Pass
     renderPostProcessing(cmd, graph, renderer, width, height);
 
-    allocator_.transitionImageLayout(cmd, ldrPresentationImage_.image, VK_FORMAT_R8G8B8A8_UNORM,
-                                   ldrPresentationImage_.currentLayout,
-                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    ldrPresentationImage_.currentLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    // The result stays on the GPU for the presenter; it is copied out for the
+    // CPU only when someone read the previous render's pixels.
+    if (recordReadbackInline && ensureReadbackBuffer()) {
+        recordReadback(cmd);
+    } else {
+        allocator_.transitionImageLayout(cmd, ldrPresentationImage_.image, VK_FORMAT_R8G8B8A8_UNORM,
+                                         ldrPresentationImage_.currentLayout,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        ldrPresentationImage_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
 
-    VkBufferImageCopy copyRegion{};
-    copyRegion.bufferOffset = 0;
-    copyRegion.bufferRowLength = width;
-    copyRegion.bufferImageHeight = height;
-    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copyRegion.imageSubresource.mipLevel = 0;
-    copyRegion.imageSubresource.baseArrayLayer = 0;
-    copyRegion.imageSubresource.layerCount = 1;
-    copyRegion.imageOffset = {0, 0, 0};
-    copyRegion.imageExtent = {width, height, 1};
-
-    vkCmdCopyImageToBuffer(cmd, ldrPresentationImage_.image,
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           readbackBuffer_.buffer, 1, &copyRegion);
-
-    allocator_.transitionImageLayout(cmd, ldrPresentationImage_.image, VK_FORMAT_R8G8B8A8_UNORM,
-                                   ldrPresentationImage_.currentLayout,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    ldrPresentationImage_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    device_.endFrame();
-    device_.submitFrame();
-    device_.waitIdle();
-
-    frameDescPool_.reset();
+    if (device_.submitFrame(cmd) && recordReadbackInline && readbackBuffer_.isValid()) {
+        readbackRecordedSerial_ = renderSerial_;
+        readbackTicket_ = device_.lastFrameTicket();
+    }
 
     hasMeshContent_ = hasDrawnMeshes;
     renderer.setCullStats(stats);

@@ -69,8 +69,13 @@ public:
     /// Retrieve or build a VkPipeline matching key and pipeline layout.
     VkPipeline getOrCreatePipeline(const PipelineKey& key, VkPipelineLayout layout);
 
-    /// Destroy all cached pipelines.
+    /// Destroy all cached pipelines (the caller has waited for their use).
     void clear();
+
+    /// Drop the pipelines built from `vert` or `frag` before those modules are
+    /// destroyed — a later module can reuse the handle — destroying them once
+    /// the GPU is done with them.
+    void evictShaders(VkShaderModule vert, VkShaderModule frag);
 
 private:
     VkPipeline createPipeline(const PipelineKey& key, VkPipelineLayout layout);

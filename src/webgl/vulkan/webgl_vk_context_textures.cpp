@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_context.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -7,28 +8,35 @@
 
 namespace bro::webgl::vk {
 
-static void copyAndProcessPixels(uint8_t* dst, const void* src, GLsizei width, GLsizei height,
-                                 uint32_t bpp, GLint unpackAlignment, bool flipY, bool premultiplyAlpha) {
+namespace {
+
+constexpr GLenum kTextureCubeMap = 0x8513;
+constexpr GLenum kCubeFacePosX = 0x8515;
+constexpr GLenum kCubeFaceNegZ = 0x851A;
+
+bool isCubeFace(GLenum target) { return target >= kCubeFacePosX && target <= kCubeFaceNegZ; }
+
+// Rows of `src` (laid out per GL_UNPACK_ALIGNMENT) into tightly packed `dst`,
+// flipped and/or alpha-premultiplied as the unpack state asks.
+void copyAndProcessPixels(uint8_t* dst, const void* src, GLsizei width, GLsizei height,
+                          uint32_t bpp, GLint unpackAlignment, bool flipY, bool premultiplyAlpha) {
     if (!src || !dst) return;
-    size_t srcRowBytes = width * bpp;
+    size_t srcRowBytes = static_cast<size_t>(width) * bpp;
     if (unpackAlignment > 1) {
         srcRowBytes = (srcRowBytes + unpackAlignment - 1) / unpackAlignment * unpackAlignment;
     }
-    size_t dstRowBytes = width * bpp;
+    const size_t dstRowBytes = static_cast<size_t>(width) * bpp;
     for (GLsizei r = 0; r < height; ++r) {
-        size_t dstRow = flipY ? (height - 1 - r) : r;
+        const size_t dstRow = flipY ? (height - 1 - r) : r;
         const uint8_t* srcRowPtr = static_cast<const uint8_t*>(src) + r * srcRowBytes;
         uint8_t* dstRowPtr = dst + dstRow * dstRowBytes;
         if (premultiplyAlpha && bpp == 4) {
             for (GLsizei x = 0; x < width; ++x) {
-                uint8_t r_col = srcRowPtr[x * 4 + 0];
-                uint8_t g_col = srcRowPtr[x * 4 + 1];
-                uint8_t b_col = srcRowPtr[x * 4 + 2];
-                uint8_t a_col = srcRowPtr[x * 4 + 3];
-                dstRowPtr[x * 4 + 0] = static_cast<uint8_t>((r_col * a_col + 127) / 255);
-                dstRowPtr[x * 4 + 1] = static_cast<uint8_t>((g_col * a_col + 127) / 255);
-                dstRowPtr[x * 4 + 2] = static_cast<uint8_t>((b_col * a_col + 127) / 255);
-                dstRowPtr[x * 4 + 3] = a_col;
+                const uint8_t a = srcRowPtr[x * 4 + 3];
+                dstRowPtr[x * 4 + 0] = static_cast<uint8_t>((srcRowPtr[x * 4 + 0] * a + 127) / 255);
+                dstRowPtr[x * 4 + 1] = static_cast<uint8_t>((srcRowPtr[x * 4 + 1] * a + 127) / 255);
+                dstRowPtr[x * 4 + 2] = static_cast<uint8_t>((srcRowPtr[x * 4 + 2] * a + 127) / 255);
+                dstRowPtr[x * 4 + 3] = a;
             }
         } else {
             std::memcpy(dstRowPtr, srcRowPtr, dstRowBytes);
@@ -36,31 +44,41 @@ static void copyAndProcessPixels(uint8_t* dst, const void* src, GLsizei width, G
     }
 }
 
-void WebGLVkContext::updateTextureSampler(VkTextureResource& tex) {
-    if (tex.sampler != VK_NULL_HANDLE && !tex.samplerDirty) return;
-    VkDevice dev = context_.device();
-    if (tex.sampler != VK_NULL_HANDLE) {
-        vkDestroySampler(dev, tex.sampler, nullptr);
-        tex.sampler = VK_NULL_HANDLE;
-    }
-    VkSamplerCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.magFilter = (tex.magFilter == GL_NEAREST) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-    info.minFilter = (tex.minFilter == GL_NEAREST || tex.minFilter == GL_NEAREST_MIPMAP_NEAREST) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-    info.mipmapMode = (tex.minFilter == GL_LINEAR_MIPMAP_LINEAR || tex.minFilter == GL_NEAREST_MIPMAP_LINEAR) ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    auto toAddressMode = [](GLenum wrap) {
-        if (wrap == GL_REPEAT) return VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    };
-    info.addressModeU = toAddressMode(tex.wrapS);
-    info.addressModeV = toAddressMode(tex.wrapT);
-    info.addressModeW = toAddressMode(tex.wrapS);
-    info.minLod = 0.0f;
-    bool hasMipmaps = (tex.minFilter != GL_NEAREST && tex.minFilter != GL_LINEAR);
-    info.maxLod = (hasMipmaps && tex.mipLevels > 1) ? static_cast<float>(tex.mipLevels - 1) : 0.0f;
-    vkCreateSampler(dev, &info, nullptr, &tex.sampler);
-    tex.samplerDirty = false;
+struct TexFormat {
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    uint32_t bpp = 4;
+};
+
+TexFormat chooseFormat(GLint internalformat, GLenum format, GLenum type) {
+    if (internalformat == GL_R32F || (format == GL_RED && type == GL_FLOAT)) return {VK_FORMAT_R32_SFLOAT, 4};
+    if (internalformat == GL_RG32F || (format == GL_RG && type == GL_FLOAT)) return {VK_FORMAT_R32G32_SFLOAT, 8};
+    if (internalformat == GL_RGBA32F || (format == GL_RGBA && type == GL_FLOAT)) return {VK_FORMAT_R32G32B32A32_SFLOAT, 16};
+    if (internalformat == GL_R16F || (format == GL_RED && type == GL_HALF_FLOAT)) return {VK_FORMAT_R16_SFLOAT, 2};
+    if (internalformat == GL_RG16F || (format == GL_RG && type == GL_HALF_FLOAT)) return {VK_FORMAT_R16G16_SFLOAT, 4};
+    if (internalformat == GL_RGBA16F || (format == GL_RGBA && type == GL_HALF_FLOAT)) return {VK_FORMAT_R16G16B16A16_SFLOAT, 8};
+    if (internalformat == GL_R8 || format == GL_RED) return {VK_FORMAT_R8_UNORM, 1};
+    if (internalformat == GL_RG8 || format == GL_RG) return {VK_FORMAT_R8G8_UNORM, 2};
+    if (internalformat == 0x81A5 /* DEPTH_COMPONENT16 */ || internalformat == 0x81A6 /* DEPTH_COMPONENT24 */ ||
+        format == 0x1902 /* DEPTH_COMPONENT */)
+        return {VK_FORMAT_D32_SFLOAT, 4};
+    if (internalformat == 0x88F0 /* DEPTH24_STENCIL8 */ || format == 0x84F9 /* DEPTH_STENCIL */)
+        return {VK_FORMAT_D32_SFLOAT_S8_UINT, 4};
+    return {VK_FORMAT_R8G8B8A8_UNORM, 4};
 }
+
+bool isDepthFormat(VkFormat f) { return render::imageAspectFor(f) != VK_IMAGE_ASPECT_COLOR_BIT; }
+
+// Bytes per pixel of client data in `format`/`type`, or `fallback`.
+uint32_t clientBpp(GLenum format, GLenum type, uint32_t fallback) {
+    const uint32_t comps = format == GL_RED ? 1 : format == GL_RG ? 2 : format == GL_RGBA ? 4 : 0;
+    if (comps == 0) return fallback;
+    if (type == GL_FLOAT) return comps * 4;
+    if (type == GL_HALF_FLOAT) return comps * 2;
+    if (type == GL_UNSIGNED_BYTE) return comps;
+    return fallback;
+}
+
+} // namespace
 
 WebGLTexture WebGLVkContext::createTexture() {
     GLuint id = nextTextureId_++;
@@ -71,25 +89,14 @@ WebGLTexture WebGLVkContext::createTexture() {
 void WebGLVkContext::deleteTexture(WebGLTexture tex) {
     auto it = textures_.find(tex.id);
     if (it != textures_.end()) {
-        VkDevice dev = context_.device();
-        if (it->second.sampler != VK_NULL_HANDLE) { vkDestroySampler(dev, it->second.sampler, nullptr); it->second.sampler = VK_NULL_HANDLE; }
-        if (it->second.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, it->second.view, nullptr); it->second.view = VK_NULL_HANDLE; }
-        if (it->second.allocId != 0) {
-            context_.destroyImage(it->second.image, it->second.allocId);
-        } else {
-            if (it->second.image != VK_NULL_HANDLE) vkDestroyImage(dev, it->second.image, nullptr);
-            if (it->second.memory != VK_NULL_HANDLE) vkFreeMemory(dev, it->second.memory, nullptr);
-        }
-        it->second.image = VK_NULL_HANDLE;
-        it->second.memory = VK_NULL_HANDLE;
-        it->second.allocId = 0;
+        releaseTexture(it->second);
         textures_.erase(it);
     }
 }
 
 void WebGLVkContext::bindTexture(GLenum target, WebGLTexture tex) {
     if (activeTextureUnit_ >= boundTextures2D_.size()) return;
-    if (target == 0x8513 /* GL_TEXTURE_CUBE_MAP */) {
+    if (target == kTextureCubeMap) {
         boundTexturesCubeMap_[activeTextureUnit_] = tex.id;
     } else if (target == 0x8C1A /* GL_TEXTURE_2D_ARRAY */) {
         boundTextures2DArray_[activeTextureUnit_] = tex.id;
@@ -109,7 +116,7 @@ void WebGLVkContext::activeTexture(GLenum texture) {
 void WebGLVkContext::texParameteri(GLenum target, GLenum pname, GLint param) {
     GLuint texId = 0;
     if (activeTextureUnit_ < boundTextures2D_.size()) {
-        if (target == 0x8513) texId = boundTexturesCubeMap_[activeTextureUnit_];
+        if (target == kTextureCubeMap) texId = boundTexturesCubeMap_[activeTextureUnit_];
         else if (target == 0x8C1A || target == 0x806F) texId = boundTextures2DArray_[activeTextureUnit_];
         else texId = boundTextures2D_[activeTextureUnit_];
     }
@@ -122,6 +129,105 @@ void WebGLVkContext::texParameteri(GLenum target, GLenum pname, GLint param) {
     else if (pname == GL_TEXTURE_WRAP_T) { tex.wrapT = param; tex.samplerDirty = true; }
 }
 
+// Give `tex` fresh storage: the previous image is released (destroyed once
+// the GPU is done with it), the new one is cleared to zero — WebGL textures
+// start initialised — and left sampleable.
+bool WebGLVkContext::allocateTexture(VkTextureResource& tex, uint32_t width, uint32_t height, VkFormat format,
+                                     uint32_t bpp, uint32_t mipLevels, uint32_t layers, bool cube) {
+    // The new image and view are built before the old storage is released, so
+    // a failed allocation leaves the texture as it was rather than half-defined.
+    const bool depth = isDepthFormat(format);
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                              VK_IMAGE_USAGE_SAMPLED_BIT |
+                              (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    uint64_t allocId = 0;
+    if (!context_.createImage(width, height, format, VK_IMAGE_TILING_OPTIMAL, usage,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, memory, offset, allocId,
+                              mipLevels, layers, cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0)) {
+        LOG_ERROR("WebGLVkContext: Failed to allocate VkImage (%ux%u x%u)", width, height, layers);
+        setSyntheticError(GL_OUT_OF_MEMORY);
+        return false;
+    }
+
+    const VkImageSubresourceRange range{render::imageAspectFor(format), 0, mipLevels, 0, layers};
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : layers > 1 || tex.target != GL_TEXTURE_2D
+                                                         ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    // Sampling reads depth only; the view of a depth+stencil image says so.
+    viewInfo.subresourceRange = range;
+    if (depth) viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    VkImageView view = VK_NULL_HANDLE;
+    if (vkCreateImageView(context_.device(), &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        LOG_ERROR("WebGLVkContext: Failed to create image view (%ux%u)", width, height);
+        context_.destroyImage(image, allocId);  // never referenced by a command
+        setSyntheticError(GL_OUT_OF_MEMORY);
+        return false;
+    }
+
+    // End any pass that has the old image attached before replacing it.
+    VkCommandBuffer cmd = transferCommands();
+    releaseTexture(tex);
+    tex.image = image;
+    tex.memory = memory;
+    tex.offset = offset;
+    tex.allocId = allocId;
+    tex.view = view;
+    tex.width = width;
+    tex.height = height;
+    tex.format = format;
+    tex.bytesPerPixel = bpp;
+    tex.mipLevels = mipLevels;
+    tex.arrayLayers = layers;
+
+    render::cmdTransitionImage(cmd, tex.image, range, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    if (depth) {
+        VkClearDepthStencilValue clear{1.0f, 0};
+        vkCmdClearDepthStencilImage(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    } else {
+        VkClearColorValue clear{};
+        vkCmdClearColorImage(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    }
+    tex.currentLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    transitionTexture(cmd, tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    return true;
+}
+
+// Record a copy of client pixels into a region of `tex`: the pixels are
+// unpacked into this frame's upload ring, copied in the command stream, and
+// the texture is sampleable again after.
+void WebGLVkContext::uploadTexture(VkTextureResource& tex, uint32_t level, uint32_t layer, uint32_t layerCount,
+                                   int32_t x, int32_t y, uint32_t width, uint32_t height, uint32_t bpp,
+                                   const void* pixels, bool unpack) {
+    if (!tex.isValid() || !pixels || width == 0 || height == 0 || layerCount == 0) return;
+    if (isDepthFormat(tex.format)) return;  // depth data uploads are not supported
+    const VkDeviceSize layerBytes = static_cast<VkDeviceSize>(width) * height * bpp;
+    render::UploadSlice staging = stage(nullptr, layerBytes * layerCount, std::max<VkDeviceSize>(bpp, 4));
+    if (!staging) return;
+    if (unpack) {
+        copyAndProcessPixels(static_cast<uint8_t*>(staging.mapped), pixels, static_cast<GLsizei>(width),
+                             static_cast<GLsizei>(height), bpp, unpackAlignment_, unpackFlipY_,
+                             unpackPremultiplyAlpha_);
+    } else {
+        std::memcpy(staging.mapped, pixels, static_cast<size_t>(layerBytes * layerCount));
+    }
+
+    VkCommandBuffer cmd = transferCommands();
+    transitionTexture(cmd, tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkBufferImageCopy region{};
+    region.bufferOffset = staging.offset;
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, layer, layerCount};
+    region.imageOffset = {x, y, 0};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyBufferToImage(cmd, staging.buffer, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    transitionTexture(cmd, tex, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+
 void WebGLVkContext::texStorage2D(GLenum target, GLsizei /*levels*/, GLenum internalformat,
                                   GLsizei width, GLsizei height) {
     texImage2D(target, 0, static_cast<GLint>(internalformat), width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -130,354 +236,75 @@ void WebGLVkContext::texStorage2D(GLenum target, GLsizei /*levels*/, GLenum inte
 void WebGLVkContext::texImage2D(GLenum target, GLint level, GLint internalformat,
                                 GLsizei width, GLsizei height, GLint /*border*/,
                                 GLenum format, GLenum type, const void* pixels) {
-    bool isCubeFace = (target >= 0x8515 && target <= 0x851A);
-    uint32_t faceIndex = isCubeFace ? (target - 0x8515) : 0;
+    const bool cubeFace = isCubeFace(target);
     GLuint texId = 0;
     if (activeTextureUnit_ < boundTextures2D_.size()) {
-        if (isCubeFace || target == 0x8513) texId = boundTexturesCubeMap_[activeTextureUnit_];
+        if (cubeFace || target == kTextureCubeMap) texId = boundTexturesCubeMap_[activeTextureUnit_];
         else texId = boundTextures2D_[activeTextureUnit_];
     }
-    if (texId == 0 || width <= 0 || height <= 0) return;
+    if (texId == 0 || width <= 0 || height <= 0 || level < 0) return;
 
-    submitAndFlush();
     VkTextureResource& tex = textures_[texId];
-    VkDevice dev = context_.device();
+    const TexFormat fmt = chooseFormat(internalformat, format, type);
+    const uint32_t w = static_cast<uint32_t>(width);
+    const uint32_t h = static_cast<uint32_t>(height);
 
-    VkFormat vkFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    uint32_t bpp = 4;
-
-    if (internalformat == GL_R32F || (format == GL_RED && type == GL_FLOAT)) {
-        vkFormat = VK_FORMAT_R32_SFLOAT;
-        bpp = 4;
-    } else if (internalformat == GL_RG32F || (format == GL_RG && type == GL_FLOAT)) {
-        vkFormat = VK_FORMAT_R32G32_SFLOAT;
-        bpp = 8;
-    } else if (internalformat == GL_RGBA32F || (format == GL_RGBA && type == GL_FLOAT)) {
-        vkFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
-        bpp = 16;
-    } else if (internalformat == GL_R16F || (format == GL_RED && type == GL_HALF_FLOAT)) {
-        vkFormat = VK_FORMAT_R16_SFLOAT;
-        bpp = 2;
-    } else if (internalformat == GL_RG16F || (format == GL_RG && type == GL_HALF_FLOAT)) {
-        vkFormat = VK_FORMAT_R16G16_SFLOAT;
-        bpp = 4;
-    } else if (internalformat == GL_RGBA16F || (format == GL_RGBA && type == GL_HALF_FLOAT)) {
-        vkFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-        bpp = 8;
-    } else if (internalformat == GL_R8 || format == GL_RED) {
-        vkFormat = VK_FORMAT_R8_UNORM;
-        bpp = 1;
-    } else if (internalformat == GL_RG8 || format == GL_RG) {
-        vkFormat = VK_FORMAT_R8G8_UNORM;
-        bpp = 2;
-    } else if (internalformat == 0x81A5 /* DEPTH_COMPONENT16 */ || internalformat == 0x81A6 /* DEPTH_COMPONENT24 */ || format == 0x1902 /* DEPTH_COMPONENT */) {
-        vkFormat = VK_FORMAT_D32_SFLOAT;
-        bpp = 4;
-    } else if (internalformat == 0x88F0 /* DEPTH24_STENCIL8 */ || format == 0x84F9 /* DEPTH_STENCIL */) {
-        vkFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
-        bpp = 4;
-    } else {
-        vkFormat = VK_FORMAT_R8G8B8A8_UNORM;
-        bpp = 4;
-    }
-
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT;
-    if (vkFormat == VK_FORMAT_D32_SFLOAT || vkFormat == VK_FORMAT_D32_SFLOAT_S8_UINT) {
-        usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    } else {
-        usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    }
-
-    if (isCubeFace) {
-        tex.target = 0x8513;
-        if (tex.image == VK_NULL_HANDLE || tex.width != static_cast<uint32_t>(width) || tex.height != static_cast<uint32_t>(height)) {
-            if (tex.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, tex.view, nullptr); tex.view = VK_NULL_HANDLE; }
-            if (tex.allocId != 0) {
-                context_.destroyImage(tex.image, tex.allocId);
-            } else {
-                if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
-                if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
-            }
-            tex.image = VK_NULL_HANDLE;
-            tex.memory = VK_NULL_HANDLE;
-            tex.allocId = 0;
-            tex.offset = 0;
-
-            tex.width = width;
-            tex.height = height;
-            tex.format = vkFormat;
-            tex.bytesPerPixel = bpp;
-            tex.mipLevels = 1;
-
-            if (!context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
-                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
-                                 tex.offset, tex.allocId,
-                                 1, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)) {
-                LOG_ERROR("WebGLVkContext: Failed to allocate VkImage for cubemap (%dx%d)", width, height);
-                setSyntheticError(GL_OUT_OF_MEMORY);
-                return;
-            }
-
-            VkImageViewCreateInfo viewInfo{};
-            viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            viewInfo.image = tex.image;
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-            viewInfo.format = tex.format;
-            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            viewInfo.subresourceRange.baseMipLevel = 0;
-            viewInfo.subresourceRange.levelCount = 1;
-            viewInfo.subresourceRange.baseArrayLayer = 0;
-            viewInfo.subresourceRange.layerCount = 6;
-            if (vkCreateImageView(dev, &viewInfo, nullptr, &tex.view) != VK_SUCCESS) {
-                LOG_ERROR("WebGLVkContext: Failed to create image view for cubemap (%dx%d)", width, height);
-                setSyntheticError(GL_OUT_OF_MEMORY);
-                return;
-            }
-
-            VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-            context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
-                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, 0, 6, 0);
-            context_.endSingleTimeCommands(cmd);
-            tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (cubeFace) {
+        tex.target = kTextureCubeMap;
+        if (!tex.isValid() || tex.width != w || tex.height != h || tex.format != fmt.format) {
+            if (!allocateTexture(tex, w, h, fmt.format, fmt.bpp, 1, 6, true)) return;
         }
-
-        if (pixels) {
-            VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * bpp;
-            VkBuffer stagingBuf = VK_NULL_HANDLE;
-            VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-            VkDeviceSize stagingOffset = 0;
-            uint64_t stagingAllocId = 0;
-            void* stagingMapped = nullptr;
-            if (!context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                  stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
-                LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for cubemap upload (%zu bytes)", imgSize);
-                setSyntheticError(GL_OUT_OF_MEMORY);
-                return;
-            }
-
-            if (stagingMapped) {
-                copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
-                                     unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-            } else {
-                void* mapped = nullptr;
-                if (vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped) == VK_SUCCESS) {
-                    copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                                         unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-                    vkUnmapMemory(dev, stagingMem);
-                } else {
-                    LOG_ERROR("WebGLVkContext: Failed to map staging memory for cubemap upload");
-                    context_.destroyBuffer(stagingBuf, stagingAllocId);
-                    setSyntheticError(GL_OUT_OF_MEMORY);
-                    return;
-                }
-            }
-
-            VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-            context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cmd, 1, 0, 1, faceIndex);
-            context_.copyBufferToImage(stagingBuf, tex.image, width, height, cmd, 0, faceIndex, 1);
-            context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, 0, 1, faceIndex);
-            context_.endSingleTimeCommands(cmd);
-
-            context_.destroyBuffer(stagingBuf, stagingAllocId);
-        }
+        uploadTexture(tex, 0, target - kCubeFacePosX, 1, 0, 0, w, h, fmt.bpp, pixels, true);
         return;
     }
 
-    // Standard 2D texture
+    // Level 0 defines the texture (and its full mip chain); the storage is
+    // kept when the size and format do not change, so re-uploading a texture
+    // every frame records a copy rather than recreating the image.
     tex.target = GL_TEXTURE_2D;
-    uint32_t numLevels = std::max(1u, static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1);
-
-    if (level == 0 || tex.image == VK_NULL_HANDLE) {
-        if (tex.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, tex.view, nullptr); tex.view = VK_NULL_HANDLE; }
-        if (tex.allocId != 0) {
-            context_.destroyImage(tex.image, tex.allocId);
-        } else {
-            if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
-            if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
+    const uint32_t numLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+    if (level == 0) {
+        if (!tex.isValid() || tex.width != w || tex.height != h || tex.format != fmt.format ||
+            tex.mipLevels != numLevels) {
+            if (!allocateTexture(tex, w, h, fmt.format, fmt.bpp, numLevels, 1, false)) return;
         }
-        tex.image = VK_NULL_HANDLE;
-        tex.memory = VK_NULL_HANDLE;
-        tex.allocId = 0;
-        tex.offset = 0;
-
-        tex.width = width;
-        tex.height = height;
-        tex.format = vkFormat;
-        tex.bytesPerPixel = bpp;
-        tex.mipLevels = numLevels;
-
-        if (!context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
-                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
-                             tex.offset, tex.allocId,
-                             numLevels, 1, 0)) {
-            LOG_ERROR("WebGLVkContext: Failed to allocate VkImage (%dx%d)", width, height);
-            setSyntheticError(GL_OUT_OF_MEMORY);
-            return;
-        }
-
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = tex.image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = tex.format;
-        bool isDepth = (vkFormat == VK_FORMAT_D32_SFLOAT || vkFormat == VK_FORMAT_D32_SFLOAT_S8_UINT);
-        viewInfo.subresourceRange.aspectMask = isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = numLevels;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-        if (vkCreateImageView(dev, &viewInfo, nullptr, &tex.view) != VK_SUCCESS) {
-            LOG_ERROR("WebGLVkContext: Failed to create image view (%dx%d)", width, height);
-            setSyntheticError(GL_OUT_OF_MEMORY);
-            return;
-        }
-
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        VkImageLayout initialLayout = isDepth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
-                                       initialLayout, cmd, numLevels, 0, 1, 0);
-        context_.endSingleTimeCommands(cmd);
-        tex.currentLayout = initialLayout;
+    } else if (!tex.isValid() || static_cast<uint32_t>(level) >= tex.mipLevels) {
+        if (!tex.isValid()) setSyntheticError(GL_INVALID_OPERATION);
+        return;
     }
-
-    if (pixels) {
-        VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * bpp;
-        VkBuffer stagingBuf = VK_NULL_HANDLE;
-        VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-        VkDeviceSize stagingOffset = 0;
-        uint64_t stagingAllocId = 0;
-        void* stagingMapped = nullptr;
-        if (!context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
-            LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for texture upload (%zu bytes)", imgSize);
-            setSyntheticError(GL_OUT_OF_MEMORY);
-            return;
-        }
-
-        if (stagingMapped) {
-            copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
-                                 unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-        } else {
-            void* mapped = nullptr;
-            if (vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped) == VK_SUCCESS) {
-                copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                                     unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-                vkUnmapMemory(dev, stagingMem);
-            } else {
-                LOG_ERROR("WebGLVkContext: Failed to map staging memory for texture upload");
-                context_.destroyBuffer(stagingBuf, stagingAllocId);
-                setSyntheticError(GL_OUT_OF_MEMORY);
-                return;
-            }
-        }
-
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cmd, 1, level, 1, 0);
-        context_.copyBufferToImage(stagingBuf, tex.image, width, height, cmd, level, 0, 1);
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, level, 1, 0);
-        context_.endSingleTimeCommands(cmd);
-        tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        context_.destroyBuffer(stagingBuf, stagingAllocId);
-    }
+    uploadTexture(tex, static_cast<uint32_t>(level), 0, 1, 0, 0, w, h, fmt.bpp, pixels, true);
 }
 
-void WebGLVkContext::texSubImage2D(GLenum /*target*/, GLint level, GLint xoffset, GLint yoffset,
+void WebGLVkContext::texSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                    GLsizei width, GLsizei height,
                                    GLenum format, GLenum type, const void* pixels) {
-    GLuint texId = (activeTextureUnit_ < boundTextures2D_.size()) ? boundTextures2D_[activeTextureUnit_] : 0;
-    if (texId == 0 || !pixels || width <= 0 || height <= 0) return;
+    GLuint texId = 0;
+    uint32_t layer = 0;
+    if (activeTextureUnit_ < boundTextures2D_.size()) {
+        if (isCubeFace(target)) {
+            texId = boundTexturesCubeMap_[activeTextureUnit_];
+            layer = target - kCubeFacePosX;
+        } else {
+            texId = boundTextures2D_[activeTextureUnit_];
+        }
+    }
+    if (texId == 0 || !pixels || width <= 0 || height <= 0 || level < 0) return;
 
     auto it = textures_.find(texId);
     if (it == textures_.end() || !it->second.isValid()) return;
     VkTextureResource& tex = it->second;
-
-    submitAndFlush();
-
-    uint32_t bpp = tex.bytesPerPixel;
-    if (type == GL_FLOAT) {
-        if (format == GL_RED) bpp = 4;
-        else if (format == GL_RG) bpp = 8;
-        else if (format == GL_RGBA) bpp = 16;
-    } else if (type == GL_HALF_FLOAT) {
-        if (format == GL_RED) bpp = 2;
-        else if (format == GL_RG) bpp = 4;
-        else if (format == GL_RGBA) bpp = 8;
-    } else if (type == GL_UNSIGNED_BYTE) {
-        if (format == GL_RED) bpp = 1;
-        else if (format == GL_RG) bpp = 2;
-        else if (format == GL_RGBA) bpp = 4;
-    }
-
-    VkDeviceSize uploadSize = static_cast<VkDeviceSize>(width) * height * bpp;
-    VkBuffer stagingBuf = VK_NULL_HANDLE;
-    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-    VkDeviceSize stagingOffset = 0;
-    uint64_t stagingAllocId = 0;
-    void* stagingMapped = nullptr;
-    VkDevice dev = context_.device();
-
-    if (!context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
-        LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for texSubImage2D (%zu bytes)", uploadSize);
-        setSyntheticError(GL_OUT_OF_MEMORY);
+    if (static_cast<uint32_t>(level) >= tex.mipLevels || xoffset < 0 || yoffset < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
         return;
     }
-
-    if (stagingMapped) {
-        copyAndProcessPixels(static_cast<uint8_t*>(stagingMapped), pixels, width, height, bpp,
-                             unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-    } else {
-        void* mapped = nullptr;
-        if (vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped) == VK_SUCCESS) {
-            copyAndProcessPixels(static_cast<uint8_t*>(mapped), pixels, width, height, bpp,
-                                 unpackAlignment_, unpackFlipY_, unpackPremultiplyAlpha_);
-            vkUnmapMemory(dev, stagingMem);
-        } else {
-            LOG_ERROR("WebGLVkContext: Failed to map staging memory for texSubImage2D");
-            context_.destroyBuffer(stagingBuf, stagingAllocId);
-            setSyntheticError(GL_OUT_OF_MEMORY);
-            return;
-        }
-    }
-
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-    context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cmd, 1, level, 1, 0);
-
-    VkBufferImageCopy region{};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.mipLevel = level;
-    region.imageSubresource.baseArrayLayer = 0;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = {xoffset, yoffset, 0};
-    region.imageExtent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
-
-    vkCmdCopyBufferToImage(cmd, stagingBuf, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-    context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, level, 1, 0);
-    context_.endSingleTimeCommands(cmd);
-    tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    context_.destroyBuffer(stagingBuf, stagingAllocId);
+    uploadTexture(tex, static_cast<uint32_t>(level), layer, 1, xoffset, yoffset, static_cast<uint32_t>(width),
+                  static_cast<uint32_t>(height), clientBpp(format, type, tex.bytesPerPixel), pixels, true);
 }
 
 void WebGLVkContext::generateMipmap(GLenum target) {
     GLuint texId = 0;
     if (activeTextureUnit_ < boundTextures2D_.size()) {
-        if (target == 0x8513) texId = boundTexturesCubeMap_[activeTextureUnit_];
+        if (target == kTextureCubeMap) texId = boundTexturesCubeMap_[activeTextureUnit_];
         else if (target == 0x8C1A) texId = boundTextures2DArray_[activeTextureUnit_];
         else texId = boundTextures2D_[activeTextureUnit_];
     }
@@ -485,183 +312,65 @@ void WebGLVkContext::generateMipmap(GLenum target) {
     auto it = textures_.find(texId);
     if (it == textures_.end() || !it->second.isValid() || it->second.mipLevels <= 1) return;
     VkTextureResource& tex = it->second;
-    submitAndFlush();
+    if (isDepthFormat(tex.format)) return;
 
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.image = tex.image;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.subresourceRange.levelCount = 1;
+    VkFormatProperties props;
+    vkGetPhysicalDeviceFormatProperties(context_.physicalDevice(), tex.format, &props);
+    const VkFilter filter = (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
+                                ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
 
-    int32_t mipWidth = tex.width;
-    int32_t mipHeight = tex.height;
-
+    // Level 0 becomes the blit source of level 1, each level the source of
+    // the next, and the whole chain ends sampleable.
+    VkCommandBuffer cmd = transferCommands();
+    auto levelRange = [&](uint32_t base, uint32_t count) {
+        return VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, base, count, 0, tex.arrayLayers};
+    };
+    render::cmdTransitionImage(cmd, tex.image, levelRange(0, 1), tex.currentLayout,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    render::cmdTransitionImage(cmd, tex.image, levelRange(1, tex.mipLevels - 1), tex.currentLayout,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    int32_t mipWidth = static_cast<int32_t>(tex.width);
+    int32_t mipHeight = static_cast<int32_t>(tex.height);
     for (uint32_t i = 1; i < tex.mipLevels; ++i) {
-        barrier.subresourceRange.baseMipLevel = i - 1;
-        barrier.oldLayout = (i == 1) ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.srcAccessMask = (i == 1) ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &barrier);
-
         VkImageBlit blit{};
-        blit.srcOffsets[0] = {0, 0, 0};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, tex.arrayLayers};
         blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
-        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.srcSubresource.mipLevel = i - 1;
-        blit.srcSubresource.baseArrayLayer = 0;
-        blit.srcSubresource.layerCount = 1;
-        blit.dstOffsets[0] = {0, 0, 0};
-        blit.dstOffsets[1] = {std::max(1, mipWidth / 2), std::max(1, mipHeight / 2), 1};
-        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.dstSubresource.mipLevel = i;
-        blit.dstSubresource.baseArrayLayer = 0;
-        blit.dstSubresource.layerCount = 1;
-
-        barrier.subresourceRange.baseMipLevel = i;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &barrier);
-
+        mipWidth = std::max(1, mipWidth / 2);
+        mipHeight = std::max(1, mipHeight / 2);
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, tex.arrayLayers};
+        blit.dstOffsets[1] = {mipWidth, mipHeight, 1};
         vkCmdBlitImage(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       1, &blit, VK_FILTER_LINEAR);
-
-        barrier.subresourceRange.baseMipLevel = i - 1;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &barrier);
-
-        barrier.subresourceRange.baseMipLevel = i;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &barrier);
-
-        if (mipWidth > 1) mipWidth /= 2;
-        if (mipHeight > 1) mipHeight /= 2;
+                       tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, filter);
+        if (i + 1 < tex.mipLevels) {
+            render::cmdTransitionImage(cmd, tex.image, levelRange(i, 1), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        }
     }
-    context_.endSingleTimeCommands(cmd);
+    render::cmdTransitionImage(cmd, tex.image, levelRange(0, tex.mipLevels - 1),
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    render::cmdTransitionImage(cmd, tex.image, levelRange(tex.mipLevels - 1, 1),
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-void WebGLVkContext::texImage3D(GLenum target, GLint level, GLint /*internalformat*/,
+void WebGLVkContext::texImage3D(GLenum target, GLint /*level*/, GLint /*internalformat*/,
                                 GLsizei width, GLsizei height, GLsizei depth, GLint /*border*/,
                                 GLenum /*format*/, GLenum /*type*/, const void* pixels) {
     GLuint texId = (activeTextureUnit_ < boundTextures2DArray_.size()) ? boundTextures2DArray_[activeTextureUnit_] : 0;
     if (texId == 0 || width <= 0 || height <= 0 || depth <= 0) return;
-    submitAndFlush();
     VkTextureResource& tex = textures_[texId];
-    VkDevice dev = context_.device();
 
-    if (tex.view != VK_NULL_HANDLE) { vkDestroyImageView(dev, tex.view, nullptr); tex.view = VK_NULL_HANDLE; }
-    if (tex.allocId != 0) {
-        context_.destroyImage(tex.image, tex.allocId);
-    } else {
-        if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
-        if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
-    }
-    tex.image = VK_NULL_HANDLE;
-    tex.memory = VK_NULL_HANDLE;
-    tex.allocId = 0;
-    tex.offset = 0;
-
-    tex.width = width;
-    tex.height = height;
-    tex.depth = depth;
+    // TEXTURE_2D_ARRAY and TEXTURE_3D are both stored as a layered RGBA8 image.
     tex.target = target;
-    tex.format = VK_FORMAT_R8G8B8A8_UNORM;
-    tex.bytesPerPixel = 4;
-    tex.mipLevels = 1;
-
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    if (!context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory,
-                         tex.offset, tex.allocId,
-                         1, depth, 0)) {
-        LOG_ERROR("WebGLVkContext: Failed to allocate VkImage for 3D texture (%dx%dx%d)", width, height, depth);
-        setSyntheticError(GL_OUT_OF_MEMORY);
-        return;
+    tex.depth = static_cast<uint32_t>(depth);
+    const uint32_t w = static_cast<uint32_t>(width);
+    const uint32_t h = static_cast<uint32_t>(height);
+    const uint32_t layers = static_cast<uint32_t>(depth);
+    if (!tex.isValid() || tex.width != w || tex.height != h || tex.arrayLayers != layers ||
+        tex.format != VK_FORMAT_R8G8B8A8_UNORM) {
+        if (!allocateTexture(tex, w, h, VK_FORMAT_R8G8B8A8_UNORM, 4, 1, layers, false)) return;
     }
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = tex.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    viewInfo.format = tex.format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = depth;
-    if (vkCreateImageView(dev, &viewInfo, nullptr, &tex.view) != VK_SUCCESS) {
-        LOG_ERROR("WebGLVkContext: Failed to create image view for 3D texture (%dx%dx%d)", width, height, depth);
-        setSyntheticError(GL_OUT_OF_MEMORY);
-        return;
-    }
-
-    if (pixels) {
-        VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * depth * tex.bytesPerPixel;
-        VkBuffer stagingBuf = VK_NULL_HANDLE;
-        VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-        VkDeviceSize stagingOffset = 0;
-        uint64_t stagingAllocId = 0;
-        void* stagingMapped = nullptr;
-        if (!context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
-            LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for 3D texture upload (%zu bytes)", imgSize);
-            setSyntheticError(GL_OUT_OF_MEMORY);
-            return;
-        }
-
-        if (stagingMapped) {
-            std::memcpy(stagingMapped, pixels, imgSize);
-        } else {
-            void* mapped = nullptr;
-            if (vkMapMemory(dev, stagingMem, stagingOffset, imgSize, 0, &mapped) == VK_SUCCESS) {
-                std::memcpy(mapped, pixels, imgSize);
-                vkUnmapMemory(dev, stagingMem);
-            } else {
-                LOG_ERROR("WebGLVkContext: Failed to map staging memory for 3D texture upload");
-                context_.destroyBuffer(stagingBuf, stagingAllocId);
-                setSyntheticError(GL_OUT_OF_MEMORY);
-                return;
-            }
-        }
-
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cmd, 1, 0, depth, 0);
-        context_.copyBufferToImage(stagingBuf, tex.image, width, height, cmd, 0, 0, depth);
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, 0, depth, 0);
-        context_.endSingleTimeCommands(cmd);
-        tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        context_.destroyBuffer(stagingBuf, stagingAllocId);
-    } else {
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, 0, depth, 0);
-        context_.endSingleTimeCommands(cmd);
-        tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    }
+    uploadTexture(tex, 0, 0, layers, 0, 0, w, h, 4, pixels, false);
 }
 
 void WebGLVkContext::texStorage3D(GLenum target, GLsizei /*levels*/, GLenum internalformat,
@@ -678,175 +387,14 @@ void WebGLVkContext::texSubImage3D(GLenum /*target*/, GLint level,
     auto it = textures_.find(texId);
     if (it == textures_.end() || !it->second.isValid()) return;
     VkTextureResource& tex = it->second;
-
-    submitAndFlush();
-    VkDevice dev = context_.device();
-    VkDeviceSize uploadSize = static_cast<VkDeviceSize>(width) * height * depth * tex.bytesPerPixel;
-    VkBuffer stagingBuf = VK_NULL_HANDLE;
-    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-    VkDeviceSize stagingOffset = 0;
-    uint64_t stagingAllocId = 0;
-    void* stagingMapped = nullptr;
-    if (!context_.createBuffer(uploadSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                          stagingBuf, stagingMem, stagingOffset, stagingAllocId, stagingMapped)) {
-        LOG_ERROR("WebGLVkContext: Failed to allocate staging buffer for texSubImage3D (%zu bytes)", uploadSize);
-        setSyntheticError(GL_OUT_OF_MEMORY);
+    if (level < 0 || static_cast<uint32_t>(level) >= tex.mipLevels || zoffset < 0 ||
+        static_cast<uint32_t>(zoffset + depth) > tex.arrayLayers) {
+        setSyntheticError(GL_INVALID_VALUE);
         return;
     }
-
-    if (stagingMapped) {
-        std::memcpy(stagingMapped, pixels, uploadSize);
-    } else {
-        void* mapped = nullptr;
-        if (vkMapMemory(dev, stagingMem, stagingOffset, uploadSize, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(mapped, pixels, uploadSize);
-            vkUnmapMemory(dev, stagingMem);
-        } else {
-            LOG_ERROR("WebGLVkContext: Failed to map staging memory for texSubImage3D");
-            context_.destroyBuffer(stagingBuf, stagingAllocId);
-            setSyntheticError(GL_OUT_OF_MEMORY);
-            return;
-        }
-    }
-
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-    context_.transitionImageLayout(tex.image, tex.format, tex.currentLayout,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cmd, 1, level, depth, zoffset);
-
-    VkBufferImageCopy region{};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.mipLevel = level;
-    region.imageSubresource.baseArrayLayer = zoffset;
-    region.imageSubresource.layerCount = depth;
-    region.imageOffset = {xoffset, yoffset, 0};
-    region.imageExtent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
-    vkCmdCopyBufferToImage(cmd, stagingBuf, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-    context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd, 1, level, depth, zoffset);
-    context_.endSingleTimeCommands(cmd);
-    tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    context_.destroyBuffer(stagingBuf, stagingAllocId);
-}
-
-void WebGLVkContext::updateSamplerObject(VkSamplerResource& smp) {
-    if (smp.sampler != VK_NULL_HANDLE && !smp.samplerDirty) return;
-    VkDevice dev = context_.device();
-    if (smp.sampler != VK_NULL_HANDLE) {
-        vkDestroySampler(dev, smp.sampler, nullptr);
-        smp.sampler = VK_NULL_HANDLE;
-    }
-    VkSamplerCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.magFilter = (smp.magFilter == GL_NEAREST) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-    info.minFilter = (smp.minFilter == GL_NEAREST || smp.minFilter == GL_NEAREST_MIPMAP_NEAREST) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-    info.mipmapMode = (smp.minFilter == GL_LINEAR_MIPMAP_LINEAR || smp.minFilter == GL_NEAREST_MIPMAP_LINEAR) ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    auto toAddressMode = [](GLenum wrap) {
-        if (wrap == GL_REPEAT) return VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        if (wrap == GL_MIRRORED_REPEAT) return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
-        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    };
-    info.addressModeU = toAddressMode(smp.wrapS);
-    info.addressModeV = toAddressMode(smp.wrapT);
-    info.addressModeW = toAddressMode(smp.wrapR);
-    bool hasMipmaps = (smp.minFilter != GL_NEAREST && smp.minFilter != GL_LINEAR);
-    info.minLod = std::max(0.0f, smp.minLod);
-    info.maxLod = hasMipmaps ? std::max(0.0f, smp.maxLod) : 0.0f;
-    if (smp.compareMode == GL_COMPARE_REF_TO_TEXTURE) {
-        info.compareEnable = VK_TRUE;
-        info.compareOp = glCompareOpToVk(smp.compareFunc);
-    }
-    vkCreateSampler(dev, &info, nullptr, &smp.sampler);
-    smp.samplerDirty = false;
-}
-
-WebGLSampler WebGLVkContext::createSampler() {
-    GLuint id = nextSamplerId_++;
-    samplers_[id] = VkSamplerResource{};
-    return {id};
-}
-
-void WebGLVkContext::deleteSampler(WebGLSampler s) {
-    auto it = samplers_.find(s.id);
-    if (it != samplers_.end()) {
-        if (it->second.sampler != VK_NULL_HANDLE) {
-            submitAndFlush();
-            vkDestroySampler(context_.device(), it->second.sampler, nullptr);
-        }
-        samplers_.erase(it);
-    }
-    for (size_t i = 0; i < boundSamplers_.size(); ++i) {
-        if (boundSamplers_[i] == s.id) {
-            boundSamplers_[i] = 0;
-        }
-    }
-}
-
-void WebGLVkContext::bindSampler(GLuint unit, WebGLSampler s) {
-    if (unit < boundSamplers_.size()) {
-        boundSamplers_[unit] = s.id;
-    }
-}
-
-void WebGLVkContext::samplerParameteri(WebGLSampler s, GLenum pname, GLint param) {
-    auto it = samplers_.find(s.id);
-    if (it == samplers_.end()) return;
-    switch (pname) {
-        case GL_TEXTURE_MIN_FILTER: it->second.minFilter = param; break;
-        case GL_TEXTURE_MAG_FILTER: it->second.magFilter = param; break;
-        case GL_TEXTURE_WRAP_S: it->second.wrapS = param; break;
-        case GL_TEXTURE_WRAP_T: it->second.wrapT = param; break;
-        case GL_TEXTURE_WRAP_R: it->second.wrapR = param; break;
-        case GL_TEXTURE_COMPARE_MODE: it->second.compareMode = param; break;
-        case GL_TEXTURE_COMPARE_FUNC: it->second.compareFunc = param; break;
-        default: break;
-    }
-    it->second.samplerDirty = true;
-}
-
-void WebGLVkContext::samplerParameterf(WebGLSampler s, GLenum pname, GLfloat param) {
-    auto it = samplers_.find(s.id);
-    if (it == samplers_.end()) return;
-    switch (pname) {
-        case GL_TEXTURE_MIN_LOD: it->second.minLod = param; break;
-        case GL_TEXTURE_MAX_LOD: it->second.maxLod = param; break;
-        default: samplerParameteri(s, pname, static_cast<GLint>(param)); return;
-    }
-    it->second.samplerDirty = true;
-}
-
-GLint WebGLVkContext::getSamplerParameteri(WebGLSampler s, GLenum pname) {
-    auto it = samplers_.find(s.id);
-    if (it == samplers_.end()) return 0;
-    switch (pname) {
-        case GL_TEXTURE_MIN_FILTER: return it->second.minFilter;
-        case GL_TEXTURE_MAG_FILTER: return it->second.magFilter;
-        case GL_TEXTURE_WRAP_S: return it->second.wrapS;
-        case GL_TEXTURE_WRAP_T: return it->second.wrapT;
-        case GL_TEXTURE_WRAP_R: return it->second.wrapR;
-        case GL_TEXTURE_COMPARE_MODE: return it->second.compareMode;
-        case GL_TEXTURE_COMPARE_FUNC: return it->second.compareFunc;
-        default: return 0;
-    }
-}
-
-GLfloat WebGLVkContext::getSamplerParameterf(WebGLSampler s, GLenum pname) {
-    auto it = samplers_.find(s.id);
-    if (it == samplers_.end()) return 0.0f;
-    switch (pname) {
-        case GL_TEXTURE_MIN_LOD: return it->second.minLod;
-        case GL_TEXTURE_MAX_LOD: return it->second.maxLod;
-        default: return static_cast<GLfloat>(getSamplerParameteri(s, pname));
-    }
-}
-
-GLboolean WebGLVkContext::isSampler(WebGLSampler s) {
-    return (s.id != 0 && samplers_.find(s.id) != samplers_.end()) ? GL_TRUE : GL_FALSE;
+    uploadTexture(tex, static_cast<uint32_t>(level), static_cast<uint32_t>(zoffset), static_cast<uint32_t>(depth),
+                  xoffset, yoffset, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                  tex.bytesPerPixel, pixels, false);
 }
 
 void WebGLVkContext::copyTexImage2D(GLenum target, GLint level, GLenum internalformat,

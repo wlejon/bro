@@ -15,6 +15,7 @@ bool PassEnvironment::init(SceneVkDevice& device, SceneVkAllocator& allocator) {
 
 bool PassEnvironment::init(SceneVkDevice& device, SceneVkAllocator& allocator, const Config& config) {
     VkDevice dev = device.device();
+    config_ = config;
 
     SceneVkDescriptorLayoutBuilder builder;
     builder.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -96,28 +97,6 @@ bool PassEnvironment::createDefaultCubemap(SceneVkDevice& device, SceneVkAllocat
         return false;
     }
 
-    // Transition image layout to SHADER_READ_ONLY_OPTIMAL
-    device.executeImmediate([&](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = dummyCubemapImage_.image;
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 6;
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &barrier);
-    });
-    dummyCubemapImage_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     // Create cubemap sampler
     VkSamplerCreateInfo samplerInfo{};
@@ -148,6 +127,14 @@ bool PassEnvironment::createDefaultCubemap(SceneVkDevice& device, SceneVkAllocat
     return true;
 }
 
+bool PassEnvironment::setSampleCount(VkDevice dev, VkSampleCountFlagBits samples) {
+    if (config_.samples == samples) return true;
+    if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(dev, pipeline_, nullptr);
+    pipeline_ = VK_NULL_HANDLE;
+    config_.samples = samples;
+    return createPipeline(dev, config_);
+}
+
 bool PassEnvironment::createPipeline(VkDevice device, const Config& config) {
     VkShaderModule vs = SceneVkShaderCompiler::createBuiltinModule(device, BuiltinSceneShader::SkyboxVert);
     VkShaderModule fs = SceneVkShaderCompiler::createBuiltinModule(device, BuiltinSceneShader::EnvironmentFrag);
@@ -163,7 +150,7 @@ bool PassEnvironment::createPipeline(VkDevice device, const Config& config) {
            .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
            .setPolygonMode(VK_POLYGON_MODE_FILL)
            .setCullMode(VK_CULL_MODE_NONE)
-           .setMultisamplingNone()
+           .setMultisampling(config.samples)
            .disableBlending(1);
 
     if (config.depthTest) {

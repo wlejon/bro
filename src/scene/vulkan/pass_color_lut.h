@@ -27,7 +27,6 @@ public:
     int lutSize() const { return lutSize_; }
 
     void render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                SceneVkDescriptorPool& descPool,
                 const SceneVkImage& inputImage,
                 VkImageView outputTargetView,
                 VkFormat outputFormat,

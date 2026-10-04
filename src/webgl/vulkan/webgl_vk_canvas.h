@@ -18,13 +18,17 @@ public:
     WebGLVkCanvas(const WebGLVkCanvas&) = delete;
     WebGLVkCanvas& operator=(const WebGLVkCanvas&) = delete;
 
-    /// Initialize color and depth/stencil attachments with given dimensions.
+    /// Create color and depth/stencil attachments of the given size. Their
+    /// contents are undefined until recordInit() clears them.
     bool init(uint32_t width, uint32_t height);
 
-    /// Resize color and depth attachments (preserves format, clears previous image content).
+    /// Recreate the attachments at a new size (contents cleared by recordInit()).
     bool resize(uint32_t width, uint32_t height);
 
-    /// Destroy allocated Vulkan image and memory resources.
+    /// Record the clear of freshly created attachments into `cmd` (no-op once done).
+    void recordInit(VkCommandBuffer cmd);
+
+    /// Release the images; they are destroyed once the GPU is done with them.
     void cleanup();
 
     /// Transition color attachment image to new layout.
@@ -43,9 +47,9 @@ public:
         transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
 
-    /// Read canvas color pixels as tightly packed, top-down RGBA (width x height x 4).
-    /// Uses Vulkan staging buffer readback without CPU readback during presentation.
-    bool readCanvasPixels(std::vector<uint8_t>& out);
+    /// Record a copy of the color attachment into `dst` as tightly packed,
+    /// top-down RGBA (width x height x 4), leaving the layout as it was.
+    bool recordCopy(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset = 0);
 
     // Accessors
     VkImage colorImage() const { return colorImage_; }
@@ -88,14 +92,7 @@ private:
     VkImageView depthView_ = VK_NULL_HANDLE;
     VkFormat depthFormat_ = VK_FORMAT_D24_UNORM_S8_UINT;
     VkImageLayout depthLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    // Readback staging resources
-    VkBuffer readbackBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory readbackMemory_ = VK_NULL_HANDLE;
-    VkDeviceSize readbackOffset_ = 0;
-    uint64_t readbackAllocId_ = 0;
-    void* readbackMapped_ = nullptr;
-    VkDeviceSize readbackBufferSize_ = 0;
+    bool needsInit_ = false;
 };
 
 } // namespace bro::webgl::vk

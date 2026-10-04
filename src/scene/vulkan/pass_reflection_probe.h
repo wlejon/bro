@@ -52,6 +52,7 @@ private:
     };
 
     bool ensureProbeGpu(ReflectionProbeNode* probe, SceneVkAllocator& allocator, SceneVkDevice& device);
+    void releaseFaceViews(SceneVkDevice& device, ProbeGpuData& data);
     void renderFace(VkCommandBuffer cmd, ReflectionProbeNode* probe, int face,
                     SceneGraph& graph, SceneRenderer& renderer, PassMesh& passMesh,
                     SceneVkAllocator& allocator, SceneVkDevice& device,
@@ -63,13 +64,7 @@ private:
     std::unordered_map<const ReflectionProbeNode*, ProbeGpuData> probeCache_;
     const ReflectionProbeNode* activeProbe_ = nullptr;
 
-    SceneVkBuffer faceCameraUbos_[6];
-    SceneVkDescriptorPool faceDescPool_;
-    VkDescriptorSet faceCameraSets_[6] = {};
     VkDescriptorSetLayout faceCameraLayout_ = VK_NULL_HANDLE;
-
-    SceneVkBuffer faceLightingUbo_;
-    VkDescriptorSet faceLightingSet_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout faceLightingLayout_ = VK_NULL_HANDLE;
 };
 

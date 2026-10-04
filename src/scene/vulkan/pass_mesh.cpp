@@ -37,9 +37,14 @@ bool PassMesh::init(SceneVkDevice& device, SceneVkAllocator& allocator, const Co
     return true;
 }
 
-void PassMesh::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
-    VkDevice dev = device.device();
+bool PassMesh::setSampleCount(VkDevice dev, VkSampleCountFlagBits samples) {
+    if (config_.samples == samples) return true;
+    destroyPipelines(dev);
+    config_.samples = samples;
+    return createPipelines(dev, config_);
+}
 
+void PassMesh::destroyPipelines(VkDevice dev) {
     if (pipelineStatic_ != VK_NULL_HANDLE) {
         vkDestroyPipeline(dev, pipelineStatic_, nullptr);
         pipelineStatic_ = VK_NULL_HANDLE;
@@ -64,6 +69,11 @@ void PassMesh::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
         vkDestroyPipeline(dev, pipelineSkinnedTranslucent_, nullptr);
         pipelineSkinnedTranslucent_ = VK_NULL_HANDLE;
     }
+}
+
+void PassMesh::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
+    VkDevice dev = device.device();
+    destroyPipelines(dev);
     if (pipelineLayout_ != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(dev, pipelineLayout_, nullptr);
         pipelineLayout_ = VK_NULL_HANDLE;

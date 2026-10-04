@@ -67,11 +67,26 @@ public:
     uint32_t width() const { return currentWidth_; }
     uint32_t height() const { return currentHeight_; }
 
+    /// The last render's tonemapped result as top-down RGBA. Waits for that
+    /// render (its own ticket, never the device); the copy is recorded into
+    /// the render itself once a caller has asked in the previous frame, so a
+    /// compositor reading every frame pays no extra submission.
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
 
 private:
     friend class PassReflectionProbe;
     bool ensureTargets(uint32_t width, uint32_t height, VkSampleCountFlagBits sampleCount = VK_SAMPLE_COUNT_1_BIT);
+
+    // Per-frame camera / lighting (scene_vk_bridge_frame.cpp)
+    SceneCameraUniforms buildCameraUniforms(SceneGraph& graph, SceneRenderer& renderer,
+                                            uint32_t width, uint32_t height) const;
+    SceneLightingUniforms buildLightingUniforms(SceneGraph& graph, SceneRenderer& renderer) const;
+    void finishLightingUniforms(SceneGraph& graph, SceneLightingUniforms& lightUniforms);
+    void writeFrameSets(const SceneCameraUniforms& cam, const SceneLightingUniforms& light);
+
+    // Readback (scene_vk_bridge_frame.cpp)
+    bool ensureReadbackBuffer();
+    void recordReadback(VkCommandBuffer cmd);
 
     struct CachedMeshBuffer {
         SceneVkBuffer vertexBuffer;
@@ -82,14 +97,14 @@ private:
     };
     CachedMeshBuffer& uploadMesh(const bromesh::MeshData& mesh, const void* key);
 
+    // Per-node GPU data. Skin attributes live in a device-local buffer; the
+    // instance matrices and bone palette are rewritten every render into the
+    // frame's upload memory, with descriptor sets from the frame.
     struct NodeDynamicBuffers {
-        SceneVkBuffer instanceBuffer;
-        size_t instanceCapacity = 0;
-
         SceneVkBuffer skinAttribBuffer;
         size_t skinAttribCapacity = 0;
 
-        SceneVkBuffer boneUbo;
+        render::UploadSlice instances;
         VkDescriptorSet boneSet = VK_NULL_HANDLE;
         VkDescriptorSet boneSetShadow = VK_NULL_HANDLE;
     };
@@ -97,13 +112,17 @@ private:
 
     struct CachedTexture {
         SceneVkImage image;
-        VkDescriptorSet descSet = VK_NULL_HANDLE;
         int width = 0;
         int height = 0;
         uint64_t hash = 0;
         bool owned = true;
+        // A material set for this frame (sets never change once in use).
+        VkDescriptorSet frameSet = VK_NULL_HANDLE;
+        uint64_t frameSerial = 0;
     };
+    /// Upload (when changed) and return a material set for this frame.
     VkDescriptorSet uploadTexture(const void* key, int width, int height, const uint8_t* rgba);
+    VkDescriptorSet materialSetFor(CachedTexture& tex, VkImageView view, VkSampler sampler);
 
     void prepareDynamicBuffers(SceneGraph& graph);
     void renderShadowPass(VkCommandBuffer cmd, SceneGraph& graph, const SceneLightingUniforms& lightUniforms, CullStats& stats);
@@ -137,7 +156,15 @@ private:
     SceneVkImage dofHdrImage_;
     SceneVkImage postLdrImage_;
     SceneVkImage ldrPresentationImage_;
+
+    // CPU readback of ldrPresentationImage_ (see readTonemapPixelsRGBA).
     SceneVkBuffer readbackBuffer_;
+    uint64_t renderSerial_ = 0;
+    uint64_t readbackRecordedSerial_ = 0;  // render whose submission includes the copy
+    uint64_t readbackTicket_ = 0;
+    bool readSinceRender_ = false;
+    uint64_t pixelsSerial_ = 0;
+    std::vector<uint8_t> pixels_;
 
     SceneVkImage dummyShadeMap_;
     SceneVkImage shadeMapImage_;
@@ -147,14 +174,12 @@ private:
 
     VkDescriptorSet uploadExternalSceneTexture(SceneVkBridge* srcBridge, const void* key);
 
-    SceneVkBuffer cameraUbo_;
-    SceneVkBuffer lightingUbo_;
-    SceneVkDescriptorPool mainDescPool_;
+    // This render's camera and lighting sets (frame descriptor arena).
     VkDescriptorSet cameraSet_ = VK_NULL_HANDLE;
     VkDescriptorSet lightingSet_ = VK_NULL_HANDLE;
-
-    SceneVkDescriptorPool dynamicDescPool_;
-    SceneVkDescriptorPool frameDescPool_;
+    // Shade-map binding for this render, set by finishLightingUniforms.
+    VkImageView shadeView_ = VK_NULL_HANDLE;
+    VkSampler shadeSampler_ = VK_NULL_HANDLE;
 
     std::unordered_map<const void*, CachedMeshBuffer> meshCache_;
     std::unordered_map<const void*, NodeDynamicBuffers> dynamicBufferCache_;
@@ -169,11 +194,6 @@ private:
     std::unordered_map<std::string, CustomPipelineEntry> customMeshPipelines_;
     std::unordered_map<std::string, VkPipeline> customShadowPipelines_;
 
-    struct NodeCustomBuffers {
-        SceneVkBuffer ubo;
-        VkDescriptorSet descSet = VK_NULL_HANDLE;
-    };
-    std::unordered_map<const void*, NodeCustomBuffers> customNodeBufferCache_;
     std::unordered_map<std::string, CachedTexture> userTextureCache_;
 
     void prepareCustomShaderForNode(const void* key, const CustomShaderState* cs, uint32_t target, bool translucent,

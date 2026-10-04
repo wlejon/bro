@@ -1,4 +1,5 @@
 #include "webgl/vulkan/webgl_vk_canvas.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -67,52 +68,54 @@ void WebGLVkCanvas::cleanup() {
     VkDevice dev = context_.device();
     if (dev == VK_NULL_HANDLE) return;
 
-    context_.waitIdle();
-
-    if (colorView_ != VK_NULL_HANDLE) {
-        vkDestroyImageView(dev, colorView_, nullptr);
-        colorView_ = VK_NULL_HANDLE;
-    }
-    if (colorAllocId_ != 0) {
-        context_.destroyImage(colorImage_, colorAllocId_);
-    } else {
-        if (colorImage_ != VK_NULL_HANDLE) vkDestroyImage(dev, colorImage_, nullptr);
-        if (colorMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, colorMemory_, nullptr);
+    render::VulkanContext* ctx = &context_;
+    struct Dead { VkImage image; VkImageView view; uint64_t allocId; };
+    Dead color{colorImage_, colorView_, colorAllocId_};
+    Dead depth{depthImage_, depthView_, depthAllocId_};
+    if (color.image != VK_NULL_HANDLE || depth.image != VK_NULL_HANDLE) {
+        context_.frames().defer([ctx, dev, color, depth] {
+            for (const Dead& d : {color, depth}) {
+                if (d.view != VK_NULL_HANDLE) vkDestroyImageView(dev, d.view, nullptr);
+                if (d.image != VK_NULL_HANDLE) ctx->destroyImage(d.image, d.allocId);
+            }
+        });
     }
     colorImage_ = VK_NULL_HANDLE;
+    colorView_ = VK_NULL_HANDLE;
     colorMemory_ = VK_NULL_HANDLE;
     colorAllocId_ = 0;
     colorOffset_ = 0;
     colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (depthView_ != VK_NULL_HANDLE) {
-        vkDestroyImageView(dev, depthView_, nullptr);
-        depthView_ = VK_NULL_HANDLE;
-    }
-    if (depthAllocId_ != 0) {
-        context_.destroyImage(depthImage_, depthAllocId_);
-    } else {
-        if (depthImage_ != VK_NULL_HANDLE) vkDestroyImage(dev, depthImage_, nullptr);
-        if (depthMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, depthMemory_, nullptr);
-    }
     depthImage_ = VK_NULL_HANDLE;
+    depthView_ = VK_NULL_HANDLE;
     depthMemory_ = VK_NULL_HANDLE;
     depthAllocId_ = 0;
     depthOffset_ = 0;
     depthLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    needsInit_ = false;
+}
 
-    if (readbackAllocId_ != 0) {
-        context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
-    } else {
-        if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(dev, readbackBuffer_, nullptr);
-        if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, readbackMemory_, nullptr);
+void WebGLVkCanvas::recordInit(VkCommandBuffer cmd) {
+    if (!needsInit_ || cmd == VK_NULL_HANDLE) return;
+    needsInit_ = false;
+    if (colorImage_ != VK_NULL_HANDLE) {
+        const VkImageSubresourceRange range = render::colorRange();
+        render::cmdTransitionImage(cmd, colorImage_, range, VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkClearColorValue clear{};
+        vkCmdClearColorImage(cmd, colorImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+        colorLayout_ = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        transitionColor(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
-    readbackBuffer_ = VK_NULL_HANDLE;
-    readbackMemory_ = VK_NULL_HANDLE;
-    readbackAllocId_ = 0;
-    readbackOffset_ = 0;
-    readbackMapped_ = nullptr;
-    readbackBufferSize_ = 0;
+    if (depthImage_ != VK_NULL_HANDLE) {
+        const VkImageSubresourceRange range{render::imageAspectFor(depthFormat_), 0, 1, 0, 1};
+        render::cmdTransitionImage(cmd, depthImage_, range, VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkClearDepthStencilValue clear{1.0f, 0};
+        vkCmdClearDepthStencilImage(cmd, depthImage_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+        depthLayout_ = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        transitionDepth(cmd, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    }
 }
 
 bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
@@ -146,16 +149,8 @@ bool WebGLVkCanvas::createColorAttachment(uint32_t width, uint32_t height) {
     if (vkCreateImageView(dev, &viewInfo, nullptr, &colorView_) != VK_SUCCESS) {
         return false;
     }
-
-    // Transition initial layout to COLOR_ATTACHMENT_OPTIMAL
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-    context_.transitionImageLayout(colorImage_, colorFormat_,
-                                   VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                   cmd);
-    context_.endSingleTimeCommands(cmd);
-    colorLayout_ = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
+    colorLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    needsInit_ = true;
     return true;
 }
 
@@ -164,7 +159,7 @@ bool WebGLVkCanvas::createDepthAttachment(uint32_t width, uint32_t height) {
     depthFormat_ = findSupportedDepthFormat();
 
     VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT;
+                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     if (!context_.createImage(width, height, depthFormat_,
                               VK_IMAGE_TILING_OPTIMAL, usage,
@@ -193,15 +188,8 @@ bool WebGLVkCanvas::createDepthAttachment(uint32_t width, uint32_t height) {
     if (vkCreateImageView(dev, &viewInfo, nullptr, &depthView_) != VK_SUCCESS) {
         return false;
     }
-
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-    context_.transitionImageLayout(depthImage_, depthFormat_,
-                                   VK_IMAGE_LAYOUT_UNDEFINED,
-                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                                   cmd);
-    context_.endSingleTimeCommands(cmd);
-    depthLayout_ = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
+    depthLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    needsInit_ = true;
     return true;
 }
 
@@ -217,77 +205,17 @@ void WebGLVkCanvas::transitionDepth(VkCommandBuffer cmd, VkImageLayout newLayout
     depthLayout_ = newLayout;
 }
 
-bool WebGLVkCanvas::readCanvasPixels(std::vector<uint8_t>& out) {
-    if (!isValid() || width_ == 0 || height_ == 0) return false;
-
-    VkDevice dev = context_.device();
-    VkDeviceSize requiredSize = static_cast<VkDeviceSize>(width_) * height_ * 4;
-
-    if (readbackBuffer_ == VK_NULL_HANDLE || readbackBufferSize_ < requiredSize) {
-        if (readbackAllocId_ != 0) {
-            context_.destroyBuffer(readbackBuffer_, readbackAllocId_);
-        } else {
-            if (readbackBuffer_ != VK_NULL_HANDLE) vkDestroyBuffer(dev, readbackBuffer_, nullptr);
-            if (readbackMemory_ != VK_NULL_HANDLE) vkFreeMemory(dev, readbackMemory_, nullptr);
-        }
-        readbackBuffer_ = VK_NULL_HANDLE;
-        readbackMemory_ = VK_NULL_HANDLE;
-        readbackAllocId_ = 0;
-        readbackOffset_ = 0;
-        readbackMapped_ = nullptr;
-
-        readbackBufferSize_ = requiredSize * 2;
-        if (!context_.createBuffer(readbackBufferSize_,
-                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                   readbackBuffer_, readbackMemory_,
-                                   readbackOffset_, readbackAllocId_, readbackMapped_)) {
-            LOG_ERROR("WebGLVkCanvas: Failed to allocate readback staging buffer");
-            return false;
-        }
-    }
-
-    VkImageLayout oldLayout = colorLayout_;
-    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
-        oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    }
-
-    VkCommandBuffer cmd = context_.beginSingleTimeCommands();
+bool WebGLVkCanvas::recordCopy(VkCommandBuffer cmd, VkBuffer dst, VkDeviceSize dstOffset) {
+    if (!isValid() || cmd == VK_NULL_HANDLE || dst == VK_NULL_HANDLE) return false;
+    recordInit(cmd);
+    const VkImageLayout restore = colorLayout_;
     transitionColor(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-
     VkBufferImageCopy copyRegion{};
-    copyRegion.bufferOffset = 0;
-    copyRegion.bufferRowLength = 0;
-    copyRegion.bufferImageHeight = 0;
-    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copyRegion.imageSubresource.mipLevel = 0;
-    copyRegion.imageSubresource.baseArrayLayer = 0;
-    copyRegion.imageSubresource.layerCount = 1;
-    copyRegion.imageOffset = {0, 0, 0};
+    copyRegion.bufferOffset = dstOffset;
+    copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copyRegion.imageExtent = {width_, height_, 1};
-
-    vkCmdCopyImageToBuffer(cmd, colorImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           readbackBuffer_, 1, &copyRegion);
-
-    transitionColor(cmd, oldLayout);
-    context_.endSingleTimeCommands(cmd);
-
-    context_.waitIdle();
-
-    if (readbackMapped_) {
-        out.resize(requiredSize);
-        std::memcpy(out.data(), readbackMapped_, requiredSize);
-    } else {
-        void* mapped = nullptr;
-        if (vkMapMemory(dev, readbackMemory_, readbackOffset_, requiredSize, 0, &mapped) != VK_SUCCESS) {
-            LOG_ERROR("WebGLVkCanvas: Failed to map readback buffer memory");
-            return false;
-        }
-        out.resize(requiredSize);
-        std::memcpy(out.data(), mapped, requiredSize);
-        vkUnmapMemory(dev, readbackMemory_);
-    }
-
+    vkCmdCopyImageToBuffer(cmd, colorImage_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, 1, &copyRegion);
+    transitionColor(cmd, restore);
     return true;
 }
 

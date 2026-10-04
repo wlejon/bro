@@ -49,6 +49,16 @@ void cmdTransitionImage(VkCommandBuffer cmd, VkImage image,
                         const VkImageSubresourceRange& range,
                         VkImageLayout oldLayout, VkImageLayout newLayout);
 
+/// A global memory barrier: `srcAccess` writes by `srcStages` made visible
+/// to `dstAccess` in `dstStages`.
+void cmdMemoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStages, VkAccessFlags srcAccess,
+                      VkPipelineStageFlags dstStages, VkAccessFlags dstAccess);
+
+/// A barrier on `size` bytes of `buffer` at `offset` (VK_WHOLE_SIZE for all).
+void cmdBufferBarrier(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
+                      VkPipelineStageFlags srcStages, VkAccessFlags srcAccess,
+                      VkPipelineStageFlags dstStages, VkAccessFlags dstAccess);
+
 /// Whole-mip-0, single-layer color subresource range.
 inline VkImageSubresourceRange colorRange(uint32_t levels = 1, uint32_t layers = 1) {
     return VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, layers};

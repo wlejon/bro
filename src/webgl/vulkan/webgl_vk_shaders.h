@@ -17,7 +17,7 @@ struct TranslatedShader {
     std::vector<VkUniformInfo> uniforms;
     std::unordered_map<std::string, GLint> attributeLocations;
     std::unordered_map<std::string, GLint> samplerBindings;
-    uint32_t pushConstantSize = 0;
+    uint32_t defaultUniformSize = 0;
 };
 
 /// Translates WebGL GLSL to Vulkan GLSL and compiles via glslc to SPIR-V.

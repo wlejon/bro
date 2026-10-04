@@ -36,11 +36,16 @@ public:
               VkDescriptorSetLayout materialLayout,
               VkDescriptorSet defaultMaterialSet);
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
+    /// Rebuild the pipeline for the HDR target's sample count.
+    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
 
     void begin(VkCommandBuffer cmd, VkDescriptorSet cameraSet);
     void draw(VkCommandBuffer cmd, const BillboardPushConstants& push, VkDescriptorSet materialSet);
 
 private:
+    bool createPipeline(VkDevice dev);
+
+    VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
     VkDescriptorSetLayout cameraLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

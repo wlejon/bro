@@ -35,9 +35,10 @@ public:
               VkFormat depthFormat = VK_FORMAT_D32_SFLOAT,
               VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
+    /// Rebuild the pipeline for the HDR target's sample count.
+    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
 
     void renderNode(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                    SceneVkDescriptorPool& descPool,
                     GaussianSplatNode* node,
                     const float* viewMatrix,
                     const float* projMatrix,
@@ -46,6 +47,11 @@ public:
 
 private:
     bool createPipelines(VkDevice device, VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples);
+    void destroyPipelines(VkDevice device);
+
+    VkFormat colorFormat_ = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormat depthFormat_ = VK_FORMAT_D32_SFLOAT;
+    VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
     bool createQuadBuffer(SceneVkAllocator& allocator);
 
     VkDescriptorSetLayout descLayout_ = VK_NULL_HANDLE;
@@ -57,7 +63,6 @@ private:
     struct NodeGpuData {
         SceneVkBuffer instanceBuffer;
         size_t capacityBytes = 0;
-        SceneVkBuffer ubo;
     };
     std::unordered_map<const void*, NodeGpuData> nodeCache_;
 };

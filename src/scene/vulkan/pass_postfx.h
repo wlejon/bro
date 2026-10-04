@@ -98,11 +98,6 @@ private:
     SceneVkImage bloomBlurImage_;
     SceneVkImage intermediateLdrImage_;
 
-    SceneVkDescriptorPool descPool_;
-    VkDescriptorSet bloomExtractSet_ = VK_NULL_HANDLE;
-    VkDescriptorSet bloomBlurSet_ = VK_NULL_HANDLE;
-    VkDescriptorSet tonemapSet_ = VK_NULL_HANDLE;
-    VkDescriptorSet fxaaSet_ = VK_NULL_HANDLE;
 };
 
 } // namespace bro::scene::vk

@@ -13,11 +13,6 @@ PassSSAO::~PassSSAO() = default;
 bool PassSSAO::init(SceneVkDevice& device, SceneVkAllocator& allocator, uint32_t width, uint32_t height) {
     generateKernel();
 
-    if (!allocator.createUniformBuffer(sizeof(SSAOUBOData), ssaoUbo_)) {
-        LOG_ERROR("PassSSAO: Failed creating SSAO uniform buffer");
-        return false;
-    }
-
     if (!createNoiseTexture(device, allocator)) {
         LOG_ERROR("PassSSAO: Failed creating noise texture");
         return false;
@@ -45,7 +40,6 @@ bool PassSSAO::init(SceneVkDevice& device, SceneVkAllocator& allocator, uint32_t
 void PassSSAO::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     destroyTargets(allocator);
 
-    allocator.destroyBuffer(ssaoUbo_);
     allocator.destroyImage(noiseTex_);
 
     VkDevice dev = device.device();
@@ -312,7 +306,6 @@ void PassSSAO::destroyTargets(SceneVkAllocator& allocator) {
 }
 
 void PassSSAO::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                      SceneVkDescriptorPool& descPool,
                       const SceneVkImage& depthImage,
                       const float* projMatrix,
                       const float* invProjMatrix,
@@ -327,7 +320,7 @@ void PassSSAO::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocat
     uboData.params[1] = bias;
     uboData.params[2] = static_cast<float>(aoWidth_) / 4.0f;
     uboData.params[3] = static_cast<float>(aoHeight_) / 4.0f;
-    allocator.updateUniformBuffer(ssaoUbo_, &uboData, sizeof(uboData));
+    const VkDescriptorBufferInfo ubo = device.frameUniform(&uboData, sizeof(uboData));
 
     VkViewport vp{0.0f, 0.0f, static_cast<float>(aoWidth_), static_cast<float>(aoHeight_), 0.0f, 1.0f};
     VkRect2D scissor{{0, 0}, {aoWidth_, aoHeight_}};
@@ -337,11 +330,11 @@ void PassSSAO::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocat
                                    ssaoTex_[0].currentLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     ssaoTex_[0].currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkDescriptorSet ssaoSet = descPool.allocate(ssaoDescLayout_);
+    VkDescriptorSet ssaoSet = device.frameSet(ssaoDescLayout_);
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, depthImage.view, pointClampSampler_);
     writer.writeImage(1, noiseTex_.view, linearRepeatSampler_);
-    writer.writeBuffer(2, ssaoUbo_.buffer, sizeof(SSAOUBOData));
+    writer.writeBuffer(2, ubo.buffer, ubo.range, ubo.offset);
     writer.updateSet(device.device(), ssaoSet);
 
     VkRenderingAttachmentInfo attInfo{};
@@ -375,7 +368,7 @@ void PassSSAO::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocat
                                    ssaoTex_[1].currentLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     ssaoTex_[1].currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkDescriptorSet blurSetH = descPool.allocate(blurDescLayout_);
+    VkDescriptorSet blurSetH = device.frameSet(blurDescLayout_);
     SceneVkDescriptorWriter writerH;
     writerH.writeImage(0, ssaoTex_[0].view, pointClampSampler_);
     writerH.updateSet(device.device(), blurSetH);
@@ -400,7 +393,7 @@ void PassSSAO::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocat
                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     ssaoTex_[0].currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkDescriptorSet blurSetV = descPool.allocate(blurDescLayout_);
+    VkDescriptorSet blurSetV = device.frameSet(blurDescLayout_);
     SceneVkDescriptorWriter writerV;
     writerV.writeImage(0, ssaoTex_[1].view, pointClampSampler_);
     writerV.updateSet(device.device(), blurSetV);
@@ -422,14 +415,13 @@ void PassSSAO::render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocat
 }
 
 void PassSSAO::applyAO(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                       SceneVkDescriptorPool& descPool,
                        VkImageView hdrTargetView,
                        uint32_t width, uint32_t height,
                        float intensity) {
     (void)allocator;
     if (applyAoPipeline_ == VK_NULL_HANDLE || !ssaoTex_[0].isValid() || intensity <= 0.0f) return;
 
-    VkDescriptorSet dSet = descPool.allocate(applyAoDescLayout_);
+    VkDescriptorSet dSet = device.frameSet(applyAoDescLayout_);
     if (dSet == VK_NULL_HANDLE) return;
 
     SceneVkDescriptorWriter writer;

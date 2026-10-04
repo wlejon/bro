@@ -147,6 +147,7 @@ add_library(bro_scene STATIC
     vulkan/pass_gaussian_splat.cpp
     vulkan/scene_vk_bridge.cpp
     vulkan/scene_vk_bridge_resources.cpp
+    vulkan/scene_vk_bridge_frame.cpp
     vulkan/scene_vk_bridge_passes.cpp
     ${VK_GENERATED_HEADERS}
 )

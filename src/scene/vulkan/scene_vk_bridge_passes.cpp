@@ -23,6 +23,12 @@
 namespace bro::scene::vk {
 
 void SceneVkBridge::prepareDynamicBuffers(SceneGraph& graph) {
+    // Per-render data never carries over from an earlier frame.
+    for (auto& [key, dyn] : dynamicBufferCache_) {
+        dyn.instances = {};
+        dyn.boneSet = VK_NULL_HANDLE;
+        dyn.boneSetShadow = VK_NULL_HANDLE;
+    }
     for (auto& [id, node] : graph.nodes_) {
         if (!node->renderVisible()) continue;
         if (node->type() == SceneNode::Type::Mesh) {
@@ -57,18 +63,6 @@ void SceneVkBridge::prepareDynamicBuffers(SceneGraph& graph) {
                         dynBuf.skinAttribCapacity = skinByteSize;
                     }
 
-                    if (!dynBuf.boneUbo.isValid()) {
-                        allocator_.createUniformBuffer(256 * 16 * sizeof(float), dynBuf.boneUbo);
-                        dynBuf.boneSet = dynamicDescPool_.allocate(passMesh_.bonePaletteLayout());
-                        SceneVkDescriptorWriter writer;
-                        writer.writeBuffer(0, dynBuf.boneUbo.buffer, 256 * 16 * sizeof(float));
-                        writer.updateSet(device_.device(), dynBuf.boneSet);
-
-                        dynBuf.boneSetShadow = dynamicDescPool_.allocate(passShadow_.bonePaletteLayout());
-                        SceneVkDescriptorWriter writerShadow;
-                        writerShadow.writeBuffer(0, dynBuf.boneUbo.buffer, 256 * 16 * sizeof(float));
-                        writerShadow.updateSet(device_.device(), dynBuf.boneSetShadow);
-                    }
                     std::vector<float> boneData(256 * 16, 0.0f);
                     for (int b = 0; b < 256; ++b) {
                         boneData[b * 16 + 0] = 1.0f;
@@ -81,7 +75,16 @@ void SceneVkBridge::prepareDynamicBuffers(SceneGraph& graph) {
                         size_t copyCount = std::min(pal.size(), boneData.size());
                         std::memcpy(boneData.data(), pal.data(), copyCount * sizeof(float));
                     }
-                    allocator_.updateUniformBuffer(dynBuf.boneUbo, boneData.data(), boneData.size() * sizeof(float));
+                    const VkDescriptorBufferInfo bones =
+                        device_.frameUniform(boneData.data(), boneData.size() * sizeof(float));
+                    dynBuf.boneSet = device_.frameSet(passMesh_.bonePaletteLayout());
+                    SceneVkDescriptorWriter writer;
+                    writer.writeBuffer(0, bones.buffer, bones.range, bones.offset);
+                    writer.updateSet(device_.device(), dynBuf.boneSet);
+                    dynBuf.boneSetShadow = device_.frameSet(passShadow_.bonePaletteLayout());
+                    SceneVkDescriptorWriter writerShadow;
+                    writerShadow.writeBuffer(0, bones.buffer, bones.range, bones.offset);
+                    writerShadow.updateSet(device_.device(), dynBuf.boneSetShadow);
                 }
             } else {
                 if (!mn->currentMesh().empty()) {
@@ -92,15 +95,11 @@ void SceneVkBridge::prepareDynamicBuffers(SceneGraph& graph) {
             auto* im = static_cast<InstancedMeshNode*>(node.get());
             if (!im->mesh().empty() && im->instanceCount() > 0) {
                 uploadMesh(im->mesh(), im);
+                // This render's instance matrices, read straight from upload memory.
                 auto& dynBuf = getDynamicBuffers(im);
-                size_t instByteSize = im->instanceCount() * 16 * sizeof(float);
-                if (dynBuf.instanceCapacity < instByteSize) {
-                    allocator_.destroyBuffer(dynBuf.instanceBuffer);
-                    allocator_.createVertexBuffer(instByteSize, im->instanceData().data(), dynBuf.instanceBuffer);
-                    dynBuf.instanceCapacity = instByteSize;
-                } else {
-                    allocator_.stageAndUploadBuffer(dynBuf.instanceBuffer.buffer, im->instanceData().data(), instByteSize);
-                }
+                const size_t instByteSize = im->instanceCount() * 16 * sizeof(float);
+                dynBuf.instances = device_.frameUpload(instByteSize);
+                if (dynBuf.instances) std::memcpy(dynBuf.instances.mapped, im->instanceData().data(), instByteSize);
             }
         }
     }
@@ -155,7 +154,9 @@ void SceneVkBridge::renderShadowPass(VkCommandBuffer cmd, SceneGraph& graph,
             caster.vertexBuffer = meshBuf.vertexBuffer.buffer;
             caster.indexBuffer = meshBuf.indexBuffer.buffer;
             caster.indexCount = meshBuf.indexCount;
-            caster.instanceBuffer = dynBuf.instanceBuffer.buffer;
+            if (!dynBuf.instances) continue;
+            caster.instanceBuffer = dynBuf.instances.buffer;
+            caster.instanceOffset = dynBuf.instances.offset;
             caster.instanceCount = static_cast<uint32_t>(im->instanceCount());
             std::memcpy(caster.modelMatrix, im->worldMatrix().data, sizeof(caster.modelMatrix));
             passShadow_.drawInstanced(cmd, caster);
@@ -235,8 +236,8 @@ void SceneVkBridge::renderDecalsPass(VkCommandBuffer cmd, SceneGraph& graph, Sce
         }
 
         VkDescriptorSet matSet = passDecal_.createMaterialSet(
-            depthCopyImage_.view, depthCopyImage_.sampler,
-            albView, albSampler, emView, emSampler, frameDescPool_);
+            device_, depthCopyImage_.view, depthCopyImage_.sampler,
+            albView, albSampler, emView, emSampler);
 
         passDecal_.draw(cmd, push, matSet);
         hasDrawnMeshes = true;
@@ -277,15 +278,10 @@ void SceneVkBridge::renderParticlesPass(VkCommandBuffer cmd, SceneGraph& graph, 
         uint32_t activeCount = static_cast<uint32_t>(p->activeParticleCount());
         if (activeCount == 0 || instData.empty()) continue;
 
-        auto& dynBuf = getDynamicBuffers(p);
-        size_t instByteSize = activeCount * 10 * sizeof(float);
-        if (dynBuf.instanceCapacity < instByteSize) {
-            allocator_.destroyBuffer(dynBuf.instanceBuffer);
-            allocator_.createVertexBuffer(instByteSize, instData.data(), dynBuf.instanceBuffer);
-            dynBuf.instanceCapacity = instByteSize;
-        } else {
-            allocator_.stageAndUploadBuffer(dynBuf.instanceBuffer.buffer, instData.data(), instByteSize);
-        }
+        const size_t instByteSize = activeCount * 10 * sizeof(float);
+        render::UploadSlice instances = device_.frameUpload(instByteSize);
+        if (!instances) continue;
+        std::memcpy(instances.mapped, instData.data(), instByteSize);
 
         ParticlePushConstants push{};
         const bromath::Mat4& model = (p->space() == Particles3DNode::SimSpace::Local)
@@ -311,13 +307,10 @@ void SceneVkBridge::renderParticlesPass(VkCommandBuffer cmd, SceneGraph& graph, 
         }
 
         VkDescriptorSet pMatSet = passParticles_.createParticleMaterialSet(
-            texView, texSampler,
-            depthCopyImage_.view, depthCopyImage_.sampler,
-            frameDescPool_);
+            device_, texView, texSampler, depthCopyImage_.view, depthCopyImage_.sampler);
 
         passParticles_.draw(cmd, p->blend() == Particles3DNode::Blend::Additive,
-                            dynBuf.instanceBuffer.buffer, activeCount,
-                            push, pMatSet);
+                            instances.buffer, instances.offset, activeCount, push, pMatSet);
         hasDrawnMeshes = true;
     }
 }
@@ -576,22 +569,6 @@ void SceneVkBridge::prepareCustomShaderForNode(const void* key, const CustomShad
     const auto& entry = it->second;
     outPipeline = entry.pipeline;
 
-    auto& nodeBuf = customNodeBufferCache_[key];
-    if (!nodeBuf.ubo.isValid() || nodeBuf.ubo.size < entry.uboSize) {
-        if (nodeBuf.ubo.isValid()) {
-            allocator_.destroyBuffer(nodeBuf.ubo);
-        }
-        if (!allocator_.createUniformBuffer(entry.uboSize, nodeBuf.ubo)) {
-            LOG_ERROR("SceneVkBridge: Failed to allocate uniform buffer for custom shader (%u bytes)", entry.uboSize);
-            return;
-        }
-        nodeBuf.descSet = dynamicDescPool_.allocate(passMesh_.customLayout());
-        if (!nodeBuf.descSet) {
-            LOG_ERROR("SceneVkBridge: Failed to allocate descriptor set for custom shader");
-            return;
-        }
-    }
-
     std::vector<uint8_t> uboData(entry.uboSize, 0);
     for (const auto& [name, offset] : entry.uniformOffsets) {
         for (const auto& u : cs->uniforms) {
@@ -604,7 +581,7 @@ void SceneVkBridge::prepareCustomShaderForNode(const void* key, const CustomShad
             }
         }
     }
-    allocator_.updateUniformBuffer(nodeBuf.ubo, uboData.data(), entry.uboSize);
+    const VkDescriptorBufferInfo ubo = device_.frameUniform(uboData.data(), entry.uboSize);
 
     for (auto& ut : userTextures) {
         if (ut.w <= 0 || ut.h <= 0) continue;
@@ -655,54 +632,28 @@ void SceneVkBridge::prepareCustomShaderForNode(const void* key, const CustomShad
         }
 
         if (!ut.subUpdates.empty() && cachedTex.image.isValid()) {
-            uint32_t bpp = (fmt == VK_FORMAT_R32_SFLOAT) ? 4 : ((fmt == VK_FORMAT_R32G32_SFLOAT) ? 8 : 16);
+            const uint32_t bpp = (fmt == VK_FORMAT_R32_SFLOAT) ? 4 : ((fmt == VK_FORMAT_R32G32_SFLOAT) ? 8 : 16);
             for (const auto& sub : ut.subUpdates) {
                 if (sub.w <= 0 || sub.h <= 0 || sub.data.empty()) continue;
-                VkDeviceSize subSize = static_cast<VkDeviceSize>(sub.w) * sub.h * bpp;
-                SceneVkBuffer staging;
-                if (allocator_.createBuffer(subSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging)) {
-                    if (staging.mappedData) {
-                        std::memcpy(staging.mappedData, sub.data.data(), subSize);
-                    } else {
-                        void* m = nullptr;
-                        vkMapMemory(device_.device(), staging.memory, staging.offset, subSize, 0, &m);
-                        std::memcpy(m, sub.data.data(), subSize);
-                        vkUnmapMemory(device_.device(), staging.memory);
-                    }
-                    device_.executeImmediate([&](VkCommandBuffer copyCmd) {
-                        allocator_.transitionImageLayout(copyCmd, cachedTex.image.image, fmt,
-                                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                                         cachedTex.image.mipLevels, 0);
-                        VkBufferImageCopy region{};
-                        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                        region.imageSubresource.mipLevel = 0;
-                        region.imageSubresource.baseArrayLayer = 0;
-                        region.imageSubresource.layerCount = 1;
-                        region.imageOffset = {sub.x, sub.y, 0};
-                        region.imageExtent = {static_cast<uint32_t>(sub.w), static_cast<uint32_t>(sub.h), 1};
-                        vkCmdCopyBufferToImage(copyCmd, staging.buffer, cachedTex.image.image,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-                        if (ut.mipmap && cachedTex.image.mipLevels > 1) {
-                            allocator_.generateMipmaps(copyCmd, cachedTex.image.image, fmt,
-                                                       cachedTex.image.width, cachedTex.image.height, cachedTex.image.mipLevels);
-                        } else {
-                            allocator_.transitionImageLayout(copyCmd, cachedTex.image.image, fmt,
-                                                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                             cachedTex.image.mipLevels, 0);
-                        }
-                    });
-                    allocator_.destroyBuffer(staging);
-                }
+                ImageRegion region;
+                region.x = sub.x;
+                region.y = sub.y;
+                region.width = static_cast<uint32_t>(sub.w);
+                region.height = static_cast<uint32_t>(sub.h);
+                allocator_.uploadImage(cachedTex.image, sub.data.data(),
+                                       static_cast<VkDeviceSize>(sub.w) * sub.h * bpp, region, ut.mipmap);
             }
             ut.subUpdates.clear();
         }
     }
 
+    VkDescriptorSet set = device_.frameSet(passMesh_.customLayout());
+    if (set == VK_NULL_HANDLE) {
+        LOG_ERROR("SceneVkBridge: Failed to allocate descriptor set for custom shader");
+        return;
+    }
     SceneVkDescriptorWriter writer;
-    writer.writeBuffer(0, nodeBuf.ubo.buffer, entry.uboSize);
+    writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
 
     for (uint32_t i = 1; i <= 8; ++i) {
         VkImageView v = passMesh_.dummyWhiteView();
@@ -718,8 +669,8 @@ void SceneVkBridge::prepareCustomShaderForNode(const void* key, const CustomShad
         }
         writer.writeImage(i, v, s);
     }
-    writer.updateSet(device_.device(), nodeBuf.descSet);
-    outSet = nodeBuf.descSet;
+    writer.updateSet(device_.device(), set);
+    outSet = set;
 }
 
 void SceneVkBridge::prepareCustomShadowShaderForNode(const void* key, const CustomShaderState* cs, bool isSkinned,
@@ -761,8 +712,7 @@ void SceneVkBridge::renderGaussianSplatPass(VkCommandBuffer cmd, SceneGraph& gra
         stats.splatDrawn++;
         auto* gsn = static_cast<GaussianSplatNode*>(node.get());
         if (gsn->splatCount() > 0) {
-            passGaussianSplat_.renderNode(cmd, device_, allocator_, frameDescPool_,
-                                         gsn, view, proj, eye, width, height);
+            passGaussianSplat_.renderNode(cmd, device_, allocator_, gsn, view, proj, eye, width, height);
             hasMeshContent_ = true;
         }
     }
@@ -786,7 +736,7 @@ void SceneVkBridge::renderPostProcessing(VkCommandBuffer cmd, SceneGraph& graph,
         dofParams.farPlane = graph.cameraFarZ_;
         dofParams.isPerspective = graph.cameraIsPerspective_;
 
-        passDoF_.render(cmd, device_, allocator_, frameDescPool_,
+        passDoF_.render(cmd, device_, allocator_,
                         *hdrInput, depthCopyImage_, dofHdrImage_.view,
                         width, height, dofParams);
 
@@ -829,7 +779,7 @@ void SceneVkBridge::renderPostProcessing(VkCommandBuffer cmd, SceneGraph& graph,
                                          ldrPresentationImage_.currentLayout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         ldrPresentationImage_.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-        passColorLut_.render(cmd, device_, allocator_, frameDescPool_,
+        passColorLut_.render(cmd, device_, allocator_,
                              postLdrImage_, ldrPresentationImage_.view,
                              VK_FORMAT_R8G8B8A8_UNORM, width, height, renderer.colorLUTAmount());
     } else {

@@ -5,88 +5,74 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <functional>
-#include <vector>
 
 namespace bro::scene::vk {
 
-/// Per-frame resources for CPU-GPU synchronization and command submission.
-struct SceneVkFrameData {
-    VkCommandPool commandPool = VK_NULL_HANDLE;
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    uint64_t ticket = 0;  // the VulkanQueue ticket of this slot's last submission
-};
-
-/// Manages graphics command buffers, frame pacing, and Vulkan 1.3 dynamic
-/// rendering function dispatch for 3D scene rendering. Every submission goes
-/// through the context's VulkanQueue; a frame slot is reused once its last
-/// submission's ticket has completed.
+/// The 3D scene's view of the shared GPU frame core (VulkanFrames): frame
+/// command buffers, per-frame upload memory and descriptor sets, deferred
+/// destruction, and an upload stream.
+///
+/// Uploads (staging copies, mip generation, first layout transitions of new
+/// images) are recorded into one upload command buffer per frame. It is
+/// submitted ahead of the scene's frame command buffer, and at frame end if
+/// nothing rendered, so every upload completes before any command that reads
+/// it; the barriers that open and close it order it against GPU work on
+/// either side. Nothing here waits, except waitIdle() at teardown.
 class SceneVkDevice {
 public:
-    static constexpr uint32_t kMaxFramesInFlight = 2;
-
     explicit SceneVkDevice(render::VulkanContext& context);
     ~SceneVkDevice();
 
     SceneVkDevice(const SceneVkDevice&) = delete;
     SceneVkDevice& operator=(const SceneVkDevice&) = delete;
 
-    /// Initialize frame command pools, command buffers, fences, and load dynamic rendering functions.
     bool init();
-
-    /// Tear down per-frame resources and wait for GPU idle.
     void shutdown();
 
-    /// Wait for everything submitted through the queue owner so far.
+    /// Wait for everything submitted through the queue owner so far
+    /// (teardown and rebuilds of the whole renderer only).
     void waitIdle() const;
 
-    /// Wait for previous frame fence, reset command pool, and begin a new frame command buffer.
+    /// A begun command buffer from the current frame for the scene's passes.
     VkCommandBuffer beginFrame();
+    /// Submit the pending uploads, then `cmd`. Returns false on failure.
+    bool submitFrame(VkCommandBuffer cmd);
+    /// The ticket of the last frame submission (0 before the first).
+    uint64_t lastFrameTicket() const { return lastFrameTicket_; }
 
-    /// End the current frame command buffer.
-    void endFrame();
+    /// This frame's upload command buffer, begun on first use.
+    VkCommandBuffer uploadCommands();
+    /// Submit the upload command buffer if anything was recorded.
+    void flushUploads();
 
-    /// Submit current frame command buffer through the queue owner with optional wait/signal semaphores.
-    bool submitFrame(VkSemaphore waitSemaphore = VK_NULL_HANDLE,
-                     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                     VkSemaphore signalSemaphore = VK_NULL_HANDLE);
+    /// `size` bytes of this frame's mapped upload memory (uniforms, staging,
+    /// per-frame vertex data), valid until the frame slot is reused.
+    render::UploadSlice frameUpload(VkDeviceSize size, VkDeviceSize alignment = 16);
+    /// A copy of `data` in this frame's upload memory, aligned for use as a
+    /// uniform buffer.
+    VkDescriptorBufferInfo frameUniform(const void* data, VkDeviceSize size);
+    /// A descriptor set of `layout` valid for this frame only.
+    VkDescriptorSet frameSet(VkDescriptorSetLayout layout);
+    /// Run `destroy` once the GPU is done with everything submitted so far.
+    void defer(std::function<void()> destroy);
 
-    /// Synchronously execute a one-shot command buffer, waiting for its own ticket.
-    void executeImmediate(const std::function<void(VkCommandBuffer)>& func);
-
-    /// Dynamic rendering dispatchers (Vulkan 1.3 / VK_KHR_dynamic_rendering).
-    void cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfoKHR* renderingInfo) const;
+    /// Dynamic rendering (Vulkan 1.3 core).
+    void cmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* renderingInfo) const;
     void cmdEndRendering(VkCommandBuffer cmd) const;
 
-    // Accessors
     render::VulkanContext& context() { return context_; }
     const render::VulkanContext& context() const { return context_; }
+    render::VulkanFrames& frames() { return context_.frames(); }
     VkDevice device() const { return context_.device(); }
     VkPhysicalDevice physicalDevice() const { return context_.physicalDevice(); }
-    VkQueue graphicsQueue() const { return context_.graphicsQueue(); }
-    uint32_t currentFrameIndex() const { return frameIndex_; }
-    uint64_t currentFrameNumber() const { return frameNumber_; }
-    VkCommandBuffer currentCommandBuffer() const { return frames_[frameIndex_].commandBuffer; }
-    const SceneVkFrameData& currentFrameData() const { return frames_[frameIndex_]; }
     bool isInitialized() const { return initialized_; }
 
 private:
-    bool initFrameData();
-    void loadDynamicRenderingProcs();
-
     render::VulkanContext& context_;
     bool initialized_ = false;
-    uint32_t frameIndex_ = 0;
-    uint64_t frameNumber_ = 0;
-    bool frameActive_ = false;
-
-    SceneVkFrameData frames_[kMaxFramesInFlight];
-
-    // Immediate submission resources
-    VkCommandPool immediateCommandPool_ = VK_NULL_HANDLE;
-
-    // Dynamic rendering entry points
-    PFN_vkCmdBeginRenderingKHR pfnCmdBeginRendering_ = nullptr;
-    PFN_vkCmdEndRenderingKHR pfnCmdEndRendering_ = nullptr;
+    VkCommandBuffer uploadCmd_ = VK_NULL_HANDLE;
+    uint64_t lastFrameTicket_ = 0;
+    render::VulkanFrames::HookId frameEndHook_ = 0;
 };
 
 } // namespace bro::scene::vk

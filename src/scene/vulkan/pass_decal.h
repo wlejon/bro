@@ -30,22 +30,26 @@ public:
     bool init(SceneVkDevice& device, SceneVkAllocator& allocator,
               VkDescriptorSetLayout cameraLayout, VkDescriptorSetLayout lightingLayout);
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
+    /// Rebuild the pipeline for the HDR target's sample count.
+    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
 
     void begin(VkCommandBuffer cmd, VkDescriptorSet cameraSet, VkDescriptorSet lightingSet);
 
     void draw(VkCommandBuffer cmd, const DecalPushConstants& push, VkDescriptorSet materialSet);
 
     VkDescriptorSetLayout materialLayout() const { return materialLayout_; }
-    VkDescriptorSet createMaterialSet(VkImageView depthView, VkSampler depthSampler,
+    VkDescriptorSet createMaterialSet(SceneVkDevice& device, VkImageView depthView, VkSampler depthSampler,
                                       VkImageView albedoView, VkSampler albedoSampler,
-                                      VkImageView emissionView, VkSampler emissionSampler,
-                                      SceneVkDescriptorPool& pool);
+                                      VkImageView emissionView, VkSampler emissionSampler);
 
     VkImageView dummyWhiteView() const { return dummyWhiteImage_.view; }
     VkImageView dummyBlackView() const { return dummyBlackImage_.view; }
     VkSampler defaultSampler() const { return defaultSampler_; }
 
 private:
+    bool createPipeline(VkDevice dev);
+
+    VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
     VkDescriptorSetLayout cameraLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout_ = VK_NULL_HANDLE;

@@ -123,4 +123,28 @@ void cmdTransitionImage(VkCommandBuffer cmd, VkImage image,
     cmdImageBarrier(cmd, b);
 }
 
+void cmdMemoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags srcStages, VkAccessFlags srcAccess,
+                      VkPipelineStageFlags dstStages, VkAccessFlags dstAccess) {
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+    vkCmdPipelineBarrier(cmd, srcStages, dstStages, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+}
+
+void cmdBufferBarrier(VkCommandBuffer cmd, VkBuffer buffer, VkDeviceSize offset, VkDeviceSize size,
+                      VkPipelineStageFlags srcStages, VkAccessFlags srcAccess,
+                      VkPipelineStageFlags dstStages, VkAccessFlags dstAccess) {
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = srcAccess;
+    barrier.dstAccessMask = dstAccess;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = buffer;
+    barrier.offset = offset;
+    barrier.size = size;
+    vkCmdPipelineBarrier(cmd, srcStages, dstStages, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+}
+
 } // namespace bro::render

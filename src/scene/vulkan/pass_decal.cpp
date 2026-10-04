@@ -89,6 +89,18 @@ bool PassDecal::init(SceneVkDevice& device, SceneVkAllocator& allocator,
         return false;
     }
 
+    return createPipeline(dev);
+}
+
+bool PassDecal::setSampleCount(VkDevice dev, VkSampleCountFlagBits samples) {
+    if (samples_ == samples) return true;
+    if (pipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(dev, pipeline_, nullptr);
+    pipeline_ = VK_NULL_HANDLE;
+    samples_ = samples;
+    return createPipeline(dev);
+}
+
+bool PassDecal::createPipeline(VkDevice dev) {
     // Vertex input for cube pos
     VkVertexInputBindingDescription bindingDesc{};
     bindingDesc.binding = 0;
@@ -115,7 +127,7 @@ bool PassDecal::init(SceneVkDevice& device, SceneVkAllocator& allocator,
      .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
      .setCullMode(VK_CULL_MODE_FRONT_BIT) // Cull front faces so camera inside still renders
-     .setMultisamplingNone();
+     .setMultisampling(samples_);
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -171,14 +183,13 @@ void PassDecal::begin(VkCommandBuffer cmd, VkDescriptorSet cameraSet, VkDescript
                             0, 2, sets, 0, nullptr);
 }
 
-VkDescriptorSet PassDecal::createMaterialSet(VkImageView depthView, VkSampler depthSampler,
+VkDescriptorSet PassDecal::createMaterialSet(SceneVkDevice& device, VkImageView depthView, VkSampler depthSampler,
                                              VkImageView albedoView, VkSampler albedoSampler,
-                                             VkImageView emissionView, VkSampler emissionSampler,
-                                             SceneVkDescriptorPool& pool) {
-    VkDescriptorSet set = pool.allocate(materialLayout_);
+                                             VkImageView emissionView, VkSampler emissionSampler) {
+    VkDescriptorSet set = device.frameSet(materialLayout_);
     if (!set) return VK_NULL_HANDLE;
 
-    VkDevice dev = pool.device();
+    VkDevice dev = device.device();
     SceneVkDescriptorWriter writer;
     writer.writeImage(0, depthView ? depthView : dummyWhiteImage_.view,
                          depthSampler ? depthSampler : defaultSampler_);

@@ -110,6 +110,19 @@ void WebGLVkPipelineCache::clear() {
     pipelines_.clear();
 }
 
+void WebGLVkPipelineCache::evictShaders(VkShaderModule vert, VkShaderModule frag) {
+    VkDevice dev = context_.device();
+    for (auto it = pipelines_.begin(); it != pipelines_.end();) {
+        if (it->first.vertShader == vert || it->first.fragShader == frag) {
+            VkPipeline pipeline = it->second;
+            context_.frames().defer([dev, pipeline] { vkDestroyPipeline(dev, pipeline, nullptr); });
+            it = pipelines_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 VkPipeline WebGLVkPipelineCache::getOrCreatePipeline(const PipelineKey& key, VkPipelineLayout layout) {
     auto it = pipelines_.find(key);
     if (it != pipelines_.end()) {

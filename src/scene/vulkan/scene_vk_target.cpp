@@ -1,4 +1,5 @@
 #include "scene/vulkan/scene_vk_target.h"
+#include "render/vulkan_util.h"
 #include "util/log.h"
 
 #include <cassert>
@@ -386,24 +387,22 @@ bool SceneVkShadowCascadeTarget::init(SceneVkAllocator& allocator, uint32_t reso
     shadowImage_.format = format_;
     shadowImage_.width = resolution_;
     shadowImage_.height = resolution_;
-    currentLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    currentLayout_ = shadowImage_.currentLayout;
 
     return true;
 }
 
 void SceneVkShadowCascadeTarget::cleanup(SceneVkAllocator& allocator) {
     VkDevice dev = allocator.device().device();
-
-    if (shadowSampler_ != VK_NULL_HANDLE) {
-        vkDestroySampler(dev, shadowSampler_, nullptr);
-        shadowSampler_ = VK_NULL_HANDLE;
+    if (shadowSampler_ != VK_NULL_HANDLE || !cascadeViews_.empty()) {
+        allocator.device().defer([dev, sampler = shadowSampler_, views = cascadeViews_] {
+            if (sampler != VK_NULL_HANDLE) vkDestroySampler(dev, sampler, nullptr);
+            for (VkImageView view : views) {
+                if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
+            }
+        });
     }
-
-    for (VkImageView view : cascadeViews_) {
-        if (view != VK_NULL_HANDLE) {
-            vkDestroyImageView(dev, view, nullptr);
-        }
-    }
+    shadowSampler_ = VK_NULL_HANDLE;
     cascadeViews_.clear();
 
     if (shadowImage_.isValid()) {
@@ -420,25 +419,8 @@ void SceneVkShadowCascadeTarget::beginCascadeRendering(VkCommandBuffer cmd, Scen
     assert(cascadeIndex < cascadeViews_.size());
 
     if (currentLayout_ != VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL) {
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = currentLayout_;
-        barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = shadowImage_.image;
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = cascadeCount_;
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-        vkCmdPipelineBarrier(cmd,
-                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+        render::cmdTransitionImage(cmd, shadowImage_.image, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, cascadeCount_},
+                                   currentLayout_, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
         currentLayout_ = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     }
 
@@ -484,25 +466,8 @@ void SceneVkShadowCascadeTarget::endCascadeRendering(VkCommandBuffer cmd, SceneV
 void SceneVkShadowCascadeTarget::transitionToShaderRead(VkCommandBuffer cmd, SceneVkAllocator& allocator) {
     (void)allocator;
     if (currentLayout_ != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.oldLayout = currentLayout_;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = shadowImage_.image;
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = cascadeCount_;
-        barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd,
-                             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+        render::cmdTransitionImage(cmd, shadowImage_.image, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, cascadeCount_},
+                                   currentLayout_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         currentLayout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 }

@@ -41,6 +41,7 @@ public:
         VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
         bool depthTest = true;
         VkCompareOp depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // Reversed-Z
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     };
 
     PassEnvironment() = default;
@@ -56,6 +57,9 @@ public:
     /// Clean up environment pipeline and resources.
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
 
+    /// Rebuild the pipeline for the HDR target's sample count.
+    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
+
     /// Record environment pass draw into active dynamic rendering pass.
     void render(VkCommandBuffer cmd, uint32_t width, uint32_t height,
                 const EnvironmentParams& params,
@@ -69,6 +73,7 @@ private:
     bool createDefaultCubemap(SceneVkDevice& device, SceneVkAllocator& allocator);
     bool createPipeline(VkDevice device, const Config& config);
 
+    Config config_{};
     VkDescriptorSetLayout cubemapLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;

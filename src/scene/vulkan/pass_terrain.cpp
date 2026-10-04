@@ -199,12 +199,6 @@ bool PassTerrain::init(SceneVkDevice& device, SceneVkAllocator& allocator,
 
     if (vkCreatePipelineLayout(dev, &plInfo, nullptr, &pipelineLayout_) != VK_SUCCESS) return false;
 
-    // 4. Descriptor pool for per-node terrain descriptors
-    terrainDescPool_.init(dev, 64, {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 128},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 64}
-    });
-
     return true;
 }
 
@@ -237,10 +231,8 @@ void PassTerrain::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     for (auto& [k, res] : nodeResources_) {
         allocator.destroyImage(res.heightsImage);
         allocator.destroyImage(res.surfacesImage);
-        allocator.destroyBuffer(res.terrainUbo);
     }
     nodeResources_.clear();
-    terrainDescPool_.destroy();
 }
 
 VkPipeline PassTerrain::getOrCreatePipeline(bool cubicHeight, bool cubicSurface) {
@@ -456,33 +448,24 @@ void main() {
 
 PassTerrain::NodeTerrainResources& PassTerrain::getOrCreateNodeResources(MeshNode* node) {
     auto& res = nodeResources_[node];
-    if (!res.terrainUbo.isValid()) {
-        allocator_->createUniformBuffer(sizeof(TerrainUniforms), res.terrainUbo);
-        res.terrainDescSet = terrainDescPool_.allocate(terrainLayout_);
-
+    if (!res.heightsImage.isValid()) {
         allocator_->createImage(1, 1, VK_FORMAT_R32_SFLOAT,
                                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                 res.heightsImage, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
                                 1, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
-
+    }
+    if (!res.surfacesImage.isValid()) {
         allocator_->createImage(1, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
                                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                 res.surfacesImage, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
                                 1, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
-
-        SceneVkDescriptorWriter writer;
-        writer.writeImage(0, res.heightsImage.view, heightsSampler_);
-        writer.writeImage(1, res.surfacesImage.view, surfacesSampler_);
-        writer.writeBuffer(2, res.terrainUbo.buffer, sizeof(TerrainUniforms));
-        writer.updateSet(device_->device(), res.terrainDescSet);
     }
     return res;
 }
 
-bool PassTerrain::syncTextures(MeshNode* node, NodeTerrainResources& res) {
-    bool updated = false;
+void PassTerrain::syncTextures(MeshNode* node, NodeTerrainResources& res) {
     for (auto& t : node->customShaderTextures()) {
         if (t.name == "u_heights") {
             int w = t.w, h = t.h, layers = t.layers;
@@ -501,24 +484,17 @@ bool PassTerrain::syncTextures(MeshNode* node, NodeTerrainResources& res) {
                 res.currentHeightsW = w;
                 res.currentHeightsH = h;
                 res.currentHeightsLayers = layers;
-                updated = true;
             }
 
             if (!t.sliceUpdates.empty()) {
                 for (const auto& u : t.sliceUpdates) {
                     if (u.layer >= layers || u.data.empty()) continue;
-                    allocator_->stageAndUploadImageLayer(res.heightsImage.image, VK_FORMAT_R32_SFLOAT,
-                                                         w, h, u.layer, 0,
-                                                         u.data.data(), u.data.size() * sizeof(float));
-                    if (mips > 1) {
-                        allocator_->device().executeImmediate([&](VkCommandBuffer cmd) {
-                            allocator_->generateMipmaps(cmd, res.heightsImage.image, VK_FORMAT_R32_SFLOAT,
-                                                        w, h, mips, u.layer, 1);
-                        });
-                    }
+                    ImageRegion region;
+                    region.layer = static_cast<uint32_t>(u.layer);
+                    allocator_->uploadImage(res.heightsImage, u.data.data(), u.data.size() * sizeof(float),
+                                            region, mips > 1);
                 }
                 t.sliceUpdates.clear();
-                updated = true;
             }
         } else if (t.name == "u_surfaces") {
             int w = t.w, h = t.h, layers = t.layers;
@@ -536,36 +512,25 @@ bool PassTerrain::syncTextures(MeshNode* node, NodeTerrainResources& res) {
                 res.currentSurfsW = w;
                 res.currentSurfsH = h;
                 res.currentSurfsLayers = layers;
-                updated = true;
             }
 
             if (!t.sliceUpdates.empty()) {
                 for (const auto& u : t.sliceUpdates) {
                     if (u.layer >= layers || u.data.empty()) continue;
-                    allocator_->stageAndUploadImageLayer(res.surfacesImage.image, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                                         w, h, u.layer, 0,
-                                                         u.data.data(), u.data.size() * sizeof(float));
+                    ImageRegion region;
+                    region.layer = static_cast<uint32_t>(u.layer);
+                    allocator_->uploadImage(res.surfacesImage, u.data.data(), u.data.size() * sizeof(float), region);
                 }
                 t.sliceUpdates.clear();
-                updated = true;
             }
         }
     }
-
-    if (updated) {
-        SceneVkDescriptorWriter writer;
-        writer.writeImage(0, res.heightsImage.view, heightsSampler_);
-        writer.writeImage(1, res.surfacesImage.view, surfacesSampler_);
-        writer.writeBuffer(2, res.terrainUbo.buffer, sizeof(TerrainUniforms));
-        writer.updateSet(device_->device(), res.terrainDescSet);
-    }
-    return true;
 }
 
-void PassTerrain::syncUniforms(MeshNode* node, NodeTerrainResources& res) {
+VkDescriptorBufferInfo PassTerrain::syncUniforms(MeshNode* node) {
     TerrainUniforms u{};
     std::memset(&u, 0, sizeof(u));
-    if (!node || !node->customShader()) return;
+    if (!node || !node->customShader()) return device_->frameUniform(&u, sizeof(u));
 
     const auto& uniforms = node->customShader()->uniforms;
     auto getU = [&](const std::string& name, int count, float* dst) {
@@ -635,7 +600,7 @@ void PassTerrain::syncUniforms(MeshNode* node, NodeTerrainResources& res) {
     getU("u_forestTint", 1, &u._u_miscParams5[1]);
     getU("u_camY", 1, &u._u_miscParams5[2]);
 
-    allocator_->updateUniformBuffer(res.terrainUbo, &u, sizeof(u));
+    return device_->frameUniform(&u, sizeof(u));
 }
 
 void PassTerrain::render(VkCommandBuffer cmd, MeshNode* terrainNode,
@@ -662,7 +627,13 @@ void PassTerrain::render(VkCommandBuffer cmd, MeshNode* terrainNode,
 
     NodeTerrainResources& res = getOrCreateNodeResources(terrainNode);
     syncTextures(terrainNode, res);
-    syncUniforms(terrainNode, res);
+    const VkDescriptorBufferInfo uniforms = syncUniforms(terrainNode);
+    VkDescriptorSet terrainSet = device_->frameSet(terrainLayout_);
+    SceneVkDescriptorWriter writer;
+    writer.writeImage(0, res.heightsImage.view, heightsSampler_);
+    writer.writeImage(1, res.surfacesImage.view, surfacesSampler_);
+    writer.writeBuffer(2, uniforms.buffer, uniforms.range, uniforms.offset);
+    writer.updateSet(device_->device(), terrainSet);
 
     VkViewport vp{};
     vp.x = 0.0f; vp.y = 0.0f;
@@ -679,7 +650,7 @@ void PassTerrain::render(VkCommandBuffer cmd, MeshNode* terrainNode,
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     std::array<VkDescriptorSet, 3> descSets = {
-        cameraSet, lightingSet, res.terrainDescSet
+        cameraSet, lightingSet, terrainSet
     };
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
                             0, static_cast<uint32_t>(descSets.size()), descSets.data(),

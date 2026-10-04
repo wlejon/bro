@@ -147,22 +147,20 @@ int main() {
     assert(device.isInitialized());
     assert(device.device() == context.device());
 
-    // Test immediate submission
-    bool immRan = false;
-    device.executeImmediate([&](VkCommandBuffer cmd) {
-        assert(cmd != VK_NULL_HANDLE);
-        immRan = true;
-    });
-    assert(immRan);
+    // Upload stream: a command buffer from the frame, submitted on flush.
+    VkCommandBuffer uploadCmd = device.uploadCommands();
+    assert(uploadCmd != VK_NULL_HANDLE);
+    assert(uploadCmd == device.uploadCommands());
+    device.flushUploads();
 
-    // Test frame coordination
+    // Frame submission returns through the queue's tickets.
     VkCommandBuffer cmd1 = device.beginFrame();
     assert(cmd1 != VK_NULL_HANDLE);
-    assert(cmd1 == device.currentCommandBuffer());
-    device.endFrame();
-    bool subOk = device.submitFrame();
+    bool subOk = device.submitFrame(cmd1);
     assert(subOk);
-    assert(device.currentFrameNumber() == 1);
+    assert(device.lastFrameTicket() != 0);
+    context.queue().wait(device.lastFrameTicket());
+    assert(context.queue().isComplete(device.lastFrameTicket()));
     std::cout << "PASSED" << std::endl;
 
     // 2. Test SceneVkAllocator (Buffers, Uniforms, Images, Mipmaps)
@@ -187,19 +185,13 @@ int main() {
     assert(ibOk);
     assert(indexBuffer.isValid());
 
-    // Uniform Buffer
-    SceneVkBuffer cameraUbo;
-    bool uboOk = allocator.createUniformBuffer(sizeof(SceneCameraUniforms), cameraUbo);
-    assert(uboOk);
-    assert(cameraUbo.isValid());
-    assert(cameraUbo.mappedData != nullptr);
-
+    // Per-frame uniforms live in the frame's upload memory.
     SceneCameraUniforms camData{};
     camData.viewport[0] = 1280.0f;
     camData.viewport[1] = 720.0f;
-    bool updOk = allocator.updateUniformBuffer(cameraUbo, &camData, sizeof(SceneCameraUniforms));
-    assert(updOk);
-    assert(static_cast<SceneCameraUniforms*>(cameraUbo.mappedData)->viewport[0] == 1280.0f);
+    VkDescriptorBufferInfo cameraUbo = device.frameUniform(&camData, sizeof(SceneCameraUniforms));
+    assert(cameraUbo.buffer != VK_NULL_HANDLE);
+    assert(cameraUbo.range == sizeof(SceneCameraUniforms));
 
     // Mipmapped Texture (32x32 RGBA)
     const uint32_t texW = 32, texH = 32;
@@ -240,7 +232,7 @@ int main() {
               << statsAfter100.activeBlockCount << " chunk(s))" << std::endl;
 
     // 3. Test Descriptors
-    std::cout << "[Test 3] SceneVkDescriptors (Layouts, Pools, Cache & Updates)... " << std::flush;
+    std::cout << "[Test 3] SceneVkDescriptors (Layouts, Pools, Frame Sets & Updates)... " << std::flush;
     VkDescriptorSetLayout camLayout = SceneVkDescriptorLayoutBuilder::createCameraLayout(device.device());
     assert(camLayout != VK_NULL_HANDLE);
 
@@ -255,7 +247,7 @@ int main() {
     assert(camSet != VK_NULL_HANDLE);
 
     SceneVkDescriptorWriter writer;
-    writer.writeBuffer(0, cameraUbo.buffer, sizeof(SceneCameraUniforms));
+    writer.writeBuffer(0, cameraUbo.buffer, cameraUbo.range, cameraUbo.offset);
     writer.updateSet(device.device(), camSet);
 
     VkDescriptorSet matSet = descPool.allocate(matLayout);
@@ -265,12 +257,9 @@ int main() {
     writer.writeImage(0, texture.view, texture.sampler);
     writer.updateSet(device.device(), matSet);
 
-    // Test Descriptor Cache
-    SceneVkDescriptorCache descCache(device.device());
-    assert(descCache.init(64));
-    VkDescriptorSet cachedSet = descCache.allocate(camLayout);
-    assert(cachedSet != VK_NULL_HANDLE);
-    descCache.reset();
+    // Per-frame sets from the frame's descriptor arena
+    VkDescriptorSet frameSet = device.frameSet(camLayout);
+    assert(frameSet != VK_NULL_HANDLE);
 
     std::cout << "PASSED" << std::endl;
 
@@ -383,8 +372,7 @@ int main() {
                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            readbackBuffer.buffer, 1, &copyRegion);
 
-    device.endFrame();
-    assert(device.submitFrame());
+    assert(device.submitFrame(cmd));
     device.waitIdle();
 
     // Verify readback pixels
@@ -443,8 +431,7 @@ int main() {
         shadowTarget.endCascadeRendering(shadowCmd, device);
     }
     shadowTarget.transitionToShaderRead(shadowCmd, allocator);
-    device.endFrame();
-    assert(device.submitFrame());
+    assert(device.submitFrame(shadowCmd));
     device.waitIdle();
 
     shadowTarget.cleanup(allocator);
@@ -462,7 +449,6 @@ int main() {
     allocator.destroyImage(texture);
     allocator.destroyBuffer(vertexBuffer);
     allocator.destroyBuffer(indexBuffer);
-    allocator.destroyBuffer(cameraUbo);
     device.shutdown();
 
     std::cout << "=== All Vulkan Chunk 2 Scene Core Tests Passed Successfully! ===" << std::endl;

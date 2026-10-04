@@ -54,16 +54,15 @@ private:
     struct NodeTerrainResources {
         SceneVkImage heightsImage;
         SceneVkImage surfacesImage;
-        SceneVkBuffer terrainUbo;
-        VkDescriptorSet terrainDescSet = VK_NULL_HANDLE;
         int currentHeightsW = 0, currentHeightsH = 0, currentHeightsLayers = 0;
         int currentSurfsW = 0, currentSurfsH = 0, currentSurfsLayers = 0;
     };
 
     VkPipeline getOrCreatePipeline(bool cubicHeight, bool cubicSurface);
     NodeTerrainResources& getOrCreateNodeResources(MeshNode* node);
-    bool syncTextures(MeshNode* node, NodeTerrainResources& res);
-    void syncUniforms(MeshNode* node, NodeTerrainResources& res);
+    void syncTextures(MeshNode* node, NodeTerrainResources& res);
+    /// This frame's copy of the node's terrain uniforms.
+    VkDescriptorBufferInfo syncUniforms(MeshNode* node);
 
     SceneVkDevice* device_ = nullptr;
     SceneVkAllocator* allocator_ = nullptr;
@@ -79,7 +78,6 @@ private:
     VkSampler heightsSampler_ = VK_NULL_HANDLE;
     VkSampler surfacesSampler_ = VK_NULL_HANDLE;
 
-    SceneVkDescriptorPool terrainDescPool_;
     std::unordered_map<const void*, NodeTerrainResources> nodeResources_;
 };
 
