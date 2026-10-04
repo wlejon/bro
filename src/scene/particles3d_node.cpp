@@ -327,40 +327,30 @@ Color Particles3DNode::evalColor(float u) const {
     return stops.back().second;
 }
 
-// ---------------------------------------------------------------------------
-// GL (main GL thread only)
-// ---------------------------------------------------------------------------
-
-GLuint Particles3DNode::ensureTextureGL() {
-    if (tex_ || texTried_ || texPath_.empty()) return tex_;
+bool Particles3DNode::ensureTextureLoaded() {
+    if (!texPixels_.empty() && texW_ > 0 && texH_ > 0) return true;
+    if (texTried_ || texPath_.empty()) return !texPixels_.empty();
     texTried_ = true;
     broimage::Image img;
     if (!broimage::decode_file(texPath_, img) || img.width <= 0 || img.height <= 0) {
-        return 0;
+        return false;
     }
-    glGenTextures(1, &tex_);
-    glBindTexture(GL_TEXTURE_2D, tex_);
-    // sRGB storage: the sampler returns linear texels for the linear HDR pass.
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, img.width, img.height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, img.pixels.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    return tex_;
+    texW_ = img.width;
+    texH_ = img.height;
+    texPixels_ = std::move(img.pixels);
+    return true;
 }
 
-bool Particles3DNode::drawInstanced(GLuint quadVbo, const Vec3& camFwd) {
-    if (liveCount_ <= 0) return false;
-
-    // Gather alive slots.
+const std::vector<float>& Particles3DNode::buildInstanceData(const Vec3& camFwd) {
     drawOrder_.clear();
     const int n = static_cast<int>(particles_.size());
     for (int i = 0; i < n; ++i) {
         if (particles_[i].alive) drawOrder_.push_back(static_cast<uint32_t>(i));
     }
-    if (drawOrder_.empty()) return false;
+    if (drawOrder_.empty()) {
+        instanceData_.clear();
+        return instanceData_;
+    }
 
     // Normal blend is order-dependent: sort back-to-front by view depth.
     // Additive is commutative — skip the sort.
@@ -390,10 +380,6 @@ bool Particles3DNode::drawInstanced(GLuint quadVbo, const Vec3& camFwd) {
         out[1] = p.pos.y;
         out[2] = p.pos.z;
         out[3] = (sizeStart_ + (sizeEnd_ - sizeStart_) * u) * p.sizeScale;
-        // Linear color straight into the linear HDR target: this pass runs
-        // before tonemap, which applies the one sRGB encode. (Billboards
-        // encode because they draw after it.) The emit() tint multiplies so
-        // rgb > 1 reaches the HDR target unclamped.
         Color c = evalColor(u);
         out[4] = c.r * p.tint.r;
         out[5] = c.g * p.tint.g;
@@ -404,6 +390,33 @@ bool Particles3DNode::drawInstanced(GLuint quadVbo, const Vec3& camFwd) {
         out[9] = f >= static_cast<float>(frames) ? static_cast<float>(frames - 1) : f;
         out += kInstFloats;
     }
+    return instanceData_;
+}
+
+// ---------------------------------------------------------------------------
+// GL (main GL thread only)
+// ---------------------------------------------------------------------------
+
+GLuint Particles3DNode::ensureTextureGL() {
+    if (tex_) return tex_;
+    if (!ensureTextureLoaded()) return 0;
+    glGenTextures(1, &tex_);
+    glBindTexture(GL_TEXTURE_2D, tex_);
+    // sRGB storage: the sampler returns linear texels for the linear HDR pass.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, texW_, texH_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, texPixels_.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return tex_;
+}
+
+bool Particles3DNode::drawInstanced(GLuint quadVbo, const Vec3& camFwd) {
+    if (liveCount_ <= 0) return false;
+    buildInstanceData(camFwd);
+    if (drawOrder_.empty()) return false;
 
     // Lazy VAO: quad corners at location 0 (shared VBO), instance stream at
     // locations 1-5 with divisor 1.

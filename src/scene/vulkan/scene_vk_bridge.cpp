@@ -5,21 +5,20 @@
 #include "scene/instanced_mesh_node.h"
 #include "scene/skinned_mesh_node.h"
 #include "scene/light_node.h"
+#include "scene/html_node.h"
+#include "scene/sprite_node.h"
+#include "scene/shape_node.h"
+#include "scene/particles3d_node.h"
+#include "scene/decal_node.h"
+#include "scene/depth_policy.h"
 #include "util/log.h"
+#include <bromath/color.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace bro::scene::vk {
-
-struct alignas(16) PackedVertex {
-    float pos[3];
-    float normal[3];
-    float uv[2];
-    float color[4];
-    float tangent[4];
-};
 
 SceneVkBridge::SceneVkBridge(render::VulkanContext& context)
     : context_(context), device_(context), allocator_(device_) {}
@@ -45,6 +44,7 @@ SceneVkBridge::~SceneVkBridge() {
     }
     textureCache_.clear();
 
+    frameDescPool_.destroy();
     dynamicDescPool_.destroy();
     mainDescPool_.destroy();
 
@@ -52,10 +52,14 @@ SceneVkBridge::~SceneVkBridge() {
     allocator_.destroyBuffer(lightingUbo_);
     allocator_.destroyBuffer(readbackBuffer_);
     allocator_.destroyImage(ldrPresentationImage_);
+    allocator_.destroyImage(depthCopyImage_);
 
     hdrTarget_.cleanup(allocator_);
     shadowTarget_.cleanup(allocator_);
 
+    passBillboard_.cleanup(device_, allocator_);
+    passParticles_.cleanup(device_, allocator_);
+    passDecal_.cleanup(device_, allocator_);
     passPostFx_.cleanup(device_, allocator_);
     passMesh_.cleanup(device_, allocator_);
     passEnv_.cleanup(device_, allocator_);
@@ -83,6 +87,21 @@ bool SceneVkBridge::init() {
         return false;
     }
 
+    if (!passBillboard_.init(device_, allocator_, passMesh_.cameraLayout(), passMesh_.materialLayout(), passMesh_.defaultMaterialSet())) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassBillboard");
+        return false;
+    }
+
+    if (!passParticles_.init(device_, allocator_, passMesh_.cameraLayout())) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassParticles");
+        return false;
+    }
+
+    if (!passDecal_.init(device_, allocator_, passMesh_.cameraLayout(), passMesh_.lightingLayout())) {
+        LOG_ERROR("SceneVkBridge: Failed initializing PassDecal");
+        return false;
+    }
+
     if (!allocator_.createUniformBuffer(sizeof(SceneCameraUniforms), cameraUbo_) ||
         !allocator_.createUniformBuffer(sizeof(SceneLightingUniforms), lightingUbo_)) {
         LOG_ERROR("SceneVkBridge: Failed allocating camera/lighting uniform buffers");
@@ -90,7 +109,8 @@ bool SceneVkBridge::init() {
     }
 
     if (!mainDescPool_.init(device_.device(), 16) ||
-        !dynamicDescPool_.init(device_.device(), 128)) {
+        !dynamicDescPool_.init(device_.device(), 1024) ||
+        !frameDescPool_.init(device_.device(), 512)) {
         LOG_ERROR("SceneVkBridge: Failed creating descriptor pools");
         return false;
     }
@@ -139,6 +159,28 @@ bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height) {
         return false;
     }
 
+    allocator_.destroyImage(depthCopyImage_);
+    VkImageUsageFlags depthCopyUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (!allocator_.createImage(width, height, VK_FORMAT_D32_SFLOAT, depthCopyUsage,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthCopyImage_,
+                               1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        LOG_ERROR("SceneVkBridge: Failed creating depth copy image (%ux%u)", width, height);
+        return false;
+    }
+
+    VkSamplerCreateInfo sampInfo{};
+    sampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampInfo.magFilter = VK_FILTER_NEAREST;
+    sampInfo.minFilter = VK_FILTER_NEAREST;
+    sampInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(device_.device(), &sampInfo, nullptr, &depthCopyImage_.sampler) != VK_SUCCESS) {
+        LOG_ERROR("SceneVkBridge: Failed creating sampler for depth copy image");
+        return false;
+    }
+
     allocator_.destroyImage(ldrPresentationImage_);
     VkImageUsageFlags ldrUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                 VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -166,140 +208,6 @@ bool SceneVkBridge::ensureTargets(uint32_t width, uint32_t height) {
     return true;
 }
 
-static uint64_t computeMeshHash(const bromesh::MeshData& mesh) {
-    uint64_t h = 14695981039346656037ULL;
-    h ^= mesh.positions.size();
-    h *= 1099511628211ULL;
-    h ^= mesh.indices.size();
-    h *= 1099511628211ULL;
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(mesh.positions.data());
-    size_t byteCount = mesh.positions.size() * sizeof(float);
-    if (byteCount <= 256) {
-        for (size_t i = 0; i < byteCount; ++i) {
-            h ^= p[i];
-            h *= 1099511628211ULL;
-        }
-    } else {
-        for (size_t i = 0; i < 128; ++i) {
-            h ^= p[i];
-            h *= 1099511628211ULL;
-        }
-        for (size_t i = byteCount - 128; i < byteCount; ++i) {
-            h ^= p[i];
-            h *= 1099511628211ULL;
-        }
-    }
-    return h;
-}
-
-SceneVkBridge::CachedMeshBuffer& SceneVkBridge::uploadMesh(const bromesh::MeshData& mesh, const void* key) {
-    auto& entry = meshCache_[key];
-    size_t vc = mesh.vertexCount();
-    size_t ic = !mesh.indices.empty() ? mesh.indices.size() : vc;
-    uint64_t currentHash = computeMeshHash(mesh);
-
-    if (entry.vertexCount == vc && entry.indexCount == ic && entry.meshHash == currentHash && entry.vertexBuffer.isValid()) {
-        return entry;
-    }
-
-    allocator_.destroyBuffer(entry.vertexBuffer);
-    allocator_.destroyBuffer(entry.indexBuffer);
-    entry.meshHash = currentHash;
-
-    std::vector<PackedVertex> vertices(vc);
-    for (size_t i = 0; i < vc; ++i) {
-        PackedVertex& v = vertices[i];
-        v.pos[0] = mesh.positions[3 * i + 0];
-        v.pos[1] = mesh.positions[3 * i + 1];
-        v.pos[2] = mesh.positions[3 * i + 2];
-
-        if (mesh.hasNormals()) {
-            v.normal[0] = mesh.normals[3 * i + 0];
-            v.normal[1] = mesh.normals[3 * i + 1];
-            v.normal[2] = mesh.normals[3 * i + 2];
-        } else {
-            v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
-        }
-
-        if (mesh.hasUVs()) {
-            v.uv[0] = mesh.uvs[2 * i + 0];
-            v.uv[1] = mesh.uvs[2 * i + 1];
-        } else {
-            v.uv[0] = 0.0f; v.uv[1] = 0.0f;
-        }
-
-        if (mesh.hasColors()) {
-            v.color[0] = mesh.colors[4 * i + 0];
-            v.color[1] = mesh.colors[4 * i + 1];
-            v.color[2] = mesh.colors[4 * i + 2];
-            v.color[3] = mesh.colors[4 * i + 3];
-        } else {
-            v.color[0] = 1.0f; v.color[1] = 1.0f; v.color[2] = 1.0f; v.color[3] = 1.0f;
-        }
-
-        if (mesh.hasTangents()) {
-            v.tangent[0] = mesh.tangents[4 * i + 0];
-            v.tangent[1] = mesh.tangents[4 * i + 1];
-            v.tangent[2] = mesh.tangents[4 * i + 2];
-            v.tangent[3] = mesh.tangents[4 * i + 3];
-        } else {
-            v.tangent[0] = 1.0f; v.tangent[1] = 0.0f; v.tangent[2] = 0.0f; v.tangent[3] = 1.0f;
-        }
-    }
-
-    allocator_.createVertexBuffer(vc * sizeof(PackedVertex), vertices.data(), entry.vertexBuffer);
-
-    if (!mesh.indices.empty()) {
-        allocator_.createIndexBuffer(mesh.indices.size() * sizeof(uint32_t), mesh.indices.data(), entry.indexBuffer);
-    } else {
-        std::vector<uint32_t> seq(vc);
-        for (uint32_t i = 0; i < vc; ++i) seq[i] = i;
-        allocator_.createIndexBuffer(seq.size() * sizeof(uint32_t), seq.data(), entry.indexBuffer);
-    }
-
-    entry.vertexCount = vc;
-    entry.indexCount = static_cast<uint32_t>(ic);
-    return entry;
-}
-
-SceneVkBridge::NodeDynamicBuffers& SceneVkBridge::getDynamicBuffers(const void* key) {
-    return dynamicBufferCache_[key];
-}
-
-VkDescriptorSet SceneVkBridge::uploadTexture(const void* key, int width, int height, const uint8_t* rgba) {
-    auto& tex = textureCache_[key];
-    if (tex.image.isValid() && tex.width == width && tex.height == height) {
-        return tex.descSet;
-    }
-
-    if (tex.image.isValid()) {
-        allocator_.destroyImage(tex.image);
-    }
-
-    TextureDesc desc{};
-    desc.width = width;
-    desc.height = height;
-    desc.format = VK_FORMAT_R8G8B8A8_UNORM;
-    desc.generateMipmaps = true;
-    if (!allocator_.createTexture2D(rgba, desc, tex.image)) {
-        return VK_NULL_HANDLE;
-    }
-    tex.width = width;
-    tex.height = height;
-
-    tex.descSet = dynamicDescPool_.allocate(passMesh_.materialLayout());
-    if (!tex.descSet) return VK_NULL_HANDLE;
-
-    SceneVkDescriptorWriter writer;
-    writer.writeImage(0, tex.image.view, tex.image.sampler);
-    writer.writeImage(1, passMesh_.dummyNormalView(), passMesh_.defaultSampler());
-    writer.writeImage(2, passMesh_.dummyWhiteView(), passMesh_.defaultSampler());
-    writer.writeImage(3, passMesh_.dummyBlackView(), passMesh_.defaultSampler());
-    writer.updateSet(device_.device(), tex.descSet);
-
-    return tex.descSet;
-}
-
 void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     uint32_t width = static_cast<uint32_t>(renderer.targetWidth());
     uint32_t height = static_cast<uint32_t>(renderer.targetHeight());
@@ -308,6 +216,10 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     if (!ensureTargets(width, height)) return;
 
     renderer.setCullingActive(renderer.frustumCullingEnabled());
+    if (renderer.cullingActive_) {
+        renderer.cameraFrustum_ = makeFrustum(
+            bromath::mmul(graph.projectionMatrix(), graph.viewMatrix()));
+    }
 
     // 1. Camera UBO setup
     SceneCameraUniforms camUniforms{};
@@ -745,7 +657,52 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
         }
     }
 
+    // Depth snapshot for decals and soft particles
+    hdrTarget_.endRendering(cmd, device_);
+
+    allocator_.transitionImageLayout(cmd, hdrTarget_.depthImage().image, VK_FORMAT_D32_SFLOAT,
+                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                     1, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    allocator_.transitionImageLayout(cmd, depthCopyImage_.image, VK_FORMAT_D32_SFLOAT,
+                                     depthCopyImage_.currentLayout,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     1, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    VkImageCopy depthCopy{};
+    depthCopy.srcSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depthCopy.srcSubresource.layerCount = 1;
+    depthCopy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    depthCopy.dstSubresource.layerCount = 1;
+    depthCopy.extent = {width, height, 1};
+    vkCmdCopyImage(cmd,
+                   hdrTarget_.depthImage().image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   depthCopyImage_.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   1, &depthCopy);
+
+    allocator_.transitionImageLayout(cmd, hdrTarget_.depthImage().image, VK_FORMAT_D32_SFLOAT,
+                                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                                     1, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    allocator_.transitionImageLayout(cmd, depthCopyImage_.image, VK_FORMAT_D32_SFLOAT,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     1, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
+    depthCopyImage_.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    hdrTarget_.beginRendering(cmd, device_,
+                             VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,
+                             {{0.0f, 0.0f, 0.0f, 0.0f}},
+                             VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,
+                             0.0f);
+
+    // Decals Pass
+    renderDecalsPass(cmd, graph, renderer, stats, hasDrawnMeshes);
+
     if (!translucentDraws.empty()) {
+        passMesh_.begin(cmd, cameraSet_, lightingSet_, width, height);
         std::stable_sort(translucentDraws.begin(), translucentDraws.end(),
                          [](const TranslucentDraw& a, const TranslucentDraw& b) {
                              return a.depth > b.depth;
@@ -760,6 +717,12 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
             }
         }
     }
+
+    // Particles3D Pass
+    renderParticlesPass(cmd, graph, renderer, stats, hasDrawnMeshes);
+
+    // Billboard & WorldQuad Pass
+    renderBillboardsPass(cmd, graph, renderer, stats, hasDrawnMeshes);
 
     if (graph.gizmoProvider_) {
         auto gizmoMeshes = graph.gizmoProvider_(&graph);
@@ -829,35 +792,10 @@ void SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer) {
     device_.submitFrame();
     device_.waitIdle();
 
+    frameDescPool_.reset();
+
     hasMeshContent_ = hasDrawnMeshes;
     renderer.setCullStats(stats);
-}
-
-std::vector<uint8_t> SceneVkBridge::readTonemapPixelsRGBA(int& outW, int& outH) {
-    if (!readbackBuffer_.isValid() || currentWidth_ == 0 || currentHeight_ == 0) {
-        outW = outH = 0;
-        return {};
-    }
-
-    outW = static_cast<int>(currentWidth_);
-    outH = static_cast<int>(currentHeight_);
-    size_t size = static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4;
-
-    std::vector<uint8_t> result(size);
-    if (readbackBuffer_.mappedData) {
-        std::memcpy(result.data(), readbackBuffer_.mappedData, size);
-    } else {
-        void* mapped = nullptr;
-        if (vkMapMemory(device_.device(), readbackBuffer_.memory, readbackBuffer_.offset, size, 0, &mapped) == VK_SUCCESS) {
-            std::memcpy(result.data(), mapped, size);
-            vkUnmapMemory(device_.device(), readbackBuffer_.memory);
-        } else {
-            outW = outH = 0;
-            return {};
-        }
-    }
-
-    return result;
 }
 
 } // namespace bro::scene::vk

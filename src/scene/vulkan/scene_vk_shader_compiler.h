@@ -23,7 +23,13 @@ enum class BuiltinSceneShader {
     PostFxVert,
     TonemapFrag,
     BloomFrag,
-    FxaaFrag
+    FxaaFrag,
+    BillboardVert,
+    BillboardFrag,
+    ParticlesVert,
+    ParticlesFrag,
+    DecalVert,
+    DecalFrag
 };
 
 /// SPIR-V shader compilation manager supporting both runtime glslc compilation

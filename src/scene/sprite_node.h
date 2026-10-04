@@ -61,6 +61,8 @@ public:
     int imageWidth() const { return imgW_; }
     int imageHeight() const { return imgH_; }
     bool hasImage() const { return !pixels_.empty(); }
+    bool isTextureDirty() const { return textureDirty_; }
+    void clearTextureDirty() { textureDirty_ = false; }
 
     // --- Spritesheet ---
 

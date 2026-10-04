@@ -62,7 +62,7 @@ bool SceneVkRenderTarget::init(SceneVkAllocator& allocator, const SceneVkRenderT
 
     // 2. Create depth/stencil buffer if enabled
     if (desc_.hasDepth) {
-        VkImageUsageFlags depthUsage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        VkImageUsageFlags depthUsage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         if (desc_.depthSampled) {
             depthUsage |= VK_IMAGE_USAGE_SAMPLED_BIT;
         }

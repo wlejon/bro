@@ -107,6 +107,12 @@ compile_vk_shader_header(postfx.vert vertex)
 compile_vk_shader_header(tonemap.frag fragment)
 compile_vk_shader_header(bloom.frag fragment)
 compile_vk_shader_header(fxaa.frag fragment)
+compile_vk_shader_header(billboard.vert vertex)
+compile_vk_shader_header(billboard.frag fragment)
+compile_vk_shader_header(particles.vert vertex)
+compile_vk_shader_header(particles.frag fragment)
+compile_vk_shader_header(decal.vert vertex)
+compile_vk_shader_header(decal.frag fragment)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
@@ -162,7 +168,12 @@ add_library(bro_scene STATIC
     vulkan/pass_shadow.cpp
     vulkan/pass_environment.cpp
     vulkan/pass_postfx.cpp
+    vulkan/pass_billboard.cpp
+    vulkan/pass_particles.cpp
+    vulkan/pass_decal.cpp
     vulkan/scene_vk_bridge.cpp
+    vulkan/scene_vk_bridge_resources.cpp
+    vulkan/scene_vk_bridge_passes.cpp
     ${GENERATED_HEADERS}
     ${VK_GENERATED_HEADERS}
 )

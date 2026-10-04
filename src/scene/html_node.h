@@ -63,6 +63,10 @@ public:
     int textureWidth() const { return texW_; }
     int textureHeight() const { return texH_; }
 
+    const std::vector<uint8_t>& pixels() const { return pixels_; }
+    bool isTextureDirty() const { return textureDirty_; }
+    void clearTextureDirty() { textureDirty_ = false; }
+
     void releaseGL();
 
 private:
@@ -74,6 +78,10 @@ private:
     float pxPerUnit_ = 100.0f;
 
     bool dirty_ = true;
+
+    // CPU pixel buffer for Vulkan/software readback
+    std::vector<uint8_t> pixels_;
+    bool textureDirty_ = false;
 
     // Main-thread-owned GL texture. Created lazily in materializePending.
     GLuint texture_ = 0;

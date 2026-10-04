@@ -57,6 +57,24 @@ static const uint32_t kSpvBloomFrag[] =
 static const uint32_t kSpvFxaaFrag[] =
 #include "fxaa.frag.spv.h"
 ;
+static const uint32_t kSpvBillboardVert[] =
+#include "billboard.vert.spv.h"
+;
+static const uint32_t kSpvBillboardFrag[] =
+#include "billboard.frag.spv.h"
+;
+static const uint32_t kSpvParticlesVert[] =
+#include "particles.vert.spv.h"
+;
+static const uint32_t kSpvParticlesFrag[] =
+#include "particles.frag.spv.h"
+;
+static const uint32_t kSpvDecalVert[] =
+#include "decal.vert.spv.h"
+;
+static const uint32_t kSpvDecalFrag[] =
+#include "decal.frag.spv.h"
+;
 
 std::mutex s_compilerMutex;
 
@@ -215,6 +233,12 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_tonemapFrag = arrayToVector(kSpvTonemapFrag);
     static const std::vector<uint32_t> s_bloomFrag = arrayToVector(kSpvBloomFrag);
     static const std::vector<uint32_t> s_fxaaFrag = arrayToVector(kSpvFxaaFrag);
+    static const std::vector<uint32_t> s_billboardVert = arrayToVector(kSpvBillboardVert);
+    static const std::vector<uint32_t> s_billboardFrag = arrayToVector(kSpvBillboardFrag);
+    static const std::vector<uint32_t> s_particlesVert = arrayToVector(kSpvParticlesVert);
+    static const std::vector<uint32_t> s_particlesFrag = arrayToVector(kSpvParticlesFrag);
+    static const std::vector<uint32_t> s_decalVert = arrayToVector(kSpvDecalVert);
+    static const std::vector<uint32_t> s_decalFrag = arrayToVector(kSpvDecalFrag);
     static const std::vector<uint32_t> s_empty;
 
     switch (shader) {
@@ -232,6 +256,12 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::TonemapFrag:       return s_tonemapFrag;
         case BuiltinSceneShader::BloomFrag:         return s_bloomFrag;
         case BuiltinSceneShader::FxaaFrag:          return s_fxaaFrag;
+        case BuiltinSceneShader::BillboardVert:     return s_billboardVert;
+        case BuiltinSceneShader::BillboardFrag:     return s_billboardFrag;
+        case BuiltinSceneShader::ParticlesVert:     return s_particlesVert;
+        case BuiltinSceneShader::ParticlesFrag:     return s_particlesFrag;
+        case BuiltinSceneShader::DecalVert:         return s_decalVert;
+        case BuiltinSceneShader::DecalFrag:         return s_decalFrag;
         default: return s_empty;
     }
 }

@@ -86,6 +86,7 @@ public:
     void reset();
 
     VkDescriptorPool handle() const { return pool_; }
+    VkDevice device() const { return device_; }
 
 private:
     VkDevice device_ = VK_NULL_HANDLE;

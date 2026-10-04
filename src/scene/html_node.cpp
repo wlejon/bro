@@ -125,9 +125,13 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D, 0);
+
+    pixels_ = std::move(buf);
+    textureDirty_ = true;
     texW_ = w;
     texH_ = h;
     dirty_ = false;
+    bumpChangeGeneration();
 }
 
 void HtmlNode::releaseGL() {

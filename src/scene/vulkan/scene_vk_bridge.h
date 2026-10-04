@@ -10,6 +10,9 @@
 #include "scene/vulkan/pass_shadow.h"
 #include "scene/vulkan/pass_environment.h"
 #include "scene/vulkan/pass_postfx.h"
+#include "scene/vulkan/pass_billboard.h"
+#include "scene/vulkan/pass_particles.h"
+#include "scene/vulkan/pass_decal.h"
 #include <bromesh/mesh_data.h>
 
 #include <memory>
@@ -23,6 +26,12 @@ class MeshNode;
 class InstancedMeshNode;
 class SkinnedMeshNode;
 class LightNode;
+class DecalNode;
+class Particles3DNode;
+class HtmlNode;
+class SpriteNode;
+class ShapeNode;
+struct CullStats;
 }
 
 namespace bro::scene::vk {
@@ -79,8 +88,13 @@ private:
         VkDescriptorSet descSet = VK_NULL_HANDLE;
         int width = 0;
         int height = 0;
+        uint64_t hash = 0;
     };
     VkDescriptorSet uploadTexture(const void* key, int width, int height, const uint8_t* rgba);
+
+    void renderDecalsPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer, CullStats& stats, bool& hasDrawnMeshes);
+    void renderParticlesPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer, CullStats& stats, bool& hasDrawnMeshes);
+    void renderBillboardsPass(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer, CullStats& stats, bool& hasDrawnMeshes);
 
     render::VulkanContext& context_;
     SceneVkDevice device_;
@@ -90,9 +104,13 @@ private:
     PassEnvironment passEnv_;
     PassMesh passMesh_;
     PassPostFx passPostFx_;
+    PassBillboard passBillboard_;
+    PassParticles passParticles_;
+    PassDecal passDecal_;
 
     SceneVkShadowCascadeTarget shadowTarget_;
     SceneVkRenderTarget hdrTarget_;
+    SceneVkImage depthCopyImage_;
     SceneVkImage ldrPresentationImage_;
     SceneVkBuffer readbackBuffer_;
 
@@ -103,6 +121,7 @@ private:
     VkDescriptorSet lightingSet_ = VK_NULL_HANDLE;
 
     SceneVkDescriptorPool dynamicDescPool_;
+    SceneVkDescriptorPool frameDescPool_;
 
     std::unordered_map<const void*, CachedMeshBuffer> meshCache_;
     std::unordered_map<const void*, NodeDynamicBuffers> dynamicBufferCache_;

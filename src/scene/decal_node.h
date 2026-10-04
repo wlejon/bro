@@ -93,6 +93,17 @@ public:
     bool hasEmissionTexture() const { return hasEmission_; }
     GLuint emissionTextureId() const { return emissionTex_; }
 
+    struct PendingTex {
+        std::vector<uint8_t> data;
+        int w = 0;
+        int h = 0;
+        bool dirty = false;
+    };
+    const PendingTex& pendingAlbedo() const { return pendingAlbedo_; }
+    const PendingTex& pendingEmission() const { return pendingEmission_; }
+    void markAlbedoClean() { pendingAlbedo_.dirty = false; }
+    void markEmissionClean() { pendingEmission_.dirty = false; }
+
     /// Upload/release any dirty staged texture slots. GL thread only.
     void flushPendingTextures();
 
@@ -101,12 +112,6 @@ public:
     void releaseGL();
 
 private:
-    struct PendingTex {
-        std::vector<uint8_t> data;
-        int w = 0;
-        int h = 0;
-        bool dirty = false;
-    };
     static void flushSlot(PendingTex& slot, GLuint& tex);
 
     float modulate_[4] = {1.0f, 1.0f, 1.0f, 1.0f};

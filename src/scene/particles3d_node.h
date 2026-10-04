@@ -185,6 +185,16 @@ public:
     /// by frustum culling.
     bool worldBounds(bromath::AABB3& out) const;
 
+    /// Build back-to-front sorted instance data for rendering.
+    /// Format: pos(3) size(1) rgba(4) rot(1) frame(1) = 10 floats per instance.
+    const std::vector<float>& buildInstanceData(const bromath::Vec3& camFwd);
+    size_t activeParticleCount() const { return drawOrder_.size(); }
+    bool hasTexture() const { return !texPath_.empty(); }
+    const std::vector<uint8_t>& texturePixels() const { return texPixels_; }
+    int textureWidth() const { return texW_; }
+    int textureHeight() const { return texH_; }
+    bool ensureTextureLoaded();
+
     // --- GL (main GL thread only) ---
 
     /// Decode + upload the texture if a path is set. Returns the GL texture
@@ -200,6 +210,9 @@ public:
     void releaseGL();
 
 private:
+    std::vector<uint8_t> texPixels_;
+    int texW_ = 0;
+    int texH_ = 0;
     struct Particle {
         bool alive = false;
         bromath::Vec3 pos;   // sim-space (world or emitter-local)
