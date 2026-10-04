@@ -19,9 +19,9 @@
 #include "render/image_cache.h"
 #include "render/shaped_run.h"
 
-#include <glad/gl.h>
-
 namespace bro::render {
+
+using GLuint = uint32_t;
 
 class GLContext;
 

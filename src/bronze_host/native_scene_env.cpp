@@ -10,7 +10,7 @@
 #include <bromesh/analysis/bvh.h>
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/manipulation/normals.h>
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 #include <json.hpp>
 
 #include <cmath>

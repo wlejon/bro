@@ -63,7 +63,6 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
-#include <glad/gl.h>
 #include <algorithm>
 #include <bit>
 #include <cmath>

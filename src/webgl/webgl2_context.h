@@ -1,7 +1,7 @@
 #pragma once
 
 #include "webgl/webgl_objects.h"
-#include <glad/gl.h>
+#include "webgl/webgl_types.h"
 
 #include <string>
 #include <vector>
@@ -298,10 +298,18 @@ public:
     void enableVertexAttribArray(GLuint index);
     void disableVertexAttribArray(GLuint index);
     void vertexAttribDivisor(GLuint index, GLuint divisor);
-    void vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w);
-    void vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w);
-    void vertexAttribI4iv(GLuint index, const GLint* v);
-    void vertexAttribI4uiv(GLuint index, const GLuint* v);
+    void vertexAttribI4i(GLuint /*index*/, GLint /*x*/, GLint /*y*/, GLint /*z*/, GLint /*w*/) {}
+    void vertexAttribI4ui(GLuint /*index*/, GLuint /*x*/, GLuint /*y*/, GLuint /*z*/, GLuint /*w*/) {}
+    void vertexAttribI4iv(GLuint /*index*/, const GLint* /*v*/) {}
+    void vertexAttribI4uiv(GLuint /*index*/, const GLuint* /*v*/) {}
+    void vertexAttrib1f(GLuint /*index*/, float /*x*/) {}
+    void vertexAttrib2f(GLuint /*index*/, float /*x*/, float /*y*/) {}
+    void vertexAttrib3f(GLuint /*index*/, float /*x*/, float /*y*/, float /*z*/) {}
+    void vertexAttrib4f(GLuint /*index*/, float /*x*/, float /*y*/, float /*z*/, float /*w*/) {}
+    void vertexAttrib1fv(GLuint /*index*/, const float* /*v*/) {}
+    void vertexAttrib2fv(GLuint /*index*/, const float* /*v*/) {}
+    void vertexAttrib3fv(GLuint /*index*/, const float* /*v*/) {}
+    void vertexAttrib4fv(GLuint /*index*/, const float* /*v*/) {}
 
     // --- Shaders ---
     WebGLShader createShader(GLenum type);
@@ -469,7 +477,7 @@ public:
     // --- Misc ---
     void flush();
     void finish();
-    void hint(GLenum target, GLenum mode);
+    void hint(GLenum /*target*/, GLenum /*mode*/) {}
 
 private:
     void createCanvasFBO();

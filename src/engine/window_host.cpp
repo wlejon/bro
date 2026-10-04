@@ -37,7 +37,7 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
-#include <glad/gl.h>
+#include "render/gl_compat.h"
 
 #include <algorithm>
 #include <cstddef>

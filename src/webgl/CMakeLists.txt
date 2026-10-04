@@ -10,10 +10,11 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_shaders.cpp
     vulkan/webgl_vk_pipeline.cpp
     vulkan/webgl_vk_context.cpp
+    vulkan/webgl_vk_context_textures.cpp
     vulkan/webgl_vk_context_draw.cpp
 )
 target_include_directories(bro_webgl PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_webgl PUBLIC bro_render glad bro_util Vulkan::Vulkan)
+target_link_libraries(bro_webgl PUBLIC bro_render bro_util Vulkan::Vulkan)
 
 if(BRO_BUILD_TESTS)
     add_executable(bro_vulkan_webgl_test tests/test_webgl_vulkan.cpp)

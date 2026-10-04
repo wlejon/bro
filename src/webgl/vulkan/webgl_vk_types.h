@@ -4,7 +4,7 @@
 #include "render/vulkan_context.h"
 
 #include <vulkan/vulkan.h>
-#include <glad/gl.h>
+#include "webgl/webgl_types.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -44,6 +44,7 @@ struct VkTextureResource {
     GLenum wrapS = GL_REPEAT;
     GLenum wrapT = GL_REPEAT;
     bool samplerDirty = true;
+    uint32_t bytesPerPixel = 4;
 
     bool isValid() const { return image != VK_NULL_HANDLE; }
 };
@@ -76,6 +77,9 @@ struct VkShaderResource {
     bool compileStatus = false;
     std::string infoLog;
 
+    uint32_t attachCount = 0;
+    bool deleteStatus = false;
+
     bool isValid() const { return module != VK_NULL_HANDLE; }
 };
 
@@ -93,6 +97,8 @@ struct VkUniformInfo {
 struct VkProgramResource {
     GLuint vertShaderId = 0;
     GLuint fragShaderId = 0;
+    VkShaderModule vertModule = VK_NULL_HANDLE;
+    VkShaderModule fragModule = VK_NULL_HANDLE;
     bool linkStatus = false;
     std::string infoLog;
 
@@ -101,7 +107,9 @@ struct VkProgramResource {
     std::vector<uint8_t> uniformBytes;
 
     std::unordered_map<std::string, GLint> attribLocations;
-    std::unordered_map<GLint, GLuint> samplerBindings; // uniform location -> texture unit
+    std::unordered_map<GLint, uint32_t> samplerLocToBinding;
+    std::unordered_map<uint32_t, uint32_t> samplerBindings; // descriptor binding -> texture unit
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
 
     bool isValid() const { return linkStatus; }
 };

@@ -48,7 +48,10 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
-#include <glad/gl.h>
+#include "render/gl_compat.h"
+#include "render/vulkan_context.h"
+#include "render/vulkan_swapchain.h"
+#include "render/vulkan_presenter.h"
 #include <algorithm>
 #include <cmath>
 
@@ -174,6 +177,9 @@ Engine::~Engine() {
     }
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
     if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
+    vulkanPresenter_.reset();
+    vulkanSwapchain_.reset();
+    vulkanContext_.reset();
 
     drawTraversal_.reset();
 

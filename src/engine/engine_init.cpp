@@ -55,7 +55,11 @@
 #include "util/log.h"
 #include "util/time.h"
 
-#include <glad/gl.h>
+#include "render/gl_compat.h"
+#include "render/vulkan_context.h"
+#include "render/vulkan_swapchain.h"
+#include "render/vulkan_presenter.h"
+#include "webgl/webgl2_context.h"
 #include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
@@ -159,16 +163,34 @@ Engine::Engine(const EngineConfig& config)
         LOG_INFO("Server mode initializing (headless server tick loop)");
     }
 
-    // Windowed / Headless initialization (rendering + DOM). Server mode never initializes GL or window.
-    const bool hasGL = (displayMode_ == DisplayMode::Windowed) ||
-                       (displayMode_ == DisplayMode::Headless && config.graphics.useGPU);
-
-    if (hasGL) {
-        bool hidden = (displayMode_ == DisplayMode::Headless);
+    // Graphics initialization.
+    // - Headless: initialize offscreen VulkanContext directly without requiring SDL window/X11.
+    // - Windowed: create platform::Window, GLContext stub, SkiaRenderer, and VulkanPresenter.
+    // - Server: never initializes graphics.
+    if (displayMode_ == DisplayMode::Headless) {
+        if (config.graphics.useGPU) {
+            try {
+                render::VulkanContextConfig vkCfg;
+                vkCfg.headless = true;
+                vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
+                if (vulkanContext_->init()) {
+                    vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_);
+                    vulkanPresenter_->init();
+                    webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
+                    LOG_INFO("Engine: Headless Vulkan initialized successfully");
+                }
+            } catch (const std::exception& e) {
+                LOG_WARN("Headless Vulkan init failed (%s); continuing with CPU raster fallback", e.what());
+                vulkanContext_.reset();
+                vulkanPresenter_.reset();
+            }
+        }
+        renderer_ = std::make_unique<render::RasterRenderer>();
+    } else if (displayMode_ == DisplayMode::Windowed) {
         try {
             window_ = std::make_unique<platform::Window>("Bro",
                 static_cast<uint32_t>(gfx.width),
-                static_cast<uint32_t>(gfx.height), hidden,
+                static_cast<uint32_t>(gfx.height), false,
                 gfx.resizable, gfx.vsync, config.graphics.borderless);
 
             const auto& wcfg = config.graphics;
@@ -177,30 +199,24 @@ Engine::Engine(const EngineConfig& config)
                 window_->setMinimumSize(wcfg.minWidth, wcfg.minHeight);
             if (wcfg.maxWidth > 0 || wcfg.maxHeight > 0)
                 window_->setMaximumSize(wcfg.maxWidth, wcfg.maxHeight);
-            if (!hidden) {
-                if (wcfg.display >= 0) {
-                    auto displays = window_->getDisplays();
-                    if (wcfg.display < static_cast<int>(displays.size())) {
-                        window_->moveToDisplay(displays[wcfg.display].id);
-                    } else {
-                        LOG_WARN("bro.json display=%d, but only %zu display(s) attached",
-                                 wcfg.display, displays.size());
-                    }
+            if (wcfg.display >= 0) {
+                auto displays = window_->getDisplays();
+                if (wcfg.display < static_cast<int>(displays.size())) {
+                    window_->moveToDisplay(displays[wcfg.display].id);
+                } else {
+                    LOG_WARN("bro.json display=%d, but only %zu display(s) attached",
+                             wcfg.display, displays.size());
                 }
-                if (wcfg.windowX != kWindowPosUnset && wcfg.windowY != kWindowPosUnset)
-                    window_->setPosition(wcfg.windowX, wcfg.windowY);
             }
+            if (wcfg.windowX != kWindowPosUnset && wcfg.windowY != kWindowPosUnset)
+                window_->setPosition(wcfg.windowX, wcfg.windowY);
 
-            if (!hidden) {
-                window_->setIcon("system/icon.png");
-                // The window may have been clamped to the display (and lost
-                // its title bar's height): lay out at the size it really is.
-                int ww = 0, wh = 0;
-                window_->getSize(ww, wh);
-                if (ww > 0 && wh > 0) {
-                    viewportWidth_ = ww;
-                    viewportHeight_ = wh;
-                }
+            window_->setIcon("system/icon.png");
+            int ww = 0, wh = 0;
+            window_->getSize(ww, wh);
+            if (ww > 0 && wh > 0) {
+                viewportWidth_ = ww;
+                viewportHeight_ = wh;
             }
 
             gl_ = std::make_unique<render::GLContext>(*window_);
@@ -208,15 +224,24 @@ Engine::Engine(const EngineConfig& config)
             if (!renderer_) {
                 throw std::runtime_error("Failed to create renderer");
             }
-        } catch (const std::exception& e) {
-            if (displayMode_ == DisplayMode::Headless) {
-                LOG_WARN("GPU init failed (%s); falling back to CPU raster rendering", e.what());
-                gl_.reset();
-                window_.reset();
-                renderer_ = std::make_unique<render::RasterRenderer>();
-            } else {
-                throw;
+
+            try {
+                render::VulkanContextConfig vkCfg;
+                vkCfg.headless = false;
+                vulkanContext_ = std::make_unique<render::VulkanContext>(vkCfg);
+                if (vulkanContext_->init() && window_->getSDLWindow()) {
+                    vulkanSwapchain_ = std::make_unique<render::VulkanSwapchain>(*vulkanContext_, window_->getSDLWindow(), gfx.vsync);
+                    if (vulkanSwapchain_->init()) {
+                        vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_, *vulkanSwapchain_);
+                        vulkanPresenter_->init();
+                        webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
+                    }
+                }
+            } catch (const std::exception& vkErr) {
+                LOG_WARN("Windowed Vulkan init failed (%s)", vkErr.what());
             }
+        } catch (const std::exception& e) {
+            throw;
         }
     } else {
         renderer_ = std::make_unique<render::RasterRenderer>();
@@ -519,7 +544,7 @@ void Engine::dispatchDocumentReadyEvents() {
 }
 
 webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas) {
-    if (!gl_) return nullptr;
+    if (!gl_ && !vulkanContext_) return nullptr;
 
     if (canvas && canvas->webglContext()) {
         return static_cast<webgl::WebGL2RenderingContext*>(canvas->webglContext());
@@ -544,7 +569,7 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas)
         cw = attrInt("width", cw);
         ch = attrInt("height", ch);
     }
-    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch);
+    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, vulkanContext_.get());
     auto* webglCtx = ctx2.get();
     if (canvas) canvas->setWebglContext(webglCtx);
     webglEntries_.push_back({std::move(ctx2), canvas});
@@ -645,7 +670,7 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
     (void)canvas;
     return nullptr;
 #else
-    if (!gl_) return nullptr;
+    if (!gl_ && !vulkanContext_) return nullptr;
 
     // A CanvasScene for `canvas` — the 2D layer a graph's sprites and shapes
     // draw into — registered with the compositor and linked to the element.

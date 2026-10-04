@@ -56,36 +56,21 @@ enum class CursorShape {
 
 /// Target graphics API for window creation.
 enum class GraphicsBackend {
-    OpenGL,
     Vulkan,
 };
 
-/// One OS window. Two kinds share this class:
-///
-/// - The PRIMARY window (public constructor): owns THE OpenGL context (or Vulkan
-///   surface) — the main context every other context in the process shares
-///   resources with — and loads the GL function pointers. Exactly one per process.
-///   SDL library lifetime is refcounted through SdlRuntime (acquired per Window),
-///   so the primary no longer single-handedly owns SDL_Init/SDL_Quit.
-///
-/// - SECONDARY windows (createSecondary): SDL_WINDOW_OPENGL surfaces created
-///   with the same GL attribute set as the primary but NO GL context of their
-///   own (getGLContext() is null). The engine composites into them by making
-///   the primary's context current on their drawable (makeGLCurrent), so all
-///   GL objects live in the one main context.
+/// One OS window created with SDL_WINDOW_VULKAN for Vulkan rendering.
 class Window {
 public:
     Window(const std::string& title, uint32_t width, uint32_t height,
            bool hidden = false, bool resizable = true, bool vsync = true,
-           bool borderless = false, GraphicsBackend backend = GraphicsBackend::OpenGL);
+           bool borderless = false, GraphicsBackend backend = GraphicsBackend::Vulkan);
     ~Window();
 
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;
 
-    /// Options for a secondary window. `x`/`y` are desktop coordinates; both
-    /// must be set (!= kPosUnset) for an explicit position, else the window
-    /// centers on `displayId` when nonzero, else the OS places it.
+    /// Options for a secondary window.
     struct SecondaryConfig {
         static constexpr int kPosUnset = INT_MIN;
         std::string title = "bro";
@@ -98,44 +83,28 @@ public:
         int x = kPosUnset;
         int y = kPosUnset;
         uint32_t displayId = 0;
-        GraphicsBackend backend = GraphicsBackend::OpenGL;
+        GraphicsBackend backend = GraphicsBackend::Vulkan;
     };
 
-    /// Create a secondary window (see class comment): SDL_WINDOW_OPENGL with
-    /// the primary's GL attribute set, no GL context, no glad load, no swap
-    /// interval touched. Returns null on failure. Main thread only. Requires
-    /// the primary window to exist (it holds the context the caller will make
-    /// current on this window's drawable).
     static std::unique_ptr<Window> createSecondary(const SecondaryConfig& cfg);
 
     SDL_Window* getSDLWindow() const { return m_window; }
-    SDL_GLContext getGLContext() const { return m_glContext; }
+    SDL_GLContext getGLContext() const { return nullptr; }
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
 
-    /// SDL window id — the key SDL events carry (event.window.windowID etc.),
-    /// used to route events to the window they happened on. 0 on failure.
+    /// SDL window id.
     uint32_t windowId() const;
 
     /// Graphics backend used by this window.
     GraphicsBackend backend() const { return m_backend; }
-    bool isVulkan() const { return m_backend == GraphicsBackend::Vulkan; }
+    bool isVulkan() const { return true; }
     bool vsyncPreference() const { return m_vsyncPref; }
 
-    /// True for the primary window (owns the process's main GL context).
-    bool ownsGLContext() const { return m_glContext != nullptr; }
-
-    /// Make `ctx` current against THIS window's drawable
-    /// (SDL_GL_MakeCurrent(this, ctx)). The per-window composite pass uses
-    /// this to point the primary's context at each secondary drawable in
-    /// turn. Returns false (and logs) on failure.
-    bool makeGLCurrent(SDL_GLContext ctx);
-
-    /// Re-apply this window's vsync preference (from the constructor /
-    /// setVSync) to the CURRENT GL context. The per-window composite pass
-    /// forces swap interval 0 for secondary swaps; the main swap calls this
-    /// first so it keeps the configured pacing.
-    void applySwapIntervalPreference();
+    /// Legacy GL context queries (OpenGL has been purged in favor of Vulkan).
+    bool ownsGLContext() const { return false; }
+    bool makeGLCurrent(SDL_GLContext) { return false; }
+    void applySwapIntervalPreference() {}
 
     /// Current client-area size in window coordinates (SDL points), queried
     /// live from SDL — unlike getWidth()/getHeight(), which only track sizes
@@ -157,14 +126,7 @@ public:
     void setTitle(const std::string& title);
     void swapWindow();
 
-    /// Create a second GL context that shares resources with the main
-    /// context. Must be called on the main thread (macOS SDL_GL_CreateContext
-    /// calls AppKit and will deadlock if invoked from a worker while the
-    /// main thread is blocked). The returned context is current on the
-    /// calling thread when this returns; the main context is restored
-    /// before the function exits. The caller owns the returned context
-    /// and must destroy it with SDL_GL_DestroyContext.
-    SDL_GLContext createSharedContext();
+    SDL_GLContext createSharedContext() { return nullptr; }
 
     // --- Runtime settings ---
 
@@ -240,10 +202,7 @@ public:
     /// X11 follow-up that would render at the display scale too.
     float getDevicePixelRatio() const;
 
-    /// Window creation flags every bro window shares. On Apple platforms this
-    /// requests a full-resolution (Retina) drawable; window coordinates stay in
-    /// points, so the drawable is getPixelDensity() times the window size.
-    static uint64_t baseWindowFlags(GraphicsBackend backend = GraphicsBackend::OpenGL);
+    static uint64_t baseWindowFlags(GraphicsBackend backend = GraphicsBackend::Vulkan);
 
     /// Set the window icon from a PNG file (taskbar / Alt-Tab / title bar).
     /// Silently no-ops if the file is missing or malformed — a missing icon
@@ -260,19 +219,11 @@ public:
 private:
     Window() = default;  // secondary-window factory path (createSecondary)
 
-    /// Request the process-wide GL attribute set (3.3 core, 24/8 depth/
-    /// stencil, double-buffered). Both window kinds set these before
-    /// SDL_CreateWindow so every SDL_WINDOW_OPENGL surface gets the same
-    /// pixel format — required for making the one shared context current on
-    /// any of their drawables.
-    static void setGLAttributes();
-
     SDL_Window* m_window = nullptr;
-    SDL_GLContext m_glContext = nullptr;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     bool m_vsyncPref = true;
-    GraphicsBackend m_backend = GraphicsBackend::OpenGL;
+    GraphicsBackend m_backend = GraphicsBackend::Vulkan;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;
 };

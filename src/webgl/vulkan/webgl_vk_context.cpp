@@ -102,6 +102,36 @@ void WebGLVkContext::initVulkanResources() {
     if (vkCreatePipelineLayout(dev, &pipelineLayoutInfo, nullptr, &pipelineLayout_) != VK_SUCCESS) {
         LOG_ERROR("WebGLVkContext: Failed to create pipeline layout");
     }
+
+    // 6. Dummy 1x1 fallback texture & sampler
+    context_.createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, dummyImage_, dummyMemory_);
+
+    VkImageViewCreateInfo dummyViewInfo{};
+    dummyViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    dummyViewInfo.image = dummyImage_;
+    dummyViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    dummyViewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    dummyViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    dummyViewInfo.subresourceRange.levelCount = 1;
+    dummyViewInfo.subresourceRange.layerCount = 1;
+    vkCreateImageView(dev, &dummyViewInfo, nullptr, &dummyView_);
+
+    VkSamplerCreateInfo dummySampInfo{};
+    dummySampInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    dummySampInfo.magFilter = VK_FILTER_LINEAR;
+    dummySampInfo.minFilter = VK_FILTER_LINEAR;
+    dummySampInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    dummySampInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    dummySampInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    vkCreateSampler(dev, &dummySampInfo, nullptr, &dummySampler_);
+
+    VkCommandBuffer dummyCmd = context_.beginSingleTimeCommands();
+    context_.transitionImageLayout(dummyImage_, VK_FORMAT_R8G8B8A8_UNORM,
+                                   VK_IMAGE_LAYOUT_UNDEFINED,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, dummyCmd);
+    context_.endSingleTimeCommands(dummyCmd);
 }
 
 void WebGLVkContext::cleanupVulkanResources() {
@@ -109,6 +139,23 @@ void WebGLVkContext::cleanupVulkanResources() {
     if (dev == VK_NULL_HANDLE) return;
 
     submitAndFlush();
+
+    if (dummySampler_ != VK_NULL_HANDLE) {
+        vkDestroySampler(dev, dummySampler_, nullptr);
+        dummySampler_ = VK_NULL_HANDLE;
+    }
+    if (dummyView_ != VK_NULL_HANDLE) {
+        vkDestroyImageView(dev, dummyView_, nullptr);
+        dummyView_ = VK_NULL_HANDLE;
+    }
+    if (dummyImage_ != VK_NULL_HANDLE) {
+        vkDestroyImage(dev, dummyImage_, nullptr);
+        dummyImage_ = VK_NULL_HANDLE;
+    }
+    if (dummyMemory_ != VK_NULL_HANDLE) {
+        vkFreeMemory(dev, dummyMemory_, nullptr);
+        dummyMemory_ = VK_NULL_HANDLE;
+    }
 
     // Destroy buffers
     for (auto& [id, buf] : buffers_) {
@@ -133,6 +180,12 @@ void WebGLVkContext::cleanupVulkanResources() {
         }
     }
     shaders_.clear();
+
+    for (auto& [id, prog] : programs_) {
+        if (prog.descriptorSet != VK_NULL_HANDLE && descriptorPool_ != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(dev, descriptorPool_, 1, &prog.descriptorSet);
+        }
+    }
     programs_.clear();
     vaos_.clear();
     framebuffers_.clear();
@@ -498,10 +551,13 @@ WebGLShader WebGLVkContext::createShader(GLenum type) {
 void WebGLVkContext::deleteShader(WebGLShader s) {
     auto it = shaders_.find(s.id);
     if (it != shaders_.end()) {
-        if (it->second.module != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(context_.device(), it->second.module, nullptr);
+        it->second.deleteStatus = true;
+        if (it->second.attachCount == 0) {
+            if (it->second.module != VK_NULL_HANDLE) {
+                vkDestroyShaderModule(context_.device(), it->second.module, nullptr);
+            }
+            shaders_.erase(it);
         }
-        shaders_.erase(it);
     }
 }
 
@@ -537,7 +593,7 @@ GLint WebGLVkContext::getShaderParameter(WebGLShader s, GLenum pname) {
     if (it == shaders_.end()) return 0;
     if (pname == GL_COMPILE_STATUS) return it->second.compileStatus ? GL_TRUE : GL_FALSE;
     if (pname == GL_SHADER_TYPE) return static_cast<GLint>(it->second.type);
-    if (pname == GL_DELETE_STATUS) return GL_FALSE;
+    if (pname == GL_DELETE_STATUS) return it->second.deleteStatus ? GL_TRUE : GL_FALSE;
     return 0;
 }
 
@@ -553,7 +609,15 @@ WebGLProgram WebGLVkContext::createProgram() {
 }
 
 void WebGLVkContext::deleteProgram(WebGLProgram p) {
-    programs_.erase(p.id);
+    auto it = programs_.find(p.id);
+    if (it != programs_.end()) {
+        if (it->second.descriptorSet != VK_NULL_HANDLE && descriptorPool_ != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(context_.device(), descriptorPool_, 1, &it->second.descriptorSet);
+        }
+        if (it->second.vertShaderId != 0) detachShader(p, {it->second.vertShaderId});
+        if (it->second.fragShaderId != 0) detachShader(p, {it->second.fragShaderId});
+        programs_.erase(it);
+    }
     if (currentProgramId_ == p.id) currentProgramId_ = 0;
 }
 
@@ -563,14 +627,28 @@ void WebGLVkContext::attachShader(WebGLProgram p, WebGLShader s) {
     if (itP != programs_.end() && itS != shaders_.end()) {
         if (itS->second.type == GL_VERTEX_SHADER) itP->second.vertShaderId = s.id;
         else if (itS->second.type == GL_FRAGMENT_SHADER) itP->second.fragShaderId = s.id;
+        itS->second.attachCount++;
     }
 }
 
 void WebGLVkContext::detachShader(WebGLProgram p, WebGLShader s) {
     auto it = programs_.find(p.id);
     if (it != programs_.end()) {
-        if (it->second.vertShaderId == s.id) it->second.vertShaderId = 0;
-        if (it->second.fragShaderId == s.id) it->second.fragShaderId = 0;
+        GLuint sId = 0;
+        if (it->second.vertShaderId == s.id) { sId = s.id; it->second.vertShaderId = 0; }
+        if (it->second.fragShaderId == s.id) { sId = s.id; it->second.fragShaderId = 0; }
+        if (sId != 0) {
+            auto itS = shaders_.find(sId);
+            if (itS != shaders_.end()) {
+                if (itS->second.attachCount > 0) itS->second.attachCount--;
+                if (itS->second.deleteStatus && itS->second.attachCount == 0) {
+                    if (itS->second.module != VK_NULL_HANDLE) {
+                        vkDestroyShaderModule(context_.device(), itS->second.module, nullptr);
+                    }
+                    shaders_.erase(itS);
+                }
+            }
+        }
     }
 }
 
@@ -589,6 +667,9 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
         return;
     }
 
+    prog.vertModule = itV->second.module;
+    prog.fragModule = itF->second.module;
+
     // Merge translated shader metadata (attributes, uniforms, push constants)
     TranslatedShader trV = WebGLVkShaderCompiler::translateToVulkanGLSL(itV->second.source, GL_VERTEX_SHADER);
     TranslatedShader trF = WebGLVkShaderCompiler::translateToVulkanGLSL(itF->second.source, GL_FRAGMENT_SHADER);
@@ -606,6 +687,25 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
             prog.uniformLocations[u.name] = u.location;
             prog.uniforms.push_back(u);
         }
+    }
+
+    prog.samplerLocToBinding.clear();
+    prog.samplerBindings.clear();
+    for (const auto& [name, binding] : trF.samplerBindings) {
+        auto locIt = prog.uniformLocations.find(name);
+        if (locIt != prog.uniformLocations.end()) {
+            prog.samplerLocToBinding[locIt->second] = binding;
+            prog.samplerBindings[binding] = 0; // default to texture unit 0
+        }
+    }
+
+    if (descriptorPool_ != VK_NULL_HANDLE && descriptorSetLayout_ != VK_NULL_HANDLE && prog.descriptorSet == VK_NULL_HANDLE) {
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = descriptorPool_;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &descriptorSetLayout_;
+        vkAllocateDescriptorSets(context_.device(), &allocInfo, &prog.descriptorSet);
     }
 
     prog.uniformBytes.assign(128, 0); // Push constant buffer storage
@@ -666,10 +766,30 @@ void WebGLVkContext::uniform1i(WebGLUniformLocation loc, GLint v0) {
     if (loc.location < 0) return;
     auto it = programs_.find(currentProgramId_);
     if (it == programs_.end()) return;
+    auto sIt = it->second.samplerLocToBinding.find(loc.location);
+    if (sIt != it->second.samplerLocToBinding.end()) {
+        it->second.samplerBindings[sIt->second] = static_cast<uint32_t>(std::max(0, v0));
+        return;
+    }
     for (const auto& u : it->second.uniforms) {
         if (u.location == loc.location) {
             if (u.offset + sizeof(GLint) <= it->second.uniformBytes.size()) {
                 std::memcpy(it->second.uniformBytes.data() + u.offset, &v0, sizeof(GLint));
+            }
+            break;
+        }
+    }
+}
+
+void WebGLVkContext::uniform2i(WebGLUniformLocation loc, GLint v0, GLint v1) {
+    if (loc.location < 0) return;
+    auto it = programs_.find(currentProgramId_);
+    if (it == programs_.end()) return;
+    GLint v[2] = {v0, v1};
+    for (const auto& u : it->second.uniforms) {
+        if (u.location == loc.location) {
+            if (u.offset + sizeof(v) <= it->second.uniformBytes.size()) {
+                std::memcpy(it->second.uniformBytes.data() + u.offset, v, sizeof(v));
             }
             break;
         }
@@ -762,186 +882,6 @@ void WebGLVkContext::uniformMatrix4fv(WebGLUniformLocation loc, GLsizei count, G
                 std::memcpy(it->second.uniformBytes.data() + u.offset, value, bytes);
             }
             break;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Textures
-// ---------------------------------------------------------------------------
-
-WebGLTexture WebGLVkContext::createTexture() {
-    GLuint id = nextTextureId_++;
-    textures_[id] = VkTextureResource{};
-    return {id};
-}
-
-void WebGLVkContext::deleteTexture(WebGLTexture tex) {
-    auto it = textures_.find(tex.id);
-    if (it != textures_.end()) {
-        VkDevice dev = context_.device();
-        if (it->second.sampler != VK_NULL_HANDLE) vkDestroySampler(dev, it->second.sampler, nullptr);
-        if (it->second.view != VK_NULL_HANDLE) vkDestroyImageView(dev, it->second.view, nullptr);
-        if (it->second.image != VK_NULL_HANDLE) vkDestroyImage(dev, it->second.image, nullptr);
-        if (it->second.memory != VK_NULL_HANDLE) vkFreeMemory(dev, it->second.memory, nullptr);
-        textures_.erase(it);
-    }
-}
-
-void WebGLVkContext::bindTexture(GLenum /*target*/, WebGLTexture tex) {
-    if (activeTextureUnit_ < boundTextures2D_.size()) {
-        boundTextures2D_[activeTextureUnit_] = tex.id;
-    }
-}
-
-void WebGLVkContext::activeTexture(GLenum texture) {
-    if (texture >= GL_TEXTURE0 && texture < GL_TEXTURE0 + 32) {
-        activeTextureUnit_ = texture - GL_TEXTURE0;
-    }
-}
-
-void WebGLVkContext::texParameteri(GLenum /*target*/, GLenum pname, GLint param) {
-    GLuint texId = (activeTextureUnit_ < boundTextures2D_.size()) ? boundTextures2D_[activeTextureUnit_] : 0;
-    if (texId == 0) return;
-    VkTextureResource& tex = textures_[texId];
-
-    if (pname == GL_TEXTURE_MIN_FILTER) { tex.minFilter = param; tex.samplerDirty = true; }
-    else if (pname == GL_TEXTURE_MAG_FILTER) { tex.magFilter = param; tex.samplerDirty = true; }
-    else if (pname == GL_TEXTURE_WRAP_S) { tex.wrapS = param; tex.samplerDirty = true; }
-    else if (pname == GL_TEXTURE_WRAP_T) { tex.wrapT = param; tex.samplerDirty = true; }
-}
-
-void WebGLVkContext::texImage2D(GLenum /*target*/, GLint /*level*/, GLint /*internalformat*/,
-                                GLsizei width, GLsizei height, GLint /*border*/,
-                                GLenum /*format*/, GLenum /*type*/, const void* pixels) {
-    GLuint texId = (activeTextureUnit_ < boundTextures2D_.size()) ? boundTextures2D_[activeTextureUnit_] : 0;
-    if (texId == 0 || width <= 0 || height <= 0) return;
-
-    submitAndFlush();
-    VkTextureResource& tex = textures_[texId];
-    VkDevice dev = context_.device();
-
-    if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(dev, tex.view, nullptr);
-    if (tex.image != VK_NULL_HANDLE) vkDestroyImage(dev, tex.image, nullptr);
-    if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(dev, tex.memory, nullptr);
-
-    tex.width = width;
-    tex.height = height;
-    tex.format = VK_FORMAT_R8G8B8A8_UNORM;
-
-    VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    context_.createImage(width, height, tex.format, VK_IMAGE_TILING_OPTIMAL, usage,
-                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = tex.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = tex.format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-    vkCreateImageView(dev, &viewInfo, nullptr, &tex.view);
-
-    if (pixels) {
-        VkDeviceSize imgSize = static_cast<VkDeviceSize>(width) * height * 4;
-        VkBuffer stagingBuf = VK_NULL_HANDLE;
-        VkDeviceMemory stagingMem = VK_NULL_HANDLE;
-        context_.createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              stagingBuf, stagingMem);
-
-        void* mapped = nullptr;
-        vkMapMemory(dev, stagingMem, 0, imgSize, 0, &mapped);
-        std::memcpy(mapped, pixels, imgSize);
-        vkUnmapMemory(dev, stagingMem);
-
-        VkCommandBuffer cmd = context_.beginSingleTimeCommands();
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_UNDEFINED,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, cmd);
-        context_.copyBufferToImage(stagingBuf, tex.image, width, height, cmd);
-        context_.transitionImageLayout(tex.image, tex.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, cmd);
-        context_.endSingleTimeCommands(cmd);
-        tex.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        vkDestroyBuffer(dev, stagingBuf, nullptr);
-        vkFreeMemory(dev, stagingMem, nullptr);
-    }
-}
-
-void WebGLVkContext::texSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                                   GLsizei width, GLsizei height,
-                                   GLenum format, GLenum type, const void* pixels) {
-    (void)target; (void)level; (void)xoffset; (void)yoffset; (void)width; (void)height;
-    (void)format; (void)type; (void)pixels;
-}
-
-void WebGLVkContext::generateMipmap(GLenum /*target*/) {}
-
-// ---------------------------------------------------------------------------
-// Framebuffers
-// ---------------------------------------------------------------------------
-
-WebGLFramebuffer WebGLVkContext::createFramebuffer() {
-    GLuint id = nextFboId_++;
-    framebuffers_[id] = VkFramebufferResource{};
-    return {id};
-}
-
-void WebGLVkContext::deleteFramebuffer(WebGLFramebuffer fb) {
-    framebuffers_.erase(fb.id);
-    if (currentFboId_ == fb.id) currentFboId_ = 0;
-}
-
-void WebGLVkContext::bindFramebuffer(GLenum /*target*/, WebGLFramebuffer fb) {
-    if (currentFboId_ != fb.id) {
-        submitAndFlush();
-        currentFboId_ = fb.id;
-    }
-}
-
-void WebGLVkContext::framebufferTexture2D(GLenum /*target*/, GLenum attachment, GLenum /*textarget*/,
-                                         WebGLTexture tex, GLint /*level*/) {
-    if (currentFboId_ == 0) return;
-    VkFramebufferResource& fbo = framebuffers_[currentFboId_];
-    if (attachment == GL_COLOR_ATTACHMENT0) {
-        fbo.colorAttachmentTex = tex.id;
-    } else if (attachment == GL_DEPTH_ATTACHMENT) {
-        fbo.depthAttachmentTex = tex.id;
-    }
-}
-
-GLenum WebGLVkContext::checkFramebufferStatus(GLenum /*target*/) {
-    return GL_FRAMEBUFFER_COMPLETE;
-}
-
-// ---------------------------------------------------------------------------
-// Readback
-// ---------------------------------------------------------------------------
-
-void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
-                                GLenum /*format*/, GLenum /*type*/, void* pixels) {
-    if (!pixels || width <= 0 || height <= 0) return;
-
-    std::vector<uint8_t> canvasData;
-    if (!readCanvasPixels(canvasData)) return;
-
-    size_t canvasW = canvas_.width();
-    size_t canvasH = canvas_.height();
-
-    uint8_t* dst = static_cast<uint8_t*>(pixels);
-    for (GLsizei row = 0; row < height; ++row) {
-        GLint srcY = y + row;
-        if (srcY >= 0 && static_cast<size_t>(srcY) < canvasH) {
-            GLint srcX = std::max(0, x);
-            GLsizei copyW = std::min(width, static_cast<GLsizei>(canvasW - srcX));
-            if (copyW > 0) {
-                const uint8_t* srcRow = canvasData.data() + (srcY * canvasW + srcX) * 4;
-                std::memcpy(dst + row * width * 4, srcRow, copyW * 4);
-            }
         }
     }
 }

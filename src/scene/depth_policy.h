@@ -26,7 +26,7 @@
 // convention), shader sources get `#define REVERSED_Z 1` injected after their
 // #version line. A shader that does not care simply ignores it.
 
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 #include <bromath/mat.h>
 #include <bromath/frustum.h>
 

@@ -2,7 +2,7 @@
 
 #include "scene/scene_node.h"
 
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 
 #include <cstdint>
 #include <functional>

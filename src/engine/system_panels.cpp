@@ -19,8 +19,7 @@
 #include "render/renderer.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
-#include "render/gl_context.h"
-#include <glad/gl.h>
+#include "render/gl_compat.h"
 #include <cmath>
 #include <cstdio>
 #include <functional>

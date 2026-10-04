@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 
 #include <bromath/frustum.h>
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <string>
-#include <glad/gl.h>
+#include "webgl/webgl_types.h"
 
 namespace bro::webgl {
 

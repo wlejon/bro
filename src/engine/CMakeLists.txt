@@ -61,7 +61,7 @@ if(BRO_WITH_3D)
     target_sources(bro_engine PRIVATE gizmo.cpp gizmo_mesh.cpp gizmo_routing.cpp)
 endif()
 target_include_directories(bro_engine PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util glad)
+target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util)
 # The source watcher behind the edit loop (app_reload.cpp) is brokit's
 # FsWatcher, the same one behind fs.watch.
 target_link_libraries(bro_engine PRIVATE brokit_api)

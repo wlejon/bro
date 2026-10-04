@@ -14,7 +14,6 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
-#include <glad/gl.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <algorithm>
@@ -227,12 +226,7 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->setDeviceScale(1.0f);
         rasterRenderer->endFrame();
 
-        // GL fence — guarantees all GPU commands are visible before the main
-        // thread samples textures for compositing.
-        GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();  // ensure fence is submitted to GPU command stream
-
-        framePresenter_->publishResult(fence);
+        framePresenter_->publishResult(nullptr);
     }
 
     // Cleanup — both double-buffered pool copies.

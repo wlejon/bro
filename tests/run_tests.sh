@@ -56,11 +56,9 @@ fi
 # Bump file descriptor limit so long test runs don't exhaust Xvfb / Mesa DRM client fds (default 1024).
 ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
 
-# On Linux without a display, automatically re-exec under xvfb-run if available.
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && "$(uname -s)" == "Linux" && "${BRO_TEST_NO_AUTO_XVFB:-0}" != "1" ]]; then
-    if command -v xvfb-run >/dev/null 2>&1; then
-        exec xvfb-run -a -s "-screen 0 1280x1024x24" "$0" "$@"
-    fi
+# On Linux without a display, use dummy SDL video driver for native headless Vulkan offscreen rendering.
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && "$(uname -s)" == "Linux" ]]; then
+    export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-dummy}"
 fi
 
 to_win_path() {

@@ -39,7 +39,7 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkSurface.h>
 
-#include <glad/gl.h>
+#include "render/gl_compat.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>

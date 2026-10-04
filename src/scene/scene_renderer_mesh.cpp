@@ -223,7 +223,7 @@ bool SceneRenderer::compileCustomShader(CustomShaderTarget target,
                                         const std::string& vertexChunk,
                                         const std::string& fragmentChunk,
                                         std::string& errOut) {
-    if (!glCreateShader) {
+    if (!glFunctionsLoaded()) {
         // glad not loaded — no GL context (CPU raster path). The scene
         // canvas context is unavailable there too, so this is belt-and-
         // braces rather than a reachable path.

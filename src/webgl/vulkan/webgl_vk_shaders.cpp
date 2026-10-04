@@ -193,6 +193,15 @@ TranslatedShader WebGLVkShaderCompiler::translateToVulkanGLSL(const std::string&
                 uint32_t binding = nextSamplerBinding++;
                 result.samplerBindings[name] = binding;
                 output << "layout(binding = " << binding << ") uniform " << type << " " << name << ";\n";
+
+                VkUniformInfo uinfo;
+                uinfo.name = name;
+                uinfo.location = nextUniformLoc++;
+                uinfo.type = typeStringToGLenum(type);
+                uinfo.offset = 0;
+                uinfo.size = 0;
+                uinfo.count = 1;
+                result.uniforms.push_back(uinfo);
             } else {
                 auto [size, align] = getUniformSizeAndAlign(type);
                 currentOffset = alignTo(currentOffset, align);

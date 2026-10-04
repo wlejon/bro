@@ -38,7 +38,7 @@ add_library(bro_render STATIC
     image_cache.cpp
 )
 target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
-target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi glad broimage::broimage Vulkan::Vulkan)
+target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi broimage::broimage Vulkan::Vulkan)
 
 # WebP decoding. Its own small library rather than a part of bro_render,
 # because bro has two independent image entry points that must agree — the
@@ -54,18 +54,6 @@ if(BRO_WITH_WEBP)
     target_link_libraries(bro_render PRIVATE bro_webp)
 else()
     target_compile_definitions(bro_render PRIVATE BRO_WITH_WEBP=0)
-endif()
-
-find_package(OpenGL REQUIRED)
-target_link_libraries(bro_render PUBLIC OpenGL::GL)
-
-# On Linux, bro doesn't reference libGL symbols directly (glad uses dlsym, SDL
-# loads GL), so --as-needed drops the libGL.so DT_NEEDED entry. Skia's
-# GrGLMakeNativeInterface() relies on dlsym(RTLD_DEFAULT, ...) finding GL
-# entry points, which fails when libGL is unloaded. Force the link.
-if(UNIX AND NOT APPLE)
-    target_link_options(bro_render INTERFACE
-        "LINKER:--no-as-needed,-lGL,--as-needed")
 endif()
 
 if(BRO_BUILD_TESTS)

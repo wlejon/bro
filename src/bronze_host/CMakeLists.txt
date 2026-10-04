@@ -377,7 +377,7 @@ endfunction()
 # only through an engine's symbol table, so no link order is load-bearing.
 find_package(Vulkan REQUIRED)
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared bronze::cli Vulkan::Vulkan
+    PUBLIC bro_engine bro_webgl broimage::broimage bronze::runtime_shared bronze::cli Vulkan::Vulkan
 )
 
 # brokit_api supplies the Node half (require(), fs, path, os, child_process,

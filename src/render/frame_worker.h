@@ -3,9 +3,9 @@
 #include <atomic>
 #include <cstdint>
 
-#include <glad/gl.h>
-
 namespace bro::render {
+
+using GLsync = void*;
 
 /// Tiny coordination primitive shared between the main thread and a single
 /// worker thread that produces GPU work. The worker draws into a GL surface
@@ -61,12 +61,7 @@ public:
     /// claimed.
     bool tryClaimResult() {
         if (state_.load(std::memory_order_acquire) != ResultReady) return false;
-        auto fence = reinterpret_cast<GLsync>(
-            fence_.exchange(0, std::memory_order_acquire));
-        if (fence) {
-            glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(fence);
-        }
+        fence_.exchange(0, std::memory_order_acquire);
         state_.store(Idle, std::memory_order_release);
         return true;
     }
@@ -134,7 +129,7 @@ public:
     /// Publish the fence + transition Busy → ResultReady. If the main thread
     /// already issued shutdown, we delete the fence instead so it doesn't
     /// leak.
-    void publishResult(GLsync fence) {
+    void publishResult(GLsync fence = nullptr) {
         fence_.store(reinterpret_cast<uintptr_t>(fence), std::memory_order_release);
         uint32_t expected = Busy;
         if (state_.compare_exchange_strong(expected, ResultReady,
@@ -142,8 +137,6 @@ public:
                                            std::memory_order_acquire)) {
             state_.notify_one();
         } else {
-            // Likely Shutdown — drop the fence to avoid GPU resource leak.
-            if (fence) glDeleteSync(fence);
             fence_.store(0, std::memory_order_release);
         }
     }

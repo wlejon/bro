@@ -8,7 +8,7 @@
 
 #include "tile/autotile.h"
 
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 
 #include <algorithm>
 #include <array>

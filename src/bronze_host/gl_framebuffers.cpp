@@ -144,42 +144,17 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
-    // Invalidation is a hint (ES 3.0 4.5): a driver without the GL 4.3 entry
-    // point (macOS tops out at 4.1) keeps the contents, which is always a
-    // correct answer, so the call validates and then does nothing.
-    b.def("invalidateFramebuffer", 2, [c](Value, std::span<const Value> a) {
-        live(c);
-        if (!glad_glInvalidateFramebuffer) return ev::undefined();
-        GLenum target = u32At(a, 0);
-        std::vector<uint32_t> storage;
-        const uint32_t* p = nullptr;
-        size_t n = 0;
-        if (uint32Data(argAt(a, 1), storage, &p, &n) && n > 0) {
-            glad_glInvalidateFramebuffer(target, static_cast<GLsizei>(n),
-                                         reinterpret_cast<const GLenum*>(p));
-        }
+    // Invalidation is a hint (ES 3.0 4.5): no-op in offscreen Vulkan rendering.
+    b.def("invalidateFramebuffer", 2, [](Value, std::span<const Value>) {
         return ev::undefined();
     });
 
     b.def("invalidateSubFramebuffer", 6, [c](Value, std::span<const Value> a) {
         auto* ctx = live(c);
-        GLint x = i32At(a, 2);
-        GLint y = i32At(a, 3);
         GLsizei width = i32At(a, 4);
         GLsizei height = i32At(a, 5);
         if (width < 0 || height < 0) {
             ctx->setSyntheticError(GL_INVALID_VALUE);
-            return ev::undefined();
-        }
-        if (!glad_glInvalidateSubFramebuffer) return ev::undefined();
-        GLenum target = u32At(a, 0);
-        std::vector<uint32_t> storage;
-        const uint32_t* p = nullptr;
-        size_t n = 0;
-        if (uint32Data(argAt(a, 1), storage, &p, &n) && n > 0) {
-            glad_glInvalidateSubFramebuffer(target, static_cast<GLsizei>(n),
-                                            reinterpret_cast<const GLenum*>(p),
-                                            x, y, width, height);
         }
         return ev::undefined();
     });

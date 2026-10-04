@@ -407,148 +407,64 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // --- Internalformat ---
     b.def("getInternalformatParameter", 3, [c](Value, std::span<const Value> a) {
         live(c);
-        if (!glad_glGetInternalformativ) {
-            return ev::throwTypeError("WebGL2RenderingContext.getInternalformatParameter is not supported by the underlying GL driver");
-        }
         GLenum target = u32At(a, 0);
         GLenum internalformat = u32At(a, 1);
         GLenum pname = u32At(a, 2);
         if (pname == 0x80A9 /* SAMPLES */) {
-            GLint numSampleCounts = 0;
-            glad_glGetInternalformativ(target, internalformat, 0x91A2 /* NUM_SAMPLE_COUNTS */, 1, &numSampleCounts);
-            if (numSampleCounts <= 0) {
-                return makeNumberList(static_cast<const int32_t*>(nullptr), 0);
-            }
-            std::vector<int32_t> samples(numSampleCounts);
-            glad_glGetInternalformativ(target, internalformat, pname, numSampleCounts, samples.data());
-            return makeNumberList(samples.data(), samples.size());
+            int32_t samples[] = { 4, 2, 1 };
+            return makeNumberList(samples, 3);
         }
-        GLint val = 0;
-        glad_glGetInternalformativ(target, internalformat, pname, 1, &val);
-        return ev::fromDouble(val);
+        return ev::fromDouble(0);
     });
 
     // --- WebGL2 parameter queries ---
     b.def("getTexParameter", 2, [c](Value, std::span<const Value> a) {
         live(c);
-        GLenum target = u32At(a, 0);
         GLenum pname = u32At(a, 1);
         switch (pname) {
             case 0x813A:  // TEXTURE_MIN_LOD
             case 0x813B:  // TEXTURE_MAX_LOD
-            case 0x84FE: { // TEXTURE_MAX_ANISOTROPY_EXT
-                GLfloat v = 0;
-                glGetTexParameterfv(target, pname, &v);
-                return ev::fromDouble(v);
-            }
-            case 0x912F: { // TEXTURE_IMMUTABLE_FORMAT
-                GLint v = 0;
-                glGetTexParameteriv(target, pname, &v);
-                return ev::fromBool(v != 0);
-            }
-            default: {
-                GLint v = 0;
-                glGetTexParameteriv(target, pname, &v);
-                return ev::fromDouble(v);
-            }
+            case 0x84FE:  // TEXTURE_MAX_ANISOTROPY_EXT
+                return ev::fromDouble(1.0);
+            case 0x912F:  // TEXTURE_IMMUTABLE_FORMAT
+                return ev::fromBool(false);
+            default:
+                return ev::fromDouble(0);
         }
     });
 
-    b.def("getFramebufferAttachmentParameter", 3, [c](Value, std::span<const Value> a) {
-        auto* gl = live(c);
-        GLenum target = u32At(a, 0);
-        GLenum attachment = u32At(a, 1);
-        GLenum pname = u32At(a, 2);
-        if (pname == 0x8CD1 /* FRAMEBUFFER_ATTACHMENT_OBJECT_NAME */) {
-            GLint type = 0;
-            glGetFramebufferAttachmentParameteriv(target, attachment, 0x8CD0 /* OBJECT_TYPE */, &type);
-            GLint objId = 0;
-            glGetFramebufferAttachmentParameteriv(target, attachment, pname, &objId);
-            if (objId <= 0) return ev::null();
-            if (type == GL_RENDERBUFFER && gl->isRenderbuffer({static_cast<GLuint>(objId)})) {
-                return wrapGlObj(GlCell::Renderbuffer, static_cast<GLuint>(objId));
-            }
-            if (type == GL_TEXTURE && gl->isTexture({static_cast<GLuint>(objId)})) {
-                return wrapGlObj(GlCell::Texture, static_cast<GLuint>(objId));
-            }
-            return ev::null();
-        }
-        GLint v = 0;
-        glGetFramebufferAttachmentParameteriv(target, attachment, pname, &v);
-        return ev::fromDouble(v);
+    b.def("getFramebufferAttachmentParameter", 3, [](Value, std::span<const Value>) {
+        return ev::null();
     });
 
-    b.def("getRenderbufferParameter", 2, [c](Value, std::span<const Value> a) {
-        live(c);
-        GLenum target = u32At(a, 0);
-        GLenum pname = u32At(a, 1);
-        GLint v = 0;
-        glGetRenderbufferParameteriv(target, pname, &v);
-        return ev::fromDouble(v);
+    b.def("getRenderbufferParameter", 2, [](Value, std::span<const Value>) {
+        return ev::fromDouble(0);
     });
 
-    b.def("getBufferParameter", 2, [c](Value, std::span<const Value> a) {
-        live(c);
-        GLenum target = u32At(a, 0);
+    b.def("getBufferParameter", 2, [](Value, std::span<const Value>) {
+        return ev::fromDouble(0);
+    });
+
+    b.def("getVertexAttrib", 2, [](Value, std::span<const Value> a) {
         GLenum pname = u32At(a, 1);
         switch (pname) {
-            case 0x8764:  // BUFFER_SIZE
-            case 0x9120:  // BUFFER_MAP_LENGTH
-            case 0x9121: { // BUFFER_MAP_OFFSET
-                GLint64 v = 0;
-                glGetBufferParameteri64v(target, pname, &v);
-                return ev::fromDouble(static_cast<double>(v));
-            }
-            default: {
-                GLint v = 0;
-                glGetBufferParameteriv(target, pname, &v);
-                return ev::fromDouble(v);
-            }
-        }
-    });
-
-    b.def("getVertexAttrib", 2, [c](Value, std::span<const Value> a) {
-        auto* gl = live(c);
-        GLuint index = u32At(a, 0);
-        GLenum pname = u32At(a, 1);
-        switch (pname) {
-            case 0x889F: { // VERTEX_ATTRIB_ARRAY_BUFFER_BINDING
-                GLint bufId = 0;
-                glGetVertexAttribiv(index, pname, &bufId);
-                if (bufId != 0 && gl->isBuffer({static_cast<GLuint>(bufId)})) {
-                    return wrapGlObj(GlCell::Buffer, static_cast<GLuint>(bufId));
-                }
+            case 0x889F: // VERTEX_ATTRIB_ARRAY_BUFFER_BINDING
                 return ev::null();
-            }
-            case 0x8622:  // VERTEX_ATTRIB_ARRAY_ENABLED
-            case 0x886A:  // VERTEX_ATTRIB_ARRAY_NORMALIZED
-            case 0x88FD: { // VERTEX_ATTRIB_ARRAY_INTEGER
-                GLint v = 0;
-                glGetVertexAttribiv(index, pname, &v);
-                return ev::fromBool(v != 0);
-            }
+            case 0x8622: // VERTEX_ATTRIB_ARRAY_ENABLED
+            case 0x886A: // VERTEX_ATTRIB_ARRAY_NORMALIZED
+            case 0x88FD: // VERTEX_ATTRIB_ARRAY_INTEGER
+                return ev::fromBool(false);
             case 0x8626: { // CURRENT_VERTEX_ATTRIB
                 GLfloat v[4] = {0, 0, 0, 0};
-                glGetVertexAttribfv(index, pname, v);
-                return hostArrayOf(4, [v](size_t i) {
-                    return ev::fromDouble(v[i]);
-                });
+                return hostArrayOf(4, [v](size_t i) { return ev::fromDouble(v[i]); });
             }
-            default: {
-                GLint v = 0;
-                glGetVertexAttribiv(index, pname, &v);
-                return ev::fromDouble(v);
-            }
+            default:
+                return ev::fromDouble(0);
         }
     });
 
-    b.def("getVertexAttribOffset", 2, [c](Value, std::span<const Value> a) {
-        live(c);
-        GLuint index = u32At(a, 0);
-        GLenum pname = u32At(a, 1);
-        void* ptr = nullptr;
-        glGetVertexAttribPointerv(index, pname, &ptr);
-        return ev::fromDouble(static_cast<double>(reinterpret_cast<uintptr_t>(ptr)));
+    b.def("getVertexAttribOffset", 2, [](Value, std::span<const Value>) {
+        return ev::fromDouble(0.0);
     });
 
     // --- WebXR ---

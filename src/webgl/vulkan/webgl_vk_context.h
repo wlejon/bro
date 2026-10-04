@@ -8,7 +8,7 @@
 #include "webgl/vulkan/webgl_vk_pipeline.h"
 
 #include <vulkan/vulkan.h>
-#include <glad/gl.h>
+#include "webgl/webgl_types.h"
 #include <vector>
 #include <unordered_map>
 #include <memory>
@@ -109,6 +109,7 @@ public:
     void uniform3f(WebGLUniformLocation loc, GLfloat v0, GLfloat v1, GLfloat v2);
     void uniform4f(WebGLUniformLocation loc, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
     void uniform1i(WebGLUniformLocation loc, GLint v0);
+    void uniform2i(WebGLUniformLocation loc, GLint v0, GLint v1);
     void uniform1fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v);
     void uniform2fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v);
     void uniform3fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v);
@@ -188,6 +189,14 @@ private:
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+
+    // Dummy fallback 1x1 texture for unbound sampler slots
+    VkImage dummyImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory dummyMemory_ = VK_NULL_HANDLE;
+    VkImageView dummyView_ = VK_NULL_HANDLE;
+    VkSampler dummySampler_ = VK_NULL_HANDLE;
+
+    void updateTextureSampler(VkTextureResource& tex);
 
     // State tracking
     VkViewport viewport_{};

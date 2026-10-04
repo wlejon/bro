@@ -11,7 +11,7 @@
 #include "util/time.h"
 #include "bronze_host/host_window_open.h"
 
-#include <glad/gl.h>
+#include "render/gl_compat.h"
 #include <algorithm>
 #include <chrono>
 #include <thread>

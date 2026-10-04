@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glad/gl.h>
+#include "webgl/webgl_types.h"
 #include <string>
 #include <cstdint>
 

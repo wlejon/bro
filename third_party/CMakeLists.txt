@@ -236,8 +236,6 @@ set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 add_subdirectory(SDL EXCLUDE_FROM_ALL)
 
-# --- glad2 (OpenGL 3.3 Core loader) ---
-add_subdirectory(glad EXCLUDE_FROM_ALL)
 
 # --- broaudio (audio engine library) ---
 # Prefer the standalone repo at ../broaudio for local development.

@@ -1,12 +1,15 @@
 #pragma once
 
-#include <glad/gl.h>
 #include <cstdint>
 #include <cstddef>
 
 namespace bro::platform { class Window; }
 
 namespace bro::render {
+
+using GLuint = uint32_t;
+using GLint = int32_t;
+using GLenum = uint32_t;
 
 // --- GL capabilities, latched once from the GL thread ------------------------
 //
@@ -66,7 +69,7 @@ public:
     void deleteTexture(GLuint tex);
 
     // --- Buffer helpers ---
-    GLuint createBuffer(uint32_t sizeBytes, GLenum usage = GL_DYNAMIC_DRAW);
+    GLuint createBuffer(uint32_t sizeBytes, GLenum usage = 0x88E8 /* GL_DYNAMIC_DRAW */);
     void uploadBuffer(GLuint buf, const void* data, uint32_t sizeBytes);
     void deleteBuffer(GLuint buf);
 

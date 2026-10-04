@@ -30,7 +30,8 @@
 #include <include/core/SkTypeface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
-#include <glad/gl.h>
+using GLuint = uint32_t;
+using GLsync = void*;
 
 class GrDirectContext;
 struct SDL_Window;

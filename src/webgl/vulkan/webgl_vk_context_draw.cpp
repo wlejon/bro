@@ -31,6 +31,47 @@ void WebGLVkContext::beginRendering() {
     ensureCommandBuffer();
     if (currentCmd_ == VK_NULL_HANDLE) return;
 
+    if (currentFboId_ != 0) {
+        auto itFbo = framebuffers_.find(currentFboId_);
+        if (itFbo == framebuffers_.end() || itFbo->second.colorAttachmentTex == 0) return;
+        auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
+        if (itTex == textures_.end() || !itTex->second.isValid()) return;
+
+        VkTextureResource& colorTex = itTex->second;
+        if (colorTex.currentLayout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+            context_.transitionImageLayout(colorTex.image, colorTex.format,
+                                           colorTex.currentLayout,
+                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                           currentCmd_);
+            colorTex.currentLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+
+        VkRenderingAttachmentInfoKHR colorAttachment{};
+        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+        colorAttachment.imageView = colorTex.view;
+        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfoKHR renderingInfo{};
+        renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR;
+        renderingInfo.renderArea.offset = {0, 0};
+        renderingInfo.renderArea.extent = {colorTex.width, colorTex.height};
+        renderingInfo.layerCount = 1;
+        renderingInfo.colorAttachmentCount = 1;
+        renderingInfo.pColorAttachments = &colorAttachment;
+        renderingInfo.pDepthAttachment = nullptr;
+        renderingInfo.pStencilAttachment = nullptr;
+
+        if (pfnCmdBeginRendering_) {
+            pfnCmdBeginRendering_(currentCmd_, &renderingInfo);
+            inRenderPass_ = true;
+        } else {
+            LOG_ERROR("WebGLVkContext: Dynamic rendering function vkCmdBeginRendering unavailable");
+        }
+        return;
+    }
+
     // Transition canvas attachments to optimal layout
     canvas_.transitionToColorAttachment(currentCmd_);
     if (canvas_.depthImage() != VK_NULL_HANDLE) {
@@ -77,6 +118,20 @@ void WebGLVkContext::endRendering() {
             pfnCmdEndRendering_(currentCmd_);
         }
         inRenderPass_ = false;
+
+        if (currentFboId_ != 0) {
+            auto itFbo = framebuffers_.find(currentFboId_);
+            if (itFbo != framebuffers_.end() && itFbo->second.colorAttachmentTex != 0) {
+                auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
+                if (itTex != textures_.end() && itTex->second.isValid()) {
+                    context_.transitionImageLayout(itTex->second.image, itTex->second.format,
+                                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                   currentCmd_);
+                    itTex->second.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                }
+            }
+        }
     }
 }
 
@@ -147,23 +202,19 @@ void WebGLVkContext::drawArrays(GLenum mode, GLint first, GLsizei count) {
 }
 
 void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instanceCount) {
-    if (currentProgramId_ == 0 || count <= 0 || instanceCount <= 0) return;
-
     auto itProg = programs_.find(currentProgramId_);
-    if (itProg == programs_.end() || !itProg->second.linkStatus) return;
-    VkProgramResource& prog = itProg->second;
+    if (itProg == programs_.end() || !itProg->second.linkStatus || count <= 0 || instanceCount <= 0) return;
 
-    auto itVert = shaders_.find(prog.vertShaderId);
-    auto itFrag = shaders_.find(prog.fragShaderId);
-    if (itVert == shaders_.end() || itFrag == shaders_.end()) return;
+    VkProgramResource& prog = itProg->second;
+    if (prog.vertModule == VK_NULL_HANDLE || prog.fragModule == VK_NULL_HANDLE) return;
 
     beginRendering();
     if (!inRenderPass_ || currentCmd_ == VK_NULL_HANDLE) return;
 
     // Build PipelineKey
     PipelineKey key{};
-    key.vertShader = itVert->second.module;
-    key.fragShader = itFrag->second.module;
+    key.vertShader = prog.vertModule;
+    key.fragShader = prog.fragModule;
     key.topology = glTopologyToVk(mode);
 
     key.cullFaceEnable = cullFaceEnabled_ ? VK_TRUE : VK_FALSE;
@@ -188,8 +239,24 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
     if (colorMask_[2]) key.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
     if (colorMask_[3]) key.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
 
-    key.colorAttachmentFormat = canvas_.colorFormat();
-    key.depthAttachmentFormat = canvas_.depthFormat();
+    VkFormat targetColorFormat = canvas_.colorFormat();
+    VkFormat targetDepthFormat = canvas_.depthFormat();
+    VkExtent2D targetExtent = {canvas_.width(), canvas_.height()};
+
+    if (currentFboId_ != 0) {
+        auto itFbo = framebuffers_.find(currentFboId_);
+        if (itFbo != framebuffers_.end() && itFbo->second.colorAttachmentTex != 0) {
+            auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
+            if (itTex != textures_.end() && itTex->second.isValid()) {
+                targetColorFormat = itTex->second.format;
+                targetDepthFormat = VK_FORMAT_UNDEFINED;
+                targetExtent = {itTex->second.width, itTex->second.height};
+            }
+        }
+    }
+
+    key.colorAttachmentFormat = targetColorFormat;
+    key.depthAttachmentFormat = targetDepthFormat;
 
     // Map vertex attributes and bindings from active VAO
     VkVAOResource& vao = vaos_[currentVaoId_];
@@ -247,9 +314,57 @@ void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count
         sc = scissor_;
     } else {
         sc.offset = {0, 0};
-        sc.extent = {canvas_.width(), canvas_.height()};
+        sc.extent = targetExtent;
     }
     vkCmdSetScissor(currentCmd_, 0, 1, &sc);
+
+    // Bind descriptor set for samplers
+    if (prog.descriptorSet != VK_NULL_HANDLE) {
+        std::vector<VkDescriptorImageInfo> imageInfos;
+        std::vector<VkWriteDescriptorSet> writes;
+        imageInfos.reserve(8);
+        writes.reserve(8);
+
+        for (uint32_t binding = 0; binding < 8; ++binding) {
+            uint32_t texUnit = 0;
+            auto sIt = prog.samplerBindings.find(binding);
+            if (sIt != prog.samplerBindings.end()) {
+                texUnit = sIt->second;
+            }
+            GLuint texId = (texUnit < boundTextures2D_.size()) ? boundTextures2D_[texUnit] : 0;
+            VkImageView view = dummyView_;
+            VkSampler sampler = dummySampler_;
+
+            if (texId != 0) {
+                auto tIt = textures_.find(texId);
+                if (tIt != textures_.end() && tIt->second.isValid()) {
+                    updateTextureSampler(tIt->second);
+                    view = tIt->second.view;
+                    sampler = tIt->second.sampler;
+                }
+            }
+
+            VkDescriptorImageInfo imgInfo{};
+            imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imgInfo.imageView = view;
+            imgInfo.sampler = sampler;
+            imageInfos.push_back(imgInfo);
+
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = prog.descriptorSet;
+            write.dstBinding = binding;
+            write.dstArrayElement = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &imageInfos.back();
+            writes.push_back(write);
+        }
+
+        vkUpdateDescriptorSets(context_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        vkCmdBindDescriptorSets(currentCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
+                                0, 1, &prog.descriptorSet, 0, nullptr);
+    }
 
     // Push uniform constants
     if (!prog.uniformBytes.empty()) {
@@ -284,17 +399,14 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     auto itProg = programs_.find(currentProgramId_);
     if (itProg == programs_.end() || !itProg->second.linkStatus) return;
     VkProgramResource& prog = itProg->second;
-
-    auto itVert = shaders_.find(prog.vertShaderId);
-    auto itFrag = shaders_.find(prog.fragShaderId);
-    if (itVert == shaders_.end() || itFrag == shaders_.end()) return;
+    if (prog.vertModule == VK_NULL_HANDLE || prog.fragModule == VK_NULL_HANDLE) return;
 
     beginRendering();
     if (!inRenderPass_ || currentCmd_ == VK_NULL_HANDLE) return;
 
     PipelineKey key{};
-    key.vertShader = itVert->second.module;
-    key.fragShader = itFrag->second.module;
+    key.vertShader = prog.vertModule;
+    key.fragShader = prog.fragModule;
     key.topology = glTopologyToVk(mode);
 
     key.cullFaceEnable = cullFaceEnabled_ ? VK_TRUE : VK_FALSE;
@@ -319,8 +431,24 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
     if (colorMask_[2]) key.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
     if (colorMask_[3]) key.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
 
-    key.colorAttachmentFormat = canvas_.colorFormat();
-    key.depthAttachmentFormat = canvas_.depthFormat();
+    VkFormat targetColorFormat = canvas_.colorFormat();
+    VkFormat targetDepthFormat = canvas_.depthFormat();
+    VkExtent2D targetExtent = {canvas_.width(), canvas_.height()};
+
+    if (currentFboId_ != 0) {
+        auto itFbo = framebuffers_.find(currentFboId_);
+        if (itFbo != framebuffers_.end() && itFbo->second.colorAttachmentTex != 0) {
+            auto itTex = textures_.find(itFbo->second.colorAttachmentTex);
+            if (itTex != textures_.end() && itTex->second.isValid()) {
+                targetColorFormat = itTex->second.format;
+                targetDepthFormat = VK_FORMAT_UNDEFINED;
+                targetExtent = {itTex->second.width, itTex->second.height};
+            }
+        }
+    }
+
+    key.colorAttachmentFormat = targetColorFormat;
+    key.depthAttachmentFormat = targetDepthFormat;
 
     VkVAOResource& vao = vaos_[currentVaoId_];
     uint32_t activeAttrCount = 0;
@@ -376,9 +504,57 @@ void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum ty
         sc = scissor_;
     } else {
         sc.offset = {0, 0};
-        sc.extent = {canvas_.width(), canvas_.height()};
+        sc.extent = targetExtent;
     }
     vkCmdSetScissor(currentCmd_, 0, 1, &sc);
+
+    // Bind descriptor set for samplers
+    if (prog.descriptorSet != VK_NULL_HANDLE) {
+        std::vector<VkDescriptorImageInfo> imageInfos;
+        std::vector<VkWriteDescriptorSet> writes;
+        imageInfos.reserve(8);
+        writes.reserve(8);
+
+        for (uint32_t binding = 0; binding < 8; ++binding) {
+            uint32_t texUnit = 0;
+            auto sIt = prog.samplerBindings.find(binding);
+            if (sIt != prog.samplerBindings.end()) {
+                texUnit = sIt->second;
+            }
+            GLuint texId = (texUnit < boundTextures2D_.size()) ? boundTextures2D_[texUnit] : 0;
+            VkImageView view = dummyView_;
+            VkSampler sampler = dummySampler_;
+
+            if (texId != 0) {
+                auto tIt = textures_.find(texId);
+                if (tIt != textures_.end() && tIt->second.isValid()) {
+                    updateTextureSampler(tIt->second);
+                    view = tIt->second.view;
+                    sampler = tIt->second.sampler;
+                }
+            }
+
+            VkDescriptorImageInfo imgInfo{};
+            imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imgInfo.imageView = view;
+            imgInfo.sampler = sampler;
+            imageInfos.push_back(imgInfo);
+
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = prog.descriptorSet;
+            write.dstBinding = binding;
+            write.dstArrayElement = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &imageInfos.back();
+            writes.push_back(write);
+        }
+
+        vkUpdateDescriptorSets(context_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        vkCmdBindDescriptorSets(currentCmd_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
+                                0, 1, &prog.descriptorSet, 0, nullptr);
+    }
 
     if (!prog.uniformBytes.empty()) {
         vkCmdPushConstants(currentCmd_, pipelineLayout_,

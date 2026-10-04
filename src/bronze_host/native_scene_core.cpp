@@ -9,7 +9,7 @@
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/manipulation/normals.h>
 #include <broimage/decode.h>
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 #include "engine/scene_audio_sync.h"
 #include <string_view>
 

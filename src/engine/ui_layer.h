@@ -1,8 +1,7 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
-
-#include <glad/gl.h>
 
 #include "render/command_buffer.h"
 
@@ -21,7 +20,7 @@ namespace bro::engine {
 struct UILayer {
     enum Type { HTML, Canvas, Iframe };
     Type type;
-    GLuint texture = 0;
+    uint32_t texture = 0;
     // CanvasScene id when type==Canvas; IframeDoc id when type==Iframe. Both are
     // resolved through an engine registry at composite time so a layer that
     // outlives its scene/sub-document draws nothing rather than dangling.

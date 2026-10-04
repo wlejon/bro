@@ -12,5 +12,5 @@ else()
 endif()
 
 find_package(Vulkan REQUIRED)
-target_link_libraries(bro_platform PUBLIC bro_util glad Vulkan::Headers)
+target_link_libraries(bro_platform PUBLIC bro_util Vulkan::Headers)
 target_link_libraries(bro_platform PRIVATE broimage::broimage)

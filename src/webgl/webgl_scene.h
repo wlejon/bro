@@ -3,7 +3,7 @@
 #include "render/scene_layer.h"
 #include "webgl/webgl2_context.h"
 
-#include <glad/gl.h>
+#include "webgl/webgl_types.h"
 
 namespace bro::webgl {
 

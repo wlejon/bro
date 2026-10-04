@@ -3,7 +3,7 @@
 #include "webgl/vulkan/webgl_vk_types.h"
 
 #include <vulkan/vulkan.h>
-#include <glad/gl.h>
+#include "webgl/webgl_types.h"
 #include <string>
 #include <vector>
 #include <unordered_map>

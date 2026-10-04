@@ -6,7 +6,7 @@
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bvh.h>
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 
 #include <functional>
 #include <memory>

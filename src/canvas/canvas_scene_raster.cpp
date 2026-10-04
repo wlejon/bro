@@ -17,8 +17,6 @@
 #include <include/core/SkPixmap.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
-#include <glad/gl.h>
-
 #include <iterator>
 
 namespace bro::canvas {
@@ -42,7 +40,6 @@ void CanvasScene::renderOnWorker(GrDirectContext* grctx, int w, int h) {
         dirty_ = false;
         if (grContext_) {
             grContext_->flushAndSubmit();
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
     }
 
@@ -87,8 +84,8 @@ void CanvasScene::releaseGpuResources() {
     snapshotImageValid_ = false;
     snapshotValid_ = false;
     if (grContext_) grContext_->flushAndSubmit();
-    if (gpuFBO_)    { glDeleteFramebuffers(1, &gpuFBO_); gpuFBO_ = 0; }
-    if (glTexture_) { glDeleteTextures(1, &glTexture_);  glTexture_ = 0; }
+    gpuFBO_ = 0;
+    glTexture_ = 0;
     surfWidth_ = surfHeight_ = 0;
     texWidth_ = texHeight_ = 0;
     grContext_ = nullptr;
@@ -200,7 +197,6 @@ void CanvasRasterThread::releaseScene(CanvasScene* scene) {
 }
 
 void CanvasRasterThread::submitJob(CanvasScene* scene, int w, int h, JobKind kind) {
-    GLsync fence = nullptr;
     {
         std::unique_lock<std::mutex> lk(m_);
         if (shutdown_) return;
@@ -208,20 +204,13 @@ void CanvasRasterThread::submitJob(CanvasScene* scene, int w, int h, JobKind kin
         hasJob_ = true;
         cv_.notify_all();
         cv_.wait(lk, [this] { return !hasJob_ || shutdown_; });
-        fence = doneFence_;
         doneFence_ = nullptr;
-    }
-    // GPU-side ordering: subsequent main-context commands (texture sampling)
-    // wait on the worker's fence without stalling the CPU.
-    if (fence) {
-        glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
-        glDeleteSync(fence);
     }
 }
 
 void CanvasRasterThread::threadFunc(SDL_Window* win) {
-    SDL_GL_MakeCurrent(win, glCtx_);
-    // Signal the main thread that MakeCurrent is done before any further GL.
+    (void)win;
+    // Signal the main thread that MakeCurrent is done before any further work.
     {
         std::lock_guard<std::mutex> lk(m_);
         ready_ = true;
@@ -229,14 +218,6 @@ void CanvasRasterThread::threadFunc(SDL_Window* win) {
     cv_.notify_all();
 
     grContext_ = render::SkiaRenderer::createGrContext();
-    if (!grContext_) {
-        LOG_ERROR("Canvas raster thread: failed to create GrDirectContext");
-        // Refuse future jobs instead of leaving submitJob callers blocked.
-        std::lock_guard<std::mutex> lk(m_);
-        shutdown_ = true;
-        cv_.notify_all();
-        return;
-    }
     LOG_INFO("Canvas raster thread started");
 
     std::unique_lock<std::mutex> lk(m_);
@@ -254,26 +235,19 @@ void CanvasRasterThread::threadFunc(SDL_Window* win) {
             else
                 s->releaseGpuResources();
         }
-        // GL fence — the submitting caller glWaitSyncs it on the main context
-        // so texture sampling is ordered after our GPU work. glFlush pushes
-        // the fence to the GPU (required before another context waits on it).
-        GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();
 
         lk.lock();
-        doneFence_ = fence;
+        doneFence_ = nullptr;
         hasJob_ = false;
         cv_.notify_all();
     }
-    if (doneFence_) {                     // unclaimed fence at shutdown
-        glDeleteSync(doneFence_);
-        doneFence_ = nullptr;
-    }
+    doneFence_ = nullptr;
     lk.unlock();
 
-    grContext_->flushAndSubmit();
-    grContext_.reset();
-    SDL_GL_MakeCurrent(win, nullptr);
+    if (grContext_) {
+        grContext_->flushAndSubmit();
+        grContext_.reset();
+    }
     LOG_INFO("Canvas raster thread stopped");
 }
 
@@ -556,50 +530,8 @@ void CanvasScene::rasterize(render::GLContext* gl) {
     if (canvasW <= 0 || canvasH <= 0) return;
     ensureSurface(canvasW, canvasH);
 
-    // Replay deferred canvas commands onto the Skia surface. flushCommands
-    // handles the Ganesh resetContext + flushAndSubmit so the FBO contains
-    // the drawn result; we restore the default framebuffer here for the
-    // compositing code that runs after.
     flushCommands();
-
-    if (!dirty_) return;
     dirty_ = false;
-
-    if (grContext_) {
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return;
-    }
-
-    // CPU fallback: upload raster pixels to GL texture
-    if (!surface_) return;
-
-    SkPixmap pixmap;
-    if (!surface_->peekPixels(&pixmap)) return;
-
-    bool needsAlloc = false;
-    if (!glTexture_) {
-        glGenTextures(1, &glTexture_);
-        glBindTexture(GL_TEXTURE_2D, glTexture_);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        needsAlloc = true;
-    } else {
-        glBindTexture(GL_TEXTURE_2D, glTexture_);
-        if (canvasW != texWidth_ || canvasH != texHeight_) needsAlloc = true;
-    }
-
-    if (needsAlloc) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, canvasW, canvasH, 0,
-                     GL_BGRA, GL_UNSIGNED_BYTE, pixmap.addr());
-        texWidth_ = canvasW;
-        texHeight_ = canvasH;
-    } else {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, canvasW, canvasH,
-                        GL_BGRA, GL_UNSIGNED_BYTE, pixmap.addr());
-    }
-    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 } // namespace bro::canvas

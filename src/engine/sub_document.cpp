@@ -32,7 +32,7 @@
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
-#include <glad/gl.h>
+#include "render/gl_compat.h"
 #include <algorithm>
 #include <filesystem>
 

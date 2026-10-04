@@ -23,7 +23,7 @@
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
 
-#include <glad/gl.h>
+#include "render/gl_compat.h"
 #include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <algorithm>
@@ -57,7 +57,7 @@ void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     canvasScenes_.push_back(std::move(scene));
 }
 
-void Engine::drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
+void Engine::drawTexturedQuad(uint32_t tex, float x, float y, float w, float h) {
     if (!tex || !gl_) return;
 
     render::TextureVertex quad[6] = {
@@ -560,7 +560,7 @@ std::vector<uint8_t> Engine::readbackSubDocTexture(unsigned int tex, int w, int 
     return px;
 }
 
-void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO,
+void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t targetFBO,
                              int offsetY, int layerW, int layerH) {
     if (!gl_) return;
     if (layers.empty()) return;

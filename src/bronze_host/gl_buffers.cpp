@@ -298,28 +298,28 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     b.def("vertexAttrib1f", 2, [c](Value, std::span<const Value> a) {
         live(c);
-        glVertexAttrib1f(u32At(a, 0), static_cast<float>(numAt(a, 1)));
+        c->vertexAttrib1f(u32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
     b.def("vertexAttrib2f", 3, [c](Value, std::span<const Value> a) {
         live(c);
-        glVertexAttrib2f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
+        c->vertexAttrib2f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
     b.def("vertexAttrib3f", 4, [c](Value, std::span<const Value> a) {
         live(c);
-        glVertexAttrib3f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
+        c->vertexAttrib3f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
                          static_cast<float>(numAt(a, 3)));
         return ev::undefined();
     });
     b.def("vertexAttrib4f", 5, [c](Value, std::span<const Value> a) {
         live(c);
-        glVertexAttrib4f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
+        c->vertexAttrib4f(u32At(a, 0), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
                          static_cast<float>(numAt(a, 3)), static_cast<float>(numAt(a, 4)));
         return ev::undefined();
     });
 
-    auto defAttribFv = [&](const char* name, size_t comps, void (*fn)(GLuint, const GLfloat*)) {
+    auto defAttribFv = [&](const char* name, size_t comps, void (webgl::WebGL2RenderingContext::*fn)(GLuint, const float*)) {
         b.def(name, 2, [c, comps, fn](Value, std::span<const Value> a) {
             std::vector<float> storage;
             const float* p = nullptr;
@@ -334,17 +334,17 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                     }
                     if (count >= comps) {
                         live(c);
-                        fn(u32At(a, 0), p + srcOffset);
+                        (c->*fn)(u32At(a, 0), p + srcOffset);
                     }
                 }
             }
             return ev::undefined();
         });
     };
-    defAttribFv("vertexAttrib1fv", 1, glVertexAttrib1fv);
-    defAttribFv("vertexAttrib2fv", 2, glVertexAttrib2fv);
-    defAttribFv("vertexAttrib3fv", 3, glVertexAttrib3fv);
-    defAttribFv("vertexAttrib4fv", 4, glVertexAttrib4fv);
+    defAttribFv("vertexAttrib1fv", 1, &webgl::WebGL2RenderingContext::vertexAttrib1fv);
+    defAttribFv("vertexAttrib2fv", 2, &webgl::WebGL2RenderingContext::vertexAttrib2fv);
+    defAttribFv("vertexAttrib3fv", 3, &webgl::WebGL2RenderingContext::vertexAttrib3fv);
+    defAttribFv("vertexAttrib4fv", 4, &webgl::WebGL2RenderingContext::vertexAttrib4fv);
 }
 
 }  // namespace bro::bronze_host

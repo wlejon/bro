@@ -15,9 +15,6 @@
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include <include/gpu/ganesh/GrBackendSurface.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
-#include <include/gpu/ganesh/gl/GrGLBackendSurface.h>
-
-#include <glad/gl.h>
 
 #include <cmath>
 #include <cstring>
@@ -65,18 +62,10 @@ CanvasScene::~CanvasScene() {
 void CanvasScene::cleanup() {
     surface_.reset();
     surfWidth_ = surfHeight_ = 0;
-    if (gpuFBO_) {
-        glDeleteFramebuffers(1, &gpuFBO_);
-        gpuFBO_ = 0;
-    }
-    if (glTexture_) {
-        glDeleteTextures(1, &glTexture_);
-        glTexture_ = 0;
-    }
+    gpuFBO_ = 0;
+    glTexture_ = 0;
     texWidth_ = texHeight_ = 0;
     fontCache_.clear();
-    // The shaped-run cache keys on the font descriptor, and the faces those
-    // descriptors resolve to are exactly what just went away.
     shaper_.clear();
 }
 
@@ -118,76 +107,10 @@ void CanvasScene::ensureSurface(int w, int h) {
     snapshotImageValid_ = false;
     snapshotImage_.reset();
 
-    if (grContext_) {
-        // Resizing: drop the old SkSurface, drain Ganesh, and recreate the
-        // texture/FBO from scratch instead of reusing the names. Two reasons:
-        //   1) Skia's Ganesh wraps the FBO by ID and caches GL state for it;
-        //      reallocating the texture's storage in place (glTexImage2D on
-        //      the same name) leaves Skia's cached state pointing at a now-
-        //      orphaned wrapping. The next draw against the new wrapping
-        //      replays a stale clear.
-        //   2) On macOS Metal-backed OpenGL, the FBO attachment caches an
-        //      internal GLDTextureRec*; that pointer goes stale when the
-        //      attached texture is reallocated underneath, and the next
-        //      glClear hits a NULL deref inside gleUpdateDrawFramebufferState.
-        // The original Windows symptom (canvas keeps drawing the previous
-        // asset after a resize) and the macOS release-build crash both come
-        // from this same surface-reuse race.
-        if (isResize) {
-            surface_.reset();
-            grContext_->flushAndSubmit();
-            if (gpuFBO_)    { glDeleteFramebuffers(1, &gpuFBO_); gpuFBO_ = 0; }
-            if (glTexture_) { glDeleteTextures(1, &glTexture_);  glTexture_ = 0; }
-        }
-    }
-
     surfWidth_ = w;
     surfHeight_ = h;
-
-    if (grContext_) {
-        // GPU path: create FBO + texture, wrap with Skia Ganesh
-        if (!glTexture_) {
-            glGenTextures(1, &glTexture_);
-        }
-        glBindTexture(GL_TEXTURE_2D, glTexture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        texWidth_ = w;
-        texHeight_ = h;
-
-        if (!gpuFBO_) {
-            glGenFramebuffers(1, &gpuFBO_);
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, gpuFBO_);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, glTexture_, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-        // Tell Skia to discard its cached view of GL state — the FBO/texture
-        // names may have been recycled to fresh objects above, and Ganesh's
-        // bind cache from the prior wrapping must not be applied to the new
-        // one.
-        grContext_->resetContext();
-
-        GrGLFramebufferInfo fbInfo;
-        fbInfo.fFBOID = gpuFBO_;
-        fbInfo.fFormat = GL_RGBA8;
-        auto backendRT = GrBackendRenderTargets::MakeGL(w, h, 0, 0, fbInfo);
-        surface_ = SkSurfaces::WrapBackendRenderTarget(
-            grContext_, backendRT,
-            kTopLeft_GrSurfaceOrigin,
-            kRGBA_8888_SkColorType,
-            SkColorSpace::MakeSRGB(), nullptr);
-    } else {
-        // CPU fallback (headless --no-gpu)
-        auto info = SkImageInfo::MakeN32Premul(w, h);
-        surface_ = SkSurfaces::Raster(info);
-    }
+    auto info = SkImageInfo::MakeN32Premul(w, h);
+    surface_ = SkSurfaces::Raster(info);
 
     // Clear to transparent (canvas default)
     if (surface_) {

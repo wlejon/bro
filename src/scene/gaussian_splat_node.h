@@ -3,7 +3,7 @@
 #include "scene/scene_node.h"
 #include <bromath/aabb.h>
 #include <bromesh/gaussian_splat.h>
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 
 #include <cstdint>
 #include <vector>

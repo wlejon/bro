@@ -43,9 +43,14 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <glad/gl.h>
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
+
+namespace bro::render {
+class VulkanContext;
+class VulkanSwapchain;
+class VulkanPresenter;
+}
 
 namespace bro::engine {
 
@@ -87,6 +92,9 @@ public:
     int framePixelHeight() const { return deviceScale_.drawableH; }
     /// Headless: render as a display with `scale` device px per CSS px.
     void setDeviceScaleFactor(float scale);
+
+    render::VulkanContext* vulkanContext() const { return vulkanContext_.get(); }
+    render::VulkanPresenter* vulkanPresenter() const { return vulkanPresenter_.get(); }
 
     std::string effectiveColorScheme() const;
     void applyColorScheme();
@@ -539,8 +547,8 @@ private:
                                     dom::Element* relatedTarget = nullptr);
     void advanceFocus(bool reverse);
     void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
-    void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
-    void compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO = 0,
+    void drawTexturedQuad(uint32_t tex, float x, float y, float w, float h);
+    void compositeLayers(const std::vector<UILayer>& layers, uint32_t targetFBO = 0,
                          int offsetY = 0, int layerW = -1, int layerH = -1);
     FramePresenter::Snapshot buildRasterSnapshot() const;
     void renderAndPresentFrame(double frameStart, double now, double wallFrameDtMs,
@@ -648,6 +656,9 @@ private:
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<render::GLContext> gl_;
     std::unique_ptr<render::Renderer> renderer_;
+    std::unique_ptr<render::VulkanContext> vulkanContext_;
+    std::unique_ptr<render::VulkanSwapchain> vulkanSwapchain_;
+    std::unique_ptr<render::VulkanPresenter> vulkanPresenter_;
     std::unique_ptr<dom::Document> document_;
     TransitionManager transitionManager_;
     AnimationManager animationManager_;

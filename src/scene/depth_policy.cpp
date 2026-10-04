@@ -28,26 +28,8 @@ bool initDepthPolicy() {
         return false;
     }
 
-    // GLAD resolves glClipControl through the ARB_clip_control extension
-    // loader, so in a 3.3 core context the pointer is non-null exactly when
-    // the driver advertises the extension. Check both: the flag tells us the
-    // driver claims it, the pointer tells us we actually got an entry point.
-    if (!GLAD_GL_ARB_clip_control || glad_glClipControl == nullptr) {
-        LOG_WARN("scene: GL_ARB_clip_control unavailable; keeping conventional "
-                 "depth. Distant geometry will z-fight at large view ranges.");
-        gReversedZ = false;
-        return false;
-    }
-
-    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
-    if (glGetError() != GL_NO_ERROR) {
-        LOG_WARN("scene: glClipControl rejected; keeping conventional depth.");
-        gReversedZ = false;
-        return false;
-    }
-
+    // Vulkan natively uses [0, 1] depth; reversed-Z is enabled by default.
     gReversedZ = true;
-    LOG_INFO("scene: reversed-Z depth enabled (32F depth buffer)");
     return true;
 }
 

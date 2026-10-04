@@ -128,7 +128,7 @@ public:
     /// Worker hands off: stage the new front index, then publish the fence
     /// via FrameWorker. Main side reads pendingFront_ inside consumeIfReady
     /// after observing the state release.
-    void publishResult(GLsync fence) {
+    void publishResult(render::GLsync fence = nullptr) {
         int back = 1 - front_.load(std::memory_order_acquire);
         pendingFront_.store(back, std::memory_order_release);
         worker_.publishResult(fence);

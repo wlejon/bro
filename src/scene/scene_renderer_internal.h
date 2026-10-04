@@ -7,7 +7,7 @@
 // file-local static in any one unit.
 
 #include "atmosphere.glsl.h"   // kAtmosphereSrc
-#include <glad/gl.h>
+#include "scene/gl_available.h"
 
 #include <cassert>
 #include <cstring>
