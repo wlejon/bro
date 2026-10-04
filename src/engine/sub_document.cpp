@@ -154,7 +154,7 @@ void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
     }
     rec->setBuffer(&d.cmdBuffer);
     traversal->setLayerBreakCallback(
-        [rec](canvas::CanvasScene* scene, unsigned int, float x, float y,
+        [rec](int /*kind*/, canvas::CanvasScene* scene, unsigned int, float x, float y,
               float w, float h, float, float, float, float) {
             if (scene) rec->recordBlitCanvasInline(scene, x, y, w, h);
         });

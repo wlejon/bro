@@ -45,6 +45,7 @@
 #include <vector>
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
+#include <vulkan/vulkan.h>
 
 namespace bro::render {
 class VulkanContext;
@@ -550,6 +551,7 @@ private:
     void drawTexturedQuad(uint32_t tex, float x, float y, float w, float h);
     void compositeLayers(const std::vector<UILayer>& layers, uint32_t targetFBO = 0,
                          int offsetY = 0, int layerW = -1, int layerH = -1);
+    void presentCurrentFrame();
     FramePresenter::Snapshot buildRasterSnapshot() const;
     void renderAndPresentFrame(double frameStart, double now, double wallFrameDtMs,
                                bool layoutSignaled, bool baseWasDirty);
@@ -958,6 +960,12 @@ private:
     unsigned int uiQuadVAO_ = 0;
     unsigned int uiQuadVBO_ = 0;
     bool testFailure_ = false;
+
+    sk_sp<SkSurface> frameCompositeSurface_;
+    int frameCompositeW_ = 0, frameCompositeH_ = 0;
+    VkImage pendingVkImage_ = VK_NULL_HANDLE;
+    VkImageLayout pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+    uint32_t pendingVkImageW_ = 0, pendingVkImageH_ = 0;
 };
 
 } // namespace bro::engine

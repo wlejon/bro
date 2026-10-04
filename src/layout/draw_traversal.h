@@ -118,7 +118,8 @@ public:
     // the same untransformed pixel space as (x..h). clipW < 0 ⇒ unclipped. The
     // canvas/WebGL layer is composited as a separate quad that bypasses the
     // Skia clip stack, so the compositor re-applies this clip as a GL scissor.
-    using LayerBreakCallback = std::function<void(canvas::CanvasScene* scene,
+    using LayerBreakCallback = std::function<void(int kind,
+                                                   canvas::CanvasScene* scene,
                                                    unsigned int directTexture,
                                                    float x, float y, float w, float h,
                                                    float clipX, float clipY,

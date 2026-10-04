@@ -196,11 +196,6 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
         }
     }
 
-    glViewport(0, 0, deviceScale_.drawableW, deviceScale_.drawableH);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
     compositeLayers(layers.appLayers, 0,
                     layers.appInsetTop, layers.appContentW,
                     layers.appContentH);
@@ -213,7 +208,11 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 
-    if (window_) window_->swapWindow();
+    if (window_) {
+        window_->swapWindow();
+    } else {
+        presentCurrentFrame();
+    }
 
     {
         double capMs = frameCapIntervalMs_;

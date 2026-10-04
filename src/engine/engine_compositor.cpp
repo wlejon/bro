@@ -17,9 +17,18 @@
 #include "render/gl_context.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
+#include "render/vulkan_presenter.h"
+#include "webgl/webgl2_context.h"
+
+#if BRO_WITH_3D
+#include "scene/scene_graph.h"
+#include "scene/scene_renderer.h"
+#endif
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
+#include <include/core/SkPaint.h>
+#include <include/core/SkRect.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
 
@@ -57,27 +66,8 @@ void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     canvasScenes_.push_back(std::move(scene));
 }
 
-void Engine::drawTexturedQuad(uint32_t tex, float x, float y, float w, float h) {
-    if (!tex || !gl_) return;
-
-    render::TextureVertex quad[6] = {
-        {x,   y,   0, 0}, {x+w, y,   1, 0}, {x+w, y+h, 1, 1},
-        {x,   y,   0, 0}, {x+w, y+h, 1, 1}, {x,   y+h, 0, 1},
-    };
-
-    glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-
-    glBindVertexArray(uiQuadVAO_);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
-                          (void*)offsetof(render::TextureVertex, u));
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+void Engine::drawTexturedQuad(uint32_t /*tex*/, float /*x*/, float /*y*/, float /*w*/, float /*h*/) {
+    // Legacy OpenGL draw quad stub - presentation is handled via VulkanPresenter
 }
 
 void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
@@ -109,11 +99,9 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     // Layer-break callback emits Cmd_LayerBreak. The replayer's handler does
     // the actual GPU surface management.
     drawTraversal_->setLayerBreakCallback(
-        [this](canvas::CanvasScene* scene, unsigned int directTexture,
+        [this](int kind, canvas::CanvasScene* scene, unsigned int directTexture,
                float x, float y, float w, float h,
                float clipX, float clipY, float clipW, float clipH) {
-            int kind = scene ? render::Cmd_LayerBreak::Canvas2D
-                             : render::Cmd_LayerBreak::WebGL;
             recordingRenderer_->recordLayerBreak(
                 kind, scene ? scene->sceneId() : 0, directTexture, x, y, w, h,
                 clipX, clipY, clipW, clipH);
@@ -199,7 +187,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              int surfW, int surfH,
                              std::vector<UILayer>& outLayers,
                              const render::CommandBuffer* promotedBuffer) {
-    if (!renderer || !renderer->grContext()) return;
+    if (!renderer) return;
+    if (!renderer->grContext() && !vulkanPresenter_) return;
 
     // surfW/surfH are the *content* dimensions (viewport minus engine-reserved
     // insets) — app layer surfaces are content-sized. The pool compare below
@@ -236,11 +225,19 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
             UILayer htmlLayer;
             htmlLayer.type = UILayer::HTML;
             htmlLayer.texture = pool[prevIdx].texture;
+            htmlLayer.surface = pool[prevIdx].surface;
             outLayers.push_back(std::move(htmlLayer));
 
             UILayer quadLayer;
-            quadLayer.type = (kind == render::Cmd_LayerBreak::IframeDoc)
-                                 ? UILayer::Iframe : UILayer::Canvas;
+            if (kind == render::Cmd_LayerBreak::IframeDoc) {
+                quadLayer.type = UILayer::Iframe;
+            } else if (kind == render::Cmd_LayerBreak::Scene3D) {
+                quadLayer.type = UILayer::Scene3D;
+            } else if (kind == render::Cmd_LayerBreak::WebGL) {
+                quadLayer.type = UILayer::WebGL;
+            } else {
+                quadLayer.type = UILayer::Canvas;
+            }
             quadLayer.canvasSceneId = sceneId;    // CanvasScene id or IframeDoc id
             quadLayer.texture = directTexture;     // WebGL direct texture (0 otherwise)
             quadLayer.cx = x; quadLayer.cy = y;
@@ -257,6 +254,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     UILayer lastHtml;
     lastHtml.type = UILayer::HTML;
     lastHtml.texture = pool[htmlLayerIdx].texture;
+    lastHtml.surface = pool[htmlLayerIdx].surface;
     outLayers.push_back(std::move(lastHtml));
 
     // Compositor-promoted layer: replay the promoted subtrees into one extra
@@ -284,6 +282,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
         UILayer promotedLayer;
         promotedLayer.type = UILayer::HTML;
         promotedLayer.texture = pool[promotedIdx].texture;
+        promotedLayer.surface = pool[promotedIdx].surface;
         outLayers.push_back(std::move(promotedLayer));
         lastIdx = promotedIdx;
     }
@@ -332,7 +331,8 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
                                      int& poolW, int& poolH,
                                      int vpW, int vpH,
                                      std::vector<UILayer>& outLayers) {
-    if (!renderer || !renderer->grContext()) return;
+    if (!renderer) return;
+    if (!renderer->grContext() && !vulkanPresenter_) return;
     if (buffer.commandCount() == 0) return;
 
     if (poolW != vpW || poolH != vpH) {
@@ -366,6 +366,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
             UILayer panelLayer;
             panelLayer.type = UILayer::HTML;
             panelLayer.texture = pool[panelIdx].texture;
+            panelLayer.surface = pool[panelIdx].surface;
             outLayers.push_back(std::move(panelLayer));
 
             panelIdx++;
@@ -397,6 +398,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     UILayer panelLayer;
     panelLayer.type = UILayer::HTML;
     panelLayer.texture = pool[panelIdx].texture;
+    panelLayer.surface = pool[panelIdx].surface;
     outLayers.push_back(std::move(panelLayer));
 
     renderer->switchSurface(origSurface);
@@ -426,7 +428,8 @@ void Engine::recordIframeLayers() {
 // sized GPU surface, and stash the resulting texture on the IframeDoc for the
 // app compositor to draw at the <iframe> element's box.
 void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
-    if (!renderer || !renderer->grContext()) return;
+    if (!renderer) return;
+    if (!renderer->grContext() && !vulkanPresenter_) return;
     // Whoever replays the sub-docs OWNS their surfaces — the raster thread
     // windowed, the main thread headless (screenshot() replays inline, there
     // being no raster thread). So this is exactly the right place to destroy the
@@ -462,7 +465,8 @@ void Engine::recordWindowHostLayers() {
 // frame's single GLsync fence covers every host's sampling exactly as it covers
 // the app's own layers.
 void Engine::replayWindowHostLayers(render::SkiaRenderer* renderer) {
-    if (!renderer || !renderer->grContext()) return;
+    if (!renderer) return;
+    if (!renderer->grContext() && !vulkanPresenter_) return;
     const float appScale = renderer->deviceScale();
     for (auto& h : windowHosts_) {
         if (h->pendingClose) continue;
@@ -539,165 +543,141 @@ void Engine::quiesceRasterForCapture() {
 
 // CPU-renderer fallback shared by both capture paths: read back whatever the
 // last replay published into `tex`, with no re-record.
-std::vector<uint8_t> Engine::readbackSubDocTexture(unsigned int tex, int w, int h,
+std::vector<uint8_t> Engine::readbackSubDocTexture(unsigned int /*tex*/, int /*w*/, int /*h*/,
                                                    int& outW, int& outH) {
-    if (tex == 0 || w <= 0 || h <= 0) return {};
-    GLuint fbo = 0;
-    glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, tex, 0);
-    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    else
-        px.clear();
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &fbo);
-    if (px.empty()) return {};
-    outW = w;
-    outH = h;
-    return px;
+    outW = 0;
+    outH = 0;
+    return {};
 }
 
-void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t targetFBO,
-                             int offsetY, int layerW, int layerH) {
-    if (!gl_) return;
+void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targetFBO*/,
+                             int offsetY, int /*layerW*/, int /*layerH*/) {
     if (layers.empty()) return;
 
+    int fbW = deviceScale_.drawableW;
+    int fbH = deviceScale_.drawableH;
+    if (fbW <= 0) fbW = viewportWidth_;
+    if (fbH <= 0) fbH = viewportHeight_;
+
+    if (!frameCompositeSurface_ || frameCompositeW_ != fbW || frameCompositeH_ != fbH) {
+        frameCompositeSurface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(fbW, fbH));
+        frameCompositeW_ = fbW;
+        frameCompositeH_ = fbH;
+        if (frameCompositeSurface_) {
+            frameCompositeSurface_->getCanvas()->clear(SK_ColorBLACK);
+        }
+    }
+
+    if (!frameCompositeSurface_) return;
+
+    SkCanvas* canvas = frameCompositeSurface_->getCanvas();
     float vw = static_cast<float>(viewportWidth_);
     float vh = static_cast<float>(viewportHeight_);
-
-    // Placement of this layer set. App layers are content-sized and recorded
-    // in content space: their HTML quads composite at (0, offsetY) with
-    // content dimensions (full texture UV), and canvas/WebGL/scene quads +
-    // scissor clips (recorded in content space) get offsetY added here — the
-    // single place the engine-reserved top inset enters the composite.
-    // System-panel layer sets keep full-viewport placement at (0, 0)
-    // (offsetY = 0, layerW/H < 0).
-    float lw = layerW >= 0 ? static_cast<float>(layerW) : vw;
-    float lh = layerH >= 0 ? static_cast<float>(layerH) : vh;
+    float sx = static_cast<float>(fbW) / (vw > 0.0f ? vw : 1.0f);
+    float sy = static_cast<float>(fbH) / (vh > 0.0f ? vh : 1.0f);
     float oy = static_cast<float>(offsetY);
 
-    // Quads are in CSS px (the shader maps the CSS viewport to NDC); the
-    // framebuffer is in device px, so only the viewport and the scissor
-    // rects below see the device scale.
-    const int fbW = deviceScale_.drawableW, fbH = deviceScale_.drawableH;
-    const float sx = static_cast<float>(fbW) / vw;
-    const float sy = static_cast<float>(fbH) / vh;
-    auto scissorCss = [&](float x, float yTop, float w, float h) {
-        int x0 = static_cast<int>(std::floor(x * sx));
-        int x1 = static_cast<int>(std::ceil((x + w) * sx));
-        int y0 = static_cast<int>(std::floor(yTop * sy));
-        int y1 = static_cast<int>(std::ceil((yTop + h) * sy));
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(x0, fbH - y1, std::max(0, x1 - x0), std::max(0, y1 - y0));
-    };
-
-    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
-    glViewport(0, 0, fbW, fbH);
-
-    glUseProgram(gl_->textureProgram());
-    float viewport[2] = {vw, vh};
-    glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
-    glUniform1i(gl_->textureSamplerLoc(), 0);
-
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_SCISSOR_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-    // Bind VAO and set up vertex attribs once for all quads
-    glBindVertexArray(uiQuadVAO_);
-    glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE,
-                          sizeof(render::TextureVertex), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
-                          sizeof(render::TextureVertex),
-                          (void*)offsetof(render::TextureVertex, u));
-    glActiveTexture(GL_TEXTURE0);
-
-    for (auto& layer : layers) {
+    for (const auto& layer : layers) {
         if (layer.type == UILayer::HTML) {
-            if (layer.texture) {
-                render::TextureVertex quad[6] = {
-                    {0,  oy,    0, 0}, {lw, oy,    1, 0}, {lw, oy+lh, 1, 1},
-                    {0,  oy,    0, 0}, {lw, oy+lh, 1, 1}, {0,  oy+lh, 0, 1},
-                };
-                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-                glBindTexture(GL_TEXTURE_2D, layer.texture);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
+            if (layer.surface) {
+                auto img = layer.surface->makeImageSnapshot();
+                if (img) {
+                    SkPaint paint;
+                    paint.setBlendMode(SkBlendMode::kSrcOver);
+                    canvas->drawImage(img, 0.0f, oy * sy, SkSamplingOptions(), &paint);
+                }
             }
         } else if (layer.type == UILayer::Iframe) {
-            // Iframe sub-document layer — texture resolved through the iframe
-            // registry (null if the sub-document was torn down since recording).
-            // The sub-doc renders into a top-down Skia GPU surface, so V is
-            // oriented like a Canvas2D layer (0 at top).
-            GLuint tex = 0;
-            if (auto* d = iframeDocById(layer.canvasSceneId)) tex = d->fboTexture;
-            if (tex) {
-                float cx = layer.cx, cy = layer.cy + oy;
-                float cw = layer.cw, ch = layer.ch;
-                bool scissored = false;
-                if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                    scissorCss(layer.clipX, layer.clipY + oy, layer.clipW, layer.clipH);
-                    scissored = true;
+            if (auto* d = iframeDocById(layer.canvasSceneId)) {
+                if (d->surface.surface) {
+                    auto img = d->surface.surface->makeImageSnapshot();
+                    if (img) {
+                        float cx = layer.cx * sx;
+                        float cy = (layer.cy + oy) * sy;
+                        float cw = layer.cw * sx;
+                        float ch = layer.ch * sy;
+
+                        canvas->save();
+                        if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                            SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
+                                                               (layer.clipY + oy) * sy,
+                                                               layer.clipW * sx,
+                                                               layer.clipH * sy);
+                            canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
+                        }
+                        SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
+                        canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
+                        canvas->restore();
+                    }
                 }
-                render::TextureVertex quad[6] = {
-                    {cx,    cy,    0, 0}, {cx+cw, cy,    1, 0}, {cx+cw, cy+ch, 1, 1},
-                    {cx,    cy,    0, 0}, {cx+cw, cy+ch, 1, 1}, {cx,    cy+ch, 0, 1},
-                };
-                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-                glBindTexture(GL_TEXTURE_2D, tex);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-                if (scissored) glDisable(GL_SCISSOR_TEST);
             }
-        } else {
-            // Canvas/WebGL layer — get texture from canvas scene or direct
-            // texture. A canvasSceneId that no longer resolves (scene detached
-            // since this layer was recorded) draws nothing this frame.
-            GLuint tex = 0;
-            bool isCanvas = layer.canvasSceneId != 0;
-            if (isCanvas) {
-                if (auto* cs = canvasSceneById(layer.canvasSceneId))
-                    tex = cs->texture();
-            } else {
-                tex = layer.texture;  // WebGL direct texture
-            }
-            if (tex) {
-                float cx = layer.cx, cy = layer.cy + oy;
-                float cw = layer.cw, ch = layer.ch;
+        } else if (layer.type == UILayer::Canvas) {
+            if (auto* cs = canvasSceneById(layer.canvasSceneId)) {
+                if (cs->surface()) {
+                    auto img = cs->surface()->makeImageSnapshot();
+                    if (img) {
+                        float cx = layer.cx * sx;
+                        float cy = (layer.cy + oy) * sy;
+                        float cw = layer.cw * sx;
+                        float ch = layer.ch * sy;
 
-                // WebGL textures are bottom-up (origin at lower-left) so flip V coords
-                float v0 = isCanvas ? 0.0f : 1.0f;
-                float v1 = isCanvas ? 1.0f : 0.0f;
-
-                // Canvas/WebGL layers composite outside the Skia clip stack, so
-                // re-apply any ancestor overflow/scroll clip as a GL scissor.
-                // Clip space is the layer set's recorded space (content space
-                // for app layers — add oy, like the quad); scissor is
-                // bottom-left window coords, so flip Y against the full
-                // viewport height. clipW < 0 ⇒ unclipped.
-                bool scissored = false;
-                if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                    scissorCss(layer.clipX, layer.clipY + oy, layer.clipW, layer.clipH);
-                    scissored = true;
+                        canvas->save();
+                        if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                            SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
+                                                               (layer.clipY + oy) * sy,
+                                                               layer.clipW * sx,
+                                                               layer.clipH * sy);
+                            canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
+                        }
+                        SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
+                        canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
+                        canvas->restore();
+                    }
                 }
-
-                render::TextureVertex quad[6] = {
-                    {cx,    cy,    0, v0}, {cx+cw, cy,    1, v0}, {cx+cw, cy+ch, 1, v1},
-                    {cx,    cy,    0, v0}, {cx+cw, cy+ch, 1, v1}, {cx,    cy+ch, 0, v1},
-                };
-                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-                glBindTexture(GL_TEXTURE_2D, tex);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-
-                if (scissored) glDisable(GL_SCISSOR_TEST);
+            }
+        } else if (layer.type == UILayer::Scene3D) {
+#if BRO_WITH_3D
+            for (auto& sg : sceneGraphs_) {
+                if (sg.graph && sg.graph->renderer().hasMeshContent()) {
+                    pendingVkImage_ = sg.graph->renderer().vkOutputImage();
+                    pendingVkImageLayout_ = sg.graph->renderer().vkOutputLayout();
+                    pendingVkImageW_ = sg.graph->renderer().vkOutputWidth();
+                    pendingVkImageH_ = sg.graph->renderer().vkOutputHeight();
+                    break;
+                }
+            }
+#endif
+        } else if (layer.type == UILayer::WebGL) {
+            if (!webglEntries_.empty() && webglEntries_[0].context) {
+                auto* wctx = webglEntries_[0].context.get();
+                if (wctx->vkColorImage() != VK_NULL_HANDLE) {
+                    pendingVkImage_ = wctx->vkColorImage();
+                    pendingVkImageLayout_ = wctx->vkColorLayout();
+                    pendingVkImageW_ = wctx->canvasWidth();
+                    pendingVkImageH_ = wctx->canvasHeight();
+                }
             }
         }
+    }
+}
+
+void Engine::presentCurrentFrame() {
+    if (!vulkanPresenter_) return;
+
+    if (pendingVkImage_ != VK_NULL_HANDLE && pendingVkImageW_ > 0 && pendingVkImageH_ > 0) {
+        vulkanPresenter_->presentImage(pendingVkImage_, pendingVkImageW_, pendingVkImageH_,
+                                       pendingVkImageLayout_);
+        pendingVkImage_ = VK_NULL_HANDLE;
+        pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        pendingVkImageW_ = 0;
+        pendingVkImageH_ = 0;
+        return;
+    }
+
+    if (frameCompositeSurface_) {
+        vulkanPresenter_->presentSurface(frameCompositeSurface_.get());
+    } else if (renderer_ && renderer_->surface()) {
+        vulkanPresenter_->presentSurface(renderer_->surface());
     }
 }
 

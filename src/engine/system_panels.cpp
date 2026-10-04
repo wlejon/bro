@@ -452,11 +452,6 @@ void Engine::renderSplashImmediate() {
     skia->setDeviceScale(1.0f);
     skia->endFrame();
 
-    glViewport(0, 0, deviceScale_.drawableW, deviceScale_.drawableH);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
     compositeLayers(systemLayers);
 
     window_->swapWindow();
@@ -563,7 +558,8 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
     GrDirectContext* panelGr = skiaRenderer ? skiaRenderer->grContext() : nullptr;
 
     traversal.setLayerBreakCallback(
-        [renderer, recorder, panelGr](canvas::CanvasScene* scene,
+        [renderer, recorder, panelGr](int /*kind*/,
+                                       canvas::CanvasScene* scene,
                                        unsigned int /*tex*/,
                                        float x, float y, float w, float h,
                                        float /*clipX*/, float /*clipY*/,

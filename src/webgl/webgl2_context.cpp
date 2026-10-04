@@ -41,6 +41,14 @@ WebGL2RenderingContext::~WebGL2RenderingContext() {
 void WebGL2RenderingContext::createCanvasFBO() {}
 void WebGL2RenderingContext::destroyCanvasFBO() {}
 
+VkImage WebGL2RenderingContext::vkColorImage() const {
+    return vkCtx_ ? vkCtx_->canvas().colorImage() : VK_NULL_HANDLE;
+}
+
+VkImageLayout WebGL2RenderingContext::vkColorLayout() const {
+    return vkCtx_ ? vkCtx_->canvas().colorLayout() : VK_IMAGE_LAYOUT_UNDEFINED;
+}
+
 void WebGL2RenderingContext::resize(int width, int height) {
     if (width == width_ && height == height_) return;
     width_ = width;

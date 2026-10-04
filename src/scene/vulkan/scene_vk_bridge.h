@@ -42,6 +42,11 @@ public:
     bool hasMeshContent() const { return hasMeshContent_; }
     uint32_t finalColorTextureId() const { return finalColorTextureId_; }
 
+    VkImage ldrImage() const { return ldrPresentationImage_.image; }
+    VkImageLayout currentLayout() const { return ldrPresentationImage_.currentLayout; }
+    uint32_t width() const { return currentWidth_; }
+    uint32_t height() const { return currentHeight_; }
+
     std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
 
 private:

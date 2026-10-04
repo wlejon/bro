@@ -8,6 +8,7 @@
 #include "scene/light_node.h"
 #include "scene/shade_map.h"
 
+#include <vulkan/vulkan.h>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -100,6 +101,10 @@ public:
     static void setDefaultVulkanContext(render::VulkanContext* ctx) { defaultVulkanContext_ = ctx; }
     static render::VulkanContext* defaultVulkanContext() { return defaultVulkanContext_; }
     vk::SceneVkBridge* vkBridge() const { return vkBridge_.get(); }
+    VkImage vkOutputImage() const;
+    VkImageLayout vkOutputLayout() const;
+    uint32_t vkOutputWidth() const;
+    uint32_t vkOutputHeight() const;
 
     float fogStart() const { return fogStart_; }
     float fogEnd() const { return fogEnd_; }

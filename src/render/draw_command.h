@@ -104,6 +104,7 @@ struct Cmd_LayerBreak {
         WebGL,           // flush surface + push HTML layer + push WebGL layer + new surface
         HtmlSurface,     // flush surface + push HTML layer + new surface (panel boundary)
         IframeDoc,       // flush surface + push HTML layer + push iframe-document layer + new surface
+        Scene3D,         // flush surface + push HTML layer + push 3D Scene layer + new surface
     };
     int kind;                    // LayerKind
     uint64_t canvasSceneId;      // CanvasScene::sceneId() when kind==Canvas2D; IframeDoc id when kind==IframeDoc; else 0

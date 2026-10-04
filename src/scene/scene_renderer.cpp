@@ -1301,4 +1301,20 @@ void SceneRenderer::render3D() {
     glBindVertexArray(0);
 }
 
+VkImage SceneRenderer::vkOutputImage() const {
+    return (vkBridge_ && hasMeshContent_) ? vkBridge_->ldrImage() : VK_NULL_HANDLE;
+}
+
+VkImageLayout SceneRenderer::vkOutputLayout() const {
+    return vkBridge_ ? vkBridge_->currentLayout() : VK_IMAGE_LAYOUT_UNDEFINED;
+}
+
+uint32_t SceneRenderer::vkOutputWidth() const {
+    return vkBridge_ ? vkBridge_->width() : 0;
+}
+
+uint32_t SceneRenderer::vkOutputHeight() const {
+    return vkBridge_ ? vkBridge_->height() : 0;
+}
+
 }  // namespace bro::scene

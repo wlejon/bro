@@ -596,6 +596,9 @@ public:
     /// force a frame when only scene-graph HTML content has changed.
     bool hasPendingHtmlWork() const;
 
+    SceneRenderer& renderer() { return renderer_; }
+    const SceneRenderer& renderer() const { return renderer_; }
+
 private:
     // The renderer walks nodes/camera state directly through its graph
     // back-reference; it is the only class with private access.

@@ -2,6 +2,7 @@
 
 #include <climits>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -126,6 +127,9 @@ public:
     void setTitle(const std::string& title);
     void swapWindow();
 
+    using SwapCallback = std::function<void()>;
+    void setSwapCallback(SwapCallback cb) { m_swapCallback = std::move(cb); }
+
     SDL_GLContext createSharedContext() { return nullptr; }
 
     // --- Runtime settings ---
@@ -226,6 +230,7 @@ private:
     GraphicsBackend m_backend = GraphicsBackend::Vulkan;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;
+    SwapCallback m_swapCallback;
 };
 
 } // namespace bro::platform

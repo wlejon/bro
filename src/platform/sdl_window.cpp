@@ -177,6 +177,9 @@ void Window::raise() {
 }
 
 void Window::swapWindow() {
+    if (m_swapCallback) {
+        m_swapCallback();
+    }
 }
 
 void Window::setTitle(const std::string& title) {

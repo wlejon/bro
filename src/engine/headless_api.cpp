@@ -15,6 +15,7 @@
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "render/command_buffer.h"
+#include "render/vulkan_presenter.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
 #endif
@@ -385,46 +386,53 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     skia->setDeviceScale(1.0f);
     skia->endFrame();
 
-    GLuint compositeFBO = 0, compositeTex = 0;
-    glGenFramebuffers(1, &compositeFBO);
-    compositeTex = gl_->createTexture2D(fw, fh, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
-    glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, compositeTex, 0);
+    compositeLayers(appLayers, 0, insetTop, cw, ch);
+    compositeLayers(systemLayers);
 
-    glViewport(0, 0, fw, fh);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    compositeLayers(appLayers, compositeFBO, insetTop, cw, ch);
-    compositeLayers(systemLayers, compositeFBO);
-
-    std::vector<uint8_t> pixels(static_cast<size_t>(fw) * fh * 4);
-    glReadPixels(0, 0, fw, fh, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDeleteFramebuffers(1, &compositeFBO);
-    gl_->deleteTexture(compositeTex);
+    presentCurrentFrame();
 
     if (activeWebGL) activeWebGL->restoreState();
 
-    size_t rowBytes = static_cast<size_t>(fw) * 4;
-    std::vector<uint8_t> row(rowBytes);
-    for (int y = 0; y < fh / 2; ++y) {
-        uint8_t* top = pixels.data() + y * rowBytes;
-        uint8_t* bot = pixels.data() + (fh - 1 - y) * rowBytes;
-        memcpy(row.data(), top, rowBytes);
-        memcpy(top, bot, rowBytes);
-        memcpy(bot, row.data(), rowBytes);
+    if (vulkanPresenter_) {
+        std::vector<uint8_t> pixels;
+        uint32_t outW = 0, outH = 0;
+        if (vulkanPresenter_->readbackPixels(pixels, outW, outH)) {
+            return pixels;
+        }
     }
 
-    return pixels;
+    if (frameCompositeSurface_) {
+        SkPixmap pixmap;
+        if (frameCompositeSurface_->peekPixels(&pixmap)) {
+            size_t pxBytes = static_cast<size_t>(pixmap.width()) * pixmap.height() * 4;
+            std::vector<uint8_t> pixels(pxBytes);
+            const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr());
+            bool isBgra = (pixmap.colorType() == kBGRA_8888_SkColorType);
+            if (isBgra) {
+                for (int y = 0; y < pixmap.height(); ++y) {
+                    for (int x = 0; x < pixmap.width(); ++x) {
+                        size_t idx = (y * pixmap.width() + x) * 4;
+                        pixels[idx + 0] = src[idx + 2];
+                        pixels[idx + 1] = src[idx + 1];
+                        pixels[idx + 2] = src[idx + 0];
+                        pixels[idx + 3] = src[idx + 3];
+                    }
+                }
+            } else {
+                std::memcpy(pixels.data(), src, pxBytes);
+            }
+            return pixels;
+        }
+    }
+
+    return {};
 }
 
 bool Engine::screenshot(const std::string& path) {
     if (!document_) return false;
     if (!ensureParentDir(path)) return false;
 
-    if (gl_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+    if ((gl_ || vulkanPresenter_) && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
         auto pixels = renderUnifiedToPixels();
         if (pixels.empty()) return false;
         return broimage::encode_png_file(path, pixels.data(), deviceScale_.drawableW,
@@ -447,25 +455,27 @@ bool Engine::screenshot(const std::string& path) {
     renderer_->save();
     renderer_->translate(0.0f, static_cast<float>(contentTop()));
 
-    for (auto& cs : canvasScenes_) {
-        float cx, cy, cw, ch;
-        cs->getScreenRect(cx, cy, cw, ch);
-        if (cs->surface()) {
-            auto* appCanvas = renderer_->getCanvas();
-            if (appCanvas) {
-                sk_sp<SkImage> img = cs->surface()->makeImageSnapshot();
-                if (img) {
-                    SkPaint paint;
-                    paint.setBlendMode(SkBlendMode::kSrcOver);
-                    appCanvas->drawImage(img, cx, cy, SkSamplingOptions(), &paint);
-                }
-            }
-        }
-    }
+    drawTraversal_->setLayerBreakCallback(
+        [&](int /*kind*/, canvas::CanvasScene* scene, unsigned int /*tex*/,
+            float x, float y, float w, float h,
+            float /*clipX*/, float /*clipY*/, float /*clipW*/, float /*clipH*/) {
+            if (!scene || w <= 0 || h <= 0) return;
+            scene->flushStaged();
+            auto* src = scene->surface();
+            if (!src) return;
+            auto img = src->makeImageSnapshot();
+            if (!img) return;
+            auto* c = renderer_->getCanvas();
+            if (!c) return;
+            SkRect dst = SkRect::MakeXYWH(x, y, w, h);
+            c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
+            scene->clearDirty();
+        });
 
     drawTraversal_->draw(document_->documentElement(),
                          0, -scrollY_,
                          contentWidth(), contentHeight(), /*viewportTop=*/0);
+    drawTraversal_->setLayerBreakCallback(nullptr);
 
     updateSelectionSnapshot();
     drawSelectionHighlight(renderer_.get(), -scrollY_);
@@ -487,7 +497,7 @@ bool Engine::screenshot(const std::string& path) {
 std::vector<uint8_t> Engine::capturePixels() {
     if (!document_) return {};
 
-    if (gl_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+    if ((gl_ || vulkanPresenter_) && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
         return renderUnifiedToPixels();
     }
 
@@ -507,25 +517,27 @@ std::vector<uint8_t> Engine::capturePixels() {
     renderer_->save();
     renderer_->translate(0.0f, static_cast<float>(contentTop()));
 
-    for (auto& cs : canvasScenes_) {
-        float cx, cy, cw, ch;
-        cs->getScreenRect(cx, cy, cw, ch);
-        if (cs->surface()) {
-            auto* appCanvas = renderer_->getCanvas();
-            if (appCanvas) {
-                sk_sp<SkImage> img = cs->surface()->makeImageSnapshot();
-                if (img) {
-                    SkPaint paint;
-                    paint.setBlendMode(SkBlendMode::kSrcOver);
-                    appCanvas->drawImage(img, cx, cy, SkSamplingOptions(), &paint);
-                }
-            }
-        }
-    }
+    drawTraversal_->setLayerBreakCallback(
+        [&](int /*kind*/, canvas::CanvasScene* scene, unsigned int /*tex*/,
+            float x, float y, float w, float h,
+            float /*clipX*/, float /*clipY*/, float /*clipW*/, float /*clipH*/) {
+            if (!scene || w <= 0 || h <= 0) return;
+            scene->flushStaged();
+            auto* src = scene->surface();
+            if (!src) return;
+            auto img = src->makeImageSnapshot();
+            if (!img) return;
+            auto* c = renderer_->getCanvas();
+            if (!c) return;
+            SkRect dst = SkRect::MakeXYWH(x, y, w, h);
+            c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
+            scene->clearDirty();
+        });
 
     drawTraversal_->draw(document_->documentElement(),
                          0, -scrollY_,
                          contentWidth(), contentHeight(), /*viewportTop=*/0);
+    drawTraversal_->setLayerBreakCallback(nullptr);
 
     overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
 
@@ -539,6 +551,14 @@ std::vector<uint8_t> Engine::capturePixels() {
     }
 
     renderer_->endFrame();
+    if (vulkanPresenter_) {
+        vulkanPresenter_->presentSurface(renderer_->surface());
+        std::vector<uint8_t> vkPixels;
+        uint32_t pw = 0, ph = 0;
+        if (vulkanPresenter_->readbackPixels(vkPixels, pw, ph)) {
+            return vkPixels;
+        }
+    }
     return renderer_->capturePixels();
 }
 

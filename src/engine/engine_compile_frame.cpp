@@ -13,13 +13,11 @@
 #include "dom/element.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
-#include "render/gl_context.h"
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "util/time.h"
 
 #include <SDL3/SDL.h>
-#include "render/gl_compat.h"
 
 #include <algorithm>
 #include <chrono>
@@ -112,10 +110,6 @@ void Engine::pumpCompileFrame(double progress) {
     skia->setDeviceScale(1.0f);
     skia->endFrame();
 
-    glViewport(0, 0, deviceScale_.drawableW, deviceScale_.drawableH);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
     compositeLayers(appLayers, 0, insetTop, cw, ch);
     compositeLayers(systemLayers);
     window_->swapWindow();

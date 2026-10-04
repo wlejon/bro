@@ -238,6 +238,9 @@ Engine::Engine(const EngineConfig& config)
                     if (vulkanSwapchain_->init()) {
                         vulkanPresenter_ = std::make_unique<render::VulkanPresenter>(*vulkanContext_, *vulkanSwapchain_);
                         vulkanPresenter_->init();
+                        window_->setSwapCallback([this]() {
+                            presentCurrentFrame();
+                        });
                         webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
 #if BRO_WITH_3D
                         scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());

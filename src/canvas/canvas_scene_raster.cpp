@@ -502,7 +502,7 @@ void CanvasScene::flushCommands() {
 // ---------------------------------------------------------------------------
 
 void CanvasScene::rasterize(render::GLContext* gl) {
-    if (!gl) return;
+    (void)gl;
 
     // Check if element was removed from the DOM. See note in prepareAndSignal.
     if (detachedCb_) {

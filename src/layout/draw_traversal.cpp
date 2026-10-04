@@ -6,6 +6,7 @@
 #include "layout/el_video.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
+#include "render/draw_command.h"
 #include "css/transform.h"
 #include "css/color.h"
 #include "layout/css_shadow.h"
@@ -1362,12 +1363,12 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         // 3D mesh FBO layer (texture ID stored on element by scene graph render)
         unsigned int fboTex = elem->sceneGraphFBOTexture();
         if (fboTex && layerBreakCb_) {
-            layerBreakCb_(nullptr, fboTex, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
+            layerBreakCb_(render::Cmd_LayerBreak::Scene3D, nullptr, fboTex, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
         // 2D canvas layer (for ShapeNode/SpriteNode content)
         if (elem->canvasScene() && layerBreakCb_) {
             auto* scene = static_cast<canvas::CanvasScene*>(elem->canvasScene());
-            layerBreakCb_(scene, 0, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
+            layerBreakCb_(render::Cmd_LayerBreak::Canvas2D, scene, 0, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
         if (needsClip) { renderer_->restore(); popClipRect(); }
         if (hasClipPath) renderer_->restore();
@@ -1379,7 +1380,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (elem->canvasScene() && visible) {
         auto* scene = static_cast<canvas::CanvasScene*>(elem->canvasScene());
         if (layerBreakCb_) {
-            layerBreakCb_(scene, 0, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
+            layerBreakCb_(render::Cmd_LayerBreak::Canvas2D, scene, 0, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
         if (needsClip) { renderer_->restore(); popClipRect(); }
         if (hasClipPath) renderer_->restore();
@@ -1391,7 +1392,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (elem->webglContext() && visible) {
         auto* webglCtx = static_cast<webgl::WebGL2RenderingContext*>(elem->webglContext());
         if (layerBreakCb_) {
-            layerBreakCb_(nullptr, webglCtx->colorTexture(), x, y, w, h,
+            layerBreakCb_(render::Cmd_LayerBreak::WebGL, nullptr, webglCtx->colorTexture(), x, y, w, h,
                           lbCX, lbCY, lbCW, lbCH);
         }
         if (needsClip) { renderer_->restore(); popClipRect(); }

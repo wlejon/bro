@@ -5,6 +5,9 @@
 
 #include "render/command_buffer.h"
 
+#include <include/core/SkSurface.h>
+#include <vulkan/vulkan.h>
+
 namespace bro::engine {
 
 /// One entry in the per-frame composite list. Built by the raster thread
@@ -18,13 +21,16 @@ namespace bro::engine {
 /// scene was destroyed resolves to null instead of dangling (no scrub pass
 /// over stale layer buffers needed).
 struct UILayer {
-    enum Type { HTML, Canvas, Iframe };
-    Type type;
+    enum Type { HTML, Canvas, Iframe, Scene3D, WebGL };
+    Type type = HTML;
     uint32_t texture = 0;
     // CanvasScene id when type==Canvas; IframeDoc id when type==Iframe. Both are
     // resolved through an engine registry at composite time so a layer that
     // outlives its scene/sub-document draws nothing rather than dangling.
     uint64_t canvasSceneId = 0;
+    sk_sp<SkSurface> surface;
+    VkImage vkImage = VK_NULL_HANDLE;
+    VkImageLayout vkImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     float cx = 0, cy = 0, cw = 0, ch = 0;
     // Overflow/scroll clip for Canvas layers, in top-left pixel space. The
     // canvas quad is composited outside the Skia clip stack, so the compositor

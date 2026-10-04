@@ -3,6 +3,7 @@
 #include "webgl/webgl_objects.h"
 #include "webgl/webgl_types.h"
 
+#include <vulkan/vulkan.h>
 #include <string>
 #include <vector>
 #include <unordered_set>
@@ -50,6 +51,9 @@ public:
     GLuint colorTexture() const { return colorTex_; }
     int canvasWidth() const { return width_; }
     int canvasHeight() const { return height_; }
+
+    VkImage vkColorImage() const;
+    VkImageLayout vkColorLayout() const;
 
     /// Bind the canvas FBO as the render target.
     /// Call before issuing WebGL draw commands in the frame loop.
