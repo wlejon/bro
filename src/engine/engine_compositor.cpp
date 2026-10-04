@@ -646,37 +646,56 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
                 }
             }
             if (targetGraph && targetGraph->renderer().hasMeshContent()) {
-                int outW = 0, outH = 0;
-                auto px = targetGraph->readTonemapPixelsRGBA(outW, outH);
-                if (!px.empty() && outW > 0 && outH > 0) {
-                    SkImageInfo info = SkImageInfo::Make(outW, outH, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-                    sk_sp<SkData> data = SkData::MakeWithCopy(px.data(), px.size());
-                    auto img = SkImages::RasterFromData(info, data, outW * 4);
-                    if (img) {
-                        float cx = layer.cx * sx;
-                        float cy = (layer.cy + oy) * sy;
-                        float cw = layer.cw * sx;
-                        float ch = layer.ch * sy;
+                auto& r = targetGraph->renderer();
+                VkImage vkImg = r.vkOutputImage();
+                if (pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ && vkImg != VK_NULL_HANDLE &&
+                    r.vkOutputWidth() > 0 && r.vkOutputHeight() > 0) {
+                    pendingVkImage_ = vkImg;
+                    pendingVkImageLayout_ = r.vkOutputLayout();
+                    pendingVkImageW_ = r.vkOutputWidth();
+                    pendingVkImageH_ = r.vkOutputHeight();
+                } else {
+                    int outW = 0, outH = 0;
+                    auto px = targetGraph->readTonemapPixelsRGBA(outW, outH);
+                    if (!px.empty() && outW > 0 && outH > 0) {
+                        SkImageInfo info = SkImageInfo::Make(outW, outH, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+                        sk_sp<SkData> data = SkData::MakeWithCopy(px.data(), px.size());
+                        auto img = SkImages::RasterFromData(info, data, outW * 4);
+                        if (img) {
+                            float cx = layer.cx * sx;
+                            float cy = (layer.cy + oy) * sy;
+                            float cw = layer.cw * sx;
+                            float ch = layer.ch * sy;
 
-                        canvas->save();
-                        if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
-                            SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
-                                                               (layer.clipY + oy) * sy,
-                                                               layer.clipW * sx,
-                                                               layer.clipH * sy);
-                            canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
+                            canvas->save();
+                            if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                                SkRect clipRect = SkRect::MakeXYWH(layer.clipX * sx,
+                                                                   (layer.clipY + oy) * sy,
+                                                                   layer.clipW * sx,
+                                                                   layer.clipH * sy);
+                                canvas->clipRect(clipRect, SkClipOp::kIntersect, true);
+                            }
+                            SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
+                            canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
+                            canvas->restore();
                         }
-                        SkRect dstRect = SkRect::MakeXYWH(cx, cy, cw, ch);
-                        canvas->drawImageRect(img, dstRect, SkSamplingOptions(SkFilterMode::kLinear));
-                        canvas->restore();
                     }
                 }
             }
 #endif
         } else if (layer.type == UILayer::WebGL) {
-            if (!webglEntries_.empty() && webglEntries_[0].context) {
-                auto* wctx = webglEntries_[0].context.get();
-                if (wctx->vkColorImage() != VK_NULL_HANDLE) {
+            if (pendingVkImage_ == VK_NULL_HANDLE) {
+                webgl::WebGL2RenderingContext* wctx = nullptr;
+                for (auto& entry : webglEntries_) {
+                    if (entry.context && (layer.canvasSceneId == 0 || (entry.element && entry.element->nodeId() == layer.canvasSceneId))) {
+                        wctx = entry.context.get();
+                        break;
+                    }
+                }
+                if (!wctx && !webglEntries_.empty()) {
+                    wctx = webglEntries_[0].context.get();
+                }
+                if (wctx && wctx->vkColorImage() != VK_NULL_HANDLE) {
                     pendingVkImage_ = wctx->vkColorImage();
                     pendingVkImageLayout_ = wctx->vkColorLayout();
                     pendingVkImageW_ = wctx->canvasWidth();
@@ -691,8 +710,11 @@ void Engine::presentCurrentFrame() {
     if (!vulkanPresenter_) return;
 
     if (pendingVkImage_ != VK_NULL_HANDLE && pendingVkImageW_ > 0 && pendingVkImageH_ > 0) {
+        VkImageLayout layout = (pendingVkImageLayout_ != VK_IMAGE_LAYOUT_UNDEFINED)
+                                   ? pendingVkImageLayout_
+                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         vulkanPresenter_->presentImage(pendingVkImage_, pendingVkImageW_, pendingVkImageH_,
-                                       pendingVkImageLayout_,
+                                       layout,
                                        frameCompositeSurface_.get());
         pendingVkImage_ = VK_NULL_HANDLE;
         pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
