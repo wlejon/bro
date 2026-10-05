@@ -2,6 +2,7 @@
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/scene_audio_sync.h"
+#include "engine/terminal_layers.h"
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/app_module.h"
@@ -118,6 +119,7 @@ Engine::~Engine() {
         d->published.clear();
     }
     drainIframeSurfaceFrees(dynamic_cast<render::SkiaRenderer*>(renderer_.get()));
+    if (terminalLayers_) terminalLayers_->releaseAll();  // before the GPU context goes
 
     menuBar_.releaseHandlers();
 

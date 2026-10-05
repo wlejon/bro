@@ -3,6 +3,7 @@
 #include "engine/overflow.h"
 #include "engine/navmesh_subsystem.h"
 #include "engine/scene_audio_sync.h"
+#include "engine/terminal_layers.h"
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
@@ -361,6 +362,7 @@ std::vector<uint8_t> Engine::capturePixels() {
                     insetTop, contentRight(), contentBottom(), scrollY_);
     recordSystemPanelLayers(sysCmds, w, h);
     recordIframeLayers();
+    if (terminalLayers_) terminalLayers_->record(deviceScale_.render);
     skia->setDeviceScale(deviceScale_.render);
     replayAppLayers(skia, appCmds,
                     screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
@@ -370,6 +372,7 @@ std::vector<uint8_t> Engine::capturePixels() {
                             screenshotSystemPoolH_,
                             fw, fh, systemLayers);
     replayIframeLayers(skia);
+    if (terminalLayers_) terminalLayers_->replay(skia);
     skia->setDeviceScale(1.0f);
     skia->endFrame();
 

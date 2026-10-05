@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
+#include "engine/terminal_layers.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
@@ -209,6 +210,8 @@ void Engine::rasterThreadFunc() {
         // thread) → IframeDoc::published, which the compositor draws for the
         // iframe layers recorded during the app pass.
         replayIframeLayers(rasterRenderer.get());
+        // Each <terminal> recorded since its last replay → its published image.
+        if (terminalLayers_) terminalLayers_->replay(rasterRenderer.get());
 
         // And each secondary window's document into its window-sized surface →
         // WindowHost::published, which the main thread presents on that
@@ -245,6 +248,7 @@ void Engine::rasterThreadFunc() {
         h->published.clear();
     }
     drainIframeSurfaceFrees(rasterRenderer.get());
+    if (terminalLayers_) terminalLayers_->releaseAll();
 
     rasterRenderer.reset();
     LOG_INFO("Raster thread stopped");

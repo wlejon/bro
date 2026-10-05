@@ -7,6 +7,7 @@
 
 #include "engine/engine.h"
 #include "engine/frame_presenter.h"
+#include "engine/terminal_layers.h"
 #include "engine/window_host.h"
 
 #include "canvas/canvas_scene.h"
@@ -178,6 +179,28 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
                 if (!d) return;
                 if (render::SkiaImageRef image = d->published.gpu()) placeSkiaImage(image, at.dst(quad), &quad);
                 else if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), quad);
+            },
+            [&](const render::TerminalLayerSource& src) {
+                const PublishedFrame* p = terminalLayers_ ? terminalLayers_->published(src.layerId) : nullptr;
+                if (!p) return;
+                // Pixel for pixel at a whole device-pixel origin, so the
+                // glyphs stay as crisp as they were rasterized.
+                auto dstFor = [&](int w, int h) {
+                    const SkRect d = at.dst(quad);
+                    return SkRect::MakeXYWH(std::round(d.left()), std::round(d.top()), float(w), float(h));
+                };
+                if (render::SkiaImageRef image = p->gpu()) {
+                    placeSkiaImage(image, dstFor(int(image->width), int(image->height)), &quad);
+                } else if (sk_sp<SkImage> img = p->get()) {
+                    if (SkCanvas* canvas = frameSegmentCanvas()) {
+                        canvas->save();
+                        SkRect c;
+                        if (at.clip(quad, c)) canvas->clipRect(c, SkClipOp::kIntersect, true);
+                        const SkRect d = dstFor(img->width(), img->height());
+                        canvas->drawImage(img, d.left(), d.top());
+                        canvas->restore();
+                    }
+                }
             },
             [&](const render::CanvasLayerSource& src) {
                 canvas::CanvasScene* cs = canvasSceneById(src.sceneId);

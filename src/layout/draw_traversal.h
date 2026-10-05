@@ -126,6 +126,9 @@ public:
     };
     using LayerBreakCallback = std::function<void(const LayerBreak&)>;
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
+    // A <terminal> as its own layer (render::TerminalLayerSource) instead of
+    // drawn inline: the app document's pass, whose compositor places it.
+    void setTerminalLayers(bool on) { terminalLayers_ = on; }
 
     // Viewport. `top` is the Y position in the output surface where the
     // content area begins — used for the html/body background paint rect.
@@ -261,6 +264,7 @@ private:
 
     std::unordered_map<std::string, CachedImage> imageCache_;
     LayerBreakCallback layerBreakCb_;
+    bool terminalLayers_ = false;
 
     // Running stack of axis-aligned overflow/scroll clip rects (each already
     // intersected with the one below it, so the top is the effective clip).

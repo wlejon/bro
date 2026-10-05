@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "engine/frame_presenter.h"
 #include "engine/sub_document.h"
+#include "engine/terminal_layers.h"
 #include "engine/inspector_highlight.h"
 #include "engine/overflow.h"
 
@@ -77,6 +78,9 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     drawTraversal_->setLayerBreakCallback([this](const layout::DrawTraversal::LayerBreak& lb) {
         recordingRenderer_->recordLayerBreak(lb.source, lb.quad);
     });
+    // A <terminal> is its own layer (TerminalLayers) except in a promoted
+    // subtree, whose replay has no layers: it draws inline there.
+    drawTraversal_->setTerminalLayers(!promotedOnly && terminalLayersEnabled());
 
     // Everything below records in *content space*: the app layer surfaces are
     // content-sized (contentW × contentH) and origin-based; the engine-reserved
@@ -133,6 +137,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     }
 
     drawTraversal_->setLayerBreakCallback(nullptr);
+    drawTraversal_->setTerminalLayers(false);
     recordingRenderer_->setBuffer(nullptr);
     // Restore default paint mode so subsequent recorders (system panels, the
     // next full pass) aren't affected.

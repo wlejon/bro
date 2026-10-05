@@ -10,6 +10,7 @@
 #include "engine/replaced_elements.h"
 #include "engine/default_styles.h"
 #include "engine/scene_audio_sync.h"
+#include "engine/terminal_layers.h"
 #include "dom/event_dispatch.h"
 #include "util/asset_path.h"
 #include "util/user_dirs.h"
@@ -74,6 +75,8 @@ Engine::Engine(const EngineConfig& config)
     , viewportScrollbar_(config.viewportScrollbar)
     , elementScrollbar_(config.elementScrollbar)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
+    // Before the raster thread exists: it reads the pointer.
+    terminalLayers_ = std::make_shared<TerminalLayers>();
 
     // The system font collection can take most of a second to build on some
     // machines; start it now so it overlaps window creation and page compile

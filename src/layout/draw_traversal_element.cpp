@@ -654,7 +654,25 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             videoCtrl->draw(renderer_, elem, box, offsetX, offsetY, videoFit);
         }
         if (auto* termCtrl = elem->terminalControl()) {
-            termCtrl->draw(renderer_, box, offsetX, offsetY);
+            // Its own layer in the app document, so a busy terminal redraws
+            // only itself and the page around it is never re-recorded for it
+            // (el_terminal_layer.cpp); inline everywhere else.
+            if (terminalLayers_ && layerBreakCb_) {
+                LayerBreak lb;
+                lb.element = elem;
+                const auto cb = dom::absoluteContentBox(elem);
+                lb.quad.x = cb.x + rootOffsetX_;
+                lb.quad.y = cb.y + rootOffsetY_;
+                lb.quad.w = cb.width;
+                lb.quad.h = cb.height;
+                if (!currentClipRect(lb.quad.clipX, lb.quad.clipY, lb.quad.clipW, lb.quad.clipH))
+                    lb.quad.clipW = lb.quad.clipH = -1.0f;
+                lb.source = render::TerminalLayerSource{termCtrl->layerId()};
+                if (lb.quad.w > 0 && lb.quad.h > 0) layerBreakCb_(lb);
+            } else {
+                termCtrl->draw(renderer_, box.contentRect.x + offsetX, box.contentRect.y + offsetY,
+                               box.contentRect.width, box.contentRect.height);
+            }
         }
         // <img> replaced content. Layout already sized the box via
         // intrinsicSize() in layout_node_adapter; here we paint the raster

@@ -6,6 +6,8 @@
 // frame with addFrame(); every 500 ms of frames the accumulators roll up into
 // the means Engine::perf*() report.
 
+#include <cstdint>
+
 namespace bro::engine {
 
 struct FrameStats {
@@ -29,6 +31,11 @@ struct FrameStats {
     double accumRasterMs = 0.0;
     double accumGpuMs = 0.0;
     double accumDrawMs = 0.0;
+
+    // Lifetime counters: how often the app document's cached base paint
+    // was invalidated and re-recorded (windowed; the <terminal> layer tests).
+    uint64_t baseInvalidations = 0;
+    uint64_t baseRecords = 0;
 
     // Counts one frame of `frameMs` wall time. Returns true when that frame
     // closed a window and the means were refreshed.

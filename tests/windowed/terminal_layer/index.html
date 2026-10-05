@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #203040; overflow: hidden; font: 13px sans-serif; }
+  /* A page with some weight beside a terminal that fills most of the window. */
+  #side { position: absolute; left: 0; top: 0; width: 240px; height: 100%; overflow: hidden; color: #cde; }
+  #side div { padding: 2px 6px; border-bottom: 1px solid #345; border-radius: 3px; box-shadow: 0 1px 2px #0004; }
+  #side div:nth-child(odd) { background: linear-gradient(90deg, #2a3a50, #1a2838); }
+  #clock { position: absolute; right: 8px; top: 4px; color: #fff; }
+  terminal { position: absolute; left: 240px; top: 24px; right: 0; bottom: 0; font: 14px monospace; }
+</style></head>
+<body>
+  <div id="side"></div>
+  <div id="clock">0</div>
+  <terminal id="t"></terminal>
+  <script src="main.js"></script>
+</body>
+</html>

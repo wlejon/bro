@@ -2,6 +2,7 @@
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
 #include "engine/overflow.h"
+#include "engine/terminal_layers.h"
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -121,6 +122,7 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
                 baseInsetBottom_ = rsnap.insetBottom;
                 baseValid_ = true;
                 appBaseDirty_ = false;
+                ++frameStats_.baseRecords;
             }
 
             if (pset) {
@@ -149,6 +151,8 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
             }
             recordIframeLayers();
             recordWindowHostLayers();
+            // Each <terminal> whose paint changed, into its own layer.
+            if (terminalLayers_) terminalLayers_->record(rsnap.scale);
 
             framePresenter_->signalRender(rsnap);
             uiDirty_ = false;

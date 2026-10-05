@@ -29,7 +29,8 @@ struct HtmlLayer {
 /// it names draws nothing rather than dangling.
 struct UILayer {
     using Content = std::variant<HtmlLayer, render::CanvasLayerSource, render::WebGLLayerSource,
-                                 render::SceneLayerSource, render::IframeLayerSource>;
+                                 render::SceneLayerSource, render::IframeLayerSource,
+                                 render::TerminalLayerSource>;
     Content content;
     render::LayerQuad quad;  // non-HTML layers
 

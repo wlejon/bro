@@ -20,7 +20,11 @@ struct SceneLayerSource { uint32_t elementId = 0; };
 /// An <iframe> sub-document: its IframeDoc id (never recycled).
 struct IframeLayerSource { uint64_t docId = 0; };
 
-using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource>;
+/// A <terminal>'s screen: its ElTerminal::layerId() (never recycled).
+struct TerminalLayerSource { uint64_t layerId = 0; };
+
+using LayerSource = std::variant<CanvasLayerSource, WebGLLayerSource, SceneLayerSource, IframeLayerSource,
+                                 TerminalLayerSource>;
 
 /// Where a layer lands, in the surface space of the HTML painted around it
 /// (CSS px; content space for the app document), and the overflow/scroll

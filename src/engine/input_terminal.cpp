@@ -15,6 +15,7 @@
 #include "engine/engine.h"
 #include "engine/input_common.h"
 #include "engine/key_mapping.h"
+#include "engine/terminal_layers.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -79,8 +80,9 @@ bool Engine::terminalKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // Keys belong to the input method while it composes.
     if (t->composing()) return true;
 
+    const layout::ElTerminal::Host& host = layout::ElTerminal::host();
     if (isPasteChord(keycode, mod)) {
-        if (!repeat) terminalPaste(platform::getClipboardText());
+        if (!repeat && host.readClipboard) terminalPaste(host.readClipboard(false));
         return true;
     }
     if (isCopyChord(keycode, mod)) {
@@ -89,13 +91,12 @@ bool Engine::terminalKeyDown(int keycode, int scancode, int mod, bool repeat) {
         copyEvt.setClipboardText(text);
         copyEvt.setIsTrusted(true);
         dispatchEvent(el, copyEvt);
-        if (!copyEvt.defaultPrevented() && !text.empty()) platform::setClipboardText(text);
+        if (!copyEvt.defaultPrevented() && !text.empty() && host.writeClipboard) host.writeClipboard(text, false);
         return true;
     }
 
     if (t->keyDown(keycode, scancode, mod, repeat)) {
-        document_->markPaintDirty();  // the cursor shows solid while typing
-        uiDirty_ = true;
+        uiDirty_ = true;  // the cursor shows solid while typing (the terminal's own layer)
         return true;
     }
     // Nothing a terminal encodes (a Cmd shortcut): the engine's hotkeys and
@@ -128,7 +129,6 @@ bool Engine::terminalTextInput(const std::string& text) {
         dispatchCompositionEvent(el, "compositionupdate", text);
         dispatchCompositionEvent(el, "compositionend", text);
     }
-    document_->markPaintDirty();
     uiDirty_ = true;
     return true;
 }
@@ -143,7 +143,6 @@ bool Engine::terminalTextEditing(const std::string& text) {
     if (!wasComposing) dispatchCompositionEvent(el, "compositionstart", "");
     dispatchCompositionEvent(el, "compositionupdate", text);
     if (text.empty()) dispatchCompositionEvent(el, "compositionend", "");
-    document_->markPaintDirty();
     uiDirty_ = true;
     updateTextInputArea();
     return true;
@@ -166,21 +165,35 @@ bool Engine::terminalPaste(const std::string& text) {
     return true;
 }
 
+void installTerminalHost(bool headless);  // input_terminal_mouse.cpp
+
 void Engine::pumpTerminals() {
+    static bool hostInstalled = false;
+    if (!hostInstalled) {
+        installTerminalHost(displayMode_ == DisplayMode::Headless);
+        hostInstalled = true;
+    }
     // Headless runs on its virtual clock (the blink phase is then
     // deterministic); windowed on the wall clock.
     const double now = displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs();
     bool repaint = false;
+    const bool layered = terminalLayersEnabled();
     layout::ElTerminal::forEach([&](layout::ElTerminal& t) {
         dom::Element* el = t.element();
         dom::Document* doc = el ? el->document() : nullptr;
         const bool focused = windowFocused_ && doc && doc->activeElement() == el;
-        if (t.pump(now, focused)) {
-            if (doc) doc->markPaintDirty();
+        // A repaint is the terminal's own layer: the page is not re-recorded
+        // (unless the layers are off, BRO_TERMINAL_LAYER=0).
+        if (t.pump(now, focused, deviceScale_.render)) {
             repaint = true;
+            if (!layered && doc) doc->markPaintDirty();
         }
+        if (t.takeCursorChanged() && el && hoveredElement_.get() == el) updateCursorFromHover(el);
     });
-    if (repaint) markAppBaseDirty();
+    if (repaint) {
+        if (layered) uiDirty_ = true;
+        else markAppBaseDirty();
+    }
 }
 
 } // namespace bro::engine
