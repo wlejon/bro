@@ -72,6 +72,8 @@ bro-* siblings build from `../<name>` working trees when present, else submodule
 | broimage | `broimage::broimage` | image decode/encode + CPU kernels + ML preprocessing (no WebGL; `bro.image.gpu` is bro-side JS) |
 | brosoundml | `brosoundml` | audio-ML inference: TTS/STT/diarization/codec/wake |
 | brovisionml | `brovisionml::brovisionml` | vision-ML inference: SAM, depth, normals, matting, ControlNet annotators |
+| bropty | `bropty` | VT emulator + PTY/ConPTY behind `<terminal>` (`BRO_WITH_TERMINAL`; `src/terminal/`) |
+| brosearch | `brosearch` | regex scrollback search (bropty's dependency) |
 | brass | `brass` | JIT / AOT native code generator backend for bronze |
 | bronze | `bronze` / `bronze-cli` / `bronze::runtime_shared` | JavaScript compiler + shared runtime (mandatory) |
 | Jolt Physics | `Jolt::Jolt` | rigid-body physics |
@@ -153,6 +155,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `gizmo-api.js` | `bro.gizmo`: 3D transform handles |
 | `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis, `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |
+| `terminal-api.js` | `<terminal>` (HTMLTerminalElement) + `bro.terminal`: native terminal element over bropty; spawn/write/feed/kill, screen/scrollback/frame text, `resize`/`exit` events, key/IME/paste routing while focused |
 
 Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: media backends, the headless driver), `docs/hot-reload.md` (the edit loop: source watcher, F5, `BRO_JIT_TIER` override), `docs/code-cache.md` (on-disk compiled-IL cache: key, location, `BRO_CODE_CACHE*`), `docs/compile-progress.md` (window stays live during a compile; `bro-compiling` / `--bro-compile-progress` on `<html>`), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage), `docs/perf-ratchet.md` (end-to-end perf ratchet: `bench/ratchet.sh`, CPU/GC/page-compile/tats-startup goldens, load guard, `--update`).
 
