@@ -10,10 +10,12 @@ namespace bro::bronze_host {
 
 void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("createTransformFeedback", 0, [c](Value, std::span<const Value>) {
-        return wrapTransformFeedback(live(c)->createTransformFeedback());
+        return glObject(c, GlCell::TransformFeedback, live(c)->createTransformFeedback().id);
     });
     b.def("deleteTransformFeedback", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteTransformFeedback(transformFeedbackOf(argAt(a, 0)));
+        const webgl::WebGLTransformFeedback tf = transformFeedbackOf(argAt(a, 0));
+        live(c)->deleteTransformFeedback(tf);
+        forgetGlObject(c, GlCell::TransformFeedback, tf.id);
         return ev::undefined();
     });
     b.def("bindTransformFeedback", 2, [c](Value, std::span<const Value> a) {
@@ -58,8 +60,8 @@ void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext*
     b.def("getTransformFeedbackVarying", 2, [c](Value, std::span<const Value> a) {
         auto prog = webgl::WebGLProgram{idOf(argAt(a, 0), GlCell::Program)};
         uint32_t index = u32At(a, 1);
-        auto info = live(c)->getTransformFeedbackVarying(prog, index);
-        if (info.type == 0) return ev::null();
+        webgl::WebGLActiveInfo info;
+        if (!live(c)->getTransformFeedbackVarying(prog, index, info)) return ev::null();
         ObjectBuilder o;
         o.set("name", ev::fromUtf8(info.name));
         o.set("type", ev::fromDouble(info.type));

@@ -67,16 +67,16 @@ if (!gl) {
     // Multi-value queries — these previously smashed the stack by writing 2-4
     // values through the single-int default path.
     const mvd = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
-    assert(Array.isArray(mvd) && mvd.length === 2, 'MAX_VIEWPORT_DIMS is [w,h]');
+    assert(mvd instanceof Int32Array && mvd.length === 2, 'MAX_VIEWPORT_DIMS is an Int32Array [w,h]');
     assert(mvd[0] >= 2048 && mvd[1] >= 2048, 'MAX_VIEWPORT_DIMS sane');
     const lwr = gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE);
-    assert(Array.isArray(lwr) && lwr.length === 2 && lwr[0] <= 1 && lwr[1] >= 1,
+    assert(lwr instanceof Float32Array && lwr.length === 2 && lwr[0] <= 1 && lwr[1] >= 1,
            'ALIASED_LINE_WIDTH_RANGE covers 1');
     const psr = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE);
-    assert(Array.isArray(psr) && psr.length === 2 && psr[0] <= 1 && psr[1] >= 1,
+    assert(psr instanceof Float32Array && psr.length === 2 && psr[0] <= 1 && psr[1] >= 1,
            'ALIASED_POINT_SIZE_RANGE covers 1');
     const bc = gl.getParameter(gl.BLEND_COLOR);
-    assert(Array.isArray(bc) && bc.length === 4, 'BLEND_COLOR is vec4');
+    assert(bc instanceof Float32Array && bc.length === 4, 'BLEND_COLOR is a Float32Array vec4');
     assert(gl.getError() === gl.NO_ERROR, 'no GL error after multi-value queries');
 
     // =====================================================================
@@ -182,8 +182,8 @@ if (!gl) {
     assert(gl.INVALID_INDEX === 4294967295, 'INVALID_INDEX is unsigned 0xFFFFFFFF');
 
     // Compressed texture formats list is an array (possibly empty)
-    assert(Array.isArray(gl.getParameter(gl.COMPRESSED_TEXTURE_FORMATS)),
-           'COMPRESSED_TEXTURE_FORMATS array');
+    assert(gl.getParameter(gl.COMPRESSED_TEXTURE_FORMATS) instanceof Uint32Array,
+           'COMPRESSED_TEXTURE_FORMATS is a Uint32Array');
 
     // IMPLEMENTATION_COLOR_READ_FORMAT/TYPE are queryable ints
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);

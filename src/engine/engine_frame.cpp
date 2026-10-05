@@ -64,6 +64,30 @@ void Engine::syncWebGLCanvasSizes() {
     }
 }
 
+void Engine::pumpWebGLContextEvents() {
+    // Indexed: a listener may create another context, growing the vector.
+    for (size_t i = 0; i < webglEntries_.size(); ++i) {
+        webgl::WebGL2RenderingContext* ctx = webglEntries_[i].context.get();
+        dom::Element* canvas = webglEntries_[i].element;
+        if (!ctx) continue;
+        switch (ctx->takeContextEvent()) {
+            case webgl::WebGL2RenderingContext::ContextEvent::Lost: {
+                // Only a cancelled lost event lets the page restore the context.
+                dom::Event lost("webglcontextlost", /*bubbles=*/false, /*cancelable=*/true);
+                dispatchEvent(canvas, lost);
+                if (!lost.defaultPrevented()) ctx->forbidRestore();
+                break;
+            }
+            case webgl::WebGL2RenderingContext::ContextEvent::Restored: {
+                dom::Event restored("webglcontextrestored", /*bubbles=*/false, /*cancelable=*/false);
+                dispatchEvent(canvas, restored);
+                break;
+            }
+            default: break;
+        }
+    }
+}
+
 double Engine::serverUptime() const {
     if (serverStartTime_ <= 0.0) return 0.0;
     return (util::currentTimeMs() - serverStartTime_) / 1000.0;
@@ -293,6 +317,7 @@ void Engine::run() {
         }
 
         pumpVideoEvents();
+        pumpWebGLContextEvents();
 
         framePresenter_->consumeIfReady();
 

@@ -14,36 +14,9 @@
 namespace bro::bronze_host {
 
 struct ContextBufferState {
-    std::unordered_map<uint64_t, ev::Persistent> indexedBindings;
     std::unordered_map<GLuint, ev::Persistent> mappedBuffers;
 };
 static std::unordered_map<webgl::WebGL2RenderingContext*, ContextBufferState> s_contextBuffers;
-
-void stashIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index, Value bufVal) {
-    if (!c) return;
-    uint64_t key = (static_cast<uint64_t>(target) << 32) | index;
-    if (ev::isNull(bufVal) || ev::isUndefined(bufVal)) {
-        auto it = s_contextBuffers.find(c);
-        if (it != s_contextBuffers.end()) {
-            it->second.indexedBindings.erase(key);
-        }
-    } else {
-        s_contextBuffers[c].indexedBindings.insert_or_assign(key, ev::Persistent(bufVal));
-    }
-}
-
-Value loadIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index) {
-    if (!c) return ev::null();
-    uint64_t key = (static_cast<uint64_t>(target) << 32) | index;
-    auto ctxIt = s_contextBuffers.find(c);
-    if (ctxIt != s_contextBuffers.end()) {
-        auto it = ctxIt->second.indexedBindings.find(key);
-        if (it != ctxIt->second.indexedBindings.end()) {
-            return it->second.get();
-        }
-    }
-    return ev::null();
-}
 
 void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     if (c) {
@@ -59,7 +32,7 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     }
 
     b.def("createBuffer", 0, [c](Value, std::span<const Value>) {
-        return wrapGlObj(GlCell::Buffer, live(c)->createBuffer().id);
+        return glObject(c, GlCell::Buffer, live(c)->createBuffer().id);
     });
     b.def("deleteBuffer", 1, [c](Value, std::span<const Value> a) {
         GLuint bufId = idOf(argAt(a, 0), GlCell::Buffer);
@@ -71,15 +44,9 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                     ev::detachArrayBuffer(mIt->second.get());
                     ctxIt->second.mappedBuffers.erase(mIt);
                 }
-                for (auto it = ctxIt->second.indexedBindings.begin(); it != ctxIt->second.indexedBindings.end(); ) {
-                    if (idOf(it->second.get(), GlCell::Buffer) == bufId) {
-                        it = ctxIt->second.indexedBindings.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
             }
             live(c)->deleteBuffer({bufId});
+            forgetGlObject(c, GlCell::Buffer, bufId);
         }
         return ev::undefined();
     });
@@ -215,7 +182,6 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         uint32_t index = u32At(a, 1);
         Value bufVal = argAt(a, 2);
         live(c)->bindBufferBase(target, index, {idOf(bufVal, GlCell::Buffer)});
-        stashIndexedBinding(c, target, index, bufVal);
         return ev::undefined();
     });
     b.def("bindBufferRange", 5, [c](Value, std::span<const Value> a) {
@@ -225,16 +191,17 @@ void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         live(c)->bindBufferRange(target, index, {idOf(bufVal, GlCell::Buffer)},
                                  static_cast<GLintptr>(i64At(a, 3)),
                                  static_cast<GLsizeiptr>(i64At(a, 4)));
-        stashIndexedBinding(c, target, index, bufVal);
         return ev::undefined();
     });
 
     // --- Vertex array objects ---
     b.def("createVertexArray", 0, [c](Value, std::span<const Value>) {
-        return wrapGlObj(GlCell::VertexArray, live(c)->createVertexArray().id);
+        return glObject(c, GlCell::VertexArray, live(c)->createVertexArray().id);
     });
     b.def("deleteVertexArray", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteVertexArray({idOf(argAt(a, 0), GlCell::VertexArray)});
+        const GLuint id = idOf(argAt(a, 0), GlCell::VertexArray);
+        live(c)->deleteVertexArray({id});
+        forgetGlObject(c, GlCell::VertexArray, id);
         return ev::undefined();
     });
     b.def("bindVertexArray", 1, [c](Value, std::span<const Value> a) {

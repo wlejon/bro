@@ -38,8 +38,12 @@ struct LinkResult {
 
 /// Link a vertex and a fragment shader. `boundAttribs` are the program's
 /// bindAttribLocation calls; a location given in the source takes precedence.
+/// With feedback varyings, the vertex stage also stores them (see
+/// kFeedbackBinding), and linking fails if one is not an output of it or the
+/// set exceeds the WebGL 2 limits.
 LinkResult link(const std::string& vertexSource, const std::string& fragmentSource,
-                const std::unordered_map<std::string, GLuint>& boundAttribs, const Limits& limits);
+                const std::unordered_map<std::string, GLuint>& boundAttribs, const Limits& limits,
+                const FeedbackRequest& feedback = {});
 
 /// What a GLSL type enum (GL_FLOAT_VEC3, GL_FLOAT_MAT2x4, GL_SAMPLER_2D...) is
 /// made of: component kind, and columns x rows (a vector is 1 x n).

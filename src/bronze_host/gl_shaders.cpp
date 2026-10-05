@@ -38,11 +38,15 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("createShader", 1, [c](Value, std::span<const Value> a) {
         GLenum type = u32At(a, 0);
         webgl::WebGLShader s = live(c)->createShader(type);
-        return wrapGlObj(GlCell::Shader, s.id, s.type);
+        return glObject(c, GlCell::Shader, s.id, s.type);
     });
     b.def("deleteShader", 1, [c](Value, std::span<const Value> a) {
         auto* cell = cellOf(argAt(a, 0), GlCell::Shader);
-        if (cell) live(c)->deleteShader({cell->id, cell->shaderType});
+        if (cell) {
+            const GLuint id = cell->id;
+            live(c)->deleteShader({id, cell->shaderType});
+            forgetGlObject(c, GlCell::Shader, id);
+        }
         return ev::undefined();
     });
     b.def("shaderSource", 2, [c](Value, std::span<const Value> a) {
@@ -88,10 +92,12 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // --- Programs ---
     b.def("createProgram", 0, [c](Value, std::span<const Value>) {
-        return wrapGlObj(GlCell::Program, live(c)->createProgram().id);
+        return glObject(c, GlCell::Program, live(c)->createProgram().id);
     });
     b.def("deleteProgram", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteProgram({idOf(argAt(a, 0), GlCell::Program)});
+        const GLuint id = idOf(argAt(a, 0), GlCell::Program);
+        live(c)->deleteProgram({id});
+        forgetGlObject(c, GlCell::Program, id);
         return ev::undefined();
     });
     b.def("attachShader", 2, [c](Value, std::span<const Value> a) {
@@ -114,6 +120,10 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         live(c)->linkProgram({idOf(argAt(a, 0), GlCell::Program)});
         return ev::undefined();
     });
+    b.def("validateProgram", 1, [c](Value, std::span<const Value> a) {
+        live(c)->validateProgram({idOf(argAt(a, 0), GlCell::Program)});
+        return ev::undefined();
+    });
     b.def("useProgram", 1, [c](Value, std::span<const Value> a) {
         live(c)->useProgram({idOf(argAt(a, 0), GlCell::Program)});
         return ev::undefined();
@@ -125,11 +135,12 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x8B82:  // LINK_STATUS
                 return ev::fromBool(live(c)->getProgramParameter_linkStatus(p) != GL_FALSE);
             case 0x8B80:  // DELETE_STATUS
-                return ev::fromBool(false);
+            case 0x8B83:  // VALIDATE_STATUS
+                return ev::fromBool(live(c)->getProgramParameter_int(p, pname) != 0);
             default:
                 // ACTIVE_UNIFORMS / ACTIVE_ATTRIBUTES / ACTIVE_UNIFORM_BLOCKS /
-                // ATTACHED_SHADERS / VALIDATE_STATUS — the int path answers all
-                // of them, matching the C++ context's own dispatch.
+                // ATTACHED_SHADERS / transform feedback — the int path answers
+                // all of them, matching the C++ context's own dispatch.
                 return ev::fromDouble(live(c)->getProgramParameter_int(p, pname));
         }
     });

@@ -94,8 +94,12 @@ FormatBits formatBits(VkFormat format) {
         case VK_FORMAT_R8G8B8A8_SRGB:
         case VK_FORMAT_R8G8B8A8_SINT:
         case VK_FORMAT_R8G8B8A8_UINT: return {8, 8, 8, 8, 0, 0};
-        case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8_SINT: case VK_FORMAT_R8_UINT: return {8, 0, 0, 0, 0, 0};
-        case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R8G8_SINT: case VK_FORMAT_R8G8_UINT: return {8, 8, 0, 0, 0, 0};
+        case VK_FORMAT_R8G8B8A8_SNORM: return {8, 8, 8, 8, 0, 0};
+        case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8_SNORM: case VK_FORMAT_R8_SINT: case VK_FORMAT_R8_UINT:
+            return {8, 0, 0, 0, 0, 0};
+        case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R8G8_SNORM: case VK_FORMAT_R8G8_SINT: case VK_FORMAT_R8G8_UINT:
+            return {8, 8, 0, 0, 0, 0};
+        case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32: return {9, 9, 9, 0, 0, 0};
         case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
         case VK_FORMAT_A2B10G10R10_UINT_PACK32: return {10, 10, 10, 2, 0, 0};
         case VK_FORMAT_R16_SFLOAT: case VK_FORMAT_R16_SINT: case VK_FORMAT_R16_UINT: return {16, 0, 0, 0, 0, 0};
@@ -143,12 +147,13 @@ bool isIntegerFormat(VkFormat format) {
 
 uint32_t colorTexelSize(VkFormat format) {
     switch (format) {
-        case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8_SINT: case VK_FORMAT_R8_UINT: return 1;
-        case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R8G8_SINT: case VK_FORMAT_R8G8_UINT:
+        case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8_SNORM: case VK_FORMAT_R8_SINT: case VK_FORMAT_R8_UINT: return 1;
+        case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R8G8_SNORM: case VK_FORMAT_R8G8_SINT: case VK_FORMAT_R8G8_UINT:
         case VK_FORMAT_R16_SFLOAT: case VK_FORMAT_R16_SINT: case VK_FORMAT_R16_UINT: return 2;
         case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SRGB: case VK_FORMAT_R8G8B8A8_SINT:
-        case VK_FORMAT_R8G8B8A8_UINT: case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        case VK_FORMAT_R8G8B8A8_UINT: case VK_FORMAT_R8G8B8A8_SNORM: case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
         case VK_FORMAT_A2B10G10R10_UINT_PACK32: case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+        case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
         case VK_FORMAT_R16G16_SFLOAT: case VK_FORMAT_R16G16_SINT: case VK_FORMAT_R16G16_UINT:
         case VK_FORMAT_R32_SFLOAT: case VK_FORMAT_R32_SINT: case VK_FORMAT_R32_UINT: return 4;
         case VK_FORMAT_R16G16B16A16_SFLOAT: case VK_FORMAT_R16G16B16A16_SINT: case VK_FORMAT_R16G16B16A16_UINT:
@@ -159,8 +164,6 @@ uint32_t colorTexelSize(VkFormat format) {
     }
 }
 
-namespace {
-
 float halfToFloat(uint16_t h) {
     const uint32_t sign = (h >> 15) & 1, exp = (h >> 10) & 0x1F, mant = h & 0x3FF;
     float v;
@@ -170,14 +173,14 @@ float halfToFloat(uint16_t h) {
     return sign ? -v : v;
 }
 
-// An unsigned float with `mantBits` mantissa bits and a 5-bit exponent
-// (the 11- and 10-bit channels of B10G11R11).
 float smallFloat(uint32_t bits, uint32_t mantBits) {
     const uint32_t exp = bits >> mantBits, mant = bits & ((1u << mantBits) - 1);
     if (exp == 0) return std::ldexp(static_cast<float>(mant), -14 - static_cast<int>(mantBits));
     if (exp == 31) return mant ? NAN : INFINITY;
     return std::ldexp(static_cast<float>(mant | (1u << mantBits)), static_cast<int>(exp) - 15 - static_cast<int>(mantBits));
 }
+
+namespace {
 
 template <typename T>
 T load(const uint8_t* p, int index) {
@@ -198,6 +201,17 @@ Texel decodeTexel(VkFormat format, const uint8_t* src) {
         case VK_FORMAT_R8G8B8A8_SRGB: {
             const int n = format == VK_FORMAT_R8_UNORM ? 1 : format == VK_FORMAT_R8G8_UNORM ? 2 : 4;
             channels(n, [&](int c) { t.f[c] = src[c] / 255.0f; });
+            break;
+        }
+        case VK_FORMAT_R8_SNORM: case VK_FORMAT_R8G8_SNORM: case VK_FORMAT_R8G8B8A8_SNORM: {
+            const int n = format == VK_FORMAT_R8_SNORM ? 1 : format == VK_FORMAT_R8G8_SNORM ? 2 : 4;
+            channels(n, [&](int c) { t.f[c] = std::fmax(load<int8_t>(src, c) / 127.0f, -1.0f); });
+            break;
+        }
+        case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32: {
+            const uint32_t v = load<uint32_t>(src, 0);
+            const float scale = std::ldexp(1.0f, static_cast<int>(v >> 27) - 15 - 9);
+            for (int c = 0; c < 3; ++c) t.f[c] = static_cast<float>((v >> (9 * c)) & 0x1FF) * scale;
             break;
         }
         case VK_FORMAT_R16_SFLOAT: case VK_FORMAT_R16G16_SFLOAT: case VK_FORMAT_R16G16B16A16_SFLOAT: {

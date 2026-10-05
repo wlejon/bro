@@ -40,6 +40,11 @@ struct Texel {
     int32_t i[4]{0, 0, 0, 1};
     uint32_t u[4]{0, 0, 0, 1};
 };
+/// IEEE half to float; an unsigned float of a 5-bit exponent and
+/// `mantBits` mantissa bits (the channels of B10G11R11) to float.
+float halfToFloat(uint16_t h);
+float smallFloat(uint32_t bits, uint32_t mantBits);
+
 /// Decode one texel of `format` (colorTexelSize(format) bytes at `src`).
 Texel decodeTexel(VkFormat format, const uint8_t* src);
 

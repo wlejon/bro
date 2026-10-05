@@ -137,9 +137,15 @@ bool VulkanContext::createImage(uint32_t width, uint32_t height, VkFormat format
     imageInfo.usage = usage;
     imageInfo.samples = samples;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    return createImage(imageInfo, properties, image, memory, outOffset, outAllocId);
+}
 
+bool VulkanContext::createImage(const VkImageCreateInfo& imageInfo, VkMemoryPropertyFlags properties,
+                                VkImage& image, VkDeviceMemory& memory, VkDeviceSize& outOffset,
+                                uint64_t& outAllocId) {
     if (vkCreateImage(device_, &imageInfo, nullptr, &image) != VK_SUCCESS) {
-        LOG_ERROR("VulkanContext: Failed to create image (%ux%u)", width, height);
+        LOG_ERROR("VulkanContext: Failed to create image (%ux%ux%u)", imageInfo.extent.width,
+                  imageInfo.extent.height, imageInfo.extent.depth);
         return false;
     }
 

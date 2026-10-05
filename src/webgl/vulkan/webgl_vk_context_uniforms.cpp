@@ -16,28 +16,18 @@ namespace bro::webgl::vk {
 // Vertex Attributes
 // ---------------------------------------------------------------------------
 
-void WebGLVkContext::vertexAttribIPointer(GLuint index, GLint size, GLenum type,
-                                          GLsizei stride, uintptr_t offset) {
-    if (index >= 16) return;
-    VkVertexAttribute& attr = vaos_[currentVaoId_].attributes[index];
-    attr.size = size;
-    attr.type = type;
-    attr.normalized = GL_FALSE;
-    attr.isInteger = true;
-    attr.stride = (stride == 0) ? (size * 4) : stride;
-    attr.offset = offset;
-    attr.bufferId = boundArrayBuffer_;
-}
-
 void WebGLVkContext::vertexAttrib1f(GLuint index, GLfloat x) { vertexAttrib4f(index, x, 0.0f, 0.0f, 1.0f); }
 void WebGLVkContext::vertexAttrib2f(GLuint index, GLfloat x, GLfloat y) { vertexAttrib4f(index, x, y, 0.0f, 1.0f); }
 void WebGLVkContext::vertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z) { vertexAttrib4f(index, x, y, z, 1.0f); }
 
 void WebGLVkContext::vertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) {
-    if (index >= 16) return;
+    if (index >= 16) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
     float* dst = reinterpret_cast<float*>(genericAttribs_[index].data());
     dst[0] = x; dst[1] = y; dst[2] = z; dst[3] = w;
-    vaos_[currentVaoId_].attributes[index].isInteger = false;
+    genericAttribKinds_[index] = VkVertexInput::Kind::Float;
     genericAttribsChanged();
 }
 
@@ -47,18 +37,24 @@ void WebGLVkContext::vertexAttrib3fv(GLuint index, const GLfloat* v) { if (v) ve
 void WebGLVkContext::vertexAttrib4fv(GLuint index, const GLfloat* v) { if (v) vertexAttrib4f(index, v[0], v[1], v[2], v[3]); }
 
 void WebGLVkContext::vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w) {
-    if (index >= 16) return;
+    if (index >= 16) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
     int32_t* dst = reinterpret_cast<int32_t*>(genericAttribs_[index].data());
     dst[0] = x; dst[1] = y; dst[2] = z; dst[3] = w;
-    vaos_[currentVaoId_].attributes[index].isInteger = true;
+    genericAttribKinds_[index] = VkVertexInput::Kind::Int;
     genericAttribsChanged();
 }
 
 void WebGLVkContext::vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w) {
-    if (index >= 16) return;
+    if (index >= 16) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
     uint32_t* dst = genericAttribs_[index].data();
     dst[0] = x; dst[1] = y; dst[2] = z; dst[3] = w;
-    vaos_[currentVaoId_].attributes[index].isInteger = true;
+    genericAttribKinds_[index] = VkVertexInput::Kind::Uint;
     genericAttribsChanged();
 }
 

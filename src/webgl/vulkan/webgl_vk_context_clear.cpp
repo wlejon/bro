@@ -6,6 +6,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace bro::webgl::vk {
 
@@ -13,7 +14,23 @@ namespace {
 
 constexpr GLbitfield kClearBits = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
 
+void bitsOf(const float f[4], uint32_t out[4]) { std::memcpy(out, f, 16); }
+
 } // namespace
+
+// How the color and stencil write masks let a clear through: not at all,
+// wholly (an attachment clear), or in part (a masked draw).
+enum class MaskReach { None, Whole, Part };
+
+static MaskReach colorReach(const GLboolean mask[4]) {
+    const int n = (mask[0] ? 1 : 0) + (mask[1] ? 1 : 0) + (mask[2] ? 1 : 0) + (mask[3] ? 1 : 0);
+    return n == 0 ? MaskReach::None : n == 4 ? MaskReach::Whole : MaskReach::Part;
+}
+
+static MaskReach stencilReach(GLuint writeMask) {
+    const GLuint m = writeMask & 0xFF;
+    return m == 0 ? MaskReach::None : m == 0xFF ? MaskReach::Whole : MaskReach::Part;
+}
 
 // Record `count` clears over the pass's render area, cut to the scissor box
 // when the scissor test is on. The pass is open.
@@ -52,10 +69,14 @@ void WebGLVkContext::clear(GLbitfield mask) {
         setSyntheticError(GL_INVALID_VALUE);
         return;
     }
+    // RASTERIZER_DISCARD discards clears too (ES 3.0 4.2.3).
+    if (rasterizerDiscardEnabled_) return;
     beginRendering();
     if (!inRenderPass_) return;
 
-    const bool writesColor = colorMask_[0] || colorMask_[1] || colorMask_[2] || colorMask_[3];
+    const MaskReach color = colorReach(colorMask_);
+    const MaskReach stencilMask = stencilReach(stencilWriteMaskFront_);
+    uint32_t maskedColor = 0;
     VkClearAttachment atts[9]{};
     uint32_t count = 0;
     if (mask & GL_COLOR_BUFFER_BIT) {
@@ -67,8 +88,12 @@ void WebGLVkContext::clear(GLbitfield mask) {
                 return;
             }
         }
-        for (uint32_t i = 0; writesColor && i < pass_.colorCount; ++i) {
+        for (uint32_t i = 0; color != MaskReach::None && i < pass_.colorCount; ++i) {
             if (!pass_.color[i]) continue;
+            if (color == MaskReach::Part) {
+                maskedColor |= 1u << i;
+                continue;
+            }
             atts[count].aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             atts[count].colorAttachment = i;
             atts[count].clearValue.color = {{clearColor_[0], clearColor_[1], clearColor_[2], clearColor_[3]}};
@@ -76,9 +101,13 @@ void WebGLVkContext::clear(GLbitfield mask) {
         }
     }
     const bool depth = (mask & GL_DEPTH_BUFFER_BIT) && pass_.depth && depthMask_;
-    const bool stencil = (mask & GL_STENCIL_BUFFER_BIT) && pass_.stencil && (stencilWriteMaskFront_ & 0xFF) != 0;
-    if (depth || stencil) atts[count++] = depthStencilClear(depth, stencil, clearDepth_, clearStencil_);
+    const bool stencil = (mask & GL_STENCIL_BUFFER_BIT) && pass_.stencil && stencilMask != MaskReach::None;
+    const bool wholeStencil = stencil && stencilMask == MaskReach::Whole;
+    if (depth || wholeStencil) atts[count++] = depthStencilClear(depth, wholeStencil, clearDepth_, clearStencil_);
     clearAttachments(atts, count);
+    uint32_t bits[4];
+    bitsOf(clearColor_, bits);
+    clearMasked(maskedColor, bits, stencil && !wholeStencil, clearStencil_);
 }
 
 // The pass's color attachment for clearBuffer's `drawbuffer`, after the
@@ -101,6 +130,7 @@ void WebGLVkContext::clearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloa
         setSyntheticError(error);
         return;
     }
+    if (rasterizerDiscardEnabled_) return;
     beginRendering();
     if (!inRenderPass_) return;
     VkClearAttachment att{};
@@ -113,7 +143,14 @@ void WebGLVkContext::clearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloa
             setSyntheticError(GL_INVALID_OPERATION);
             return;
         }
-        if (!(colorMask_[0] || colorMask_[1] || colorMask_[2] || colorMask_[3])) return;
+        const MaskReach reach = colorReach(colorMask_);
+        if (reach == MaskReach::None) return;
+        if (reach == MaskReach::Part) {
+            uint32_t bits[4];
+            bitsOf(values, bits);
+            clearMasked(1u << drawbuffer, bits, false, 0);
+            return;
+        }
         att.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         att.colorAttachment = static_cast<uint32_t>(drawbuffer);
         att.clearValue.color = {{values[0], values[1], values[2], values[3]}};
@@ -132,16 +169,32 @@ void WebGLVkContext::clearBufferiv(GLenum buffer, GLint drawbuffer, const GLint*
         setSyntheticError(error);
         return;
     }
+    if (rasterizerDiscardEnabled_) return;
     beginRendering();
     if (!inRenderPass_) return;
     VkClearAttachment att{};
     uint32_t count = 0;
     if (buffer == GL_STENCIL) {
-        att = depthStencilClear(false, pass_.stencil && (stencilWriteMaskFront_ & 0xFF) != 0, 0.0f, values[0]);
-        count = att.aspectMask ? 1 : 0;
+        const MaskReach reach = stencilReach(stencilWriteMaskFront_);
+        if (!pass_.stencil || reach == MaskReach::None) return;
+        if (reach == MaskReach::Part) {
+            const uint32_t none[4]{};
+            clearMasked(0, none, true, values[0]);
+            return;
+        }
+        att = depthStencilClear(false, true, 0.0f, values[0]);
+        count = 1;
     } else if (static_cast<uint32_t>(drawbuffer) < pass_.colorCount && pass_.color[drawbuffer]) {
         if (!isSignedIntegerFormat(pass_.color[drawbuffer].format)) {
             setSyntheticError(GL_INVALID_OPERATION);
+            return;
+        }
+        const MaskReach reach = colorReach(colorMask_);
+        if (reach == MaskReach::None) return;
+        if (reach == MaskReach::Part) {
+            uint32_t bits[4];
+            std::memcpy(bits, values, 16);
+            clearMasked(1u << drawbuffer, bits, false, 0);
             return;
         }
         att.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -165,12 +218,19 @@ void WebGLVkContext::clearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuin
         setSyntheticError(error);
         return;
     }
+    if (rasterizerDiscardEnabled_) return;
     beginRendering();
     if (!inRenderPass_) return;
     if (static_cast<uint32_t>(drawbuffer) >= pass_.colorCount || !pass_.color[drawbuffer]) return;
     const VkFormat format = pass_.color[drawbuffer].format;
     if (!isIntegerFormat(format) || isSignedIntegerFormat(format)) {
         setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    const MaskReach reach = colorReach(colorMask_);
+    if (reach == MaskReach::None) return;
+    if (reach == MaskReach::Part) {
+        clearMasked(1u << drawbuffer, values, false, 0);
         return;
     }
     VkClearAttachment att{};
@@ -189,12 +249,16 @@ void WebGLVkContext::clearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat dept
         setSyntheticError(GL_INVALID_VALUE);
         return;
     }
+    if (rasterizerDiscardEnabled_) return;
     beginRendering();
     if (!inRenderPass_) return;
+    const MaskReach reach = stencilReach(stencilWriteMaskFront_);
+    const bool clearsStencil = pass_.stencil && reach != MaskReach::None;
     const VkClearAttachment att = depthStencilClear(pass_.depth && depthMask_,
-                                                    pass_.stencil && (stencilWriteMaskFront_ & 0xFF) != 0, depth,
-                                                    stencil);
+                                                    clearsStencil && reach == MaskReach::Whole, depth, stencil);
     clearAttachments(&att, att.aspectMask ? 1 : 0);
+    const uint32_t none[4]{};
+    if (clearsStencil && reach == MaskReach::Part) clearMasked(0, none, true, stencil);
 }
 
 } // namespace bro::webgl::vk

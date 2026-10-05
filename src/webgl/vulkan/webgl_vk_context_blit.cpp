@@ -75,6 +75,8 @@ bool WebGLVkContext::scratchImage(VkFormat format, uint32_t width, uint32_t heig
     out.height = height;
     out.format = format;
     out.target = GL_RENDERBUFFER;
+    out.mipLevels = out.arrayLayers = 1;
+    out.layouts.assign(1, VK_IMAGE_LAYOUT_UNDEFINED);
     return true;
 }
 
@@ -100,6 +102,11 @@ void WebGLVkContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLin
     RenderTarget dst;
     Surface srcColor;
     if (!readColorSurface(srcColor) || !drawTarget(dst)) return;
+    // Blitting a level of an image onto itself is an error; onto another
+    // level (or layer, or 3D slice) of the same image it is a copy like any other.
+    auto sameSubresource = [](const Surface& a, const Surface& b) {
+        return a.image == b.image && a.level == b.level && a.layer == b.layer && a.z == b.z;
+    };
 
     // The read framebuffer's depth and stencil, and its sample count.
     Surface srcDepth, srcStencil;
@@ -143,15 +150,15 @@ void WebGLVkContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLin
             if (isIntegerFormat(d.format) != srcInt ||
                 isSignedIntegerFormat(d.format) != isSignedIntegerFormat(srcColor.format) ||
                 (srcSamples > VK_SAMPLE_COUNT_1_BIT && d.format != srcColor.format) ||
-                (d.image == srcColor.image && d.level == srcColor.level && d.layer == srcColor.layer)) {
+                sameSubresource(d, srcColor)) {
                 setSyntheticError(GL_INVALID_OPERATION);
                 return;
             }
         }
     }
-    if (((mask & GL_DEPTH_BUFFER_BIT) && (srcDepth.format != dst.depth.format || srcDepth.image == dst.depth.image)) ||
+    if (((mask & GL_DEPTH_BUFFER_BIT) && (srcDepth.format != dst.depth.format || sameSubresource(srcDepth, dst.depth))) ||
         ((mask & GL_STENCIL_BUFFER_BIT) &&
-         (srcStencil.format != dst.stencil.format || srcStencil.image == dst.stencil.image))) {
+         (srcStencil.format != dst.stencil.format || sameSubresource(srcStencil, dst.stencil)))) {
         setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
@@ -193,6 +200,7 @@ void WebGLVkContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLin
         out.tex = &tex;
         out.image = tex.image;
         out.level = out.layer = 0;
+        out.z = 0;
         out.samples = VK_SAMPLE_COUNT_1_BIT;
         if (s.aspects() == VK_IMAGE_ASPECT_COLOR_BIT) {
             transitionSurface(cmd, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -276,8 +284,8 @@ void WebGLVkContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLin
                 VkImageCopy c{};
                 c.srcSubresource = srcLayers;
                 c.dstSubresource = dstLayers;
-                c.srcOffset = {sx, sy + static_cast<int32_t>(row), 0};
-                c.dstOffset = {dx, mirrorY ? dy + static_cast<int32_t>(h - 1 - row) : dy, 0};
+                c.srcOffset = {sx, sy + static_cast<int32_t>(row), s.z};
+                c.dstOffset = {dx, mirrorY ? dy + static_cast<int32_t>(h - 1 - row) : dy, d.z};
                 c.extent = {w, mirrorY ? 1u : h, 1};
                 regions.push_back(c);
             }
@@ -287,11 +295,11 @@ void WebGLVkContext::blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLin
         } else {
             VkImageBlit b{};
             b.srcSubresource = srcLayers;
-            b.srcOffsets[0] = {r.sx0, sy0, 0};
-            b.srcOffsets[1] = {r.sx1, sy1, 1};
+            b.srcOffsets[0] = {r.sx0, sy0, s.z};
+            b.srcOffsets[1] = {r.sx1, sy1, s.z + 1};
             b.dstSubresource = dstLayers;
-            b.dstOffsets[0] = {r.dx0, dy0, 0};
-            b.dstOffsets[1] = {r.dx1, dy1, 1};
+            b.dstOffsets[0] = {r.dx0, dy0, d.z};
+            b.dstOffsets[1] = {r.dx1, dy1, d.z + 1};
             vkCmdBlitImage(cmd, s.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d.image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b,
                            filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);

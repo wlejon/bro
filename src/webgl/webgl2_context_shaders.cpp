@@ -24,9 +24,9 @@ void WebGL2RenderingContext::deleteVertexArray(WebGLVertexArrayObject vao) {
 }
 
 void WebGL2RenderingContext::bindVertexArray(WebGLVertexArrayObject vao) {
+    if (!vkCtx_ || !vkCtx_->bindVertexArray(vao)) return;
     if (vao.id != 0) validVAOs_.insert(vao.id);
     sVAO_ = vao.id;
-    if (vkCtx_) vkCtx_->bindVertexArray(vao);
 }
 
 // ===========================================================================
@@ -191,6 +191,22 @@ WebGLActiveInfo WebGL2RenderingContext::getActiveAttrib(WebGLProgram program, GL
 WebGLActiveInfo WebGL2RenderingContext::getActiveUniform(WebGLProgram program, GLuint index) {
     if (vkCtx_) return vkCtx_->getActiveUniform(program, index);
     return {};
+}
+
+bool WebGL2RenderingContext::getVertexAttrib(GLuint index, GLenum pname, GLValue& out) {
+    return vkCtx_ && vkCtx_->getVertexAttrib(index, pname, out);
+}
+
+GLintptr WebGL2RenderingContext::getVertexAttribOffset(GLuint index, GLenum pname) {
+    return vkCtx_ ? vkCtx_->getVertexAttribOffset(index, pname) : 0;
+}
+
+bool WebGL2RenderingContext::getUniform(WebGLProgram program, WebGLUniformLocation loc, GLValue& out) {
+    return vkCtx_ && vkCtx_->getUniform(program, loc, out);
+}
+
+void WebGL2RenderingContext::validateProgram(WebGLProgram program) {
+    if (vkCtx_) vkCtx_->validateProgram(program);
 }
 
 GLint WebGL2RenderingContext::getProgramParameter_int(WebGLProgram program, GLenum pname) {

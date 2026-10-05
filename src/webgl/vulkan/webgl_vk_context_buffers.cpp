@@ -6,7 +6,7 @@
 namespace bro::webgl::vk {
 
 WebGLBuffer WebGLVkContext::createBuffer() {
-    GLuint id = nextBufferId_++;
+    GLuint id = nextObjectId_++;
     buffers_[id] = VkBufferResource{};
     return {id};
 }
@@ -27,7 +27,29 @@ void WebGLVkContext::deleteBuffer(WebGLBuffer buf) {
     if (boundCopyReadBuffer_ == buf.id) boundCopyReadBuffer_ = 0;
     if (boundCopyWriteBuffer_ == buf.id) boundCopyWriteBuffer_ = 0;
     if (boundTransformFeedbackBuffer_ == buf.id) boundTransformFeedbackBuffer_ = 0;
+    for (auto& [id, f] : feedbacks_)
+        for (IndexedBuffer& b : f.buffers)
+            if (b.buffer == buf.id) b = IndexedBuffer{};
 }
+
+namespace {
+
+bool bufferTargetValid(GLenum target) {
+    switch (target) {
+        case GL_ARRAY_BUFFER: case GL_ELEMENT_ARRAY_BUFFER: case GL_PIXEL_PACK_BUFFER:
+        case GL_PIXEL_UNPACK_BUFFER: case GL_UNIFORM_BUFFER: case GL_COPY_READ_BUFFER:
+        case GL_COPY_WRITE_BUFFER: case GL_TRANSFORM_FEEDBACK_BUFFER:
+            return true;
+        default: return false;
+    }
+}
+
+// The nine STREAM / STATIC / DYNAMIC x DRAW / READ / COPY hints.
+bool bufferUsageValid(GLenum usage) {
+    return usage >= GL_STREAM_DRAW && usage <= GL_DYNAMIC_COPY && (usage & 3) != 3;
+}
+
+} // namespace
 
 GLuint WebGLVkContext::getBoundBufferId(GLenum target) const {
     switch (target) {
@@ -43,6 +65,20 @@ GLuint WebGLVkContext::getBoundBufferId(GLenum target) const {
     }
 }
 
+bool WebGLVkContext::getBufferParameter(GLenum target, GLenum pname, GLint& out) {
+    if (!bufferTargetValid(target) || (pname != GL_BUFFER_SIZE && pname != GL_BUFFER_USAGE)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return false;
+    }
+    auto it = buffers_.find(getBoundBufferId(target));
+    if (it == buffers_.end()) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return false;
+    }
+    out = pname == GL_BUFFER_SIZE ? static_cast<GLint>(it->second.size) : static_cast<GLint>(it->second.usage);
+    return true;
+}
+
 GLuint WebGLVkContext::boundBuffer(GLenum target) {
     return getBoundBufferId(target);
 }
@@ -54,7 +90,15 @@ int64_t WebGLVkContext::boundBufferSize(GLenum target) {
     return (it != buffers_.end()) ? static_cast<int64_t>(it->second.size) : 0;
 }
 
-void WebGLVkContext::bindBuffer(GLenum target, WebGLBuffer buf) {
+bool WebGLVkContext::bindBuffer(GLenum target, WebGLBuffer buf) {
+    if (!bufferTargetValid(target)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return false;
+    }
+    if (buf.id != 0 && buffers_.find(buf.id) == buffers_.end()) {
+        setSyntheticError(GL_INVALID_OPERATION);  // deleted, or from before a context loss
+        return false;
+    }
     switch (target) {
         case GL_ARRAY_BUFFER:
             boundArrayBuffer_ = buf.id;
@@ -81,15 +125,18 @@ void WebGLVkContext::bindBuffer(GLenum target, WebGLBuffer buf) {
         case GL_TRANSFORM_FEEDBACK_BUFFER:
             boundTransformFeedbackBuffer_ = buf.id;
             break;
-        default:
-            setSyntheticError(GL_INVALID_ENUM);
-            break;
+        default: break;
     }
+    return true;
 }
 
 void WebGLVkContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf) {
+    if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
+        bindFeedbackBuffer(index, buf.id, 0, 0);
+        return;
+    }
     if (target != GL_UNIFORM_BUFFER) {
-        bindBuffer(target, buf);
+        setSyntheticError(GL_INVALID_ENUM);
         return;
     }
     if (index >= boundUniformBuffers_.size()) {
@@ -104,8 +151,16 @@ void WebGLVkContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf
 // bound before the buffer has storage, or the storage may change).
 void WebGLVkContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf, GLintptr offset,
                                      GLsizeiptr size) {
+    if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
+        if (buf.id != 0 && size <= 0) {
+            setSyntheticError(GL_INVALID_VALUE);
+            return;
+        }
+        bindFeedbackBuffer(index, buf.id, offset, size);
+        return;
+    }
     if (target != GL_UNIFORM_BUFFER) {
-        bindBuffer(target, buf);
+        setSyntheticError(GL_INVALID_ENUM);
         return;
     }
     if (index >= boundUniformBuffers_.size() || offset < 0 || (buf.id != 0 && size <= 0)) {
@@ -122,7 +177,25 @@ void WebGLVkContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer bu
     boundUniformBuffer_ = buf.id;
 }
 
+GLuint WebGLVkContext::indexedBuffer(GLenum target, GLuint index) {
+    if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
+        if (index < kMaxFeedbackBuffers) return feedbacks_[boundFeedback_].buffers[index].buffer;
+    } else if (index < boundUniformBuffers_.size()) {
+        return boundUniformBuffers_[index].buffer;
+    }
+    setSyntheticError(GL_INVALID_VALUE);
+    return 0;
+}
+
 int64_t WebGLVkContext::getIndexedBufferParameter(GLenum pname, GLuint index) {
+    if (pname == GL_TRANSFORM_FEEDBACK_BUFFER_START || pname == GL_TRANSFORM_FEEDBACK_BUFFER_SIZE) {
+        if (index >= kMaxFeedbackBuffers) {
+            setSyntheticError(GL_INVALID_VALUE);
+            return 0;
+        }
+        const IndexedBuffer& b = feedbacks_[boundFeedback_].buffers[index];
+        return pname == GL_TRANSFORM_FEEDBACK_BUFFER_START ? b.offset : b.size;
+    }
     if (index >= boundUniformBuffers_.size()) {
         setSyntheticError(GL_INVALID_VALUE);
         return 0;
@@ -134,7 +207,11 @@ int64_t WebGLVkContext::getIndexedBufferParameter(GLenum pname, GLuint index) {
     return 0;
 }
 
-void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data, GLenum /*usage*/) {
+void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
+    if (!bufferTargetValid(target) || !bufferUsageValid(usage)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return;
+    }
     if (size < 0) {
         setSyntheticError(GL_INVALID_VALUE);
         return;
@@ -153,15 +230,17 @@ void WebGLVkContext::bufferData(GLenum target, GLsizeiptr size, const void* data
     if (res.isValid() && res.size != newSize) releaseBuffer(res);
 
     res.size = newSize;
+    res.usage = usage;
     res.shadowData.assign(static_cast<size_t>(size), 0);
     if (data && size > 0) std::memcpy(res.shadowData.data(), data, static_cast<size_t>(size));
+    ++res.version;
     if (size == 0) return;
 
     if (!res.isValid()) {
         const VkBufferUsageFlags usage =
             VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         void* mapped = nullptr;
         if (!context_.createBuffer(res.size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                    res.buffer, res.memory, res.offset, res.allocId, mapped)) {
@@ -189,6 +268,7 @@ void WebGLVkContext::bufferSubData(GLenum target, GLintptr offset, GLsizeiptr si
         return;
     }
     if (!data || size == 0) return;
+    syncShadow(res);
 
     std::memcpy(res.shadowData.data() + offset, data, size);
     uploadToBuffer(res, static_cast<VkDeviceSize>(offset), data, static_cast<VkDeviceSize>(size));
@@ -210,6 +290,7 @@ void WebGLVkContext::getBufferSubData(GLenum target, GLintptr srcByteOffset, voi
         return;
     }
     if (dstData && length > 0) {
+        syncShadow(res);
         std::memcpy(dstData, res.shadowData.data() + srcByteOffset, length);
     }
 }
@@ -237,6 +318,8 @@ void WebGLVkContext::copyBufferSubData(GLenum readTarget, GLenum writeTarget,
     }
     if (size == 0) return;
 
+    syncShadow(readRes);
+    syncShadow(writeRes);
     std::memmove(writeRes.shadowData.data() + writeOffset,
                  readRes.shadowData.data() + readOffset, size);
     uploadToBuffer(writeRes, static_cast<VkDeviceSize>(writeOffset),
@@ -275,6 +358,7 @@ void* WebGLVkContext::mapBufferRange(GLenum target, GLintptr offset, GLsizeiptr 
         return nullptr;
     }
 
+    syncShadow(res);
     res.isMapped = true;
     res.mappedPtr = res.shadowData.data() + offset;
     return res.mappedPtr;
@@ -314,48 +398,6 @@ void WebGLVkContext::flushMappedBufferRange(GLenum target, GLintptr offset, GLsi
         uploadToBuffer(res, static_cast<VkDeviceSize>(offset), res.shadowData.data() + offset,
                        static_cast<VkDeviceSize>(length));
     }
-}
-
-void WebGLVkContext::texImage2DFromPBO(GLenum target, GLint level, GLint internalformat,
-                                       GLsizei width, GLsizei height, GLint border,
-                                       GLenum format, GLenum type, GLintptr offset)
-{
-    if (boundPixelUnpackBuffer_ == 0) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    if (unpackFlipY_) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    VkBufferResource& pbo = buffers_[boundPixelUnpackBuffer_];
-    if (offset < 0 || offset > static_cast<GLintptr>(pbo.shadowData.size())) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    const void* ptr = pbo.shadowData.data() + offset;
-    texImage2D(target, level, internalformat, width, height, border, format, type, ptr);
-}
-
-void WebGLVkContext::texSubImage2DFromPBO(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                                          GLsizei width, GLsizei height,
-                                          GLenum format, GLenum type, GLintptr offset)
-{
-    if (boundPixelUnpackBuffer_ == 0) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    if (unpackFlipY_) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    VkBufferResource& pbo = buffers_[boundPixelUnpackBuffer_];
-    if (offset < 0 || offset > static_cast<GLintptr>(pbo.shadowData.size())) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    const void* ptr = pbo.shadowData.data() + offset;
-    texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, ptr);
 }
 
 } // namespace bro::webgl::vk

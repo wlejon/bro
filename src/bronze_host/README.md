@@ -587,11 +587,10 @@ diffs its output against a committed expectation.
 
 ## Deliberately not covered (yet)
 
-**GL**: samplers, sync, occlusion queries, transform feedback, PBO paths,
-`mapBufferRange`, `getIndexedParameter`, 3D/array textures, non-square matrix
-uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
-`getParameter`'s array-shaped answers are pseudo-arrays (indexable, `length`, no
-`Array.prototype`).
+**GL**: the WebGL 2 surface is bound in full; what the Vulkan backend does not
+do is listed in the WebGL2 support matrix of `docs/headless.md`. Object values
+are `===`-stable (`glObject`, `gl_internal.h`), and array-shaped `getParameter`
+answers are the typed arrays the IDL names.
 
 **Events**: the exact list is under "Not supported, precisely" above.
 

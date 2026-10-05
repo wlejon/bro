@@ -12,6 +12,7 @@ WebGL2RenderingContext* WebGL2RenderingContext::current_ = nullptr;
 WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::VulkanContext* vkContext)
     : width_(width), height_(height) {
     if (!vkContext) vkContext = defaultVulkanContext_;
+    device_ = vkContext;
     if (vkContext) {
         vkCtx_ = std::make_unique<vk::WebGLVkContext>(width, height, *vkContext);
         sViewport_[2] = width_;
@@ -20,11 +21,6 @@ WebGL2RenderingContext::WebGL2RenderingContext(int width, int height, render::Vu
     } else {
         LOG_WARN("WebGL2RenderingContext created without Vulkan backend (%dx%d)", width, height);
     }
-    compressedFormats_ = {
-        0x8DBB, 0x8DBC, 0x8DBD, 0x8DBE, // RGTC (BC4/BC5)
-        0x8E8C, 0x8E8D, 0x8E8E, 0x8E8F, // BPTC (BC7/BC6H)
-        0x83F0, 0x83F1, 0x83F2, 0x83F3  // S3TC (DXT1, DXT3, DXT5)
-    };
 }
 
 WebGL2RenderingContext::~WebGL2RenderingContext() {
@@ -52,6 +48,49 @@ void WebGL2RenderingContext::resize(int width, int height) {
     if (vkCtx_) {
         vkCtx_->resize(width, height);
     }
+}
+
+// WebGL 1.0 5.15.3 "lose the context": the backend and every object go now;
+// the lost event is the engine's to fire, at the canvas, after this turn.
+void WebGL2RenderingContext::loseContext() {
+    if (lost_) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (vkCtx_) nextObjectId_ = vkCtx_->nextObjectId();
+    vkCtx_.reset();
+    static_cast<WebGL2FrontState&>(*this) = WebGL2FrontState{};
+    lost_ = true;
+    lostErrorPending_ = true;
+    restoreAllowed_ = true;
+    pendingEvent_ = ContextEvent::Lost;
+}
+
+void WebGL2RenderingContext::restoreContext() {
+    // Before the lost event has fired, or after it was not cancelled, there
+    // is nothing to restore yet / at all.
+    if (!lost_ || !restoreAllowed_ || pendingEvent_ != ContextEvent::None) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    pendingEvent_ = ContextEvent::Restored;
+}
+
+WebGL2RenderingContext::ContextEvent WebGL2RenderingContext::takeContextEvent() {
+    const ContextEvent e = pendingEvent_;
+    pendingEvent_ = ContextEvent::None;
+    if (e == ContextEvent::Restored) {
+        // WebGL 1.0 5.15.4 "restore the context": a fresh drawing buffer and
+        // default state; names continue, so no lost object's names a new one.
+        // Calls made while lost may have touched the front end's state.
+        static_cast<WebGL2FrontState&>(*this) = WebGL2FrontState{};
+        if (device_) vkCtx_ = std::make_unique<vk::WebGLVkContext>(width_, height_, *device_, nextObjectId_);
+        sViewport_[2] = width_;
+        sViewport_[3] = height_;
+        lost_ = false;
+        lostErrorPending_ = false;
+    }
+    return e;
 }
 
 void WebGL2RenderingContext::makeCurrent() {
@@ -172,6 +211,12 @@ void WebGL2RenderingContext::frontFace(GLenum mode) {
 void WebGL2RenderingContext::polygonOffset(GLfloat factor, GLfloat units) {
     if (vkCtx_) vkCtx_->polygonOffset(factor, units);
 }
+void WebGL2RenderingContext::hint(GLenum target, GLenum mode) {
+    if (vkCtx_) vkCtx_->hint(target, mode);
+}
+void WebGL2RenderingContext::sampleCoverage(GLfloat value, GLboolean invert) {
+    if (vkCtx_) vkCtx_->sampleCoverage(value, invert);
+}
 void WebGL2RenderingContext::lineWidth(GLfloat width) {
     if (vkCtx_) vkCtx_->lineWidth(width);
 }
@@ -189,6 +234,11 @@ void WebGL2RenderingContext::pixelStorei(GLenum pname, GLint param) {
 }
 
 GLenum WebGL2RenderingContext::getError() {
+    if (lost_) {
+        const bool first = lostErrorPending_;
+        lostErrorPending_ = false;
+        return first ? 0x9242 /* CONTEXT_LOST_WEBGL */ : GL_NO_ERROR;
+    }
     if (syntheticError_ != GL_NO_ERROR) {
         GLenum e = syntheticError_;
         syntheticError_ = GL_NO_ERROR;
@@ -223,12 +273,12 @@ void WebGL2RenderingContext::deleteBuffer(WebGLBuffer buf) {
 }
 
 void WebGL2RenderingContext::bindBuffer(GLenum target, WebGLBuffer buf) {
+    if (!vkCtx_ || !vkCtx_->bindBuffer(target, buf)) return;
     if (buf.id != 0) validBuffers_.insert(buf.id);
     if (target == GL_ARRAY_BUFFER) sArrayBuf_ = buf.id;
     else if (target == GL_ELEMENT_ARRAY_BUFFER) sElementBuf_ = buf.id;
     else if (target == GL_PIXEL_PACK_BUFFER) sPixelPack_ = buf.id;
     else if (target == GL_PIXEL_UNPACK_BUFFER) sPixelUnpack_ = buf.id;
-    if (vkCtx_) vkCtx_->bindBuffer(target, buf);
 }
 
 void WebGL2RenderingContext::bufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
@@ -270,13 +320,15 @@ void WebGL2RenderingContext::flushMappedBufferRange(GLenum target, GLintptr offs
 
 void WebGL2RenderingContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf) {
     if (vkCtx_) vkCtx_->bindBufferBase(target, index, buf);
-    bindBuffer(target, buf);
 }
 
 void WebGL2RenderingContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf,
                                              GLintptr offset, GLsizeiptr size) {
     if (vkCtx_) vkCtx_->bindBufferRange(target, index, buf, offset, size);
-    bindBuffer(target, buf);
+}
+
+bool WebGL2RenderingContext::getBufferParameter(GLenum target, GLenum pname, GLint& out) {
+    return vkCtx_ && vkCtx_->getBufferParameter(target, pname, out);
 }
 
 int64_t WebGL2RenderingContext::boundBufferSize(GLenum target) {
@@ -289,96 +341,100 @@ void WebGL2RenderingContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GL
     if (vkCtx_) vkCtx_->readPixelsToPBO(x, y, width, height, format, type, offset);
 }
 
-void WebGL2RenderingContext::texImage2DFromPBO(GLenum target, GLint level, GLint internalformat,
-                                               GLsizei width, GLsizei height, GLint border,
-                                               GLenum format, GLenum type, GLintptr offset) {
-    if (vkCtx_) vkCtx_->texImage2DFromPBO(target, level, internalformat, width, height, border, format, type, offset);
-}
-
-void WebGL2RenderingContext::texSubImage2DFromPBO(GLenum target, GLint level,
-                                                  GLint xoffset, GLint yoffset,
-                                                  GLsizei width, GLsizei height,
-                                                  GLenum format, GLenum type, GLintptr offset) {
-    if (vkCtx_) vkCtx_->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height, format, type, offset);
-}
-
-static GLuint s_nextQueryId = 1;
-static std::unordered_map<GLuint, GLuint> s_queryResults;
-
 WebGLQuery WebGL2RenderingContext::createQuery() {
-    GLuint id = s_nextQueryId++;
-    createdQueries_.insert(id);
-    return {id};
+    return {vkCtx_ ? vkCtx_->createQuery() : 0};
 }
+
 void WebGL2RenderingContext::deleteQuery(WebGLQuery q) {
-    if (q.id != 0) {
-        createdQueries_.erase(q.id);
-        validQueries_.erase(q.id);
-        deletedQueries_.insert(q.id);
-        s_queryResults.erase(q.id);
-    }
+    if (vkCtx_) vkCtx_->deleteQuery(q.id);
 }
-void WebGL2RenderingContext::beginQuery(GLenum /*target*/, WebGLQuery q) {
-    if (q.id == 0 || createdQueries_.count(q.id) == 0 || deletedQueries_.count(q.id) > 0) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    validQueries_.insert(q.id);
-    if (sScissorTest_ && (sScissorBox_[2] == 0 || sScissorBox_[3] == 0)) {
-        s_queryResults[q.id] = 0;
-    } else {
-        s_queryResults[q.id] = 1;
-    }
+
+void WebGL2RenderingContext::beginQuery(GLenum target, WebGLQuery q) {
+    if (vkCtx_) vkCtx_->beginQuery(target, q.id);
 }
-void WebGL2RenderingContext::endQuery(GLenum /*target*/) {}
-GLuint WebGL2RenderingContext::getQueryParameteru(WebGLQuery q, GLenum pname) {
-    if (q.id == 0 || deletedQueries_.count(q.id) > 0 || validQueries_.count(q.id) == 0) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return 0;
-    }
-    if (pname == 0x8867 /* GL_QUERY_RESULT_AVAILABLE */) return GL_TRUE;
-    if (pname == 0x8866 /* GL_QUERY_RESULT */) {
-        auto it = s_queryResults.find(q.id);
-        if (it != s_queryResults.end()) return it->second;
-        return 1;
-    }
-    return 0;
+
+void WebGL2RenderingContext::endQuery(GLenum target) {
+    if (vkCtx_) vkCtx_->endQuery(target);
 }
+
+WebGLQuery WebGL2RenderingContext::currentQuery(GLenum target) {
+    return {vkCtx_ ? vkCtx_->currentQuery(target) : 0};
+}
+
+bool WebGL2RenderingContext::getQueryParameter(WebGLQuery q, GLenum pname, GLuint& out) {
+    return vkCtx_ && vkCtx_->getQueryParameter(q.id, pname, out);
+}
+
 GLboolean WebGL2RenderingContext::isQuery(WebGLQuery q) {
-    return (q.id != 0 && validQueries_.count(q.id) > 0) ? GL_TRUE : GL_FALSE;
+    return vkCtx_ ? vkCtx_->isQuery(q.id) : GL_FALSE;
 }
 
-bool WebGL2RenderingContext::transformFeedbackObjectsSupported() const { return false; }
-WebGLTransformFeedback WebGL2RenderingContext::createTransformFeedback() { return {0}; }
-void WebGL2RenderingContext::deleteTransformFeedback(WebGLTransformFeedback /*tf*/) {}
-void WebGL2RenderingContext::bindTransformFeedback(GLenum /*target*/, WebGLTransformFeedback /*tf*/) {}
-void WebGL2RenderingContext::beginTransformFeedback(GLenum /*primitiveMode*/) {}
-void WebGL2RenderingContext::endTransformFeedback() {}
-void WebGL2RenderingContext::pauseTransformFeedback() {}
-void WebGL2RenderingContext::resumeTransformFeedback() {}
-void WebGL2RenderingContext::transformFeedbackVaryings(WebGLProgram /*program*/,
-                                                       const std::vector<std::string>& /*varyings*/,
-                                                       GLenum /*bufferMode*/) {}
-WebGLActiveInfo WebGL2RenderingContext::getTransformFeedbackVarying(WebGLProgram /*program*/, GLuint /*index*/) { return {}; }
-GLboolean WebGL2RenderingContext::isTransformFeedback(WebGLTransformFeedback /*tf*/) { return GL_FALSE; }
+bool WebGL2RenderingContext::transformFeedbackSupported() const {
+    return vkCtx_ && vkCtx_->transformFeedbackSupported();
+}
+
+WebGLTransformFeedback WebGL2RenderingContext::createTransformFeedback() {
+    return {vkCtx_ ? vkCtx_->createTransformFeedback() : 0};
+}
+
+void WebGL2RenderingContext::deleteTransformFeedback(WebGLTransformFeedback tf) {
+    if (vkCtx_) vkCtx_->deleteTransformFeedback(tf.id);
+}
+
+void WebGL2RenderingContext::bindTransformFeedback(GLenum target, WebGLTransformFeedback tf) {
+    if (vkCtx_) vkCtx_->bindTransformFeedback(target, tf.id);
+}
+
+void WebGL2RenderingContext::beginTransformFeedback(GLenum primitiveMode) {
+    if (vkCtx_) vkCtx_->beginTransformFeedback(primitiveMode);
+}
+
+void WebGL2RenderingContext::endTransformFeedback() {
+    if (vkCtx_) vkCtx_->endTransformFeedback();
+}
+
+void WebGL2RenderingContext::pauseTransformFeedback() {
+    if (vkCtx_) vkCtx_->pauseTransformFeedback();
+}
+
+void WebGL2RenderingContext::resumeTransformFeedback() {
+    if (vkCtx_) vkCtx_->resumeTransformFeedback();
+}
+
+void WebGL2RenderingContext::transformFeedbackVaryings(WebGLProgram program, const std::vector<std::string>& varyings,
+                                                       GLenum bufferMode) {
+    if (vkCtx_) vkCtx_->transformFeedbackVaryings(program.id, varyings, bufferMode);
+}
+
+bool WebGL2RenderingContext::getTransformFeedbackVarying(WebGLProgram program, GLuint index, WebGLActiveInfo& out) {
+    vk::VkFeedbackVarying v;
+    if (!vkCtx_ || !vkCtx_->getTransformFeedbackVarying(program.id, index, v)) return false;
+    out = {v.name, v.type, v.size};
+    return true;
+}
+
+GLboolean WebGL2RenderingContext::isTransformFeedback(WebGLTransformFeedback tf) {
+    return vkCtx_ ? vkCtx_->isTransformFeedback(tf.id) : GL_FALSE;
+}
+
+bool WebGL2RenderingContext::transformFeedbackActive() const {
+    return vkCtx_ && vkCtx_->transformFeedbackActive();
+}
+
+bool WebGL2RenderingContext::transformFeedbackPaused() const {
+    return vkCtx_ && vkCtx_->transformFeedbackPaused();
+}
+
+WebGLTransformFeedback WebGL2RenderingContext::boundTransformFeedback() const {
+    return {vkCtx_ ? vkCtx_->boundTransformFeedback() : 0};
+}
+
+WebGLBuffer WebGL2RenderingContext::indexedBuffer(GLenum target, GLuint index) {
+    return {vkCtx_ ? vkCtx_->indexedBuffer(target, index) : 0};
+}
+
 int64_t WebGL2RenderingContext::getIndexedParameterInt64(GLenum pname, GLuint index) {
-    // Transform feedback buffer ranges are not tracked (transform feedback is unsupported).
-    if (vkCtx_ && (pname == 0x8A29 /* UNIFORM_BUFFER_START */ || pname == 0x8A2A /* UNIFORM_BUFFER_SIZE */))
-        return vkCtx_->getIndexedBufferParameter(pname, index);
-    return 0;
-}
-
-void WebGL2RenderingContext::texImage3D(GLenum target, GLint level, GLint internalformat,
-                                        GLsizei width, GLsizei height, GLsizei depth, GLint border,
-                                        GLenum format, GLenum type, const void* pixels) {
-    if (vkCtx_) vkCtx_->texImage3D(target, level, internalformat, width, height, depth, border, format, type, pixels);
-}
-
-void WebGL2RenderingContext::texSubImage3D(GLenum target, GLint level,
-                                           GLint xoffset, GLint yoffset, GLint zoffset,
-                                           GLsizei width, GLsizei height, GLsizei depth,
-                                           GLenum format, GLenum type, const void* pixels) {
-    if (vkCtx_) vkCtx_->texSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth, format, type, pixels);
+    return vkCtx_ ? vkCtx_->getIndexedBufferParameter(pname, index) : 0;
 }
 
 bool WebGL2RenderingContext::validateReadPixels(GLsizei width, GLsizei height,
@@ -397,9 +453,6 @@ bool WebGL2RenderingContext::validateReadPixels(GLsizei width, GLsizei height,
 
 GLboolean WebGL2RenderingContext::isBuffer(WebGLBuffer buf) {
     return (buf.id != 0 && validBuffers_.count(buf.id) > 0) ? GL_TRUE : GL_FALSE;
-}
-GLboolean WebGL2RenderingContext::isTexture(WebGLTexture tex) {
-    return (tex.id != 0 && validTextures_.count(tex.id) > 0) ? GL_TRUE : GL_FALSE;
 }
 GLboolean WebGL2RenderingContext::isFramebuffer(WebGLFramebuffer fbo) {
     return (fbo.id != 0 && validFramebuffers_.count(fbo.id) > 0) ? GL_TRUE : GL_FALSE;
@@ -461,13 +514,8 @@ void WebGL2RenderingContext::getParameterBool4(GLenum pname, GLboolean* out) {
     else { out[0] = GL_TRUE; out[1] = GL_TRUE; out[2] = GL_TRUE; out[3] = GL_TRUE; }
 }
 
-WebGLTexture WebGL2RenderingContext::boundTexture(GLenum /*target*/) const {
-    GLuint unit = (sActiveTex_ >= GL_TEXTURE0 && sActiveTex_ < GL_TEXTURE0 + 32) ? (sActiveTex_ - GL_TEXTURE0) : 0;
-    return {sTex2D_[unit]};
-}
-
 WebGLSampler WebGL2RenderingContext::boundSampler(GLuint unit) const {
-    if (unit < 32) return {sSampler_[unit]};
+    if (vkCtx_) return {vkCtx_->boundSampler(unit)};
     return {0};
 }
 
@@ -482,11 +530,13 @@ std::string WebGL2RenderingContext::getParameterString(GLenum pname) {
 std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
     std::vector<std::string> exts = {
         "EXT_color_buffer_float",
-        "EXT_texture_compression_rgtc",
-        "EXT_texture_compression_bptc",
-        "WEBGL_compressed_texture_s3tc",
         "BRO_buffer_map",
+        "WEBGL_lose_context",
     };
+    if (vkCtx_ && vkCtx_->anisotropicFiltering()) exts.emplace_back("EXT_texture_filter_anisotropic");
+    // Compressed formats the device samples natively, and only those.
+    if (vkCtx_)
+        for (std::string& name : vkCtx_->compressedTextureExtensions()) exts.push_back(std::move(name));
     // What 32-bit float formats can do is the device's to say.
     if (vkCtx_ && vkCtx_->formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
         exts.emplace_back("EXT_float_blend");
@@ -497,6 +547,8 @@ std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
 }
 
 bool WebGL2RenderingContext::getExtension(const std::string& name) {
+    // A compressed-texture extension's formats are accepted once enabled.
+    if (vkCtx_ && vkCtx_->enableCompressedExtension(name)) return true;
     for (auto& ext : getSupportedExtensions()) {
         if (ext == name) return true;
     }

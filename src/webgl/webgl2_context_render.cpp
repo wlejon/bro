@@ -144,9 +144,9 @@ void WebGL2RenderingContext::drawElementsInstanced(GLenum mode, GLsizei count, G
     if (vkCtx_) vkCtx_->drawElementsInstanced(mode, count, type, static_cast<uintptr_t>(offset), instanceCount);
 }
 
-void WebGL2RenderingContext::drawRangeElements(GLenum mode, GLuint /*start*/, GLuint /*end*/,
+void WebGL2RenderingContext::drawRangeElements(GLenum mode, GLuint start, GLuint end,
                                                GLsizei count, GLenum type, GLintptr offset) {
-    drawElements(mode, count, type, offset);
+    if (vkCtx_) vkCtx_->drawRangeElements(mode, start, end, count, type, static_cast<uintptr_t>(offset));
 }
 
 void WebGL2RenderingContext::flush() {

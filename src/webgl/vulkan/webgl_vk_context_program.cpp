@@ -30,7 +30,7 @@ WebGLShader WebGLVkContext::createShader(GLenum type) {
         setSyntheticError(GL_INVALID_ENUM);
         return {};
     }
-    GLuint id = nextShaderId_++;
+    GLuint id = nextObjectId_++;
     shaders_[id] = VkShaderResource{type};
     return {id, type};
 }
@@ -68,7 +68,7 @@ std::string WebGLVkContext::getShaderInfoLog(WebGLShader s) {
 }
 
 WebGLProgram WebGLVkContext::createProgram() {
-    GLuint id = nextProgramId_++;
+    GLuint id = nextObjectId_++;
     programs_[id] = VkProgramResource{};
     return {id};
 }
@@ -163,6 +163,9 @@ bool WebGLVkContext::buildProgramLayouts(VkProgramResource& prog) {
     if (iface.defaultBlockBinding >= 0)
         bindings.push_back({static_cast<uint32_t>(iface.defaultBlockBinding), VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                             VK_SHADER_STAGE_ALL_GRAPHICS, nullptr});
+    for (uint32_t b = 0; b < iface.feedbackBuffers; ++b)
+        bindings.push_back({kFeedbackBinding + b, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT,
+                            nullptr});
 
     VkDevice dev = context_.device();
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -171,13 +174,17 @@ bool WebGLVkContext::buildProgramLayouts(VkProgramResource& prog) {
     layoutInfo.pBindings = bindings.data();
     if (vkCreateDescriptorSetLayout(dev, &layoutInfo, nullptr, &prog.setLayout) != VK_SUCCESS) return false;
 
-    const VkPushConstantRange fragmentPush{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(FragmentPush)};
+    // A capturing vertex stage reads its FeedbackPush past the fragment's.
+    const VkPushConstantRange pushes[] = {
+        {VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(FragmentPush)},
+        {VK_SHADER_STAGE_VERTEX_BIT, kFeedbackPushOffset, sizeof(FeedbackPush)},
+    };
     VkPipelineLayoutCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineInfo.setLayoutCount = 1;
     pipelineInfo.pSetLayouts = &prog.setLayout;
-    pipelineInfo.pushConstantRangeCount = 1;
-    pipelineInfo.pPushConstantRanges = &fragmentPush;
+    pipelineInfo.pushConstantRangeCount = iface.feedbackVaryings.empty() ? 1 : 2;
+    pipelineInfo.pPushConstantRanges = pushes;
     return vkCreatePipelineLayout(dev, &pipelineInfo, nullptr, &prog.pipelineLayout) == VK_SUCCESS;
 }
 
@@ -185,8 +192,16 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
     auto it = programs_.find(p.id);
     if (it == programs_.end()) return;
     VkProgramResource& prog = it->second;
+    // ES 3.0 2.15.2: not the program an active transform feedback captures with.
+    for (const auto& [fid, f] : feedbacks_) {
+        if (f.active && f.program == p.id) {
+            setSyntheticError(GL_INVALID_OPERATION);
+            return;
+        }
+    }
     auto itV = shaders_.find(prog.vertShaderId);
     auto itF = shaders_.find(prog.fragShaderId);
+    prog.validateStatus = false;  // until the next validateProgram
 
     auto fail = [&](std::string log) {
         releaseProgramExecutable(prog);
@@ -206,7 +221,8 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
     glsl::Limits limits;
     limits.maxVertexAttribs = static_cast<uint32_t>(getParameterInt(GL_MAX_VERTEX_ATTRIBS));
     limits.maxDrawBuffers = static_cast<uint32_t>(getParameterInt(GL_MAX_DRAW_BUFFERS));
-    glsl::LinkResult linked = glsl::link(itV->second.source, itF->second.source, prog.boundAttribLocations, limits);
+    glsl::LinkResult linked = glsl::link(itV->second.source, itF->second.source, prog.boundAttribLocations, limits,
+                                         prog.feedbackRequest);
     if (!linked.ok) {
         fail(std::move(linked.log));
         return;
@@ -230,6 +246,19 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
     if (li.samplerUnitCount > static_cast<uint32_t>(getParameterInt(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS))) {
         fail("ERROR: the program uses more samplers than MAX_COMBINED_TEXTURE_IMAGE_UNITS\n");
         return;
+    }
+    // A portability device without mutableComparisonSamplers (an old
+    // MoltenVK) cannot bind a depth-compare sampler, which every shadow
+    // sampler reads through: such a program fails here rather than drawing
+    // uncompared depth.
+    if (!context_.comparisonSamplers()) {
+        for (const VkSamplerBinding& s : li.samplers) {
+            if (s.type == GL_SAMPLER_2D_SHADOW || s.type == GL_SAMPLER_CUBE_SHADOW ||
+                s.type == GL_SAMPLER_2D_ARRAY_SHADOW) {
+                fail("ERROR: this device has no depth-compare samplers, so no sampler*Shadow\n");
+                return;
+            }
+        }
     }
     if (li.uniformBlocks.size() > static_cast<size_t>(getParameterInt(GL_MAX_COMBINED_UNIFORM_BLOCKS))) {
         fail("ERROR: the program uses more uniform blocks than MAX_COMBINED_UNIFORM_BLOCKS\n");
@@ -261,6 +290,10 @@ void WebGLVkContext::linkProgram(WebGLProgram p) {
 }
 
 void WebGLVkContext::useProgram(WebGLProgram p) {
+    if (feedbackCapturing()) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
     if (p.id != 0) {
         auto it = programs_.find(p.id);
         if (it == programs_.end() || !it->second.linkStatus) {
@@ -283,11 +316,21 @@ GLint WebGLVkContext::getProgramParameter(WebGLProgram p, GLenum pname) {
     switch (pname) {
         case GL_LINK_STATUS: return prog.linkStatus ? GL_TRUE : GL_FALSE;
         case GL_DELETE_STATUS: return prog.deleteStatus ? GL_TRUE : GL_FALSE;
+        case GL_VALIDATE_STATUS: return prog.validateStatus ? GL_TRUE : GL_FALSE;
         case GL_ATTACHED_SHADERS: return (prog.vertShaderId != 0 ? 1 : 0) + (prog.fragShaderId != 0 ? 1 : 0);
         case GL_ACTIVE_ATTRIBUTES: return static_cast<GLint>(prog.iface.attribs.size());
         case GL_ACTIVE_UNIFORMS: return static_cast<GLint>(prog.iface.uniforms.size());
         case GL_ACTIVE_UNIFORM_BLOCKS: return static_cast<GLint>(prog.iface.uniformBlocks.size());
-        default: return 0;
+        case GL_TRANSFORM_FEEDBACK_VARYINGS: return static_cast<GLint>(prog.iface.feedbackVaryings.size());
+        case GL_TRANSFORM_FEEDBACK_BUFFER_MODE: return static_cast<GLint>(prog.iface.feedbackBufferMode);
+        case GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH: {
+            size_t longest = 0;
+            for (const VkFeedbackVarying& v : prog.iface.feedbackVaryings) longest = std::max(longest, v.name.size() + 1);
+            return static_cast<GLint>(longest);
+        }
+        default:
+            setSyntheticError(GL_INVALID_ENUM);
+            return 0;
     }
 }
 

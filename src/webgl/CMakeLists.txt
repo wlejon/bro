@@ -16,13 +16,24 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_context_placeholders.cpp
     vulkan/webgl_vk_context_uniforms.cpp
     vulkan/webgl_vk_context_textures.cpp
+    vulkan/webgl_vk_context_texstorage.cpp
+    vulkan/webgl_vk_context_texcopy.cpp
     vulkan/webgl_vk_context_samplers.cpp
     vulkan/webgl_vk_context_framebuffers.cpp
+    vulkan/webgl_vk_context_renderbuffers.cpp
+    vulkan/webgl_vk_context_drawcalls.cpp
+    vulkan/webgl_vk_context_vertices.cpp
+    vulkan/webgl_vk_context_maskedclear.cpp
+    vulkan/webgl_vk_context_queries.cpp
+    vulkan/webgl_vk_context_feedback.cpp
+    vulkan/webgl_vk_context_getters.cpp
     vulkan/webgl_vk_context_blit.cpp
     vulkan/webgl_vk_context_clear.cpp
     vulkan/webgl_vk_context_readback.cpp
     vulkan/webgl_vk_context_parameters.cpp
     vulkan/webgl_vk_formats.cpp
+    vulkan/webgl_vk_texformat.cpp
+    vulkan/webgl_vk_pixels.cpp
     vulkan/webgl_vk_context_commands.cpp
     vulkan/webgl_vk_context_draw.cpp
     vulkan/webgl_vk_stream.cpp

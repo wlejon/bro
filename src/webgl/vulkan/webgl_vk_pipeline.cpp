@@ -16,6 +16,10 @@ inline void hashCombine(size_t& seed, size_t value) {
 
 bool PipelineKey::operator==(const PipelineKey& o) const {
     if (vertShader != o.vertShader || fragShader != o.fragShader || topology != o.topology) return false;
+    if (primitiveRestartEnable != o.primitiveRestartEnable ||
+        depthBiasEnable != o.depthBiasEnable || alphaOneMask != o.alphaOneMask || unwrittenMask != o.unwrittenMask ||
+        alphaToCoverageEnable != o.alphaToCoverageEnable || sampleMask != o.sampleMask)
+        return false;
     if (cullMode != o.cullMode || frontFace != o.frontFace || cullFaceEnable != o.cullFaceEnable) return false;
     if (depthTestEnable != o.depthTestEnable || depthWriteEnable != o.depthWriteEnable || depthCompareOp != o.depthCompareOp) return false;
     if (stencilTestEnable != o.stencilTestEnable) return false;
@@ -48,7 +52,7 @@ bool PipelineKey::operator==(const PipelineKey& o) const {
     for (uint32_t i = 0; i < bindingCount; ++i) {
         if (bindings[i].binding != o.bindings[i].binding ||
             bindings[i].stride != o.bindings[i].stride ||
-            bindings[i].inputRate != o.bindings[i].inputRate) {
+            bindings[i].inputRate != o.bindings[i].inputRate || divisors[i] != o.divisors[i]) {
             return false;
         }
     }
@@ -61,6 +65,11 @@ size_t PipelineKeyHasher::operator()(const PipelineKey& k) const {
     hashCombine(seed, std::hash<void*>()((void*)k.vertShader));
     hashCombine(seed, std::hash<void*>()((void*)k.fragShader));
     hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.topology)));
+    hashCombine(seed, std::hash<uint32_t>()(k.primitiveRestartEnable |
+                                            k.depthBiasEnable << 2 | k.alphaToCoverageEnable << 3 |
+                                            static_cast<uint32_t>(k.alphaOneMask) << 4 |
+                                            static_cast<uint32_t>(k.unwrittenMask) << 12));
+    hashCombine(seed, std::hash<uint32_t>()(k.sampleMask));
     hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.cullMode)));
     hashCombine(seed, std::hash<uint32_t>()(static_cast<uint32_t>(k.frontFace)));
     hashCombine(seed, std::hash<uint32_t>()(k.cullFaceEnable));
@@ -165,7 +174,17 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = key.topology;
-    inputAssembly.primitiveRestartEnable = VK_FALSE;
+    inputAssembly.primitiveRestartEnable = key.primitiveRestartEnable;
+
+    VkVertexInputBindingDivisorDescriptionEXT divisors[16]{};
+    VkPipelineVertexInputDivisorStateCreateInfoEXT divisorInfo{};
+    divisorInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT;
+    for (uint32_t i = 0; i < key.bindingCount; ++i)
+        if (key.divisors[i] > 1) divisors[divisorInfo.vertexBindingDivisorCount++] = {i, key.divisors[i]};
+    if (divisorInfo.vertexBindingDivisorCount > 0) {
+        divisorInfo.pVertexBindingDivisors = divisors;
+        vertexInputInfo.pNext = &divisorInfo;
+    }
 
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -180,12 +199,15 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = key.cullFaceEnable ? key.cullMode : VK_CULL_MODE_NONE;
     rasterizer.frontFace = key.frontFace;
-    rasterizer.depthBiasEnable = VK_FALSE;
+    rasterizer.depthBiasEnable = key.depthBiasEnable;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = key.samples;
+    multisampling.alphaToCoverageEnable = key.alphaToCoverageEnable;
+    const VkSampleMask sampleMask = key.sampleMask;
+    multisampling.pSampleMask = &sampleMask;
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
@@ -211,6 +233,8 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     VkPipelineColorBlendAttachmentState colorBlendAttachments[8]{};
     for (uint32_t i = 0; i < attCount; ++i) {
         colorBlendAttachments[i] = colorBlendAttachment;
+        if (key.alphaOneMask & (1u << i)) colorBlendAttachments[i].colorWriteMask &= ~VK_COLOR_COMPONENT_A_BIT;
+        if (key.unwrittenMask & (1u << i)) colorBlendAttachments[i].colorWriteMask = 0;
         // GL does not blend into integer (or otherwise unblendable) buffers.
         if (key.blendEnable && key.colorAttachmentFormats[i] != VK_FORMAT_UNDEFINED) {
             VkFormatProperties props;
@@ -226,13 +250,12 @@ VkPipeline WebGLVkPipelineCache::createPipeline(const PipelineKey& key, VkPipeli
     colorBlending.attachmentCount = attCount;
     colorBlending.pAttachments = colorBlendAttachments;
 
-    VkDynamicState dynamicStates[] = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
-    };
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                      VK_DYNAMIC_STATE_DEPTH_BIAS, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+                                      VK_DYNAMIC_STATE_LINE_WIDTH};
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = 2;
+    dynamicState.dynamicStateCount = context_.wideLines() ? 5 : 4;
     dynamicState.pDynamicStates = dynamicStates;
 
     // Dynamic Rendering configuration

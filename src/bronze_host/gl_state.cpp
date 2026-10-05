@@ -120,6 +120,10 @@ void installGlState(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         live(c)->polygonOffset(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
+    b.def("sampleCoverage", 2, [c](Value, std::span<const Value> a) {
+        live(c)->sampleCoverage(static_cast<float>(numAt(a, 0)), boolAt(a, 1) ? GL_TRUE : GL_FALSE);
+        return ev::undefined();
+    });
     b.def("lineWidth", 1, [c](Value, std::span<const Value> a) {
         live(c)->lineWidth(static_cast<float>(numAt(a, 0)));
         return ev::undefined();

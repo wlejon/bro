@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#include <vulkan/vulkan_beta.h>  // VkPhysicalDevicePortabilitySubsetFeaturesKHR
 
 #include <algorithm>
 #include <cstdlib>
@@ -495,14 +496,73 @@ bool VulkanContext::createLogicalDevice() {
     vulkan12Features.timelineSemaphore = VK_TRUE;
     vulkan12Features.pNext = &vulkan13Features;
 
+    // Optional core features, each enabled where the device has it; the
+    // accessors report what was enabled. WebGL is their main consumer:
+    // vertex-stage stores carry transform feedback, the compression features
+    // decide which compressed-texture extensions it offers.
+    const VkPhysicalDeviceFeatures available = deviceFeatures_;
     VkPhysicalDeviceFeatures deviceFeatures{};
-    deviceFeatures.samplerAnisotropy = deviceFeatures_.samplerAnisotropy;
-    deviceFeatures.wideLines = deviceFeatures_.wideLines;
-    deviceFeatures.largePoints = deviceFeatures_.largePoints;
+    deviceFeatures.samplerAnisotropy = available.samplerAnisotropy;
+    deviceFeatures.wideLines = available.wideLines;
+    deviceFeatures.largePoints = available.largePoints;
+    deviceFeatures.vertexPipelineStoresAndAtomics = available.vertexPipelineStoresAndAtomics;
+    deviceFeatures.textureCompressionBC = available.textureCompressionBC;
+    deviceFeatures.textureCompressionETC2 = available.textureCompressionETC2;
+    deviceFeatures.textureCompressionASTC_LDR = available.textureCompressionASTC_LDR;
+    deviceFeatures.occlusionQueryPrecise = available.occlusionQueryPrecise;
+    deviceFeatures.fullDrawIndexUint32 = available.fullDrawIndexUint32;
+    deviceFeatures.depthBiasClamp = available.depthBiasClamp;
+    deviceFeatures.independentBlend = available.independentBlend;
+    deviceFeatures.shaderClipDistance = available.shaderClipDistance;
+    deviceFeatures_ = deviceFeatures;
+
+    // Instanced-attribute divisors other than 0 and 1, and primitive restart
+    // for list topologies (WebGL 2 restarts every indexed draw).
+    void* chain = &vulkan12Features;
+    VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT divisorFeatures{};
+    divisorFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+    VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT restartFeatures{};
+    restartFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_TOPOLOGY_LIST_RESTART_FEATURES_EXT;
+    // MoltenVK: the portability subset's features must be enabled to be
+    // relied on (mutable comparison samplers, triangle fans, ...).
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilityFeatures{};
+    // The enum is behind VK_ENABLE_BETA_EXTENSIONS in vulkan_core.h.
+    portabilityFeatures.sType = static_cast<VkStructureType>(1000163000);
+    auto probe = [&](auto& features) {
+        VkPhysicalDeviceFeatures2 f2{};
+        f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        f2.pNext = &features;
+        vkGetPhysicalDeviceFeatures2(physicalDevice_, &f2);
+        features.pNext = chain;
+        chain = &features;
+    };
+    if (hasExtension(availExts, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME)) {
+        probe(divisorFeatures);
+        if (divisorFeatures.vertexAttributeInstanceRateDivisor) {
+            enabledExtensions.push_back(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
+            vertexAttributeDivisor_ = true;
+        }
+        divisorFeatures.vertexAttributeInstanceRateZeroDivisor = VK_FALSE;
+        if (!vertexAttributeDivisor_) chain = divisorFeatures.pNext;
+    }
+    if (hasExtension(availExts, VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME)) {
+        probe(restartFeatures);
+        if (restartFeatures.primitiveTopologyListRestart) {
+            enabledExtensions.push_back(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+            listRestart_ = true;
+        }
+        restartFeatures.primitiveTopologyPatchListRestart = VK_FALSE;
+        if (!listRestart_) chain = restartFeatures.pNext;
+    }
+    if (hasExtension(availExts, "VK_KHR_portability_subset")) {
+        probe(portabilityFeatures);
+        imageView2DOn3D_ = portabilityFeatures.imageView2DOn3DImage == VK_TRUE;
+        mutableComparisonSamplers_ = portabilityFeatures.mutableComparisonSamplers == VK_TRUE;
+    }
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    createInfo.pNext = &vulkan12Features;
+    createInfo.pNext = chain;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;

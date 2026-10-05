@@ -15,6 +15,8 @@ struct PipelineKey {
     VkShaderModule vertShader = VK_NULL_HANDLE;
     VkShaderModule fragShader = VK_NULL_HANDLE;
     VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkBool32 primitiveRestartEnable = VK_FALSE;
+    VkBool32 depthBiasEnable = VK_FALSE;  // POLYGON_OFFSET_FILL; the factors are dynamic
 
     VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
     VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -38,6 +40,15 @@ struct PipelineKey {
 
     VkColorComponentFlags colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    // Attachments that store an RGB format as RGBA: their alpha (one) is
+    // never written.
+    uint8_t alphaOneMask = 0;
+    // Attachments the fragment shader does not write (an internal clear's).
+    uint8_t unwrittenMask = 0;
+
+    // Multisampling (only with more than one sample, as GL has it).
+    VkBool32 alphaToCoverageEnable = VK_FALSE;
+    uint32_t sampleMask = ~0u;
 
     // The pass's attachments: format i is fragment output i's (UNDEFINED for
     // a NONE draw buffer); depth and stencil are UNDEFINED when absent.
@@ -52,6 +63,9 @@ struct PipelineKey {
 
     uint32_t bindingCount = 0;
     VkVertexInputBindingDescription bindings[16]{};
+    // Per binding: the instance divisor when other than 0 or 1
+    // (VK_EXT_vertex_attribute_divisor).
+    uint32_t divisors[16]{};
 
     bool operator==(const PipelineKey& o) const;
 };
@@ -69,7 +83,10 @@ public:
     WebGLVkPipelineCache(const WebGLVkPipelineCache&) = delete;
     WebGLVkPipelineCache& operator=(const WebGLVkPipelineCache&) = delete;
 
-    /// Retrieve or build a VkPipeline matching key and pipeline layout.
+    /// Retrieve or build a VkPipeline matching key and pipeline layout. Every
+    /// pipeline takes viewport, scissor, depth bias and blend constants as
+    /// dynamic state, and the line width too where the device has wide lines;
+    /// the draw sets them.
     VkPipeline getOrCreatePipeline(const PipelineKey& key, VkPipelineLayout layout);
 
     /// Destroy all cached pipelines (the caller has waited for their use).

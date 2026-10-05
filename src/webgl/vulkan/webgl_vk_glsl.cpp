@@ -434,6 +434,153 @@ void reflectUniforms(glslang::TProgram& program, ProgramInterface& iface) {
     }
 }
 
+// The GL type enum of a varying's type (its element type, for an array);
+// 0 for what transform feedback cannot capture (structs, bools).
+GLenum glTypeOf(const glslang::TType& type) {
+    const glslang::TBasicType basic = type.getBasicType();
+    if (type.isMatrix()) {
+        if (basic != glslang::EbtFloat) return 0;
+        static const GLenum kMatrices[3][3] = {
+            {GL_FLOAT_MAT2, GL_FLOAT_MAT2x3, GL_FLOAT_MAT2x4},
+            {GL_FLOAT_MAT3x2, GL_FLOAT_MAT3, GL_FLOAT_MAT3x4},
+            {GL_FLOAT_MAT4x2, GL_FLOAT_MAT4x3, GL_FLOAT_MAT4},
+        };
+        return kMatrices[type.getMatrixCols() - 2][type.getMatrixRows() - 2];
+    }
+    const int n = std::max(1, type.getVectorSize()) - 1;
+    static const GLenum kFloat[] = {GL_FLOAT, GL_FLOAT_VEC2, GL_FLOAT_VEC3, GL_FLOAT_VEC4};
+    static const GLenum kInt[] = {GL_INT, GL_INT_VEC2, GL_INT_VEC3, GL_INT_VEC4};
+    static const GLenum kUint[] = {GL_UNSIGNED_INT, GL_UNSIGNED_INT_VEC2, GL_UNSIGNED_INT_VEC3, GL_UNSIGNED_INT_VEC4};
+    switch (basic) {
+        case glslang::EbtFloat: return kFloat[n];
+        case glslang::EbtInt: return kInt[n];
+        case glslang::EbtUint: return kUint[n];
+        default: return 0;
+    }
+}
+
+// Lay out the transform feedback varyings over the vertex stage's outputs
+// (read from its parse tree), with the ES 3.0 link errors.
+bool feedbackInterface(glslang::TShader& vs, const FeedbackRequest& request, ProgramInterface& iface,
+                       std::string& log) {
+    std::unordered_map<std::string, const glslang::TType*> outputs;
+    const glslang::TIntermediate* im = vs.getIntermediate();
+    TIntermNode* rootNode = im ? im->getTreeRoot() : nullptr;
+    glslang::TIntermAggregate* root = rootNode ? rootNode->getAsAggregate() : nullptr;
+    for (TIntermNode* node : root ? root->getSequence() : glslang::TIntermSequence{}) {
+        glslang::TIntermAggregate* agg = node->getAsAggregate();
+        if (!agg || agg->getOp() != glslang::EOpLinkerObjects) continue;
+        for (TIntermNode* obj : agg->getSequence()) {
+            glslang::TIntermSymbol* sym = obj->getAsSymbolNode();
+            if (sym && sym->getQualifier().storage == glslang::EvqVaryingOut)
+                outputs[sym->getName().c_str()] = &sym->getType();
+        }
+    }
+
+    const bool separate = request.bufferMode == GL_SEPARATE_ATTRIBS;
+    if (separate && request.varyings.size() > kMaxFeedbackBuffers) {
+        log += "ERROR: more separate transform feedback varyings than MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS\n";
+        return false;
+    }
+    uint32_t words = 0;
+    for (size_t i = 0; i < request.varyings.size(); ++i) {
+        const std::string& name = request.varyings[i];
+        for (size_t j = 0; j < i; ++j) {
+            if (request.varyings[j] == name) {
+                log += "ERROR: transform feedback varying '" + name + "' is named twice\n";
+                return false;
+            }
+        }
+        VkFeedbackVarying v;
+        v.name = name;
+        if (name == "gl_Position") {
+            v.type = GL_FLOAT_VEC4;
+        } else if (name == "gl_PointSize") {
+            v.type = GL_FLOAT;
+        } else {
+            auto it = outputs.find(name);
+            if (it == outputs.end()) {
+                log += "ERROR: transform feedback varying '" + name + "' is not an output of the vertex shader\n";
+                return false;
+            }
+            v.type = glTypeOf(*it->second);
+            if (v.type == 0 || it->second->isStruct()) {
+                log += "ERROR: transform feedback varying '" + name + "' has a type that cannot be captured\n";
+                return false;
+            }
+            v.array = it->second->isArray();
+            v.size = v.array ? std::max(1, it->second->getOuterArraySize()) : 1;
+        }
+        v.components = typeInfo(v.type).components() * static_cast<uint32_t>(v.size);
+        if (separate) {
+            if (v.components > 4) {
+                log += "ERROR: transform feedback varying '" + name +
+                       "' has more than MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS components\n";
+                return false;
+            }
+            v.buffer = static_cast<uint32_t>(i);
+            iface.feedbackStrides[i] = v.components;
+        } else {
+            v.offset = words;
+        }
+        words += v.components;
+        iface.feedbackVaryings.push_back(v);
+    }
+    if (!separate && words > 64) {
+        log += "ERROR: the transform feedback varyings exceed MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS\n";
+        return false;
+    }
+    if (!separate) iface.feedbackStrides[0] = words;
+    iface.feedbackBufferMode = request.bufferMode;
+    iface.feedbackBuffers = separate ? static_cast<uint32_t>(request.varyings.size()) : 1;
+    return true;
+}
+
+// The vertex stage's main when it captures: kVertexEpilogue's, storing each
+// captured varying's words (as uint bits) at the vertex's record before GL's
+// depth is mapped to Vulkan's.
+std::string captureEpilogue(const ProgramInterface& iface) {
+    std::string out = "\n#undef main\n";
+    for (uint32_t b = 0; b < iface.feedbackBuffers; ++b)
+        out += "layout(std430, set = 0, binding = " + std::to_string(kFeedbackBinding + b) +
+               ") buffer BroFeedback" + std::to_string(b) + " { uint bro_feedback" + std::to_string(b) + "[]; };\n";
+    out += "layout(push_constant) uniform BroFeedbackPush {\n"
+           "    layout(offset = " + std::to_string(kFeedbackPushOffset) + ") uint base;\n"
+           "    uint first;\n    uint count;\n";
+    for (uint32_t b = 0; b < kMaxFeedbackBuffers; ++b) out += "    uint wordOffset" + std::to_string(b) + ";\n";
+    out += "} bro_feedbackPush;\n"
+           "void main() {\n"
+           "    gl_PointSize = 1.0;\n"
+           "    bro_user_main();\n"
+           "    uint bro_v = uint(gl_VertexIndex) - bro_feedbackPush.first;\n"
+           "    if (bro_v < bro_feedbackPush.count) {\n"
+           "        uint bro_r = bro_feedbackPush.base + uint(gl_InstanceIndex) * bro_feedbackPush.count + bro_v;\n";
+    for (const VkFeedbackVarying& v : iface.feedbackVaryings) {
+        const TypeInfo t = typeInfo(v.type);
+        const std::string buffer = std::to_string(v.buffer);
+        const std::string at = "bro_feedbackPush.wordOffset" + buffer + " + bro_r * " +
+                               std::to_string(iface.feedbackStrides[v.buffer]) + "u + " + std::to_string(v.offset) +
+                               "u";
+        const uint32_t per = t.components();
+        for (uint32_t k = 0; k < v.components; ++k) {
+            std::string expr = v.name;
+            if (v.array) expr += "[" + std::to_string(k / per) + "]";
+            const uint32_t within = k % per;
+            if (t.isMatrix())
+                expr += "[" + std::to_string(within / t.rows) + "][" + std::to_string(within % t.rows) + "]";
+            else if (t.rows > 1)
+                expr += "[" + std::to_string(within) + "]";
+            if (t.kind == TypeInfo::Kind::Float) expr = "floatBitsToUint(" + expr + ")";
+            else if (t.kind == TypeInfo::Kind::Int) expr = "uint(" + expr + ")";
+            out += "        bro_feedback" + buffer + "[" + at + " + " + std::to_string(k) + "u] = " + expr + ";\n";
+        }
+    }
+    out += "    }\n"
+           "    gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n"
+           "}\n";
+    return out;
+}
+
 void reflectOutputs(glslang::TProgram& program, ProgramInterface& iface) {
     for (int i = 0; i < program.getNumPipeOutputs(); ++i) {
         const glslang::TObjectReflection& out = program.getPipeOutput(i);
@@ -499,7 +646,8 @@ bool compile(const std::string& source, GLenum type, std::string& log) {
 }
 
 LinkResult link(const std::string& vertexSource, const std::string& fragmentSource,
-                const std::unordered_map<std::string, GLuint>& boundAttribs, const Limits& limits) {
+                const std::unordered_map<std::string, GLuint>& boundAttribs, const Limits& limits,
+                const FeedbackRequest& feedback) {
     LinkResult result;
     auto lock = render::acquireGlslang();
     if (!lock.owns_lock()) {
@@ -507,8 +655,19 @@ LinkResult link(const std::string& vertexSource, const std::string& fragmentSour
         return result;
     }
 
-    const StageSource vsSrc = stageSource(EShLangVertex, vertexSource, limits);
+    StageSource vsSrc = stageSource(EShLangVertex, vertexSource, limits);
     const StageSource fsSrc = stageSource(EShLangFragment, fragmentSource, limits);
+    // Capturing: what the vertex stage outputs decides the layout, so it is
+    // parsed once to read them, then again with the capturing main.
+    std::string capture;
+    if (!feedback.varyings.empty()) {
+        glslang::TShader probe(EShLangVertex);
+        if (!parse(probe, vsSrc, result.log) ||
+            !feedbackInterface(probe, feedback, result.iface, result.log))
+            return result;
+        capture = captureEpilogue(result.iface);
+        vsSrc.strings[1] = capture.c_str();
+    }
     // The program refers to its shaders, so they outlive it.
     glslang::TShader vs(EShLangVertex);
     glslang::TShader fs(EShLangFragment);

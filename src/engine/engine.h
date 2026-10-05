@@ -714,6 +714,9 @@ private:
 
     std::vector<WebGLEntry> webglEntries_;
     void syncWebGLCanvasSizes();
+    // Fires the webglcontextlost / webglcontextrestored events a context owes
+    // its canvas (WEBGL_lose_context), a task after the call that caused them.
+    void pumpWebGLContextEvents();
 
     std::unique_ptr<FramePresenter> framePresenter_;
     std::unique_ptr<LayoutPipeline>  layoutPipeline_;

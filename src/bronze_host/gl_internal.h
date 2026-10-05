@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -84,6 +85,21 @@ inline Value wrapGlObj(uint32_t kind, GLuint id, GLenum shaderType = 0) {
     return ev::makeHandle(cell, glCellDtor);
 }
 
+// The one wrapper a live GL object has, so everything that answers the
+// object — its create call, getParameter(*_BINDING), getQuery,
+// getFramebufferAttachmentParameter — answers the same value (WebGL's ===
+// identity). Held from creation until the object is deleted or the context
+// is torn down, which is as long as the object itself lives (deletion is
+// explicit; see GlCell). null for id 0. ALLOCATES on first sight.
+Value glObject(webgl::WebGL2RenderingContext* c, uint32_t kind, GLuint id, GLenum shaderType = 0);
+// Drop the wrapper of a deleted object; a later lookup makes a new one.
+void forgetGlObject(webgl::WebGL2RenderingContext* c, uint32_t kind, GLuint id);
+// Drop every object wrapper: the context was lost, and its objects with it.
+void forgetGlObjects(webgl::WebGL2RenderingContext* c);
+// The object getExtension(name) answers, the same one every time; `make`
+// builds it the first time. ALLOCATES on first sight.
+Value glExtension(webgl::WebGL2RenderingContext* c, const std::string& name, const std::function<Value()>& make);
+
 // ALLOCATES (makeHandle). null for the -1 location, which is what three.js's
 // `location === null` checks expect — where getUniformLocation answers null.
 inline Value wrapUniformLocation(webgl::WebGLUniformLocation loc) {
@@ -95,22 +111,12 @@ inline Value wrapUniformLocation(webgl::WebGLUniformLocation loc) {
     return ev::makeHandle(cell, glCellDtor);
 }
 
-inline Value wrapSampler(webgl::WebGLSampler s) {
-    if (!s.id) return ev::null();
-    return wrapGlObj(GlCell::Sampler, s.id);
-}
-
 inline Value wrapSync(webgl::WebGLSync s) {
     if (!s.sync) return ev::null();
     auto* cell = new GlCell{};
     cell->kind = GlCell::Sync;
     cell->sync = s.sync;
     return ev::makeHandle(cell, glCellDtor);
-}
-
-inline Value wrapQuery(webgl::WebGLQuery q) {
-    if (!q.id) return ev::null();
-    return wrapGlObj(GlCell::Query, q.id);
 }
 
 // nullptr for null/undefined/foreign values and kind mismatches —
@@ -143,11 +149,6 @@ inline webgl::WebGLSync syncOf(Value v) {
 
 inline webgl::WebGLQuery queryOf(Value v) {
     return {idOf(v, GlCell::Query)};
-}
-
-inline Value wrapTransformFeedback(webgl::WebGLTransformFeedback tf) {
-    if (!tf.id) return ev::null();
-    return wrapGlObj(GlCell::TransformFeedback, tf.id);
 }
 
 inline webgl::WebGLTransformFeedback transformFeedbackOf(Value v) {
@@ -392,10 +393,6 @@ struct ObjectBuilder {
 
 // Helper to build a real JS Array
 Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make);
-
-// Indexed buffer bindings (WebGLBuffer stash for getIndexedParameter)
-void stashIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index, Value bufVal);
-Value loadIndexedBinding(webgl::WebGL2RenderingContext* c, uint32_t target, uint32_t index);
 
 // Each takes the under-construction context object and the wrapped context.
 // gl_context.cpp calls them in one fixed order; the order of def() calls

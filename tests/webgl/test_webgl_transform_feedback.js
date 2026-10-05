@@ -149,6 +149,90 @@ if (!gl) {
     assert(gl.getError() === gl.NO_ERROR, 'no error after pause/resume capture');
 
     // =====================================================================
+    // Interleaved capture of gl_Position (as the shader wrote it) and a
+    // varying, instanced TRIANGLES: a trailing partial triangle is not
+    // captured, records run instance by instance.
+    // =====================================================================
+    const vs2 = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs2,
+        '#version 300 es\nin float aIn;\nout float vOut;\nflat out ivec2 vId;\n' +
+        'void main(){ vOut = aIn * 2.0 + 1.0; vId = ivec2(gl_VertexID, gl_InstanceID);\n' +
+        '  gl_Position = vec4(aIn, -aIn, 0.5, 1.0); }');
+    gl.compileShader(vs2);
+    const fs2 = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs2, '#version 300 es\nprecision highp float;\nflat in ivec2 vId;\nin float vOut;\nout vec4 o;\n' +
+                    'void main(){ o = vec4(vOut, float(vId.x), 0.0, 1.0); }');
+    gl.compileShader(fs2);
+    const prog2 = gl.createProgram();
+    gl.attachShader(prog2, vs2); gl.attachShader(prog2, fs2);
+    gl.transformFeedbackVaryings(prog2, ['gl_Position', 'vOut', 'vId'], gl.INTERLEAVED_ATTRIBS);
+    gl.linkProgram(prog2);
+    assert(gl.getProgramParameter(prog2, gl.LINK_STATUS), 'interleaved program links: ' + gl.getProgramInfoLog(prog2));
+    const v2 = gl.getTransformFeedbackVarying(prog2, 2);
+    assert(v2 && v2.name === 'vId' && v2.type === gl.INT_VEC2 && v2.size === 1, 'ivec2 varying metadata');
+    gl.useProgram(prog2);
+    const words = 4 + 1 + 2;
+    const tfBuf2 = gl.createBuffer();
+    gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, tfBuf2);
+    gl.bufferData(gl.TRANSFORM_FEEDBACK_BUFFER, 6 * words * 4 + 8, gl.DYNAMIC_READ);
+    const tf2 = gl.createTransformFeedback();
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tf2);
+    gl.bindBufferRange(gl.TRANSFORM_FEEDBACK_BUFFER, 0, tfBuf2, 8, 6 * words * 4);
+    gl.enable(gl.RASTERIZER_DISCARD);
+    gl.beginTransformFeedback(gl.TRIANGLES);
+    gl.drawArrays(gl.POINTS, 0, 3);
+    assert(gl.getError() === gl.INVALID_OPERATION, 'a draw in another primitive mode is INVALID_OPERATION');
+    gl.useProgram(prog);
+    assert(gl.getError() === gl.INVALID_OPERATION, 'useProgram while capturing is INVALID_OPERATION');
+    const ibo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2]), gl.STATIC_DRAW);
+    gl.drawElements(gl.TRIANGLES, 3, gl.UNSIGNED_SHORT, 0);
+    assert(gl.getError() === gl.INVALID_OPERATION, 'drawElements while capturing is INVALID_OPERATION');
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 4, 2);  // 3 records per instance
+    assert(gl.getError() === gl.NO_ERROR, 'instanced capture');
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    assert(gl.getError() === gl.INVALID_OPERATION, 'a capture past the bound range is INVALID_OPERATION');
+    gl.endTransformFeedback();
+    gl.disable(gl.RASTERIZER_DISCARD);
+    const rec = new Float32Array(6 * words);
+    gl.getBufferSubData(gl.TRANSFORM_FEEDBACK_BUFFER, 8, rec);
+    const recInt = new Int32Array(rec.buffer);
+    let ok = true;
+    for (let r = 0; r < 6; r++) {
+        const inst = Math.floor(r / 3), v = r % 3, a = v + 1, o = r * words;
+        ok = ok && near(rec[o], a) && near(rec[o + 1], -a) && near(rec[o + 2], 0.5) && near(rec[o + 3], 1) &&
+             near(rec[o + 4], a * 2 + 1) && recInt[o + 5] === v && recInt[o + 6] === inst;
+        if (!ok) { assert(false, 'record ' + r + ': ' + Array.from(rec.subarray(o, o + 5)) + ' ids ' + recInt[o + 5] + ',' + recInt[o + 6]); break; }
+    }
+    assert(ok, 'interleaved records: position, varying and ids per vertex and instance');
+    const head = new Float32Array(2);
+    gl.getBufferSubData(gl.TRANSFORM_FEEDBACK_BUFFER, 0, head);
+    assert(head[0] === 0 && head[1] === 0, 'nothing written before the bound offset');
+
+    // The captured buffer feeds a draw: the positions as a vertex array.
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, tfBuf2);
+    gl.vertexAttribPointer(0, 1, gl.FLOAT, false, words * 4, 8 + 4 * 4);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, tfBuf);
+    gl.bufferData(gl.TRANSFORM_FEEDBACK_BUFFER, 16, gl.DYNAMIC_READ);
+    gl.enable(gl.RASTERIZER_DISCARD);
+    gl.beginTransformFeedback(gl.POINTS);
+    gl.drawArrays(gl.POINTS, 0, 4);
+    gl.endTransformFeedback();
+    gl.disable(gl.RASTERIZER_DISCARD);
+    const chained = new Float32Array(4);
+    gl.getBufferSubData(gl.TRANSFORM_FEEDBACK_BUFFER, 0, chained);
+    // vOut of the first pass (3, 5, 7, 3) through vOut = x * 2 + 1.
+    assert(near(chained[0], 7) && near(chained[1], 11) && near(chained[2], 15) && near(chained[3], 7),
+           'a second capture reads the first as its vertex array: ' + Array.from(chained));
+    gl.bindBuffer(gl.ARRAY_BUFFER, inBuf);
+    gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, 0);
+    gl.deleteTransformFeedback(tf2);
+    assert(gl.getError() === gl.NO_ERROR, 'no error after the interleaved capture');
+
+    // =====================================================================
     // Deletion semantics
     // =====================================================================
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);

@@ -197,7 +197,7 @@ if (!gl) {
     assert(gl.getParameter(gl.MAX_UNIFORM_BUFFER_BINDINGS) >= 24, 'MAX_UNIFORM_BUFFER_BINDINGS >= 24');
     assert(gl.getParameter(gl.MAX_ELEMENT_INDEX) >= 16777215, 'MAX_ELEMENT_INDEX >= 2^24 - 1');
     const lineRange = gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE);
-    assert(lineRange[0] === 1 && lineRange[1] === 1, 'lines are one pixel wide');
+    assert(lineRange[0] <= 1 && lineRange[1] >= 1, 'one-pixel lines are in ALIASED_LINE_WIDTH_RANGE: ' + lineRange);
     const maxRb = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
     const rb = gl.createRenderbuffer();
     gl.bindRenderbuffer(gl.RENDERBUFFER, rb);

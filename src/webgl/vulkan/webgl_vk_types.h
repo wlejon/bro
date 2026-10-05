@@ -1,6 +1,7 @@
 #pragma once
 
 #include "webgl/webgl_objects.h"
+#include "webgl/vulkan/webgl_vk_texformat.h"
 #include "render/vulkan_context.h"
 
 #include <vulkan/vulkan.h>
@@ -32,13 +33,33 @@ struct FragmentPush {
 /// only by copies recorded in the context's command stream, plus the
 /// authoritative host-side copy that reads (getBufferSubData, 8-bit indices,
 /// PBO sources) are served from.
+/// What a range of an index buffer holds: its smallest and largest index
+/// (restart indices aside) and whether a restart index occurs, cached on the
+/// buffer for the contents `version` had.
+struct IndexRange {
+    uint64_t version = ~0ull;
+    uintptr_t offset = 0;
+    uint32_t count = 0;
+    GLenum type = 0;
+    uint32_t minIndex = 0, maxIndex = 0;
+    bool empty = true;  // only restart indices (or none)
+    bool restart = false;
+};
+
 struct VkBufferResource {
     VkBuffer buffer = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceSize size = 0;
     VkDeviceSize offset = 0;
     uint64_t allocId = 0;
+    GLenum usage = GL_STATIC_DRAW;  // bufferData's hint, for BUFFER_USAGE
     std::vector<uint8_t> shadowData;
+    // Bumped by every write to the contents, so what a draw derived from
+    // them (an index range scan) knows when it is stale.
+    uint64_t version = 0;
+    bool deviceNewer = false;  // the GPU wrote it (transform feedback) since shadowData was
+    std::array<IndexRange, 4> indexRanges{};
+    uint32_t nextIndexRange = 0;
     bool isMapped = false;
     void* mappedPtr = nullptr;
 
@@ -46,41 +67,9 @@ struct VkBufferResource {
 };
 using WebGLBufferResource = VkBufferResource;
 
-/// 2D Texture object backed by Vulkan image, view, and sampler.
-struct VkTextureResource {
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-    VkDeviceSize offset = 0;
-    uint64_t allocId = 0;
-    VkImageView view = VK_NULL_HANDLE;
-    // Single-level, single-layer views a framebuffer renders through, keyed
-    // by (level << 16 | layer); made on first use.
-    std::vector<std::pair<uint32_t, VkImageView>> attachmentViews;
-    VkSampler sampler = VK_NULL_HANDLE;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
-    VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // of every mip and layer
-    uint32_t mipLevels = 1;
-    uint32_t arrayLayers = 1;
-    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;  // > 1 only for multisampled renderbuffers
-
-    GLenum minFilter = GL_NEAREST_MIPMAP_LINEAR;
-    GLenum magFilter = GL_LINEAR;
-    GLenum wrapS = GL_REPEAT;
-    GLenum wrapT = GL_REPEAT;
-    GLenum target = 0x0DE1 /* GL_TEXTURE_2D */;
-    uint32_t depth = 1;
-    bool samplerDirty = true;
-    uint32_t bytesPerPixel = 4;
-
-    bool isValid() const { return image != VK_NULL_HANDLE; }
-};
-using WebGLTextureResource = VkTextureResource;
-
-/// Sampler object backed by Vulkan sampler.
-struct VkSamplerResource {
-    VkSampler sampler = VK_NULL_HANDLE;
+/// The sampling state a texture or a sampler object carries. A bound sampler
+/// object's replaces its unit's texture's wholesale.
+struct SamplerState {
     GLenum minFilter = GL_NEAREST_MIPMAP_LINEAR;
     GLenum magFilter = GL_LINEAR;
     GLenum wrapS = GL_REPEAT;
@@ -90,7 +79,70 @@ struct VkSamplerResource {
     GLfloat maxLod = 1000.0f;
     GLenum compareMode = GL_NONE;
     GLenum compareFunc = GL_LEQUAL;
-    bool samplerDirty = true;
+    GLfloat maxAnisotropy = 1.0f;  // EXT_texture_filter_anisotropic
+    bool operator==(const SamplerState&) const = default;
+    /// The minification filter reads more than the base level.
+    bool mipmapped() const { return minFilter != GL_NEAREST && minFilter != GL_LINEAR; }
+};
+
+/// One mip level as GL defines it: its size and format, and which of its
+/// images (one, or a cube map's six faces) texImage* has specified.
+struct TexLevel {
+    uint32_t width = 0, height = 0, depth = 0;
+    uint8_t faces = 0;  // bit i: layer (cube face) i defined; bit 0 for other targets
+    TexFormat format;
+};
+
+/// A texture object, or the storage of a renderbuffer or scratch image.
+///
+/// GL lets each level be specified separately at any size and format; the
+/// Vulkan image is one mip chain. The image is sized so that every defined
+/// level is the level of that chain it claims to be, and is reallocated
+/// (keeping the levels still consistent with it) when a level is redefined
+/// at a size or format the chain cannot hold. Levels holding no GL image are
+/// never read: an incomplete texture samples the context's placeholder.
+///
+/// Every subresource keeps its own layout, so one level can be rendered to or
+/// copied while the others are sampled. A texture's subresources are left in
+/// SHADER_READ_ONLY_OPTIMAL between operations.
+struct VkTextureResource {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize offset = 0;
+    uint64_t allocId = 0;
+    // Sampled views over a level range, keyed by (base << 8 | count); and
+    // single-level, single-layer (or 3D slice) views a framebuffer renders
+    // through, keyed by (level << 16 | layer). Made on first use.
+    std::vector<std::pair<uint32_t, VkImageView>> sampledViews;
+    std::vector<std::pair<uint32_t, VkImageView>> attachmentViews;
+    TexFormat tf;  // what the image stores
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    uint32_t width = 0, height = 0, depth = 1;  // level 0 of the image; depth > 1 only for 3D
+    uint32_t mipLevels = 1;
+    uint32_t arrayLayers = 1;  // 6 for a cube map, the layer count of a 2D array
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;  // > 1 only for multisampled renderbuffers
+    std::vector<VkImageLayout> layouts;  // per subresource: level * arrayLayers + layer
+
+    GLenum target = 0;  // the target it was first bound to; RENDERBUFFER for renderbuffer storage
+    std::vector<TexLevel> levels;
+    bool immutable = false;  // texStorage*: every level of `immutableLevels` defined, fixed
+    uint32_t immutableLevels = 0;
+    GLint baseLevel = 0;
+    GLint maxLevel = 1000;
+    SamplerState sampler;
+
+    bool isValid() const { return image != VK_NULL_HANDLE; }
+    bool is3D() const { return target == GL_TEXTURE_3D; }
+    VkImageLayout layout(uint32_t level, uint32_t layer) const {
+        const size_t i = static_cast<size_t>(level) * arrayLayers + layer;
+        return i < layouts.size() ? layouts[i] : VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+};
+using WebGLTextureResource = VkTextureResource;
+
+/// Sampler object.
+struct VkSamplerResource {
+    SamplerState state;
 };
 
 /// Vertex attribute specification within a Vertex Array Object (VAO).
@@ -187,6 +239,39 @@ struct VkUniformLocation {
 };
 
 /// What linking learns about a program from glslang's reflection.
+/// A transform feedback varying, as getTransformFeedbackVarying reports it,
+/// and where the vertex stage writes it: `components` 32-bit words into
+/// capture buffer `buffer`, from word `offset` of each vertex's record.
+struct VkFeedbackVarying {
+    std::string name;
+    GLenum type = GL_FLOAT;
+    GLint size = 1;
+    uint32_t buffer = 0;
+    uint32_t offset = 0;
+    uint32_t components = 1;
+    bool array = false;
+};
+
+/// Transform feedback is the vertex stage storing its captured varyings
+/// into the bound buffers (as storage buffers at kFeedbackBinding + i), at
+/// the record of each vertex the draw captures; FeedbackPush says which,
+/// from offset kFeedbackPushOffset of the push constants.
+constexpr uint32_t kFeedbackBinding = 112;
+constexpr uint32_t kMaxFeedbackBuffers = 4;
+constexpr uint32_t kFeedbackPushOffset = 16;
+struct FeedbackPush {
+    uint32_t base = 0;   // records already written since beginTransformFeedback
+    uint32_t first = 0;  // the draw's first vertex
+    uint32_t count = 0;  // vertices captured per instance (0: not capturing)
+    uint32_t wordOffset[kMaxFeedbackBuffers]{};  // of each binding, past its descriptor's offset
+};
+
+/// The varyings transformFeedbackVaryings named, captured as `bufferMode`.
+struct FeedbackRequest {
+    std::vector<std::string> varyings;
+    GLenum bufferMode = GL_INTERLEAVED_ATTRIBS;
+};
+
 struct ProgramInterface {
     std::vector<VkAttribInfo> attribs;
     std::vector<VkVertexInput> vertexInputs;
@@ -200,6 +285,10 @@ struct ProgramInterface {
     uint32_t fragmentSamplerUnits = 0;  // a sampler both use counts in both
     int32_t defaultBlockBinding = -1;  // -1: no default-block values
     uint32_t defaultBlockSize = 0;
+    std::vector<VkFeedbackVarying> feedbackVaryings;
+    GLenum feedbackBufferMode = GL_INTERLEAVED_ATTRIBS;
+    uint32_t feedbackBuffers = 0;                                 // capture buffers written
+    std::array<uint32_t, kMaxFeedbackBuffers> feedbackStrides{};  // words per record in each
 };
 
 /// A program object. A successful link replaces the executable — modules,
@@ -208,9 +297,11 @@ struct VkProgramResource {
     GLuint vertShaderId = 0;
     GLuint fragShaderId = 0;
     bool linkStatus = false;
+    bool validateStatus = false;
     bool deleteStatus = false;
     std::string infoLog;
     std::unordered_map<std::string, GLuint> boundAttribLocations;  // bindAttribLocation
+    FeedbackRequest feedbackRequest;  // transformFeedbackVaryings, for the next link
 
     VkShaderModule vertModule = VK_NULL_HANDLE;
     VkShaderModule fragModule = VK_NULL_HANDLE;
@@ -269,124 +360,70 @@ struct VkRenderbufferResource {
 // Format and State Translation Helpers
 // ---------------------------------------------------------------------------
 
+/// The vertex format a vertex array of `size` components of `type` is read
+/// as: integer for vertexAttribIPointer, else normalized or converted to
+/// float (scaled). VK_FORMAT_UNDEFINED where Vulkan has none (32-bit
+/// integers read as float); the draw converts those itself.
 inline VkFormat glTypeToVkFormat(GLenum type, GLint size, GLboolean normalized, bool isInteger = false) {
-    if (isInteger || type == GL_INT || type == GL_UNSIGNED_INT) {
-        if (type == GL_INT) {
-            switch (size) {
-                case 1: return VK_FORMAT_R32_SINT;
-                case 2: return VK_FORMAT_R32G32_SINT;
-                case 3: return VK_FORMAT_R32G32B32_SINT;
-                case 4: return VK_FORMAT_R32G32B32A32_SINT;
-            }
-        } else if (type == GL_UNSIGNED_INT) {
-            switch (size) {
-                case 1: return VK_FORMAT_R32_UINT;
-                case 2: return VK_FORMAT_R32G32_UINT;
-                case 3: return VK_FORMAT_R32G32B32_UINT;
-                case 4: return VK_FORMAT_R32G32B32A32_UINT;
-            }
-        } else if (type == GL_SHORT) {
-            switch (size) {
-                case 1: return VK_FORMAT_R16_SINT;
-                case 2: return VK_FORMAT_R16G16_SINT;
-                case 3: return VK_FORMAT_R16G16B16_SINT;
-                case 4: return VK_FORMAT_R16G16B16A16_SINT;
-            }
-        } else if (type == GL_UNSIGNED_SHORT) {
-            switch (size) {
-                case 1: return VK_FORMAT_R16_UINT;
-                case 2: return VK_FORMAT_R16G16_UINT;
-                case 3: return VK_FORMAT_R16G16B16_UINT;
-                case 4: return VK_FORMAT_R16G16B16A16_UINT;
-            }
-        } else if (type == GL_BYTE) {
-            switch (size) {
-                case 1: return VK_FORMAT_R8_SINT;
-                case 2: return VK_FORMAT_R8G8_SINT;
-                case 3: return VK_FORMAT_R8G8B8_SINT;
-                case 4: return VK_FORMAT_R8G8B8A8_SINT;
-            }
-        } else if (type == GL_UNSIGNED_BYTE) {
-            switch (size) {
-                case 1: return VK_FORMAT_R8_UINT;
-                case 2: return VK_FORMAT_R8G8_UINT;
-                case 3: return VK_FORMAT_R8G8B8_UINT;
-                case 4: return VK_FORMAT_R8G8B8A8_UINT;
-            }
-        }
+    if (size < 1 || size > 4) return VK_FORMAT_UNDEFINED;
+    const int n = size - 1;
+    auto of = [n](VkFormat r, VkFormat rg, VkFormat rgb, VkFormat rgba) {
+        const VkFormat f[] = {r, rg, rgb, rgba};
+        return f[n];
+    };
+    switch (type) {
+        case GL_FLOAT:
+            return of(VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT,
+                      VK_FORMAT_R32G32B32A32_SFLOAT);
+        case GL_HALF_FLOAT:
+            return of(VK_FORMAT_R16_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16G16B16_SFLOAT,
+                      VK_FORMAT_R16G16B16A16_SFLOAT);
+        case GL_BYTE:
+            if (isInteger) return of(VK_FORMAT_R8_SINT, VK_FORMAT_R8G8_SINT, VK_FORMAT_R8G8B8_SINT, VK_FORMAT_R8G8B8A8_SINT);
+            if (normalized)
+                return of(VK_FORMAT_R8_SNORM, VK_FORMAT_R8G8_SNORM, VK_FORMAT_R8G8B8_SNORM, VK_FORMAT_R8G8B8A8_SNORM);
+            return of(VK_FORMAT_R8_SSCALED, VK_FORMAT_R8G8_SSCALED, VK_FORMAT_R8G8B8_SSCALED,
+                      VK_FORMAT_R8G8B8A8_SSCALED);
+        case GL_UNSIGNED_BYTE:
+            if (isInteger) return of(VK_FORMAT_R8_UINT, VK_FORMAT_R8G8_UINT, VK_FORMAT_R8G8B8_UINT, VK_FORMAT_R8G8B8A8_UINT);
+            if (normalized)
+                return of(VK_FORMAT_R8_UNORM, VK_FORMAT_R8G8_UNORM, VK_FORMAT_R8G8B8_UNORM, VK_FORMAT_R8G8B8A8_UNORM);
+            return of(VK_FORMAT_R8_USCALED, VK_FORMAT_R8G8_USCALED, VK_FORMAT_R8G8B8_USCALED,
+                      VK_FORMAT_R8G8B8A8_USCALED);
+        case GL_SHORT:
+            if (isInteger)
+                return of(VK_FORMAT_R16_SINT, VK_FORMAT_R16G16_SINT, VK_FORMAT_R16G16B16_SINT,
+                          VK_FORMAT_R16G16B16A16_SINT);
+            if (normalized)
+                return of(VK_FORMAT_R16_SNORM, VK_FORMAT_R16G16_SNORM, VK_FORMAT_R16G16B16_SNORM,
+                          VK_FORMAT_R16G16B16A16_SNORM);
+            return of(VK_FORMAT_R16_SSCALED, VK_FORMAT_R16G16_SSCALED, VK_FORMAT_R16G16B16_SSCALED,
+                      VK_FORMAT_R16G16B16A16_SSCALED);
+        case GL_UNSIGNED_SHORT:
+            if (isInteger)
+                return of(VK_FORMAT_R16_UINT, VK_FORMAT_R16G16_UINT, VK_FORMAT_R16G16B16_UINT,
+                          VK_FORMAT_R16G16B16A16_UINT);
+            if (normalized)
+                return of(VK_FORMAT_R16_UNORM, VK_FORMAT_R16G16_UNORM, VK_FORMAT_R16G16B16_UNORM,
+                          VK_FORMAT_R16G16B16A16_UNORM);
+            return of(VK_FORMAT_R16_USCALED, VK_FORMAT_R16G16_USCALED, VK_FORMAT_R16G16B16_USCALED,
+                      VK_FORMAT_R16G16B16A16_USCALED);
+        case GL_INT:
+            if (isInteger)
+                return of(VK_FORMAT_R32_SINT, VK_FORMAT_R32G32_SINT, VK_FORMAT_R32G32B32_SINT,
+                          VK_FORMAT_R32G32B32A32_SINT);
+            return VK_FORMAT_UNDEFINED;
+        case GL_UNSIGNED_INT:
+            if (isInteger)
+                return of(VK_FORMAT_R32_UINT, VK_FORMAT_R32G32_UINT, VK_FORMAT_R32G32B32_UINT,
+                          VK_FORMAT_R32G32B32A32_UINT);
+            return VK_FORMAT_UNDEFINED;
+        case 0x8D9F:  // INT_2_10_10_10_REV
+            return normalized ? VK_FORMAT_A2B10G10R10_SNORM_PACK32 : VK_FORMAT_A2B10G10R10_SSCALED_PACK32;
+        case 0x8368:  // UNSIGNED_INT_2_10_10_10_REV
+            return normalized ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_A2B10G10R10_USCALED_PACK32;
+        default: return VK_FORMAT_UNDEFINED;
     }
-    if (type == GL_FLOAT) {
-        switch (size) {
-            case 1: return VK_FORMAT_R32_SFLOAT;
-            case 2: return VK_FORMAT_R32G32_SFLOAT;
-            case 3: return VK_FORMAT_R32G32B32_SFLOAT;
-            case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
-            default: return VK_FORMAT_R32G32B32A32_SFLOAT;
-        }
-    } else if (type == GL_UNSIGNED_BYTE) {
-        if (normalized) {
-            switch (size) {
-                case 1: return VK_FORMAT_R8_UNORM;
-                case 2: return VK_FORMAT_R8G8_UNORM;
-                case 3: return VK_FORMAT_R8G8B8_UNORM;
-                case 4: return VK_FORMAT_R8G8B8A8_UNORM;
-            }
-        } else {
-            switch (size) {
-                case 1: return VK_FORMAT_R8_UINT;
-                case 2: return VK_FORMAT_R8G8_UINT;
-                case 3: return VK_FORMAT_R8G8B8_UINT;
-                case 4: return VK_FORMAT_R8G8B8A8_UINT;
-            }
-        }
-    } else if (type == GL_BYTE) {
-        if (normalized) {
-            switch (size) {
-                case 1: return VK_FORMAT_R8_SNORM;
-                case 2: return VK_FORMAT_R8G8_SNORM;
-                case 3: return VK_FORMAT_R8G8B8_SNORM;
-                case 4: return VK_FORMAT_R8G8B8A8_SNORM;
-            }
-        } else {
-            switch (size) {
-                case 1: return VK_FORMAT_R8_SINT;
-                case 2: return VK_FORMAT_R8G8_SINT;
-                case 3: return VK_FORMAT_R8G8B8_SINT;
-                case 4: return VK_FORMAT_R8G8B8A8_SINT;
-            }
-        }
-    } else if (type == GL_UNSIGNED_SHORT) {
-        if (normalized) {
-            switch (size) {
-                case 1: return VK_FORMAT_R16_UNORM;
-                case 2: return VK_FORMAT_R16G16_UNORM;
-                case 3: return VK_FORMAT_R16G16B16_UNORM;
-                case 4: return VK_FORMAT_R16G16B16A16_UNORM;
-            }
-        } else {
-            switch (size) {
-                case 1: return VK_FORMAT_R16_UINT;
-                case 2: return VK_FORMAT_R16G16_UINT;
-                case 3: return VK_FORMAT_R16G16B16_UINT;
-                case 4: return VK_FORMAT_R16G16B16A16_UINT;
-            }
-        }
-    } else if (type == GL_INT) {
-        switch (size) {
-            case 1: return VK_FORMAT_R32_SINT;
-            case 2: return VK_FORMAT_R32G32_SINT;
-            case 3: return VK_FORMAT_R32G32B32_SINT;
-            case 4: return VK_FORMAT_R32G32B32A32_SINT;
-        }
-    } else if (type == GL_UNSIGNED_INT) {
-        switch (size) {
-            case 1: return VK_FORMAT_R32_UINT;
-            case 2: return VK_FORMAT_R32G32_UINT;
-            case 3: return VK_FORMAT_R32G32B32_UINT;
-            case 4: return VK_FORMAT_R32G32B32A32_UINT;
-        }
-    }
-    return VK_FORMAT_R32G32B32A32_SFLOAT;
 }
 
 inline VkPrimitiveTopology glTopologyToVk(GLenum mode) {

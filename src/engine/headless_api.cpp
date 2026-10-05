@@ -50,6 +50,7 @@ namespace bro::engine {
 
 void Engine::flush() {
     pumpVideoEvents();
+    pumpWebGLContextEvents();
 
     if (document_) {
         document_->setTransitionManager(&transitionManager_, engineNowMs_);
@@ -233,6 +234,7 @@ void Engine::advanceTime(double ms) {
         mediaHeldForStep_ = false;
         pumpVideoEvents();
         mediaHeldForStep_ = true;
+        pumpWebGLContextEvents();
 
         syncWebGLCanvasSizes();
         webgl::WebGL2RenderingContext::invalidateCurrent();

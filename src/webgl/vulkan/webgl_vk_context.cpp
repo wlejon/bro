@@ -7,9 +7,10 @@
 
 namespace bro::webgl::vk {
 
-WebGLVkContext::WebGLVkContext(int width, int height, render::VulkanContext& context)
+WebGLVkContext::WebGLVkContext(int width, int height, render::VulkanContext& context, GLuint firstObjectId)
     : context_(context), stream_(context), canvas_(context), pipelineCache_(context)
 {
+    nextObjectId_ = firstObjectId;
     canvas_.init(width, height);
     initVulkanResources();
     canvas_.recordInit(commands());
@@ -54,7 +55,6 @@ void WebGLVkContext::cleanupVulkanResources() {
     textures_.clear();
     for (auto& [id, rb] : renderbuffers_) releaseTexture(rb.storage);
     renderbuffers_.clear();
-    for (auto& [id, smp] : samplers_) releaseSampler(smp.sampler);
     samplers_.clear();
 
     // Everything below is either never referenced by a recorded command
@@ -65,6 +65,10 @@ void WebGLVkContext::cleanupVulkanResources() {
     if (readback_.buffer != VK_NULL_HANDLE) context_.destroyBuffer(readback_.buffer, readback_.allocId);
     readback_ = Readback{};
     destroyPlaceholders();
+    destroySamplerCache();
+    destroyMaskedClear();
+    destroyQueries();
+    destroyFeedback();
 
     shaders_.clear();
     for (auto& [id, prog] : programs_) releaseProgramExecutable(prog);
@@ -236,7 +240,14 @@ GLboolean WebGLVkContext::isEnabled(GLenum cap) {
 
 void WebGLVkContext::depthFunc(GLenum func) { depthFunc_ = func; }
 void WebGLVkContext::depthMask(GLboolean flag) { depthMask_ = flag; }
-void WebGLVkContext::depthRange(GLfloat /*zNear*/, GLfloat /*zFar*/) {}
+void WebGLVkContext::depthRange(GLfloat zNear, GLfloat zFar) {
+    if (zNear > zFar) {
+        setSyntheticError(GL_INVALID_OPERATION);  // WebGL forbids an inverted range
+        return;
+    }
+    depthNear_ = std::clamp(zNear, 0.0f, 1.0f);
+    depthFar_ = std::clamp(zFar, 0.0f, 1.0f);
+}
 void WebGLVkContext::blendFunc(GLenum sfactor, GLenum dfactor) {
     blendFuncSeparate(sfactor, dfactor, sfactor, dfactor);
 }
@@ -247,7 +258,9 @@ void WebGLVkContext::blendEquation(GLenum mode) { blendEquationSeparate(mode, mo
 void WebGLVkContext::blendEquationSeparate(GLenum modeRGB, GLenum modeAlpha) {
     blendEqRGB_ = modeRGB; blendEqAlpha_ = modeAlpha;
 }
-void WebGLVkContext::blendColor(GLfloat /*r*/, GLfloat /*g*/, GLfloat /*b*/, GLfloat /*a*/) {}
+void WebGLVkContext::blendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
+    blendColor_[0] = r; blendColor_[1] = g; blendColor_[2] = b; blendColor_[3] = a;
+}
 void WebGLVkContext::colorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
     colorMask_[0] = r; colorMask_[1] = g; colorMask_[2] = b; colorMask_[3] = a;
 }
@@ -296,28 +309,77 @@ void WebGLVkContext::stencilMaskSeparate(GLenum face, GLuint mask) {
 
 void WebGLVkContext::cullFace(GLenum mode) { cullFaceMode_ = mode; }
 void WebGLVkContext::frontFace(GLenum mode) { frontFaceMode_ = mode; }
-void WebGLVkContext::lineWidth(GLfloat /*width*/) {}
-void WebGLVkContext::polygonOffset(GLfloat /*factor*/, GLfloat /*units*/) {}
+void WebGLVkContext::lineWidth(GLfloat width) {
+    if (!(width > 0.0f)) {
+        setSyntheticError(GL_INVALID_VALUE);  // also NaN
+        return;
+    }
+    lineWidth_ = width;
+}
+void WebGLVkContext::polygonOffset(GLfloat factor, GLfloat units) {
+    polygonOffsetFactor_ = factor;
+    polygonOffsetUnits_ = units;
+}
+void WebGLVkContext::sampleCoverage(GLfloat value, GLboolean invert) {
+    sampleCoverageValue_ = std::clamp(value, 0.0f, 1.0f);
+    sampleCoverageInvert_ = invert != GL_FALSE;
+}
+void WebGLVkContext::hint(GLenum target, GLenum mode) {
+    if ((target != GL_GENERATE_MIPMAP_HINT && target != GL_FRAGMENT_SHADER_DERIVATIVE_HINT) ||
+        (mode != GL_DONT_CARE && mode != GL_FASTEST && mode != GL_NICEST)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return;
+    }
+    // Recorded for getParameter; mipmaps and derivatives are computed one way.
+    (target == GL_GENERATE_MIPMAP_HINT ? generateMipmapHint_ : derivativeHint_) = mode;
+}
 
 void WebGLVkContext::pixelStorei(GLenum pname, GLint param) {
-    if (pname == GL_UNPACK_ALIGNMENT) {
-        if (param == 1 || param == 2 || param == 4 || param == 8) {
-            unpackAlignment_ = param;
-        } else {
-            setSyntheticError(GL_INVALID_VALUE);
-        }
-    } else if (pname == GL_PACK_ALIGNMENT) {
-        if (param == 1 || param == 2 || param == 4 || param == 8) {
-            packAlignment_ = param;
-        } else {
-            setSyntheticError(GL_INVALID_VALUE);
-        }
-    } else if (pname == 0x9240 /* UNPACK_FLIP_Y_WEBGL */) {
-        unpackFlipY_ = (param != 0);
-    } else if (pname == 0x9241 /* UNPACK_PREMULTIPLY_ALPHA_WEBGL */) {
-        unpackPremultiplyAlpha_ = (param != 0);
-    } else if (pname == 0x9243 /* UNPACK_COLORSPACE_CONVERSION_WEBGL */) {
-        unpackColorspaceConversion_ = param;
+    auto alignment = [&](int32_t& out) {
+        if (param == 1 || param == 2 || param == 4 || param == 8) out = param;
+        else setSyntheticError(GL_INVALID_VALUE);
+    };
+    auto count = [&](int32_t& out) {
+        if (param >= 0) out = param;
+        else setSyntheticError(GL_INVALID_VALUE);
+    };
+    switch (pname) {
+        case GL_UNPACK_ALIGNMENT: alignment(unpack_.alignment); break;
+        case GL_PACK_ALIGNMENT: alignment(pack_.alignment); break;
+        case GL_UNPACK_ROW_LENGTH: count(unpack_.rowLength); break;
+        case GL_UNPACK_IMAGE_HEIGHT: count(unpack_.imageHeight); break;
+        case GL_UNPACK_SKIP_PIXELS: count(unpack_.skipPixels); break;
+        case GL_UNPACK_SKIP_ROWS: count(unpack_.skipRows); break;
+        case GL_UNPACK_SKIP_IMAGES: count(unpack_.skipImages); break;
+        case GL_PACK_ROW_LENGTH: count(pack_.rowLength); break;
+        case GL_PACK_SKIP_PIXELS: count(pack_.skipPixels); break;
+        case GL_PACK_SKIP_ROWS: count(pack_.skipRows); break;
+        case GL_UNPACK_FLIP_Y_WEBGL: unpackFlipY_ = param != 0; break;
+        case GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL: unpackPremultiplyAlpha_ = param != 0; break;
+        case GL_UNPACK_COLORSPACE_CONVERSION_WEBGL:
+            if (param == GL_NONE || param == 0x9244 /* BROWSER_DEFAULT_WEBGL */) unpackColorspaceConversion_ = param;
+            else setSyntheticError(GL_INVALID_ENUM);
+            break;
+        default: setSyntheticError(GL_INVALID_ENUM); break;
+    }
+}
+
+GLint WebGLVkContext::getPixelStorei(GLenum pname) const {
+    switch (pname) {
+        case GL_UNPACK_ALIGNMENT: return unpack_.alignment;
+        case GL_PACK_ALIGNMENT: return pack_.alignment;
+        case GL_UNPACK_ROW_LENGTH: return unpack_.rowLength;
+        case GL_UNPACK_IMAGE_HEIGHT: return unpack_.imageHeight;
+        case GL_UNPACK_SKIP_PIXELS: return unpack_.skipPixels;
+        case GL_UNPACK_SKIP_ROWS: return unpack_.skipRows;
+        case GL_UNPACK_SKIP_IMAGES: return unpack_.skipImages;
+        case GL_PACK_ROW_LENGTH: return pack_.rowLength;
+        case GL_PACK_SKIP_PIXELS: return pack_.skipPixels;
+        case GL_PACK_SKIP_ROWS: return pack_.skipRows;
+        case GL_UNPACK_FLIP_Y_WEBGL: return unpackFlipY_ ? 1 : 0;
+        case GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL: return unpackPremultiplyAlpha_ ? 1 : 0;
+        case GL_UNPACK_COLORSPACE_CONVERSION_WEBGL: return unpackColorspaceConversion_;
+        default: return 0;
     }
 }
 
@@ -326,7 +388,7 @@ void WebGLVkContext::pixelStorei(GLenum pname, GLint param) {
 // ---------------------------------------------------------------------------
 
 WebGLVertexArrayObject WebGLVkContext::createVertexArray() {
-    GLuint id = nextVaoId_++;
+    GLuint id = nextObjectId_++;
     vaos_[id] = VkVAOResource{};
     return {id};
 }
@@ -338,42 +400,14 @@ void WebGLVkContext::deleteVertexArray(WebGLVertexArrayObject vao) {
     }
 }
 
-void WebGLVkContext::bindVertexArray(WebGLVertexArrayObject vao) {
+bool WebGLVkContext::bindVertexArray(WebGLVertexArrayObject vao) {
+    if (vao.id != 0 && vaos_.find(vao.id) == vaos_.end()) {
+        setSyntheticError(GL_INVALID_OPERATION);  // deleted, or from before a context loss
+        return false;
+    }
     currentVaoId_ = vao.id;
-    if (vaos_.find(vao.id) == vaos_.end()) {
-        vaos_[vao.id] = VkVAOResource{};
-    }
     boundElementArrayBuffer_ = vaos_[currentVaoId_].elementArrayBufferId;
-}
-
-void WebGLVkContext::enableVertexAttribArray(GLuint index) {
-    if (index < 16) {
-        vaos_[currentVaoId_].attributes[index].enabled = true;
-    }
-}
-
-void WebGLVkContext::disableVertexAttribArray(GLuint index) {
-    if (index < 16) {
-        vaos_[currentVaoId_].attributes[index].enabled = false;
-    }
-}
-
-void WebGLVkContext::vertexAttribPointer(GLuint index, GLint size, GLenum type,
-                                         GLboolean normalized, GLsizei stride, uintptr_t offset) {
-    if (index >= 16) return;
-    VkVertexAttribute& attr = vaos_[currentVaoId_].attributes[index];
-    attr.size = size;
-    attr.type = type;
-    attr.normalized = normalized;
-    attr.stride = (stride == 0) ? (size * 4) : stride;
-    attr.offset = offset;
-    attr.bufferId = boundArrayBuffer_;
-}
-
-void WebGLVkContext::vertexAttribDivisor(GLuint index, GLuint divisor) {
-    if (index < 16) {
-        vaos_[currentVaoId_].attributes[index].divisor = divisor;
-    }
+    return true;
 }
 
 } // namespace bro::webgl::vk

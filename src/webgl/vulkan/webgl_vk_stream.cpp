@@ -189,6 +189,7 @@ VkDescriptorPool WebGLVkStream::createDescriptorPool() {
     const VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kDescriptorSetsPerPool * 8},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kDescriptorSetsPerPool * 4},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kDescriptorSetsPerPool},
     };
     VkDescriptorPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

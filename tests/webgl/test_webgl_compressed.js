@@ -1,9 +1,8 @@
-// WebGL2 conformance subset — compressed textures: driver-gated extension
-// surfacing (S3TC / RGTC / BPTC — desktop GL has no ETC2),
-// getParameter(COMPRESSED_TEXTURE_FORMATS), hand-encoded DXT1/RGTC1 blocks
-// uploaded and verified via pixels, block-size and alignment validation.
-// Exercises WebGL2 texture API, _queries.cpp +
-// src/webgl/webgl2_context.cpp.
+// WebGL2 conformance subset — compressed textures: device-gated extension
+// surfacing (each family only where the Vulkan device samples it natively:
+// BC on desktop GPUs, ETC2/ASTC on Apple), COMPRESSED_TEXTURE_FORMATS
+// following getExtension, hand-encoded DXT1/RGTC1 blocks uploaded and
+// verified via pixels, block-size and alignment validation.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');
@@ -62,16 +61,18 @@ if (!gl) {
     const exts = gl.getSupportedExtensions();
 
     // =====================================================================
-    // Honest surfacing: RGTC is core since GL 3.0 (always present); ETC2 is
-    // NOT expressible on desktop GL 3.3 and must not be claimed.
+    // COMPRESSED_TEXTURE_FORMATS lists the formats of ENABLED extensions:
+    // none before getExtension, RGTC's after.
     // =====================================================================
-    assert(exts.indexOf('EXT_texture_compression_rgtc') >= 0, 'RGTC extension surfaced');
-    assert(exts.indexOf('WEBGL_compressed_texture_etc') < 0, 'ETC2 not claimed (desktop GL)');
-    const formats = gl.getParameter(gl.COMPRESSED_TEXTURE_FORMATS);
-    assert(Array.isArray(formats) && formats.length > 0, 'COMPRESSED_TEXTURE_FORMATS non-empty');
-
+    const before = gl.getParameter(gl.COMPRESSED_TEXTURE_FORMATS);
+    assert(before instanceof Uint32Array && before.length === 0, 'no compressed formats before getExtension');
+    if (exts.indexOf('EXT_texture_compression_rgtc') < 0) {
+        skipTest('the device samples no BC formats (RGTC)');
+    } else {
     const rgtc = gl.getExtension('EXT_texture_compression_rgtc');
     assert(rgtc !== null, 'RGTC extension object');
+    let formats = gl.getParameter(gl.COMPRESSED_TEXTURE_FORMATS);
+    assert(formats instanceof Uint32Array && formats.length > 0, 'COMPRESSED_TEXTURE_FORMATS non-empty');
     assert(rgtc.COMPRESSED_RED_RGTC1_EXT === 0x8DBB, 'RGTC constants on extension object');
     assert(formats.indexOf(rgtc.COMPRESSED_RED_RGTC1_EXT) >= 0,
            'RGTC1 listed in COMPRESSED_TEXTURE_FORMATS');
@@ -119,10 +120,10 @@ if (!gl) {
                                new Uint8Array(rgtc1Block(0)));
     assert(gl.getError() === gl.INVALID_OPERATION, 'misaligned sub-rect -> INVALID_OPERATION');
 
-    // Unsupported format (ETC2 RGB8) -> INVALID_ENUM, nothing uploaded.
+    // A format whose extension is not enabled (ETC2 RGB8) -> INVALID_ENUM.
     gl.compressedTexImage2D(gl.TEXTURE_2D, 0, 0x9274 /* COMPRESSED_RGB8_ETC2 */,
                             4, 4, 0, new Uint8Array(8));
-    assert(gl.getError() === gl.INVALID_ENUM, 'ETC2 format -> INVALID_ENUM');
+    assert(gl.getError() === gl.INVALID_ENUM, 'ETC2 format (not enabled) -> INVALID_ENUM');
 
     // =====================================================================
     // S3TC (driver-gated): solid-red DXT1 block; color0=0xF800 (RGB565 red),
@@ -131,6 +132,7 @@ if (!gl) {
     const s3tc = gl.getExtension('WEBGL_compressed_texture_s3tc');
     if (s3tc) {
         assert(exts.indexOf('WEBGL_compressed_texture_s3tc') >= 0, 's3tc listed when supported');
+        formats = gl.getParameter(gl.COMPRESSED_TEXTURE_FORMATS);
         assert(formats.indexOf(s3tc.COMPRESSED_RGB_S3TC_DXT1_EXT) >= 0,
                'DXT1 listed in COMPRESSED_TEXTURE_FORMATS');
         const dxt1Red = new Uint8Array([0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0]);
@@ -154,6 +156,7 @@ if (!gl) {
     assert(gl.getError() === gl.NO_ERROR, 'no error at end');
 
     console.log('webgl compressed texture tests passed');
+    }
 }
 
 document.body.removeChild(canvas);

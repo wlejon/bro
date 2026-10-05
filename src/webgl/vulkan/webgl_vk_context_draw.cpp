@@ -3,6 +3,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bro::webgl::vk {
@@ -11,7 +12,50 @@ namespace {
 
 uint64_t handleBits(const void* h) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(h)); }
 
+// What a sampler uniform's type reads: float (or depth, uncompared),
+// signed or unsigned integer texels, or a depth comparison.
+enum class SamplerKind : uint8_t { Float, Int, Uint, Shadow };
+
+SamplerKind samplerKind(GLenum type) {
+    switch (type) {
+        case GL_INT_SAMPLER_2D: case GL_INT_SAMPLER_3D: case GL_INT_SAMPLER_CUBE: case GL_INT_SAMPLER_2D_ARRAY:
+            return SamplerKind::Int;
+        case GL_UNSIGNED_INT_SAMPLER_2D: case GL_UNSIGNED_INT_SAMPLER_3D: case GL_UNSIGNED_INT_SAMPLER_CUBE:
+        case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
+            return SamplerKind::Uint;
+        case GL_SAMPLER_2D_SHADOW: case GL_SAMPLER_CUBE_SHADOW: case GL_SAMPLER_2D_ARRAY_SHADOW:
+            return SamplerKind::Shadow;
+        default: return SamplerKind::Float;
+    }
+}
+
+// WebGL 2 5.22: a complete texture whose texels the sampler type cannot
+// read (an integer texture through a float sampler, a comparing texture
+// through a non-shadow one, ...) makes the draw INVALID_OPERATION.
+bool samplerMatches(SamplerKind want, const TexFormat& tf, const SamplerState& state) {
+    const bool compare = tf.isDepthOrStencil() && state.compareMode == GL_COMPARE_REF_TO_TEXTURE;
+    switch (want) {
+        case SamplerKind::Int: return tf.kind == TexKind::Int;
+        case SamplerKind::Uint: return tf.kind == TexKind::Uint;
+        case SamplerKind::Shadow: return compare;
+        default: return !tf.isInteger() && !compare;
+    }
+}
+
 } // namespace
+
+// Whether the open pass renders into a level of `tex` in [base, base +
+// count): sampling it would be a feedback loop (WebGL 2 5.18), and the
+// level is in attachment layout besides.
+bool WebGLVkContext::sampledByPass(const VkTextureResource& tex, uint32_t base, uint32_t count) const {
+    if (!inRenderPass_) return false;
+    auto renders = [&](const Surface& s) {
+        return s.source == Surface::Source::Texture && s.tex == &tex && s.level >= base && s.level < base + count;
+    };
+    for (uint32_t i = 0; i < pass_.colorCount; ++i)
+        if (renders(pass_.color[i])) return true;
+    return renders(pass_.depth) || renders(pass_.stencil);
+}
 
 // The first target row of GL's bottom-up scissor box: counted down from the
 // top on the top-down canvas, as is on a framebuffer object.
@@ -33,14 +77,20 @@ VkProgramResource* WebGLVkContext::drawProgram(const char* what) {
         setSyntheticError(GL_INVALID_OPERATION);
         return nullptr;
     }
+    if (samplerUnitConflict(prog)) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return nullptr;
+    }
     return &prog;
 }
 
-void WebGLVkContext::buildPipelineKey(GLenum mode, const VkProgramResource& prog, PipelineKey& key,
-                                      VkExtent2D& extent) {
+void WebGLVkContext::buildPipelineKey(GLenum mode, const VkProgramResource& prog, const DrawShape& shape,
+                                      PipelineKey& key, VkExtent2D& extent) {
     key.vertShader = prog.vertModule;
     key.fragShader = prog.fragModule;
     key.topology = glTopologyToVk(mode);
+    key.primitiveRestartEnable = shape.restart ? VK_TRUE : VK_FALSE;
+    key.depthBiasEnable = polygonOffsetFillEnabled_ ? VK_TRUE : VK_FALSE;
 
     key.cullFaceEnable = cullFaceEnabled_ ? VK_TRUE : VK_FALSE;
     key.cullMode = glCullModeToVk(cullFaceMode_);
@@ -94,43 +144,61 @@ void WebGLVkContext::buildPipelineKey(GLenum mode, const VkProgramResource& prog
     key.depthAttachmentFormat = pass_.depth ? pass_.depth.format : VK_FORMAT_UNDEFINED;
     key.stencilAttachmentFormat = pass_.stencil ? pass_.stencil.format : VK_FORMAT_UNDEFINED;
     key.samples = pass_.samples;
+    for (uint32_t i = 0; i < pass_.colorCount; ++i)
+        if (pass_.color[i].alphaOne) key.alphaOneMask |= static_cast<uint8_t>(1u << i);
+
+    // SAMPLE_ALPHA_TO_COVERAGE and SAMPLE_COVERAGE only act on multisampled
+    // targets; the coverage value keeps round(value * samples) samples.
+    if (pass_.samples > VK_SAMPLE_COUNT_1_BIT) {
+        key.alphaToCoverageEnable = sampleAlphaToCoverageEnabled_ ? VK_TRUE : VK_FALSE;
+        if (sampleCoverageEnabled_) {
+            const uint32_t samples = static_cast<uint32_t>(pass_.samples);
+            const uint32_t all = samples >= 32 ? ~0u : (1u << samples) - 1;
+            const uint32_t kept = static_cast<uint32_t>(std::lround(sampleCoverageValue_ * samples));
+            const uint32_t mask = kept >= 32 ? ~0u : (1u << kept) - 1;
+            key.sampleMask = (sampleCoverageInvert_ ? ~mask : mask) & all;
+        }
+    }
 }
 
-void WebGLVkContext::bindVertexInputs(const VkProgramResource& prog, PipelineKey& key,
-                                      std::vector<VkBuffer>& vbos, std::vector<VkDeviceSize>& offsets) {
-    VkVAOResource& vao = vaos_[currentVaoId_];
-    uint32_t count = 0;
-    for (const VkVertexInput& in : prog.iface.vertexInputs) {
-        const uint32_t loc = in.location;
-        if (loc >= vao.attributes.size()) continue;
-        const VkVertexAttribute& attr = vao.attributes[loc];
-        auto bIt = (attr.enabled && attr.bufferId != 0) ? buffers_.find(attr.bufferId) : buffers_.end();
-        if (bIt != buffers_.end() && bIt->second.isValid()) {
-            key.attributes[count] = {loc, count, glTypeToVkFormat(attr.type, attr.size, attr.normalized, attr.isInteger), 0};
-            key.bindings[count] = {count, static_cast<uint32_t>(attr.stride),
-                                   attr.divisor > 0 ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
-            vbos.push_back(bIt->second.buffer);
-            offsets.push_back(attr.offset);
-        } else {
-            // A disabled array reads the attribute's constant value: a zero
-            // stride binding over the segment's copy of the generic values.
-            if (genericAttribSerial_ != stream_.segmentSerial() || !genericAttribSlice_) {
-                genericAttribSlice_ = stage(genericAttribs_.data(), sizeof(genericAttribs_));
-                genericAttribSerial_ = stream_.segmentSerial();
-            }
-            if (!genericAttribSlice_) continue;
-            VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT;
-            if (in.kind == VkVertexInput::Kind::Int) format = VK_FORMAT_R32G32B32A32_SINT;
-            if (in.kind == VkVertexInput::Kind::Uint) format = VK_FORMAT_R32G32B32A32_UINT;
-            key.attributes[count] = {loc, count, format, 0};
-            key.bindings[count] = {count, 0, VK_VERTEX_INPUT_RATE_VERTEX};
-            vbos.push_back(genericAttribSlice_.buffer);
-            offsets.push_back(genericAttribSlice_.offset + loc * 16);
-        }
-        count++;
+// The fixed-function values every pipeline takes as dynamic state.
+void WebGLVkContext::setDynamicState(VkCommandBuffer cmd, VkExtent2D extent) {
+    // The canvas is drawn top-down (a negative viewport height maps GL's
+    // bottom-up NDC onto it); a framebuffer object in GL's own row order.
+    const bool flipped = pass_.topDown;
+    VkViewport vp{};
+    vp.x = viewport_.x;
+    vp.y = flipped ? static_cast<float>(extent.height) - viewport_.y : viewport_.y;
+    vp.width = viewport_.width;
+    vp.height = flipped ? -viewport_.height : viewport_.height;
+    vp.minDepth = depthNear_;
+    vp.maxDepth = depthFar_;
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+
+    VkRect2D sc{};
+    if (scissorTest_) {
+        int32_t x0 = std::max(0, scissor_.offset.x);
+        int32_t top = scissorTop(extent);
+        int32_t y0 = std::max(0, top);
+        int32_t x1 = std::min(static_cast<int32_t>(extent.width),
+                              scissor_.offset.x + static_cast<int32_t>(scissor_.extent.width));
+        int32_t y1 = std::min(static_cast<int32_t>(extent.height),
+                              top + static_cast<int32_t>(scissor_.extent.height));
+        sc.offset = {x0, y0};
+        sc.extent = {static_cast<uint32_t>(std::max(0, x1 - x0)), static_cast<uint32_t>(std::max(0, y1 - y0))};
+    } else {
+        sc.extent = extent;
     }
-    key.attributeCount = count;
-    key.bindingCount = count;
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+
+    // GL offsets depth by factor * DZ + units * r; Vulkan by its slope and
+    // constant factors, the same terms.
+    vkCmdSetDepthBias(cmd, polygonOffsetUnits_, 0.0f, polygonOffsetFactor_);
+    vkCmdSetBlendConstants(cmd, blendColor_);
+    if (context_.wideLines()) {
+        const float* range = context_.deviceProperties().limits.lineWidthRange;
+        vkCmdSetLineWidth(cmd, std::clamp(lineWidth_, range[0], range[1]));
+    }
 }
 
 // The texture a sampler of `type` reads from texture unit `unit`.
@@ -181,7 +249,7 @@ bool WebGLVkContext::uniformBlockRange(const VkProgramResource& prog, size_t blo
 // one descriptor set. The set comes from the stream segment and is written
 // once, before any command uses it; a draw whose bindings match the previous
 // draw of the same program in the same segment reuses that set.
-bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog) {
+bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource& prog, DrawShape& shape) {
     const ProgramInterface& iface = prog.iface;
     const uint64_t serial = stream_.segmentSerial();
     const bool sameSegment = prog.drawSegmentSerial == serial;
@@ -199,33 +267,36 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
         prog.drawUniformBytes = prog.uniformBytes;
     }
 
+    std::vector<VkDescriptorBufferInfo> captures;
+    if (iface.feedbackBuffers > 0) feedbackDescriptors(prog, shape, captures);
+
     std::vector<VkDescriptorImageInfo> images(iface.samplerUnitCount);
     std::vector<uint64_t> key;
     key.reserve(images.size() * 2 + blocks.size() * 3 + 2);
     for (const VkSamplerBinding& s : iface.samplers) {
+        const SamplerKind want = samplerKind(s.type);
         for (uint32_t e = 0; e < s.count; ++e) {
             const uint32_t unit = prog.samplerUnits[s.firstUnit + e];
             VkImageView view = placeholderView(s.type);
-            VkSampler sampler = placeholderSampler_;
+            VkSampler sampler = want == SamplerKind::Shadow ? placeholderShadowSampler_ : placeholderSampler_;
             const GLuint texId = textureForSampler(s.type, unit);
             auto tIt = texId != 0 ? textures_.find(texId) : textures_.end();
-            if (tIt != textures_.end() && tIt->second.isValid() &&
-                tIt->second.currentLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                // Only the open pass leaves a texture in attachment layout:
-                // sampling what the draw writes is WebGL's feedback loop.
-                LOG_ERROR("WebGLVkContext: draw samples texture %u, which the draw framebuffer renders into", texId);
-                setSyntheticError(GL_INVALID_OPERATION);
-                return false;
-            }
-            if (tIt != textures_.end() && tIt->second.isValid()) {
-                updateTextureSampler(tIt->second);
-                view = tIt->second.view;
-                sampler = tIt->second.sampler;
-                if (unit < boundSamplers_.size() && boundSamplers_[unit] != 0) {
-                    if (auto smpIt = samplers_.find(boundSamplers_[unit]); smpIt != samplers_.end()) {
-                        updateSamplerObject(smpIt->second);
-                        sampler = smpIt->second.sampler;
+            VkTextureResource* tex = tIt != textures_.end() ? &tIt->second : nullptr;
+            // A bound sampler object's state replaces the texture's own.
+            const GLuint samplerId = unit < boundSamplers_.size() ? boundSamplers_[unit] : 0;
+            auto smpIt = samplerId != 0 ? samplers_.find(samplerId) : samplers_.end();
+            uint32_t base = 0, count = 0;
+            if (tex && tex->isValid()) {
+                SamplerState state = smpIt != samplers_.end() ? smpIt->second.state : tex->sampler;
+                if (textureComplete(*tex, state, base, count)) {
+                    if (!samplerMatches(want, tex->tf, state) || sampledByPass(*tex, base, count)) {
+                        setSyntheticError(GL_INVALID_OPERATION);
+                        return false;
                     }
+                    if (want != SamplerKind::Shadow) state.compareMode = GL_NONE;
+                    view = sampledView(*tex, base, count);
+                    sampler = samplerFor(state, tex->tf, state.mipmapped());
+                    if (view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE) return false;
                 }
             }
             images[s.firstUnit + e] = {sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -240,6 +311,10 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
     }
     key.push_back(handleBits(prog.drawUniforms.buffer));
     key.push_back(prog.drawUniforms.offset);
+    for (const VkDescriptorBufferInfo& b : captures) {
+        key.push_back(handleBits(b.buffer));
+        key.push_back(b.offset);
+    }
 
     if (!sameSegment || prog.drawSet == VK_NULL_HANDLE || key != prog.drawBindingKey) {
         VkDescriptorSet set = stream_.allocDescriptorSet(prog.setLayout);
@@ -248,7 +323,7 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
             return false;
         }
         std::vector<VkWriteDescriptorSet> writes;
-        writes.reserve(iface.samplers.size() + blocks.size() + 1);
+        writes.reserve(iface.samplers.size() + blocks.size() + captures.size() + 1);
         for (const VkSamplerBinding& s : iface.samplers)
             writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, s.binding, 0, s.count,
                               VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &images[s.firstUnit], nullptr, nullptr});
@@ -261,6 +336,9 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
             writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set,
                               static_cast<uint32_t>(iface.defaultBlockBinding), 0, 1,
                               VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &prog.drawUniforms, nullptr});
+        for (uint32_t b = 0; b < captures.size(); ++b)
+            writes.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, set, kFeedbackBinding + b, 0, 1,
+                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &captures[b], nullptr});
         vkUpdateDescriptorSets(context_.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         prog.drawSet = set;
         prog.drawBindingKey = std::move(key);
@@ -272,19 +350,27 @@ bool WebGLVkContext::bindProgramResources(VkCommandBuffer cmd, VkProgramResource
 }
 
 // Everything a draw needs bound before its vkCmdDraw*: the render pass, the
-// pipeline for the current state, viewport/scissor, descriptors and vertex
+// pipeline for the current state, dynamic state, descriptors and vertex
 // buffers. Returns false (with the GL error set) when the draw cannot happen.
-bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog) {
+bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog, DrawShape& shape) {
+    if (rasterizerDiscardEnabled_ && !shape.feedback) {
+        // Nothing reaches the framebuffer: the draw only has its errors.
+        PipelineKey key{};
+        std::vector<VkBuffer> vbos;
+        std::vector<VkDeviceSize> offsets;
+        bindVertexInputs(prog, shape, key, vbos, offsets);
+        return false;
+    }
     beginRendering();
     if (!inRenderPass_) return false;
     VkCommandBuffer cmd = commands();
 
     PipelineKey key{};
     VkExtent2D extent{};
-    buildPipelineKey(mode, prog, key, extent);
+    buildPipelineKey(mode, prog, shape, key, extent);
     std::vector<VkBuffer> vbos;
     std::vector<VkDeviceSize> offsets;
-    bindVertexInputs(prog, key, vbos, offsets);
+    if (!bindVertexInputs(prog, shape, key, vbos, offsets)) return false;
 
     VkPipeline pipeline = pipelineCache_.getOrCreatePipeline(key, prog.pipelineLayout);
     if (pipeline == VK_NULL_HANDLE) {
@@ -292,110 +378,26 @@ bool WebGLVkContext::prepareDraw(GLenum mode, VkProgramResource& prog) {
         setSyntheticError(GL_INVALID_OPERATION);
         return false;
     }
+    if (!bindProgramResources(cmd, prog, shape)) return false;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    // The canvas is drawn top-down (a negative viewport height maps GL's
-    // bottom-up NDC onto it); a framebuffer object in GL's own row order.
-    const bool flipped = pass_.topDown;
-    const FragmentPush push = flipped ? FragmentPush{static_cast<float>(extent.height), -1.0f} : FragmentPush{};
+    const FragmentPush push =
+        pass_.topDown ? FragmentPush{static_cast<float>(extent.height), -1.0f} : FragmentPush{};
     vkCmdPushConstants(cmd, prog.pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-
-    VkViewport vp{};
-    vp.x = viewport_.x;
-    vp.y = flipped ? static_cast<float>(extent.height) - viewport_.y : viewport_.y;
-    vp.width = viewport_.width;
-    vp.height = flipped ? -viewport_.height : viewport_.height;
-    vp.minDepth = 0.0f;
-    vp.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-
-    VkRect2D sc{};
-    if (scissorTest_) {
-        int32_t x0 = std::max(0, scissor_.offset.x);
-        int32_t top = scissorTop(extent);
-        int32_t y0 = std::max(0, top);
-        int32_t x1 = std::min(static_cast<int32_t>(extent.width),
-                              scissor_.offset.x + static_cast<int32_t>(scissor_.extent.width));
-        int32_t y1 = std::min(static_cast<int32_t>(extent.height),
-                              top + static_cast<int32_t>(scissor_.extent.height));
-        sc.offset = {x0, y0};
-        sc.extent = {static_cast<uint32_t>(std::max(0, x1 - x0)), static_cast<uint32_t>(std::max(0, y1 - y0))};
-    } else {
-        sc.extent = extent;
+    if (!prog.iface.feedbackVaryings.empty()) {
+        const FeedbackPush capture = shape.feedback ? shape.feedbackPush : FeedbackPush{};
+        vkCmdPushConstants(cmd, prog.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, kFeedbackPushOffset,
+                           sizeof(capture), &capture);
     }
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-
-    if (!bindProgramResources(cmd, prog)) return false;
+    setDynamicState(cmd, extent);
+    // RASTERIZER_DISCARD while capturing: the vertex stage runs, no fragment
+    // does (an empty scissor; the pipeline keeps its fragment state).
+    if (rasterizerDiscardEnabled_) {
+        const VkRect2D none{};
+        vkCmdSetScissor(cmd, 0, 1, &none);
+    }
     if (!vbos.empty())
         vkCmdBindVertexBuffers(cmd, 0, static_cast<uint32_t>(vbos.size()), vbos.data(), offsets.data());
     return true;
-}
-
-void WebGLVkContext::drawArrays(GLenum mode, GLint first, GLsizei count) {
-    drawArraysInstanced(mode, first, count, 1);
-}
-
-void WebGLVkContext::drawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instanceCount) {
-    if (count <= 0 || instanceCount <= 0) return;
-    flushIfOverBudget();
-    VkProgramResource* prog = drawProgram("drawArrays");
-    if (!prog) return;
-    if (!prepareDraw(mode, *prog)) return;
-    vkCmdDraw(commands(), static_cast<uint32_t>(count), static_cast<uint32_t>(instanceCount),
-              static_cast<uint32_t>(first), 0);
-}
-
-void WebGLVkContext::drawElements(GLenum mode, GLsizei count, GLenum type, uintptr_t offset) {
-    drawElementsInstanced(mode, count, type, offset, 1);
-}
-
-void WebGLVkContext::drawElementsInstanced(GLenum mode, GLsizei count, GLenum type,
-                                          uintptr_t offset, GLsizei instanceCount) {
-    if (count <= 0 || instanceCount <= 0) return;
-    flushIfOverBudget();
-    if (currentProgramId_ == 0) {
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-
-    GLuint iboId = vaos_[currentVaoId_].elementArrayBufferId;
-    if (iboId == 0) {
-        LOG_ERROR("WebGLVkContext: drawElements called with no element array buffer bound");
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    auto iboIt = buffers_.find(iboId);
-    if (iboIt == buffers_.end() || !iboIt->second.isValid()) {
-        LOG_ERROR("WebGLVkContext: Bound element array buffer %u is invalid", iboId);
-        setSyntheticError(GL_INVALID_OPERATION);
-        return;
-    }
-    VkProgramResource* prog = drawProgram("drawElements");
-    if (!prog) return;
-
-    // Vulkan has no 8-bit indices (without an extension): widen them into
-    // this draw's own slice of the upload ring.
-    VkBuffer indexBuf = iboIt->second.buffer;
-    VkDeviceSize indexOffset = offset;
-    VkIndexType idxType = (type == GL_UNSIGNED_SHORT) ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-    if (type == GL_UNSIGNED_BYTE) {
-        const auto& shadow = iboIt->second.shadowData;
-        if (offset + static_cast<size_t>(count) > shadow.size()) {
-            setSyntheticError(GL_INVALID_OPERATION);
-            return;
-        }
-        render::UploadSlice slice = stage(nullptr, static_cast<VkDeviceSize>(count) * sizeof(uint16_t), 4);
-        if (!slice) return;
-        auto* expanded = static_cast<uint16_t*>(slice.mapped);
-        for (GLsizei i = 0; i < count; ++i) expanded[i] = shadow[offset + i];
-        indexBuf = slice.buffer;
-        indexOffset = slice.offset;
-        idxType = VK_INDEX_TYPE_UINT16;
-    }
-
-    if (!prepareDraw(mode, *prog)) return;
-    VkCommandBuffer cmd = commands();
-    vkCmdBindIndexBuffer(cmd, indexBuf, indexOffset, idxType);
-    vkCmdDrawIndexed(cmd, static_cast<uint32_t>(count), static_cast<uint32_t>(instanceCount), 0, 0, 0);
 }
 
 } // namespace bro::webgl::vk

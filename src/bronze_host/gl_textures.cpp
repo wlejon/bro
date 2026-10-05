@@ -133,14 +133,90 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
     return {};
 }
 
+
+// Resolve a DOM source and hand its pixels to `upload` straight away (the
+// pointer may be heap-borrowed); INVALID_VALUE when it has none.
+template <typename Upload>
+void uploadSource(webgl::WebGL2RenderingContext* c, Value source, const char* who, Upload&& upload) {
+    SourcePixels src = resolveSource(source, who);
+    if (!src) {
+        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    // Nothing between resolveSource and the upload allocates on the bronze
+    // heap, which keeps an ImageData-backed pointer valid.
+    if (src.disturbedGlState) live(c)->restoreState();
+    upload(src);
+}
+
+// The bytes of a typed-array (or ArrayBuffer) upload source from element
+// `srcOffset` on. A srcOffset past the end is INVALID_VALUE (`rangeError`).
+struct ViewBytes {
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    bool rangeError = false;
+    explicit operator bool() const { return data != nullptr; }
+};
+
+ViewBytes viewBytes(webgl::WebGL2RenderingContext* c, Value v, Value srcOffset) {
+    ViewBytes out;
+    const uint8_t* data = nullptr;
+    size_t len = 0, elemSize = 1;
+    if (!ev::typedArrayInfo(v) || !bufferBytes(v, &data, &len, &elemSize)) return out;
+    const size_t offset = ev::isUndefined(srcOffset) ? 0 : static_cast<size_t>(ev::toDouble(srcOffset));
+    if (offset > len / elemSize) {
+        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        out.rangeError = true;
+        return out;
+    }
+    out.data = data + offset * elemSize;
+    out.size = len - offset * elemSize;
+    // A zero-length view still names client memory, not "no data".
+    if (out.size == 0) out.data = data;
+    return out;
+}
+
+// A compressed upload's view at `index`, then srcOffset and
+// srcLengthOverride in elements.
+ViewBytes compressedView(webgl::WebGL2RenderingContext* c, std::span<const Value> a, size_t index) {
+    const uint8_t* data = nullptr;
+    size_t len = 0, elemSize = 1;
+    ViewBytes out;
+    if (!bufferBytes(argAt(a, index), &data, &len, &elemSize)) {
+        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        return out;
+    }
+    const size_t elemCount = len / elemSize;
+    const size_t srcOffset = a.size() > index + 1 && !ev::isUndefined(a[index + 1]) ? u32At(a, index + 1) : 0;
+    const bool hasOverride = a.size() > index + 2 && !ev::isUndefined(a[index + 2]);
+    const size_t override = hasOverride ? u32At(a, index + 2) : 0;
+    if (srcOffset > elemCount || (hasOverride && override > elemCount - srcOffset)) {
+        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        return out;
+    }
+    const size_t count = hasOverride ? override : elemCount - srcOffset;
+    out.data = data + srcOffset * elemSize;
+    out.size = count * elemSize;
+    return out;
+}
+
+// Pixels of a DOM source go to 2D images only: a 3D image from one is
+// refused, by name, rather than read as something it is not.
+void refuseDomSource3D(webgl::WebGL2RenderingContext* c, const char* who) {
+    LOG_ERROR("bronze_host: %s from a DOM source is not supported; upload a typed array", who);
+    live(c)->setSyntheticError(GL_INVALID_OPERATION);
+}
+
 }  // namespace
 
 void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("createTexture", 0, [c](Value, std::span<const Value>) {
-        return wrapGlObj(GlCell::Texture, live(c)->createTexture().id);
+        return glObject(c, GlCell::Texture, live(c)->createTexture().id);
     });
     b.def("deleteTexture", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteTexture({idOf(argAt(a, 0), GlCell::Texture)});
+        const GLuint id = idOf(argAt(a, 0), GlCell::Texture);
+        live(c)->deleteTexture({id});
+        forgetGlObject(c, GlCell::Texture, id);
         return ev::undefined();
     });
     b.def("bindTexture", 2, [c](Value, std::span<const Value> a) {
@@ -164,101 +240,71 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
-    // texImage2D(target, level, internalformat, width, height, border,
-    //            format, type, data|null). Data is a typed array or
-    // null/undefined; a 6-arg DOM-source call is a named refusal (above).
+    // texImage2D: the 6-arg DOM-source form, or the 9/10-arg form whose
+    // pixels are null, a PIXEL_UNPACK_BUFFER offset, a typed array (with
+    // WebGL 2's srcOffset), or a DOM source of the given size.
     b.def("texImage2D", 9, [c](Value, std::span<const Value> a) {
         // Short calls are padded to arity with undefined, so the 6-arg
         // DOM-source call announces itself by an OBJECT where the 9-arg form
-        // has `border` (a number). That is the whole overload discriminator,
-        // and it is exact: `border` is required to be 0 in both WebGL versions,
-        // so a number there is never a source and a source there is never a
-        // border.
+        // has `border` (a number, required to be 0).
         if (ev::isObject(argAt(a, 5))) {
-            // texImage2D(target, level, internalformat, format, type, source)
-            GLenum domTarget = u32At(a, 0);
-            GLint domLevel = i32At(a, 1);
-            GLint domInternalformat = i32At(a, 2);
-            GLenum domFormat = u32At(a, 3);
-            GLenum domType = u32At(a, 4);
-            SourcePixels src = resolveSource(argAt(a, 5), "texImage2D");
-            if (src) {
-                // Nothing between resolveSource and here allocates on the
-                // bronze heap, which is what keeps an ImageData-backed pointer
-                // valid; the context copies the bytes into the driver.
-                if (src.disturbedGlState) live(c)->restoreState();
-                live(c)->texImage2D(domTarget, domLevel, domInternalformat, src.width,
-                                    src.height, /*border=*/0, domFormat, domType, src.data);
-            } else {
-                live(c)->setSyntheticError(GL_INVALID_VALUE);
-            }
+            uploadSource(c, argAt(a, 5), "texImage2D", [&](const SourcePixels& src) {
+                live(c)->texImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), -1, -1, u32At(a, 3),
+                                          u32At(a, 4), src.data, static_cast<uint32_t>(src.width),
+                                          static_cast<uint32_t>(src.height));
+            });
             return ev::undefined();
         }
-        GLenum target = u32At(a, 0);
-        GLint level = i32At(a, 1);
-        GLint internalformat = i32At(a, 2);
-        GLsizei width = i32At(a, 3);
-        GLsizei height = i32At(a, 4);
-        GLint border = i32At(a, 5);
-        GLenum format = u32At(a, 6);
-        GLenum type = u32At(a, 7);
+        const GLenum target = u32At(a, 0), format = u32At(a, 6), type = u32At(a, 7);
+        const GLint level = i32At(a, 1), internalformat = i32At(a, 2), border = i32At(a, 5);
+        const GLsizei width = i32At(a, 3), height = i32At(a, 4);
         Value data = argAt(a, 8);
         if (ev::isUndefined(data) || ev::isNull(data)) {
-            live(c)->texImage2D(target, level, internalformat, width, height, border,
-                                format, type, nullptr);
+            live(c)->texImage2D(target, level, internalformat, width, height, border, format, type, nullptr, 0);
         } else if (ev::isNumber(data)) {
-            live(c)->texImage2DFromPBO(target, level, internalformat, width, height, border,
-                                       format, type, static_cast<GLintptr>(i64At(a, 8)));
-        } else if (auto info = ev::typedArrayInfo(data)) {
-            live(c)->texImage2D(target, level, internalformat, width, height, border,
-                                format, type, info.data);
+            live(c)->texImage2DFromPBO(target, level, internalformat, width, height, border, format, type,
+                                       static_cast<GLintptr>(i64At(a, 8)));
+        } else if (ViewBytes view = viewBytes(c, data, argAt(a, 9))) {
+            live(c)->texImage2D(target, level, internalformat, width, height, border, format, type, view.data,
+                                view.size);
+        } else if (!view.rangeError) {
+            uploadSource(c, data, "texImage2D", [&](const SourcePixels& src) {
+                live(c)->texImage2DSource(target, level, internalformat, width, height, format, type, src.data,
+                                          static_cast<uint32_t>(src.width), static_cast<uint32_t>(src.height));
+            });
         }
         return ev::undefined();
     });
 
-    // texSubImage2D(target, level, xoffset, yoffset, width, height, format,
-    //               type, data). Same typed-array-only stance.
+    // texSubImage2D: the 7-arg DOM-source form (three.js's default WebGL 2
+    // path: texStorage2D, then this), or the 9/10-arg form.
     b.def("texSubImage2D", 9, [c](Value, std::span<const Value> a) {
-        // Same padding logic as texImage2D above: the 7-arg DOM-source call
-        // puts its source at index 6, where the 9-arg form has `format`, a
-        // numeric enum. An object there is the 7-arg form.
-        //
-        // This is the overload three.js reaches on the WebGL2 path it takes by
-        // default: WebGLTextures allocates with texStorage2D and then fills
-        // level 0 with texSubImage2D(target, 0, 0, 0, format, type, image).
         if (ev::isObject(argAt(a, 6))) {
-            // texSubImage2D(target, level, xoffset, yoffset, format, type, source)
-            GLenum domTarget = u32At(a, 0);
-            GLint domLevel = i32At(a, 1);
-            GLint domX = i32At(a, 2);
-            GLint domY = i32At(a, 3);
-            GLenum domFormat = u32At(a, 4);
-            GLenum domType = u32At(a, 5);
-            SourcePixels src = resolveSource(argAt(a, 6), "texSubImage2D");
-            if (src) {
-                if (src.disturbedGlState) live(c)->restoreState();
-                live(c)->texSubImage2D(domTarget, domLevel, domX, domY, src.width,
-                                       src.height, domFormat, domType, src.data);
-            } else {
-                live(c)->setSyntheticError(GL_INVALID_VALUE);
-            }
+            uploadSource(c, argAt(a, 6), "texSubImage2D", [&](const SourcePixels& src) {
+                live(c)->texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1,
+                                             u32At(a, 4), u32At(a, 5), src.data, static_cast<uint32_t>(src.width),
+                                             static_cast<uint32_t>(src.height));
+            });
             return ev::undefined();
         }
-        GLenum target = u32At(a, 0);
-        GLint level = i32At(a, 1);
-        GLint xoffset = i32At(a, 2);
-        GLint yoffset = i32At(a, 3);
-        GLsizei width = i32At(a, 4);
-        GLsizei height = i32At(a, 5);
-        GLenum format = u32At(a, 6);
-        GLenum type = u32At(a, 7);
+        const GLenum target = u32At(a, 0), format = u32At(a, 6), type = u32At(a, 7);
+        const GLint level = i32At(a, 1), xoffset = i32At(a, 2), yoffset = i32At(a, 3);
+        const GLsizei width = i32At(a, 4), height = i32At(a, 5);
         Value data = argAt(a, 8);
         if (ev::isNumber(data)) {
-            live(c)->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height,
-                                          format, type, static_cast<GLintptr>(i64At(a, 8)));
-        } else if (auto info = ev::typedArrayInfo(data)) {
-            live(c)->texSubImage2D(target, level, xoffset, yoffset, width, height, format,
-                                   type, info.data);
+            live(c)->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height, format, type,
+                                          static_cast<GLintptr>(i64At(a, 8)));
+        } else if (ViewBytes view = viewBytes(c, data, argAt(a, 9))) {
+            live(c)->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, view.data,
+                                   view.size);
+        } else if (ev::isObject(data) && !view.rangeError) {
+            uploadSource(c, data, "texSubImage2D", [&](const SourcePixels& src) {
+                live(c)->texSubImage2DSource(target, level, xoffset, yoffset, width, height, format, type,
+                                             src.data, static_cast<uint32_t>(src.width),
+                                             static_cast<uint32_t>(src.height));
+            });
+        } else if (!view.rangeError) {
+            live(c)->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, nullptr, 0);
         }
         return ev::undefined();
     });
@@ -271,24 +317,42 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // The 3D family. Not an optional extra: WebGLState's constructor builds
     // its empty TEXTURE_2D_ARRAY / TEXTURE_3D textures with texImage3D, so a
-    // renderer cannot even be CONSTRUCTED without it — its absence was the
-    // first compiled WebGLRenderer's "undefined is not a function".
+    // renderer cannot even be CONSTRUCTED without it.
     b.def("texImage3D", 10, [c](Value, std::span<const Value> a) {
-        const uint8_t* data = nullptr;
-        size_t len = 0, elemSize = 1;
-        bufferBytes(argAt(a, 9), &data, &len, &elemSize);  // null pixels stay null
-        live(c)->texImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
-                            i32At(a, 4), i32At(a, 5), i32At(a, 6), u32At(a, 7),
-                            u32At(a, 8), data);
+        const GLenum target = u32At(a, 0), format = u32At(a, 7), type = u32At(a, 8);
+        const GLint level = i32At(a, 1), internalformat = i32At(a, 2), border = i32At(a, 6);
+        const GLsizei width = i32At(a, 3), height = i32At(a, 4), depth = i32At(a, 5);
+        Value data = argAt(a, 9);
+        if (ev::isUndefined(data) || ev::isNull(data)) {
+            live(c)->texImage3D(target, level, internalformat, width, height, depth, border, format, type, nullptr,
+                                0);
+        } else if (ev::isNumber(data)) {
+            live(c)->texImage3DFromPBO(target, level, internalformat, width, height, depth, border, format, type,
+                                       static_cast<GLintptr>(i64At(a, 9)));
+        } else if (ViewBytes view = viewBytes(c, data, argAt(a, 10))) {
+            live(c)->texImage3D(target, level, internalformat, width, height, depth, border, format, type,
+                                view.data, view.size);
+        } else if (!view.rangeError) {
+            refuseDomSource3D(c, "texImage3D");
+        }
         return ev::undefined();
     });
     b.def("texSubImage3D", 11, [c](Value, std::span<const Value> a) {
-        const uint8_t* data = nullptr;
-        size_t len = 0, elemSize = 1;
-        bufferBytes(argAt(a, 10), &data, &len, &elemSize);
-        live(c)->texSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
-                               i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7),
-                               u32At(a, 8), u32At(a, 9), data);
+        const GLenum target = u32At(a, 0), format = u32At(a, 8), type = u32At(a, 9);
+        const GLint level = i32At(a, 1), x = i32At(a, 2), y = i32At(a, 3), z = i32At(a, 4);
+        const GLsizei width = i32At(a, 5), height = i32At(a, 6), depth = i32At(a, 7);
+        Value data = argAt(a, 10);
+        if (ev::isNumber(data)) {
+            live(c)->texSubImage3DFromPBO(target, level, x, y, z, width, height, depth, format, type,
+                                          static_cast<GLintptr>(i64At(a, 10)));
+        } else if (ViewBytes view = viewBytes(c, data, argAt(a, 11))) {
+            live(c)->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, view.data,
+                                   view.size);
+        } else if (ev::isObject(data) && !view.rangeError) {
+            refuseDomSource3D(c, "texSubImage3D");
+        } else if (!view.rangeError) {
+            live(c)->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, nullptr, 0);
+        }
         return ev::undefined();
     });
     b.def("texStorage3D", 6, [c](Value, std::span<const Value> a) {
@@ -301,42 +365,51 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
-    // Compressed uploads, with the WebGL2 srcOffset/srcLengthOverride tail in
-    // ELEMENT units of the source view.
+    // Compressed uploads: a view (with the WebGL 2 srcOffset /
+    // srcLengthOverride tail, in elements), or imageSize + a byte offset
+    // into the bound PIXEL_UNPACK_BUFFER.
     b.def("compressedTexImage2D", 7, [c](Value, std::span<const Value> a) {
-        const uint8_t* data = nullptr;
-        size_t len = 0, elemSize = 1;
-        if (bufferBytes(argAt(a, 6), &data, &len, &elemSize)) {
-            size_t elemCount = len / elemSize;
-            size_t srcOffset = static_cast<size_t>(u32At(a, 7));
-            if (srcOffset > elemCount) srcOffset = elemCount;
-            size_t count = elemCount - srcOffset;
-            if (a.size() >= 9 && !ev::isUndefined(a[8])) {
-                size_t l = static_cast<size_t>(u32At(a, 8));
-                if (l < count) count = l;
-            }
-            live(c)->compressedTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2),
-                                          i32At(a, 3), i32At(a, 4), i32At(a, 5),
-                                          data + srcOffset * elemSize, count * elemSize);
+        if (ev::isNumber(argAt(a, 6))) {
+            live(c)->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), 1,
+                                               i32At(a, 5), i32At(a, 6), static_cast<GLintptr>(i64At(a, 7)),
+                                               false);
+        } else if (ViewBytes view = compressedView(c, a, 6)) {
+            live(c)->compressedTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                          i32At(a, 5), view.data, view.size);
         }
         return ev::undefined();
     });
     b.def("compressedTexSubImage2D", 8, [c](Value, std::span<const Value> a) {
-        const uint8_t* data = nullptr;
-        size_t len = 0, elemSize = 1;
-        if (bufferBytes(argAt(a, 7), &data, &len, &elemSize)) {
-            size_t elemCount = len / elemSize;
-            size_t srcOffset = static_cast<size_t>(u32At(a, 8));
-            if (srcOffset > elemCount) srcOffset = elemCount;
-            size_t count = elemCount - srcOffset;
-            if (a.size() >= 10 && !ev::isUndefined(a[9])) {
-                size_t l = static_cast<size_t>(u32At(a, 9));
-                if (l < count) count = l;
-            }
-            live(c)->compressedTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2),
-                                             i32At(a, 3), i32At(a, 4), i32At(a, 5),
-                                             u32At(a, 6), data + srcOffset * elemSize,
-                                             count * elemSize);
+        if (ev::isNumber(argAt(a, 7))) {
+            live(c)->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), 0,
+                                                  i32At(a, 4), i32At(a, 5), 1, u32At(a, 6), i32At(a, 7),
+                                                  static_cast<GLintptr>(i64At(a, 8)), false);
+        } else if (ViewBytes view = compressedView(c, a, 7)) {
+            live(c)->compressedTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                             i32At(a, 5), u32At(a, 6), view.data, view.size);
+        }
+        return ev::undefined();
+    });
+    b.def("compressedTexImage3D", 8, [c](Value, std::span<const Value> a) {
+        if (ev::isNumber(argAt(a, 7))) {
+            live(c)->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                               i32At(a, 5), i32At(a, 6), i32At(a, 7),
+                                               static_cast<GLintptr>(i64At(a, 8)), true);
+        } else if (ViewBytes view = compressedView(c, a, 7)) {
+            live(c)->compressedTexImage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                          i32At(a, 5), i32At(a, 6), view.data, view.size);
+        }
+        return ev::undefined();
+    });
+    b.def("compressedTexSubImage3D", 10, [c](Value, std::span<const Value> a) {
+        if (ev::isNumber(argAt(a, 9))) {
+            live(c)->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                                  i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), i32At(a, 9),
+                                                  static_cast<GLintptr>(i64At(a, 10)), true);
+        } else if (ViewBytes view = compressedView(c, a, 9)) {
+            live(c)->compressedTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                             i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), view.data,
+                                             view.size);
         }
         return ev::undefined();
     });
@@ -347,17 +420,24 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
     b.def("copyTexSubImage2D", 8, [c](Value, std::span<const Value> a) {
-        live(c)->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
+        live(c)->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
                                    i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
+        return ev::undefined();
+    });
+    b.def("copyTexSubImage3D", 9, [c](Value, std::span<const Value> a) {
+        live(c)->copyTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                   i32At(a, 5), i32At(a, 6), i32At(a, 7), i32At(a, 8));
         return ev::undefined();
     });
 
     // --- WebGLSampler ---
     b.def("createSampler", 0, [c](Value, std::span<const Value>) {
-        return wrapSampler(live(c)->createSampler());
+        return glObject(c, GlCell::Sampler, live(c)->createSampler().id);
     });
     b.def("deleteSampler", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteSampler(samplerOf(argAt(a, 0)));
+        const webgl::WebGLSampler s = samplerOf(argAt(a, 0));
+        live(c)->deleteSampler(s);
+        forgetGlObject(c, GlCell::Sampler, s.id);
         return ev::undefined();
     });
     b.def("bindSampler", 2, [c](Value, std::span<const Value> a) {

@@ -80,6 +80,18 @@ public:
     bool wideLines() const { return deviceFeatures_.wideLines == VK_TRUE; }
     /// Point sizes other than 1 (enabled whenever the device has them).
     bool largePoints() const { return deviceFeatures_.largePoints == VK_TRUE; }
+    /// The core features the device was created with.
+    const VkPhysicalDeviceFeatures& features() const { return deviceFeatures_; }
+    /// Instance-rate vertex divisors other than 1 (VK_EXT_vertex_attribute_divisor).
+    bool vertexAttributeDivisor() const { return vertexAttributeDivisor_; }
+    /// Primitive restart in list topologies (VK_EXT_primitive_topology_list_restart).
+    bool primitiveListRestart() const { return listRestart_; }
+    /// 2D views of a 3D image's slices, to render into them (false only on
+    /// portability-subset devices without imageView2DOn3DImage).
+    bool imageView2DOn3D() const { return imageView2DOn3D_; }
+    /// Depth-compare samplers (false only on portability-subset devices
+    /// without mutableComparisonSamplers).
+    bool comparisonSamplers() const { return mutableComparisonSamplers_; }
 
     VulkanQueue& queue() { return queue_; }
     VulkanFrames& frames() { return frames_; }
@@ -121,6 +133,10 @@ public:
                      uint32_t mipLevels = 1, uint32_t arrayLayers = 1,
                      VkImageCreateFlags flags = 0,
                      VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
+
+    /// Any image (3D, mutable, ...) in pooled memory.
+    bool createImage(const VkImageCreateInfo& info, VkMemoryPropertyFlags properties, VkImage& image,
+                     VkDeviceMemory& memory, VkDeviceSize& outOffset, uint64_t& outAllocId);
 
     void destroyImage(VkImage image, uint64_t allocId);
 
@@ -195,6 +211,10 @@ private:
 
     uint32_t apiVersion_ = 0;
     bool synchronization2_ = false;
+    bool vertexAttributeDivisor_ = false;
+    bool listRestart_ = false;
+    bool imageView2DOn3D_ = true;
+    bool mutableComparisonSamplers_ = true;
 
     VkCommandPool commandPool_ = VK_NULL_HANDLE;  // single-time commands, guarded below
     mutable std::mutex commandPoolMutex_;

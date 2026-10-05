@@ -19,7 +19,7 @@ constexpr VkPipelineStageFlags kBufferReadStages =
     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
 constexpr VkAccessFlags kBufferReadAccess =
     VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
-    VK_ACCESS_TRANSFER_READ_BIT;
+    VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;  // transform feedback stores
 
 } // namespace
 
@@ -35,6 +35,7 @@ VkCommandBuffer WebGLVkContext::transferCommands() {
 void WebGLVkContext::flushCommands() {
     endRendering();
     stream_.submit();
+    queriesSubmitted();
 }
 
 void WebGLVkContext::flushIfOverBudget() {
@@ -60,13 +61,14 @@ render::UploadSlice WebGLVkContext::stage(const void* data, VkDeviceSize size, V
 
 void WebGLVkContext::uploadToBuffer(VkBufferResource& res, VkDeviceSize offset, const void* data,
                                     VkDeviceSize size) {
+    ++res.version;
     if (!res.isValid() || size == 0) return;
     flushIfOverBudget();
     render::UploadSlice staging = stage(data, size, 4);
     if (!staging) return;
     VkCommandBuffer cmd = transferCommands();
     render::cmdBufferBarrier(cmd, res.buffer, offset, size,
-                             kBufferReadStages, VK_ACCESS_TRANSFER_WRITE_BIT,
+                             kBufferReadStages, VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
     VkBufferCopy region{staging.offset, offset, size};
     vkCmdCopyBuffer(cmd, staging.buffer, res.buffer, 1, &region);
@@ -76,11 +78,66 @@ void WebGLVkContext::uploadToBuffer(VkBufferResource& res, VkDeviceSize offset, 
 }
 
 void WebGLVkContext::transitionTexture(VkCommandBuffer cmd, VkTextureResource& tex, VkImageLayout layout) {
-    if (!tex.isValid() || tex.currentLayout == layout) return;
-    const VkImageSubresourceRange range{render::imageAspectFor(tex.format), 0, tex.mipLevels, 0,
-                                        tex.arrayLayers};
-    render::cmdTransitionImage(cmd, tex.image, range, tex.currentLayout, layout);
-    tex.currentLayout = layout;
+    transitionTextureRange(cmd, tex, 0, tex.mipLevels, 0, tex.arrayLayers, layout);
+}
+
+// One barrier per run of layers sharing a layout, all in one call; a range
+// in one layout throughout (the usual case) is one barrier.
+void WebGLVkContext::transitionTextureRange(VkCommandBuffer cmd, VkTextureResource& tex, uint32_t level,
+                                            uint32_t levelCount, uint32_t layer, uint32_t layerCount,
+                                            VkImageLayout layout) {
+    if (!tex.isValid() || levelCount == 0 || layerCount == 0) return;
+    const VkImageAspectFlags aspect = render::imageAspectFor(tex.format);
+    const uint32_t layers = tex.arrayLayers;
+    auto at = [&](uint32_t l, uint32_t i) -> VkImageLayout& { return tex.layouts[static_cast<size_t>(l) * layers + i]; };
+
+    std::vector<VkImageMemoryBarrier> barriers;
+    VkPipelineStageFlags srcStages = 0, dstStages = 0;
+    auto barrier = [&](VkImageLayout old, uint32_t l, uint32_t lc, uint32_t i, uint32_t ic) {
+        if (old == layout) return;
+        const render::LayoutUsage src = render::layoutUsage(old, /*asSource=*/true);
+        const render::LayoutUsage dst = render::layoutUsage(layout, /*asSource=*/false);
+        srcStages |= src.stages;
+        dstStages |= dst.stages;
+        VkImageMemoryBarrier b{};
+        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        b.srcAccessMask = src.access;
+        b.dstAccessMask = dst.access;
+        b.oldLayout = old;
+        b.newLayout = layout;
+        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = tex.image;
+        b.subresourceRange = {aspect, l, lc, i, ic};
+        barriers.push_back(b);
+    };
+
+    const VkImageLayout first = at(level, layer);
+    bool uniform = true;
+    for (uint32_t l = level; uniform && l < level + levelCount; ++l)
+        for (uint32_t i = layer; i < layer + layerCount; ++i)
+            if (at(l, i) != first) {
+                uniform = false;
+                break;
+            }
+    if (uniform) {
+        barrier(first, level, levelCount, layer, layerCount);
+    } else {
+        for (uint32_t l = level; l < level + levelCount; ++l) {
+            for (uint32_t i = layer; i < layer + layerCount;) {
+                const VkImageLayout old = at(l, i);
+                uint32_t j = i + 1;
+                while (j < layer + layerCount && at(l, j) == old) ++j;
+                barrier(old, l, 1, i, j - i);
+                i = j;
+            }
+        }
+    }
+    for (uint32_t l = level; l < level + levelCount; ++l)
+        for (uint32_t i = layer; i < layer + layerCount; ++i) at(l, i) = layout;
+    if (!barriers.empty())
+        vkCmdPipelineBarrier(cmd, srcStages, dstStages, 0, 0, nullptr, 0, nullptr,
+                             static_cast<uint32_t>(barriers.size()), barriers.data());
 }
 
 void WebGLVkContext::releaseBuffer(VkBufferResource& res) {
@@ -100,34 +157,23 @@ void WebGLVkContext::releaseTexture(VkTextureResource& tex) {
     render::VulkanContext* ctx = &context_;
     VkDevice dev = context_.device();
     VkImage image = tex.image;
-    VkImageView view = tex.view;
-    std::vector<VkImageView> attachments;
-    for (const auto& [key, v] : tex.attachmentViews) attachments.push_back(v);
+    std::vector<VkImageView> views;
+    for (const auto& [key, v] : tex.sampledViews) views.push_back(v);
+    for (const auto& [key, v] : tex.attachmentViews) views.push_back(v);
     uint64_t allocId = tex.allocId;
-    releaseSampler(tex.sampler);
-    if (image != VK_NULL_HANDLE || view != VK_NULL_HANDLE || !attachments.empty()) {
-        stream_.defer([ctx, dev, image, view, attachments = std::move(attachments), allocId] {
-            for (VkImageView v : attachments) vkDestroyImageView(dev, v, nullptr);
-            if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
+    if (image != VK_NULL_HANDLE || !views.empty()) {
+        stream_.defer([ctx, dev, image, views = std::move(views), allocId] {
+            for (VkImageView v : views) vkDestroyImageView(dev, v, nullptr);
             if (image != VK_NULL_HANDLE) ctx->destroyImage(image, allocId);
         });
     }
     tex.image = VK_NULL_HANDLE;
     tex.memory = VK_NULL_HANDLE;
-    tex.view = VK_NULL_HANDLE;
+    tex.sampledViews.clear();
     tex.attachmentViews.clear();
+    tex.layouts.clear();
     tex.allocId = 0;
     tex.offset = 0;
-    tex.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    tex.samplerDirty = true;
-}
-
-void WebGLVkContext::releaseSampler(VkSampler& sampler) {
-    if (sampler == VK_NULL_HANDLE) return;
-    VkDevice dev = context_.device();
-    VkSampler dead = sampler;
-    stream_.defer([dev, dead] { vkDestroySampler(dev, dead, nullptr); });
-    sampler = VK_NULL_HANDLE;
 }
 
 void* WebGLVkContext::readbackMemory(VkDeviceSize size) {
@@ -197,7 +243,9 @@ void WebGLVkContext::beginRendering() {
     info.pColorAttachments = colors.data();
     info.pDepthAttachment = target.depth ? &depth : nullptr;
     info.pStencilAttachment = target.stencil ? &stencil : nullptr;
+    prepareOcclusionSlot(cmd);
     vkCmdBeginRendering(cmd, &info);
+    beginOcclusionSlot(cmd);
     pass_ = target;
     inRenderPass_ = true;
 }
@@ -205,6 +253,7 @@ void WebGLVkContext::beginRendering() {
 void WebGLVkContext::endRendering() {
     if (!inRenderPass_) return;
     VkCommandBuffer cmd = stream_.commands();
+    endOcclusionSlot(cmd);
     vkCmdEndRendering(cmd);
     inRenderPass_ = false;
 

@@ -1,6 +1,7 @@
 // What a sampler reads when no complete texture is bound to its unit: GL
 // returns (0, 0, 0, 1). Vulkan needs a real descriptor of the right view type
-// and component kind, so the context keeps 1x1 images of each.
+// and component kind, so the context keeps 1x1 images of each; a shadow
+// sampler reads a depth image through a comparison that always fails.
 
 #include "webgl/vulkan/webgl_vk_context.h"
 #include "render/vulkan_util.h"
@@ -10,9 +11,10 @@ namespace bro::webgl::vk {
 
 namespace {
 
-constexpr VkFormat kPlaceholderFormats[3] = {
-    VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SINT, VK_FORMAT_R8G8B8A8_UINT,
+constexpr VkFormat kPlaceholderFormats[4] = {
+    VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SINT, VK_FORMAT_R8G8B8A8_UINT, VK_FORMAT_D16_UNORM,
 };
+constexpr size_t kDepthPlaceholder = 3;
 
 bool createImage(render::VulkanContext& context, VkImageType type, VkFormat format, uint32_t layers,
                  VkImageCreateFlags flags, VkImage& image, VkDeviceMemory& memory) {
@@ -52,16 +54,21 @@ VkImageView createView(VkDevice dev, VkImage image, VkImageViewType type, VkForm
     info.image = image;
     info.viewType = type;
     info.format = format;
-    info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+    info.subresourceRange = {render::imageAspectFor(format), 0, 1, 0, layers};
     VkImageView view = VK_NULL_HANDLE;
     if (vkCreateImageView(dev, &info, nullptr, &view) != VK_SUCCESS) return VK_NULL_HANDLE;
     return view;
 }
 
-void recordClear(VkCommandBuffer cmd, VkImage image, uint32_t layers, const VkClearColorValue& value) {
-    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+void recordClear(VkCommandBuffer cmd, VkImage image, VkFormat format, uint32_t layers, const VkClearColorValue& value) {
+    const VkImageSubresourceRange range{render::imageAspectFor(format), 0, 1, 0, layers};
     render::cmdTransitionImage(cmd, image, range, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
+    if (range.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT) {
+        vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &range);
+    } else {
+        const VkClearDepthStencilValue depth{0.0f, 0};
+        vkCmdClearDepthStencilImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &depth, 1, &range);
+    }
     render::cmdTransitionImage(cmd, image, range, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
@@ -77,18 +84,21 @@ void WebGLVkContext::createPlaceholders() {
         VkClearColorValue value{};
         if (kind == 0) value.float32[3] = 1.0f;
         else value.uint32[3] = 1;
+        const bool depth = kind == kDepthPlaceholder;  // no 3D shadow samplers
         if (!createImage(context_, VK_IMAGE_TYPE_2D, format, 6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT, p.layered,
                          p.layeredMemory) ||
-            !createImage(context_, VK_IMAGE_TYPE_3D, format, 1, 0, p.volume, p.volumeMemory)) {
+            (!depth && !createImage(context_, VK_IMAGE_TYPE_3D, format, 1, 0, p.volume, p.volumeMemory))) {
             LOG_ERROR("WebGLVkContext: failed to create placeholder textures");
             continue;
         }
         p.views[0] = createView(dev, p.layered, VK_IMAGE_VIEW_TYPE_2D, format, 1);
         p.views[1] = createView(dev, p.layered, VK_IMAGE_VIEW_TYPE_2D_ARRAY, format, 1);
         p.views[2] = createView(dev, p.layered, VK_IMAGE_VIEW_TYPE_CUBE, format, 6);
-        p.views[3] = createView(dev, p.volume, VK_IMAGE_VIEW_TYPE_3D, format, 1);
-        recordClear(cmd, p.layered, 6, value);
-        recordClear(cmd, p.volume, 1, value);
+        recordClear(cmd, p.layered, format, 6, value);
+        if (!depth) {
+            p.views[3] = createView(dev, p.volume, VK_IMAGE_VIEW_TYPE_3D, format, 1);
+            recordClear(cmd, p.volume, format, 1, value);
+        }
     }
 
     // Nearest filtering: an integer view cannot be sampled linearly.
@@ -101,6 +111,12 @@ void WebGLVkContext::createPlaceholders() {
     sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     if (vkCreateSampler(dev, &sampler, nullptr, &placeholderSampler_) != VK_SUCCESS)
         LOG_ERROR("WebGLVkContext: failed to create the placeholder sampler");
+    // Only where shadow samplers can link (see linkProgram).
+    sampler.compareEnable = VK_TRUE;
+    sampler.compareOp = VK_COMPARE_OP_NEVER;
+    if (context_.comparisonSamplers() &&
+        vkCreateSampler(dev, &sampler, nullptr, &placeholderShadowSampler_) != VK_SUCCESS)
+        LOG_ERROR("WebGLVkContext: failed to create the placeholder shadow sampler");
 }
 
 void WebGLVkContext::destroyPlaceholders() {
@@ -115,7 +131,9 @@ void WebGLVkContext::destroyPlaceholders() {
         p = Placeholder{};
     }
     if (placeholderSampler_ != VK_NULL_HANDLE) vkDestroySampler(dev, placeholderSampler_, nullptr);
+    if (placeholderShadowSampler_ != VK_NULL_HANDLE) vkDestroySampler(dev, placeholderShadowSampler_, nullptr);
     placeholderSampler_ = VK_NULL_HANDLE;
+    placeholderShadowSampler_ = VK_NULL_HANDLE;
 }
 
 VkImageView WebGLVkContext::placeholderView(GLenum samplerType) const {
@@ -127,6 +145,9 @@ VkImageView WebGLVkContext::placeholderView(GLenum samplerType) const {
         case GL_UNSIGNED_INT_SAMPLER_2D: case GL_UNSIGNED_INT_SAMPLER_3D: case GL_UNSIGNED_INT_SAMPLER_CUBE:
         case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
             kind = 2;
+            break;
+        case GL_SAMPLER_2D_SHADOW: case GL_SAMPLER_2D_ARRAY_SHADOW: case GL_SAMPLER_CUBE_SHADOW:
+            kind = kDepthPlaceholder;
             break;
         default: break;
     }

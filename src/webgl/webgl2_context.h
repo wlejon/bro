@@ -18,14 +18,45 @@ namespace bro::webgl::vk { class WebGLVkContext; }
 
 namespace bro::webgl {
 
-GLint translateInternalFormat(GLint internalformat, GLenum type);
-int bytesPerPixel(GLenum format, GLenum type);
 
-/// WebGL2RenderingContext — maps WebGL2 API calls to raw OpenGL 3.3 or Vulkan.
-///
-/// Owns a dedicated FBO (OpenGL) or offscreen VkImage (Vulkan) that serves as the WebGL canvas.
-/// The rendered result is composited into the window by WebGLScene or VulkanPresenter.
-class WebGL2RenderingContext {
+/// The front end's own per-context state, beside the backend's: object
+/// tracking, pixel store, the first pending WebGL error, and the bindings it
+/// answers getters from. A context restored after a loss starts it again.
+struct WebGL2FrontState {
+    std::unordered_set<GLuint> validBuffers_;
+    std::unordered_set<GLuint> validPrograms_;
+    std::unordered_set<GLuint> validShaders_;
+    std::unordered_set<GLuint> validFramebuffers_;
+    std::unordered_set<GLuint> validRenderbuffers_;
+    std::unordered_set<GLuint> validVAOs_;
+    std::unordered_set<GLuint> validSamplers_;
+    std::unordered_set<GLsync> validSyncs_;
+
+    // pixelStorei state
+    GLint unpackAlignment_ = 4;
+    GLint packAlignment_ = 4;
+    GLboolean unpackFlipY_ = GL_FALSE;
+    GLboolean unpackPremultiplyAlpha_ = GL_FALSE;
+    GLint unpackColorspace_ = 0x9244; // BROWSER_DEFAULT_WEBGL
+
+    // First pending WebGL-level error (returned by getError before real GL errors)
+    GLenum syntheticError_ = 0; // GL_NO_ERROR
+
+    GLint sViewport_[4] = {0, 0, 0, 0};
+    GLint sScissorBox_[4] = {0, 0, 0, 0};
+    GLuint sProgram_ = 0;
+    GLuint sVAO_ = 0;
+    GLuint sArrayBuf_ = 0;
+    GLuint sElementBuf_ = 0;
+    GLuint sPixelPack_ = 0;
+    GLuint sPixelUnpack_ = 0;
+    bool sScissorTest_ = false;
+};
+
+/// WebGL2RenderingContext — maps WebGL2 API calls onto the Vulkan backend
+/// (vk::WebGLVkContext), which owns the offscreen VkImage that serves as the
+/// WebGL canvas; the engine composites it into the window.
+class WebGL2RenderingContext : private WebGL2FrontState {
 public:
     WebGL2RenderingContext(int width, int height, render::VulkanContext* vkContext = nullptr);
     ~WebGL2RenderingContext();
@@ -216,14 +247,16 @@ public:
     void deleteQuery(WebGLQuery q);
     void beginQuery(GLenum target, WebGLQuery q);
     void endQuery(GLenum target);
-    GLuint getQueryParameteru(WebGLQuery q, GLenum pname);
+    WebGLQuery currentQuery(GLenum target);  // getQuery(target, CURRENT_QUERY)
+    /// QUERY_RESULT / QUERY_RESULT_AVAILABLE; false (with the GL error) for
+    /// a query that has none.
+    bool getQueryParameter(WebGLQuery q, GLenum pname, GLuint& out);
     GLboolean isQuery(WebGLQuery q);
 
     // --- Transform feedback (WebGL2) ---
-    /// TF *objects* are ARB_transform_feedback2 (core in GL 4.0, an extension
-    /// on 3.3 hardware — universal on desktop drivers). Everything else
-    /// (begin/end/varyings, the default TF object) is core GL 3.0.
-    bool transformFeedbackObjectsSupported() const;
+    /// False when the device cannot capture (createTransformFeedback then
+    /// answers no object).
+    bool transformFeedbackSupported() const;
     WebGLTransformFeedback createTransformFeedback();
     void deleteTransformFeedback(WebGLTransformFeedback tf);
     void bindTransformFeedback(GLenum target, WebGLTransformFeedback tf);
@@ -234,12 +267,16 @@ public:
     void transformFeedbackVaryings(WebGLProgram program,
                                    const std::vector<std::string>& varyings,
                                    GLenum bufferMode);
-    WebGLActiveInfo getTransformFeedbackVarying(WebGLProgram program, GLuint index);
+    /// False (with INVALID_VALUE) for an index past the program's varyings.
+    bool getTransformFeedbackVarying(WebGLProgram program, GLuint index, WebGLActiveInfo& out);
     GLboolean isTransformFeedback(WebGLTransformFeedback tf);
-    bool transformFeedbackActive() const { return tfActive_; }
-    bool transformFeedbackPaused() const { return tfPaused_; }
+    bool transformFeedbackActive() const;
+    bool transformFeedbackPaused() const;
+    WebGLTransformFeedback boundTransformFeedback() const;
 
-    /// getIndexedParameter numeric rows (indexed buffer-range queries).
+    /// getIndexedParameter: the buffer at TRANSFORM_FEEDBACK_BUFFER or
+    /// UNIFORM_BUFFER binding `index`, and the numeric rows (*_START, *_SIZE).
+    WebGLBuffer indexedBuffer(GLenum target, GLuint index);
     int64_t getIndexedParameterInt64(GLenum pname, GLuint index);
 
     // --- Pixel buffer objects (WebGL2) ---
@@ -247,6 +284,13 @@ public:
     GLuint pixelUnpackBuffer() const { return sPixelUnpack_; }
     /// Byte size of the buffer bound at `target` (0 when none bound).
     int64_t boundBufferSize(GLenum target);
+    /// getBufferParameter / getVertexAttrib / getUniform: false (with the GL
+    /// error) for an invalid query.
+    bool getBufferParameter(GLenum target, GLenum pname, GLint& out);
+    bool getVertexAttrib(GLuint index, GLenum pname, GLValue& out);
+    GLintptr getVertexAttribOffset(GLuint index, GLenum pname);
+    bool getUniform(WebGLProgram program, WebGLUniformLocation loc, GLValue& out);
+    void validateProgram(WebGLProgram program);
     /// readPixels into the bound PIXEL_PACK_BUFFER at a byte offset.
     /// Bounds-checks the offset against the PBO size (same no-overflow
     /// guarantee as the client-memory path) and records synthetic errors.
@@ -262,20 +306,24 @@ public:
                               GLint xoffset, GLint yoffset,
                               GLsizei width, GLsizei height,
                               GLenum format, GLenum type, GLintptr offset);
+    void texImage3DFromPBO(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
+                           GLsizei depth, GLint border, GLenum format, GLenum type, GLintptr offset);
+    void texSubImage3DFromPBO(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                              GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
+                              GLintptr offset);
 
     // --- Copies (framebuffer -> texture) ---
     void copyTexImage2D(GLenum target, GLint level, GLenum internalformat,
                         GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
     void copyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                            GLint x, GLint y, GLsizei width, GLsizei height);
+    void copyTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                           GLint x, GLint y, GLsizei width, GLsizei height);
 
     // --- Compressed textures ---
-    /// Formats exposed via the driver's real extension support (probed at
-    /// context creation). Desktop GL 3.3 has no ETC2 — S3TC/RGTC/BPTC only.
-    const std::vector<GLint>& compressedTextureFormats() const { return compressedFormats_; }
-    bool isCompressedFormatSupported(GLenum format) const;
-    /// Both validate block-size math against dataLen before touching the
-    /// driver (the no-overread guarantee for client memory).
+    /// COMPRESSED_TEXTURE_FORMATS: the formats of the enabled compressed
+    /// texture extensions, each one the device samples natively.
+    std::vector<GLint> compressedTextureFormats() const;
     void compressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
                               GLsizei width, GLsizei height, GLint border,
                               const void* data, size_t dataLen);
@@ -283,6 +331,19 @@ public:
                                  GLint xoffset, GLint yoffset,
                                  GLsizei width, GLsizei height, GLenum format,
                                  const void* data, size_t dataLen);
+    void compressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
+                              GLsizei depth, GLint border, const void* data, size_t dataLen);
+    void compressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                 GLsizei width, GLsizei height, GLsizei depth, GLenum format, const void* data,
+                                 size_t dataLen);
+    /// The compressed uploads from the bound PIXEL_UNPACK_BUFFER: `size`
+    /// bytes at byte `offset`.
+    void compressedTexImageFromPBO(GLenum target, GLint level, GLenum internalformat, GLsizei width,
+                                   GLsizei height, GLsizei depth, GLint border, GLsizei size, GLintptr offset,
+                                   bool is3D);
+    void compressedTexSubImageFromPBO(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                      GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei size,
+                                      GLintptr offset, bool is3D);
 
     // --- VAO ---
     WebGLVertexArrayObject createVertexArray();
@@ -390,20 +451,32 @@ public:
     void activeTexture(GLenum texture);
     void texParameteri(GLenum target, GLenum pname, GLint param);
     void texParameterf(GLenum target, GLenum pname, GLfloat param);
+    /// getTexParameter: false (with the GL error) for an invalid query.
+    bool getTexParameter(GLenum target, GLenum pname, TexParameterValue& out);
+    // Uploads carry the client bytes and how many there are (WebGL raises
+    // INVALID_OPERATION for too few); null pixels define zeros.
     void texImage2D(GLenum target, GLint level, GLint internalformat,
                     GLsizei width, GLsizei height, GLint border,
-                    GLenum format, GLenum type, const void* pixels);
+                    GLenum format, GLenum type, const void* pixels, size_t size);
     void texSubImage2D(GLenum target, GLint level,
                        GLint xoffset, GLint yoffset,
                        GLsizei width, GLsizei height,
-                       GLenum format, GLenum type, const void* pixels);
+                       GLenum format, GLenum type, const void* pixels, size_t size);
     void texImage3D(GLenum target, GLint level, GLint internalformat,
                     GLsizei width, GLsizei height, GLsizei depth, GLint border,
-                    GLenum format, GLenum type, const void* pixels);
+                    GLenum format, GLenum type, const void* pixels, size_t size);
     void texSubImage3D(GLenum target, GLint level,
                        GLint xoffset, GLint yoffset, GLint zoffset,
                        GLsizei width, GLsizei height, GLsizei depth,
-                       GLenum format, GLenum type, const void* pixels);
+                       GLenum format, GLenum type, const void* pixels, size_t size);
+    /// A decoded DOM source (Image, canvas, video, ImageBitmap, ImageData):
+    /// tightly packed RGBA8, top row first. width/height < 0 take its size.
+    void texImage2DSource(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
+                          GLenum format, GLenum type, const uint8_t* rgba, uint32_t srcWidth,
+                          uint32_t srcHeight);
+    void texSubImage2DSource(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
+                             GLsizei height, GLenum format, GLenum type, const uint8_t* rgba,
+                             uint32_t srcWidth, uint32_t srcHeight);
     void generateMipmap(GLenum target);
     void texStorage2D(GLenum target, GLsizei levels, GLenum internalformat,
                       GLsizei width, GLsizei height);
@@ -481,10 +554,7 @@ public:
     WebGLVertexArrayObject currentVertexArray() const { return {sVAO_}; }
     WebGLTexture boundTexture(GLenum target) const;
     WebGLSampler boundSampler(GLuint unit) const;
-    WebGLTransformFeedback boundTransformFeedback() const { return {sTransformFeedback_}; }
-    GLuint activeTextureUnit() const {
-        return (sActiveTex_ >= GL_TEXTURE0 && sActiveTex_ < GL_TEXTURE0 + 32) ? (sActiveTex_ - GL_TEXTURE0) : 0;
-    }
+    GLuint activeTextureUnit() const;
 
     // --- Object predicates (WebGL is* semantics: false for deleted names,
     //     false before first bind for gen-style objects — matches GL) ---
@@ -499,54 +569,33 @@ public:
     // --- Misc ---
     void flush();
     void finish();
-    void hint(GLenum /*target*/, GLenum /*mode*/) {}
+    void hint(GLenum target, GLenum mode);
+    void sampleCoverage(GLfloat value, GLboolean invert);
+
+    // --- Context loss (WEBGL_lose_context) ---
+    // A lost context has no backend: every call is a no-op answering its
+    // zero value, and getError reports CONTEXT_LOST_WEBGL once. The engine
+    // fires the canvas's webglcontextlost / webglcontextrestored events.
+    enum class ContextEvent : uint8_t { None, Lost, Restored };
+    bool isContextLost() const { return lost_; }
+    void loseContext();
+    void restoreContext();
+    /// The context event the engine owes the canvas, taken once. Taking
+    /// Restored is what restores: a fresh backend, every object gone.
+    ContextEvent takeContextEvent();
+    /// The lost event was not cancelled: restoreContext may not restore.
+    void forbidRestore() { restoreAllowed_ = false; }
+
+    /// Nothing to re-apply: the Vulkan backend keeps no state in a shared
+    /// device context. Kept for the compositor's call after it draws.
+    void restoreState();
 
 private:
-
     int width_;
     int height_;
 
     /// Which context's shadow state is live in the shared GL context.
     static WebGL2RenderingContext* current_;
-
-
-    // Object tracking
-    std::unordered_set<GLuint> validBuffers_;
-    std::unordered_set<GLuint> validTextures_;
-    std::unordered_set<GLuint> validPrograms_;
-    std::unordered_set<GLuint> validShaders_;
-    std::unordered_set<GLuint> validFramebuffers_;
-    std::unordered_set<GLuint> validRenderbuffers_;
-    std::unordered_set<GLuint> validVAOs_;
-    std::unordered_set<GLuint> validSamplers_;
-    std::unordered_set<GLuint> createdQueries_;
-    std::unordered_set<GLuint> validQueries_;
-    std::unordered_set<GLuint> deletedQueries_;
-    std::unordered_set<GLsync> validSyncs_;
-    std::unordered_set<GLuint> validTransformFeedbacks_;
-
-    // Live glMapBufferRange mappings, keyed by buffer id (see mapBufferRange).
-    // Almost always empty, and never large: GL 3.3 has no persistent mapping,
-    // so a mapping spans one update, not a frame.
-    std::unordered_map<GLuint, void*> mappedBuffers_;
-
-    // Transform feedback state (also drives the compositing handoff: an
-    // active TF is paused around engine GL work and resumed afterwards).
-    bool tfActive_ = false;
-    bool tfPaused_ = false;
-
-    // Compressed formats the driver actually supports (probed once).
-    std::vector<GLint> compressedFormats_;
-
-    // pixelStorei state
-    GLint unpackAlignment_ = 4;
-    GLint packAlignment_ = 4;
-    GLboolean unpackFlipY_ = GL_FALSE;
-    GLboolean unpackPremultiplyAlpha_ = GL_FALSE;
-    GLint unpackColorspace_ = 0x9244; // BROWSER_DEFAULT_WEBGL
-
-    // First pending WebGL-level error (returned by getError before real GL errors)
-    GLenum syntheticError_ = 0; // GL_NO_ERROR
 
     // Apply UNPACK_FLIP_Y_WEBGL / UNPACK_PREMULTIPLY_ALPHA_WEBGL to client
     // pixel data before upload. Returns the pointer to upload (either the
@@ -555,44 +604,16 @@ private:
                                       GLenum format, GLenum type,
                                       std::vector<uint8_t>& tmp) const;
 
-    // --- Shadow state for cheap save/restore around compositing ---
-public:
-    /// Re-apply all shadow-tracked GL state (call after compositing).
-    void restoreState();
-
-private:
-    // Tracked by our wrapper methods — no glGet* queries needed
-    GLfloat sClearR_ = 0, sClearG_ = 0, sClearB_ = 0, sClearA_ = 0;
-    GLint sViewport_[4] = {0, 0, 0, 0};
-    GLint sScissorBox_[4] = {0, 0, 0, 0};
-    GLuint sProgram_ = 0;
-    GLuint sVAO_ = 0;
-    GLuint sArrayBuf_ = 0;
-    GLuint sElementBuf_ = 0;
-    GLuint sPixelPack_ = 0;
-    GLuint sPixelUnpack_ = 0;
-    GLenum sActiveTex_ = GL_TEXTURE0;
-    GLuint sTex2D_[32] = {};      // per texture unit
-    GLuint sSampler_[32] = {};    // per texture unit (sampler objects)
-    GLint sBlendSrcRGB_ = GL_ONE, sBlendDstRGB_ = GL_ZERO;
-    GLint sBlendSrcA_ = GL_ONE, sBlendDstA_ = GL_ZERO;
-    GLenum sBlendEqRGB_ = GL_FUNC_ADD, sBlendEqA_ = GL_FUNC_ADD;
-    GLboolean sDepthMask_ = GL_TRUE;
-    GLboolean sColorMask_[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
-    GLenum sDepthFunc_ = GL_LESS;
-    GLenum sCullMode_ = GL_BACK;
-    GLenum sFrontFace_ = GL_CCW;
-    GLuint sTransformFeedback_ = 0;  // bound TF object (0 = default)
-    // Capability flags
-    bool sBlend_ = false;
-    bool sDepthTest_ = false;
-    bool sCullFace_ = false;
-    bool sScissorTest_ = false;
-    bool sStencilTest_ = false;
-    bool sRasterizerDiscard_ = false;
-
     std::vector<TeardownCallback> teardownCallbacks_;
     std::unique_ptr<vk::WebGLVkContext> vkCtx_;
+    render::VulkanContext* device_ = nullptr;  // what a restore builds the backend on
+
+    bool lost_ = false;
+    bool restoreAllowed_ = false;
+    bool lostErrorPending_ = false;  // getError's one CONTEXT_LOST_WEBGL
+    ContextEvent pendingEvent_ = ContextEvent::None;
+    GLuint nextObjectId_ = 1;        // the lost backend's, for the restored one
+
     inline static render::VulkanContext* defaultVulkanContext_ = nullptr;
 };
 

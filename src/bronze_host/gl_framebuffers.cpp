@@ -15,10 +15,12 @@ namespace bro::bronze_host {
 void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // --- Framebuffers ---
     b.def("createFramebuffer", 0, [c](Value, std::span<const Value>) {
-        return wrapGlObj(GlCell::Framebuffer, live(c)->createFramebuffer().id);
+        return glObject(c, GlCell::Framebuffer, live(c)->createFramebuffer().id);
     });
     b.def("deleteFramebuffer", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteFramebuffer({idOf(argAt(a, 0), GlCell::Framebuffer)});
+        const GLuint id = idOf(argAt(a, 0), GlCell::Framebuffer);
+        live(c)->deleteFramebuffer({id});
+        forgetGlObject(c, GlCell::Framebuffer, id);
         return ev::undefined();
     });
     b.def("bindFramebuffer", 2, [c](Value, std::span<const Value> a) {
@@ -166,10 +168,12 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // --- Renderbuffers ---
     b.def("createRenderbuffer", 0, [c](Value, std::span<const Value>) {
-        return wrapGlObj(GlCell::Renderbuffer, live(c)->createRenderbuffer().id);
+        return glObject(c, GlCell::Renderbuffer, live(c)->createRenderbuffer().id);
     });
     b.def("deleteRenderbuffer", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteRenderbuffer({idOf(argAt(a, 0), GlCell::Renderbuffer)});
+        const GLuint id = idOf(argAt(a, 0), GlCell::Renderbuffer);
+        live(c)->deleteRenderbuffer({id});
+        forgetGlObject(c, GlCell::Renderbuffer, id);
         return ev::undefined();
     });
     b.def("bindRenderbuffer", 2, [c](Value, std::span<const Value> a) {

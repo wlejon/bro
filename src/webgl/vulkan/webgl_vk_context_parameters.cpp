@@ -38,8 +38,8 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
         // --- Texture and framebuffer sizes ---
         case GL_MAX_TEXTURE_SIZE: return clampInt(L.maxImageDimension2D);
         case GL_MAX_CUBE_MAP_TEXTURE_SIZE: return clampInt(L.maxImageDimensionCube);
-        case 0x8073 /* GL_MAX_3D_TEXTURE_SIZE */: return clampInt(L.maxImageDimension3D);
-        case 0x88FF /* GL_MAX_ARRAY_TEXTURE_LAYERS */: return clampInt(L.maxImageArrayLayers);
+        case GL_MAX_3D_TEXTURE_SIZE: return clampInt(L.maxImageDimension3D);
+        case GL_MAX_ARRAY_TEXTURE_LAYERS: return clampInt(L.maxImageArrayLayers);
         case GL_MAX_RENDERBUFFER_SIZE:
             return clampInt(std::min({L.maxImageDimension2D, L.maxFramebufferWidth, L.maxFramebufferHeight}));
         case GL_MAX_DRAW_BUFFERS:
@@ -93,10 +93,12 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
             return clampInt(static_cast<uint64_t>(getParameterInt64(pname)));
         case GL_MAX_ELEMENTS_VERTICES:
         case GL_MAX_ELEMENTS_INDICES: return clampInt(L.maxDrawIndexedIndexValue);
-        // Transform feedback is not implemented: its limits are what it can hold.
-        case GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS:
+        // Transform feedback's ES 3.0 minimums, which the capturing vertex
+        // stage holds (0 where the device cannot capture).
+        case GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS: return transformFeedbackSupported() ? 64 : 0;
         case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS:
-        case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS: return 0;
+            return transformFeedbackSupported() ? static_cast<GLint>(kMaxFeedbackBuffers) : 0;
+        case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS: return transformFeedbackSupported() ? 4 : 0;
 
         // --- Framebuffer state ---
         case GL_RED_BITS: case GL_GREEN_BITS: case GL_BLUE_BITS: case GL_ALPHA_BITS:
@@ -135,6 +137,8 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
                                       ? static_cast<GLint>(target.samples) : 0;
             return pname == GL_SAMPLES ? samples : (samples > 0 ? 1 : 0);
         }
+        case GL_GENERATE_MIPMAP_HINT: return static_cast<GLint>(generateMipmapHint_);
+        case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: return static_cast<GLint>(derivativeHint_);
         case GL_IMPLEMENTATION_COLOR_READ_FORMAT:
         case GL_IMPLEMENTATION_COLOR_READ_TYPE: {
             Surface s;
@@ -145,11 +149,9 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
                 setSyntheticError(GL_INVALID_OPERATION);
                 return 0;
             }
-            const bool integer = isIntegerFormat(s.format);
-            if (pname == GL_IMPLEMENTATION_COLOR_READ_FORMAT) return integer ? GL_RGBA_INTEGER : GL_RGBA;
-            if (integer) return isSignedIntegerFormat(s.format) ? GL_INT : GL_UNSIGNED_INT;
-            const FormatBits bits = formatBits(s.format);
-            return bits.red == 8 || s.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ? GL_UNSIGNED_BYTE : GL_FLOAT;
+            GLenum format = 0, type = 0;
+            implementationReadFormat(s, format, type);
+            return static_cast<GLint>(pname == GL_IMPLEMENTATION_COLOR_READ_FORMAT ? format : type);
         }
         case GL_READ_BUFFER: return static_cast<GLint>(readBufferState());
 
@@ -164,8 +166,10 @@ GLint WebGLVkContext::getParameterInt(GLenum pname) {
         case 0x0B45 /* GL_CULL_FACE_MODE */: return cullFaceMode_;
         case 0x0B46 /* GL_FRONT_FACE */: return frontFaceMode_;
         case 0x84E0 /* GL_ACTIVE_TEXTURE */: return activeTextureUnit_ + GL_TEXTURE0;
-        case GL_UNPACK_ALIGNMENT: return unpackAlignment_;
-        case GL_PACK_ALIGNMENT: return packAlignment_;
+        case GL_UNPACK_ALIGNMENT: case GL_PACK_ALIGNMENT: case GL_UNPACK_ROW_LENGTH: case GL_UNPACK_IMAGE_HEIGHT:
+        case GL_UNPACK_SKIP_PIXELS: case GL_UNPACK_SKIP_ROWS: case GL_UNPACK_SKIP_IMAGES: case GL_PACK_ROW_LENGTH:
+        case GL_PACK_SKIP_PIXELS: case GL_PACK_SKIP_ROWS: case GL_UNPACK_COLORSPACE_CONVERSION_WEBGL:
+            return getPixelStorei(pname);
         case GL_STENCIL_WRITEMASK: return stencilWriteMaskFront_;
         case GL_STENCIL_BACK_WRITEMASK: return stencilWriteMaskBack_;
         case GL_STENCIL_CLEAR_VALUE: return clearStencil_;
@@ -214,9 +218,15 @@ int64_t WebGLVkContext::getParameterInt64(GLenum pname) {
 GLfloat WebGLVkContext::getParameterFloat(GLenum pname) {
     switch (pname) {
         case 0x0B73 /* GL_DEPTH_CLEAR_VALUE */: return clearDepth_;
-        case GL_LINE_WIDTH: return 1.0f;
+        case GL_LINE_WIDTH: return lineWidth_;
+        case GL_POLYGON_OFFSET_FACTOR: return polygonOffsetFactor_;
+        case GL_POLYGON_OFFSET_UNITS: return polygonOffsetUnits_;
         case GL_MAX_TEXTURE_LOD_BIAS: return context_.deviceProperties().limits.maxSamplerLodBias;
-        case 0x80AA /* GL_SAMPLE_COVERAGE_VALUE */: return 1.0f;
+        case GL_SAMPLE_COVERAGE_VALUE: return sampleCoverageValue_;
+        case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
+            if (context_.features().samplerAnisotropy) return context_.deviceProperties().limits.maxSamplerAnisotropy;
+            setSyntheticError(GL_INVALID_ENUM);
+            return 0.0f;
         default: return 0.0f;
     }
 }
@@ -233,6 +243,7 @@ GLboolean WebGLVkContext::getParameterBool(GLenum pname) {
     if (pname == 0x8C89 /* GL_RASTERIZER_DISCARD */) return rasterizerDiscardEnabled_ ? GL_TRUE : GL_FALSE;
     if (pname == 0x809E /* GL_SAMPLE_ALPHA_TO_COVERAGE */) return sampleAlphaToCoverageEnabled_ ? GL_TRUE : GL_FALSE;
     if (pname == 0x80A0 /* GL_SAMPLE_COVERAGE */) return sampleCoverageEnabled_ ? GL_TRUE : GL_FALSE;
+    if (pname == GL_SAMPLE_COVERAGE_INVERT) return sampleCoverageInvert_ ? GL_TRUE : GL_FALSE;
     return GL_FALSE;
 }
 
@@ -271,10 +282,12 @@ void WebGLVkContext::getParameterFloat2(GLenum pname, GLfloat* out) {
         out[0] = 1.0f;
         out[1] = context_.largePoints() ? L.pointSizeRange[1] : 1.0f;
     } else if (pname == GL_ALIASED_LINE_WIDTH_RANGE) {
-        out[0] = 1.0f;  // lines are always one pixel wide
-        out[1] = 1.0f;
-    } else if (pname == 0x0B70 /* GL_DEPTH_RANGE */) {
-        out[1] = 1.0f;
+        // Wide lines need the wideLines feature (MoltenVK has none).
+        out[0] = 1.0f;
+        out[1] = context_.wideLines() ? context_.deviceProperties().limits.lineWidthRange[1] : 1.0f;
+    } else if (pname == GL_DEPTH_RANGE) {
+        out[0] = depthNear_;
+        out[1] = depthFar_;
     }
 }
 
@@ -282,6 +295,8 @@ void WebGLVkContext::getParameterFloat4(GLenum pname, GLfloat* out) {
     out[0] = out[1] = out[2] = out[3] = 0.0f;
     if (pname == 0x0C22 /* GL_COLOR_CLEAR_VALUE */) {
         for (int i = 0; i < 4; ++i) out[i] = clearColor_[i];
+    } else if (pname == GL_BLEND_COLOR) {
+        for (int i = 0; i < 4; ++i) out[i] = blendColor_[i];
     }
 }
 

@@ -75,6 +75,9 @@ if (!gl) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, 64, 64);
     function draw() { gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); }
+    // The uvec4 input's constant must be set as unsigned: the default
+    // generic value is float, which WebGL 2 does not let a uvec4 read.
+    gl.vertexAttribI4ui(1, 0, 0, 0, 0);
 
     // =====================================================================
     // Scalar setters: uniform1ui + uniform2ui
@@ -122,14 +125,18 @@ if (!gl) {
     draw();
     assertPx(px(32, 32), 255, 0, 255, 'vertexAttribI4uiv');
 
+    gl.vertexAttribI4ui(1, 64, 64, 255, 255);
+    draw();
+    assertPx(px(32, 32), 64, 64, 255, 'vertexAttribI4ui again');
+    assert(gl.getError() === gl.NO_ERROR, 'no error after constant uint attribs');
+
+    // WebGL 2 5.11: a constant of another kind than the input's (signed for
+    // a uvec4) makes the draw INVALID_OPERATION and leaves the pixels alone.
     gl.vertexAttribI4iv(1, [255, 255, 0, 255]); // plain array accepted
     draw();
-    assertPx(px(32, 32), 255, 255, 0, 'vertexAttribI4iv plain array');
-
-    gl.vertexAttribI4i(1, 64, 64, 255, 255);
-    draw();
-    assertPx(px(32, 32), 64, 64, 255, 'vertexAttribI4i');
-    assert(gl.getError() === gl.NO_ERROR, 'no error after constant int attribs');
+    assert(gl.getError() === gl.INVALID_OPERATION, 'vertexAttribI4iv into a uvec4 input is INVALID_OPERATION');
+    assertPx(px(32, 32), 64, 64, 255, 'the mismatched draw drew nothing');
+    gl.vertexAttribI4ui(1, 64, 64, 255, 255);
 
     console.log('webgl uint tests passed');
 }
