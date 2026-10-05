@@ -309,7 +309,7 @@ void installHeadlessTestHooks(engine::Engine& engine) {
 
         ObjectBuilder out;
         out.set("graph", ev::fromBool(el->sceneGraph() != nullptr));
-        out.set("fboTexture", ev::fromDouble(static_cast<double>(el->sceneGraphFBOTexture())));
+        out.set("layer", ev::fromBool(el->sceneLayerReady()));
         return out.get();
     });
 

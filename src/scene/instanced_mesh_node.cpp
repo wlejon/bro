@@ -1,6 +1,5 @@
 #include "scene/instanced_mesh_node.h"
 #include "scene/scene_graph.h"
-#include "scene/gpu_upload_stats.h"
 #include "util/log.h"
 
 #include <bromesh/manipulation/normals.h>
@@ -15,9 +14,6 @@ namespace bro::scene {
 
 InstancedMeshNode::InstancedMeshNode(const std::string& name) : SceneNode(name) {}
 
-InstancedMeshNode::~InstancedMeshNode() {
-    releaseGL();
-}
 
 static void ensureTangents(bromesh::MeshData& m) {
     if (m.hasUVs() && m.hasNormals() && !m.hasTangents())
@@ -27,7 +23,8 @@ static void ensureTangents(bromesh::MeshData& m) {
 void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
     mesh_ = mesh;
     ensureTangents(mesh_);
-    meshDirty_ = true;
+    hasVertexColors_ = mesh_.hasColors();
+    geometryGeneration_ = nextResourceGeneration();
     batchDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
@@ -38,7 +35,8 @@ void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
 void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
     mesh_ = std::move(mesh);
     ensureTangents(mesh_);
-    meshDirty_ = true;
+    hasVertexColors_ = mesh_.hasColors();
+    geometryGeneration_ = nextResourceGeneration();
     batchDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
@@ -58,19 +56,20 @@ void InstancedMeshNode::setStaticBatch(bool b) {
     if (staticBatch_ == b) return;
     staticBatch_ = b;
     batchDirty_ = true;
-    meshDirty_ = true;       // the uploaded mesh switches between mesh_/batchMesh_
-    instancesDirty_ = true;  // and the instance buffer between N rows and 1
     if (!b) batchMesh_.clear();
     bumpChangeGeneration();
+}
+
+void InstancedMeshNode::instancesChanged() {
+    batchDirty_ = true;
+    instanceBoundsDirty_ = true;
+    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
 
 void InstancedMeshNode::setInstances(const float* data, size_t count) {
     instanceData_.assign(data, data + count * 16);
     instanceCount_ = count;
-    instancesDirty_ = true;
-    batchDirty_ = true;
-    instanceBoundsDirty_ = true;
-    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
+    instancesChanged();
 }
 
 void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t count) {
@@ -108,19 +107,13 @@ void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t c
         float idxClamped = variantIdx < 0.0f ? 0.0f : (variantIdx > 255.0f ? 255.0f : variantIdx);
         o[15] = (idxClamped + 0.5f) / 256.0f;
     }
-    instancesDirty_ = true;
-    batchDirty_ = true;
-    instanceBoundsDirty_ = true;
-    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
+    instancesChanged();
 }
 
 void InstancedMeshNode::updateInstance(size_t i, const float* data16) {
     if (i >= instanceCount_) return;
     std::memcpy(instanceData_.data() + i * 16, data16, sizeof(float) * 16);
-    instancesDirty_ = true;
-    batchDirty_ = true;
-    instanceBoundsDirty_ = true;
-    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
+    instancesChanged();
 }
 
 void InstancedMeshNode::setScatterSegments(const float* segData, size_t segCount,
@@ -136,7 +129,6 @@ void InstancedMeshNode::setScatterSegments(const float* segData, size_t segCount
     scatterParams_ = params;
     scatterBounds_.min = {boundsMin[0], boundsMin[1], boundsMin[2]};
     scatterBounds_.max = {boundsMax[0], boundsMax[1], boundsMax[2]};
-    scatterDirty_ = true;
     bumpChangeGeneration();
 }
 
@@ -151,74 +143,26 @@ void InstancedMeshNode::setTubeSegments(const float* segData, size_t segCount,
     tubeRadiusScale_ = radiusScale;
     tubeBounds_.min = {boundsMin[0], boundsMin[1], boundsMin[2]};
     tubeBounds_.max = {boundsMax[0], boundsMax[1], boundsMax[2]};
-    tubeDirty_ = true;
     bumpChangeGeneration();
 }
 
-void InstancedMeshNode::releaseGL() {
-    vao_ = 0;
-    vbo_ = 0;
-    ibo_ = 0;
-    instVbo_ = 0;
-    segTex_ = 0;
-    segBuf_ = 0;
-    instSegTex_ = 0;
-    instSegBuf_ = 0;
-    tubeTex_ = 0;
-    tubeBuf_ = 0;
-    tubeVao_ = 0;
-    texture_ = 0;
-    normalTex_ = 0;
-    mrTex_ = 0;
-    aoTex_ = 0;
-    emissiveTex_ = 0;
-    indexCount_ = 0;
-    instVboCapacity_ = 0;
-}
-
-static void stage(InstancedMeshNode::PendingTex& p, int w, int h, const uint8_t* rgba) {
-    if (w <= 0 || h <= 0 || !rgba) {
-        p.data.clear();
-        p.w = 0;
-        p.h = 0;
-    } else {
-        p.data.assign(rgba, rgba + (size_t)w * (size_t)h * 4);
-        p.w = w;
-        p.h = h;
-    }
-    p.dirty = true;
-}
-
-void InstancedMeshNode::setBaseColorTexture(int w, int h, const uint8_t* rgba) { stage(pendingBase_, w, h, rgba); }
-void InstancedMeshNode::clearBaseColorTexture() { stage(pendingBase_, 0, 0, nullptr); }
-void InstancedMeshNode::setNormalTexture(int w, int h, const uint8_t* rgba) { stage(pendingNormal_, w, h, rgba); }
-void InstancedMeshNode::clearNormalTexture() { stage(pendingNormal_, 0, 0, nullptr); }
-void InstancedMeshNode::setMetallicRoughnessTexture(int w, int h, const uint8_t* rgba) { stage(pendingMR_, w, h, rgba); }
-void InstancedMeshNode::clearMetallicRoughnessTexture() { stage(pendingMR_, 0, 0, nullptr); }
-void InstancedMeshNode::setOcclusionTexture(int w, int h, const uint8_t* rgba) { stage(pendingAO_, w, h, rgba); }
-void InstancedMeshNode::clearOcclusionTexture() { stage(pendingAO_, 0, 0, nullptr); }
-void InstancedMeshNode::setEmissiveTexture(int w, int h, const uint8_t* rgba) { stage(pendingEmissive_, w, h, rgba); }
-void InstancedMeshNode::clearEmissiveTexture() { stage(pendingEmissive_, 0, 0, nullptr); }
-
-// Upload mipmaps that preserve alpha-tested coverage. Without this, a
-// sparse alpha-cutout atlas (foliage cards, sprites, decals) loses its
-// thresholded silhouette as LOD increases — the box-filter average of
-// many transparent pixels falls below the cutoff and the cutout vanishes
-// entirely. Castano's technique: pick a per-level alpha scale so each
-// mip's coverage at cutoff 0.5 matches level 0's. For fully-opaque
-// textures this collapses to scale = 1, so it's a safe default for all
-static void flushTex(InstancedMeshNode::PendingTex& p, GLuint& glTex) {
-    (void)glTex;
-    p.dirty = false;
-}
-
+void InstancedMeshNode::setBaseColorTexture(int w, int h, const uint8_t* rgba) { baseColorTex_.set(w, h, rgba); }
+void InstancedMeshNode::clearBaseColorTexture() { baseColorTex_.clear(); }
+void InstancedMeshNode::setNormalTexture(int w, int h, const uint8_t* rgba) { normalTex_.set(w, h, rgba); }
+void InstancedMeshNode::clearNormalTexture() { normalTex_.clear(); }
+void InstancedMeshNode::setMetallicRoughnessTexture(int w, int h, const uint8_t* rgba) { mrTex_.set(w, h, rgba); }
+void InstancedMeshNode::clearMetallicRoughnessTexture() { mrTex_.clear(); }
+void InstancedMeshNode::setOcclusionTexture(int w, int h, const uint8_t* rgba) { aoTex_.set(w, h, rgba); }
+void InstancedMeshNode::clearOcclusionTexture() { aoTex_.clear(); }
+void InstancedMeshNode::setEmissiveTexture(int w, int h, const uint8_t* rgba) { emissiveTex_.set(w, h, rgba); }
+void InstancedMeshNode::clearEmissiveTexture() { emissiveTex_.clear(); }
 
 // Bake mesh_ + instanceData_ into batchMesh_: one copy of the mesh per
 // instance, transformed into node space, with the instance RGB tint folded
 // into vertex colours and the atlas cell folded into UVs, all merged. The
 // draw then renders batchMesh_ as a single identity instance (see
 // setStaticBatch). O(total verts); only runs when batchDirty_ && renderingBatched.
-void InstancedMeshNode::rebuildStaticBatch() {
+void InstancedMeshNode::rebuildStaticBatch() const {
     batchDirty_ = false;
     batchMesh_.clear();
     if (mesh_.empty() || instanceCount_ == 0) return;
@@ -273,54 +217,6 @@ void InstancedMeshNode::rebuildStaticBatch() {
     }
     batchMesh_ = bromesh::mergeMeshes(parts);
     ensureTangents(batchMesh_);
-    meshDirty_ = true;       // batchMesh_ must be (re)uploaded
-    instancesDirty_ = true;  // single identity instance row
-}
-
-void InstancedMeshNode::uploadMeshToGPU() {
-    const bromesh::MeshData& M = renderingBatched() ? batchMesh_ : mesh_;
-    if (M.empty()) return;
-    hasVertexColors_ = M.hasColors();
-    indexCount_ = (GLsizei)M.indices.size();
-    meshDirty_ = false;
-
-    flushTex(pendingBase_,     texture_);
-    flushTex(pendingNormal_,   normalTex_);
-    flushTex(pendingMR_,       mrTex_);
-    flushTex(pendingAO_,       aoTex_);
-    flushTex(pendingEmissive_, emissiveTex_);
-}
-
-void InstancedMeshNode::uploadInstancesToGPU() {
-    instancesDirty_ = false;
-}
-
-void InstancedMeshNode::uploadScatterToGPU() {
-    scatterDirty_ = false;
-}
-
-bool InstancedMeshNode::drawScatter() {
-    return false;
-}
-
-void InstancedMeshNode::uploadTubeToGPU() {
-    tubeDirty_ = false;
-}
-
-bool InstancedMeshNode::drawTube() {
-    return false;
-}
-
-bool InstancedMeshNode::drawTubeDepth() {
-    return false;
-}
-
-void InstancedMeshNode::onRender(SceneGraph& graph) {
-    (void)graph;
-}
-
-bool InstancedMeshNode::drawRawInstanced() {
-    return false;
 }
 
 bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax[3]) const {
@@ -369,27 +265,12 @@ bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax
     }
 
     // Fold in the node's own parent-chain transform so this matches what
-    // actually renders (renderInstancedMeshNode applies the same
-    // worldMatrix()). Transforming the cached box is slightly looser than
+    // actually renders (the draw applies the same worldMatrix()). Transforming the cached box is slightly looser than
     // transforming every instance corner, but stays conservative.
     bromath::AABB3 wb = bromath::atransform(instanceBoundsCache_, worldMatrix());
     outMin[0] = wb.min.x; outMin[1] = wb.min.y; outMin[2] = wb.min.z;
     outMax[0] = wb.max.x; outMax[1] = wb.max.y; outMax[2] = wb.max.z;
     return true;
-}
-
-bool InstancedMeshNode::drawRawInstancedDepth() {
-    // Scatter nodes have no matching depth-only shadow VS (the shadow pipeline
-    // reads per-instance attributes the scatter path doesn't provide), so they
-    // don't cast shadows. Foliage sets castsShadow=false anyway.
-    if (scatterMode_) return false;
-    // Tube nodes cast shadows through their own tube-depth sub-pass, not the
-    // instanced depth path (they have no mesh/instance buffer to draw here).
-    if (tubeMode_) return false;
-    // Same VAO as the forward pass — the depth-only shader reads aPos
-    // (location 0) and the per-instance matrix attributes (8..10). Other
-    // vertex attributes are simply unused.
-    return drawRawInstanced();
 }
 
 } // namespace bro::scene

@@ -23,6 +23,7 @@
 
 #include "scene/graph_liveness.h"
 #include "scene/shade_map.h"
+#include "scene/texture_source.h"
 #include "tile/grid.h"
 #include "tile/coord.h"
 
@@ -348,7 +349,6 @@ private:
     bool shadeBinding(ShadeMapBinding& out);
     void attachShadeMap(MeshNode* node);
     void attachShadeMap(InstancedMeshNode* node);
-    void releaseShadeTexture();
 
     // Grid-local (no origin) XZ center of a cell; square cell-center or hex
     // pointy-top pixel center depending on grid_->topology().
@@ -409,18 +409,12 @@ private:
     std::unique_ptr<tile::TileGrid> grid_;
     std::vector<uint32_t> tint_;   // per-cell RGBA8, row-major; 0xFFFFFFFF = none
 
-    // Shade map: per-cell 0..255 (255 = untouched), the GL texture built from
-    // it, and the dirty rows still to upload.
+    // Shade map: per-cell 0..255 (255 = untouched) and the generation the
+    // renderer compares against its GPU copy (see shade_map.h).
     std::vector<uint8_t> shade_;
     bool shadeUsed_ = false;
-    unsigned shadeTex_ = 0;
-    int shadeTexW_ = 0, shadeTexH_ = 0;
-    int shadeDirtyY0_ = 0, shadeDirtyY1_ = -1;
-    void markShadeDirty(int y) {
-        if (shadeDirtyY1_ < shadeDirtyY0_) { shadeDirtyY0_ = shadeDirtyY1_ = y; return; }
-        if (y < shadeDirtyY0_) shadeDirtyY0_ = y;
-        if (y > shadeDirtyY1_) shadeDirtyY1_ = y;
-    }
+    uint64_t shadeGeneration_ = 0;
+    void markShadeDirty() { shadeGeneration_ = nextResourceGeneration(); }
 
     // Animation state
     std::vector<int>  animOf_;        // tile id -> animation index, or -1

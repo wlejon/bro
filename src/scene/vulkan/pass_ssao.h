@@ -1,77 +1,85 @@
 #pragma once
 
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_allocator.h"
-#include "scene/vulkan/scene_vk_pipeline.h"
-#include "scene/vulkan/scene_vk_descriptors.h"
+// Screen-space ambient occlusion, applied to indirect light only.
+//
+// While SSAO is on, the opaque scope carries a second colour attachment that
+// mesh.frag (and the terrain) fill with each surface's indirect light —
+// ambient plus probe reflection, after shade-map and fog. Then:
+//
+//   PassSSAO     estimates visibility at half resolution from the depth
+//                snapshot (hemisphere kernel, rotation noise) and blurs it
+//                separably, into its own R8 targets.
+//   PassAoApply  subtracts indirect * (1 - visibility) from the HDR colour,
+//                full-screen in the HDR scope, before decals, SSR and the
+//                translucents draw: direct light and emission keep their
+//                full value, and nothing drawn later is darkened.
+
+#include "scene/vulkan/scene_pass.h"
+#include "scene/vulkan/scene_vk_target_format.h"
+
 #include <vulkan/vulkan.h>
-#include <cstdint>
-#include <vector>
 
 namespace bro::scene::vk {
 
-struct SSAOUBOData {
-    float proj[16];
-    float invProj[16];
-    float kernel[16 * 4];
-    float params[4]; // x: radius, y: bias, z: noiseScaleX, w: noiseScaleY
-};
-
-class PassSSAO {
+class PassSSAO final : public ScenePass {
 public:
-    PassSSAO() = default;
-    ~PassSSAO();
+    const char* name() const override { return "ssao"; }
+    bool setup(SceneGpu& gpu) override;
+    void resize(SceneGpu& gpu, uint32_t width, uint32_t height) override;
+    bool active(const SceneFrame& frame) const override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
 
-    PassSSAO(const PassSSAO&) = delete;
-    PassSSAO& operator=(const PassSSAO&) = delete;
-
-    bool init(SceneVkDevice& device, SceneVkAllocator& allocator, uint32_t width, uint32_t height);
-    void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
-
-    bool resize(SceneVkDevice& device, SceneVkAllocator& allocator, uint32_t width, uint32_t height);
-
-    void render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                const SceneVkImage& depthImage,
-                const float* projMatrix,
-                const float* invProjMatrix,
-                float radius, float bias);
-
-    void applyAO(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                 VkImageView hdrTargetView,
-                 uint32_t width, uint32_t height,
-                 float intensity);
-
-    const SceneVkImage& aoImage() const { return ssaoTex_[0]; }
-    bool isValid() const { return ssaoTex_[0].isValid(); }
+    /// The blurred visibility of this frame (valid after record()).
+    SceneVkImage& visibility() { return ao_[0]; }
 
 private:
-    bool createPipelines(VkDevice device);
-    bool createNoiseTexture(SceneVkDevice& device, SceneVkAllocator& allocator);
+    struct Uniforms {
+        float proj[16];
+        float invProj[16];
+        float kernel[16 * 4];
+        float params[4];   // radius, bias, noise scale x, y
+    };
+
     void generateKernel();
-    bool createTargets(SceneVkAllocator& allocator, uint32_t width, uint32_t height);
-    void destroyTargets(SceneVkAllocator& allocator);
+    bool createNoise(SceneGpu& gpu);
+    void draw(SceneFrame& frame, SceneVkImage& target, VkPipeline pipeline, VkPipelineLayout layout,
+              VkDescriptorSet set, const float* push);
 
-    uint32_t aoWidth_ = 0;
-    uint32_t aoHeight_ = 0;
-
-    VkDescriptorSetLayout ssaoDescLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout ssaoPipelineLayout_ = VK_NULL_HANDLE;
+    SceneVkDevice* device_ = nullptr;
+    VkDescriptorSetLayout ssaoSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout ssaoLayout_ = VK_NULL_HANDLE;
     VkPipeline ssaoPipeline_ = VK_NULL_HANDLE;
-
-    VkDescriptorSetLayout blurDescLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout blurPipelineLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout blurSetLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout blurLayout_ = VK_NULL_HANDLE;
     VkPipeline blurPipeline_ = VK_NULL_HANDLE;
 
-    VkDescriptorSetLayout applyAoDescLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout applyAoPipelineLayout_ = VK_NULL_HANDLE;
-    VkPipeline applyAoPipeline_ = VK_NULL_HANDLE;
-
-    SceneVkImage noiseTex_;
-    SceneVkImage ssaoTex_[2]; // Half-res ping-pong textures
-    VkSampler pointClampSampler_ = VK_NULL_HANDLE;
-    VkSampler linearRepeatSampler_ = VK_NULL_HANDLE;
-
+    SceneVkImage noise_;
+    SceneVkImage ao_[2];   // half-res ping-pong
+    VkSampler clampSampler_ = VK_NULL_HANDLE;
     float kernel_[16 * 4] = {};
 };
 
-} // namespace bro::scene::vk
+class PassAoApply final : public ScenePass {
+public:
+    explicit PassAoApply(PassSSAO& ssao) : ssao_(ssao) {}
+
+    const char* name() const override { return "ao-apply"; }
+    bool setup(SceneGpu& gpu) override;
+    bool active(const SceneFrame& frame) const override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
+
+private:
+    PassSSAO& ssao_;
+    SceneVkDevice* device_ = nullptr;
+    VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    VkShaderModule vs_ = VK_NULL_HANDLE;
+    VkShaderModule fs_ = VK_NULL_HANDLE;
+    PipelineVariants pipelines_;
+};
+
+}  // namespace bro::scene::vk

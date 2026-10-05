@@ -1,6 +1,5 @@
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
-#include "scene/gpu_upload_stats.h"
 #include "util/log.h"
 
 #include <bromesh/analysis/bbox.h>
@@ -22,9 +21,7 @@ int MeshNode::maxUserTextures() {
 
 MeshNode::MeshNode(const std::string& name) : SceneNode(name) {}
 
-MeshNode::~MeshNode() {
-    releaseGL();
-}
+MeshNode::~MeshNode() = default;
 
 // Auto-populate tangents for normal mapping when the source geometry has the
 // prerequisites (UVs + normals) but no tangent stream. Cheap enough to run
@@ -39,7 +36,8 @@ static void ensureTangents(bromesh::MeshData& m) {
 void MeshNode::setMesh(const bromesh::MeshData& mesh) {
     mesh_ = mesh;
     ensureTangents(mesh_);
-    gpuDirty_ = true;
+    geometryGeneration_ = nextResourceGeneration();
+    if (lods_.empty()) hasVertexColors_ = mesh_.hasColors();
     bvhDirty_ = true;
     recomputeBounds();
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
@@ -48,7 +46,8 @@ void MeshNode::setMesh(const bromesh::MeshData& mesh) {
 void MeshNode::setMesh(bromesh::MeshData&& mesh) {
     mesh_ = std::move(mesh);
     ensureTangents(mesh_);
-    gpuDirty_ = true;
+    geometryGeneration_ = nextResourceGeneration();
+    if (lods_.empty()) hasVertexColors_ = mesh_.hasColors();
     bvhDirty_ = true;
     recomputeBounds();
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
@@ -84,12 +83,6 @@ void MeshNode::setLodMeshes(std::vector<LodLevel> levels) {
         LOG_WARN("setLodMeshes: not supported on skinned meshes (ignored)");
         return;
     }
-    // Stage the old chain's GL names for deletion on the GL thread.
-    for (auto& e : lods_) {
-        if (e.vao) deadLodVaos_.push_back(e.vao);
-        if (e.vbo) deadLodBufs_.push_back(e.vbo);
-        if (e.ibo) deadLodBufs_.push_back(e.ibo);
-    }
     lods_.clear();
     lods_.reserve(levels.size());
     for (auto& lv : levels) {
@@ -105,7 +98,8 @@ void MeshNode::setLodMeshes(std::vector<LodLevel> levels) {
                          return a.maxDist < b.maxDist;
                      });
     lodSelected_ = 0;
-    if (!lods_.empty()) hasVertexColors_ = lods_[0].hasColors;
+    hasVertexColors_ = lods_.empty() ? mesh_.hasColors() : lods_[0].hasColors;
+    geometryGeneration_ = nextResourceGeneration();
     recomputeBounds();
     bumpChangeGeneration();  // rendered geometry changed
 }
@@ -123,11 +117,6 @@ void MeshNode::selectLodByDistance(float d) {
     }
 }
 
-void MeshNode::flushDeadLodBuffers() {
-    deadLodVaos_.clear();
-    deadLodBufs_.clear();
-}
-
 const bromesh::MeshBVH& MeshNode::bvh() const {
     if (bvhDirty_) {
         bvh_ = bromesh::MeshBVH::build(mesh_);
@@ -136,118 +125,64 @@ const bromesh::MeshBVH& MeshNode::bvh() const {
     return bvh_;
 }
 
-void MeshNode::releaseGL() {
-    vao_ = 0;
-    vbo_ = 0;
-    ibo_ = 0;
-    for (auto& e : lods_) {
-        e.vao = 0;
-        e.vbo = 0;
-        e.ibo = 0;
-        e.indexCount = 0;
-        e.gpuDirty = true;
-    }
-    flushDeadLodBuffers();
-    texture_ = 0;
-    normalTex_ = 0;
-    mrTex_ = 0;
-    aoTex_ = 0;
-    emissiveTex_ = 0;
-    for (auto& t : userTextures_) {
-        t.tex = 0;
-    }
-    userTextures_.clear();
-    indexCount_ = 0;
-}
-
-static void stage(MeshNode::PendingTex& p, int w, int h, const uint8_t* rgba) {
-    if (w <= 0 || h <= 0 || !rgba) {
-        p.data.clear();
-        p.w = 0;
-        p.h = 0;
-    } else {
-        p.data.assign(rgba, rgba + (size_t)w * (size_t)h * 4);
-        p.w = w;
-        p.h = h;
-    }
-    p.dirty = true;
-}
-
 void MeshNode::setBaseColorTexture(int width, int height, const uint8_t* rgba) {
-    externalBaseColorTex_ = nullptr;  // owned bytes win; drop the live link
-    externalSceneProvider_ = nullptr;
-    stage(pendingBase_, width, height, rgba);
+    externalSceneProvider_ = nullptr;  // owned bytes win; drop the live link
+    baseColorTex_.set(width, height, rgba);
 }
 void MeshNode::clearBaseColorTexture() {
-    externalBaseColorTex_ = nullptr;
     externalSceneProvider_ = nullptr;
-    stage(pendingBase_, 0, 0, nullptr);
-}
-
-void MeshNode::setExternalBaseColorTexture(ExternalTextureProvider provider) {
-    externalBaseColorTex_ = std::move(provider);
-    // Stage a clear of the owned slot so a previously uploaded texture is
-    // deleted at the next flush — setters may run without a GL context
-    // current, so the delete cannot happen here.
-    stage(pendingBase_, 0, 0, nullptr);
+    baseColorTex_.clear();
 }
 
 void MeshNode::setNormalTexture(int width, int height, const uint8_t* rgba) {
-    stage(pendingNormal_, width, height, rgba);
+    normalTex_.set(width, height, rgba);
 }
-void MeshNode::clearNormalTexture() { stage(pendingNormal_, 0, 0, nullptr); }
+void MeshNode::clearNormalTexture() { normalTex_.clear(); }
 
 void MeshNode::setMetallicRoughnessTexture(int width, int height, const uint8_t* rgba) {
-    stage(pendingMR_, width, height, rgba);
+    mrTex_.set(width, height, rgba);
 }
-void MeshNode::clearMetallicRoughnessTexture() { stage(pendingMR_, 0, 0, nullptr); }
+void MeshNode::clearMetallicRoughnessTexture() { mrTex_.clear(); }
 
 void MeshNode::setOcclusionTexture(int width, int height, const uint8_t* rgba) {
-    stage(pendingAO_, width, height, rgba);
+    aoTex_.set(width, height, rgba);
 }
-void MeshNode::clearOcclusionTexture() { stage(pendingAO_, 0, 0, nullptr); }
+void MeshNode::clearOcclusionTexture() { aoTex_.clear(); }
 
 void MeshNode::setEmissiveTexture(int width, int height, const uint8_t* rgba) {
-    stage(pendingEmissive_, width, height, rgba);
+    emissiveTex_.set(width, height, rgba);
 }
-void MeshNode::clearEmissiveTexture() { stage(pendingEmissive_, 0, 0, nullptr); }
-
-static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
-    (void)glTex;
-    p.dirty = false;
-}
+void MeshNode::clearEmissiveTexture() { emissiveTex_.clear(); }
 
 bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
                                       int height, const float* data,
                                       bool mipmap, bool repeat,
                                       bool clampT, int channels) {
     const bool release = (width <= 0 || height <= 0 || !data);
-    for (auto& t : userTextures_) {
+    for (auto it = userTextures_.begin(); it != userTextures_.end(); ++it) {
+        UserTexture& t = *it;
         if (t.name != name) continue;
-        // A full upload replaces the whole image, so any sub-rect writes
-        // staged against the OLD contents are superseded — dropping them here
-        // is what keeps the flush order (full first, then subs) equivalent to
-        // the order the setters were called in.
+        if (release) {
+            // Dropping the slot frees the name for the budget; the renderer
+            // releases its GPU copy when it no longer sees the name.
+            userTextures_.erase(it);
+            bumpChangeGeneration();
+            return true;
+        }
+        // A full upload replaces the whole image, so sub-rect writes staged
+        // against the OLD contents are superseded, and a 2D upload onto what
+        // was an array slot turns it back into a plain 2D slot.
         t.subUpdates.clear();
-        // A 2D upload onto what was an array slot turns it back into a plain
-        // 2D slot; the flush sees the target change and recreates the name.
         t.sliceUpdates.clear();
         t.layers = 0;
-        if (release) {
-            t.data.clear();
-            t.data.shrink_to_fit();
-            t.w = t.h = 0;
-            t.channels = 1;
-        } else {
-            t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);
-            t.w = width;
-            t.h = height;
-            t.channels = channels;
-            t.mipmap = mipmap;
-            t.repeat = repeat;
-            t.clampT = clampT;
-        }
-        t.dirty = true;
+        t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);
+        t.w = width;
+        t.h = height;
+        t.channels = channels;
+        t.mipmap = mipmap;
+        t.repeat = repeat;
+        t.clampT = clampT;
+        t.generation = nextResourceGeneration();
         bumpChangeGeneration();
         return true;
     }
@@ -262,7 +197,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
     t.mipmap = mipmap;
     t.repeat = repeat;
     t.clampT = clampT;
-    t.dirty = true;
+    t.generation = nextResourceGeneration();
     userTextures_.push_back(std::move(t));
     bumpChangeGeneration();
     return true;
@@ -283,8 +218,6 @@ bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
                      "slices, not sub-rects (ignored)", name.c_str());
             return false;
         }
-        // Bound against the staged extent, not the GL texture: the slot may
-        // not have flushed yet, and t.w/t.h are the dimensions it WILL have.
         if (t.w <= 0 || t.h <= 0) {
             LOG_WARN("updateShaderTexture('%s'): slot has no dimensions yet — "
                      "set the full texture first (ignored)", name.c_str());
@@ -296,8 +229,16 @@ bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
                      name.c_str(), width, height, x, y, t.w, t.h);
             return false;
         }
+        // Keep the CPU image whole, so a later full rebuild of the GPU copy
+        // still carries this write.
+        const size_t ch = (size_t)t.channels;
+        for (int row = 0; row < height; ++row) {
+            const float* src = data + (size_t)row * width * ch;
+            float* dst = t.data.data() + (((size_t)(y + row) * t.w) + x) * ch;
+            std::copy(src, src + (size_t)width * ch, dst);
+        }
         UserTexture::SubUpdate s;
-        s.data.assign(data, data + (size_t)width * (size_t)height * (size_t)t.channels);
+        s.data.assign(data, data + (size_t)width * (size_t)height * ch);
         s.x = x; s.y = y; s.w = width; s.h = height;
         t.subUpdates.push_back(std::move(s));
         bumpChangeGeneration();
@@ -314,17 +255,11 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
                                            bool repeat, bool clampT) {
     const bool release = (width <= 0 || height <= 0 || layers <= 0);
     if (!release && (channels < 1 || channels > 4)) return false;
-    for (auto& t : userTextures_) {
+    for (auto it = userTextures_.begin(); it != userTextures_.end(); ++it) {
+        UserTexture& t = *it;
         if (t.name != name) continue;
         if (release) {
-            t.data.clear();
-            t.data.shrink_to_fit();
-            t.subUpdates.clear();
-            t.sliceUpdates.clear();
-            t.w = t.h = 0;
-            t.layers = 0;
-            t.channels = 1;
-            t.dirty = true;
+            userTextures_.erase(it);
             bumpChangeGeneration();
             return true;
         }
@@ -333,8 +268,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
                                t.mipmap == mipmap && t.repeat == repeat &&
                                t.clampT == clampT;
         if (sameShape) return true;   // storage and written slices survive
-        t.data.clear();
-        t.data.shrink_to_fit();
+        t.data.assign((size_t)width * height * layers * channels, 0.0f);
         t.subUpdates.clear();
         t.sliceUpdates.clear();       // written against the old shape
         t.w = width;
@@ -344,7 +278,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
         t.mipmap = mipmap;
         t.repeat = repeat;
         t.clampT = clampT;
-        t.dirty = true;
+        t.generation = nextResourceGeneration();
         bumpChangeGeneration();
         return true;
     }
@@ -352,6 +286,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
     if ((int)userTextures_.size() >= maxUserTextures()) return false;
     UserTexture t;
     t.name = name;
+    t.data.assign((size_t)width * height * layers * channels, 0.0f);
     t.w = width;
     t.h = height;
     t.layers = layers;
@@ -359,7 +294,7 @@ bool MeshNode::setCustomShaderTextureArray(const std::string& name,
     t.mipmap = mipmap;
     t.repeat = repeat;
     t.clampT = clampT;
-    t.dirty = true;
+    t.generation = nextResourceGeneration();
     userTextures_.push_back(std::move(t));
     bumpChangeGeneration();
     return true;
@@ -375,6 +310,7 @@ bool MeshNode::setCustomShaderTextureArrayLayer(const std::string& name,
             return false;
         }
         const size_t n = (size_t)t.w * (size_t)t.h * (size_t)t.channels;
+        std::copy(data, data + n, t.data.data() + (size_t)layer * n);
         // A later write to the same slice supersedes an earlier staged one.
         for (auto& u : t.sliceUpdates) {
             if (u.layer != layer) continue;
@@ -396,75 +332,6 @@ bool MeshNode::setCustomShaderTextureArrayLayer(const std::string& name,
 
 void MeshNode::clearCustomShaderTexture(const std::string& name) {
     setCustomShaderTexture(name, 0, 0, nullptr);
-}
-
-static void flushUserTexArray(MeshNode::UserTexture& t) {
-    t.sliceUpdates.clear();
-    t.dirty = false;
-}
-
-static void flushUserTex(MeshNode::UserTexture& t) {
-    t.subUpdates.clear();
-    t.dirty = false;
-}
-
-void MeshNode::flushPendingTexturesImpl() {
-    flushTex(pendingBase_,     texture_);
-    flushTex(pendingNormal_,   normalTex_);
-    flushTex(pendingMR_,       mrTex_);
-    flushTex(pendingAO_,       aoTex_);
-    flushTex(pendingEmissive_, emissiveTex_);
-    for (auto& t : userTextures_) flushUserTex(t);
-    // Drop fully-released slots so the name can be re-bound later without
-    // counting against the unit budget.
-    userTextures_.erase(
-        std::remove_if(userTextures_.begin(), userTextures_.end(),
-                       [](const UserTexture& t) {
-                           return t.tex == 0 && !t.dirty && t.w == 0;
-                       }),
-        userTextures_.end());
-}
-
-static void uploadInterleavedMesh(const bromesh::MeshData& mesh,
-                                  GLuint& /*vao*/, GLuint& /*vbo*/, GLuint& /*ibo*/,
-                                  GLsizei& indexCount) {
-    indexCount = (GLsizei)mesh.indices.size();
-}
-
-const float* MeshNode::normalMatrix3(const bromath::Mat4& model) const {
-    float src[9];
-    for (int c = 0; c < 3; ++c)
-        for (int r = 0; r < 3; ++r)
-            src[c * 3 + r] = model.at(r, c);
-
-    if (normalMatValid_ && std::memcmp(src, normalMatSrc_, sizeof(src)) == 0)
-        return normalMat3_;
-
-    // minverse returns identity for a singular matrix (zero scale), so
-    // degenerate nodes fall back to untransformed normals instead of NaNs.
-    const bromath::Mat4 invT = bromath::mtranspose(bromath::minverse(model));
-    for (int c = 0; c < 3; ++c)
-        for (int r = 0; r < 3; ++r)
-            normalMat3_[c * 3 + r] = invT.at(r, c);
-
-    std::memcpy(normalMatSrc_, src, sizeof(src));
-    normalMatValid_ = true;
-    return normalMat3_;
-}
-
-void MeshNode::uploadToGPU() {
-    if (mesh_.empty()) return;
-    hasVertexColors_ = mesh_.hasColors();
-    indexCount_ = (GLsizei)mesh_.indices.size();
-    gpuDirty_ = false;
-    flushPendingTextures();
-}
-
-void MeshNode::onRender(SceneGraph& /*graph*/) {
-}
-
-bool MeshNode::drawRaw() {
-    return false;
 }
 
 void MeshNode::setDrawMode(DrawMode m) {

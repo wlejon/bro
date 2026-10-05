@@ -41,7 +41,7 @@ if (!scene) {
     assert(meshUploads >= 12, 'the world uploaded its meshes once: ' + meshUploads);
     assert(texUploads >= 4, 'and its textures: ' + texUploads);
     assert(scene.attached === true && scene.keepAlive === false, 'a fresh scene is attached, not keepAlive');
-    assert(__host.sceneLink(c1).fboTexture > 0, 'c1 composites the scene');
+    assert(__host.sceneLink(c1).layer === true, 'c1 composites the scene');
     const contexts = __host.sceneContextCount();
 
     // ---- attachTo: both canvases live -------------------------------------
@@ -54,8 +54,8 @@ if (!scene) {
     assert(now.meshUploads === built.meshUploads, 'no mesh re-upload after attachTo: ' + (now.meshUploads - built.meshUploads));
     assert(now.textureUploads === built.textureUploads, 'no texture re-upload after attachTo');
     assert(__host.sceneContextCount() === contexts, 'the same scene context, not a second one');
-    assert(__host.sceneLink(c1).graph === false && __host.sceneLink(c1).fboTexture === 0, 'c1 no longer shows the scene');
-    assert(__host.sceneLink(c2).graph === true && __host.sceneLink(c2).fboTexture > 0, 'c2 composites the scene');
+    assert(__host.sceneLink(c1).graph === false && __host.sceneLink(c1).layer === false, 'c1 no longer shows the scene');
+    assert(__host.sceneLink(c2).graph === true && __host.sceneLink(c2).layer === true, 'c2 composites the scene');
     assert(c2.getContext('scene') === scene, "getContext('scene') on c2 answers the moved scene");
     const fresh = c1.getContext('scene');
     assert(fresh && fresh !== scene, "c1 can take a new scene of its own");
@@ -77,7 +77,7 @@ if (!scene) {
     now = __host.sceneUploadStats();
     assert(now.meshUploads === built.meshUploads && now.textureUploads === built.textureUploads,
            'no re-upload across a detach + attach to a new canvas');
-    assert(scene.attached === true && __host.sceneLink(c3).fboTexture > 0, 'c3 composites the parked scene');
+    assert(scene.attached === true && __host.sceneLink(c3).layer === true, 'c3 composites the parked scene');
 
     // The scene is still the same live world: a new node uploads once, on c3.
     scene.createMesh({ mesh: 'box', color: 'green' });

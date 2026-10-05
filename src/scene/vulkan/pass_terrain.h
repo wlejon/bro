@@ -1,85 +1,39 @@
 #pragma once
 
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_allocator.h"
-#include "scene/vulkan/scene_vk_descriptors.h"
-#include "scene/vulkan/scene_vk_pipeline.h"
+// Clipmap terrain: the ring mesh a ClipmapTerrain owns (MeshNode with a
+// clipmapRole), displaced on the GPU from its height array and shaded from
+// its surface array, drawn into the HDR scope with the opaque meshes. The
+// shaders are assembled from the clipmap GLSL sources per (cubic height,
+// cubic surface) variant; the node's sampler slots and uniforms feed set 2.
+
+#include "scene/mesh_node.h"
+#include "scene/vulkan/scene_pass.h"
+#include "scene/vulkan/scene_vk_target_format.h"
+
 #include <vulkan/vulkan.h>
-#include <vector>
-#include <string>
-
-#include <unordered_map>
-
-namespace bro::scene {
-class SceneGraph;
-class MeshNode;
-}
 
 namespace bro::scene::vk {
 
-/// Pass for rendering clipmap terrain LOD rings with height displacement,
-/// normal maps, procedural detail, and tile shade mapping.
-class PassTerrain {
+class PassTerrain final : public ScenePass {
 public:
-    PassTerrain() = default;
-    ~PassTerrain();
-
-    PassTerrain(const PassTerrain&) = delete;
-    PassTerrain& operator=(const PassTerrain&) = delete;
-
-    bool init(SceneVkDevice& device, SceneVkAllocator& allocator,
-              VkDescriptorSetLayout cameraLayout, VkDescriptorSetLayout lightingLayout);
-    void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
-
-    void render(VkCommandBuffer cmd, MeshNode* terrainNode,
-                VkDescriptorSet cameraSet, VkDescriptorSet lightingSet,
-                uint32_t viewportWidth, uint32_t viewportHeight,
-                VkBuffer vertexBuffer, VkBuffer indexBuffer, uint32_t indexCount);
-
-    void setSampleCount(VkSampleCountFlagBits samples) {
-        if (sampleCount_ != samples) {
-            sampleCount_ = samples;
-            for (int h = 0; h < 2; ++h) {
-                for (int s = 0; s < 2; ++s) {
-                    if (pipelines_[h][s] != VK_NULL_HANDLE && device_) {
-                        vkDestroyPipeline(device_->device(), pipelines_[h][s], nullptr);
-                        pipelines_[h][s] = VK_NULL_HANDLE;
-                    }
-                }
-            }
-        }
-    }
+    const char* name() const override { return "terrain"; }
+    bool setup(SceneGpu& gpu) override;
+    bool active(const SceneFrame& frame) const override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
 
 private:
-    struct NodeTerrainResources {
-        SceneVkImage heightsImage;
-        SceneVkImage surfacesImage;
-        int currentHeightsW = 0, currentHeightsH = 0, currentHeightsLayers = 0;
-        int currentSurfsW = 0, currentSurfsH = 0, currentSurfsLayers = 0;
-    };
-
-    VkPipeline getOrCreatePipeline(bool cubicHeight, bool cubicSurface);
-    NodeTerrainResources& getOrCreateNodeResources(MeshNode* node);
-    void syncTextures(MeshNode* node, NodeTerrainResources& res);
-    /// This frame's copy of the node's terrain uniforms.
-    VkDescriptorBufferInfo syncUniforms(MeshNode* node);
+    VkPipeline pipeline(const MeshNode::ClipmapRole& role, const TargetFormat& target);
+    /// This frame's copy of the node's terrain uniform block.
+    static VkDescriptorBufferInfo uniforms(SceneVkDevice& device, const MeshNode* node);
 
     SceneVkDevice* device_ = nullptr;
-    SceneVkAllocator* allocator_ = nullptr;
-    VkDescriptorSetLayout cameraLayout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout lightingLayout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout terrainLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-
-    VkSampleCountFlagBits sampleCount_ = VK_SAMPLE_COUNT_1_BIT;
-    // Pipelines indexed by [cubicHeight(0/1)][cubicSurface(0/1)]
-    VkPipeline pipelines_[2][2] = {{VK_NULL_HANDLE, VK_NULL_HANDLE}, {VK_NULL_HANDLE, VK_NULL_HANDLE}};
-
-    VkSampler heightsSampler_ = VK_NULL_HANDLE;
-    VkSampler surfacesSampler_ = VK_NULL_HANDLE;
-
-    std::unordered_map<const void*, NodeTerrainResources> nodeResources_;
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    PipelineVariants pipelines_;
+    SceneVkImage emptyHeights_;
+    SceneVkImage emptySurfaces_;
 };
 
-} // namespace bro::scene::vk
-
+}  // namespace bro::scene::vk

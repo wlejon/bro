@@ -1360,9 +1360,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         h = lbRect.height;
     }
     if (elem->sceneGraph() && visible) {
-        // 3D mesh FBO layer (texture ID stored on element by scene graph render)
-        unsigned int fboTex = elem->sceneGraphFBOTexture();
-        if (fboTex && layerBreakCb_) {
+        // The scene's 3D layer (the compositor resolves the image by element id)
+        if (elem->sceneLayerReady() && layerBreakCb_) {
             layerBreakCb_(render::Cmd_LayerBreak::Scene3D, nullptr, elem->nodeId(), x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
         // 2D canvas layer (for ShapeNode/SpriteNode content)

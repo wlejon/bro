@@ -11,7 +11,9 @@
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_pipeline.h"
 #include "scene/vulkan/scene_vk_descriptors.h"
-#include "scene/vulkan/scene_vk_target.h"
+#include "scene/vulkan/scene_frame_graph.h"
+#include "scene/vulkan/scene_targets.h"
+#include "scene/vulkan/scene_vk_target_format.h"
 #include "render/vulkan_context.h"
 #include "render/vulkan_debug.h"
 #include "util/log.h"
@@ -313,38 +315,56 @@ int main() {
                    .setCullMode(VK_CULL_MODE_NONE)
                    .disableBlending(1)
                    .enableDepthTest(true, VK_COMPARE_OP_GREATER_OR_EQUAL)
-                   .setDynamicRendering({VK_FORMAT_R8G8B8A8_UNORM}, VK_FORMAT_D32_SFLOAT);
+                   .setTarget({{VK_FORMAT_R8G8B8A8_UNORM}, 1, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT});
 
     VkPipeline testPipeline = pipelineBuilder.build(device.device(), pipelineLayout);
     assert(testPipeline != VK_NULL_HANDLE);
 
     std::cout << "PASSED" << std::endl;
 
-    // 5. Test SceneVkRenderTarget & Dynamic Rendering Offscreen Render & Readback
-    std::cout << "[Test 5] SceneVkRenderTarget Offscreen Dynamic Rendering & Pixel Check... " << std::flush;
+    // 5. Dynamic rendering into allocator images, layouts tracked by the frame graph
+    std::cout << "[Test 5] Offscreen Dynamic Rendering & Pixel Check... " << std::flush;
     const uint32_t renderW = 64, renderH = 64;
-    SceneVkRenderTargetDesc targetDesc;
-    targetDesc.width = renderW;
-    targetDesc.height = renderH;
-    targetDesc.colorFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    targetDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
-    targetDesc.hasColor = true;
-    targetDesc.hasDepth = true;
-    targetDesc.colorSampled = true;
-    targetDesc.depthSampled = true;
-
-    SceneVkRenderTarget renderTarget;
-    bool rtOk = renderTarget.init(allocator, targetDesc);
+    SceneVkImage color, depth;
+    bool rtOk = allocator.createImage(renderW, renderH, VK_FORMAT_R8G8B8A8_UNORM,
+                                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, color) &&
+                allocator.createImage(renderW, renderH, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depth, 1, VK_SAMPLE_COUNT_1_BIT,
+                                      VK_IMAGE_ASPECT_DEPTH_BIT);
     assert(rtOk);
-    assert(renderTarget.isValid());
 
     // Record dynamic rendering pass
     VkCommandBuffer cmd = device.beginFrame();
+    SceneFrameGraph::transition(cmd, color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    SceneFrameGraph::transition(cmd, depth, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
-    VkClearColorValue clearRed = {{1.0f, 0.0f, 0.0f, 1.0f}};
-    renderTarget.beginRendering(cmd, device,
-                               VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, clearRed,
-                               VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, 0.0f);
+    VkRenderingAttachmentInfo colorAtt{};
+    colorAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAtt.imageView = color.view;
+    colorAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAtt.clearValue.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+    VkRenderingAttachmentInfo depthAtt{};
+    depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAtt.imageView = depth.view;
+    depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAtt.clearValue.depthStencil = {0.0f, 0};
+    VkRenderingInfo renderInfo{};
+    renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    renderInfo.renderArea = {{0, 0}, {renderW, renderH}};
+    renderInfo.layerCount = 1;
+    renderInfo.colorAttachmentCount = 1;
+    renderInfo.pColorAttachments = &colorAtt;
+    renderInfo.pDepthAttachment = &depthAtt;
+    device.cmdBeginRendering(cmd, &renderInfo);
+    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(renderW), static_cast<float>(renderH), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, {renderW, renderH}};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, testPipeline);
 
@@ -352,12 +372,10 @@ int main() {
     vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer.buffer, offsets);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
-    renderTarget.endRendering(cmd, device);
+    device.cmdEndRendering(cmd);
 
     // Transition color image to TRANSFER_SRC_OPTIMAL to read back pixels
-    allocator.transitionImageLayout(cmd, renderTarget.colorImage().image, VK_FORMAT_R8G8B8A8_UNORM,
-                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    SceneFrameGraph::transition(cmd, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
     // Staging buffer for readback
     VkDeviceSize readbackSize = renderW * renderH * 4;
@@ -378,7 +396,7 @@ int main() {
     copyRegion.imageOffset = {0, 0, 0};
     copyRegion.imageExtent = {renderW, renderH, 1};
 
-    vkCmdCopyImageToBuffer(cmd, renderTarget.colorImage().image,
+    vkCmdCopyImageToBuffer(cmd, color.image,
                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            readbackBuffer.buffer, 1, &copyRegion);
 
@@ -423,32 +441,31 @@ int main() {
     allocator.destroyBuffer(readbackBuffer);
     std::cout << "PASSED (Triangle & background pixels verified)" << std::endl;
 
-    // 6. Test SceneVkShadowCascadeTarget
-    std::cout << "[Test 6] SceneVkShadowCascadeTarget (Layered Array; comparison sampler on the device)... " << std::flush;
-    SceneVkShadowCascadeTarget shadowTarget;
-    bool shadowOk = shadowTarget.init(allocator, 256, 4, VK_FORMAT_D32_SFLOAT);
-    assert(shadowOk);
-    assert(shadowTarget.isValid());
-    assert(shadowTarget.cascadeCount() == 4);
-    assert(shadowTarget.resolution() == 256);
-    assert(shadowTarget.arrayView() != VK_NULL_HANDLE);
+    // 6. The frame targets: sizes, sample-count clamp, shadow cascade views
+    std::cout << "[Test 6] SceneTargets (frame images, MSAA clamp, shadow array)... " << std::flush;
+    SceneTargets targets;
+    assert(targets.setup(device, allocator));
+    assert(targets.shadow.isValid() && targets.shadow.arrayLayers == SceneTargets::kShadowCascades);
+    for (VkImageView v : targets.shadowCascadeViews) assert(v != VK_NULL_HANDLE);
     assert(device.shadowCompareSampler() != VK_NULL_HANDLE);
-
-    // Test cascade rendering recording
-    VkCommandBuffer shadowCmd = device.beginFrame();
-    for (uint32_t c = 0; c < 4; ++c) {
-        shadowTarget.beginCascadeRendering(shadowCmd, device, c, 1.0f);
-        shadowTarget.endCascadeRendering(shadowCmd, device);
-    }
-    shadowTarget.transitionToShaderRead(shadowCmd, allocator);
-    assert(device.submitFrame(shadowCmd));
-    device.waitIdle();
-
-    shadowTarget.cleanup(allocator);
+    const VkSampleCountFlagBits samples = targets.supportedSamples(4);
+    assert(samples >= VK_SAMPLE_COUNT_1_BIT && samples <= VK_SAMPLE_COUNT_4_BIT);
+    assert(targets.supportedSamples(0) == VK_SAMPLE_COUNT_1_BIT);
+    assert(targets.ensure(allocator, 32, 16, samples));
+    assert(targets.valid() && targets.width() == 32 && targets.height() == 16);
+    assert(targets.hdr.width == 32 && targets.ldr.height == 16);
+    assert(targets.msaa() == (samples != VK_SAMPLE_COUNT_1_BIT));
+    assert(!targets.ensure(allocator, 32, 16, samples));   // unchanged: nothing recreated
+    assert(targets.ensureIndirect(allocator) && targets.indirect.isValid());
+    const TargetFormat hdr = targets.hdrTarget(true);
+    assert(hdr.colorCount == 2 && hdr.samples == samples && hdr.depth == SceneTargets::kDepthFormat);
+    assert(targets.hdrTarget(false).key() != hdr.key());
+    targets.cleanup(allocator);
     std::cout << "PASSED" << std::endl;
 
     // Clean up
-    renderTarget.cleanup(allocator);
+    allocator.destroyImage(color);
+    allocator.destroyImage(depth);
     vkDestroyPipeline(device.device(), testPipeline, nullptr);
     vkDestroyPipelineLayout(device.device(), pipelineLayout, nullptr);
     SceneVkShaderModule::destroy(device.device(), vsModule);

@@ -1,218 +1,174 @@
 #include "scene/vulkan/pass_gaussian_splat.h"
+
 #include "scene/gaussian_splat_node.h"
+#include "scene/scene_graph.h"
+#include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/scene_vk_depth.h"
+#include "scene/vulkan/scene_vk_descriptors.h"
+#include "scene/vulkan/scene_vk_device.h"
+#include "scene/vulkan/scene_vk_pipeline.h"
 #include "scene/vulkan/scene_vk_shader_compiler.h"
-#include "util/log.h"
+
+#include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace bro::scene::vk {
 
-PassGaussianSplat::~PassGaussianSplat() = default;
-
-bool PassGaussianSplat::init(SceneVkDevice& device, SceneVkAllocator& allocator,
-                             VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples) {
-    if (!createQuadBuffer(allocator)) {
-        LOG_ERROR("PassGaussianSplat: Failed creating quad vertex buffer");
-        return false;
-    }
-    colorFormat_ = colorFormat;
-    depthFormat_ = depthFormat;
-    samples_ = samples;
-    return createPipelines(device.device(), colorFormat, depthFormat, samples);
+namespace {
+constexpr uint32_t kInstanceFloats = 14;   // centre 3, scale 3, quaternion 4, colour 4
 }
 
-bool PassGaussianSplat::setSampleCount(VkDevice dev, VkSampleCountFlagBits samples) {
-    if (samples_ == samples) return true;
-    destroyPipelines(dev);
-    samples_ = samples;
-    return createPipelines(dev, colorFormat_, depthFormat_, samples_);
+bool PassGaussianSplat::setup(SceneGpu& gpu) {
+    device_ = &gpu.device;
+    allocator_ = &gpu.allocator;
+    VkDevice dev = gpu.device.device();
+
+    static const float quad[8] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
+    if (!gpu.allocator.createVertexBuffer(sizeof(quad), quad, quad_)) return false;
+
+    SceneVkDescriptorLayoutBuilder sets;
+    sets.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
+    setLayout_ = sets.build(dev);
+    if (!setLayout_) return false;
+    VkPipelineLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    info.setLayoutCount = 1;
+    info.pSetLayouts = &setLayout_;
+    if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
+
+    vs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::GaussianSplatVert);
+    fs_ = SceneVkShaderCompiler::createBuiltinModule(dev, BuiltinSceneShader::GaussianSplatFrag);
+    return vs_ && fs_;
 }
 
-void PassGaussianSplat::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
-    allocator.destroyBuffer(quadBuffer_);
-
-    for (auto& [key, data] : nodeCache_) {
-        allocator.destroyBuffer(data.instanceBuffer);
-    }
-    nodeCache_.clear();
-    destroyPipelines(device.device());
+void PassGaussianSplat::cleanup(SceneGpu& gpu) {
+    VkDevice dev = gpu.device.device();
+    pipelines_.destroy(gpu.device);
+    for (auto& [id, inst] : instances_) gpu.allocator.destroyBuffer(inst.buffer);
+    instances_.clear();
+    gpu.allocator.destroyBuffer(quad_);
+    SceneVkShaderCompiler::destroyModule(dev, vs_);
+    SceneVkShaderCompiler::destroyModule(dev, fs_);
+    vs_ = fs_ = VK_NULL_HANDLE;
+    if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
+    if (setLayout_) vkDestroyDescriptorSetLayout(dev, setLayout_, nullptr);
+    layout_ = VK_NULL_HANDLE;
+    setLayout_ = VK_NULL_HANDLE;
 }
 
-void PassGaussianSplat::destroyPipelines(VkDevice dev) {
-    if (pipeline_ != VK_NULL_HANDLE) {
-        vkDestroyPipeline(dev, pipeline_, nullptr);
-        pipeline_ = VK_NULL_HANDLE;
-    }
-    if (pipelineLayout_ != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(dev, pipelineLayout_, nullptr);
-        pipelineLayout_ = VK_NULL_HANDLE;
-    }
-    if (descLayout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(dev, descLayout_, nullptr);
-        descLayout_ = VK_NULL_HANDLE;
+void PassGaussianSplat::releaseNodes(SceneGpu& gpu, std::span<const uint32_t> ids) {
+    for (uint32_t id : ids) {
+        auto it = instances_.find(id);
+        if (it == instances_.end()) continue;
+        gpu.allocator.destroyBuffer(it->second.buffer);
+        instances_.erase(it);
     }
 }
 
-bool PassGaussianSplat::createQuadBuffer(SceneVkAllocator& allocator) {
-    static const float quad[8] = {
-        -1.0f, -1.0f,
-         1.0f, -1.0f,
-        -1.0f,  1.0f,
-         1.0f,  1.0f,
-    };
-    return allocator.createVertexBuffer(sizeof(quad), quad, quadBuffer_);
+void PassGaussianSplat::declare(const SceneFrame&, PassIO& io) const {
+    io.hdr();
 }
 
-bool PassGaussianSplat::createPipelines(VkDevice device, VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples) {
-    SceneVkDescriptorLayoutBuilder descBuilder;
-    descBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT);
-    descLayout_ = descBuilder.build(device);
-    if (!descLayout_) return false;
-
-    VkPipelineLayoutCreateInfo plInfo{};
-    plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 1;
-    plInfo.pSetLayouts = &descLayout_;
-    if (vkCreatePipelineLayout(device, &plInfo, nullptr, &pipelineLayout_) != VK_SUCCESS) return false;
-
-    VkShaderModule vsMod = SceneVkShaderCompiler::createBuiltinModule(device, BuiltinSceneShader::GaussianSplatVert);
-    VkShaderModule fsMod = SceneVkShaderCompiler::createBuiltinModule(device, BuiltinSceneShader::GaussianSplatFrag);
-    if (!vsMod || !fsMod) {
-        if (vsMod) SceneVkShaderCompiler::destroyModule(device, vsMod);
-        if (fsMod) SceneVkShaderCompiler::destroyModule(device, fsMod);
-        return false;
+void PassGaussianSplat::record(SceneFrame& frame) {
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    for (auto& [id, owned] : frame.graph.nodes()) {
+        SceneNode* node = owned.get();
+        if (!node->renderVisible() || node->type() != SceneNode::Type::GaussianSplat) continue;
+        if (frame.renderer.cameraCulled(node)) {
+            frame.stats.splatCulled++;
+            continue;
+        }
+        frame.stats.splatDrawn++;
+        auto& splat = static_cast<GaussianSplatNode&>(*node);
+        if (splat.splatCount() == 0) continue;
+        if (!pipeline) {
+            pipeline = pipelines_.get(0, frame.hdrTarget, [&] {
+                const std::vector<VkVertexInputBindingDescription> bindings = {
+                    {0, sizeof(float) * 2, VK_VERTEX_INPUT_RATE_VERTEX},
+                    {1, sizeof(float) * kInstanceFloats, VK_VERTEX_INPUT_RATE_INSTANCE},
+                };
+                const std::vector<VkVertexInputAttributeDescription> attributes = {
+                    {0, 0, VK_FORMAT_R32G32_SFLOAT, 0},
+                    {1, 1, VK_FORMAT_R32G32B32_SFLOAT, 0},
+                    {2, 1, VK_FORMAT_R32G32B32_SFLOAT, sizeof(float) * 3},
+                    {3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 6},
+                    {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 10},
+                };
+                VkPipelineColorBlendAttachmentState blend{};
+                blend.blendEnable = VK_TRUE;
+                blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                blend.colorBlendOp = VK_BLEND_OP_ADD;
+                blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                blend.alphaBlendOp = VK_BLEND_OP_ADD;
+                blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+                SceneVkPipelineBuilder b;
+                b.setShaderStages(vs_, fs_)
+                 .setVertexInput(bindings, attributes)
+                 .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
+                 .setPolygonMode(VK_POLYGON_MODE_FILL)
+                 .setCullMode(VK_CULL_MODE_NONE)
+                 .setTarget(frame.hdrTarget)
+                 .setColorBlendAttachment(0, blend)
+                 .enableDepthTest(false);
+                return b.build(device_->device(), layout_);
+            });
+            if (!pipeline) return;
+        }
+        drawNode(frame, pipeline, splat);
     }
-
-    // Vertex bindings
-    VkVertexInputBindingDescription bindings[2]{};
-    // Binding 0: Quad corner (vec2)
-    bindings[0].binding = 0;
-    bindings[0].stride = sizeof(float) * 2;
-    bindings[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    // Binding 1: Instance data (14 floats: pos 3, scale 3, quat 4, color 4)
-    bindings[1].binding = 1;
-    bindings[1].stride = sizeof(float) * 14;
-    bindings[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
-
-    VkVertexInputAttributeDescription attribs[5]{};
-    // location 0: aCorner
-    attribs[0].location = 0;
-    attribs[0].binding = 0;
-    attribs[0].format = VK_FORMAT_R32G32_SFLOAT;
-    attribs[0].offset = 0;
-
-    // location 1: aCenter
-    attribs[1].location = 1;
-    attribs[1].binding = 1;
-    attribs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribs[1].offset = 0;
-
-    // location 2: aScale
-    attribs[2].location = 2;
-    attribs[2].binding = 1;
-    attribs[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attribs[2].offset = sizeof(float) * 3;
-
-    // location 3: aQuat
-    attribs[3].location = 3;
-    attribs[3].binding = 1;
-    attribs[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attribs[3].offset = sizeof(float) * 6;
-
-    // location 4: aColor
-    attribs[4].location = 4;
-    attribs[4].binding = 1;
-    attribs[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attribs[4].offset = sizeof(float) * 10;
-
-    VkPipelineColorBlendAttachmentState splatBlend{};
-    splatBlend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    splatBlend.blendEnable = VK_TRUE;
-    splatBlend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-    splatBlend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    splatBlend.colorBlendOp = VK_BLEND_OP_ADD;
-    splatBlend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    splatBlend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    splatBlend.alphaBlendOp = VK_BLEND_OP_ADD;
-
-    SceneVkPipelineBuilder builder;
-    builder.setShaderStages(vsMod, fsMod)
-           .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
-           .setCullMode(VK_CULL_MODE_NONE)
-           .setMultisampling(samples)
-           .setColorBlendAttachment(0, splatBlend)
-           .enableDepthTest(false, VK_COMPARE_OP_GREATER_OR_EQUAL)
-           .setDynamicRendering({colorFormat}, depthFormat);
-
-    builder.setVertexInput(
-        std::vector<VkVertexInputBindingDescription>(bindings, bindings + 2),
-        std::vector<VkVertexInputAttributeDescription>(attribs, attribs + 5)
-    );
-
-    pipeline_ = builder.build(device, pipelineLayout_);
-
-    SceneVkShaderCompiler::destroyModule(device, vsMod);
-    SceneVkShaderCompiler::destroyModule(device, fsMod);
-
-    return pipeline_ != VK_NULL_HANDLE;
 }
 
-void PassGaussianSplat::renderNode(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                                  GaussianSplatNode* node,
-                                  const float* viewMatrix,
-                                  const float* projMatrix,
-                                  const float eye[3],
-                                  uint32_t width, uint32_t height) {
-    if (!node || node->splatCount() == 0 || width == 0 || height == 0) return;
+void PassGaussianSplat::drawNode(SceneFrame& frame, VkPipeline pipeline, GaussianSplatNode& node) {
+    const SceneView& view = frame.view;
+    if (view.width == 0 || view.height == 0) return;
+    const float eye[3] = {view.eye.x, view.eye.y, view.eye.z};
+    const bromath::Mat4& model = node.worldMatrix();
+    const bool resorted = node.needsResort(view.view.data, eye, model);
+    if (resorted) node.resort(view.view.data, eye, model);
+    const auto& data = node.instanceData();
+    if (data.empty()) return;
 
-    const bromath::Mat4& model = node->worldMatrix();
-    const bool resorted = node->needsResort(viewMatrix, eye, model);
-    if (resorted) node->resort(viewMatrix, eye, model);
-    const auto& instData = node->instanceData();
-    if (instData.empty()) return;
-
-    // The instance data only changes when the splats are re-sorted; it lives
-    // in a device-local buffer that the upload stream rewrites then.
-    NodeGpuData& gpuData = nodeCache_[node];
-    const size_t reqBytes = instData.size() * sizeof(float);
+    Instances& inst = instances_[node.id()];
+    const size_t bytes = data.size() * sizeof(float);
     bool upload = resorted;
-    if (!gpuData.instanceBuffer.buffer || gpuData.capacityBytes < reqBytes) {
-        allocator.destroyBuffer(gpuData.instanceBuffer);
-        gpuData.capacityBytes = reqBytes * 2;
-        if (!allocator.createBuffer(gpuData.capacityBytes,
-                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, gpuData.instanceBuffer)) {
-            gpuData.capacityBytes = 0;
+    if (!inst.buffer.buffer || inst.capacity < bytes) {
+        allocator_->destroyBuffer(inst.buffer);
+        inst.capacity = bytes * 2;
+        if (!allocator_->createBuffer(inst.capacity, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, inst.buffer)) {
+            inst.capacity = 0;
             return;
         }
         upload = true;
     }
-    if (upload) allocator.stageAndUploadBuffer(gpuData.instanceBuffer.buffer, instData.data(), reqBytes);
+    if (upload) allocator_->stageAndUploadBuffer(inst.buffer.buffer, data.data(), bytes);
 
-    SplatUBOData ubo{};
-    std::memcpy(ubo.model, model.data, sizeof(ubo.model));
-    std::memcpy(ubo.view, viewMatrix, sizeof(ubo.view));
-    std::memcpy(ubo.proj, projMatrix, sizeof(ubo.proj));
-    ubo.focal[0] = 0.5f * static_cast<float>(width) * std::fabs(projMatrix[0]);
-    ubo.focal[1] = 0.5f * static_cast<float>(height) * std::fabs(projMatrix[5]);
-    ubo.viewport[0] = static_cast<float>(width);
-    ubo.viewport[1] = static_cast<float>(height);
-    const VkDescriptorBufferInfo uboInfo = device.frameUniform(&ubo, sizeof(ubo));
-
-    VkDescriptorSet dSet = device.frameSet(descLayout_);
+    Uniforms u{};
+    std::memcpy(u.model, model.data, sizeof(u.model));
+    std::memcpy(u.view, view.view.data, sizeof(u.view));
+    std::memcpy(u.proj, view.proj.data, sizeof(u.proj));
+    u.focal[0] = 0.5f * static_cast<float>(view.width) * std::fabs(view.proj.data[0]);
+    u.focal[1] = 0.5f * static_cast<float>(view.height) * std::fabs(view.proj.data[5]);
+    u.viewport[0] = static_cast<float>(view.width);
+    u.viewport[1] = static_cast<float>(view.height);
+    const VkDescriptorBufferInfo ubo = device_->frameUniform(&u, sizeof(u));
+    VkDescriptorSet set = device_->frameSet(setLayout_);
     SceneVkDescriptorWriter writer;
-    writer.writeBuffer(0, uboInfo.buffer, uboInfo.range, uboInfo.offset);
-    writer.updateSet(device.device(), dSet);
+    writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
+    writer.updateSet(device_->device(), set);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1, &dSet, 0, nullptr);
-
-    VkBuffer vtxBuffers[2] = { quadBuffer_.buffer, gpuData.instanceBuffer.buffer };
-    VkDeviceSize offsets[2] = { 0, 0 };
-    vkCmdBindVertexBuffers(cmd, 0, 2, vtxBuffers, offsets);
-
-    vkCmdDraw(cmd, 4, static_cast<uint32_t>(node->splatCount()), 0, 0);
+    VkCommandBuffer cmd = frame.cmd;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &set, 0, nullptr);
+    const VkBuffer buffers[2] = {quad_.buffer, inst.buffer.buffer};
+    const VkDeviceSize offsets[2] = {0, 0};
+    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+    vkCmdDraw(cmd, 4, static_cast<uint32_t>(node.splatCount()), 0, 0);
+    frame.drewContent = true;
 }
 
-} // namespace bro::scene::vk
+}  // namespace bro::scene::vk

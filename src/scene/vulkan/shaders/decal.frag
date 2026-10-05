@@ -1,5 +1,8 @@
 #version 450
 
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+
 layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
     mat4 proj;
@@ -42,8 +45,8 @@ void main() {
     vec2 screenUV = gl_FragCoord.xy / camera.viewport.xy;
     float d = texture(uSceneDepth, screenUV).r;
 
-    // Cleared / sky depth check in reversed-Z:
-    if (d <= 0.0) discard;
+    // Cleared (sky) depth: nothing to project onto.
+    if (REVERSED_Z ? d <= 0.0 : d >= 1.0) discard;
 
     // In Vulkan, screenUV.y = 0 is top, 1 is bottom.
     // Vulkan NDC: x in [-1, 1], y in [-1, 1] (y=-1 is top, y=+1 is bottom).

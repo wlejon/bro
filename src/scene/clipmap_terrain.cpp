@@ -75,6 +75,9 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     buildGeometry();
 
     node_->setCustomShader(shaderSource("vertex"), shaderSource("fragment"));
+    // The renderer draws this mesh through its terrain pipeline (by role,
+    // never by name), with the cubic variants these sources were built with.
+    node_->setClipmapRole({cfg_.cubicHeight, cfg_.cubicSurface});
     node_->setColor(0.40f, 0.44f, 0.36f, 1.0f);
     node_->setMetallic(0.0f);
     node_->setRoughness(0.95f);

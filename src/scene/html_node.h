@@ -2,7 +2,7 @@
 
 #include "scene/scene_node.h"
 
-#include "webgl/webgl_types.h"
+#include "scene/texture_source.h"
 
 #include <memory>
 #include <string>
@@ -13,24 +13,23 @@ namespace bro::render { class SkiaRenderer; }
 namespace bro::scene {
 
 /// A scene node that owns a detached dom::Document + Element subtree,
-/// rasterizes it off-screen, and renders as a world-anchored billboard via
-/// the scene's mesh FBO pipeline.
+/// rasterizes it off-screen, and renders as a world-anchored billboard
+/// (the scene's billboard pass).
 ///
 /// Threading: the detached Document is main-thread-only. JS mutations,
-/// style resolution, layout, paint, and GL upload all run on the main
-/// thread. HtmlNodes are small (HUD labels, HP bars) so single-threaded
+/// style resolution, layout and paint all run on the main thread; the
+/// renderer uploads the resulting pixels when their generation moves. HtmlNodes are small (HUD labels, HP bars) so single-threaded
 /// materialization is cheap, and it sidesteps the need to synchronize the
 /// detached Document with the raster thread.
 class HtmlNode : public SceneNode {
 public:
     explicit HtmlNode(const std::string& name = "");
-    ~HtmlNode() override;
+    ~HtmlNode() override;   // out of line: dom::Document is incomplete here
 
     HtmlNode(const HtmlNode&) = delete;
     HtmlNode& operator=(const HtmlNode&) = delete;
 
     Type type() const override { return Type::Html; }
-    void onRender(SceneGraph& graph) override {}  // billboard path handles it
 
     /// Root element for imperative JS mutation. Never null after construction.
     dom::Element* root() const { return root_; }
@@ -54,20 +53,12 @@ public:
     void markHtmlDirty() { dirty_ = true; }
     bool isHtmlDirty() const { return dirty_; }
 
-    /// If dirty, resolve styles + layout + paint the subtree and upload the
-    /// pixels into the GL texture. Must run on the main/GL thread with a
-    /// Skia renderer registered on that thread.
+    /// If dirty, resolve styles + layout + paint the subtree into texture().
+    /// Must run on the main thread with a Skia renderer registered on it.
     void materializePending(render::SkiaRenderer* renderer);
 
-    GLuint textureId() const { return texture_; }
-    int textureWidth() const { return texW_; }
-    int textureHeight() const { return texH_; }
-
-    const std::vector<uint8_t>& pixels() const { return pixels_; }
-    bool isTextureDirty() const { return textureDirty_; }
-    void clearTextureDirty() { textureDirty_ = false; }
-
-    void releaseGL();
+    /// The last raster: premultiplied RGBA8, layout-size pixels.
+    const NodeTexture& texture() const { return texture_; }
 
 private:
     std::unique_ptr<dom::Document> doc_;
@@ -79,14 +70,7 @@ private:
 
     bool dirty_ = true;
 
-    // CPU pixel buffer for Vulkan/software readback
-    std::vector<uint8_t> pixels_;
-    bool textureDirty_ = false;
-
-    // Main-thread-owned GL texture. Created lazily in materializePending.
-    GLuint texture_ = 0;
-    int texW_ = 0;
-    int texH_ = 0;
+    NodeTexture texture_;
 };
 
 } // namespace bro::scene

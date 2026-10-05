@@ -31,6 +31,15 @@ std::string spliceChunk(const char* baseSrc, const std::string& chunk, const cha
     return s;
 }
 
+// `#define <name> 1` right after the #version line.
+std::string defineAfterVersion(std::string src, const char* name) {
+    const size_t version = src.find("#version");
+    const size_t lineEnd = version == std::string::npos ? std::string::npos : src.find('\n', version);
+    if (lineEnd == std::string::npos) return src;
+    src.insert(lineEnd + 1, std::string("#define ") + name + " 1\n");
+    return src;
+}
+
 } // namespace
 
 std::string SceneVkCustomShader::preprocessUserGlsl(const std::string& chunk,
@@ -181,6 +190,7 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
                                                      const std::string& fragmentChunk,
                                                      VkShaderModule& outVs,
                                                      VkShaderModule& outFs,
+                                                     bool indirectOutput,
                                                      std::vector<std::string>& outSamplerNames,
                                                      std::string& errOut) {
     // Vertex stage
@@ -217,6 +227,7 @@ bool SceneVkCustomShader::compileCustomShaderModules(VkDevice device,
     } else {
         fsSrc = kVkMeshFragSrc;
     }
+    if (indirectOutput) fsSrc = defineAfterVersion(std::move(fsSrc), "SCENE_INDIRECT_OUTPUT");
 
     auto fsSpirv = SceneVkShaderCompiler::compileGlsl(fsSrc, VK_SHADER_STAGE_FRAGMENT_BIT, &errOut);
     if (fsSpirv.empty()) {

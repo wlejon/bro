@@ -27,12 +27,15 @@ public:
                                      std::string& errOut);
 
     /// Compile vertex and fragment shader stages with spliced user chunks.
+    /// `indirectOutput` builds the fragment stage that also writes the
+    /// indirect light (location 1) for the SSAO opaque pass.
     static bool compileCustomShaderModules(VkDevice device,
                                            SceneRenderer::CustomShaderTarget target,
                                            const std::string& vertexChunk,
                                            const std::string& fragmentChunk,
                                            VkShaderModule& outVs,
                                            VkShaderModule& outFs,
+                                           bool indirectOutput,
                                            std::vector<std::string>& outSamplerNames,
                                            std::string& errOut);
 

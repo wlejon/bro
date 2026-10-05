@@ -13,6 +13,7 @@ enum class BuiltinSceneShader {
     MeshInstancedVert,
     MeshSkinnedVert,
     MeshFrag,
+    MeshIndirectFrag,   // mesh.frag with SCENE_INDIRECT_OUTPUT (the SSAO opaque pass)
     ShadowVert,
     ShadowInstancedVert,
     ShadowSkinnedVert,

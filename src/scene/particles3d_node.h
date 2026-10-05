@@ -3,7 +3,7 @@
 #include "scene/scene_node.h"
 #include <bromath/aabb.h>
 #include <bromath/color.h>
-#include "webgl/webgl_types.h"
+#include "scene/texture_source.h"
 
 #include <cstdint>
 #include <functional>
@@ -31,7 +31,7 @@ public:
     enum class SimSpace : uint8_t { World, Local };
 
     explicit Particles3DNode(const std::string& name = "");
-    ~Particles3DNode() override;
+    ~Particles3DNode() override = default;
 
     Particles3DNode(const Particles3DNode&) = delete;
     Particles3DNode& operator=(const Particles3DNode&) = delete;
@@ -190,29 +190,12 @@ public:
     const std::vector<float>& buildInstanceData(const bromath::Vec3& camFwd);
     size_t activeParticleCount() const { return drawOrder_.size(); }
     bool hasTexture() const { return !texPath_.empty(); }
-    const std::vector<uint8_t>& texturePixels() const { return texPixels_; }
-    int textureWidth() const { return texW_; }
-    int textureHeight() const { return texH_; }
+    /// Decode the setTexturePath() file once; false when there is no path or
+    /// it failed to decode (the particles then draw as soft round points).
     bool ensureTextureLoaded();
-
-    // --- GL (main GL thread only) ---
-
-    /// Decode + upload the texture if a path is set. Returns the GL texture
-    /// id (0 = none / decode failed — draw as soft round points).
-    GLuint ensureTextureGL();
-
-    /// Fill the per-instance buffer (back-to-front sorted for Normal blend),
-    /// upload, and issue one instanced draw. `quadVbo` is the shared unit
-    /// quad owned by the SceneRenderer; camera basis comes from the caller's
-    /// bound program uniforms. Returns false if nothing drew.
-    bool drawInstanced(GLuint quadVbo, const bromath::Vec3& camFwd);
-
-    void releaseGL();
+    const NodeTexture& texture() const { return texture_; }
 
 private:
-    std::vector<uint8_t> texPixels_;
-    int texW_ = 0;
-    int texH_ = 0;
     struct Particle {
         bool alive = false;
         bromath::Vec3 pos;   // sim-space (world or emitter-local)
@@ -288,19 +271,16 @@ private:
     // Flipbook
     int sheetCols_ = 1, sheetRows_ = 1, sheetFrames_ = 1;
 
-    // Texture (decoded lazily; GL upload on first draw)
+    // Texture (decoded lazily on the render path)
     std::string texPath_;
-    GLuint tex_ = 0;
+    NodeTexture texture_;
     bool texTried_ = false;
 
-    // Draw scratch + GL instance buffer
+    // Draw scratch
     static constexpr int kInstFloats = 10; // pos(3) size(1) rgba(4) rot(1) frame(1)
     std::vector<float> instanceData_;
     std::vector<uint32_t> drawOrder_;
     std::vector<float> depthKey_;
-    GLuint vao_ = 0;
-    GLuint instVbo_ = 0;
-    size_t instVboCapacity_ = 0; // bytes
 };
 
 } // namespace bro::scene

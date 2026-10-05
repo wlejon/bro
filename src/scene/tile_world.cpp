@@ -233,8 +233,7 @@ void TileWorld::initFromGrid() {
 
     tint_.assign(static_cast<size_t>(config_.width) * config_.height, 0xFFFFFFFFu);
     shade_.assign(static_cast<size_t>(config_.width) * config_.height, 255);
-    shadeDirtyY0_ = 0;
-    shadeDirtyY1_ = -1;
+    markShadeDirty();
 
     // Build the tile-id -> animation index map and reset frame state.
     animClock_ = 0.0;
@@ -267,9 +266,7 @@ void TileWorld::clear() {
         for (auto& k : objectKinds_)
             if (k.node) g->destroyNode(k.node);
         if (root_) g->destroyNode(root_);
-        releaseShadeTexture();
     }
-    shadeTex_ = 0;
     shadeUsed_ = false;
     shade_.clear();
     chunks_.clear();
@@ -412,7 +409,7 @@ void TileWorld::setShade(int x, int y, float v) {
     shadeUsed_ = true;
     if (shade_[idx] == q) return;
     shade_[idx] = q;
-    markShadeDirty(y);
+    markShadeDirty();
 }
 
 void TileWorld::fillShade(int x0, int y0, int x1, int y1, float v) {
@@ -429,7 +426,7 @@ void TileWorld::fillShade(int x0, int y0, int x1, int y1, float v) {
             cell = q;
             rowChanged = true;
         }
-        if (rowChanged) markShadeDirty(y);
+        if (rowChanged) markShadeDirty();
     }
 }
 
@@ -441,7 +438,7 @@ void TileWorld::setShadeMap(const float* values, size_t count) {
         const uint8_t q = quantizeShade(values[i]);
         if (shade_[i] == q) continue;
         shade_[i] = q;
-        markShadeDirty(static_cast<int>(i / config_.width));
+        markShadeDirty();
     }
 }
 
@@ -452,7 +449,7 @@ void TileWorld::setShadeMap(const uint8_t* values, size_t count) {
     for (size_t i = 0; i < n; ++i) {
         if (shade_[i] == values[i]) continue;
         shade_[i] = values[i];
-        markShadeDirty(static_cast<int>(i / config_.width));
+        markShadeDirty();
     }
 }
 
@@ -466,8 +463,8 @@ bool TileWorld::shadeBinding(ShadeMapBinding& out) {
     if (!shadeUsed_ || shade_.empty() || !root_) return false;
     const int w = config_.width, h = config_.height;
     const bromath::Mat4& m = root_->worldMatrix();
-    out.tex = 0;
     out.pixels = shade_.data();
+    out.generation = shadeGeneration_;
     out.origin = Vec3{m.at(0, 3), m.at(1, 3), m.at(2, 3)};
     out.cellSize = config_.cellSize;
     out.hex = grid_ && grid_->topology() == tile::Topology::Hex;
@@ -482,13 +479,6 @@ void TileWorld::attachShadeMap(MeshNode* node) {
 
 void TileWorld::attachShadeMap(InstancedMeshNode* node) {
     if (node) node->setShadeMap([this](ShadeMapBinding& b) { return shadeBinding(b); });
-}
-
-void TileWorld::releaseShadeTexture() {
-    shadeTex_ = 0;
-    shadeTexW_ = shadeTexH_ = 0;
-    shadeDirtyY1_ = -1;
-    shadeDirtyY0_ = 0;
 }
 
 // ---- query --------------------------------------------------------------

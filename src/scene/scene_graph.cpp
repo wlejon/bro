@@ -26,13 +26,8 @@ SceneGraph::SceneGraph() {
     liveToken_->graph = this;
 
     // A scene nobody gave a camera draws through the default intrinsics: an
-    // eye at the origin looking down -Z. The matrix has to be built here, not
-    // left to syncProjectionToDepthPolicy(), which rebuilds only when the
-    // convention changed: with reversed-Z that happened to produce it on the
-    // first frame, and without clip control (macOS) the identity matrix stayed
-    // and culled everything outside a unit cube.
+    // eye at the origin looking down -Z.
     projectionMatrix_ = makePerspective(cameraFovY_, cameraAspect_, cameraNearZ_, cameraFarZ_);
-    projectionBuiltReversed_ = gReversedZ;
 }
 
 
@@ -216,31 +211,15 @@ void SceneGraph::applyActiveCamera() {
     cameraAspect_ = aspect;
     if (cam->perspective()) {
         cameraFovY_ = cam->fovY();
-        projectionMatrix_ = makePerspective(cam->fovY(), aspect,
-                                                                            cam->nearZ(), cam->farZ());
+        projectionMatrix_ = makePerspective(cam->fovY(), aspect, cam->nearZ(), cam->farZ());
         cameraIsPerspective_ = true;
     } else {
         const float halfH = 0.5f * cam->orthoHeight();
         const float halfW = halfH * aspect;
         cameraOrthoL_ = -halfW; cameraOrthoR_ = halfW;
         cameraOrthoB_ = -halfH; cameraOrthoT_ = halfH;
-        projectionMatrix_ = makeOrtho(-halfW, halfW, -halfH, halfH,
-                                                          cam->nearZ(), cam->farZ());
+        projectionMatrix_ = makeOrtho(-halfW, halfW, -halfH, halfH, cam->nearZ(), cam->farZ());
         cameraIsPerspective_ = false;
-    }
-}
-
-void SceneGraph::syncProjectionToDepthPolicy() {
-    if (projectionBuiltReversed_ == gReversedZ) return;
-    projectionBuiltReversed_ = gReversedZ;
-
-    if (cameraIsPerspective_) {
-        projectionMatrix_ = makePerspective(cameraFovY_, cameraAspect_,
-                                            cameraNearZ_, cameraFarZ_);
-    } else {
-        projectionMatrix_ = makeOrtho(cameraOrthoL_, cameraOrthoR_,
-                                      cameraOrthoB_, cameraOrthoT_,
-                                      cameraNearZ_, cameraFarZ_);
     }
 }
 
@@ -421,6 +400,8 @@ void SceneGraph::destroyNode(SceneNode* node) {
         agentBindings_.erase(id);
         nodes_.erase(id);
     }
+    // Their GPU copies go too (deferred past the frames still using them).
+    renderer_.releaseNodes(ids);
 }
 
 SceneNode* SceneGraph::findById(uint32_t id) const {
@@ -585,8 +566,7 @@ void SceneGraph::render() {
         }
     }
 
-    // 3D passes (mesh/instanced/splat/billboard/shadow/IBL/post) live in
-    // SceneRenderer; it walks this graph via its back-reference.
+    // The 3D passes live in SceneRenderer; it walks this graph's nodes.
     renderer_.render3D();
 
     // --- 2D canvas pass ---------------------------------------------------
@@ -630,12 +610,9 @@ void SceneGraph::render() {
         canvasScene_->restore();
     }
 
-    // Notify the DOM element of the current FBO texture for compositing.
-    // We hand over the tonemapped LDR texture; if tonemap hasn't run (no
-    // 3D content this frame) we pass 0 to clear.
-    if (fboTexCb_) {
-        fboTexCb_(renderer_.hasMeshContent() ? renderer_.finalColorTex() : 0);
-    }
+    // Hand the DOM element this frame's 3D layer for compositing (empty
+    // when nothing 3D was drawn).
+    if (layerCb_) layerCb_(renderer_.outputImage());
 }
 
 bool SceneGraph::unprojectLocal(float localX, float localY,
@@ -791,7 +768,7 @@ void SceneGraph::pickHtmlNodes(float canvasLocalX, float canvasLocalY,
 }
 
 // ---------------------------------------------------------------------------
-// HtmlNode rasterization — runs on the main/GL thread before scene render
+// HtmlNode rasterization — runs on the main thread before scene render
 // so layout of the detached Documents stays serialized with JS mutations.
 // ---------------------------------------------------------------------------
 
@@ -804,12 +781,11 @@ void SceneGraph::materializeHtmlNodes(render::SkiaRenderer* renderer) {
             continue;
         }
         // World-anchored sprites participate in the same 3D billboard pass
-        // as HtmlNodes and need their textures uploaded on the GL/main
-        // thread before scene render. Skip 2D-only sprites — those go
-        // through the canvas path which doesn't need GL textures.
+        // as HtmlNodes, so their image file must be decoded before scene
+        // render. 2D-only sprites load lazily on the canvas path instead.
         if (node->type() == SceneNode::Type::Sprite && node->hasWorldAnchor()) {
             auto* sp = static_cast<SpriteNode*>(node.get());
-            sp->materializeBillboard();
+            sp->ensureImageLoaded();
         }
     }
 }

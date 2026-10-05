@@ -1,58 +1,59 @@
 #pragma once
 
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_allocator.h"
-#include "scene/vulkan/scene_vk_pipeline.h"
-#include "scene/vulkan/scene_vk_descriptors.h"
+// World-anchored billboards: every node with a world anchor (shapes, sprites,
+// HTML panels) as a camera-facing quad — Y-locked when the node asks — and,
+// with light icons on, a marker per light. Premultiplied over the HDR scope,
+// depth-tested against the scene, after the particles.
+
+#include "scene/vulkan/scene_pass.h"
+#include "scene/vulkan/scene_vk_target_format.h"
+
 #include <vulkan/vulkan.h>
+
 #include <cstdint>
+
+namespace bro::scene {
+struct NodeTexture;
+class SceneNode;
+class LightNode;
+}
 
 namespace bro::scene::vk {
 
-struct alignas(16) BillboardPushConstants {
-    float anchor[4];      // 16 bytes: xyz = worldAnchor, w = unused
-    float right[4];       // 16 bytes: xyz = billboard right, w = unused
-    float up[4];          // 16 bytes: xyz = billboard up, w = unused
-    float halfSize[2];    // 8 bytes: halfW, halfH
-    float uvMin[2];       // 8 bytes: uMin, vMin
-    float uvMax[2];       // 8 bytes: uMax, vMax
-    float strokeWidth;    // 4 bytes: in UV units
-    int32_t shapeMode;    // 4 bytes: 0=rect, 1=circle SDF, 2=premul tex (Html), 3=ring disc, 4=straight tex (Sprite)
-    float color[4];       // 16 bytes: RGBA color / tint
-    float stroke[4];      // 16 bytes: RGBA stroke color
-};
-
-/// Camera-facing billboard and world-anchored quad rendering pass into HDR target.
-class PassBillboard {
+class PassBillboard final : public ScenePass {
 public:
-    PassBillboard() = default;
-    ~PassBillboard() = default;
-
-    PassBillboard(const PassBillboard&) = delete;
-    PassBillboard& operator=(const PassBillboard&) = delete;
-
-    bool init(SceneVkDevice& device, SceneVkAllocator& allocator,
-              VkDescriptorSetLayout cameraLayout,
-              VkDescriptorSetLayout materialLayout,
-              VkDescriptorSet defaultMaterialSet);
-    void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
-    /// Rebuild the pipeline for the HDR target's sample count.
-    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
-
-    void begin(VkCommandBuffer cmd, VkDescriptorSet cameraSet);
-    void draw(VkCommandBuffer cmd, const BillboardPushConstants& push, VkDescriptorSet materialSet);
+    const char* name() const override { return "billboards"; }
+    bool setup(SceneGpu& gpu) override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
 
 private:
-    bool createPipeline(VkDevice dev);
+    /// billboard.vert/frag's push block.
+    struct alignas(16) Push {
+        float anchor[4];     // xyz world anchor
+        float right[4];      // xyz quad right
+        float up[4];         // xyz quad up
+        float halfSize[2];
+        float uvMin[2];
+        float uvMax[2];
+        float strokeWidth;   // in uv units
+        int32_t shapeMode;   // 0 rect, 1 circle, 2 premultiplied texture (HTML), 3 ring, 4 straight texture (sprite)
+        float color[4];
+        float stroke[4];
+    };
 
-    VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
-    VkDescriptorSetLayout cameraLayout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout materialLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-    VkPipeline pipeline_ = VK_NULL_HANDLE;
+    /// Fill `push` (and the texture's set) for an anchored node; false when
+    /// it draws nothing.
+    bool prepareNode(SceneFrame& frame, SceneNode& node, Push& push, VkDescriptorSet& material);
+    void prepareLightIcon(const SceneFrame& frame, const LightNode& light, Push& push);
+    VkDescriptorSet textureSet(SceneFrame& frame, const NodeTexture& tex, uint32_t nodeId);
 
-    VkDescriptorSet defaultMaterialSet_ = VK_NULL_HANDLE;
-    VkDescriptorSet activeCameraSet_ = VK_NULL_HANDLE;
+    SceneVkDevice* device_ = nullptr;
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    VkShaderModule vs_ = VK_NULL_HANDLE;
+    VkShaderModule fs_ = VK_NULL_HANDLE;
+    PipelineVariants pipelines_;
 };
 
-} // namespace bro::scene::vk
+}  // namespace bro::scene::vk

@@ -111,9 +111,6 @@ public:
     /// using the graph's current camera so the list is render-ready.
     std::vector<scene::MeshNode*> meshesForRender(scene::SceneGraph* graph);
 
-    /// Release GPU resources (arrow mesh uploads). Call before GL shutdown.
-    void releaseGL();
-
     // --- Picking + drag ---------------------------------------------------
 
     struct PickResult {

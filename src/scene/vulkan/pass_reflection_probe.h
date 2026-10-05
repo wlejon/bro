@@ -1,71 +1,49 @@
 #pragma once
 
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_allocator.h"
-#include "scene/vulkan/scene_vk_descriptors.h"
-#include "scene/vulkan/pass_mesh.h"
-#include "scene/reflection_probe_node.h"
+// Reflection-probe capture. Every visible probe that asks for a capture
+// renders its six cube faces (opaque meshes, unlit by scene lights, built-in
+// shading) into a mipmapped RGBA16F cube, box-filtered down the chain; the
+// highest-priority probe holding a capture becomes the frame's probe
+// (SceneFrame::probe), which the lighting set samples. Cubes are keyed by
+// node id and dropped when their node is destroyed.
 
-#include <vulkan/vulkan.h>
+#include "scene/vulkan/scene_pass.h"
+
+#include <array>
+#include <cstdint>
 #include <unordered_map>
-#include <vector>
 
 namespace bro::scene {
-class SceneGraph;
-class SceneRenderer;
+class ReflectionProbeNode;
 }
 
 namespace bro::scene::vk {
 
-class SceneVkBridge;
-
-/// Reflection probe capturing pass that renders the 6 cubemap faces of active probes.
-class PassReflectionProbe {
+class PassReflectionProbe final : public ScenePass {
 public:
-    PassReflectionProbe() = default;
-    ~PassReflectionProbe();
-
-    PassReflectionProbe(const PassReflectionProbe&) = delete;
-    PassReflectionProbe& operator=(const PassReflectionProbe&) = delete;
-
-    bool init(SceneVkDevice& device, SceneVkAllocator& allocator);
-    void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
-
-    void updateProbes(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer,
-                      PassMesh& passMesh, SceneVkAllocator& allocator, SceneVkDevice& device,
-                      SceneVkBridge& bridge);
-
-    bool hasActiveProbe() const { return activeProbe_ != nullptr; }
-    const ReflectionProbeNode* activeProbe() const { return activeProbe_; }
-
-    VkImageView activeCubemapView() const;
-    VkSampler activeCubemapSampler() const { return cubemapSampler_; }
-    VkImageView dummyCubemapView() const { return dummyCubemap_.view; }
+    const char* name() const override { return "reflection-probes"; }
+    bool setup(SceneGpu& gpu) override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void releaseNodes(SceneGpu& gpu, std::span<const uint32_t> ids) override;
+    void cleanup(SceneGpu& gpu) override;
 
 private:
-    struct ProbeGpuData {
-        SceneVkImage cubemap;
-        std::vector<VkImageView> faceViews; // 6 individual face views
-        SceneVkImage depthImage;
+    struct Probe {
+        SceneVkImage cube;
+        std::array<VkImageView, 6> faces{};
+        SceneVkImage depth;
         int resolution = 0;
         uint32_t mipLevels = 1;
     };
 
-    bool ensureProbeGpu(ReflectionProbeNode* probe, SceneVkAllocator& allocator, SceneVkDevice& device);
-    void releaseFaceViews(SceneVkDevice& device, ProbeGpuData& data);
-    void renderFace(VkCommandBuffer cmd, ReflectionProbeNode* probe, int face,
-                    SceneGraph& graph, SceneRenderer& renderer, PassMesh& passMesh,
-                    SceneVkAllocator& allocator, SceneVkDevice& device,
-                    SceneVkBridge& bridge);
+    Probe* ensure(SceneGpu& gpu, const ReflectionProbeNode& node);
+    void release(SceneGpu& gpu, Probe& probe);
+    void capture(SceneFrame& frame, const ReflectionProbeNode& node, Probe& probe);
+    void renderFace(SceneFrame& frame, const ReflectionProbeNode& node, Probe& probe, int face);
+    void buildMips(SceneFrame& frame, Probe& probe);
 
-    SceneVkImage dummyCubemap_;
-    VkSampler cubemapSampler_ = VK_NULL_HANDLE;
-
-    std::unordered_map<const ReflectionProbeNode*, ProbeGpuData> probeCache_;
-    const ReflectionProbeNode* activeProbe_ = nullptr;
-
-    VkDescriptorSetLayout faceCameraLayout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout faceLightingLayout_ = VK_NULL_HANDLE;
+    std::unordered_map<uint32_t, Probe> probes_;
 };
 
-} // namespace bro::scene::vk
+}  // namespace bro::scene::vk

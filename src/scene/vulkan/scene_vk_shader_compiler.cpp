@@ -20,6 +20,9 @@ static const uint32_t kSpvMeshSkinnedVert[] =
 static const uint32_t kSpvMeshFrag[] =
 #include "mesh.frag.spv.h"
 ;
+static const uint32_t kSpvMeshIndirectFrag[] =
+#include "mesh_indirect.frag.spv.h"
+;
 static const uint32_t kSpvShadowVert[] =
 #include "shadow.vert.spv.h"
 ;
@@ -125,6 +128,7 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
     static const std::vector<uint32_t> s_meshInstVert = arrayToVector(kSpvMeshInstancedVert);
     static const std::vector<uint32_t> s_meshSkinnedVert = arrayToVector(kSpvMeshSkinnedVert);
     static const std::vector<uint32_t> s_meshFrag = arrayToVector(kSpvMeshFrag);
+    static const std::vector<uint32_t> s_meshIndirectFrag = arrayToVector(kSpvMeshIndirectFrag);
     static const std::vector<uint32_t> s_shadowVert = arrayToVector(kSpvShadowVert);
     static const std::vector<uint32_t> s_shadowInstVert = arrayToVector(kSpvShadowInstancedVert);
     static const std::vector<uint32_t> s_shadowSkinnedVert = arrayToVector(kSpvShadowSkinnedVert);
@@ -156,6 +160,7 @@ const std::vector<uint32_t>& SceneVkShaderCompiler::getBuiltinSpirv(BuiltinScene
         case BuiltinSceneShader::MeshInstancedVert: return s_meshInstVert;
         case BuiltinSceneShader::MeshSkinnedVert:   return s_meshSkinnedVert;
         case BuiltinSceneShader::MeshFrag:          return s_meshFrag;
+        case BuiltinSceneShader::MeshIndirectFrag:  return s_meshIndirectFrag;
         case BuiltinSceneShader::ShadowVert:        return s_shadowVert;
         case BuiltinSceneShader::ShadowInstancedVert: return s_shadowInstVert;
         case BuiltinSceneShader::ShadowSkinnedVert: return s_shadowSkinnedVert;

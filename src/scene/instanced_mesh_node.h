@@ -7,14 +7,14 @@
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bbox.h>
 #include <bromesh/analysis/bvh.h>
-#include "webgl/webgl_types.h"
+#include "scene/texture_source.h"
 
 #include <vector>
 #include <cstdint>
 
 namespace bro::scene {
 
-/// Renders many copies of one mesh in a single draw call via glDrawElementsInstanced.
+/// Renders many copies of one mesh in a single instanced draw.
 /// One mesh + one material is shared across all instances; per-instance state is a
 /// 4x3 affine model transform plus an RGBA color tint, packed as 16 floats:
 ///
@@ -28,13 +28,12 @@ namespace bro::scene {
 class InstancedMeshNode : public SceneNode {
 public:
     explicit InstancedMeshNode(const std::string& name = "");
-    ~InstancedMeshNode() override;
+    ~InstancedMeshNode() override = default;
 
     InstancedMeshNode(const InstancedMeshNode&) = delete;
     InstancedMeshNode& operator=(const InstancedMeshNode&) = delete;
 
     Type type() const override { return Type::InstancedMesh; }
-    void onRender(SceneGraph& graph) override;
 
     // --- Mesh ---
 
@@ -81,6 +80,9 @@ public:
 
     const std::vector<float>& instanceData() const { return instanceData_; }
 
+    /// Moves whenever the mesh changes (the renderer re-uploads geometry).
+    uint64_t geometryGeneration() const { return geometryGeneration_; }
+
     /// Lazily-built, cached BVH over the instance mesh — one BVH shared by every
     /// instance, since they all draw the same geometry. Mirrors MeshNode::bvh().
     const bromesh::MeshBVH& bvh() const;
@@ -93,30 +95,32 @@ public:
     }
     const float* color() const { return color_; }
 
+    // Material textures: tightly packed RGBA8, copied. The renderer uploads
+    // a slot when its generation moves (see texture_source.h).
     void setBaseColorTexture(int width, int height, const uint8_t* rgba);
     void clearBaseColorTexture();
-    bool hasBaseColorTexture() const { return texture_ != 0; }
-    GLuint baseColorTextureId() const { return texture_; }
+    bool hasBaseColorTexture() const { return !baseColorTex_.empty(); }
+    const NodeTexture& baseColorTexture() const { return baseColorTex_; }
 
     void setNormalTexture(int width, int height, const uint8_t* rgba);
     void clearNormalTexture();
-    bool hasNormalTexture() const { return normalTex_ != 0; }
-    GLuint normalTextureId() const { return normalTex_; }
+    bool hasNormalTexture() const { return !normalTex_.empty(); }
+    const NodeTexture& normalTexture() const { return normalTex_; }
 
     void setMetallicRoughnessTexture(int width, int height, const uint8_t* rgba);
     void clearMetallicRoughnessTexture();
-    bool hasMetallicRoughnessTexture() const { return mrTex_ != 0; }
-    GLuint metallicRoughnessTextureId() const { return mrTex_; }
+    bool hasMetallicRoughnessTexture() const { return !mrTex_.empty(); }
+    const NodeTexture& metallicRoughnessTexture() const { return mrTex_; }
 
     void setOcclusionTexture(int width, int height, const uint8_t* rgba);
     void clearOcclusionTexture();
-    bool hasOcclusionTexture() const { return aoTex_ != 0; }
-    GLuint occlusionTextureId() const { return aoTex_; }
+    bool hasOcclusionTexture() const { return !aoTex_.empty(); }
+    const NodeTexture& occlusionTexture() const { return aoTex_; }
 
     void setEmissiveTexture(int width, int height, const uint8_t* rgba);
     void clearEmissiveTexture();
-    bool hasEmissiveTexture() const { return emissiveTex_ != 0; }
-    GLuint emissiveTextureId() const { return emissiveTex_; }
+    bool hasEmissiveTexture() const { return !emissiveTex_.empty(); }
+    const NodeTexture& emissiveTexture() const { return emissiveTex_; }
 
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
@@ -148,7 +152,7 @@ public:
 
     // --- Static batching ---
     // Collapse ALL instances into ONE merged mesh drawn as a single instance.
-    // `glDrawElementsInstanced` carries a fixed ~7-9us of GPU time PER INSTANCE
+    // An instanced draw carries a fixed ~7-9us of GPU time PER INSTANCE
     // on some drivers (measured + Nsight-confirmed), independent of the
     // instance's geometry — negligible for a big mesh drawn a few times, but
     // catastrophic for high counts of tiny (few-triangle) meshes (20000 quads =
@@ -183,6 +187,9 @@ public:
     }
 
     // --- GPU foliage scatter mode ---
+    // The Vulkan renderer does not draw scatter nodes yet; it says so once in
+    // the log rather than pretending. The state is kept so culling, picking
+    // and a future pass see what the app set.
     // Expand `segCount` branch segments into leaves entirely in the vertex
     // shader (shaders/foliage_scatter.vert), so the tens-of-thousands-of-leaves
     // scatter never touches the CPU and no per-leaf instance buffer is built or
@@ -210,10 +217,11 @@ public:
     size_t scatterSegCount() const { return scatterSegCount_; }
     size_t scatterInstanceCount() const { return scatterInstCount_; }
     const ScatterParams& scatterParams() const { return scatterParams_; }
-    GLuint scatterSegTexture() const { return segTex_; }
-    GLuint scatterInstSegTexture() const { return instSegTex_; }
+    const std::vector<float>& scatterSegments() const { return scatterData_; }
+    const std::vector<float>& scatterInstanceSegments() const { return scatterInstSeg_; }
 
     // --- GPU procedural branch-tube mode ---
+    // Not drawn by the Vulkan renderer yet (logged once, like scatter mode).
     // Synthesise tapered tube (stem) geometry entirely in the vertex shader
     // (shaders/branch_tube.vert) from a compact per-segment texture buffer, so
     // a growing skeleton re-uploads only the segment records — never a re-baked
@@ -231,18 +239,9 @@ public:
     size_t tubeSegCount() const { return tubeSegCount_; }
     int tubeSides() const { return tubeSides_; }
     float tubeRadiusScale() const { return tubeRadiusScale_; }
-    GLuint tubeSegTexture() const { return tubeTex_; }
+    const std::vector<float>& tubeSegments() const { return tubeData_; }
     /// Vertices a full tube draw issues (segCount * sides * 6).
-    GLsizei tubeVertexCount() const {
-        return (GLsizei)(tubeSegCount_ * (size_t)tubeSides_ * 6);
-    }
-    /// Bind the (attribute-less) tube VAO and issue the forward tube draw. The
-    /// caller has already bound the tube program + uploaded uniforms and the
-    /// segment TBO. Returns true if anything drew.
-    bool drawTube();
-    /// Same geometry into the shadow depth pass (caller bound the tube-depth
-    /// program + uLightVP + the segment TBO).
-    bool drawTubeDepth();
+    size_t tubeVertexCount() const { return tubeSegCount_ * (size_t)tubeSides_ * 6; }
 
     void setMetallic(float m) { metallic_ = m; }
     float metallic() const { return metallic_; }
@@ -278,6 +277,7 @@ public:
     void setAtlasGrid(int cols, int rows) {
         atlasCols_ = cols < 1 ? 1 : cols;
         atlasRows_ = rows < 1 ? 1 : rows;
+        batchDirty_ = true;   // the batch bakes the atlas cell into its UVs
     }
     int atlasCols() const { return atlasCols_; }
     int atlasRows() const { return atlasRows_; }
@@ -315,10 +315,6 @@ public:
     void setCullMargin(float m) { cullMargin_ = m < 0.0f ? 0.0f : m; }
     float cullMargin() const { return cullMargin_; }
 
-    /// Bind VAO and issue a depth-only instanced draw — used by the shadow
-    /// caster pass. Returns true if anything drew.
-    bool drawRawInstancedDepth();
-
     /// Compute the world-space AABB enclosing every instance's transformed
     /// local mesh bounds. Used by shadow frustum fitting. Returns false if
     /// there are no instances or the mesh is empty.
@@ -336,34 +332,16 @@ public:
                                       : (vertexColorTint_ != 0 && hasVertexColors_);
     }
 
-    /// Bind VAO and issue glDrawElementsInstanced. Used by the forward pass
-    /// after the caller has already bound the appropriate program and uploaded
-    /// material/camera uniforms. Returns true if anything drew.
-    bool drawRawInstanced();
-
-    void releaseGL();
-
-    // Same staged-upload pattern as MeshNode (kept private — texture setters
-    // stage on the calling thread, uploadMeshToGPU() flushes on the GL thread).
-    struct PendingTex {
-        std::vector<uint8_t> data;
-        int w = 0;
-        int h = 0;
-        bool dirty = false;
-    };
-
 private:
-    void uploadMeshToGPU();
-    void uploadInstancesToGPU();
-    void uploadScatterToGPU();
-    bool drawScatter();
-    void uploadTubeToGPU();
     // Rebake batchMesh_ from mesh_ + instanceData_ (static-batch path). Clears
-    // batchDirty_ and marks the GL mesh/instance buffers dirty for re-upload.
-    void rebuildStaticBatch();
+    // batchDirty_. The Vulkan renderer does not draw the batch yet (it draws
+    // every node instanced), so nothing calls this until static batching is
+    // ported.
+    void rebuildStaticBatch() const;
+    void instancesChanged();
 
     bromesh::MeshData mesh_;
-    bool meshDirty_ = false;
+    uint64_t geometryGeneration_ = nextResourceGeneration();
     bromath::AABB3 bounds_;
 
     // Cached BVH over mesh_, invalidated by setMesh. Covers the instance mesh
@@ -373,13 +351,13 @@ private:
 
     std::vector<float> instanceData_;
     size_t instanceCount_ = 0;
-    bool instancesDirty_ = false;
 
     // Static batching: mesh_ + instanceData_ merged into one draw. batchMesh_
-    // is the baked geometry uploaded (instead of mesh_) when renderingBatched().
+    // is the baked geometry drawn (instead of mesh_) when renderingBatched().
+    // Baked lazily on the render path, hence mutable.
     bool staticBatch_ = false;
-    bool batchDirty_ = true;
-    bromesh::MeshData batchMesh_;
+    mutable bool batchDirty_ = true;
+    mutable bromesh::MeshData batchMesh_;
 
     // Node-space union of instance-transformed mesh bounds, rebuilt lazily by
     // computeWorldInstanceBounds when the mesh or instances change. Cached
@@ -388,54 +366,28 @@ private:
     mutable bromath::AABB3 instanceBoundsCache_;
     mutable bool instanceBoundsDirty_ = true;
 
-    // GL resources
-    GLuint vao_ = 0;
-    GLuint vbo_ = 0;       // mesh vertex buffer
-    GLuint ibo_ = 0;       // index buffer
-    GLuint instVbo_ = 0;   // per-instance interleaved buffer
-    size_t instVboCapacity_ = 0;  // bytes currently allocated on GPU
-
-    // Scatter mode (see setScatterSegments). segBuf_ holds the packed segment
-    // records; segTex_ is the texture-buffer view the scatter VS samples.
+    // Scatter mode (see setScatterSegments): the packed segment records.
     bool scatterMode_ = false;
-    bool scatterDirty_ = false;
     std::vector<float> scatterData_;     // segCount*8 floats (2 RGBA32F texels)
     std::vector<float> scatterInstSeg_;  // instCount floats (leaf → segment idx)
     size_t scatterSegCount_ = 0;
     size_t scatterInstCount_ = 0;
     ScatterParams scatterParams_;
     bromath::AABB3 scatterBounds_;
-    GLuint segBuf_ = 0;       // GL_TEXTURE_BUFFER of segment records
-    GLuint segTex_ = 0;       // texture bound to segBuf_ (RGBA32F samplerBuffer)
-    GLuint instSegBuf_ = 0;   // GL_TEXTURE_BUFFER of per-leaf segment indices
-    GLuint instSegTex_ = 0;   // texture bound to instSegBuf_ (R32F samplerBuffer)
 
-    // Procedural branch-tube mode (see setTubeSegments). tubeBuf_ holds the
-    // packed segment records; tubeTex_ is the RGBA32F samplerBuffer view the
-    // tube VS samples. tubeVao_ is an empty VAO bound for the attribute-less
-    // draw (core profile requires some VAO bound even with no vertex attribs).
+    // Procedural branch-tube mode (see setTubeSegments): the packed segment
+    // records.
     bool tubeMode_ = false;
-    bool tubeDirty_ = false;
     std::vector<float> tubeData_;   // segCount*8 floats (2 RGBA32F texels each)
     size_t tubeSegCount_ = 0;
     int    tubeSides_ = 6;
     float  tubeRadiusScale_ = 1.0f;
     bromath::AABB3 tubeBounds_;
-    GLuint tubeBuf_ = 0;      // GL_TEXTURE_BUFFER of segment records
-    GLuint tubeTex_ = 0;      // texture bound to tubeBuf_ (RGBA32F samplerBuffer)
-    GLuint tubeVao_ = 0;      // empty VAO for the attribute-less tube draw
-    GLuint texture_ = 0;
-    GLuint normalTex_ = 0;
-    GLuint mrTex_ = 0;
-    GLuint aoTex_ = 0;
-    GLuint emissiveTex_ = 0;
-    GLsizei indexCount_ = 0;
-
-    PendingTex pendingBase_;
-    PendingTex pendingNormal_;
-    PendingTex pendingMR_;
-    PendingTex pendingAO_;
-    PendingTex pendingEmissive_;
+    NodeTexture baseColorTex_;
+    NodeTexture normalTex_;
+    NodeTexture mrTex_;
+    NodeTexture aoTex_;
+    NodeTexture emissiveTex_;
 
     // Material
     bool hasVertexColors_ = false;

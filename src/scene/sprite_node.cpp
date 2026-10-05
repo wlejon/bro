@@ -10,21 +10,16 @@ namespace bro::scene {
 
 SpriteNode::SpriteNode(const std::string& name) : SceneNode(name) {}
 
-SpriteNode::~SpriteNode() { releaseGL(); }
 
 void SpriteNode::setImageData(const uint8_t* rgba, int w, int h) {
-    imgW_ = w;
-    imgH_ = h;
-    pixels_.assign(rgba, rgba + w * h * 4);
+    image_.set(w, h, rgba);
     imageLoaded_ = true;
-    textureDirty_ = true;
 }
 
 void SpriteNode::setImagePath(const std::string& path) {
     imagePath_ = path;
     imageLoaded_ = false;
-    pixels_.clear();
-    textureDirty_ = true;
+    image_.clear();
 }
 
 void SpriteNode::setSheetGrid(int frameWidth, int frameHeight, int columns, int rows) {
@@ -141,32 +136,18 @@ void SpriteNode::onTick(float dtSec) {
     }
 }
 
-void SpriteNode::materializeBillboard() {
-    // Lazy-load image from path, mirroring the 2D onRender path. Without
-    // this, world-anchored sprites that never went through the 2D path
-    // would never have pixels in time for the billboard pass.
-    if (!imageLoaded_ && !imagePath_.empty()) {
-        broimage::Image img;
-        if (broimage::decode_file(imagePath_, img)) {
-            imgW_ = img.width;
-            imgH_ = img.height;
-            pixels_ = std::move(img.pixels);
-            textureDirty_ = true;
-        }
-        imageLoaded_ = true;
-    }
-    if (pixels_.empty() || imgW_ <= 0 || imgH_ <= 0) return;
-    if (texture_ != 0 && !textureDirty_) return;
-
-    texW_ = imgW_;
-    texH_ = imgH_;
-    textureDirty_ = false;
+void SpriteNode::ensureImageLoaded() {
+    if (imageLoaded_ || imagePath_.empty()) return;
+    broimage::Image img;
+    if (broimage::decode_file(imagePath_, img))
+        image_.adopt(img.width, img.height, std::move(img.pixels));
+    imageLoaded_ = true;
 }
 
 void SpriteNode::currentUvRect(float& uMin, float& vMin,
                                 float& uMax, float& vMax) const {
     uMin = 0.0f; vMin = 0.0f; uMax = 1.0f; vMax = 1.0f;
-    if (imgW_ <= 0 || imgH_ <= 0) return;
+    if (image_.empty()) return;
     float sx, sy, sw, sh;
     if (currentSheetRect(sx, sy, sw, sh)) {
         // sheet frame
@@ -175,36 +156,20 @@ void SpriteNode::currentUvRect(float& uMin, float& vMin,
     } else {
         return;  // full image
     }
-    const float fw = static_cast<float>(imgW_);
-    const float fh = static_cast<float>(imgH_);
+    const float fw = static_cast<float>(image_.width);
+    const float fh = static_cast<float>(image_.height);
     uMin = sx / fw;
     vMin = sy / fh;
     uMax = (sx + sw) / fw;
     vMax = (sy + sh) / fh;
 }
 
-void SpriteNode::releaseGL() {
-    texture_ = 0;
-    texW_ = 0;
-    texH_ = 0;
-}
-
 void SpriteNode::onRender(SceneGraph& graph) {
     auto* cs = graph.canvasScene();
     if (!cs) return;
 
-    // Lazy-load image from path
-    if (!imageLoaded_ && !imagePath_.empty()) {
-        broimage::Image img;
-        if (broimage::decode_file(imagePath_, img)) {
-            imgW_ = img.width;
-            imgH_ = img.height;
-            pixels_ = std::move(img.pixels);
-        }
-        imageLoaded_ = true;
-    }
-
-    if (pixels_.empty()) return;
+    ensureImageLoaded();
+    if (image_.empty()) return;
 
     // Source rect resolution priority:
     //   1. Active sheet frame (if a sheet is configured)
@@ -225,11 +190,12 @@ void SpriteNode::onRender(SceneGraph& graph) {
     } else if (hasSheetRect) {
         dw = sw; dh = sh;
     } else {
-        dw = static_cast<float>(imgW_);
-        dh = static_cast<float>(imgH_);
+        dw = static_cast<float>(image_.width);
+        dh = static_cast<float>(image_.height);
     }
 
     const auto& wm = worldMatrix();
+    const int imgW = image_.width, imgH = image_.height;
 
     cs->save();
     cs->setTransform(wm.at(0, 0), wm.at(1, 0), wm.at(0, 1), wm.at(1, 1), wm.at(0, 3), wm.at(1, 3));
@@ -242,12 +208,12 @@ void SpriteNode::onRender(SceneGraph& graph) {
     float ay = -dh * anchorY_;
 
     if (useSrc) {
-        cs->drawImage(pixels_.data(), imgW_, imgH_,
+        cs->drawImage(image_.rgba.data(), imgW, imgH,
                       sx, sy, sw, sh,
                       ax, ay, dw, dh);
     } else {
-        cs->drawImage(pixels_.data(), imgW_, imgH_,
-                      0, 0, static_cast<float>(imgW_), static_cast<float>(imgH_),
+        cs->drawImage(image_.rgba.data(), imgW, imgH,
+                      0, 0, static_cast<float>(imgW), static_cast<float>(imgH),
                       ax, ay, dw, dh);
     }
 

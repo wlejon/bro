@@ -47,9 +47,7 @@ HtmlNode::HtmlNode(const std::string& name) : SceneNode(name) {
     }
 }
 
-HtmlNode::~HtmlNode() {
-    releaseGL();
-}
+HtmlNode::~HtmlNode() = default;
 
 void HtmlNode::setHtml(const std::string& html) {
     if (!doc_ || !root_) return;
@@ -84,9 +82,9 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer) {
     doc_->performLayout((float)w, (float)h, metrics);
     doc_->clearDirty();
 
-    // CPU-backed SkSurface. We read pixels back and upload through GL rather
-    // than using a Ganesh-backed surface, to keep this independent of which
-    // GrDirectContext the caller's renderer owns.
+    // CPU-backed SkSurface. We read the pixels back for the scene renderer
+    // to upload rather than using a GPU-backed surface, to keep this
+    // independent of which GPU context the caller's renderer owns.
     SkImageInfo info = SkImageInfo::MakeN32Premul(w, h);
     sk_sp<SkSurface> cpuSurface = SkSurfaces::Raster(info);
     if (!cpuSurface) {
@@ -105,7 +103,7 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer) {
     renderer->switchSurface(prev);
 
     // Read out premultiplied RGBA. The billboard fragment shader expects
-    // premultiplied, so GL_RGBA + premul data needs no format conversion.
+    // premultiplied, so RGBA8 + premul data needs no format conversion.
     const size_t rowBytes = (size_t)w * 4u;
     std::vector<uint8_t> buf((size_t)h * rowBytes);
     SkImageInfo readInfo = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType,
@@ -115,18 +113,9 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer) {
         return;
     }
 
-    pixels_ = std::move(buf);
-    textureDirty_ = true;
-    texW_ = w;
-    texH_ = h;
+    texture_.adopt(w, h, std::move(buf));
     dirty_ = false;
     bumpChangeGeneration();
-}
-
-void HtmlNode::releaseGL() {
-    texture_ = 0;
-    texW_ = 0;
-    texH_ = 0;
 }
 
 } // namespace bro::scene

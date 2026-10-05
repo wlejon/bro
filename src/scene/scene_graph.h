@@ -22,8 +22,6 @@
 #include "scene/tween.h"
 #include "scene/clip_player.h"
 
-#include "webgl/webgl_types.h"
-
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -36,14 +34,9 @@ namespace brogameagent { class World; }
 
 namespace bro::scene {
 
-namespace vk {
-class SceneVkBridge;
-class PassReflectionProbe;
-}
-
 /// Per-canvas scene graph. Owns all nodes and manages update/render traversal.
-/// GL rendering (pipelines, FBOs, shadows, IBL, post stack) lives in the
-/// SceneRenderer this graph owns; the render-config API below forwards to it.
+/// Rendering lives in the SceneRenderer this graph owns; the render-config
+/// API below forwards to it.
 class SceneGraph {
 public:
     SceneGraph();
@@ -204,9 +197,6 @@ public:
     /// 3D MeshNodes are rendered into an FBO via GL. 2D nodes render via CanvasScene.
     void render();
 
-    /// Get the color texture of the 3D FBO (for compositing). 0 if no 3D content.
-    GLuint meshFBOTexture() const { return renderer_.meshFBOTexture(); }
-
     /// Returns true if any MeshNodes were rendered this frame.
     bool hasMeshContent() const { return renderer_.hasMeshContent(); }
 
@@ -222,14 +212,6 @@ public:
         return renderer_.readTonemapPixelsRGBA(outW, outH);
     }
 
-    /// Current LDR output texture of this scene's 3D pipeline — the same
-    /// texture the compositor samples (the tilt-shift output when that pass
-    /// ran, else the tonemap output). 0 until the first 3D render. The id is
-    /// NOT stable across frames: the FBO chain is recreated on canvas resize
-    /// and renderScale changes, so consumers must re-resolve every frame
-    /// (see outputTextureSource()).
-    unsigned outputColorTexture() const { return renderer_.finalColorTex(); }
-
     /// Shared liveness token for scene-as-texture consumers (a mesh in
     /// another scene sampling this scene's output). A consumer keeps a
     /// weak_ptr to this token and resolves it at draw time: a failed lock()
@@ -240,10 +222,11 @@ public:
     struct OutputTextureSource { SceneGraph* graph = nullptr; };
     std::shared_ptr<OutputTextureSource> outputTextureSource();
 
-    /// Callback invoked after render() with the current mesh FBO texture (or 0).
-    /// Used to push the texture ID to the DOM element for compositing.
-    using FBOTextureCallback = std::function<void(unsigned int texId)>;
-    void setFBOTextureCallback(FBOTextureCallback cb) { fboTexCb_ = std::move(cb); }
+    /// Callback invoked after render() with the 3D layer the element
+    /// composites: the renderer's output image, or an empty one when no 3D
+    /// content was drawn. The image is only valid until the next render().
+    using LayerCallback = std::function<void(const render::LayerImage& layer)>;
+    void setLayerCallback(LayerCallback cb) { layerCb_ = std::move(cb); }
 
     /// Gizmo overlay provider. Invoked during render() after the mesh +
     /// billboard passes, while the mesh FBO is still bound. Returns a list
@@ -253,6 +236,11 @@ public:
     /// convention (handles remain grabbable even when inside geometry).
     using GizmoProvider = std::function<std::vector<MeshNode*>(SceneGraph*)>;
     void setGizmoProvider(GizmoProvider cb) { gizmoProvider_ = std::move(cb); }
+    bool hasGizmoProvider() const { return static_cast<bool>(gizmoProvider_); }
+    /// The provider's handles for this frame (empty without a provider).
+    std::vector<MeshNode*> gizmoMeshes() {
+        return gizmoProvider_ ? gizmoProvider_(this) : std::vector<MeshNode*>{};
+    }
 
     // --- Camera ---
 
@@ -317,13 +305,9 @@ public:
     /// distance to the camera, under ortho it is fixed by the projection's
     /// half-height and distance does not enter into it.
     bool cameraIsPerspective() const { return cameraIsPerspective_; }
+    float cameraNearZ() const { return cameraNearZ_; }
+    float cameraFarZ() const { return cameraFarZ_; }
     float cameraFovY() const { return cameraFovY_; }
-
-    /// Rebuild the projection if it was built under a different depth
-    /// convention than the one now active. No-op in the overwhelmingly common
-    /// case; the renderer calls it once per frame because the convention is
-    /// only settled on the first frame that has a GL context.
-    void syncProjectionToDepthPolicy();
 
     /// Unproject canvas-local pixel coordinates to a world-space ray.
     /// `localX` / `localY` are in pixels relative to the canvas (top-left
@@ -604,12 +588,12 @@ public:
     SceneRenderer& renderer() { return renderer_; }
     const SceneRenderer& renderer() const { return renderer_; }
 
+    /// Every node the graph owns, by id (the root excluded).
+    const std::unordered_map<uint32_t, std::unique_ptr<SceneNode>>& nodes() const { return nodes_; }
+
 private:
-    // The renderer walks nodes/camera state directly through its graph
-    // back-reference; it is the only class with private access.
+    // The shadow planner reads the camera intrinsics directly.
     friend class SceneRenderer;
-    friend class vk::SceneVkBridge;
-    friend class vk::PassReflectionProbe;
 
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
 
@@ -671,11 +655,6 @@ private:
     // can be rebuilt without the caller.
     float cameraOrthoL_ = -1.0f, cameraOrthoR_ = 1.0f;
     float cameraOrthoB_ = -1.0f, cameraOrthoT_ = 1.0f;
-    // Which depth convention built projectionMatrix_. The convention is only
-    // decided once a GL context exists, which can be after JS has already set
-    // a camera, so the matrix and the context can disagree for exactly one
-    // frame; syncProjectionToDepthPolicy() closes that gap.
-    bool  projectionBuiltReversed_ = false;
     // When the caller didn't pin an explicit aspect (e.g. omitted `aspect`
     // in scene.setCamera), the projection matrix must stay in lock-step with
     // canvas/FBO dimensions — otherwise resizing the window squishes content
@@ -694,7 +673,7 @@ private:
     // Canvas size for FBO
     int canvasWidth_ = 0, canvasHeight_ = 0;
 
-    FBOTextureCallback fboTexCb_;
+    LayerCallback layerCb_;
     GizmoProvider gizmoProvider_;
 
     // Scene-as-texture liveness token (lazily created; see
@@ -705,7 +684,7 @@ private:
     // livenessToken()). Wrappers hold weak_ptrs only.
     std::shared_ptr<LivenessToken> liveToken_;
 
-    // GL rendering: pipelines, FBOs, shadows, IBL, post stack. The renderer
+    // The 3D renderer and its GPU state. The renderer
     // never touches graph state in its destructor, so member order is not
     // load-bearing; it lives last simply to keep the hot node/camera state
     // at stable offsets.

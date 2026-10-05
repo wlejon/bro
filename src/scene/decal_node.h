@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene/scene_node.h"
-#include "webgl/webgl_types.h"
+#include "scene/texture_source.h"
 
 #include <cstdint>
 #include <vector>
@@ -29,7 +29,6 @@ namespace bro::scene {
 class DecalNode : public SceneNode {
 public:
     explicit DecalNode(const std::string& name = "");
-    ~DecalNode() override;
 
     Type type() const override { return Type::Decal; }
 
@@ -77,43 +76,23 @@ public:
     void setRenderPriority(int p) { renderPriority_ = p; }
     int renderPriority() const { return renderPriority_; }
 
-    // --- Textures (staged upload, same pattern as MeshNode) ---
-    // Setters copy the RGBA8 bytes (tightly packed, top-left origin) and may
-    // run without a GL context; flushPendingTextures() uploads on the GL
-    // thread before the decal pass reads texture ids. A decal without an
-    // albedo texture projects plain `modulate` (a colored box projection).
+    // --- Textures ---
+    // Setters copy the RGBA8 bytes (tightly packed, top-left origin); the
+    // renderer uploads a slot when its generation moves (texture_source.h).
+    // A decal without an albedo texture projects plain `modulate` (a colored
+    // box projection).
 
     void setAlbedoTexture(int width, int height, const uint8_t* rgba);
     void clearAlbedoTexture();
-    bool hasAlbedoTexture() const { return hasAlbedo_; }
-    GLuint albedoTextureId() const { return albedoTex_; }
+    bool hasAlbedoTexture() const { return !albedoTex_.empty(); }
+    const NodeTexture& albedoTexture() const { return albedoTex_; }
 
     void setEmissionTexture(int width, int height, const uint8_t* rgba);
     void clearEmissionTexture();
-    bool hasEmissionTexture() const { return hasEmission_; }
-    GLuint emissionTextureId() const { return emissionTex_; }
-
-    struct PendingTex {
-        std::vector<uint8_t> data;
-        int w = 0;
-        int h = 0;
-        bool dirty = false;
-    };
-    const PendingTex& pendingAlbedo() const { return pendingAlbedo_; }
-    const PendingTex& pendingEmission() const { return pendingEmission_; }
-    void markAlbedoClean() { pendingAlbedo_.dirty = false; }
-    void markEmissionClean() { pendingEmission_.dirty = false; }
-
-    /// Upload/release any dirty staged texture slots. GL thread only.
-    void flushPendingTextures();
-
-    /// Release GPU resources (GL thread; called from the destructor like
-    /// SpriteNode — nodes are destroyed on the GL thread).
-    void releaseGL();
+    bool hasEmissionTexture() const { return !emissionTex_.empty(); }
+    const NodeTexture& emissionTexture() const { return emissionTex_; }
 
 private:
-    static void flushSlot(PendingTex& slot, GLuint& tex);
-
     float modulate_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float emissionStrength_ = 1.0f;
     float upperFade_ = 0.0f;
@@ -121,14 +100,8 @@ private:
     float normalFade_ = 0.0f;
     int renderPriority_ = 0;
 
-    // True from the setter on (staged or uploaded); false after clear.
-    bool hasAlbedo_ = false;
-    bool hasEmission_ = false;
-
-    GLuint albedoTex_ = 0;
-    GLuint emissionTex_ = 0;
-    PendingTex pendingAlbedo_;
-    PendingTex pendingEmission_;
+    NodeTexture albedoTex_;
+    NodeTexture emissionTex_;
 };
 
 } // namespace bro::scene

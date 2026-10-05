@@ -46,6 +46,10 @@ foreach(_shader
     bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
                      "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${_shader}" ${_stage})
 endforeach()
+# The opaque mesh shader that also writes the indirect light for SSAO.
+bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
+                 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
+                 NAME mesh_indirect.frag DEFINES SCENE_INDIRECT_OUTPUT)
 
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
@@ -87,17 +91,7 @@ add_library(bro_scene STATIC
     impostor_layer.cpp
     depth_policy.cpp
     scene_renderer.cpp
-    scene_renderer_mesh.cpp
-    scene_renderer_instanced.cpp
-    scene_renderer_particles.cpp
-    scene_renderer_decals.cpp
-    scene_renderer_lighting.cpp
     scene_renderer_shadow.cpp
-    scene_renderer_postfx.cpp
-    scene_renderer_ssr.cpp
-    scene_renderer_environment.cpp
-    scene_renderer_overlays.cpp
-    scene_renderer_probes.cpp
     shape_node.cpp
     sprite_node.cpp
     physics_node.cpp
@@ -126,27 +120,33 @@ add_library(bro_scene STATIC
     vulkan/scene_vk_allocator.cpp
     vulkan/scene_vk_pipeline.cpp
     vulkan/scene_vk_descriptors.cpp
-    vulkan/scene_vk_target.cpp
     vulkan/scene_vk_shader_compiler.cpp
     vulkan/scene_vk_custom_shader.cpp
-    vulkan/pass_mesh.cpp
+    vulkan/scene_view.cpp
+    vulkan/scene_defaults.cpp
+    vulkan/scene_targets.cpp
+    vulkan/scene_gpu_resources.cpp
+    vulkan/scene_mesh_drawer.cpp
+    vulkan/scene_draw_list.cpp
+    vulkan/scene_frame_graph.cpp
+    vulkan/scene_fullscreen.cpp
+    vulkan/scene_lighting.cpp
     vulkan/pass_shadow.cpp
-    vulkan/pass_environment.cpp
-    vulkan/pass_postfx.cpp
-    vulkan/pass_billboard.cpp
-    vulkan/pass_particles.cpp
-    vulkan/pass_decal.cpp
     vulkan/pass_reflection_probe.cpp
+    vulkan/pass_environment.cpp
+    vulkan/pass_mesh.cpp
     vulkan/pass_terrain.cpp
+    vulkan/pass_snapshot.cpp
     vulkan/pass_ssao.cpp
     vulkan/pass_ssr.cpp
-    vulkan/pass_dof.cpp
-    vulkan/pass_color_lut.cpp
+    vulkan/pass_decal.cpp
+    vulkan/pass_particles.cpp
+    vulkan/pass_billboard.cpp
     vulkan/pass_gaussian_splat.cpp
+    vulkan/pass_dof.cpp
+    vulkan/pass_postfx.cpp
+    vulkan/pass_color_lut.cpp
     vulkan/scene_vk_bridge.cpp
-    vulkan/scene_vk_bridge_resources.cpp
-    vulkan/scene_vk_bridge_frame.cpp
-    vulkan/scene_vk_bridge_passes.cpp
     ${VK_GENERATED_HEADERS}
 )
 
@@ -169,7 +169,10 @@ if(BRO_BUILD_TESTS)
     target_include_directories(bro_vulkan_scene_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 
     add_executable(bro_vulkan_scene_passes_test tests/test_vulkan_scene_passes.cpp)
-    target_link_libraries(bro_vulkan_scene_passes_test PRIVATE bro_scene bro_render bro_platform bro_util skia Vulkan::Vulkan)
+    # A real SceneGraph pulls in the DOM, whose style code calls back into the
+    # engine's animation managers, so bro_engine is named again after bro_dom.
+    target_link_libraries(bro_vulkan_scene_passes_test PRIVATE bro_scene bro_engine bro_dom bro_engine
+                          bro_render bro_platform bro_util skia Vulkan::Vulkan)
     target_include_directories(bro_vulkan_scene_passes_test PRIVATE ${bro_SOURCE_DIR}/src ${VK_GEN_DIR})
 endif()
 

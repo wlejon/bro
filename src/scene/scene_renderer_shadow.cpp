@@ -1,19 +1,14 @@
 #include "scene/scene_renderer.h"
+#include "scene/depth_policy.h"
 #include "scene/scene_graph.h"
-#include "scene/scene_renderer_internal.h"
 #include "scene/skinned_mesh_node.h"
-#include "canvas/canvas_scene.h"
 #include "util/log.h"
-
-#include "broimage/decode.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <functional>
 #include <vector>
-
-
 
 namespace bro::scene {
 
@@ -22,30 +17,9 @@ using bromath::Quat;
 using bromath::Mat4;
 
 // ---------------------------------------------------------------------------
-// Shadow pipeline
+// Shadow-tile planner (see scene_renderer.h). The Vulkan shadow pass does not
+// draw the plan yet; the cache decision and the caster counters are real.
 // ---------------------------------------------------------------------------
-
-void SceneRenderer::ensureShadowPipeline() {
-}
-
-void SceneRenderer::ensureShadowInstancedPipeline() {
-}
-
-void SceneRenderer::ensureShadowSkinnedPipeline() {
-}
-
-SceneRenderer::CustomShadowEntry* SceneRenderer::ensureCustomShadowProgram(
-        bool /*skinned*/, const std::string& /*vertexChunk*/) {
-    return nullptr;
-}
-
-void SceneRenderer::ensureShadowAtlas() {
-}
-
-void SceneRenderer::destroyShadowAtlas() {
-    shadowAtlasAllocated_ = 0;
-    invalidateShadowCache();
-}
 
 void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
                                         bromath::AABB3& receivers) const {
@@ -270,15 +244,10 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     computeShadowBounds(casterBounds, receiverBounds);
     if (bromath::aisEmpty(casterBounds)) return;
 
-    // Bias matrix maps NDC to UV [0,1]. XY always need the half-scale-and-
-    // offset, but Z only does under the conventional [-1,1] mapping: with
-    // clip control on, the shadow projections above already emit [0,1] depth,
-    // so remapping z again would compress every comparison into [0.5,1] and
-    // shadow everything.
-    const float zs = gReversedZ ? 1.0f : 0.5f;
-    const float zo = gReversedZ ? 0.0f : 0.5f;
-    Mat4 bias = bromath::mmul(bromath::mtranslate({0.5f, 0.5f, zo}),
-                              bromath::mscale({0.5f, 0.5f, zs}));
+    // Bias matrix maps NDC to UV [0,1]. Only XY need the half-scale-and-
+    // offset: the shadow projections already emit [0,1] depth.
+    Mat4 bias = bromath::mmul(bromath::mtranslate({0.5f, 0.5f, 0.0f}),
+                              bromath::mscale({0.5f, 0.5f, 1.0f}));
 
     // Atlas grid from the tile demand: one sun over an ortho camera (or a
     // single-cascade sun) takes the WHOLE atlas, up to four tiles take a
@@ -574,7 +543,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     }
 }
 
-void SceneRenderer::renderShadowPass() {
+void SceneRenderer::planShadowTiles() {
     if (shadowTileCount_ == 0) return;
     const bool hasInstancedCasters = !shadowInstancedCasters_.empty();
     const bool hasCustomCasters = !shadowCustomCasters_.empty();
@@ -689,7 +658,7 @@ void SceneRenderer::renderShadowPass() {
             e.casters = sig;
         }
     }
-    if (!anyRender) return;  // every tile reused — no GL work at all
+    if (!anyRender) return;  // every tile reused
 
     shadowAtlasNeedsClear_ = false;
     for (int slot = 0; slot < shadowTileCount_; ++slot) {

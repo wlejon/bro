@@ -1,5 +1,8 @@
 #version 450
 
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+
 layout(location = 0) in vec2 inUV;
 layout(location = 1) in vec4 inColor;
 
@@ -30,8 +33,8 @@ layout(location = 0) out vec4 fragColor;
 float linearizeDepth(float d) {
     float n = camera.viewport.z;
     float f = camera.viewport.w;
-    // Reversed-Z: d = 1.0 at near, d = 0.0 at far
-    return n * f / max(d * (f - n) + n, 1e-7);
+    if (REVERSED_Z) return n * f / max(d * (f - n) + n, 1e-7);   // d = 1 at near, 0 at far
+    return n * f / max(f - d * (f - n), 1e-7);                    // d = 0 at near, 1 at far
 }
 
 void main() {

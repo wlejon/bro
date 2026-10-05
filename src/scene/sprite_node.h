@@ -2,7 +2,7 @@
 
 #include "scene/scene_node.h"
 
-#include "webgl/webgl_types.h"
+#include "scene/texture_source.h"
 
 #include <cstdint>
 #include <functional>
@@ -21,7 +21,7 @@ namespace bro::scene {
 class SpriteNode : public SceneNode {
 public:
     explicit SpriteNode(const std::string& name = "");
-    ~SpriteNode() override;
+    ~SpriteNode() override = default;
 
     Type type() const override { return Type::Sprite; }
     void onRender(SceneGraph& graph) override;
@@ -57,12 +57,10 @@ public:
     float opacity() const { return opacity_; }
 
     // Image data access (for rendering)
-    const std::vector<uint8_t>& imagePixels() const { return pixels_; }
-    int imageWidth() const { return imgW_; }
-    int imageHeight() const { return imgH_; }
-    bool hasImage() const { return !pixels_.empty(); }
-    bool isTextureDirty() const { return textureDirty_; }
-    void clearTextureDirty() { textureDirty_ = false; }
+    const NodeTexture& image() const { return image_; }
+    int imageWidth() const { return image_.width; }
+    int imageHeight() const { return image_.height; }
+    bool hasImage() const { return !image_.empty(); }
 
     // --- Spritesheet ---
 
@@ -125,26 +123,18 @@ public:
     /// hasSourceRect_ / full image).
     bool currentSheetRect(float& x, float& y, float& w, float& h) const;
 
-    /// World-anchored billboard rendering path: upload pixels_ into a GL
-    /// texture if not already uploaded (or if the source image changed).
-    /// No-op when there are no pixels yet (path-load happens lazily on the
-    /// first 2D render pass; billboards force-load here too).
-    void materializeBillboard();
+    /// Decode the setImagePath() file if it has not been loaded yet. The 2D
+    /// render path and the 3D billboard path both call this before reading
+    /// image(); a no-op once loaded.
+    void ensureImageLoaded();
 
     /// Compute UV sub-rect for the active sheet frame (or [0,0]-[1,1] when
     /// no sheet is configured / explicit srcRect not set).
     void currentUvRect(float& uMin, float& vMin,
                        float& uMax, float& vMax) const;
 
-    GLuint textureId() const { return texture_; }
-    int    textureWidth()  const { return texW_; }
-    int    textureHeight() const { return texH_; }
-
-    void releaseGL();
-
 private:
-    std::vector<uint8_t> pixels_;
-    int imgW_ = 0, imgH_ = 0;
+    NodeTexture image_;
     std::string imagePath_;
     bool imageLoaded_ = false;
 
@@ -166,13 +156,6 @@ private:
     float animElapsed_ = 0.0f; // seconds accumulated within the current frame
     bool  playing_ = false;
     AnimationEndCallback onEnd_;
-
-    // GL texture for world-anchored billboards. Lazily created on first
-    // materializeBillboard() and refreshed whenever pixels_ is replaced.
-    GLuint texture_ = 0;
-    int    texW_ = 0;
-    int    texH_ = 0;
-    bool   textureDirty_ = false;
 };
 
 } // namespace bro::scene

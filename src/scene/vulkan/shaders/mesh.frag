@@ -8,6 +8,12 @@ layout(location = 4) in vec3 inTangent;
 layout(location = 5) in vec3 inBitangent;
 
 layout(location = 0) out vec4 outColor;
+#ifdef SCENE_INDIRECT_OUTPUT
+// The indirect (ambient + probe) light in outColor, for the SSAO pass to
+// darken after the opaque pass (scene/vulkan/pass_ssao.h). Only built into the
+// variant drawn while SSAO is on.
+layout(location = 1) out vec4 outIndirect;
+#endif
 
 layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
@@ -282,10 +288,12 @@ void main() {
     // Ambient lighting
     vec3 ambient = lighting.ambientColor.rgb * lighting.ambientColor.a * albedo.rgb;
 
+    vec3 indirect = ambient;
     vec3 color = ambient + direct + emissive;
 #ifndef CUSTOM_FRAGMENT
     if ((flags & 16u) != 0u) {
         color = albedo.rgb + emissive;
+        indirect = vec3(0.0);
     } else
 #endif
     if (lighting.probePos.w > 0.5) {
@@ -295,10 +303,13 @@ void main() {
         vec3 raw = probeRadiance(R_p, roughness, probeW);
         vec3 probeSpec = raw * F_p * lighting.probeParams.x;
         color += probeSpec * probeW;
+        indirect += probeSpec * probeW;
     }
 
     if ((flags & 32u) != 0u && lighting.shadeOrigin.w > 0.5) {
-        color *= cellShade();
+        float shade = cellShade();
+        color *= shade;
+        indirect *= shade;
     }
 
     float outAlpha = albedo.a;
@@ -314,10 +325,14 @@ void main() {
     float fogFactor = fogFactorFor(camDist, inWorldPos.y);
     if (fogFactor > 0.0) {
         color = mix(color, camera.fogColor.rgb, fogFactor);
+        indirect *= 1.0 - fogFactor;
         if ((flags & 64u) != 0u) {
             outAlpha = mix(outAlpha, 0.0, fogFactor);
         }
     }
 
     outColor = vec4(color, outAlpha);
+#ifdef SCENE_INDIRECT_OUTPUT
+    outIndirect = vec4(indirect, 0.0);
+#endif
 }

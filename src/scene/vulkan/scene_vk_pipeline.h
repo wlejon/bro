@@ -1,5 +1,8 @@
 #pragma once
 
+#include "scene/vulkan/scene_vk_depth.h"
+#include "scene/vulkan/scene_vk_target_format.h"
+
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <string>
@@ -16,6 +19,11 @@ public:
 };
 
 /// Fluent graphics pipeline builder supporting Vulkan 1.3 Dynamic Rendering.
+///
+/// Every stage gets the depth policy as specialization constant
+/// depth::kReversedZConstantId. Colour attachments the blend state does not
+/// mention (a target wider than what the shader writes) get a zero write
+/// mask, so a pass can draw into a scope that carries extra attachments.
 class SceneVkPipelineBuilder {
 public:
     SceneVkPipelineBuilder();
@@ -50,11 +58,8 @@ public:
     SceneVkPipelineBuilder& setCullMode(VkCullModeFlags cullMode,
                                        VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
-    /// Configure single-sample multisampling (disabled MSAA).
-    SceneVkPipelineBuilder& setMultisamplingNone();
-
-    /// Configure multisampling with specified sample count.
-    SceneVkPipelineBuilder& setMultisampling(VkSampleCountFlagBits samples);
+    /// Attachment formats and sample count of the target the pipeline draws into.
+    SceneVkPipelineBuilder& setTarget(const TargetFormat& target);
 
     /// Configure color blending to disabled (overwrite).
     SceneVkPipelineBuilder& disableBlending(uint32_t colorAttachmentCount = 1);
@@ -62,24 +67,17 @@ public:
     /// Configure standard pre-multiplied / alpha blending.
     SceneVkPipelineBuilder& enableAlphaBlending(uint32_t colorAttachmentCount = 1);
 
-    /// Configure additive blending.
-    SceneVkPipelineBuilder& enableAdditiveBlending(uint32_t colorAttachmentCount = 1);
-
     /// Set an explicit blend state for a specific color attachment.
     SceneVkPipelineBuilder& setColorBlendAttachment(uint32_t index,
                                                     const VkPipelineColorBlendAttachmentState& blendState);
 
-    /// Enable depth testing and depth write with specified compare operator (default VK_COMPARE_OP_GREATER_OR_EQUAL for reversed-Z).
+    /// Enable depth testing; the compare op defaults to the camera depth
+    /// policy's "nearer wins" (depth::compareCloser).
     SceneVkPipelineBuilder& enableDepthTest(bool depthWrite = true,
-                                           VkCompareOp compareOp = VK_COMPARE_OP_GREATER_OR_EQUAL);
+                                           VkCompareOp compareOp = depth::compareCloser());
 
     /// Disable depth testing and write.
     SceneVkPipelineBuilder& disableDepthTest();
-
-    /// Configure dynamic rendering attachment formats (Vulkan 1.3 / VK_KHR_dynamic_rendering).
-    SceneVkPipelineBuilder& setDynamicRendering(const std::vector<VkFormat>& colorFormats,
-                                               VkFormat depthFormat = VK_FORMAT_UNDEFINED,
-                                               VkFormat stencilFormat = VK_FORMAT_UNDEFINED);
 
     /// Specify dynamic states (defaults to VIEWPORT and SCISSOR).
     SceneVkPipelineBuilder& setDynamicStates(const std::vector<VkDynamicState>& states);

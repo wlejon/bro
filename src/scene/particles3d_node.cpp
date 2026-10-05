@@ -71,10 +71,6 @@ Particles3DNode::Particles3DNode(const std::string& name) : SceneNode(name) {
     bounds_ = bromath::aempty3();
 }
 
-Particles3DNode::~Particles3DNode() {
-    releaseGL();
-}
-
 void Particles3DNode::setMaxParticles(int n) {
     if (n < 1) n = 1;
     particles_.assign(static_cast<size_t>(n), Particle{});
@@ -84,9 +80,10 @@ void Particles3DNode::setMaxParticles(int n) {
 }
 
 void Particles3DNode::setTexturePath(const std::string& path) {
+    if (path == texPath_) return;
     texPath_ = path;
     texTried_ = false;
-    tex_ = 0;
+    texture_.clear();   // a new path decodes afresh rather than keeping the old image
 }
 
 void Particles3DNode::setSheet(int cols, int rows, int frames) {
@@ -327,16 +324,14 @@ Color Particles3DNode::evalColor(float u) const {
 }
 
 bool Particles3DNode::ensureTextureLoaded() {
-    if (!texPixels_.empty() && texW_ > 0 && texH_ > 0) return true;
-    if (texTried_ || texPath_.empty()) return !texPixels_.empty();
+    if (!texture_.empty()) return true;
+    if (texTried_ || texPath_.empty()) return false;
     texTried_ = true;
     broimage::Image img;
     if (!broimage::decode_file(texPath_, img) || img.width <= 0 || img.height <= 0) {
         return false;
     }
-    texW_ = img.width;
-    texH_ = img.height;
-    texPixels_ = std::move(img.pixels);
+    texture_.adopt(img.width, img.height, std::move(img.pixels));
     return true;
 }
 
@@ -390,25 +385,6 @@ const std::vector<float>& Particles3DNode::buildInstanceData(const Vec3& camFwd)
         out += kInstFloats;
     }
     return instanceData_;
-}
-
-// ---------------------------------------------------------------------------
-// GL (main GL thread only)
-// ---------------------------------------------------------------------------
-
-GLuint Particles3DNode::ensureTextureGL() {
-    return 0;
-}
-
-bool Particles3DNode::drawInstanced(GLuint /*quadVbo*/, const Vec3& /*camFwd*/) {
-    return false;
-}
-
-void Particles3DNode::releaseGL() {
-    instVbo_ = 0;
-    vao_ = 0;
-    tex_ = 0;
-    instVboCapacity_ = 0;
 }
 
 } // namespace bro::scene

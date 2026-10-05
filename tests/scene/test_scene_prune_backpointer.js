@@ -30,7 +30,7 @@ if (!scene) {
 
     let link = __host.sceneLink(canvas);
     assert(link.graph === true, 'live graph: canvas carries the scene back-pointer');
-    assert(link.fboTexture > 0, 'live graph: canvas carries an FBO texture id');
+    assert(link.layer === true, 'live graph: canvas carries a 3D layer');
 
     // removeChild leaves the Element alive and re-insertable (unlike remove(),
     // which queues it for free), so the back-pointers can still be read after
@@ -44,8 +44,8 @@ if (!scene) {
     link = __host.sceneLink(canvas);
     assert(link.graph === false,
         'scene back-pointer cleared when the graph was reclaimed');
-    assert(link.fboTexture === 0,
-        'FBO texture id cleared when the graph was reclaimed');
+    assert(link.layer === false,
+        '3D layer cleared when the graph was reclaimed');
 
     // Re-attaching must not resurrect a layer break for the destroyed graph:
     // the element is an ordinary canvas again until something asks for a new
@@ -54,7 +54,7 @@ if (!scene) {
     flush();
     link = __host.sceneLink(canvas);
     assert(link.graph === false, 'a re-attached canvas has no scene until asked again');
-    assert(link.fboTexture === 0, 'and no FBO texture');
+    assert(link.layer === false, 'and no FBO texture');
 
     // And asking again builds a genuinely new context rather than handing back
     // the reclaimed one — the flag being trustworthy is what lets getContext

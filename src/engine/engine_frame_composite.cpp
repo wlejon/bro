@@ -140,10 +140,9 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targ
                 }
             }
             if (!graph || !graph->renderer().hasMeshContent()) continue;
-            auto& r = graph->renderer();
-            if (coversFrame(layer) && pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ &&
-                r.vkOutputImage() != VK_NULL_HANDLE && r.vkOutputWidth() > 0 && r.vkOutputHeight() > 0) {
-                claimFrameImage(r.vkOutputImage(), r.vkOutputLayout(), r.vkOutputWidth(), r.vkOutputHeight());
+            const render::LayerImage out = graph->renderer().outputImage();
+            if (coversFrame(layer) && pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ && out) {
+                claimFrameImage(out.image, out.layout, out.width, out.height);
             } else {
                 int w = 0, h = 0;
                 auto px = graph->readTonemapPixelsRGBA(w, h);

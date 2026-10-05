@@ -30,21 +30,16 @@ class AnimationPlayer;
 class SkinnedMeshNode : public MeshNode {
 public:
     /// Bone cap = palette UBO size. The palette lives in a std140 uniform
-    /// block of 256 mat4s = 16 KB, which is exactly GL 3.3 core's guaranteed
-    /// minimum GL_MAX_UNIFORM_BLOCK_SIZE — so the cap never depends on the
+    /// block of 256 mat4s = 16 KB, which is exactly Vulkan's guaranteed
+    /// minimum maxUniformBufferRange — so the cap never depends on the
     /// driver. A float-texture palette could lift the cap but costs 4 texel
     /// fetches per matrix per vertex and burns a sampler unit in the depth-
     /// only shadow pass; 256 comfortably covers character rigs (humanoids
     /// run ~60-180 bones), so the UBO is the better trade.
     static constexpr int kMaxBones = 256;
 
-    /// Uniform-buffer binding point the palette binds to. Shared by the
-    /// skinned mesh program and the skinned shadow program (both declare
-    /// block "BonePalette" bound here).
-    static constexpr int kPaletteBinding = 0;
-
     explicit SkinnedMeshNode(const std::string& name = "");
-    ~SkinnedMeshNode() override;
+    ~SkinnedMeshNode() override;   // out of line: AnimationPlayer is incomplete here
 
     SkinnedMeshNode* asSkinnedMesh() override { return this; }
 
@@ -91,6 +86,11 @@ public:
     const std::vector<uint16_t>& skinJoints() const { return joints_; }
     const std::vector<float>& skinPalette() const { return palette_; }
 
+    /// Moves when the joint/weight streams change (the renderer re-uploads
+    /// its skin attribute buffer). The palette is per-frame data and has no
+    /// generation: the renderer writes it into the frame's arena every draw.
+    uint64_t skinGeneration() const { return skinGeneration_; }
+
     // --- Animation player ---
 
     /// Lazily-created skeletal animation player (setSkeleton/addClip/play —
@@ -104,37 +104,16 @@ public:
     /// frame loop and headless virtual time).
     void onTick(float dtSec) override;
 
-    // --- GL-thread hooks (renderer only) ---
-
-    /// Called by the renderer right before a skinned draw: flushes a dirty
-    /// skin attribute VBO into the VAO (when the mesh itself didn't change),
-    /// flushes a dirty palette into the UBO, and binds the UBO to
-    /// kPaletteBinding. Must run on the GL thread with no VAO bound.
-    void prepareSkinnedDraw();
-
-    void releaseGL() override;
-
-protected:
-    /// MeshNode upload + joint/weight streams appended to the same VAO as
-    /// attributes 5 (uvec4 joints, u16) and 6 (vec4 weights, float).
-    void uploadToGPU() override;
-
 private:
-    void uploadSkinAttribs();
-
     // CPU-side skin streams (4 per vertex each). Joints stored as u16 —
     // kMaxBones is 256 so the narrowing is always lossless.
     std::vector<float>    weights_;
     std::vector<uint16_t> joints_;
     int  boneCount_ = 0;
-    bool skinVboDirty_ = false;
+    uint64_t skinGeneration_ = nextResourceGeneration();
 
-    // Palette staging (boneCount_ * 16 floats) + GPU objects.
+    // Palette (boneCount_ * 16 floats).
     std::vector<float> palette_;
-    bool paletteDirty_ = false;
-
-    GLuint skinVbo_ = 0;
-    GLuint paletteUbo_ = 0;
 
     std::unique_ptr<AnimationPlayer> player_;
 };

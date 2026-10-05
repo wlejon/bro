@@ -15,16 +15,6 @@ using scene::MeshNode;
 using bromath::Quat;
 using bromath::Vec3;
 
-void GizmoManager::releaseGL() {
-    auto r = [](MeshNode* n){ if (n) n->releaseGL(); };
-    r(arrowX_.get()); r(arrowY_.get()); r(arrowZ_.get());
-    r(ringX_.get());  r(ringY_.get());  r(ringZ_.get());
-    r(scaleX_.get()); r(scaleY_.get()); r(scaleZ_.get());
-    r(scaleCenter_.get());
-    r(planeXY_.get()); r(planeYZ_.get()); r(planeXZ_.get());
-    r(ringView_.get());
-}
-
 // ---------------------------------------------------------------------------
 // Arrow mesh
 // ---------------------------------------------------------------------------

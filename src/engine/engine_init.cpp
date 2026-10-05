@@ -759,7 +759,7 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
             oldCs->onElementFinalized();
         }
         graphPtr->setCanvasScene(nullptr);
-        graphPtr->setFBOTextureCallback([](unsigned int) {});
+        graphPtr->setLayerCallback({});
         it->element = nullptr;
         it->document = nullptr;
         it->elementId = 0;
@@ -774,8 +774,8 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
         if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
         graphPtr->setCanvasSize(cw, ch);
         target->setSceneGraph(graphPtr);
-        graphPtr->setFBOTextureCallback([target](unsigned int tex) {
-            target->setSceneGraphFBOTexture(tex);
+        graphPtr->setLayerCallback([target](const render::LayerImage& layer) {
+            target->setSceneLayerReady(static_cast<bool>(layer));
         });
         it->element = target;
         it->document = target->document();
@@ -809,7 +809,7 @@ dom::Element* Engine::liveElementOf(const SceneGraphEntry& entry) const {
 static void severSceneGraphLink(dom::Element* el) {
     if (!el) return;
     el->setSceneGraph(nullptr);
-    el->setSceneGraphFBOTexture(0);
+    el->setSceneLayerReady(false);
 }
 
 void Engine::pruneDetachedSceneGraphs() {

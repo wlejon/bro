@@ -461,9 +461,11 @@ public:
     void setIframeDoc(void* d) { iframeDoc_ = d; }
     void* iframeDoc() const { return iframeDoc_; }
 
-    // Scene graph mesh FBO texture (set by scene graph render, read by draw traversal)
-    void setSceneGraphFBOTexture(unsigned int tex) { sceneGraphFBOTex_ = tex; }
-    unsigned int sceneGraphFBOTexture() const { return sceneGraphFBOTex_; }
+    // Whether the scene graph's last render produced a 3D layer to composite
+    // here (set after each scene render, read by the draw traversal). The
+    // image itself is resolved from the graph at composite time.
+    void setSceneLayerReady(bool ready) { sceneLayerReady_ = ready; }
+    bool sceneLayerReady() const { return sceneLayerReady_; }
 
     // Custom validity message (HTMLInputElement.setCustomValidity). Empty
     // string means no custom error — any other value is treated as a
@@ -610,7 +612,7 @@ private:
     void* sceneGraph_ = nullptr;
     void* iframeDoc_ = nullptr;
     void* jsWrapper_ = nullptr;
-    unsigned int sceneGraphFBOTex_ = 0;
+    bool sceneLayerReady_ = false;
 };
 
 // Template implementation — must be in header

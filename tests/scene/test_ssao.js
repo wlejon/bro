@@ -1,11 +1,11 @@
-// SSAO (scene.setSSAO) — half-res depth-based AO multiplied into the lit HDR
-// image in the tonemap pass. A floor/wall crease must darken when SSAO is on;
-// open floor far from any occluder must stay (nearly) untouched. Mid-gray
-// emissive surfaces make the un-occluded base color deterministic AND keep
-// the HDR value below 1.0 so the multiply isn't clamped away (AO is a
-// post-multiply on the lit image, so it applies to emissive too); linear
-// tonemap + gamma 1 keeps readback linear. All assertions comparative
-// (on vs off) so they're robust to GPU variance.
+// SSAO (scene.setSSAO) — half-res depth-based AO applied to the opaque
+// surfaces' indirect (ambient) light. A floor/wall crease must darken when
+// SSAO is on; open floor far from any occluder must stay (nearly) untouched.
+// Mid-gray surfaces lit by ambient alone make the un-occluded value
+// deterministic AND keep it below 1.0 so the darkening isn't clamped away;
+// linear tonemap + gamma 1 keeps readback linear. All assertions comparative
+// (on vs off) so they're robust to GPU variance. A second scene checks that
+// direct and emitted light are left alone.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '200');
@@ -23,18 +23,19 @@ if (!scene) {
         position: [0, 3, 5], target: [0, 0.5, -2], up: [0, 1, 0],
     });
 
-    // Interior corner: floor plane + back wall. Mid-gray emissive with a
-    // zero-intensity light (suppresses the implicit sun) keeps the HDR value
-    // ~0.62 — comfortably below 1.0, so the AO multiply survives the tonemap
-    // clamp (a super-white HDR surface would clamp right back to 255 and
-    // hide moderate occlusion).
+    // Interior corner: floor plane + back wall. Mid-gray under white ambient
+    // with a zero-intensity light (suppresses the implicit sun) keeps the HDR
+    // value ~0.6 — comfortably below 1.0, so the darkening survives the
+    // tonemap clamp (a super-white HDR surface would clamp right back to 255
+    // and hide moderate occlusion).
     scene.createLight({ type: 'directional', intensity: 0 });
+    scene.setAmbient([1, 1, 1]);
     scene.createMesh({
-        mesh: Mesh.box(8, 0.25, 8), color: [0.6, 0.6, 0.6, 1], emissive: 1,
+        mesh: Mesh.box(8, 0.25, 8), color: [0.6, 0.6, 0.6, 1],
         y: -0.25,
     });
-    scene.createMesh({
-        mesh: Mesh.box(8, 4, 0.25), color: [0.6, 0.6, 0.6, 1], emissive: 1,
+    const wall = scene.createMesh({
+        mesh: Mesh.box(8, 4, 0.25), color: [0.6, 0.6, 0.6, 1],
         y: 4 - 0.25, z: -4,
     });
 
@@ -106,6 +107,21 @@ if (!scene) {
     }
     assert(maxDelta === 0,
         `SSAO off is pixel-identical to never-enabled (maxDelta=${maxDelta})`);
+
+    // AO takes away indirect light only: the same corner lit by emission
+    // alone (no ambient) is untouched by SSAO, crease included.
+    scene.setAmbient([0, 0, 0]);
+    wall.emissive = 1;
+    flush();
+    const emissiveOff = scene.captureFrame();
+    scene.setSSAO({ enabled: true, radius: 1.5, intensity: 1.5, bias: 0.02 });
+    const emissiveOn = scene.captureFrame();
+    const wallOff = avg(emissiveOff, 100, bestRow - 6, 2);
+    const wallOn = avg(emissiveOn, 100, bestRow - 6, 2);
+    assert(wallOff > 120, `emissive wall visible (${wallOff.toFixed(1)})`);
+    assert(Math.abs(wallOff - wallOn) < 1,
+        `SSAO leaves emitted light alone (${wallOff.toFixed(1)} -> ${wallOn.toFixed(1)})`);
+    scene.setSSAO({ enabled: false });
 
     flush();
 }

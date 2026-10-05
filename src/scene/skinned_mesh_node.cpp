@@ -8,9 +8,7 @@ namespace bro::scene {
 
 SkinnedMeshNode::SkinnedMeshNode(const std::string& name) : MeshNode(name) {}
 
-SkinnedMeshNode::~SkinnedMeshNode() {
-    releaseGL();
-}
+SkinnedMeshNode::~SkinnedMeshNode() = default;
 
 AnimationPlayer& SkinnedMeshNode::ensurePlayer() {
     if (!player_) player_ = std::make_unique<AnimationPlayer>(*this);
@@ -26,8 +24,7 @@ bool SkinnedMeshNode::setSkin(const bromesh::SkinData& skin) {
     joints_.clear();
     palette_.clear();
     boneCount_ = 0;
-    skinVboDirty_ = true;
-    paletteDirty_ = true;
+    skinGeneration_ = nextResourceGeneration();
 
     size_t bones = skin.boneCount;
     if (bones == 0 && !skin.inverseBindMatrices.empty())
@@ -82,30 +79,7 @@ int SkinnedMeshNode::setSkinningMatrices(const float* mats, size_t count) {
     size_t n = count < (size_t)boneCount_ ? count : (size_t)boneCount_;
     if (n == 0) return 0;
     std::memcpy(palette_.data(), mats, n * 16 * sizeof(float));
-    paletteDirty_ = true;
     return (int)n;
-}
-
-void SkinnedMeshNode::uploadToGPU() {
-    MeshNode::uploadToGPU();
-    uploadSkinAttribs();
-}
-
-void SkinnedMeshNode::uploadSkinAttribs() {
-    skinVboDirty_ = false;
-}
-
-void SkinnedMeshNode::prepareSkinnedDraw() {
-    skinVboDirty_ = false;
-    paletteDirty_ = false;
-}
-
-void SkinnedMeshNode::releaseGL() {
-    skinVbo_ = 0;
-    paletteUbo_ = 0;
-    skinVboDirty_ = true;
-    paletteDirty_ = true;
-    MeshNode::releaseGL();
 }
 
 } // namespace bro::scene

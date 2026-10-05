@@ -1,7 +1,13 @@
 #include "scene/vulkan/pass_terrain.h"
-#include "scene/vulkan/pass_mesh.h"
-#include "scene/vulkan/scene_vk_shader_compiler.h"
+
 #include "scene/mesh_node.h"
+#include "scene/vulkan/scene_defaults.h"
+#include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/scene_gpu_resources.h"
+#include "scene/vulkan/scene_mesh_drawer.h"
+#include "scene/vulkan/scene_vk_device.h"
+#include "scene/vulkan/scene_vk_pipeline.h"
+#include "scene/vulkan/scene_vk_shader_compiler.h"
 #include "util/log.h"
 
 #include "clipmap_common.glsl.src.h"
@@ -12,7 +18,8 @@
 #include "clipmap.vert.glsl.src.h"
 #include "clipmap.frag.glsl.src.h"
 
-#include <cmath>
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <sstream>
 
@@ -136,113 +143,13 @@ const char* kTerrainHeader = R"(
 #define u_camY (_u_miscParams5.z)
 )";
 
-} // namespace
-
-PassTerrain::~PassTerrain() {
-}
-
-bool PassTerrain::init(SceneVkDevice& device, SceneVkAllocator& allocator,
-                       VkDescriptorSetLayout cameraLayout, VkDescriptorSetLayout lightingLayout) {
-    device_ = &device;
-    allocator_ = &allocator;
-    cameraLayout_ = cameraLayout;
-    lightingLayout_ = lightingLayout;
-    VkDevice dev = device.device();
-
-    // 1. Samplers
-    VkSamplerCreateInfo sInfo{};
-    sInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    sInfo.magFilter = VK_FILTER_LINEAR;
-    sInfo.minFilter = VK_FILTER_LINEAR;
-    sInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    sInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    sInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sInfo.maxLod = 16.0f;
-    if (vkCreateSampler(dev, &sInfo, nullptr, &heightsSampler_) != VK_SUCCESS) return false;
-
-    sInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    sInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    sInfo.maxLod = 0.0f;
-    if (vkCreateSampler(dev, &sInfo, nullptr, &surfacesSampler_) != VK_SUCCESS) return false;
-
-    // 2. Terrain Descriptor Set Layout (Set 2):
-    // binding 0: sampler2DArray u_heights
-    // binding 1: sampler2DArray u_surfaces
-    // binding 2: UBO TerrainUniforms
-    SceneVkDescriptorLayoutBuilder layoutBuilder;
-    layoutBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-    layoutBuilder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-    layoutBuilder.addBinding(2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-    terrainLayout_ = layoutBuilder.build(dev);
-    if (!terrainLayout_) return false;
-
-    // 3. Pipeline Layout
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(MeshPushConstants);
-
-    std::array<VkDescriptorSetLayout, 3> layouts = {
-        cameraLayout_, lightingLayout_, terrainLayout_
-    };
-
-    VkPipelineLayoutCreateInfo plInfo{};
-    plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = static_cast<uint32_t>(layouts.size());
-    plInfo.pSetLayouts = layouts.data();
-    plInfo.pushConstantRangeCount = 1;
-    plInfo.pPushConstantRanges = &pushRange;
-
-    if (vkCreatePipelineLayout(dev, &plInfo, nullptr, &pipelineLayout_) != VK_SUCCESS) return false;
-
-    return true;
-}
-
-void PassTerrain::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
-    VkDevice dev = device.device();
-    for (int h = 0; h < 2; ++h) {
-        for (int s = 0; s < 2; ++s) {
-            if (pipelines_[h][s] != VK_NULL_HANDLE) {
-                vkDestroyPipeline(dev, pipelines_[h][s], nullptr);
-                pipelines_[h][s] = VK_NULL_HANDLE;
-            }
-        }
-    }
-    if (pipelineLayout_ != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(dev, pipelineLayout_, nullptr);
-        pipelineLayout_ = VK_NULL_HANDLE;
-    }
-    if (terrainLayout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(dev, terrainLayout_, nullptr);
-        terrainLayout_ = VK_NULL_HANDLE;
-    }
-    if (heightsSampler_ != VK_NULL_HANDLE) {
-        vkDestroySampler(dev, heightsSampler_, nullptr);
-        heightsSampler_ = VK_NULL_HANDLE;
-    }
-    if (surfacesSampler_ != VK_NULL_HANDLE) {
-        vkDestroySampler(dev, surfacesSampler_, nullptr);
-        surfacesSampler_ = VK_NULL_HANDLE;
-    }
-    for (auto& [k, res] : nodeResources_) {
-        allocator.destroyImage(res.heightsImage);
-        allocator.destroyImage(res.surfacesImage);
-    }
-    nodeResources_.clear();
-}
-
-VkPipeline PassTerrain::getOrCreatePipeline(bool cubicHeight, bool cubicSurface) {
-    int h = cubicHeight ? 1 : 0;
-    int s = cubicSurface ? 1 : 0;
-    if (pipelines_[h][s] != VK_NULL_HANDLE) return pipelines_[h][s];
-
+/// The terrain shaders for one variant. With `indirect` the fragment stage
+/// also writes the surface's ambient light to the indirect attachment, so
+/// SSAO darkens the terrain's ambient like any opaque surface's.
+void terrainSources(bool cubicHeight, bool cubicSurface, bool indirect, std::string& vsCode, std::string& fsCode) {
     std::string vsCommon = std::string(kClipmapCommonSrc) + kClipmapDetailSrc;
     if (cubicHeight) vsCommon += kClipmapCubicHeightSrc;
-    std::string vsCode = "#version 450\n"
+    vsCode = "#version 450\n"
         "layout(location = 0) in vec3 inPos;\n"
         "layout(location = 1) in vec3 inNormal;\n"
         "layout(location = 2) in vec2 inUV;\n"
@@ -300,7 +207,7 @@ void main() {
     if (cubicSurface) fsCommon += kClipmapCubicSrc;
     fsCommon += kClipmapMaterialSrc;
 
-    std::string fsCode = "#version 450\n"
+    fsCode = "#version 450\n"
         "layout(location = 0) in vec3 vWorldPos;\n"
         "layout(location = 1) in vec3 vNormal;\n"
         "layout(location = 2) in vec2 vUV;\n"
@@ -309,7 +216,8 @@ void main() {
         "layout(location = 5) in vec3 vBitangentW;\n"
         "layout(location = 6) in float vCamDist;\n"
         "layout(location = 0) out vec4 outColor;\n"
-        "layout(set = 0, binding = 0) uniform CameraUBO {\n"
+        + std::string(indirect ? "#define SCENE_INDIRECT_OUTPUT\nlayout(location = 1) out vec4 outIndirect;\n" : "")
+        + "layout(set = 0, binding = 0) uniform CameraUBO {\n"
         "    mat4 view; mat4 proj; mat4 viewProj; mat4 invView; mat4 invProj;\n"
         "    vec4 eyePos; vec4 viewport; vec4 fogParams; vec4 fogColor;\n"
         "} camera;\n"
@@ -391,150 +299,117 @@ void main() {
     vec3 direct = (baseColor / 3.14159265359) * radiance * NdotL;
     vec3 ambient = lighting.ambientColor.rgb * lighting.ambientColor.a * baseColor;
     vec3 color = ambient + direct + emissive;
+    vec3 indirect = ambient;
 
     uint flags = uint(push.pbrParams.w);
     if ((flags & 32u) != 0u && lighting.shadeOrigin.w > 0.5) {
-        color *= cellShade();
+        float shade = cellShade();
+        color *= shade;
+        indirect *= shade;
     }
 
     outColor = vec4(color, alpha);
+#ifdef SCENE_INDIRECT_OUTPUT
+    outIndirect = vec4(indirect, 0.0);
+#endif
 }
 )";
 
-    auto vsSpv = SceneVkShaderCompiler::compileGlsl(vsCode, VK_SHADER_STAGE_VERTEX_BIT);
-    auto fsSpv = SceneVkShaderCompiler::compileGlsl(fsCode, VK_SHADER_STAGE_FRAGMENT_BIT);
-    if (vsSpv.empty() || fsSpv.empty()) {
-        LOG_ERROR("PassTerrain: Failed compiling shaders for terrain (cubicHeight=%d, cubicSurface=%d)",
-                  cubicHeight, cubicSurface);
-        return VK_NULL_HANDLE;
-    }
-
-    VkShaderModule vsModule = SceneVkShaderCompiler::createModule(device_->device(), vsSpv);
-    VkShaderModule fsModule = SceneVkShaderCompiler::createModule(device_->device(), fsSpv);
-
-    VkVertexInputBindingDescription staticBinding{};
-    staticBinding.binding = 0;
-    staticBinding.stride = 64;
-    staticBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    std::vector<VkVertexInputAttributeDescription> staticAttributes = {
-        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
-        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
-        {2, 0, VK_FORMAT_R32G32_SFLOAT, 24},
-        {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32},
-        {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 48}
-    };
-
-    SceneVkPipelineBuilder builder;
-    builder.addShaderStage(VK_SHADER_STAGE_VERTEX_BIT, vsModule)
-           .addShaderStage(VK_SHADER_STAGE_FRAGMENT_BIT, fsModule)
-           .setVertexInput({staticBinding}, staticAttributes)
-           .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
-           .setPolygonMode(VK_POLYGON_MODE_FILL)
-           .setCullMode(VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-           .setMultisampling(sampleCount_)
-           .disableBlending(1)
-           .enableDepthTest(true, VK_COMPARE_OP_GREATER_OR_EQUAL)
-           .setDynamicRendering({VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_D32_SFLOAT);
-
-    VkPipeline pipeline = builder.build(device_->device(), pipelineLayout_);
-
-    SceneVkShaderCompiler::destroyModule(device_->device(), vsModule);
-    SceneVkShaderCompiler::destroyModule(device_->device(), fsModule);
-
-    pipelines_[h][s] = pipeline;
-    return pipeline;
 }
 
-PassTerrain::NodeTerrainResources& PassTerrain::getOrCreateNodeResources(MeshNode* node) {
-    auto& res = nodeResources_[node];
-    if (!res.heightsImage.isValid()) {
-        allocator_->createImage(1, 1, VK_FORMAT_R32_SFLOAT,
-                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                res.heightsImage, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                1, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+}  // namespace
+
+bool PassTerrain::setup(SceneGpu& gpu) {
+    device_ = &gpu.device;
+    VkDevice dev = gpu.device.device();
+
+    // Set 2: u_heights, u_surfaces (2D arrays) and the terrain uniforms.
+    SceneVkDescriptorLayoutBuilder builder;
+    const VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    builder.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, stages);
+    builder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, stages);
+    builder.addBinding(2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, stages);
+    terrainLayout_ = builder.build(dev);
+    if (!terrainLayout_) return false;
+
+    const std::array<VkDescriptorSetLayout, 3> sets = {gpu.defaults.cameraLayout, gpu.defaults.lightingLayout,
+                                                       terrainLayout_};
+    VkPushConstantRange push{stages, 0, sizeof(MeshPushConstants)};
+    VkPipelineLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    info.setLayoutCount = static_cast<uint32_t>(sets.size());
+    info.pSetLayouts = sets.data();
+    info.pushConstantRangeCount = 1;
+    info.pPushConstantRanges = &push;
+    if (vkCreatePipelineLayout(dev, &info, nullptr, &layout_) != VK_SUCCESS) return false;
+
+    // Until a node has uploaded its arrays, set 2 samples zero.
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (!gpu.allocator.createImage(1, 1, VK_FORMAT_R32_SFLOAT, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                   emptyHeights_, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0,
+                                   VK_IMAGE_VIEW_TYPE_2D_ARRAY) ||
+        !gpu.allocator.createImage(1, 1, VK_FORMAT_R32G32B32A32_SFLOAT, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                   emptySurfaces_, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0,
+                                   VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
+        return false;
     }
-    if (!res.surfacesImage.isValid()) {
-        allocator_->createImage(1, 1, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                res.surfacesImage, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                1, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
-    }
-    return res;
+    return true;
 }
 
-void PassTerrain::syncTextures(MeshNode* node, NodeTerrainResources& res) {
-    for (auto& t : node->customShaderTextures()) {
-        if (t.name == "u_heights") {
-            int w = t.w, h = t.h, layers = t.layers;
-            if (w <= 0 || h <= 0 || layers <= 0) continue;
+void PassTerrain::cleanup(SceneGpu& gpu) {
+    VkDevice dev = gpu.device.device();
+    pipelines_.destroy(gpu.device);
+    gpu.allocator.destroyImage(emptyHeights_);
+    gpu.allocator.destroyImage(emptySurfaces_);
+    if (layout_) vkDestroyPipelineLayout(dev, layout_, nullptr);
+    if (terrainLayout_) vkDestroyDescriptorSetLayout(dev, terrainLayout_, nullptr);
+    layout_ = VK_NULL_HANDLE;
+    terrainLayout_ = VK_NULL_HANDLE;
+}
 
-            uint32_t mips = static_cast<uint32_t>(std::floor(std::log2(std::min(w, h)))) + 1;
-            bool realloc = (!res.heightsImage.isValid() || res.currentHeightsW != w || res.currentHeightsH != h || res.currentHeightsLayers != layers);
-
-            if (realloc) {
-                allocator_->destroyImage(res.heightsImage);
-                allocator_->createImage(w, h, VK_FORMAT_R32_SFLOAT,
-                                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                        res.heightsImage, mips, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                        layers, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
-                res.currentHeightsW = w;
-                res.currentHeightsH = h;
-                res.currentHeightsLayers = layers;
-            }
-
-            if (!t.sliceUpdates.empty()) {
-                for (const auto& u : t.sliceUpdates) {
-                    if (u.layer >= layers || u.data.empty()) continue;
-                    ImageRegion region;
-                    region.layer = static_cast<uint32_t>(u.layer);
-                    allocator_->uploadImage(res.heightsImage, u.data.data(), u.data.size() * sizeof(float),
-                                            region, mips > 1);
-                }
-                t.sliceUpdates.clear();
-            }
-        } else if (t.name == "u_surfaces") {
-            int w = t.w, h = t.h, layers = t.layers;
-            if (w <= 0 || h <= 0 || layers <= 0) continue;
-
-            bool realloc = (!res.surfacesImage.isValid() || res.currentSurfsW != w || res.currentSurfsH != h || res.currentSurfsLayers != layers);
-
-            if (realloc) {
-                allocator_->destroyImage(res.surfacesImage);
-                allocator_->createImage(w, h, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                        res.surfacesImage, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                        layers, 0, VK_IMAGE_VIEW_TYPE_2D_ARRAY);
-                res.currentSurfsW = w;
-                res.currentSurfsH = h;
-                res.currentSurfsLayers = layers;
-            }
-
-            if (!t.sliceUpdates.empty()) {
-                for (const auto& u : t.sliceUpdates) {
-                    if (u.layer >= layers || u.data.empty()) continue;
-                    ImageRegion region;
-                    region.layer = static_cast<uint32_t>(u.layer);
-                    allocator_->uploadImage(res.surfacesImage, u.data.data(), u.data.size() * sizeof(float), region);
-                }
-                t.sliceUpdates.clear();
-            }
+VkPipeline PassTerrain::pipeline(const MeshNode::ClipmapRole& role, const TargetFormat& target) {
+    const uint32_t variant = (role.cubicHeight ? 2u : 0u) + (role.cubicSurface ? 1u : 0u);
+    return pipelines_.get(variant, target, [&]() -> VkPipeline {
+        std::string vsCode, fsCode;
+        terrainSources(role.cubicHeight, role.cubicSurface, target.colorCount > 1, vsCode, fsCode);
+        const auto vsSpv = SceneVkShaderCompiler::compileGlsl(vsCode, VK_SHADER_STAGE_VERTEX_BIT);
+        const auto fsSpv = SceneVkShaderCompiler::compileGlsl(fsCode, VK_SHADER_STAGE_FRAGMENT_BIT);
+        if (vsSpv.empty() || fsSpv.empty()) {
+            LOG_ERROR("PassTerrain: Failed compiling the terrain shaders (cubicHeight=%d, cubicSurface=%d)",
+                      role.cubicHeight, role.cubicSurface);
+            return VK_NULL_HANDLE;
         }
-    }
+        VkDevice dev = device_->device();
+        VkShaderModule vs = SceneVkShaderCompiler::createModule(dev, vsSpv);
+        VkShaderModule fs = SceneVkShaderCompiler::createModule(dev, fsSpv);
+
+        std::vector<VkVertexInputBindingDescription> bindings;
+        std::vector<VkVertexInputAttributeDescription> attributes;
+        SceneMeshDrawer::vertexInput(MeshKind::Static, bindings, attributes);
+        SceneVkPipelineBuilder b;
+        b.setShaderStages(vs, fs)
+         .setVertexInput(bindings, attributes)
+         .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+         .setPolygonMode(VK_POLYGON_MODE_FILL)
+         .setCullMode(VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+         .setTarget(target)
+         .disableBlending(target.colorCount)
+         .enableDepthTest(true);
+        VkPipeline p = b.build(dev, layout_);
+        SceneVkShaderCompiler::destroyModule(dev, vs);
+        SceneVkShaderCompiler::destroyModule(dev, fs);
+        return p;
+    });
 }
 
-VkDescriptorBufferInfo PassTerrain::syncUniforms(MeshNode* node) {
+VkDescriptorBufferInfo PassTerrain::uniforms(SceneVkDevice& device, const MeshNode* node) {
     TerrainUniforms u{};
     std::memset(&u, 0, sizeof(u));
-    if (!node || !node->customShader()) return device_->frameUniform(&u, sizeof(u));
+    if (!node || !node->customShader()) return device.frameUniform(&u, sizeof(u));
 
-    const auto& uniforms = node->customShader()->uniforms;
+    const auto& values = node->customShader()->uniforms;
     auto getU = [&](const std::string& name, int count, float* dst) {
-        for (const auto& unif : uniforms) {
+        for (const auto& unif : values) {
             if (unif.name == name) {
                 int n = std::min<int>(count, unif.comps);
                 for (int i = 0; i < n; ++i) dst[i] = unif.v[i];
@@ -600,80 +475,68 @@ VkDescriptorBufferInfo PassTerrain::syncUniforms(MeshNode* node) {
     getU("u_forestTint", 1, &u._u_miscParams5[1]);
     getU("u_camY", 1, &u._u_miscParams5[2]);
 
-    return device_->frameUniform(&u, sizeof(u));
+    return device.frameUniform(&u, sizeof(u));
 }
 
-void PassTerrain::render(VkCommandBuffer cmd, MeshNode* terrainNode,
-                         VkDescriptorSet cameraSet, VkDescriptorSet lightingSet,
-                         uint32_t viewportWidth, uint32_t viewportHeight,
-                         VkBuffer vertexBuffer, VkBuffer indexBuffer, uint32_t indexCount) {
-    if (!terrainNode || indexCount == 0) return;
+bool PassTerrain::active(const SceneFrame& frame) const {
+    return !frame.lists.terrains.empty();
+}
 
-    bool cubicHeight = false;
-    bool cubicSurface = false;
-    if (terrainNode->customShader()) {
-        const auto& vs = terrainNode->customShader()->vertexChunk;
-        const auto& fs = terrainNode->customShader()->fragmentChunk;
-        if (vs.find("cmCubicTapLevel") != std::string::npos || vs.find("cmHeightCubic") != std::string::npos) {
-            cubicHeight = true;
+void PassTerrain::declare(const SceneFrame& frame, PassIO& io) const {
+    io.hdr({.indirect = frame.ssao});
+}
+
+void PassTerrain::record(SceneFrame& frame) {
+    SceneGpu& gpu = frame.gpu;
+    VkCommandBuffer cmd = frame.cmd;
+    for (MeshNode* node : frame.lists.terrains) {
+        const MeshNode::ClipmapRole* role = node->clipmapRole();
+        const bromesh::MeshData& data = node->currentMesh();
+        const uint32_t slot = &data == &node->mesh() ? 0u : static_cast<uint32_t>(node->selectedLod()) + 1u;
+        const GpuMesh* gm = gpu.resources.mesh(node->id(), slot, node->geometryGeneration(), data);
+        VkPipeline p = role && gm ? pipeline(*role, frame.hdrTarget) : VK_NULL_HANDLE;
+        if (!p) continue;
+
+        const SceneVkImage* heights = &emptyHeights_;
+        const SceneVkImage* surfaces = &emptySurfaces_;
+        for (auto& t : node->customShaderTextures()) {
+            if (t.layers <= 0) continue;
+            if (t.name == "u_heights") {
+                if (const SceneVkImage* img = gpu.resources.userTexture(node->id(), t)) heights = img;
+            } else if (t.name == "u_surfaces") {
+                if (const SceneVkImage* img = gpu.resources.userTexture(node->id(), t)) surfaces = img;
+            }
         }
-        if (fs.find("cmCubicTap") != std::string::npos) {
-            cubicSurface = true;
-        }
+        gpu.resources.pruneUserTextures(node->id(), node->customShaderTextures());
+
+        const VkDescriptorBufferInfo ubo = uniforms(gpu.device, node);
+        VkDescriptorSet set = gpu.device.frameSet(terrainLayout_);
+        SceneVkDescriptorWriter writer;
+        writer.writeImage(0, heights->view, heights->sampler ? heights->sampler : gpu.defaults.sampler);
+        writer.writeImage(1, surfaces->view, surfaces->sampler ? surfaces->sampler : gpu.defaults.sampler);
+        writer.writeBuffer(2, ubo.buffer, ubo.range, ubo.offset);
+        writer.updateSet(gpu.device.device(), set);
+
+        MeshPushConstants push{};
+        std::memcpy(push.model, node->worldMatrix().data, sizeof(push.model));
+        std::memcpy(push.baseColor, node->color(), sizeof(push.baseColor));
+        std::memcpy(push.emissive, node->emissiveColor(), 3 * sizeof(float));
+        push.emissive[3] = node->emissive();
+        push.pbrParams[0] = node->metallic();
+        push.pbrParams[1] = node->roughness();
+        push.pbrParams[2] = node->alphaCutoff();
+        push.pbrParams[3] = node->shadeMap() ? static_cast<float>(mesh_flags::kShadeMap) : 0.0f;
+
+        const VkDescriptorSet sets[3] = {frame.cameraSet, frame.lightingSet, set};
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 3, sets, 0, nullptr);
+        vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push),
+                           &push);
+        const VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &gm->vertices.buffer, &offset);
+        vkCmdBindIndexBuffer(cmd, gm->indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, gm->indexCount, 1, 0, 0, 0);
     }
-
-    VkPipeline pipeline = getOrCreatePipeline(cubicHeight, cubicSurface);
-    if (!pipeline) return;
-
-    NodeTerrainResources& res = getOrCreateNodeResources(terrainNode);
-    syncTextures(terrainNode, res);
-    const VkDescriptorBufferInfo uniforms = syncUniforms(terrainNode);
-    VkDescriptorSet terrainSet = device_->frameSet(terrainLayout_);
-    SceneVkDescriptorWriter writer;
-    writer.writeImage(0, res.heightsImage.view, heightsSampler_);
-    writer.writeImage(1, res.surfacesImage.view, surfacesSampler_);
-    writer.writeBuffer(2, uniforms.buffer, uniforms.range, uniforms.offset);
-    writer.updateSet(device_->device(), terrainSet);
-
-    VkViewport vp{};
-    vp.x = 0.0f; vp.y = 0.0f;
-    vp.width = static_cast<float>(viewportWidth);
-    vp.height = static_cast<float>(viewportHeight);
-    vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = {viewportWidth, viewportHeight};
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-
-    std::array<VkDescriptorSet, 3> descSets = {
-        cameraSet, lightingSet, terrainSet
-    };
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_,
-                            0, static_cast<uint32_t>(descSets.size()), descSets.data(),
-                            0, nullptr);
-
-    MeshPushConstants push{};
-    std::memcpy(push.model, terrainNode->worldMatrix().data, sizeof(push.model));
-    std::memcpy(push.baseColor, terrainNode->color(), sizeof(push.baseColor));
-    std::memcpy(push.emissive, terrainNode->emissiveColor(), sizeof(push.emissive));
-    push.emissive[3] = terrainNode->emissive();
-    push.pbrParams[0] = terrainNode->metallic();
-    push.pbrParams[1] = terrainNode->roughness();
-    push.pbrParams[2] = terrainNode->alphaCutoff();
-    push.pbrParams[3] = terrainNode->shadeMap() ? 32.0f : 0.0f;
-
-    vkCmdPushConstants(cmd, pipelineLayout_,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(push), &push);
-
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, &offset);
-    vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
 }
 
-} // namespace bro::scene::vk
+}  // namespace bro::scene::vk

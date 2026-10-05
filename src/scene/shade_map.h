@@ -7,21 +7,21 @@
 // lights do — the difference from a tint, which multiplies the albedo and
 // still leaves specular and ambient on the surface.
 //
-// The binding is resolved per draw through a provider so the texture can be
-// uploaded lazily on the GL thread and the owner (the TileWorld) keeps one
-// texture for every node that samples it. A provider returning false means
-// "no shade this draw" and costs the draw one uniform.
+// The binding is resolved per frame through a provider, so the owner (the
+// TileWorld) keeps one CPU map for every node that samples it and the
+// renderer keeps one GPU copy, re-uploaded when `generation` moves. A
+// provider returning false means "no shade".
 
 #include <bromath/vec.h>
-#include "webgl/webgl_types.h"
+#include <cstdint>
 
 #include <functional>
 
 namespace bro::scene {
 
 struct ShadeMapBinding {
-    GLuint tex = 0;                 // R8 texture, one texel per cell
-    const uint8_t* pixels = nullptr;// raw R8 data if available
+    const uint8_t* pixels = nullptr;// R8, one byte per cell, row-major
+    uint64_t generation = 0;        // moves whenever any cell changes
     bromath::Vec3 origin;           // world position of cell (0, 0)'s grid origin
     float cellSize = 1.0f;          // world units per cell (hex: circumradius)
     bool hex = false;               // pointy-top odd-r hex grid, else square

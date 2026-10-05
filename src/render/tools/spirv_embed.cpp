@@ -1,6 +1,6 @@
 // bro_spirv_embed — the build-time half of render/glsl_compiler.h.
 //
-//   bro_spirv_embed <vert|frag|comp> <input.glsl> <output.h>
+//   bro_spirv_embed <vert|frag|comp> <input.glsl> <output.h> [DEFINE...]
 //
 // Compiles one GLSL file with the same in-process glslang the engine uses at
 // run time and writes its SPIR-V as a brace-enclosed list of 32-bit words, so
@@ -9,6 +9,9 @@
 //   static const uint32_t kSpv[] =
 //   #include "name.vert.spv.h"
 //   ;
+//
+// Each DEFINE becomes `#define DEFINE 1` right after the #version line, so
+// one source can build several variants.
 //
 // Exits nonzero, with glslang's diagnostics on stderr, if the shader does not
 // compile; the output is written only on success, so a failed build leaves no
@@ -24,8 +27,8 @@
 
 int main(int argc, char** argv) {
     using bro::render::ShaderStage;
-    if (argc != 4) {
-        std::fprintf(stderr, "usage: bro_spirv_embed <vert|frag|comp> <input.glsl> <output.h>\n");
+    if (argc < 4) {
+        std::fprintf(stderr, "usage: bro_spirv_embed <vert|frag|comp> <input.glsl> <output.h> [DEFINE...]\n");
         return 2;
     }
     ShaderStage stage;
@@ -45,8 +48,21 @@ int main(int argc, char** argv) {
     std::stringstream source;
     source << in.rdbuf();
 
+    std::string text = source.str();
+    if (argc > 4) {
+        std::string defines;
+        for (int i = 4; i < argc; ++i) defines += std::string("#define ") + argv[i] + " 1\n";
+        const size_t version = text.find("#version");
+        const size_t lineEnd = version == std::string::npos ? std::string::npos : text.find('\n', version);
+        if (lineEnd == std::string::npos) {
+            std::fprintf(stderr, "bro_spirv_embed: %s has no #version line to define after\n", argv[2]);
+            return 1;
+        }
+        text.insert(lineEnd + 1, defines);
+    }
+
     std::string log;
-    const auto spirv = bro::render::compileGlslToSpirv(source.str(), stage, &log);
+    const auto spirv = bro::render::compileGlslToSpirv(text, stage, &log);
     if (spirv.empty()) {
         std::fprintf(stderr, "%s: shader compilation failed\n%s\n", argv[2], log.c_str());
         return 1;

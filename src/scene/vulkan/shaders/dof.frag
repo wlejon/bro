@@ -1,5 +1,8 @@
 #version 450
 
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
@@ -18,10 +21,12 @@ layout(push_constant) uniform DoFPushConstants {
 float linearizeDepth(float d) {
     float n = push.nearPlane;
     float f = push.farPlane;
-    if (push.isPerspective > 0.5) {
-        return n * f / max(d * (f - n) + n, 1e-9);
+    if (REVERSED_Z) {
+        if (push.isPerspective > 0.5) return n * f / max(d * (f - n) + n, 1e-9);
+        return n + (1.0 - d) * (f - n);
     }
-    return n + (1.0 - d) * (f - n);
+    if (push.isPerspective > 0.5) return n * f / max(f - d * (f - n), 1e-9);
+    return n + d * (f - n);
 }
 
 void main() {

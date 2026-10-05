@@ -1,50 +1,42 @@
 #pragma once
 
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_allocator.h"
-#include "scene/vulkan/scene_vk_pipeline.h"
-#include "scene/vulkan/scene_vk_descriptors.h"
+// Colour grading: postLdr through the renderer's 3D LUT (trilinear, mixed
+// in by the LUT amount) into ldr. The LUT is uploaded as a 3D texture
+// whenever its generation moves; the renderer grades a frame only when
+// ensureLut() has one (SceneFrame::lut), since the pass then owns ldr.
+
+#include "scene/vulkan/scene_pass.h"
+
+namespace bro::scene {
+class SceneRenderer;
+}
+
 #include <vulkan/vulkan.h>
+
 #include <cstdint>
-#include <string>
 
 namespace bro::scene::vk {
 
-class PassColorLut {
+class PassColorLut final : public ScenePass {
 public:
-    PassColorLut() = default;
-    ~PassColorLut();
+    const char* name() const override { return "color-lut"; }
+    bool setup(SceneGpu& gpu) override;
+    bool active(const SceneFrame& frame) const override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
 
-    PassColorLut(const PassColorLut&) = delete;
-    PassColorLut& operator=(const PassColorLut&) = delete;
-
-    bool init(SceneVkDevice& device, SceneVkAllocator& allocator);
-    void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
-
-    bool updateLut(SceneVkDevice& device, SceneVkAllocator& allocator, int size, const uint8_t* rgbaVoxels);
-    void clearLut(SceneVkAllocator& allocator);
-    bool hasLut() const { return lutImage_.isValid(); }
-    int lutSize() const { return lutSize_; }
-
-    void render(VkCommandBuffer cmd, SceneVkDevice& device, SceneVkAllocator& allocator,
-                const SceneVkImage& inputImage,
-                VkImageView outputTargetView,
-                VkFormat outputFormat,
-                uint32_t width, uint32_t height,
-                float amount);
-
-    VkDescriptorSetLayout descLayout() const { return descLayout_; }
-    const SceneVkImage& lutImage() const { return lutImage_; }
+    /// Upload the renderer's LUT if it changed (frame begun); true when one is held.
+    bool ensureLut(SceneGpu& gpu, const SceneRenderer& renderer);
 
 private:
-    bool createPipeline(VkDevice device);
-
-    VkDescriptorSetLayout descLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+    SceneVkDevice* device_ = nullptr;
+    VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
-
-    SceneVkImage lutImage_;
+    SceneVkImage lut_;
     int lutSize_ = 0;
+    uint64_t lutGeneration_ = 0;
 };
 
-} // namespace bro::scene::vk
+}  // namespace bro::scene::vk

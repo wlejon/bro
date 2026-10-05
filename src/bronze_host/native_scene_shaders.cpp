@@ -257,11 +257,6 @@ void bro_scene_SceneNode_setBaseColorTextureFromScene(void* self, void* sourceSc
     auto* mn = static_cast<scene::MeshNode*>(n);
     auto srcToken = srcGraph->outputTextureSource();
     std::weak_ptr<scene::SceneGraph::OutputTextureSource> weak = srcToken;
-    mn->setExternalBaseColorTexture([weak]() -> unsigned {
-        auto locked = weak.lock();
-        if (!locked || !locked->graph) return 0;
-        return locked->graph->outputColorTexture();
-    });
     mn->setExternalSceneProvider([weak]() -> scene::SceneGraph* {
         auto locked = weak.lock();
         return locked ? locked->graph : nullptr;

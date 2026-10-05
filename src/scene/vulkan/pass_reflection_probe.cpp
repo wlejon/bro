@@ -1,415 +1,275 @@
 #include "scene/vulkan/pass_reflection_probe.h"
-#include "scene/vulkan/scene_vk_bridge.h"
-#include "scene/scene_graph.h"
-#include "scene/scene_renderer.h"
+
+#include "scene/depth_policy.h"
 #include "scene/mesh_node.h"
-#include "scene/light_node.h"
+#include "scene/reflection_probe_node.h"
+#include "scene/scene_graph.h"
+#include "scene/vulkan/scene_defaults.h"
+#include "scene/vulkan/scene_frame.h"
+#include "scene/vulkan/scene_gpu_resources.h"
+#include "scene/vulkan/scene_lighting.h"
+#include "scene/vulkan/scene_mesh_drawer.h"
+#include "scene/vulkan/scene_targets.h"
+#include "scene/vulkan/scene_vk_depth.h"
+#include "scene/vulkan/scene_vk_device.h"
 #include "util/log.h"
 
+#include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstring>
-#include <algorithm>
 
 namespace bro::scene::vk {
 
-PassReflectionProbe::~PassReflectionProbe() {
-}
+namespace {
 
-bool PassReflectionProbe::init(SceneVkDevice& device, SceneVkAllocator& allocator) {
-    cleanup(device, allocator);
-    VkDevice dev = device.device();
+constexpr VkFormat kCubeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+constexpr float kFaceNear = 0.05f;
+constexpr float kFaceFar = 1000.0f;
 
-    // 1. Cubemap linear mipmapped sampler
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.maxAnisotropy = 1.0f;
-    samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = 16.0f;
+// Cube face order +X, -X, +Y, -Y, +Z, -Z with the conventional face ups.
+const bromath::Vec3 kFaceDirs[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+const bromath::Vec3 kFaceUps[6] = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};
 
-    if (vkCreateSampler(dev, &samplerInfo, nullptr, &cubemapSampler_) != VK_SUCCESS) {
-        LOG_ERROR("PassReflectionProbe: Failed creating cubemap sampler");
-        return false;
-    }
+}  // namespace
 
-    // 2. Dummy 1x1 black cubemap
-    bool ok = allocator.createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM,
-                                   VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                   dummyCubemap_, 1, VK_SAMPLE_COUNT_1_BIT,
-                                   VK_IMAGE_ASPECT_COLOR_BIT, 6,
-                                   VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
-    if (!ok) {
-        LOG_ERROR("PassReflectionProbe: Failed creating dummy cubemap");
-        return false;
-    }
-
-
-    // 3. Face Camera & Lighting descriptor layouts & buffers
-    SceneVkDescriptorLayoutBuilder camBuilder;
-    camBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                          VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-    faceCameraLayout_ = camBuilder.build(dev);
-
-    faceLightingLayout_ = SceneVkDescriptorLayoutBuilder::createLightingLayout(dev, device.shadowCompareSampler());
-
+bool PassReflectionProbe::setup(SceneGpu&) {
     return true;
 }
 
-void PassReflectionProbe::cleanup(SceneVkDevice& device, SceneVkAllocator& allocator) {
-    VkDevice dev = device.device();
-    for (auto& [probe, data] : probeCache_) {
-        releaseFaceViews(device, data);
-        allocator.destroyImage(data.cubemap);
-        allocator.destroyImage(data.depthImage);
-    }
-    probeCache_.clear();
-    activeProbe_ = nullptr;
+void PassReflectionProbe::release(SceneGpu& gpu, Probe& probe) {
+    VkDevice dev = gpu.device.device();
+    gpu.device.defer([dev, views = probe.faces] {
+        for (VkImageView v : views) {
+            if (v != VK_NULL_HANDLE) vkDestroyImageView(dev, v, nullptr);
+        }
+    });
+    probe.faces = {};
+    gpu.allocator.destroyImage(probe.cube);
+    gpu.allocator.destroyImage(probe.depth);
+}
 
-    if (dummyCubemap_.isValid()) {
-        dummyCubemap_.sampler = VK_NULL_HANDLE;
-        allocator.destroyImage(dummyCubemap_);
-    }
-    if (cubemapSampler_ != VK_NULL_HANDLE) {
-        vkDestroySampler(dev, cubemapSampler_, nullptr);
-        cubemapSampler_ = VK_NULL_HANDLE;
-    }
-    if (faceCameraLayout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(dev, faceCameraLayout_, nullptr);
-        faceCameraLayout_ = VK_NULL_HANDLE;
-    }
-    if (faceLightingLayout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(dev, faceLightingLayout_, nullptr);
-        faceLightingLayout_ = VK_NULL_HANDLE;
+void PassReflectionProbe::releaseNodes(SceneGpu& gpu, std::span<const uint32_t> ids) {
+    for (uint32_t id : ids) {
+        auto it = probes_.find(id);
+        if (it == probes_.end()) continue;
+        release(gpu, it->second);
+        probes_.erase(it);
     }
 }
 
-bool PassReflectionProbe::ensureProbeGpu(ReflectionProbeNode* probe, SceneVkAllocator& allocator, SceneVkDevice& device) {
-    auto& data = probeCache_[probe];
-    int res = probe->resolution();
-    if (res < 16) res = 16;
-    if (res > 1024) res = 1024;
+void PassReflectionProbe::cleanup(SceneGpu& gpu) {
+    for (auto& [id, probe] : probes_) release(gpu, probe);
+    probes_.clear();
+}
 
-    uint32_t mips = static_cast<uint32_t>(std::floor(std::log2(res))) + 1;
-    if (data.cubemap.isValid() && data.resolution == res) {
-        return true;
+PassReflectionProbe::Probe* PassReflectionProbe::ensure(SceneGpu& gpu, const ReflectionProbeNode& node) {
+    Probe& probe = probes_[node.id()];
+    const int res = std::clamp(node.resolution(), 16, 1024);
+    if (probe.cube.isValid() && probe.resolution == res) return &probe;
+    release(gpu, probe);
+
+    probe.resolution = res;
+    probe.mipLevels = static_cast<uint32_t>(std::floor(std::log2(res))) + 1;
+    const auto size = static_cast<uint32_t>(res);
+    if (!gpu.allocator.createImage(size, size, kCubeFormat,
+                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, probe.cube, probe.mipLevels,
+                                   VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT, 6,
+                                   VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)) {
+        LOG_ERROR("PassReflectionProbe: Failed creating a %dx%d cube", res, res);
+        probes_.erase(node.id());
+        return nullptr;
     }
-
-    VkDevice dev = device.device();
-    releaseFaceViews(device, data);
-    allocator.destroyImage(data.cubemap);
-    allocator.destroyImage(data.depthImage);
-
-    data.resolution = res;
-    data.mipLevels = mips;
-
-    // 1. Create cubemap image (RGBA16F, 6 layers, mips)
-    VkImageUsageFlags cubeUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                                 VK_IMAGE_USAGE_SAMPLED_BIT |
-                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                                 VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    bool ok = allocator.createImage(res, res, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                   cubeUsage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                                   data.cubemap, mips, VK_SAMPLE_COUNT_1_BIT,
-                                   VK_IMAGE_ASPECT_COLOR_BIT,
-                                   6, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT);
-    if (!ok) {
-        LOG_ERROR("PassReflectionProbe: Failed creating cubemap image (%dx%d)", res, res);
-        return false;
-    }
-
-    // 2. Create 6 face views (2D layer views)
-    data.faceViews.resize(6, VK_NULL_HANDLE);
     for (uint32_t f = 0; f < 6; ++f) {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = data.cubemap.image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = f;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(dev, &viewInfo, nullptr, &data.faceViews[f]) != VK_SUCCESS) {
+        VkImageViewCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        info.image = probe.cube.image;
+        info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        info.format = kCubeFormat;
+        info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, f, 1};
+        if (vkCreateImageView(gpu.device.device(), &info, nullptr, &probe.faces[f]) != VK_SUCCESS) {
             LOG_ERROR("PassReflectionProbe: Failed creating face view %u", f);
-            return false;
+            release(gpu, probe);
+            probes_.erase(node.id());
+            return nullptr;
         }
     }
-
-    // 3. Create depth buffer (D32_SFLOAT, res x res)
-    ok = allocator.createImage(res, res, VK_FORMAT_D32_SFLOAT,
-                              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                              data.depthImage, 1, VK_SAMPLE_COUNT_1_BIT,
-                              VK_IMAGE_ASPECT_DEPTH_BIT);
-    if (!ok) {
-        LOG_ERROR("PassReflectionProbe: Failed creating depth buffer");
-        return false;
+    if (!gpu.allocator.createImage(size, size, SceneTargets::kDepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, probe.depth, 1, VK_SAMPLE_COUNT_1_BIT,
+                                   VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        LOG_ERROR("PassReflectionProbe: Failed creating the face depth buffer");
+        release(gpu, probe);
+        probes_.erase(node.id());
+        return nullptr;
     }
-
-    return true;
+    return &probe;
 }
 
-void PassReflectionProbe::renderFace(VkCommandBuffer cmd, ReflectionProbeNode* probe, int face,
-                                    SceneGraph& graph, SceneRenderer& renderer, PassMesh& passMesh,
-                                    SceneVkAllocator& allocator, SceneVkDevice& device,
-                                    SceneVkBridge& bridge) {
-    auto& data = probeCache_[probe];
-    uint32_t res = static_cast<uint32_t>(data.resolution);
+void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
+    // The faces bind a lighting set, whose shadow binding must be readable.
+    io.sample(frame.gpu.targets.shadow);
+}
 
-    const auto& probeWorld = probe->worldMatrix();
-    bromath::Vec3 eye{probeWorld.at(0, 3), probeWorld.at(1, 3), probeWorld.at(2, 3)};
+void PassReflectionProbe::record(SceneFrame& frame) {
+    const ReflectionProbeNode* best = nullptr;
+    int bestPriority = INT_MIN;
+    for (auto& [id, owned] : frame.graph.nodes()) {
+        if (!owned->renderVisible() || owned->type() != SceneNode::Type::ReflectionProbe) continue;
+        auto* node = static_cast<ReflectionProbeNode*>(owned.get());
+        if (node->updateMode() == ReflectionProbeNode::UpdateMode::Once && !node->hasData()) node->requestCapture();
+        if (node->captureRequested()) {
+            if (Probe* probe = ensure(frame.gpu, *node)) {
+                capture(frame, *node, *probe);
+                node->markCaptured();
+            }
+        }
+        if (node->hasData() && node->priority() >= bestPriority && probes_.count(node->id())) {
+            bestPriority = node->priority();
+            best = node;
+        }
+    }
+    if (best) {
+        const Probe& probe = probes_.at(best->id());
+        frame.probe.node = best;
+        frame.probe.view = probe.cube.view;
+        frame.probe.mipLevels = probe.mipLevels;
+    }
+}
 
-    static const bromath::Vec3 kDirs[6] = {
-        {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}
-    };
-    static const bromath::Vec3 kUps[6] = {
-        {0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}
-    };
+void PassReflectionProbe::capture(SceneFrame& frame, const ReflectionProbeNode& node, Probe& probe) {
+    SceneVkAllocator& alloc = frame.gpu.allocator;
+    alloc.transitionImageLayout(frame.cmd, probe.cube.image, kCubeFormat, probe.cube.currentLayout,
+                                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1, 0, VK_IMAGE_ASPECT_COLOR_BIT, 6, 0);
+    alloc.transitionImageLayout(frame.cmd, probe.depth.image, SceneTargets::kDepthFormat, probe.depth.currentLayout,
+                                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, 1, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
+    probe.depth.currentLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    for (int f = 0; f < 6; ++f) renderFace(frame, node, probe, f);
+    buildMips(frame, probe);
+}
 
-    bromath::Mat4 view = bromath::mlookAt(eye, eye + kDirs[face], kUps[face]);
+void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNode& node, Probe& probe, int face) {
+    SceneGpu& gpu = frame.gpu;
+    VkCommandBuffer cmd = frame.cmd;
+    const auto res = static_cast<uint32_t>(probe.resolution);
 
-    float nearZ = 0.05f;
-    float farZ = 1000.0f;
-    bromath::Mat4 proj = bromath::midentity();
-    for (int i = 0; i < 16; ++i) proj.data[i] = 0.0f;
-    proj.at(0, 0) = 1.0f;
-    proj.at(1, 1) = -1.0f; // Vulkan Y-flip
-    // Reversed-Z: near maps to 1, far maps to 0
-    proj.at(2, 2) = nearZ / (farZ - nearZ);
-    proj.at(2, 3) = (farZ * nearZ) / (farZ - nearZ);
-    proj.at(3, 2) = -1.0f;
+    const auto& world = node.worldMatrix();
+    const bromath::Vec3 eye{world.at(0, 3), world.at(1, 3), world.at(2, 3)};
+    const SceneView view = SceneView::make(bromath::mlookAt(eye, eye + kFaceDirs[face], kFaceUps[face]),
+                                           makePerspective(3.14159265358979f * 0.5f, 1.0f, kFaceNear, kFaceFar),
+                                           eye, kFaceNear, kFaceFar, true, res, res);
 
-    bromath::Mat4 vp = bromath::mmul(proj, view);
-
-    SceneCameraUniforms camUniforms{};
-    std::memcpy(camUniforms.view, view.data, sizeof(camUniforms.view));
-    std::memcpy(camUniforms.proj, proj.data, sizeof(camUniforms.proj));
-    std::memcpy(camUniforms.viewProj, vp.data, sizeof(camUniforms.viewProj));
-    camUniforms.eyePos[0] = eye.x;
-    camUniforms.eyePos[1] = eye.y;
-    camUniforms.eyePos[2] = eye.z;
-    camUniforms.eyePos[3] = 0.0f;
-    camUniforms.viewport[0] = static_cast<float>(res);
-    camUniforms.viewport[1] = static_cast<float>(res);
-    camUniforms.viewport[2] = nearZ;
-    camUniforms.viewport[3] = farZ;
-
-    // The face renders with its own camera and an unlit, shadowless lighting
-    // block; both sets are this frame's.
-    const VkDescriptorBufferInfo camInfo = device.frameUniform(&camUniforms, sizeof(camUniforms));
-    VkDescriptorSet cameraSet = device.frameSet(faceCameraLayout_);
+    // The face's own camera, and a lighting block with no lights (unfogged, unlit).
+    const SceneCameraUniforms cam = view.uniforms(nullptr);
+    const VkDescriptorBufferInfo camInfo = gpu.device.frameUniform(&cam, sizeof(cam));
+    VkDescriptorSet cameraSet = gpu.device.frameSet(gpu.defaults.cameraLayout);
     SceneVkDescriptorWriter camWriter;
     camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
-    camWriter.updateSet(device.device(), cameraSet);
-
+    camWriter.updateSet(gpu.device.device(), cameraSet);
     const SceneLightingUniforms noLights{};
-    const VkDescriptorBufferInfo lightInfo = device.frameUniform(&noLights, sizeof(noLights));
-    VkDescriptorSet lightingSet = device.frameSet(faceLightingLayout_);
-    SceneVkDescriptorWriter lightWriter;
-    lightWriter.writeBuffer(0, lightInfo.buffer, lightInfo.range, lightInfo.offset);
-    lightWriter.writeImage(1, bridge.shadowTarget_.arrayView(), VK_NULL_HANDLE);  // immutable compare sampler
-    lightWriter.writeImage(2, dummyCubemap_.view, cubemapSampler_);
-    lightWriter.writeImage(3, bridge.dummyShadeMap_.view, bridge.dummyShadeMap_.sampler);
-    lightWriter.updateSet(device.device(), lightingSet);
+    VkDescriptorSet lightingSet = writeLightingSet(gpu, noLights, VK_NULL_HANDLE, nullptr);
 
-    // Dynamic rendering into face
-    allocator.transitionImageLayout(cmd, data.cubemap.image, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                     data.cubemap.currentLayout,
-                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                     1, 0, VK_IMAGE_ASPECT_COLOR_BIT,
-                                     1, static_cast<uint32_t>(face));
+    VkRenderingAttachmentInfo color{};
+    color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color.imageView = probe.faces[face];
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    VkRenderingAttachmentInfo depthAtt{};
+    depthAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAtt.imageView = probe.depth.view;
+    depthAtt.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAtt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAtt.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAtt.clearValue.depthStencil = {depth::clearFar(), 0};
+    VkRenderingInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = {{0, 0}, {res, res}};
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &color;
+    info.pDepthAttachment = &depthAtt;
+    gpu.device.cmdBeginRendering(cmd, &info);
+    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(res), static_cast<float>(res), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, {res, res}};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    allocator.transitionImageLayout(cmd, data.depthImage.image, VK_FORMAT_D32_SFLOAT,
-                                     data.depthImage.currentLayout,
-                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                                     1, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
-    data.depthImage.currentLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    TargetFormat target = TargetFormat::colorOnly(kCubeFormat);
+    target.depth = SceneTargets::kDepthFormat;
 
-    VkRenderingAttachmentInfoKHR colorAttachment{};
-    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
-    colorAttachment.imageView = data.faceViews[face];
-    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    for (auto& [id, owned] : frame.graph.nodes()) {
+        if (!owned->renderVisible() || owned->type() != SceneNode::Type::Mesh) continue;
+        auto* mesh = static_cast<MeshNode*>(owned.get());
+        const bromesh::MeshData& data = mesh->currentMesh();
+        if (data.empty()) continue;
+        // Mirrors would only reflect themselves.
+        if (mesh->metallic() > 0.8f && mesh->roughness() < 0.2f) continue;
 
-    VkRenderingAttachmentInfoKHR depthAttachment{};
-    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
-    depthAttachment.imageView = data.depthImage.view;
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.clearValue.depthStencil = {0.0f, 0}; // Reversed-Z clear depth is 0.0
+        const uint32_t slot = &data == &mesh->mesh() ? 0u : static_cast<uint32_t>(mesh->selectedLod()) + 1u;
+        const GpuMesh* gm = gpu.resources.mesh(mesh->id(), slot, mesh->geometryGeneration(), data);
+        if (!gm) continue;
 
-    VkRenderingInfoKHR renderingInfo{};
-    renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR;
-    renderingInfo.renderArea = {{0, 0}, {res, res}};
-    renderingInfo.layerCount = 1;
-    renderingInfo.colorAttachmentCount = 1;
-    renderingInfo.pColorAttachments = &colorAttachment;
-    renderingInfo.pDepthAttachment = &depthAttachment;
+        MeshDraw draw;
+        draw.kind = MeshKind::Static;
+        draw.nodeId = mesh->id();
+        draw.vertices = gm->vertices.buffer;
+        draw.indices = gm->indices.buffer;
+        draw.indexCount = gm->indexCount;
+        std::memcpy(draw.push.model, mesh->worldMatrix().data, sizeof(draw.push.model));
+        std::memcpy(draw.push.baseColor, mesh->color(), sizeof(draw.push.baseColor));
+        std::memcpy(draw.push.emissive, mesh->emissiveColor(), 3 * sizeof(float));
+        draw.push.emissive[3] = mesh->emissive();
+        draw.push.pbrParams[0] = mesh->metallic();
+        draw.push.pbrParams[1] = mesh->roughness();
+        draw.push.pbrParams[2] = mesh->alphaCutoff();
 
-    vkCmdBeginRendering(cmd, &renderingInfo);
-
-    passMesh.begin(cmd, cameraSet, lightingSet, res, res);
-
-    for (auto& [id, node] : graph.nodes_) {
-        if (!node->renderVisible()) continue;
-        if (node.get() == probe) continue;
-        if (node->type() == SceneNode::Type::Mesh) {
-            auto* mn = static_cast<MeshNode*>(node.get());
-            if (mn->currentMesh().empty()) continue;
-            // Skip mirror objects (like metallic reflection test spheres) to avoid recursion
-            if (mn->metallic() > 0.8f && mn->roughness() < 0.2f) continue;
-
-            auto& meshBuf = bridge.uploadMesh(mn->currentMesh(), mn);
-            MeshDrawCall draw{};
-            draw.vertexBuffer = meshBuf.vertexBuffer.buffer;
-            draw.indexBuffer = meshBuf.indexBuffer.buffer;
-            draw.indexCount = meshBuf.indexCount;
-            std::memcpy(draw.modelMatrix, mn->worldMatrix().data, sizeof(draw.modelMatrix));
-            std::memcpy(draw.baseColor, mn->color(), sizeof(draw.baseColor));
-            std::memcpy(draw.emissiveColor, mn->emissiveColor(), sizeof(draw.emissiveColor));
-            draw.emissiveIntensity = mn->emissive();
-            draw.metallic = mn->metallic();
-            draw.roughness = mn->roughness();
-            draw.alphaCutoff = mn->alphaCutoff();
-            draw.flags = 0;
-            if (mn->effectiveUnlit()) draw.flags |= 16u;
-
-            const auto& pTex = mn->pendingBaseTexture();
-            if (pTex.w > 0 && pTex.h > 0 && !pTex.data.empty()) {
-                draw.materialSet = bridge.uploadTexture(mn, pTex.w, pTex.h, pTex.data.data());
-                if (draw.materialSet != VK_NULL_HANDLE) draw.flags |= 1u;
-            }
-
-            passMesh.drawStatic(cmd, draw);
+        uint32_t flags = mesh->effectiveUnlit() ? mesh_flags::kUnlit : 0u;
+        if (const SceneVkImage* albedo = gpu.resources.texture(mesh->id(), TextureSlot::BaseColor,
+                                                               mesh->baseColorTexture())) {
+            const SceneDefaults& d = gpu.defaults;
+            draw.materialSet = gpu.device.frameSet(d.materialLayout);
+            SceneVkDescriptorWriter writer;
+            writer.writeImage(0, albedo->view, albedo->sampler);
+            writer.writeImage(1, d.flatNormal.view, d.sampler);
+            writer.writeImage(2, d.white.view, d.sampler);
+            writer.writeImage(3, d.black.view, d.sampler);
+            writer.updateSet(gpu.device.device(), draw.materialSet);
+            flags |= mesh_flags::kAlbedoMap;
         }
+        draw.push.pbrParams[3] = static_cast<float>(flags);
+        gpu.meshes.record(cmd, target, cameraSet, lightingSet, draw);
     }
 
-    vkCmdEndRendering(cmd);
+    gpu.device.cmdEndRendering(cmd);
 }
 
-void PassReflectionProbe::updateProbes(VkCommandBuffer cmd, SceneGraph& graph, SceneRenderer& renderer,
-                                      PassMesh& passMesh, SceneVkAllocator& allocator, SceneVkDevice& device,
-                                      SceneVkBridge& bridge) {
-    activeProbe_ = nullptr;
-    std::vector<ReflectionProbeNode*> visibleProbes;
-
-    for (auto& [id, node] : graph.nodes_) {
-        if (!node->renderVisible() || node->type() != SceneNode::Type::ReflectionProbe) continue;
-        auto* p = static_cast<ReflectionProbeNode*>(node.get());
-        visibleProbes.push_back(p);
-
-        if (p->updateMode() == ReflectionProbeNode::UpdateMode::Once && !p->hasData()) {
-            p->requestCapture();
-        }
-
-        if (p->captureRequested()) {
-            if (!ensureProbeGpu(p, allocator, device)) continue;
-            auto& data = probeCache_[p];
-
-            // Render all 6 cube faces
-            for (int f = 0; f < 6; ++f) {
-                renderFace(cmd, p, f, graph, renderer, passMesh, allocator, device, bridge);
-            }
-
-            // Generate mipmaps
-            allocator.transitionImageLayout(cmd, data.cubemap.image, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                             1, 0, VK_IMAGE_ASPECT_COLOR_BIT,
-                                             6, 0);
-
-            for (uint32_t i = 1; i < data.mipLevels; ++i) {
-                allocator.transitionImageLayout(cmd, data.cubemap.image, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                 VK_IMAGE_LAYOUT_UNDEFINED,
-                                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                                 1, i, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                 6, 0);
-
-                int32_t srcW = std::max(1, data.resolution >> (i - 1));
-                int32_t srcH = std::max(1, data.resolution >> (i - 1));
-                int32_t dstW = std::max(1, data.resolution >> i);
-                int32_t dstH = std::max(1, data.resolution >> i);
-
-                VkImageBlit blit{};
-                blit.srcOffsets[0] = {0, 0, 0};
-                blit.srcOffsets[1] = {srcW, srcH, 1};
-                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                blit.srcSubresource.mipLevel = i - 1;
-                blit.srcSubresource.baseArrayLayer = 0;
-                blit.srcSubresource.layerCount = 6;
-
-                blit.dstOffsets[0] = {0, 0, 0};
-                blit.dstOffsets[1] = {dstW, dstH, 1};
-                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                blit.dstSubresource.mipLevel = i;
-                blit.dstSubresource.baseArrayLayer = 0;
-                blit.dstSubresource.layerCount = 6;
-
-                vkCmdBlitImage(cmd,
-                               data.cubemap.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               data.cubemap.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               1, &blit, VK_FILTER_LINEAR);
-
-                allocator.transitionImageLayout(cmd, data.cubemap.image, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                                 1, i, VK_IMAGE_ASPECT_COLOR_BIT,
-                                                 6, 0);
-            }
-
-            allocator.transitionImageLayout(cmd, data.cubemap.image, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                             data.mipLevels, 0, VK_IMAGE_ASPECT_COLOR_BIT,
-                                             6, 0);
-            data.cubemap.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-            p->markCaptured();
-        }
+void PassReflectionProbe::buildMips(SceneFrame& frame, Probe& probe) {
+    SceneVkAllocator& alloc = frame.gpu.allocator;
+    VkCommandBuffer cmd = frame.cmd;
+    alloc.transitionImageLayout(cmd, probe.cube.image, kCubeFormat, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1, 0, VK_IMAGE_ASPECT_COLOR_BIT, 6, 0);
+    for (uint32_t i = 1; i < probe.mipLevels; ++i) {
+        alloc.transitionImageLayout(cmd, probe.cube.image, kCubeFormat, VK_IMAGE_LAYOUT_UNDEFINED,
+                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, i, VK_IMAGE_ASPECT_COLOR_BIT, 6, 0);
+        const int32_t src = std::max(1, probe.resolution >> (i - 1));
+        const int32_t dst = std::max(1, probe.resolution >> i);
+        VkImageBlit blit{};
+        blit.srcOffsets[1] = {src, src, 1};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 6};
+        blit.dstOffsets[1] = {dst, dst, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 6};
+        vkCmdBlitImage(cmd, probe.cube.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, probe.cube.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        alloc.transitionImageLayout(cmd, probe.cube.image, kCubeFormat, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1, i, VK_IMAGE_ASPECT_COLOR_BIT, 6, 0);
     }
-
-    // Select active probe: highest priority probe with data
-    int bestPriority = -999999;
-    for (auto* p : visibleProbes) {
-        if (!p->hasData()) continue;
-        if (p->priority() >= bestPriority) {
-            bestPriority = p->priority();
-            activeProbe_ = p;
-        }
-    }
+    alloc.transitionImageLayout(cmd, probe.cube.image, kCubeFormat, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, probe.mipLevels, 0,
+                                VK_IMAGE_ASPECT_COLOR_BIT, 6, 0);
+    probe.cube.currentLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
-void PassReflectionProbe::releaseFaceViews(SceneVkDevice& device, ProbeGpuData& data) {
-    if (!data.faceViews.empty()) {
-        VkDevice dev = device.device();
-        device.defer([dev, views = data.faceViews] {
-            for (VkImageView view : views) {
-                if (view != VK_NULL_HANDLE) vkDestroyImageView(dev, view, nullptr);
-            }
-        });
-    }
-    data.faceViews.clear();
-}
-
-VkImageView PassReflectionProbe::activeCubemapView() const {
-    if (activeProbe_) {
-        auto it = probeCache_.find(activeProbe_);
-        if (it != probeCache_.end() && it->second.cubemap.isValid()) {
-            return it->second.cubemap.view;
-        }
-    }
-    return dummyCubemap_.view;
-}
-
-} // namespace bro::scene::vk
+}  // namespace bro::scene::vk

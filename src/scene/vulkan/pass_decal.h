@@ -1,69 +1,46 @@
 #pragma once
 
-#include "scene/vulkan/scene_vk_device.h"
-#include "scene/vulkan/scene_vk_allocator.h"
-#include "scene/vulkan/scene_vk_pipeline.h"
-#include "scene/vulkan/scene_vk_descriptors.h"
+// Projected decals: each DecalNode's unit box is rasterised (back faces, so
+// a camera inside the box still sees it) and every covered pixel whose
+// opaque surface lies inside the box takes the decal's albedo and emission,
+// reconstructed from the depth snapshot. Drawn in the HDR scope after the
+// opaque surfaces and SSR, before translucents, in renderPriority order.
+
+#include "scene/vulkan/scene_pass.h"
+#include "scene/vulkan/scene_vk_target_format.h"
+
 #include <vulkan/vulkan.h>
+
 #include <cstdint>
 
 namespace bro::scene::vk {
 
-struct alignas(16) DecalPushConstants {
-    float model[16];        // 64 bytes
-    float invModel[16];     // 64 bytes
-    float modulate[4];      // 16 bytes: rgb tint, a = master opacity
-    float decalUp[4];       // 16 bytes: xyz = up (unit), w = emissionStrength
-    float fades[4];         // 16 bytes: x = upperFade, y = lowerFade, z = normalFade, w = unused
-    int32_t flags[4];       // 16 bytes: x = hasAlbedo, y = hasEmission
-};
-
-/// Screen-space projected decal rendering pass.
-class PassDecal {
+class PassDecal final : public ScenePass {
 public:
-    PassDecal() = default;
-    ~PassDecal() = default;
-
-    PassDecal(const PassDecal&) = delete;
-    PassDecal& operator=(const PassDecal&) = delete;
-
-    bool init(SceneVkDevice& device, SceneVkAllocator& allocator,
-              VkDescriptorSetLayout cameraLayout, VkDescriptorSetLayout lightingLayout);
-    void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
-    /// Rebuild the pipeline for the HDR target's sample count.
-    bool setSampleCount(VkDevice dev, VkSampleCountFlagBits samples);
-
-    void begin(VkCommandBuffer cmd, VkDescriptorSet cameraSet, VkDescriptorSet lightingSet);
-
-    void draw(VkCommandBuffer cmd, const DecalPushConstants& push, VkDescriptorSet materialSet);
-
-    VkDescriptorSetLayout materialLayout() const { return materialLayout_; }
-    VkDescriptorSet createMaterialSet(SceneVkDevice& device, VkImageView depthView, VkSampler depthSampler,
-                                      VkImageView albedoView, VkSampler albedoSampler,
-                                      VkImageView emissionView, VkSampler emissionSampler);
-
-    VkImageView dummyWhiteView() const { return dummyWhiteImage_.view; }
-    VkImageView dummyBlackView() const { return dummyBlackImage_.view; }
-    VkSampler defaultSampler() const { return defaultSampler_; }
+    const char* name() const override { return "decals"; }
+    bool setup(SceneGpu& gpu) override;
+    void declare(const SceneFrame& frame, PassIO& io) const override;
+    void record(SceneFrame& frame) override;
+    void cleanup(SceneGpu& gpu) override;
 
 private:
-    bool createPipeline(VkDevice dev);
+    /// decal.vert/frag's push block.
+    struct alignas(16) Push {
+        float model[16];
+        float invModel[16];
+        float modulate[4];   // rgb tint, a = opacity
+        float decalUp[4];    // xyz unit up, w = emission strength
+        float fades[4];      // upper, lower, normal
+        int32_t flags[4];    // has albedo, has emission
+    };
 
-    VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;
-    VkDescriptorSetLayout cameraLayout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout lightingLayout_ = VK_NULL_HANDLE;
-    VkDescriptorSetLayout materialLayout_ = VK_NULL_HANDLE;
-    VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-    VkPipeline pipeline_ = VK_NULL_HANDLE;
-
-    SceneVkBuffer cubeVertexBuffer_;
-
-    SceneVkImage dummyWhiteImage_;
-    SceneVkImage dummyBlackImage_;
-    VkSampler defaultSampler_ = VK_NULL_HANDLE;
-
-    VkDescriptorSet activeCameraSet_ = VK_NULL_HANDLE;
-    VkDescriptorSet activeLightingSet_ = VK_NULL_HANDLE;
+    SceneVkDevice* device_ = nullptr;
+    VkDescriptorSetLayout materialLayout_ = VK_NULL_HANDLE;   // depth, albedo, emission
+    VkPipelineLayout layout_ = VK_NULL_HANDLE;
+    VkShaderModule vs_ = VK_NULL_HANDLE;
+    VkShaderModule fs_ = VK_NULL_HANDLE;
+    SceneVkBuffer cube_;   // 36 vertices of the unit box
+    PipelineVariants pipelines_;
 };
 
-} // namespace bro::scene::vk
+}  // namespace bro::scene::vk

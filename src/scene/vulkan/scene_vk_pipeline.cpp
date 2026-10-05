@@ -66,7 +66,7 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::reset() {
     depthStencil_.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil_.depthTestEnable = VK_TRUE;
     depthStencil_.depthWriteEnable = VK_TRUE;
-    depthStencil_.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    depthStencil_.depthCompareOp = depth::compareCloser();
     depthStencil_.depthBoundsTestEnable = VK_FALSE;
     depthStencil_.stencilTestEnable = VK_FALSE;
 
@@ -123,15 +123,12 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setCullMode(VkCullModeFlags cull
     return *this;
 }
 
-SceneVkPipelineBuilder& SceneVkPipelineBuilder::setMultisamplingNone() {
+SceneVkPipelineBuilder& SceneVkPipelineBuilder::setTarget(const TargetFormat& target) {
+    colorAttachmentFormats_.assign(target.color, target.color + target.colorCount);
+    depthAttachmentFormat_ = target.depth;
+    stencilAttachmentFormat_ = VK_FORMAT_UNDEFINED;
     multisampling_.sampleShadingEnable = VK_FALSE;
-    multisampling_.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    return *this;
-}
-
-SceneVkPipelineBuilder& SceneVkPipelineBuilder::setMultisampling(VkSampleCountFlagBits samples) {
-    multisampling_.sampleShadingEnable = VK_FALSE;
-    multisampling_.rasterizationSamples = samples;
+    multisampling_.rasterizationSamples = target.samples;
     return *this;
 }
 
@@ -165,24 +162,6 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::enableAlphaBlending(uint32_t col
     return *this;
 }
 
-SceneVkPipelineBuilder& SceneVkPipelineBuilder::enableAdditiveBlending(uint32_t colorAttachmentCount) {
-    colorBlendAttachments_.clear();
-    for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
-        VkPipelineColorBlendAttachmentState blendAttachment{};
-        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        blendAttachment.blendEnable = VK_TRUE;
-        blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-        blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-        blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
-        colorBlendAttachments_.push_back(blendAttachment);
-    }
-    return *this;
-}
-
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::setColorBlendAttachment(
     uint32_t index, const VkPipelineColorBlendAttachmentState& blendState) {
     if (index >= colorBlendAttachments_.size()) {
@@ -202,14 +181,6 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::enableDepthTest(bool depthWrite,
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::disableDepthTest() {
     depthStencil_.depthTestEnable = VK_FALSE;
     depthStencil_.depthWriteEnable = VK_FALSE;
-    return *this;
-}
-
-SceneVkPipelineBuilder& SceneVkPipelineBuilder::setDynamicRendering(
-    const std::vector<VkFormat>& colorFormats, VkFormat depthFormat, VkFormat stencilFormat) {
-    colorAttachmentFormats_ = colorFormats;
-    depthAttachmentFormat_ = depthFormat;
-    stencilAttachmentFormat_ = stencilFormat;
     return *this;
 }
 
@@ -233,12 +204,30 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
     viewportState.scissorCount = 1;
     viewportState.pScissors = nullptr;   // Handled dynamically
 
+    // One blend state per colour attachment. Without independentBlend (not
+    // enabled on the device) they must all be identical, so an attachment the
+    // pass did not set blends like the first — the shader writes every
+    // output of a multi-attachment target.
+    std::vector<VkPipelineColorBlendAttachmentState> blends = colorBlendAttachments_;
+    if (!blends.empty()) blends.resize(colorAttachmentFormats_.size(), blends.front());
+
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
     colorBlending.logicOp = VK_LOGIC_OP_COPY;
-    colorBlending.attachmentCount = static_cast<uint32_t>(colorBlendAttachments_.size());
-    colorBlending.pAttachments = colorBlendAttachments_.data();
+    colorBlending.attachmentCount = static_cast<uint32_t>(blends.size());
+    colorBlending.pAttachments = blends.data();
+
+    // The depth policy, as specialization constant 0 on every stage.
+    const VkBool32 reversed = reversedZ() ? VK_TRUE : VK_FALSE;
+    const VkSpecializationMapEntry policyEntry{depth::kReversedZConstantId, 0, sizeof(VkBool32)};
+    VkSpecializationInfo policy{};
+    policy.mapEntryCount = 1;
+    policy.pMapEntries = &policyEntry;
+    policy.dataSize = sizeof(reversed);
+    policy.pData = &reversed;
+    std::vector<VkPipelineShaderStageCreateInfo> stages = shaderStages_;
+    for (auto& st : stages) st.pSpecializationInfo = &policy;
 
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -247,8 +236,8 @@ VkPipeline SceneVkPipelineBuilder::build(VkDevice device, VkPipelineLayout layou
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages_.size());
-    pipelineInfo.pStages = shaderStages_.data();
+    pipelineInfo.stageCount = static_cast<uint32_t>(stages.size());
+    pipelineInfo.pStages = stages.data();
     pipelineInfo.pVertexInputState = &vertexInputInfo;
     pipelineInfo.pInputAssemblyState = &inputAssembly_;
     pipelineInfo.pViewportState = &viewportState;

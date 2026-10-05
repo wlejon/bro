@@ -6,7 +6,7 @@
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bvh.h>
-#include "webgl/webgl_types.h"
+#include "scene/texture_source.h"
 
 #include <functional>
 #include <memory>
@@ -17,8 +17,10 @@ namespace bro::scene {
 
 class SkinnedMeshNode;
 
-/// A renderable 3D mesh node. Holds bromesh::MeshData and owns GL resources.
-/// Renders into a shared FBO owned by SceneGraph (set up during render pass).
+/// A renderable 3D mesh node: bromesh::MeshData plus a PBR material. The node
+/// holds CPU data only; the scene renderer keeps the GPU copies keyed by node
+/// id and refreshes them when geometryGeneration() or a texture slot's
+/// generation moves (scene/texture_source.h).
 class MeshNode : public SceneNode {
 public:
     explicit MeshNode(const std::string& name = "");
@@ -28,7 +30,6 @@ public:
     MeshNode& operator=(const MeshNode&) = delete;
 
     Type type() const override { return Type::Mesh; }
-    void onRender(SceneGraph& graph) override;
 
     /// Downcast hook: non-null when this node is a SkinnedMeshNode. Skinned
     /// meshes deliberately keep Type::Mesh so every Mesh-typed walk (shadow
@@ -39,9 +40,9 @@ public:
 
     // --- Draw mode ---
 
-    /// What GL primitive the index buffer encodes. Triangles is the default
+    /// What primitive the index buffer encodes. Triangles is the default
     /// and matches every existing call site. Lines reinterprets `indices` as
-    /// pairs of endpoint indices and issues GL_LINES. Lines lack normals/UVs/
+    /// pairs of endpoint indices. Lines lack normals/UVs/
     /// tangents, so switching to Lines also flips the node to unlit and
     /// disables shadow casting (lines can't sensibly shadow anything).
     enum class DrawMode { Triangles, Lines };
@@ -118,7 +119,7 @@ public:
         return mesh_;
     }
 
-    /// True when drawRaw can emit geometry: a non-empty base mesh or a LOD
+    /// True when the node has geometry to draw: a non-empty base mesh or a LOD
     /// chain. Pass gathers use this instead of mesh().empty() so chain-only
     /// nodes aren't skipped.
     bool hasDrawableMesh() const { return !mesh_.empty() || !lods_.empty(); }
@@ -131,7 +132,7 @@ public:
     }
     const float* color() const { return color_; }
 
-    /// Whether the current mesh has per-vertex colors (set after uploadToGPU).
+    /// Whether the current mesh (base or selected LOD level) has per-vertex colors.
     bool hasVertexColors() const { return hasVertexColors_; }
 
     /// Whether the per-vertex color stream tints the albedo. Tri-state:
@@ -155,74 +156,62 @@ public:
         return vertexColorTint_ > 0 ? 2 : 1;
     }
 
-    /// Upload an RGBA8 baseColor texture (tightly packed, top-left origin).
-    /// Pass width=0 / height=0 / data=nullptr to clear. Takes a copy; the
-    /// caller's buffer can be freed immediately after.
+    /// RGBA8 baseColor texture (tightly packed, top-left origin). Pass
+    /// width=0 / height=0 / data=nullptr to clear. Takes a copy; the caller's
+    /// buffer can be freed immediately after.
     void setBaseColorTexture(int width, int height, const uint8_t* rgba);
     void clearBaseColorTexture();
+    /// True when the base colour samples a texture: owned pixels or a linked
+    /// scene (setExternalSceneProvider).
     bool hasBaseColorTexture() const {
-        return externalBaseColorTex_ != nullptr || texture_ != 0;
+        return externalSceneProvider_ != nullptr || !baseColorTex_.empty();
     }
-    GLuint baseColorTextureId() const { return texture_; }
+    const NodeTexture& baseColorTexture() const { return baseColorTex_; }
 
-    /// Live-linked external baseColor texture (scene-as-texture). The
-    /// provider is invoked at draw time every frame and returns the CURRENT
-    /// GL texture name to sample — or 0 when the source has nothing yet
-    /// (never rendered) or no longer exists (source scene destroyed), in
-    /// which case the mesh draws its plain base color. Per-draw resolution
-    /// is what makes the link live: FBO textures are recreated on canvas
-    /// resize / renderScale changes, and the new id is picked up on the next
-    /// frame with no re-wiring. MeshNode never owns or deletes an external
-    /// texture (releaseGL ignores it). Mutually exclusive with the owned
-    /// setBaseColorTexture(bytes) path — setting either clears the other.
-    using ExternalTextureProvider = std::function<unsigned()>;
-    void setExternalBaseColorTexture(ExternalTextureProvider provider);
-    bool hasExternalBaseColorTexture() const {
-        return externalBaseColorTex_ != nullptr;
-    }
-
+    /// Live-linked external baseColor: another scene's rendered output
+    /// (scene-as-texture). The provider is asked at draw time every frame
+    /// and returns the source graph, or null once it is gone, in which case
+    /// the mesh draws its plain base colour. Per-draw resolution is what
+    /// makes the link live: the source's output image is recreated on
+    /// resize and render-scale changes and the new one is picked up on the
+    /// next frame with no re-wiring. Mutually exclusive with owned pixels —
+    /// setting either clears the other.
     using ExternalSceneProvider = std::function<SceneGraph*()>;
     void setExternalSceneProvider(ExternalSceneProvider provider) {
         externalSceneProvider_ = std::move(provider);
+        if (externalSceneProvider_) baseColorTex_.clear();
     }
+    bool hasExternalBaseColorTexture() const { return externalSceneProvider_ != nullptr; }
     SceneGraph* externalSceneGraph() const {
         return externalSceneProvider_ ? externalSceneProvider_() : nullptr;
     }
 
-    /// Draw-time baseColor resolution: the external provider when set (may
-    /// return 0 — see above), else the owned texture (0 if none).
-    GLuint resolvedBaseColorTextureId() const {
-        return externalBaseColorTex_ ? (GLuint)externalBaseColorTex_()
-                                     : texture_;
-    }
-
-    /// Tangent-space normal map (RGBA8, .xy = xy, .z ignored and reconstructed,
-    /// or full .xyz sampled directly — this shader reads all three channels).
+    /// Tangent-space normal map (RGBA8, .xyz sampled).
     void setNormalTexture(int width, int height, const uint8_t* rgba);
     void clearNormalTexture();
-    bool hasNormalTexture() const { return normalTex_ != 0; }
-    GLuint normalTextureId() const { return normalTex_; }
+    bool hasNormalTexture() const { return !normalTex_.empty(); }
+    const NodeTexture& normalTexture() const { return normalTex_; }
 
     /// Metallic-roughness texture (glTF packing: G = roughness, B = metallic).
     /// R and A are unused. Scalar metallic/roughness multiply with the sample.
     void setMetallicRoughnessTexture(int width, int height, const uint8_t* rgba);
     void clearMetallicRoughnessTexture();
-    bool hasMetallicRoughnessTexture() const { return mrTex_ != 0; }
-    GLuint metallicRoughnessTextureId() const { return mrTex_; }
+    bool hasMetallicRoughnessTexture() const { return !mrTex_.empty(); }
+    const NodeTexture& metallicRoughnessTexture() const { return mrTex_; }
 
     /// Ambient-occlusion map (R channel used). Modulates ambient/IBL only.
     void setOcclusionTexture(int width, int height, const uint8_t* rgba);
     void clearOcclusionTexture();
-    bool hasOcclusionTexture() const { return aoTex_ != 0; }
-    GLuint occlusionTextureId() const { return aoTex_; }
+    bool hasOcclusionTexture() const { return !aoTex_.empty(); }
+    const NodeTexture& occlusionTexture() const { return aoTex_; }
 
     /// Emissive map (RGB). Multiplied by the scalar `emissive` and the
     /// `emissiveColor` tint — set intensity=1 and color to the glTF
     /// emissiveFactor to match glTF's `emissiveTexture * emissiveFactor`.
     void setEmissiveTexture(int width, int height, const uint8_t* rgba);
     void clearEmissiveTexture();
-    bool hasEmissiveTexture() const { return emissiveTex_ != 0; }
-    GLuint emissiveTextureId() const { return emissiveTex_; }
+    bool hasEmissiveTexture() const { return !emissiveTex_.empty(); }
+    const NodeTexture& emissiveTexture() const { return emissiveTex_; }
 
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
@@ -379,32 +368,31 @@ public:
     static int userTextureUnitLimit();
     static int maxUserTextures();
 
-    /// One user sampler slot. `data`/`w`/`h` stage a CPU-side upload that
-    /// flushPendingTextures() consumes on the GL thread; `tex` is the owned
-    /// GL name (0 until first upload / after release).
+    /// One user sampler slot. `data` is the slot's full CPU image (kept so
+    /// the renderer can always rebuild its GPU copy); `generation` moves on
+    /// every reallocation or full write, and the queued sub-rect / slice
+    /// writes are the partial updates since, which the renderer applies to
+    /// the GPU copy it already holds and then drains.
     struct UserTexture {
-        /// A staged sub-rectangle write (glTexSubImage2D at the next flush).
-        /// Kept as a queue rather than folded into `data` because the slot
-        /// does not keep a CPU mirror of the texture after upload — there is
-        /// nothing to fold into.
+        /// A staged sub-rectangle write. Also already applied to `data`.
         struct SubUpdate {
             std::vector<float> data;
             int x = 0, y = 0, w = 0, h = 0;
         };
 
         std::string name;            // carries the `u_` prefix
-        std::vector<float> data;     // staged R32F pixels (cleared on upload)
+        std::vector<float> data;     // full image: w x h x channels (x layers)
         int w = 0;
         int h = 0;
         int channels = 1;
-        bool dirty = false;
+        uint64_t generation = 0;     // see nextResourceGeneration()
         // Generate a mip chain and use trilinear minification. Off by default:
         // a heightfield raymarcher wants the level-0 samples it staged, and
         // the chain costs both memory and a per-upload generate pass.
         bool mipmap = false;
-        // GL_REPEAT instead of GL_CLAMP_TO_EDGE. Off by default: a slot is
-        // usually a window onto the world with no meaning outside its extent,
-        // where repeating would wrap the far edge into view. A slot that is a
+        // Repeat instead of clamp-to-edge. Off by default: a slot is usually
+        // a window onto the world with no meaning outside its extent, where
+        // repeating would wrap the far edge into view. A slot that is a
         // TILE — one periodic patch sampled at arbitrary coordinates — needs
         // the opposite, and cannot get it from a fract() in the shader: that
         // leaves a texel-wide seam at the wrap which every mip level widens.
@@ -416,36 +404,29 @@ public:
         // each pole. Clamping there is not an approximation — the pole rows are
         // single-valued, so the clamped value is the correct one.
         bool clampT = false;
-        // Array slots (setCustomShaderTextureArray): > 0 makes the slot a
-        // GL_TEXTURE_2D_ARRAY of `layers` slices, each w x h, bound to a
-        // sampler2DArray. One unit however many slices — which is the point:
-        // a fragment stage may hold as few as 16 active samplers (macOS GL
-        // 4.1 core reports exactly that), and ten of them are the mesh
-        // pipeline's before a node adds any.
+        // Array slots (setCustomShaderTextureArray): > 0 makes the slot a 2D
+        // array of `layers` slices, each w x h, bound to a sampler2DArray.
+        // One binding however many slices.
         int layers = 0;
-        // A staged whole-slice write (glTexSubImage3D at the next flush). An
-        // array slot never keeps a CPU image of its own; `dirty` on an array
-        // means "(re)allocate", after which every slice not staged here is
-        // zero-filled rather than left undefined.
+        // A staged whole-slice write. Also already applied to `data`, whose
+        // slices not yet written read as zero.
         struct SliceUpdate {
             int layer = 0;
             std::vector<float> data;
         };
         std::vector<SliceUpdate> sliceUpdates;
-        GLuint tex = 0;
-        bool texIsArray = false;     // `tex` was created as a 2D_ARRAY
         std::vector<SubUpdate> subUpdates;
     };
 
     /// Stage a float texture for the named user sampler.
     /// `data` must hold width*height*channels floats; pass data=nullptr (or a zero
     /// extent) to release the slot. `mipmap` opts the slot into a generated
-    /// mip chain with GL_LINEAR_MIPMAP_LINEAR minification, which is what a
+    /// mip chain with trilinear minification, which is what a
     /// shader sampling textureLod() at a FRACTIONAL level needs — without it
-    /// GL has no second level to blend toward and every level reads as 0.
+    /// there is no second level to blend toward.
     /// Returns false only when a NEW name would exceed maxUserTextures() —
-    /// existing names always succeed. Safe off the GL thread: the upload
-    /// happens in flushPendingTextures().
+    /// existing names always succeed. The renderer uploads it before the
+    /// next draw.
     bool setCustomShaderTexture(const std::string& name, int width, int height,
                                 const float* data, bool mipmap = false,
                                 bool repeat = false, bool clampT = false,
@@ -456,8 +437,7 @@ public:
     /// costs. `data` must hold width*height floats laid out row-major for the
     /// sub-rect alone. Returns false — logging, never writing partially or
     /// out of bounds — when the slot is unknown, has no dimensions yet, or
-    /// the rect falls outside them. Safe off the GL thread; bounds are
-    /// checked against the CPU-side extent, which outlives the staged bytes.
+    /// the rect falls outside them.
     bool updateCustomShaderTexture(const std::string& name, int x, int y,
                                    int width, int height, const float* data);
     /// Stage (or, with a zero extent or layers <= 0, release) an ARRAY
@@ -465,10 +445,9 @@ public:
     /// read in GLSL through a sampler2DArray of the same name. Allocation
     /// alone — the slices start as zeros; fill them with
     /// setCustomShaderTextureArrayLayer. Calling this again with the same
-    /// shape keeps the GL storage and every slice already written; a new shape
-    /// reallocates and zeroes. `repeat` is GL_REPEAT in S, and in T too unless
-    /// `clampT`. A mipmapped slot regenerates its chain for every slice at the
-    /// flush after any slice write — GL has no per-slice regenerate.
+    /// shape keeps the GPU storage and every slice already written; a new shape
+    /// reallocates and zeroes. `repeat` repeats in S, and in T too unless
+    /// `clampT`. A mipmapped slot regenerates the chain of each written slice.
     /// Same budget rule as setCustomShaderTexture: false only when a NEW name
     /// would exceed maxUserTextures().
     bool setCustomShaderTextureArray(const std::string& name, int width,
@@ -478,11 +457,11 @@ public:
 
     /// Stage one whole slice of an existing array slot: width*height*channels
     /// floats at the slot's shape. Refused (false, logged) for an unknown or
-    /// non-array slot or a layer out of range. Safe off the GL thread.
+    /// non-array slot or a layer out of range.
     bool setCustomShaderTextureArrayLayer(const std::string& name, int layer,
                                           const float* data);
 
-    /// Release the named slot (GL delete happens at the next flush).
+    /// Release the named slot; the name no longer counts against the budget.
     void clearCustomShaderTexture(const std::string& name);
     const std::vector<UserTexture>& customShaderTextures() const {
         return userTextures_;
@@ -500,79 +479,30 @@ public:
     void setCullMargin(float m) { cullMargin_ = m < 0.0f ? 0.0f : m; }
     float cullMargin() const { return cullMargin_; }
 
-    /// Upload/release any dirty staged texture slots. GL thread only. The
-    /// renderer calls this before reading material texture state so runtime
-    /// texture swaps (setBaseColorTexture and friends) apply the same frame
-    /// they were set; drawRaw also flushes for depth-only paths.
-    ///
-    /// Two calls land on every mesh draw (renderMeshNode, then drawRaw), and on
-    /// a steady scene both have nothing to do — but the work they skip used to
-    /// be behind an out-of-line call that ran a remove_if over userTextures_
-    /// regardless. The gate is derived from the staged state rather than kept
-    /// as a flag, so no future setter can forget to raise it.
-    void flushPendingTextures() {
-        if (pendingBase_.dirty || pendingNormal_.dirty || pendingMR_.dirty ||
-            pendingAO_.dirty || pendingEmissive_.dirty || !userTextures_.empty())
-            flushPendingTexturesImpl();
-    }
+    // --- Renderer hooks ---
 
-    /// Release GPU resources (call before GL context is destroyed).
-    virtual void releaseGL();
+    /// Moves whenever the drawable geometry changes (setMesh, setLodMeshes);
+    /// the renderer re-uploads vertex/index buffers when it does.
+    uint64_t geometryGeneration() const { return geometryGeneration_; }
 
-    /// Bind VAO and issue glDrawElements without touching material uniforms.
-    /// Used by depth-only passes (shadow maps) where the caller's program is
-    /// already bound and only positions matter. Returns true if anything drew.
-    bool drawRaw();
-
-    // Staged texture upload — setters capture the bytes and uploadToGPU()
-    // (which runs in the render thread with GL context bound) actually uploads.
-    // Public so file-scope helpers in mesh_node.cpp can operate on slots.
-    struct PendingTex {
-        std::vector<uint8_t> data;
-        int w = 0;
-        int h = 0;
-        bool dirty = false;
+    /// The clipmap-terrain role: set by ClipmapTerrain on the ring mesh it
+    /// owns, which the renderer then draws through the terrain pipeline (its
+    /// custom shader is the clipmap source, not a user chunk). The two flags
+    /// select the cubic reconstruction variants compiled into that pipeline.
+    struct ClipmapRole {
+        bool cubicHeight = false;
+        bool cubicSurface = false;
     };
-    const PendingTex& pendingBaseTexture() const { return pendingBase_; }
-
-protected:
-    /// Interleave + upload the vertex/index buffers (GL thread, called from
-    /// drawRaw when gpuDirty_). Virtual so SkinnedMeshNode can append its
-    /// joint/weight attribute streams to the same VAO.
-    virtual void uploadToGPU();
-
-    // GL vertex-array handle — shared with SkinnedMeshNode's skin-attribute
-    // upload, which binds it to add attributes 5/6.
-    GLuint vao_ = 0;
-
-public:
-    /// Inverse-transpose of `model`'s upper 3x3 — the normal matrix, so normals
-    /// stay perpendicular under non-uniform scale. Returns 9 floats in column-
-    /// major order, valid until the next call on this node.
-    ///
-    /// Cached against the 3x3 it was built from, because the alternative is a
-    /// full 4x4 inverse + transpose on every draw. The per-frame camera-relative
-    /// offset the renderer applies touches only column 3, which drops out of the
-    /// 3x3 entirely — so a mesh that is not rotating or scaling computes this
-    /// once and then never again, however far the camera travels.
-    const float* normalMatrix3(const bromath::Mat4& model) const;
+    void setClipmapRole(const ClipmapRole& role) { clipmapRole_ = role; hasClipmapRole_ = true; }
+    const ClipmapRole* clipmapRole() const { return hasClipmapRole_ ? &clipmapRole_ : nullptr; }
 
 private:
-    /// The real flush. Only reached when flushPendingTextures() sees staged
-    /// work; it is also the one place that can rebind a texture out from under
-    /// a caller, which is why the gate above matters beyond speed.
-    void flushPendingTexturesImpl();
-
-    mutable float normalMat3_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-    mutable float normalMatSrc_[9] = {};   // the 3x3 normalMat3_ was built from
-    mutable bool  normalMatValid_ = false;
-
     // Recompute bounds_ from the base mesh + every LOD level (union), so
     // culling stays valid across level switches.
     void recomputeBounds();
 
     bromesh::MeshData mesh_;
-    bool gpuDirty_ = false;
+    uint64_t geometryGeneration_ = nextResourceGeneration();
 
     // Cached bounds + BVH. Both are invalidated (bvhDirty_ = true, bounds_
     // recomputed) on every setMesh call. The BVH covers the BASE mesh only;
@@ -581,45 +511,23 @@ private:
     mutable bromesh::MeshBVH bvh_;
     mutable bool bvhDirty_ = true;
 
-    // LOD chain (sorted by maxDist ascending). Each level owns its own GL
-    // buffer set, uploaded lazily on first draw; replaced levels stage their
-    // GL names into the dead lists, deleted at the next draw / releaseGL on
-    // the GL thread (setters may run without a context current, matching the
-    // staged-texture pattern above).
+    // LOD chain (sorted by maxDist ascending). The renderer keeps one GPU
+    // copy per level, all under geometryGeneration_.
     struct LodEntry {
         bromesh::MeshData mesh;
         float maxDist = 0.0f;
-        GLuint vao = 0, vbo = 0, ibo = 0;
-        GLsizei indexCount = 0;
-        bool gpuDirty = true;
         bool hasColors = false;
     };
     std::vector<LodEntry> lods_;
     int lodSelected_ = 0;
-    std::vector<GLuint> deadLodVaos_;
-    std::vector<GLuint> deadLodBufs_;
-    void flushDeadLodBuffers();   // GL thread
 
-    // GL resources
-    GLuint vbo_ = 0;
-    GLuint ibo_ = 0;
-    GLuint texture_ = 0;
-    GLuint normalTex_ = 0;
-    GLuint mrTex_ = 0;
-    GLuint aoTex_ = 0;
-    GLuint emissiveTex_ = 0;
-    GLsizei indexCount_ = 0;
-
-    // Live-linked external baseColor source (see setExternalBaseColorTexture).
-    // Never a GL name we own — releaseGL must not (and cannot) delete it.
-    ExternalTextureProvider externalBaseColorTex_;
+    // Material textures and the linked-scene base colour (setExternalSceneProvider).
+    NodeTexture baseColorTex_;
+    NodeTexture normalTex_;
+    NodeTexture mrTex_;
+    NodeTexture aoTex_;
+    NodeTexture emissiveTex_;
     ExternalSceneProvider externalSceneProvider_;
-
-    PendingTex pendingBase_;
-    PendingTex pendingNormal_;
-    PendingTex pendingMR_;
-    PendingTex pendingAO_;
-    PendingTex pendingEmissive_;
 
     // Material
     bool hasVertexColors_ = false;
@@ -654,12 +562,13 @@ private:
     // Heap-allocated so the common shaderless mesh pays one pointer.
     std::unique_ptr<CustomShaderState> customShader_;
     // User sampler slots (see setCustomShaderTexture). Deliberately NOT part
-    // of CustomShaderState: setShader() replaces that state wholesale, which
-    // would drop owned GL names on the floor. Owned here, released in
-    // releaseGL() alongside the material textures.
+    // of CustomShaderState: setShader() replaces that state wholesale, and the
+    // textures outlive a shader swap.
     std::vector<UserTexture> userTextures_;
     float cullMargin_ = 0.0f;
     ShadeMapProvider shadeMap_;
+    ClipmapRole clipmapRole_;
+    bool hasClipmapRole_ = false;
 };
 
 } // namespace bro::scene

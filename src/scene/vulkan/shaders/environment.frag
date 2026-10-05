@@ -1,7 +1,14 @@
 #version 450
 
+// The camera depth policy (scene/vulkan/scene_vk_depth.h).
+layout(constant_id = 0) const bool REVERSED_Z = true;
+
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
+// The opaque scope's indirect-light attachment, when SSAO adds one: the sky
+// has no indirect light for AO to take away. Without the attachment the
+// write goes nowhere.
+layout(location = 1) out vec4 outIndirect;
 
 layout(set = 0, binding = 0) uniform samplerCube texCubemap;
 
@@ -14,8 +21,9 @@ layout(push_constant) uniform EnvPush {
 } push;
 
 void main() {
+    outIndirect = vec4(0.0);
     vec2 ndc = inUV * 2.0 - 1.0;
-    vec4 clipFar = vec4(ndc, 0.0, 1.0);
+    vec4 clipFar = vec4(ndc, REVERSED_Z ? 0.0 : 1.0, 1.0);
     vec4 worldFar = push.invViewProj * clipFar;
     float len = length(worldFar.xyz);
     vec3 rayDir = (len > 0.0001) ? (worldFar.xyz / len) : vec3(0.0, 0.0, -1.0);
