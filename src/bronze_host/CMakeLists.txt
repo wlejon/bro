@@ -77,16 +77,16 @@ endif()
 # defined below the library, because one of the compiled modules is built
 # against a manifest a tool linking THIS library prints.
 set(BRO_BRONZE_HOST_SOURCES
-    gl_constants.cpp
-    gl_state.cpp
-    gl_buffers.cpp
-    gl_shaders.cpp
-    gl_textures.cpp
-    gl_framebuffers.cpp
-    gl_queries.cpp
-    gl_transform_feedback.cpp
-    gl_context.cpp
-    gl_profile.cpp
+    webgl_constants.cpp
+    webgl_state.cpp
+    webgl_buffers.cpp
+    webgl_shaders.cpp
+    webgl_textures.cpp
+    webgl_framebuffers.cpp
+    webgl_queries.cpp
+    webgl_transform_feedback.cpp
+    webgl_context.cpp
+    host_profile.cpp
     host_telemetry.cpp
     app_module.cpp
     dom_globals.cpp

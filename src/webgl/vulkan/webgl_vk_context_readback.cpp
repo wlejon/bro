@@ -66,10 +66,24 @@ size_t WebGLVkContext::readPixelsByteCount(GLsizei width, GLsizei height, GLenum
     return packedSize(pack_, format, type, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 }
 
-void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
-                                GLenum format, GLenum type, void* pixels) {
-    if (!pixels) return;
-    if (readPixelsByteCount(width, height, format, type) == 0) return;
+void WebGLVkContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                void* pixels, size_t size) {
+    // WebGL 2: client memory is not a destination while a pack buffer is bound.
+    if (boundPixelPackBuffer_ != 0) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    const size_t bytes = readPixelsByteCount(width, height, format, type);
+    if (bytes == 0 || !pixels) return;
+    if (size < bytes) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    readPixelsInto(x, y, width, height, format, type, pixels);
+}
+
+void WebGLVkContext::readPixelsInto(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                    void* pixels) {
     Surface src;
     readColorSurface(src);
     if (src.samples > VK_SAMPLE_COUNT_1_BIT) {
@@ -137,7 +151,7 @@ void WebGLVkContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei he
         return;
     }
     syncShadow(pbo);
-    readPixels(x, y, width, height, format, type, pbo.shadowData.data() + offset);
+    readPixelsInto(x, y, width, height, format, type, pbo.shadowData.data() + offset);
     uploadToBuffer(pbo, static_cast<VkDeviceSize>(offset), pbo.shadowData.data() + offset, byteCount);
 }
 

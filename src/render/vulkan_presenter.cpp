@@ -8,6 +8,7 @@
 #include <include/core/SkSurface.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bro::render {
@@ -167,7 +168,7 @@ bool VulkanPresenter::ensureReadbackBuffer(VkDeviceSize size) {
 }
 
 bool VulkanPresenter::present(const PresentFrame& frame) {
-    if (!frame.below && !frame.hasImage() && !frame.above) return false;
+    if (!frame.below && !frame.hasImages()) return false;
     return swapchain_ ? presentToSwapchain(frame) : presentOffscreen(frame);
 }
 
@@ -188,10 +189,14 @@ bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame
     cmdImageBarrier(cmd, toDst);
     targetLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-    // The base is the layer below, or else the image copied straight in.
-    const bool imageIsBase = !frame.below && frame.hasImage();
-    const uint32_t baseW = frame.below ? frame.below.width : imageIsBase ? frame.imageWidth : 0;
-    const uint32_t baseH = frame.below ? frame.below.height : imageIsBase ? frame.imageHeight : 0;
+    // The base is the layer below, or else the first image copied straight
+    // in when it lands 1:1 at the top-left uncut.
+    const PresentImage* first = frame.images.empty() ? nullptr : &frame.images.front();
+    const bool imageIsBase = !frame.below && first && *first && !first->clipped && first->dstX == 0.0f &&
+                             first->dstY == 0.0f && first->dstW == static_cast<float>(first->width) &&
+                             first->dstH == static_cast<float>(first->height);
+    const uint32_t baseW = frame.below ? frame.below.width : imageIsBase ? first->width : 0;
+    const uint32_t baseH = frame.below ? frame.below.height : imageIsBase ? first->height : 0;
     if (baseW < target.width || baseH < target.height) {
         VkClearColorValue clear{};
         std::memcpy(clear.float32, frame.clearColor, sizeof(clear.float32));
@@ -210,40 +215,45 @@ bool VulkanPresenter::recordFrame(VkCommandBuffer cmd, const PresentFrame& frame
     }
 
     if (imageIsBase) {
-        const uint32_t w = std::min(frame.imageWidth, target.width);
-        const uint32_t h = std::min(frame.imageHeight, target.height);
-        const bool toSrc = frame.imageLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        const uint32_t w = std::min(first->width, target.width);
+        const uint32_t h = std::min(first->height, target.height);
+        const bool toSrc = first->layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         if (toSrc)
-            cmdTransitionImage(cmd, frame.image, colorRange(), frame.imageLayout,
+            cmdTransitionImage(cmd, first->image, colorRange(), first->layout,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         VkImageBlit blit{};
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
         blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.dstOffsets[1] = {static_cast<int32_t>(w), static_cast<int32_t>(h), 1};
-        vkCmdBlitImage(cmd, frame.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        vkCmdBlitImage(cmd, first->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
         if (toSrc)
-            cmdTransitionImage(cmd, frame.image, colorRange(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               frame.imageLayout);
+            cmdTransitionImage(cmd, first->image, colorRange(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               first->layout);
     }
 
-    // Blended layers: the image over the layer below, then the layer above.
-    BlendDraw draws[2];
-    size_t drawCount = 0;
-    if (frame.hasImage() && !imageIsBase) {
-        if (!copyImageTexture(cmd, frame, draws[drawCount++])) return false;
+    // Blended layers, in order: each image (but a base one), then the CPU
+    // layer above it. Every copy and upload is recorded before the one pass
+    // that draws them.
+    std::vector<BlendDraw> draws;
+    draws.reserve(frame.images.size() * 2);
+    for (size_t i = 0; i < frame.images.size(); ++i) {
+        const PresentImage& image = frame.images[i];
+        if (image && !(i == 0 && imageIsBase)) {
+            if (!copyImageTexture(cmd, image, i, target, draws.emplace_back())) return false;
+        }
+        if (image.above) {
+            if (!uploadLayerTexture(cmd, image.above, i, target, draws.emplace_back())) return false;
+        }
     }
-    if (frame.above) {
-        if (!uploadLayerTexture(cmd, frame.above, draws[drawCount++])) return false;
-    }
-    if (drawCount == 0) return true;
+    if (draws.empty()) return true;
 
     // Blending reads what the transfers above wrote.
     cmdTransitionImage(cmd, target.image, colorRange(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     targetLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    recordBlendDraws(cmd, target, draws, drawCount);
+    recordBlendDraws(cmd, target, draws);
     return true;
 }
 
@@ -287,13 +297,23 @@ bool VulkanPresenter::presentOffscreen(const PresentFrame& frame) {
     auto& frames = context_.frames();
     frames.ensureFrame();
 
-    // The target covers every layer.
-    const uint32_t w = std::max({frame.below ? frame.below.width : 0u,
-                                 frame.hasImage() ? frame.imageWidth : 0u,
-                                 frame.above ? frame.above.width : 0u});
-    const uint32_t h = std::max({frame.below ? frame.below.height : 0u,
-                                 frame.hasImage() ? frame.imageHeight : 0u,
-                                 frame.above ? frame.above.height : 0u});
+    // The target is the frame the CPU layers make up; a frame of GPU images
+    // alone covers them all.
+    uint32_t w = frame.below ? frame.below.width : 0u;
+    uint32_t h = frame.below ? frame.below.height : 0u;
+    for (const PresentImage& image : frame.images) {
+        if (!image.above) continue;
+        w = std::max(w, image.above.width);
+        h = std::max(h, image.above.height);
+    }
+    if (w == 0 || h == 0) {
+        for (const PresentImage& image : frame.images) {
+            if (!image) continue;
+            w = std::max(w, static_cast<uint32_t>(std::ceil(std::max(0.0f, image.dstX + image.dstW))));
+            h = std::max(h, static_cast<uint32_t>(std::ceil(std::max(0.0f, image.dstY + image.dstH))));
+        }
+    }
+    if (w == 0 || h == 0) return false;
     constexpr VkImageUsageFlags kUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     readbackTicket_ = 0;
@@ -361,11 +381,8 @@ bool VulkanPresenter::presentPixels(const void* pixels, uint32_t width, uint32_t
 bool VulkanPresenter::presentImage(VkImage image, uint32_t width, uint32_t height,
                                    VkImageLayout currentLayout, SkSurface* overlaySurface) {
     PresentFrame frame;
-    frame.image = image;
-    frame.imageLayout = currentLayout;
-    frame.imageWidth = width;
-    frame.imageHeight = height;
-    if (overlaySurface) frame.above = surfaceLayer(overlaySurface);
+    PresentImage& layer = frame.images.emplace_back(PresentImage::at1to1(image, currentLayout, width, height));
+    if (overlaySurface) layer.above = surfaceLayer(overlaySurface);
     return present(frame);
 }
 

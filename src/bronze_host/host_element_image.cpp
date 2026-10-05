@@ -23,7 +23,7 @@
 // is what lets `hostImageOf` answer for an img element and lets
 // gl_textures.cpp keep asking one question.
 
-#include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
+#include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_html_interfaces.h"
 #include "bronze_host/host_node_sweep.h"

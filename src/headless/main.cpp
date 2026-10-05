@@ -4,7 +4,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "bronze_host/app_module.h"
-#include "bronze_host/gl_profile.h"
+#include "bronze_host/host_profile.h"
 #include "bronze_host/host_storage.h"
 #include "util/crash_handler.h"
 

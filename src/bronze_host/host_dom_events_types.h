@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "dom/event.h"
 
 #include <string>

@@ -4,7 +4,7 @@
 // power query. Registered as a host global AND set on globalThis, like the
 // other roots, so a compiled read and a dynamic one find the same object.
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 #include "engine/engine.h"
 #include "platform/clipboard.h"

@@ -4,7 +4,7 @@
 
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_gc.h"
 #include "bronze_host/host_globals_internal.h"
 

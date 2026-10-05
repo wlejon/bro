@@ -5,28 +5,21 @@
 
 namespace bro::render {
 
-using GLsync = void*;
-
 /// Tiny coordination primitive shared between the main thread and a single
-/// worker thread that produces GPU work. The worker draws into a GL surface
-/// owned by its own context, places a fence, and hands off to the main thread
-/// which waits on the fence before sampling the resulting texture.
+/// worker thread that produces a frame's layers. The worker draws into the
+/// back buffer and publishes it; the main thread claims the result before
+/// compositing it.
 ///
 /// The state machine is intentionally tiny:
 ///
 ///     Idle ──postRequest()──▶ Requested
 ///     Requested ──worker waitForRequest()──▶ (worker proceeds) ──markBusy()──▶ Busy
-///     Busy ──publishResult(fence)──▶ ResultReady
+///     Busy ──publishResult()──▶ ResultReady
 ///     ResultReady ──main tryClaimResult()──▶ Idle
 ///
 /// Either side may issue postShutdown() at any time; the worker's
-/// waitForRequest() returns false in that case, and publishResult() drops
-/// the fence on the floor instead of publishing.
-///
-/// The class wraps the GL fence handshake in one place. Owners only call
-/// postRequest / tryClaimResult; they never glWaitSync directly. This makes
-/// the "produce fence, wait on fence, delete fence" lifetime impossible to
-/// get wrong from the call site.
+/// waitForRequest() returns false in that case, and publishResult() does
+/// not publish.
 class FrameWorker {
 public:
     enum State : uint32_t {
@@ -56,12 +49,10 @@ public:
         state_.notify_one();
     }
 
-    /// If the worker has published a result, glWaitSync + glDeleteSync the
-    /// fence and transition back to Idle. Returns true iff a result was
-    /// claimed.
+    /// If the worker has published a result, transition back to Idle.
+    /// Returns true iff a result was claimed.
     bool tryClaimResult() {
         if (state_.load(std::memory_order_acquire) != ResultReady) return false;
-        fence_.exchange(0, std::memory_order_acquire);
         state_.store(Idle, std::memory_order_release);
         return true;
     }
@@ -126,24 +117,18 @@ public:
         state_.store(Busy, std::memory_order_release);
     }
 
-    /// Publish the fence + transition Busy → ResultReady. If the main thread
-    /// already issued shutdown, we delete the fence instead so it doesn't
-    /// leak.
-    void publishResult(GLsync fence = nullptr) {
-        fence_.store(reinterpret_cast<uintptr_t>(fence), std::memory_order_release);
+    /// Busy → ResultReady, unless the main thread already issued shutdown.
+    void publishResult() {
         uint32_t expected = Busy;
         if (state_.compare_exchange_strong(expected, ResultReady,
                                            std::memory_order_acq_rel,
                                            std::memory_order_acquire)) {
             state_.notify_one();
-        } else {
-            fence_.store(0, std::memory_order_release);
         }
     }
 
 private:
     std::atomic<uint32_t> state_{Idle};
-    std::atomic<uintptr_t> fence_{0};  // GLsync handle as opaque uintptr
 };
 
 } // namespace bro::render

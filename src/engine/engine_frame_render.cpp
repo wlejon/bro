@@ -159,18 +159,6 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
 
     auto layers = framePresenter_->currentLayers();
 
-    for (auto& layer : layers.appLayers) {
-        if (layer.type != UILayer::Canvas) continue;
-        if (auto* cs = canvasSceneById(layer.canvasSceneId))
-            cs->prepareAndSignal();
-    }
-
-    for (auto& layer : layers.appLayers) {
-        if (layer.type != UILayer::Canvas) continue;
-        if (auto* cs = canvasSceneById(layer.canvasSceneId))
-            cs->consumeFence();
-    }
-
     frameStats_.accumRasterMs += (util::currentTimeMs() - tRaster) - layoutWaitMs;
     frameStats_.accumLayoutMs += layoutWaitMs;
 
@@ -196,15 +184,11 @@ void Engine::renderAndPresentFrame(double frameStart, double now, double wallFra
     }
 
     beginFrameComposite();
-    compositeLayers(layers.appLayers, 0,
-                    layers.appInsetTop, layers.appContentW,
-                    layers.appContentH);
+    compositeLayers(layers.appLayers, layers.appInsetTop);
 
     compositeLayers(layers.systemLayers);
 
     compositeWindowHosts();
-
-    webgl::WebGL2RenderingContext::invalidateCurrent();
 
     frameStats_.accumGpuMs += util::currentTimeMs() - tGpu;
 

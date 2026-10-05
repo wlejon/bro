@@ -22,7 +22,7 @@ namespace bro::render {
 class CommandReplayer {
 public:
     using LayerBreakHandler = std::function<void(int kind, uint64_t canvasSceneId,
-                                                  unsigned int directTexture,
+                                                  unsigned int elementId,
                                                   float x, float y, float w, float h,
                                                   float clipX, float clipY,
                                                   float clipW, float clipH)>;

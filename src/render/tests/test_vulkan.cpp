@@ -165,10 +165,9 @@ void testPresenterOffscreen(render::VulkanContext& ctx) {
     // the first's in-flight layer texture.
     ctx.frames().beginFrame();
     render::PresentFrame frame;
-    frame.image = blue.image;
-    frame.imageWidth = frame.imageHeight = 48;
-    frame.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    frame.above = render::VulkanPresenter::surfaceLayer(above.get());
+    frame.images.push_back(
+        render::PresentImage::at1to1(blue.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 48, 48));
+    frame.images[0].above = render::VulkanPresenter::surfaceLayer(above.get());
     frame.clearColor[0] = 0.0f; frame.clearColor[1] = 1.0f; frame.clearColor[2] = 0.0f; frame.clearColor[3] = 1.0f;
     CHECK(presenter.present(frame));
     CHECK(presenter.present(frame));
@@ -189,7 +188,7 @@ void testPresenterOffscreen(render::VulkanContext& ctx) {
     auto below = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(64, 64));
     below->getCanvas()->clear(SK_ColorWHITE);
     ctx.frames().beginFrame();
-    frame.image = halfBlue.image;
+    frame.images[0].image = halfBlue.image;
     frame.below = render::VulkanPresenter::surfaceLayer(below.get());
     CHECK(presenter.present(frame));
     CHECK(presenter.readbackPixels(out, w, h));
@@ -200,6 +199,37 @@ void testPresenterOffscreen(render::VulkanContext& ctx) {
         CHECK(near(top[0], 191) && near(top[1], 64) && near(top[2], 128));
         const uint8_t* outside = px(out, w, 60, 60);  // only the layer below
         CHECK(outside[0] == 255 && outside[1] == 255 && outside[2] == 255);
+    }
+
+    // Images placed anywhere, scaled and clipped, several in one frame: the
+    // blue image squeezed into a 16x16 square at (8,8) and cut to its left
+    // half, then the half-blue one at (40,40), past the frame's edge.
+    ctx.frames().beginFrame();
+    render::PresentFrame placed;
+    placed.below = render::VulkanPresenter::surfaceLayer(below.get());
+    render::PresentImage& squeezed = placed.images.emplace_back(
+        render::PresentImage::at1to1(blue.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 48, 48));
+    squeezed.dstX = squeezed.dstY = 8.0f;
+    squeezed.dstW = squeezed.dstH = 16.0f;
+    squeezed.clipped = true;
+    squeezed.clip = {{8, 8}, {8, 16}};
+    render::PresentImage& offset = placed.images.emplace_back(
+        render::PresentImage::at1to1(halfBlue.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 48, 48));
+    offset.dstX = offset.dstY = 40.0f;
+    CHECK(presenter.present(placed));
+    CHECK(presenter.readbackPixels(out, w, h));
+    CHECK(w == 64 && h == 64);
+    if (w == 64 && h == 64) {
+        const uint8_t* in = px(out, w, 10, 10);  // the squeezed image, inside its clip
+        CHECK(in[0] == 0 && in[1] == 0 && in[2] == 255);
+        const uint8_t* cut = px(out, w, 20, 10);  // inside its rectangle, outside the clip
+        CHECK(cut[0] == 255 && cut[1] == 255 && cut[2] == 255);
+        const uint8_t* corner = px(out, w, 4, 4);  // beside it
+        CHECK(corner[0] == 255 && corner[1] == 255 && corner[2] == 255);
+        const uint8_t* half = px(out, w, 50, 50);  // the second image, half blue over white
+        CHECK(near(half[0], 128) && near(half[1], 128) && half[2] == 255);
+        const uint8_t* before = px(out, w, 36, 50);  // left of it
+        CHECK(before[0] == 255 && before[1] == 255 && before[2] == 255);
     }
     ctx.queue().waitIdle();
     ctx.destroyImage(halfBlue.image, halfBlue.id);

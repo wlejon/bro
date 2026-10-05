@@ -81,7 +81,7 @@ struct WindowHost {
     // raster thread at replay, ordered by the frame handshake like boxW/boxH.
     float renderScale = 1.0f;
     render::CommandBuffer cmdBuffer;
-    render::SkiaRenderer::GPUSurface surface;  // raster thread only
+    render::SkiaRenderer::LayerSurface surface;  // raster thread only
     int surfW = 0, surfH = 0;
     PublishedFrame published;                  // what compositeWindowHosts presents
 

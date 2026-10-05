@@ -13,15 +13,12 @@
 #include <include/core/SkTypeface.h>
 #include <include/core/SkFontMgr.h>
 #include <include/core/SkFontStyle.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
 
 #include "render/font_fallback.h"
 #include "render/image_cache.h"
 #include "render/shaped_run.h"
 
 namespace bro::render {
-
-using GLuint = uint32_t;
 
 // ---------------------------------------------------------------------------
 // SkiaRenderer -- Skia raster UI + Vulkan display
@@ -34,13 +31,6 @@ class SkiaRenderer final : public Renderer {
 public:
     explicit SkiaRenderer();
     ~SkiaRenderer() override;
-
-    /// Create a standalone Ganesh GL GrDirectContext for the current thread's GL context.
-    /// Returns nullptr if GPU initialization fails.
-    static sk_sp<GrDirectContext> createGrContext();
-
-    /// GPU Skia context (Ganesh GL) — nullptr if CPU-only mode.
-    GrDirectContext* grContext() const { return grContext_.get(); }
 
     void clear(bromath::Color color) override;
 
@@ -131,9 +121,6 @@ public:
     void beginFrame(int width, int height) override;
     void endFrame() override;
 
-    /// Upload Skia pixels to the GL texture. Call after endFrame().
-    void uploadToGPU();
-
     /// Switch the active drawing surface mid-frame (for compositing layers).
     /// Returns the previous surface. The new surface is cleared to transparent.
     /// Call between beginFrame() and endFrame().
@@ -147,27 +134,21 @@ public:
     void setDeviceScale(float scale) { deviceScale_ = scale > 0.0f ? scale : 1.0f; }
     float deviceScale() const { return deviceScale_; }
 
-    /// GPU-backed Skia surface (Ganesh) with its own FBO + GL texture.
-    /// Used for HTML compositing layers so rendering goes directly to GPU
-    /// with no CPU→GPU upload.
-    struct GPUSurface {
+    /// A compositing layer's raster surface (HTML layers, system panels,
+    /// iframe documents), drawn through switchSurface().
+    struct LayerSurface {
         sk_sp<SkSurface> surface;
-        GLuint texture = 0;
-        GLuint fbo = 0;
     };
 
-    /// Create a GPU-backed Skia surface at the given dimensions.
-    GPUSurface createGPUSurface(int width, int height);
+    /// A surface of the given size.
+    LayerSurface createLayerSurface(int width, int height);
 
-    /// Recreate the SkSurface wrapper for an existing FBO/texture.
-    /// Cheap — only the Skia wrapper is recreated, GL resources stay alive.
-    void rewrapGPUSurface(GPUSurface& surf, int width, int height);
+    /// Make `surf` width x height, keeping its surface when it already is:
+    /// switchSurface() clears it for the next frame.
+    void fitLayerSurface(LayerSurface& surf, int width, int height);
 
-    /// Destroy a GPU surface, releasing FBO and texture resources.
-    void destroyGPUSurface(GPUSurface& surf);
-
-    /// Access the UI overlay GL texture (BGRA8, premultiplied alpha).
-    GLuint getUITexture() const { return uiTexture_; }
+    /// Release the surface's pixels.
+    void releaseLayerSurface(LayerSurface& surf);
 
     SkCanvas* getCanvas() const override { return canvas_; }
     SkSurface* surface() const override { return surface_.get(); }
@@ -177,21 +158,12 @@ public:
 private:
     SkColor toSkColor(bromath::Color c) const;
 
-    GLuint uiTexture_ = 0;
-    int textureWidth_ = 0;
-    int textureHeight_ = 0;
-
-    // Skia GPU context (Ganesh GL backend)
-    sk_sp<GrDirectContext> grContext_;
-    GLuint gpuFBO_ = 0;         // FBO that wraps uiTexture_ for Skia GPU rendering
-
     sk_sp<SkSurface> surface_;
     SkCanvas* canvas_ = nullptr;
     float deviceScale_ = 1.0f;
     // Clear the current canvas and set it up for a frame: base matrix at the
     // device scale, then the base save().
     void enterCanvas();
-    bool gpuMode_ = false;      // true if GPU backend active
 
     struct FontEntry {
         sk_sp<SkTypeface> typeface;
@@ -254,9 +226,6 @@ private:
         sk_sp<SkTypeface> typeface;
     };
     std::vector<CustomFont> customFonts_;
-
-    // Pending pixel data for upload
-    bool pixelsPending_ = false;
 };
 
 // ---------------------------------------------------------------------------

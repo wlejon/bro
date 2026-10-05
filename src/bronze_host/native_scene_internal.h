@@ -1,7 +1,7 @@
 #pragma once
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"

@@ -247,13 +247,12 @@ void Engine::processPendingIframeReloads() {
         // An explicit reload()/src= is a request to retry, so drop any record of
         // a previous failure for this element.
         iframeLoadFailed_.erase(el);
-        // Salvage the existing GPU surface across the reload: it is owned by the
-        // raster renderer's GL context, so recreating it would leak the old one
-        // (and destroying it here would be the wrong context). Hand it to the
-        // rebuilt sub-doc; replayIframeLayers resizes it if the box changed, and
-        // keeping its published frame means the preview shows the old frame
+        // Salvage the existing layer surface across the reload: the raster
+        // thread may be the one drawing into it, so it is not released here.
+        // Hand it to the rebuilt sub-doc; replayIframeLayers resizes it if the
+        // box changed, and keeping its published frame means the preview shows the old frame
         // until the new one paints instead of flashing blank.
-        render::SkiaRenderer::GPUSurface salvaged;
+        render::SkiaRenderer::LayerSurface salvaged;
         int salvagedW = 0, salvagedH = 0;
         sk_sp<SkImage> salvagedFrame;
         bool haveSalvage = false;
@@ -291,12 +290,11 @@ void Engine::processPendingIframeReloads() {
     }
 }
 
-// Main thread, raster-idle only. See the header for why an iframe surface can
-// only be destroyed on the raster thread. Secondary-window hosts route their
-// surfaces through the same queue — it is a per-CONTEXT free list, not an
-// iframe-specific one.
-void Engine::queueIframeSurfaceFree(render::SkiaRenderer::GPUSurface&& surf) {
-    if (!surf.surface && !surf.fbo && !surf.texture) return;
+// Main thread, raster-idle only. See the header for why an iframe surface is
+// released on the raster thread. Secondary-window hosts route their surfaces
+// through the same queue.
+void Engine::queueIframeSurfaceFree(render::SkiaRenderer::LayerSurface&& surf) {
+    if (!surf.surface) return;
     iframeSurfaceFrees_.push_back(std::move(surf));
 }
 
@@ -304,7 +302,7 @@ void Engine::queueIframeSurfaceFree(render::SkiaRenderer::GPUSurface&& surf) {
 void Engine::drainIframeSurfaceFrees(render::SkiaRenderer* renderer) {
     if (iframeSurfaceFrees_.empty()) return;
     if (renderer) {
-        for (auto& s : iframeSurfaceFrees_) renderer->destroyGPUSurface(s);
+        for (auto& s : iframeSurfaceFrees_) renderer->releaseLayerSurface(s);
     }
     iframeSurfaceFrees_.clear();
 }

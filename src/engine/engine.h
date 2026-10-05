@@ -44,11 +44,11 @@
 #include <unordered_set>
 #include <vector>
 #include <include/core/SkSurface.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
 #include <vulkan/vulkan.h>
 
 namespace bro::render {
 struct PresentFrame;
+struct PresentImage;
 class VulkanContext;
 class VulkanSwapchain;
 class VulkanPresenter;
@@ -555,8 +555,8 @@ private:
     // or readCompositedFrame() (headless capture).
     void beginGpuFrame();
     void beginFrameComposite();
-    void compositeLayers(const std::vector<UILayer>& layers, uint32_t targetFBO = 0,
-                         int offsetY = 0, int layerW = -1, int layerH = -1);
+    /// `offsetY`: where the layers' top edge sits in the frame (the app's inset).
+    void compositeLayers(const std::vector<UILayer>& layers, int offsetY = 0);
     void presentCurrentFrame();
     std::vector<uint8_t> readCompositedFrame();
     render::PresentFrame describeCompositedFrame();
@@ -573,7 +573,7 @@ private:
 
     void replayAppLayers(render::SkiaRenderer* renderer,
                          const render::CommandBuffer& buffer,
-                         std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                         std::vector<render::SkiaRenderer::LayerSurface>& pool,
                          int& poolW, int& poolH,
                          int surfW, int surfH,
                          std::vector<UILayer>& outLayers,
@@ -584,7 +584,7 @@ private:
 
     void replaySystemPanelLayers(render::SkiaRenderer* renderer,
                                  const render::CommandBuffer& buffer,
-                                 std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                                 std::vector<render::SkiaRenderer::LayerSurface>& pool,
                                  int& poolW, int& poolH,
                                  int vpW, int vpH,
                                  std::vector<UILayer>& outLayers);
@@ -638,7 +638,7 @@ private:
     SubDocRef windowHostSubDoc(WindowHost& h);
     void quiesceRasterForCapture();
     std::vector<uint8_t> readPublishedFrame(const PublishedFrame& frame, int& outW, int& outH);
-    void queueIframeSurfaceFree(render::SkiaRenderer::GPUSurface&& surf);
+    void queueIframeSurfaceFree(render::SkiaRenderer::LayerSurface&& surf);
     void drainIframeSurfaceFrees(render::SkiaRenderer* renderer);
 
     dom::Element* iframeHitTest(IframeDoc* dp, float localX, float localY);
@@ -710,7 +710,6 @@ private:
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenesDetached_;
     std::unordered_map<uint64_t, canvas::CanvasScene*> canvasSceneRegistry_;
     canvas::CanvasScene* canvasSceneById(uint64_t id) const;
-    std::unique_ptr<canvas::CanvasRasterThread> canvasRasterThread_;
 
     std::vector<WebGLEntry> webglEntries_;
     void syncWebGLCanvasSizes();
@@ -725,14 +724,14 @@ private:
     std::thread       rasterThread_;
     std::thread       layoutThread_;
 
-    std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_[2];
+    std::vector<render::SkiaRenderer::LayerSurface> htmlSurfacePool_[2];
     int htmlSurfacePoolW_[2] = {0, 0}, htmlSurfacePoolH_[2] = {0, 0};
-    std::vector<render::SkiaRenderer::GPUSurface> systemSurfacePool_[2];
+    std::vector<render::SkiaRenderer::LayerSurface> systemSurfacePool_[2];
     int systemSurfacePoolW_[2] = {0, 0}, systemSurfacePoolH_[2] = {0, 0};
 
-    std::vector<render::SkiaRenderer::GPUSurface> screenshotHtmlPool_;
+    std::vector<render::SkiaRenderer::LayerSurface> screenshotHtmlPool_;
     int screenshotHtmlPoolW_ = 0, screenshotHtmlPoolH_ = 0;
-    std::vector<render::SkiaRenderer::GPUSurface> screenshotSystemPool_;
+    std::vector<render::SkiaRenderer::LayerSurface> screenshotSystemPool_;
     int screenshotSystemPoolW_ = 0, screenshotSystemPoolH_ = 0;
 
     MenuBar menuBar_;
@@ -821,7 +820,7 @@ private:
     double appWatchLastChangeMs_ = 0.0;
     bool appWatchPending_ = false;
     std::vector<dom::Element*> pendingIframeReloads_;
-    std::vector<render::SkiaRenderer::GPUSurface> iframeSurfaceFrees_;
+    std::vector<render::SkiaRenderer::LayerSurface> iframeSurfaceFrees_;
     bool iframeSyncNeeded_ = false;
     std::unordered_map<dom::Element*, std::string> iframeLoadFailed_;
     bool systemPerfVisible_ = false;
@@ -968,17 +967,17 @@ private:
 
     bool testFailure_ = false;
 
-    // The frame's CPU composite. Layers composite into frameCompositeSurface_
-    // until one claims the frame's GPU base image (pendingVkImage_, a full-
-    // viewport scene or WebGL canvas); the layers after it go to
-    // frameAboveSurface_, which the presenter blends over that image.
-    sk_sp<SkSurface> frameCompositeSurface_;
-    sk_sp<SkSurface> frameAboveSurface_;
-    bool frameAboveActive_ = false;
+    // The frame's composite, bottom to top: CPU layers composite into
+    // frameSegments_[0] until a GPU layer (a 3D scene, a WebGL canvas) is
+    // reached. Its image joins frameImages_, placed where the layer sits,
+    // and the layers after it composite into the next segment, which the
+    // presenter blends over that image — and so on. frameSegmentUsed_ marks
+    // the segments something was drawn into.
+    std::vector<sk_sp<SkSurface>> frameSegments_;
+    std::vector<bool> frameSegmentUsed_;
+    std::vector<render::PresentImage> frameImages_;
     int frameCompositeW_ = 0, frameCompositeH_ = 0;
-    VkImage pendingVkImage_ = VK_NULL_HANDLE;
-    VkImageLayout pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-    uint32_t pendingVkImageW_ = 0, pendingVkImageH_ = 0;
+    SkCanvas* frameSegmentCanvas();  // the segment being composited into
 };
 
 } // namespace bro::engine

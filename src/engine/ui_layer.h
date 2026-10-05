@@ -23,7 +23,7 @@ namespace bro::engine {
 struct UILayer {
     enum Type { HTML, Canvas, Iframe, Scene3D, WebGL };
     Type type = HTML;
-    uint32_t texture = 0;
+    uint32_t elementId = 0;  // the WebGL or Scene3D element's node id
     // CanvasScene id when type==Canvas; IframeDoc id when type==Iframe. Both are
     // resolved through an engine registry at composite time so a layer that
     // outlives its scene/sub-document draws nothing rather than dangling.

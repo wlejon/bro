@@ -81,16 +81,12 @@ void WebGLVkContext::cleanupVulkanResources() {
     canvas_.cleanup();
 }
 
+// The viewport and scissor box are the app's: a resized drawing buffer
+// keeps them (WebGL 1.0, "The WebGL Viewport"), as GL's did.
 void WebGLVkContext::resize(int width, int height) {
     endRendering();
     canvas_.resize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     canvas_.recordInit(commands());
-    viewport(0, 0, width, height);
-    scissor(0, 0, width, height);
-}
-
-void WebGLVkContext::unbindCanvasFBO() {
-    flushCommands();
 }
 
 bool WebGLVkContext::readCanvasPixels(std::vector<uint8_t>& out) {
@@ -112,19 +108,6 @@ void WebGLVkContext::flush() {
 
 void WebGLVkContext::finish() {
     waitForCommands();
-}
-
-uint64_t WebGLVkContext::insertFence() {
-    flushCommands();
-    return stream_.lastTicket();
-}
-
-bool WebGLVkContext::isFenceSignaled(uint64_t ticket) const {
-    return context_.queue().isComplete(ticket);
-}
-
-bool WebGLVkContext::waitFence(uint64_t ticket, uint64_t timeoutNs) {
-    return context_.queue().wait(ticket, timeoutNs);
 }
 
 GLenum WebGLVkContext::getError() {
@@ -401,13 +384,20 @@ void WebGLVkContext::deleteVertexArray(WebGLVertexArrayObject vao) {
 }
 
 bool WebGLVkContext::bindVertexArray(WebGLVertexArrayObject vao) {
-    if (vao.id != 0 && vaos_.find(vao.id) == vaos_.end()) {
+    auto it = vaos_.find(vao.id);
+    if (it == vaos_.end()) {
         setSyntheticError(GL_INVALID_OPERATION);  // deleted, or from before a context loss
         return false;
     }
+    it->second.everBound = true;
     currentVaoId_ = vao.id;
-    boundElementArrayBuffer_ = vaos_[currentVaoId_].elementArrayBufferId;
+    boundElementArrayBuffer_ = it->second.elementArrayBufferId;
     return true;
+}
+
+GLboolean WebGLVkContext::isVertexArray(WebGLVertexArrayObject vao) const {
+    auto it = vao.id != 0 ? vaos_.find(vao.id) : vaos_.end();
+    return it != vaos_.end() && it->second.everBound ? GL_TRUE : GL_FALSE;
 }
 
 } // namespace bro::webgl::vk

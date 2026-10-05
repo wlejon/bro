@@ -321,13 +321,7 @@ void Engine::run() {
 
         framePresenter_->consumeIfReady();
 
-        if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) {
-            for (auto& cs : canvasScenesDetached_) {
-                if (cs->isThreaded() && canvasRasterThread_)
-                    canvasRasterThread_->releaseScene(cs.get());
-            }
-            canvasScenesDetached_.clear();
-        }
+        if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) canvasScenesDetached_.clear();
 
         eventLoop_->pollEvents();
         if (eventLoop_->shouldQuit()) {
@@ -401,13 +395,10 @@ void Engine::run() {
         if (systemDirty_) uiDirty_ = true;
 
         syncWebGLCanvasSizes();
-        webgl::WebGL2RenderingContext::invalidateCurrent();
 
         if (!timePaused_) fireFrameCallbacks(scaledFrameDtMs);
 
         for (auto& pump : framePumps_) pump();
-
-        webgl::WebGL2RenderingContext::endAppGL();
 
 #if BRO_WITH_3D
         if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {

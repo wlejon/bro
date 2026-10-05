@@ -1,6 +1,6 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_node_sweep.h"
 #include "bronze_host/host_worker_msg.h"

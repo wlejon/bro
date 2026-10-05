@@ -1,4 +1,4 @@
-// The BRO_GL_PROFILE seam. gl_profile.h holds the reasoning; this file is the
+// The BRO_HOST_PROFILE seam. host_profile.h holds the reasoning; this file is the
 // mechanism: a slot table built at install time, a two-timestamp wrapper, and
 // a sorted dump at exit.
 
@@ -6,7 +6,7 @@
 // deprecation opt-out rather than a blanket C4996 disable.
 #define _CRT_SECURE_NO_WARNINGS
 
-#include "bronze_host/gl_profile.h"
+#include "bronze_host/host_profile.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -81,7 +81,7 @@ bool s_dumped = false;
 void initOnce() {
     if (s_initialised) return;
     s_initialised = true;
-    const char* env = std::getenv("BRO_GL_PROFILE");
+    const char* env = std::getenv("BRO_HOST_PROFILE");
     if (env && std::strcmp(env, "trace") == 0) {
         s_enabled = true;
         s_trace = true;
@@ -159,7 +159,7 @@ void hostProfileDump() {
     const double msPerTick = 1000.0 / perSec;
     const double nsPerTick = 1e9 / perSec;
 
-    std::fprintf(stderr, "\n=== Bro Host Native Call Profile (BRO_GL_PROFILE=1) ===\n");
+    std::fprintf(stderr, "\n=== Bro Host Native Call Profile (BRO_HOST_PROFILE=1) ===\n");
     std::fprintf(stderr, "entry points called : %zu\n", slots.size());
     std::fprintf(stderr, "total calls         : %llu\n",
                  static_cast<unsigned long long>(totalCalls));

@@ -14,7 +14,7 @@
 // namespace, rather than answering a canned "cpu".
 
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 
 #if BRO_WITH_TENSOR
 

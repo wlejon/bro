@@ -13,7 +13,6 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <algorithm>
 #include <bit>
@@ -171,7 +170,6 @@ void Engine::rasterThreadFunc() {
         backBuf.appLayers.clear();
         backBuf.systemLayers.clear();
 
-        if (rasterRenderer->grContext()) rasterRenderer->grContext()->resetContext();
         rasterRenderer->beginFrame(snap.vpWidth, snap.vpHeight);
 
         // App layer surfaces are content-sized (viewport minus engine
@@ -216,14 +214,14 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->setDeviceScale(1.0f);
         rasterRenderer->endFrame();
 
-        framePresenter_->publishResult(nullptr);
+        framePresenter_->publishResult();
     }
 
     // Cleanup — both double-buffered pool copies.
     for (int i = 0; i < 2; ++i) {
-        for (auto& ps : htmlSurfacePool_[i])   rasterRenderer->destroyGPUSurface(ps);
+        for (auto& ps : htmlSurfacePool_[i])   rasterRenderer->releaseLayerSurface(ps);
         htmlSurfacePool_[i].clear();
-        for (auto& ps : systemSurfacePool_[i]) rasterRenderer->destroyGPUSurface(ps);
+        for (auto& ps : systemSurfacePool_[i]) rasterRenderer->releaseLayerSurface(ps);
         systemSurfacePool_[i].clear();
     }
     // Iframe sub-document surfaces live on this context too (replayIframeLayers
@@ -235,7 +233,7 @@ void Engine::rasterThreadFunc() {
     // above are safe to touch).
     for (auto& d : iframeDocs_) {
         if (!d) continue;
-        rasterRenderer->destroyGPUSurface(d->surface);
+        rasterRenderer->releaseLayerSurface(d->surface);
         d->surfW = d->surfH = 0;
         d->published.clear();
     }
@@ -246,7 +244,7 @@ void Engine::rasterThreadFunc() {
     // rasterThread_.join()).
     for (auto& h : windowHosts_) {
         if (!h) continue;
-        rasterRenderer->destroyGPUSurface(h->surface);
+        rasterRenderer->releaseLayerSurface(h->surface);
         h->surfW = h->surfH = 0;
         h->published.clear();
     }

@@ -21,7 +21,7 @@ struct SubDocRef {
     int& boxW;
     int& boxH;
     render::CommandBuffer& cmdBuffer;
-    render::SkiaRenderer::GPUSurface& surface;
+    render::SkiaRenderer::LayerSurface& surface;
     int& surfW;
     int& surfH;
     PublishedFrame& published;

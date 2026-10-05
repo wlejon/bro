@@ -4,7 +4,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_storage.h"
 #include "bronze_host/host_natives.h"  // pollNet
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 
 #include "engine/engine.h"
 #include "platform/dialogs.h"

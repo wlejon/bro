@@ -198,6 +198,26 @@ bool WebGLVkContext::formatSupports(VkFormat format, VkFormatFeatureFlags featur
     return (props.optimalTilingFeatures & features) == features;
 }
 
+std::vector<std::string> WebGLVkContext::supportedExtensions() const {
+    std::vector<std::string> exts = {"EXT_color_buffer_float", "BRO_buffer_map", "WEBGL_lose_context"};
+    if (anisotropicFiltering()) exts.emplace_back("EXT_texture_filter_anisotropic");
+    // Compressed formats the device samples natively, and only those.
+    for (std::string& name : compressedTextureExtensions()) exts.push_back(std::move(name));
+    // What 32-bit float formats can do is the device's to say.
+    if (formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT))
+        exts.emplace_back("EXT_float_blend");
+    if (formatSupports(VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+        exts.emplace_back("OES_texture_float_linear");
+    return exts;
+}
+
+bool WebGLVkContext::enableExtension(const std::string& name) {
+    // A compressed-texture extension's formats are accepted once enabled.
+    if (enableCompressedExtension(name)) return true;
+    const std::vector<std::string> exts = supportedExtensions();
+    return std::find(exts.begin(), exts.end(), name) != exts.end();
+}
+
 // The limits GL types as 64-bit.
 int64_t WebGLVkContext::getParameterInt64(GLenum pname) {
     const VkPhysicalDeviceLimits& L = context_.deviceProperties().limits;

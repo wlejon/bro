@@ -4,7 +4,7 @@
 #include "bronze_host/host_template.h"
 #include "bronze_host/host_iframe.h"
 #include "bronze_host/host_element_video.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
 #include "engine/engine.h"
 #include "dom/document.h"

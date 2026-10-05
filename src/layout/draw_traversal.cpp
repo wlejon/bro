@@ -1341,7 +1341,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     bool haveLBClip = currentClipRect(lbCX, lbCY, lbCW, lbCH);
     if (!haveLBClip) { lbCW = -1; lbCH = -1; }
     // Canvas/WebGL/scene content isn't drawn through renderer_ (it's a
-    // separately-composited GL texture quad), so it doesn't pick up the CTM
+    // separately-composited quad), so it doesn't pick up the CTM
     // concat above — project through the element's own ancestor-transform
     // chain explicitly, the same math getBoundingClientRect() uses, so a
     // zoomed/panned ancestor (CSS transform: translate/scale) positions the

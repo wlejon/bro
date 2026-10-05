@@ -6,9 +6,9 @@
 
 namespace bro::webgl {
 
-// Each WebGL object wraps a GLuint handle. These are lightweight value types
-// used as opaque handles in the JS bindings. The ID 0 is reserved/invalid
-// for most types (matching WebGL spec where null represents "no object").
+// Each WebGL object is a name the backend issues (one sequence for every
+// kind). These are lightweight value types the JS binding wraps; 0 is no
+// object, which WebGL spells null.
 
 struct WebGLBuffer       { GLuint id = 0; };
 struct WebGLTexture      { GLuint id = 0; };
@@ -19,7 +19,7 @@ struct WebGLRenderbuffer { GLuint id = 0; };
 struct WebGLVertexArrayObject { GLuint id = 0; };
 struct WebGLSampler      { GLuint id = 0; };
 struct WebGLQuery        { GLuint id = 0; };
-struct WebGLSync         { GLsync sync = nullptr; };
+struct WebGLSync         { GLuint id = 0; };
 struct WebGLTransformFeedback { GLuint id = 0; };
 
 struct WebGLUniformLocation {
@@ -31,12 +31,6 @@ struct WebGLActiveInfo {
     std::string name;
     GLenum type = 0;
     GLint size = 0;
-};
-
-struct WebGLShaderPrecisionFormat {
-    GLint rangeMin = 0;
-    GLint rangeMax = 0;
-    GLint precision = 0;
 };
 
 } // namespace bro::webgl

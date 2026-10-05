@@ -90,16 +90,6 @@ void Engine::shutdown() {
     if (framePresenter_) framePresenter_->postShutdown();
     if (rasterThread_.joinable()) rasterThread_.join();
 
-    if (canvasRasterThread_ && canvasRasterThread_->started()) {
-        for (auto& cs : canvasScenes_) {
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-        }
-        for (auto& cs : canvasScenesDetached_) {
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-        }
-        canvasRasterThread_->stop();
-    }
-
     closeAllGamepads();
     destroyAllWindowHosts();
     removeModalEventWatch();
@@ -119,14 +109,14 @@ Engine::~Engine() {
 #endif
 
     if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
-        for (auto& ps : screenshotHtmlPool_) skia->destroyGPUSurface(ps);
+        for (auto& ps : screenshotHtmlPool_) skia->releaseLayerSurface(ps);
         screenshotHtmlPool_.clear();
-        for (auto& ps : screenshotSystemPool_) skia->destroyGPUSurface(ps);
+        for (auto& ps : screenshotSystemPool_) skia->releaseLayerSurface(ps);
         screenshotSystemPool_.clear();
 
         for (auto& d : iframeDocs_) {
             if (!d) continue;
-            skia->destroyGPUSurface(d->surface);
+            skia->releaseLayerSurface(d->surface);
             d->surfW = d->surfH = 0;
             d->published.clear();
         }
@@ -146,7 +136,6 @@ Engine::~Engine() {
     canvasScenesDetached_.clear();
     canvasScenes_.clear();
     canvasSceneRegistry_.clear();
-    canvasRasterThread_.reset();
 
     webglEntries_.clear();
     destroyAllIframes();
@@ -162,8 +151,8 @@ Engine::~Engine() {
         auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
         for (int i = 0; i < 2; ++i) {
             if (skia) {
-                for (auto& ps : htmlSurfacePool_[i]) skia->destroyGPUSurface(ps);
-                for (auto& ps : systemSurfacePool_[i]) skia->destroyGPUSurface(ps);
+                for (auto& ps : htmlSurfacePool_[i]) skia->releaseLayerSurface(ps);
+                for (auto& ps : systemSurfacePool_[i]) skia->releaseLayerSurface(ps);
             }
             htmlSurfacePool_[i].clear();
             systemSurfacePool_[i].clear();
@@ -195,7 +184,6 @@ Engine::~Engine() {
     vulkanPresenter_.reset();
     vulkanSwapchain_.reset();
     vulkanContext_.reset();
-    webgl::WebGL2RenderingContext::setDefaultVulkanContext(nullptr);
 #if BRO_WITH_3D
     scene::SceneRenderer::setDefaultVulkanContext(nullptr);
 #endif
@@ -204,7 +192,7 @@ Engine::~Engine() {
 void Engine::handleResize(int w, int h) {
     // A script reaches this with its own numbers (headless resize(), a
     // headless bro.window.setSize): the viewport sizes every layer surface
-    // and readback, so it stays within what one GL texture can be. An OS
+    // and readback, so it stays within what one image can be. An OS
     // window never reports a size outside this.
     constexpr int kMaxViewportSide = 16384;
     w = std::clamp(w, 1, kMaxViewportSide);

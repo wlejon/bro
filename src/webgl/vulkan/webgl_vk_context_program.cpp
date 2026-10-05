@@ -67,6 +67,32 @@ std::string WebGLVkContext::getShaderInfoLog(WebGLShader s) {
     return (it != shaders_.end()) ? it->second.infoLog : "";
 }
 
+std::string WebGLVkContext::getShaderSource(WebGLShader s) {
+    auto it = shaders_.find(s.id);
+    return (it != shaders_.end()) ? it->second.source : "";
+}
+
+// A shader or program flagged for deletion (still attached, or in use) is
+// no longer one, for WebGL's is*.
+GLboolean WebGLVkContext::isShader(WebGLShader s) const {
+    auto it = s.id != 0 ? shaders_.find(s.id) : shaders_.end();
+    return it != shaders_.end() && !it->second.deleteStatus ? GL_TRUE : GL_FALSE;
+}
+
+GLboolean WebGLVkContext::isProgram(WebGLProgram p) const {
+    auto it = p.id != 0 ? programs_.find(p.id) : programs_.end();
+    return it != programs_.end() && !it->second.deleteStatus ? GL_TRUE : GL_FALSE;
+}
+
+std::vector<GLuint> WebGLVkContext::attachedShaders(WebGLProgram p) const {
+    std::vector<GLuint> out;
+    auto it = programs_.find(p.id);
+    if (it == programs_.end()) return out;
+    for (GLuint id : {it->second.vertShaderId, it->second.fragShaderId})
+        if (id != 0) out.push_back(id);
+    return out;
+}
+
 WebGLProgram WebGLVkContext::createProgram() {
     GLuint id = nextObjectId_++;
     programs_[id] = VkProgramResource{};

@@ -108,12 +108,12 @@ struct Cmd_LayerBreak {
     };
     int kind;                    // LayerKind
     uint64_t canvasSceneId;      // CanvasScene::sceneId() when kind==Canvas2D; IframeDoc id when kind==IframeDoc; else 0
-    unsigned int directTexture;  // GL texture id when kind==WebGL
+    unsigned int elementId;      // the element's node id when kind==WebGL or Scene3D
     float x, y, w, h;            // ignored for HtmlSurface
     // Active overflow/scroll clip at the layer-break point, in the same
     // untransformed pixel space as x/y/w/h. The canvas/WebGL layer is a
     // separate composited quad that bypasses the Skia clip stack, so the
-    // compositor re-applies this as a GL scissor. clipW < 0 ⇒ unclipped.
+    // compositor re-applies this as a clip. clipW < 0 ⇒ unclipped.
     float clipX = 0, clipY = 0, clipW = -1, clipH = -1;
 };
 

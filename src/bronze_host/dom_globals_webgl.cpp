@@ -1,7 +1,7 @@
 // WebGL host globals: WebGL2RenderingContext and WebGLRenderingContext constructor functions.
 // Minted as a proper HostClass with attached static constants and prototype branding.
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_html_interfaces.h"
 
@@ -24,9 +24,9 @@ void installWebGLGlobals() {
     g_webgl2RenderingContextClass.install(
         "WebGL2RenderingContext", 0, nullptr,
         [](ObjectBuilder& proto) {
-            installGlConstants(proto);
+            installWebGLConstants(proto);
         });
-    installGlConstants(g_webgl2RenderingContextClass);
+    installWebGLConstants(g_webgl2RenderingContextClass);
 
     // WebGLRenderingContext: branded constructor
     // One constructor for both the registry and globalThis, minted before

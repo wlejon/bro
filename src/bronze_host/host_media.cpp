@@ -1,5 +1,5 @@
 #include "bronze_host/host_media.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "util/asset_path.h"
 
 #if BRO_WITH_VIDEO

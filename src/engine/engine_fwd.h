@@ -17,7 +17,7 @@ namespace bro::physics { class PhysicsWorld; }
 namespace bro::net { class NetService; }
 namespace bro::steam { class SteamService; }
 namespace bro::scene { class SceneGraph; class HtmlNode; struct CullStats; }
-namespace bro::canvas { class CanvasScene; class CanvasRasterThread; }
+namespace bro::canvas { class CanvasScene; }
 namespace bro::platform { class Window; class EventLoop; }
 namespace bro::dom { class Document; class Element; class Event; class TextNode; }
 namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }

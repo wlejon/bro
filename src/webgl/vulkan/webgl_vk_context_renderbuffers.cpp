@@ -26,6 +26,11 @@ WebGLRenderbuffer WebGLVkContext::createRenderbuffer() {
     return {id};
 }
 
+GLboolean WebGLVkContext::isRenderbuffer(WebGLRenderbuffer rbo) const {
+    auto it = rbo.id != 0 ? renderbuffers_.find(rbo.id) : renderbuffers_.end();
+    return it != renderbuffers_.end() && it->second.everBound ? GL_TRUE : GL_FALSE;
+}
+
 void WebGLVkContext::deleteRenderbuffer(WebGLRenderbuffer rbo) {
     auto it = rbo.id != 0 ? renderbuffers_.find(rbo.id) : renderbuffers_.end();
     if (it == renderbuffers_.end()) return;
@@ -52,10 +57,12 @@ void WebGLVkContext::bindRenderbuffer(GLenum target, WebGLRenderbuffer rbo) {
         setSyntheticError(GL_INVALID_ENUM);
         return;
     }
-    if (rbo.id != 0 && renderbuffers_.find(rbo.id) == renderbuffers_.end()) {
+    auto it = rbo.id != 0 ? renderbuffers_.find(rbo.id) : renderbuffers_.end();
+    if (rbo.id != 0 && it == renderbuffers_.end()) {
         setSyntheticError(GL_INVALID_OPERATION);
         return;
     }
+    if (it != renderbuffers_.end()) it->second.everBound = true;
     currentRenderbufferId_ = rbo.id;
 }
 

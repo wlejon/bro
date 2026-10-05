@@ -1,246 +1,19 @@
-// CanvasScene's raster side: the shared canvas worker (CanvasRasterThread),
-// the per-scene work it runs, command replay onto the SkSurface, and the
-// compositing upload. The recording API that fills the command buffer lives in
-// canvas_scene.cpp and canvas_scene_state.cpp.
+// CanvasScene's raster side: command replay onto the SkSurface, and the
+// per-frame rasterize the compositor calls. The recording API that fills the
+// command buffer lives in canvas_scene.cpp and canvas_scene_state.cpp.
 
 #include "canvas/canvas_scene.h"
-#include "render/skia_backend.h"
 #include "util/log.h"
-
-#include <SDL3/SDL.h>
 
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkM44.h>
 #include <include/core/SkPixmap.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <iterator>
 
 namespace bro::canvas {
-
-// ---------------------------------------------------------------------------
-// Threading
-// ---------------------------------------------------------------------------
-
-// Worker-thread render body: ensure the surface, replay staged commands, and
-// refresh the snapshot if one was requested. Runs ON the shared worker thread
-// (CanvasRasterThread::threadFunc), where this scene's GrContext is current.
-void CanvasScene::renderOnWorker(GrDirectContext* grctx, int w, int h) {
-    grContext_ = grctx;          // pin the surface to the worker's context
-    ensureSurface(w, h);
-
-    if (grContext_) grContext_->resetContext();
-
-    flushStagedCommands();
-
-    if (dirty_) {
-        dirty_ = false;
-        if (grContext_) {
-            grContext_->flushAndSubmit();
-        }
-    }
-
-    // Snapshot readback (canvas-as-source for drawImage / getImageData). Done
-    // here because the surface is Ganesh-backed against this worker's GrContext
-    // — readPixels from the main thread would cross GL contexts. The bytes copy
-    // into a portable raster SkImage so destination scenes can blit it.
-    if (snapshotRequested_.load(std::memory_order_acquire)) {
-        int sw = surfWidth_;
-        int sh = surfHeight_;
-        if (surface_ && sw > 0 && sh > 0) {
-            if (grContext_) grContext_->resetContext();
-            snapshot_.assign(static_cast<size_t>(sw) * sh * 4, 0);
-            auto info = SkImageInfo::Make(sw, sh, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-            bool ok = surface_->readPixels(info, snapshot_.data(), sw * 4, 0, 0);
-            if (ok) {
-                auto data = SkData::MakeWithCopy(snapshot_.data(), snapshot_.size());
-                snapshotImage_ = SkImages::RasterFromData(info, data, sw * 4);
-                snapshotW_ = sw;
-                snapshotH_ = sh;
-                snapshotValid_ = true;
-                snapshotImageValid_ = static_cast<bool>(snapshotImage_);
-            } else {
-                snapshotImage_.reset();
-                snapshotValid_ = false;
-                snapshotImageValid_ = false;
-            }
-        } else {
-            snapshot_.clear();
-            snapshotImage_.reset();
-            snapshotValid_ = false;
-            snapshotImageValid_ = false;
-        }
-        snapshotRequested_.store(false, std::memory_order_release);
-    }
-}
-
-// Worker-thread teardown: free GPU resources on the context that created them.
-void CanvasScene::releaseGpuResources() {
-    surface_.reset();
-    snapshotImage_.reset();
-    snapshotImageValid_ = false;
-    snapshotValid_ = false;
-    if (grContext_) grContext_->flushAndSubmit();
-    gpuFBO_ = 0;
-    glTexture_ = 0;
-    surfWidth_ = surfHeight_ = 0;
-    texWidth_ = texHeight_ = 0;
-    grContext_ = nullptr;
-}
-
-void CanvasScene::prepareAndSignal() {
-    if (!threaded_ || !rasterThread_) return;
-
-    // Check if element was removed from the DOM. Offscreen canvases (created
-    // via document.createElement and never appended) read as orphaned from
-    // frame one even though they're being used as sprite atlases — defer until
-    // the canvas has been seen attached at least once.
-    if (detachedCb_) {
-        // The backing Element may have been freed (deferred-free / pointer
-        // reuse) since this scene was last touched. backingElementAlive() is a
-        // pointer-value liveness check that never dereferences it, so it is
-        // safe even on a dangling pointer — this is the guard for the
-        // use-after-free that crashed here on rapid canvas churn.
-        if (!backingElementAlive()) { onElementFinalized(); return; }
-        bool orphaned = detachedCb_(detachedUd_);
-        if (!orphaned) everAttached_ = true;
-        if (orphaned && everAttached_) {
-            detached_ = true;
-            return;
-        }
-    }
-
-    // Query element layout position (main thread, DOM access). The displayed
-    // size still comes from layout, but the bitmap (surface) size uses
-    // queryLayoutWidth/Height so an intrinsic canvas.width/height attribute
-    // beats the layout box.
-    float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
-    if (layoutCb_) {
-        layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
-    }
-
-    screenX_ = layoutX;
-    screenY_ = layoutY - viewportScrollY_;
-
-    int canvasW = queryLayoutWidth();
-    int canvasH = queryLayoutHeight();
-    if (canvasW <= 0 || canvasH <= 0) return;
-
-    // Only rasterize if there's work to do (commands or resize).
-    bool needsResize = (canvasW != surfWidth_ || canvasH != surfHeight_);
-    if (commands_.empty() && !needsResize) return;
-
-    // Swap commands to the staged buffer the worker replays, then rasterize
-    // synchronously on the shared worker (blocks until the fence is consumed).
-    if (!commands_.empty()) std::swap(commands_, stagedCommands_);
-    rasterThread_->render(this, canvasW, canvasH);
-}
-
-void CanvasScene::flushSync() {
-    if (!threaded_ || !rasterThread_) {
-        flushCommands();
-        return;
-    }
-    int cw = queryLayoutWidth();
-    int ch = queryLayoutHeight();
-    if (cw <= 0 || ch <= 0) return;
-    // Swap any pending commands; render() also services a pending snapshot.
-    if (!commands_.empty()) std::swap(commands_, stagedCommands_);
-    rasterThread_->render(this, cw, ch);
-}
-
-// ---------------------------------------------------------------------------
-// CanvasRasterThread — one persistent canvas-raster worker (shared by scenes)
-// ---------------------------------------------------------------------------
-
-void CanvasRasterThread::start(SDL_Window* win) {
-    if (started_ || !win) return;
-    started_ = true;
-    ready_ = false;
-    shutdown_ = false;
-    hasJob_ = false;
-    thread_ = std::thread(&CanvasRasterThread::threadFunc, this, win);
-    std::unique_lock<std::mutex> lk(m_);
-    cv_.wait(lk, [this] { return ready_; });
-}
-
-void CanvasRasterThread::stop() {
-    if (!started_) return;
-    {
-        std::lock_guard<std::mutex> lk(m_);
-        shutdown_ = true;
-    }
-    cv_.notify_all();
-    if (thread_.joinable()) thread_.join();
-    started_ = false;
-}
-
-void CanvasRasterThread::render(CanvasScene* scene, int w, int h) {
-    if (!started_ || !scene) return;
-    submitJob(scene, w, h, JobKind::Render);
-}
-
-void CanvasRasterThread::releaseScene(CanvasScene* scene) {
-    if (!started_ || !scene) return;
-    submitJob(scene, 0, 0, JobKind::Release);
-}
-
-void CanvasRasterThread::submitJob(CanvasScene* scene, int w, int h, JobKind kind) {
-    {
-        std::unique_lock<std::mutex> lk(m_);
-        if (shutdown_) return;
-        job_ = scene; jobW_ = w; jobH_ = h; jobKind_ = kind;
-        hasJob_ = true;
-        cv_.notify_all();
-        cv_.wait(lk, [this] { return !hasJob_ || shutdown_; });
-        doneFence_ = nullptr;
-    }
-}
-
-void CanvasRasterThread::threadFunc(SDL_Window* win) {
-    (void)win;
-    // Signal the main thread that MakeCurrent is done before any further work.
-    {
-        std::lock_guard<std::mutex> lk(m_);
-        ready_ = true;
-    }
-    cv_.notify_all();
-
-    grContext_ = render::SkiaRenderer::createGrContext();
-    LOG_INFO("Canvas raster thread started");
-
-    std::unique_lock<std::mutex> lk(m_);
-    while (true) {
-        cv_.wait(lk, [this] { return hasJob_ || shutdown_; });
-        if (shutdown_) break;
-        CanvasScene* s = job_;
-        const int w = jobW_, h = jobH_;
-        const JobKind kind = jobKind_;
-        lk.unlock();
-
-        if (s) {
-            if (kind == JobKind::Render)
-                s->renderOnWorker(grContext_.get(), w, h);
-            else
-                s->releaseGpuResources();
-        }
-
-        lk.lock();
-        doneFence_ = nullptr;
-        hasJob_ = false;
-        cv_.notify_all();
-    }
-    doneFence_ = nullptr;
-    lk.unlock();
-
-    if (grContext_) {
-        grContext_->flushAndSubmit();
-        grContext_.reset();
-    }
-    LOG_INFO("Canvas raster thread stopped");
-}
 
 void CanvasScene::stageCommandsForRaster() {
     if (commands_.empty()) return;
@@ -258,9 +31,8 @@ void CanvasScene::stageCommandsForRaster() {
 // only of putImageData calls, the SkCanvas replay (paint setup, transform
 // save/restore, draw-image submission) is pure overhead — the final state of
 // the surface is just the bytes from the *last* putImageData. We can skip
-// directly to a bulk pixel upload via SkSurface::writePixels, which on a
-// Ganesh GPU surface hits a glTexSubImage2D-style path with no draw pipeline
-// activity. This is the dominant pattern for streaming visualizations
+// directly to a bulk pixel copy via SkSurface::writePixels, with no draw
+// pipeline activity. This is the dominant pattern for streaming visualizations
 // (noise fields, audio waveforms, spectrograms, voxel mini-maps).
 //
 // Conservative check: every command must be kPutImageData. If any other op
@@ -458,14 +230,6 @@ void CanvasScene::flushStagedCommands() {
 void CanvasScene::flushCommands() {
     if (commands_.empty()) return;
 
-    // Re-sync Skia's GL state cache: external code (engine compositing,
-    // screenshot paths) may have changed FBO/program bindings since the
-    // last Ganesh draw. Without this, Skia draws against stale state and
-    // commands silently miss the canvas FBO. Do this BEFORE the fast path
-    // too — writePixels also goes through Ganesh and benefits from a clean
-    // state cache.
-    if (grContext_) grContext_->resetContext();
-
     if (tryStreamingPutImageDataFastPath(surface_.get(), commands_)) {
         commands_.clear();
         return;
@@ -476,25 +240,21 @@ void CanvasScene::flushCommands() {
 
     replayCommands(c, commands_);
     commands_.clear();
-    // Submit GPU work so subsequent surface->readPixels (and the next
-    // rasterize) see the result. Skia internally flushes on readPixels,
-    // but explicit submit is needed so other GL code (engine compositing)
-    // sees the canvas FBO contents.
-    if (grContext_) {
-        grContext_->flushAndSubmit();
-    }
     dirty_ = true;
     snapshotValid_ = false;
     snapshotImageValid_ = false;
 }
 
 // ---------------------------------------------------------------------------
-// Compositing — upload raster pixels to GL texture
+// Compositing — bring the surface up to date for this frame
 // ---------------------------------------------------------------------------
 
 void CanvasScene::rasterize() {
-
-    // Check if element was removed from the DOM. See note in prepareAndSignal.
+    // Was the element removed from the DOM? An offscreen canvas (created and
+    // never appended, a sprite atlas say) reads as orphaned from frame one, so
+    // only one that has been seen attached counts as detached. The backing
+    // Element may have been freed since the scene was last touched;
+    // backingElementAlive() checks the pointer's value without dereferencing it.
     if (detachedCb_) {
         if (!backingElementAlive()) { onElementFinalized(); return; }
         bool orphaned = detachedCb_(detachedUd_);

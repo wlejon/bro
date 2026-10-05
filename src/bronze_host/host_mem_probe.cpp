@@ -14,7 +14,7 @@
 // heapCommitted.
 
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "embed/embed.h"
 
 #include <include/core/SkGraphics.h>

@@ -5,7 +5,7 @@
 // CSSOM "serialize an identifier" algorithm, for building selectors out of
 // arbitrary ids and class names.
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 
 #include "css/parser.h"

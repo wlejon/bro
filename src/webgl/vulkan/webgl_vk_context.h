@@ -12,6 +12,7 @@
 #include "webgl/webgl_types.h"
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -19,7 +20,10 @@
 
 namespace bro::webgl::vk {
 
-/// Vulkan-backed implementation of WebGL2 rendering commands.
+/// The WebGL2 API on Vulkan: every WebGL2RenderingContext call the JS
+/// binding makes lands here, against this context's own state, objects and
+/// drawing buffer (the canvas). Errors are recorded GL-style, the first one
+/// pending until getError.
 class WebGLVkContext {
 public:
     WebGLVkContext(int width, int height, render::VulkanContext& context, GLuint firstObjectId = 1);
@@ -90,9 +94,6 @@ public:
 
     GLint getParameterInt(GLenum pname);
     int64_t getParameterInt64(GLenum pname);  // the 64-bit limits (MAX_ELEMENT_INDEX, ...)
-    /// True when the device has every one of `features` for `format`
-    /// (optimal tiling): the extensions it can honestly expose.
-    bool formatSupports(VkFormat format, VkFormatFeatureFlags features) const;
     GLfloat getParameterFloat(GLenum pname);
     GLboolean getParameterBool(GLenum pname);
     void getParameterInt2(GLenum pname, GLint* out);
@@ -101,9 +102,16 @@ public:
     void getParameterFloat4(GLenum pname, GLfloat* out);
     void getParameterBool4(GLenum pname, GLboolean* out);
 
+    /// getSupportedExtensions: what this device backs. enableExtension is
+    /// getExtension's: true when supported, and a compressed-texture
+    /// extension's formats are accepted from then on.
+    std::vector<std::string> supportedExtensions() const;
+    bool enableExtension(const std::string& name);
+
     // --- Buffers ---
     WebGLBuffer createBuffer();
     void deleteBuffer(WebGLBuffer buf);
+    GLboolean isBuffer(WebGLBuffer buf) const;  // true once bound
     bool bindBuffer(GLenum target, WebGLBuffer buf);  // false (with the error) when refused
     void bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf);
     void bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf, GLintptr offset, GLsizeiptr size);
@@ -117,7 +125,6 @@ public:
     bool unmapBuffer(GLenum target);
     void flushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length);
     GLuint boundBuffer(GLenum target);
-    GLuint getBoundBufferId(GLenum target) const;
     int64_t boundBufferSize(GLenum target);
     /// BUFFER_SIZE / BUFFER_USAGE of the buffer bound to `target`.
     bool getBufferParameter(GLenum target, GLenum pname, GLint& out);
@@ -132,9 +139,14 @@ public:
     void compileShader(WebGLShader s);
     GLint getShaderParameter(WebGLShader s, GLenum pname);
     std::string getShaderInfoLog(WebGLShader s);
+    std::string getShaderSource(WebGLShader s);
+    GLboolean isShader(WebGLShader s) const;
 
     WebGLProgram createProgram();
     void deleteProgram(WebGLProgram p);
+    GLboolean isProgram(WebGLProgram p) const;
+    GLuint currentProgram() const { return currentProgramId_; }
+    std::vector<GLuint> attachedShaders(WebGLProgram p) const;
     void attachShader(WebGLProgram p, WebGLShader s);
     void detachShader(WebGLProgram p, WebGLShader s);
     void linkProgram(WebGLProgram p);
@@ -198,6 +210,8 @@ public:
     WebGLVertexArrayObject createVertexArray();
     void deleteVertexArray(WebGLVertexArrayObject vao);
     bool bindVertexArray(WebGLVertexArrayObject vao);
+    GLboolean isVertexArray(WebGLVertexArrayObject vao) const;  // true once bound
+    GLuint currentVertexArray() const { return currentVaoId_; }
     void enableVertexAttribArray(GLuint index);
     void disableVertexAttribArray(GLuint index);
     void vertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized,
@@ -240,6 +254,7 @@ public:
     void activeTexture(GLenum texture);
     GLboolean isTexture(WebGLTexture tex) const;
     GLuint boundTexture(GLenum target) const;  // TEXTURE_BINDING_* of the active unit
+    GLuint activeTextureUnit() const { return activeTextureUnit_; }
     void texParameteri(GLenum target, GLenum pname, GLint param);
     void texParameterf(GLenum target, GLenum pname, GLfloat param);
     /// getTexParameter: false (with the GL error) for an invalid query.
@@ -278,12 +293,6 @@ public:
     // extensions this device backs (compressedTextureFormats) are accepted.
     // A PBO source is `size` bytes at byte `offset` of the bound buffer.
     std::vector<GLint> compressedTextureFormats() const;
-    /// EXT_texture_filter_anisotropic: the device filters anisotropically.
-    bool anisotropicFiltering() const;
-    /// The compressed-texture extensions this device backs, and enabling
-    /// one (getExtension): its formats are accepted from then on.
-    std::vector<std::string> compressedTextureExtensions() const;
-    bool enableCompressedExtension(const std::string& name);
     void compressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
                               GLint border, const void* data, size_t size);
     void compressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
@@ -322,6 +331,7 @@ public:
     WebGLFramebuffer createFramebuffer();
     void deleteFramebuffer(WebGLFramebuffer fb);
     void bindFramebuffer(GLenum target, WebGLFramebuffer fb);
+    GLboolean isFramebuffer(WebGLFramebuffer fb) const;  // true once bound
     void framebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget,
                               WebGLTexture tex, GLint level);
     void framebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget,
@@ -330,6 +340,10 @@ public:
     GLenum checkFramebufferStatus(GLenum target);
     void drawBuffers(GLsizei n, const GLenum* bufs);
     void readBuffer(GLenum src);
+    /// Validated, and otherwise a hint the attachments' contents satisfy.
+    void invalidateFramebuffer(GLenum target, std::span<const GLenum> attachments);
+    void invalidateSubFramebuffer(GLenum target, std::span<const GLenum> attachments, GLint x, GLint y,
+                                  GLsizei width, GLsizei height);
     void blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                          GLbitfield mask, GLenum filter);
@@ -360,17 +374,16 @@ public:
     WebGLRenderbuffer createRenderbuffer();
     void deleteRenderbuffer(WebGLRenderbuffer rbo);
     void bindRenderbuffer(GLenum target, WebGLRenderbuffer rbo);
+    GLboolean isRenderbuffer(WebGLRenderbuffer rbo) const;  // true once bound
     void renderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
     void renderbufferStorageMultisample(GLenum target, GLsizei samples, GLenum internalformat,
                                         GLsizei width, GLsizei height);
 
     // --- Readback ---
-    void readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
-                    GLenum format, GLenum type, void* pixels);
-    /// Bytes readPixels writes for a width x height rectangle of
-    /// format/type under the PACK_* state, or 0 when the combination is not
-    /// one WebGL2 lets this read buffer be read as (with the GL error set).
-    size_t readPixelsByteCount(GLsizei width, GLsizei height, GLenum format, GLenum type);
+    /// readPixels into client memory of `size` bytes: fewer than the read
+    /// writes, or a bound PIXEL_PACK_BUFFER, is INVALID_OPERATION.
+    void readPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels,
+                    size_t size);
 
     /// Submit everything recorded so far. Never waits.
     void flush();
@@ -409,19 +422,37 @@ public:
     /// false with the GL error.
     bool getQueryParameter(GLuint id, GLenum pname, GLuint& out);
 
-    /// Fence for WebGL sync objects: submits the recorded work and returns the
-    /// ticket whose completion means it all finished.
-    uint64_t insertFence();
-    bool isFenceSignaled(uint64_t ticket) const;
-    /// Wait up to `timeoutNs` for `ticket`; true once it has completed.
-    bool waitFence(uint64_t ticket, uint64_t timeoutNs);
-
-    /// Submit the recorded work (the engine is about to composite or read the
-    /// canvas). The app's framebuffer binding is untouched: it persists
-    /// across frames, as GL's does.
-    void unbindCanvasFBO();
+    // --- Sync objects (webgl_vk_context_sync.cpp) ---
+    /// MAX_CLIENT_WAIT_TIMEOUT_WEBGL: longer client waits are refused.
+    static constexpr double kMaxClientWaitTimeoutNs = 1e9;
+    GLuint fenceSync(GLenum condition, GLbitfield flags);
+    void deleteSync(GLuint id);
+    GLboolean isSync(GLuint id) const;
+    GLenum clientWaitSync(GLuint id, GLbitfield flags, double timeoutNs);
+    void waitSync(GLuint id, GLbitfield flags, double timeoutNs);
+    /// False (with the GL error) for a deleted sync or an unknown pname.
+    bool getSyncParameter(GLuint id, GLenum pname, GLint& out);
 
 private:
+    /// True when the device has every one of `features` for `format`
+    /// (optimal tiling): the extensions it can honestly expose.
+    bool formatSupports(VkFormat format, VkFormatFeatureFlags features) const;
+    /// EXT_texture_filter_anisotropic: the device filters anisotropically.
+    bool anisotropicFiltering() const;
+    /// The compressed-texture extensions this device backs, and enabling one.
+    std::vector<std::string> compressedTextureExtensions() const;
+    bool enableCompressedExtension(const std::string& name);
+    bool markBufferBound(GLuint id);
+    GLuint getBoundBufferId(GLenum target) const;
+    /// Bytes readPixels writes for a width x height rectangle of
+    /// format/type under the PACK_* state, or 0 when the combination is not
+    /// one WebGL2 lets this read buffer be read as (with the GL error set).
+    size_t readPixelsByteCount(GLsizei width, GLsizei height, GLenum format, GLenum type);
+    /// readPixels into memory known to hold the result.
+    void readPixelsInto(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                        void* pixels);
+    std::unordered_map<GLuint, uint64_t> syncs_;  // sync object -> the queue ticket it signals with
+
     void initVulkanResources();
     void cleanupVulkanResources();
 

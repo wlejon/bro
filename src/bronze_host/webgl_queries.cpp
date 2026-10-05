@@ -6,7 +6,7 @@
 // (Int32Array for VIEWPORT, Float32Array for DEPTH_RANGE, Uint32Array for
 // COMPRESSED_TEXTURE_FORMATS, ...), and sequence<GLboolean> ones a real Array.
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_internal.h"
 
 #include <cstring>
@@ -20,7 +20,7 @@ namespace {
 // Float32Array / Int32Array / Uint32Array / sequence<boolean>.
 Value glValue(webgl::WebGL2RenderingContext* c, const webgl::GLValue& v) {
     using Kind = webgl::GLValue::Kind;
-    if (v.kind == Kind::Buffer) return v.words[0] ? glObject(c, GlCell::Buffer, v.words[0]) : ev::null();
+    if (v.kind == Kind::Buffer) return v.words[0] ? webglObject(c, WebGLCell::Buffer, v.words[0]) : ev::null();
     if (!v.array) {
         switch (v.kind) {
             case Kind::Float: { float f; std::memcpy(&f, &v.words[0], 4); return ev::fromDouble(f); }
@@ -104,8 +104,9 @@ Value makeExtension(webgl::WebGL2RenderingContext* c, const std::string& name) {
         def("MAP_UNSYNCHRONIZED_BIT", 0x0020);
     } else if (name == "WEBGL_lose_context") {
         o.def("loseContext", 0, [c](Value, std::span<const Value>) {
+            detachWebGLMappings(c);
             c->loseContext();
-            forgetGlObjects(c);
+            forgetWebGLObjects(c);
             return ev::undefined();
         });
         o.def("restoreContext", 0, [c](Value, std::span<const Value>) {
@@ -117,12 +118,44 @@ Value makeExtension(webgl::WebGL2RenderingContext* c, const std::string& name) {
     return o.get();
 }
 
+// The object an *_BINDING query names: null for none, or for one no longer
+// live (deleted, or never bound).
+Value bindingObject(webgl::WebGL2RenderingContext* c, uint32_t kind, GLuint id, bool exists) {
+    return id != 0 && exists ? webglObject(c, kind, id) : ev::null();
+}
+
+// The buffer target each *_BUFFER_BINDING pname reports.
+GLenum bufferBindingTarget(GLenum pname) {
+    switch (pname) {
+        case 0x8894: return GL_ARRAY_BUFFER;               // ARRAY_BUFFER_BINDING
+        case 0x8895: return GL_ELEMENT_ARRAY_BUFFER;       // ELEMENT_ARRAY_BUFFER_BINDING
+        case 0x88ED: return GL_PIXEL_PACK_BUFFER;          // PIXEL_PACK_BUFFER_BINDING
+        case 0x88EF: return GL_PIXEL_UNPACK_BUFFER;        // PIXEL_UNPACK_BUFFER_BINDING
+        case 0x8A28: return GL_UNIFORM_BUFFER;             // UNIFORM_BUFFER_BINDING
+        case 0x8C8F: return GL_TRANSFORM_FEEDBACK_BUFFER;  // TRANSFORM_FEEDBACK_BUFFER_BINDING
+        case 0x8F36: return GL_COPY_READ_BUFFER;           // COPY_READ_BUFFER_BINDING
+        case 0x8F37: return GL_COPY_WRITE_BUFFER;          // COPY_WRITE_BUFFER_BINDING
+        default: return 0;
+    }
+}
+
+// The texture target each TEXTURE_BINDING_* pname reports.
+GLenum textureBindingTarget(GLenum pname) {
+    switch (pname) {
+        case 0x8069: return GL_TEXTURE_2D;        // TEXTURE_BINDING_2D
+        case 0x8514: return GL_TEXTURE_CUBE_MAP;  // TEXTURE_BINDING_CUBE_MAP
+        case 0x806A: return GL_TEXTURE_3D;        // TEXTURE_BINDING_3D
+        case 0x8C1D: return GL_TEXTURE_2D_ARRAY;  // TEXTURE_BINDING_2D_ARRAY
+        default: return 0;
+    }
+}
+
 } // namespace
 
-void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
+void installWebGLQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("getParameter", 1, [c](Value, std::span<const Value> a) {
-        if (c->isContextLost()) return ev::null();
         auto* gl = live(c);
+        if (!gl) return ev::null();
         GLenum pname = u32At(a, 0);
         switch (pname) {
             // String parameters
@@ -130,9 +163,10 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 return ev::fromUtf8("WebGL 2.0");
             case 0x8B8C:  // GL_SHADING_LANGUAGE_VERSION
                 return ev::fromUtf8("WebGL GLSL ES 3.00");
-            case 0x1F01:  // GL_RENDERER
             case 0x1F00:  // GL_VENDOR
-                return ev::fromUtf8(gl->getParameterString(pname));
+                return ev::fromUtf8("Bro");
+            case 0x1F01:  // GL_RENDERER
+                return ev::fromUtf8("Bro Vulkan");
 
             // Float parameters
             case 0x0B73:  // GL_DEPTH_CLEAR_VALUE
@@ -150,21 +184,14 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 gl->getParameterInt4(pname, v);
                 return makeInt32Array(v, 4);
             }
-            // Int[2] — two ints; the scalar default path would smash the stack.
+            // Int[2]
             case 0x0D3A: {  // GL_MAX_VIEWPORT_DIMS
                 GLint v[2] = {0, 0};
                 gl->getParameterInt2(pname, v);
                 return makeInt32Array(v, 2);
             }
-            // Float[2]. ALIASED_POINT_SIZE_RANGE is not a core-profile enum
-            // (a strict core context — macOS — answers INVALID_ENUM and
-            // leaves the pair at 0), so it asks core's POINT_SIZE_RANGE,
-            // the same range under its core name.
-            case 0x846D: {  // GL_ALIASED_POINT_SIZE_RANGE
-                GLfloat v[2] = {0, 0};
-                gl->getParameterFloat2(0x0B12, v);  // GL_POINT_SIZE_RANGE
-                return makeFloat32Array(v, 2);
-            }
+            // Float[2]
+            case 0x846D:    // GL_ALIASED_POINT_SIZE_RANGE
             case 0x846E:    // GL_ALIASED_LINE_WIDTH_RANGE
             case 0x0B70: {  // GL_DEPTH_RANGE
                 GLfloat v[2] = {0, 0};
@@ -187,121 +214,60 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                 });
             }
 
-            // WebGL-only pixel-store state — shadow answers, not GL enums.
+            // WebGL-only pixel-store state.
             case 0x9240:  // UNPACK_FLIP_Y_WEBGL
-                return ev::fromBool(gl->unpackFlipY() != GL_FALSE);
             case 0x9241:  // UNPACK_PREMULTIPLY_ALPHA_WEBGL
-                return ev::fromBool(gl->unpackPremultiplyAlpha() != GL_FALSE);
+                return ev::fromBool(gl->getPixelStorei(pname) != 0);
             case 0x9243:  // UNPACK_COLORSPACE_CONVERSION_WEBGL
-                return ev::fromDouble(gl->unpackColorspaceConversion());
+                return ev::fromDouble(gl->getPixelStorei(pname));
 
-            // Object-binding queries:
-            case 0x8894: { // ARRAY_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_ARRAY_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
+            // Object-binding queries.
+            case 0x8894: case 0x8895: case 0x88ED: case 0x88EF:
+            case 0x8A28: case 0x8C8F: case 0x8F36: case 0x8F37: {  // *_BUFFER_BINDING
+                const GLuint id = gl->boundBuffer(bufferBindingTarget(pname));
+                return bindingObject(c, WebGLCell::Buffer, id, gl->isBuffer({id}));
             }
-            case 0x8895: { // ELEMENT_ARRAY_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_ELEMENT_ARRAY_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
+            case 0x8069: case 0x8514: case 0x806A: case 0x8C1D: {  // TEXTURE_BINDING_*
+                const GLuint id = gl->boundTexture(textureBindingTarget(pname));
+                return bindingObject(c, WebGLCell::Texture, id, gl->isTexture({id}));
             }
-            case 0x88ED: { // PIXEL_PACK_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_PIXEL_PACK_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
+            case 0x8B8D: {  // CURRENT_PROGRAM
+                const GLuint id = gl->currentProgram();
+                return bindingObject(c, WebGLCell::Program, id, gl->isProgram({id}));
             }
-            case 0x88EF: { // PIXEL_UNPACK_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_PIXEL_UNPACK_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
+            case 0x8CA6: {  // FRAMEBUFFER_BINDING / DRAW_FRAMEBUFFER_BINDING
+                const GLuint id = gl->drawFramebufferBinding();
+                return bindingObject(c, WebGLCell::Framebuffer, id, gl->isFramebuffer({id}));
             }
-            case 0x8A28: { // UNIFORM_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_UNIFORM_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
+            case 0x8CAA: {  // READ_FRAMEBUFFER_BINDING
+                const GLuint id = gl->readFramebufferBinding();
+                return bindingObject(c, WebGLCell::Framebuffer, id, gl->isFramebuffer({id}));
             }
-            case 0x8C8F: { // TRANSFORM_FEEDBACK_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
+            case 0x8CA7: {  // RENDERBUFFER_BINDING
+                const GLuint id = gl->renderbufferBinding();
+                return bindingObject(c, WebGLCell::Renderbuffer, id, gl->isRenderbuffer({id}));
             }
-            case 0x8F36: { // COPY_READ_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_COPY_READ_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
+            case 0x85B5: {  // VERTEX_ARRAY_BINDING
+                const GLuint id = gl->currentVertexArray();
+                return bindingObject(c, WebGLCell::VertexArray, id, gl->isVertexArray({id}));
             }
-            case 0x8F37: { // COPY_WRITE_BUFFER_BINDING
-                GLuint val = gl->boundBuffer(GL_COPY_WRITE_BUFFER);
-                if (val != 0 && gl->isBuffer({val})) return glObject(c, GlCell::Buffer, val);
-                return ev::null();
-            }
-            case 0x8B8D: { // CURRENT_PROGRAM
-                GLuint val = gl->currentProgram().id;
-                if (val != 0 && gl->isProgram({val})) return glObject(c, GlCell::Program, val);
-                return ev::null();
-            }
-            case 0x8CA6: { // FRAMEBUFFER_BINDING / DRAW_FRAMEBUFFER_BINDING
-                GLuint val = gl->currentDrawFramebuffer().id;
-                if (val != 0 && gl->isFramebuffer({val})) return glObject(c, GlCell::Framebuffer, val);
-                return ev::null();
-            }
-            case 0x8CAA: { // READ_FRAMEBUFFER_BINDING
-                GLuint val = gl->currentReadFramebuffer().id;
-                if (val != 0 && gl->isFramebuffer({val})) return glObject(c, GlCell::Framebuffer, val);
-                return ev::null();
-            }
-            case 0x8CA7: { // RENDERBUFFER_BINDING
-                GLuint val = gl->currentRenderbuffer().id;
-                if (val != 0 && gl->isRenderbuffer({val})) return glObject(c, GlCell::Renderbuffer, val);
-                return ev::null();
-            }
-            case 0x8069: { // TEXTURE_BINDING_2D
-                GLuint val = gl->boundTexture(GL_TEXTURE_2D).id;
-                if (val != 0 && gl->isTexture({val})) return glObject(c, GlCell::Texture, val);
-                return ev::null();
-            }
-            case 0x8514: { // TEXTURE_BINDING_CUBE_MAP
-                GLuint val = gl->boundTexture(GL_TEXTURE_CUBE_MAP).id;
-                if (val != 0 && gl->isTexture({val})) return glObject(c, GlCell::Texture, val);
-                return ev::null();
-            }
-            case 0x806A: { // TEXTURE_BINDING_3D
-                GLuint val = gl->boundTexture(GL_TEXTURE_3D).id;
-                if (val != 0 && gl->isTexture({val})) return glObject(c, GlCell::Texture, val);
-                return ev::null();
-            }
-            case 0x8C1D: { // TEXTURE_BINDING_2D_ARRAY
-                GLuint val = gl->boundTexture(GL_TEXTURE_2D_ARRAY).id;
-                if (val != 0 && gl->isTexture({val})) return glObject(c, GlCell::Texture, val);
-                return ev::null();
-            }
-            case 0x85B5: { // VERTEX_ARRAY_BINDING
-                GLuint val = gl->currentVertexArray().id;
-                if (val != 0 && gl->isVertexArray({val})) return glObject(c, GlCell::VertexArray, val);
-                return ev::null();
-            }
-            case 0x8919: { // SAMPLER_BINDING
-                GLuint val = gl->boundSampler(gl->activeTextureUnit()).id;
-                if (val != 0 && gl->isSampler({val})) return glObject(c, GlCell::Sampler, val);
-                return ev::null();
+            case 0x8919: {  // SAMPLER_BINDING
+                const GLuint id = gl->boundSampler(gl->activeTextureUnit());
+                return bindingObject(c, WebGLCell::Sampler, id, gl->isSampler({id}));
             }
             case 0x8E25: {  // TRANSFORM_FEEDBACK_BINDING
-                GLuint val = gl->boundTransformFeedback().id;
-                if (val != 0 && gl->isTransformFeedback({val})) {
-                    return glObject(c, GlCell::TransformFeedback, val);
-                }
-                return ev::null();
+                const GLuint id = gl->boundTransformFeedback();
+                return bindingObject(c, WebGLCell::TransformFeedback, id, gl->isTransformFeedback(id));
             }
 
-            // Compressed formats the driver actually probed at creation.
+            // The compressed formats of the extensions enabled so far.
             case 0x86A3: {  // GL_COMPRESSED_TEXTURE_FORMATS
-                const auto& fmts = gl->compressedTextureFormats();
+                const std::vector<GLint> fmts = gl->compressedTextureFormats();
                 return makeUint32Array(reinterpret_cast<const uint32_t*>(fmts.data()), fmts.size());
             }
 
             case 0x9247:  // MAX_CLIENT_WAIT_TIMEOUT_WEBGL
-                return ev::fromDouble(webgl::WebGL2RenderingContext::kMaxClientWaitTimeoutNs);
+                return ev::fromDouble(WebGLBackend::kMaxClientWaitTimeoutNs);
 
             case 0x8E24:  // GL_TRANSFORM_FEEDBACK_ACTIVE
                 return ev::fromBool(gl->transformFeedbackActive());
@@ -323,7 +289,7 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
             case 0x80AB:  // GL_SAMPLE_COVERAGE_INVERT
                 return ev::fromBool(gl->getParameterBool(pname) != GL_FALSE);
 
-            // 64-bit limits (GLint64 in GL).
+            // 64-bit limits.
             case 0x8A30:  // GL_MAX_UNIFORM_BLOCK_SIZE
             case 0x8A31:  // GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS
             case 0x8A33:  // GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS
@@ -344,35 +310,39 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // extension is not supported or the context is lost.
     b.def("getExtension", 1, [c](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
-        if (ev::isObject(nameV) || c->isContextLost()) return ev::null();
+        if (ev::isObject(nameV) || !live(c)) return ev::null();
         std::string name = ev::toUtf8(nameV);
-        if (!live(c)->getExtension(name)) return ev::null();
-        return glExtension(c, name, [c, &name] { return makeExtension(c, name); });
+        // Re-fetched: converting the name may run script that loses the context.
+        auto* gl = live(c);
+        if (!gl || !gl->enableExtension(name)) return ev::null();
+        return webglExtension(c, name, [c, &name] { return makeExtension(c, name); });
     });
 
     b.def("getIndexedParameter", 2, [c](Value, std::span<const Value> a) {
-        if (!live(c) || a.size() < 2) return ev::null();
+        auto* gl = live(c);
+        if (!gl || a.size() < 2) return ev::null();
         uint32_t pname = u32At(a, 0);
         uint32_t index = u32At(a, 1);
         switch (pname) {
             case 0x8C8F:  // TRANSFORM_FEEDBACK_BUFFER_BINDING
-                return glObject(c, GlCell::Buffer, live(c)->indexedBuffer(0x8C8E /* TRANSFORM_FEEDBACK_BUFFER */, index).id);
+                return webglObject(c, WebGLCell::Buffer, gl->indexedBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, index));
             case 0x8A28:  // UNIFORM_BUFFER_BINDING
-                return glObject(c, GlCell::Buffer, live(c)->indexedBuffer(0x8A11 /* UNIFORM_BUFFER */, index).id);
+                return webglObject(c, WebGLCell::Buffer, gl->indexedBuffer(GL_UNIFORM_BUFFER, index));
             case 0x8C84:  // TRANSFORM_FEEDBACK_BUFFER_START
             case 0x8C85:  // TRANSFORM_FEEDBACK_BUFFER_SIZE
             case 0x8A29:  // UNIFORM_BUFFER_START
             case 0x8A2A:  // UNIFORM_BUFFER_SIZE
-                return ev::fromDouble(static_cast<double>(live(c)->getIndexedParameterInt64(pname, index)));
+                return ev::fromDouble(static_cast<double>(gl->getIndexedBufferParameter(pname, index)));
             default:
-                live(c)->setSyntheticError(0x0500 /* GL_INVALID_ENUM */);
+                gl->setSyntheticError(GL_INVALID_ENUM);
                 return ev::null();
         }
     });
 
     b.def("getSupportedExtensions", 0, [c](Value, std::span<const Value>) {
-        if (c->isContextLost()) return ev::null();
-        auto exts = live(c)->getSupportedExtensions();
+        auto* gl = live(c);
+        if (!gl) return ev::null();
+        const std::vector<std::string> exts = gl->supportedExtensions();
         return hostArrayOf(exts.size(), [&exts](size_t i) {
             return ev::fromUtf8(exts[i]);
         });
@@ -380,7 +350,8 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // Every precision is highp: shaders compile with precision qualifiers
     // dropped (32-bit floats and ints throughout).
-    b.def("getShaderPrecisionFormat", 2, [](Value, std::span<const Value> a) {
+    b.def("getShaderPrecisionFormat", 2, [c](Value, std::span<const Value> a) {
+        if (!live(c)) return ev::null();
         const GLenum type = u32At(a, 1);
         const bool integer = type >= 0x8DF3 && type <= 0x8DF5;  // LOW_INT .. HIGH_INT
         ObjectBuilder o;
@@ -412,86 +383,96 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
 
     // --- WebGLSync ---
     b.def("fenceSync", 2, [c](Value, std::span<const Value> a) {
-        return wrapSync(live(c)->fenceSync(u32At(a, 0), u32At(a, 1)));
+        auto* gl = live(c);
+        return gl ? webglObject(c, WebGLCell::Sync, gl->fenceSync(u32At(a, 0), u32At(a, 1))) : ev::null();
     });
     b.def("deleteSync", 1, [c](Value, std::span<const Value> a) {
-        live(c)->deleteSync(syncOf(argAt(a, 0)));
+        const GLuint id = idOf(argAt(a, 0), WebGLCell::Sync);
+        if (auto* gl = live(c)) gl->deleteSync(id);
+        forgetWebGLObject(c, WebGLCell::Sync, id);
         return ev::undefined();
     });
     b.def("clientWaitSync", 3, [c](Value, std::span<const Value> a) {
-        GLenum res = live(c)->clientWaitSync(syncOf(argAt(a, 0)), u32At(a, 1), numAt(a, 2));
-        return ev::fromDouble(res);
+        auto* gl = live(c);
+        if (!gl) return ev::fromDouble(0x911D);  // WAIT_FAILED
+        return ev::fromDouble(gl->clientWaitSync(idOf(argAt(a, 0), WebGLCell::Sync), u32At(a, 1), numAt(a, 2)));
     });
     b.def("waitSync", 3, [c](Value, std::span<const Value> a) {
-        live(c)->waitSync(syncOf(argAt(a, 0)), u32At(a, 1), numAt(a, 2));
+        if (auto* gl = live(c)) gl->waitSync(idOf(argAt(a, 0), WebGLCell::Sync), u32At(a, 1), numAt(a, 2));
         return ev::undefined();
     });
     b.def("getSyncParameter", 2, [c](Value, std::span<const Value> a) {
-        GLint v = live(c)->getSyncParameter(syncOf(argAt(a, 0)), u32At(a, 1));
+        auto* gl = live(c);
+        GLint v = 0;
+        if (!gl || !gl->getSyncParameter(idOf(argAt(a, 0), WebGLCell::Sync), u32At(a, 1), v)) return ev::null();
         return ev::fromDouble(v);
     });
     b.def("isSync", 1, [c](Value, std::span<const Value> a) {
-        return ev::fromBool(live(c)->isSync(syncOf(argAt(a, 0))) != GL_FALSE);
+        auto* gl = live(c);
+        return ev::fromBool(gl && gl->isSync(idOf(argAt(a, 0), WebGLCell::Sync)) != GL_FALSE);
     });
 
     // --- WebGLQuery ---
     b.def("createQuery", 0, [c](Value, std::span<const Value>) {
-        return glObject(c, GlCell::Query, live(c)->createQuery().id);
+        auto* gl = live(c);
+        return gl ? webglObject(c, WebGLCell::Query, gl->createQuery()) : ev::null();
     });
     b.def("deleteQuery", 1, [c](Value, std::span<const Value> a) {
-        const webgl::WebGLQuery q = queryOf(argAt(a, 0));
-        live(c)->deleteQuery(q);
-        forgetGlObject(c, GlCell::Query, q.id);
+        const GLuint id = idOf(argAt(a, 0), WebGLCell::Query);
+        if (auto* gl = live(c)) gl->deleteQuery(id);
+        forgetWebGLObject(c, WebGLCell::Query, id);
         return ev::undefined();
     });
     b.def("beginQuery", 2, [c](Value, std::span<const Value> a) {
-        live(c)->beginQuery(u32At(a, 0), queryOf(argAt(a, 1)));
+        if (auto* gl = live(c)) gl->beginQuery(u32At(a, 0), idOf(argAt(a, 1), WebGLCell::Query));
         return ev::undefined();
     });
     b.def("endQuery", 1, [c](Value, std::span<const Value> a) {
-        live(c)->endQuery(u32At(a, 0));
+        if (auto* gl = live(c)) gl->endQuery(u32At(a, 0));
         return ev::undefined();
     });
     b.def("getQuery", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
+        if (!gl) return ev::null();
         if (u32At(a, 1) != 0x8865 /* CURRENT_QUERY */) {
-            live(c)->setSyntheticError(GL_INVALID_ENUM);
+            gl->setSyntheticError(GL_INVALID_ENUM);
             return ev::null();
         }
-        return glObject(c, GlCell::Query, live(c)->currentQuery(u32At(a, 0)).id);
+        return webglObject(c, WebGLCell::Query, gl->currentQuery(u32At(a, 0)));
     });
     b.def("getQueryParameter", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
         const GLenum pname = u32At(a, 1);
         GLuint v = 0;
-        if (!live(c)->getQueryParameter(queryOf(argAt(a, 0)), pname, v)) return ev::null();
+        if (!gl || !gl->getQueryParameter(idOf(argAt(a, 0), WebGLCell::Query), pname, v)) return ev::null();
         if (pname == 0x8867 /* QUERY_RESULT_AVAILABLE */) return ev::fromBool(v != 0);
         return ev::fromDouble(v);
     });
     b.def("isQuery", 1, [c](Value, std::span<const Value> a) {
-        return ev::fromBool(live(c)->isQuery(queryOf(argAt(a, 0))) != GL_FALSE);
+        auto* gl = live(c);
+        return ev::fromBool(gl && gl->isQuery(idOf(argAt(a, 0), WebGLCell::Query)) != GL_FALSE);
     });
 
     // --- Internalformat ---
     b.def("getInternalformatParameter", 3, [c](Value, std::span<const Value> a) {
-        live(c);
+        auto* gl = live(c);
+        if (!gl) return ev::null();
         GLenum target = u32At(a, 0);
         GLenum internalformat = u32At(a, 1);
         GLenum pname = u32At(a, 2);
-        if (target != 0x8D41 /* RENDERBUFFER */) {
-            live(c)->setSyntheticError(0x0500 /* GL_INVALID_ENUM */);
+        if (target != GL_RENDERBUFFER || pname != 0x80A9 /* SAMPLES */) {
+            gl->setSyntheticError(GL_INVALID_ENUM);
             return ev::null();
         }
-        if (pname == 0x80A9 /* SAMPLES */) {
-            const std::vector<GLint> samples = live(c)->supportedSampleCounts(internalformat);
-            return makeInt32Array(samples.data(), samples.size());
-        }
-        live(c)->setSyntheticError(0x0500 /* GL_INVALID_ENUM */);
-        return ev::null();
+        const std::vector<GLint> samples = gl->supportedSampleCounts(internalformat);
+        return makeInt32Array(samples.data(), samples.size());
     });
 
     // --- WebGL2 parameter queries ---
     b.def("getTexParameter", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
         webgl::TexParameterValue v;
-        if (!live(c)->getTexParameter(u32At(a, 0), u32At(a, 1), v)) return ev::null();
+        if (!gl || !gl->getTexParameter(u32At(a, 0), u32At(a, 1), v)) return ev::null();
         switch (v.kind) {
             case webgl::TexParameterValue::Kind::Bool: return ev::fromBool(v.i != 0);
             case webgl::TexParameterValue::Kind::Float: return ev::fromDouble(v.f);
@@ -500,48 +481,49 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     });
 
     b.def("getFramebufferAttachmentParameter", 3, [c](Value, std::span<const Value> a) {
-        GLint value = 0;
-        GLenum objectType = 0;
-        GLuint objectName = 0;
-        bool isNull = false;
-        if (!live(c)->getFramebufferAttachmentParameter(u32At(a, 0), u32At(a, 1), u32At(a, 2), value, objectType,
-                                                        objectName, isNull) ||
-            isNull)
+        auto* gl = live(c);
+        WebGLBackend::AttachmentParameter p;
+        if (!gl || !gl->getFramebufferAttachmentParameter(u32At(a, 0), u32At(a, 1), u32At(a, 2), p) || p.isNull)
             return ev::null();
-        if (objectType == 0x1702 /* TEXTURE */) return glObject(c, GlCell::Texture, objectName);
-        if (objectType == 0x8D41 /* RENDERBUFFER */) return glObject(c, GlCell::Renderbuffer, objectName);
-        return ev::fromDouble(value);
+        if (p.objectType == 0x1702 /* TEXTURE */) return webglObject(c, WebGLCell::Texture, p.objectName);
+        if (p.objectType == GL_RENDERBUFFER) return webglObject(c, WebGLCell::Renderbuffer, p.objectName);
+        return ev::fromDouble(p.value);
     });
 
     b.def("getRenderbufferParameter", 2, [c](Value, std::span<const Value> a) {
-        return ev::fromDouble(live(c)->getRenderbufferParameter(u32At(a, 0), u32At(a, 1)));
+        auto* gl = live(c);
+        return gl ? ev::fromDouble(gl->getRenderbufferParameter(u32At(a, 0), u32At(a, 1))) : ev::null();
     });
 
     b.def("getBufferParameter", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
         GLint v = 0;
-        if (!live(c)->getBufferParameter(u32At(a, 0), u32At(a, 1), v)) return ev::null();
+        if (!gl || !gl->getBufferParameter(u32At(a, 0), u32At(a, 1), v)) return ev::null();
         return ev::fromDouble(v);
     });
 
     b.def("getVertexAttrib", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
         webgl::GLValue v;
-        if (!live(c)->getVertexAttrib(u32At(a, 0), u32At(a, 1), v)) return ev::null();
+        if (!gl || !gl->getVertexAttrib(u32At(a, 0), u32At(a, 1), v)) return ev::null();
         return glValue(c, v);
     });
 
     b.def("getVertexAttribOffset", 2, [c](Value, std::span<const Value> a) {
-        return ev::fromDouble(static_cast<double>(live(c)->getVertexAttribOffset(u32At(a, 0), u32At(a, 1))));
+        auto* gl = live(c);
+        return ev::fromDouble(gl ? static_cast<double>(gl->getVertexAttribOffset(u32At(a, 0), u32At(a, 1))) : 0);
     });
 
     b.def("getUniform", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
         webgl::GLValue v;
-        if (!live(c)->getUniform({idOf(argAt(a, 0), GlCell::Program)}, locOf(argAt(a, 1)), v)) return ev::null();
+        if (!gl || !gl->getUniform({idOf(argAt(a, 0), WebGLCell::Program)}, locOf(argAt(a, 1)), v))
+            return ev::null();
         return glValue(c, v);
     });
 
     // --- WebXR ---
-    // WebXR is not supported/unavailable in this desktop host, so makeXRCompatible
-    // rejects with AbortError per instructions.
+    // There is no XR device, so makeXRCompatible rejects with AbortError.
     b.def("makeXRCompatible", 0, [](Value, std::span<const Value>) {
         ev::Persistent p{ev::createPromise()};
         ev::Persistent err{hostMakeDomError("AbortError", "WebXR is not supported")};

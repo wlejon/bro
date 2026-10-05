@@ -1,7 +1,7 @@
 // CSS style proxy, computedStyle, and CSS custom property handling.
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_node_sweep.h"
 

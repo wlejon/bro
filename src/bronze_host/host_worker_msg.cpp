@@ -10,7 +10,7 @@
 
 #include "bronze_host/host_worker_msg.h"
 #include "bronze_host/host_worker_msg_format.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "abi/bronze_abi.h"
 #include "embed/embed_clone.h"
 #include "runtime/heap.h"

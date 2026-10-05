@@ -1,7 +1,7 @@
 #pragma once
 
-// WebGL2 and OpenGL ES core types and constants.
-// Standalone header replacing desktop OpenGL/glad dependencies.
+// The WebGL2 API's types (the IDL's GLenum, GLint, ...) and the constants it
+// names, as the binding and the Vulkan backend share them.
 
 #include <cstdint>
 #include <cstddef>
@@ -27,7 +27,6 @@ using GLclampd = double;
 using GLchar = char;
 using GLint64 = int64_t;
 using GLuint64 = uint64_t;
-using GLsync = void*;
 
 /// One getTexParameter answer: an integer (enums included), a float or a
 /// boolean, as the parameter is typed.
@@ -69,7 +68,6 @@ using bro::webgl::GLclampd;
 using bro::webgl::GLchar;
 using bro::webgl::GLint64;
 using bro::webgl::GLuint64;
-using bro::webgl::GLsync;
 
 #define GL_ALIASED_LINE_WIDTH_RANGE 0x846E
 #define GL_ALPHA 0x1906

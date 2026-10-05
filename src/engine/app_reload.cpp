@@ -161,12 +161,6 @@ void Engine::performAppReload() {
     inspector_.pickerHover = nullptr;
     inspectorNodeMap_.clear();
 
-    if (canvasRasterThread_ && canvasRasterThread_->started()) {
-        for (auto& cs : canvasScenes_)
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-        for (auto& cs : canvasScenesDetached_)
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-    }
     if (document_) {
         document_->forEachLiveElement(
             [](dom::Element* el) { el->setCanvasScene(nullptr); });

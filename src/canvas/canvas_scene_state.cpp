@@ -452,7 +452,7 @@ float CanvasScene::adjustTextY(float y) const {
 // ---------------------------------------------------------------------------
 
 // fillText and strokeText differ only in which paint they build. Both shape
-// here, on the JS thread, and record the resulting blob: the canvas worker then
+// here, on the JS thread, and record the resulting blob: replay then
 // replays glyphs without shaping, and without re-deriving font fallback for
 // every frame the way drawSimpleText did.
 void CanvasScene::recordText(bool stroke, const std::string& text, float x, float y, float maxWidth) {

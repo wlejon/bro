@@ -112,7 +112,7 @@ void Engine::pumpCompileFrame(double progress) {
     skia->endFrame();
 
     beginFrameComposite();
-    compositeLayers(appLayers, 0, insetTop, cw, ch);
+    compositeLayers(appLayers, insetTop);
     compositeLayers(systemLayers);
     presentCurrentFrame();
 

@@ -1,27 +1,22 @@
 #pragma once
 
-// Shared plumbing for the bronze-side WebGL2 binding (src/bronze_host).
-//
-// Wraps webgl::WebGL2RenderingContext, exposing the WebGL2 call surface with
-// bronze embed Values.
+// The plumbing every bronze_host binding shares: defensive argument readers,
+// bulk-data readers over typed arrays and plain arrays, and ObjectBuilder,
+// which builds a host object property by property in a fixed order.
 //
 // GC DISCIPLINE (the one rule of this layer): bronze's heap is a moving
 // semispace collector. A Value held in a plain C++ variable is stale after
 // the next allocating embed call; anything held across one lives in a
 // bronze::embed::Persistent. Pointers from embed::typedArrayInfo() die at the
-// next bronze allocation — every function here that takes one hands it to a
-// GL call (which copies into the driver) before any embed call that could
-// allocate, and never stores it.
+// next bronze allocation — every binding that takes one hands it to the call
+// that consumes it (which copies) before any embed call that could allocate,
+// and never stores it.
 
-#include "bronze_host/gl_profile.h"
 #include "bronze_host/host_numeric.h"
+#include "bronze_host/host_profile.h"
 #include "bronze_host/host_rooted.h"
 
-#include "webgl/webgl_types.h"
-#include "webgl/webgl2_context.h"
-#include "webgl/webgl_objects.h"
 #include "embed/embed.h"
-#include "runtime/bigint.h"
 
 #include <cmath>
 #include <cstddef>
@@ -37,144 +32,12 @@ namespace ev = bronze::embed;
 using Value = bronze::Value;
 
 // ---------------------------------------------------------------------------
-// GL object handles
-// ---------------------------------------------------------------------------
-
-// The payload behind every WebGL object value the binding hands the program
-// (WebGLBuffer, WebGLTexture, ... WebGLUniformLocation). One struct for all
-// kinds, so there is exactly one finalizer; the kind tag is checked on unwrap.
-//
-// TEARDOWN ORDER, decided here: the finalizer NEVER touches GL. bronze's
-// collector may prove a texture handle dead long after the Engine — and with
-// it the GL context — has been destroyed, and the finalizer runs
-// mid-collection where even a live context must not be called into. So GL
-// deletion remains explicit via deleteBuffer/deleteTexture/etc.
-struct GlCell {
-    enum Kind : uint32_t {
-        Buffer = 1,
-        Texture,
-        Program,
-        Shader,
-        Framebuffer,
-        Renderbuffer,
-        VertexArray,
-        UniformLoc,
-        Sampler,
-        Sync,
-        TransformFeedback,
-        Query,
-    };
-    uint32_t kind = 0;
-    GLuint id = 0;
-    GLenum shaderType = 0;
-    int32_t location = -1;
-    uint32_t program = 0;
-    GLsync sync = nullptr;
-};
-
-inline void glCellDtor(void* data) {
-    delete static_cast<GlCell*>(data);
-}
-
-// ALLOCATES (makeHandle).
-inline Value wrapGlObj(uint32_t kind, GLuint id, GLenum shaderType = 0) {
-    auto* cell = new GlCell{};
-    cell->kind = kind;
-    cell->id = id;
-    cell->shaderType = shaderType;
-    return ev::makeHandle(cell, glCellDtor);
-}
-
-// The one wrapper a live GL object has, so everything that answers the
-// object — its create call, getParameter(*_BINDING), getQuery,
-// getFramebufferAttachmentParameter — answers the same value (WebGL's ===
-// identity). Held from creation until the object is deleted or the context
-// is torn down, which is as long as the object itself lives (deletion is
-// explicit; see GlCell). null for id 0. ALLOCATES on first sight.
-Value glObject(webgl::WebGL2RenderingContext* c, uint32_t kind, GLuint id, GLenum shaderType = 0);
-// Drop the wrapper of a deleted object; a later lookup makes a new one.
-void forgetGlObject(webgl::WebGL2RenderingContext* c, uint32_t kind, GLuint id);
-// Drop every object wrapper: the context was lost, and its objects with it.
-void forgetGlObjects(webgl::WebGL2RenderingContext* c);
-// The object getExtension(name) answers, the same one every time; `make`
-// builds it the first time. ALLOCATES on first sight.
-Value glExtension(webgl::WebGL2RenderingContext* c, const std::string& name, const std::function<Value()>& make);
-
-// ALLOCATES (makeHandle). null for the -1 location, which is what three.js's
-// `location === null` checks expect — where getUniformLocation answers null.
-inline Value wrapUniformLocation(webgl::WebGLUniformLocation loc) {
-    if (loc.location < 0) return ev::null();
-    auto* cell = new GlCell{};
-    cell->kind = GlCell::UniformLoc;
-    cell->location = loc.location;
-    cell->program = loc.program;
-    return ev::makeHandle(cell, glCellDtor);
-}
-
-inline Value wrapSync(webgl::WebGLSync s) {
-    if (!s.sync) return ev::null();
-    auto* cell = new GlCell{};
-    cell->kind = GlCell::Sync;
-    cell->sync = s.sync;
-    return ev::makeHandle(cell, glCellDtor);
-}
-
-// nullptr for null/undefined/foreign values and kind mismatches —
-// id-0 fail-soft, so a wrong argument is a GL no-op rather than a crash.
-inline GlCell* cellOf(Value v, uint32_t kind) {
-    auto* cell = static_cast<GlCell*>(ev::handleData(v));
-    if (!cell || cell->kind != kind) return nullptr;
-    return cell;
-}
-
-inline GLuint idOf(Value v, uint32_t kind) {
-    auto* cell = cellOf(v, kind);
-    return cell ? cell->id : 0;
-}
-
-inline webgl::WebGLUniformLocation locOf(Value v) {
-    auto* cell = cellOf(v, GlCell::UniformLoc);
-    if (!cell) return {-1, 0};
-    return {cell->location, cell->program};
-}
-
-inline webgl::WebGLSampler samplerOf(Value v) {
-    return {idOf(v, GlCell::Sampler)};
-}
-
-inline webgl::WebGLSync syncOf(Value v) {
-    auto* cell = cellOf(v, GlCell::Sync);
-    return cell ? webgl::WebGLSync{cell->sync} : webgl::WebGLSync{nullptr};
-}
-
-inline webgl::WebGLQuery queryOf(Value v) {
-    return {idOf(v, GlCell::Query)};
-}
-
-inline webgl::WebGLTransformFeedback transformFeedbackOf(Value v) {
-    return {idOf(v, GlCell::TransformFeedback)};
-}
-
-// ---------------------------------------------------------------------------
-// The live context
-// ---------------------------------------------------------------------------
-
-// Every wrapped call funnels through here:
-// makeCurrent() re-applies this context's shadow state if
-// another canvas (or the engine's own compositing) touched GL since — a
-// pointer compare in the common single-canvas case.
-inline webgl::WebGL2RenderingContext* live(webgl::WebGL2RenderingContext* c) {
-    if (c) c->makeCurrent();
-    return c;
-}
-
-// ---------------------------------------------------------------------------
 // Argument readers
 // ---------------------------------------------------------------------------
 
 // Defensive by design: embed::toDouble on an OBJECT is a hard runtime error
 // (rt_convert.cpp), and a padded missing argument arrives as undefined (NaN).
-// GL argument decoding must never take the process down over a bad call, so
+// Argument decoding must never take the process down over a bad call, so
 // objects and NaN read as 0.
 inline double numAt(std::span<const Value> args, size_t i) {
     if (i >= args.size()) return 0.0;
@@ -232,7 +95,7 @@ inline bool hasArg(std::span<const Value> args, size_t i) {
 // ---------------------------------------------------------------------------
 
 // A typed array answers its heap bytes directly — VALID ONLY UNTIL THE NEXT
-// BRONZE ALLOCATION, so the caller's GL call must be the very next thing that
+// BRONZE ALLOCATION, so the call consuming it must be the very next thing that
 // happens. A plain JS array (three.js hands those to uniform*fv and
 // drawBuffers) is copied element by element into `storage` via embed reads;
 // the copy is host memory and stable. False when the value is neither.
@@ -305,7 +168,7 @@ inline bool uint32Data(Value v, std::vector<uint32_t>& storage,
 // Raw bytes of a typed array OR an ArrayBuffer, with the element size the
 // WebGL2 srcOffset/length overloads count in (1 for a bare buffer) — the
 // bronze twin of getBufferDataEx(). The pointer is heap-borrowed: consume it
-// in the very next GL call, allocate nothing in between.
+// in the very next call, allocate nothing in between.
 inline bool bufferBytes(Value v, const uint8_t** outData, size_t* outLen,
                         size_t* outElemSize) {
     if (auto info = ev::typedArrayInfo(v)) {
@@ -346,14 +209,14 @@ struct ObjectBuilder {
     }
 
     void def(const char* name, uint32_t arity, ev::NativeFn fn) {
-        // hostProfileWrap is the identity unless BRO_GL_PROFILE=1 (gl_profile.h);
+        // hostProfileWrap is the identity unless BRO_HOST_PROFILE=1 (host_profile.h);
         // makeFunction allocates, so it runs BEFORE obj.get() is read.
         //
         // The name is passed on, and it is a fact rather than a courtesy: a
         // host method standing in for a web-platform one answers for that
         // method's `.name` too (`gl.drawElements.name === "drawElements"` in
         // every browser), and a profile of the runtime cannot otherwise tell
-        // 166 GL entry points apart — every host function shares ONE
+        // 166 WebGL entry points apart — every host function shares ONE
         // trampoline code pointer, so the name slot is the only thing that
         // distinguishes them. One line here names every method reached through
         // this builder, DOM included, for the same reason hostProfileWrap's
@@ -386,37 +249,9 @@ struct ObjectBuilder {
 
     Value get() const { return obj.get(); }
 };
-
-// ---------------------------------------------------------------------------
-// Family installers (one per file for modularity)
-// ---------------------------------------------------------------------------
-
-// Helper to build a real JS Array
+// A real JS Array of `count` elements, element i from make(i).
 Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make);
 
-// Each takes the under-construction context object and the wrapped context.
-// gl_context.cpp calls them in one fixed order; the order of def() calls
-// inside each is likewise fixed. `c` outlives the program: the Engine owns it
-// until teardown, and nothing bronze finalizes ever dereferences it.
 class HostClass;
-
-void installGlConstants(ObjectBuilder& b);
-void installGlConstants(const HostClass& cls);
-void installGlState(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installGlBuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext* c);
-
-// The whole context object: constants + every family + gl.canvas +
-// drawingBufferWidth/Height + prototype branded with WebGL2RenderingContext.
-// `canvasValue` is the host canvas object (dom_globals.cpp) so gl.canvas
-// answers live width/height. ALLOCATES heavily; returns the finished object.
-Value createGlContextValue(webgl::WebGL2RenderingContext* c, Value canvasValue);
-
-const HostClass& webgl2RenderingContextHostClass();
-void installWebGLGlobals();
 
 }  // namespace bro::bronze_host

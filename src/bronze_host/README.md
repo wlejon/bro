@@ -48,7 +48,8 @@ Enabled by default (`BRO_WITH_BRONZE=ON`).
 | `native_manifest_tool.cpp`, `js_entry_stubs.cpp` | `bro-native-manifest`, the build-time tool that prints the manifest `bro_core.js` is compiled against, and the no-op fallback entries it (and unsupported JIT architectures) links |
 | `host_worker.cpp`, `host_worker_msg.cpp` | `Worker`: a thread with its own bronze realm, and the tagged serialization a `postMessage` crosses realms as |
 | `host_vendor_globals.cpp` | vendor global declarations (`signals`, `CodeMirror`, `acorn`, etc.) |
-| `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
+| `host_builder.h`, `host_profile.cpp` | what every binding shares: `ObjectBuilder`, the argument and typed-array readers, and the `BRO_HOST_PROFILE=1` call profiler every `def` goes through |
+| `webgl_*.cpp`, `webgl_internal.h` | the WebGL2 binding, one file per call family, calling the context's Vulkan backend (`webgl::vk::WebGLVkContext`) directly |
 
 Not every file is in the table; the rest are one web interface each and are
 named by what they own (`host_range.cpp`, `host_selection.cpp`,
@@ -255,7 +256,7 @@ write `const slice = blob.slice`.
 
 **What is deliberately NOT a class:**
 
-- **The WebGL cells** (`gl_internal.h`): `WebGLBuffer`, `WebGLTexture` and
+- **The WebGL cells** (`webgl_internal.h`): `WebGLBuffer`, `WebGLTexture` and
   friends carry no methods on the web either, so a prototype would save
   nothing, and the names are not in the manifest to be an instance of.
 - **Text, Comment and DocumentFragment** wrappers: they share
@@ -587,10 +588,10 @@ diffs its output against a committed expectation.
 
 ## Deliberately not covered (yet)
 
-**GL**: the WebGL 2 surface is bound in full; what the Vulkan backend does not
-do is listed in the WebGL2 support matrix of `docs/headless.md`. Object values
-are `===`-stable (`glObject`, `gl_internal.h`), and array-shaped `getParameter`
-answers are the typed arrays the IDL names.
+**WebGL**: the WebGL 2 surface is bound in full; what the Vulkan backend does
+not do is listed in the WebGL2 support matrix of `docs/headless.md`. Object
+values are `===`-stable (`webglObject`, `webgl_internal.h`), and array-shaped
+`getParameter` answers are the typed arrays the IDL names.
 
 **Events**: the exact list is under "Not supported, precisely" above.
 

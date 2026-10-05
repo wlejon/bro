@@ -62,6 +62,7 @@ struct VkBufferResource {
     uint32_t nextIndexRange = 0;
     bool isMapped = false;
     void* mappedPtr = nullptr;
+    bool everBound = false;  // isBuffer: true once bound
 
     bool isValid() const { return buffer != VK_NULL_HANDLE; }
 };
@@ -162,6 +163,7 @@ struct VkVertexAttribute {
 struct VkVAOResource {
     std::array<VkVertexAttribute, 16> attributes{};
     GLuint elementArrayBufferId = 0;
+    bool everBound = false;  // isVertexArray: true once bound
 };
 
 /// A shader object: its source and the result of the last compileShader.
@@ -347,6 +349,7 @@ struct VkFramebufferResource {
     VkFboAttachment stencil;
     std::array<GLenum, 8> drawBuffers{0x8CE0 /* GL_COLOR_ATTACHMENT0 */};
     GLenum readBuffer = 0x8CE0;
+    bool everBound = false;  // isFramebuffer: true once bound
 };
 
 /// Renderbuffer object: its own image (multisampled when asked), never
@@ -354,6 +357,7 @@ struct VkFramebufferResource {
 struct VkRenderbufferResource {
     VkTextureResource storage;
     GLenum internalformat = 0;
+    bool everBound = false;  // isRenderbuffer: true once bound
 };
 
 // ---------------------------------------------------------------------------

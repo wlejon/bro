@@ -41,7 +41,7 @@
 // the timer table and the host classes follow.
 
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt, boolAt
+#include "bronze_host/host_builder.h"  // ObjectBuilder, argAt, boolAt
 #include "bronze_host/host_node_sweep.h"
 
 #include <algorithm>

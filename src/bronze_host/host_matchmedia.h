@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include <string>
 
 namespace bro::dom { class Document; }

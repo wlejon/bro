@@ -1,5 +1,5 @@
 #include "bronze_host/host_window_open.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_worker_msg.h"

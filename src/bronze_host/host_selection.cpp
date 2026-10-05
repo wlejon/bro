@@ -2,7 +2,7 @@
 
 #include "bronze_host/host_selection.h"
 #include "bronze_host/host_range.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 
 #include "dom/selection.h"

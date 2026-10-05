@@ -11,7 +11,7 @@ namespace bro::engine {
 
 /// Owns the double-buffered layer lists and the snapshot atomics that the
 /// main thread hands to the raster worker each frame. Wraps a FrameWorker
-/// for the actual signal/wait/fence handshake.
+/// for the actual signal/wait handshake.
 ///
 /// All access to the front buffer index goes through currentLayers() or
 /// consumeIfReady(); there is no API that returns the bare index. This makes
@@ -64,11 +64,11 @@ public:
         worker_.postRequest();
     }
 
-    /// If the worker has new textures published, wait on its fence, flip the
-    /// front buffer, and return the fresh view. Otherwise std::nullopt.
+    /// If the worker has published new layers, flip the front buffer and
+    /// return the fresh view. Otherwise std::nullopt.
     std::optional<LayerView> consumeIfReady() {
         if (!worker_.isResultReady()) return std::nullopt;
-        // Worker stored newFront_ before publishing the fence; tryClaimResult
+        // Worker stored pendingFront_ before publishing; tryClaimResult
         // synchronises both via the state release/acquire pair.
         worker_.tryClaimResult();
         int newFront = pendingFront_.load(std::memory_order_acquire);
@@ -125,13 +125,13 @@ public:
         return 1 - front_.load(std::memory_order_acquire);
     }
 
-    /// Worker hands off: stage the new front index, then publish the fence
-    /// via FrameWorker. Main side reads pendingFront_ inside consumeIfReady
+    /// Worker hands off: stage the new front index, then publish via
+    /// FrameWorker. Main side reads pendingFront_ inside consumeIfReady
     /// after observing the state release.
-    void publishResult(render::GLsync fence = nullptr) {
+    void publishResult() {
         int back = 1 - front_.load(std::memory_order_acquire);
         pendingFront_.store(back, std::memory_order_release);
-        worker_.publishResult(fence);
+        worker_.publishResult();
     }
 
     // ---- lifecycle ----

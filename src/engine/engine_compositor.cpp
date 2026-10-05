@@ -31,7 +31,6 @@
 #include <include/core/SkRect.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <algorithm>
 #include <cmath>
@@ -42,25 +41,9 @@
 namespace bro::engine {
 
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
-    if (scene) {
-        scene->init();
-        // Windowed GPU mode: bind to the shared canvas-raster worker. No GL
-        // context is created here — the worker's context was created once at
-        // run() start — so registering a canvas never races the raster thread.
-        // (If the worker isn't up yet, e.g. a scene created during app load,
-        // run()'s init binds it once the worker exists.)
-        if (displayMode_ == DisplayMode::Windowed && window_) {
-            if (canvasRasterThread_)
-                scene->bindRasterThread(canvasRasterThread_.get());
-        } else {
-            // Headless / CPU fallback: use renderer's GrContext directly
-            auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-            if (skia && skia->grContext()) {
-                scene->setGrContext(skia->grContext());
-            }
-        }
-    }
-    if (scene) canvasSceneRegistry_[scene->sceneId()] = scene.get();
+    if (!scene) return;
+    scene->init();
+    canvasSceneRegistry_[scene->sceneId()] = scene.get();
     canvasScenes_.push_back(std::move(scene));
 }
 
@@ -91,13 +74,13 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     recordingRenderer_->setBuffer(&outBuffer);
 
     // Layer-break callback emits Cmd_LayerBreak. The replayer's handler does
-    // the actual GPU surface management.
+    // the actual layer surface management.
     drawTraversal_->setLayerBreakCallback(
-        [this](int kind, canvas::CanvasScene* scene, unsigned int directTexture,
+        [this](int kind, canvas::CanvasScene* scene, unsigned int elementId,
                float x, float y, float w, float h,
                float clipX, float clipY, float clipW, float clipH) {
             recordingRenderer_->recordLayerBreak(
-                kind, scene ? scene->sceneId() : 0, directTexture, x, y, w, h,
+                kind, scene ? scene->sceneId() : 0, elementId, x, y, w, h,
                 clipX, clipY, clipW, clipH);
         });
     // <iframe> sub-documents: record a break carrying the IframeDoc id. Its
@@ -176,7 +159,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
 
 void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              const render::CommandBuffer& buffer,
-                             std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                             std::vector<render::SkiaRenderer::LayerSurface>& pool,
                              int& poolW, int& poolH,
                              int surfW, int surfH,
                              std::vector<UILayer>& outLayers,
@@ -187,16 +170,13 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     // insets) — app layer surfaces are content-sized. The pool compare below
     // must use these dims so a menu show/hide (contentH change) reallocates.
     if (poolW != surfW || poolH != surfH) {
-        for (auto& ps : pool) renderer->destroyGPUSurface(ps);
+        for (auto& ps : pool) renderer->releaseLayerSurface(ps);
         pool.clear();
         poolW = surfW;
         poolH = surfH;
     }
     if (pool.empty()) {
-        pool.push_back(renderer->createGPUSurface(surfW, surfH));
-    }
-    for (auto& ps : pool) {
-        renderer->rewrapGPUSurface(ps, surfW, surfH);
+        pool.push_back(renderer->createLayerSurface(surfW, surfH));
     }
 
     int htmlLayerIdx = 0;
@@ -204,20 +184,18 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 
     render::CommandReplayer replayer(renderer);
     replayer.setLayerBreakHandler(
-        [&](int kind, uint64_t sceneId, unsigned int directTexture,
+        [&](int kind, uint64_t sceneId, unsigned int elementId,
             float x, float y, float w, float h,
             float clipX, float clipY, float clipW, float clipH) {
             int prevIdx = htmlLayerIdx;
             htmlLayerIdx++;
             while (htmlLayerIdx >= static_cast<int>(pool.size())) {
-                pool.push_back(renderer->createGPUSurface(surfW, surfH));
-                renderer->rewrapGPUSurface(pool.back(), surfW, surfH);
+                pool.push_back(renderer->createLayerSurface(surfW, surfH));
             }
             renderer->switchSurface(pool[htmlLayerIdx].surface);
 
             UILayer htmlLayer;
             htmlLayer.type = UILayer::HTML;
-            htmlLayer.texture = pool[prevIdx].texture;
             htmlLayer.surface = pool[prevIdx].surface;
             outLayers.push_back(std::move(htmlLayer));
 
@@ -232,7 +210,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                 quadLayer.type = UILayer::Canvas;
             }
             quadLayer.canvasSceneId = sceneId;    // CanvasScene id or IframeDoc id
-            quadLayer.texture = directTexture;     // WebGL direct texture (0 otherwise)
+            quadLayer.elementId = elementId;      // the WebGL/Scene3D element (0 otherwise)
             quadLayer.cx = x; quadLayer.cy = y;
             quadLayer.cw = w; quadLayer.ch = h;
             quadLayer.clipX = clipX; quadLayer.clipY = clipY;
@@ -246,7 +224,6 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     renderer->switchSurface(origSurface);
     UILayer lastHtml;
     lastHtml.type = UILayer::HTML;
-    lastHtml.texture = pool[htmlLayerIdx].texture;
     lastHtml.surface = pool[htmlLayerIdx].surface;
     outLayers.push_back(std::move(lastHtml));
 
@@ -254,12 +231,10 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     // pool surface and append it as the topmost HTML layer, filling the holes
     // the base pass left. Painted in content space at absolute offsets (same
     // walk as the base), so a full-surface quad lines up 1:1.
-    int lastIdx = htmlLayerIdx;
     if (promotedBuffer && promotedBuffer->commandCount() > 0) {
         int promotedIdx = htmlLayerIdx + 1;
         while (promotedIdx >= static_cast<int>(pool.size())) {
-            pool.push_back(renderer->createGPUSurface(surfW, surfH));
-            renderer->rewrapGPUSurface(pool.back(), surfW, surfH);
+            pool.push_back(renderer->createLayerSurface(surfW, surfH));
         }
         renderer->switchSurface(pool[promotedIdx].surface);
         render::CommandReplayer promotedReplayer(renderer);
@@ -274,17 +249,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 
         UILayer promotedLayer;
         promotedLayer.type = UILayer::HTML;
-        promotedLayer.texture = pool[promotedIdx].texture;
         promotedLayer.surface = pool[promotedIdx].surface;
         outLayers.push_back(std::move(promotedLayer));
-        lastIdx = promotedIdx;
-    }
-
-    // Flush each pool surface's deferred Ganesh ops.
-    for (int i = 0; i <= lastIdx; ++i) {
-        if (pool[i].surface && renderer->grContext()) {
-            renderer->grContext()->flush(pool[i].surface.get());
-        }
     }
 }
 
@@ -320,7 +286,7 @@ void Engine::recordSystemPanelLayers(render::CommandBuffer& outBuffer,
 
 void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
                                      const render::CommandBuffer& buffer,
-                                     std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                                     std::vector<render::SkiaRenderer::LayerSurface>& pool,
                                      int& poolW, int& poolH,
                                      int vpW, int vpH,
                                      std::vector<UILayer>& outLayers) {
@@ -328,7 +294,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     if (buffer.commandCount() == 0) return;
 
     if (poolW != vpW || poolH != vpH) {
-        for (auto& ps : pool) renderer->destroyGPUSurface(ps);
+        for (auto& ps : pool) renderer->releaseLayerSurface(ps);
         pool.clear();
         poolW = vpW;
         poolH = vpH;
@@ -336,17 +302,14 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
 
     auto ensurePoolAt = [&](size_t idx) {
         while (idx >= pool.size()) {
-            pool.push_back(renderer->createGPUSurface(vpW, vpH));
-            renderer->rewrapGPUSurface(pool.back(), vpW, vpH);
+            pool.push_back(renderer->createLayerSurface(vpW, vpH));
         }
     };
 
     size_t panelIdx = 0;
     ensurePoolAt(panelIdx);
-    renderer->rewrapGPUSurface(pool[panelIdx], vpW, vpH);
+    renderer->fitLayerSurface(pool[panelIdx], vpW, vpH);
     auto origSurface = renderer->switchSurface(pool[panelIdx].surface);
-
-    auto* grCtx = renderer->grContext();
 
     render::CommandReplayer replayer(renderer);
     replayer.setLayerBreakHandler(
@@ -354,23 +317,20 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
             float, float, float, float, float, float, float, float) {
             if (kind != render::Cmd_LayerBreak::HtmlSurface) return;
             // Capture current panel into a UILayer, advance to next surface.
-            if (grCtx) grCtx->flush(pool[panelIdx].surface.get());
             UILayer panelLayer;
             panelLayer.type = UILayer::HTML;
-            panelLayer.texture = pool[panelIdx].texture;
             panelLayer.surface = pool[panelIdx].surface;
             outLayers.push_back(std::move(panelLayer));
 
             panelIdx++;
             ensurePoolAt(panelIdx);
-            renderer->rewrapGPUSurface(pool[panelIdx], vpW, vpH);
+            renderer->fitLayerSurface(pool[panelIdx], vpW, vpH);
             renderer->switchSurface(pool[panelIdx].surface);
         });
     replayer.setBlitCanvasInlineHandler(
         [&](void* scenePtr, float x, float y, float w, float h) {
             auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
             if (!scene || w <= 0 || h <= 0) return;
-            if (grCtx) scene->setGrContext(grCtx);
             scene->flushStaged();
             auto* src = scene->surface();
             if (!src) return;
@@ -386,10 +346,8 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     replayer.replay(buffer);
 
     // Capture the final panel.
-    if (grCtx) grCtx->flush(pool[panelIdx].surface.get());
     UILayer panelLayer;
     panelLayer.type = UILayer::HTML;
-    panelLayer.texture = pool[panelIdx].texture;
     panelLayer.surface = pool[panelIdx].surface;
     outLayers.push_back(std::move(panelLayer));
 
@@ -417,15 +375,15 @@ void Engine::recordIframeLayers() {
 }
 
 // Raster thread: replay each iframe sub-document's command buffer into a box-
-// sized GPU surface, and stash the resulting texture on the IframeDoc for the
+// sized layer surface, and publish a snapshot of it on the IframeDoc for the
 // app compositor to draw at the <iframe> element's box.
 void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
     if (!renderer) return;
     // Whoever replays the sub-docs OWNS their surfaces — the raster thread
     // windowed, the main thread headless (screenshot() replays inline, there
-    // being no raster thread). So this is exactly the right place to destroy the
-    // ones orphaned since the last replay: `renderer` is, by construction, the
-    // context that created them. Ahead of the empty check, or churn that removed
+    // being no raster thread). So this is exactly the right place to release the
+    // ones orphaned since the last replay: nothing else can be drawing into
+    // them. Ahead of the empty check, or churn that removed
     // the last iframe would leave its surface queued forever.
     drainIframeSurfaceFrees(renderer);
     for (auto& d : iframeDocs_) replaySubDoc(iframeSubDoc(*d), renderer);

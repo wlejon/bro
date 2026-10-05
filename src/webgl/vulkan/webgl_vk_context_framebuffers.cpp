@@ -59,6 +59,11 @@ WebGLFramebuffer WebGLVkContext::createFramebuffer() {
     return {id};
 }
 
+GLboolean WebGLVkContext::isFramebuffer(WebGLFramebuffer fb) const {
+    auto it = fb.id != 0 ? framebuffers_.find(fb.id) : framebuffers_.end();
+    return it != framebuffers_.end() && it->second.everBound ? GL_TRUE : GL_FALSE;
+}
+
 void WebGLVkContext::deleteFramebuffer(WebGLFramebuffer fb) {
     if (fb.id == 0 || framebuffers_.find(fb.id) == framebuffers_.end()) return;
     // Deleting a bound framebuffer binds the canvas in its place.
@@ -73,10 +78,12 @@ void WebGLVkContext::bindFramebuffer(GLenum target, WebGLFramebuffer fb) {
         setSyntheticError(GL_INVALID_ENUM);
         return;
     }
-    if (fb.id != 0 && framebuffers_.find(fb.id) == framebuffers_.end()) {
+    auto it = fb.id != 0 ? framebuffers_.find(fb.id) : framebuffers_.end();
+    if (fb.id != 0 && it == framebuffers_.end()) {
         setSyntheticError(GL_INVALID_OPERATION);  // a deleted framebuffer
         return;
     }
+    if (it != framebuffers_.end()) it->second.everBound = true;
     if (target != GL_READ_FRAMEBUFFER && drawFboId_ != fb.id) {
         endRendering();
         drawFboId_ = fb.id;
@@ -464,6 +471,37 @@ void WebGLVkContext::readBuffer(GLenum src) {
         return;
     }
     framebuffers_[readFboId_].readBuffer = src;
+}
+
+// Invalidation only promises that the named contents are no longer needed;
+// the attachments keep them, which satisfies it. What is checked is what
+// the call must reject: the target, each attachment name for the
+// framebuffer bound there, and the region's size.
+void WebGLVkContext::invalidateFramebuffer(GLenum target, std::span<const GLenum> attachments) {
+    GLuint id = 0;
+    framebufferForTarget(target, id);
+    if (!isFramebufferTarget(target)) return;
+    for (GLenum attachment : attachments) {
+        const bool valid = id == 0 ? attachment == GL_COLOR || attachment == GL_DEPTH || attachment == GL_STENCIL
+                                   : isColorAttachment(attachment) || attachment == GL_DEPTH_ATTACHMENT ||
+                                         attachment == GL_STENCIL_ATTACHMENT ||
+                                         attachment == GL_DEPTH_STENCIL_ATTACHMENT;
+        if (valid) continue;
+        // A color attachment past MAX_COLOR_ATTACHMENTS is a bad value, not a bad name.
+        const bool pastMax = id != 0 && attachment >= GL_COLOR_ATTACHMENT0 + kMaxColorAttachments &&
+                             attachment <= GL_COLOR_ATTACHMENT0 + 15;
+        setSyntheticError(pastMax ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
+        return;
+    }
+}
+
+void WebGLVkContext::invalidateSubFramebuffer(GLenum target, std::span<const GLenum> attachments, GLint, GLint,
+                                              GLsizei width, GLsizei height) {
+    if (width < 0 || height < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    invalidateFramebuffer(target, attachments);
 }
 
 GLenum WebGLVkContext::drawBufferState(GLuint i) const {

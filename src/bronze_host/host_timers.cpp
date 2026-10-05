@@ -21,7 +21,7 @@
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_realm_scope.h"
-#include "bronze_host/gl_internal.h"  // argAt / numAt / i32At
+#include "bronze_host/host_builder.h"  // argAt / numAt / i32At
 
 #include "dom/document.h"
 #include "util/log.h"

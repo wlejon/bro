@@ -30,7 +30,7 @@ struct DeviceScale {
 
     /// A CSS extent in device px at the render scale, at least 1.
     int toDevice(int cssPx) const {
-        constexpr int kMaxSide = 16384;  // one GL texture, as handleResize clamps
+        constexpr int kMaxSide = 16384;  // one image's side, as handleResize clamps
         return std::clamp(static_cast<int>(std::lround(cssPx * render)), 1, kMaxSide);
     }
 };

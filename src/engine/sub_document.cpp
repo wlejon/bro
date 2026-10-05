@@ -30,7 +30,6 @@
 #include <include/core/SkImage.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkSurface.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -166,14 +165,12 @@ void recordSubDoc(SubDocRef d, render::RecordingRenderer* rec,
 }
 
 static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
-                                         GrDirectContext* grCtx,
                                          const render::CommandBuffer& buffer) {
     render::CommandReplayer replayer(renderer);
     replayer.setBlitCanvasInlineHandler(
         [&](void* scenePtr, float x, float y, float w, float h) {
             auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
             if (!scene || w <= 0 || h <= 0) return;
-            if (grCtx) scene->setGrContext(grCtx);
             scene->flushStaged();
             auto* src = scene->surface();
             if (!src) return;
@@ -181,7 +178,6 @@ static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
             if (!img) return;
             auto* c = renderer->getCanvas();
             if (!c) return;
-            if (grCtx) grCtx->resetContext();
             c->drawImageRect(img, SkRect::MakeXYWH(x, y, w, h),
                              SkSamplingOptions(SkFilterMode::kLinear));
             scene->clearDirty();
@@ -190,7 +186,6 @@ static void replayBufferWithInlineCanvas(render::SkiaRenderer* renderer,
 }
 
 void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
-    auto* grCtx = renderer->grContext();
     if (d.cmdBuffer.commandCount() == 0) { d.published.clear(); return; }
     // The surface is in device px at the renderer's current scale; the box
     // (and the compositor quad sampling it) stay in CSS px.
@@ -198,15 +193,14 @@ void replaySubDoc(SubDocRef d, render::SkiaRenderer* renderer) {
     ds.render = renderer->deviceScale();
     int bw = ds.toDevice(std::max(1, d.boxW)), bh = ds.toDevice(std::max(1, d.boxH));
     if (!d.surface.surface || d.surfW != bw || d.surfH != bh) {
-        if (d.surface.surface) renderer->destroyGPUSurface(d.surface);
-        d.surface = renderer->createGPUSurface(bw, bh);
+        if (d.surface.surface) renderer->releaseLayerSurface(d.surface);
+        d.surface = renderer->createLayerSurface(bw, bh);
         d.surfW = bw; d.surfH = bh;
     }
     if (!d.surface.surface) { d.published.clear(); return; }
     auto prev = renderer->switchSurface(d.surface.surface);
     if (auto* c = renderer->getCanvas()) c->clear(SK_ColorTRANSPARENT);
-    replayBufferWithInlineCanvas(renderer, grCtx, d.cmdBuffer);
-    if (grCtx) grCtx->flush(d.surface.surface.get());
+    replayBufferWithInlineCanvas(renderer, d.cmdBuffer);
     // The compositor reads this snapshot, never the surface itself.
     d.published.publish(d.surface.surface->makeImageSnapshot());
     renderer->switchSurface(prev);
@@ -219,18 +213,15 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
     if (d.cmdBuffer.commandCount() == 0) return {};
     int w = std::max(1, d.boxW), h = std::max(1, d.boxH);
 
-    auto* grCtx = skia->grContext();
-    if (grCtx) grCtx->resetContext();
-    render::SkiaRenderer::GPUSurface surf = skia->createGPUSurface(w, h);
-    if (!surf.surface) { if (grCtx) grCtx->resetContext(); return {}; }
+    render::SkiaRenderer::LayerSurface surf = skia->createLayerSurface(w, h);
+    if (!surf.surface) return {};
     // capture() hands back CSS-px pixels whatever the display scale.
     const float prevScale = skia->deviceScale();
     skia->setDeviceScale(1.0f);
     auto prev = skia->switchSurface(surf.surface);
     if (auto* c = skia->getCanvas()) c->clear(SK_ColorTRANSPARENT);
 
-    replayBufferWithInlineCanvas(skia, grCtx, d.cmdBuffer);
-    if (grCtx) grCtx->flush(surf.surface.get());
+    replayBufferWithInlineCanvas(skia, d.cmdBuffer);
 
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
     SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
@@ -240,8 +231,7 @@ std::vector<uint8_t> captureSubDoc(SubDocRef d, render::SkiaRenderer* skia,
 
     skia->switchSurface(prev);
     skia->setDeviceScale(prevScale);
-    skia->destroyGPUSurface(surf);
-    if (grCtx) grCtx->resetContext();
+    skia->releaseLayerSurface(surf);
 
     if (pixels.empty()) return {};
     outW = w;

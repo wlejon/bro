@@ -32,6 +32,10 @@ if (!gl) {
 
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    const shader = gl.createShader(gl.VERTEX_SHADER);
+    const prog = gl.createProgram();
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    const query = gl.createQuery();
     gl.clearColor(1, 0, 0, 1);
     gl.viewport(0, 0, 4, 4);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -50,6 +54,30 @@ if (!gl) {
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     assert(gl.createBuffer() === null, 'creating while lost answers null');
+    // Each call answers the spec's lost value.
+    assert(gl.getShaderParameter(shader, gl.COMPILE_STATUS) === null, 'getShaderParameter: null');
+    assert(gl.getShaderInfoLog(shader) === null, 'getShaderInfoLog: null');
+    assert(gl.getShaderSource(shader) === null, 'getShaderSource: null');
+    assert(gl.getProgramParameter(prog, gl.LINK_STATUS) === null, 'getProgramParameter: null');
+    assert(gl.getProgramInfoLog(prog) === null, 'getProgramInfoLog: null');
+    assert(gl.getAttachedShaders(prog) === null, 'getAttachedShaders: null');
+    assert(gl.getUniformLocation(prog, 'u') === null, 'getUniformLocation: null');
+    assert(gl.getAttribLocation(prog, 'a') === -1, 'getAttribLocation: -1');
+    assert(gl.getFragDataLocation(prog, 'o') === -1, 'getFragDataLocation: -1');
+    assert(gl.isShader(shader) === false && gl.isProgram(prog) === false, 'is*: false');
+    assert(gl.isSync(sync) === false && gl.isQuery(query) === false, 'isSync / isQuery: false');
+    assert(gl.isEnabled(gl.BLEND) === false, 'isEnabled: false');
+    assert(gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_UNSUPPORTED,
+           'checkFramebufferStatus: FRAMEBUFFER_UNSUPPORTED');
+    assert(gl.clientWaitSync(sync, 0, 0) === gl.WAIT_FAILED, 'clientWaitSync: WAIT_FAILED');
+    assert(gl.getSyncParameter(sync, gl.SYNC_STATUS) === null, 'getSyncParameter: null');
+    assert(gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE) === null, 'getQueryParameter: null');
+    assert(gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT) === null,
+           'getShaderPrecisionFormat: null');
+    assert(gl.getExtension('EXT_color_buffer_float') === null, 'getExtension: null');
+    assert(gl.createShader(gl.FRAGMENT_SHADER) === null && gl.createProgram() === null &&
+           gl.createTexture() === null && gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0) === null,
+           'create*: null');
     assert(gl.getError() === gl.NO_ERROR, 'calls while lost are silent no-ops');
     flush();
     assert(lost === 1, 'webglcontextlost fired at the canvas');

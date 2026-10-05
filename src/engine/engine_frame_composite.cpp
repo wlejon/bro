@@ -1,4 +1,5 @@
-// Frame composition: the CPU composite of a frame's UI layers, and its
+// Frame composition: the CPU composite of a frame's UI layers around the GPU
+// layers (3D scenes, WebGL canvases) the presenter draws in place, and its
 // presentation — windowed through the VulkanPresenter (or the software window
 // surface without Vulkan), headless as pixels for a capture.
 
@@ -20,7 +21,6 @@
 #endif
 
 #include <include/core/SkCanvas.h>
-#include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkPixmap.h>
@@ -41,24 +41,21 @@ struct LayerPlacement {
     SkRect dst(const UILayer& l) const {
         return SkRect::MakeXYWH(l.cx * sx, (l.cy + oy) * sy, l.cw * sx, l.ch * sy);
     }
+    // The layer's clip, when it has one.
+    bool clip(const UILayer& l, SkRect& out) const {
+        if (l.clipW < 0.0f || l.clipH < 0.0f) return false;
+        out = SkRect::MakeXYWH(l.clipX * sx, (l.clipY + oy) * sy, l.clipW * sx, l.clipH * sy);
+        return true;
+    }
     void draw(SkCanvas* canvas, const sk_sp<SkImage>& img, const UILayer& l) const {
         if (!img) return;
         canvas->save();
-        if (l.clipW >= 0.0f && l.clipH >= 0.0f) {
-            canvas->clipRect(SkRect::MakeXYWH(l.clipX * sx, (l.clipY + oy) * sy, l.clipW * sx, l.clipH * sy),
-                             SkClipOp::kIntersect, true);
-        }
+        SkRect c;
+        if (clip(l, c)) canvas->clipRect(c, SkClipOp::kIntersect, true);
         canvas->drawImageRect(img, dst(l), SkSamplingOptions(SkFilterMode::kLinear));
         canvas->restore();
     }
 };
-
-sk_sp<SkImage> rgbaImage(std::vector<uint8_t>&& px, int w, int h) {
-    if (px.empty() || w <= 0 || h <= 0) return nullptr;
-    SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-    return SkImages::RasterFromData(info, SkData::MakeWithCopy(px.data(), px.size()),
-                                    static_cast<size_t>(w) * 4);
-}
 
 } // namespace
 
@@ -68,109 +65,111 @@ void Engine::beginGpuFrame() {
     if (vulkanContext_) vulkanContext_->frames().beginFrame();
 }
 
-// Size and clear this frame's composite surface; forget last frame's GPU base layer.
+// Size and clear this frame's composite; forget last frame's GPU layers.
 void Engine::beginFrameComposite() {
     int fbW = deviceScale_.drawableW > 0 ? deviceScale_.drawableW : viewportWidth_;
     int fbH = deviceScale_.drawableH > 0 ? deviceScale_.drawableH : viewportHeight_;
-    if (!frameCompositeSurface_ || frameCompositeW_ != fbW || frameCompositeH_ != fbH) {
-        frameCompositeSurface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(fbW, fbH));
-        frameAboveSurface_.reset();
+    if (frameCompositeW_ != fbW || frameCompositeH_ != fbH) {
+        frameSegments_.clear();
         frameCompositeW_ = fbW;
         frameCompositeH_ = fbH;
     }
-    if (frameCompositeSurface_) frameCompositeSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
-    frameAboveActive_ = false;
-    pendingVkImage_ = VK_NULL_HANDLE;
-    pendingVkImageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-    pendingVkImageW_ = pendingVkImageH_ = 0;
+    if (frameSegments_.empty())
+        frameSegments_.push_back(SkSurfaces::Raster(SkImageInfo::MakeN32Premul(fbW, fbH)));
+    if (frameSegments_[0]) frameSegments_[0]->getCanvas()->clear(SK_ColorTRANSPARENT);
+    frameSegmentUsed_.assign(1, true);
+    frameImages_.clear();
 }
 
-void Engine::compositeLayers(const std::vector<UILayer>& layers, uint32_t /*targetFBO*/,
-                             int offsetY, int /*layerW*/, int /*layerH*/) {
-    if (layers.empty() || !frameCompositeSurface_) return;
+// The segment the next CPU layer composites into: the one above the last GPU
+// image, cleared the first time it is drawn into this frame.
+SkCanvas* Engine::frameSegmentCanvas() {
+    const size_t index = frameImages_.size();
+    while (frameSegments_.size() <= index)
+        frameSegments_.push_back(SkSurfaces::Raster(SkImageInfo::MakeN32Premul(frameCompositeW_, frameCompositeH_)));
+    if (frameSegmentUsed_.size() <= index) frameSegmentUsed_.resize(index + 1, false);
+    SkSurface* surface = frameSegments_[index].get();
+    if (!surface) return nullptr;
+    if (!frameSegmentUsed_[index]) {
+        surface->getCanvas()->clear(SK_ColorTRANSPARENT);
+        frameSegmentUsed_[index] = true;
+    }
+    return surface->getCanvas();
+}
+
+void Engine::compositeLayers(const std::vector<UILayer>& layers, int offsetY) {
+    if (layers.empty() || frameSegments_.empty() || !frameSegments_[0]) return;
 
     const int fbW = frameCompositeW_, fbH = frameCompositeH_;
-    SkCanvas* canvas = frameAboveActive_ ? frameAboveSurface_->getCanvas()
-                                         : frameCompositeSurface_->getCanvas();
     LayerPlacement at;
     at.sx = static_cast<float>(fbW) / static_cast<float>(viewportWidth_ > 0 ? viewportWidth_ : 1);
     at.sy = static_cast<float>(fbH) / static_cast<float>(viewportHeight_ > 0 ? viewportHeight_ : 1);
     at.oy = static_cast<float>(offsetY);
 
-    // A layer covering the whole frame can be presented straight from its GPU
-    // image instead of being read back into the composite: the layers so far
-    // stay below it, and the ones after it composite into the surface above.
-    auto coversFrame = [&](const UILayer& l) {
-        SkRect r = at.dst(l);
-        return r.left() <= 1.0f && r.top() <= 1.0f &&
-               std::abs(r.width() - fbW) <= 2.0f && std::abs(r.height() - fbH) <= 2.0f;
-    };
-    auto claimFrameImage = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h) {
-        pendingVkImage_ = image;
-        pendingVkImageLayout_ = layout;
-        pendingVkImageW_ = w;
-        pendingVkImageH_ = h;
-        if (!frameAboveSurface_)
-            frameAboveSurface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(fbW, fbH));
-        if (!frameAboveSurface_) return;
-        frameAboveSurface_->getCanvas()->clear(SK_ColorTRANSPARENT);
-        frameAboveActive_ = true;
-        canvas = frameAboveSurface_->getCanvas();
+    // A GPU layer's image goes to the presenter, placed and clipped where the
+    // layer sits; the CPU layers after it composite into the next segment.
+    auto addImage = [&](VkImage image, VkImageLayout layout, uint32_t w, uint32_t h, const UILayer& l) {
+        const SkRect dst = at.dst(l);
+        render::PresentImage& out = frameImages_.emplace_back();
+        out.image = image;
+        out.layout = layout;
+        out.width = w;
+        out.height = h;
+        out.dstX = dst.left();
+        out.dstY = dst.top();
+        out.dstW = dst.width();
+        out.dstH = dst.height();
+        SkRect clip;
+        if (at.clip(l, clip)) {
+            const SkIRect r = clip.roundOut();
+            out.clipped = true;
+            out.clip = {{r.left(), r.top()},
+                        {static_cast<uint32_t>(std::max(0, r.width())), static_cast<uint32_t>(std::max(0, r.height()))}};
+        }
     };
 
     for (const auto& layer : layers) {
         if (layer.type == UILayer::HTML) {
             if (layer.surface) {
                 if (auto img = layer.surface->makeImageSnapshot())
-                    canvas->drawImage(img, 0.0f, at.oy * at.sy);
+                    if (SkCanvas* canvas = frameSegmentCanvas()) canvas->drawImage(img, 0.0f, at.oy * at.sy);
             }
         } else if (layer.type == UILayer::Iframe) {
-            if (auto* d = iframeDocById(layer.canvasSceneId)) at.draw(canvas, d->published.get(), layer);
+            if (auto* d = iframeDocById(layer.canvasSceneId))
+                if (SkCanvas* canvas = frameSegmentCanvas()) at.draw(canvas, d->published.get(), layer);
         } else if (layer.type == UILayer::Canvas) {
             if (auto* cs = canvasSceneById(layer.canvasSceneId)) {
-                if (cs->surface()) at.draw(canvas, cs->surface()->makeImageSnapshot(), layer);
+                if (cs->surface())
+                    if (SkCanvas* canvas = frameSegmentCanvas())
+                        at.draw(canvas, cs->surface()->makeImageSnapshot(), layer);
             }
         } else if (layer.type == UILayer::Scene3D) {
 #if BRO_WITH_3D
             scene::SceneGraph* graph = nullptr;
             for (auto& sg : sceneGraphs_) {
-                if (sg.graph && (layer.texture == 0 || sg.elementId == layer.texture)) {
+                if (sg.graph && (layer.elementId == 0 || sg.elementId == layer.elementId)) {
                     graph = sg.graph.get();
                     break;
                 }
             }
             if (!graph || !graph->renderer().hasMeshContent()) continue;
             const render::LayerImage out = graph->renderer().outputImage();
-            if (coversFrame(layer) && pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ && out) {
-                claimFrameImage(out.image, out.layout, out.width, out.height);
-            } else {
-                int w = 0, h = 0;
-                auto px = graph->readTonemapPixelsRGBA(w, h);
-                at.draw(canvas, rgbaImage(std::move(px), w, h), layer);
-            }
+            if (out) addImage(out.image, out.layout, out.width, out.height, layer);
 #endif
         } else if (layer.type == UILayer::WebGL) {
             webgl::WebGL2RenderingContext* wctx = nullptr;
             for (auto& entry : webglEntries_) {
-                if (entry.context && entry.element && entry.element->nodeId() == layer.texture) {
+                if (entry.context && entry.element && entry.element->nodeId() == layer.elementId) {
                     wctx = entry.context.get();
                     break;
                 }
             }
-            if (!wctx) continue;
+            if (!wctx || wctx->colorImage() == VK_NULL_HANDLE) continue;
             // The canvas's recorded work must be submitted before the
             // presenter's submission samples it (queue order does the rest).
             wctx->flush();
-            if (coversFrame(layer) && pendingVkImage_ == VK_NULL_HANDLE && vulkanPresenter_ &&
-                wctx->vkColorImage() != VK_NULL_HANDLE) {
-                claimFrameImage(wctx->vkColorImage(), wctx->vkColorLayout(),
-                                static_cast<uint32_t>(wctx->canvasWidth()),
-                                static_cast<uint32_t>(wctx->canvasHeight()));
-            } else {
-                std::vector<uint8_t> px;
-                if (wctx->readCanvasPixels(px))
-                    at.draw(canvas, rgbaImage(std::move(px), wctx->canvasWidth(), wctx->canvasHeight()), layer);
-            }
+            addImage(wctx->colorImage(), wctx->colorLayout(), static_cast<uint32_t>(wctx->canvasWidth()),
+                     static_cast<uint32_t>(wctx->canvasHeight()), layer);
         }
     }
 }
@@ -179,22 +178,19 @@ static render::PresentPixels layerOf(SkSurface* surface) {
     return surface ? render::VulkanPresenter::surfaceLayer(surface) : render::PresentPixels{};
 }
 
-// The frame as a PresentFrame: the CPU composite below the pending GPU image
-// (if a layer claimed one), and the layers composited after it above.
+// The frame as a PresentFrame: the first segment below, then each GPU image
+// with the segment composited after it above.
 render::PresentFrame Engine::describeCompositedFrame() {
     render::PresentFrame frame;
-    frame.below = layerOf(frameCompositeSurface_.get());
-    if (pendingVkImage_ != VK_NULL_HANDLE && pendingVkImageW_ > 0 && pendingVkImageH_ > 0) {
-        frame.image = pendingVkImage_;
-        frame.imageLayout = pendingVkImageLayout_ != VK_IMAGE_LAYOUT_UNDEFINED
-                                ? pendingVkImageLayout_
-                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        frame.imageWidth = pendingVkImageW_;
-        frame.imageHeight = pendingVkImageH_;
-        if (frameAboveActive_) frame.above = layerOf(frameAboveSurface_.get());
+    if (!frameSegments_.empty()) frame.below = layerOf(frameSegments_[0].get());
+    frame.images = std::move(frameImages_);
+    for (size_t i = 0; i < frame.images.size(); ++i) {
+        const size_t segment = i + 1;
+        if (segment < frameSegmentUsed_.size() && frameSegmentUsed_[segment])
+            frame.images[i].above = layerOf(frameSegments_[segment].get());
     }
-    pendingVkImage_ = VK_NULL_HANDLE;
-    frameAboveActive_ = false;
+    frameImages_.clear();
+    frameSegmentUsed_.assign(1, true);
     return frame;
 }
 
@@ -211,11 +207,11 @@ void Engine::presentCurrentFrame() {
 }
 
 // Headless capture of the composited frame as RGBA8. A frame that is only the
-// CPU composite is read straight from it; one with a GPU base layer is
-// composited by the presenter and read back, in one submission and one wait.
+// CPU composite is read straight from it; one with GPU layers is composited by
+// the presenter and read back, in one submission and one wait.
 std::vector<uint8_t> Engine::readCompositedFrame() {
     const render::PresentFrame frame = describeCompositedFrame();
-    if (frame.hasImage() && vulkanPresenter_ && vulkanPresenter_->isHeadless()) {
+    if (frame.hasImages() && vulkanPresenter_ && vulkanPresenter_->isHeadless()) {
         std::vector<uint8_t> pixels;
         uint32_t w = 0, h = 0;
         if (vulkanPresenter_->present(frame) && vulkanPresenter_->readbackPixels(pixels, w, h))
@@ -224,7 +220,7 @@ std::vector<uint8_t> Engine::readCompositedFrame() {
         return {};
     }
     SkPixmap pm;
-    if (!frameCompositeSurface_ || !frameCompositeSurface_->peekPixels(&pm)) return {};
+    if (frameSegments_.empty() || !frameSegments_[0] || !frameSegments_[0]->peekPixels(&pm)) return {};
     return render::pixmapToRgba(pm);
 }
 

@@ -314,16 +314,15 @@ int main() {
     }
 
     // -------------------------------------------------------------------------
-    // Test 6: WebGL2RenderingContext Bridge Integration
+    // Test 6: WebGL2RenderingContext owning its backend, across a resize
     // -------------------------------------------------------------------------
-    std::cout << "[Test 6] WebGL2RenderingContext Bridge Integration... " << std::flush;
+    std::cout << "[Test 6] WebGL2RenderingContext backend + resize... " << std::flush;
     {
-        WebGL2RenderingContext glCtx(64, 64, &context);
-        assert(glCtx.isVulkanBackend());
-        assert(glCtx.vkContext() != nullptr);
+        WebGL2RenderingContext glCtx(64, 64, context);
+        assert(glCtx.backend() != nullptr);
 
-        glCtx.clearColor(0.0f, 1.0f, 1.0f, 1.0f); // Cyan
-        glCtx.clear(GL_COLOR_BUFFER_BIT);
+        glCtx.backend()->clearColor(0.0f, 1.0f, 1.0f, 1.0f); // Cyan
+        glCtx.backend()->clear(GL_COLOR_BUFFER_BIT);
 
         std::vector<uint8_t> cyanPixels;
         assert(glCtx.readCanvasPixels(cyanPixels));
@@ -333,13 +332,12 @@ int main() {
         assert(cyanPixels[2] == 255);
         assert(cyanPixels[3] == 255);
 
-        // Test resizing through bridge
         glCtx.resize(32, 32);
         assert(glCtx.canvasWidth() == 32);
         assert(glCtx.canvasHeight() == 32);
 
-        glCtx.clearColor(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
-        glCtx.clear(GL_COLOR_BUFFER_BIT);
+        glCtx.backend()->clearColor(1.0f, 1.0f, 0.0f, 1.0f); // Yellow
+        glCtx.backend()->clear(GL_COLOR_BUFFER_BIT);
 
         std::vector<uint8_t> yellowPixels;
         assert(glCtx.readCanvasPixels(yellowPixels));

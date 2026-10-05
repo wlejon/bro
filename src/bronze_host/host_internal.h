@@ -1,12 +1,11 @@
 #pragma once
 
-// The non-GL half of the bronze host layer: the frame seam every host-provided
+// The bronze host layer's shared runtime: the frame seam every host-provided
 // global hangs off, and the three things the files on it must share — the
 // error funnel, the frame clock, and the main-thread task queue.
 //
-// gl_internal.h is the other half. It owns ObjectBuilder and the argument
-// readers, because that is where the value boundary was first drawn; a file
-// here includes both headers and says so at the top.
+// host_builder.h is the other half: ObjectBuilder and the argument readers.
+// A file that needs both includes both.
 //
 // THE GC RULE, restated because most of what follows exists to obey it: a
 // Value held across an allocating embed call is stale. Host state that must
@@ -56,8 +55,7 @@ namespace bro::bronze_host {
 namespace ev = bronze::embed;
 using Value = bronze::Value;
 
-// gl_internal.h owns it; a file that only registers properties does not need
-// the GL headers to say so.
+// host_builder.h owns it; a file that only names it needs nothing more.
 struct ObjectBuilder;
 
 // ---------------------------------------------------------------------------
@@ -137,8 +135,8 @@ private:
 // Every host object with a C++ payload is an embed handle, and every unwrap in
 // this layer reaches it through the same embed::handleData — which answers a
 // void* with no type on it. So each payload struct starts with a uint32_t tag
-// in the same position as GlCell::kind (gl_internal.h), carrying a value no GL
-// kind uses: an Image handed to idOf(v, GlCell::Texture) reads kHostImageTag,
+// in the same position as WebGLCell::kind (webgl_internal.h), carrying a value no
+// WebGL kind uses: an Image handed to idOf(v, WebGLCell::Texture) reads kHostImageTag,
 // fails the kind compare and answers 0, and a WebGLTexture handed to
 // hostImageOf reads a kind of 1..8 and answers nullptr. The alternative — each
 // unwrap trusting that it is only ever passed its own cells — is the shape of

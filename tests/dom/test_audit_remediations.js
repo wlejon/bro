@@ -59,14 +59,15 @@ assert(typeof globalThis.Animation === 'function', 'globalThis.Animation exists'
     if (gl) {
         assert(typeof gl.invalidateSubFramebuffer === 'function', 'gl.invalidateSubFramebuffer is a function');
         // Passing negative dimensions should set GL_INVALID_VALUE
-        gl.invalidateSubFramebuffer(gl.FRAMEBUFFER, [gl.COLOR_ATTACHMENT0], 0, 0, -10, 10);
+        gl.invalidateSubFramebuffer(gl.FRAMEBUFFER, [gl.COLOR], 0, 0, -10, 10);
         assert(gl.getError() === gl.INVALID_VALUE, 'negative width generates INVALID_VALUE');
 
-        gl.invalidateSubFramebuffer(gl.FRAMEBUFFER, [gl.COLOR_ATTACHMENT0], 0, 0, 10, -10);
+        gl.invalidateSubFramebuffer(gl.FRAMEBUFFER, [gl.COLOR], 0, 0, 10, -10);
         assert(gl.getError() === gl.INVALID_VALUE, 'negative height generates INVALID_VALUE');
 
-        // Valid dimensions should succeed without error
-        gl.invalidateSubFramebuffer(gl.FRAMEBUFFER, [gl.COLOR_ATTACHMENT0], 0, 0, 10, 10);
+        // Valid dimensions should succeed without error (the canvas's
+        // buffers are COLOR/DEPTH/STENCIL; it has no COLOR_ATTACHMENT0)
+        gl.invalidateSubFramebuffer(gl.FRAMEBUFFER, [gl.COLOR], 0, 0, 10, 10);
         assert(gl.getError() === gl.NO_ERROR, 'valid sub-framebuffer invalidation succeeds');
     } else {
         missingGpuContext('webgl2');

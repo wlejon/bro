@@ -306,8 +306,8 @@ void WebGLVkContext::copyFromReadBuffer(VkTextureResource& tex, uint32_t level, 
         const PackState saved = pack_;
         pack_ = PackState{};
         pack_.alignment = 1;
-        readPixels(x0, y0, static_cast<GLsizei>(w), static_cast<GLsizei>(h), GL_RGBA, GL_UNSIGNED_BYTE,
-                   rgba.data());
+        readPixelsInto(x0, y0, static_cast<GLsizei>(w), static_cast<GLsizei>(h), GL_RGBA, GL_UNSIGNED_BYTE,
+                       rgba.data());
         pack_ = saved;
         PixelSource pixels{rgba.data(), rgba.size(), GL_RGBA, GL_UNSIGNED_BYTE};
         pixels.raw = true;

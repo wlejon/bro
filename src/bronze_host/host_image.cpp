@@ -38,7 +38,7 @@
 // already makes it for markup.
 
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
+#include "bronze_host/host_builder.h"  // ObjectBuilder, argAt
 
 #include "dom/document.h"
 #include "dom/element.h"

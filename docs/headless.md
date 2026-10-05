@@ -611,8 +611,9 @@ ordered) and `MAX_SERVER_WAIT_TIMEOUT` is 0.
 `vertexPipelineStoresAndAtomics` (else `createTransformFeedback` returns
 null and the limits are 0): interleaved and separate capture into up to 4
 buffers (`bindBufferBase` / `bindBufferRange`), of float, integer, vector,
-matrix and array varyings and `gl_Position` (a struct or bool varying fails
-the link), from `drawArrays` /
+matrix and array varyings, members of struct varyings named `s.member`,
+array elements named `a[i]`, and `gl_Position` (a whole struct or a bool
+varying fails the link), from `drawArrays` /
 `drawArraysInstanced` in `POINTS` / `LINES` / `TRIANGLES`; pause / resume;
 transform feedback objects; `getTransformFeedbackVarying`; and the ES 3.0
 errors (mode mismatch, `drawElements` while capturing, overflow, a capture
@@ -621,9 +622,13 @@ stage stores the varyings itself, so capture works with or without
 `RASTERIZER_DISCARD`.
 
 **Context loss.** `WEBGL_lose_context` loses and restores the context:
-while lost every call is a no-op answering its zero value (`getParameter`,
-`getContextAttributes` and `getSupportedExtensions` answer null),
-`getError` reports `CONTEXT_LOST_WEBGL` once, and `webglcontextlost` fires
+while lost every call is a no-op answering what the WebGL spec says a lost
+context answers — null for objects and queries (`create*`, `getParameter`,
+`getShaderParameter`, `getContextAttributes`, `getSupportedExtensions`,
+`getExtension`, ...), false for the `is*` predicates and `isEnabled`, -1
+from `getAttribLocation` / `getFragDataLocation`, `WAIT_FAILED` from
+`clientWaitSync`, `FRAMEBUFFER_UNSUPPORTED` from `checkFramebufferStatus`
+— `getError` reports `CONTEXT_LOST_WEBGL` once, and `webglcontextlost` fires
 at the canvas a task later; a page that cancels it may `restoreContext()`,
 after which `webglcontextrestored` fires and the context starts over with
 default state and none of its old objects. A real Vulkan device loss is not
@@ -639,8 +644,14 @@ VAOs, integer attributes, constant attributes (`vertexAttrib*`,
 `getActiveUniformBlockParameter` / `Name`); the getters `getUniform` (typed
 as the IDL says: numbers, booleans, `Float32Array` / `Int32Array` /
 `Uint32Array`, a boolean array for `bvec*`, the unit for a sampler),
-`getVertexAttrib` / `getVertexAttribOffset`, `getBufferParameter`; the
-`is*` predicates.
+`getVertexAttrib` / `getVertexAttribOffset`, `getBufferParameter`,
+`getShaderSource`, `getAttachedShaders`; the `is*` predicates (a buffer,
+framebuffer, renderbuffer, vertex array or transform feedback is one once
+it has been bound, a shader or program until it is flagged for deletion);
+`invalidateFramebuffer` / `invalidateSubFramebuffer`, validated (target,
+attachment names for the bound framebuffer, size) and otherwise a hint the
+attachments satisfy by keeping their contents. Resizing the canvas keeps the
+viewport the page set.
 
 **Binding layer:** every object a call answers (`createBuffer`,
 `getParameter(CURRENT_PROGRAM)`, `getFramebufferAttachmentParameter(...
@@ -650,9 +661,7 @@ objects, and `getExtension` answers the same object on every call. Array
 results are the typed arrays the IDL names.
 
 **Not implemented:** an antialiased canvas (`antialias` is reported false;
-render into a multisampled renderbuffer and blit instead);
-`invalidateFramebuffer` / `invalidateSubFramebuffer` are accepted as the
-hints they are and do nothing.
+render into a multisampled renderbuffer and blit instead).
 
 #### `BRO_buffer_map` — direct access to buffer storage
 

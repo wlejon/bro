@@ -197,7 +197,6 @@ Engine::Engine(const EngineConfig& config)
             if (!vulkanPresenter_->init()) {
                 throw std::runtime_error("Headless VulkanPresenter initialization failed (render::VulkanPresenter::init returned false)");
             }
-            webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
 #if BRO_WITH_3D
             scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
 #endif
@@ -263,7 +262,6 @@ Engine::Engine(const EngineConfig& config)
                 if (!vulkanPresenter_->init()) {
                     throw std::runtime_error("Windowed Vulkan presenter initialization failed");
                 }
-                webgl::WebGL2RenderingContext::setDefaultVulkanContext(vulkanContext_.get());
 #if BRO_WITH_3D
                 scene::SceneRenderer::setDefaultVulkanContext(vulkanContext_.get());
 #endif
@@ -594,7 +592,7 @@ webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas)
         cw = attrInt("width", cw);
         ch = attrInt("height", ch);
     }
-    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, vulkanContext_.get());
+    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch, *vulkanContext_);
     auto* webglCtx = ctx2.get();
     if (canvas) canvas->setWebglContext(webglCtx);
     webglEntries_.push_back({std::move(ctx2), canvas});

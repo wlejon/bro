@@ -90,15 +90,30 @@ int64_t WebGLVkContext::boundBufferSize(GLenum target) {
     return (it != buffers_.end()) ? static_cast<int64_t>(it->second.size) : 0;
 }
 
+GLboolean WebGLVkContext::isBuffer(WebGLBuffer buf) const {
+    auto it = buf.id != 0 ? buffers_.find(buf.id) : buffers_.end();
+    return it != buffers_.end() && it->second.everBound ? GL_TRUE : GL_FALSE;
+}
+
+// A bind of `id`: 0, or a live buffer, which isBuffer answers for from now
+// on. INVALID_OPERATION for a deleted one (or one from before a context loss).
+bool WebGLVkContext::markBufferBound(GLuint id) {
+    if (id == 0) return true;
+    auto it = buffers_.find(id);
+    if (it == buffers_.end()) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return false;
+    }
+    it->second.everBound = true;
+    return true;
+}
+
 bool WebGLVkContext::bindBuffer(GLenum target, WebGLBuffer buf) {
     if (!bufferTargetValid(target)) {
         setSyntheticError(GL_INVALID_ENUM);
         return false;
     }
-    if (buf.id != 0 && buffers_.find(buf.id) == buffers_.end()) {
-        setSyntheticError(GL_INVALID_OPERATION);  // deleted, or from before a context loss
-        return false;
-    }
+    if (!markBufferBound(buf.id)) return false;
     switch (target) {
         case GL_ARRAY_BUFFER:
             boundArrayBuffer_ = buf.id;
@@ -131,12 +146,13 @@ bool WebGLVkContext::bindBuffer(GLenum target, WebGLBuffer buf) {
 }
 
 void WebGLVkContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf) {
-    if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
-        bindFeedbackBuffer(index, buf.id, 0, 0);
+    if (target != GL_TRANSFORM_FEEDBACK_BUFFER && target != GL_UNIFORM_BUFFER) {
+        setSyntheticError(GL_INVALID_ENUM);
         return;
     }
-    if (target != GL_UNIFORM_BUFFER) {
-        setSyntheticError(GL_INVALID_ENUM);
+    if (!markBufferBound(buf.id)) return;
+    if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
+        bindFeedbackBuffer(index, buf.id, 0, 0);
         return;
     }
     if (index >= boundUniformBuffers_.size()) {
@@ -151,16 +167,17 @@ void WebGLVkContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf
 // bound before the buffer has storage, or the storage may change).
 void WebGLVkContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf, GLintptr offset,
                                      GLsizeiptr size) {
+    if (target != GL_TRANSFORM_FEEDBACK_BUFFER && target != GL_UNIFORM_BUFFER) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return;
+    }
+    if (!markBufferBound(buf.id)) return;
     if (target == GL_TRANSFORM_FEEDBACK_BUFFER) {
         if (buf.id != 0 && size <= 0) {
             setSyntheticError(GL_INVALID_VALUE);
             return;
         }
         bindFeedbackBuffer(index, buf.id, offset, size);
-        return;
-    }
-    if (target != GL_UNIFORM_BUFFER) {
-        setSyntheticError(GL_INVALID_ENUM);
         return;
     }
     if (index >= boundUniformBuffers_.size() || offset < 0 || (buf.id != 0 && size <= 0)) {

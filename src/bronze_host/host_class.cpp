@@ -38,7 +38,7 @@
 // install ran — no methods, but no fatal either.
 
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"  // ObjectBuilder
+#include "bronze_host/host_builder.h"  // ObjectBuilder
 #include "util/log.h"
 
 #include <span>

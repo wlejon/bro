@@ -1,5 +1,5 @@
 #include "bronze_host/host_canvas_gradient.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "canvas/canvas2d.h"
 #include "util/string_utils.h"
 

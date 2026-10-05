@@ -10,13 +10,13 @@
 // (host_image.cpp) or an ImageData-shaped { width, height, data }.
 //
 // Upload pointers come from embed::typedArrayInfo and live only until the
-// next bronze allocation — each is handed to its GL call (which copies into
-// the driver) in the same statement chain with nothing allocating in between.
+// next bronze allocation — each is handed to the backend (which copies it)
+// in the same statement chain with nothing allocating in between.
 // An Image's pixels are host memory and would survive, but resolveSource
 // deliberately hands both kinds back through one type so no caller can start
 // depending on which it got.
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_globals_internal.h"
 
@@ -36,16 +36,11 @@ namespace {
 //
 // THE POINTER MAY BE HEAP-BORROWED: for an ImageData-shaped source it points
 // into the bronze heap and dies at the next bronze allocation, so the caller's
-// GL call must be the very next thing that happens.
+// upload must be the very next thing that happens.
 struct SourcePixels {
     const uint8_t* data = nullptr;
     GLsizei width = 0;
     GLsizei height = 0;
-    // Resolving a <canvas> source snapshots it through Ganesh on the SHARED
-    // GL context, which leaves Skia's viewport, FBO, program and texture
-    // bindings behind. The caller restores the app's WebGL state before the
-    // upload — the texture Skia left bound is not the one the app bound.
-    bool disturbedGlState = false;
     explicit operator bool() const { return data != nullptr; }
 };
 
@@ -84,11 +79,7 @@ SourcePixels resolveSource(Value sourceIn, const char* who) {
             const int w = scene->width();
             const int h = scene->height();
             const uint8_t* px = (w > 0 && h > 0) ? scene->snapshotPixels(w, h) : nullptr;
-            if (px) {
-                // A cache hit touches no GL, a miss ran Ganesh; flagged either
-                // way, because guessing wrong the other way corrupts the frame.
-                return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h), /*disturbed=*/true};
-            }
+            if (px) return {px, static_cast<GLsizei>(w), static_cast<GLsizei>(h)};
         }
         if (auto* vc = el->videoControl()) {
             int vw = 0, vh = 0;
@@ -140,12 +131,11 @@ template <typename Upload>
 void uploadSource(webgl::WebGL2RenderingContext* c, Value source, const char* who, Upload&& upload) {
     SourcePixels src = resolveSource(source, who);
     if (!src) {
-        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
         return;
     }
     // Nothing between resolveSource and the upload allocates on the bronze
     // heap, which keeps an ImageData-backed pointer valid.
-    if (src.disturbedGlState) live(c)->restoreState();
     upload(src);
 }
 
@@ -165,7 +155,7 @@ ViewBytes viewBytes(webgl::WebGL2RenderingContext* c, Value v, Value srcOffset) 
     if (!ev::typedArrayInfo(v) || !bufferBytes(v, &data, &len, &elemSize)) return out;
     const size_t offset = ev::isUndefined(srcOffset) ? 0 : static_cast<size_t>(ev::toDouble(srcOffset));
     if (offset > len / elemSize) {
-        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
         out.rangeError = true;
         return out;
     }
@@ -183,7 +173,7 @@ ViewBytes compressedView(webgl::WebGL2RenderingContext* c, std::span<const Value
     size_t len = 0, elemSize = 1;
     ViewBytes out;
     if (!bufferBytes(argAt(a, index), &data, &len, &elemSize)) {
-        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
         return out;
     }
     const size_t elemCount = len / elemSize;
@@ -191,7 +181,7 @@ ViewBytes compressedView(webgl::WebGL2RenderingContext* c, std::span<const Value
     const bool hasOverride = a.size() > index + 2 && !ev::isUndefined(a[index + 2]);
     const size_t override = hasOverride ? u32At(a, index + 2) : 0;
     if (srcOffset > elemCount || (hasOverride && override > elemCount - srcOffset)) {
-        live(c)->setSyntheticError(GL_INVALID_VALUE);
+        if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_VALUE);
         return out;
     }
     const size_t count = hasOverride ? override : elemCount - srcOffset;
@@ -204,39 +194,40 @@ ViewBytes compressedView(webgl::WebGL2RenderingContext* c, std::span<const Value
 // refused, by name, rather than read as something it is not.
 void refuseDomSource3D(webgl::WebGL2RenderingContext* c, const char* who) {
     LOG_ERROR("bronze_host: %s from a DOM source is not supported; upload a typed array", who);
-    live(c)->setSyntheticError(GL_INVALID_OPERATION);
+    if (auto* gl = live(c)) gl->setSyntheticError(GL_INVALID_OPERATION);
 }
 
 }  // namespace
 
-void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
+void installWebGLTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("createTexture", 0, [c](Value, std::span<const Value>) {
-        return glObject(c, GlCell::Texture, live(c)->createTexture().id);
+        auto* gl = live(c);
+        return gl ? webglObject(c, WebGLCell::Texture, gl->createTexture().id) : ev::null();
     });
     b.def("deleteTexture", 1, [c](Value, std::span<const Value> a) {
-        const GLuint id = idOf(argAt(a, 0), GlCell::Texture);
-        live(c)->deleteTexture({id});
-        forgetGlObject(c, GlCell::Texture, id);
+        const GLuint id = idOf(argAt(a, 0), WebGLCell::Texture);
+        if (auto* gl = live(c)) gl->deleteTexture({id});
+        forgetWebGLObject(c, WebGLCell::Texture, id);
         return ev::undefined();
     });
     b.def("bindTexture", 2, [c](Value, std::span<const Value> a) {
-        live(c)->bindTexture(u32At(a, 0), {idOf(argAt(a, 1), GlCell::Texture)});
+        if (auto* gl = live(c)) gl->bindTexture(u32At(a, 0), {idOf(argAt(a, 1), WebGLCell::Texture)});
         return ev::undefined();
     });
     b.def("isTexture", 1, [c](Value, std::span<const Value> a) {
-        return ev::fromBool(live(c)->isTexture({idOf(argAt(a, 0), GlCell::Texture)}) !=
-                            GL_FALSE);
+        auto* gl = live(c);
+        return ev::fromBool(gl && gl->isTexture({idOf(argAt(a, 0), WebGLCell::Texture)}) != GL_FALSE);
     });
     b.def("activeTexture", 1, [c](Value, std::span<const Value> a) {
-        live(c)->activeTexture(u32At(a, 0));
+        if (auto* gl = live(c)) gl->activeTexture(u32At(a, 0));
         return ev::undefined();
     });
     b.def("texParameteri", 3, [c](Value, std::span<const Value> a) {
-        live(c)->texParameteri(u32At(a, 0), u32At(a, 1), i32At(a, 2));
+        if (auto* gl = live(c)) gl->texParameteri(u32At(a, 0), u32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
     b.def("texParameterf", 3, [c](Value, std::span<const Value> a) {
-        live(c)->texParameterf(u32At(a, 0), u32At(a, 1), static_cast<float>(numAt(a, 2)));
+        if (auto* gl = live(c)) gl->texParameterf(u32At(a, 0), u32At(a, 1), static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
 
@@ -249,9 +240,10 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         // has `border` (a number, required to be 0).
         if (ev::isObject(argAt(a, 5))) {
             uploadSource(c, argAt(a, 5), "texImage2D", [&](const SourcePixels& src) {
-                live(c)->texImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), -1, -1, u32At(a, 3),
-                                          u32At(a, 4), src.data, static_cast<uint32_t>(src.width),
-                                          static_cast<uint32_t>(src.height));
+                if (auto* gl = live(c))
+                    gl->texImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), -1, -1, u32At(a, 3),
+                                         u32At(a, 4), src.data, static_cast<uint32_t>(src.width),
+                                         static_cast<uint32_t>(src.height));
             });
             return ev::undefined();
         }
@@ -260,17 +252,21 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         const GLsizei width = i32At(a, 3), height = i32At(a, 4);
         Value data = argAt(a, 8);
         if (ev::isUndefined(data) || ev::isNull(data)) {
-            live(c)->texImage2D(target, level, internalformat, width, height, border, format, type, nullptr, 0);
+            if (auto* gl = live(c))
+                gl->texImage2D(target, level, internalformat, width, height, border, format, type, nullptr, 0);
         } else if (ev::isNumber(data)) {
-            live(c)->texImage2DFromPBO(target, level, internalformat, width, height, border, format, type,
-                                       static_cast<GLintptr>(i64At(a, 8)));
+            if (auto* gl = live(c))
+                gl->texImage2DFromPBO(target, level, internalformat, width, height, border, format, type,
+                                      static_cast<GLintptr>(i64At(a, 8)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 9))) {
-            live(c)->texImage2D(target, level, internalformat, width, height, border, format, type, view.data,
-                                view.size);
+            if (auto* gl = live(c))
+                gl->texImage2D(target, level, internalformat, width, height, border, format, type, view.data,
+                               view.size);
         } else if (!view.rangeError) {
             uploadSource(c, data, "texImage2D", [&](const SourcePixels& src) {
-                live(c)->texImage2DSource(target, level, internalformat, width, height, format, type, src.data,
-                                          static_cast<uint32_t>(src.width), static_cast<uint32_t>(src.height));
+                if (auto* gl = live(c))
+                    gl->texImage2DSource(target, level, internalformat, width, height, format, type, src.data,
+                                         static_cast<uint32_t>(src.width), static_cast<uint32_t>(src.height));
             });
         }
         return ev::undefined();
@@ -281,9 +277,10 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("texSubImage2D", 9, [c](Value, std::span<const Value> a) {
         if (ev::isObject(argAt(a, 6))) {
             uploadSource(c, argAt(a, 6), "texSubImage2D", [&](const SourcePixels& src) {
-                live(c)->texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1,
-                                             u32At(a, 4), u32At(a, 5), src.data, static_cast<uint32_t>(src.width),
-                                             static_cast<uint32_t>(src.height));
+                if (auto* gl = live(c))
+                    gl->texSubImage2DSource(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), -1, -1,
+                                            u32At(a, 4), u32At(a, 5), src.data, static_cast<uint32_t>(src.width),
+                                            static_cast<uint32_t>(src.height));
             });
             return ev::undefined();
         }
@@ -292,26 +289,31 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         const GLsizei width = i32At(a, 4), height = i32At(a, 5);
         Value data = argAt(a, 8);
         if (ev::isNumber(data)) {
-            live(c)->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height, format, type,
-                                          static_cast<GLintptr>(i64At(a, 8)));
+            if (auto* gl = live(c))
+                gl->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height, format, type,
+                                         static_cast<GLintptr>(i64At(a, 8)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 9))) {
-            live(c)->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, view.data,
-                                   view.size);
+            if (auto* gl = live(c))
+                gl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, view.data,
+                                  view.size);
         } else if (ev::isObject(data) && !view.rangeError) {
             uploadSource(c, data, "texSubImage2D", [&](const SourcePixels& src) {
-                live(c)->texSubImage2DSource(target, level, xoffset, yoffset, width, height, format, type,
-                                             src.data, static_cast<uint32_t>(src.width),
-                                             static_cast<uint32_t>(src.height));
+                if (auto* gl = live(c))
+                    gl->texSubImage2DSource(target, level, xoffset, yoffset, width, height, format, type,
+                                            src.data, static_cast<uint32_t>(src.width),
+                                            static_cast<uint32_t>(src.height));
             });
         } else if (!view.rangeError) {
-            live(c)->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, nullptr, 0);
+            if (auto* gl = live(c))
+                gl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, nullptr, 0);
         }
         return ev::undefined();
     });
 
     b.def("texStorage2D", 5, [c](Value, std::span<const Value> a) {
-        live(c)->texStorage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
-                              i32At(a, 4));
+        if (auto* gl = live(c))
+            gl->texStorage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
+                             i32At(a, 4));
         return ev::undefined();
     });
 
@@ -324,14 +326,17 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         const GLsizei width = i32At(a, 3), height = i32At(a, 4), depth = i32At(a, 5);
         Value data = argAt(a, 9);
         if (ev::isUndefined(data) || ev::isNull(data)) {
-            live(c)->texImage3D(target, level, internalformat, width, height, depth, border, format, type, nullptr,
-                                0);
+            if (auto* gl = live(c))
+                gl->texImage3D(target, level, internalformat, width, height, depth, border, format, type, nullptr,
+                               0);
         } else if (ev::isNumber(data)) {
-            live(c)->texImage3DFromPBO(target, level, internalformat, width, height, depth, border, format, type,
-                                       static_cast<GLintptr>(i64At(a, 9)));
+            if (auto* gl = live(c))
+                gl->texImage3DFromPBO(target, level, internalformat, width, height, depth, border, format, type,
+                                      static_cast<GLintptr>(i64At(a, 9)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 10))) {
-            live(c)->texImage3D(target, level, internalformat, width, height, depth, border, format, type,
-                                view.data, view.size);
+            if (auto* gl = live(c))
+                gl->texImage3D(target, level, internalformat, width, height, depth, border, format, type,
+                               view.data, view.size);
         } else if (!view.rangeError) {
             refuseDomSource3D(c, "texImage3D");
         }
@@ -343,25 +348,29 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         const GLsizei width = i32At(a, 5), height = i32At(a, 6), depth = i32At(a, 7);
         Value data = argAt(a, 10);
         if (ev::isNumber(data)) {
-            live(c)->texSubImage3DFromPBO(target, level, x, y, z, width, height, depth, format, type,
-                                          static_cast<GLintptr>(i64At(a, 10)));
+            if (auto* gl = live(c))
+                gl->texSubImage3DFromPBO(target, level, x, y, z, width, height, depth, format, type,
+                                         static_cast<GLintptr>(i64At(a, 10)));
         } else if (ViewBytes view = viewBytes(c, data, argAt(a, 11))) {
-            live(c)->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, view.data,
-                                   view.size);
+            if (auto* gl = live(c))
+                gl->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, view.data,
+                                  view.size);
         } else if (ev::isObject(data) && !view.rangeError) {
             refuseDomSource3D(c, "texSubImage3D");
         } else if (!view.rangeError) {
-            live(c)->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, nullptr, 0);
+            if (auto* gl = live(c))
+                gl->texSubImage3D(target, level, x, y, z, width, height, depth, format, type, nullptr, 0);
         }
         return ev::undefined();
     });
     b.def("texStorage3D", 6, [c](Value, std::span<const Value> a) {
-        live(c)->texStorage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
-                              i32At(a, 4), i32At(a, 5));
+        if (auto* gl = live(c))
+            gl->texStorage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
+                             i32At(a, 4), i32At(a, 5));
         return ev::undefined();
     });
     b.def("generateMipmap", 1, [c](Value, std::span<const Value> a) {
-        live(c)->generateMipmap(u32At(a, 0));
+        if (auto* gl = live(c)) gl->generateMipmap(u32At(a, 0));
         return ev::undefined();
     });
 
@@ -370,100 +379,115 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     // into the bound PIXEL_UNPACK_BUFFER.
     b.def("compressedTexImage2D", 7, [c](Value, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 6))) {
-            live(c)->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), 1,
-                                               i32At(a, 5), i32At(a, 6), static_cast<GLintptr>(i64At(a, 7)),
-                                               false);
+            if (auto* gl = live(c))
+                gl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4), 1,
+                                              i32At(a, 5), i32At(a, 6), static_cast<GLintptr>(i64At(a, 7)),
+                                              false);
         } else if (ViewBytes view = compressedView(c, a, 6)) {
-            live(c)->compressedTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                          i32At(a, 5), view.data, view.size);
+            if (auto* gl = live(c))
+                gl->compressedTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                         i32At(a, 5), view.data, view.size);
         }
         return ev::undefined();
     });
     b.def("compressedTexSubImage2D", 8, [c](Value, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 7))) {
-            live(c)->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), 0,
-                                                  i32At(a, 4), i32At(a, 5), 1, u32At(a, 6), i32At(a, 7),
-                                                  static_cast<GLintptr>(i64At(a, 8)), false);
+            if (auto* gl = live(c))
+                gl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), 0,
+                                                 i32At(a, 4), i32At(a, 5), 1, u32At(a, 6), i32At(a, 7),
+                                                 static_cast<GLintptr>(i64At(a, 8)), false);
         } else if (ViewBytes view = compressedView(c, a, 7)) {
-            live(c)->compressedTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                             i32At(a, 5), u32At(a, 6), view.data, view.size);
+            if (auto* gl = live(c))
+                gl->compressedTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                            i32At(a, 5), u32At(a, 6), view.data, view.size);
         }
         return ev::undefined();
     });
     b.def("compressedTexImage3D", 8, [c](Value, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 7))) {
-            live(c)->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                               i32At(a, 5), i32At(a, 6), i32At(a, 7),
-                                               static_cast<GLintptr>(i64At(a, 8)), true);
+            if (auto* gl = live(c))
+                gl->compressedTexImageFromPBO(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                              i32At(a, 5), i32At(a, 6), i32At(a, 7),
+                                              static_cast<GLintptr>(i64At(a, 8)), true);
         } else if (ViewBytes view = compressedView(c, a, 7)) {
-            live(c)->compressedTexImage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                          i32At(a, 5), i32At(a, 6), view.data, view.size);
+            if (auto* gl = live(c))
+                gl->compressedTexImage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                         i32At(a, 5), i32At(a, 6), view.data, view.size);
         }
         return ev::undefined();
     });
     b.def("compressedTexSubImage3D", 10, [c](Value, std::span<const Value> a) {
         if (ev::isNumber(argAt(a, 9))) {
-            live(c)->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                                  i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), i32At(a, 9),
-                                                  static_cast<GLintptr>(i64At(a, 10)), true);
+            if (auto* gl = live(c))
+                gl->compressedTexSubImageFromPBO(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                                 i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), i32At(a, 9),
+                                                 static_cast<GLintptr>(i64At(a, 10)), true);
         } else if (ViewBytes view = compressedView(c, a, 9)) {
-            live(c)->compressedTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                             i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), view.data,
-                                             view.size);
+            if (auto* gl = live(c))
+                gl->compressedTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                            i32At(a, 5), i32At(a, 6), i32At(a, 7), u32At(a, 8), view.data,
+                                            view.size);
         }
         return ev::undefined();
     });
 
     b.def("copyTexImage2D", 8, [c](Value, std::span<const Value> a) {
-        live(c)->copyTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
-                                i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
+        if (auto* gl = live(c))
+            gl->copyTexImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
+                               i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
         return ev::undefined();
     });
     b.def("copyTexSubImage2D", 8, [c](Value, std::span<const Value> a) {
-        live(c)->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
-                                   i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
+        if (auto* gl = live(c))
+            gl->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
+                                  i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
         return ev::undefined();
     });
     b.def("copyTexSubImage3D", 9, [c](Value, std::span<const Value> a) {
-        live(c)->copyTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
-                                   i32At(a, 5), i32At(a, 6), i32At(a, 7), i32At(a, 8));
+        if (auto* gl = live(c))
+            gl->copyTexSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3), i32At(a, 4),
+                                  i32At(a, 5), i32At(a, 6), i32At(a, 7), i32At(a, 8));
         return ev::undefined();
     });
 
     // --- WebGLSampler ---
     b.def("createSampler", 0, [c](Value, std::span<const Value>) {
-        return glObject(c, GlCell::Sampler, live(c)->createSampler().id);
+        auto* gl = live(c);
+        return gl ? webglObject(c, WebGLCell::Sampler, gl->createSampler().id) : ev::null();
     });
     b.def("deleteSampler", 1, [c](Value, std::span<const Value> a) {
         const webgl::WebGLSampler s = samplerOf(argAt(a, 0));
-        live(c)->deleteSampler(s);
-        forgetGlObject(c, GlCell::Sampler, s.id);
+        if (auto* gl = live(c)) gl->deleteSampler(s);
+        forgetWebGLObject(c, WebGLCell::Sampler, s.id);
         return ev::undefined();
     });
     b.def("bindSampler", 2, [c](Value, std::span<const Value> a) {
-        live(c)->bindSampler(u32At(a, 0), samplerOf(argAt(a, 1)));
+        if (auto* gl = live(c)) gl->bindSampler(u32At(a, 0), samplerOf(argAt(a, 1)));
         return ev::undefined();
     });
     b.def("samplerParameteri", 3, [c](Value, std::span<const Value> a) {
-        live(c)->samplerParameteri(samplerOf(argAt(a, 0)), u32At(a, 1), i32At(a, 2));
+        if (auto* gl = live(c)) gl->samplerParameteri(samplerOf(argAt(a, 0)), u32At(a, 1), i32At(a, 2));
         return ev::undefined();
     });
     b.def("samplerParameterf", 3, [c](Value, std::span<const Value> a) {
-        live(c)->samplerParameterf(samplerOf(argAt(a, 0)), u32At(a, 1),
-                                   static_cast<float>(numAt(a, 2)));
+        if (auto* gl = live(c))
+            gl->samplerParameterf(samplerOf(argAt(a, 0)), u32At(a, 1),
+                                  static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
     b.def("getSamplerParameter", 2, [c](Value, std::span<const Value> a) {
+        auto* gl = live(c);
+        if (!gl) return ev::null();
         GLenum pname = u32At(a, 1);
-        if (pname == 0x813A /* TEXTURE_MIN_LOD */ ||
-            pname == 0x813B /* TEXTURE_MAX_LOD */ ||
+        if (pname == 0x813A /* TEXTURE_MIN_LOD */ || pname == 0x813B /* TEXTURE_MAX_LOD */ ||
             pname == 0x84FE /* TEXTURE_MAX_ANISOTROPY_EXT */) {
-            return ev::fromDouble(live(c)->getSamplerParameterf(samplerOf(argAt(a, 0)), pname));
+            return ev::fromDouble(gl->getSamplerParameterf(samplerOf(argAt(a, 0)), pname));
         }
-        return ev::fromDouble(live(c)->getSamplerParameteri(samplerOf(argAt(a, 0)), pname));
+        return ev::fromDouble(gl->getSamplerParameteri(samplerOf(argAt(a, 0)), pname));
     });
     b.def("isSampler", 1, [c](Value, std::span<const Value> a) {
-        return ev::fromBool(live(c)->isSampler(samplerOf(argAt(a, 0))) != GL_FALSE);
+        auto* gl = live(c);
+        return ev::fromBool(gl && gl->isSampler(samplerOf(argAt(a, 0))) != GL_FALSE);
     });
 }
 

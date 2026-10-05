@@ -21,25 +21,47 @@ struct PresentPixels {
     explicit operator bool() const { return pixels && width > 0 && height > 0; }
 };
 
-/// One frame for VulkanPresenter::present, bottom to top: CPU pixels below
-/// (the UI under a 3D scene, or the whole frame), an optional GPU image (a
-/// full-viewport scene or WebGL canvas), CPU pixels above (the UI over it).
-/// Every layer sits 1:1 at the target's top-left; the image and the layer
-/// above blend with premultiplied alpha. Whatever no layer covers is
-/// `clearColor`.
-struct PresentFrame {
-    PresentPixels below;
-
+/// A GPU image of a PresentFrame (a 3D scene's output, a WebGL canvas),
+/// drawn into `dst` in target pixels — scaled when the sizes differ — and
+/// cut to `clip`; then `above`, the CPU layer of everything composited after
+/// it, at the target's top-left.
+struct PresentImage {
     VkImage image = VK_NULL_HANDLE;
-    VkImageLayout imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // restored afterwards
-    uint32_t imageWidth = 0;
-    uint32_t imageHeight = 0;
+    VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;  // restored afterwards
+    uint32_t width = 0;
+    uint32_t height = 0;
+    float dstX = 0.0f, dstY = 0.0f, dstW = 0.0f, dstH = 0.0f;
+    bool clipped = false;
+    VkRect2D clip{};  // when clipped
 
     PresentPixels above;
 
+    /// `image` 1:1 at the target's top-left.
+    static PresentImage at1to1(VkImage image, VkImageLayout layout, uint32_t width, uint32_t height) {
+        PresentImage out;
+        out.image = image;
+        out.layout = layout;
+        out.width = width;
+        out.height = height;
+        out.dstW = static_cast<float>(width);
+        out.dstH = static_cast<float>(height);
+        return out;
+    }
+    explicit operator bool() const { return image != VK_NULL_HANDLE && width > 0 && height > 0; }
+};
+
+/// One frame for VulkanPresenter::present, bottom to top: CPU pixels below
+/// (the UI under the first GPU image, or the whole frame), then each GPU
+/// image with the CPU layer above it. CPU layers sit 1:1 at the target's
+/// top-left; everything over `below` blends with premultiplied alpha.
+/// Whatever no layer covers is `clearColor`.
+struct PresentFrame {
+    PresentPixels below;
+    std::vector<PresentImage> images;
+
     float clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
 
-    bool hasImage() const { return image != VK_NULL_HANDLE && imageWidth > 0 && imageHeight > 0; }
+    bool hasImages() const { return !images.empty(); }
 };
 
 /// Puts finished frames on screen (windowed: a VulkanSwapchain) or into an
@@ -118,11 +140,12 @@ private:
         uint32_t width;
         uint32_t height;
     };
-    // A texture blended onto the target, 1:1 at its top-left.
+    // A texture blended onto the target: drawn into `dst` (target pixels),
+    // cut to `scissor`.
     struct BlendDraw {
         VkDescriptorSet set = VK_NULL_HANDLE;
-        uint32_t width = 0;
-        uint32_t height = 0;
+        VkViewport dst{};
+        VkRect2D scissor{};
     };
 
     // vulkan_presenter.cpp
@@ -140,12 +163,14 @@ private:
     bool initBlendResources();
     void destroyBlendResources();
     VkPipeline blendPipeline(VkFormat targetFormat);
-    Image* slotTexture(Image (&ring)[VulkanFrames::kFramesInFlight], uint32_t width, uint32_t height,
-                       VkFormat format);
-    bool uploadLayerTexture(VkCommandBuffer cmd, const PresentPixels& layer, BlendDraw& out);
-    bool copyImageTexture(VkCommandBuffer cmd, const PresentFrame& frame, BlendDraw& out);
-    bool describeTexture(const Image& tex, BlendDraw& out);
-    void recordBlendDraws(VkCommandBuffer cmd, const Target& target, const BlendDraw* draws, size_t count);
+    using TextureRing = std::vector<Image>[VulkanFrames::kFramesInFlight];
+    Image* slotTexture(TextureRing& ring, size_t index, uint32_t width, uint32_t height, VkFormat format);
+    bool uploadLayerTexture(VkCommandBuffer cmd, const PresentPixels& layer, size_t index, const Target& target,
+                            BlendDraw& out);
+    bool copyImageTexture(VkCommandBuffer cmd, const PresentImage& image, size_t index, const Target& target,
+                          BlendDraw& out);
+    bool describeTexture(const Image& tex, VkSampler sampler, BlendDraw& out);
+    void recordBlendDraws(VkCommandBuffer cmd, const Target& target, const std::vector<BlendDraw>& draws);
 
     VulkanContext& context_;
     VulkanSwapchain* swapchain_ = nullptr;  // null offscreen
@@ -163,11 +188,12 @@ private:
     VkDeviceSize readbackSize_ = 0;
     uint64_t readbackTicket_ = 0;  // 0 = nothing presented to read back
 
-    // Blended layers: per frame slot, the layer above's texture and the
-    // GPU image's copy (when there is a layer below it to blend onto).
-    Image aboveTex_[VulkanFrames::kFramesInFlight];
-    Image imageTex_[VulkanFrames::kFramesInFlight];
-    VkSampler blendSampler_ = VK_NULL_HANDLE;
+    // Blended layers: per frame slot, the CPU layers' textures and the GPU
+    // images' copies, by their place in the frame.
+    TextureRing aboveTex_;
+    TextureRing imageTex_;
+    VkSampler blendSampler_ = VK_NULL_HANDLE;        // 1:1 draws
+    VkSampler blendSamplerLinear_ = VK_NULL_HANDLE;  // scaled images
     VkDescriptorSetLayout blendSetLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout blendPipelineLayout_ = VK_NULL_HANDLE;
     std::map<VkFormat, VkPipeline> blendPipelines_;

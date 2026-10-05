@@ -1,7 +1,7 @@
 #include "bronze_host/host_headless_internal.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_anchor_download.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_telemetry.h"
 #include "bronze_host/host_node_sweep.h"
 #include "engine/engine.h"

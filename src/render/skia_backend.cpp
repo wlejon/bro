@@ -33,29 +33,20 @@
 #include <include/ports/SkFontMgr_fontconfig.h>
 #include <include/ports/SkFontScanner_FreeType.h>
 #endif
-#include <include/gpu/ganesh/GrDirectContext.h>
 
 namespace bro::render {
 
 using bromath::Color;
 
 // ===========================================================================
-// SkiaRenderer — Skia raster rendering + OpenGL display
+// SkiaRenderer — Skia raster rendering
 // ===========================================================================
 //
-// Drawing primitives, text, clips and layers live here. The GrContext, frame
-// surfaces and pixel readback are in skia_backend_gpu.cpp; gradient fills and
+// Drawing primitives, text, clips and layers live here. The frame and layer
+// surfaces and pixel readback are in skia_backend_surfaces.cpp; gradient fills and
 // SVG paint servers are in skia_backend_gradient.cpp.
 
-SkiaRenderer::SkiaRenderer() {
-    grContext_ = createGrContext();
-    if (grContext_) {
-        gpuMode_ = true;
-        LOG_INFO("SkiaRenderer created (GPU-accelerated Ganesh backend)");
-    } else {
-        LOG_INFO("SkiaRenderer created (CPU raster fallback)");
-    }
-}
+SkiaRenderer::SkiaRenderer() = default;
 
 SkiaRenderer::~SkiaRenderer() {
     // Shaped runs hold SkFonts derived from fonts_ — drop them first.
@@ -646,8 +637,7 @@ void SkiaRenderer::concat(float a, float b, float c, float d, float e, float f) 
 void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h,
                              uint64_t imageId) {
     if (!canvas_) return;
-    // Decoding happens once per image id; subsequent frames reuse the SkImage
-    // (and, under Ganesh, the GPU texture Skia caches against it).
+    // Decoding happens once per image id; subsequent frames reuse the SkImage.
     sk_sp<SkImage> image = imageCache_.resolve(imageId, data, len);
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());

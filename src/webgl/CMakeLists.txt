@@ -2,9 +2,6 @@ find_package(Vulkan REQUIRED)
 
 add_library(bro_webgl STATIC
     webgl2_context.cpp
-    webgl2_context_shaders.cpp
-    webgl2_context_textures.cpp
-    webgl2_context_render.cpp
     vulkan/webgl_vk_canvas.cpp
     vulkan/webgl_vk_glsl.cpp
     vulkan/webgl_vk_spirv.cpp
@@ -25,6 +22,7 @@ add_library(bro_webgl STATIC
     vulkan/webgl_vk_context_vertices.cpp
     vulkan/webgl_vk_context_maskedclear.cpp
     vulkan/webgl_vk_context_queries.cpp
+    vulkan/webgl_vk_context_sync.cpp
     vulkan/webgl_vk_context_feedback.cpp
     vulkan/webgl_vk_context_getters.cpp
     vulkan/webgl_vk_context_blit.cpp

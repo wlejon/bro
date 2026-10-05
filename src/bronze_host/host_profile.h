@@ -1,11 +1,11 @@
 #pragma once
 
-// Env-gated wall-clock profiler for the host native call surface — the GL
-// entry points first (that is what BRO_GL_PROFILE names), but by construction
-// every function a bronze-compiled program reaches through ObjectBuilder::def
-// or ::accessor, DOM included, because they all funnel through one place.
+// Env-gated wall-clock profiler for the host native call surface: every
+// function a bronze-compiled program reaches through ObjectBuilder::def or
+// ::accessor — WebGL, DOM and the rest — because they all funnel through one
+// place.
 //
-// MEASUREMENT, NOT POLICY. When BRO_GL_PROFILE is unset, hostProfileWrap()
+// MEASUREMENT, NOT POLICY. When BRO_HOST_PROFILE is unset, hostProfileWrap()
 // hands the callable straight back and the installed function is bit-for-bit
 // the one the binding wrote: no branch, no counter, no indirection in the hot
 // path. The cost of the seam existing is one bool test per *installed*
@@ -19,14 +19,14 @@
 // Self vs inclusive: a host call can re-enter JS (event dispatch, a callback),
 // which would double-count the callee's time into the caller. A thread-local
 // child accumulator subtracts it, so `self` is the time actually spent inside
-// the binding and the GL driver, and `incl` is the wall time the program saw.
-// For GL, which never re-enters, the two are equal.
+// the binding and what it calls, and `incl` is the wall time the program saw.
+// For WebGL, which never re-enters, the two are equal.
 
 #include "embed/embed.h"
 
 namespace bro::bronze_host {
 
-// True when BRO_GL_PROFILE=1 was in the environment at first use. Read it
+// True when BRO_HOST_PROFILE=1 was in the environment at first use. Read it
 // through hostProfileEnabled(); the flag is initialised lazily on first wrap.
 bool hostProfileEnabled();
 

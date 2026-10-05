@@ -22,7 +22,6 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
-#include <include/gpu/ganesh/GrDirectContext.h>
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "dom/document.h"
@@ -554,11 +553,8 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
     if (!renderer || !doc.document) return;
 
     auto* recorder = dynamic_cast<render::RecordingRenderer*>(renderer);
-    auto* skiaRenderer = dynamic_cast<render::SkiaRenderer*>(renderer);
-    GrDirectContext* panelGr = skiaRenderer ? skiaRenderer->grContext() : nullptr;
-
     traversal.setLayerBreakCallback(
-        [renderer, recorder, panelGr](int /*kind*/,
+        [renderer, recorder](int /*kind*/,
                                        canvas::CanvasScene* scene,
                                        unsigned int /*tex*/,
                                        float x, float y, float w, float h,
@@ -570,7 +566,6 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
                 recorder->recordBlitCanvasInline(scene, x, y, w, h);
                 return;
             }
-            if (panelGr) scene->setGrContext(panelGr);
             scene->flushStaged();
             auto* src = scene->surface();
             if (!src) return;

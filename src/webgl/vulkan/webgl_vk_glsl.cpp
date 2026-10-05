@@ -435,7 +435,8 @@ void reflectUniforms(glslang::TProgram& program, ProgramInterface& iface) {
 }
 
 // The GL type enum of a varying's type (its element type, for an array);
-// 0 for what transform feedback cannot capture (structs, bools).
+// 0 for what transform feedback cannot capture (bools; a whole struct is
+// captured member by member, by name).
 GLenum glTypeOf(const glslang::TType& type) {
     const glslang::TBasicType basic = type.getBasicType();
     if (type.isMatrix()) {
@@ -457,6 +458,47 @@ GLenum glTypeOf(const glslang::TType& type) {
         case glslang::EbtUint: return kUint[n];
         default: return 0;
     }
+}
+
+// What a transform feedback name designates: a vertex output, a member of
+// one (`s.member`, nested), or one element of an array (`a[2]`,
+// `s.list[1].x`). `elementOf` says `type` is an array the name took one
+// element of, so it captures as that element. False if it names nothing.
+struct FeedbackTarget {
+    const glslang::TType* type = nullptr;
+    bool elementOf = false;
+};
+bool resolveFeedbackName(const std::string& name,
+                         const std::unordered_map<std::string, const glslang::TType*>& outputs,
+                         FeedbackTarget& out) {
+    size_t i = name.find_first_of(".[");
+    auto it = outputs.find(name.substr(0, i));
+    if (it == outputs.end()) return false;
+    out = {it->second, false};
+    while (i < name.size()) {
+        if (name[i] == '[') {
+            const size_t close = name.find(']', i);
+            if (close == std::string::npos || close == i + 1 || !out.type->isArray() || out.elementOf) return false;
+            const std::string digits = name.substr(i + 1, close - i - 1);
+            if (digits.find_first_not_of("0123456789") != std::string::npos) return false;
+            if (std::stoul(digits) >= static_cast<unsigned long>(std::max(0, out.type->getOuterArraySize())))
+                return false;
+            out.elementOf = true;
+            i = close + 1;
+        } else {
+            // A member of a struct (or of the element of an array of them).
+            if (!out.type->isStruct() || (out.type->isArray() && !out.elementOf)) return false;
+            const size_t end = name.find_first_of(".[", i + 1);
+            const std::string field = name.substr(i + 1, end == std::string::npos ? std::string::npos : end - i - 1);
+            const glslang::TType* member = nullptr;
+            for (const glslang::TTypeLoc& loc : *out.type->getStruct())
+                if (loc.type->getFieldName().c_str() == field) member = loc.type;
+            if (!member) return false;
+            out = {member, false};
+            i = end == std::string::npos ? name.size() : end;
+        }
+    }
+    return true;
 }
 
 // Lay out the transform feedback varyings over the vertex stage's outputs
@@ -498,18 +540,18 @@ bool feedbackInterface(glslang::TShader& vs, const FeedbackRequest& request, Pro
         } else if (name == "gl_PointSize") {
             v.type = GL_FLOAT;
         } else {
-            auto it = outputs.find(name);
-            if (it == outputs.end()) {
+            FeedbackTarget target;
+            if (!resolveFeedbackName(name, outputs, target)) {
                 log += "ERROR: transform feedback varying '" + name + "' is not an output of the vertex shader\n";
                 return false;
             }
-            v.type = glTypeOf(*it->second);
-            if (v.type == 0 || it->second->isStruct()) {
+            v.type = target.type->isStruct() ? 0 : glTypeOf(*target.type);
+            if (v.type == 0) {
                 log += "ERROR: transform feedback varying '" + name + "' has a type that cannot be captured\n";
                 return false;
             }
-            v.array = it->second->isArray();
-            v.size = v.array ? std::max(1, it->second->getOuterArraySize()) : 1;
+            v.array = target.type->isArray() && !target.elementOf;
+            v.size = v.array ? std::max(1, target.type->getOuterArraySize()) : 1;
         }
         v.components = typeInfo(v.type).components() * static_cast<uint32_t>(v.size);
         if (separate) {

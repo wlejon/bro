@@ -3,7 +3,7 @@
 //
 // Registered in deterministic array order.
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_internal.h"
 
 namespace bro::bronze_host {
@@ -646,13 +646,13 @@ const ConstantEntry kConstants[] = {
 
 }  // namespace
 
-void installGlConstants(ObjectBuilder& b) {
+void installWebGLConstants(ObjectBuilder& b) {
     for (const ConstantEntry& e : kConstants) {
         b.set(e.name, ev::fromDouble(e.value));
     }
 }
 
-void installGlConstants(const HostClass& cls) {
+void installWebGLConstants(const HostClass& cls) {
     for (const ConstantEntry& e : kConstants) {
         cls.setStatic(e.name, ev::fromDouble(e.value));
     }

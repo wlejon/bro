@@ -6,7 +6,7 @@
 // web property, and deliberately kept: a drop or a pick is the one moment a
 // page is handed a real filesystem path (docs/paths-api.js, docs/file-api.js).
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 
 #include <chrono>

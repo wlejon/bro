@@ -24,7 +24,7 @@
 
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"  // ObjectBuilder
+#include "bronze_host/host_builder.h"  // ObjectBuilder
 #include "engine/engine.h"
 
 #include <algorithm>

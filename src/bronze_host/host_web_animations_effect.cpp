@@ -7,7 +7,7 @@
 #include "bronze_host/host_web_animations_internal.h"
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
 #include "dom/element.h"
 #include "engine/css_easing.h"

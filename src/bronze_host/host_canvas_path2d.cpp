@@ -6,7 +6,7 @@
 
 #include "bronze_host/host_canvas_path2d.h"
 #include "bronze_host/host_canvas2d_paths.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include <include/core/SkMatrix.h>
 #include <include/core/SkRect.h>
 #include <include/utils/SkParsePath.h>

@@ -1,6 +1,6 @@
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_internal.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/shadow_root.h"

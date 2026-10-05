@@ -14,7 +14,7 @@
 #if BRO_WITH_VISION
 
 #include "bronze_host/host_vision.h"
-#include "bronze_host/gl_internal.h"  // ObjectBuilder
+#include "bronze_host/host_builder.h"  // ObjectBuilder
 
 // brovisionml/src/api/host_vision_internal.h — the wrapper structs, the tags,
 // the HostClass handles, readImageInput and the make*Array helpers.

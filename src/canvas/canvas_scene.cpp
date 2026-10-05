@@ -1,7 +1,7 @@
 // CanvasScene: construction, the backing surface, and the recording half of
 // the Canvas 2D API (rects, paths, transforms, images, pixel access, reset).
-// Drawing state, paints and text are in canvas_scene_state.cpp; the worker
-// thread, replay and compositing upload are in canvas_scene_raster.cpp.
+// Drawing state, paints and text are in canvas_scene_state.cpp; replay
+// onto the surface is in canvas_scene_raster.cpp.
 
 #include "canvas/canvas_scene.h"
 
@@ -12,9 +12,6 @@
 #include <include/core/SkBlendMode.h>
 #include <include/core/SkPathBuilder.h>
 #include <include/core/SkRRect.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
-#include <include/gpu/ganesh/GrBackendSurface.h>
-#include <include/gpu/ganesh/SkSurfaceGanesh.h>
 
 #include <cmath>
 #include <cstring>
@@ -52,19 +49,12 @@ CanvasScene::CanvasScene(render::Renderer* renderer)
 }
 
 CanvasScene::~CanvasScene() {
-    // Threaded scenes have their GPU resources freed on the shared worker
-    // (CanvasRasterThread::releaseScene) before the engine destroys them — we
-    // must not touch GL from here (wrong thread/context). Non-threaded scenes
-    // own their surface on this thread, so clean up directly.
-    if (!threaded_) cleanup();
+    cleanup();
 }
 
 void CanvasScene::cleanup() {
     surface_.reset();
     surfWidth_ = surfHeight_ = 0;
-    gpuFBO_ = 0;
-    glTexture_ = 0;
-    texWidth_ = texHeight_ = 0;
     fontCache_.clear();
     shaper_.clear();
 }
@@ -459,42 +449,8 @@ std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
     if (w <= 0 || h <= 0) return {};
     std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4, 0);
 
-    if (threaded_) {
-        // Defer the readback to the canvas worker so it runs on the same
-        // GL/GrContext that owns surface_. Re-uses the cached snapshot when
-        // valid, otherwise round-trips through the worker via flushSync.
-        int sw = queryLayoutWidth();
-        int sh = queryLayoutHeight();
-        if (sw <= 0 || sh <= 0) return pixels;
-        if (!snapshotValid_ || snapshotW_ != sw || snapshotH_ != sh) {
-            snapshotRequested_.store(true, std::memory_order_release);
-            flushSync();
-        }
-        if (!snapshotValid_ || snapshot_.empty()) return pixels;
-
-        // 64-bit edges: x + w must not overflow for a rectangle a script
-        // placed near INT_MAX.
-        const int x0 = static_cast<int>(std::clamp<int64_t>(x, 0, sw));
-        const int x1 = static_cast<int>(std::clamp<int64_t>(int64_t{x} + w, 0, sw));
-        const int y0 = static_cast<int>(std::clamp<int64_t>(y, 0, sh));
-        const int y1 = static_cast<int>(std::clamp<int64_t>(int64_t{y} + h, 0, sh));
-        if (x1 <= x0 || y1 <= y0) return pixels;
-        const int copyW = x1 - x0;
-        for (int row = y0; row < y1; ++row) {
-            int dstRow = row - y;
-            int dstCol = x0 - x;
-            std::memcpy(&pixels[(static_cast<size_t>(dstRow) * w + dstCol) * 4],
-                        &snapshot_[(static_cast<size_t>(row) * sw + x0) * 4],
-                        static_cast<size_t>(copyW) * 4);
-        }
-        return pixels;
-    }
-
-    // Non-threaded path: surface lives on the calling thread, safe to read
-    // here directly.
     flushCommands();
     if (!surface_) return pixels;
-    if (grContext_) grContext_->resetContext();
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     surface_->readPixels(info, pixels.data(), w * 4, x, y);
     return pixels;
@@ -521,21 +477,12 @@ sk_sp<SkImage> CanvasScene::snapshotImage() {
     int h = queryLayoutHeight();
     if (w <= 0 || h <= 0) return nullptr;
 
-    if (threaded_) {
-        // Worker reads pixels on its own GL/GrContext and builds a portable
-        // raster SkImage in snapshotImage_. Round-trip via flushSync.
-        snapshotRequested_.store(true, std::memory_order_release);
-        flushSync();
-        return snapshotImageValid_ ? snapshotImage_ : nullptr;
-    }
-
-    // Non-threaded: read directly. A raster-backed SkImage is portable —
-    // makeImageSnapshot would tie the result to this scene's grContext.
-    // An undrawn canvas gets its (transparent) surface made to read from.
+    // A copy of the pixels, so the image stays what the canvas showed when it
+    // was taken. An undrawn canvas gets its (transparent) surface made to
+    // read from.
     flushCommands();
     if (!surface_) skCanvas();
     if (!surface_) return nullptr;
-    if (grContext_) grContext_->resetContext();
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     snapshot_.assign(static_cast<size_t>(w) * h * 4, 0);
     if (!surface_->readPixels(info, snapshot_.data(), w * 4, 0, 0)) {
@@ -558,16 +505,7 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
         return snapshot_.data();
     }
 
-    if (threaded_) {
-        snapshotRequested_.store(true, std::memory_order_release);
-        flushSync();
-        if (!snapshotValid_ || snapshotW_ != w || snapshotH_ != h || snapshot_.empty()) {
-            return nullptr;
-        }
-        return snapshot_.data();
-    }
-
-    // Non-threaded path. A canvas nothing has drawn to yet has no surface
+    // A canvas nothing has drawn to yet has no surface
     // (flushCommands creates it only for a command); its bitmap is still
     // transparent black of its size, so make the surface to read that from.
     flushCommands();
@@ -576,7 +514,6 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
         snapshotValid_ = false;
         return nullptr;
     }
-    if (grContext_) grContext_->resetContext();
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     snapshot_.assign(static_cast<size_t>(w) * h * 4, 0);
     if (!surface_->readPixels(info, snapshot_.data(), w * 4, 0, 0)) {

@@ -1,5 +1,5 @@
 #include "bronze_host/host_canvas_pattern.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_globals_internal.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"

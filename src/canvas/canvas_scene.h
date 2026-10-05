@@ -6,12 +6,9 @@
 #include "render/shaped_run.h"
 
 #include <atomic>
-#include <condition_variable>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 #include <unordered_map>
 
@@ -28,17 +25,9 @@
 #include <include/core/SkSurface.h>
 #include <include/core/SkTileMode.h>
 #include <include/core/SkTypeface.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
-
-using GLuint = uint32_t;
-using GLsync = void*;
-
-class GrDirectContext;
-struct SDL_Window;
 
 namespace bro::canvas {
 
-class CanvasRasterThread;
 
 /// Deferred canvas command — recorded during JS, replayed during rasterize().
 struct CanvasCmd {
@@ -90,7 +79,7 @@ struct CanvasCmd {
 /// the pattern transform. Shared between the JS CanvasPattern object and every
 /// canvas state whose fill/stroke style names it, because setTransform() after
 /// assignment must reach the next draw. Only ever read and written on the JS
-/// thread: the shader is built when a draw is recorded, and the worker sees
+/// thread: the shader is built when a draw is recorded, and replay sees
 /// only that shader.
 struct CanvasPatternData {
     sk_sp<SkImage> image;
@@ -129,8 +118,7 @@ struct CanvasTextMetrics {
 /// Per-canvas Skia-backed renderer.  Each CanvasScene owns an SkSurface.
 /// Draw operations are recorded into a command buffer during JS execution and
 /// replayed onto the SkCanvas during rasterize(), keeping Skia rendering cost
-/// out of the JS phase.  The raster pixels are then uploaded to a GL texture
-/// for compositing by the engine.
+/// out of the JS phase.  The engine composites the surface's pixels.
 class CanvasScene {
 public:
     explicit CanvasScene(render::Renderer* renderer);
@@ -166,59 +154,7 @@ public:
 
     void init() {}
 
-    /// Set Ganesh GPU context for GPU-accelerated canvas rendering.
-    /// If set, Skia draws directly to GPU (no CPU raster + upload).
-    /// Invalidates existing surface so it's recreated with the new context.
-    void setGrContext(GrDirectContext* ctx) {
-        if (grContext_ != ctx) {
-            surface_.reset();
-            grContext_ = ctx;
-        }
-    }
-
     void cleanup();
-
-    // --- Threading (windowed GPU mode) ---
-
-    /// Bind this scene to the engine's shared canvas-raster worker (one
-    /// persistent GL context + thread, created once). All GPU work for this
-    /// scene then runs on that worker. Passing nullptr leaves the scene in the
-    /// non-threaded (inline) path. This replaced the old one-thread-and-context-
-    /// per-canvas model, whose context create/destroy on the hot path raced the
-    /// raster thread's GL on shared contexts (a Windows/NVIDIA crash under
-    /// canvas churn).
-    void bindRasterThread(CanvasRasterThread* rt) {
-        rasterThread_ = rt;
-        threaded_ = (rt != nullptr);
-    }
-
-    /// Main thread: query layout, swap commands, and rasterize this scene on
-    /// the shared worker (synchronous: returns once the GPU fence is consumed).
-    /// No-op if not threaded or there is no work to do.
-    void prepareAndSignal();
-
-    /// Main thread: kept for API symmetry. prepareAndSignal already waits on the
-    /// worker, so there is nothing left to consume here.
-    void consumeFence() {}
-
-    /// Synchronously flush all pending commands. Routes through the shared
-    /// worker when threaded; otherwise replays inline. Used by getImageData().
-    void flushSync();
-
-    bool isThreaded() const { return threaded_; }
-
-    // --- Shared-worker entry points (called ON the canvas-raster worker thread
-    //     by CanvasRasterThread; never call these from the main thread for a
-    //     threaded scene). ---
-
-    /// Worker thread: ensure the surface, replay staged commands, and (when a
-    /// snapshot was requested) refresh the host-side pixel snapshot. `grctx` is
-    /// the worker's GrContext; the scene pins its surface to it.
-    void renderOnWorker(GrDirectContext* grctx, int w, int h);
-
-    /// Worker thread: free this scene's GPU resources (SkSurface / FBO /
-    /// texture) on the context that created them, before the scene is destroyed.
-    void releaseGpuResources();
 
     render::Renderer* renderer() const { return renderer_; }
     int width() const { return queryLayoutWidth(); }
@@ -229,7 +165,7 @@ public:
     /// When non-zero, takes precedence over layout-derived size — the surface
     /// resizes the moment the JS attribute is set, without waiting for the
     /// layout thread to publish a new content rect. Pass 0 to clear back to
-    /// layout-driven sizing. Atomic so the canvas thread reads consistently.
+    /// layout-driven sizing. Atomic so the raster thread reads consistently.
     void setIntrinsicSize(int w, int h) {
         intrinsicW_.store(w, std::memory_order_relaxed);
         intrinsicH_.store(h, std::memory_order_relaxed);
@@ -430,11 +366,9 @@ public:
 
     // --- Compositing support ---
 
-    /// Ensure the backing surface matches the layout size and upload to GL.
-    /// Call once per frame before compositing.
+    /// Bring the backing surface to the layout size and replay the frame's
+    /// commands onto it. Call once per frame before compositing.
     void rasterize();
-
-    GLuint texture() const { return glTexture_; }
 
     void getScreenRect(float& x, float& y, float& w, float& h) const {
         x = screenX_; y = screenY_;
@@ -448,10 +382,10 @@ public:
     /// panel's target Skia canvas. Safe no-op if there are no pending commands.
     void flush() { flushCommands(); }
 
-    /// Main thread: move recorded commands into the staged buffer so the raster
-    /// thread can replay them via flushStaged(). Used by non-threaded scenes
-    /// (system panels) to avoid racing on commands_ while JS is still running.
-    /// Must only be called when the raster thread is idle.
+    /// Main thread: move recorded commands into the staged buffer so the
+    /// engine's raster thread can replay them via flushStaged() (system panels,
+    /// iframes) without racing on commands_ while JS is still running. Must
+    /// only be called when the raster thread is idle.
     void stageCommandsForRaster();
 
     /// Raster thread: replay staged commands onto the backing SkSurface.
@@ -517,7 +451,7 @@ public:
 private:
     /// Replay all deferred commands onto the Skia canvas.
     void flushCommands();
-    /// Replay staged commands (canvas thread path).
+    /// Replay staged commands (raster thread path).
     void flushStagedCommands();
 
     int queryLayoutWidth() const;
@@ -562,8 +496,6 @@ private:
     uint64_t sceneId_ = nextSceneId();
 
     render::Renderer* renderer_;
-    GrDirectContext* grContext_ = nullptr;  // GPU Skia context (null = CPU fallback)
-    GLuint gpuFBO_ = 0;                    // FBO for GPU-backed canvas surface
     LayoutCallback layoutCb_ = nullptr;
     void* layoutUd_ = nullptr;
     DetachedCallback detachedCb_ = nullptr;
@@ -589,15 +521,12 @@ private:
 
     // Intrinsic bitmap size set via canvas.width / canvas.height attribute.
     // When non-zero, overrides layout-derived sizing. Atomic because the
-    // canvas thread reads these from queryLayoutWidth/Height while the
+    // raster thread reads these from queryLayoutWidth/Height while the
     // main thread writes them from JS attribute setters.
     std::atomic<int> intrinsicW_{0};
     std::atomic<int> intrinsicH_{0};
 
-    // GL texture for compositing
-    GLuint glTexture_ = 0;
-    int texWidth_ = 0, texHeight_ = 0;  // current GL texture dimensions
-    bool dirty_ = false;  // surface pixels changed, need GL re-upload
+    bool dirty_ = false;  // surface pixels changed since the compositor last took them
 
     // Screen-space position for compositing
     float screenX_ = 0, screenY_ = 0;
@@ -681,76 +610,8 @@ private:
     bool typoMetrics(float& ascent, float& descent) const;
     void recordText(bool stroke, const std::string& text, float x, float y, float maxWidth = -1.0f);
 
-    // --- Canvas thread state ---
-    bool threaded_ = false;
-    // The engine's shared canvas-raster worker, or null when non-threaded
-    // (headless / CPU). Owned by the engine, outlives the scene.
-    CanvasRasterThread* rasterThread_ = nullptr;
-    // Main thread sets before a flushSync; the worker reads it and refreshes
-    // snapshot_/snapshotImage_ on the worker thread (where the surface's
-    // GrContext lives). Cleared by the worker once the snapshot is written.
-    std::atomic<bool> snapshotRequested_{false};
+    // Commands handed to the engine's raster thread (stageCommandsForRaster).
     std::vector<CanvasCmd> stagedCommands_;
-};
-
-/// One persistent canvas-raster worker: its own GL context + GrDirectContext +
-/// OS thread, created once and reused for the engine's lifetime. CanvasScenes
-/// bind to it and are rasterized one at a time on its thread. This replaces the
-/// old one-GL-context-and-thread-per-canvas model, whose create/destroy on the
-/// hot path raced the raster thread's GL on shared contexts (a Windows/NVIDIA
-/// crash under canvas churn). One worker means canvas rasterization is
-/// serialized; a pool of these can be slotted in behind the same interface if
-/// cross-canvas parallelism is needed.
-class CanvasRasterThread {
-public:
-    /// Main thread: take ownership of an already-created shared GL context and
-    /// spin the worker. Blocks until the worker has SDL_GL_MakeCurrent'd it and
-    /// built its GrContext (the Windows/NVIDIA "no concurrent wgl*Context"
-    /// guarantee — the context is created once here, while quiescent).
-    void start(SDL_Window* win);
-
-    /// Main thread: stop + join the worker. Every
-    /// scene bound to this worker must have been released (releaseScene) first.
-    void stop();
-
-    bool started() const { return started_; }
-
-    /// Main thread: rasterize `scene` (size w×h) on this worker, blocking until
-    /// the GPU fence is consumed.
-    void render(CanvasScene* scene, int w, int h);
-
-    /// Main thread: free a scene's GPU resources on this worker's context, where
-    /// they were created. Call before destroying the scene.
-    void releaseScene(CanvasScene* scene);
-
-private:
-    enum class JobKind { Render, Release };
-
-    void threadFunc(SDL_Window* win);
-    // Main thread: publish one job, wake the worker, block until it completes
-    // (including the worker's GPU-fence wait). No-op after shutdown.
-    void submitJob(CanvasScene* scene, int w, int h, JobKind kind);
-
-    std::thread thread_;
-    sk_sp<GrDirectContext> grContext_;
-    bool started_ = false;
-
-    // Synchronous cross-thread call: render()/releaseScene() are RPCs onto the
-    // GL-owning worker — the caller always blocks start-to-finish, so a plain
-    // mutex+condvar job slot is the whole protocol. The worker never touches a
-    // scene outside a submitJob window, which is what makes raw CanvasScene*
-    // safe here.
-    std::mutex m_;
-    std::condition_variable cv_;
-    bool ready_ = false;       // worker has MakeCurrent'd its context
-    bool hasJob_ = false;
-    bool shutdown_ = false;    // set by stop(), or by the worker on init failure
-    CanvasScene* job_ = nullptr;
-    int jobW_ = 0, jobH_ = 0;
-    JobKind jobKind_ = JobKind::Render;
-    // Fence from the completed job; the submitting caller glWaitSyncs it on
-    // the main context (GPU-side ordering, no CPU stall) and deletes it.
-    GLsync doneFence_ = nullptr;
 };
 
 } // namespace bro::canvas

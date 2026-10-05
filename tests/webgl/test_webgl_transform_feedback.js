@@ -3,8 +3,8 @@
 // object, bindBufferBase, begin/draw/end, getBufferSubData) and assert the
 // computed values numerically. Also: TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
 // query, pause/resume, RASTERIZER_DISCARD, getTransformFeedbackVarying,
-// getIndexedParameter rows, isTransformFeedback lifecycle.
-// Exercises WebGL2 object API + src/webgl/webgl2_context.cpp.
+// getIndexedParameter rows, isTransformFeedback lifecycle, struct members
+// captured by name.
 
 const canvas = document.createElement('canvas');
 canvas.setAttribute('width', '64');
@@ -231,6 +231,56 @@ if (!gl) {
     gl.vertexAttribPointer(0, 1, gl.FLOAT, false, 0, 0);
     gl.deleteTransformFeedback(tf2);
     assert(gl.getError() === gl.NO_ERROR, 'no error after the interleaved capture');
+
+    // =====================================================================
+    // Struct members, and an element of an array member, captured by name;
+    // a whole struct, or a member it does not have, fails the link.
+    // =====================================================================
+    function structProgram(varyings) {
+        const svs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(svs,
+            '#version 300 es\nin float aIn;\n' +
+            'struct S { float a; vec2 b; float list[3]; };\nout S s;\n' +
+            'void main(){ s.a = aIn; s.b = vec2(aIn * 10.0, -aIn);\n' +
+            '  s.list[0] = 0.0; s.list[1] = aIn + 100.0; s.list[2] = 0.0;\n' +
+            '  gl_Position = vec4(0.0, 0.0, 0.0, 1.0); gl_PointSize = 1.0; }');
+        gl.compileShader(svs);
+        if (!gl.getShaderParameter(svs, gl.COMPILE_STATUS))
+            throw new Error('struct vs: ' + gl.getShaderInfoLog(svs));
+        const p = gl.createProgram();
+        gl.attachShader(p, svs); gl.attachShader(p, fs);
+        gl.bindAttribLocation(p, 0, 'aIn');
+        gl.transformFeedbackVaryings(p, varyings, gl.INTERLEAVED_ATTRIBS);
+        gl.linkProgram(p);
+        return p;
+    }
+    assert(!gl.getProgramParameter(structProgram(['s']), gl.LINK_STATUS), 'a whole struct fails the link');
+    assert(!gl.getProgramParameter(structProgram(['s.nope']), gl.LINK_STATUS), 'a missing member fails the link');
+    const sprog = structProgram(['s.b', 's.list[1]', 's.a']);
+    assert(gl.getProgramParameter(sprog, gl.LINK_STATUS), 'struct members link: ' + gl.getProgramInfoLog(sprog));
+    const sv = gl.getTransformFeedbackVarying(sprog, 0);
+    assert(sv && sv.name === 's.b' && sv.type === gl.FLOAT_VEC2 && sv.size === 1, 'the member\'s metadata');
+    const sl = gl.getTransformFeedbackVarying(sprog, 1);
+    assert(sl && sl.name === 's.list[1]' && sl.type === gl.FLOAT && sl.size === 1, 'the element\'s metadata');
+    gl.useProgram(sprog);
+    const tf3 = gl.createTransformFeedback();
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tf3);
+    const structBuf = gl.createBuffer();
+    gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, structBuf);
+    gl.bufferData(gl.TRANSFORM_FEEDBACK_BUFFER, 32, gl.DYNAMIC_READ);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, structBuf);
+    gl.enable(gl.RASTERIZER_DISCARD);
+    gl.beginTransformFeedback(gl.POINTS);
+    gl.drawArrays(gl.POINTS, 0, 2);
+    gl.endTransformFeedback();
+    gl.disable(gl.RASTERIZER_DISCARD);
+    const members = new Float32Array(8);
+    gl.getBufferSubData(gl.TRANSFORM_FEEDBACK_BUFFER, 0, members);
+    assert(Array.from(members).join() === '10,-1,101,1,20,-2,102,2',
+           'struct members captured interleaved: ' + Array.from(members));
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+    gl.deleteTransformFeedback(tf3);
+    assert(gl.getError() === gl.NO_ERROR, 'no error after the struct capture');
 
     // =====================================================================
     // Deletion semantics

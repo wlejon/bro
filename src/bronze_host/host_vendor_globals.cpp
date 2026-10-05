@@ -2,7 +2,7 @@
 // jsonlint, draco_encoder — as values a compiled app can read. Unset globals resolve to undefined.
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 
 #include "util/log.h"

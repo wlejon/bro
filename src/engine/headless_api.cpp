@@ -197,9 +197,6 @@ void Engine::flush() {
 }
 
 void Engine::advanceTime(double ms) {
-    webgl::WebGL2RenderingContext* activeWebGL = nullptr;
-    if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
-
     double remaining = ms;
     while (remaining > 0) {
         double step = std::min(remaining, 16.0);
@@ -237,7 +234,6 @@ void Engine::advanceTime(double ms) {
         pumpWebGLContextEvents();
 
         syncWebGLCanvasSizes();
-        webgl::WebGL2RenderingContext::invalidateCurrent();
 
         if (!timePaused_) fireFrameCallbacks(scaledStep);
 
@@ -249,8 +245,6 @@ void Engine::advanceTime(double ms) {
 
         if (!timePaused_) tickIframes(engineNowMs_);
         if (!timePaused_) tickWindowHosts(engineNowMs_);
-
-        webgl::WebGL2RenderingContext::endAppGL();
 
 #if BRO_WITH_PHYSICS
         if (physicsWorld_) {
@@ -324,12 +318,7 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     int w = viewportWidth_, h = viewportHeight_;
     const int fw = deviceScale_.drawableW, fh = deviceScale_.drawableH;
 
-    webgl::WebGL2RenderingContext* activeWebGL = nullptr;
-    if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
     syncWebGLCanvasSizes();
-    webgl::WebGL2RenderingContext::invalidateCurrent();
-
-    webgl::WebGL2RenderingContext::endAppGL();
 
 #if BRO_WITH_3D
     for (auto& sg : sceneGraphs_) {
@@ -381,12 +370,9 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     skia->endFrame();
 
     beginFrameComposite();
-    compositeLayers(appLayers, 0, insetTop, cw, ch);
+    compositeLayers(appLayers, insetTop);
     compositeLayers(systemLayers);
-    std::vector<uint8_t> pixels = readCompositedFrame();
-
-    if (activeWebGL) activeWebGL->restoreState();
-    return pixels;
+    return readCompositedFrame();
 }
 
 bool Engine::screenshot(const std::string& path) {
@@ -400,14 +386,8 @@ bool Engine::screenshot(const std::string& path) {
                                          deviceScale_.drawableH, 4);
     }
 
-    {
-        webgl::WebGL2RenderingContext* activeWebGL = nullptr;
-        if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
-        syncWebGLCanvasSizes();
-        webgl::WebGL2RenderingContext::invalidateCurrent();
-        if (!timePaused_) fireFrameCallbacks(0.0);
-        webgl::WebGL2RenderingContext::endAppGL();
-    }
+    syncWebGLCanvasSizes();
+    if (!timePaused_) fireFrameCallbacks(0.0);
 
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
@@ -461,14 +441,8 @@ std::vector<uint8_t> Engine::capturePixels() {
         return renderUnifiedToPixels();
     }
 
-    {
-        webgl::WebGL2RenderingContext* activeWebGL = nullptr;
-        if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
-        syncWebGLCanvasSizes();
-        webgl::WebGL2RenderingContext::invalidateCurrent();
-        if (!timePaused_) fireFrameCallbacks(0.0);
-        webgl::WebGL2RenderingContext::endAppGL();
-    }
+    syncWebGLCanvasSizes();
+    if (!timePaused_) fireFrameCallbacks(0.0);
 
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});

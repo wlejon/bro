@@ -1,45 +1,46 @@
 // Transform feedback bindings for WebGL2.
-// Wraps webgl::WebGL2RenderingContext transform feedback methods.
 
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/webgl_internal.h"
 
 #include <string>
 #include <vector>
 
 namespace bro::bronze_host {
 
-void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
+void installWebGLTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("createTransformFeedback", 0, [c](Value, std::span<const Value>) {
-        return glObject(c, GlCell::TransformFeedback, live(c)->createTransformFeedback().id);
+        auto* gl = live(c);
+        return gl ? webglObject(c, WebGLCell::TransformFeedback, gl->createTransformFeedback()) : ev::null();
     });
     b.def("deleteTransformFeedback", 1, [c](Value, std::span<const Value> a) {
-        const webgl::WebGLTransformFeedback tf = transformFeedbackOf(argAt(a, 0));
-        live(c)->deleteTransformFeedback(tf);
-        forgetGlObject(c, GlCell::TransformFeedback, tf.id);
+        const GLuint id = idOf(argAt(a, 0), WebGLCell::TransformFeedback);
+        if (auto* gl = live(c)) gl->deleteTransformFeedback(id);
+        forgetWebGLObject(c, WebGLCell::TransformFeedback, id);
         return ev::undefined();
     });
     b.def("bindTransformFeedback", 2, [c](Value, std::span<const Value> a) {
-        live(c)->bindTransformFeedback(u32At(a, 0), transformFeedbackOf(argAt(a, 1)));
+        if (auto* gl = live(c))
+            gl->bindTransformFeedback(u32At(a, 0), idOf(argAt(a, 1), WebGLCell::TransformFeedback));
         return ev::undefined();
     });
     b.def("beginTransformFeedback", 1, [c](Value, std::span<const Value> a) {
-        live(c)->beginTransformFeedback(u32At(a, 0));
+        if (auto* gl = live(c)) gl->beginTransformFeedback(u32At(a, 0));
         return ev::undefined();
     });
     b.def("endTransformFeedback", 0, [c](Value, std::span<const Value> a) {
-        live(c)->endTransformFeedback();
+        if (auto* gl = live(c)) gl->endTransformFeedback();
         return ev::undefined();
     });
     b.def("pauseTransformFeedback", 0, [c](Value, std::span<const Value> a) {
-        live(c)->pauseTransformFeedback();
+        if (auto* gl = live(c)) gl->pauseTransformFeedback();
         return ev::undefined();
     });
     b.def("resumeTransformFeedback", 0, [c](Value, std::span<const Value> a) {
-        live(c)->resumeTransformFeedback();
+        if (auto* gl = live(c)) gl->resumeTransformFeedback();
         return ev::undefined();
     });
     b.def("transformFeedbackVaryings", 3, [c](Value, std::span<const Value> a) {
-        auto prog = webgl::WebGLProgram{idOf(argAt(a, 0), GlCell::Program)};
+        const GLuint prog = idOf(argAt(a, 0), WebGLCell::Program);
         Value namesVal = argAt(a, 1);
         std::vector<std::string> names;
         if (ev::isObject(namesVal)) {
@@ -54,14 +55,14 @@ void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext*
                 }
             }
         }
-        live(c)->transformFeedbackVaryings(prog, names, u32At(a, 2));
+        if (auto* gl = live(c)) gl->transformFeedbackVaryings(prog, names, u32At(a, 2));
         return ev::undefined();
     });
     b.def("getTransformFeedbackVarying", 2, [c](Value, std::span<const Value> a) {
-        auto prog = webgl::WebGLProgram{idOf(argAt(a, 0), GlCell::Program)};
-        uint32_t index = u32At(a, 1);
-        webgl::WebGLActiveInfo info;
-        if (!live(c)->getTransformFeedbackVarying(prog, index, info)) return ev::null();
+        auto* gl = live(c);
+        webgl::vk::VkFeedbackVarying info;
+        if (!gl || !gl->getTransformFeedbackVarying(idOf(argAt(a, 0), WebGLCell::Program), u32At(a, 1), info))
+            return ev::null();
         ObjectBuilder o;
         o.set("name", ev::fromUtf8(info.name));
         o.set("type", ev::fromDouble(info.type));
@@ -69,7 +70,9 @@ void installGlTransformFeedback(ObjectBuilder& b, webgl::WebGL2RenderingContext*
         return o.get();
     });
     b.def("isTransformFeedback", 1, [c](Value, std::span<const Value> a) {
-        return ev::fromBool(live(c)->isTransformFeedback(transformFeedbackOf(argAt(a, 0))) != GL_FALSE);
+        auto* gl = live(c);
+        return ev::fromBool(gl &&
+                            gl->isTransformFeedback(idOf(argAt(a, 0), WebGLCell::TransformFeedback)) != GL_FALSE);
     });
 }
 

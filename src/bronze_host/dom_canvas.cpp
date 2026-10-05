@@ -1,5 +1,5 @@
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_globals_internal.h"
 #include "bronze_host/host_internal.h"
@@ -381,7 +381,7 @@ Value makeCanvasValue(dom::Element* el) {
         webgl::WebGL2RenderingContext* ctx = eng->createWebGL2Context(cs->el);
         if (!ctx) return ev::null();
         cs->glCtx = ctx;
-        ev::Persistent glRoot(createGlContextValue(ctx, canvasRoot.get()));
+        ev::Persistent glRoot(createWebGLContextValue(ctx, canvasRoot.get()));
         ev::setProperty(canvasRoot.get(), "__bro_gl__", glRoot.get());
         cs->hasGl = true;
         cs->contextType = type;

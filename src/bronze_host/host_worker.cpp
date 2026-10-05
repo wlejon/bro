@@ -3,7 +3,7 @@
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/eval.h"
 #include "bronze_host/eval_jit.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/host_builder.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/host_natives.h"
 #include "bronze_host/host_headless.h"

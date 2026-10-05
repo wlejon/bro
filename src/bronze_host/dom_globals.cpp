@@ -24,7 +24,7 @@
 // and outlive the compiled program's run.
 
 #include "bronze_host/bronze_host.h"
-#include "bronze_host/gl_internal.h"
+#include "bronze_host/webgl_internal.h"
 #include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
 #include "bronze_host/eval.h"
