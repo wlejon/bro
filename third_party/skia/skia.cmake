@@ -82,8 +82,7 @@ if(BRO_FETCH_SKIA)
     # When bumping a pin, move the outgoing SHA-256 into this list.
     set(_skia_retired_lib_shas
         "adb014b9eb366266d205b293258d9a9628f73b9ea7156da2053e65e3f3363f55"  # m147 GL, linux-x64
-        "42fc7231974cc0011f09e343cadb31935be5019669125ee261fea7fbe947481d"  # m147 GL, macos-arm64
-        "e4e561366ac923218406c9f9a027ed23401b44f7c40b041a9fab5fddb4e46823") # m147 GL, windows-x64
+        "42fc7231974cc0011f09e343cadb31935be5019669125ee261fea7fbe947481d") # m147 GL, macos-arm64
     if(EXISTS "${_skia_release}")
         file(SHA256 "${_skia_release}" _skia_have)
         if(_skia_have IN_LIST _skia_retired_lib_shas)
@@ -93,9 +92,11 @@ if(BRO_FETCH_SKIA)
     endif()
     if(NOT EXISTS "${_skia_release}" AND NOT EXISTS "${_skia_debug}")
         set(_skia_lib_asset "")
-        # Windows x64 is not hosted for the Vulkan build yet; build it per
-        # BUILDING.md and place it in lib/Release/.
-        if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+        if(WIN32)
+            # Built with Ganesh GL and Vulkan; bro uses only the Vulkan half.
+            set(_skia_lib_asset "skia-windows-x64-Release.lib")
+            set(_skia_lib_sha "e4e561366ac923218406c9f9a027ed23401b44f7c40b041a9fab5fddb4e46823")
+        elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
             # Only Apple Silicon (arm64) is hosted; Intel Macs fall through to
             # build_skia_mac.sh rather than fetch an unlinkable arm64 lib.
             set(_skia_lib_asset "skia-macos-arm64-Release.a")

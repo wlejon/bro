@@ -30,6 +30,7 @@ Desktop.ini
 
 # Skia pre-built (large binaries) and source checkout
 third_party/skia/lib/
+third_party/skia/skia-checkout/
 third_party/skia/include/
 third_party/skia/src/
 

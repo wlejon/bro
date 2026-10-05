@@ -24,7 +24,7 @@ cmake -B build-release -DCMAKE_BUILD_TYPE=Release && cmake --build build-release
 
 Headless: `bro-headless <appdir> test.js` or `bro-headless <appdir> -e "expr"`; the script is compiled in-process by bronze and run against the engine. There is no REPL. `--no-gpu` = Skia on the CPU, no WebGL/3D scene. Submodules: `git submodule update --init`.
 
-**Skia is pre-built.** Headers + Release lib auto-download at configure on Linux/arm64-macOS (Windows x64 not hosted yet for the Vulkan build), pinned to one Skia commit (`chrome/m147`) so the lib always matches the headers; `-DBRO_FETCH_SKIA=OFF` disables. Hand-build only for Windows (gn args in BUILDING.md), Intel macOS, or a version change: `third_party/skia/build_skia_{linux,mac}.sh`, lib into `third_party/skia/lib/{Debug,Release}/`.
+**Skia is pre-built.** Headers + Release lib auto-download at configure on Windows/Linux/arm64-macOS, pinned to one Skia commit (`chrome/m147`) so the lib always matches the headers; `-DBRO_FETCH_SKIA=OFF` disables. Hand-build only for Intel macOS, a Windows Debug lib, or a version change: `third_party/skia/build_skia_{linux,mac}.sh` / `build_skia_windows.ps1`, lib into `third_party/skia/lib/{Debug,Release}/`.
 
 macOS: `tests/run_tests.sh` needs bash 4+ (`brew install bash`); system bash is 3.2.
 
