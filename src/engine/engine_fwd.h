@@ -28,6 +28,7 @@ namespace bro::engine {
 class Engine;
 class LayoutPipeline;
 class AudioInference;
+class TerminalLayers;
 struct SubDocRef;
 
 } // namespace bro::engine

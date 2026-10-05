@@ -245,9 +245,13 @@ void Engine::handleMouseDown(float x, float y, int button) {
             controlDragIsPanel_ = false;
         }
 
+        dom::ElementHandle pressed(document_.get(), target);
         dispatchPointerAlias("pointerdown", target, evt);
         dispatchDocMousePress(cctx, appMouseState_, target, evt,
                               focusX, focusY, intent);
+        // A <terminal> acts on the press the page left alone.
+        if (pressed.get() && !evt.defaultPrevented())
+            terminalMouseDown(pressed.get(), docX, docY, button, mod, intent.ordinal);
         updateTextInputArea();
         markAppBaseDirty();
 
@@ -279,7 +283,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
             bool replaced = false;
             if (target && !inEditableHost(target)) {
                 const std::string& tag = target->tagName();
-                replaced = tag == "CANVAS" || tag == "IMG" || tag == "VIDEO";
+                replaced = tag == "CANVAS" || tag == "IMG" || tag == "VIDEO" || tag == "TERMINAL";
             }
             bool suppressed = target && isSelectionSuppressed(target);
             if (replaced && !isEditableControl && !suppressed) {
@@ -414,6 +418,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         selectionDragging_ = false;
         controlDragElement_.reset();
     }
+    terminalMouseUp(docX, docY, button);
 
     if (document_) {
         dom::Element* target = hitTest(docX, docY);
@@ -485,7 +490,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
 void Engine::updateCursorFromHover(dom::Element* target) {
     std::string css;
-    if (target) {
+    if (auto* term = target ? target->terminalControl() : nullptr) {
+        // I-beam over text, pointer over a link, the program's own shape
+        // (OSC 22), the arrow while the program has the mouse.
+        css = term->pointerCursor(currentModState());
+    } else if (target) {
         const auto& cs = target->computedStyle();
         auto it = cs.find("cursor");
         if (it != cs.end()) css = it->second;

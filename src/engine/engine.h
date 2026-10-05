@@ -453,6 +453,7 @@ public:
     double perfRasterMs() const { return frameStats_.phaseRasterMs; }
     double perfGpuMs() const { return frameStats_.phaseGpuMs; }
     double perfDrawMs() const { return frameStats_.phaseDrawMs; }
+    const FrameStats& frameStats() const { return frameStats_; }
 
     /// Every secondary window (bro.window.open), live or pending, in
     /// creation order. The perf HUD lists them.
@@ -508,17 +509,21 @@ private:
                               const dom::MouseEvent& src);
     void pumpVideoEvents();
 
-    // <terminal> (input_terminal.cpp). The focused terminal takes keys,
-    // text, IME composition and paste before the page's own handling; each
-    // returns true when it consumed the event. pumpTerminals runs once per
-    // frame (and per headless step) on the main thread.
+    // <terminal> (input_terminal*.cpp): keys, text, IME and paste go to the
+    // focused one before the page's handling; the mouse after the page's.
     layout::ElTerminal* focusedTerminal(dom::Element** elOut = nullptr);
     bool terminalKeyDown(int keycode, int scancode, int mod, bool repeat);
     bool terminalKeyUp(int keycode, int scancode, int mod, bool repeat);
     bool terminalTextInput(const std::string& text);
     bool terminalTextEditing(const std::string& text);
     bool terminalPaste(const std::string& text);
-    void pumpTerminals();
+    void terminalMouseDown(dom::Element* target, float docX, float docY, int button, int mod, int clicks);
+    void terminalMouseMove(dom::Element* target, dom::Element* prevHover, float docX, float docY);
+    void terminalMouseUp(float docX, float docY, int button);
+    bool terminalWheel(dom::Element* target, float docX, float docY, float dy);
+    void pumpTerminals();  // once per frame / headless step: also installs ElTerminal::Host
+    std::shared_ptr<TerminalLayers> terminalLayers_;  // (terminal_layers.h)
+    dom::ElementHandle terminalCapture_;               // the terminal a press is captured by
 
     float overlayMouseY(float y) const;
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
@@ -699,7 +704,7 @@ private:
     std::unordered_set<dom::Element*> basePromotedSet_;
     bool baseValid_ = false;
     bool appBaseDirty_ = false;
-    void markAppBaseDirty() { appBaseDirty_ = true; uiDirty_ = true; }
+    void markAppBaseDirty() { appBaseDirty_ = true; uiDirty_ = true; ++frameStats_.baseInvalidations; }
     float baseScrollY_ = 0.0f;
     int baseInsetTop_ = -1, baseInsetRight_ = -1, baseInsetBottom_ = -1;
 
@@ -874,9 +879,8 @@ private:
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
     bool mediaEventsArmed_ = false;
-    // Set inside a headless advanceTime step after the step has moved media to
-    // its instant; pumpVideoEvents then dispatches events without moving any
-    // media clock or picture. See Engine::advanceTime.
+    // Set inside a headless advanceTime step once media is at its instant:
+    // pumpVideoEvents then moves no media clock or picture (advanceTime).
     bool mediaHeldForStep_ = false;
 
     dom::ElementHandle hoveredElement_;
@@ -988,13 +992,9 @@ private:
     bool testFailure_ = false;
 
     // The frame's composite, bottom to top: CPU layers composite into
-    // frameSegments_[0] until a GPU layer (a 3D scene, a WebGL canvas, a
-    // Skia GPU surface) is reached. Its image joins frameImages_, placed
-    // where the layer sits, and the layers after it composite into the next
-    // segment, which the presenter blends over that image — and so on.
-    // frameSegmentUsed_ marks the segments something was drawn into.
-    // frameSkiaImages_ keeps the Skia images in frameImages_ alive until the
-    // frame is submitted.
+    // frameSegments_[0] until a GPU layer; its image joins frameImages_ and
+    // the layers after it go into the next segment, blended over it, and so
+    // on. frameSkiaImages_ keeps those images alive until the submit.
     std::vector<sk_sp<SkSurface>> frameSegments_;
     std::vector<bool> frameSegmentUsed_;
     std::vector<render::PresentImage> frameImages_;

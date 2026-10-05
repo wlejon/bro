@@ -195,6 +195,7 @@ set(BRO_BRONZE_HOST_SOURCES
     host_video.cpp
     host_element_video.cpp
     host_element_terminal.cpp
+    host_element_terminal_view.cpp
     host_media.cpp
 )
 

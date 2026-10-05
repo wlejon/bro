@@ -1,9 +1,11 @@
 // HTMLTerminalElement: script's handle on a <terminal> (layout::ElTerminal).
 // bro paints and feeds the element itself; script starts the child, writes
-// to it, reads the screen and listens for `resize` and `exit`. The control is
-// created on first use, the way the layout pass creates it for markup, so a
-// terminal made and spawned in one turn works before it has ever been laid
-// out. docs/terminal-api.js is the contract.
+// to it, reads the screen, sets options and colours, and listens for the
+// element's events. The control is created on first use, the way the layout
+// pass creates it for markup, so a terminal made and spawned in one turn
+// works before it has ever been laid out. docs/terminal-api.js is the
+// contract. The view half (scrollback, selection, search, links, commands)
+// is host_element_terminal_view.cpp.
 
 #include "bronze_host/host_element_terminal.h"
 #include "bronze_host/host_bro_namespaces.h"
@@ -14,6 +16,7 @@
 
 #include "dom/element.h"
 #include "engine/engine.h"
+#include "engine/terminal_layers.h"
 #include "layout/el_terminal.h"
 
 #include <memory>
@@ -21,15 +24,9 @@
 
 namespace bro::bronze_host {
 
-namespace {
-
-dom::Element* getElement(Value self) {
+layout::ElTerminal* hostTerminalControl(Value self, bool create) {
     HostNodeState* st = hostNodeStateOfValue(self);
-    return st ? st->el : nullptr;
-}
-
-layout::ElTerminal* control(Value self, bool create = true) {
-    dom::Element* el = getElement(self);
+    dom::Element* el = st ? st->el : nullptr;
     if (!el) return nullptr;
     if (auto* t = el->terminalControl()) return t;
     if (!create || (el->tagName() != "terminal" && el->tagName() != "TERMINAL")) return nullptr;
@@ -41,8 +38,18 @@ layout::ElTerminal* control(Value self, bool create = true) {
     return el->terminalControl();
 }
 
+namespace {
+
+layout::ElTerminal* control(Value self, bool create = true) { return hostTerminalControl(self, create); }
+
 std::string stringArg(std::span<const Value> a, size_t i) {
     return i < a.size() && !ev::isUndefined(a[i]) && !ev::isNull(a[i]) ? ev::toUtf8(a[i]) : std::string();
+}
+
+// A property of a rooted options object, if present (not undefined / null).
+bool prop(const ev::Persistent& obj, const char* name, ev::Persistent& out) {
+    out.set(ev::getProperty(obj.get(), name));
+    return !ev::isUndefined(out.get()) && !ev::isNull(out.get());
 }
 
 // spawn()'s options object: { command, args, cwd, env }.
@@ -109,6 +116,116 @@ bool readSpawnSpec(Value opts, layout::ElTerminal::SpawnSpec& spec, std::string&
     return true;
 }
 
+Value optionsValue(const layout::ElTerminal::Options& o) {
+    ObjectBuilder b;
+    b.set("copyOnSelect", ev::fromBool(o.copyOnSelect));
+    b.set("middleClickPaste", ev::fromBool(o.middleClickPaste));
+    b.set("scrollOnInput", ev::fromBool(o.scrollOnInput));
+    b.set("boldIsBright", ev::fromBool(o.boldIsBright));
+    b.set("minimumContrast", ev::fromDouble(o.minimumContrast));
+    b.set("ligatures", ev::fromBool(o.ligatures));
+    b.set("clipboard", ev::fromUtf8(o.clipboard));
+    b.set("wheelLines", ev::fromDouble(o.wheelLines));
+    return b.get();
+}
+
+// Merges the keys `v` has over `o`. False with `error` on a bad value.
+bool readOptions(Value v, layout::ElTerminal::Options& o, std::string& error) {
+    if (!ev::isObject(v)) {
+        error = "options must be an object";
+        return false;
+    }
+    ev::Persistent obj(v);
+    ev::Persistent p(ev::undefined());
+    if (prop(obj, "copyOnSelect", p)) o.copyOnSelect = ev::toBool(p.get());
+    if (prop(obj, "middleClickPaste", p)) o.middleClickPaste = ev::toBool(p.get());
+    if (prop(obj, "scrollOnInput", p)) o.scrollOnInput = ev::toBool(p.get());
+    if (prop(obj, "boldIsBright", p)) o.boldIsBright = ev::toBool(p.get());
+    if (prop(obj, "ligatures", p)) o.ligatures = ev::toBool(p.get());
+    if (prop(obj, "minimumContrast", p)) {
+        const double d = ev::isObject(p.get()) ? 0.0 : ev::toDouble(p.get());
+        if (!(d >= 1.0 && d <= 21.0)) {
+            error = "minimumContrast must be a contrast ratio from 1 to 21";
+            return false;
+        }
+        o.minimumContrast = float(d);
+    }
+    if (prop(obj, "wheelLines", p)) {
+        const double d = ev::isObject(p.get()) ? 0.0 : ev::toDouble(p.get());
+        if (!(d >= 1.0 && d <= 100.0)) {
+            error = "wheelLines must be from 1 to 100";
+            return false;
+        }
+        o.wheelLines = int(d);
+    }
+    if (prop(obj, "clipboard", p)) {
+        const std::string c = ev::toUtf8(p.get());
+        if (c != "deny" && c != "write" && c != "read-write") {
+            error = "clipboard must be \"deny\", \"write\" or \"read-write\"";
+            return false;
+        }
+        o.clipboard = c;
+    }
+    return true;
+}
+
+Value themeValue(const layout::ElTerminal::Theme& t) {
+    ObjectBuilder b;
+    b.set("foreground", ev::fromUtf8(t.foreground));
+    b.set("background", ev::fromUtf8(t.background));
+    b.set("cursor", ev::fromUtf8(t.cursor));
+    b.set("selection", ev::fromUtf8(t.selection));
+    b.set("match", ev::fromUtf8(t.match));
+    b.set("currentMatch", ev::fromUtf8(t.currentMatch));
+    ev::Persistent ansi(hostArrayOf(t.ansi.size(), [&t](size_t i) { return ev::fromUtf8(t.ansi[i]); }));
+    b.set("ansi", ansi.get());
+    return b.get();
+}
+
+// A theme object: each key present replaces that slot ("" or null returns it
+// to CSS); keys left out keep what script set before.
+bool readTheme(Value v, layout::ElTerminal::Theme& t, std::string& error) {
+    if (ev::isNull(v) || ev::isUndefined(v)) {
+        t = layout::ElTerminal::Theme{};
+        return true;
+    }
+    if (!ev::isObject(v)) {
+        error = "theme must be an object";
+        return false;
+    }
+    ev::Persistent obj(v);
+    auto slot = [&](const char* name, std::string& out) {
+        Value p = ev::getProperty(obj.get(), name);
+        if (ev::isUndefined(p)) return;
+        out = ev::isNull(p) ? std::string() : ev::toUtf8(p);
+    };
+    slot("foreground", t.foreground);
+    slot("background", t.background);
+    slot("cursor", t.cursor);
+    slot("selection", t.selection);
+    slot("match", t.match);
+    slot("currentMatch", t.currentMatch);
+    ev::Persistent ansi(ev::getProperty(obj.get(), "ansi"));
+    if (!ev::isUndefined(ansi.get()) && !ev::isNull(ansi.get())) {
+        // Index 0-15 the ANSI colours, 16-255 the rest of the 256-colour table;
+        // a hole (or null) leaves that slot to CSS.
+        if (!hostIsArray(ansi.get())) {
+            error = "theme.ansi must be an array of up to 256 colours";
+            return false;
+        }
+        uint32_t n = 0;
+        if (!lengthWithin(ev::toDouble(ev::getProperty(ansi.get(), "length")), 256, n)) {
+            error = "theme.ansi must be an array of up to 256 colours";
+            return false;
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            Value c = ev::getElement(ansi.get(), i);
+            t.ansi[i] = ev::isNull(c) || ev::isUndefined(c) ? std::string() : ev::toUtf8(c);
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 Value makeBroTerminalValue() {
@@ -118,6 +235,19 @@ Value makeBroTerminalValue() {
     o.accessor("defaultShell",
         [](Value, std::span<const Value>) -> Value { return ev::fromUtf8(layout::ElTerminal::defaultShell()); },
         nullptr);
+    // Lifetime counters: how often the terminals' own layers and the page's
+    // cached paint were recorded (the compositor-layer tests and the perf
+    // probe read these).
+    o.def("stats", 0, [](Value, std::span<const Value>) -> Value {
+        ObjectBuilder s;
+        // False under BRO_TERMINAL_LAYER=0: terminals paint inline with the page.
+        s.set("layered", ev::fromBool(engine::terminalLayersEnabled()));
+        s.set("layerRecords", ev::fromDouble(double(layout::ElTerminal::totalLayerRecords())));
+        auto* eng = hostEngine();
+        s.set("pageRecords", ev::fromDouble(eng ? double(eng->frameStats().baseRecords) : 0.0));
+        s.set("pageInvalidations", ev::fromDouble(eng ? double(eng->frameStats().baseInvalidations) : 0.0));
+        return s.get();
+    });
     return o.get();
 }
 
@@ -143,6 +273,11 @@ void decorateTerminalProto(ObjectBuilder& b) {
     b.def("feed", 1, [](Value self, std::span<const Value> a) -> Value {
         if (auto* t = control(self)) t->feed(stringArg(a, 0));
         return ev::undefined();
+    });
+    // paste(text): as a paste from the clipboard (bracketed when asked for).
+    b.def("paste", 1, [](Value self, std::span<const Value> a) -> Value {
+        auto* t = control(self);
+        return ev::fromBool(t && t->paste(stringArg(a, 0)));
     });
     b.def("kill", 0, [](Value self, std::span<const Value>) -> Value {
         if (auto* t = control(self, false)) t->kill();
@@ -178,6 +313,8 @@ void decorateTerminalProto(ObjectBuilder& b) {
         return c ? ev::fromDouble(*c) : ev::null();
     });
     readOnly("title", [](layout::ElTerminal& t) { return ev::fromUtf8(t.title()); });
+    readOnly("cwd", [](layout::ElTerminal& t) { return ev::fromUtf8(t.cwd()); });
+    readOnly("pointerShape", [](layout::ElTerminal& t) { return ev::fromUtf8(t.pointerShape()); });
     readOnly("cursor", [](layout::ElTerminal& t) {
         const auto c = t.cursor();
         ObjectBuilder o;
@@ -188,6 +325,51 @@ void decorateTerminalProto(ObjectBuilder& b) {
         o.set("shape", ev::fromUtf8(c.shape));
         return o.get();
     });
+    readOnly("metrics", [](layout::ElTerminal& t) {
+        const auto m = t.metrics();
+        ObjectBuilder o;
+        o.set("cellWidth", ev::fromDouble(m.cellWidth));
+        o.set("cellHeight", ev::fromDouble(m.cellHeight));
+        o.set("baseline", ev::fromDouble(m.baseline));
+        o.set("pixelWidth", ev::fromDouble(m.pixelWidth));
+        o.set("pixelHeight", ev::fromDouble(m.pixelHeight));
+        o.set("scale", ev::fromDouble(m.scale));
+        return o.get();
+    });
+    readOnly("layerRecords", [](layout::ElTerminal& t) { return ev::fromDouble(double(t.layerRecords())); });
+
+    // options: read as a fresh object; assigning merges the keys given.
+    b.accessor("options",
+        [](Value self, std::span<const Value>) -> Value {
+            auto* t = control(self);
+            return t ? optionsValue(t->options()) : ev::undefined();
+        },
+        [](Value self, std::span<const Value> a) -> Value {
+            auto* t = control(self);
+            if (!t) return ev::undefined();
+            layout::ElTerminal::Options o = t->options();
+            std::string error;
+            if (!readOptions(argAt(a, 0), o, error)) return ev::throwTypeError(error.c_str());
+            t->setOptions(o);
+            return ev::undefined();
+        });
+    // theme: the colours in effect; assigning sets script's own (null: clear).
+    b.accessor("theme",
+        [](Value self, std::span<const Value>) -> Value {
+            auto* t = control(self);
+            return t ? themeValue(t->theme()) : ev::undefined();
+        },
+        [](Value self, std::span<const Value> a) -> Value {
+            auto* t = control(self);
+            if (!t) return ev::undefined();
+            layout::ElTerminal::Theme theme = t->scriptTheme();
+            std::string error;
+            if (!readTheme(argAt(a, 0), theme, error)) return ev::throwTypeError(error.c_str());
+            t->setTheme(theme);
+            return ev::undefined();
+        });
+
+    decorateTerminalViewProto(b);
 }
 
 }  // namespace bro::bronze_host

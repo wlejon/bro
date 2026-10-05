@@ -1,30 +1,43 @@
+// ElTerminal core: the registry, the font and the grid it sizes, the child,
+// keys and text, and the per-frame pump. The layer, the mouse, the view, the
+// events and the theme are in their own el_terminal_*.cpp; a build without
+// BRO_WITH_TERMINAL compiles el_terminal_off.cpp instead of all of them but
+// this file's shared half.
+
 #include "layout/el_terminal.h"
 
+#include "dom/document.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/event.h"
 #include "dom/event_dispatch.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <mutex>
 
 #if BRO_WITH_TERMINAL
-#include "terminal/term_keys.h"
-#include "terminal/term_paint.h"
-#include "terminal/term_session.h"
+#include "layout/el_terminal_impl.h"
 #endif
 
 namespace bro::layout {
 
-namespace {
+// ===========================================================================
+// Shared by both builds
 
-std::vector<ElTerminal*>& registry() {
+std::vector<ElTerminal*>& termRegistry() {
     static std::vector<ElTerminal*> r;
     return r;
 }
 
-int intAttr(const dom::Element* el, const char* name, int fallback, int lo, int hi) {
+uint64_t termNextLayerId() {
+    static std::atomic<uint64_t> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+int termIntAttr(const dom::Element* el, const char* name, int fallback, int lo, int hi) {
     if (!el || !el->hasAttribute(name)) return fallback;
     const std::string& v = el->getAttribute(name);
     char* end = nullptr;
@@ -33,16 +46,30 @@ int intAttr(const dom::Element* el, const char* name, int fallback, int lo, int 
     return int(std::clamp<long>(n, lo, hi));
 }
 
+namespace {
+ElTerminal::Host& hostSlot() {
+    static ElTerminal::Host h;
+    return h;
+}
 } // namespace
+
+void ElTerminal::setHost(Host host) { hostSlot() = std::move(host); }
+const ElTerminal::Host& ElTerminal::host() { return hostSlot(); }
 
 void ElTerminal::forEach(const std::function<void(ElTerminal&)>& fn) {
     // A callback may create or destroy terminals (an event listener does):
     // walk a copy, and skip any that left the registry meanwhile.
-    const std::vector<ElTerminal*> live = registry();
+    const std::vector<ElTerminal*> live = termRegistry();
     for (ElTerminal* t : live) {
-        const auto& now = registry();
+        const auto& now = termRegistry();
         if (std::find(now.begin(), now.end(), t) != now.end()) fn(*t);
     }
+}
+
+ElTerminal* ElTerminal::byId(uint64_t id) {
+    for (ElTerminal* t : termRegistry())
+        if (t->layerId_ == id) return t;
+    return nullptr;
 }
 
 #if BRO_WITH_TERMINAL
@@ -50,59 +77,39 @@ void ElTerminal::forEach(const std::function<void(ElTerminal&)>& fn) {
 // ===========================================================================
 // Compiled in
 
-struct ElTerminal::Impl {
-    std::unique_ptr<terminal::TermSession> session;
-    terminal::TermPainter painter;
-    std::shared_ptr<const bropty::Frame> frame;  // the frame drawn (main thread)
-
-    // The element's font and the cell metrics measured from it. Read by
-    // getContentSize() on the layout thread too, hence the lock.
-    mutable std::mutex fontMu;
-    std::string family = "monospace";
-    float size = 14.0f;
-    int weight = 400;
-    bool italic = false;
-    float lineHeight = 0.0f;
-    uint64_t fontGeneration = ~0ull;
-    terminal::CellMetrics metrics;
-    bool haveMetrics = false;
-
-    // Focus, blink, events.
-    bool focused = false;
-    bool blinkOn = true;
-    double nowMs = 0;
-    double blinkEpoch = 0;
-    bool exitDispatched = false;
-    int lastCols = 0, lastRows = 0;
-
-    // A text key held until the text input it produces arrives (or the key
-    // is released, or another key comes first), so the encoder gets both the
-    // key and the text it typed (kitty's associated text, keypad vs digits).
-    bool haveDeferred = false;
-    bropty::KeyEvent deferred;
-    // A key sent on its own (Ctrl+C, Enter, keypad): the text input SDL
-    // generates for it, if any, is not typed a second time.
-    bool suppressText = false;
-
-    // Where the content box was last drawn, for the IME window.
-    bool drawn = false;
-    float drawX = 0, drawY = 0;
-
-    render::FontRef font() const { return render::FontRef{family, size, weight, italic}; }
-};
-
 bool ElTerminal::available() { return true; }
 
-ElTerminal::ElTerminal(render::Renderer* renderer) : renderer_(renderer), impl_(std::make_unique<Impl>()) {
+ElTerminal::ElTerminal(render::Renderer* renderer)
+    : renderer_(renderer), impl_(std::make_unique<Impl>()), layerId_(termNextLayerId()) {
     impl_->session = std::make_unique<terminal::TermSession>(80, 24);
-    registry().push_back(this);
+    impl_->layer = std::make_shared<TermLayer>(layerId_);
+#if defined(__linux__) || defined(__FreeBSD__)
+    options_.middleClickPaste = true;  // the X11 habit
+#endif
+    termRegistry().push_back(this);
 }
 
 ElTerminal::~ElTerminal() {
-    auto& r = registry();
+    auto& r = termRegistry();
     r.erase(std::remove(r.begin(), r.end(), this), r.end());
-    // The session's destructor stops the parser thread and the child.
+    // The session's destructor stops the parser thread and the child. The
+    // layer lives on while a replay holds it.
 }
+
+namespace {
+
+// A CSS length in px: "12px", "0.1em" (of `fontSize`), a bare number.
+float cssLengthPx(const std::string& v, float fontSize) {
+    char* end = nullptr;
+    const float n = std::strtof(v.c_str(), &end);
+    if (end == v.c_str() || !std::isfinite(n)) return 0.0f;
+    const std::string unit(end);
+    if (unit == "em") return n * fontSize;
+    if (unit == "rem") return n * 16.0f;
+    return n;  // "px" or unitless
+}
+
+} // namespace
 
 void ElTerminal::refreshFont() {
     if (!elem_) return;
@@ -121,9 +128,8 @@ void ElTerminal::refreshFont() {
     }
     int weight = 400;
     if (auto it = style.find("font-weight"); it != style.end()) {
-        if (it->second == "bold") weight = 700;
+        if (it->second == "bold" || it->second == "bolder") weight = 700;
         else if (it->second == "lighter") weight = 100;
-        else if (it->second == "bolder") weight = 700;
         else {
             char* end = nullptr;
             const long v = std::strtol(it->second.c_str(), &end, 10);
@@ -140,62 +146,57 @@ void ElTerminal::refreshFont() {
         const float n = std::strtof(v.c_str(), &end);
         if (end != v.c_str() && n > 0) {
             const std::string unit(end);
-            if (unit.empty()) lineHeight = n * size;           // a multiplier
-            else if (unit == "px") lineHeight = n;
+            if (unit.empty()) lineHeight = n * size;  // a multiplier
             else if (unit == "%") lineHeight = n * size / 100.0f;
-            else if (unit == "em") lineHeight = n * size;
+            else lineHeight = cssLengthPx(v, size);
         }
     }
+    float letterSpacing = 0.0f;
+    if (auto it = style.find("letter-spacing"); it != style.end() && it->second != "normal")
+        letterSpacing = cssLengthPx(it->second, size);
 
     const uint64_t gen = renderer_ ? renderer_->fontGeneration() : 0;
     std::lock_guard<std::mutex> g(impl_->fontMu);
     Impl& m = *impl_;
+    const bool ligatures = options_.ligatures;
     if (m.haveMetrics && family == m.family && size == m.size && weight == m.weight && italic == m.italic &&
-        lineHeight == m.lineHeight && gen == m.fontGeneration)
+        lineHeight == m.lineHeight && letterSpacing == m.letterSpacing && ligatures == m.ligatures &&
+        gen == m.fontGeneration && m.metrics.scale == m.scale)
         return;
     m.family = std::move(family);
     m.size = size;
     m.weight = weight;
     m.italic = italic;
     m.lineHeight = lineHeight;
+    m.letterSpacing = letterSpacing;
+    m.ligatures = ligatures;
     m.fontGeneration = gen;
-    m.metrics = terminal::CellMetrics::measure(renderer_, m.font(), lineHeight);
+    // Ligatures join glyphs across cells, which needs the font's own advance
+    // as the cell width; otherwise the cell snaps to whole device pixels.
+    m.metrics = terminal::CellMetrics::measure(renderer_, m.font(), lineHeight, letterSpacing, m.scale, ligatures);
     m.haveMetrics = true;
+    m.layerDirty = true;
 }
 
 void ElTerminal::getContentSize(float& w, float& h) {
     refreshFont();
-    const int cols = intAttr(elem_, "cols", 80, 1, 1000);
-    const int rows = intAttr(elem_, "rows", 24, 1, 1000);
+    const int cols = termIntAttr(elem_, "cols", 80, 1, 1000);
+    const int rows = termIntAttr(elem_, "rows", 24, 1, 1000);
     std::lock_guard<std::mutex> g(impl_->fontMu);
     w = std::ceil(float(cols) * impl_->metrics.cellW);
     h = std::ceil(float(rows) * impl_->metrics.cellH);
 }
 
-void ElTerminal::draw(render::Renderer* renderer, const htmlayout::layout::LayoutBox& box, float offsetX,
-                      float offsetY) {
-    Impl& m = *impl_;
-    if (!m.frame) m.frame = m.session->acquireFrame();
-    if (!m.frame || !renderer) return;
-    const float x = box.contentRect.x + offsetX;
-    const float y = box.contentRect.y + offsetY;
-    const float w = box.contentRect.width;
-    const float h = box.contentRect.height;
-    if (w <= 0 || h <= 0) return;
-    m.drawn = true;
-    m.drawX = x;
-    m.drawY = y;
-    terminal::CellMetrics metrics;
-    terminal::PaintOptions opts;
-    {
-        std::lock_guard<std::mutex> g(m.fontMu);
-        metrics = m.metrics;
-    }
-    opts.font = m.font();  // family views m.family, stable for the paint
-    opts.focused = m.focused;
-    opts.blinkOn = m.blinkOn;
-    opts.preedit = preedit_;
-    m.painter.paint(renderer, *m.frame, x, y, w, h, metrics, opts);
+ElTerminal::Metrics ElTerminal::metrics() const {
+    const terminal::CellMetrics c = impl_->cellMetrics();
+    Metrics out;
+    out.cellWidth = c.cellW;
+    out.cellHeight = c.cellH;
+    out.baseline = c.baseline;
+    out.pixelWidth = c.pixelWidth();
+    out.pixelHeight = c.pixelHeight();
+    out.scale = c.scale;
+    return out;
 }
 
 // ---- the child ---------------------------------------------------------------
@@ -222,6 +223,7 @@ int ElTerminal::rows() const { return impl_->session->rows(); }
 std::string ElTerminal::screenText() const { return impl_->session->screenText(); }
 std::string ElTerminal::scrollbackText() const { return impl_->session->scrollbackText(); }
 std::string ElTerminal::title() const { return impl_->session->title(); }
+std::string ElTerminal::cwd() const { return impl_->session->cwd(); }
 std::string ElTerminal::selectionText() const { return impl_->session->selectionText(); }
 std::string ElTerminal::defaultShell() { return terminal::defaultShell(); }
 
@@ -268,6 +270,7 @@ bool ElTerminal::keyDown(int keycode, int scancode, int sdlMod, bool repeat) {
         keycode, scancode, sdlMod, repeat ? bropty::KeyAction::Repeat : bropty::KeyAction::Press);
     if (tk.kind == terminal::KeyKind::None) return false;
     m.blinkEpoch = m.nowMs;  // the cursor shows solid while typing
+    m.layerDirty = true;
     if (tk.kind == terminal::KeyKind::Functional) {
         m.session->sendKey(tk.ev);
         m.suppressText = true;
@@ -309,6 +312,7 @@ bool ElTerminal::keyUp(int keycode, int scancode, int sdlMod) {
 bool ElTerminal::textInput(std::string_view text) {
     Impl& m = *impl_;
     m.blinkEpoch = m.nowMs;
+    m.layerDirty = true;
     preedit_.clear();
     if (m.haveDeferred) {
         m.haveDeferred = false;
@@ -327,25 +331,27 @@ void ElTerminal::setPreedit(std::string_view text) {
     // A composition starting swallows the key that started it.
     if (!text.empty()) impl_->haveDeferred = false;
     preedit_ = std::string(text);
+    impl_->layerDirty = true;
 }
 
 bool ElTerminal::paste(std::string_view text) {
     flushDeferredKey();
     impl_->blinkEpoch = impl_->nowMs;
+    impl_->layerDirty = true;
     return impl_->session->paste(text);
 }
 
 bool ElTerminal::caretRect(float& x, float& y, float& w, float& h) const {
     const Impl& m = *impl_;
-    if (!m.drawn || !m.frame) return false;
-    terminal::CellMetrics metrics;
-    {
-        std::lock_guard<std::mutex> g(m.fontMu);
-        metrics = m.metrics;
-    }
+    if (!m.frame || !elem_) return false;
+    const terminal::CellMetrics metrics = m.cellMetrics();
+    // Where the layer sits: document space, less the viewport scroll.
+    const dom::AbsoluteRect box = dom::absoluteContentBox(elem_);
+    const dom::Document* doc = elem_->document();
+    const float scrollY = doc ? doc->viewportScrollY() : 0.0f;
     const int row = std::max(0, m.frame->cursor_y);
-    x = m.drawX + float(m.frame->cursor.col) * metrics.cellW;
-    y = m.drawY + float(row) * metrics.cellH;
+    x = box.x + float(m.frame->cursor.col) * metrics.cellW;
+    y = box.y - scrollY + float(row) * metrics.cellH;
     w = metrics.cellW;
     h = metrics.cellH;
     return true;
@@ -353,37 +359,34 @@ bool ElTerminal::caretRect(float& x, float& y, float& w, float& h) const {
 
 // ---- the main loop -------------------------------------------------------------
 
-bool ElTerminal::pump(double nowMs, bool focused) {
+bool ElTerminal::pump(double nowMs, bool focused, float scale) {
     Impl& m = *impl_;
     m.nowMs = nowMs;
-    bool repaint = false;
     if (!elem_) return false;
 
-    refreshFont();
-    terminal::CellMetrics metrics;
-    {
+    if (scale > 0.0f && std::isfinite(scale)) {
         std::lock_guard<std::mutex> g(m.fontMu);
-        metrics = m.metrics;
+        m.scale = scale;
     }
+    refreshFont();
+    refreshTheme();
+    const terminal::CellMetrics metrics = m.cellMetrics();
 
-    // The grid follows the content box.
+    // The grid follows the content box; the PTY's pixel size counts device px.
     const auto& box = elem_->layoutBox();
     if (box.contentRect.width > 0 && box.contentRect.height > 0 && metrics.cellW > 0 && metrics.cellH > 0) {
         const int cols = std::max(1, int(std::floor(box.contentRect.width / metrics.cellW + 1e-3f)));
         const int rows = std::max(1, int(std::floor(box.contentRect.height / metrics.cellH + 1e-3f)));
-        m.session->resize(cols, rows, int(std::lround(metrics.cellW)), int(std::lround(metrics.cellH)));
+        m.session->resize(cols, rows, metrics.pixelWidth(), metrics.pixelHeight());
     }
     if (m.session->cols() != m.lastCols || m.session->rows() != m.lastRows) {
         const bool first = m.lastCols == 0;
         m.lastCols = m.session->cols();
         m.lastRows = m.session->rows();
-        repaint = true;
-        if (!first) {
-            dom::CustomEvent evt("resize", false, false);
-            evt.setDetail("{\"cols\":" + std::to_string(m.lastCols) + ",\"rows\":" + std::to_string(m.lastRows) + "}");
-            evt.setIsTrusted(true);
-            dom::dispatchDomEvent(elem_, evt);
-        }
+        m.layerDirty = true;
+        if (!first)
+            termDispatch(elem_, "resize",
+                         "{\"cols\":" + std::to_string(m.lastCols) + ",\"rows\":" + std::to_string(m.lastRows) + "}");
     }
 
     if (focused != m.focused) {
@@ -394,12 +397,12 @@ bool ElTerminal::pump(double nowMs, bool focused) {
         }
         m.session->focus(focused);  // reported only under ?1004
         m.blinkEpoch = nowMs;
-        repaint = true;
+        m.layerDirty = true;
     }
 
     if (m.session->hasNewFrame() || !m.frame) {
         m.frame = m.session->acquireFrame();
-        repaint = true;
+        m.layerDirty = true;
     }
 
     // Blink: 530 ms on, 530 off, restarted by input.
@@ -408,71 +411,22 @@ bool ElTerminal::pump(double nowMs, bool focused) {
         blinkOn = std::fmod(std::max(0.0, nowMs - m.blinkEpoch), 1060.0) < 530.0;
     if (blinkOn != m.blinkOn) {
         m.blinkOn = blinkOn;
-        repaint = true;
+        m.layerDirty = true;
     }
+
+    autoScroll(nowMs);
+    dispatchEvents();
 
     if (m.session->exited() && !m.exitDispatched) {
         m.exitDispatched = true;
         if (m.session->hasNewFrame()) m.frame = m.session->acquireFrame();
-        dom::CustomEvent evt("exit", false, false);
         const auto code = m.session->exitCode();
-        evt.setDetail(code ? "{\"exitCode\":" + std::to_string(*code) + "}" : std::string("{\"exitCode\":null}"));
-        evt.setIsTrusted(true);
-        dom::dispatchDomEvent(elem_, evt);
-        repaint = true;
+        termDispatch(elem_, "exit", code ? "{\"exitCode\":" + std::to_string(*code) + "}" : "{\"exitCode\":null}");
+        m.layerDirty = true;
     }
-    return repaint;
+    return m.layerDirty.load();
 }
 
-#else
-
-// ===========================================================================
-// Compiled out: an inert box of the default size.
-
-struct ElTerminal::Impl {};
-
-bool ElTerminal::available() { return false; }
-ElTerminal::ElTerminal(render::Renderer* renderer) : renderer_(renderer) { registry().push_back(this); }
-ElTerminal::~ElTerminal() {
-    auto& r = registry();
-    r.erase(std::remove(r.begin(), r.end(), this), r.end());
-}
-void ElTerminal::refreshFont() {}
-void ElTerminal::getContentSize(float& w, float& h) {
-    w = float(intAttr(elem_, "cols", 80, 1, 1000)) * 8.0f;
-    h = float(intAttr(elem_, "rows", 24, 1, 1000)) * 16.0f;
-}
-void ElTerminal::draw(render::Renderer*, const htmlayout::layout::LayoutBox&, float, float) {}
-bool ElTerminal::spawn(const SpawnSpec&, std::string* error) {
-    if (error) *error = "<terminal> is not compiled into this build (BRO_WITH_TERMINAL)";
-    return false;
-}
-bool ElTerminal::write(std::string_view) { return false; }
-void ElTerminal::feed(std::string_view) {}
-void ElTerminal::kill() {}
-int64_t ElTerminal::pid() const { return 0; }
-bool ElTerminal::running() const { return false; }
-bool ElTerminal::exited() const { return false; }
-std::optional<int> ElTerminal::exitCode() const { return std::nullopt; }
-int ElTerminal::cols() const { return 0; }
-int ElTerminal::rows() const { return 0; }
-std::string ElTerminal::screenText() const { return {}; }
-std::string ElTerminal::scrollbackText() const { return {}; }
-std::string ElTerminal::frameText() const { return {}; }
-std::string ElTerminal::title() const { return {}; }
-std::string ElTerminal::selectionText() const { return {}; }
-std::string ElTerminal::defaultShell() { return {}; }
-ElTerminal::CursorInfo ElTerminal::cursor() const { return {}; }
-void ElTerminal::flushDeferredKey() {}
-bool ElTerminal::keyDown(int, int, int, bool) { return false; }
-bool ElTerminal::keyUp(int, int, int) { return false; }
-void ElTerminal::keyCancelled() {}
-bool ElTerminal::textInput(std::string_view) { return false; }
-void ElTerminal::setPreedit(std::string_view) {}
-bool ElTerminal::paste(std::string_view) { return false; }
-bool ElTerminal::caretRect(float&, float&, float&, float&) const { return false; }
-bool ElTerminal::pump(double, bool) { return false; }
-
-#endif
+#endif  // BRO_WITH_TERMINAL
 
 } // namespace bro::layout

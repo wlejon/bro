@@ -94,6 +94,11 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         if (wheelEvt.defaultPrevented()) {
             return;
         }
+        // A <terminal> scrolls its history (or reports the wheel to the program).
+        if (terminalWheel(target, docX, docY, util::verticalWheelDelta(dx, dy))) {
+            uiDirty_ = true;
+            return;
+        }
     }
 
     auto* activeEl = document_->activeElement();

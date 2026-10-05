@@ -357,6 +357,9 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             hoveredElement_.assign(document_.get(), target);
         }
 
+        // Selection drags, reports and link hover (before the cursor, which
+        // follows the link under the pointer).
+        terminalMouseMove(target, prevHover, docX, docY);
         updateCursorFromHover(hoveredElement_.get());
 
 #if BRO_WITH_3D
