@@ -152,6 +152,7 @@ void SceneRenderer::render3D() {
     if (frameLights_.empty()) frameLights_.push_back(&implicitSun_);
     updateSunIrradiance(frameLights_);
     updateSkyAmbient(graph_.cameraEye().y);
+    shadowAtlasLimit_ = static_cast<int>(vkBridge_->maxShadowAtlas());
     prepareShadows(frameLights_);
     planShadowTiles();
 

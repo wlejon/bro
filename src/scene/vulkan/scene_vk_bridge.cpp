@@ -98,7 +98,12 @@ bool SceneVkBridge::render3D(SceneGraph& graph, SceneRenderer& renderer, CullSta
     SceneFrame frame(cmd, gpu_, graph, renderer);
     frame.stats = stats;
     frame.view = SceneView::fromCamera(graph, width, height);
-    frame.lighting = sceneLighting(graph, renderer, frame.view, frame.shadowed);
+    if (renderer.shadowPlan().tileCount > 0 &&
+        !targets_.ensureShadowAtlas(allocator_, static_cast<uint32_t>(renderer.shadowPlan().atlasSize))) {
+        renderer.invalidateShadowCache();
+    }
+    frame.lighting = sceneLighting(renderer);
+    writeCameraSet(frame);
     frame.ssao = renderer.ssaoEnabled() && targets_.ensureIndirect(allocator_);
     frame.dof = renderer.depthOfFieldEnabled();
     frame.lut = renderer.hasColorLUT() && renderer.colorLUTAmount() > 0.0f && colorLut_->ensureLut(gpu_, renderer);

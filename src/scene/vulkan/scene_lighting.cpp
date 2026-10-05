@@ -6,6 +6,7 @@
 #include "scene/mesh_node.h"
 #include "scene/reflection_probe_node.h"
 #include "scene/scene_graph.h"
+#include "scene/scene_renderer.h"
 #include "scene/vulkan/scene_defaults.h"
 #include "scene/vulkan/scene_frame.h"
 #include "scene/vulkan/scene_gpu_resources.h"
@@ -20,66 +21,55 @@ namespace bro::scene::vk {
 
 namespace {
 
-constexpr size_t kMaxPointLights = 16;
-
-// The directional shadow: one orthographic map centred a little ahead of the
-// camera (the cascade planner's tiles are not drawn yet; see SceneRenderer).
-constexpr float kShadowCenterAhead = 8.0f;
-constexpr float kShadowLightDistance = 25.0f;
-constexpr float kShadowHalfExtent = 12.0f;
-constexpr float kShadowNear = 1.0f;
-constexpr float kShadowFar = 50.0f;
-
-void setLight(ScenePointLight& out, const LightNode& l) {
-    if (l.kind() == LightNode::Kind::Directional) {
-        const bromath::Vec3 dir = bromath::vnorm(l.direction());
-        out.position[0] = dir.x;
-        out.position[1] = dir.y;
-        out.position[2] = dir.z;
-        out.position[3] = -1.0f;
-    } else {
-        const auto& m = l.worldMatrix();
-        out.position[0] = m.at(0, 3);
-        out.position[1] = m.at(1, 3);
-        out.position[2] = m.at(2, 3);
-        out.position[3] = l.range();
-    }
+void setLight(SceneLightUniform& out, const LightNode& l) {
+    const auto& m = l.worldMatrix();
+    out.position[0] = m.at(0, 3);
+    out.position[1] = m.at(1, 3);
+    out.position[2] = m.at(2, 3);
+    out.position[3] = static_cast<float>(l.kind());
+    bromath::Vec3 d = l.direction();
+    const float len = std::sqrt(bromath::vdot(d, d));
+    if (len > 1e-6f) d = d * (1.0f / len);
+    out.direction[0] = d.x;
+    out.direction[1] = d.y;
+    out.direction[2] = d.z;
+    out.direction[3] = l.range();
     const auto& c = l.color();
     out.color[0] = c.x;
     out.color[1] = c.y;
     out.color[2] = c.z;
     out.color[3] = l.intensity();
+    out.shadow[0] = std::cos(l.innerAngle());
+    out.shadow[1] = std::cos(l.outerAngle());
+    out.shadow[2] = -1.0f;
 }
 
 }  // namespace
 
-SceneLightingUniforms sceneLighting(const SceneGraph& graph, const SceneRenderer& renderer, const SceneView& view,
-                                    bool& shadowed) {
+SceneLightingUniforms sceneLighting(const SceneRenderer& renderer) {
     SceneLightingUniforms light{};
-    const LightNode* sun = nullptr;
-    std::vector<const LightNode*> others;
-    for (const auto& [id, node] : graph.nodes()) {
-        if (!node->renderVisible() || node->type() != SceneNode::Type::Light) continue;
-        const auto* l = static_cast<const LightNode*>(node.get());
-        if (l->kind() == LightNode::Kind::Directional) {
-            // The first directional light is the sun, unless a later one
-            // casts shadows and it does not.
-            if (!sun) {
-                sun = l;
-            } else if (l->castsShadow() && !sun->castsShadow()) {
-                others.push_back(sun);
-                sun = l;
-            } else {
-                others.push_back(l);
-            }
-        } else if (l->kind() == LightNode::Kind::Point || l->kind() == LightNode::Kind::Spot) {
-            others.push_back(l);
-        }
-    }
+    const ShadowPlan& plan = renderer.shadowPlan();
+    const std::vector<LightNode*>& lights = renderer.frameLights();
+    const int count = std::min(static_cast<int>(lights.size()), kSceneMaxLights);
 
-    shadowed = false;
+    // The sun (decals light by it alone): the first directional light,
+    // unless a later one casts shadows and it does not.
+    const LightNode* sun = nullptr;
+    for (int i = 0; i < count; ++i) {
+        const LightNode& l = *lights[i];
+        setLight(light.lights[i], l);
+        if (i < ShadowPlan::kMaxLights && plan.lightSlot[i] >= 0 && plan.lightSlotCount[i] > 0) {
+            light.lights[i].shadow[2] = static_cast<float>(plan.lightSlot[i]);
+            light.lights[i].shadow[3] = static_cast<float>(plan.lightSlotCount[i]);
+            std::memcpy(light.lights[i].cascadeSplit, plan.cascadeSplit[i], sizeof(light.lights[i].cascadeSplit));
+        }
+        if (l.kind() != LightNode::Kind::Directional) continue;
+        if (!sun || (l.castsShadow() && !sun->castsShadow())) sun = &l;
+    }
     if (sun) {
-        const bromath::Vec3 dir = bromath::vnorm(sun->direction());
+        bromath::Vec3 dir = sun->direction();
+        const float len = std::sqrt(bromath::vdot(dir, dir));
+        if (len > 1e-6f) dir = dir * (1.0f / len);
         light.sunDirection[0] = dir.x;
         light.sunDirection[1] = dir.y;
         light.sunDirection[2] = dir.z;
@@ -89,26 +79,7 @@ SceneLightingUniforms sceneLighting(const SceneGraph& graph, const SceneRenderer
         light.sunColor[1] = c.y;
         light.sunColor[2] = c.z;
         light.sunColor[3] = sun->intensity();
-        light.numLights[0] = 1.0f;
-        shadowed = sun->castsShadow();
-    } else if (others.empty()) {
-        // No lights at all: an implicit sun, so meshes are never black.
-        const bromath::Vec3 dir = bromath::vnorm(bromath::Vec3{-0.3f, -1.0f, -0.5f});
-        light.sunDirection[0] = dir.x;
-        light.sunDirection[1] = dir.y;
-        light.sunDirection[2] = dir.z;
-        light.sunDirection[3] = 1.0f;
-        light.sunColor[0] = 1.0f;
-        light.sunColor[1] = 0.98f;
-        light.sunColor[2] = 0.95f;
-        light.sunColor[3] = 3.0f;
-        light.numLights[0] = 1.0f;
     }
-    light.numLights[2] = shadowed ? 1.0f : 0.0f;
-
-    const size_t count = std::min(others.size(), kMaxPointLights);
-    light.numLights[1] = static_cast<float>(count);
-    for (size_t i = 0; i < count; ++i) setLight(light.pointLights[i], *others[i]);
 
     const float* amb = renderer.effectiveAmbient();
     light.ambientColor[0] = amb[0];
@@ -116,17 +87,43 @@ SceneLightingUniforms sceneLighting(const SceneGraph& graph, const SceneRenderer
     light.ambientColor[2] = amb[2];
     light.ambientColor[3] = 1.0f;
 
-    const bromath::Vec3 lightDir{light.sunDirection[0], light.sunDirection[1], light.sunDirection[2]};
-    const bromath::Vec3 center = view.eye + view.forward() * kShadowCenterAhead;
-    const bromath::Vec3 lightEye = center - lightDir * kShadowLightDistance;
-    const bromath::Vec3 up = std::abs(lightDir.y) > 0.99f ? bromath::Vec3{0, 0, 1} : bromath::Vec3{0, 1, 0};
-    const bromath::Mat4 lightView = bromath::mlookAt(lightEye, center, up);
-    const bromath::Mat4 lightProj = toVulkanClip(makeOrthoZeroToOne(-kShadowHalfExtent, kShadowHalfExtent,
-                                                                    -kShadowHalfExtent, kShadowHalfExtent,
-                                                                    kShadowNear, kShadowFar));
-    const bromath::Mat4 lightVP = bromath::mmul(lightProj, lightView);
-    std::memcpy(light.shadowCascadeProj, lightVP.data, sizeof(light.shadowCascadeProj));
+    const int tiles = std::min(plan.tileCount, kSceneMaxShadowTiles);
+    light.params[0] = static_cast<float>(count);
+    light.params[1] = static_cast<float>(plan.pcfTaps);
+    light.params[2] = plan.atlasSize > 0 ? 1.0f / static_cast<float>(plan.atlasSize) : 0.0f;
+    light.params[3] = static_cast<float>(tiles);
+
+    // Clip -> (tile uv, depth): x,y from [-1,1] to [0,1]; the clip y flip of
+    // toVulkanClip matches the flip the shadow pass rendered the tile with.
+    bromath::Mat4 toUv = bromath::midentity();
+    toUv.at(0, 0) = 0.5f;
+    toUv.at(1, 1) = 0.5f;
+    toUv.at(0, 3) = 0.5f;
+    toUv.at(1, 3) = 0.5f;
+    for (int t = 0; t < tiles; ++t) {
+        const ShadowTilePlan& tile = plan.tiles[t];
+        SceneShadowTileUniform& out = light.shadows[t];
+        const bromath::Mat4 m = bromath::mmul(toUv, toVulkanClip(tile.viewProj));
+        std::memcpy(out.matrix, m.data, sizeof(out.matrix));
+        std::memcpy(out.rect, tile.rect, sizeof(out.rect));
+        out.bias[0] = tile.bias;
+        out.bias[1] = tile.normalBias;
+        out.bias[2] = tile.texelConst;
+        out.bias[3] = tile.texelPerMetre;
+        out.depth[0] = tile.zNear;
+        out.depth[1] = tile.zFar;
+        out.depth[2] = tile.ortho ? 1.0f : 0.0f;
+    }
     return light;
+}
+
+void writeCameraSet(SceneFrame& frame) {
+    const SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
+    const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
+    frame.cameraSet = frame.gpu.device.frameSet(frame.gpu.defaults.cameraLayout);
+    SceneVkDescriptorWriter camWriter;
+    camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
+    camWriter.updateSet(frame.gpu.device.device(), frame.cameraSet);
 }
 
 VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uniforms, VkImageView probeView,
@@ -136,7 +133,7 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
     VkDescriptorSet set = gpu.device.frameSet(d.lightingLayout);
     SceneVkDescriptorWriter writer;
     writer.writeBuffer(0, ubo.buffer, ubo.range, ubo.offset);
-    writer.writeImage(1, gpu.targets.shadow.view, VK_NULL_HANDLE);   // immutable compare sampler
+    writer.writeImage(1, gpu.targets.shadowAtlas.view, VK_NULL_HANDLE);   // immutable compare sampler
     writer.writeImage(2, probeView ? probeView : d.cube.view, d.cubeSampler);
     writer.writeImage(3, shadeMap ? shadeMap->view : d.white.view, shadeMap ? shadeMap->sampler : d.sampler);
     writer.updateSet(gpu.device.device(), set);
@@ -144,7 +141,7 @@ VkDescriptorSet writeLightingSet(SceneGpu& gpu, const SceneLightingUniforms& uni
 }
 
 void PassFrameUniforms::declare(const SceneFrame& frame, PassIO& io) const {
-    io.sample(frame.gpu.targets.shadow);
+    io.sample(frame.gpu.targets.shadowAtlas);
 }
 
 void PassFrameUniforms::record(SceneFrame& frame) {
@@ -198,13 +195,6 @@ void PassFrameUniforms::record(SceneFrame& frame) {
         light.shadeParams[2] = static_cast<float>(binding.width);
         light.shadeParams[3] = static_cast<float>(binding.height);
     }
-
-    const SceneCameraUniforms cam = frame.view.uniforms(&frame.renderer);
-    const VkDescriptorBufferInfo camInfo = frame.gpu.device.frameUniform(&cam, sizeof(cam));
-    frame.cameraSet = frame.gpu.device.frameSet(frame.gpu.defaults.cameraLayout);
-    SceneVkDescriptorWriter camWriter;
-    camWriter.writeBuffer(0, camInfo.buffer, camInfo.range, camInfo.offset);
-    camWriter.updateSet(frame.gpu.device.device(), frame.cameraSet);
 
     frame.lightingSet = writeLightingSet(frame.gpu, light, frame.probe.view, shade);
 }

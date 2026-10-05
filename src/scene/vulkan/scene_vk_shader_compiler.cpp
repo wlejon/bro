@@ -3,10 +3,55 @@
 #include "render/glsl_compiler.h"
 #include "util/log.h"
 
+#include "scene_camera.glsl.src.h"
+#include "scene_lighting.glsl.src.h"
+#include "scene_mesh_push.glsl.src.h"
+#include "scene_shadow_push.glsl.src.h"
+
+#include <cstring>
+#include <sstream>
 
 namespace bro::scene::vk {
 
 namespace {
+
+// The GLSL a scene shader may #include, by name.
+const char* includedSource(const std::string& name) {
+    static const struct { const char* name; const char* source; } kIncludes[] = {
+        {"scene_camera.glsl", kVkSceneCameraSrc},
+        {"scene_lighting.glsl", kVkSceneLightingSrc},
+        {"scene_mesh_push.glsl", kVkSceneMeshPushSrc},
+        {"scene_shadow_push.glsl", kVkSceneShadowPushSrc},
+    };
+    for (const auto& inc : kIncludes) {
+        if (name == inc.name) return inc.source;
+    }
+    return nullptr;
+}
+
+// Replace each `#include "name"` line with the named source (recursively), as
+// bro_spirv_embed does for the build-time compiles. False on an unknown name.
+bool expandIncludes(const std::string& source, std::string& out, std::string* errOut, int depth = 0) {
+    std::istringstream lines(source);
+    std::string line;
+    while (std::getline(lines, line)) {
+        const size_t hash = line.find_first_not_of(" \t");
+        if (hash != std::string::npos && line.compare(hash, 8, "#include") == 0) {
+            const size_t open = line.find('"', hash);
+            const size_t close = open == std::string::npos ? open : line.find('"', open + 1);
+            const char* included =
+                close == std::string::npos ? nullptr : includedSource(line.substr(open + 1, close - open - 1));
+            if (!included || depth > 8 || !expandIncludes(included, out, errOut, depth + 1)) {
+                if (errOut && errOut->empty()) *errOut = "unknown or recursive include: " + line;
+                return false;
+            }
+            continue;
+        }
+        out += line;
+        out += '\n';
+    }
+    return true;
+}
 
 static const uint32_t kSpvMeshVert[] =
 #include "mesh.vert.spv.h"
@@ -117,7 +162,13 @@ std::vector<uint32_t> SceneVkShaderCompiler::compileGlsl(const std::string& glsl
             return {};
     }
     std::string log;
-    std::vector<uint32_t> spirv = render::compileGlslToSpirv(glslSource, glStage, &log);
+    std::string source;
+    if (!expandIncludes(glslSource, source, &log)) {
+        LOG_ERROR("SceneVkShaderCompiler: %s", log.c_str());
+        if (errOut) *errOut = std::move(log);
+        return {};
+    }
+    std::vector<uint32_t> spirv = render::compileGlslToSpirv(source, glStage, &log);
     if (spirv.empty()) LOG_ERROR("SceneVkShaderCompiler: GLSL compilation failed:\n%s", log.c_str());
     if (errOut) *errOut = std::move(log);
     return spirv;

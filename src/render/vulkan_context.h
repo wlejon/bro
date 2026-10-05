@@ -75,6 +75,9 @@ public:
     /// (1.3) and what the device supports.
     uint32_t apiVersion() const { return apiVersion_; }
     bool hasSynchronization2() const { return synchronization2_; }
+    /// Line widths other than 1 (enabled whenever the device has them;
+    /// MoltenVK does not).
+    bool wideLines() const { return deviceFeatures_.wideLines == VK_TRUE; }
 
     VulkanQueue& queue() { return queue_; }
     VulkanFrames& frames() { return frames_; }

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <type_traits>
 #include <vector>
 
 namespace bro::scene {
@@ -17,8 +18,7 @@ using bromath::Quat;
 using bromath::Mat4;
 
 // ---------------------------------------------------------------------------
-// Shadow-tile planner (see scene_renderer.h). The Vulkan shadow pass does not
-// draw the plan yet; the cache decision and the caster counters are real.
+// Shadow-tile planner (see scene_renderer.h and shadow_plan.h).
 // ---------------------------------------------------------------------------
 
 void SceneRenderer::computeShadowBounds(bromath::AABB3& casters,
@@ -168,18 +168,26 @@ int clipFrustumToBox(const Vec3 corners[8], const bromath::AABB3& box, Vec3* out
 
 void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     // Reset per-frame shadow state. Default every light to "no shadow".
-    shadowTileCount_ = 0;
+    ShadowPlan& plan = shadowPlan_;
+    plan.tileCount = 0;
+    plan.pcfTaps = shadowPCFTaps_;
+    plan.atlasSize = std::max(1, std::min(shadowAtlasSize_, shadowAtlasLimit_));
+    if (plan.atlasSize != shadowPlannedAtlas_) {
+        // Every tile's texels move with the atlas: nothing cached survives.
+        shadowPlannedAtlas_ = plan.atlasSize;
+        invalidateShadowCache();
+    }
     shadowCasters_.clear();
     shadowSkinnedCasters_.clear();
     shadowCustomCasters_.clear();
     shadowSkinnedCustomCasters_.clear();
     shadowInstancedCasters_.clear();
     shadowTubeCasters_.clear();
-    for (int i = 0; i < 32; ++i) {
-        lightShadowSlot_[i] = -1;
-        lightShadowSlotCount_[i] = 0;
-        lightCascadeSplit_[i][0] = lightCascadeSplit_[i][1] =
-        lightCascadeSplit_[i][2] = lightCascadeSplit_[i][3] = 1e30f;
+    for (int i = 0; i < ShadowPlan::kMaxLights; ++i) {
+        plan.lightSlot[i] = -1;
+        plan.lightSlotCount[i] = 0;
+        plan.cascadeSplit[i][0] = plan.cascadeSplit[i][1] =
+        plan.cascadeSplit[i][2] = plan.cascadeSplit[i][3] = 1e30f;
     }
 
     // Quick skip: if no light wants shadows, don't bother fitting.
@@ -244,11 +252,6 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     computeShadowBounds(casterBounds, receiverBounds);
     if (bromath::aisEmpty(casterBounds)) return;
 
-    // Bias matrix maps NDC to UV [0,1]. Only XY need the half-scale-and-
-    // offset: the shadow projections already emit [0,1] depth.
-    Mat4 bias = bromath::mmul(bromath::mtranslate({0.5f, 0.5f, 0.0f}),
-                              bromath::mscale({0.5f, 0.5f, 1.0f}));
-
     // Atlas grid from the tile demand: one sun over an ortho camera (or a
     // single-cascade sun) takes the WHOLE atlas, up to four tiles take a
     // quarter each, anything more falls back to 16ths. A 512 px tile — the
@@ -271,10 +274,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         // Every tile moved: cached texels are at the wrong place.
         shadowGridDim_ = gridDim;
         invalidateShadowCache();
-        shadowAtlasNeedsClear_ = true;
     }
     const float tileUV = 1.0f / (float)gridDim;
-    const int   tilePx = shadowAtlasSize_ / gridDim;
+    const int   tilePx = plan.atlasSize / gridDim;
 
     // texelConst / texelPerDist: world size of one shadow texel at the
     // receiver — a constant for an ortho tile, per metre of light distance
@@ -283,36 +285,31 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     auto bakeTile = [&](int slot, const Mat4& lightProjView, LightNode* L,
                         float texelConst, float texelPerDist,
                         float zNear, float zFar, bool ortho) {
-        // shadowMatrixCamRel = bias * proj * view * translate(cameraEye)
-        // so the FS can multiply directly against vWorldPos (camera-relative).
-        Mat4 t = bromath::mtranslate({graph_.cameraEye_.x, graph_.cameraEye_.y, graph_.cameraEye_.z});
-        Mat4 cam = bromath::mmul(bromath::mmul(bias, lightProjView), t);
-        std::memcpy(shadowMatrixCamRel_[slot], cam.data, sizeof(float) * 16);
-        std::memcpy(shadowRenderMatrix_[slot], lightProjView.data, sizeof(float) * 16);
-
-        int gx = slot % gridDim;
-        int gy = slot / gridDim;
-        shadowAtlasRect_[slot][0] = gx * tileUV;
-        shadowAtlasRect_[slot][1] = gy * tileUV;
-        shadowAtlasRect_[slot][2] = tileUV;
-        shadowAtlasRect_[slot][3] = tileUV;
-
-        shadowBias_[slot][0] = L->shadowBias();
-        shadowBias_[slot][1] = L->shadowNormalBias();
-        shadowTexelWorld_[slot][0] = texelConst;
-        shadowTexelWorld_[slot][1] = texelPerDist;
-        shadowDepthParams_[slot][0] = zNear;
-        shadowDepthParams_[slot][1] = zFar;
-        shadowDepthParams_[slot][2] = ortho ? 1.0f : 0.0f;
-
-        shadowTileLight_[slot] = L;
+        ShadowTilePlan& t = plan.tiles[slot];
+        t.viewProj = lightProjView;
+        t.frustum = makeFrustum(lightProjView);
+        const int gx = slot % gridDim;
+        const int gy = slot / gridDim;
+        t.rect[0] = gx * tileUV;
+        t.rect[1] = gy * tileUV;
+        t.rect[2] = tileUV;
+        t.rect[3] = tileUV;
+        t.bias = L->shadowBias();
+        t.normalBias = L->shadowNormalBias();
+        t.texelConst = texelConst;
+        t.texelPerMetre = texelPerDist;
+        t.zNear = zNear;
+        t.zFar = zFar;
+        t.ortho = ortho;
+        t.render = false;
+        t.light = L;
     };
 
     // For each shadow-casting light, allocate slot(s) and build matrices.
-    for (int i = 0; i < (int)lights.size() && i < 32; ++i) {
+    for (int i = 0; i < (int)lights.size() && i < ShadowPlan::kMaxLights; ++i) {
         LightNode* L = lights[i];
         if (!L || !L->castsShadow()) continue;
-        if (shadowTileCount_ >= kMaxShadowTiles) break;
+        if (plan.tileCount >= kMaxShadowTiles) break;
 
         if (L->kind() == LightNode::Kind::Directional) {
             Vec3 d = L->direction();
@@ -333,7 +330,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             // on-screen scale, so depth slices buy it nothing: one map.
             int N = L->cascadeCount();
             if (!persp) N = 1;
-            int budgetLeft = kMaxShadowTiles - shadowTileCount_;
+            int budgetLeft = kMaxShadowTiles - plan.tileCount;
             if (N > budgetLeft) N = budgetLeft;
             if (N <= 0) continue;
 
@@ -353,11 +350,11 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 splitFar[c] = lambda * logS + (1.0f - lambda) * uniform;
             }
 
-            int firstSlot = shadowTileCount_;
-            lightShadowSlot_[i] = firstSlot;
-            lightShadowSlotCount_[i] = N;
+            int firstSlot = plan.tileCount;
+            plan.lightSlot[i] = firstSlot;
+            plan.lightSlotCount[i] = N;
             for (int c = 0; c < N - 1; ++c) {
-                lightCascadeSplit_[i][c] = splitFar[c + 1];
+                plan.cascadeSplit[i][c] = splitFar[c + 1];
             }
             // The last cascade absorbs anything farther — already 1e30f from reset.
 
@@ -463,7 +460,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 Mat4 projView = bromath::mmul(proj, lightRot);
                 bakeTile(firstSlot + c, projView, L, texelSize, 0.0f,
                          nearD, farD, true);
-                shadowTileCount_++;
+                plan.tileCount++;
             }
         }
         else if (L->kind() == LightNode::Kind::Spot) {
@@ -490,18 +487,18 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             Mat4 view = bromath::mlookAt(eye, target, up);
             Mat4 proj = makePerspectiveZeroToOne(fov, 1.0f, near, far);
             Mat4 projView = bromath::mmul(proj, view);
-            bakeTile(shadowTileCount_, projView, L,
+            bakeTile(plan.tileCount, projView, L,
                      0.0f, 2.0f * std::tan(fov * 0.5f) / (float)tilePx,
                      near, far, false);
-            lightShadowSlot_[i] = shadowTileCount_;
-            lightShadowSlotCount_[i] = 1;
-            shadowTileCount_++;
+            plan.lightSlot[i] = plan.tileCount;
+            plan.lightSlotCount[i] = 1;
+            plan.tileCount++;
         }
         else if (L->kind() == LightNode::Kind::Point) {
             // Point light = 6-face cube projection. Each face gets its own
             // atlas tile rendered with perspective(90deg, 1, near, far).
             // Needs 6 contiguous slots; skip if the budget can't fit them.
-            if (shadowTileCount_ + 6 > kMaxShadowTiles) continue;
+            if (plan.tileCount + 6 > kMaxShadowTiles) continue;
 
             const Mat4& M = L->worldMatrix();
             Vec3 eye{M.at(0,3), M.at(1,3), M.at(2,3)};
@@ -525,9 +522,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 {0,-1, 0}, {0,-1, 0},
             };
 
-            int firstSlot = shadowTileCount_;
-            lightShadowSlot_[i] = firstSlot;
-            lightShadowSlotCount_[i] = 6;
+            int firstSlot = plan.tileCount;
+            plan.lightSlot[i] = firstSlot;
+            plan.lightSlotCount[i] = 6;
             for (int f = 0; f < 6; ++f) {
                 Vec3 target{eye.x + forward[f].x,
                             eye.y + forward[f].y,
@@ -537,28 +534,21 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 // 90 deg face: a texel spans 2*tan(45deg)/tilePx per metre.
                 bakeTile(firstSlot + f, projView, L,
                          0.0f, 2.0f / (float)tilePx, near, far, false);
-                shadowTileCount_++;
+                plan.tileCount++;
             }
         }
     }
 }
 
 void SceneRenderer::planShadowTiles() {
-    if (shadowTileCount_ == 0) return;
-    const bool hasInstancedCasters = !shadowInstancedCasters_.empty();
-    const bool hasCustomCasters = !shadowCustomCasters_.empty();
-    const bool hasSkinnedCustomCasters = !shadowSkinnedCustomCasters_.empty();
-    const bool hasTubeCasters = !shadowTubeCasters_.empty();
+    ShadowPlan& plan = shadowPlan_;
+    if (plan.tileCount == 0) return;
 
-    const int tileSize = shadowAtlasSize_ / shadowGridDim_;  // grid chosen in prepareShadows
-
-    // Per-tile frustum culling: casters are tested against each tile's light
-    // volume (cascade ortho box, spot cone, point cube face — all encoded by
-    // the tile's world-space lightVP, the exact matrix the rasterizer clips
-    // against). NEVER the camera frustum: an off-screen caster must still
-    // shadow on-screen geometry. Caster world bounds are cached once per
-    // frame (posed for skinned casters); a caster without valid bounds draws
-    // into every tile.
+    // Caster world bounds, cached once per frame (posed for skinned casters)
+    // for the per-tile overlap test below. A caster without valid bounds
+    // overlaps every tile. The test is against each tile's light volume —
+    // never the camera frustum: an off-screen caster must still shadow
+    // on-screen geometry.
     struct CasterBounds { bromath::AABB3 box; bool valid; };
     std::vector<CasterBounds> staticBounds, skinnedBounds, instBounds,
                               customBounds, skinnedCustomBounds, tubeBounds;
@@ -582,15 +572,6 @@ void SceneRenderer::planShadowTiles() {
         cache(shadowTubeCasters_, tubeBounds);
     }
 
-    // Tile frustums, shared by the cache-signature build below and the
-    // per-caster cull in the draw loop.
-    Mat4 tileVP[kMaxShadowTiles];
-    bromath::Frustum tileFrustum[kMaxShadowTiles];
-    for (int slot = 0; slot < shadowTileCount_; ++slot) {
-        std::memcpy(tileVP[slot].data, shadowRenderMatrix_[slot], sizeof(float) * 16);
-        if (cullingActive_) tileFrustum[slot] = makeFrustum(tileVP[slot]);
-    }
-
     // --- Static shadow-tile cache decision -------------------------------
     // A tile's depth content is a pure function of its lightVP matrix and
     // the (geometry, world transform) of every caster overlapping its
@@ -598,101 +579,63 @@ void SceneRenderer::planShadowTiles() {
     // signature is the ordered (node id, change generation) list of
     // overlapping casters with per-list separators; conservative-correct:
     // any membership or generation difference re-renders, and tiles touched
-    // by skinned or custom-vertex casters (pose/displacement changes with
-    // no generation signal) are permanently dynamic. Directional cascades
-    // fold camera motion into lightVP (the fit follows the camera), so they
-    // only cache while the camera is still; spot/point tiles are camera-
-    // independent and cache across any camera movement.
-    cullStats_.shadowTilesTotal += shadowTileCount_;
-    const bool fullClear = shadowAtlasNeedsClear_ || !shadowCacheEnabled_;
-    bool renderSlot[kMaxShadowTiles] = {};
-    bool anyRender = false;
-    if (!shadowCacheEnabled_) {
-        for (int slot = 0; slot < shadowTileCount_; ++slot) renderSlot[slot] = true;
-        anyRender = true;
-        cullStats_.shadowTilesRendered += shadowTileCount_;
-    } else {
-        std::vector<std::pair<uint32_t, uint64_t>> sig;
-        for (int slot = 0; slot < shadowTileCount_; ++slot) {
-            sig.clear();
-            bool dynamic = false;
-            auto addList = [&](const auto& casters,
-                               const std::vector<CasterBounds>& bounds,
-                               uint64_t listTag, bool listDynamic) {
-                sig.emplace_back(0u, listTag);  // separator — node ids start at 1
-                for (size_t i = 0; i < casters.size(); ++i) {
-                    if (cullingActive_ && bounds[i].valid &&
-                        !bromath::fintersects(tileFrustum[slot], bounds[i].box))
-                        continue;
-                    sig.emplace_back(casters[i]->id(),
-                                     casters[i]->changeGeneration());
-                    if (listDynamic) dynamic = true;
-                }
-            };
-            addList(shadowCasters_,              staticBounds,        1, false);
-            addList(shadowSkinnedCasters_,       skinnedBounds,       2, true);
-            addList(shadowCustomCasters_,        customBounds,        3, false);
-            addList(shadowSkinnedCustomCasters_, skinnedCustomBounds, 4, true);
-            addList(shadowInstancedCasters_,     instBounds,          5, false);
-            addList(shadowTubeCasters_,          tubeBounds,          6, false);
-
-            ShadowTileCacheEntry& e = shadowTileCache_[slot];
-            const uint32_t lightId = shadowTileLight_[slot]->id();
-            if (!fullClear && !dynamic && e.valid && e.lightId == lightId &&
-                std::memcmp(e.lightVP, shadowRenderMatrix_[slot],
-                            sizeof(e.lightVP)) == 0 &&
-                e.casters == sig) {
-                // Atlas texels already hold exactly this content; the FS
-                // sampling matrices were refreshed by prepareShadows.
-                cullStats_.shadowTilesCached++;
-                continue;
-            }
-            renderSlot[slot] = true;
-            anyRender = true;
+    // by skinned, custom-vertex or wind-swayed casters (pose, displacement
+    // and sway change with no generation signal) are permanently dynamic.
+    // Directional cascades fold camera motion into lightVP (the fit follows
+    // the camera), so they only cache while the camera is still; spot/point
+    // tiles are camera-independent and cache across any camera movement.
+    cullStats_.shadowTilesTotal += plan.tileCount;
+    const bool windy = windStrength_ > 0.0f;
+    std::vector<std::pair<uint32_t, uint64_t>> sig;
+    for (int slot = 0; slot < plan.tileCount; ++slot) {
+        ShadowTilePlan& tile = plan.tiles[slot];
+        if (!shadowCacheEnabled_) {
+            tile.render = true;
             cullStats_.shadowTilesRendered++;
-            // Record what the tile is about to contain. Dynamic tiles never
-            // validate — their casters mutate without a generation bump.
-            e.valid = !dynamic;
-            e.lightId = lightId;
-            std::memcpy(e.lightVP, shadowRenderMatrix_[slot], sizeof(e.lightVP));
-            e.casters = sig;
+            continue;
         }
-    }
-    if (!anyRender) return;  // every tile reused
-
-    shadowAtlasNeedsClear_ = false;
-    for (int slot = 0; slot < shadowTileCount_; ++slot) {
-        if (!renderSlot[slot]) continue;
-        auto tileCulled = [&](const std::vector<CasterBounds>& bounds, size_t i) {
-            if (!cullingActive_ || !bounds[i].valid) return false;
-            return !bromath::fintersects(tileFrustum[slot], bounds[i].box);
+        sig.clear();
+        bool dynamic = false;
+        auto addList = [&](const auto& casters,
+                           const std::vector<CasterBounds>& bounds,
+                           uint64_t listTag, bool listDynamic) {
+            sig.emplace_back(0u, listTag);  // separator — node ids start at 1
+            for (size_t i = 0; i < casters.size(); ++i) {
+                if (cullingActive_ && bounds[i].valid &&
+                    !bromath::fintersects(tile.frustum, bounds[i].box))
+                    continue;
+                sig.emplace_back(casters[i]->id(), casters[i]->changeGeneration());
+                if (listDynamic) dynamic = true;
+                if constexpr (std::is_same_v<std::decay_t<decltype(*casters[i])>, MeshNode>) {
+                    if (windy && casters[i]->windMask() > 0.0f) dynamic = true;
+                }
+            }
         };
-        for (size_t i = 0; i < shadowCasters_.size(); ++i) {
-            if (tileCulled(staticBounds, i)) { cullStats_.shadowCulled++; continue; }
-            cullStats_.shadowDrawn++;
+        addList(shadowCasters_,              staticBounds,        1, false);
+        addList(shadowSkinnedCasters_,       skinnedBounds,       2, true);
+        addList(shadowCustomCasters_,        customBounds,        3, true);
+        addList(shadowSkinnedCustomCasters_, skinnedCustomBounds, 4, true);
+        addList(shadowInstancedCasters_,     instBounds,          5, false);
+        addList(shadowTubeCasters_,          tubeBounds,          6, false);
+
+        ShadowTileCacheEntry& e = shadowTileCache_[slot];
+        const uint32_t lightId = tile.light->id();
+        if (!dynamic && e.valid && e.lightId == lightId &&
+            std::memcmp(e.lightVP, tile.viewProj.data, sizeof(e.lightVP)) == 0 &&
+            e.casters == sig) {
+            // The atlas texels already hold exactly this content.
+            cullStats_.shadowTilesCached++;
+            continue;
         }
-        for (size_t i = 0; i < shadowSkinnedCasters_.size(); ++i) {
-            if (tileCulled(skinnedBounds, i)) { cullStats_.shadowCulled++; continue; }
-            cullStats_.shadowDrawn++;
-        }
-        for (size_t i = 0; i < shadowCustomCasters_.size(); ++i) {
-            if (tileCulled(customBounds, i)) { cullStats_.shadowCulled++; continue; }
-            cullStats_.shadowDrawn++;
-        }
-        for (size_t i = 0; i < shadowSkinnedCustomCasters_.size(); ++i) {
-            if (tileCulled(skinnedCustomBounds, i)) { cullStats_.shadowCulled++; continue; }
-            cullStats_.shadowDrawn++;
-        }
-        for (size_t i = 0; i < shadowInstancedCasters_.size(); ++i) {
-            if (tileCulled(instBounds, i)) { cullStats_.shadowCulled++; continue; }
-            cullStats_.shadowDrawn++;
-        }
-        for (size_t i = 0; i < shadowTubeCasters_.size(); ++i) {
-            if (tileCulled(tubeBounds, i)) { cullStats_.shadowCulled++; continue; }
-            cullStats_.shadowDrawn++;
-        }
+        tile.render = true;
+        cullStats_.shadowTilesRendered++;
+        // Record what the tile is about to contain. Dynamic tiles never
+        // validate — their casters mutate without a generation bump.
+        e.valid = !dynamic;
+        e.lightId = lightId;
+        std::memcpy(e.lightVP, tile.viewProj.data, sizeof(e.lightVP));
+        e.casters = sig;
     }
 }
-
 
 }  // namespace bro::scene

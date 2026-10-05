@@ -48,8 +48,10 @@ public:
     SceneVkShaderCompiler() = default;
     ~SceneVkShaderCompiler() = default;
 
-    /// Compile a Vulkan GLSL source string into SPIR-V words. Returns an
-    /// empty vector (and the compiler's diagnostics in *errOut) on failure.
+    /// Compile a Vulkan GLSL source string into SPIR-V words. `#include
+    /// "name"` lines pull in the shared scene GLSL (scene_camera.glsl,
+    /// scene_lighting.glsl, scene_mesh_push.glsl, scene_shadow_push.glsl).
+    /// Returns an empty vector (and the diagnostics in *errOut) on failure.
     static std::vector<uint32_t> compileGlsl(const std::string& glslSource,
                                              VkShaderStageFlagBits stage,
                                              std::string* errOut = nullptr);

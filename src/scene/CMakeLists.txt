@@ -8,6 +8,11 @@ set(VK_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_vk")
 file(MAKE_DIRECTORY "${VK_GEN_DIR}")
 
 set(VK_GENERATED_HEADERS "")
+# The GLSL the shaders #include (expanded by bro_spirv_embed at build time and
+# by SceneVkShaderCompiler at run time).
+set(VK_SHADER_INCLUDES scene_camera.glsl scene_lighting.glsl scene_mesh_push.glsl scene_shadow_push.glsl)
+list(TRANSFORM VK_SHADER_INCLUDES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/"
+     OUTPUT_VARIABLE VK_SHADER_INCLUDE_PATHS)
 foreach(_shader
         mesh.vert
         mesh_instanced.vert
@@ -44,12 +49,13 @@ foreach(_shader
         set(_stage frag)
     endif()
     bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
-                     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${_shader}" ${_stage})
+                     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${_shader}" ${_stage}
+                     DEPENDS ${VK_SHADER_INCLUDE_PATHS})
 endforeach()
 # The opaque mesh shader that also writes the indirect light for SSAO.
 bro_spirv_header(VK_GENERATED_HEADERS "${VK_GEN_DIR}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/mesh.frag" frag
-                 NAME mesh_indirect.frag DEFINES SCENE_INDIRECT_OUTPUT)
+                 NAME mesh_indirect.frag DEFINES SCENE_INDIRECT_OUTPUT DEPENDS ${VK_SHADER_INCLUDE_PATHS})
 
 function(embed_vk_shader SHADER_FILE VAR_NAME)
     set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/${SHADER_FILE}")
@@ -74,6 +80,10 @@ embed_vk_shader(mesh_instanced.vert   kVkMeshInstancedVertSrc)
 embed_vk_shader(mesh_skinned.vert     kVkMeshSkinnedVertSrc)
 embed_vk_shader(shadow.vert           kVkShadowVertSrc)
 embed_vk_shader(shadow_skinned.vert   kVkShadowSkinnedVertSrc)
+embed_vk_shader(scene_camera.glsl     kVkSceneCameraSrc)
+embed_vk_shader(scene_lighting.glsl   kVkSceneLightingSrc)
+embed_vk_shader(scene_mesh_push.glsl  kVkSceneMeshPushSrc)
+embed_vk_shader(scene_shadow_push.glsl kVkSceneShadowPushSrc)
 embed_vk_shader(clipmap_common.glsl       kClipmapCommonSrc)
 embed_vk_shader(clipmap_detail.glsl       kClipmapDetailSrc)
 embed_vk_shader(clipmap_material.glsl     kClipmapMaterialSrc)

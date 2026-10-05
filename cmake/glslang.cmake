@@ -44,19 +44,20 @@ if(NOT TARGET glslang::glslang OR NOT TARGET glslang::glslang-default-resource-l
 endif()
 
 # bro_spirv_header(<out_var> <gen_dir> <glsl_file> <vert|frag|comp>
-#                  [NAME <variant>] [DEFINES <define>...])
+#                  [NAME <variant>] [DEFINES <define>...] [DEPENDS <file>...])
 #
 # Compiles <glsl_file> at build time with bro_spirv_embed (src/render/tools)
 # into <gen_dir>/<name>.spv.h and appends that header to <out_var>, for a
 # target to list among its sources and #include. DEFINES are #defined (to 1)
 # after the #version line; a variant built that way names its header with
 # NAME (<variant>.spv.h) so it does not collide with the plain build.
+# DEPENDS lists the files the shader #includes, so editing one rebuilds it.
 #
 # A cross build cannot run a tool it built for the target, so it names a
 # host build of the tool with -DBRO_SPIRV_EMBED=<path>.
 set(BRO_SPIRV_EMBED "" CACHE FILEPATH "Host bro_spirv_embed, for cross builds")
 function(bro_spirv_header out_var gen_dir glsl_file stage)
-    cmake_parse_arguments(_spv "" "NAME" "DEFINES" ${ARGN})
+    cmake_parse_arguments(_spv "" "NAME" "DEFINES;DEPENDS" ${ARGN})
     get_filename_component(_name "${glsl_file}" NAME)
     if(_spv_NAME)
         set(_name "${_spv_NAME}")
@@ -75,7 +76,7 @@ function(bro_spirv_header out_var gen_dir glsl_file stage)
     add_custom_command(
         OUTPUT  "${_out}"
         COMMAND "${_tool}" ${stage} "${glsl_file}" "${_out}" ${_spv_DEFINES}
-        DEPENDS "${glsl_file}" ${_tool_dep}
+        DEPENDS "${glsl_file}" ${_spv_DEPENDS} ${_tool_dep}
         COMMENT "SPIR-V ${_name} -> ${_name}.spv.h"
         VERBATIM
     )

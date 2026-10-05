@@ -39,6 +39,7 @@ enum class TextureSlot : uint32_t {
     Image,          // sprite sheet, HTML panel, particle texture
     DecalAlbedo,
     DecalEmission,
+    Occlusion,
 };
 
 struct GpuMesh {

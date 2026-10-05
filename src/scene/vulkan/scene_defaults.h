@@ -18,9 +18,10 @@ public:
     void cleanup(SceneVkDevice& device, SceneVkAllocator& allocator);
 
     // --- Set layouts of the lit pipelines ---
-    // set 0: camera UBO; set 1: lighting UBO + shadow array + probe cube +
+    // set 0: camera UBO; set 1: lighting UBO + shadow atlas + probe cube +
     // shade map; set 2: material (albedo, normal, metallic-roughness,
-    // emissive); set 3: bone palette UBO; set 4: custom shader UBO + 8 samplers.
+    // emissive, occlusion); set 3: bone palette UBO; set 4: custom shader UBO
+    // + 8 samplers.
     VkDescriptorSetLayout cameraLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout lightingLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout materialLayout = VK_NULL_HANDLE;

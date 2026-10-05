@@ -441,12 +441,15 @@ int main() {
     allocator.destroyBuffer(readbackBuffer);
     std::cout << "PASSED (Triangle & background pixels verified)" << std::endl;
 
-    // 6. The frame targets: sizes, sample-count clamp, shadow cascade views
-    std::cout << "[Test 6] SceneTargets (frame images, MSAA clamp, shadow array)... " << std::flush;
+    // 6. The frame targets: sizes, sample-count clamp, the shadow atlas
+    std::cout << "[Test 6] SceneTargets (frame images, MSAA clamp, shadow atlas)... " << std::flush;
     SceneTargets targets;
     assert(targets.setup(device, allocator));
-    assert(targets.shadow.isValid() && targets.shadow.arrayLayers == SceneTargets::kShadowCascades);
-    for (VkImageView v : targets.shadowCascadeViews) assert(v != VK_NULL_HANDLE);
+    assert(targets.shadowAtlas.isValid() && targets.shadowAtlas.width == 1);
+    assert(targets.ensureShadowAtlas(allocator, 512) && targets.shadowAtlas.width == 512);
+    assert(targets.ensureShadowAtlas(allocator, targets.maxShadowAtlas() + 1) &&
+           targets.shadowAtlas.width == targets.maxShadowAtlas());
+    assert(targets.ensureShadowAtlas(allocator, 256) && targets.shadowAtlas.height == 256);
     assert(device.shadowCompareSampler() != VK_NULL_HANDLE);
     const VkSampleCountFlagBits samples = targets.supportedSamples(4);
     assert(samples >= VK_SAMPLE_COUNT_1_BIT && samples <= VK_SAMPLE_COUNT_4_BIT);

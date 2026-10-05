@@ -142,7 +142,7 @@ bool SceneVkDescriptorPool::init(VkDevice device, uint32_t maxSets,
     if (poolSizes.empty()) {
         poolSizes = {
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, maxSets * 2 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxSets * 4 },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxSets * 5 },
             { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, maxSets },
             { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, maxSets }
         };

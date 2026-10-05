@@ -109,7 +109,7 @@ PassReflectionProbe::Probe* PassReflectionProbe::ensure(SceneGpu& gpu, const Ref
 
 void PassReflectionProbe::declare(const SceneFrame& frame, PassIO& io) const {
     // The faces bind a lighting set, whose shadow binding must be readable.
-    io.sample(frame.gpu.targets.shadow);
+    io.sample(frame.gpu.targets.shadowAtlas);
 }
 
 void PassReflectionProbe::record(SceneFrame& frame) {
@@ -226,7 +226,8 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
         draw.push.pbrParams[1] = mesh->roughness();
         draw.push.pbrParams[2] = mesh->alphaCutoff();
 
-        uint32_t flags = mesh->effectiveUnlit() ? mesh_flags::kUnlit : 0u;
+        uint32_t flags = (mesh->effectiveUnlit() ? mesh_flags::kUnlit : 0u) |
+                         mesh_flags::vertexColor(mesh->vertexColorMode());
         if (const SceneVkImage* albedo = gpu.resources.texture(mesh->id(), TextureSlot::BaseColor,
                                                                mesh->baseColorTexture())) {
             const SceneDefaults& d = gpu.defaults;
@@ -236,6 +237,7 @@ void PassReflectionProbe::renderFace(SceneFrame& frame, const ReflectionProbeNod
             writer.writeImage(1, d.flatNormal.view, d.sampler);
             writer.writeImage(2, d.white.view, d.sampler);
             writer.writeImage(3, d.black.view, d.sampler);
+            writer.writeImage(4, d.white.view, d.sampler);
             writer.updateSet(gpu.device.device(), draw.materialSet);
             flags |= mesh_flags::kAlbedoMap;
         }

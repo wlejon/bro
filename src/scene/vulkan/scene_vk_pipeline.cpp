@@ -123,6 +123,11 @@ SceneVkPipelineBuilder& SceneVkPipelineBuilder::setCullMode(VkCullModeFlags cull
     return *this;
 }
 
+SceneVkPipelineBuilder& SceneVkPipelineBuilder::setDepthBias(bool enable) {
+    rasterizer_.depthBiasEnable = enable ? VK_TRUE : VK_FALSE;
+    return *this;
+}
+
 SceneVkPipelineBuilder& SceneVkPipelineBuilder::setTarget(const TargetFormat& target) {
     colorAttachmentFormats_.assign(target.color, target.color + target.colorCount);
     depthAttachmentFormat_ = target.depth;

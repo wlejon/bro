@@ -9,6 +9,7 @@
 #include "render/layer_image.h"
 #include "scene/atmosphere.h"
 #include "scene/light_node.h"
+#include "scene/shadow_plan.h"
 
 #include <bromath/aabb.h>
 #include <bromath/frustum.h>
@@ -263,13 +264,7 @@ public:
     /// or 4x4 grid per frame from how many tiles the lights ask for, so one
     /// sun over an orthographic camera gets the whole atlas.
     void setShadowQuality(int atlasSize, int pcfTaps) {
-        const int size = atlasSize > 0 ? atlasSize : 4096;
-        if (size != shadowAtlasSize_) {
-            // Every tile's texels move with the atlas: nothing cached survives.
-            invalidateShadowCache();
-            shadowAtlasNeedsClear_ = true;
-        }
-        shadowAtlasSize_ = size;
+        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 4096;
         shadowPCFTaps_ = (pcfTaps >= 5) ? 5 : (pcfTaps >= 3) ? 3 : 1;
     }
     int shadowAtlasSize() const { return shadowAtlasSize_; }
@@ -387,9 +382,21 @@ public:
     float windStrength() const { return windStrength_; }
     float windFrequency() const { return windFreq_; }
 
+    /// This frame's lights (at most 32, root-attached and visible), or the
+    /// implicit sun when the scene declares none. The shadow plan's per-light
+    /// arrays are indexed like this list.
+    const std::vector<LightNode*>& frameLights() const { return frameLights_; }
+
+    /// This frame's shadow plan (see shadow_plan.h).
+    const ShadowPlan& shadowPlan() const { return shadowPlan_; }
+    /// Forgets every cached shadow tile, so the next frame re-renders them
+    /// all (the atlas they were drawn into is gone).
+    void invalidateShadowCache() {
+        for (auto& e : shadowTileCache_) e.valid = false;
+    }
+
 private:
-    // This frame's lights (at most 32, root-attached and visible), or the
-    // implicit sun when the scene declares none. Rebuilt per frame.
+    // Rebuilds frameLights_ (see frameLights()).
     void collectLights(std::vector<LightNode*>& out) const;
 
     // Implicit directional sun used when the scene declares no lights, so
@@ -401,11 +408,10 @@ private:
     // --- Shadow-tile planner (scene_renderer_shadow.cpp) ---
     // Decides which lights cast shadows this frame, allocates atlas tiles and
     // computes their world->shadow-clip matrices (prepareShadows), then
-    // decides per tile whether its cached content is still valid and which
-    // casters a re-render would draw (planShadowTiles), filling the shadow
-    // counters of cullStats_. The Vulkan shadow pass does not consume the
-    // tile plan yet — it renders one directional map of its own (see
-    // vulkan/pass_shadow.h) — so the plan is what the atlas WILL draw.
+    // decides per tile whether its cached content is still valid
+    // (planShadowTiles), filling shadowPlan_ and the tile counters of
+    // cullStats_. The Vulkan shadow pass draws the tiles marked for render
+    // and counts the casters it draws and culls.
     void prepareShadows(const std::vector<LightNode*>& lights);
     void planShadowTiles();
 
@@ -516,39 +522,18 @@ private:
     // --- Shadow planner state ---
     // Hard cap: 16 atlas tiles. A typical scene budget is 1 directional
     // (1-4 cascades) + a few spots/points; overflow lights go unshadowed.
-    static constexpr int kMaxShadowTiles = 16;
+    static constexpr int kMaxShadowTiles = ShadowPlan::kMaxTiles;
 
     int shadowAtlasSize_ = 4096;
+    int shadowAtlasLimit_ = 4096;  // the device's largest 2D image side
     int shadowPCFTaps_ = 3;       // PCF grid side: 1, 3 or 5 (see setShadowQuality)
     // Atlas grid for the current frame: 1, 2 or 4 tiles per side, chosen by
     // prepareShadows from the tile demand (1 -> whole atlas, <=4 -> quarters,
-    // else 16ths). Changing it moves every tile, so it invalidates the cache.
+    // else 16ths). Changing it moves every tile, so it invalidates the cache,
+    // as does a new atlas size.
     int shadowGridDim_ = 4;
-
-    // Per-frame shadow data, populated by prepareShadows(). Indexed by slot.
-    int   shadowTileCount_ = 0;
-    float shadowMatrixCamRel_[kMaxShadowTiles][16] = {};
-    float shadowAtlasRect_[kMaxShadowTiles][4]     = {};   // origin.xy, size.xy in [0,1]
-    float shadowBias_[kMaxShadowTiles][2]          = {};   // const, normal-bias world units
-    // World size of one shadow texel at the receiver: .x constant (ortho
-    // directional tiles), .y per metre of light distance (spot/point tiles,
-    // whose texels grow with distance).
-    float shadowTexelWorld_[kMaxShadowTiles][2]    = {};
-    // (near, far, isOrtho) of the tile's projection, so a receiver can turn a
-    // world-unit depth bias into [0,1] depth.
-    float shadowDepthParams_[kMaxShadowTiles][3]   = {};
-
-    // Per-light shadow slot (-1 if unshadowed). Indexed by light index.
-    int lightShadowSlot_[32] = {};
-    // For directional CSM: 1..4 cascades, each occupies a contiguous slot.
-    int   lightShadowSlotCount_[32] = {};
-    // Cascade FAR distances in view space; .x = cascade 0 far, etc.
-    float lightCascadeSplit_[32][4] = {};
-
-    // Matrices to render into the atlas (one per tile), world space.
-    float shadowRenderMatrix_[kMaxShadowTiles][16] = {};
-    // Which light owns each tile, for routing the caster draws.
-    LightNode* shadowTileLight_[kMaxShadowTiles] = {};
+    int shadowPlannedAtlas_ = 0;
+    ShadowPlan shadowPlan_;
 
     // --- Static shadow-tile cache ---
     // One entry per atlas tile, recording what the tile's depth content was
@@ -558,7 +543,8 @@ private:
     // interleaved with (0, listIndex) separators so a caster migrating
     // between caster lists never aliases an unchanged signature. A tile is
     // reused when the current signature is identical — any difference, or
-    // any overlapping skinned/custom-vertex caster, re-renders.
+    // any overlapping skinned, wind-swayed or custom-vertex caster,
+    // re-renders.
     struct ShadowTileCacheEntry {
         bool valid = false;
         uint32_t lightId = 0;
@@ -567,18 +553,12 @@ private:
     };
     ShadowTileCacheEntry shadowTileCache_[kMaxShadowTiles];
     bool shadowCacheEnabled_ = true;
-    // A freshly (re)allocated atlas holds garbage — force one full clear
-    // (and thus a full re-render) before any per-tile reuse.
-    bool shadowAtlasNeedsClear_ = true;
-    void invalidateShadowCache() {
-        for (auto& e : shadowTileCache_) e.valid = false;
-    }
 
     // Per-frame shadow caster lists; rebuilt at the top of prepareShadows.
     // Skinned casters deform with the palette; casters whose custom shader
-    // has a VERTEX chunk split into the custom lists (sorted by chunk source)
-    // so a displaced silhouette can be drawn per group. Fragment-only custom
-    // shaders stay in the default lists.
+    // has a VERTEX chunk split into the custom lists, whose displacement
+    // changes without a generation bump. Fragment-only custom shaders stay
+    // in the default lists.
     std::vector<MeshNode*> shadowCasters_;
     std::vector<MeshNode*> shadowSkinnedCasters_;
     std::vector<MeshNode*> shadowCustomCasters_;

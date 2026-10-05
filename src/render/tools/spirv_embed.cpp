@@ -11,7 +11,10 @@
 //   ;
 //
 // Each DEFINE becomes `#define DEFINE 1` right after the #version line, so
-// one source can build several variants.
+// one source can build several variants. A line `#include "name"` is replaced
+// by the file `name` beside the input (recursively), the same textual
+// include the scene expands for its run-time compiles
+// (scene/vulkan/scene_vk_shader_compiler.h).
 //
 // Exits nonzero, with glslang's diagnostics on stderr, if the shader does not
 // compile; the output is written only on success, so a failed build leaves no
@@ -24,6 +27,55 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+
+namespace {
+
+bool readFile(const std::string& path, std::string& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::stringstream text;
+    text << in.rdbuf();
+    out = text.str();
+    return true;
+}
+
+// Replace every `#include "name"` line with the file `name` from `dir`.
+bool expandIncludes(std::string& text, const std::string& dir, int depth) {
+    if (depth > 8) {
+        std::fprintf(stderr, "bro_spirv_embed: #include nested too deeply\n");
+        return false;
+    }
+    std::string out;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        const size_t hash = line.find_first_not_of(" \t");
+        if (hash != std::string::npos && line.compare(hash, 8, "#include") == 0) {
+            const size_t open = line.find('"', hash);
+            const size_t close = open == std::string::npos ? open : line.find('"', open + 1);
+            if (close == std::string::npos) {
+                std::fprintf(stderr, "bro_spirv_embed: malformed include: %s\n", line.c_str());
+                return false;
+            }
+            const std::string path = dir + line.substr(open + 1, close - open - 1);
+            std::string included;
+            if (!readFile(path, included)) {
+                std::fprintf(stderr, "bro_spirv_embed: cannot read included %s\n", path.c_str());
+                return false;
+            }
+            if (!expandIncludes(included, dir, depth + 1)) return false;
+            out += included;
+            out += '\n';
+            continue;
+        }
+        out += line;
+        out += '\n';
+    }
+    text = std::move(out);
+    return true;
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     using bro::render::ShaderStage;
@@ -40,15 +92,14 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    std::ifstream in(argv[2], std::ios::binary);
-    if (!in) {
+    std::string text;
+    if (!readFile(argv[2], text)) {
         std::fprintf(stderr, "bro_spirv_embed: cannot read %s\n", argv[2]);
         return 1;
     }
-    std::stringstream source;
-    source << in.rdbuf();
-
-    std::string text = source.str();
+    const std::string input = argv[2];
+    const size_t slash = input.find_last_of("/\\");
+    if (!expandIncludes(text, slash == std::string::npos ? std::string() : input.substr(0, slash + 1), 0)) return 1;
     if (argc > 4) {
         std::string defines;
         for (int i = 4; i < argc; ++i) defines += std::string("#define ") + argv[i] + " 1\n";

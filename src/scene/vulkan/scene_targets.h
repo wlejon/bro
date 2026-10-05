@@ -16,16 +16,17 @@
 //                            soft particles, SSAO, SSR, depth of field).
 //   ssrSnapshot              the lit opaque colour SSR reflects.
 //   dofHdr, postLdr, ldr     the post chain; ldr is the frame's output.
-//   shadow                   the directional shadow map: one depth layer per
-//                            cascade, sampled as an array with the compare
-//                            sampler of the lighting layout.
+//   shadowAtlas              every light's shadow tiles (SceneRenderer's
+//                            ShadowPlan), sampled with the compare sampler of
+//                            the lighting layout. 1x1 until a light casts a
+//                            shadow, then the plan's size; it never shrinks,
+//                            so cached tiles survive frames without shadows.
 
 #include "scene/vulkan/scene_vk_allocator.h"
 #include "scene/vulkan/scene_vk_target_format.h"
 
 #include <vulkan/vulkan.h>
 
-#include <array>
 #include <cstdint>
 
 namespace bro::scene::vk {
@@ -35,8 +36,6 @@ public:
     static constexpr VkFormat kHdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
     static constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
     static constexpr VkFormat kLdrFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    static constexpr uint32_t kShadowResolution = 1024;
-    static constexpr uint32_t kShadowCascades = 4;
 
     bool setup(SceneVkDevice& device, SceneVkAllocator& allocator);
     void cleanup(SceneVkAllocator& allocator);
@@ -51,6 +50,11 @@ public:
     bool ensure(SceneVkAllocator& allocator, uint32_t width, uint32_t height, VkSampleCountFlagBits samples);
     /// Allocate the indirect-light attachments if they are not yet.
     bool ensureIndirect(SceneVkAllocator& allocator);
+    /// Make the shadow atlas `size` texels square (clamped to the device),
+    /// recreating it when the size differs. False on allocation failure.
+    bool ensureShadowAtlas(SceneVkAllocator& allocator, uint32_t size);
+    /// The largest shadow atlas the device can allocate.
+    uint32_t maxShadowAtlas() const { return maxImageDimension_; }
 
     bool valid() const { return hdr.isValid() && depth.isValid() && ldr.isValid(); }
     uint32_t width() const { return width_; }
@@ -76,8 +80,7 @@ public:
     SceneVkImage postLdr;
     SceneVkImage ldr;
 
-    SceneVkImage shadow;
-    std::array<VkImageView, kShadowCascades> shadowCascadeViews{};
+    SceneVkImage shadowAtlas;
 
 private:
     void destroyFrameImages(SceneVkAllocator& allocator);
@@ -91,6 +94,7 @@ private:
     VkSampleCountFlags supportedSamples_ = VK_SAMPLE_COUNT_1_BIT;
     VkResolveModeFlags supportedDepthResolve_ = 0;
     VkResolveModeFlagBits depthResolve_ = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+    uint32_t maxImageDimension_ = 4096;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     VkSampleCountFlagBits samples_ = VK_SAMPLE_COUNT_1_BIT;

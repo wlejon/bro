@@ -88,6 +88,7 @@ bool SceneDefaults::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     writer.writeImage(1, flatNormal.view, sampler);
     writer.writeImage(2, white.view, sampler);
     writer.writeImage(3, black.view, sampler);
+    writer.writeImage(4, white.view, sampler);
     writer.updateSet(dev, defaultMaterialSet);
     return true;
 }

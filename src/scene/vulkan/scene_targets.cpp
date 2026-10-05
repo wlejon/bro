@@ -3,6 +3,8 @@
 #include "scene/vulkan/scene_vk_depth.h"
 #include "util/log.h"
 
+#include <algorithm>
+
 namespace bro::scene::vk {
 
 bool SceneTargets::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
@@ -21,42 +23,29 @@ bool SceneTargets::setup(SceneVkDevice& device, SceneVkAllocator& allocator) {
     supportedDepthResolve_ = resolve.supportedDepthResolveModes;
     depthResolve_ = depth::resolveNearest(supportedDepthResolve_);
 
-    if (!allocator.createImage(kShadowResolution, kShadowResolution, kDepthFormat,
-                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shadow, 1, VK_SAMPLE_COUNT_1_BIT,
-                               VK_IMAGE_ASPECT_DEPTH_BIT, kShadowCascades)) {
-        LOG_ERROR("SceneTargets: Failed creating the shadow map");
-        return false;
-    }
-    for (uint32_t i = 0; i < kShadowCascades; ++i) {
-        VkImageViewCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        info.image = shadow.image;
-        info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        info.format = kDepthFormat;
-        info.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, i, 1};
-        if (vkCreateImageView(device_, &info, nullptr, &shadowCascadeViews[i]) != VK_SUCCESS) {
-            LOG_ERROR("SceneTargets: Failed creating shadow cascade view %u", i);
-            return false;
-        }
-    }
-    return true;
+    maxImageDimension_ = limits.maxImageDimension2D;
+    return ensureShadowAtlas(allocator, 1);
 }
 
 void SceneTargets::cleanup(SceneVkAllocator& allocator) {
     destroyFrameImages(allocator);
     allocator.destroyImage(indirect);
     allocator.destroyImage(indirectMsaa);
-    if (sceneDevice_) {
-        VkDevice dev = device_;
-        sceneDevice_->defer([dev, views = shadowCascadeViews] {
-            for (VkImageView v : views) {
-                if (v != VK_NULL_HANDLE) vkDestroyImageView(dev, v, nullptr);
-            }
-        });
+    allocator.destroyImage(shadowAtlas);
+}
+
+bool SceneTargets::ensureShadowAtlas(SceneVkAllocator& allocator, uint32_t size) {
+    size = std::clamp<uint32_t>(size, 1, maxImageDimension_);
+    if (shadowAtlas.isValid() && shadowAtlas.width == size) return true;
+    allocator.destroyImage(shadowAtlas);
+    if (!allocator.createImage(size, size, kDepthFormat,
+                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, shadowAtlas, 1, VK_SAMPLE_COUNT_1_BIT,
+                               VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        LOG_ERROR("SceneTargets: Failed creating the %ux%u shadow atlas", size, size);
+        return false;
     }
-    shadowCascadeViews = {};
-    allocator.destroyImage(shadow);
+    return true;
 }
 
 VkSampleCountFlagBits SceneTargets::supportedSamples(int requested) const {

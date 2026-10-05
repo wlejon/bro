@@ -1,5 +1,6 @@
 #include "scene/vulkan/scene_mesh_drawer.h"
 
+#include "scene/depth_policy.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/scene_graph.h"
 #include "scene/skinned_mesh_node.h"
@@ -58,6 +59,7 @@ void SceneMeshDrawer::vertexInput(MeshKind kind, std::vector<VkVertexInputBindin
 bool SceneMeshDrawer::setup(SceneGpu& gpu) {
     device_ = gpu.device.device();
     defaults_ = &gpu.defaults;
+    wideLines_ = gpu.device.context().wideLines();
 
     const std::array<VkDescriptorSetLayout, 5> sets = {gpu.defaults.cameraLayout, gpu.defaults.lightingLayout,
                                                        gpu.defaults.materialLayout, gpu.defaults.boneLayout,
@@ -107,20 +109,39 @@ void SceneMeshDrawer::cleanup(SceneGpu& gpu) {
     layout_ = VK_NULL_HANDLE;
 }
 
-VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, bool translucent,
+namespace raster {
+constexpr uint32_t kTranslucent = 1;
+constexpr uint32_t kTwoSided = 2;
+constexpr uint32_t kLines = 4;
+}
+
+uint32_t SceneMeshDrawer::rasterVariant(const MeshDraw& draw) {
+    return (draw.translucent ? raster::kTranslucent : 0u) | (draw.twoSided ? raster::kTwoSided : 0u) |
+           (draw.lines ? raster::kLines : 0u);
+}
+
+VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t rasterBits,
                                           const TargetFormat& target) {
     std::vector<VkVertexInputBindingDescription> bindings;
     std::vector<VkVertexInputAttributeDescription> attributes;
     vertexInput(kind, bindings, attributes);
 
+    const bool lines = (rasterBits & raster::kLines) != 0;
+    const bool cullBack = (rasterBits & (raster::kTwoSided | raster::kLines)) == 0;
+    std::vector<VkDynamicState> dynamic = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                           VK_DYNAMIC_STATE_DEPTH_BIAS};
+    if (lines && wideLines_) dynamic.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+
     SceneVkPipelineBuilder b;
     b.setShaderStages(vs, fs)
      .setVertexInput(bindings, attributes)
-     .setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
+     .setInputTopology(lines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST)
      .setPolygonMode(VK_POLYGON_MODE_FILL)
-     .setCullMode(VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_COUNTER_CLOCKWISE)
-     .setTarget(target);
-    if (translucent) {
+     .setCullMode(cullBack ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
+     .setTarget(target)
+     .setDepthBias(true)
+     .setDynamicStates(dynamic);
+    if (rasterBits & raster::kTranslucent) {
         b.enableAlphaBlending(1).enableDepthTest(false);
     } else {
         // Every attachment is written: the indirect-light one, when the
@@ -130,11 +151,12 @@ VkPipeline SceneMeshDrawer::buildPipeline(VkShaderModule vs, VkShaderModule fs, 
     return b.build(device_, layout_);
 }
 
-VkPipeline SceneMeshDrawer::builtinPipeline(MeshKind kind, bool translucent, const TargetFormat& target) {
-    const uint32_t variant = static_cast<uint32_t>(kind) * 2 + (translucent ? 1 : 0);
+VkPipeline SceneMeshDrawer::builtinPipeline(const MeshDraw& draw, const TargetFormat& target) {
+    const uint32_t rasterBits = rasterVariant(draw);
+    const uint32_t variant = static_cast<uint32_t>(draw.kind) * 8 + rasterBits;
     return builtin_.get(variant, target, [&] {
         VkShaderModule fs = target.colorCount > 1 ? fsIndirect_ : fs_;
-        return buildPipeline(vs_[static_cast<int>(kind)], fs, kind, translucent, target);
+        return buildPipeline(vs_[static_cast<int>(draw.kind)], fs, draw.kind, rasterBits, target);
     });
 }
 
@@ -164,9 +186,10 @@ SceneMeshDrawer::CustomProgram* SceneMeshDrawer::program(const CustomShaderState
     return custom_.emplace(std::move(key), std::move(prog)).first->second.get();
 }
 
-VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, MeshKind kind, bool translucent,
-                                           const TargetFormat& target) {
-    return prog.pipelines.get(translucent ? 1 : 0, target, [&]() -> VkPipeline {
+VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target) {
+    const MeshKind kind = draw.kind;
+    const uint32_t rasterBits = rasterVariant(draw);
+    return prog.pipelines.get(rasterBits, target, [&]() -> VkPipeline {
         VkShaderModule fs = prog.fs;
         if (target.colorCount > 1) {
             if (prog.indirectFailed) return VK_NULL_HANDLE;
@@ -187,7 +210,7 @@ VkPipeline SceneMeshDrawer::customPipeline(CustomProgram& prog, MeshKind kind, b
             }
             fs = prog.fsIndirect;
         }
-        return buildPipeline(prog.vs, fs, kind, translucent, target);
+        return buildPipeline(prog.vs, fs, kind, rasterBits, target);
     });
 }
 
@@ -243,17 +266,26 @@ VkDescriptorSet SceneMeshDrawer::customSet(SceneFrame& frame, uint32_t nodeId, c
     return set;
 }
 
-void SceneMeshDrawer::fill(const float* color, const float* emissiveColor, float emissive, float metallic,
-                           float roughness, float alphaCutoff, MeshDraw& out) {
+template <typename Node>
+void SceneMeshDrawer::fillMaterial(const Node& node, MeshDraw& out) {
+    const float* color = node.color();
+    const float* emissiveColor = node.emissiveColor();
+    std::memcpy(out.push.model, node.worldMatrix().data, sizeof(out.push.model));
     std::memcpy(out.push.baseColor, color, sizeof(out.push.baseColor));
     out.push.emissive[0] = emissiveColor[0];
     out.push.emissive[1] = emissiveColor[1];
     out.push.emissive[2] = emissiveColor[2];
-    out.push.emissive[3] = emissive;
-    out.push.pbrParams[0] = metallic;
-    out.push.pbrParams[1] = roughness;
-    out.push.pbrParams[2] = alphaCutoff;
+    out.push.emissive[3] = node.emissive();
+    out.push.pbrParams[0] = node.metallic();
+    out.push.pbrParams[1] = node.roughness();
+    out.push.pbrParams[2] = node.alphaCutoff();
+    out.push.extra[0] = node.nearClipDist();
     out.translucent = color[3] < 1.0f;
+    // Unlit meshes never cast: they draw outside the lighting a shadow
+    // belongs to (a custom shader suppresses unlit, so it casts).
+    out.castsShadow = node.castsShadow() && !node.effectiveUnlit();
+    out.depthBiasFactor = node.depthBiasFactor();
+    out.depthBiasUnits = node.depthBiasUnits();
 }
 
 namespace {
@@ -265,6 +297,7 @@ struct MaterialImages {
     const SceneVkImage* normal = nullptr;
     const SceneVkImage* metallicRoughness = nullptr;
     const SceneVkImage* emissive = nullptr;
+    const SceneVkImage* occlusion = nullptr;
 };
 
 template <typename Node>
@@ -274,6 +307,7 @@ MaterialImages materialImages(SceneGpuResources& res, const Node& node) {
     m.normal = res.texture(node.id(), TextureSlot::Normal, node.normalTexture());
     m.metallicRoughness = res.texture(node.id(), TextureSlot::MetallicRoughness, node.metallicRoughnessTexture());
     m.emissive = res.texture(node.id(), TextureSlot::Emissive, node.emissiveTexture());
+    m.occlusion = res.texture(node.id(), TextureSlot::Occlusion, node.occlusionTexture());
     return m;
 }
 
@@ -286,7 +320,8 @@ VkDescriptorSet materialSet(SceneFrame& frame, const SceneDefaults& d, const Mat
     if (m.normal) flags |= mesh_flags::kNormalMap;
     if (m.metallicRoughness) flags |= mesh_flags::kMetallicRoughnessMap;
     if (m.emissive) flags |= mesh_flags::kEmissiveMap;
-    if (!albedoView && !m.normal && !m.metallicRoughness && !m.emissive) return VK_NULL_HANDLE;
+    if (m.occlusion) flags |= mesh_flags::kOcclusionMap;
+    if (!albedoView && !m.normal && !m.metallicRoughness && !m.emissive && !m.occlusion) return VK_NULL_HANDLE;
 
     VkDescriptorSet set = frame.gpu.device.frameSet(d.materialLayout);
     SceneVkDescriptorWriter writer;
@@ -295,6 +330,8 @@ VkDescriptorSet materialSet(SceneFrame& frame, const SceneDefaults& d, const Mat
     writer.writeImage(2, m.metallicRoughness ? m.metallicRoughness->view : d.white.view,
                       m.metallicRoughness ? m.metallicRoughness->sampler : d.sampler);
     writer.writeImage(3, m.emissive ? m.emissive->view : d.black.view, m.emissive ? m.emissive->sampler : d.sampler);
+    writer.writeImage(4, m.occlusion ? m.occlusion->view : d.white.view,
+                      m.occlusion ? m.occlusion->sampler : d.sampler);
     writer.updateSet(frame.gpu.device.device(), set);
     return set;
 }
@@ -314,10 +351,15 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
     out.vertices = gm->vertices.buffer;
     out.indices = gm->indices.buffer;
     out.indexCount = gm->indexCount;
-    out.castsShadow = node.castsShadow();
-    std::memcpy(out.push.model, node.worldMatrix().data, sizeof(out.push.model));
-    fill(node.color(), node.emissiveColor(), node.emissive(), node.metallic(), node.roughness(),
-         node.alphaCutoff(), out);
+    fillMaterial(node, out);
+    out.push.extra[1] = node.subsurface();
+    out.push.extra[2] = node.windMask();
+    out.twoSided = node.twoSided();
+    if (node.drawMode() == MeshNode::DrawMode::Lines) {
+        out.lines = true;
+        out.lineWidth = node.lineWidth();
+        out.castsShadow = false;
+    }
 
     if (skinned) {
         out.skin = frame.gpu.resources.skinAttributes(*skinned, data.vertexCount());
@@ -325,9 +367,12 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, MeshNode& node, MeshDraw& out) 
         if (!out.skin) return false;
     }
 
-    uint32_t flags = 0;
+    uint32_t flags = mesh_flags::vertexColor(node.vertexColorMode());
     if (frame.renderer.ssrEnabled()) flags |= mesh_flags::kReflectance;
     if (node.shadeMap()) flags |= mesh_flags::kShadeMap;
+    if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
+    if (out.twoSided) flags |= mesh_flags::kTwoSided;
+    if (data.hasTangents()) flags |= mesh_flags::kHasTangents;
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
         if (CustomProgram* prog = program(*cs, out.kind))
@@ -374,14 +419,17 @@ bool SceneMeshDrawer::prepare(SceneFrame& frame, InstancedMeshNode& node, MeshDr
     out.instances = rows.buffer;
     out.instanceOffset = rows.offset;
     out.instanceCount = static_cast<uint32_t>(count);
-    out.castsShadow = node.castsShadow();
-    std::memcpy(out.push.model, node.worldMatrix().data, sizeof(out.push.model));
-    fill(node.color(), node.emissiveColor(), node.emissive(), node.metallic(), node.roughness(),
-         node.alphaCutoff(), out);
+    fillMaterial(node, out);
+    out.twoSided = node.doubleSided();
+    out.push.extra[3] = static_cast<float>(std::clamp(node.effectiveAtlasCols(), 1, 255)) +
+                        256.0f * static_cast<float>(std::clamp(node.effectiveAtlasRows(), 1, 255));
 
-    uint32_t flags = 0;
+    uint32_t flags = mesh_flags::vertexColor(node.useVertexColorForDraw() ? 1 : 0);
     if (frame.renderer.ssrEnabled()) flags |= mesh_flags::kReflectance;
     if (node.shadeMap()) flags |= mesh_flags::kShadeMap;
+    if (node.receivesShadow()) flags |= mesh_flags::kReceivesShadow;
+    if (out.twoSided) flags |= mesh_flags::kTwoSided;
+    if (node.mesh().hasTangents()) flags |= mesh_flags::kHasTangents;
     if (const CustomShaderState* cs = node.customShader()) {
         out.custom = cs;
         if (CustomProgram* prog = program(*cs, out.kind)) out.customSet = customSet(frame, node.id(), *cs, *prog, nullptr);
@@ -399,11 +447,11 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
     bool custom = false;
     if (draw.custom && draw.customSet) {
         if (CustomProgram* prog = program(*draw.custom, draw.kind)) {
-            pipeline = customPipeline(*prog, draw.kind, draw.translucent, target);
+            pipeline = customPipeline(*prog, draw, target);
             custom = pipeline != VK_NULL_HANDLE;
         }
     }
-    if (!pipeline) pipeline = builtinPipeline(draw.kind, draw.translucent, target);
+    if (!pipeline) pipeline = builtinPipeline(draw, target);
     if (!pipeline) return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -416,6 +464,11 @@ void SceneMeshDrawer::record(VkCommandBuffer cmd, const TargetFormat& target, Vk
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 4, 1, &draw.customSet, 0, nullptr);
     vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                        sizeof(MeshPushConstants), &draw.push);
+    // Polygon offset, oriented so a negative bias pulls toward the camera
+    // under either depth policy.
+    const float toward = reversedZ() ? -1.0f : 1.0f;
+    vkCmdSetDepthBias(cmd, toward * draw.depthBiasUnits, 0.0f, toward * draw.depthBiasFactor);
+    if (draw.lines && wideLines_) vkCmdSetLineWidth(cmd, draw.lineWidth);
 
     const VkBuffer buffers[2] = {draw.vertices, draw.kind == MeshKind::Instanced ? draw.instances : draw.skin};
     const VkDeviceSize offsets[2] = {0, draw.kind == MeshKind::Instanced ? draw.instanceOffset : 0};

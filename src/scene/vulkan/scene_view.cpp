@@ -62,6 +62,13 @@ SceneCameraUniforms SceneView::uniforms(const SceneRenderer* fog) const {
         cam.fogColor[1] = fog->fogColor()[1];
         cam.fogColor[2] = fog->fogColor()[2];
         cam.fogColor[3] = fog->fogHeightFalloff();
+        const float* windDir = fog->windDir();
+        cam.wind[0] = windDir[0];
+        cam.wind[1] = windDir[1];
+        cam.wind[2] = windDir[2];
+        cam.wind[3] = fog->windStrength();
+        cam.windParams[0] = fog->windTime();
+        cam.windParams[1] = fog->windFrequency();
     }
     return cam;
 }

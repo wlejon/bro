@@ -64,7 +64,6 @@ struct SceneFrame {
     /// Sun, lights, ambient and shadow projection (scene_lighting.h). The
     /// probe and shade-map fields are filled by the frame-uniforms pass.
     SceneLightingUniforms lighting{};
-    bool shadowed = false;   // the sun casts a shadow this frame
 
     /// The reflection probe the lit passes sample (set by the probe pass).
     struct Probe {

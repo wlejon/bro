@@ -50,8 +50,8 @@ struct SceneView {
     /// The graph's active camera rendered at `width` x `height`.
     static SceneView fromCamera(const SceneGraph& graph, uint32_t width, uint32_t height);
 
-    /// The camera block of every lit pipeline (set 0). Fog comes from the
-    /// renderer's settings; a view that should not be fogged passes none.
+    /// The camera block of every lit pipeline (set 0). Fog and wind come from
+    /// the renderer's settings; a view that should have neither passes none.
     SceneCameraUniforms uniforms(const SceneRenderer* fog) const;
 
     /// Camera forward / right / up in world space.

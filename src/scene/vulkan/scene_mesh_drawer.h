@@ -12,6 +12,8 @@
 // first use, so a new target format or sample count never rebuilds anything.
 
 #include "scene/mesh_node.h"
+
+#include <bromath/aabb.h>
 #include "scene/vulkan/scene_vk_pipeline.h"
 #include "scene/vulkan/scene_vk_target_format.h"
 
@@ -34,15 +36,18 @@ struct SceneFrame;
 struct SceneGpu;
 class SceneDefaults;
 
-/// Per-draw push constants of every mesh pipeline (and the terrain's).
+/// Per-draw push constants of every mesh pipeline (and the terrain's) —
+/// shaders/scene_mesh_push.glsl. Exactly the 128 bytes every device offers.
 struct alignas(16) MeshPushConstants {
     float model[16];
     float baseColor[4];
     float emissive[4];    // rgb tint, a = intensity
     float pbrParams[4];   // metallic, roughness, alphaCutoff, flags
+    float extra[4];       // near clip, subsurface, wind mask, atlas grid (cols + rows * 256)
 };
+static_assert(sizeof(MeshPushConstants) == 128);
 
-/// MeshPushConstants::pbrParams[3] bits (mesh.frag).
+/// MeshPushConstants::pbrParams[3] bits (scene_mesh_push.glsl).
 namespace mesh_flags {
 constexpr uint32_t kAlbedoMap = 1;
 constexpr uint32_t kNormalMap = 2;
@@ -51,6 +56,12 @@ constexpr uint32_t kEmissiveMap = 8;
 constexpr uint32_t kUnlit = 16;
 constexpr uint32_t kShadeMap = 32;
 constexpr uint32_t kReflectance = 64;   // alpha carries SSR reflectance
+constexpr uint32_t kOcclusionMap = 128;
+constexpr uint32_t kReceivesShadow = 256;
+constexpr uint32_t kTwoSided = 512;
+constexpr uint32_t kHasTangents = 4096;
+/// The vertex colour mode (0 none, 1 replaces the albedo, 2 tints it) in bits 10-11.
+constexpr uint32_t vertexColor(int mode) { return static_cast<uint32_t>(mode & 3) << 10; }
 }
 
 enum class MeshKind : uint8_t { Static, Instanced, Skinned };
@@ -74,8 +85,15 @@ struct MeshDraw {
     MeshPushConstants push{};
     bool translucent = false;
     bool castsShadow = false;
+    bool twoSided = false;       // no back-face culling (and no front-face culling as a caster)
+    bool lines = false;          // indices are line pairs; drawn unlit
+    float lineWidth = 1.0f;
+    float depthBiasFactor = 0.0f;   // MeshNode::setDepthBias: negative pulls toward the camera
+    float depthBiasUnits = 0.0f;
     bool cameraCulled = false;   // outside the camera frustum this frame
     float viewDepth = 0.0f;      // along the view direction, for sorting
+    bool hasBounds = false;      // world bounds, for the shadow tiles' culling
+    bromath::AABB3 bounds;
 };
 
 class SceneMeshDrawer {
@@ -113,19 +131,22 @@ private:
         PipelineVariants pipelines;
     };
 
-    static void fill(const float* color, const float* emissiveColor, float emissive, float metallic,
-                     float roughness, float alphaCutoff, MeshDraw& out);
+    template <typename Node>
+    static void fillMaterial(const Node& node, MeshDraw& out);
     CustomProgram* program(const CustomShaderState& cs, MeshKind kind);
     VkDescriptorSet customSet(SceneFrame& frame, uint32_t nodeId, const CustomShaderState& cs,
                               const CustomProgram& prog, std::vector<MeshNode::UserTexture>* textures);
     VkDescriptorSet boneSet(SceneFrame& frame, const std::vector<float>& palette);
-    VkPipeline builtinPipeline(MeshKind kind, bool translucent, const TargetFormat& target);
-    VkPipeline customPipeline(CustomProgram& prog, MeshKind kind, bool translucent, const TargetFormat& target);
-    VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, bool translucent,
+    /// The pipeline state a draw selects beyond its shaders.
+    static uint32_t rasterVariant(const MeshDraw& draw);
+    VkPipeline builtinPipeline(const MeshDraw& draw, const TargetFormat& target);
+    VkPipeline customPipeline(CustomProgram& prog, const MeshDraw& draw, const TargetFormat& target);
+    VkPipeline buildPipeline(VkShaderModule vs, VkShaderModule fs, MeshKind kind, uint32_t raster,
                              const TargetFormat& target);
 
     VkDevice device_ = VK_NULL_HANDLE;
     SceneDefaults* defaults_ = nullptr;
+    bool wideLines_ = false;   // the device draws lines wider than 1 px
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkShaderModule vs_[3] = {};
     VkShaderModule fs_ = VK_NULL_HANDLE;

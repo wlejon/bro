@@ -3,26 +3,8 @@
 // The camera depth policy (scene/vulkan/scene_vk_depth.h).
 layout(constant_id = 0) const bool REVERSED_Z = true;
 
-layout(set = 0, binding = 0) uniform CameraUBO {
-    mat4 view;
-    mat4 proj;
-    mat4 viewProj;
-    mat4 invView;
-    mat4 invProj;
-    vec4 eyePos;
-    vec4 viewport; // x: width, y: height, z: near, w: far
-    vec4 fogParams;
-    vec4 fogColor;
-} camera;
-
-layout(set = 1, binding = 0) uniform LightingUBO {
-    vec4 sunDirection;
-    vec4 sunColor;
-    vec4 ambientColor;
-    vec4 shadowSplits;
-    mat4 shadowCascadeProj;
-    vec4 numLights;
-} lighting;
+#include "scene_camera.glsl"
+#include "scene_lighting.glsl"
 
 layout(set = 2, binding = 0) uniform sampler2D uSceneDepth;
 layout(set = 2, binding = 1) uniform sampler2D uAlbedoTex;
@@ -38,8 +20,6 @@ layout(push_constant) uniform DecalPush {
 } push;
 
 layout(location = 0) out vec4 fragColor;
-
-const float PI = 3.14159265359;
 
 void main() {
     vec2 screenUV = gl_FragCoord.xy / camera.viewport.xy;

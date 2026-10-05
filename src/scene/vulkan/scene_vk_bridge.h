@@ -50,6 +50,8 @@ public:
 
     /// The last render's LDR output (shader-read once its submission completes).
     render::LayerImage outputImage() const;
+    /// The largest shadow atlas side the device allows.
+    uint32_t maxShadowAtlas() const { return targets_.maxShadowAtlas(); }
 
     /// Drop everything held for these destroyed nodes (deferred).
     void releaseNodes(std::span<const uint32_t> ids);

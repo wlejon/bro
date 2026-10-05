@@ -11,15 +11,19 @@ namespace bro::scene::vk {
 
 namespace {
 
-float viewDepthOf(const SceneFrame& frame, SceneNode* node) {
+// The node's world bounds (the shadow pass culls casters by them) and the
+// view depth of their centre (translucent sorting).
+void placeDraw(const SceneFrame& frame, SceneNode* node, MeshDraw& draw) {
     bromath::Vec3 center;
     if (auto bounds = frame.renderer.nodeWorldBounds(node)) {
+        draw.hasBounds = true;
+        draw.bounds = *bounds;
         center = (bounds->min + bounds->max) * 0.5f;
     } else {
         const bromath::Mat4& w = node->worldMatrix();
         center = bromath::Vec3{w.at(0, 3), w.at(1, 3), w.at(2, 3)};
     }
-    return bromath::vdot(center - frame.view.eye, frame.view.forward());
+    draw.viewDepth = bromath::vdot(center - frame.view.eye, frame.view.forward());
 }
 
 }  // namespace
@@ -62,7 +66,7 @@ void buildDrawLists(SceneFrame& frame) {
         }
 
         draw.cameraCulled = culled;
-        draw.viewDepth = viewDepthOf(frame, node);
+        placeDraw(frame, node, draw);
         const auto index = static_cast<uint32_t>(lists.meshes.size());
         lists.meshes.push_back(draw);
         if (culled) continue;

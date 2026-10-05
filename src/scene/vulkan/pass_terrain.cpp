@@ -162,13 +162,8 @@ void terrainSources(bool cubicHeight, bool cubicSurface, bool indirect, std::str
         "layout(location = 4) out vec3 vTangentW;\n"
         "layout(location = 5) out vec3 vBitangentW;\n"
         "layout(location = 6) out float vCamDist;\n"
-        "layout(set = 0, binding = 0) uniform CameraUBO {\n"
-        "    mat4 view; mat4 proj; mat4 viewProj; mat4 invView; mat4 invProj;\n"
-        "    vec4 eyePos; vec4 viewport; vec4 fogParams; vec4 fogColor;\n"
-        "} camera;\n"
-        "layout(push_constant) uniform PushConstants {\n"
-        "    mat4 model; vec4 baseColor; vec4 emissive; vec4 pbrParams;\n"
-        "} push;\n"
+        "#include \"scene_camera.glsl\"\n"
+        "#include \"scene_mesh_push.glsl\"\n"
         "layout(set = 2, binding = 0) uniform sampler2DArray u_heights;\n"
         "layout(set = 2, binding = 1) uniform sampler2DArray u_surfaces;\n"
         "layout(set = 2, binding = 2, std140) uniform CustomUniforms {\n"
@@ -217,25 +212,9 @@ void main() {
         "layout(location = 6) in float vCamDist;\n"
         "layout(location = 0) out vec4 outColor;\n"
         + std::string(indirect ? "#define SCENE_INDIRECT_OUTPUT\nlayout(location = 1) out vec4 outIndirect;\n" : "")
-        + "layout(set = 0, binding = 0) uniform CameraUBO {\n"
-        "    mat4 view; mat4 proj; mat4 viewProj; mat4 invView; mat4 invProj;\n"
-        "    vec4 eyePos; vec4 viewport; vec4 fogParams; vec4 fogColor;\n"
-        "} camera;\n"
-        "struct PointLight { vec4 position; vec4 color; };\n"
-        "layout(set = 1, binding = 0) uniform LightingUBO {\n"
-        "    vec4 sunDirection; vec4 sunColor; vec4 ambientColor;\n"
-        "    vec4 shadowSplits; mat4 shadowCascadeProj; vec4 numLights;\n"
-        "    PointLight pointLights[16];\n"
-        "    mat4 probeWorldToLocal; mat4 probeLocalToWorld;\n"
-        "    vec4 probePos; vec4 probeBoxSize; vec4 probeParams;\n"
-        "    vec4 shadeOrigin; vec4 shadeParams;\n"
-        "} lighting;\n"
-        "layout(set = 1, binding = 1) uniform sampler2DArrayShadow shadowMapArray;\n"
-        "layout(set = 1, binding = 2) uniform samplerCube texReflectionProbe;\n"
-        "layout(set = 1, binding = 3) uniform sampler2D texShadeMap;\n"
-        "layout(push_constant) uniform PushConstants {\n"
-        "    mat4 model; vec4 baseColor; vec4 emissive; vec4 pbrParams;\n"
-        "} push;\n"
+        + "#include \"scene_camera.glsl\"\n"
+        "#include \"scene_lighting.glsl\"\n"
+        "#include \"scene_mesh_push.glsl\"\n"
         "layout(set = 2, binding = 0) uniform sampler2DArray u_heights;\n"
         "layout(set = 2, binding = 1) uniform sampler2DArray u_surfaces;\n"
         "layout(set = 2, binding = 2, std140) uniform CustomUniforms {\n"
@@ -252,33 +231,6 @@ void main() {
         "    vec4 _u_miscParams3; vec4 _u_miscParams4; vec4 _u_miscParams5;\n"
         "};\n"
         + std::string(kTerrainHeader)
-        + R"(
-float cellShade() {
-    float R = max(lighting.shadeParams.x, 1e-6);
-    vec3 nudged = vWorldPos - normalize(vNormal) * (0.05 * R);
-    vec2 p = nudged.xz - lighting.shadeOrigin.xz;
-    int cx, cy;
-    if (lighting.shadeParams.y > 0.5) {
-        float r = p.y / (1.5 * R);
-        float q = p.x / (1.7320508 * R) - r * 0.5;
-        float x = q, z = r, y = -x - z;
-        float rx = floor(x + 0.5), ry = floor(y + 0.5), rz = floor(z + 0.5);
-        float dx = abs(rx - x), dy = abs(ry - y), dz = abs(rz - z);
-        if (dx > dy && dx > dz) rx = -ry - rz;
-        else if (dy > dz)       ry = -rx - rz;
-        else                    rz = -rx - ry;
-        int hq = int(rx), hr = int(rz);
-        cy = hr;
-        cx = hq + (hr - (hr & 1)) / 2;
-    } else {
-        cx = int(floor(p.x / R));
-        cy = int(floor(p.y / R));
-    }
-    if (cx < 0 || cy < 0 || cx >= int(lighting.shadeParams.z) || cy >= int(lighting.shadeParams.w))
-        return 1.0;
-    return texelFetch(texShadeMap, ivec2(cx, cy), 0).r;
-}
-)"
         + stripUniforms(fsCommon + kClipmapFragSrc)
         + R"(
 void main() {
@@ -291,19 +243,27 @@ void main() {
 
     userFragment(baseColor, normal, metallic, roughness, emissive, alpha);
 
-    vec3 N = normalize(normal);
-    vec3 V = normalize(camera.eyePos.xyz - vWorldPos);
-    vec3 L = normalize(-lighting.sunDirection.xyz);
-    float NdotL = max(dot(N, L), 0.0);
-    vec3 radiance = lighting.sunColor.rgb * lighting.sunColor.a;
-    vec3 direct = (baseColor / 3.14159265359) * radiance * NdotL;
-    vec3 ambient = lighting.ambientColor.rgb * lighting.ambientColor.a * baseColor;
-    vec3 color = ambient + direct + emissive;
-    vec3 indirect = ambient;
+    uint flags = meshFlags();
+    SceneSurface s;
+    s.position = vWorldPos;
+    s.normal = normalize(normal);
+    s.view = normalize(camera.eyePos.xyz - vWorldPos);
+    s.camDist = length(camera.eyePos.xyz - vWorldPos);
+    s.baseColor = baseColor;
+    s.metallic = clamp(metallic, 0.0, 1.0);
+    s.roughness = clamp(roughness, 0.04, 1.0);
+    s.receivesShadow = (flags & MESH_RECEIVES_SHADOW) != 0u;
+    s.twoSided = false;
+    s.subsurface = 0.0;
 
-    uint flags = uint(push.pbrParams.w);
-    if ((flags & 32u) != 0u && lighting.shadeOrigin.w > 0.5) {
-        float shade = cellShade();
+    vec3 indirect = sceneAmbient(s);
+    vec3 color = sceneDirectLight(s) + indirect + emissive;
+    float fog = fogFactorFor(s.camDist, vWorldPos.y);
+    color = mix(color, camera.fogColor.rgb, fog);
+    indirect *= 1.0 - fog;
+
+    if ((flags & MESH_SHADE_MAP) != 0u && lighting.shadeOrigin.w > 0.5) {
+        float shade = cellShade(vWorldPos, normalize(vNormal));
         color *= shade;
         indirect *= shade;
     }
@@ -525,7 +485,9 @@ void PassTerrain::record(SceneFrame& frame) {
         push.pbrParams[0] = node->metallic();
         push.pbrParams[1] = node->roughness();
         push.pbrParams[2] = node->alphaCutoff();
-        push.pbrParams[3] = node->shadeMap() ? static_cast<float>(mesh_flags::kShadeMap) : 0.0f;
+        uint32_t flags = node->shadeMap() ? mesh_flags::kShadeMap : 0u;
+        if (node->receivesShadow()) flags |= mesh_flags::kReceivesShadow;
+        push.pbrParams[3] = static_cast<float>(flags);
 
         const VkDescriptorSet sets[3] = {frame.cameraSet, frame.lightingSet, set};
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);

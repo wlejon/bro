@@ -497,6 +497,7 @@ bool VulkanContext::createLogicalDevice() {
 
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = deviceFeatures_.samplerAnisotropy;
+    deviceFeatures.wideLines = deviceFeatures_.wideLines;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

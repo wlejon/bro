@@ -58,6 +58,10 @@ public:
     SceneVkPipelineBuilder& setCullMode(VkCullModeFlags cullMode,
                                        VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
+    /// Enable depth bias; its factors are set with vkCmdSetDepthBias (list
+    /// VK_DYNAMIC_STATE_DEPTH_BIAS among the dynamic states).
+    SceneVkPipelineBuilder& setDepthBias(bool enable);
+
     /// Attachment formats and sample count of the target the pipeline draws into.
     SceneVkPipelineBuilder& setTarget(const TargetFormat& target);
 
